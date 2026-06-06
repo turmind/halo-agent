@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --parallel -r dev",
-    "build": "pnpm --filter @turmind/halo-core build && pnpm --filter @turmind/halo-server build && pnpm --filter @turmind/halo-cli build && pnpm --filter @turmind/halo-admin build",
+    "build": "pnpm --filter @turmind/halo-core build && pnpm --filter @turmind/halo-server build && pnpm --filter @turmind/halo-acp-adapter build && pnpm --filter @turmind/halo-cli build && pnpm --filter @turmind/halo-admin build",
     "start": "pnpm --parallel -r start"
   },
   "engines": {
