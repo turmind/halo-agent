@@ -1,0 +1,89 @@
+id: aws-bedrock-mantle
+displayName: AWS Bedrock Mantle (OpenAI GPT-5.x)
+displayName_zh: AWS Bedrock Mantle（OpenAI GPT-5.x）
+description: OpenAI GPT-5.5 / 5.4 on Amazon Bedrock via the bedrock-mantle endpoint (OpenAI Responses API only — not Converse/InvokeModel). us-east-2 only.
+description_zh: 通过 Bedrock Mantle 端点调用 OpenAI GPT-5.5 / 5.4（仅 OpenAI Responses API，不支持 Converse/InvokeModel）。仅 us-east-2。
+# Mantle is a distinct endpoint from bedrock-runtime; the OpenAI surface lives
+# under /openai/v1. GPT-5.5 is us-east-2 only (GPT-5.4 also allows us-west-2,
+# but we ship the us-east-2 endpoint that serves both).
+defaultEndpoint: https://bedrock-mantle.us-east-2.api.aws/openai/v1
+endpointPresets:
+  - https://bedrock-mantle.us-east-2.api.aws/openai/v1
+
+defaultModelId: openai.gpt-5.5
+
+# Auth: a Bedrock long-term API key passed as a Bearer token. Generate at
+# console → Bedrock → API keys → long-term. The default placeholder reads the
+# AWS_BEARER_TOKEN_BEDROCK env var; leave the env unset and fill the key in
+# Settings to store it in secrets/settings.yaml instead. resolveApiKey() reads
+# `api_key`, so the bearer token flows straight to the agent with no extra wiring.
+secrets:
+  - key: api_key
+    description: Bedrock long-term API key (sent as a Bearer token). Defaults to the AWS_BEARER_TOKEN_BEDROCK env var.
+    description_zh: Bedrock 长期 API Key（作为 Bearer 令牌发送）。默认读取 AWS_BEARER_TOKEN_BEDROCK 环境变量。
+    default: <<AWS_BEARER_TOKEN_BEDROCK>>
+    secret: true
+
+# capability notes for Mantle/OpenAI:
+#   - image: input only (text/image in, text-only out — no audio/video/image gen)
+#   - promptCaching: AUTOMATIC (prefix ≥1024 tok, ~5min idle TTL). No cache_control
+#     is sent and there's no 1h option — single 5m preset reflects reality, the
+#     runtime never writes cache control, it only reads cached_tokens back.
+#   - thinking: adaptive via reasoning.effort = low|medium|high (no budget_tokens
+#     mode; xhigh/max would be mapped down to high by the runtime).
+models:
+  - id: openai.gpt-5.5
+    displayName: GPT-5.5
+    maxOutputTokens: 64000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+      # Output length of the final answer (Responses API `text.verbosity`),
+      # separate from reasoning effort. Default low = terse + cheaper, best for
+      # tool-driven agent turns. Override per-agent via agent.yaml model.verbosity.
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: openai.gpt-5.4
+    displayName: GPT-5.4
+    maxOutputTokens: 64000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+      # See GPT-5.5 above — final-answer length, default low, per-agent overridable.
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }

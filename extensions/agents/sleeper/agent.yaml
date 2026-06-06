@@ -1,0 +1,30 @@
+name: sleeper
+description: sleeper
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-sonnet-4-6
+  promptCaching: 1h
+  thinking:
+    enabled: true
+    effort: medium
+system_prompt: |
+  You are sleeper. sleeper
+context:
+  maxTokens: 200000
+  compressAt: 0.7
+tools:
+  - file_read
+  - file_write
+  - file_edit
+  - file_list
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+  - start_session
+  - session_list
+  - interrupt_session
+  - stop_session
+  - list_agents
+  - query_agent
+skills: []

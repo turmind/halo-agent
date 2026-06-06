@@ -1,0 +1,41 @@
+id: kimi
+displayName: Kimi (Moonshot AI)
+displayName_zh: Kimi（月之暗面）
+description: Kimi K2.6 via OpenAI-compatible chat completions API
+description_zh: Kimi K2.6，通过 OpenAI 兼容的 chat completions API 调用
+defaultEndpoint: https://api.moonshot.cn/v1
+
+secrets:
+  - key: api_key
+    description: Kimi (Moonshot AI) API Key. Get from https://platform.kimi.com/console/api-keys
+    description_zh: Kimi (月之暗面) API Key。从 https://platform.kimi.com/console/api-keys 获取
+    default: <<KIMI_API_KEY>>
+    secret: true
+
+# Capabilities verified 2026-05-27 via live probes. Kimi-k2.6 returns
+# "prepare image failed" on image_url blocks despite past docs claiming
+# vision — set image:false until/unless a vision-specific model id is
+# tested here. reasoning_effort accepts { minimal, low, medium, high };
+# `max` errors with explicit message listing the four valid values.
+# Caching is automatic; cached_tokens shows up reliably from turn 2 once
+# the prompt is long enough (~2K+).
+models:
+  - id: kimi-k2.6
+    displayName: Kimi K2.6
+    maxOutputTokens: 32768
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: minimal, label: Minimal }
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }

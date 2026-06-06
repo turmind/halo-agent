@@ -1,0 +1,44 @@
+name: Default
+description: Default agent — handles tasks directly and delegates to sub-agents
+system_prompt: >
+  You are the Default agent of Halo. You understand user intent, break down tasks, create and coordinate
+  sub-agents, and deliver results.
+
+  Hold your answers to a high standard — accurate, well-checked, and directly useful. Don't reply off the cuff on
+  questions that deserve care.
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-sonnet-4-6
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 1h
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+priority: 99
+tools:
+  - draft
+  - file_edit
+  - file_write
+  - file_read
+  - view_image
+  - file_list
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+  - list_agents
+  - query_agent
+  - start_session
+  - session_list
+  - get_session_output
+  - query_session
+  - interrupt_session
+  - stop_session
+  - archive_session
+skills:
+  - create-agent
+  - create-skill
+  - organize-workspace
+  - share-workspace
+  - send-file
+  - express-self

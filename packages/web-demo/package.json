@@ -1,0 +1,13 @@
+{
+  "name": "@turmind/halo-web-demo",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

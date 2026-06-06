@@ -1,0 +1,137 @@
+id: doubao
+displayName: Doubao (Volcengine)
+displayName_zh: 豆包（火山方舟）
+description: ByteDance Doubao Seed-2.0 family on Volcengine Ark — pro / lite / mini / code, OpenAI-compatible
+description_zh: 字节豆包 Seed-2.0 系列（火山方舟），OpenAI 兼容协议
+defaultEndpoint: https://ark.cn-beijing.volces.com/api/v3
+defaultModelId: doubao-seed-2-0-pro-260215
+
+secrets:
+  - key: api_key
+    description: Volcengine Ark API Key. Format starts with ark-. Get from https://console.volcengine.com/ark
+    description_zh: 火山方舟 API Key，ark- 开头。从 https://console.volcengine.com/ark 获取
+    default: <<ARK_API_KEY>>
+    secret: true
+
+# Capability notes for Doubao Seed-2.0 — verified end-to-end on 2026-05-26:
+#   - All four models share the same wire shape (OpenAI chat completions
+#     + Volcengine `thinking:{type:'enabled'/'disabled'}`).
+#   - thinking type=auto is rejected as "Unsupported" — only enabled/disabled.
+#   - reasoning_content is returned in message.reasoning_content when
+#     thinking is enabled; suppressed when disabled.
+#   - Caching is automatic — no cache_control parameter required. Verified
+#     2026-05-26 with a >4096-token system prompt and 5 same-prompt turns:
+#     all four models (pro/lite/mini/code) hit cache at least once.
+#     Caveats observed empirically:
+#       - prompts shorter than ~4096 tokens generally don't cache at all;
+#       - first 1-3 turns of a fresh prompt commonly miss while the cache
+#         warms up;
+#       - cache can drop unexpectedly mid-conversation (turn N hits, turn
+#         N+1 misses, turn N+2 hits again) — not stable steady-state.
+#     Treat the cache as opportunistic; UI badges are accurate when shown.
+#   - Tool calls return standard OpenAI tool_calls shape.
+#   - Image: pro/lite/mini all accepted image_url blocks; in our smoke
+#     test all four answered "Black" for what was actually a red 64×64 PNG,
+#     so reliability is uncertain. We default image:false; user can flip
+#     after their own verification.
+#   - Doubao 2.0 docs aren't fully published; model id strings sourced
+#     from the Volcengine Ark console (the activated-model list).
+models:
+  - id: doubao-seed-2-0-pro-260215
+    displayName: Doubao Seed 2.0 Pro
+    maxOutputTokens: 16384
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        # Doubao caches automatically (no cache_control parameter needed
+        # in the request). The badge is just a visibility hint — UI shows
+        # the read/write counts so users see when cache is helping.
+        # Doc says default TTL is the platform default; observed empirically
+        # to behave like ~5min ephemeral. Cache only kicks in for prompts
+        # above ~4096 tokens; first 1-3 turns of a fresh prompt commonly
+        # miss while the cache is warming up.
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: medium
+        # effort label is Halo-side only — Doubao only sees enabled/disabled.
+        # We still expose Off/On as toggles by mapping both options to the
+        # same flag (keeps the form consistent across providers).
+        effortPresets:
+          - { value: medium, label: On }
+
+  - id: doubao-seed-2-0-lite-260428
+    displayName: Doubao Seed 2.0 Lite
+    maxOutputTokens: 16384
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        # Doubao caches automatically (no cache_control parameter needed
+        # in the request). The badge is just a visibility hint — UI shows
+        # the read/write counts so users see when cache is helping.
+        # Doc says default TTL is the platform default; observed empirically
+        # to behave like ~5min ephemeral. Cache only kicks in for prompts
+        # above ~4096 tokens; first 1-3 turns of a fresh prompt commonly
+        # miss while the cache is warming up.
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: medium, label: On }
+
+  - id: doubao-seed-2-0-mini-260428
+    displayName: Doubao Seed 2.0 Mini
+    maxOutputTokens: 16384
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        # Doubao caches automatically (no cache_control parameter needed
+        # in the request). The badge is just a visibility hint — UI shows
+        # the read/write counts so users see when cache is helping.
+        # Doc says default TTL is the platform default; observed empirically
+        # to behave like ~5min ephemeral. Cache only kicks in for prompts
+        # above ~4096 tokens; first 1-3 turns of a fresh prompt commonly
+        # miss while the cache is warming up.
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: medium, label: On }
+
+  - id: doubao-seed-2-0-code-preview-260215
+    displayName: Doubao Seed 2.0 Code Preview
+    maxOutputTokens: 16384
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        # Doubao caches automatically (no cache_control parameter needed
+        # in the request). The badge is just a visibility hint — UI shows
+        # the read/write counts so users see when cache is helping.
+        # Doc says default TTL is the platform default; observed empirically
+        # to behave like ~5min ephemeral. Cache only kicks in for prompts
+        # above ~4096 tokens; first 1-3 turns of a fresh prompt commonly
+        # miss while the cache is warming up.
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: medium, label: On }

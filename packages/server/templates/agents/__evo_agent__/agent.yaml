@@ -1,0 +1,29 @@
+name: Evolution Agent
+description: System agent for self-evolution. Analyzes a session, drafts a prompt patch, runs a sandbox dry-run to score it. Hidden from list_agents.
+internal: true
+priority: -1
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-opus-4-8
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 5m
+  thinking:
+    enabled: true
+    effort: xhigh
+system_prompt: >
+  You are Halo's evolution agent. You analyze a single chat session, identify
+  one or more concrete improvements to the workspace's prompt files, and run a
+  sandbox dry-run to score each suggestion. See AGENT.md for the full
+  procedure. You are invoked by an evo wrapper process — never by a user
+  directly.
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+tools:
+  - file_read
+  - file_write
+  - file_edit
+  - file_list
+  - grep
+  - glob
+skills: []

@@ -1,0 +1,329 @@
+/**
+ * Agent loader — shared functions for loading agent YAML configs,
+ * skill metadata, and scanning available agents.
+ *
+ * Used by both Orchestrator and SessionManager.
+ */
+import type { ToolDef } from './bedrock-agent.js'
+import { createWorkspaceTools } from '../tools/workspace-tools.js'
+import { TOOL_WARN_MARKER } from './agent-loop.js'
+import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
+import path from 'node:path'
+import { homedir } from 'node:os'
+import YAML from 'yaml'
+
+export const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
+export const GLOBAL_SKILLS_DIR = path.join(homedir(), '.halo', 'global', 'skills')
+
+/** Parsed agent YAML config */
+export interface AgentYamlConfig {
+  name: string
+  description?: string
+  model?: { provider?: string; id?: string; endpoint?: string; maxTokens?: number; promptCaching?: boolean | string; thinking?: { enabled?: boolean; budget?: string; effort?: string }; verbosity?: string }
+  system_prompt?: string
+  tools?: string[]
+  skills?: string[]
+  context?: { maxTokens?: number; compressAt?: number }
+  /** Sort weight — higher sorts first. Default 0. Seed `default` agent uses 99. */
+  priority?: number
+  /** Hidden from `list_agents` (so other agents can't delegate to it) but
+   *  still listed in admin's agent management. Used by the self-evolution
+   *  agents (`__evo_agent__`, `__apply_agent__`). */
+  internal?: boolean
+}
+
+/** Whole-folder override: a workspace agent dir (`<ws>/.halo/agents/<id>/`)
+ *  replaces the global one wholesale, the same way `prompts/<scope>/` does and
+ *  the same way sharing an agent ships one folder. When the workspace dir
+ *  exists, agent.yaml / AGENT.md are read only from it (a missing file inside
+ *  is just absent — NO per-file fallback to global), so you never get a
+ *  Frankenstein mix of workspace AGENT.md + global agent.yaml. When it
+ *  doesn't exist, the agent is served entirely from global. */
+export function agentSourceDir(agentId: string, workspaceRoot?: string): string {
+  if (workspaceRoot) {
+    const wsDir = path.join(workspaceRoot, '.halo', 'agents', agentId)
+    if (fsSync.existsSync(wsDir)) return wsDir
+  }
+  return path.join(GLOBAL_AGENTS_DIR, agentId)
+}
+
+/** Load agent.yaml from the agent's source dir (workspace dir wholly
+ *  overrides global — see agentSourceDir). */
+export async function loadAgentYaml(agentId: string, workspaceRoot?: string): Promise<AgentYamlConfig | null> {
+  try {
+    const content = await fs.readFile(path.join(agentSourceDir(agentId, workspaceRoot), 'agent.yaml'), 'utf-8')
+    return YAML.parse(content) as AgentYamlConfig
+  } catch {
+    return null
+  }
+}
+
+/** Parse SKILL.md frontmatter to extract name, description, optional
+ *  command, and optional `requiresAccess` (full|workspace|readonly).
+ *  When `requiresAccess` is set, the skill is hidden from agents whose
+ *  session access level is more restricted (see SkillMeta filtering in
+ *  loadSkillMetadata). Default is unset → visible to all access levels. */
+export function parseSkillFrontmatter(raw: string): {
+  name?: string
+  description?: string
+  command?: string
+  requiresAccess?: 'full' | 'workspace' | 'readonly'
+  body: string
+} {
+  const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/)
+  if (!fmMatch) return { body: raw.trim() }
+  const fmBlock = fmMatch[1]
+  const body = raw.slice(fmMatch[0].length).trim()
+  let name: string | undefined
+  let description: string | undefined
+  let command: string | undefined
+  let requiresAccess: 'full' | 'workspace' | 'readonly' | undefined
+  for (const line of fmBlock.split('\n')) {
+    const nameMatch = line.match(/^name:\s*(.+)/)
+    if (nameMatch) name = nameMatch[1].trim()
+    const descMatch = line.match(/^description:\s*(.+)/)
+    if (descMatch) description = descMatch[1].trim()
+    const cmdMatch = line.match(/^command:\s*(.+)/)
+    if (cmdMatch) command = cmdMatch[1].trim()
+    const acccessMatch = line.match(/^requiresAccess:\s*(.+)/)
+    if (acccessMatch) {
+      const v = acccessMatch[1].trim()
+      if (v === 'full' || v === 'workspace' || v === 'readonly') requiresAccess = v
+    }
+  }
+  return { name, description, command, requiresAccess, body }
+}
+
+/** A skill id must be a single path segment — same shape as the `{{<id>.params}}`
+ *  namespace convention. Reject anything with `.`, `/`, `\` so a malformed
+ *  `agent.yaml` skills entry can't `..`-traverse out of the skills dir. */
+const SKILL_ID_RE = /^[\w-]+$/
+
+/** Source dir for a skill — workspace skill folder wholly overrides the
+ *  global one (same whole-folder rule as agents; see agentSourceDir).
+ *  A workspace `skills/<id>/` dir means that skill is served entirely from
+ *  the workspace — SKILL.md plus all sibling resource files — with no
+ *  per-file fallback to the global skill's resources. */
+export function skillSourceDir(skillId: string, workspaceRoot?: string): string | null {
+  if (!SKILL_ID_RE.test(skillId)) return null
+  if (workspaceRoot) {
+    const wsDir = path.join(workspaceRoot, '.halo', 'skills', skillId)
+    if (fsSync.existsSync(wsDir)) return wsDir
+  }
+  return path.join(GLOBAL_SKILLS_DIR, skillId)
+}
+
+/** Resolve SKILL.md path for a skill ID (workspace skill folder wholly
+ *  overrides global — see skillSourceDir). Returns null when the id is
+ *  malformed or no SKILL.md exists in the resolved source dir. */
+export function resolveSkillPath(skillId: string, workspaceRoot?: string): string | null {
+  const dir = skillSourceDir(skillId, workspaceRoot)
+  if (!dir) return null
+  const p = path.join(dir, 'SKILL.md')
+  try { fsSync.accessSync(p); return p } catch { return null }
+}
+
+export interface SkillMeta {
+  id: string
+  name: string
+  description: string
+  path: string
+  command?: string
+  requiresAccess?: 'full' | 'workspace' | 'readonly'
+}
+
+/** Rank for `accessLevel` ordering. Skill with `requiresAccess` is
+ *  visible only when the session's level is at least as permissive. */
+const ACCESS_RANK: Record<'readonly' | 'workspace' | 'full', number> = {
+  readonly: 0,
+  workspace: 1,
+  full: 2,
+}
+
+/**
+ * Load skill metadata (name + description only) for system prompt injection.
+ *
+ * Filters:
+ *   - skill in `disabledSet` → excluded (admin-disabled)
+ *   - skill's `requiresAccess` is more permissive than `accessLevel` →
+ *     excluded (e.g. `requiresAccess: full` is hidden from a `readonly`
+ *     channel session). When the session has no access constraint
+ *     (full / undefined), nothing is filtered on this axis.
+ */
+export async function loadSkillMetadata(
+  skillIds: string[],
+  workspaceRoot?: string,
+  disabledSet?: Set<string>,
+  accessLevel?: 'readonly' | 'workspace' | 'full' | null,
+): Promise<SkillMeta[]> {
+  const sessionRank = accessLevel ? ACCESS_RANK[accessLevel] : ACCESS_RANK.full
+  const result: SkillMeta[] = []
+  for (const skillId of skillIds) {
+    if (disabledSet?.has(`global:${skillId}`) || disabledSet?.has(`workspace:${skillId}`)) continue
+    const mdPath = resolveSkillPath(skillId, workspaceRoot)
+    if (!mdPath) continue
+    try {
+      const raw = await fs.readFile(mdPath, 'utf-8')
+      const { name, description, command, requiresAccess } = parseSkillFrontmatter(raw)
+      if (requiresAccess && ACCESS_RANK[requiresAccess] > sessionRank) continue
+      result.push({
+        id: skillId,
+        name: name ?? skillId,
+        description: description ?? '',
+        path: mdPath,
+        command,
+        requiresAccess,
+      })
+    } catch { /* skip */ }
+  }
+  return result
+}
+
+/** Build skill metadata XML for system prompt (progressive disclosure — metadata only) */
+export function buildSkillPrompt(skills: SkillMeta[]): string {
+  if (skills.length === 0) return ''
+  const entries = skills.map((s) => `  <skill>\n    <name>${s.name}</name>\n    <id>${s.id}</id>\n    <description>${s.description}</description>\n  </skill>`).join('\n')
+  return `\n\n## Your Skills\n\nYou have ${skills.length} skill(s) available. Use the \`activate_skill\` tool to load full instructions before using a skill.\n\n<available_skills>\n${entries}\n</available_skills>`
+}
+
+export interface SkillToolContext {
+  workspaceRoot?: string
+  workingDir?: string | null
+  agentName?: string
+}
+
+/** Create the activate_skill tool for on-demand skill loading */
+export function createSkillTool(skills: SkillMeta[], ctx: SkillToolContext = {}): ToolDef {
+  const skillMap = new Map(skills.map((s) => [s.id, s]))
+  return {
+    name: 'activate_skill',
+    description: 'Load full instructions for a skill. Call this before following a skill\'s workflow. Returns the complete SKILL.md content including prompts, templates, and guidelines.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        skill_id: {
+          type: 'string' as const,
+          description: `Skill ID to activate. Available: ${skills.map((s) => s.id).join(', ')}`,
+        },
+      },
+      required: ['skill_id'],
+    },
+    callback: async (input: unknown) => {
+      const { skill_id } = input as { skill_id: string }
+      const meta = skillMap.get(skill_id)
+      if (!meta) return `${TOOL_WARN_MARKER}\nError: skill "${skill_id}" not found. Available: ${skills.map((s) => s.id).join(', ')}`
+      try {
+        const raw = await fs.readFile(meta.path, 'utf-8')
+        const { body } = parseSkillFrontmatter(raw)
+        const skillDir = path.dirname(meta.path)
+
+        // Rewrite skill-local short-form placeholders into fully-qualified
+        // ones before handing the body to the model. Authors can write
+        // `{{params.api_key}}` inside their SKILL.md and the runtime will
+        // expand it from `<skill-id>.params.api_key` at shell_exec time.
+        // (Secrets keep no short form — referencing `{{secrets.…}}` from a
+        // skill body is intentionally unsupported.)
+        const qualifiedBody = body.replace(
+          /\{\{\s*params\.([\w-][\w.-]*)\s*\}\}/g,
+          (_m, key: string) => `{{${skill_id}.params.${key}}}`,
+        )
+
+        // Render built-in {{placeholders}} only — keep {{<id>.params.*}} as-is so
+        // secrets don't leak into model context. They get substituted at shell_exec
+        // time inside workspace-tools.
+        const { buildRenderContext, renderMdBody } = await import('../prompts/md-vars.js')
+        const renderCtx = await buildRenderContext({
+          workspaceRoot: ctx.workspaceRoot,
+          workingDir: ctx.workingDir ?? null,
+          agentName: ctx.agentName,
+        })
+        renderCtx.settings = {}
+        // Restrict any leftover `{{<x>.params.<y>}}` placeholder to this
+        // skill's own namespace — the body got short-form-rewritten just
+        // above, but a hand-written long form pointing at someone else's
+        // params should not silently render at shell_exec time later.
+        renderCtx.allowedNamespace = skill_id
+        const renderedBody = renderMdBody(qualifiedBody, renderCtx)
+
+        let resources = ''
+        try {
+          const entries = await fs.readdir(skillDir, { recursive: true, withFileTypes: true })
+          const files = entries.filter((e) => e.isFile() && e.name !== 'SKILL.md').map((e) => {
+            const rel = e.parentPath ? path.relative(skillDir, path.join(e.parentPath, e.name)) : e.name
+            return rel
+          })
+          if (files.length > 0) resources = `\n\nResource files in skill directory:\n${files.map((f) => `- ${f}`).join('\n')}`
+        } catch { /* no subdirs */ }
+        return `# Skill: ${meta.name}\n\n${renderedBody}${resources}`
+      } catch (err) {
+        return `Error loading skill: ${err instanceof Error ? err.message : String(err)}`
+      }
+    },
+  }
+}
+
+export interface ScannedAgent {
+  id: string
+  name: string
+  description: string
+  model: string
+  tools: string[]
+  skills: string[]
+  scope: 'global' | 'workspace'
+  priority: number
+  disabled?: boolean
+  /** True for agents flagged `internal: true` in their agent.yaml. Hidden
+   *  from `list_agents` so other agents can't delegate to them. Admin UI
+   *  still shows them with a badge. */
+  internal?: boolean
+}
+
+/** Scan all available agents from global + workspace directories. disabledSet keys are "scope:id". */
+export async function scanAvailableAgents(workspaceRoot?: string, disabledSet?: Set<string>): Promise<ScannedAgent[]> {
+  const agents: ScannedAgent[] = []
+  try {
+    const globalNames = await fs.readdir(GLOBAL_AGENTS_DIR)
+    for (const name of globalNames) {
+      const yamlPath = path.join(GLOBAL_AGENTS_DIR, name, 'agent.yaml')
+      try {
+        const content = await fs.readFile(yamlPath, 'utf-8')
+        const cfg = YAML.parse(content) as AgentYamlConfig
+        agents.push({
+          id: name, name: cfg.name ?? name, description: cfg.description ?? '',
+          model: cfg.model?.id ?? '', tools: cfg.tools ?? [], skills: cfg.skills ?? [],
+          scope: 'global', priority: cfg.priority ?? 0,
+          disabled: disabledSet?.has(`global:${name}`) ?? false,
+          internal: cfg.internal === true ? true : undefined,
+        })
+      } catch { /* skip */ }
+    }
+  } catch { /* dir doesn't exist */ }
+  if (workspaceRoot) {
+    const wsAgentsDir = path.join(workspaceRoot, '.halo', 'agents')
+    try {
+      const wsNames = await fs.readdir(wsAgentsDir)
+      for (const name of wsNames) {
+        const yamlPath = path.join(wsAgentsDir, name, 'agent.yaml')
+        try {
+          const content = await fs.readFile(yamlPath, 'utf-8')
+          const cfg = YAML.parse(content) as AgentYamlConfig
+          agents.push({
+            id: name, name: cfg.name ?? name, description: cfg.description ?? '',
+            model: cfg.model?.id ?? '', tools: cfg.tools ?? [], skills: cfg.skills ?? [],
+            scope: 'workspace', priority: cfg.priority ?? 0,
+            disabled: disabledSet?.has(`workspace:${name}`) ?? false,
+            internal: cfg.internal === true ? true : undefined,
+          })
+        } catch { /* skip */ }
+      }
+    } catch { /* dir doesn't exist */ }
+  }
+  return agents
+}
+
+/** Filter workspace tools by name list. Strict: only listed tools are included. */
+export function filterTools(allTools: ToolDef[], allowedNames?: string[]): ToolDef[] {
+  const nameSet = new Set(allowedNames ?? [])
+  return allTools.filter((t) => nameSet.has(t.name))
+}

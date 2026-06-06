@@ -1,0 +1,75 @@
+appId: com.turmind.halo
+productName: Halo
+directories:
+  output: dist
+# Skip @electron/rebuild on every build: the desktop package has no native
+# dependencies of its own (the only native modules — better-sqlite3, node-pty,
+# @parcel/watcher — live in the staged server-runtime / cli-runtime trees under
+# extraResources, already built for the target). Rebuilding here was pure dead
+# time each pack.
+npmRebuild: false
+files:
+  - src/**
+  - package.json
+# setup-helper.mjs is exec'd by the bundled `node` binary (a separate
+# process), not by Electron's main. A plain node sees app.asar as an
+# opaque zip and can't load files inside it, so this file must live
+# outside the asar archive.
+asarUnpack:
+  - src/setup-helper.mjs
+extraResources:
+  - from: resources/server-runtime
+    to: server-runtime
+  # CLI runtime (halo tui / cli / setup / acp). Self-contained esbuild
+  # bundle + its own flat node_modules; shares ~/.halo with the desktop
+  # server but runs as a separate in-process client (no HTTP server, no
+  # server.lock). The Win installer drops a halo.cmd launcher pointing
+  # here (build/installer.nsh); mac exposes it via an app menu item.
+  - from: resources/cli-runtime
+    to: cli-runtime
+  - from: resources/admin-out
+    to: admin-out
+  # `node` (Unix) is staged on macOS / Linux builds; `node.exe` is staged
+  # on Windows builds. electron-builder is fine with files that don't
+  # exist (skipped silently), so listing both is safe regardless of
+  # which prepack-* script ran.
+  - from: resources/node
+    to: node
+  - from: resources/node.exe
+    to: node.exe
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: arm64
+  icon: resources/icon.icns
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+dmg:
+  writeUpdateInfo: false
+  icon: resources/icon.icns
+  # Standard "drag to Applications" layout: the app on the left, an Applications
+  # symlink on the right. Dragging onto it replaces a same-named app in place,
+  # so users no longer have to uninstall the old build first.
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 200
+      type: file
+    - x: 400
+      y: 200
+      type: link
+      path: /Applications
+win:
+  target:
+    - target: nsis
+      arch: x64
+  icon: resources/icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  shortcutName: Halo

@@ -1,0 +1,30 @@
+name: Apply Agent
+description: System agent for self-evolution. Merges approved patches into a wrapper-built sandbox. Wrapper handles validation via __score__. Hidden from list_agents.
+internal: true
+priority: -1
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-opus-4-8
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 5m
+  thinking:
+    enabled: true
+    effort: xhigh
+system_prompt: >
+  You are Halo's apply agent. You merge one or more approved evolution
+  patches into a sandbox the wrapper has already built for you. You do NOT
+  build the sandbox, you do NOT run dry-runs, you do NOT score the result —
+  those are the wrapper's jobs. See AGENT.md for the full procedure. You
+  are invoked by an evo wrapper process — never by a user directly.
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+tools:
+  - file_read
+  - file_write
+  - file_edit
+  - file_list
+  - grep
+  - glob
+  - shell_exec
+skills: []

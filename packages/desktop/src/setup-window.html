@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Halo — First-time Setup</title>
+  <style>
+    /* Match admin UI dark theme — see packages/admin/src/app/globals.css. */
+    * { box-sizing: border-box; }
+    html { color-scheme: dark; }
+    body {
+      margin: 0; padding: 28px;
+      font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0a0a0a;
+      color: #ededed;
+      min-height: 100vh;
+    }
+    h1 { display: flex; align-items: center; gap: 12px; font-size: 20px; margin: 0 0 18px; }
+    h1 svg { flex: none; }
+    p.lead { color: #a1a1aa; margin: 0 0 20px; line-height: 1.5; }
+    label { display: block; font-weight: 500; margin: 14px 0 6px; color: #ededed; }
+    input[type="password"] {
+      width: 100%; padding: 9px 11px;
+      border: 1px solid #2a2a2a; border-radius: 6px;
+      font: inherit; outline: none;
+      background: #18181b; color: #ededed;
+    }
+    input[type="password"]::placeholder { color: #6b7280; }
+    input[type="password"]:focus { border-color: #6087fa; box-shadow: 0 0 0 3px rgba(96,135,250,.25); }
+    .err { color: #f87171; min-height: 18px; margin-top: 8px; font-size: 13px; }
+    .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }
+    button {
+      padding: 8px 18px; border-radius: 6px; border: 1px solid transparent;
+      font: inherit; cursor: pointer;
+    }
+    button.primary { background: #0a84ff; color: #fff; }
+    button.primary:hover { background: #0072e0; }
+    button.primary:disabled { background: #1e3a8a; color: #93c5fd; cursor: not-allowed; }
+    .hint { font-size: 12px; color: #71717a; margin-top: 10px; line-height: 1.5; }
+    code { background: #1f1f23; padding: 1px 6px; border-radius: 3px; color: #d4d4d8; }
+  </style>
+</head>
+<body>
+  <h1>
+    <svg width="32" height="32" viewBox="0 0 32 32">
+      <defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#a78bfa"/>
+      </linearGradient></defs>
+      <path d="M16 2 L28.66 9 L28.66 23 L16 30 L3.34 23 L3.34 9 Z" fill="url(#g)"/>
+      <text x="16" y="22.5" font-family="Inter,system-ui,sans-serif" font-size="17" font-weight="800" fill="white" text-anchor="middle">B</text>
+    </svg>
+    Welcome to Halo
+  </h1>
+  <p class="lead">Set an admin password to protect your workspace. You'll use it to sign in to the Halo UI.</p>
+
+  <label for="pw1">Password</label>
+  <input id="pw1" type="password" autocomplete="new-password" placeholder="At least 4 characters">
+
+  <label for="pw2">Confirm password</label>
+  <input id="pw2" type="password" autocomplete="new-password" placeholder="Type the password again">
+
+  <div class="err" id="err"></div>
+
+  <div class="actions">
+    <button class="primary" id="submit">Continue</button>
+  </div>
+
+  <p class="hint">You can change the password later by running <code>halo setup</code> from a terminal.</p>
+
+  <script>
+    const { ipcRenderer } = require('electron')
+    const pw1 = document.getElementById('pw1')
+    const pw2 = document.getElementById('pw2')
+    const err = document.getElementById('err')
+    const btn = document.getElementById('submit')
+
+    pw1.focus()
+
+    function show(msg) { err.textContent = msg }
+
+    async function submit() {
+      show('')
+      const a = pw1.value, b = pw2.value
+      if (!a || a.length < 4) return show('Password must be at least 4 characters.')
+      if (a !== b) return show("Passwords don't match.")
+      btn.disabled = true
+      btn.textContent = 'Saving…'
+      try {
+        await ipcRenderer.invoke('halo:set-password', a)
+        // main.cjs will close this window and proceed to start the server
+      } catch (e) {
+        btn.disabled = false
+        btn.textContent = 'Continue'
+        show(String(e && e.message || e))
+      }
+    }
+
+    btn.addEventListener('click', submit)
+    document.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit() })
+  </script>
+</body>
+</html>

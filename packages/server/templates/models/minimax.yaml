@@ -1,0 +1,80 @@
+id: minimax
+displayName: MiniMax
+displayName_zh: MiniMax
+description: MiniMax M2.7 family via the Anthropic-compatible Messages API
+description_zh: MiniMax M2.7 系列，通过 Anthropic 兼容的 Messages API 调用
+defaultEndpoint: https://api.minimaxi.com/anthropic
+defaultModelId: MiniMax-M2.7
+
+secrets:
+  - key: api_key
+    description: MiniMax API Key. Get from https://platform.minimaxi.com/user-center/basic-information/interface-key
+    description_zh: MiniMax API Key。从 https://platform.minimaxi.com/user-center/basic-information/interface-key 获取
+    default: <<MINIMAX_API_KEY>>
+    secret: true
+
+# Capability notes for MiniMax M2.7 family — verified against
+# platform.minimaxi.com/docs/api-reference/text-anthropic-api on 2026-05-26
+# plus live probes against MiniMax-M2.7:
+#   - image / video / audio: documented as not supported
+#   - thinking: forced on — `thinking:{type:'disabled'}` and omitting the
+#     field both still produce thinking blocks; only budget_tokens influences
+#     output. So we don't expose an off toggle.
+#   - cache_control: both models support caching. Doc says TTL is 5min,
+#     refreshing automatically on each hit. cache_control:{type:'ephemeral'}
+#     is the only shape — no longer-TTL knob exposed by MiniMax.
+#       - MiniMax-M2.7-highspeed: turn 1 reports cache_creation_input_tokens=N,
+#         turn 2 reports cache_read_input_tokens=N. Standard Anthropic shape.
+#       - MiniMax-M2.7: turn 1 reports cache_creation=0 (write happens
+#         implicitly without surfacing the count); turn 2 still reports
+#         cache_read_input_tokens=N. Read badge will appear after the first
+#         repeat, but the "write" badge never shows on M2.7 — quirk of
+#         MiniMax's reporting, not a Halo bug. Verified 2026-05-26.
+#     Cache is per-model (no cross-model sharing observed).
+#   - effort presets: pure Halo-side abstraction. `low` (1024 budget) was
+#     observed to truncate the run with stop=max_tokens before any thinking
+#     completes — leaving it out of the preset list. medium/high are safe.
+models:
+  - id: MiniMax-M2.7
+    displayName: MiniMax M2.7
+    maxOutputTokens: 16384
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # MiniMax thinking is always-on — there's no off switch. We still
+        # surface a Thinking control because budget_tokens shapes output
+        # length / latency. `effortPresets` are pure Halo-side labels;
+        # minimax-agent.ts maps them via effortToBudget() before sending.
+        mode: manual
+        defaultEnabled: true
+        default: medium
+        defaultBudgetTokens: 8192
+        effortPresets:
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: MiniMax-M2.7-highspeed
+    displayName: MiniMax M2.7 Highspeed
+    maxOutputTokens: 16384
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: manual
+        defaultEnabled: true
+        default: medium
+        defaultBudgetTokens: 8192
+        effortPresets:
+          - { value: medium, label: Medium }
+          - { value: high, label: High }

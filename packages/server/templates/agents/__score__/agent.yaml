@@ -1,0 +1,29 @@
+name: Score
+description: System agent for self-evolution. Reads a patch + dry-run output + original snapshot and writes score.json. Hidden from list_agents. Reused at apply time as the regression gate.
+internal: true
+priority: -1
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-opus-4-8
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 5m
+  thinking:
+    enabled: true
+    effort: xhigh
+system_prompt: >
+  You are Halo's evolution scorer. You read a proposed patch, the dry-run
+  output it produced when applied to a sandbox, and the original conversation
+  snapshot. You write score.json with lint/behavior/scope/confidence/avg/notes.
+  You never modify any other file and you never run anything. See AGENT.md
+  for the full procedure. You are invoked by an evo wrapper process — never
+  by a user directly.
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+tools:
+  - file_read
+  - file_write
+  - file_list
+  - grep
+  - glob
+skills: []

@@ -1,0 +1,10 @@
+displayName_zh: Tavily 联网搜索
+description: Real-time web search via Tavily Search API.
+description_zh: 通过 Tavily 搜索 API 进行实时联网搜索。
+
+params:
+  - key: api_key
+    description: Tavily Search API Key. Get one at https://app.tavily.com.
+    description_zh: Tavily 搜索 API Key。从 https://app.tavily.com 获取。
+    default: <<TAVILY_API_KEY>>
+    secret: true

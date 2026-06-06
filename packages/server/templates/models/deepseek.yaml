@@ -1,0 +1,62 @@
+id: deepseek
+displayName: DeepSeek
+displayName_zh: DeepSeek
+description: DeepSeek V4 via OpenAI-compatible chat completions API
+description_zh: DeepSeek V4，通过 OpenAI 兼容的 chat completions API 调用
+defaultEndpoint: https://api.deepseek.com
+
+secrets:
+  - key: api_key
+    description: DeepSeek API Key. Get from https://platform.deepseek.com/api_keys
+    description_zh: DeepSeek API Key。从 https://platform.deepseek.com/api_keys 获取
+    default: <<DEEPSEEK_API_KEY>>
+    secret: true
+
+# Capabilities verified 2026-05-27 via live probes. DeepSeek's image_url
+# blocks are rejected at the JSON-deserialize layer ("unknown variant
+# image_url"), so image:false is correct. reasoning_effort accepts
+# { low, medium, high, max, xhigh } — bogus values 400 with the full
+# valid list in the error. Caching is automatic; cached_tokens shows up
+# from turn 2.
+models:
+  - id: deepseek-v4-pro
+    displayName: DeepSeek V4 Pro
+    maxOutputTokens: 65536
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+          - { value: xhigh, label: XHigh }
+
+  - id: deepseek-v4-flash
+    displayName: DeepSeek V4 Flash
+    maxOutputTokens: 65536
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+          - { value: xhigh, label: XHigh }

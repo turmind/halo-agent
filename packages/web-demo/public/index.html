@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="zh-CN" id="htmlRoot">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Halo Web Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --border: #2a2a4a;
+      --text: #e0e0e0;
+      --muted: #8888aa;
+      --primary: #4a6cf7;
+      --primary-hover: #3b5de7;
+      --user-bg: #2d3a5e;
+      --bot-bg: #1e2a45;
+      --danger: #ef4444;
+      --tool-bg: rgba(74,108,247,0.08);
+      --tool-border: rgba(74,108,247,0.3);
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      overflow: hidden;
+    }
+    .hidden { display: none !important; }
+
+    /* Login */
+    .login {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100dvh;
+      gap: 16px;
+      padding: 20px;
+    }
+    .login input {
+      width: 100%;
+      max-width: 320px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+    }
+    .login input:focus { border-color: var(--primary); }
+    .login button {
+      padding: 10px 24px;
+      border-radius: 8px;
+      border: none;
+      background: var(--primary);
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .login button:hover { background: var(--primary-hover); }
+    .login .error { color: var(--danger); font-size: 12px; }
+
+    /* Chat layout */
+    #chatView {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .header h1 { font-size: 14px; font-weight: 600; }
+    .header .status {
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .header .status .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #10b981;
+    }
+    .header .status .dot.running {
+      background: var(--primary);
+      animation: pulse 1s infinite;
+    }
+    .header .status .dot.disconnected { background: var(--danger); }
+
+    /* Messages */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+    }
+    .msg {
+      max-width: 88%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: var(--user-bg);
+      border-bottom-right-radius: 4px;
+    }
+    .msg.bot {
+      align-self: flex-start;
+      background: var(--bot-bg);
+      border-bottom-left-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .msg.system {
+      align-self: center;
+      color: var(--muted);
+      font-size: 11px;
+      padding: 4px 12px;
+      background: transparent;
+    }
+    .msg .bot-text { }
+    .msg .thinking-block {
+      color: var(--muted);
+      font-style: italic;
+      font-size: 11px;
+      margin-bottom: 6px;
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.02);
+      border-radius: 4px;
+      max-height: 60px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: max-height 0.2s;
+    }
+    .msg .thinking-block.expanded { max-height: none; }
+    .msg .tool-block {
+      font-size: 11px;
+      margin: 6px 0;
+      padding: 6px 10px;
+      background: var(--tool-bg);
+      border-radius: 6px;
+      border-left: 3px solid var(--tool-border);
+      cursor: pointer;
+    }
+    .msg .tool-block .tool-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--primary);
+      font-weight: 500;
+    }
+    .msg .tool-block .tool-detail {
+      color: var(--muted);
+      margin-top: 4px;
+      font-family: monospace;
+      font-size: 10px;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.2s;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .msg .tool-block.expanded .tool-detail { max-height: 300px; overflow-y: auto; }
+    .msg .tool-block .tool-result {
+      color: var(--muted);
+      margin-top: 4px;
+      font-size: 10px;
+      font-family: monospace;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.2s;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .msg .tool-block.expanded .tool-result { max-height: 200px; overflow-y: auto; }
+
+    /* Input area */
+    .input-area {
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      padding: 10px 16px;
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+      flex-shrink: 0;
+    }
+    .input-area textarea {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: inherit;
+      resize: none;
+      min-height: 40px;
+      max-height: 120px;
+      line-height: 1.4;
+      outline: none;
+    }
+    .input-area textarea:focus { border-color: var(--primary); }
+    .input-area button {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .btn-send { background: var(--primary); color: white; }
+    .btn-send:hover { background: var(--primary-hover); }
+    .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-stop { background: var(--danger); color: white; }
+    .btn-stop:hover { opacity: 0.9; }
+    .btn-icon {
+      background: transparent;
+      border: 1px solid var(--border) !important;
+      color: var(--muted);
+    }
+    .btn-icon:hover { color: var(--text); border-color: var(--text) !important; }
+    .btn-icon.recording { color: var(--danger); border-color: var(--danger) !important; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+    /* Queue indicator */
+    .queue-indicator {
+      font-size: 10px;
+      color: var(--muted);
+      padding: 2px 16px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    /* Toolbar */
+    .toolbar-wrap { position: relative; }
+    .toolbar-btn {
+      width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .toolbar-btn:hover { color: var(--text); border-color: var(--text); }
+    .toolbar-menu {
+      display: none;
+      position: absolute; top: 38px; right: 0; z-index: 100;
+      min-width: 160px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      padding: 4px 0; flex-direction: column;
+    }
+    .toolbar-menu.show { display: flex; }
+    .toolbar-item {
+      padding: 8px 14px; font-size: 13px; cursor: pointer;
+      display: flex; align-items: center; gap: 8px; white-space: nowrap;
+    }
+    .toolbar-item:hover { background: rgba(74,108,247,0.1); }
+    .toolbar-item .arrow { margin-left: auto; color: var(--muted); font-size: 10px; }
+    .toolbar-sep { height: 1px; background: var(--border); margin: 4px 0; }
+    .toolbar-sub {
+      display: none; position: absolute; top: 0; right: 100%; margin-right: 4px;
+      min-width: 180px; max-height: 300px; overflow-y: auto;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); padding: 4px 0;
+    }
+    .toolbar-sub.show { display: flex; flex-direction: column; }
+    .toolbar-sub .toolbar-item { font-size: 12px; }
+    .toolbar-sub .toolbar-item.active { color: var(--primary); }
+    .toolbar-sub .loading { padding: 12px 14px; color: var(--muted); font-size: 11px; }
+
+    .lang-toggle {
+      font-size: 12px; padding: 4px 8px; border-radius: 4px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--muted); cursor: pointer; margin-right: 8px;
+    }
+    .lang-toggle:hover { color: var(--text); border-color: var(--text); }
+
+    .media-btns { display: flex; gap: 6px; }
+    .media-toggle { display: none; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; align-items: center; justify-content: center; flex-shrink: 0; }
+    .media-toggle:hover { color: var(--text); border-color: var(--text); }
+
+    /* Mobile */
+    @media (max-width: 600px) {
+      .input-area textarea { font-size: 16px; }
+      .input-area { padding-bottom: env(safe-area-inset-bottom, 10px); }
+      .login input { font-size: 16px; }
+      .media-btns { display: none; }
+      .media-btns.show { display: flex; }
+      .media-toggle { display: flex; }
+    }
+
+    /* Image preview */
+    .image-preview {
+      display: flex;
+      gap: 6px;
+      padding: 4px 0;
+      flex-wrap: wrap;
+    }
+    .image-preview .thumb {
+      position: relative;
+      width: 48px;
+      height: 48px;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .image-preview .thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .image-preview .thumb .remove {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--danger);
+      color: white;
+      border: none;
+      font-size: 9px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="loginView" class="login">
+    <h2>Halo Web Demo</h2>
+    <p id="loginSubtitle" style="color: var(--muted); font-size: 12px;"></p>
+    <input id="passwordInput" type="password" placeholder="" autofocus onkeydown="if(event.key==='Enter')doLogin()">
+    <button id="loginBtn" onclick="doLogin()"></button>
+    <div id="loginError" class="error hidden"></div>
+  </div>
+
+  <div id="chatView" class="hidden">
+    <div class="header">
+      <div>
+        <h1>Halo Web Demo</h1>
+        <div class="status">
+          <span class="dot" id="statusDot"></span>
+          <span id="statusText"></span>
+        </div>
+      </div>
+      <button class="lang-toggle" id="langToggle" onclick="toggleLang()">EN</button>
+      <div class="toolbar-wrap" id="toolbarWrap">
+        <button class="toolbar-btn" id="toolbarBtn" onclick="toggleToolbar()" title="" data-i18n-title="toolbar.title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <div class="toolbar-menu" id="toolbarMenu">
+          <div class="toolbar-item" onmouseenter="showSub('sessions')" onclick="showSub('sessions')">
+            <span>📋</span><span id="menuSessions"></span><span class="arrow">▸</span>
+            <div class="toolbar-sub" id="subSessions"></div>
+          </div>
+          <div class="toolbar-item" onmouseenter="showSub('agents')" onclick="showSub('agents')">
+            <span>🤖</span><span>Agents</span><span class="arrow">▸</span>
+            <div class="toolbar-sub" id="subAgents"></div>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-item" onclick="execCmd('/new')"><span>✨</span><span id="menuNew"></span></div>
+          <div class="toolbar-item" onclick="execCmd('/compact')"><span>🗜</span><span id="menuCompact"></span></div>
+          <div class="toolbar-item" onclick="execCmd('/stop')"><span>⏹</span><span id="menuStop"></span></div>
+          <div class="toolbar-item" onclick="promptWs()"><span>📂</span><span id="menuWs"></span></div>
+          <div class="toolbar-item" onclick="execCmd('/help')"><span>❓</span><span id="menuHelp"></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="messages" id="messages"></div>
+    <div class="queue-indicator hidden" id="queueIndicator"></div>
+    <div class="input-area">
+      <button class="media-toggle" onclick="toggleMediaBtns()" title="附件" data-i18n-title="btn.attach">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+      <div class="media-btns" id="mediaBtns">
+        <button class="btn-icon" id="voiceBtn" onclick="toggleVoice()" title="录音" data-i18n-title="btn.voice">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </button>
+        <button class="btn-icon" id="imageBtn" onclick="pickImage()" title="上传图片" data-i18n-title="btn.image">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+        </button>
+        <button class="btn-icon" id="cameraBtn" onclick="captureCamera()" title="拍照" data-i18n-title="btn.camera">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </button>
+      </div>
+      <div style="flex:1; display:flex; flex-direction:column; gap:4px;">
+        <div class="image-preview hidden" id="imagePreview"></div>
+        <textarea id="msgInput" placeholder="" rows="1" onkeydown="handleKey(event)"></textarea>
+      </div>
+      <button class="btn-send" id="sendBtn" onclick="sendMessage()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="22" y1="2" x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+      <button class="btn-stop hidden" id="stopBtn" onclick="stopGeneration()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="4" y="4" width="16" height="16" rx="2"/>
+        </svg>
+      </button>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" multiple class="hidden" onchange="handleFiles(this.files)">
+    <input type="file" id="cameraInput" accept="image/*" capture="environment" class="hidden" onchange="handleFiles(this.files)">
+  </div>
+
+  <script>
+    // ── i18n ──
+
+    const i18n = {
+      en: {
+        'login.subtitle': 'Enter password',
+        'login.placeholder': 'Password...',
+        'login.submit': 'Enter',
+        'login.error': 'Wrong password',
+        'login.connFailed': 'Connection failed',
+        'login.expired': 'Session expired, please log in again',
+        'status.connected': 'Connected',
+        'status.generating': 'Generating...',
+        'status.disconnected': 'Disconnected',
+        'toolbar.title': 'Commands',
+        'toolbar.sessions': 'Sessions',
+        'toolbar.new': 'New session',
+        'toolbar.compact': 'Compact context',
+        'toolbar.stop': 'Stop',
+        'toolbar.workspace': 'Workspace',
+        'toolbar.help': 'Help',
+        'toolbar.wsPrompt': 'Enter workspace path (leave empty to view current):',
+        'toolbar.loading': 'Loading...',
+        'toolbar.loadFailed': 'Failed to load',
+        'toolbar.noSessions': 'No sessions',
+        'toolbar.noAgents': 'No agents',
+        'btn.attach': 'Attach',
+        'btn.voice': 'Record',
+        'btn.image': 'Upload image',
+        'btn.camera': 'Camera',
+        'input.placeholder': 'Type a message... (/ for commands)',
+        'chat.stopped': '(Stopped)',
+        'chat.connError': '❌ Connection error: ',
+        'chat.imageLabel': '🖼 [Image]',
+        'chat.imageSent': '(User sent images)',
+        'chat.queued': '{n} message(s) queued...',
+        'chat.voiceLabel': '🎤 [Voice message]',
+        'chat.voiceSent': '(User sent a voice message)',
+        'chat.micError': 'Cannot access microphone: ',
+      },
+      zh: {
+        'login.subtitle': '输入密码',
+        'login.placeholder': '密码...',
+        'login.submit': '进入',
+        'login.error': '密码错误',
+        'login.connFailed': '连接失败',
+        'login.expired': '会话过期，请重新登录',
+        'status.connected': '已连接',
+        'status.generating': '生成中...',
+        'status.disconnected': '连接断开',
+        'toolbar.title': '命令菜单',
+        'toolbar.sessions': '会话',
+        'toolbar.new': '新建会话',
+        'toolbar.compact': '压缩上下文',
+        'toolbar.stop': '停止',
+        'toolbar.workspace': '工作区',
+        'toolbar.help': '帮助',
+        'toolbar.wsPrompt': '输入工作区路径（留空查看当前）：',
+        'toolbar.loading': '加载中...',
+        'toolbar.loadFailed': '加载失败',
+        'toolbar.noSessions': '暂无会话',
+        'toolbar.noAgents': '暂无 Agent',
+        'btn.attach': '附件',
+        'btn.voice': '录音',
+        'btn.image': '上传图片',
+        'btn.camera': '拍照',
+        'input.placeholder': '输入消息... (/ 开头为命令)',
+        'chat.stopped': '（已停止）',
+        'chat.connError': '❌ 连接错误: ',
+        'chat.imageLabel': '🖼 [图片]',
+        'chat.imageSent': '(用户发送了图片)',
+        'chat.queued': '队列中还有 {n} 条消息等待发送...',
+        'chat.voiceLabel': '🎤 [语音消息]',
+        'chat.voiceSent': '(用户发送了一段语音消息)',
+        'chat.micError': '无法访问麦克风: ',
+      }
+    }
+
+    function getLang() {
+      return localStorage.getItem('halo_lang') || (navigator.language.startsWith('zh') ? 'zh' : 'en')
+    }
+
+    function T(key) {
+      const lang = getLang()
+      return (i18n[lang] && i18n[lang][key]) || (i18n.en[key]) || key
+    }
+
+    function toggleLang() {
+      const next = getLang() === 'zh' ? 'en' : 'zh'
+      localStorage.setItem('halo_lang', next)
+      applyLang()
+    }
+
+    function applyLang() {
+      const lang = getLang()
+      document.getElementById('htmlRoot').lang = lang === 'zh' ? 'zh-CN' : 'en'
+      document.getElementById('langToggle').textContent = lang === 'zh' ? '中' : 'EN'
+      document.getElementById('loginSubtitle').textContent = T('login.subtitle')
+      document.getElementById('passwordInput').placeholder = T('login.placeholder')
+      document.getElementById('loginBtn').textContent = T('login.submit')
+      document.getElementById('menuSessions').textContent = T('toolbar.sessions')
+      document.getElementById('menuNew').textContent = T('toolbar.new')
+      document.getElementById('menuCompact').textContent = T('toolbar.compact')
+      document.getElementById('menuStop').textContent = T('toolbar.stop')
+      document.getElementById('menuWs').textContent = T('toolbar.workspace')
+      document.getElementById('menuHelp').textContent = T('toolbar.help')
+      document.getElementById('msgInput').placeholder = T('input.placeholder')
+      document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        el.title = T(el.dataset.i18nTitle)
+      })
+      if (!generating) {
+        document.getElementById('statusText').textContent = T('status.connected')
+      }
+    }
+
+    let session = localStorage.getItem('halo_web_demo_session') || ''
+    let generating = false
+    let abortController = null
+    let pendingImages = []
+    let messageQueue = []
+
+    if (session) enterChat()
+    applyLang()
+
+    async function doLogin() {
+      const input = document.getElementById('passwordInput')
+      const password = input ? input.value.trim() : ''
+      try {
+        const res = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          showLoginError(data.error || T('login.error'))
+          return
+        }
+        session = data.session || ''
+        localStorage.setItem('halo_web_demo_session', session)
+        enterChat()
+      } catch {
+        showLoginError(T('login.connFailed'))
+      }
+    }
+
+    function showLoginError(msg) {
+      const el = document.getElementById('loginError')
+      el.textContent = msg
+      el.classList.remove('hidden')
+    }
+
+    function enterChat() {
+      document.getElementById('loginView').classList.add('hidden')
+      document.getElementById('chatView').classList.remove('hidden')
+      document.getElementById('msgInput').focus()
+      loadHistory()
+    }
+
+    // ── History & Reconnect ──
+
+    async function loadHistory() {
+      try {
+        const res = await fetch('/history', { headers: { 'x-session': session } })
+        if (res.status === 401) { logout(); return }
+        if (!res.ok) return
+        const data = await res.json()
+        const container = document.getElementById('messages')
+        container.innerHTML = ''
+        if (data.messages && data.messages.length > 0) {
+          for (const msg of data.messages) {
+            if (msg.role === 'user') {
+              appendMsg('user', msg.content)
+            } else if (msg.role === 'assistant') {
+              const botDiv = appendBotMessage()
+              if (msg.contentBlocks && msg.contentBlocks.length > 0) {
+                for (const block of msg.contentBlocks) {
+                  if (block.type === 'thinking' && block.text) {
+                    updateThinking(botDiv, block.text, true)
+                  } else if (block.type === 'tool_call' && block.toolCall) {
+                    appendToolBlock(botDiv, block.toolCall.name, block.toolCall.input, block.toolCall.output || null)
+                  }
+                }
+              }
+              if (msg.content) {
+                const mediaRe = /^MEDIA:\s*(\S.*?)\s*$/gm
+                const files = []
+                const cleaned = msg.content.replace(mediaRe, (_, p) => { files.push(p); return '' })
+                // History replay: write synchronously. setTextContent
+                // batches via a single global RAF slot which is the
+                // right behaviour for streaming (one buffer per turn),
+                // but in a history loop every iteration overwrites the
+                // pending slot — only the last assistant message's text
+                // would land, all earlier ones came up blank with just
+                // their thinking block visible.
+                if (cleaned.trim()) {
+                  const el = botDiv.querySelector('.bot-text')
+                  if (el) el.textContent = cleaned.trim()
+                }
+                for (const f of files) appendFileBlock(botDiv, f)
+              }
+            }
+          }
+        }
+        if (data.running) {
+          subscribeToRunning()
+        }
+      } catch { /* ignore */ }
+    }
+
+    async function subscribeToRunning() {
+      setStatus('running', T('status.generating'))
+      setGenerating(true)
+      abortController = new AbortController()
+
+      const botDiv = appendBotMessage()
+      let fullText = ''
+
+      try {
+        const res = await fetch('/subscribe', {
+          headers: { 'x-session': session },
+          signal: abortController.signal,
+        })
+        if (!res.ok) { setGenerating(false); return }
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue
+            try {
+              const event = JSON.parse(line.slice(6))
+              fullText = handleSSEEvent(event, botDiv, fullText)
+              if (event.type === 'complete' || event.type === 'error') break
+            } catch { /* skip */ }
+          }
+        }
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.log('[subscribe] stream ended:', err.message)
+        }
+      } finally {
+        setGenerating(false)
+        abortController = null
+        if (!fullText && !botDiv.querySelector('.bot-text')?.textContent && !botDiv.querySelector('.tool-block')) {
+          botDiv.remove()
+        }
+        processQueue()
+      }
+    }
+
+    // ── Send Message ──
+
+    function handleKey(e) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault()
+        sendMessage()
+      }
+    }
+
+    function sendMessage() {
+      const input = document.getElementById('msgInput')
+      const text = input.value.trim()
+      if (!text && pendingImages.length === 0) return
+
+      input.value = ''
+      autoResize(input)
+
+      const images = pendingImages.length > 0 ? [...pendingImages] : undefined
+      clearImagePreview()
+
+      if (text) appendMsg('user', text)
+      else if (images) appendMsg('user', T('chat.imageLabel'))
+
+      if (generating) {
+        messageQueue.push({ message: text || T('chat.imageLabel'), images })
+        updateQueueIndicator()
+      } else {
+        doChat(text || T('chat.imageSent'), images)
+      }
+    }
+
+    async function doChat(message, images) {
+      setGenerating(true)
+      setStatus('running', T('status.generating'))
+      abortController = new AbortController()
+
+      const botDiv = appendBotMessage()
+      let fullText = ''
+
+      try {
+        const body = { message }
+        if (images) body.images = images
+
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-session': session },
+          body: JSON.stringify(body),
+          signal: abortController.signal,
+        })
+
+        if (res.status === 401) { logout(); return }
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue
+            try {
+              const event = JSON.parse(line.slice(6))
+              fullText = handleSSEEvent(event, botDiv, fullText)
+              if (event.type === 'complete' || event.type === 'error') break
+            } catch { /* skip */ }
+          }
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          if (!fullText) appendTextToBot(botDiv, T('chat.stopped'))
+        } else {
+          console.log('[chat] connection error:', err.message)
+          if (!fullText) appendTextToBot(botDiv, T('chat.connError') + err.message)
+        }
+      } finally {
+        setGenerating(false)
+        abortController = null
+        if (!fullText && !botDiv.querySelector('.bot-text')?.textContent && !botDiv.querySelector('.tool-block')) {
+          botDiv.remove()
+        }
+        processQueue()
+      }
+    }
+
+    function handleSSEEvent(event, botDiv, fullText) {
+      switch (event.type) {
+        case 'stream':
+          fullText += event.text
+          setTextContent(botDiv, fullText)
+          scrollToBottom()
+          break
+        case 'thinking':
+          updateThinking(botDiv, event.text)
+          break
+        case 'tool_call':
+          appendToolBlock(botDiv, event.toolName, event.toolInput, null)
+          scrollToBottom()
+          break
+        case 'tool_result':
+          updateLastToolResult(botDiv, event.toolName, event.result)
+          break
+        case 'file':
+          appendFileBlock(botDiv, event.path)
+          scrollToBottom()
+          break
+        case 'error':
+          appendTextToBot(botDiv, '❌ ' + event.error)
+          break
+        case 'switch':
+          setTimeout(() => loadHistory(), 100)
+          break
+        case 'complete':
+          break
+      }
+      return fullText
+    }
+
+    // ── Queue processing ──
+
+    async function processQueue() {
+      if (messageQueue.length === 0) {
+        updateQueueIndicator()
+        return
+      }
+      const next = messageQueue.shift()
+      updateQueueIndicator()
+      await doChat(next.message, next.images)
+    }
+
+    function updateQueueIndicator() {
+      const el = document.getElementById('queueIndicator')
+      if (messageQueue.length > 0) {
+        el.textContent = T('chat.queued').replace('{n}', messageQueue.length)
+        el.classList.remove('hidden')
+      } else {
+        el.classList.add('hidden')
+      }
+    }
+
+    // ── Stop ──
+
+    async function stopGeneration() {
+      if (abortController) abortController.abort()
+      try {
+        await fetch('/stop', { method: 'POST', headers: { 'x-session': session } })
+      } catch { /* ignore */ }
+    }
+
+    // ── DOM helpers ──
+
+    function appendMsg(role, content) {
+      const div = document.createElement('div')
+      div.className = `msg ${role}`
+      div.textContent = content
+      document.getElementById('messages').appendChild(div)
+      scrollToBottom()
+      return div
+    }
+
+    function appendBotMessage() {
+      const div = document.createElement('div')
+      div.className = 'msg bot'
+      const textEl = document.createElement('div')
+      textEl.className = 'bot-text'
+      div.appendChild(textEl)
+      document.getElementById('messages').appendChild(div)
+      scrollToBottom()
+      return div
+    }
+
+    let _renderRAF = null
+    let _pendingRender = null
+    function setTextContent(botDiv, text) {
+      _pendingRender = { botDiv, text }
+      if (_renderRAF) return
+      _renderRAF = requestAnimationFrame(() => {
+        _renderRAF = null
+        if (_pendingRender) {
+          const el = _pendingRender.botDiv.querySelector('.bot-text')
+          if (el) el.textContent = _pendingRender.text
+          _pendingRender = null
+        }
+      })
+    }
+
+    function appendTextToBot(botDiv, text) {
+      const el = botDiv.querySelector('.bot-text')
+      if (el) el.textContent += text
+    }
+
+    function updateThinking(botDiv, text, replace) {
+      let el = botDiv.querySelector('.thinking-block')
+      if (!el) {
+        el = document.createElement('div')
+        el.className = 'thinking-block'
+        el._fullText = ''
+        el.onclick = () => {
+          el.classList.toggle('expanded')
+          renderThinkingText(el)
+        }
+        botDiv.insertBefore(el, botDiv.firstChild)
+      }
+      el._fullText = replace ? text : (el._fullText + text)
+      renderThinkingText(el)
+    }
+
+    function renderThinkingText(el) {
+      const t = el._fullText
+      if (el.classList.contains('expanded')) {
+        el.textContent = '💭 ' + t
+      } else {
+        el.textContent = '💭 ' + (t.length > 120 ? t.slice(-120) + '…' : t)
+      }
+    }
+
+    function appendToolBlock(botDiv, toolName, toolInput, result) {
+      const block = document.createElement('div')
+      block.className = 'tool-block'
+      block.onclick = () => block.classList.toggle('expanded')
+
+      const header = document.createElement('div')
+      header.className = 'tool-header'
+      header.textContent = '🔧 ' + toolName
+
+      const detail = document.createElement('div')
+      detail.className = 'tool-detail'
+      if (toolInput) {
+        detail.textContent = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput, null, 2)
+      }
+
+      const resultEl = document.createElement('div')
+      resultEl.className = 'tool-result'
+      if (result) resultEl.textContent = result
+
+      block.appendChild(header)
+      block.appendChild(detail)
+      block.appendChild(resultEl)
+
+      const textEl = botDiv.querySelector('.bot-text')
+      botDiv.insertBefore(block, textEl)
+    }
+
+    function updateLastToolResult(botDiv, toolName, result) {
+      const blocks = botDiv.querySelectorAll('.tool-block')
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const header = blocks[i].querySelector('.tool-header')
+        if (header && header.textContent.includes(toolName)) {
+          const resultEl = blocks[i].querySelector('.tool-result')
+          if (resultEl) resultEl.textContent = result || ''
+          break
+        }
+      }
+    }
+
+    function appendFileBlock(botDiv, filePath) {
+      const block = document.createElement('div')
+      block.className = 'file-block'
+      const name = filePath.split('/').pop() || filePath
+      const ext = name.split('.').pop()?.toLowerCase() || ''
+      const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']
+      const url = '/file?path=' + encodeURIComponent(filePath)
+
+      if (imageExts.includes(ext)) {
+        const img = document.createElement('img')
+        img.src = url
+        img.style.maxWidth = '100%'
+        img.style.maxHeight = '300px'
+        img.style.borderRadius = '6px'
+        img.style.marginTop = '4px'
+        block.appendChild(img)
+      }
+
+      const link = document.createElement('a')
+      link.href = url
+      link.target = '_blank'
+      link.textContent = '📎 ' + name
+      link.style.display = 'block'
+      link.style.marginTop = '4px'
+      link.style.color = 'var(--primary)'
+      link.style.fontSize = '12px'
+      block.appendChild(link)
+
+      const textEl = botDiv.querySelector('.bot-text')
+      botDiv.insertBefore(block, textEl)
+    }
+
+    function scrollToBottom() {
+      const el = document.getElementById('messages')
+      el.scrollTop = el.scrollHeight
+    }
+
+    function autoResize(el) {
+      el.style.height = 'auto'
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+    }
+
+    document.getElementById('msgInput')?.addEventListener('input', function() { autoResize(this) })
+
+    function setGenerating(v) {
+      generating = v
+      document.getElementById('sendBtn').classList.toggle('hidden', v)
+      document.getElementById('stopBtn').classList.toggle('hidden', !v)
+      if (!v) setStatus('connected', T('status.connected'))
+    }
+
+    function setStatus(state, text) {
+      const dot = document.getElementById('statusDot')
+      const txt = document.getElementById('statusText')
+      dot.className = 'dot' + (state === 'running' ? ' running' : state === 'disconnected' ? ' disconnected' : '')
+      txt.textContent = text
+    }
+
+    function logout() {
+      localStorage.removeItem('halo_web_demo_session')
+      session = ''
+      document.getElementById('chatView').classList.add('hidden')
+      document.getElementById('loginView').classList.remove('hidden')
+      showLoginError(T('login.expired'))
+    }
+
+    // ── Image upload ──
+
+    function pickImage() {
+      document.getElementById('fileInput').click()
+    }
+
+    function captureCamera() {
+      document.getElementById('cameraInput').click()
+    }
+
+    function handleFiles(files) {
+      for (const file of files) {
+        if (!file.type.startsWith('image/')) continue
+        const reader = new FileReader()
+        reader.onload = () => {
+          const base64 = reader.result.split(',')[1]
+          pendingImages.push({ data: base64, mimeType: file.type })
+          renderImagePreview()
+        }
+        reader.readAsDataURL(file)
+      }
+      document.getElementById('fileInput').value = ''
+      document.getElementById('cameraInput').value = ''
+    }
+
+    function renderImagePreview() {
+      const container = document.getElementById('imagePreview')
+      container.innerHTML = ''
+      if (pendingImages.length === 0) {
+        container.classList.add('hidden')
+        return
+      }
+      container.classList.remove('hidden')
+      pendingImages.forEach((img, idx) => {
+        const thumb = document.createElement('div')
+        thumb.className = 'thumb'
+        const imgEl = document.createElement('img')
+        imgEl.src = `data:${img.mimeType};base64,${img.data}`
+        const btn = document.createElement('button')
+        btn.className = 'remove'
+        btn.textContent = '×'
+        btn.onclick = (e) => { e.stopPropagation(); pendingImages.splice(idx, 1); renderImagePreview() }
+        thumb.appendChild(imgEl)
+        thumb.appendChild(btn)
+        container.appendChild(thumb)
+      })
+    }
+
+    function clearImagePreview() {
+      pendingImages = []
+      renderImagePreview()
+    }
+
+    // ── Voice recording ──
+
+    let mediaRecorder = null
+    let audioChunks = []
+    let recording = false
+
+    function toggleVoice() {
+      if (recording) stopRecording()
+      else startRecording()
+    }
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+        audioChunks = []
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) audioChunks.push(e.data)
+        }
+
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop())
+          const blob = new Blob(audioChunks, { type: 'audio/webm' })
+          const reader = new FileReader()
+          reader.onload = async () => {
+            const base64 = reader.result.split(',')[1]
+            appendMsg('user', T('chat.voiceLabel'))
+            const images = [{ data: base64, mimeType: 'audio/webm' }]
+            if (generating) {
+              messageQueue.push({ message: T('chat.voiceSent'), images })
+              updateQueueIndicator()
+            } else {
+              await doChat(T('chat.voiceSent'), images)
+            }
+          }
+          reader.readAsDataURL(blob)
+        }
+
+        mediaRecorder.start()
+        recording = true
+        document.getElementById('voiceBtn').classList.add('recording')
+      } catch (err) {
+        alert(T('chat.micError') + err.message)
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop()
+      }
+      recording = false
+      document.getElementById('voiceBtn').classList.remove('recording')
+    }
+
+    // ── Media toggle (mobile) ──
+
+    function toggleMediaBtns() {
+      document.getElementById('mediaBtns').classList.toggle('show')
+    }
+
+    // ── Toolbar ──
+
+    function toggleToolbar() {
+      const menu = document.getElementById('toolbarMenu')
+      const isOpen = menu.classList.contains('show')
+      closeToolbar()
+      if (!isOpen) menu.classList.add('show')
+    }
+
+    function closeToolbar() {
+      document.getElementById('toolbarMenu').classList.remove('show')
+      document.querySelectorAll('.toolbar-sub').forEach(el => el.classList.remove('show'))
+    }
+
+    document.addEventListener('click', (e) => {
+      if (!document.getElementById('toolbarWrap').contains(e.target)) closeToolbar()
+    })
+
+    function execCmd(cmd) {
+      closeToolbar()
+      const input = document.getElementById('msgInput')
+      input.value = cmd
+      sendMessage()
+    }
+
+    function promptWs() {
+      closeToolbar()
+      const path = prompt(T('toolbar.wsPrompt'))
+      if (path === null) return
+      execCmd(path ? '/ws ' + path.trim() : '/ws')
+    }
+
+    async function showSub(type) {
+      document.querySelectorAll('.toolbar-sub').forEach(el => el.classList.remove('show'))
+      const subEl = type === 'sessions' ? document.getElementById('subSessions') : document.getElementById('subAgents')
+      subEl.innerHTML = '<div class="loading">' + T('toolbar.loading') + '</div>'
+      subEl.classList.add('show')
+
+      if (type === 'sessions') {
+        await loadSessionList(subEl)
+      } else {
+        await loadAgentList(subEl)
+      }
+    }
+
+    async function loadSessionList(container) {
+      try {
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-session': session },
+          body: JSON.stringify({ message: '/list' }),
+        })
+        if (!res.ok) { container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'; return }
+
+        const text = await readSSEText(res)
+        const lines = text.split('\n').filter(l => l.trim())
+        container.innerHTML = ''
+
+        let found = false
+        for (const line of lines) {
+          const match = line.match(/^\s*[→]?\s*(\d+)\.\s*(.+)$/)
+          if (!match) continue
+          found = true
+          const num = match[1]
+          const label = match[2].replace(/\[(我|me)\]\s*/, '').trim()
+          const isCurrent = line.trimStart().startsWith('→')
+          const item = document.createElement('div')
+          item.className = 'toolbar-item' + (isCurrent ? ' active' : '')
+          item.textContent = (isCurrent ? '● ' : '') + label
+          item.onclick = () => { if (!isCurrent) execCmd('/switch ' + num) }
+          container.appendChild(item)
+        }
+
+        if (!found) container.innerHTML = '<div class="loading">' + T('toolbar.noSessions') + '</div>'
+      } catch {
+        container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'
+      }
+    }
+
+    async function loadAgentList(container) {
+      try {
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-session': session },
+          body: JSON.stringify({ message: '/agents' }),
+        })
+        if (!res.ok) { container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'; return }
+
+        const text = await readSSEText(res)
+        const lines = text.split('\n').filter(l => l.trim())
+        container.innerHTML = ''
+
+        let found = false
+        for (const line of lines) {
+          const match = line.match(/^\s*(\d+)\.\s*(?:\[.+?\]\s*)?(\S+?)(?:\s*—.*)?$/)
+          if (!match) continue
+          found = true
+          const num = match[1]
+          const name = match[2]
+          const item = document.createElement('div')
+          item.className = 'toolbar-item'
+          item.textContent = name
+          item.onclick = () => execCmd('/agent ' + num)
+          container.appendChild(item)
+        }
+
+        if (!found) container.innerHTML = '<div class="loading">' + T('toolbar.noAgents') + '</div>'
+      } catch {
+        container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'
+      }
+    }
+
+    async function readSSEText(res) {
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = '', result = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const ev = JSON.parse(line.slice(6))
+            if (ev.type === 'stream') result += ev.text
+          } catch {}
+        }
+      }
+      return result
+    }
+  </script>
+</body>
+</html>

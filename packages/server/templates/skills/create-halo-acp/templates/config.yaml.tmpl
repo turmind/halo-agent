@@ -1,0 +1,33 @@
+displayName: Ask {{LABEL_DISPLAY}}
+description: Forward a question to the {{LABEL_DISPLAY}} halo agent over ACP.
+
+params:
+  - key: host
+    description: Remote halo server hostname or IP.
+    description_zh: 远端 halo server 主机名 / IP。
+    default: "{{HOST}}"
+
+  - key: port
+    description: Remote halo server port.
+    description_zh: 远端 halo server 端口。
+    default: "{{PORT}}"
+
+  - key: workspace
+    description: Absolute path of the remote workspace to drive.
+    description_zh: 要驱动的远端 workspace 绝对路径。
+    default: "{{WORKSPACE}}"
+
+  - key: label
+    description: Friendly name for the remote, shown when reporting back to the user.
+    description_zh: 报告给用户时使用的称呼。
+    default: "{{LABEL_DISPLAY}}"
+
+  - key: agent_id
+    description: Optional remote agent profile id. Blank = remote 'default'.
+    description_zh: 可选的远端 agent id，留空则用远端 default。
+    default: ""
+
+  - key: token
+    description: Web-channel token from the remote halo admin. Must be a full-access token if cross-workspace addressing is needed.
+    description_zh: 远端 halo 后台 Web channel token。若需跨 workspace 调用必须是 full 权限。
+    secret: true

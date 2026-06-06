@@ -1,0 +1,61 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+:root {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --card: #141414;
+  --card-foreground: #ededed;
+  --border: #2a2a2a;
+  --input: #2a2a2a;
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --secondary: #1e1e1e;
+  --secondary-foreground: #a1a1a1;
+  --muted: #1e1e1e;
+  --muted-foreground: #737373;
+  --accent: #1e293b;
+  --accent-foreground: #e2e8f0;
+  --destructive: #ef4444;
+  --ring: #3b82f6;
+  --radius: 0.5rem;
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Panel resize handle */
+[data-panel-resize-handle-id] {
+  background: var(--border);
+  transition: background 150ms ease;
+}
+
+[data-panel-resize-handle-id]:hover,
+[data-panel-resize-handle-id][data-resize-handle-active] {
+  background: var(--primary);
+}

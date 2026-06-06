@@ -1,0 +1,56 @@
+id: hunyuan
+displayName: Hunyuan (Tencent)
+displayName_zh: 混元（腾讯）
+description: Tencent Hunyuan Hy3 preview — 295B/21B MoE, agent-oriented with no_think / think_low / think_high modes
+description_zh: 腾讯混元 Hy3 preview，295B/21B 激活 MoE，面向 Agent 工作负载，支持 no_think / think_low / think_high 三档思考
+defaultEndpoint: https://tokenhub.tencentmaas.com/v1
+defaultModelId: hy3-preview
+
+secrets:
+  - key: api_key
+    description: Tencent Hunyuan Hy3 API Key. Format starts with sk-.
+    description_zh: 腾讯混元 Hy3 API Key，sk- 开头
+    default: <<HUNYUAN_API_KEY>>
+    secret: true
+
+# Capability notes for Hunyuan Hy3 — verified end-to-end on 2026-05-26:
+#   - Endpoint hosted on tokenhub.tencentmaas.com (NOT api.hunyuan.cloud.tencent.com,
+#     which is the older OpenAI-compat surface that doesn't have Hy3).
+#   - Caching is automatic (no cache_control needed). Verified: same long
+#     system prompt across turns shows usage.prompt_tokens_details
+#     .cached_tokens > 0 from turn 2 onward.
+#   - Thinking modes per Hy3 product naming → `reasoning_effort`:
+#       no_think    → omit reasoning_effort (zero reasoning_tokens)
+#       think_low   → reasoning_effort: 'low'
+#       think_high  → reasoning_effort: 'high'
+#     hunyuan-agent.ts maps thinking.enabled=false → no_think (no field),
+#     thinking.enabled=true + effort=low|medium|high → reasoning_effort.
+#   - Image input: gateway accepts image_url blocks but model says "I don't
+#     see an image" — image:false.
+#   - 256K context per product description (not enforced here; model just
+#     accepts long inputs).
+models:
+  - id: hy3-preview
+    displayName: Hunyuan Hy3 Preview
+    maxOutputTokens: 16384
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        # Automatic caching, no cache_control parameter. cached_tokens reliably
+        # appears from turn 2 once prompt is long enough. The TTL knob isn't
+        # exposed by Hy3 — value is hint-only for the form.
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # Maps Halo effort labels to Hy3's reasoning_effort. The Hy3
+        # product surface markets these as no_think / think_low / think_high;
+        # we expose Off / Low / High since "Off" is the natural opposite of
+        # an enable toggle.
+        defaultEnabled: true
+        default: low
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: high, label: High }

@@ -1,0 +1,59 @@
+# Extensions
+
+Archive of extra agents / skills kept alongside the code. **Not auto-loaded by Halo** — copy into `~/.halo/global/` or `<workspace>/.halo/` by hand to activate.
+
+Intended to evolve into an extension market (install / versioning / dependency resolution). For now it's just a git-tracked stash.
+
+## Layout
+
+```
+extensions/
+├── agents/
+│   ├── <agent-id>/
+│   │   ├── agent.yaml
+│   │   └── AGENT.md
+│   └── ...
+└── skills/
+    └── <skill-id>/
+        └── SKILL.md
+```
+
+## Install to global
+
+```bash
+# Agent
+cp -r extensions/agents/sleeper ~/.halo/global/agents/
+
+# Skill
+cp -r extensions/skills/<skill-id> ~/.halo/global/skills/
+```
+
+Takes effect on the next agent spawn (running sessions are unaffected — `/new` to pick up the new prompt).
+
+## Install to a workspace
+
+```bash
+cp -r extensions/agents/sleeper /path/to/workspace/.halo/agents/
+```
+
+Workspace versions **override** global entries with the same id.
+
+## Uninstall
+
+Delete the corresponding directory. Keep at least one global agent (the server refuses to delete the last one).
+
+## Current inventory
+
+### Agents
+
+| ID | Purpose |
+|----|---------|
+| [sleeper](agents/sleeper/) | Minimal test agent with the full tool set plus a few session tools |
+| [test-agent](agents/test-agent/) | Test agent with the full workspace tool set, used to validate behaviors |
+
+### Skills
+
+| ID | Purpose |
+|----|---------|
+| [nova-web-search](skills/nova-web-search/) | Real-time web search via Amazon Nova 2 Lite's `nova_grounding` — replacement for `web_search` |
+| [wechat-send](skills/wechat-send/) | Send messages to WeChat users from the agent side (pairs with the Weixin channel) |

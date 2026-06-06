@@ -1,0 +1,74 @@
+---
+name: Ask {{LABEL_DISPLAY}}
+description: Ask a question to the {{LABEL_DISPLAY}} halo agent (running on {{HOST}}:{{PORT}}, workspace {{WORKSPACE}}) over ACP. Activate when the user names this remote ("ask {{LABEL}}…", "the {{LABEL_DISPLAY}} agent") or asks something only that workspace's agent has data / tools for. Returns the remote agent's reply as text.
+command: /ask-{{LABEL}}
+---
+
+# Ask {{LABEL_DISPLAY}}
+
+This binding talks to the **{{LABEL_DISPLAY}}** halo agent at `{{HOST}}:{{PORT}}`, workspace `{{WORKSPACE}}`. It spawns `halo acp`, pipes JSON-RPC over stdio, forwards the prompt, streams the reply back as text.
+
+**When to use this**:
+
+- The user names this remote ("ask {{LABEL}}…", "the {{LABEL_DISPLAY}} agent") — direct signal.
+- The user asks something only `{{WORKSPACE}}` has the credentials / files / context for, and your local workspace doesn't.
+
+**When NOT to use it**:
+
+- The local agent can answer it itself.
+- The user's question is workspace-meta ("list my files", "what skills do I have") — that's local.
+- A different remote binding fits better (run `/help` to see all `/ask-*` commands; pick the closest match by label).
+
+## Invoke
+
+Sibling helper: this skill's directory contains `ask.py`. Always quote the user's question as the FIRST positional arg:
+
+```bash
+shell_exec: python3 {{SKILL_DIR}}/ask.py \
+  "<the user's question, in the language they asked it>" \
+  --host {{params.host}} \
+  --port {{params.port}} \
+  --workspace {{params.workspace}} \
+  --token {{params.token}}
+```
+
+If `params.agent_id` is non-blank, append `--agent-id {{params.agent_id}}`. Skip when blank — `ask.py` also drops blank / unsubstituted-`{{…}}` agent-ids defensively, but cleaner not to pass it at all.
+
+stdout looks like:
+
+```
+SESSION: <session-id>
+---
+<remote agent's reply text>
+```
+
+The session id is the ACP session — keep it for follow-up turns.
+
+### Threading (multi-turn on the same remote conversation)
+
+Sequences of related questions ("what's the AWS bill", "now break down Bedrock", "now show RDS by region") should reuse the same remote session so the remote agent sees full history. Parse the `SESSION:` line from the first call's stdout; on follow-ups append `--session-id <id>`:
+
+```bash
+shell_exec: python3 {{SKILL_DIR}}/ask.py \
+  "<follow-up question>" \
+  --host {{params.host}} --port {{params.port}} \
+  --workspace {{params.workspace}} --token {{params.token}} \
+  --session-id <id-from-previous-call>
+```
+
+If a follow-up says `unknown session: <id>` on stderr, the remote session was deleted — drop the id and start fresh.
+
+## Reply format
+
+> Asked **{{params.label}}** — here's the reply:
+>
+> <copy or summarize the response>
+
+Quote directly when short. Summarize multi-section replies and offer to dig deeper. Don't paste the SESSION line — that's bookkeeping.
+
+## Failure modes
+
+- **HTTP 401**: token wrong / disabled. Tell the user to fix `ask-{{LABEL}}.params.token` in Settings → Skills → Ask {{LABEL_DISPLAY}}.
+- **`fetch failed`**: server `{{HOST}}:{{PORT}}` unreachable.
+- **Timeout (exit 124)**: remote prompt > 10 min. Offer narrower question.
+- **stopReason ≠ end_turn**: stderr includes `stopReason=cancelled|refusal`. Pass along with the partial reply.

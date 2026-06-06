@@ -1,0 +1,25 @@
+name: Deep Executor
+description: Heavy-lift worker for creation- and reasoning-intensive tasks (slide decks, long docs, complex planning, large refactors). Uses Opus — more expensive; reserve for tasks Sonnet would visibly struggle on.
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-opus-4-7
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 1h
+  thinking:
+    enabled: true
+    effort: high
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+priority: 40
+tools:
+  - file_read
+  - file_write
+  - file_edit
+  - file_list
+  - view_image
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+skills: []

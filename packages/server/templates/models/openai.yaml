@@ -1,0 +1,51 @@
+id: openai
+displayName: OpenAI (Generic)
+displayName_zh: OpenAI（通用）
+description: Generic OpenAI-compatible chat completions. Use for native OpenAI or any third-party OpenAI-compatible gateway. Capabilities are exposed openly — the user is expected to know what their endpoint supports.
+description_zh: 通用 OpenAI 兼容协议。可用于原生 OpenAI 或任何第三方 OpenAI 兼容网关。能力字段开放给用户自选——由用户对端点能力自行负责。
+defaultEndpoint: https://api.openai.com/v1
+defaultModelId: gpt-4o
+endpointPresets:
+  - https://api.openai.com/v1
+
+secrets:
+  - key: api_key
+    description: API key for the chosen OpenAI-compatible endpoint. Format depends on provider (sk-... for OpenAI, ark-... for Volcengine, etc.)
+    description_zh: 所选 OpenAI 兼容端点的 API Key。前缀格式因厂商而异（OpenAI 是 sk-、火山方舟是 ark- 等）
+    default: <<OPENAI_API_KEY>>
+    secret: true
+
+# This provider is a "user-fills-everything" placeholder. The single
+# placeholder model below exists so the registry has something to render
+# in the form's model dropdown — replace its id/endpoint with whatever
+# you actually want to call. capabilities here are deliberately
+# permissive (image/video/audio all true, full thinking + caching
+# presets) so the form doesn't lock anything; if your real endpoint
+# doesn't support, e.g., audio, just don't send audio.
+#
+# Custom model ids (anything not listed under `models:`) are treated as
+# fully-permissive in the admin form — the user can flip image/video/
+# audio toggles, pick caching TTL, and set thinking effort or budget.
+models:
+  - id: gpt-4o
+    displayName: GPT-4o (placeholder)
+    maxOutputTokens: 16384
+    capabilities:
+      image: true
+      video: true
+      audio: true
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: manual
+        defaultEnabled: false
+        default: medium
+        defaultBudgetTokens: 8192
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }

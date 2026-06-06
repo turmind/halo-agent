@@ -1,0 +1,32 @@
+{
+  "name": "@turmind/halo-desktop",
+  "private": true,
+  "version": "0.1.1",
+  "description": "Halo desktop wrapper (Electron)",
+  "license": "MIT",
+  "main": "src/main.cjs",
+  "scripts": {
+    "gen-icon": "node scripts/gen-icon.mjs",
+    "prepack-dmg": "node scripts/stage-runtime.mjs",
+    "prepack-dmg:x64": "node scripts/stage-runtime.mjs --arch=x64",
+    "prepack-win": "node scripts/stage-runtime.mjs --platform=win32 --arch=x64",
+    "prepack-dmg:fast": "node scripts/stage-runtime.mjs --fast",
+    "prepack-dmg:x64:fast": "node scripts/stage-runtime.mjs --arch=x64 --fast",
+    "prepack-win:fast": "node scripts/stage-runtime.mjs --platform=win32 --arch=x64 --fast",
+    "dev": "electron .",
+    "dist": "pnpm dist:arm64",
+    "dist:arm64": "pnpm gen-icon && pnpm prepack-dmg && electron-builder --mac --arm64 --config electron-builder.yml",
+    "dist:x64":   "pnpm gen-icon && pnpm prepack-dmg:x64 && electron-builder --mac --x64 --config electron-builder.yml",
+    "dist:win":   "pnpm gen-icon && pnpm prepack-win && electron-builder --win --x64 --config electron-builder.yml",
+    "dist:arm64:fast": "pnpm prepack-dmg:fast && electron-builder --mac --arm64 --config electron-builder.yml",
+    "dist:x64:fast":   "pnpm prepack-dmg:x64:fast && electron-builder --mac --x64 --config electron-builder.yml",
+    "dist:win:fast":   "pnpm prepack-win:fast && electron-builder --win --x64 --config electron-builder.yml",
+    "clean": "rm -rf resources/server-runtime resources/admin-out resources/icon.icns resources/icon.ico resources/icon.png resources/node resources/node.exe dist"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^2.1.8",
+    "sharp": "^0.34.5"
+  }
+}

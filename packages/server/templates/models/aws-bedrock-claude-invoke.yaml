@@ -1,0 +1,156 @@
+id: aws-bedrock-claude-invoke
+displayName: AWS Bedrock Claude (Invoke API)
+displayName_zh: AWS Bedrock Claude（Invoke API）
+description: Invokes Bedrock via InvokeModel (non-streaming), sends raw Anthropic Messages API format
+description_zh: 通过 Bedrock InvokeModel（非流式）调用，发送原生 Anthropic Messages API 格式
+defaultEndpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+endpointPresets:
+  - https://bedrock-runtime.us-east-1.amazonaws.com
+  - https://bedrock-runtime.us-west-2.amazonaws.com
+  - https://bedrock-runtime.eu-west-1.amazonaws.com
+  - https://bedrock-runtime.ap-northeast-1.amazonaws.com
+
+# When the user switches to this provider, the form lands on this model id
+# (falls back to models[0].id if missing). Sonnet 4.6 is the daily-driver pick:
+# Opus 4.6/4.7 cost 5–10x more, Haiku 4.5 is best for narrow agents.
+defaultModelId: global.anthropic.claude-sonnet-4-6
+
+# Server-side credentials. Stored at <provider-id>.secrets.<key> in
+# settings.yaml; never injected into agent prompts or shell_exec.
+secrets:
+  - key: access_key_id
+    description: AWS Access Key ID. Leave empty to use the AWS credential chain (env / ~/.aws / EC2 role).
+    description_zh: AWS Access Key ID。留空则使用凭证链（环境变量 / ~/.aws/credentials / EC2 角色）
+    default: <<AWS_ACCESS_KEY_ID>>
+    secret: true
+  - key: secret_access_key
+    description: AWS Secret Access Key. Leave empty to use the credential chain.
+    description_zh: AWS Secret Access Key。留空则使用凭证链
+    default: <<AWS_SECRET_ACCESS_KEY>>
+    secret: true
+
+# capability defaults (per model):
+#   promptCaching.default      → auto-on value when toggled / on provider switch
+#   thinking.defaultEnabled    → start with Thinking checked for new agents
+#   thinking.default           → effort selected when Thinking is on (adaptive)
+#   thinking.defaultBudgetTokens → budget selected when Thinking is on (manual)
+models:
+  - id: global.anthropic.claude-sonnet-4-6
+    displayName: Claude Sonnet 4.6
+    maxOutputTokens: 64000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        # adaptive = `thinking: { type: 'adaptive' }` + `output_config.effort`
+        # manual   = `thinking: { type: 'enabled', budget_tokens: N }` (effort
+        #            translated to a budget number at runtime)
+        # See bedrock-agent.ts for the effort→budget table used in manual mode.
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+
+  - id: global.anthropic.claude-opus-4-6-v1
+    displayName: Claude Opus 4.6
+    maxOutputTokens: 128000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+
+  - id: global.anthropic.claude-opus-4-7
+    displayName: Claude Opus 4.7
+    maxOutputTokens: 128000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: high       # Opus 4.7 is the heavy-thinking model — high pays off
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+
+  - id: global.anthropic.claude-opus-4-8
+    displayName: Claude Opus 4.8
+    maxOutputTokens: 128000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        # Bedrock-confirmed adaptive effort set for opus-4-8 (verified by an
+        # invalid-value probe): low / medium / high / xhigh / max.
+        mode: adaptive
+        defaultEnabled: true
+        default: high       # Opus 4.8 is the latest flagship — high by default; xhigh/max on demand
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+
+  - id: global.anthropic.claude-haiku-4-5-20251001-v1:0
+    displayName: Claude Haiku 4.5
+    maxOutputTokens: 64000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        # Haiku 4.5 only supports legacy budget_tokens; UI shows a number input.
+        # bedrock-agent.ts translates effort labels via the effort→budget table.
+        mode: manual
+        defaultEnabled: false   # Haiku is the cheap-fast model — thinking off by default
+        defaultBudgetTokens: 4000
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }

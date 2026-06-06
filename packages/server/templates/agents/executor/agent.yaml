@@ -1,0 +1,25 @@
+name: Executor
+description: Workhorse for self-contained tasks. Takes a brief, executes end-to-end, returns a summary. Does not delegate further.
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-sonnet-4-6
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 1h
+  thinking:
+    enabled: true
+    effort: medium
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+priority: 50
+tools:
+  - file_read
+  - file_write
+  - file_edit
+  - file_list
+  - view_image
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+skills: []

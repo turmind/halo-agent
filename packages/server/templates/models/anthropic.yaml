@@ -1,0 +1,47 @@
+id: anthropic
+displayName: Anthropic (Generic)
+displayName_zh: Anthropic（通用）
+description: Generic Anthropic Messages API. Use for api.anthropic.com or any Anthropic-compatible third-party gateway.
+description_zh: 通用 Anthropic Messages API。可用于 api.anthropic.com 原生端点或任何 Anthropic 兼容的第三方网关。
+defaultEndpoint: https://api.anthropic.com
+defaultModelId: claude-sonnet-4-6
+endpointPresets:
+  - https://api.anthropic.com
+
+secrets:
+  - key: api_key
+    description: Anthropic API Key. Format starts with sk-ant-.
+    description_zh: Anthropic API Key，sk-ant- 开头
+    default: <<ANTHROPIC_API_KEY>>
+    secret: true
+
+# Placeholder model — the user is expected to set the actual model id
+# (claude-sonnet-4-6, claude-opus-4-7, etc.) and the matching endpoint.
+# capabilities are deliberately permissive; flip what your real endpoint
+# doesn't support.
+#
+# Custom model ids (anything not listed under `models:`) are treated as
+# fully-permissive in the admin form — image/video/audio toggles,
+# caching TTL, thinking effort/budget all become editable.
+models:
+  - id: claude-sonnet-4-6
+    displayName: Claude Sonnet 4.6 (placeholder)
+    maxOutputTokens: 64000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }

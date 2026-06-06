@@ -1,0 +1,17 @@
+{
+  "name": "@turmind/halo-acp-adapter",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

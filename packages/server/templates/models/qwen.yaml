@@ -1,0 +1,78 @@
+id: qwen
+displayName: Qwen (Aliyun)
+displayName_zh: 通义千问（阿里云）
+description: Qwen3 family on Aliyun Bailian via the Anthropic-compatible Messages API
+description_zh: 阿里云百炼通义千问，通过 Anthropic 兼容的 Messages API 调用
+defaultEndpoint: https://dashscope.aliyuncs.com/apps/anthropic
+defaultModelId: qwen3.7-max
+endpointPresets:
+  - https://dashscope.aliyuncs.com/apps/anthropic         # Beijing
+  - https://dashscope-intl.aliyuncs.com/apps/anthropic    # Singapore
+  - https://dashscope-us.aliyuncs.com/apps/anthropic      # Virginia
+
+secrets:
+  - key: api_key
+    description: Aliyun Bailian (DashScope) API Key. Get from https://bailian.console.aliyun.com
+    description_zh: 阿里云百炼 API Key。从 https://bailian.console.aliyun.com 获取
+    default: <<DASHSCOPE_API_KEY>>
+    secret: true
+
+# Capability notes for Qwen — verified end-to-end on 2026-05-26 against
+# help.aliyun.com/zh/model-studio/anthropic-api-messages plus live probes:
+#   - cache_control: ephemeral (5min default per doc) — verified by sending
+#     same long system twice; turn1 reports cache_creation_input_tokens=N,
+#     turn2 reports cache_read_input_tokens=N. Standard Anthropic shape.
+#     Doc only mentions 5m; no 1h variant — qwen-agent.ts deliberately
+#     omits the `ttl` attribute.
+#   - thinking: honored both ways. type=enabled emits a thinking block,
+#     type=disabled really suppresses it (unlike MiniMax which forces it on).
+#   - image: probed live — qwen3.6-plus correctly identified colors (works
+#     despite docs saying a vision-specific model is required);
+#     qwen3.7-max returned `Unexpected item type in content` (not
+#     supported). So image:false on max, image:true on plus.
+#   - effort presets: pure Halo-side abstraction. Same effort→budget
+#     table as bedrock-agent.ts via qwen-agent.ts's effortToBudget().
+#   - temperature range: doc says [0, 2) instead of Anthropic's [0, 1] —
+#     doesn't affect Halo since we don't expose temperature in the form.
+models:
+  - id: qwen3.7-max
+    displayName: Qwen3.7 Max
+    maxOutputTokens: 16384
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # Anthropic legacy/manual shape: thinking:{type:'enabled', budget_tokens:N}.
+        # qwen-agent.ts maps effort labels via effortToBudget().
+        mode: manual
+        defaultEnabled: true
+        default: medium
+        defaultBudgetTokens: 8192
+        effortPresets:
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: qwen3.6-plus
+    displayName: Qwen3.6 Plus
+    maxOutputTokens: 16384
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: manual
+        defaultEnabled: true
+        default: medium
+        defaultBudgetTokens: 8192
+        effortPresets:
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
