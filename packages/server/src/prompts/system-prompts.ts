@@ -88,7 +88,7 @@ async function loadDir(dirPath: string, fallback: string): Promise<{ content: st
   }
   const mdFiles = selectForPlatform(entries.filter((n) => n.endsWith('.md')).sort())
   if (mdFiles.length === 0) {
-    console.warn(`[SystemPrompts] No .md files in ${dirPath} — using built-in fallback`)
+    console.log(`[SystemPrompts] No .md files in ${dirPath} — using built-in fallback`)
     return { content: fallback, files: [] }
   }
   const chunks: string[] = []
