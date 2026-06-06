@@ -141,8 +141,32 @@ export class WorkspaceWatcher {
       try { isDir = fs.statSync(absPath).isDirectory() } catch { /* vanished between event and stat */ }
       action = isDir ? 'addDir' : 'add'
     }
-    this.pending.set(rel, { path: rel, action })
+    this.coalesce(rel, action)
     this.scheduleFlush()
+  }
+
+  /**
+   * Merge a new event into the per-path pending slot. Plain last-wins is wrong
+   * for the common "create then write" burst: a file_write (or any create
+   * immediately followed by a modify) fires `create` then `update` within the
+   * 300ms window; last-wins would collapse that to `change`, which the
+   * front-end tree ignores (it only inserts on `add`) — so the new file never
+   * appears. Precedence rules, per path per window:
+   *   - pending add/addDir + change  → keep add  (file is net-new; the tree
+   *                                     needs the `add` to insert the node)
+   *   - pending add/addDir + unlink  → drop      (created and removed within
+   *                                     the window → no net change to emit)
+   *   - pending (anything)  + add/addDir/unlink → take the new one (a real
+   *                                     structural transition supersedes)
+   *   - otherwise → last-wins
+   */
+  private coalesce(rel: string, action: FileChangeEvent['action']): void {
+    const prev = this.pending.get(rel)
+    if (prev && (prev.action === 'add' || prev.action === 'addDir')) {
+      if (action === 'change') return                 // keep the pending add
+      if (action === 'unlink') { this.pending.delete(rel); return }  // add+unlink cancels out
+    }
+    this.pending.set(rel, { path: rel, action })
   }
 
   async stop(): Promise<void> {
