@@ -39,12 +39,19 @@
 </head>
 <body>
   <div class="logo">
-    <svg width="56" height="56" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
-      <defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#a78bfa"/>
-      </linearGradient></defs>
-      <path d="M16 2 L28.66 9 L28.66 23 L16 30 L3.34 23 L3.34 9 Z" fill="url(#g)"/>
-      <text x="16" y="22.5" font-family="-apple-system,sans-serif" font-size="17" font-weight="800" fill="white" text-anchor="middle">B</text>
+    <svg width="56" height="56" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="core_sp" cx="42%" cy="38%" r="68%"><stop offset="0" stop-color="#d8e6ff"/><stop offset="0.35" stop-color="#8aa6ff"/><stop offset="1" stop-color="#9b6bff"/></radialGradient>
+        <linearGradient id="ring_sp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6f9bff"/><stop offset="1" stop-color="#a06bff"/></linearGradient>
+        <linearGradient id="bg_sp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0e1430"/><stop offset="1" stop-color="#070a16"/></linearGradient>
+        <clipPath id="sq_sp"><rect x="104" y="104" width="816" height="816" rx="182"/></clipPath>
+      </defs>
+      <g clip-path="url(#sq_sp)">
+        <rect x="104" y="104" width="816" height="816" fill="url(#bg_sp)"/>
+        <circle cx="512" cy="512" r="118" fill="none" stroke="url(#ring_sp)" stroke-width="15" opacity="0.34"/>
+        <circle cx="512" cy="512" r="176" fill="none" stroke="url(#ring_sp)" stroke-width="12" opacity="0.20"/>
+        <circle cx="512" cy="512" r="62" fill="url(#core_sp)"/>
+      </g>
     </svg>
   </div>
   <div class="title">Halo</div>
