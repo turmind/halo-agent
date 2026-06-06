@@ -22,10 +22,10 @@ extensions/
 
 ```bash
 # Agent
-cp -r extensions/agents/sleeper ~/.halo/global/agents/
+cp -r extensions/agents/<agent-id> ~/.halo/global/agents/
 
 # Skill
-cp -r extensions/skills/<skill-id> ~/.halo/global/skills/
+cp -r extensions/skills/nova-web-search ~/.halo/global/skills/
 ```
 
 Takes effect on the next agent spawn (running sessions are unaffected — `/new` to pick up the new prompt).
@@ -33,7 +33,7 @@ Takes effect on the next agent spawn (running sessions are unaffected — `/new`
 ## Install to a workspace
 
 ```bash
-cp -r extensions/agents/sleeper /path/to/workspace/.halo/agents/
+cp -r extensions/skills/nova-web-search /path/to/workspace/.halo/skills/
 ```
 
 Workspace versions **override** global entries with the same id.
@@ -46,14 +46,12 @@ Delete the corresponding directory. Keep at least one global agent (the server r
 
 ### Agents
 
-| ID | Purpose |
-|----|---------|
-| [sleeper](agents/sleeper/) | Minimal test agent with the full tool set plus a few session tools |
-| [test-agent](agents/test-agent/) | Test agent with the full workspace tool set, used to validate behaviors |
+_None currently._
 
 ### Skills
 
 | ID | Purpose |
 |----|---------|
+| [canvas-pptx](skills/canvas-pptx/) | Create, edit, and inspect PowerPoint (.pptx) files — Halo-adapted port of Anthropic's canvas_pptx |
 | [nova-web-search](skills/nova-web-search/) | Real-time web search via Amazon Nova 2 Lite's `nova_grounding` — replacement for `web_search` |
-| [wechat-send](skills/wechat-send/) | Send messages to WeChat users from the agent side (pairs with the Weixin channel) |
+| [send-file](skills/send-file/) | Send images, videos, or files as attachments to the current user across all channels |
