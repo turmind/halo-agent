@@ -22,7 +22,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { evolutionApplies, evolutionRuns, getEvoDb } from '../db/evo-db.js'
-import { removeRunArtifacts } from '../evolution/archive.js'
+import { removeRunArtifacts, removeApplyArtifacts } from '../evolution/archive.js'
 import { broadcast } from '../ws/broadcast.js'
 
 // Statuses a run must NOT be in to allow manual delete. `pending` (the ticker
@@ -389,6 +389,25 @@ export function createEvolutionRoutes(): Hono {
     if (UNDELETABLE_RUN_STATUSES.has(row.status)) {
       return c.json({ error: `cannot delete run in status=${row.status}` }, 409)
     }
+
+    // Cascade to the applies this run produced. An apply links to its source
+    // run(s) only via the `source_run_ids` JSON array (no FK), so match with
+    // json_each. Each apply has its own dir + history rollback snapshot +
+    // archive zip + log; without this they'd be stranded on disk (and as
+    // orphaned db rows) when the run is deleted. Filesystem + db are queried
+    // directly here, never from in-memory state, so a restart between list
+    // and delete can't strand artifacts.
+    const applies = db
+      .select({ id: evolutionApplies.id, workspacePath: evolutionApplies.workspacePath })
+      .from(evolutionApplies)
+      .where(sql`EXISTS (SELECT 1 FROM json_each(${evolutionApplies.sourceRunIds}) WHERE value = ${id})`)
+      .all()
+    for (const a of applies) {
+      removeApplyArtifacts(a.workspacePath, a.id)
+      db.delete(evolutionApplies).where(eq(evolutionApplies.id, a.id)).run()
+      broadcast({ type: 'evolution:apply_changed', id: a.id, kind: 'deleted' })
+    }
+
     removeRunArtifacts(row.workspacePath, id)
     db.delete(evolutionRuns).where(eq(evolutionRuns.id, id)).run()
     broadcast({ type: 'evolution:run_changed', id, kind: 'deleted' })

@@ -27,6 +27,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { eq, and, isNull, lte, isNotNull, lt } from 'drizzle-orm'
 import { evolutionRuns, evolutionApplies, getEvoDb } from '../db/evo-db.js'
+import { wsEvoHistoryDir, evoWrapperLogFile, evoApplyLogFile } from '../paths.js'
 
 /** Statuses considered "terminal" — eligible for archive after the
  *  retention window. Active states (running / pending / etc.) are
@@ -114,15 +115,32 @@ function purgeApply(workspacePath: string, applyId: string): void {
   rmFile(zipPath)
 }
 
-/** Delete a run's on-disk footprint outright: the live run dir AND its archive
+/** Delete a run's on-disk footprint outright: the live run dir, its archive
  *  zip (normally only one exists — an active run has the dir, an archived run
- *  has the zip). Used by the manual-delete route in routes/evolution.ts;
- *  removing the db row is the caller's job. Path layout intentionally matches
- *  archiveRun/purgeRun above so there's one source of truth for where a run's
- *  files live. */
+ *  has the zip), and the global wrapper log. Used by the manual-delete route
+ *  in routes/evolution.ts; removing the db row is the caller's job. Apply
+ *  artifacts (applies/, history/) are NOT touched here — the route cascades
+ *  to removeApplyArtifacts for each apply the run produced. Path layout
+ *  intentionally matches archiveRun/purgeRun above so there's one source of
+ *  truth for where a run's files live. */
 export function removeRunArtifacts(workspacePath: string, runId: string): void {
   rmDir(path.join(workspacePath, '.halo', 'evo', 'runs', runId))
   rmFile(path.join(workspacePath, '.halo', 'evo', 'archive', `run-${runId}.zip`))
+  rmFile(evoWrapperLogFile(runId))
+}
+
+/** Delete an apply's on-disk footprint outright: the live apply dir, its
+ *  archive zip, the pre-apply rollback snapshot under history/, and the
+ *  global apply log. Mirrors removeRunArtifacts; removing the db row is the
+ *  caller's job. The history snapshot IS removed here (unlike the retention
+ *  job, which deliberately keeps it) because a manual delete means the user
+ *  is discarding this apply outright — leaving the rollback dir behind is the
+ *  exact orphaned-folder the cleanup is meant to prevent. */
+export function removeApplyArtifacts(workspacePath: string, applyId: string): void {
+  rmDir(path.join(workspacePath, '.halo', 'evo', 'applies', applyId))
+  rmFile(path.join(workspacePath, '.halo', 'evo', 'archive', `apply-${applyId}.zip`))
+  rmDir(wsEvoHistoryDir(workspacePath, applyId))
+  rmFile(evoApplyLogFile(applyId))
 }
 
 /** Run one archive pass. Idempotent — call as often as you want. */
