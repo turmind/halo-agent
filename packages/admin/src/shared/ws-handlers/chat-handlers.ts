@@ -81,9 +81,9 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
   // The reply goes through raw wsClient.send (not use-chat's dispatchMessage),
   // so the capture instruction is NOT re-injected on it — that's what stops a
   // capture loop. We still echo a user bubble + streaming slot so the UI shows
-  // the round-trip, mirroring dispatchMessage. Camera frames are JPEG (from
-  // getUserMedia→canvas); screen frames are PNG (from desktopCapturer).
-  const mimeType = isCamera ? 'image/jpeg' : 'image/png'
+  // the round-trip, mirroring dispatchMessage. Both paths are now JPEG: camera
+  // via getUserMedia→canvas (quality 0.85), screen via NativeImage.toJPEG(85).
+  const mimeType = 'image/jpeg'
   let base64: string | null = null
   try {
     // For the camera, source.id holds the chosen deviceId ('' = default); pass

@@ -13,19 +13,53 @@ import { CommandPalette } from './command-palette'
 import { FileMentionPicker } from './file-mention-picker'
 import { useT } from '@/shared/i18n'
 
-/** Convert a File to base64 string (without data URL prefix) */
-function fileToBase64(file: File): Promise<string> {
+/** Read a File to a base64 string (no data URL prefix), verbatim. */
+function rawFileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result as string
-      // Strip data URL prefix: "data:image/png;base64,..."
-      const base64 = result.split(',')[1]
-      resolve(base64)
-    }
+    reader.onload = () => resolve((reader.result as string).split(',')[1])
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
+}
+
+// Long-edge cap for outgoing images. Claude's vision pipeline downsamples
+// anything larger anyway, so sending a 4000px phone photo just wastes upload
+// bandwidth and tokens. 1568 is Anthropic's documented max useful edge.
+const IMG_MAX_EDGE = 1568
+const IMG_JPEG_QUALITY = 0.85
+
+/**
+ * Convert an image File to a compressed base64 JPEG (no data URL prefix):
+ * decode → downscale so the long edge ≤ IMG_MAX_EDGE → re-encode as JPEG 0.85.
+ * This is the single choke point for every attachment path (file picker, drag,
+ * paste), matching the camera/screenshot compression. Falls back to the raw
+ * bytes if the browser can't decode it (non-raster, decode error) so we never
+ * silently drop an attachment. Returns { base64, mimeType }.
+ */
+async function fileToBase64(file: File): Promise<{ base64: string; mimeType: string }> {
+  if (!file.type.startsWith('image/')) {
+    return { base64: await rawFileToBase64(file), mimeType: file.type || 'application/octet-stream' }
+  }
+  try {
+    const bitmap = await createImageBitmap(file)
+    const scale = Math.min(1, IMG_MAX_EDGE / Math.max(bitmap.width, bitmap.height))
+    const w = Math.max(1, Math.round(bitmap.width * scale))
+    const h = Math.max(1, Math.round(bitmap.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w; canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('no 2d context')
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    bitmap.close()
+    const dataUrl = canvas.toDataURL('image/jpeg', IMG_JPEG_QUALITY)
+    const base64 = dataUrl.split(',')[1]
+    if (!base64) throw new Error('encode failed')
+    return { base64, mimeType: 'image/jpeg' }
+  } catch {
+    // Decode/encode failed — send the original rather than lose the image.
+    return { base64: await rawFileToBase64(file), mimeType: file.type || 'image/png' }
+  }
 }
 
 /** Desktop-shell capture bridge (preload injects it). Undefined in a browser. */
@@ -752,8 +786,8 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     const imageDataList: Array<{ data: string; mimeType: string }> = []
     for (const pf of pendingFiles) {
       try {
-        const base64 = await fileToBase64(pf.file)
-        imageDataList.push({ data: base64, mimeType: pf.file.type })
+        const { base64, mimeType } = await fileToBase64(pf.file)
+        imageDataList.push({ data: base64, mimeType })
       } catch (err) {
         console.error('[MessageInput] Image conversion failed:', err)
       }

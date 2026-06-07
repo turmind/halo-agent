@@ -389,8 +389,10 @@ function isMostlyBlack(image) {
 
 // Grab a full-res-ish frame of a previously-listed source. Re-fetches sources
 // at a large thumbnailSize (vision models downsample anyway; 1920 wide keeps
-// base64 size reasonable) and matches by id. Returns base64 PNG, or null if
-// the window is gone (closed since it was bound) or stays blank/black.
+// base64 size reasonable) and matches by id. Returns base64 JPEG (quality 85 —
+// a screenshot is photographic enough that JPEG is far smaller than lossless
+// PNG, matching the camera path), or null if the window is gone (closed since
+// it was bound) or stays blank/black.
 ipcMain.handle('halo:capture-grab', async (_e, sourceId) => {
   if (!CAPTURE_SUPPORTED || !sourceId) return null
   // macOS returns an unusable frame in two distinct ways: an EMPTY frame while
@@ -409,7 +411,7 @@ ipcMain.handle('halo:capture-grab', async (_e, sourceId) => {
     const match = sources.find((s) => s.id === sourceId)
     if (!match) return null  // window is gone — no point retrying
     if (!match.thumbnail.isEmpty() && !isMostlyBlack(match.thumbnail)) {
-      return match.thumbnail.toPNG().toString('base64')
+      return match.thumbnail.toJPEG(85).toString('base64')
     }
   }
   return null  // empty/black after retries (window occluded/minimized too long)
