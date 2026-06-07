@@ -467,7 +467,7 @@ function CollapsibleLog({ title, body }: { title: string; body: string }) {
         <span className="text-xs text-[var(--muted-foreground)]">({(body.length / 1024).toFixed(1)} KB)</span>
       </button>
       {open && (
-        <pre className="mt-2 max-h-[480px] overflow-auto whitespace-pre-wrap rounded border border-zinc-700/40 bg-zinc-900/40 p-3 font-mono text-[11px] leading-relaxed">{body}</pre>
+        <pre className="mt-2 whitespace-pre-wrap break-words rounded border border-zinc-700/40 bg-zinc-900/40 p-3 font-mono text-[11px] leading-relaxed">{body}</pre>
       )}
     </div>
   )
