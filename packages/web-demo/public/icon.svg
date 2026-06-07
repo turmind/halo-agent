@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs>
+<radialGradient id="core" cx="42%" cy="38%" r="68%">
+  <stop offset="0" stop-color="#d8e6ff"/><stop offset="0.35" stop-color="#8aa6ff"/><stop offset="1" stop-color="#9b6bff"/>
+</radialGradient>
+<linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6f9bff"/><stop offset="1" stop-color="#a06bff"/></linearGradient>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0e1430"/><stop offset="1" stop-color="#070a16"/></linearGradient>
+<filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="16" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<radialGradient id="halo" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#5b78ff" stop-opacity="0.45"/><stop offset="1" stop-color="#5b78ff" stop-opacity="0"/></radialGradient>
+<clipPath id="squircle"><rect x="104" y="104" width="816" height="816" rx="182" ry="182"/></clipPath></defs>
+<g clip-path="url(#squircle)">
+<rect x="104" y="104" width="816" height="816" fill="url(#bg)"/>
+<circle cx="512" cy="512" r="255" fill="url(#halo)"/>
+<circle cx="512" cy="512" r="118" fill="none" stroke="url(#ring)" stroke-width="15" opacity="0.34"/>
+<circle cx="512" cy="512" r="176" fill="none" stroke="url(#ring)" stroke-width="12" opacity="0.20"/>
+<circle cx="512" cy="512" r="233" fill="none" stroke="url(#ring)" stroke-width="10" opacity="0.10"/>
+<circle cx="512" cy="512" r="62" fill="url(#core)" filter="url(#glow)"/>
+</g>
+</svg>
