@@ -372,21 +372,32 @@ export function createWorkspaceTools(
       // full resolution (which it can't shrink itself), so rather than reject,
       // we downscale+re-encode to fit. The file on disk is untouched — only the
       // bytes we hand the model are compressed.
+      // Anthropic's vision limits: a single image's base64 must be ≤5 MB, and
+      // anything past a 1568px long edge / ~1.15 MP is downscaled by the API
+      // anyway (extra latency), with >8000px outright rejected. So we normalise
+      // to BOTH ceilings up front — fit the byte budget AND cap the long edge —
+      // independently, since a big-but-not-5MB screenshot (e.g. a 6000px tall
+      // page grab) would otherwise sail past the byte check yet still be
+      // oversized. Only the bytes handed to the model change; the file is kept.
       const B64_LIMIT = 5 * 1024 * 1024
+      const MAX_EDGE = 1568
       const b64Len = (n: number) => Math.ceil(n / 3) * 4
+      const dims = imageDimensions(buf, mediaType)
+      const tooManyBytes = b64Len(buf.length) > B64_LIMIT
+      const tooBig = dims != null && Math.max(dims.w, dims.h) > MAX_EDGE
       let outMediaType = mediaType
       let outBuf = buf
       let note = ''
-      if (b64Len(buf.length) > B64_LIMIT) {
+      if (tooManyBytes || tooBig) {
         try {
           const { Jimp } = await import('jimp')
           const img = await Jimp.read(buf)
-          // Cap the long edge, then re-encode as JPEG, stepping quality down
-          // until the base64 fits. JPEG (not PNG) so photographic screenshots
-          // shrink hard; mirrors the camera/screen-capture compression.
+          // Cap the long edge to MAX_EDGE, then re-encode as JPEG, stepping
+          // quality down until the base64 fits. JPEG (not PNG) so photographic
+          // screenshots shrink hard; mirrors the camera/screen-capture path.
           const longEdge = Math.max(img.bitmap.width, img.bitmap.height)
-          if (longEdge > 2000) img.scale(2000 / longEdge)
-          let q = 80
+          if (longEdge > MAX_EDGE) img.scale(MAX_EDGE / longEdge)
+          let q = 82
           let jpeg = await img.getBuffer('image/jpeg', { quality: q })
           while (b64Len(jpeg.length) > B64_LIMIT && q > 30) {
             q -= 15
@@ -394,9 +405,9 @@ export function createWorkspaceTools(
           }
           outBuf = jpeg
           outMediaType = 'image/jpeg'
-          note = ` — compressed to ${(jpeg.length / 1024).toFixed(0)} KB (jpeg q${q}) to fit the model's image limit`
+          note = ` — resized to ${img.bitmap.width}×${img.bitmap.height}, ${(jpeg.length / 1024).toFixed(0)} KB (jpeg q${q}) to fit the model's image limits`
         } catch (err) {
-          return `${TOOL_WARN_MARKER}\nError: image too large for the model (${(b64Len(buf.length) / 1024 / 1024).toFixed(1)} MB base64) and automatic compression failed (${err instanceof Error ? err.message : String(err)}). Shrink it (e.g. lower resolution / crop the relevant region) and retry.`
+          return `${TOOL_WARN_MARKER}\nError: image is too large for the model and automatic compression failed (${err instanceof Error ? err.message : String(err)}). Shrink it (lower resolution / crop the relevant region) and retry.`
         }
       }
       return [
@@ -784,4 +795,37 @@ export function createWorkspaceTools(
     return [fileRead, ...visionTools, fileList, grepTool, globTool]
   }
   return allTools
+}
+
+/**
+ * Read an image's pixel dimensions straight from its header — no full decode,
+ * so view_image can cheaply decide whether to downscale without spinning up
+ * jimp on every (often already-small) image. Covers PNG and JPEG, the formats
+ * screenshots use; returns null for anything else (caller then falls back to
+ * the byte-size check alone). Pure header parsing, best-effort.
+ */
+function imageDimensions(buf: Buffer, mediaType: string): { w: number; h: number } | null {
+  try {
+    if (mediaType === 'image/png') {
+      // PNG: 8-byte sig, then IHDR whose width/height are big-endian u32 at 16/20.
+      if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return null
+      return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
+    }
+    if (mediaType === 'image/jpeg') {
+      // JPEG: walk markers to the first SOF (0xC0–0xCF, excluding non-frame
+      // C4/C8/CC), whose payload holds height then width as big-endian u16.
+      if (buf.readUInt16BE(0) !== 0xffd8) return null
+      let off = 2
+      while (off + 9 < buf.length) {
+        if (buf[off] !== 0xff) { off++; continue }
+        const marker = buf[off + 1]
+        if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          return { h: buf.readUInt16BE(off + 5), w: buf.readUInt16BE(off + 7) }
+        }
+        off += 2 + buf.readUInt16BE(off + 2) // skip this segment by its length
+      }
+      return null
+    }
+  } catch { /* malformed header — fall back to byte-size check */ }
+  return null
 }
