@@ -196,6 +196,32 @@ csv with the headers "name,age" and a few rows to /tmp/x.csv` works;
 If a single original turn was already a clean, context-free probe, you
 can reuse it for both fields. Most aren't.
 
+#### The dry-run is a sandbox — keep `testMessage` self-contained
+
+The dry-run runs the patched agent inside an isolated sandbox under the run
+dir (`--access workspace`), with bwrap masking `~/.aws` / `~/.ssh` / `~/.kube`
+and the real `~/.halo/global/*` databases. It is NOT the user's real
+workspace. So a `testMessage` that drives the agent to touch anything
+*outside* the sandbox will make the dry-run fail or hang for the wrong reason
+— not because your patch is bad, but because the resource isn't reachable:
+
+- Writing global/shared databases (e.g. `~/.halo/global/cron.db` — the cron
+  case), or any absolute path outside the run dir.
+- Calling external services / cloud APIs (AWS, HTTP endpoints, a channel send).
+- Reading files that only exist in the real workspace, not the sandbox copy.
+
+Design `testMessage` so the rule is exercised **entirely within the sandbox**:
+prefer a probe that writes to a relative/temp path, inspects a sandbox file,
+or just elicits the agent's *wording/decision* (which is what the scorer reads
+anyway) rather than its real side effect. For a cron-skill patch, a probe like
+"how would you schedule a one-off reminder in 5 minutes? show the exact
+manage-cron.py command" tests that the agent reaches for the skill correctly
+without actually writing the global db.
+
+If the behavior genuinely can't be observed without an out-of-sandbox side
+effect, pick the most sandbox-observable angle you can — don't fabricate a
+probe that's bound to fail in the sandbox.
+
 ### 4. Write the sandbox target
 
 A single `file_write` to `<runDir>/sandbox/.halo/<target>`. The new
