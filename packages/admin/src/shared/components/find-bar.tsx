@@ -30,42 +30,34 @@ export function FindBar() {
   const [result, setResult] = useState<{ ordinal: number; total: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const api = useRef<FindApi | null>(null)
+  // True while an IME composition is in flight (typing Chinese/Japanese/etc.).
+  // We must not yank focus or fire a search mid-composition or the half-typed
+  // characters get dropped.
+  const composing = useRef(false)
 
   // Resolve the bridge once. If absent (plain browser), the component renders
   // nothing and binds no shortcut — native Cmd+F is left alone.
   useEffect(() => { api.current = getFindApi() }, [])
 
-  // Subscribe to match-count results from the main process. findInPage moves
-  // the renderer's focus onto the matched node when it highlights a hit, which
-  // would steal focus from our input mid-typing (you'd type one char, it'd
-  // jump, and the next keystroke would be lost) and break repeat-Enter. Pull
-  // focus back to the input every time a result lands.
+  // Keep the input focused without scrolling. findInPage moves the renderer's
+  // focus onto the matched node when it highlights a hit, which otherwise stole
+  // focus from our input (one char typed → focus jumps → next keystroke lost,
+  // and repeat-Enter broke). `preventScroll` is critical: a plain focus() would
+  // scroll the fixed input into view and fight findInPage's own scroll-to-match.
+  const refocus = useCallback(() => {
+    if (composing.current) return
+    inputRef.current?.focus({ preventScroll: true })
+  }, [])
+
+  // Subscribe to match-count results from the main process; refocus on each.
   useEffect(() => {
     const a = api.current
     if (!a) return
     return a.onResult((r) => {
       setResult({ ordinal: r.activeMatchOrdinal, total: r.matches })
-      inputRef.current?.focus()
+      refocus()
     })
-  }, [])
-
-  // Cmd/Ctrl+F: open the bar — unless focus is in a Monaco editor, which has
-  // its own find. Esc closes. Bound only when the bridge exists.
-  useEffect(() => {
-    if (!api.current) return
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
-        const active = document.activeElement
-        if (active && active.closest('.monaco-editor')) return // let Monaco handle it
-        e.preventDefault()
-        setOpen(true)
-        // Focus + preselect so a second Cmd+F just retypes over the query.
-        requestAnimationFrame(() => inputRef.current?.select())
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [refocus])
 
   const runFind = useCallback((text: string, forward = true, findNext = false) => {
     const a = api.current
@@ -74,19 +66,54 @@ export function FindBar() {
     a.find(text, { forward, findNext })
   }, [])
 
-  // Incremental search as the user types (findNext:false restarts from top).
-  useEffect(() => {
-    if (!open) return
-    runFind(query, true, false)
-  }, [query, open, runFind])
-
   const close = useCallback(() => {
     setOpen(false)
     setResult(null)
     api.current?.stop('clearSelection')
   }, [])
 
+  // Global shortcuts (bound only when the bridge exists):
+  //  - Cmd/Ctrl+F opens the bar (unless focus is in a Monaco editor, which has
+  //    its own find) and selects any existing query so a re-press overwrites it.
+  //  - Esc closes from anywhere — bound on window, not the input, because
+  //    findInPage may have moved focus off the input by the time you hit Esc.
+  useEffect(() => {
+    if (!api.current) return
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+        const active = document.activeElement
+        if (active && active.closest('.monaco-editor')) return // let Monaco handle it
+        e.preventDefault()
+        setOpen(true)
+        // Defer past the render so the input exists, then focus + select. Works
+        // for both first open (mount) and re-press while already open (autoFocus
+        // wouldn't re-fire). preventScroll so opening doesn't jump the page.
+        setTimeout(() => {
+          const el = inputRef.current
+          if (!el) return
+          el.focus({ preventScroll: true })
+          el.select()
+        }, 0)
+      } else if (e.key === 'Escape' && open) {
+        e.preventDefault()
+        close()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, close])
+
+  // Re-run the search whenever the query changes while open — but not mid-IME-
+  // composition (that fires onChange per keystroke with partial text). The
+  // composition's final onChange (after compositionend) runs the real search.
+  useEffect(() => {
+    if (!open || composing.current) return
+    runFind(query, true, false)
+  }, [query, open, runFind])
+
   if (!open) return null
+
+  const noMatch = query.length > 0 && (!result || result.total === 0)
 
   return (
     <div className="fixed right-4 top-3 z-[2147483646] flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 shadow-lg">
@@ -96,12 +123,20 @@ export function FindBar() {
         autoFocus
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        onCompositionStart={() => { composing.current = true }}
+        onCompositionEnd={(e) => {
+          composing.current = false
+          // The composition's committed text didn't trigger the query effect
+          // (composing was true); run the search now with the final value.
+          setQuery(e.currentTarget.value)
+          runFind(e.currentTarget.value, true, false)
+        }}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') { e.preventDefault(); close() }
-          else if (e.key === 'Enter') { e.preventDefault(); runFind(query, !e.shiftKey, true) }
+          // Enter → next match, Shift+Enter → previous. Esc is handled globally.
+          if (e.key === 'Enter') { e.preventDefault(); runFind(query, !e.shiftKey, true) }
         }}
         placeholder="Find"
-        className="w-44 bg-transparent text-sm text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)]"
+        className={`w-44 bg-transparent text-sm outline-none placeholder:text-[var(--muted-foreground)] ${noMatch ? 'text-red-400' : 'text-[var(--foreground)]'}`}
       />
       <span className="min-w-[3.5rem] shrink-0 text-center text-xs tabular-nums text-[var(--muted-foreground)]">
         {query ? (result && result.total > 0 ? `${result.ordinal}/${result.total}` : '0/0') : ''}
