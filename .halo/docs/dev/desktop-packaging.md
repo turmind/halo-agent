@@ -72,8 +72,10 @@ dependency work. Three levers, in order of how often they help:
 
 3. **`npmRebuild: false`** (electron-builder.yml). The desktop package has no
    native deps of its own — `better-sqlite3` / `node-pty` / `@parcel/watcher`
-   all live in the staged `server-runtime` / `cli-runtime` trees, already built
-   for the target. Skipping `@electron/rebuild` removes dead time every pack.
+   all live in the staged `server-runtime` / `cli-runtime` trees, fixed up for
+   the target *by `stage-runtime.mjs`* (not by electron-builder). Skipping
+   `@electron/rebuild` removes dead time every pack. Note the staging fixups are
+   what actually make these correct per-target — see the cross-stage gotchas.
 
 **What's left (the ~70 s floor):** electron-builder itself — asar packing, dmg
 generation, and Gatekeeper scanning the ~350 MB of `extraResources`. Neither
@@ -184,6 +186,41 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   silently no-ops in the desktop app (the symptom: clicking OK on a delete
   confirm does nothing, because `if (!confirm(...)) return` always returns). In
   a plain browser the helpers fall back to the native sync dialogs.
+
+- **Cross-staging needs a full restage — auto-fast skips the native fixup.**
+  After editing `stage-runtime.mjs`, or any time you cross-stage a target whose
+  `node_modules` differs from what's on disk, run with `HALO_STAGE_FULL=1`. The
+  fast path only re-syncs compiled outputs and **reuses the existing
+  `node_modules`**, so it never re-runs the per-target native fixups
+  (`@parcel/watcher` swap, `better-sqlite3` prebuild-install). Symptom of
+  forgetting: the win/x64 dmg still carries the host's arm64 binaries.
+
+- **`@parcel/watcher` binary doesn't cross-stage via `npm install`.** Its
+  per-platform binary package (`@parcel/watcher-win32-x64` etc.) declares
+  `os`/`cpu`, so `npm install` on a mac host **silently skips it** — leaving
+  only the host's `watcher-darwin-arm64` (dragged in by `pnpm deploy`), and the
+  packaged app crashes with *"no prebuild or local build of @parcel/watcher
+  found"*. `stage-runtime.mjs` `installParcelWatcherBinary()` fetches the right
+  one with `npm pack` (no os/cpu gate) and extracts it into every `@parcel`
+  scope (pnpm's isolated layout has several), removing the host's. Verify after
+  a build: `find …/win-unpacked -path '*watcher-*' -name '*.node' | xargs file`
+  should show only PE32 (win) / the target's Mach-O — no foreign arch.
+  (`better-sqlite3` and `node-pty` don't hit this — they use `prebuild-install`
+  and bundled multi-platform prebuilds respectively.)
+
+- **`ENOTEMPTY` / `directory not empty` mid-stage or in electron-builder.** A
+  prior stage's `resources/{cli,server}-runtime/node_modules` (or
+  `dist/win-unpacked`) can fail to delete cleanly on macOS (open handles, deep
+  nesting). Hard-clean before a full restage:
+  `rm -rf resources/{cli-runtime,server-runtime,admin-out,node} dist/{win-unpacked,mac,mac-arm64}`
+  then rebuild.
+
+- **A `--x64` / `--win` pack also emits a stray `Halo-0.1.0-arm64.dmg` — it's
+  poisoned, discard it.** electron-builder honours the yml's `arm64` mac target
+  even when you pass `--x64`, so it re-packages the *current* (x64/win-staged)
+  `resources/` as an arm64 dmg. That dmg's native binaries are the wrong arch.
+  The real per-target artifacts are `Halo-0.1.0.dmg` (x64) and `Halo Setup
+  0.1.0.exe` (win); only trust the arm64 dmg from an actual `dist:arm64` run.
 
 ## Verifying a build
 
