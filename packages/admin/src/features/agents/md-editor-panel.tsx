@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { api } from '@/shared/api-client'
 import { Save, BookOpen, Loader2 } from 'lucide-react'
 import { cn } from '@/shared/utils'
+import '@/features/editor/monaco-loader'
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false })
 

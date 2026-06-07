@@ -4,13 +4,14 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "next build --no-lint && next start --port 3000",
-    "build": "next build",
+    "dev": "next build --no-lint && node scripts/copy-monaco.mjs && next start --port 3000",
+    "build": "next build && node scripts/copy-monaco.mjs",
     "start": "next start --port 3000"
   },
   "dependencies": {
     "@turmind/halo-core": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
+    "monaco-editor": "^0.55.1",
     "@radix-ui/react-dialog": "^1.1.0",
     "@radix-ui/react-dropdown-menu": "^2.1.0",
     "@radix-ui/react-scroll-area": "^1.2.0",

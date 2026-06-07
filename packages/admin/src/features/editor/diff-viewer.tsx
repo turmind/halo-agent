@@ -1,6 +1,7 @@
 'use client'
 
 import { DiffEditor } from '@monaco-editor/react'
+import './monaco-loader'
 import { getLanguageFromPath } from '@/shared/utils'
 
 interface DiffViewerProps {

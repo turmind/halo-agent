@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useEffect } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
+import './monaco-loader'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 
 interface CodeEditorProps {
