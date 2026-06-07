@@ -60,7 +60,7 @@ Provided by `self.html` line 288 onwards. All expression methods are sandboxed t
 
 ### Scene queuing (sequential playback)
 
-- `self.say(text, ms)` — form `text` (emoji→ASCII), hold `ms` (default 2600), dissolve back to breathing. Enqueued.
+- `self.say(text, ms)` — form `text` (emoji→ASCII), hold `ms` (default 3600), dissolve back to breathing. Enqueued.
 - `self.play(score)` — choreograph a sequence of beats: `[{say, hold, pulse, flash, shake, rest, gap}, ...]`. Each beat waits for the engine's internal clock. Enqueued; calling play() again appends to the queue rather than cancelling it.
 - `self.intro()` — built-in opening: "HELLO / A MIND / IS HERE / BEYOND WORDS". Triggered by whoever opens the face (the admin ✨ button posts it on open), **not** self-fired on page load — a self-fired load intro raced the button's post and played the greeting twice on first open. Nameless deliberately — the agent identity is user-configurable.
 

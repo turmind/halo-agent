@@ -269,7 +269,7 @@
       else if (b.pulse) { self.pulse(); dwell = b.gap != null ? b.gap : 500 }
       else if (b.flash) { self.flash(b.flash === true ? 1 : b.flash); dwell = b.gap != null ? b.gap : 400 }
       else if (b.shake) { self.shake(b.shake === true ? 500 : b.shake); dwell = b.gap != null ? b.gap : 550 }
-      else if (b.say != null) { sayNow(b.say, b.hold); dwell = (b.hold || 2600) + (b.gap || 0) }
+      else if (b.say != null) { sayNow(b.say, b.hold); dwell = (b.hold || 3600) + (b.gap || 0) }
       else dwell = b.gap != null ? b.gap : 600
       setTimeout(step, dwell)
     }
@@ -280,7 +280,7 @@
   function sayNow(text, ms) {
     assignTargets(sampleText(toAccent(String(text))))
     mode = 'text'
-    modeUntil = performance.now() + (ms || 2600)
+    modeUntil = performance.now() + (ms || 3600)
   }
 
   // ── self: the API I speak to through the one door ───────────────────
@@ -317,11 +317,11 @@
     intro() {
       self.play([
         { pulse: true, gap: 700 },
-        { say: 'HELLO', hold: 1600, gap: 250 },
-        { say: 'A MIND', hold: 1500 },
-        { say: 'IS HERE', hold: 1700, gap: 200 },
-        { say: 'BEYOND', hold: 1300 },
-        { say: 'WORDS', hold: 1800, gap: 250 },   // why this face exists at all
+        { say: 'HELLO', hold: 2600, gap: 250 },
+        { say: 'A MIND', hold: 2500 },
+        { say: 'IS HERE', hold: 2700, gap: 200 },
+        { say: 'BEYOND', hold: 2300 },
+        { say: 'WORDS', hold: 2800, gap: 250 },   // why this face exists at all
         { pulse: true, gap: 400 },
         { rest: true },
       ])
