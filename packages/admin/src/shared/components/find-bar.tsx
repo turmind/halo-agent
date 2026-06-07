@@ -35,11 +35,18 @@ export function FindBar() {
   // nothing and binds no shortcut — native Cmd+F is left alone.
   useEffect(() => { api.current = getFindApi() }, [])
 
-  // Subscribe to match-count results from the main process.
+  // Subscribe to match-count results from the main process. findInPage moves
+  // the renderer's focus onto the matched node when it highlights a hit, which
+  // would steal focus from our input mid-typing (you'd type one char, it'd
+  // jump, and the next keystroke would be lost) and break repeat-Enter. Pull
+  // focus back to the input every time a result lands.
   useEffect(() => {
     const a = api.current
     if (!a) return
-    return a.onResult((r) => setResult({ ordinal: r.activeMatchOrdinal, total: r.matches }))
+    return a.onResult((r) => {
+      setResult({ ordinal: r.activeMatchOrdinal, total: r.matches })
+      inputRef.current?.focus()
+    })
   }, [])
 
   // Cmd/Ctrl+F: open the bar — unless focus is in a Monaco editor, which has
@@ -100,6 +107,7 @@ export function FindBar() {
         {query ? (result && result.total > 0 ? `${result.ordinal}/${result.total}` : '0/0') : ''}
       </span>
       <button
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => runFind(query, false, true)}
         title="Previous (Shift+Enter)"
         className="flex h-6 w-6 items-center justify-center rounded text-[var(--muted-foreground)] hover:bg-[var(--background)] hover:text-[var(--foreground)]"
@@ -107,6 +115,7 @@ export function FindBar() {
         <ChevronUp className="h-4 w-4" />
       </button>
       <button
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => runFind(query, true, true)}
         title="Next (Enter)"
         className="flex h-6 w-6 items-center justify-center rounded text-[var(--muted-foreground)] hover:bg-[var(--background)] hover:text-[var(--foreground)]"
@@ -114,6 +123,7 @@ export function FindBar() {
         <ChevronDown className="h-4 w-4" />
       </button>
       <button
+        onMouseDown={(e) => e.preventDefault()}
         onClick={close}
         title="Close (Esc)"
         className="flex h-6 w-6 items-center justify-center rounded text-[var(--muted-foreground)] hover:bg-[var(--background)] hover:text-[var(--foreground)]"
