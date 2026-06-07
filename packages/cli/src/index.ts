@@ -1,3 +1,4 @@
+import './silence-warnings.js' // must be first — patches emitWarning before deps load
 import path from 'node:path'
 import fs from 'node:fs'
 import { homedir } from 'node:os'
