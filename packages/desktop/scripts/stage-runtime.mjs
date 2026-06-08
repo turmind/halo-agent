@@ -149,17 +149,19 @@ stageCliRuntime()
 //    devDeps; we rely on @turmind/halo-core being listed as a runtime dep of
 //    @turmind/halo-server (workspace:* gets resolved into the deployed tree).
 //
-//    Linker choice matters for cross-platform packaging:
-//    - Default (isolated) lays out node_modules as symlinks into .pnpm/.
-//      macOS follows them fine, but Windows can't resolve the mac-created
-//      Unix symlinks after the tree is copied into the .exe — `import
-//      'yaml'` then fails with ERR_MODULE_NOT_FOUND at server startup.
-//    - `hoisted` produces a flat, real-directory node_modules (npm-style)
-//      that works on every OS. We use it for Windows builds; macOS keeps
-//      the lighter symlink layout it's already proven to run with.
-console.log('[stage] pnpm deploy server-runtime')
-const linkerFlag = TARGET_PLATFORM === 'win32' ? ' --config.node-linker=hoisted' : ''
-run(`pnpm deploy --legacy --filter @turmind/halo-server --prod${linkerFlag} "${SERVER_RT}"`)
+//    node-linker=hoisted on EVERY target — a flat, real-directory
+//    node_modules (npm-style) with no .pnpm symlink farm. Required, not
+//    merely preferred:
+//    - Windows can't resolve the mac-created Unix symlinks after the tree is
+//      copied into the .exe — `import 'yaml'` fails ERR_MODULE_NOT_FOUND.
+//    - macOS *runs* the isolated layout, but `pnpm deploy` leaves a self-
+//      referential symlink for the deployed package itself
+//      (.pnpm/node_modules/@turmind/halo-server -> ../../../../../../../server)
+//      whose relative depth only resolves inside the monorepo; copied into
+//      Halo.app it dangles outside the bundle. The ~1100-symlink farm also
+//      slows Gatekeeper's first-launch scan. Flat layout has neither problem.
+console.log('[stage] pnpm deploy server-runtime (node-linker=hoisted)')
+run(`pnpm deploy --legacy --filter @turmind/halo-server --prod --config.node-linker=hoisted "${SERVER_RT}"`)
 
 // `pnpm deploy --prod` prunes the ROOT workspace's node_modules to prod-only as
 // a side effect (the devDep symlinks — electron-builder, sharp, png-to-ico,
@@ -187,11 +189,11 @@ fetchTargetArchNatives()
 //     runtime on the target arch.
 trimNativeBloat()
 
-// Resolve the real directories of an installed package across both pnpm
-// linker layouts. Windows builds use `hoisted` (flat node_modules/<pkg>);
-// macOS uses the default isolated layout (node_modules/.pnpm/<pkg>@<ver>/
-// node_modules/<pkg>). We must operate on the dir node actually loads, so
-// return every match found under either layout.
+// Resolve the real directories of an installed package. We deploy with
+// node-linker=hoisted (flat node_modules/<pkg>) on every target; the isolated
+// (.pnpm/<pkg>@<ver>/node_modules/<pkg>) branch is kept as a fallback so this
+// helper stays correct even if a tree is staged the default way. We must
+// operate on the dir node actually loads, so return every match under either.
 function resolvePkgDirs(pkgName) {
   const dirs = []
   // hoisted: flat path
@@ -383,7 +385,7 @@ function stageCliRuntime() {
   // 3. Install prod deps with npm (not pnpm): dist-pub/package.json is a plain
   //    flat dependency list, and npm produces a flat real-directory
   //    node_modules with no symlinks — cross-platform safe (the same reason
-  //    server-runtime uses node-linker=hoisted for Windows).
+  //    server-runtime uses node-linker=hoisted).
   console.log('[stage] npm install --omit=dev (cli-runtime)')
   execSync('npm install --omit=dev --no-audit --no-fund --no-package-lock', {
     cwd: CLI_RT,

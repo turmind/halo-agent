@@ -16,7 +16,7 @@ Halo.app
 │     • picks a free port, seeds ~/.halo, spawns the server, waits /api/health
 │     • on quit: SIGTERM the server, SIGKILL fallback after 1.5s
 └── resources/ (electron-builder extraResources)
-      ├── server-runtime/   ← pnpm-deployed @turmind/halo-server tree (dist + node_modules + templates)
+      ├── server-runtime/   ← pnpm-deployed @turmind/halo-server tree (dist + node_modules + templates), node-linker=hoisted (flat, no .pnpm symlink farm)
       ├── admin-out/         ← Next.js static export
       └── node              ← private node v22 binary (server child runs on this, NOT Electron's node)
 ```
@@ -107,9 +107,12 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
 
 ## Build steps in detail (`stage-runtime.mjs`)
 
-1. **`pnpm deploy --legacy --prod`** → flattens `@turmind/halo-server` (+ the
-   `@turmind/halo-core` workspace dep) into `resources/server-runtime/node_modules`
-   with no symlinks, so the app is self-contained.
+1. **`pnpm deploy --legacy --prod --config.node-linker=hoisted`** → flattens
+   `@turmind/halo-server` (+ the `@turmind/halo-core` workspace dep) into
+   `resources/server-runtime/node_modules` as a flat, real-directory tree (no
+   `.pnpm` symlink farm), so the app is self-contained. `hoisted` on **every**
+   target — see the dangling-self-symlink gotcha for why macOS can't use the
+   default isolated layout.
 2. **Copy `templates/`** — `pnpm deploy` doesn't pick these up; copied
    explicitly. This is what carries the built-in skills (incl. `send-file`),
    agents, prompts, models into the dmg.
@@ -124,6 +127,27 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
    Gatekeeper. **We deliberately do NOT `strip`** — see gotcha below.
 
 ## Gotchas (learned the hard way)
+
+- **`pnpm deploy` (default isolated linker) leaves a dangling self-symlink that
+  escapes the .app — use `node-linker=hoisted` on EVERY target.** The default
+  isolated layout creates `server-runtime/node_modules/.pnpm/node_modules/@turmind/halo-server
+  -> ../../../../../../../server`, a relative climb whose depth only resolves
+  *inside the monorepo* (back to `packages/server`). Once copied into
+  `Halo.app/Contents/Resources/`, the same relative path points outside the
+  bundle (`Halo.app/server`) and dangles. Symptom: a colleague who installs the
+  dmg hits `No such file: /Applications/Halo.app/Contents/Resources/server-runtime/node_modules/.pnpm/node_modules/@turmind/halo-server`
+  — even though the build machine runs fine, because there the symlink target
+  *does* exist. The build also carried ~1100 symlinks (the whole `.pnpm` farm),
+  slowing Gatekeeper's first-launch scan. Windows already used `hoisted` (mac-
+  created Unix symlinks don't survive the copy into the .exe); we now use it on
+  **all** targets — a flat, real-directory `node_modules` has neither the
+  escaping self-symlink nor the farm. Verify: `find Halo.app -type l | wc -l`
+  should be ~36 (Electron framework links only), and
+  `find Halo.app -path '*@turmind/halo-server'` should be empty.
+  *Note this is separate from the "is damaged" Gatekeeper prompt — that's the
+  ad-hoc signature + download quarantine (`identity: null` in the yml), fixed
+  per-machine with `sudo xattr -dr com.apple.quarantine /Applications/Halo.app`,
+  or properly with a Developer ID signature + notarization.*
 
 - **Never `strip` the bundled node binary.** Recent macOS `strip` (Xcode 26
   toolchain) trims the *dynamic* symbol table, not just debug symbols. The
@@ -202,7 +226,9 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   packaged app crashes with *"no prebuild or local build of @parcel/watcher
   found"*. `stage-runtime.mjs` `installParcelWatcherBinary()` fetches the right
   one with `npm pack` (no os/cpu gate) and extracts it into every `@parcel`
-  scope (pnpm's isolated layout has several), removing the host's. Verify after
+  scope it finds under `node_modules` (`findParcelScopesWithWatcher` walks for
+  them — one under the flat `hoisted` layout, several if a tree is ever staged
+  the default isolated way), removing the host's. Verify after
   a build: `find …/win-unpacked -path '*watcher-*' -name '*.node' | xargs file`
   should show only PE32 (win) / the target's Mach-O — no foreign arch.
   (`better-sqlite3` and `node-pty` don't hit this — they use `prebuild-install`
