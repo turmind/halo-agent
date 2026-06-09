@@ -29,6 +29,7 @@ import { build } from 'esbuild'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execSync } from 'node:child_process'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -96,8 +97,25 @@ const EXTERNAL = readDepsList()
 // Version stamped into the bundle as a compile-time constant. The bundle is a
 // single file with no package.json beside the source, so the server can't read
 // its own version at runtime — esbuild's `define` replaces `process.env.HALO_VERSION`
-// with the cli package.json version literal. Surfaced via GET /api/health.
-const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(CLI_ROOT, 'package.json'), 'utf-8')).version
+// with this literal. Surfaced via GET /api/health + `halo --version`.
+//
+// We suffix the base version with the short git sha (`0.1.1-<sha>`) so every
+// build is uniquely identifiable and maps exactly to a commit — telling apart
+// "did my new build actually deploy?" at a glance. A dirty tree gets a
+// `-dirty` marker. Falls back to the bare version if git isn't available
+// (e.g. building from an unpacked tarball).
+const BASE_VERSION = JSON.parse(fs.readFileSync(path.join(CLI_ROOT, 'package.json'), 'utf-8')).version
+function gitVersion() {
+  try {
+    const sha = execSync('git rev-parse --short HEAD', { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+    const dirty = execSync('git status --porcelain', { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().length > 0
+    return `${BASE_VERSION}-${sha}${dirty ? '-dirty' : ''}`
+  } catch {
+    return BASE_VERSION
+  }
+}
+const PKG_VERSION = gitVersion()
+console.log(`[build-bundle] version: ${PKG_VERSION}`)
 
 // Output an ESM bundle. We only bundle our own source (the workspace
 // packages); every npm dep (Hono, aws-sdk, ink, drizzle, etc.) stays external
@@ -228,7 +246,9 @@ const dependencies = mergeDeps([cliPkg, serverPkg, corePkg])
 
 const pubPkg = {
   name: '@turmind/halo',
-  version: cliPkg.version,
+  // Same sha-suffixed version as the in-bundle constant, so `npm ls -g`,
+  // `halo --version`, and GET /api/health all agree on one string.
+  version: PKG_VERSION,
   description: 'Halo — multi-agent collaborative workspace. CLI + TUI + HTTP/WS server in one package.',
   type: 'module',
   license: cliPkg.license || 'MIT',
