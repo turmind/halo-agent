@@ -24,7 +24,7 @@
 
 **🖥 IDE-like admin UI.** Chat + Monaco editor + file explorer + terminal (xterm.js), all in one browser tab. No switching between "talking to the AI" and "looking at the code."
 
-**📁 Workspace = project context.** Agent configs, skills, session history, and project docs are all just files under `.halo/`. Git-friendly and forkable. No hidden memory, no opaque state.
+**📁 The workspace is a portable unit.** Agent configs, skills, session history, and project docs are all just files under `.halo/` — no hidden memory, no opaque state. Because the whole agent lives in one directory, the unit you share is the *entire workspace*, not a single skill: copy `.halo/` (or `git clone` it) and the recipient gets a complete, runnable agent — persona, every skill, and config — that starts working on arrival. This is also what makes self-evolution possible: the evolution agent rewrites real files in the workspace, dry-runs them, and merges on approval.
 
 **🔒 Permission isolation.** Three access levels (`full` / `workspace` / `readonly`) enforced by a bubblewrap sandbox. Hand someone a `readonly` entry point and they can use your agents without write access to your files. (Filesystem isolation only — see [Status & Limitations](#status--limitations).)
 
