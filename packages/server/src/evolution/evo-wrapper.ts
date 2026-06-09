@@ -25,8 +25,10 @@
  *     Agent reads patch.md + dry-run-output.txt + source-snapshot.json and
  *     writes score.json. No file edits, no execution.
  *
- * Apply mode is still placeholder (phase 11). Heartbeat runs throughout
- * regardless of phase.
+ * Apply mode was originally a placeholder (phase 11); it is now fully
+ * implemented as the two-phase A'/B' flow described in the "Apply mode" block
+ * further down (build sandbox + merge approved patches, then regression-score
+ * before publishing). Heartbeat runs throughout regardless of phase.
  *
  * Process model: detached from the server (`stdio:'ignore'` + `detached:true`
  * in the ticker spawn) so a server restart doesn't kill running evaluations.

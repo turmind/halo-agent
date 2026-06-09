@@ -26,7 +26,7 @@
 
 **📁 Workspace = project context.** Agent configs, skills, session history, and project docs are all just files under `.halo/`. Git-friendly and forkable. No hidden memory, no opaque state.
 
-**🔒 Permission isolation.** Three access levels (`full` / `workspace` / `readonly`) enforced by a bubblewrap sandbox. Hand someone a `readonly` entry point and they can use your agents without risk.
+**🔒 Permission isolation.** Three access levels (`full` / `workspace` / `readonly`) enforced by a bubblewrap sandbox. Hand someone a `readonly` entry point and they can use your agents without write access to your files. (Filesystem isolation only — see [Status & Limitations](#status--limitations).)
 
 ## Quick Start
 
@@ -119,6 +119,16 @@ Every channel shares the same workspace and session state. Onboarding guides liv
 - [`.halo/docs/dev/deploy.md`](.halo/docs/dev/deploy.md) — deployment (systemd / Nginx)
 - [`.halo/docs/dev/env.md`](.halo/docs/dev/env.md) — env vars, build commands
 - [`CLAUDE.md`](CLAUDE.md) — development instructions for Claude Code
+
+## Status & Limitations
+
+Halo is young and single-maintainer. It runs, but treat it as an early-stage project, not a hardened product:
+
+- **Sandbox isolates the filesystem, not the network.** The bubblewrap sandbox covers access levels and filesystem reach (host paths, `~/.aws`/`~/.ssh` masked), but does **not** isolate the network — code running inside it can still make outbound connections. The threat model is accidental damage and path escape by a trusted agent, **not** containment of a deliberately malicious skill exfiltrating data. Network isolation is on the roadmap.
+- **No automated test suite yet.** Correctness rests on review and manual verification. Targeted tests for the externally-fixed contracts (session-file format, WS protocol) are planned over broad unit coverage.
+- **Single maintainer, minimal external validation.** Expect rough edges; APIs and on-disk formats may still change between versions.
+
+If you hit something broken or surprising, please open an issue — early feedback is genuinely useful right now.
 
 ## Roadmap
 
