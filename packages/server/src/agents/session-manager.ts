@@ -28,7 +28,7 @@ import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools } from './session-tools.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
-import { saveSessionToFile, fileSegment, getSessionDir, findInternalSession, atomicWriteSessionFile } from '../sessions/session-store.js'
+import { saveSessionToFile, fileSegment, findInternalSession } from '../sessions/session-store.js'
 import type { SessionMessage } from '../sessions/session-types.js'
 import {
   createSaveSnapshot,
@@ -38,6 +38,7 @@ import { SessionUIStore } from './session-ui-store.js'
 import { SessionQueryStore } from './session-query-store.js'
 import { SessionAgentBuilder, type AgentMeta, type BuiltAgent } from './session-agent-builder.js'
 import { SessionSkillCommands } from './session-skill-commands.js'
+import { SessionStateStore } from './session-state-store.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -250,6 +251,9 @@ export class SessionManager implements SessionManagerInternals {
   /** Skill-backed slash-command permission resolver. Carved out (see
    *  SessionSkillCommands); pure reads over db + workspace files. */
   private readonly skillCommands: SessionSkillCommands
+  /** rawMessages disk persistence (save/load agent state). Carved out (see
+   *  SessionStateStore); reads workspaceRoot + the delete tombstone via host. */
+  private readonly stateStore: SessionStateStore
   /**
    * Tombstones: ids of sessions deleted during this process's lifetime. After
    * deletion any in-flight `saveSessionToFile` for these ids must be skipped,
@@ -295,6 +299,7 @@ export class SessionManager implements SessionManagerInternals {
     this.queryStore = new SessionQueryStore(this)
     this.agentBuilder = new SessionAgentBuilder(this)
     this.skillCommands = new SessionSkillCommands(this)
+    this.stateStore = new SessionStateStore(this)
     // Only the long-lived server process (which owns this workspace's runtime
     // and holds server.lock) passes this. CLI/TUI/channel-subprocess/evo-wrapper
     // share the same db while the server may be actively running sessions — they
@@ -390,58 +395,22 @@ export class SessionManager implements SessionManagerInternals {
     }
   }
 
-  // ── Agent state persistence ─────────────────────────────────────────
+  // ── Agent state persistence (delegated to SessionStateStore) ────────
 
-  /** Directory for agent session files.
-   *  Resolution lives in session-store.ts so that all session-path
-   *  consumers (here, route handlers, future tools) share one source
-   *  of truth — including the special-case routing for internal
-   *  agents (__evo_agent__ / __score__ / __apply_agent__) into
-   *  `~/.halo/global/internal-sessions/`. */
+  /** Directory for agent session files. Kept as a thin pass-through because
+   *  getSessionTitle / getSessionOutput resolve session file paths too. */
   private sessionDir(agentId: string): string {
-    return getSessionDir(agentId, this.workspaceRoot)
+    return this.stateStore.sessionDir(agentId)
   }
 
   /** Save agent.messages as rawMessages field in the delegated log file (read-merge-write) */
   private saveAgentState(session: AgentSession): void {
-    // Honour the deletion tombstone like persistSessionFile/persistUIState do —
-    // a late write from an in-flight turn's releaseSession must not resurrect a
-    // file the user just deleted.
-    if (this.deletedSessionIds.has(session.id)) return
-    try {
-      const dir = this.sessionDir(session.agentId)
-      fsSync.mkdirSync(dir, { recursive: true })
-      const filePath = path.join(dir, `${fileSegment(session.id)}.json`)
-
-      let existing: Record<string, unknown> = {}
-      try { existing = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) } catch { /* new file */ }
-
-      const now = new Date().toISOString()
-      existing.id = session.id
-      existing.agentId = session.agentId
-      if (!existing.agentName) existing.agentName = session.agentId
-      if (session.parentId) existing.parentSessionId = session.parentId
-      if (!existing.title) existing.title = session.description?.slice(0, 60) || `${session.agentId} session`
-      if (!existing.createdAt) existing.createdAt = now
-      existing.updatedAt = now
-      existing.messageCount = Array.isArray(session.agent.messages) ? session.agent.messages.length : 0
-      existing.output = session.output
-      existing.rawMessages = session.agent.messages
-      atomicWriteSessionFile(filePath, JSON.stringify(existing, null, 2))
-    } catch (err) {
-      console.error(`[SessionManager] Failed to save state for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
-    }
+    this.stateStore.saveAgentState(session)
   }
 
   /** Load agent.messages from the delegated log file's rawMessages field */
   private loadAgentState(sessionId: string, agentId: string): unknown[] {
-    try {
-      const filePath = path.join(this.sessionDir(agentId), `${fileSegment(sessionId)}.json`)
-      const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
-      return (data.rawMessages ?? []) as unknown[]
-    } catch {
-      return []
-    }
+    return this.stateStore.loadAgentState(sessionId, agentId)
   }
 
   // ── Session tools ──────────────────────────────────────────────────

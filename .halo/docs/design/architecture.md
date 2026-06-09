@@ -43,9 +43,9 @@ Responsibilities:
 1. Agent instance lifecycle (create / restore / release)
 2. Session state machine (idle / running / compacting)
 3. Message routing (user→agent / agent→agent)
-4. `rawMessages` disk persistence (`saveAgentState`) + JSONL audit
+4. The turn-execution loop + compaction
 
-Four concerns were split into their own files (SessionManager keeps thin pass-throughs and owns the instances, each taking `this` as host): **SessionUIStore** — UIState reducer + persistence + event dispatch (`emitEvent` → listener); **SessionQueryStore** — read-only session-metadata queries + the row→SessionInfo status projection; **SessionAgentBuilder** — agent.yaml → ModelRuntime + system prompt + tools + /context metadata; **SessionSkillCommands** — skill-backed slash-command permission resolution. See below.
+Five concerns were split into their own files (SessionManager keeps thin pass-throughs and owns the instances, each taking `this` as host): **SessionUIStore** — UIState reducer + persistence + event dispatch (`emitEvent` → listener); **SessionQueryStore** — read-only session-metadata queries + the row→SessionInfo status projection; **SessionAgentBuilder** — agent.yaml → ModelRuntime + system prompt + tools + /context metadata; **SessionSkillCommands** — skill-backed slash-command permission resolution; **SessionStateStore** — `rawMessages` disk persistence (save/load agent state). See below.
 
 ### ModelRuntime — LLM interaction layer (provider-agnostic)
 
@@ -134,6 +134,10 @@ File: `agents/session-agent-builder.ts`. Stateless. Turns an agentId + agent.yam
 
 File: `agents/session-skill-commands.ts`. Stateless, pure reads. Resolves which skill-backed slash commands an agent may invoke (yaml `skills:` whitelist ∩ not-disabled ∩ access gate via SKILL.md `requiresAccess`). Source of truth for the slash-suggest popup and the server-side check in `execSkillCommand`. Host surface: workspaceRoot / db.
 
+### SessionStateStore — rawMessages disk persistence
+
+File: `agents/session-state-store.ts`. Stateless. Saves/loads an agent's `rawMessages` (LLM-facing history) to its `.json` file via read-merge-write — the `rawMessages` half of session persistence (SessionUIStore owns the UI-log half; both write the same file). `saveAgentState` takes a narrow `SavableSession` (6 fields), not the full AgentSession. Host surface: workspaceRoot + `isSessionDeleted` (the tombstone short-circuit so a late save can't resurrect a deleted file).
+
 ## Helper modules
 
 ### SessionStore — disk persistence
@@ -193,6 +197,7 @@ SessionUIStore          │ ✦  │    │    │    │        │      │   
 SessionQueryStore       │ ✦  │    │    │    │        │      │     │
 SessionAgentBuilder     │ ✦  │    │    │    │        │      │     │
 SessionSkillCommands    │ ✦  │    │    │    │        │      │     │
+SessionStateStore       │ ✦  │    │    │    │        │      │     │
 EventProcessor          │    │ ✦  │    │ ✦  │        │      │
 UILogBuilder            │ ✦  │    │    │    │        │      │
 SessionStore            │ ✦  │ ✦  │ ✦  │ ✦  │ ✦(Ses) │      │
@@ -234,7 +239,7 @@ SQLite only holds metadata indexes; all content lives on the filesystem.
 
 ## Coupling hot spots
 
-**High: SessionManager** — the central hub, depending on 10+ modules. Still large (~2300 lines) but trending down: UI-log state + event routing (SessionUIStore), read-only metadata queries (SessionQueryStore), agent construction (SessionAgentBuilder), and skill-command permissions (SessionSkillCommands) are all split out as one-directional dependencies. What remains is the genuine core: the turn-execution loop, session lifecycle, and compaction (the last being the remaining carve-out candidate — it mutates shared per-session state, so it's higher-risk than the four done so far).
+**High: SessionManager** — the central hub, depending on 10+ modules. Still large (~2270 lines) but trending down: UI-log state + event routing (SessionUIStore), read-only metadata queries (SessionQueryStore), agent construction (SessionAgentBuilder), skill-command permissions (SessionSkillCommands), and rawMessages persistence (SessionStateStore) are all split out as one-directional dependencies. What remains is the genuine core: the turn-execution loop, session lifecycle, and compaction. Compaction was evaluated as a carve-out candidate and deliberately left in — it's bidirectionally interwoven with the turn loop (it's a beforeCallModel hook AND it runs a turn internally) and mutates shared per-session state, so extracting it would widen the host interface and tangle control flow more than it'd help.
 
 **Medium: WS Handler** — depends on SessionManager for all agent operations, owns connection lifecycle, compact orchestration, session switching, terminal/file watcher. It used to have two-way state sync with SessionManager (resolved: UIState now belongs to SessionManager).
 
