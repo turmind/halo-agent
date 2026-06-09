@@ -218,6 +218,10 @@ function realpathBounded(filePath: string): string {
  */
 export function assertPathAllowed(filePath: string, opts: SandboxOptions, write = false): string {
   opts = normalizeOptsForPlatform(opts)
+  // Windows always normalizes to 'full' (no bwrap), so it returns here and
+  // never reaches the realpath / `startsWith(wsRoot + '/')` logic below — the
+  // hardcoded POSIX '/' separator in that path is intentionally fine: it only
+  // runs on the linux/mac non-full sandbox path. Win security stays app-level.
   if (opts.accessLevel === 'full') return path.resolve(filePath)
 
   const resolved = realpathBounded(filePath)
