@@ -420,6 +420,19 @@ export class SessionManager implements SessionManagerInternals {
     const sub = e.taskId ? state.subSessionLogs.get(e.taskId) : undefined
     const turnId = sub ? sub.currentTurnId : state.currentTurnId
     this.reduceIntoUIState(rootId, event)
+    // Root turn settled — push session:changed so admin session lists re-fetch
+    // their list-visible metadata (messageCount / title / updatedAt). This is
+    // the only admin-side refresh hook for channel-driven turns; without it the
+    // list stays stale, e.g. a fresh channel session lingers at "0 msgs / no
+    // title" because createSession's broadcast raced ahead of the message's
+    // (debounced) disk write and nothing re-broadcast after. `complete` is the
+    // right moment: reduceIntoUIState just flushed final state synchronously
+    // (flushPersist, not the debounced path a `user` event takes) and
+    // runAgentTurn already bumped the SQLite updatedAt, so the re-fetch reads
+    // consistent count + ordering. The open chat already streams live via the
+    // listeners below; the list was the gap. `complete` only ever fires for
+    // root sessions, so no extra guard needed.
+    if (event.type === 'complete') broadcast({ type: 'session:changed' })
     const listeners = this.eventListeners.get(rootId)
     if (event.type === 'complete' || event.type === 'user') {
       console.debug(`[SessionManager] emit ${event.type} root=${rootId} listeners=${listeners?.size ?? 0}`)

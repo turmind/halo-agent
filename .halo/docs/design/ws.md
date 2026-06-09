@@ -69,6 +69,7 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | `chat:queued` | `sendUserMessage` returning queued | User-message-queued notification |
 | `file:changed` | WorkspaceWatcher | File change notification (path + action) |
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |
+| `session:changed` | `SessionManager` (broadcast to all clients) | Root session list changed — re-fetch. Fires on root-session create *and* on each root turn `complete` (so channel-driven messages refresh the count/title/ordering, not just admin's own turns). |
 | `session:cleared` | session:clear handler | /new complete |
 | `session:compacted` | compact handler | Compaction complete |
 | `compact:started` / `compact:summarizing` / `compact:done` | compact handler | Compaction progress |
