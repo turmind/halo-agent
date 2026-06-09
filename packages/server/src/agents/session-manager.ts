@@ -415,12 +415,6 @@ export class SessionManager implements SessionManagerInternals {
 
   // ── Session tools ──────────────────────────────────────────────────
 
-  static readonly SESSION_TOOL_NAMES = [
-    'start_session', 'session_list', 'query_session',
-    'interrupt_session', 'stop_session', 'archive_session',
-    'get_session_output', 'list_agents', 'query_agent',
-  ] as const
-
   /**
    * Resolve a working directory argument against the workspace root.
    * Accepts absolute paths or workspace-relative paths. Throws if the resolved path
@@ -444,8 +438,6 @@ export class SessionManager implements SessionManagerInternals {
     }
     return resolved
   }
-
-  static readonly DEFAULT_SESSION_TOOLS = ['query_session'] as const
 
   /**
    * Build the session-management tools (start_session / query_session / etc.)
