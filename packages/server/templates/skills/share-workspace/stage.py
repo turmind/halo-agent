@@ -73,7 +73,7 @@ BUILTIN_AGENT_IDS = {
     "default", "executor", "deep-executor",
 }
 BUILTIN_SKILL_IDS = {
-    "agent", "create-skill", "organize-workspace",
+    "agent", "skill", "organize-workspace",
     "share-workspace", "manage-cron-jobs", "send-file", "create-halo-acp",
 }
 

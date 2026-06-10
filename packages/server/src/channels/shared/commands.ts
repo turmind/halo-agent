@@ -1,9 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { SessionManager } from '../../agents/session-manager.js'
-import { scanAvailableAgents, GLOBAL_AGENTS_DIR, loadAgentYaml } from '../../agents/agent-loader.js'
+import { scanAvailableAgents, GLOBAL_AGENTS_DIR, GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter } from '../../agents/agent-loader.js'
 import { ensureWorkspaceHalo } from '../../init.js'
-import { getDisabledSet } from '../../db/index.js'
+import { getDisabledSet, toggleDisabled } from '../../db/index.js'
 import { t, type Lang } from './i18n.js'
 import { execSkillCommand, getCommandSkillInfo } from '../../commands/skill-command.js'
 import { commandRegistry } from '../../commands/index.js'
@@ -398,7 +398,7 @@ export function execNote(ctx: CommandContext, arg: string): CommandResult {
  */
 export const DISPATCH_COMMANDS = [
   '/help', '/stop', '/interrupt', '/compact', '/new', '/list', '/switch',
-  '/ws', '/context', '/evo', '/agent',
+  '/ws', '/context', '/evo', '/agent', '/skill',
 ] as const
 
 export async function dispatchCommand(
@@ -424,8 +424,9 @@ export async function dispatchCommand(
     // the agent skill. Explicit case (not default) so it's always registered
     // and the startup descriptor↔dispatch assertion is satisfied.
     case '/agent': return routeObjectOrSkill(ctx, command, arg)
+    case '/skill': return routeObjectOrSkill(ctx, command, arg)
     default:
-      // Skill-defined slash commands (e.g. /create-skill) — same routing, but
+      // Skill-defined slash commands (e.g. /organize-workspace) — same routing, but
       // reached only when the command isn't a builtin above.
       return routeObjectOrSkill(ctx, command, arg)
   }
@@ -493,6 +494,14 @@ const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
     switch: { handler: (ctx, subArg) => execAgentSwitch(ctx, subArg), descKey: 'verb.agent.switch' },
     desc: { handler: (ctx, subArg) => execAgentDesc(ctx, subArg), descKey: 'verb.agent.desc' },
     delete: { handler: (ctx, subArg) => execAgentDelete(ctx, subArg), requiresAccess: 'full', descKey: 'verb.agent.delete' },
+  },
+  '/skill': {
+    // list/desc are pure reads — open to readonly. disable toggles a
+    // workspace-level DB flag (workspace). delete removes files (full).
+    list: { handler: (ctx) => execSkillList(ctx), descKey: 'verb.skill.list' },
+    desc: { handler: (ctx, subArg) => execSkillDesc(ctx, subArg), descKey: 'verb.skill.desc' },
+    disable: { handler: (ctx, subArg) => execSkillDisable(ctx, subArg), requiresAccess: 'workspace', descKey: 'verb.skill.disable' },
+    delete: { handler: (ctx, subArg) => execSkillDelete(ctx, subArg), requiresAccess: 'full', descKey: 'verb.skill.delete' },
   },
 }
 
@@ -661,6 +670,111 @@ export async function execAgentDelete(ctx: CommandContext, arg: string): Promise
     return { text: t('agent.delete_done', ctx.lang, { name: agent.name, scope: agent.scope }) }
   } catch (err) {
     return { text: t('agent.failed', ctx.lang, { error: err instanceof Error ? err.message : String(err) }) }
+  }
+}
+
+// ── /skill builtin verbs ─────────────────────────────────────────────────────
+// Deterministic skill management. create / update fall through to the `skill`
+// skill (LLM-driven, authors SKILL.md files).
+
+interface ScannedSkill {
+  id: string
+  name: string
+  description: string
+  scope: 'global' | 'workspace'
+  disabled: boolean
+  overridden: boolean
+}
+
+/** Scan global + workspace skills. Workspace wholly overrides a same-id global
+ *  (the global row is kept but flagged `overridden`). `disabled` comes from the
+ *  workspace DB (disabled_items), keyed `scope:id`. */
+function scanSkills(ctx: CommandContext): ScannedSkill[] {
+  const disabledSet = getDisabledSet(ctx.sm.getDb(), 'skill')
+  const out: ScannedSkill[] = []
+  const scanOne = (dir: string, scope: 'global' | 'workspace') => {
+    let names: string[]
+    try { names = fs.readdirSync(dir) } catch { return }
+    for (const id of names) {
+      const mdPath = path.join(dir, id, 'SKILL.md')
+      if (!fs.existsSync(mdPath)) continue
+      try {
+        const { name, description } = parseSkillFrontmatter(fs.readFileSync(mdPath, 'utf-8'))
+        out.push({
+          id, name: name || id, description: description ?? '', scope,
+          disabled: disabledSet.has(`${scope}:${id}`), overridden: false,
+        })
+      } catch { /* skip unparsable */ }
+    }
+  }
+  scanOne(GLOBAL_SKILLS_DIR, 'global')
+  scanOne(path.join(ctx.workspacePath, '.halo', 'skills'), 'workspace')
+  const wsIds = new Set(out.filter((s) => s.scope === 'workspace').map((s) => s.id))
+  for (const s of out) if (s.scope === 'global' && wsIds.has(s.id)) s.overridden = true
+  return out
+}
+
+/** Resolve a skill by 1-based index (against the list order) or by id. */
+function resolveSkill(skills: ScannedSkill[], arg: string): ScannedSkill | undefined {
+  const idx = parseInt(arg, 10)
+  if (Number.isInteger(idx) && idx >= 1 && idx <= skills.length) return skills[idx - 1]
+  // Prefer the workspace copy when both scopes have the id (it's the live one).
+  return skills.find((s) => s.id === arg && s.scope === 'workspace') ?? skills.find((s) => s.id === arg)
+}
+
+export function execSkillList(ctx: CommandContext): CommandResult {
+  const skills = scanSkills(ctx)
+  if (skills.length === 0) return { text: t('skills.empty', ctx.lang) }
+  const lines = [t('skills.title', ctx.lang)]
+  skills.forEach((s, i) => {
+    const scope = s.scope === 'workspace' ? '[ws]' : (ctx.lang === 'zh' ? '[全局]' : '[global]')
+    const flags = [
+      s.disabled ? (ctx.lang === 'zh' ? '已禁用' : 'disabled') : '',
+      s.overridden ? (ctx.lang === 'zh' ? '被覆盖' : 'overridden') : '',
+    ].filter(Boolean).join(', ')
+    const desc = s.description ? ` — ${s.description.slice(0, 40)}` : ''
+    lines.push(`  ${i + 1}. ${scope} ${s.id}${desc}${flags ? ` (${flags})` : ''}`)
+  })
+  return { text: lines.join('\n') }
+}
+
+export function execSkillDesc(ctx: CommandContext, arg: string): CommandResult {
+  if (!arg) return { text: t('skill.usage_desc', ctx.lang) }
+  const skills = scanSkills(ctx)
+  const skill = resolveSkill(skills, arg)
+  if (!skill) return { text: t('skill.not_found', ctx.lang, { name: arg }) }
+  const lines = [
+    `**${skill.name}** (${skill.id}) ${skill.scope === 'workspace' ? '[ws]' : '[global]'}`,
+    skill.description ? `\n${skill.description}` : '',
+    skill.disabled ? `\n⚠ ${ctx.lang === 'zh' ? '此 skill 已在本 workspace 禁用' : 'Disabled in this workspace'}` : '',
+    skill.overridden ? `\n⚠ ${ctx.lang === 'zh' ? '被同名 workspace skill 覆盖' : 'Overridden by a same-id workspace skill'}` : '',
+  ].filter(Boolean)
+  return { text: lines.join('\n') }
+}
+
+export function execSkillDisable(ctx: CommandContext, arg: string): CommandResult {
+  if (!arg) return { text: t('skill.usage_disable', ctx.lang) }
+  const skills = scanSkills(ctx)
+  const skill = resolveSkill(skills, arg)
+  if (!skill) return { text: t('skill.not_found', ctx.lang, { name: arg }) }
+  const disabled = toggleDisabled(ctx.sm.getDb(), 'skill', skill.id, skill.scope)
+  return { text: t(disabled ? 'skill.disabled_done' : 'skill.enabled_done', ctx.lang, { name: skill.id }) }
+}
+
+export function execSkillDelete(ctx: CommandContext, arg: string): CommandResult {
+  if (!arg) return { text: t('skill.usage_delete', ctx.lang) }
+  const skills = scanSkills(ctx)
+  const skill = resolveSkill(skills, arg)
+  if (!skill) return { text: t('skill.not_found', ctx.lang, { name: arg }) }
+  // Built-in skills are re-seeded on restart — deleting won't stick (same as agents).
+  const dir = skill.scope === 'workspace'
+    ? path.join(ctx.workspacePath, '.halo', 'skills', skill.id)
+    : path.join(GLOBAL_SKILLS_DIR, skill.id)
+  try {
+    fs.rmSync(dir, { recursive: true, force: true })
+    return { text: t('skill.delete_done', ctx.lang, { name: skill.id, scope: skill.scope }) }
+  } catch (err) {
+    return { text: t('skill.delete_failed', ctx.lang, { error: err instanceof Error ? err.message : String(err) }) }
   }
 }
 

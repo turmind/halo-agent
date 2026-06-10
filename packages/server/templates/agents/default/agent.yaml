@@ -37,7 +37,7 @@ tools:
   - archive_session
 skills:
   - agent
-  - create-skill
+  - skill
   - organize-workspace
   - share-workspace
   - send-file

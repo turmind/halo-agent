@@ -19,6 +19,7 @@ const messages: Record<string, Record<Lang, string>> = {
   'cmd.ws.readonly': { zh: '查看当前 workspace', en: 'Show current workspace' },
   'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
   'cmd.agent':   { zh: '管理 agent', en: 'Manage agents' },
+  'cmd.skill':   { zh: '管理 skill', en: 'Manage skills' },
 
   // ── /agent builtin verb descriptions (shown in `/agent help`) ──
   'verb.agent.list':   { zh: '列出可用的 agent', en: 'List usable agents' },
@@ -26,6 +27,22 @@ const messages: Record<string, Record<Lang, string>> = {
   'verb.agent.desc':   { zh: '查看某个 agent 的模型 / 工具 / 技能', en: "Show an agent's model / tools / skills" },
   'verb.agent.delete': { zh: '删除一个 agent（workspace 或全局）', en: 'Delete an agent (workspace or global)' },
   'verb.none':   { zh: '{cmd} 没有你可用的操作', en: 'No actions available to you for {cmd}' },
+
+  // ── /skill builtin verbs ──
+  'verb.skill.list':    { zh: '列出全部 skill（含禁用/覆盖状态）', en: 'List all skills (with disabled/overridden flags)' },
+  'verb.skill.desc':    { zh: '查看某个 skill 的描述与状态', en: "Show a skill's description and status" },
+  'verb.skill.disable': { zh: '禁用/启用某个 skill（本 workspace）', en: 'Disable/enable a skill (this workspace)' },
+  'verb.skill.delete':  { zh: '删除一个 skill（workspace 或全局）', en: 'Delete a skill (workspace or global)' },
+  'skills.empty': { zh: '没有任何 skill', en: 'No skills found' },
+  'skills.title': { zh: '可用 Skill：', en: 'Skills:' },
+  'skill.usage_desc': { zh: '用法：/skill desc <名称或编号>', en: 'Usage: /skill desc <name or number>' },
+  'skill.usage_disable': { zh: '用法：/skill disable <名称或编号>', en: 'Usage: /skill disable <name or number>' },
+  'skill.usage_delete': { zh: '用法：/skill delete <名称或编号>', en: 'Usage: /skill delete <name or number>' },
+  'skill.not_found': { zh: '找不到 skill: {name}', en: 'Skill not found: {name}' },
+  'skill.disabled_done': { zh: '⏸ 已禁用 skill "{name}"（本 workspace）', en: '⏸ Skill "{name}" disabled (this workspace)' },
+  'skill.enabled_done': { zh: '▶ 已启用 skill "{name}"（本 workspace）', en: '▶ Skill "{name}" enabled (this workspace)' },
+  'skill.delete_done': { zh: '🗑 已删除 skill "{name}"（{scope}）', en: '🗑 Deleted skill "{name}" ({scope})' },
+  'skill.delete_failed': { zh: '删除失败: {error}', en: 'Delete failed: {error}' },
 
   // Channel-specific (currently WeChat-only)
   'cmd.qr':      { zh: '生成邀请二维码（仅管理员）', en: 'Generate invite QR (admin only)' },

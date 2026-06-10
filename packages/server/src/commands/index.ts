@@ -33,6 +33,7 @@ commandRegistry.registerDescriptor({ name: 'evo',     slashName: '/evo',     des
 // agent); create/update fall through to the `agent` skill. Always registered
 // so it doesn't depend on the skill being whitelisted.
 commandRegistry.registerDescriptor({ name: 'agent',   slashName: '/agent',   description: 'Manage agents (list/switch/desc/delete; create/update via skill)', type: 'server', argHint: '<verb>', source: 'builtin' })
+commandRegistry.registerDescriptor({ name: 'skill',   slashName: '/skill',   description: 'Manage skills (list/desc/disable/delete; create/update via skill)', type: 'server', argHint: '<verb>', source: 'builtin' })
 
 /** Names (no leading slash) of every registered builtin command. Single source
  *  of truth for channels that need to enumerate commands — e.g. Telegram's
