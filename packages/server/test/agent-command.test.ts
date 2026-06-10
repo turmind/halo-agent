@@ -20,7 +20,7 @@ function writeAgentSkill(): void {
   writeFileSync(join(dir, 'SKILL.md'), [
     '---', 'name: agent', 'description: Manage agents', 'command: /agent',
     'verbs:',
-    '  - { name: list,   builtin: true,  requiresAccess: workspace, desc: List }',
+    '  - { name: list,   builtin: true,  desc: List }',
     '  - { name: delete, builtin: true,  requiresAccess: full,      desc: Delete }',
     '  - { name: create, builtin: false, requiresAccess: full,      desc: Create a new agent }',
     '---', '# agent body',
@@ -64,6 +64,13 @@ describe('/agent help — skill whitelisted', () => {
 
   it('workspace user sees list but not delete/create (full-gated)', async () => {
     const res = await dispatchCommand(ctxFor(new SessionManager(ws), 'workspace'), '/agent', '')
+    expect(res?.text).toContain('/agent list')
+    expect(res?.text).not.toContain('/agent delete')
+    expect(res?.text).not.toContain('/agent create')
+  })
+
+  it('readonly user sees the read verbs (list open to everyone) but nothing full-gated', async () => {
+    const res = await dispatchCommand(ctxFor(new SessionManager(ws), 'readonly'), '/agent', '')
     expect(res?.text).toContain('/agent list')
     expect(res?.text).not.toContain('/agent delete')
     expect(res?.text).not.toContain('/agent create')

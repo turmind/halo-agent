@@ -478,9 +478,11 @@ interface BuiltinVerb {
  */
 const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
   '/agent': {
-    list: { handler: (ctx) => execAgentList(ctx), requiresAccess: 'workspace', descKey: 'verb.agent.list' },
-    switch: { handler: (ctx, subArg) => execAgentSwitch(ctx, subArg), requiresAccess: 'workspace', descKey: 'verb.agent.switch' },
-    desc: { handler: (ctx, subArg) => execAgentDesc(ctx, subArg), requiresAccess: 'workspace', descKey: 'verb.agent.desc' },
+    // list/desc are pure reads; switch creates a session that inherits the
+    // caller's own access level (no escalation) — all open to readonly.
+    list: { handler: (ctx) => execAgentList(ctx), descKey: 'verb.agent.list' },
+    switch: { handler: (ctx, subArg) => execAgentSwitch(ctx, subArg), descKey: 'verb.agent.switch' },
+    desc: { handler: (ctx, subArg) => execAgentDesc(ctx, subArg), descKey: 'verb.agent.desc' },
     delete: { handler: (ctx, subArg) => execAgentDelete(ctx, subArg), requiresAccess: 'full', descKey: 'verb.agent.delete' },
   },
 }

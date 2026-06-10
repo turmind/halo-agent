@@ -4,10 +4,10 @@ description: Create or update agent configurations (agent.yaml + AGENT.md). Acti
 command: /agent
 verbs:
   # builtin verbs — access is set in code (SUBCOMMAND_ROUTES); shown here for reference
-  - { name: list,   builtin: true,  requiresAccess: workspace, desc: List usable agents }
-  - { name: switch, builtin: true,  requiresAccess: workspace, desc: Start a session with an agent }
-  - { name: desc,   builtin: true,  requiresAccess: workspace, desc: Show an agent's model / tools / skills }
-  - { name: delete, builtin: true,  requiresAccess: full,      desc: Delete an agent (workspace or global) }
+  - { name: list,   builtin: true,  desc: List usable agents }
+  - { name: switch, builtin: true,  desc: Start a session with an agent }
+  - { name: desc,   builtin: true,  desc: Show an agent's model / tools / skills }
+  - { name: delete, builtin: true,  requiresAccess: full, desc: Delete an agent (workspace or global) }
   # skill verbs — access enforced from here
   - { name: create, builtin: false, requiresAccess: full, desc: Create a new agent }
   - { name: update, builtin: false, requiresAccess: full, desc: Modify an existing agent }
@@ -78,9 +78,9 @@ skills:
 **Required:** `model.provider` (must match an id in `~/.halo/global/models/<provider>.yaml`),
 `model.id`, `model.endpoint` — the server rejects sessions missing any of these.
 
-**Model choice:** Sonnet 4.6 is the default workhorse. Opus 4.7 only when the
-task visibly needs deeper reasoning (costs more — not the default). Haiku 4.5
-for fast, lightweight work.
+**Model choice:** Sonnet 4.6 is the default workhorse. Opus 4.8
+(`global.anthropic.claude-opus-4-8`) when the task visibly needs deeper
+reasoning (costs more — not the default). Haiku 4.5 for fast, lightweight work.
 
 **Thinking:** `medium` is a good default; `high`/`xhigh` only for deep-reasoning
 agents; `enabled: false` to turn it off entirely.

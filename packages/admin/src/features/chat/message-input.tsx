@@ -731,12 +731,14 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
 
   const selectCommand = useCallback((cmd: SlashCommand) => {
     const parts = text.split(/\s+/)
+    const typed = parts[0] ?? ''
     const args = parts.slice(1).join(' ')
     // Commands that take arguments (argHint set — e.g. `/agent <verb>`,
-    // `/switch <n>`) shouldn't fire on selection: fill the input with the
-    // command name and let the user type the argument. Only fire immediately
-    // when the user already typed an arg, or the command takes none.
-    if (cmd.argHint && !args) {
+    // `/switch <n>`): selecting from a PARTIAL prefix (`/ag`) completes the
+    // name and waits for the argument. If the full name is already typed
+    // (`/agent` + Enter again), send it as-is — a bare object command returns
+    // its action list server-side, so this never loops.
+    if (cmd.argHint && !args && typed !== cmd.name) {
       setText(cmd.name + ' ')
       setCmdIndex(0)
       textareaRef.current?.focus()
