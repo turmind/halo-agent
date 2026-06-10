@@ -11,7 +11,7 @@ import { postToFace } from '@/features/editor/face-bridge'
  *  it on its own line. */
 const CAPTURE_MARKER = /<<<CAPTURE>>>/
 
-/** Marker the LLM emits to drive its visual "face" (see `express-self` skill +
+/** Marker the LLM emits to drive its visual "face" (see `self` skill +
  *  `.halo/canvas/self.html`). The payload between the markers is a line of
  *  face JS, forwarded VERBATIM to the open preview — Halo never parses it.
  *  Non-greedy dot-all because payloads legitimately contain `>`, `(`, and

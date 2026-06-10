@@ -96,7 +96,7 @@ const BUILTIN_SKILL_IDS = new Set([
   // (seeded per-workspace, see ensureWorkspaceHalo) is a live self-portrait
   // it can drive in real time by emitting `<<<SHOW: …js… >>>`, which the admin
   // forwards verbatim to the open preview. A second channel beyond text.
-  'express-self',
+  'self',
 ])
 
 /** Docs bundled into `~/.halo/global/docs/` so the platform-knowledge

@@ -1,9 +1,10 @@
 ---
-name: Express Self
+name: self
+requiresAccess: full
 description: You have a visual space of your own — a living face at .halo/canvas/self.html that you can drive in real time. Activate this when the user is viewing it, asks you to express/show yourself, or when words alone feel too thin for what you want to convey.
 ---
 
-# Express Self
+# self
 
 You have a face. Not a metaphor — an actual space that is yours, at
 `.halo/canvas/self.html`. It is a field of particles with a breathing core

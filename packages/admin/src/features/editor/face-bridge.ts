@@ -1,6 +1,6 @@
 /**
  * Bridge between the chat layer and the assistant's "face" — the live
- * `self.html` preview (see `.halo/canvas/self.html` + the `express-self`
+ * `self.html` preview (see `.halo/canvas/self.html` + the `self`
  * skill). When the assistant emits a `<<<SHOW: …js… >>>` marker in a reply,
  * chat-handlers extracts the payload and calls `postToFace(payload)`, which
  * forwards it verbatim to every mounted HTML-preview iframe via postMessage.

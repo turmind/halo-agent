@@ -40,7 +40,7 @@ skills:
   - skill
   - ws
   - send-file
-  - express-self
+  - self
   - aws-knowledge
   - nova-web-search
   - cron
