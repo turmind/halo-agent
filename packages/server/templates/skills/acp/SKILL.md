@@ -1,36 +1,70 @@
 ---
 name: acp
-description: Manage ACP bindings — generate an `ask-<label>` bridge skill that relays questions to a remote halo agent (host/port/token/workspace), a local Claude Code instance, or a local Kiro. Activate when the user says "add an ACP binding", "let me talk to <other agent>", "connect Claude Code / Kiro", or asks to wire a new remote workspace.
+description: Talk to other agents over ACP — `/acp kiro <q>` (local Kiro), `/acp claude <q>` (local Claude Code), `/acp halo <q>` (the configured remote halo). Also manages per-remote `ask-<label>` bindings for multiple halo remotes. Activate when the user wants to ask another agent something or wire up an ACP connection.
 command: /acp
 requiresAccess: full
 verbs:
-  - { name: add, desc: Generate a new ask-<label> binding (halo or claude) }
-  - { name: list, desc: List existing ask-* bindings }
-  - { name: remove, desc: Remove a binding (delete its ask-<label> skill) }
+  - { name: kiro,   desc: Ask the local Kiro (rest of the line is the question) }
+  - { name: claude, desc: Ask the local Claude Code (rest of the line is the question) }
+  - { name: halo,   desc: Ask the configured remote halo (rest of the line is the question) }
+  - { name: add,    desc: Generate an ask-<label> binding for an additional halo remote }
+  - { name: list,   desc: List ask-* bindings }
+  - { name: remove, desc: Remove a binding }
 ---
 
 # acp
 
-The requested action is **`$1`** (full args: `$ARGUMENTS`); with natural
-language, infer it. `list` = enumerate `ask-*` skill dirs (workspace + global)
-and report label/kind/target. `remove` = confirm, then delete the chosen
-`ask-<label>` skill directory and its settings.yaml namespace entry. `add` =
-the generator flow below.
+The requested action is **`$1`**; everything after it is the payload
+(`$ARGUMENTS` minus the first token). With natural language, infer both.
 
-## Three binding kinds
+## Direct ask verbs — kiro / claude / halo
 
-- **halo** (default) — a remote halo server: needs label/host/port/token/workspace.
-- **claude** — the local Claude Code install, bridged via the standard ACP
-  adapter (`claude-agent-acp`, `npm i -g @agentclientprotocol/claude-agent-acp`).
-  Needs only label + a working directory (`cwd`) the Claude session should run
-  in. No host/port/token. The generated SKILL.md invokes
-  `ask.py --kind claude --cwd <dir>`; everything else (threading via SESSION
-  id, reply format) is identical.
-- **kiro** — the local Kiro CLI (`kiro-cli acp`; spawned with
-  `--trust-all-tools` since the relay is headless). Same shape as claude:
-  label + `cwd` only — `ask.py --kind kiro --cwd <dir>`. Optional
-  `--agent-id <name>` selects a Kiro agent profile.
+The question is the rest of the line. The helper lives in this skill's
+directory under `templates/ask.py` — the workspace copy wins if it exists,
+else the global one (deterministic paths, no glob needed):
 
+- `<workspace>/.halo/skills/acp/templates/ask.py`
+- `~/.halo/global/skills/acp/templates/ask.py`
+
+Pick ASK = the first of those that exists, then run and relay the reply
+(quote short answers; summarize long ones — never paste the SESSION
+bookkeeping line):
+
+```bash
+# /acp kiro <question>            — local Kiro CLI
+shell_exec: python3 $ASK "<question>" --kind kiro --cwd {{workspace_root}}
+
+# /acp claude <question>          — local Claude Code
+shell_exec: python3 $ASK "<question>" --kind claude --cwd {{workspace_root}}
+
+# /acp halo <question>            — the configured remote halo
+shell_exec: python3 $ASK "<question>" --kind halo \
+  --host {{params.host}} --port {{params.port}} \
+  --workspace {{params.workspace}} --token {{params.token}}
+```
+
+- For `halo`, the target comes from this skill's settings (`acp.params.*` —
+  admin Settings → Skills → acp). If `{{params.host}}` renders as a literal
+  `{{...}}`, the remote isn't configured yet: tell the user to fill in
+  host/port/workspace/token there first.
+- Follow-ups on the same topic: reuse the `SESSION:` id from the previous
+  call's stdout with `--session-id <id>` so the other agent keeps context.
+  If it errors with unknown session, drop the id and start fresh.
+- Failure modes: `not found in PATH` → that CLI isn't installed (kiro-cli /
+  claude-agent-acp / halo). Exit 124 → timed out, suggest a narrower question.
+  stopReason≠end_turn on stderr → pass it along with the partial reply.
+
+## Multiple halo remotes — add / list / remove
+
+One remote halo fits in `acp.params.*` above. For SEVERAL remotes (each with
+its own host/token), generate a dedicated `ask-<label>` skill per remote —
+each gets its own `/ask-<label>` command and its own settings namespace.
+
+- **list** — enumerate `ask-*` skill dirs (workspace + global); report each
+  label and target.
+- **remove** — confirm, delete the chosen `ask-<label>` skill directory, and
+  mention the leftover `ask-<label>:` block in settings.yaml can be cleaned.
+- **add** — the generator flow below.
 
 ## Add — generator flow
 

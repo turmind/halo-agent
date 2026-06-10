@@ -1,0 +1,23 @@
+displayName: ACP
+description: Default remote halo target for `/acp halo <question>`. Local kiro/claude verbs need no config. For multiple halo remotes, use `/acp add` to generate per-remote bindings instead.
+
+params:
+  - key: host
+    description: Remote halo server hostname or IP (for /acp halo).
+    description_zh: 远端 halo server 主机名 / IP（供 /acp halo 使用）。
+    default: ""
+
+  - key: port
+    description: Remote halo server port.
+    description_zh: 远端 halo server 端口。
+    default: "9527"
+
+  - key: workspace
+    description: Absolute path of the remote workspace to drive.
+    description_zh: 要驱动的远端 workspace 绝对路径。
+    default: ""
+
+  - key: token
+    description: Web-channel token from the remote halo admin.
+    description_zh: 远端 halo 后台 Web channel token。
+    secret: true
