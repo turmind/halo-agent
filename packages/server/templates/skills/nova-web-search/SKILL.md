@@ -1,7 +1,7 @@
 ---
-name: Nova Web Search
+name: nova-web-search
 description: Real-time web search using Amazon Nova 2 Lite's built-in nova_grounding system tool. Use this skill when the user asks about current events, news, latest updates, prices, or any real-time information. This replaces the web_search tool.
-disabled: true
+user-invocable: false
 ---
 # Nova Web Search
 

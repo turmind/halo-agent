@@ -1,6 +1,7 @@
 ---
 name: aws-knowledge
 description: Query the official AWS Knowledge MCP server for up-to-date AWS documentation, API references, best practices, troubleshooting guides, CDK/CloudFormation examples, What's New announcements, and regional availability. Activate when the user asks any AWS question — services, APIs, errors, architecture, new features, regional support, or "how do I do X on AWS". Always prefer this over general knowledge for AWS topics.
+user-invocable: false
 ---
 # AWS Knowledge
 

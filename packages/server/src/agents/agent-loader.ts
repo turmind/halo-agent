@@ -93,6 +93,10 @@ export function parseSkillFrontmatter(raw: string): {
   requiresAccess?: 'full' | 'workspace' | 'readonly'
   verbs?: SkillVerb[]
   disableModelInvocation?: boolean
+  /** Standard `user-invocable: false` — the skill never becomes a slash
+   *  command (hidden from users), but the model can still auto-activate it.
+   *  Mirror image of disable-model-invocation. Default true. */
+  userInvocable?: boolean
   body: string
 } {
   const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/)
@@ -138,6 +142,7 @@ export function parseSkillFrontmatter(raw: string): {
   // `disable-model-invocation` is the standard (kebab) field name; accept the
   // camel variant too for hand-authored leniency.
   const disableModelInvocation = doc['disable-model-invocation'] === true || doc.disableModelInvocation === true
+  const userInvocable = !(doc['user-invocable'] === false || doc.userInvocable === false)
 
   let verbs: SkillVerb[] | undefined
   if (Array.isArray(doc.verbs)) {
@@ -159,7 +164,7 @@ export function parseSkillFrontmatter(raw: string): {
     if (parsedVerbs.length > 0) verbs = parsedVerbs
   }
 
-  return { name, description, command, requiresAccess, verbs, disableModelInvocation, body }
+  return { name, description, command, requiresAccess, verbs, disableModelInvocation, userInvocable, body }
 }
 
 /** A skill id must be a single path segment — same shape as the `{{<id>.params}}`

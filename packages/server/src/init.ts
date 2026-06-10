@@ -88,6 +88,10 @@ const BUILTIN_SKILL_IDS = new Set([
   // skill never gets seeded into ~/.halo/global/skills/, so agents
   // can't discover it via activate_skill.
   'send-file',
+  // Capability skills, model-invoked only (user-invocable: false — no slash
+  // command). Preinstalled because they're broadly useful out of the box.
+  'aws-knowledge',
+  'nova-web-search',
   // The agent's visual "face": teaches it that `.halo/canvas/self.html`
   // (seeded per-workspace, see ensureWorkspaceHalo) is a live self-portrait
   // it can drive in real time by emitting `<<<SHOW: …js… >>>`, which the admin

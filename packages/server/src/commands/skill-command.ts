@@ -35,7 +35,14 @@ async function scanDir(dir: string): Promise<SkillCommandEntry[]> {
     const skillMdPath = path.join(skillDir, 'SKILL.md')
     try {
       const content = await fs.readFile(skillMdPath, 'utf-8')
-      const { name, description, command, requiresAccess, verbs } = parseSkillFrontmatter(content)
+      const { name, description, command, requiresAccess, verbs, userInvocable } = parseSkillFrontmatter(content)
+      // `user-invocable: false` (standard): never a slash command — skip the
+      // command entirely so it can't be listed or dispatched. The model can
+      // still activate the skill (loadSkillMetadata doesn't read this flag).
+      if (userInvocable === false) {
+        entries.push({ id: entryName, name: name || entryName, description: description ?? '', command: '', skillPath: skillMdPath, requiresAccess, verbs })
+        continue
+      }
       // Skills without a `command:` are cached too (command='') — their verbs
       // still feed object-command help — they just never become slash-command
       // descriptors below.
