@@ -132,7 +132,13 @@ def main() -> None:
             fail(f"initialize failed: {resp['error']}")
 
         if args.session_id:
-            rid = send("session/load", {"sessionId": args.session_id})
+            # ACP session/load requires cwd + mcpServers (same as session/new);
+            # kiro-cli exits silently if they're missing.
+            load_params: dict[str, Any] = {"sessionId": args.session_id}
+            if args.kind in ("claude", "kiro"):
+                load_params["cwd"] = args.cwd or os.getcwd()
+                load_params["mcpServers"] = []
+            rid = send("session/load", load_params)
             resp = wait_for(rid, deadline)
             if "error" in resp:
                 fail(f"session/load failed: {resp['error']}")
