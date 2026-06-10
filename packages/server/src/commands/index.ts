@@ -24,8 +24,13 @@ commandRegistry.registerDescriptor({ name: 'help',    slashName: '/help',    des
 // palette, TUI) can suggest them. Keep in sync with SUBCOMMAND_ROUTES — skill
 // verbs (e.g. agent create/update) come from the skill's SKILL.md instead.
 commandRegistry.registerDescriptor({ name: 'session', slashName: '/session', description: 'Manage sessions', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
-  { name: 'new', builtin: true }, { name: 'list', builtin: true }, { name: 'switch', builtin: true },
-  { name: 'stop', builtin: true }, { name: 'interrupt', builtin: true }, { name: 'compact', builtin: true }, { name: 'context', builtin: true },
+  { name: 'new', builtin: true, desc: 'Start a new session' },
+  { name: 'list', builtin: true, desc: 'List recent sessions' },
+  { name: 'switch', builtin: true, desc: 'Switch to a session by index' },
+  { name: 'stop', builtin: true, desc: 'Stop the running agent task' },
+  { name: 'interrupt', builtin: true, desc: 'Interrupt the running task' },
+  { name: 'compact', builtin: true, desc: 'Compress conversation context' },
+  { name: 'context', builtin: true, desc: 'Show context window + agent info' },
 ] })
 commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Show or switch workspace',               type: 'server', argHint: '[path]', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'evo',     slashName: '/evo',     description: 'Queue an evolution run on this session', type: 'server', argHint: '[hint]', source: 'builtin' })
@@ -33,12 +38,21 @@ commandRegistry.registerDescriptor({ name: 'evo',     slashName: '/evo',     des
 // agent); create/update fall through to the `agent` skill. Always registered
 // so it doesn't depend on the skill being whitelisted.
 commandRegistry.registerDescriptor({ name: 'agent',   slashName: '/agent',   description: 'Manage agents', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
-  { name: 'list', builtin: true }, { name: 'switch', builtin: true }, { name: 'desc', builtin: true }, { name: 'delete', builtin: true },
-  { name: 'create' }, { name: 'update' },
+  { name: 'list', builtin: true, desc: 'List usable agents' },
+  { name: 'switch', builtin: true, desc: 'Start a session with an agent' },
+  { name: 'desc', builtin: true, desc: "Show an agent's model / tools / skills" },
+  { name: 'delete', builtin: true, desc: 'Delete an agent (workspace or global)' },
+  { name: 'create', desc: 'Create a new agent' },
+  { name: 'update', desc: 'Modify an existing agent' },
 ] })
 commandRegistry.registerDescriptor({ name: 'skill',   slashName: '/skill',   description: 'Manage skills', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
-  { name: 'list', builtin: true }, { name: 'desc', builtin: true }, { name: 'disable', builtin: true }, { name: 'enable', builtin: true }, { name: 'delete', builtin: true },
-  { name: 'create' }, { name: 'update' },
+  { name: 'list', builtin: true, desc: 'List all skills (with disabled/overridden flags)' },
+  { name: 'desc', builtin: true, desc: "Show a skill's description and status" },
+  { name: 'disable', builtin: true, desc: 'Disable a skill (this workspace)' },
+  { name: 'enable', builtin: true, desc: 'Enable a skill (this workspace)' },
+  { name: 'delete', builtin: true, desc: 'Delete a skill (workspace or global)' },
+  { name: 'create', desc: 'Create a new skill' },
+  { name: 'update', desc: 'Modify an existing skill' },
 ] })
 
 /** Names (no leading slash) of every registered builtin command. Single source
