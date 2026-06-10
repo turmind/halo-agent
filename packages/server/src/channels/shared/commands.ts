@@ -500,7 +500,8 @@ const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
     // workspace-level DB flag (workspace). delete removes files (full).
     list: { handler: (ctx) => execSkillList(ctx), descKey: 'verb.skill.list' },
     desc: { handler: (ctx, subArg) => execSkillDesc(ctx, subArg), descKey: 'verb.skill.desc' },
-    disable: { handler: (ctx, subArg) => execSkillDisable(ctx, subArg), requiresAccess: 'workspace', descKey: 'verb.skill.disable' },
+    disable: { handler: (ctx, subArg) => execSkillSetDisabled(ctx, subArg, true), requiresAccess: 'workspace', descKey: 'verb.skill.disable' },
+    enable: { handler: (ctx, subArg) => execSkillSetDisabled(ctx, subArg, false), requiresAccess: 'workspace', descKey: 'verb.skill.enable' },
     delete: { handler: (ctx, subArg) => execSkillDelete(ctx, subArg), requiresAccess: 'full', descKey: 'verb.skill.delete' },
   },
 }
@@ -752,13 +753,18 @@ export function execSkillDesc(ctx: CommandContext, arg: string): CommandResult {
   return { text: lines.join('\n') }
 }
 
-export function execSkillDisable(ctx: CommandContext, arg: string): CommandResult {
-  if (!arg) return { text: t('skill.usage_disable', ctx.lang) }
+export function execSkillSetDisabled(ctx: CommandContext, arg: string, disable: boolean): CommandResult {
+  if (!arg) return { text: t(disable ? 'skill.usage_disable' : 'skill.usage_enable', ctx.lang) }
   const skills = scanSkills(ctx)
   const skill = resolveSkill(skills, arg)
   if (!skill) return { text: t('skill.not_found', ctx.lang, { name: arg }) }
-  const disabled = toggleDisabled(ctx.sm.getDb(), 'skill', skill.id, skill.scope)
-  return { text: t(disabled ? 'skill.disabled_done' : 'skill.enabled_done', ctx.lang, { name: skill.id }) }
+  // toggleDisabled flips; only flip when the current state differs from the
+  // requested one, so `disable` on an already-disabled skill is a no-op.
+  if (skill.disabled === disable) {
+    return { text: t(disable ? 'skill.already_disabled' : 'skill.already_enabled', ctx.lang, { name: skill.id }) }
+  }
+  toggleDisabled(ctx.sm.getDb(), 'skill', skill.id, skill.scope)
+  return { text: t(disable ? 'skill.disabled_done' : 'skill.enabled_done', ctx.lang, { name: skill.id }) }
 }
 
 export function execSkillDelete(ctx: CommandContext, arg: string): CommandResult {

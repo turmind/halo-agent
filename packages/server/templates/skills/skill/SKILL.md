@@ -6,7 +6,8 @@ verbs:
   # builtin verbs — access is set in code (SUBCOMMAND_ROUTES); shown here for reference
   - { name: list,    builtin: true, desc: List all skills (with disabled/overridden flags) }
   - { name: desc,    builtin: true, desc: Show a skill's description and status }
-  - { name: disable, builtin: true, requiresAccess: workspace, desc: Disable/enable a skill (this workspace) }
+  - { name: disable, builtin: true, requiresAccess: workspace, desc: Disable a skill (this workspace) }
+  - { name: enable,  builtin: true, requiresAccess: workspace, desc: Enable a skill (this workspace) }
   - { name: delete,  builtin: true, requiresAccess: full, desc: Delete a skill (workspace or global) }
   # skill verbs — access enforced from here
   - { name: create, builtin: false, requiresAccess: full, desc: Create a new skill }
