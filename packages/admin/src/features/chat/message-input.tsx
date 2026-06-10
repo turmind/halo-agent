@@ -8,7 +8,7 @@ import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { useChatStore } from '@/features/chat/chat-store'
 import { postToFace } from '@/features/editor/face-bridge'
-import { matchCommands, matchVerbs, type SlashCommand } from './slash-commands'
+import { matchCommands, matchVerbs, getCommands, type SlashCommand } from './slash-commands'
 import { CommandPalette } from './command-palette'
 import { FileMentionPicker } from './file-mention-picker'
 import { useT } from '@/shared/i18n'
@@ -619,9 +619,13 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   }, [selectedText, selectedRange, activeTab])
 
   const matchedCmds = useMemo(() => {
-    const firstWord = text.split(/\s/)[0] ?? ''
-    if (!firstWord.startsWith('/') || firstWord.length < 1) return []
-    return matchCommands(firstWord)
+    // Command palette only while typing the command word itself. Once a space
+    // is present the user is in verb/args territory — re-showing the command's
+    // own row there (e.g. right after picking a verb: `/session list `) is
+    // noise. Sending still works: handleSend resolves the command by exact
+    // first-word lookup, independent of this palette list.
+    if (!text.startsWith('/') || /\s/.test(text)) return []
+    return matchCommands(text)
   }, [text])
 
   // Second-stage completion: `/agent ` typed in full → suggest its verbs.
@@ -791,9 +795,21 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
       selectVerb(v)
       return
     }
-    if (trimmed.startsWith('/') && matchedCmds.length > 0) {
-      selectCommand(matchedCmds[cmdIndex] ?? matchedCmds[0])
-      return
+    if (trimmed.startsWith('/')) {
+      // Palette open (typing the command word): Enter picks the highlighted
+      // candidate (completes if it needs args, fires if it doesn't).
+      if (matchedCmds.length > 0) {
+        selectCommand(matchedCmds[cmdIndex] ?? matchedCmds[0])
+        return
+      }
+      // No palette (args already typed, e.g. `/session list`): resolve the
+      // command by exact first-word match and fire it with the args.
+      const exact = getCommands().find((c) => c.name === trimmed.split(/\s+/)[0]?.toLowerCase())
+      if (exact) {
+        selectCommand(exact)
+        return
+      }
+      // Unknown /word → fall through and send as a chat message.
     }
 
     // Attachments are images only (addFiles filters non-images out). Convert
