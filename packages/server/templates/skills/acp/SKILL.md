@@ -1,15 +1,14 @@
 ---
 name: acp
-description: Talk to other agents over ACP — `/acp kiro <q>` (local Kiro), `/acp claude <q>` (local Claude Code), `/acp halo <q>` (the configured remote halo). Also manages per-remote `ask-<label>` bindings for multiple halo remotes. Activate when the user wants to ask another agent something or wire up an ACP connection.
+description: Talk to other agents over ACP — `/acp kiro <q>` (local Kiro), `/acp claude <q>` (local Claude Code) — and manage `ask-<label>` bindings for remote halo servers. Activate when the user wants to ask another agent something or wire up an ACP connection.
 command: /acp
 requiresAccess: full
 verbs:
   - { name: kiro,   desc: Ask the local Kiro (rest of the line is the question) }
   - { name: claude, desc: Ask the local Claude Code (rest of the line is the question) }
-  - { name: halo,   desc: Ask the configured remote halo (rest of the line is the question) }
-  - { name: add,    desc: Generate an ask-<label> binding for an additional halo remote }
-  - { name: list,   desc: List ask-* bindings }
-  - { name: remove, desc: Remove a binding }
+  - { name: add,    desc: Generate an ask-<label> binding for a remote halo }
+  - { name: list,   desc: List generated ask-* binding skills }
+  - { name: remove, desc: Remove a generated ask-* binding skill }
 ---
 
 # acp
@@ -17,7 +16,7 @@ verbs:
 The requested action is **`$1`**; everything after it is the payload
 (`$ARGUMENTS` minus the first token). With natural language, infer both.
 
-## Direct ask verbs — kiro / claude / halo
+## Direct ask verbs — kiro / claude
 
 The question is the rest of the line. The helper lives in this skill's
 directory under `templates/ask.py` — the workspace copy wins if it exists,
@@ -36,17 +35,11 @@ shell_exec: python3 $ASK "<question>" --kind kiro --cwd {{workspace_root}}
 
 # /acp claude <question>          — local Claude Code
 shell_exec: python3 $ASK "<question>" --kind claude --cwd {{workspace_root}}
-
-# /acp halo <question>            — the configured remote halo
-shell_exec: python3 $ASK "<question>" --kind halo \
-  --host {{params.host}} --port {{params.port}} \
-  --workspace {{params.workspace}} --token {{params.token}}
 ```
 
-- For `halo`, the target comes from this skill's settings (`acp.params.*` —
-  admin Settings → Skills → acp). If `{{params.host}}` renders as a literal
-  `{{...}}`, the remote isn't configured yet: tell the user to fill in
-  host/port/workspace/token there first.
+Remote halo servers are reached through generated bindings (`/ask-<label>`),
+not a direct verb — see add/list/remove below.
+
 - Follow-ups on the same topic: reuse the `SESSION:` id from the previous
   call's stdout with `--session-id <id>` so the other agent keeps context.
   If it errors with unknown session, drop the id and start fresh.
@@ -54,11 +47,11 @@ shell_exec: python3 $ASK "<question>" --kind halo \
   claude-agent-acp / halo). Exit 124 → timed out, suggest a narrower question.
   stopReason≠end_turn on stderr → pass it along with the partial reply.
 
-## Multiple halo remotes — add / list / remove
+## Remote halo bindings — add / list / remove
 
-One remote halo fits in `acp.params.*` above. For SEVERAL remotes (each with
-its own host/token), generate a dedicated `ask-<label>` skill per remote —
-each gets its own `/ask-<label>` command and its own settings namespace.
+These verbs manage the GENERATED `ask-<label>` skills (one per remote halo,
+each with its own `/ask-<label>` command and settings namespace holding that
+remote's host/token).
 
 - **list** — enumerate `ask-*` skill dirs (workspace + global); report each
   label and target.
