@@ -49,7 +49,7 @@ export interface BuiltinVars {
   ai_name?: string
   agent_name?: string
   /** Channel of origin (telegram / wechat / web / undefined for ws/cli).
-   *  Used by skills like manage-cron-jobs to default targets to the chat
+   *  Used by skills like cron to default targets to the chat
    *  the user is talking from. */
   'channel.type'?: string
   'channel.account_id'?: string

@@ -75,7 +75,7 @@ const BUILTIN_SKILL_IDS = new Set([
   'agent',
   'skill',
   'ws',
-  'manage-cron-jobs',
+  'cron',
   // Meta-skill: walks the user through generating a per-remote
   // `ask-<label>` ACP binding skill. The generated bindings live in
   // user-owned skill dirs (workspace or global) and aren't templated;

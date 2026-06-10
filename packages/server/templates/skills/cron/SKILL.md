@@ -1,10 +1,22 @@
 ---
-name: Manage Cron Jobs
-description: Create, list, edit, or delete scheduled cron tasks that run a halo agent on a cron schedule and optionally push the result to a chat channel (telegram / wechat / slack / feishu). Activate when the user asks to "add / create a cron job", "list cron tasks", "delete a scheduled task", or anything similar around recurring agent runs.
+name: cron
+description: Manage scheduled cron jobs that run a halo agent on a schedule and optionally push the result to a chat channel (telegram / wechat / slack / feishu). Activate when the user asks to add / list / edit / pause / delete a recurring agent task.
+command: /cron
 requiresAccess: full
+verbs:
+  - { name: create,  desc: Create a scheduled job }
+  - { name: list,    desc: List scheduled jobs }
+  - { name: update,  desc: Edit a job (schedule / prompt / targets) }
+  - { name: enable,  desc: Resume a paused job }
+  - { name: disable, desc: Pause a job }
+  - { name: delete,  desc: Delete a job }
 ---
 
-# Manage Cron Jobs
+# cron
+
+The requested action is **`$1`** (full args: `$ARGUMENTS`); with
+natural-language activation, infer it from the request. All verbs run through
+this body — map them onto the helper script's subcommands below.
 
 Halo runs a global cron daemon that executes user-defined agent prompts on a schedule and
 optionally pushes the resulting text to a chat (telegram / wechat / slack / feishu). Use the

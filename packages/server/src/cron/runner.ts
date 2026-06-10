@@ -207,7 +207,7 @@ export function unscheduleJob(jobId: string): void {
  * This process's REST route mutations call `scheduleJob` directly and
  * don't rely on reconcile. The only thing reconcile catches is
  * out-of-band edits (agent running `sqlite3 cron.db UPDATE ...` from
- * the manage-cron-jobs skill, manual ops surgery), which originate
+ * the cron skill, manual ops surgery), which originate
  * from a different sqlite connection — so `data_version` flips for us.
  *
  * Cost on the fast path: one pragma read, ~microseconds. Beats the
@@ -250,7 +250,7 @@ function reconcileFromDb(): void {
   const liveIds = new Set<string>()
   // Track which job ids changed during this pass so we can broadcast a
   // single coalesced cron:job_changed for each. Out-of-band edits (e.g.
-  // the manage-cron-jobs skill writing the db directly) reach the admin
+  // the cron skill writing the db directly) reach the admin
   // UI through this path.
   const changedIds = new Set<string>()
   const seenBefore = new Set(_fingerprint.keys())

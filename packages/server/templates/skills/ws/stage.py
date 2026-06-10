@@ -73,7 +73,7 @@ BUILTIN_AGENT_IDS = {
     "default", "executor", "deep-executor",
 }
 BUILTIN_SKILL_IDS = {
-    "agent", "skill", "ws", "manage-cron-jobs", "send-file", "create-halo-acp",
+    "agent", "skill", "ws", "cron", "send-file", "create-halo-acp",
     "aws-knowledge", "nova-web-search", "express-self",
 }
 

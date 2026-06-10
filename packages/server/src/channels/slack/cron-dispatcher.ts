@@ -37,7 +37,7 @@ function parseChatId(raw: string): { channel: string; threadTs?: string } {
  *   - `C0123456`              — public channel id (push lands top-level)
  *   - `C0123456:1700000000.0` — `<channel>:<thread_ts>`, push lands in the thread
  *
- * Cron jobs created from inside Slack via the `manage-cron-jobs` skill
+ * Cron jobs created from inside Slack via the `cron` skill
  * inject the current chat as `chatId`, so the natural workflow ("set
  * me a daily reminder") just works. Admin-UI cron jobs that don't
  * specify a target run silently — the result shows in the cron log,

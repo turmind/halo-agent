@@ -7,7 +7,7 @@
  * the caller passes the numeric chat id explicitly.
  *
  * Cron jobs created from inside a telegram chat via the
- * `manage-cron-jobs` skill auto-pin the current chat id; admin-UI
+ * `cron` skill auto-pin the current chat id; admin-UI
  * cron jobs that don't specify a target run silently — the result
  * shows in the cron log, nothing pushed.
  */
