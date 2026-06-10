@@ -28,7 +28,11 @@ commandRegistry.registerDescriptor({ name: 'interrupt', slashName: '/interrupt',
 commandRegistry.registerDescriptor({ name: 'compact', slashName: '/compact', description: 'Compress conversation context',          type: 'server', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'context', slashName: '/context', description: 'Show context window + agent info',       type: 'server', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Show or switch workspace',               type: 'server', argHint: '[path]', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'note',    slashName: '/note',    description: 'Queue an evolution run on this session', type: 'server', argHint: '[hint]', source: 'builtin' })
+commandRegistry.registerDescriptor({ name: 'evo',     slashName: '/evo',     description: 'Queue an evolution run on this session', type: 'server', argHint: '[hint]', source: 'builtin' })
+// Object command: list/switch/desc/delete run as builtin verbs (work on every
+// agent); create/update fall through to the `agent` skill. Always registered
+// so it doesn't depend on the skill being whitelisted.
+commandRegistry.registerDescriptor({ name: 'agent',   slashName: '/agent',   description: 'Manage agents (list/switch/desc/delete; create/update via skill)', type: 'server', argHint: '<verb>', source: 'builtin' })
 
 /** Names (no leading slash) of every registered builtin command. Single source
  *  of truth for channels that need to enumerate commands — e.g. Telegram's

@@ -46,6 +46,25 @@ async function scanDir(dir: string): Promise<SkillCommandEntry[]> {
 
 let cachedEntries: SkillCommandEntry[] = []
 
+/** Verbs + object-level access of the skill behind an object command, even
+ *  when a builtin command shadows the skill from the descriptor list (e.g.
+ *  `/agent`). Reads the full scan (cachedEntries), not just listed descriptors,
+ *  so `/agent help` can show create/update (skill verbs) alongside the builtin
+ *  verbs, and gate them by the skill's requiresAccess. Empty for a command with
+ *  no backing skill. */
+export async function getCommandSkillInfo(
+  slashCommand: string,
+  workspaceRoot?: string,
+): Promise<{ verbs: SkillVerb[]; requiresAccess?: 'full' | 'workspace' | 'readonly' }> {
+  await scanSkillDescriptors(workspaceRoot)
+  const cmd = slashCommand.startsWith('/') ? slashCommand : `/${slashCommand}`
+  const entry = cachedEntries.find((e) => {
+    const slash = e.command.startsWith('/') ? e.command : `/${e.command}`
+    return slash === cmd
+  })
+  return { verbs: entry?.verbs ?? [], requiresAccess: entry?.requiresAccess }
+}
+
 export async function scanSkillDescriptors(workspaceRoot?: string): Promise<CommandDescriptor[]> {
   const globalEntries = await scanDir(GLOBAL_SKILLS_DIR)
   let wsEntries: SkillCommandEntry[] = []
@@ -69,19 +88,28 @@ export async function scanSkillDescriptors(workspaceRoot?: string): Promise<Comm
       .map((d) => d.slashName),
   )
   const claimed = new Set(builtinSlashes)
-  const valid: SkillCommandEntry[] = []
-  for (const entry of merged.values()) {
+  // `cachedEntries` (consumed by execSkillCommand) keeps EVERY skill, including
+  // ones whose command is shadowed by a builtin — e.g. the `agent` skill, whose
+  // /agent command is now a builtin object command but whose body still serves
+  // the create/update verbs via fallback. `listed` is the subset that becomes
+  // actual slash-command descriptors (shadowed ones excluded so the palette
+  // never shows a command the builtin/another-skill already owns).
+  cachedEntries = Array.from(merged.values())
+  const listed: SkillCommandEntry[] = []
+  for (const entry of cachedEntries) {
     const slashName = entry.command.startsWith('/') ? entry.command : `/${entry.command}`
     if (claimed.has(slashName)) {
-      const by = builtinSlashes.has(slashName) ? 'a builtin' : 'another skill'
-      console.warn(`[CommandRegistry] skill "${entry.id}" command "${slashName}" shadowed by ${by} — dropped from command list`)
+      // A builtin owning the name is expected for object commands (the skill
+      // body still runs via fallback), so only warn on skill-vs-skill clashes.
+      if (!builtinSlashes.has(slashName)) {
+        console.warn(`[CommandRegistry] skill "${entry.id}" command "${slashName}" shadowed by another skill — dropped from command list`)
+      }
       continue
     }
     claimed.add(slashName)
-    valid.push(entry)
+    listed.push(entry)
   }
-  cachedEntries = valid
-  return valid.map((entry) => {
+  return listed.map((entry) => {
     const slashName = entry.command.startsWith('/') ? entry.command : `/${entry.command}`
     return {
       name: slashName.slice(1),

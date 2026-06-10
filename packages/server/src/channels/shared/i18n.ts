@@ -17,7 +17,8 @@ const messages: Record<string, Record<Lang, string>> = {
   'cmd.context': { zh: '查看上下文窗口与 agent 信息', en: 'Show context window + agent info' },
   'cmd.ws':      { zh: '查看或切换 workspace', en: 'Show or switch workspace' },
   'cmd.ws.readonly': { zh: '查看当前 workspace', en: 'Show current workspace' },
-  'cmd.note':    { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
+  'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
+  'cmd.agent':   { zh: '管理 agent（list/switch/desc/delete；create/update 走 skill）', en: 'Manage agents (list/switch/desc/delete; create/update via skill)' },
 
   // Channel-specific (currently WeChat-only)
   'cmd.qr':      { zh: '生成邀请二维码（仅管理员）', en: 'Generate invite QR (admin only)' },
@@ -80,12 +81,12 @@ const messages: Record<string, Record<Lang, string>> = {
   'context.no_session': { zh: '没有活跃会话', en: 'No active session' },
   'context.not_loaded': { zh: '会话未加载', en: 'Session not loaded' },
 
-  // ── /note (self-evolution) ──
-  'note.readonly': { zh: 'Readonly 用户不能触发 /note。', en: 'Readonly users cannot trigger /note.' },
-  'note.no_session': { zh: '当前没有可分析的 root 会话。', en: 'No active root session to analyze.' },
-  'note.queued': { zh: '📝 已加入评估队列。完成后可在 admin 的 Evolution 页查看。', en: '📝 Queued for evaluation. Results will appear under the admin Evolution tab.' },
-  'note.snapshot_failed': { zh: '快照失败,请查 server 日志。', en: 'Snapshot failed — check server logs.' },
-  'note.queue_failed': { zh: '入队失败,请查 server 日志。', en: 'Failed to enqueue — check server logs.' },
+  // ── /evo (self-evolution) ──
+  'evo.readonly': { zh: 'Readonly 用户不能触发 /evo。', en: 'Readonly users cannot trigger /evo.' },
+  'evo.no_session': { zh: '当前没有可分析的 root 会话。', en: 'No active root session to analyze.' },
+  'evo.queued': { zh: '📝 已加入评估队列。完成后可在 admin 的 Evolution 页查看。', en: '📝 Queued for evaluation. Results will appear under the admin Evolution tab.' },
+  'evo.snapshot_failed': { zh: '快照失败,请查 server 日志。', en: 'Snapshot failed — check server logs.' },
+  'evo.queue_failed': { zh: '入队失败,请查 server 日志。', en: 'Failed to enqueue — check server logs.' },
 
   // ── /agent verbs (list / switch / desc / delete) ──
   'agents.empty': { zh: '没有可用的 agent', en: 'No agents available' },

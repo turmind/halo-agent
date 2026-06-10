@@ -74,6 +74,10 @@ export interface SkillVerb {
   name: string
   builtin?: boolean
   desc?: string
+  /** Per-verb access gate, symmetric with how builtin verbs declare it in
+   *  SUBCOMMAND_ROUTES. Unset → inherits the skill's object-level
+   *  `requiresAccess`; that unset too → open to everyone. */
+  requiresAccess?: 'full' | 'workspace' | 'readonly'
 }
 
 /** Parse SKILL.md frontmatter to extract name, description, optional
@@ -140,8 +144,14 @@ export function parseSkillFrontmatter(raw: string): {
     const parsedVerbs = doc.verbs
       .map((v): SkillVerb | null => {
         if (v && typeof v === 'object' && typeof (v as { name?: unknown }).name === 'string') {
-          const o = v as { name: string; builtin?: unknown; desc?: unknown }
-          return { name: o.name.trim(), builtin: o.builtin === true, desc: typeof o.desc === 'string' ? o.desc : undefined }
+          const o = v as { name: string; builtin?: unknown; desc?: unknown; requiresAccess?: unknown }
+          const vra = typeof o.requiresAccess === 'string' ? o.requiresAccess.trim() : undefined
+          return {
+            name: o.name.trim(),
+            builtin: o.builtin === true,
+            desc: typeof o.desc === 'string' ? o.desc : undefined,
+            requiresAccess: (vra === 'full' || vra === 'workspace' || vra === 'readonly') ? vra : undefined,
+          }
         }
         return null
       })

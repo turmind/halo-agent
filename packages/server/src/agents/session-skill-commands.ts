@@ -5,6 +5,25 @@ import { loadAgentYaml } from './agent-loader.js'
 import { scanSkillDescriptors } from '../commands/skill-command.js'
 import type { CommandDescriptor } from '../commands/types.js'
 
+const VIS_RANK = { readonly: 0, workspace: 1, full: 2 } as const
+
+/** A command's /help visibility threshold = the lowest gate among its verbs
+ *  (each verb's own requiresAccess, else the command's object-level one). No
+ *  verbs → just the object-level requiresAccess. undefined → no gate (some
+ *  verb open to everyone). Mirrors the verb-access rule on the dispatch side;
+ *  kept here (not imported) to avoid a channels→agents layering cycle. */
+function commandVisibilityGate(d: CommandDescriptor): 'full' | 'workspace' | 'readonly' | undefined {
+  if (!d.verbs || d.verbs.length === 0) return d.requiresAccess
+  let min: number | undefined
+  for (const v of d.verbs) {
+    const ra = v.requiresAccess ?? d.requiresAccess
+    const r = ra ? VIS_RANK[ra] : 0
+    min = min === undefined ? r : Math.min(min, r)
+  }
+  if (min === undefined || min === 0) return undefined
+  return min === VIS_RANK.full ? 'full' : 'workspace'
+}
+
 /**
  * Surface that SessionSkillCommands needs from SessionManager. Both are pure
  * reads (db row + workspace files), so the host is just db + workspaceRoot.
@@ -82,7 +101,12 @@ export class SessionSkillCommands {
       const skillId = d.skillId ?? d.name
       if (!allowed.has(skillId)) return false
       if (disabledSet.has(skillId)) return false
-      if (d.requiresAccess && RANK[d.requiresAccess] > sessionRank) return false
+      // Visibility threshold = the lowest gate among the command's verbs (each
+      // verb's own requiresAccess, else the object-level one). A command with
+      // no verbs just uses its object-level requiresAccess. Show it if the user
+      // clears that lowest bar — which verbs exactly is refined by `/cmd help`.
+      const gate = commandVisibilityGate(d)
+      if (gate && RANK[gate] > sessionRank) return false
       return true
     })
   }

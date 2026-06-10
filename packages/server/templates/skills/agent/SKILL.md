@@ -2,14 +2,15 @@
 name: agent
 description: Create or update agent configurations (agent.yaml + AGENT.md). Activate when the user wants to add a new agent or change an existing agent's model / tools / skills / behavior.
 command: /agent
-requiresAccess: full
 verbs:
-  - { name: list,   builtin: true,  desc: List usable agents }
-  - { name: switch, builtin: true,  desc: Start a session with an agent }
-  - { name: desc,   builtin: true,  desc: Show an agent's model / tools / skills }
-  - { name: delete, builtin: true,  desc: Delete an agent (workspace or global) }
-  - { name: create, builtin: false, desc: Create a new agent }
-  - { name: update, builtin: false, desc: Modify an existing agent }
+  # builtin verbs — access is set in code (SUBCOMMAND_ROUTES); shown here for reference
+  - { name: list,   builtin: true,  requiresAccess: workspace, desc: List usable agents }
+  - { name: switch, builtin: true,  requiresAccess: workspace, desc: Start a session with an agent }
+  - { name: desc,   builtin: true,  requiresAccess: workspace, desc: Show an agent's model / tools / skills }
+  - { name: delete, builtin: true,  requiresAccess: full,      desc: Delete an agent (workspace or global) }
+  # skill verbs — access enforced from here
+  - { name: create, builtin: false, requiresAccess: full, desc: Create a new agent }
+  - { name: update, builtin: false, requiresAccess: full, desc: Modify an existing agent }
 ---
 
 # agent

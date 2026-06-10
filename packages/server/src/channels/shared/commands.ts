@@ -5,8 +5,7 @@ import { scanAvailableAgents, GLOBAL_AGENTS_DIR } from '../../agents/agent-loade
 import { ensureWorkspaceHalo } from '../../init.js'
 import { getDisabledSet } from '../../db/index.js'
 import { t, type Lang } from './i18n.js'
-import { execSkillCommand, scanSkillDescriptors } from '../../commands/skill-command.js'
-import type { CommandDescriptor } from '../../commands/types.js'
+import { execSkillCommand, getCommandSkillInfo } from '../../commands/skill-command.js'
 import { commandRegistry } from '../../commands/index.js'
 import { config } from '../../config.js'
 import { enqueueEvoRun } from '../../evolution/enqueue.js'
@@ -92,21 +91,32 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
   // the *active session's agent* (mirrors `/api/commands?sessionId=...`).
   // Without this, channels like WeChat / Telegram never see skill commands —
   // the registry only ever holds builtins until someone hits the REST route.
-  const builtins = commandRegistry.listDescriptors().filter((d) => {
+  const builtinCandidates = commandRegistry.listDescriptors().filter((d) => {
     if (d.source === 'skill') return false
     // Client-side commands (e.g. `/clear` — the admin UI clears the chat
     // pane locally) have no server handler. Channels other than the
     // admin browser would just route them to dispatchCommand, get a
     // cmd.unknown back, and confuse the user. Hide them from /help.
     if (d.type === 'client') return false
-    // /note is the manual evo trigger — available at every level (L0 = manual
+    // /evo is the manual evo trigger — available at every level (L0 = manual
     // only, L1 = also auto on pre-compact), so it's gated on access, not level.
     // Readonly channel guests still can't trigger evo.
-    if (d.name === 'note') {
+    if (d.name === 'evo') {
       if (ctx.accessLevel === 'readonly') return false
     }
     return true
   })
+  // Object commands (e.g. /agent) are shown only if the user can run at least
+  // one verb — its lowest verb gate. Avoids listing a command whose every verb
+  // is above the user's access. Non-object builtins have no gate here.
+  const builtins: typeof builtinCandidates = []
+  for (const d of builtinCandidates) {
+    if (isObjectCommand(d.slashName)) {
+      const threshold = minAccess(await verbAccessMap(d.slashName, ctx.workspacePath))
+      if (threshold && RANK[threshold] > RANK[ctx.accessLevel]) continue
+    }
+    builtins.push(d)
+  }
   const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
   // Use the channel account's *current* accessLevel (ctx.accessLevel),
   // not whatever was persisted on the session row when it was first
@@ -342,15 +352,15 @@ export async function execContext(ctx: CommandContext): Promise<CommandResult> {
  */
 export function execNote(ctx: CommandContext, arg: string): CommandResult {
   if (ctx.accessLevel === 'readonly') {
-    return { text: t('note.readonly', ctx.lang) }
+    return { text: t('evo.readonly', ctx.lang) }
   }
   const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
-  if (!active) return { text: t('note.no_session', ctx.lang) }
+  if (!active) return { text: t('evo.no_session', ctx.lang) }
 
-  // /note only works on root sessions — sub-agent sessions are the parent
+  // /evo only works on root sessions — sub-agent sessions are the parent
   // root's responsibility. Hierarchical ids use `>` to separate parent and
   // child (`root>child>grandchild`); a root id has no `>`.
-  if (active.includes('>')) return { text: t('note.no_session', ctx.lang) }
+  if (active.includes('>')) return { text: t('evo.no_session', ctx.lang) }
 
   const result = enqueueEvoRun({
     sm: ctx.sm,
@@ -360,11 +370,11 @@ export function execNote(ctx: CommandContext, arg: string): CommandResult {
     userHint: arg.trim() || null,
   })
   if (!result.ok) {
-    console.error(`[evo] /note ${result.reason}: ${result.error}`)
-    if (result.reason === 'snapshot_failed') return { text: t('note.snapshot_failed', ctx.lang) }
-    return { text: t('note.queue_failed', ctx.lang) }
+    console.error(`[evo] /evo ${result.reason}: ${result.error}`)
+    if (result.reason === 'snapshot_failed') return { text: t('evo.snapshot_failed', ctx.lang) }
+    return { text: t('evo.queue_failed', ctx.lang) }
   }
-  return { text: t('note.queued', ctx.lang) }
+  return { text: t('evo.queued', ctx.lang) }
 }
 
 /**
@@ -378,7 +388,7 @@ export function execNote(ctx: CommandContext, arg: string): CommandResult {
  */
 export const DISPATCH_COMMANDS = [
   '/help', '/stop', '/interrupt', '/compact', '/new', '/list', '/switch',
-  '/ws', '/context', '/note',
+  '/ws', '/context', '/evo', '/agent',
 ] as const
 
 export async function dispatchCommand(
@@ -397,32 +407,44 @@ export async function dispatchCommand(
     case '/switch': return execSwitch(ctx, arg)
     case '/ws': return execWs(ctx, arg)
     case '/context': return execContext(ctx)
-    case '/note': return execNote(ctx, arg)
-    default: {
-      // noun-verb routing: for object commands like `/agent`, the first arg
-      // token is a verb. Verbs with a builtin handler run as deterministic
-      // code (no LLM); everything else falls through to the same-named skill
-      // (LLM-driven). Lets `/agent list` be exact while `/agent create` is the
-      // skill's job. See SUBCOMMAND_ROUTES.
-      const routed = await tryRouteSubcommand(ctx, command, arg)
-      if (routed !== NOT_ROUTED) return routed
-
-      const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
-      if (active) {
-        // Pass ctx.accessLevel — the channel account's *current* level —
-        // so a recent admin-side change (readonly → workspace, etc.)
-        // takes effect immediately. Without this we'd gate against the
-        // session row's stale snapshot.
-        const result = await execSkillCommand(command, arg, ctx.sm, active, ctx.workspacePath, ctx.channel, ctx.accessLevel, ctx.lang)
-        // 'ok' means execSkillCommand kicked sendUserMessage — the agent
-        // is now running on `active`. Surface that so the channel keeps
-        // its event stream open for the skill body's response.
-        if (result === 'ok') return { text: t('skill.activated', ctx.lang, { cmd: command }), startedTurn: true, sessionId: active }
-        if (result !== 'not_found') return { text: result }
-      }
-      return null
-    }
+    case '/evo': return execNote(ctx, arg)
+    // `/agent` is a builtin object command: its list/switch/desc/delete verbs
+    // are deterministic builtin code, so it works on EVERY agent regardless of
+    // whether the `agent` skill is whitelisted. create/update fall through to
+    // the agent skill. Explicit case (not default) so it's always registered
+    // and the startup descriptor↔dispatch assertion is satisfied.
+    case '/agent': return routeObjectOrSkill(ctx, command, arg)
+    default:
+      // Skill-defined slash commands (e.g. /create-skill) — same routing, but
+      // reached only when the command isn't a builtin above.
+      return routeObjectOrSkill(ctx, command, arg)
   }
+}
+
+/** Shared routing for object/skill commands: try the noun-verb builtin verbs
+ *  first (deterministic), else fall through to the same-named skill (LLM). */
+async function routeObjectOrSkill(
+  ctx: CommandContext,
+  command: string,
+  arg: string,
+): Promise<CommandResult | null> {
+  const routed = await tryRouteSubcommand(ctx, command, arg)
+  if (routed !== NOT_ROUTED) return routed
+
+  const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
+  if (active) {
+    // Pass ctx.accessLevel — the channel account's *current* level — so a
+    // recent admin-side change (readonly → workspace, etc.) takes effect
+    // immediately. Without this we'd gate against the session row's stale
+    // snapshot.
+    const result = await execSkillCommand(command, arg, ctx.sm, active, ctx.workspacePath, ctx.channel, ctx.accessLevel, ctx.lang)
+    // 'ok' means execSkillCommand kicked sendUserMessage — the agent is now
+    // running on `active`. Surface that so the channel keeps its event stream
+    // open for the skill body's response.
+    if (result === 'ok') return { text: t('skill.activated', ctx.lang, { cmd: command }), startedTurn: true, sessionId: active }
+    if (result !== 'not_found') return { text: result }
+  }
+  return null
 }
 
 /** Sentinel: this command/verb has no builtin subcommand handler — caller
@@ -457,6 +479,59 @@ const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
     desc: { handler: (ctx, subArg) => execAgentDesc(ctx, subArg), requiresAccess: 'workspace' },
     delete: { handler: (ctx, subArg) => execAgentDelete(ctx, subArg), requiresAccess: 'full' },
   },
+}
+
+type Access = 'full' | 'workspace' | 'readonly'
+const RANK = { readonly: 0, workspace: 1, full: 2 } as const
+
+/** Is this slash command an object command (has builtin verbs)? */
+function isObjectCommand(command: string): boolean {
+  return command in SUBCOMMAND_ROUTES
+}
+
+/**
+ * The single source of verb-level access for a command. Returns `{ verb →
+ * requiresAccess }` for every verb the command exposes, applying ONE rule
+ * symmetrically to builtin and skill verbs:
+ *
+ *   verb's own requiresAccess  (builtin: SUBCOMMAND_ROUTES; skill: SKILL.md verbs)
+ *     ?? the skill's object-level requiresAccess
+ *     ?? open (undefined)
+ *
+ * Every consumer — the router gate, /agent help, and /help visibility — derives
+ * from this map, so there's no second place where verb permissions are decided.
+ */
+async function verbAccessMap(
+  command: string,
+  workspaceRoot?: string,
+): Promise<Map<string, Access | undefined>> {
+  const builtins = SUBCOMMAND_ROUTES[command] ?? {}
+  const { verbs, requiresAccess: objectRA } = await getCommandSkillInfo(command, workspaceRoot)
+  const map = new Map<string, Access | undefined>()
+  // Declared verbs (from the skill's `verbs:`): builtin verbs take their gate
+  // from SUBCOMMAND_ROUTES, skill verbs from their own requiresAccess; either
+  // falls back to the object-level gate.
+  for (const v of verbs) {
+    const own = (v.name in builtins) ? builtins[v.name].requiresAccess : v.requiresAccess
+    map.set(v.name, own ?? objectRA)
+  }
+  // Builtin verbs not declared in `verbs:` still exist — include them.
+  for (const [name, b] of Object.entries(builtins)) {
+    if (!map.has(name)) map.set(name, b.requiresAccess ?? objectRA)
+  }
+  return map
+}
+
+/** Lowest access level that can use ANY verb — a command's /help visibility
+ *  threshold. undefined → some verb is open to everyone (always visible). */
+function minAccess(accessByVerb: Map<string, Access | undefined>): Access | undefined {
+  let min: number | undefined
+  for (const ra of accessByVerb.values()) {
+    const r = ra ? RANK[ra] : 0
+    min = min === undefined ? r : Math.min(min, r)
+  }
+  if (min === undefined || min === 0) return undefined
+  return min === RANK.full ? 'full' : 'workspace'
 }
 
 // ── /agent builtin verbs ─────────────────────────────────────────────────────
@@ -562,53 +637,44 @@ async function tryRouteSubcommand(
   const handlers = SUBCOMMAND_ROUTES[command]
   if (!handlers) return NOT_ROUTED
 
-  const descriptors = await scanSkillDescriptors(ctx.workspacePath)
-  const desc = descriptors.find((d) => d.slashName === command)
-
   const trimmed = arg.trim()
   const verb = trimmed.split(/\s+/)[0] ?? ''
 
   // Bare / help: list only the verbs this user is allowed to run.
-  if (verb === '' || verb === 'help') return renderObjectHelp(ctx, command, desc)
+  if (verb === '' || verb === 'help') return renderObjectHelp(ctx, command)
+
+  // Gate EVERY verb here from the one access map (builtin + skill, same rule),
+  // before dispatching. This is the single enforcement point — skill verbs are
+  // gated here too, not left to execSkillCommand, so verb-level access holds
+  // even with no object-level requiresAccess. Unset → open to everyone.
+  const required = (await verbAccessMap(command, ctx.workspacePath)).get(verb)
+  if (required && RANK[required] > RANK[ctx.accessLevel]) {
+    return { text: t('skill.access_required', ctx.lang, { cmd: `${command} ${verb}`, required, current: ctx.accessLevel }) }
+  }
 
   const builtin = handlers[verb]
-  // Not a builtin verb → fall through to the skill (e.g. `/agent create`).
-  // Its access is gated by the skill's own requiresAccess in execSkillCommand,
-  // NOT here — skill-verb permissions live in SKILL.md.
+  // No builtin handler → fall through to the skill (e.g. `/agent create`),
+  // already access-checked above.
   if (!builtin) return NOT_ROUTED
-
-  // Builtin verb: gate by the verb's hardcoded requiresAccess (code-level,
-  // since builtin verbs are code and never reach execSkillCommand). Unset →
-  // open to everyone.
-  if (builtin.requiresAccess) {
-    const RANK = { readonly: 0, workspace: 1, full: 2 } as const
-    if (RANK[builtin.requiresAccess] > RANK[ctx.accessLevel]) {
-      return { text: t('skill.access_required', ctx.lang, { cmd: `${command} ${verb}`, required: builtin.requiresAccess, current: ctx.accessLevel }) }
-    }
-  }
 
   const subArg = trimmed.slice(verb.length).trim()
   return builtin.handler(ctx, subArg)
 }
 
-/** Build the `/cmd help` listing from the object command's declared `verbs`
- *  (read from its skill descriptor — the SKILL.md `verbs:` field). Builtin
- *  verbs and skill verbs are listed together so the user sees the full set in
- *  one place, regardless of which side actually handles each. */
-async function renderObjectHelp(ctx: CommandContext, command: string, desc?: CommandDescriptor): Promise<CommandResult> {
-  // List only verbs the user can actually run. A verb's gate comes from its
-  // source: builtin verbs from the hardcoded SUBCOMMAND_ROUTES, skill verbs
-  // (create/update) from the skill's object-level requiresAccess. Unset → open.
-  const RANK = { readonly: 0, workspace: 1, full: 2 } as const
-  const builtins = SUBCOMMAND_ROUTES[command] ?? {}
+/** Build the `/cmd help` listing from the object command's declared `verbs`.
+ *  Lists builtin verbs and skill verbs together so the user sees the full set
+ *  in one place, regardless of which side actually handles each. */
+async function renderObjectHelp(ctx: CommandContext, command: string): Promise<CommandResult> {
+  // Same source as the router gate: one verb-access map, then filter to what
+  // this user can run. Verb names + descriptions come from the skill's SKILL.md
+  // (English / author-defined), so the listing stays English (matches /help).
+  const access = await verbAccessMap(command, ctx.workspacePath)
+  const { verbs: allVerbs } = await getCommandSkillInfo(command, ctx.workspacePath)
   const allowed = (verbName: string): boolean => {
-    const required = builtins[verbName]?.requiresAccess ?? (verbName in builtins ? undefined : desc?.requiresAccess)
+    const required = access.get(verbName)
     return !required || RANK[required] <= RANK[ctx.accessLevel]
   }
-  const verbs = (desc?.verbs ?? []).filter((v) => allowed(v.name))
-  // Verb names + descriptions come from the skill's SKILL.md (English /
-  // author-defined), so the listing stays English rather than going through
-  // i18n — matches how skill commands render in /help.
+  const verbs = allVerbs.filter((v) => allowed(v.name))
   if (verbs.length === 0) {
     return { text: `${command}: no actions to list` }
   }
