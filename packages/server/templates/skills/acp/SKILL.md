@@ -43,6 +43,13 @@ not a direct verb — see add/list/remove below.
 - Follow-ups on the same topic: reuse the `SESSION:` id from the previous
   call's stdout with `--session-id <id>` so the other agent keeps context.
   If it errors with unknown session, drop the id and start fresh.
+- **The question text is passed verbatim** — including the OTHER agent's own
+  slash commands. Verified with kiro: sending `/model` as the question lists
+  its available models; `/model <full-model-id>` switches its model and saves
+  it as default (fuzzy names like `claude` are rejected — full id only, e.g.
+  `claude-opus-4.7`). Use this when the user asks to change the remote/local
+  agent's model or invoke its built-in commands. Other kinds may support their
+  own command sets the same way.
 - Failure modes: `not found in PATH` → that CLI isn't installed (kiro-cli /
   claude-agent-acp / halo). Exit 124 → timed out, suggest a narrower question.
   stopReason≠end_turn on stderr → pass it along with the partial reply.
