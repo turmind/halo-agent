@@ -18,7 +18,7 @@ const messages: Record<string, Record<Lang, string>> = {
   'cmd.ws':      { zh: '查看或切换 workspace', en: 'Show or switch workspace' },
   'cmd.ws.readonly': { zh: '查看当前 workspace', en: 'Show current workspace' },
   'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
-  'cmd.agent':   { zh: '管理 agent（list/switch/desc/delete；create/update 走 skill）', en: 'Manage agents (list/switch/desc/delete; create/update via skill)' },
+  'cmd.agent':   { zh: '管理 agent', en: 'Manage agents' },
 
   // ── /agent builtin verb descriptions (shown in `/agent help`) ──
   'verb.agent.list':   { zh: '列出可用的 agent', en: 'List usable agents' },

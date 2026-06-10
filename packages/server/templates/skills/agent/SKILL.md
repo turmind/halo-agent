@@ -24,12 +24,28 @@ author files. `list` / `switch` / `desc` / `delete` are handled directly by the
 `/agent` command and never reach here. The requested action is **`$1`** (full
 args: `$ARGUMENTS`); if invoked by natural language, infer it from the request.
 
-## Locations
+## Locations & scope rules (read before create/update)
 
 - `<workspace>/.halo/agents/<agent-id>/` — workspace-scoped
 - `~/.halo/global/agents/<agent-id>/` — shared across all workspaces
 
 A workspace agent **overrides** a global one with the same id at runtime.
+Consequences you must apply:
+
+- **Create**: ask (or infer from the request) which scope. Default to
+  **workspace** unless the user says "global" / "all workspaces". If creating a
+  workspace agent whose id already exists globally, say so — the new file will
+  shadow the global one in this workspace.
+- **Update**: resolve which file is actually in effect FIRST — check the
+  workspace path, fall back to global. Edit the file that exists; if both
+  exist, edit the workspace one (it's the live one here) unless the user
+  explicitly says to change the global. Never edit global to fix behavior in
+  one workspace when a workspace copy shadows it — that edit would have no
+  effect here.
+- **Built-in agents** (`default`, `executor`, `deep-executor`, internal
+  `__*__`): their global copies are force re-seeded on every server start —
+  direct edits to those global files are lost. To customize a built-in, copy
+  it to workspace scope and edit there.
 
 ## Create
 

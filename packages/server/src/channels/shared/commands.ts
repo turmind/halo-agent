@@ -106,15 +106,21 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
     }
     return true
   })
-  // Object commands (e.g. /agent) are shown only if the user can run at least
-  // one verb — its lowest verb gate. Avoids listing a command whose every verb
-  // is above the user's access. Non-object builtins have no gate here.
+  // Object commands (e.g. /agent): compute the verbs THIS user can run. None
+  // runnable → the command is hidden entirely; otherwise the runnable set is
+  // appended to its /help description, so a readonly channel sees exactly
+  // `(list/switch/desc)` and never the full-gated verbs.
+  const objectVerbs = new Map<string, string[]>()
   const builtins: typeof builtinCandidates = []
   for (const d of builtinCandidates) {
     if (isObjectCommand(d.slashName)) {
       const skillAvail = await skillCommandAvailable(ctx, d.slashName)
-      const threshold = minAccess(await verbAccessMap(d.slashName, ctx.workspacePath, skillAvail))
-      if (threshold && RANK[threshold] > RANK[ctx.accessLevel]) continue
+      const access = await verbAccessMap(d.slashName, ctx.workspacePath, skillAvail)
+      const runnable = [...access.entries()]
+        .filter(([, ra]) => !ra || RANK[ra] <= RANK[ctx.accessLevel])
+        .map(([name]) => name)
+      if (runnable.length === 0) continue
+      objectVerbs.set(d.slashName, runnable)
     }
     builtins.push(d)
   }
@@ -155,6 +161,9 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
       } else {
         desc = d.description
       }
+      // Object command: show only the verbs THIS user can run (computed above).
+      const runnable = objectVerbs.get(d.slashName)
+      if (runnable) desc = `${desc} (${runnable.join('/')})`
       return { head: `${d.slashName}${showArg}`, desc }
     })
 
