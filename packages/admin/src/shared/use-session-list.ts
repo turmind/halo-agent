@@ -24,6 +24,9 @@ export function useSessionList(projectId?: string) {
   const busVersion = useSessionBus((s) => s.version)
 
   const refresh = useCallback(async () => {
+    // No workspace selected yet (first paint / project store still hydrating):
+    // the server requires projectId and would 400 — skip until it exists.
+    if (!projectId) { setSessions([]); setNextCursor(null); return }
     try {
       const res = await api.sessionLogs.list(projectId, { rootOnly: true, limit: PAGE_SIZE })
       setSessions(res.sessions as unknown as SessionMeta[])
@@ -40,6 +43,7 @@ export function useSessionList(projectId?: string) {
     if (nextCursor === null || loadingMore) return
     setLoadingMore(true)
     try {
+      if (!projectId) return
       const res = await api.sessionLogs.list(projectId, { rootOnly: true, limit: PAGE_SIZE, cursor: nextCursor })
       const fresh = res.sessions as unknown as SessionMeta[]
       setSessions((prev) => {
