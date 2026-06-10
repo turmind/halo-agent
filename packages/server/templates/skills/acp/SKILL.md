@@ -1,6 +1,6 @@
 ---
 name: acp
-description: Manage ACP bindings — generate an `ask-<label>` bridge skill that relays questions to a remote halo agent (host/port/token/workspace) or to a local Claude Code instance. Activate when the user says "add an ACP binding", "let me talk to <other agent>", "connect Claude Code", or asks to wire a new remote workspace.
+description: Manage ACP bindings — generate an `ask-<label>` bridge skill that relays questions to a remote halo agent (host/port/token/workspace), a local Claude Code instance, or a local Kiro. Activate when the user says "add an ACP binding", "let me talk to <other agent>", "connect Claude Code / Kiro", or asks to wire a new remote workspace.
 command: /acp
 requiresAccess: full
 verbs:
@@ -17,7 +17,7 @@ and report label/kind/target. `remove` = confirm, then delete the chosen
 `ask-<label>` skill directory and its settings.yaml namespace entry. `add` =
 the generator flow below.
 
-## Two binding kinds
+## Three binding kinds
 
 - **halo** (default) — a remote halo server: needs label/host/port/token/workspace.
 - **claude** — the local Claude Code install, bridged via the standard ACP
@@ -26,6 +26,10 @@ the generator flow below.
   in. No host/port/token. The generated SKILL.md invokes
   `ask.py --kind claude --cwd <dir>`; everything else (threading via SESSION
   id, reply format) is identical.
+- **kiro** — the local Kiro CLI (`kiro-cli acp`; spawned with
+  `--trust-all-tools` since the relay is headless). Same shape as claude:
+  label + `cwd` only — `ask.py --kind kiro --cwd <dir>`. Optional
+  `--agent-id <name>` selects a Kiro agent profile.
 
 
 ## Add — generator flow

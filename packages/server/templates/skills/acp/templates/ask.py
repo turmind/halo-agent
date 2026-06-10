@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ask.py — call a remote agent over ACP (halo server or local Claude Code). See SKILL.md."""
+"""ask.py — call an agent over ACP: remote halo server, local Claude Code, or local Kiro. See SKILL.md."""
 from __future__ import annotations
 
 import argparse
@@ -21,8 +21,8 @@ def fail(msg: str, code: int = 1) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(prog="ask.py", description="Ask a remote agent over ACP.")
     p.add_argument("question")
-    p.add_argument("--kind", default="halo", choices=["halo", "claude"],
-                   help="halo: remote halo server via `halo acp`; claude: local Claude Code via `claude-agent-acp`.")
+    p.add_argument("--kind", default="halo", choices=["halo", "claude", "kiro"],
+                   help="halo: remote halo server via `halo acp`; claude: local Claude Code via `claude-agent-acp`; kiro: local Kiro via `kiro-cli acp`.")
     p.add_argument("--host")
     p.add_argument("--port")
     p.add_argument("--token")
@@ -33,6 +33,7 @@ def main() -> None:
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--halo-bin", default=None)
     p.add_argument("--claude-bin", default=None)
+    p.add_argument("--kiro-bin", default=None)
     args = p.parse_args()
 
     if args.kind == "claude":
@@ -40,6 +41,15 @@ def main() -> None:
         if shutil.which(bin_) is None and not os.path.isabs(bin_):
             fail(f"`{bin_}` not found in PATH. npm install -g @agentclientprotocol/claude-agent-acp, or set --claude-bin.", 2)
         cmd = [bin_]
+    elif args.kind == "kiro":
+        bin_ = args.kiro_bin or os.environ.get("KIRO_ACP_BIN") or "kiro-cli"
+        if shutil.which(bin_) is None and not os.path.isabs(bin_):
+            fail(f"`{bin_}` not found in PATH. Install Kiro CLI, or set --kiro-bin.", 2)
+        # --trust-all-tools: the binding is a headless relay; there's no human
+        # at this end to answer kiro's per-tool permission prompts.
+        cmd = [bin_, "acp", "--trust-all-tools"]
+        if args.agent_id and not args.agent_id.startswith("{{"):
+            cmd += ["--agent", args.agent_id]
     else:
         for k in ("host", "port", "token", "workspace"):
             if not getattr(args, k):
@@ -128,7 +138,7 @@ def main() -> None:
                 fail(f"session/load failed: {resp['error']}")
             session_id = args.session_id
         else:
-            new_params = {"cwd": args.cwd or os.getcwd(), "mcpServers": []} if args.kind == "claude" else {}
+            new_params = {"cwd": args.cwd or os.getcwd(), "mcpServers": []} if args.kind in ("claude", "kiro") else {}
             rid = send("session/new", new_params)
             resp = wait_for(rid, deadline)
             if "error" in resp:
