@@ -98,11 +98,9 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
     // admin browser would just route them to dispatchCommand, get a
     // cmd.unknown back, and confuse the user. Hide them from /help.
     if (d.type === 'client') return false
-    // /evo is the manual evo trigger — available at every level (L0 = manual
-    // only, L1 = also auto on pre-compact), so it's gated on access, not level.
-    // Readonly channel guests still can't trigger evo.
+    // /evo drafts config changes — full-access only, hidden otherwise.
     if (d.name === 'evo') {
-      if (ctx.accessLevel === 'readonly') return false
+      if (ctx.accessLevel !== 'full') return false
     }
     return true
   })
@@ -147,7 +145,6 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
     .sort((a, b) => a.slashName.localeCompare(b.slashName))
     .map((d) => {
       const arg = d.argHint ? ` ${d.argHint}` : ''
-      const showArg = d.name === 'ws' && ctx.accessLevel !== 'full' ? '' : arg
       // Builtin descriptions live in i18n under `cmd.<name>`; skills keep
       // their SKILL.md description (currently English-only). A few commands
       // have access-level-aware variants (e.g. /ws is read-only without
@@ -164,7 +161,7 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
       // Object command: show only the verbs THIS user can run (computed above).
       const runnable = objectVerbs.get(d.slashName)
       if (runnable) desc = `${desc} (${runnable.join('/')})`
-      return { head: `${d.slashName}${showArg}`, desc }
+      return { head: `${d.slashName}${arg}`, desc }
     })
 
   // Accept channel-specific extras as either pre-formatted strings (legacy)
@@ -361,8 +358,9 @@ export async function execContext(ctx: CommandContext): Promise<CommandResult> {
  *   - no active root session in this workspace for the user
  */
 export function execNote(ctx: CommandContext, arg: string): CommandResult {
-  if (ctx.accessLevel === 'readonly') {
-    return { text: t('evo.readonly', ctx.lang) }
+  // Evolution drafts config changes — full only.
+  if (ctx.accessLevel !== 'full') {
+    return { text: t('evo.full_only', ctx.lang) }
   }
   const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
   if (!active) return { text: t('evo.no_session', ctx.lang) }
@@ -408,7 +406,7 @@ export async function dispatchCommand(
 ): Promise<CommandResult | null> {
   switch (command) {
     case '/help': return execHelp(ctx, opts?.extraHelpLines)
-    case '/ws': return execWs(ctx, arg)
+    case '/ws': return routeObjectOrSkill(ctx, command, arg)
     case '/evo': return execNote(ctx, arg)
     // Session lifecycle is an object command: /session new|list|switch|stop|…
     case '/session': return routeObjectOrSkill(ctx, command, arg)
@@ -481,6 +479,16 @@ interface BuiltinVerb {
  * can differ under one `/agent` command.
  */
 const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
+  '/ws': {
+    info: { handler: (ctx) => execWsInfo(ctx), descKey: 'verb.ws.info' },
+    switch: { handler: (ctx, subArg) => execWsSwitch(ctx, subArg), requiresAccess: 'full', descKey: 'verb.ws.switch' },
+    // Delegated skill verbs — these run a specific skill by id (the skills
+    // carry no slash command of their own). Gated here AND by the skill's
+    // own requiresAccess inside execSkillCommand.
+    setup: { handler: (ctx, subArg) => delegateToSkill(ctx, 'organize-workspace', `setup ${subArg}`.trim()), requiresAccess: 'workspace', descKey: 'verb.ws.setup' },
+    tidy: { handler: (ctx, subArg) => delegateToSkill(ctx, 'organize-workspace', `tidy ${subArg}`.trim()), requiresAccess: 'workspace', descKey: 'verb.ws.tidy' },
+    share: { handler: (ctx, subArg) => delegateToSkill(ctx, 'share-workspace', subArg), requiresAccess: 'full', descKey: 'verb.ws.share' },
+  },
   '/session': {
     // All open to readonly: new/switch operate within the caller's own access
     // level (the created/target session inherits it), and list/context/stop/
@@ -869,12 +877,28 @@ async function renderObjectHelp(ctx: CommandContext, command: string): Promise<C
   return { text: `${command} actions:\n${lines.join('\n')}` }
 }
 
-export function execWs(ctx: CommandContext, arg: string): CommandResult {
-  if (!arg) return { text: t('ws.current', ctx.lang, { path: ctx.workspacePath }) }
-  if (ctx.accessLevel !== 'full') return { text: t('ws.readonly', ctx.lang) }
+export function execWsInfo(ctx: CommandContext): CommandResult {
+  return { text: t('ws.current', ctx.lang, { path: ctx.workspacePath }) }
+}
+
+export function execWsSwitch(ctx: CommandContext, arg: string): CommandResult {
+  // Access ('full') is gated at the router (SUBCOMMAND_ROUTES) before we get here.
+  if (!arg) return { text: t('ws.switch_usage', ctx.lang) }
   if (!path.isAbsolute(arg)) return { text: t('ws.must_abs', ctx.lang) }
   if (!fs.existsSync(arg)) return { text: t('ws.not_found', ctx.lang, { path: arg }) }
   if (arg === ctx.workspacePath) return { text: t('ws.same', ctx.lang) }
   ensureWorkspaceHalo(arg)
   return { text: t('ws.done', ctx.lang, { path: arg }), workspace: { path: arg } }
+}
+
+/** Run a specific skill by id as a delegated object verb (e.g. `/ws setup` →
+ *  the organize-workspace skill). Same activation path as a skill slash
+ *  command — the skill's own whitelist/disabled/requiresAccess gates apply. */
+async function delegateToSkill(ctx: CommandContext, skillId: string, args: string): Promise<CommandResult | null> {
+  const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
+  if (!active) return { text: t('skill.no_active_session', ctx.lang) }
+  const result = await execSkillCommand(`skill:${skillId}`, args, ctx.sm, active, ctx.workspacePath, ctx.channel, ctx.accessLevel, ctx.lang)
+  if (result === 'ok') return { text: t('skill.activated', ctx.lang, { cmd: skillId }), startedTurn: true, sessionId: active }
+  if (result === 'not_found') return { text: t('skill.not_found', ctx.lang, { name: skillId }) }
+  return { text: result }
 }

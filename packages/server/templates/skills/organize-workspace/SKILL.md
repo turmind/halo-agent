@@ -1,11 +1,16 @@
 ---
 name: Organize Workspace
 description: Set up or reorganize a workspace's `.halo/` knowledge files. First run — interview the user, draft INDEX.md / INSTRUCTIONS.md / memory entries from scratch. Subsequent runs — review what's already there, prune stale entries, reshape sections, surface gaps. Activate when the user asks to "set up / init / organize / reorganize / clean up" the workspace.
-command: /organize-workspace
 requiresAccess: workspace
 ---
 
 # Organize Workspace
+
+Invoked via `/ws setup` (first-time setup) or `/ws tidy` (review & prune an
+existing knowledge base) — the mode arrives as **`$1`** (`setup` or `tidy`).
+With no `$1` (natural-language activation), infer the mode: no `.halo/INDEX.md`
+yet → setup; otherwise tidy.
+
 
 Use this when the user wants to **set up** or **reorganize** a workspace's `.halo/` knowledge files (INDEX.md, INSTRUCTIONS.md, memory/). Two modes, picked by what's already on disk:
 

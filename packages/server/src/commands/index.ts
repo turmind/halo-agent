@@ -32,7 +32,13 @@ commandRegistry.registerDescriptor({ name: 'session', slashName: '/session', des
   { name: 'compact', builtin: true, desc: 'Compress conversation context' },
   { name: 'context', builtin: true, desc: 'Show context window + agent info' },
 ] })
-commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Show or switch workspace',               type: 'server', argHint: '[path]', source: 'builtin' })
+commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Manage the workspace', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
+  { name: 'info', builtin: true, desc: 'Show the current workspace' },
+  { name: 'switch', builtin: true, desc: 'Switch workspace (absolute path)' },
+  { name: 'setup', builtin: true, desc: 'Set up the .halo knowledge files' },
+  { name: 'tidy', builtin: true, desc: 'Tidy/prune the .halo knowledge files' },
+  { name: 'share', builtin: true, desc: 'Package the workspace config as a shareable zip' },
+] })
 commandRegistry.registerDescriptor({ name: 'evo',     slashName: '/evo',     description: 'Queue an evolution run on this session', type: 'server', argHint: '[hint]', source: 'builtin' })
 // Object command: list/switch/desc/delete run as builtin verbs (work on every
 // agent); create/update fall through to the `agent` skill. Always registered

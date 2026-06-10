@@ -9,8 +9,16 @@ const messages: Record<string, Record<Lang, string>> = {
   'cmd.help':    { zh: '显示此帮助', en: 'Show available commands' },
   'cmd.clear':   { zh: '清空聊天（/session new 的别名）', en: 'Clear chat (alias for /session new)' },
   'cmd.session': { zh: '管理会话', en: 'Manage sessions' },
-  'cmd.ws':      { zh: '查看或切换 workspace', en: 'Show or switch workspace' },
-  'cmd.ws.readonly': { zh: '查看当前 workspace', en: 'Show current workspace' },
+  'cmd.ws':      { zh: '管理 workspace', en: 'Manage the workspace' },
+
+  // ── /ws builtin verbs ──
+  'verb.ws.info':   { zh: '显示当前 workspace', en: 'Show the current workspace' },
+  'verb.ws.switch': { zh: '切换 workspace（绝对路径）', en: 'Switch workspace (absolute path)' },
+  'verb.ws.setup':  { zh: '初始化 .halo 知识库（organize-workspace skill）', en: 'Set up the .halo knowledge files (organize-workspace skill)' },
+  'verb.ws.tidy':   { zh: '整理/清理 .halo 知识库（organize-workspace skill）', en: 'Tidy/prune the .halo knowledge files (organize-workspace skill)' },
+  'verb.ws.share':  { zh: '打包 workspace 配置为可分享 zip（share-workspace skill）', en: 'Package the workspace config as a shareable zip (share-workspace skill)' },
+  'ws.switch_usage': { zh: '用法：/ws switch <绝对路径>', en: 'Usage: /ws switch <absolute path>' },
+  'skill.no_active_session': { zh: '没有活跃会话，先发一条消息再试', en: 'No active session — send a message first' },
   'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
   'cmd.agent':   { zh: '管理 agent', en: 'Manage agents' },
   'cmd.skill':   { zh: '管理 skill', en: 'Manage skills' },
@@ -113,7 +121,7 @@ const messages: Record<string, Record<Lang, string>> = {
   'context.not_loaded': { zh: '会话未加载', en: 'Session not loaded' },
 
   // ── /evo (self-evolution) ──
-  'evo.readonly': { zh: 'Readonly 用户不能触发 /evo。', en: 'Readonly users cannot trigger /evo.' },
+  'evo.full_only': { zh: '只有 full 权限可以触发 /evo。', en: 'Only full access can trigger /evo.' },
   'evo.no_session': { zh: '当前没有可分析的 root 会话。', en: 'No active root session to analyze.' },
   'evo.queued': { zh: '📝 已加入评估队列。完成后可在 admin 的 Evolution 页查看。', en: '📝 Queued for evaluation. Results will appear under the admin Evolution tab.' },
   'evo.snapshot_failed': { zh: '快照失败,请查 server 日志。', en: 'Snapshot failed — check server logs.' },

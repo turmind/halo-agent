@@ -36,9 +36,10 @@ async function scanDir(dir: string): Promise<SkillCommandEntry[]> {
     try {
       const content = await fs.readFile(skillMdPath, 'utf-8')
       const { name, description, command, requiresAccess, verbs } = parseSkillFrontmatter(content)
-      if (command) {
-        entries.push({ id: entryName, name: name || entryName, description: description ?? '', command, skillPath: skillMdPath, requiresAccess, verbs })
-      }
+      // Skills without a `command:` are still cached (command='') so verb
+      // delegation can run them by id (execSkillCommand `skill:<id>`); they
+      // just never become slash-command descriptors below.
+      entries.push({ id: entryName, name: name || entryName, description: description ?? '', command: command ?? '', skillPath: skillMdPath, requiresAccess, verbs })
     } catch { /* skip */ }
   }
   return entries
@@ -97,6 +98,7 @@ export async function scanSkillDescriptors(workspaceRoot?: string): Promise<Comm
   cachedEntries = Array.from(merged.values())
   const listed: SkillCommandEntry[] = []
   for (const entry of cachedEntries) {
+    if (!entry.command) continue // cached for by-id delegation only, no slash command
     const slashName = entry.command.startsWith('/') ? entry.command : `/${entry.command}`
     if (claimed.has(slashName)) {
       // A builtin owning the name is expected for object commands (the skill
@@ -145,12 +147,20 @@ export async function execSkillCommand(
   // a server restart. Reading ~10 small SKILL.md files per slash command
   // is negligible vs. the cost of getting access-level wrong.
   await scanSkillDescriptors(workspaceRoot)
-  const cmdName = slashCommand.startsWith('/') ? slashCommand.slice(1) : slashCommand
-  const entry = cachedEntries.find((e) => {
-    const slash = e.command.startsWith('/') ? e.command : `/${e.command}`
-    return slash.slice(1) === cmdName
-  })
+  // Two lookup forms: `/name` (user-typed slash command) and `skill:<id>`
+  // (verb delegation from a builtin object command, e.g. /ws setup → the
+  // organize-workspace skill, which has no slash command of its own).
+  const entry = slashCommand.startsWith('skill:')
+    ? cachedEntries.find((e) => e.id === slashCommand.slice('skill:'.length))
+    : cachedEntries.find((e) => {
+        if (!e.command) return false
+        const slash = e.command.startsWith('/') ? e.command : `/${e.command}`
+        return slash.slice(1) === (slashCommand.startsWith('/') ? slashCommand.slice(1) : slashCommand)
+      })
   if (!entry) return 'not_found'
+  // Display name for user-facing strings: the slash form when the skill has
+  // one, else the skill id (delegated verbs).
+  const cmdName = entry.command ? (entry.command.startsWith('/') ? entry.command.slice(1) : entry.command) : entry.id
 
   // Permission check: the session's current agent must whitelist this skill
   // in its agent.yaml `skills:` list, and the skill must not be disabled.
