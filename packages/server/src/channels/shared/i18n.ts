@@ -20,6 +20,13 @@ const messages: Record<string, Record<Lang, string>> = {
   'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
   'cmd.agent':   { zh: '管理 agent（list/switch/desc/delete；create/update 走 skill）', en: 'Manage agents (list/switch/desc/delete; create/update via skill)' },
 
+  // ── /agent builtin verb descriptions (shown in `/agent help`) ──
+  'verb.agent.list':   { zh: '列出可用的 agent', en: 'List usable agents' },
+  'verb.agent.switch': { zh: '用指定 agent 开始一个会话', en: 'Start a session with an agent' },
+  'verb.agent.desc':   { zh: '查看某个 agent 的模型 / 工具 / 技能', en: "Show an agent's model / tools / skills" },
+  'verb.agent.delete': { zh: '删除一个 agent（workspace 或全局）', en: 'Delete an agent (workspace or global)' },
+  'verb.none':   { zh: '{cmd} 没有你可用的操作', en: 'No actions available to you for {cmd}' },
+
   // Channel-specific (currently WeChat-only)
   'cmd.qr':      { zh: '生成邀请二维码（仅管理员）', en: 'Generate invite QR (admin only)' },
   'cmd.model':   { zh: '切换当前会话的模型（仅 WS）', en: 'Switch model for this session (WS only)' },

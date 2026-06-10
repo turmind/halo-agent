@@ -732,6 +732,16 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   const selectCommand = useCallback((cmd: SlashCommand) => {
     const parts = text.split(/\s+/)
     const args = parts.slice(1).join(' ')
+    // Commands that take arguments (argHint set — e.g. `/agent <verb>`,
+    // `/switch <n>`) shouldn't fire on selection: fill the input with the
+    // command name and let the user type the argument. Only fire immediately
+    // when the user already typed an arg, or the command takes none.
+    if (cmd.argHint && !args) {
+      setText(cmd.name + ' ')
+      setCmdIndex(0)
+      textareaRef.current?.focus()
+      return
+    }
     onCommand?.(cmd, args)
     setText('')
     setCmdIndex(0)

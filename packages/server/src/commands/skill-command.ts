@@ -55,14 +55,14 @@ let cachedEntries: SkillCommandEntry[] = []
 export async function getCommandSkillInfo(
   slashCommand: string,
   workspaceRoot?: string,
-): Promise<{ verbs: SkillVerb[]; requiresAccess?: 'full' | 'workspace' | 'readonly' }> {
+): Promise<{ skillId?: string; verbs: SkillVerb[]; requiresAccess?: 'full' | 'workspace' | 'readonly' }> {
   await scanSkillDescriptors(workspaceRoot)
   const cmd = slashCommand.startsWith('/') ? slashCommand : `/${slashCommand}`
   const entry = cachedEntries.find((e) => {
     const slash = e.command.startsWith('/') ? e.command : `/${e.command}`
     return slash === cmd
   })
-  return { verbs: entry?.verbs ?? [], requiresAccess: entry?.requiresAccess }
+  return { skillId: entry?.id, verbs: entry?.verbs ?? [], requiresAccess: entry?.requiresAccess }
 }
 
 export async function scanSkillDescriptors(workspaceRoot?: string): Promise<CommandDescriptor[]> {

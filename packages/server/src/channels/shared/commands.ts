@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { SessionManager } from '../../agents/session-manager.js'
-import { scanAvailableAgents, GLOBAL_AGENTS_DIR } from '../../agents/agent-loader.js'
+import { scanAvailableAgents, GLOBAL_AGENTS_DIR, loadAgentYaml } from '../../agents/agent-loader.js'
 import { ensureWorkspaceHalo } from '../../init.js'
 import { getDisabledSet } from '../../db/index.js'
 import { t, type Lang } from './i18n.js'
@@ -112,7 +112,8 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
   const builtins: typeof builtinCandidates = []
   for (const d of builtinCandidates) {
     if (isObjectCommand(d.slashName)) {
-      const threshold = minAccess(await verbAccessMap(d.slashName, ctx.workspacePath))
+      const skillAvail = await skillCommandAvailable(ctx, d.slashName)
+      const threshold = minAccess(await verbAccessMap(d.slashName, ctx.workspacePath, skillAvail))
       if (threshold && RANK[threshold] > RANK[ctx.accessLevel]) continue
     }
     builtins.push(d)
@@ -456,12 +457,15 @@ const NOT_ROUTED = Symbol('not-routed')
  *  (e.g. for `/agent switch coder`, verb=`switch`, subArg=`coder`). */
 type SubcommandHandler = (ctx: CommandContext, subArg: string) => Promise<CommandResult | null> | CommandResult | null
 
-/** A builtin verb: its handler plus a hardcoded access gate. `requiresAccess`
- *  is code-level (NOT read from the skill's SKILL.md) — builtin verbs are code,
- *  so their permissions live with the code. Unset → open to everyone. */
+/** A builtin verb: handler + hardcoded access gate + i18n description key.
+ *  All code-level (NOT from SKILL.md) — builtin verbs are part of the builtin
+ *  command and must work (and be listable) even when the backing skill isn't
+ *  installed/whitelisted. `requiresAccess` unset → open to everyone. `descKey`
+ *  is an i18n key so builtin verb help is localized. */
 interface BuiltinVerb {
   handler: SubcommandHandler
   requiresAccess?: 'full' | 'workspace' | 'readonly'
+  descKey: string
 }
 
 /**
@@ -474,10 +478,10 @@ interface BuiltinVerb {
  */
 const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
   '/agent': {
-    list: { handler: (ctx) => execAgentList(ctx), requiresAccess: 'workspace' },
-    switch: { handler: (ctx, subArg) => execAgentSwitch(ctx, subArg), requiresAccess: 'workspace' },
-    desc: { handler: (ctx, subArg) => execAgentDesc(ctx, subArg), requiresAccess: 'workspace' },
-    delete: { handler: (ctx, subArg) => execAgentDelete(ctx, subArg), requiresAccess: 'full' },
+    list: { handler: (ctx) => execAgentList(ctx), requiresAccess: 'workspace', descKey: 'verb.agent.list' },
+    switch: { handler: (ctx, subArg) => execAgentSwitch(ctx, subArg), requiresAccess: 'workspace', descKey: 'verb.agent.switch' },
+    desc: { handler: (ctx, subArg) => execAgentDesc(ctx, subArg), requiresAccess: 'workspace', descKey: 'verb.agent.desc' },
+    delete: { handler: (ctx, subArg) => execAgentDelete(ctx, subArg), requiresAccess: 'full', descKey: 'verb.agent.delete' },
   },
 }
 
@@ -504,15 +508,24 @@ function isObjectCommand(command: string): boolean {
 async function verbAccessMap(
   command: string,
   workspaceRoot?: string,
+  /** Whether the backing skill is available to the current agent (whitelisted,
+   *  not disabled). Builtin verbs (list/switch/...) are part of the builtin
+   *  command and always included; skill verbs (create/update) only when the
+   *  skill is available — so an agent without the `agent` skill doesn't see
+   *  create/update. Defaults true for callers that have no agent context. */
+  skillVerbsAvailable = true,
 ): Promise<Map<string, Access | undefined>> {
   const builtins = SUBCOMMAND_ROUTES[command] ?? {}
   const { verbs, requiresAccess: objectRA } = await getCommandSkillInfo(command, workspaceRoot)
   const map = new Map<string, Access | undefined>()
   // Declared verbs (from the skill's `verbs:`): builtin verbs take their gate
   // from SUBCOMMAND_ROUTES, skill verbs from their own requiresAccess; either
-  // falls back to the object-level gate.
+  // falls back to the object-level gate. Skill verbs are skipped when the skill
+  // isn't available to this agent.
   for (const v of verbs) {
-    const own = (v.name in builtins) ? builtins[v.name].requiresAccess : v.requiresAccess
+    const isBuiltin = v.name in builtins
+    if (!isBuiltin && !skillVerbsAvailable) continue
+    const own = isBuiltin ? builtins[v.name].requiresAccess : v.requiresAccess
     map.set(v.name, own ?? objectRA)
   }
   // Builtin verbs not declared in `verbs:` still exist — include them.
@@ -520,6 +533,23 @@ async function verbAccessMap(
     if (!map.has(name)) map.set(name, b.requiresAccess ?? objectRA)
   }
   return map
+}
+
+/** Is the skill backing an object command available to the session's agent
+ *  (whitelisted in agent.yaml, not disabled)? Decides whether skill verbs
+ *  (create/update) show up; builtin verbs don't depend on this. Checks the
+ *  whitelist by skill id directly — NOT via the command list, which excludes
+ *  commands shadowed by a builtin (like /agent), so that exclusion mustn't make
+ *  the skill look unavailable. */
+async function skillCommandAvailable(ctx: CommandContext, command: string): Promise<boolean> {
+  const { skillId } = await getCommandSkillInfo(command, ctx.workspacePath)
+  if (!skillId) return false
+  const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
+  const agentId = (active && ctx.sm.getSessionById(active)?.agentId) || 'default'
+  const yamlConfig = await loadAgentYaml(agentId, ctx.workspacePath)
+  if (!yamlConfig?.skills?.includes(skillId)) return false
+  if (getDisabledSet(ctx.sm.getDb(), 'skill').has(skillId)) return false
+  return true
 }
 
 /** Lowest access level that can use ANY verb — a command's /help visibility
@@ -665,21 +695,40 @@ async function tryRouteSubcommand(
  *  Lists builtin verbs and skill verbs together so the user sees the full set
  *  in one place, regardless of which side actually handles each. */
 async function renderObjectHelp(ctx: CommandContext, command: string): Promise<CommandResult> {
-  // Same source as the router gate: one verb-access map, then filter to what
-  // this user can run. Verb names + descriptions come from the skill's SKILL.md
-  // (English / author-defined), so the listing stays English (matches /help).
-  const access = await verbAccessMap(command, ctx.workspacePath)
-  const { verbs: allVerbs } = await getCommandSkillInfo(command, ctx.workspacePath)
-  const allowed = (verbName: string): boolean => {
-    const required = access.get(verbName)
+  // Two verb sources, merged into one listing:
+  //   - builtin verbs (SUBCOMMAND_ROUTES): always listed (they don't depend on
+  //     the skill being installed); desc is localized via i18n.
+  //   - skill verbs (SKILL.md `verbs:`): listed only if the skill is available
+  //     to this agent (whitelisted, not disabled); desc stays English (SKILL.md).
+  // Each then filtered by the user's access. This is why an agent WITHOUT the
+  // `agent` skill still sees list/switch/desc/delete.
+  const builtins = SUBCOMMAND_ROUTES[command] ?? {}
+  const skillAvail = await skillCommandAvailable(ctx, command)
+  const access = await verbAccessMap(command, ctx.workspacePath, skillAvail)
+  const canRun = (verb: string): boolean => {
+    const required = access.get(verb)
     return !required || RANK[required] <= RANK[ctx.accessLevel]
   }
-  const verbs = allVerbs.filter((v) => allowed(v.name))
-  if (verbs.length === 0) {
-    return { text: `${command}: no actions to list` }
+
+  const rows: Array<{ name: string; desc: string }> = []
+  // Builtin verbs first, in declared order.
+  for (const [name, b] of Object.entries(builtins)) {
+    if (canRun(name)) rows.push({ name, desc: t(b.descKey, ctx.lang) })
   }
-  const width = Math.max(...verbs.map((v) => v.name.length))
-  const lines = verbs.map((v) => `  ${command} ${v.name.padEnd(width)}  ${v.desc ?? ''}`.trimEnd())
+  // Skill verbs (only those not shadowed by a builtin), if the skill is available.
+  if (skillAvail) {
+    const { verbs: skillVerbs } = await getCommandSkillInfo(command, ctx.workspacePath)
+    for (const v of skillVerbs) {
+      if (v.name in builtins) continue
+      if (canRun(v.name)) rows.push({ name: v.name, desc: v.desc ?? '' })
+    }
+  }
+
+  if (rows.length === 0) {
+    return { text: t('verb.none', ctx.lang, { cmd: command }) }
+  }
+  const width = Math.max(...rows.map((r) => r.name.length))
+  const lines = rows.map((r) => `  ${command} ${r.name.padEnd(width)}  ${r.desc}`.trimEnd())
   return { text: `${command} actions:\n${lines.join('\n')}` }
 }
 
