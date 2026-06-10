@@ -16,7 +16,7 @@ CLI/TUI ─────────┘        │
                                (commands/skill-command.ts)
 ```
 
-WS handler special-cases `compact` because it needs UI progress callbacks: `compact` → `sm.compactSession(sid, { onProgress })` directly. Every other command routes through `dispatchCommand`.
+WS handler special-cases `/session compact` because it needs UI progress callbacks: `compact` → `sm.compactSession(sid, { onProgress })` directly. Every other command routes through `dispatchCommand`.
 
 ## Key modules
 
@@ -32,8 +32,8 @@ WS handler special-cases `compact` because it needs UI progress callbacks: `comp
 1. Channel receives a slash command from user input (or WS `command:<name>` message)
 2. Channel builds a `CommandContext` (shared interface: sm, userId, sessionPrefix, accessLevel, workspacePath, lang)
 3. Channel calls `dispatchCommand(ctx, '/command', args)`
-4. `dispatchCommand` switch matches built-in commands → calls `exec*` functions
-5. Default case: tries `execSkillCommand` as fallback for skill-defined slash commands
+4. `dispatchCommand` switch: `/help` and `/evo` call `exec*` directly; object commands (`/session`, `/agent`, `/skill`, `/ws`) and the default case route through `routeObjectOrSkill`
+5. `routeObjectOrSkill` tries the builtin noun-verb table first (`SUBCOMMAND_ROUTES`, per-verb access via `verbAccessMap`), else falls through to `execSkillCommand` for the same-named skill — verb/permission model in [requirements/command.md](../requirements/command.md)
 6. Returns `CommandResult { text, switchTo?, workspace? }` — channel formats and sends to user
 
 `scanSkillDescriptors` drops skill commands that collide with a built-in (or another skill) at scan time, so dispatch and the discovery API stay consistent — see [requirements/command.md](../requirements/command.md#conflict-detection).

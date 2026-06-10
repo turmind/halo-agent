@@ -52,9 +52,9 @@ In Debug mode the top-right gets an extra `Prompt` button; click to expand the f
 
 Use it to see exactly what context the agent was given for a given turn.
 
-## Non-destructive /new
+## Non-destructive /session new
 
-Typing `/new` in the chat:
+Typing `/session new` in the chat:
 1. Saves the current session to disk
 2. Creates a background handler to keep the old session's in-flight events flowing
 3. UI resets to an empty session

@@ -26,9 +26,9 @@ Source: [handler.ts:150-200](../../../packages/server/src/ws/handler.ts#L150) sw
 | `chat` | Send a user message (queued when the agent is busy) |
 | `chat:stop` | Hard-abort the current generation (ends the turn, no re-run) → `stopUserSession` |
 | `chat:interrupt` | Interrupt the in-flight turn now (aborts a command mid-run); the server then folds any queued messages into one follow-up turn → `interruptSession`. Admin chat esc maps to this. A compacting session cancels the compact instead (same as `chat:stop`). |
-| `session:clear` | Non-destructive /new: save the current, detach, create fresh (handled inline) |
+| `session:clear` | Non-destructive /session new: save the current, detach, create fresh (handled inline) |
 | `session:delete` | Delete session files + cascade-delete descendants in SQLite (handled inline) |
-| `command:<name>` | Route through shared `dispatchCommand` (see [command.md](command.md)); compact/model handled inline for UI callbacks |
+| `command:<name>` | Route through shared `dispatchCommand` (see [command.md](command.md)); `/session compact` handled inline for UI callbacks |
 | `terminal:start` | Spawn a new PTY |
 | `terminal:input` | Send keystrokes |
 | `terminal:resize` | Resize terminal |
@@ -70,10 +70,9 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | `file:changed` | WorkspaceWatcher | File change notification (path + action) |
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |
 | `session:changed` | `SessionManager` (broadcast to all clients) | Root session list changed — re-fetch. Fires on root-session create *and* on each root turn `complete` (so channel-driven messages refresh the count/title/ordering, not just admin's own turns). |
-| `session:cleared` | session:clear handler | /new complete |
+| `session:cleared` | session:clear handler | /session new complete |
 | `session:compacted` | compact handler | Compaction complete |
 | `compact:started` / `compact:summarizing` / `compact:done` | compact handler | Compaction progress |
-| `model:changed` | model handler | Model switch confirmation |
 
 ## WS Handler as a thin session client
 
@@ -101,8 +100,7 @@ UI state (messageLog / streamBuffer / turnToolCalls / tokens) belongs to Session
 ### Command dispatch
 
 - `session:clear` / `session:delete` — handled inline (save/detach/delete logic specific to WS client lifecycle)
-- `command:compact` — calls `sm.compactSession(sid, { onProgress })` directly for real-time progress feedback
-- `command:model` — inline model switch with WS response
+- `command:session` with `compact` verb — calls `sm.compactSession(sid, { onProgress })` directly for real-time progress feedback
 - All other `command:*` — builds a shared `CommandContext` and routes through `dispatchCommand()` (see [command.md](command.md))
 
 ### Message flow
@@ -137,4 +135,4 @@ Inside the subscribe handler, `messageLog.length === 0` is a precondition for lo
 
 ## Background session dispatch
 
-When the user hits `/new` while a sub-agent is still running: see [background-dispatch.md](background-dispatch.md).
+When the user hits `/session new` while a sub-agent is still running: see [background-dispatch.md](background-dispatch.md).

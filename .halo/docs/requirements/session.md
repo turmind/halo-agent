@@ -37,8 +37,8 @@ The Prompt button (FileText icon) shows the system prompt used by this session. 
 - Deleting a session removes the JSON file and cascade-deletes all descendants in SQLite
 - Assistant messages embed a `toolCalls` array so tool-call cards persist across refresh
 
-### Non-destructive /new
-`/new` (session:clear) **does not** destroy the old session:
+### Non-destructive /session new
+`/session new` (session:clear) **does not** destroy the old session:
 1. Save current session to disk
 2. Create a background handler to keep the old session's in-flight events flowing
 3. Reset client state, enter empty conversation

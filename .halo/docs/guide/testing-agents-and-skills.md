@@ -42,12 +42,12 @@ Edits take effect on the **next** session, not retroactively:
 
 | What you changed | When it takes effect |
 |---|---|
-| `AGENT.md` body | Next `/new` session |
+| `AGENT.md` body | Next `/session new` session |
 | `agent.yaml` tools / skills / model | Next session spawn |
 | `settings.yaml` values | Next session spawn (or next `activate_skill` call for SKILL bodies) |
 | Env vars (`<<ENV>>` placeholders) | Restart server, then next session spawn |
 
-So the loop is: edit → `/new` → re-test. No server restart for MD/YAML/settings changes.
+So the loop is: edit → `/session new` → re-test. No server restart for MD/YAML/settings changes.
 
 ---
 
@@ -82,7 +82,7 @@ The agent decides to call `activate_skill(skill_id='code-review')`, which return
 **Path B: slash command** — if the SKILL.md frontmatter declares `command: /review`:
 > `/review packages/server/src/agents/agent-loader.ts`
 
-Halo composes the SKILL.md body + `{{args}}` = `packages/server/src/agents/agent-loader.ts` and sends it to the agent as a message. See [skills.md#skill-as-command](skills.md#skill-as-command).
+Halo renders the SKILL.md body with `$ARGUMENTS` / `{{args}}` = `packages/server/src/agents/agent-loader.ts` and sends it to the agent as a message (args reach the body only through placeholders). See [skills.md#skill-as-command](skills.md#skill-as-command).
 
 ### 4. Verify activation
 
@@ -115,7 +115,7 @@ The env var is unset. Halo renders the literal placeholder so you (and the agent
 
 ### Saved agent changes don't seem to apply
 
-You might be looking at a session that started *before* the edit. Every session caches its own assembled system prompt at spawn time. `/new` to start fresh, or switch to a different session and back.
+You might be looking at a session that started *before* the edit. Every session caches its own assembled system prompt at spawn time. `/session new` to start fresh, or switch to a different session and back.
 
 ### Deleting a test session
 

@@ -50,7 +50,7 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 ### Disable / Enable
 - Toggle switch on each agent row in the admin sidebar. Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Both global and workspace agents can be independently toggled per workspace.
 - Disabled agents are greyed out (opacity-40) with sub-text "disabled"; the toggle stays visible.
-- Hidden from: `list_agents` tool, chat agent selector, share-workspace export.
+- Hidden from: `list_agents` tool, chat agent selector, `/ws share` export.
 - Still visible in the admin management sidebar for re-enabling.
 
 ### Tool selection
@@ -79,6 +79,6 @@ API: `GET/PUT /api/agent-configs/:id/md/:fileType`
 - **Not rendered for internal agents** (`internal: true`) — they're delegated to by other agents, never driven directly
 
 ### Internal agents
-Agents flagged `internal: true` in agent.yaml (e.g. `__evo_agent__`, `__apply_agent__`, `__score__`) are platform tooling. They are hidden from every user-facing surface: `list_agents` tool, `/new` default pick, and the chat agent selector — and have no Test button. They stay editable in the management sidebar's collapsed **Internal** group.
+Agents flagged `internal: true` in agent.yaml (e.g. `__evo_agent__`, `__apply_agent__`, `__score__`) are platform tooling. They are hidden from every user-facing surface: `list_agents` tool, `/session new` default pick, and the chat agent selector — and have no Test button. They stay editable in the management sidebar's collapsed **Internal** group.
 
 Replaces the old built-in test chat panel, giving a more realistic environment (full workspace tools + session persistence).

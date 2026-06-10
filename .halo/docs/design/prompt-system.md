@@ -132,7 +132,7 @@ Result:
 
 Missing directory or read failure: warn + use built-in fallback.
 
-`loadSystemPrompts` also returns `files: { bootstrap: string[]; all: string[]; root: string[] }` — the absolute paths of the `.md` files actually read for each scope (empty when the built-in fallback was used). `session-manager.ts` forwards this list into `AgentMeta.mdFiles`, which `/context` renders one line per file (label `prompt/<scope>/<basename>`). When a scope falls back to the built-in constants, a single line `prompt/<scope> (built-in fallback): <dir>` is shown instead.
+`loadSystemPrompts` also returns `files: { bootstrap: string[]; all: string[]; root: string[] }` — the absolute paths of the `.md` files actually read for each scope (empty when the built-in fallback was used). `session-manager.ts` forwards this list into `AgentMeta.mdFiles`, which `/session context` renders one line per file (label `prompt/<scope>/<basename>`). When a scope falls back to the built-in constants, a single line `prompt/<scope> (built-in fallback): <dir>` is shown instead.
 
 ## Step 5 — Compose the MD prompt
 
@@ -288,7 +288,7 @@ interface RenderContext {
     agent_name?: string
     // Channel origin (skill invocations only — undefined for AGENT.md
     // render and admin/WS skill invocations). Filled by channel handlers
-    // when they call execSkillCommand. Skills like manage-cron-jobs use
+    // when they call execSkillCommand. Skills like cron use
     // these to default targets to the originating chat.
     'channel.type'?: string            // 'telegram' | 'wechat' | 'web'
     'channel.account_id'?: string

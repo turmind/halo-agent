@@ -39,7 +39,7 @@ The Skills sidebar mirrors the Agents sidebar layout:
 - Each section header has its own **+ button** — scope is implicit from which button is clicked, no pop-up picker
 - Creating a name that collides with the other scope prompts a one-time confirmation explaining the runtime override
 - Items overridden by a workspace skill are rendered dimmed with "overridden" subtitle
-- Disabled skills are rendered dimmed with "disabled" subtitle and a toggle switch (always visible). Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md frontmatter). Both global and workspace skills can be independently toggled per workspace. Disabled skills are excluded from system prompt injection, activate_skill tool, agent form skill picker, and share-workspace export.
+- Disabled skills are rendered dimmed with "disabled" subtitle and a toggle switch (always visible). Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md frontmatter). Both global and workspace skills can be independently toggled per workspace. Disabled skills are excluded from system prompt injection, activate_skill tool, agent form skill picker, and `/ws share` export.
 - Selection uses a composite `id:scope` key (localStorage `halo_skills_selectedKey`) so the same id in different scopes can coexist
 
 ### Auto-sync behaviour (workspace vs. global)
@@ -52,13 +52,13 @@ The Skills sidebar and any open mini-workspace editor stay in sync with the file
 | Edit a file inside a skill while the mini-workspace editor has it open | Live (EditorPanel translates workspace-rel path into its own tab.path and refetches) | Live for the currently-open tab (same code path) — but the file tree change won't show new/removed sibling files until focus refresh |
 | Edit from external CLI / SSH | Same as above | Same as above |
 
-So when an agent (or skill-creator) creates a **global** skill, the Skills sidebar won't reflect it until the user refocuses the browser window. The skill-creator skill documents this so agents can warn the user.
+So when an agent (or the `skill` skill) creates a **global** skill, the Skills sidebar won't reflect it until the user refocuses the browser window. The `skill` skill documents this so agents can warn the user.
 
 ### SKILL.md protocol
 
 ```markdown
 ---
-name: Code Review
+name: code-review
 description: Automated code review with checklist
 command: /review
 ---
@@ -71,9 +71,10 @@ Review the code for:
 ...
 ```
 
-- **Frontmatter** (required): `name` + `description` — injected into the agent system prompt for discovery
+- **Frontmatter** (required): `name` (kebab-case, = directory name) + `description` — injected into the agent system prompt for discovery
 - **Body**: the full instructions, lazily loaded by the agent via `activate_skill`
-- **Optional fields**: `allowed-tools` (space-separated), `metadata` (custom kv), `command` (slash command registration), `requiresAccess` (one of `full` / `workspace` / `readonly`)
+- **Optional fields**: `allowed-tools` (space-separated), `metadata` (custom kv), `command` (slash command registration — opt-in, only declared commands exist), `requiresAccess` (one of `full` / `workspace` / `readonly`), `verbs` (Halo extension — subcommand list, each `{ name, builtin?, requiresAccess?, desc? }`; skill verbs' access gates are declared here), `disable-model-invocation` (standard — command exists but skill is not injected for model auto-activation), `user-invocable` (standard — `false` = never a slash command, model can still activate)
+- **Arguments**: user command-line args fill `$ARGUMENTS` / `$1`–`$9` placeholders in the body (quotes respected, `\$` escapes, `$5.00`/`$PATH` untouched); `{{...}}` placeholders (params/channel/workspace_root etc.) carry platform-injected values — the two coexist without cross-translation. A verb reaches the body as `$1` for dispatch; args are no longer appended verbatim to the body end
 
 ### Skill-as-command
 When a `command` field is present (e.g. `command: /review`), the skill auto-registers as a slash command. Users trigger it with `/review`. See [commands](command.md).
@@ -86,16 +87,16 @@ A skill can declare a minimum session access level in frontmatter:
 
 ```yaml
 ---
-name: Organize Workspace
+name: ws
 description: ...
-command: /organize-workspace
+command: /ws
 requiresAccess: workspace
 ---
 ```
 
 When set, the skill is hidden from agents whose session access level is more restricted (e.g. a `readonly` Telegram channel can't see or invoke a `requiresAccess: full` skill). The check runs both at metadata-load time (so it never enters the system prompt's `<available_skills>` block) and at slash-command execution time (server-side gate, so a user typing the slash manually still hits it). `requiresAccess` is independent of `command`: an agent-activated-only skill (no `command`) is still hidden from too-restricted sessions.
 
-Default is unset → the skill is visible to all access levels. `full` is the standard "admin-only" marker for skills that mutate global state (cron, share-workspace, etc. — these are agent-activated only, no slash command).
+Default is unset → the skill is visible to all access levels. `full` is the standard "admin-only" marker for skills that mutate global state (cron, self, etc.).
 
 ### Settings integration
 

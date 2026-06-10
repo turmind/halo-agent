@@ -8,7 +8,7 @@ The dropdown to the left of the input lists every agent (global + workspace).
 
 - The agent with the highest `priority` is auto-selected for new sessions. The seed `Default` agent uses `priority: 99`, so it wins until you raise another agent above it.
 - Once you manually pick an agent, that choice is remembered across `clear` / new sessions until you pick something else.
-- **A conversation is locked to one agent**: once you start chatting, the dropdown locks. To change agent, start a new session (`/new`).
+- **A conversation is locked to one agent**: once you start chatting, the dropdown locks. To change agent, start a new session (`/session new`).
 
 ## Sending messages
 
@@ -45,35 +45,33 @@ Images are sent to the agent as base64, with multimodal support (Claude 4.6 can 
 
 Typing `/` opens autocomplete.
 
+Most commands are noun-verb **object commands**: `/<obj> <verb> [args]`. Bare `/<obj>` (or `/<obj> help`) lists the verbs you're allowed to run.
+
 | Command | Purpose |
 |---|---|
-| `/new` | Start a new conversation (old session stays in the sidebar; any running sub-agents keep going in the background) |
-| `/clear` | Alias for `/new` |
-| `/compact` | LLM compresses the current conversation's context (keeps the most recent N messages intact, summarises the rest; N defaults to 5, configurable via `general.compact.keep_messages`) |
-| `/context` | Show current token usage, agent info, and available tools |
-| `/stop` | Stop the running agent task |
-| `/list` | List recent sessions |
-| `/switch <n>` | Switch active session by index |
-| `/ws [path]` | Show or switch workspace |
-| `/note [hint]` | Queue a self-evolution run on this session (requires `general.evolution.level: L1`) |
-| `/help` | List every command |
-| `/organize-workspace` | Set up or reorganize `.halo/` (INDEX.md / INSTRUCTIONS.md / memory/). Init mode for new workspaces; organize mode reviews and prunes existing ones — backed by the `organize-workspace` skill |
+| `/session <verb>` | Manage sessions — `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context`. All built-in, available to everyone. `new` starts a fresh conversation (old session stays in the sidebar; running sub-agents keep going); `compact` keeps the most recent N messages intact (N defaults to 5, `general.compact.keep_messages`); `context` shows token usage, agent info, and available tools |
+| `/clear` | Admin-UI alias for `/session new` |
+| `/agent <verb>` | Manage agents — `list` / `switch <name\|index>` / `desc` (built-in, open to all) · `delete` (built-in, full access) · `create` / `update` (handled by the `agent` skill, full access) |
+| `/skill <verb>` | Manage skills — `list` / `desc` (built-in, open to all) · `disable` / `enable` (built-in, workspace access) · `delete` (built-in, full access) · `create` / `update` (handled by the `skill` skill, full access) |
+| `/ws <verb>` | Manage the workspace — `info` (built-in, open to all) · `switch <path>` (built-in, full access) · `setup` / `tidy` (ws skill, workspace access; init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) · `share` (ws skill, full access; export a shareable bundle) |
+| `/cron <verb>` | Scheduled agent runs — `create` / `list` / `update` / `enable` / `disable` / `delete` (cron skill, full access) |
+| `/acp <verb>` | Talk to other agents over ACP — `kiro <q>` / `claude <q>` ask a local agent directly; `add` / `list` / `remove` manage generated `ask-<label>` bindings (acp skill, full access) |
+| `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
+| `/help` | List every command — object commands only show the verbs you can run |
 
 Skills can also register slash commands (put `command: /xxx` in the SKILL.md frontmatter).
 
 ### WeChat channel commands
 
-If you're chatting from WeChat, a different set of commands is available (handled by the WeChat channel, not the normal command registry):
+If you're chatting from WeChat, the same shared commands are available (routed through the common command dispatcher), plus one WeChat-specific extra:
 
 | Command | Purpose |
 |---|---|
-| `/new` | Create a new session; old sessions stay accessible via `/list` + `/switch` (nothing is archived) |
-| `/list` | List recent sessions (newest first); the active one is marked `→` |
-| `/switch <index>` | Switch the active session to the indexed one (readonly bot 仅能切到自己的 [我] 会话) |
-| `/ws` / `/ws <path>` | Show or switch workspace (absolute path; 切换仅 full 权限 bot 可用) |
-| `/name` / `/name <new>` | Show or rename the bot |
-| `/send <path>` | Send a workspace file as WeChat media |
-| `/organize-workspace` | Set up or reorganize `.halo/` in this workspace |
+| `/session new` | Create a new session; old sessions stay accessible via `/session list` + `/session switch` (nothing is archived) |
+| `/session list` | List recent sessions (newest first); the active one is marked `→` |
+| `/session switch <index>` | Switch the active session to the indexed one (readonly bot 仅能切到自己的 [我] 会话) |
+| `/ws info` / `/ws switch <path>` | Show or switch workspace (absolute path; 切换仅 full 权限 bot 可用) |
+| `/qr [level]` | Generate an invite QR for a new bot account (full 权限 bot 专用) |
 | `/help` | Show help |
 
 If the session is currently compacting or busy when your message arrives, you'll see a hint — ("⏳ integrating context…" / "🔄 queued…") — and the message is queued (while compacting it's dropped; while busy it's kept).

@@ -14,7 +14,7 @@ Halo server (9527) ──┤── channels/telegram/               ├── Se
                          or any HTTP client
 ```
 
-Common slash commands (`/new`, `/list`, `/switch`, `/stop`, `/compact`, `/ws`, `/help`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter.
+Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/ws`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter.
 
 Web channel is a public HTTP API on Halo. `packages/web-demo` is a standalone demo frontend that proxies requests through its own auth layer.
 
@@ -34,7 +34,7 @@ Web-specific config JSON fields: `token` (auto-generated base64url, 24 bytes).
 - Session ID format: `web_<accountId>_<createdAtBase36>`
 - Active session tracked in memory (`activeOverrides` Map); defaults to most recent
 - Sessions live under the account's bound workspace using the `default` agent
-- Admin panel and other channels see these sessions in their `/list` (tagged `[web]`)
+- Admin panel and other channels see these sessions in their `/session list` (tagged `[web]`)
 - Access level inherited from the account
 
 ### Commands
@@ -44,13 +44,13 @@ Slash commands are intercepted before reaching the agent:
 | Command | Effect |
 |---|---|
 | `/help` | List available commands |
-| `/new` | Create a new session |
-| `/list` | List all sessions (show ownership tags) |
-| `/switch <n>` | Switch to session by number (readonly can only switch to own) |
-| `/stop` | Interrupt current running task |
-| `/compact` | Compress session context |
-| `/ws` | Show current workspace |
-| `/ws <path>` | Switch workspace (full access only) |
+| `/session new` | Create a new session |
+| `/session list` | List all sessions (show ownership tags) |
+| `/session switch <n>` | Switch to session by number (readonly can only switch to own) |
+| `/session stop` | Interrupt current running task |
+| `/session compact` | Compress session context |
+| `/ws info` | Show current workspace |
+| `/ws switch <path>` | Switch workspace (full access only) |
 
 ### Media handling
 
@@ -84,14 +84,14 @@ data: {"type":"tool_call","toolName":"read_file","toolInput":{...}}
 data: {"type":"tool_result","toolName":"read_file","result":"..."}
 data: {"type":"stream","text":"Hello! "}
 data: {"type":"stream","text":"How can I help?"}
-data: {"type":"switch","sessionId":"..."}   // after /switch or /new command
+data: {"type":"switch","sessionId":"..."}   // after /session switch or /session new command
 data: {"type":"complete"}
 data: {"type":"error","error":"..."}
 ```
 
 #### Per-request overrides (`workspace`, `sessionId`, `agentId`)
 
-By default each token is bound 1:1 to the workspace its admin row configured, and `/web/chat` operates on the account's "active" session (most-recently-used or one set by `/new` / `/switch`). External integrations — currently the [ACP adapter](../dev/acp-adapter.md) — need finer control:
+By default each token is bound 1:1 to the workspace its admin row configured, and `/web/chat` operates on the account's "active" session (most-recently-used or one set by `/session new` / `/session switch`). External integrations — currently the [ACP adapter](../dev/acp-adapter.md) — need finer control:
 
 - `workspace` (string, optional): server-side absolute path. Overrides `account.workspacePath` for this request only. **Gated on `accessLevel === 'full'`** — readonly / workspace tokens cannot escape their account-bound workspace; the gate returns an SSE `error` event.
 - `sessionId` (string, optional): explicit halo session id. Bypasses the account's active-session pointer entirely. If the session doesn't yet exist, the server creates it with the supplied id (so callers can pre-mint stable ids and address them across reconnects).
@@ -185,7 +185,7 @@ node server.js
 - SSE streaming with tool call display (collapsible)
 - Auto-reconnect: if session is running on page load, subscribes to live stream
 - Message queue: can send while agent is running, messages queue and send sequentially
-- Slash commands (`/help`, `/new`, `/list`, `/switch`, `/stop`, `/compact`, `/ws`)
+- Slash commands (`/help`, `/session`, `/agent`, `/skill`, `/ws`)
 - Image upload (file picker + camera capture)
 - Voice recording (webm audio saved to workspace, path given to agent)
 - Stop/interrupt button

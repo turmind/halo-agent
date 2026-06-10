@@ -119,7 +119,7 @@ Top-right `Test` button:
 
 Better than the old built-in test chat — it has full workspace tools + session persistence.
 
-Internal agents (`internal: true`, e.g. self-evolution agents) have no Test button and never appear in the chat agent selector or `/new`'s default pick — they're delegated to by other agents, never driven directly. They remain editable in the management sidebar's collapsed **Internal** group.
+Internal agents (`internal: true`, e.g. self-evolution agents) have no Test button and never appear in the chat agent selector or `/session new`'s default pick — they're delegated to by other agents, never driven directly. They remain editable in the management sidebar's collapsed **Internal** group.
 
 ## Delete
 
@@ -184,7 +184,7 @@ skills:
 
 ```
 
-> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Toggle via admin sidebar; disabled agents are hidden from `list_agents`, chat selector, and share-workspace export. Still visible in admin sidebar (dimmed + toggle switch).
+> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Toggle via admin sidebar; disabled agents are hidden from `list_agents`, chat selector, and `/ws share` export. Still visible in admin sidebar (dimmed + toggle switch).
 
 **Field source**: `packages/server/src/agents/agent-loader.ts`, `AgentYamlConfig` interface.
 

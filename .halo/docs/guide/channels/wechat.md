@@ -70,15 +70,12 @@ Same set as the other channels — type as plain text in your WeChat DM with the
 
 | Command | Effect |
 |---|---|
-| `/new` | New session |
-| `/list` | Recent sessions |
-| `/switch <n>` | Switch active session |
-| `/stop` | Cancel the running task |
-| `/compact` | Compress context |
-| `/ws` | Show / change workspace (full access only) |
-| `/name <new>` | Rename the bot account label |
-| `/send <path>` | Send a file from the workspace as media |
-| `/help` | List commands |
+| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` |
+| `/agent <verb>` | Manage agents (`list` / `switch` / `desc` open to all; `delete` full; `create` / `update` via skill, full) |
+| `/skill <verb>` | Manage skills (`list` / `desc` open; `disable` / `enable` workspace; `delete` full; `create` / `update` via skill, full) |
+| `/ws <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
+| `/help` | List commands — object commands show only the verbs you can run |
+| `/qr [level]` | Generate an invite QR (admin only) |
 
 ## Cron jobs targeting WeChat
 

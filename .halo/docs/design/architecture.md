@@ -107,7 +107,7 @@ File: `ws/broadcast.ts`. Per-client `sendJson` is for chat-stream events that be
 
 - `evolution/ticker.ts` — diffs db status against an in-memory snapshot every 30s, emits `evolution:run_changed` / `evolution:apply_changed` for wrapper-driven transitions (the wrapper child can't reach the parent's wss directly)
 - `routes/evolution.ts` — REST mutations (approve/reject/retry) emit immediately so user-action latency is "instant"
-- `cron/runner.ts` — `runJob` insert + `finalize` emit `cron:run_changed`; `reconcileFromDb` emits `cron:job_changed kind=reconciled|deleted` for out-of-band db edits (e.g. the manage-cron-jobs skill writing the db directly)
+- `cron/runner.ts` — `runJob` insert + `finalize` emit `cron:run_changed`; `reconcileFromDb` emits `cron:job_changed kind=reconciled|deleted` for out-of-band db edits (e.g. the cron skill writing the db directly)
 - `routes/cron.ts` — REST mutations emit `cron:job_changed kind=created|updated|deleted` immediately
 
 ### UILogBuilder — UI state reducer
@@ -128,7 +128,7 @@ File: `agents/session-query-store.ts`. Stateless; split out of SessionManager al
 
 ### SessionAgentBuilder — agent construction pipeline
 
-File: `agents/session-agent-builder.ts`. Stateless. Turns an agentId + agent.yaml into a live ModelRuntime plus system prompt, tool set, context/thinking config, and `/context` metadata (`AgentMeta`/`BuiltAgent` are defined + exported here). `createSession` / `ensureSession` / the rerun paths call `buildAgentInstance`. Host surface: workspaceRoot / db / `createSessionTools`.
+File: `agents/session-agent-builder.ts`. Stateless. Turns an agentId + agent.yaml into a live ModelRuntime plus system prompt, tool set, context/thinking config, and `/session context` metadata (`AgentMeta`/`BuiltAgent` are defined + exported here). `createSession` / `ensureSession` / the rerun paths call `buildAgentInstance`. Host surface: workspaceRoot / db / `createSessionTools`.
 
 ### SessionSkillCommands — skill-command permissions
 
@@ -174,7 +174,7 @@ Standalone terminal client — imports agent-core modules from `@turmind/halo-se
 
 Entry: `packages/cli/src/index.ts` → `harness.ts` (wraps SessionManager) → `cli.ts` (non-interactive) / `tui.ts` (interactive readline).
 
-Uses `dispatchCommand()` from `channels/shared/commands.ts` for `/new`, `/list`, `/switch`, `/compact`, etc. Session prefix: `cli_`. Sessions are persisted identically to admin/channel sessions and are visible in the admin panel.
+Uses `dispatchCommand()` from `channels/shared/commands.ts` for `/session new`, `/session list`, `/session switch`, `/session compact`, etc. Session prefix: `cli_`. Sessions are persisted identically to admin/channel sessions and are visible in the admin panel.
 
 See [guide/cli.md](../guide/cli.md).
 

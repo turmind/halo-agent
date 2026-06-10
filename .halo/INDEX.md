@@ -52,7 +52,7 @@ Halo currently supports these input channels — onboarding guides at [guide/cha
 
 Separate from the channel system: a stdio bridge (`halo acp`, package `@turmind/halo-acp-adapter`) that lets ACP clients — most notably Claude Code — drive a halo server as if it were a native ACP agent. Internally it just translates ACP JSON-RPC into the existing web channel HTTP + SSE, reusing the same web-channel tokens. ACP sessionId === halo sessionId, so `session/load` works without adapter-side persistence (client owns ids). v1 covers `initialize` / `session/new` / `session/load` / `session/prompt` / `session/cancel`; reverse fs and `requestPermission` are intentionally out of scope.
 
-For **halo-to-halo** delegation (one workspace's agent calling out to another's), halo ships a `create-halo-acp` meta-skill (agent-activated only, not a slash command) that stamps out per-remote `ask-<label>` bindings (each with its own slash command, settings namespace, and admin form). Multiple bindings coexist; each uses the ACP adapter under the hood. See [dev/acp-adapter.md](docs/dev/acp-adapter.md).
+For **halo-to-halo** delegation (one workspace's agent calling out to another's), halo ships an `acp` skill (object command `/acp`, full access) that stamps out per-remote `ask-<label>` bindings via `/acp add` (each with its own slash command, settings namespace, and admin form; managed with `/acp list|remove`). Multiple bindings coexist; each uses the ACP adapter under the hood. `/acp kiro <question>` and `/acp claude <question>` ask a local Kiro / Claude Code agent directly, zero config. See [dev/acp-adapter.md](docs/dev/acp-adapter.md).
 
 ### Why both inbound and outbound ACP?
 
@@ -61,11 +61,11 @@ Most agent harnesses treat ACP as one-way (let an external IDE drive me). Halo s
 - **Inbound** (Claude Code → halo): a remote IDE wants to use a halo workspace's agent + tools + workspace knowledge. Standard ACP server role.
 - **Outbound** (halo → other halo): an agent on workspace A discovers it doesn't have the credentials / data to answer, but knows another workspace B has them. It calls B's agent through a generated `ask-<label>` binding. The remote node is itself an agent, not a tool — it does its own reasoning, tool use, and may even chain to a *third* halo via its own bindings.
 
-Outbound delegation is what `create-halo-acp` exists for. As soon as you run more than one halo server (one per team / per environment / per credential boundary), template-driven binding generation is the only way to avoid an O(N²) hand-written skill explosion. Harnesses without per-node LLM (single-brain gateways with channel adapters) don't need this and don't have it; harnesses with per-user single-process agents don't need it either. It's specific to "team workspace × multi-node × multi-LLM" deployments.
+Outbound delegation is what the `acp` skill exists for. As soon as you run more than one halo server (one per team / per environment / per credential boundary), template-driven binding generation is the only way to avoid an O(N²) hand-written skill explosion. Harnesses without per-node LLM (single-brain gateways with channel adapters) don't need this and don't have it; harnesses with per-user single-process agents don't need it either. It's specific to "team workspace × multi-node × multi-LLM" deployments.
 
 ## Self-Evolution
 
-Active workspaces learn from their own conversations: when a user invokes `/note` (or pre-compact fires), an `__evo_agent__` analyzes the session, drafts a prompt-file improvement, runs a sandbox dry-run, and an `__score__` agent grades the result. Reviewer approves in the **Evolution** admin tab → `__apply_agent__` merges into a sandbox, wrapper re-runs regression scoring, then publishes to the workspace's `.halo/`. See [design/evolution.md](docs/design/evolution.md) for the full design (wrapper-orchestrated Run/Apply phases); early proposal notes in [plans/self-evolution.md](docs/plans/self-evolution.md).
+Active workspaces learn from their own conversations: when a user invokes `/evo` (or pre-compact fires), an `__evo_agent__` analyzes the session, drafts a prompt-file improvement, runs a sandbox dry-run, and an `__score__` agent grades the result. Reviewer approves in the **Evolution** admin tab → `__apply_agent__` merges into a sandbox, wrapper re-runs regression scoring, then publishes to the workspace's `.halo/`. See [design/evolution.md](docs/design/evolution.md) for the full design (wrapper-orchestrated Run/Apply phases); early proposal notes in [plans/self-evolution.md](docs/plans/self-evolution.md).
 
 Key state lives in:
 - `~/.halo/global/evo.db` — global queue tables `evolution_runs` + `evolution_applies` (separate from per-workspace sqlite)
@@ -86,13 +86,13 @@ Key state:
 - `~/.halo/global/cron.db` — global tables `cron_jobs` (with `run_at` column for at-mode) + `cron_runs`
 - `~/.halo/global/logs/cron/<runId>.log` — per-run cli stdout/stderr (30-day retention)
 
-Driven from `packages/server/src/cron/` (runner + registry) + per-channel `cron-dispatcher.ts` files (telegram / wechat / slack / feishu) + `packages/server/templates/skills/manage-cron-jobs/` (the agent-facing skill, which receives `{{channel.type/account_id/chat_id}}` placeholders so it can default targets to the current chat when invoked from any of the four channels, and uses `list --chat-id <id>` to reverse-look-up subscriptions when the user asks "delete my cron" from inside a chat).
+Driven from `packages/server/src/cron/` (runner + registry) + per-channel `cron-dispatcher.ts` files (telegram / wechat / slack / feishu) + `packages/server/templates/skills/cron/` (the agent-facing skill, which receives `{{channel.type/account_id/chat_id}}` placeholders so it can default targets to the current chat when invoked from any of the four channels, and uses `list --chat-id <id>` to reverse-look-up subscriptions when the user asks "delete my cron" from inside a chat).
 
 ## Express Self (visual face)
 
-The agent has a second channel beyond text: a living particle face at `<workspace>/.halo/canvas/self.html` it can drive in real time. It emits a `<<<SHOW: self.say("HI") >>>` marker in a reply; the admin detects it, forwards the payload verbatim to the open `self.html` preview via `postMessage`, and strips the marker from rendered chat. The `self` API (say/play/react/pulse/flash/shake/intro) is a stable engine, force-copied into every workspace on open; the agent expresses itself purely through runtime `<<<SHOW>>>` markers, never by editing the file. Taught by the built-in `express-self` skill. See [design/express-self.md](docs/design/express-self.md).
+The agent has a second channel beyond text: a living particle face at `<workspace>/.halo/canvas/self.html` it can drive in real time. It emits a `<<<SHOW: self.say("HI") >>>` marker in a reply; the admin detects it, forwards the payload verbatim to the open `self.html` preview via `postMessage`, and strips the marker from rendered chat. The `self` API (say/play/react/pulse/flash/shake/intro) is a stable engine, force-copied into every workspace on open; the agent expresses itself purely through runtime `<<<SHOW>>>` markers, never by editing the file. Taught by the built-in `self` skill. See [design/express-self.md](docs/design/express-self.md).
 
-Driven from `packages/server/templates/canvas/self.html` (engine) + `packages/server/templates/skills/express-self/` (skill) + `packages/admin/src/shared/ws-handlers/chat-handlers.ts` (marker detection) + `packages/admin/src/features/editor/face-bridge.ts` (preview forwarding).
+Driven from `packages/server/templates/canvas/self.html` (engine) + `packages/server/templates/skills/self/` (skill) + `packages/admin/src/shared/ws-handlers/chat-handlers.ts` (marker detection) + `packages/admin/src/features/editor/face-bridge.ts` (preview forwarding).
 
 ## Memory
 

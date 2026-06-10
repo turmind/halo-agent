@@ -5,7 +5,7 @@ Let agents draft and validate improvements to their own prompt surface by learni
 ## Architecture
 
 ```
-                  /note or pre-compact hook (user action)
+                  /evo or pre-compact hook (user action)
                             ↓
                     enqueueEvoRun() (sync)
          mkdir runs/<id>/, snapshot source session + prompt surface
@@ -41,17 +41,17 @@ All coordination via global db (`~/.halo/global/evo.db`). Wrapper heartbeats eve
 
 ## Trigger and Enqueue Flow
 
-### `/note [hint]` (slash command)
+### `/evo [hint]` (slash command)
 
 User in chat:
 ```
-/note                        # evo runs on current root session
-/note answer is too verbose  # hint for what to focus on
+/evo                        # evo runs on current root session
+/evo answer is too verbose  # hint for what to focus on
 ```
 
 Server flow (synchronous, ~10ms):
 
-1. Refuse if `evolution.level !== 'L1'` or user is `readonly`.
+1. Refuse if user is not `full` access (not gated on `evolution.level`).
 2. Resolve root session id (must be `parentId === null`).
 3. Call `enqueueEvoRun()` from `/packages/server/src/evolution/enqueue.ts`:
    - mkdir `<ws>/.halo/evo/runs/<id>/`
@@ -59,7 +59,7 @@ Server flow (synchronous, ~10ms):
    - Write `tool-flow.md` (tool_result-stripped Markdown view for skimming)
    - Write `meta.json` (metadata: runId, triggerKind, sourceSession, userHint, createdAt)
    - Write `evo-context.json` (snapshot of prompt surface at trigger time: assembled system prompt, all prompt files, agent/skill listings)
-4. INSERT `evolution_runs` row with `status='pending'`, `trigger_kind='note'`.
+4. INSERT `evolution_runs` row with `status='pending'`, `trigger_kind='note'` (internal trigger id keeps the old name; only the user-visible command was renamed to `/evo`).
 5. Reply via `chat:system`: "📝 Queued for evaluation".
 
 `evo-context.json` is authoritative state — the wrapper packs it into agent briefs verbatim, so evo/scorer never need `file_read` to inspect system-prompt files.
@@ -253,7 +253,7 @@ After apply publishes to main, **no explicit session-release step needed**. Sess
 
 | File | Lines | Purpose |
 |---|---|---|
-| `/packages/server/src/evolution/enqueue.ts` | 404 | Snapshot session + prompt surface at trigger time. Write runDir/, INSERT evolution_runs. Both `/note` and pre-compact hook call this. |
+| `/packages/server/src/evolution/enqueue.ts` | 404 | Snapshot session + prompt surface at trigger time. Write runDir/, INSERT evolution_runs. Both `/evo` and pre-compact hook call this. |
 | `/packages/server/src/evolution/ticker.ts` | 497 | Stateless 30s scheduler. Mark timeouts, claim pending, spawn wrappers. Per-workspace apply mutex. Broadcast status changes to admin UI. |
 | `/packages/server/src/evolution/spawn.ts` | 37 | Real spawner: detached Node child running evo-wrapper.js. Override-able for testing. |
 | `/packages/server/src/evolution/evo-wrapper.ts` | 2000+ | Wrapper orchestrator. 3-phase run mode (draft/dry-run/score). Apply mode (merge/regress/publish). Heartbeat every 60s. Handles Windows command-line limits via stdin briefs. |
@@ -287,7 +287,7 @@ general:
       pre_compact: true
 ```
 
-L0 disables all evo. L1 enables both `/note` and pre-compact triggering. Defaults conservative; tune if machine handles more.
+L0 = manual drafting only (`/evo`); L1 also enables pre-compact triggering. Defaults conservative; tune if machine handles more.
 
 ## Admin UI Integration
 
@@ -338,9 +338,9 @@ If they're identical (both clean), that's legal. Old patches wrote single `messa
 ## Scope Limits
 
 - evo observes **root sessions only** (`parentId === null`). Sub-agent sessions don't trigger evo.
-- evo is **invisible to conversation**: no user/assistant messages appended to source session log. One short `chat:system` line per `/note`.
+- evo is **invisible to conversation**: no user/assistant messages appended to source session log. One short `chat:system` line per `/evo`.
 - Wrappers never modify `~/.halo/global/` directly. Apply uses copy-on-write: read global, write workspace override via file_write in sandbox, then sync to main.
-- `/note` is rejected for `readonly` users.
+- `/evo` is rejected for non-`full` users.
 
 ## Why This Design
 

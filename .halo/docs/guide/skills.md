@@ -30,13 +30,13 @@ Putting those in AGENT.md would bloat the system prompt. Skills use **progressiv
 
 Workspace overrides global (same id).
 
-**Built-in skills** (`create-agent`, `create-skill`, `organize-workspace`, `share-workspace`, `manage-cron-jobs`, `send-file`, `create-halo-acp`) are server-shipped and **force-overwritten on every server startup**. Local edits to these directories under `~/.halo/global/skills/` will be lost. To customize one, copy it into `<project>/.halo/skills/<id>/` (workspace replaces global) and edit there. Other skills under `~/.halo/global/skills/` — including any the user created via the admin UI — are untouched by the seeder.
+**Built-in skills** (`agent`, `skill`, `ws`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`) are server-shipped and **force-overwritten on every server startup**. Local edits to these directories under `~/.halo/global/skills/` will be lost. To customize one, copy it into `<project>/.halo/skills/<id>/` (workspace replaces global) and edit there. Other skills under `~/.halo/global/skills/` — including any the user created via the admin UI — are untouched by the seeder.
 
 ## SKILL.md format
 
 ```markdown
 ---
-name: Code Review
+name: code-review
 description: Review code for correctness, performance, and style
 command: /review       # optional: also register a slash command
 ---
@@ -55,9 +55,9 @@ Follow the checklist in checklist.md...
 **Frontmatter fields**:
 | Field | Required | Purpose |
 |---|---|---|
-| name | yes | Display name |
+| name | yes | kebab-case, = directory name (lowercase / digits / hyphens, ≤64) |
 | description | yes | One-line description (what agents see at discovery time) |
-| command | no | Also register as a slash command (`/xxx` user-triggerable) |
+| command | no | Also register as a slash command (`/xxx` user-triggerable) — opt-in, unlike the upstream Agent Skills standard where the directory name automatically becomes a command |
 
 **Body**: the full instructions, returned when the agent calls `activate_skill(skill_id)`.
 
@@ -101,14 +101,12 @@ When SKILL.md frontmatter has a `command` field, the user can slash-trigger it:
 User: /review src/foo.ts
 ```
 
-Halo composes the SKILL.md body + user args into a message for the agent:
+Halo renders the SKILL.md body (user args reach it via `$ARGUMENTS` / `$1`–`$9` placeholders — they are not appended to the end) and sends it as a message for the agent:
 
 ```
 [Skill activated: /review]
 
-{SKILL.md body}
-
-src/foo.ts
+{SKILL.md body, with $ARGUMENTS → "src/foo.ts"}
 ```
 
 The agent follows the skill's instructions.
@@ -152,29 +150,33 @@ Halo seeds these skills on every startup (the ids in `BUILTIN_SKILL_IDS`, `packa
 
 | ID | Purpose |
 |---|---|
-| create-agent | Assists the user in creating a new agent, bound to `/create-agent` |
-| create-skill | Assists the user in creating a new skill, bound to `/create-skill` |
-| organize-workspace | Sets up or reorganizes `.halo/` (INDEX.md / INSTRUCTIONS.md / memory/), bound to the `/organize-workspace` command. Init mode for first-time setup; organize mode for ongoing cleanup |
-| share-workspace | Exports a workspace's agents/skills/docs as a shareable bundle |
-| manage-cron-jobs | Create / list / delete scheduled agent runs from any channel chat |
-| send-file | Deliver an image/video/file as a channel attachment by emitting `MEDIA:<absolute_path>` — works on Web / WeChat / Telegram / Slack / Feishu |
-| create-halo-acp | Meta-skill: generates per-remote `ask-<label>` ACP bindings for halo-to-halo delegation |
+| agent | Create / update agents — backs the `create` / `update` verbs of `/agent` |
+| skill | Create / update skills — backs the `create` / `update` verbs of `/skill` |
+| ws | Workspace maintenance — backs `/ws setup` / `tidy` (init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) and `/ws share` (export a shareable bundle) |
+| cron | Create / list / update / enable / disable / delete scheduled agent runs — backs `/cron` |
+| acp | Talk to other agents over ACP (`/acp kiro\|claude <q>`) and manage `ask-<label>` bindings for halo-to-halo delegation (`/acp add\|list\|remove`) |
+| send-file | Deliver an image/video/file as a channel attachment by emitting `MEDIA:<absolute_path>` — works on Web / WeChat / Telegram / Slack / Feishu (no command; model-activated, workspace access) |
+| self | The agent's own visual space (`.halo/canvas/self.html`) for self-expression (no command; model-activated, full access) |
+| aws-knowledge | Query the official AWS Knowledge MCP server for up-to-date AWS docs (no command, `user-invocable: false`; model auto-activates) |
+| nova-web-search | Real-time web search via Amazon Nova 2 Lite's nova_grounding (no command, `user-invocable: false`; model auto-activates) |
 
-All live under `~/.halo/global/skills/` and are force-overwritten on startup. To customize one, copy it into `<project>/.halo/skills/<id>/` and edit there (workspace overrides global).
+All live under `~/.halo/global/skills/` and are force-overwritten on startup. To customize one, copy it into `<project>/.halo/skills/<id>/` and edit there (workspace overrides global). `tavily-web-search` remains an optional (non-seeded) skill.
 
 ## SKILL.md field reference
 
-Frontmatter fields:
+Frontmatter fields (Halo dialect of the Agent Skills standard):
 
 ```markdown
 ---
-name: Code Review                    # required, display name (shown at discovery)
+name: code-review                    # required, kebab-case, = directory name
 description: Review code changes     # required, one-line description (agents use this to decide when to activate)
-command: /review                     # optional, register as a slash command
-allowed-tools: file_read grep        # optional, space-separated tool subset the skill is allowed to use
-metadata:                            # optional, arbitrary kv (passed to the agent on activation)
-  category: quality
-  severity: strict
+command: /review                     # optional, register as a slash command (opt-in)
+requiresAccess: workspace            # optional (Halo), object-level access gate: full | workspace | readonly
+verbs:                               # optional (Halo extension), subcommand declarations
+  - { name: list, builtin: true, desc: List things }
+  - { name: create, requiresAccess: full, desc: Create a thing }
+disable-model-invocation: true       # optional (standard), command stays but the model can't auto-activate
+user-invocable: false                # optional (standard), never becomes a slash command; model can still activate
 ---
 
 # Skill Body...
@@ -184,13 +186,15 @@ metadata:                            # optional, arbitrary kv (passed to the age
 
 | Field | Required | Purpose |
 |---|---|---|
-| name | yes | Display name, appears in the agent system prompt's `<available_skills>` block |
+| name | yes | kebab-case, = directory name; appears in the agent system prompt's `<available_skills>` block |
 | description | yes | Helps agents decide when to activate |
 | command | no | Register a slash command — see Skill-as-Command above |
-| allowed-tools | no | Space-separated tool allowlist (skill-level, ANDed with agent.yaml tools) |
-| metadata | no | Custom kv the agent sees on activation (e.g. skill-specific config) |
+| requiresAccess | no | Halo-specific access gate (`full` / `workspace` / `readonly`) for the whole skill |
+| verbs | no | **Halo extension** — list of `{ name, builtin?, requiresAccess?, desc? }`. `builtin: true` marks a verb handled by platform code (declarative; actual routing lives in `SUBCOMMAND_ROUTES`); skill verbs take their access gate from this declaration. The verb reaches the body via `$1` |
+| disable-model-invocation | no | Standard — `true` keeps the slash command but the skill isn't injected for the model (no auto-activation) |
+| user-invocable | no | Standard — `false` means no slash command ever; the model can still activate it |
 
-> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md). Toggle via admin sidebar; disabled skills are excluded from system prompt injection, activate_skill tool, agent form picker, and share-workspace export. Still visible in admin sidebar (dimmed + toggle switch).
+> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md). Toggle via admin sidebar or `/skill disable|enable`; disabled skills are excluded from system prompt injection, activate_skill tool, agent form picker, and `/ws share` export. Still visible in admin sidebar (dimmed + toggle switch).
 
 **Minimal SKILL.md**: frontmatter with `name` + `description` + body; everything else is optional.
 
@@ -212,6 +216,8 @@ Resource files in skill directory:
 ## Placeholders (template variables)
 
 SKILL.md body supports `{{var}}` placeholders, rendered on activation. AGENT.md uses the same syntax.
+
+User command-line args additionally use the **standard** syntax `$ARGUMENTS` / `$1`–`$9` (quote-aware; `\$` escapes; `$5.00` / `$12` / `$PATH` are left alone). The two systems coexist without cross-translation: `$…` carries user args, `{{…}}` carries Halo-injected values. For object commands, the verb arrives as `$1`.
 
 ### Built-ins (no dot)
 

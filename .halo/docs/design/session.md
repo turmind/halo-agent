@@ -12,7 +12,7 @@ Every session lives at `.halo/sessions/{agentId}/{sessionId}.json`. No parent/ch
 
 Sessions for "internal" agents (`__evo_agent__`, `__score__`, `__apply_agent__`, future platform tooling — anything whose id matches `__*__`) are special-cased. They don't belong to any user workspace, so they live at `~/.halo/global/internal-sessions/<agentId>/<sessionId>.json` regardless of which workspace the cli was launched against. `getSessionDir()` in `sessions/session-store.ts` does this routing.
 
-These sessions also do **not** get an `agent_sessions` row in the workspace's `halo.db`. To make `cli -s <id>` resume them, `SessionManager.ensureSession` and `getSessionById` fall back to a directory scan over `internal-sessions/` (`findInternalSession` in session-store.ts) when no db row exists. This keeps the user's workspace db clean of platform-tooling rows; channel `/list` and admin session listings naturally don't see them.
+These sessions also do **not** get an `agent_sessions` row in the workspace's `halo.db`. To make `cli -s <id>` resume them, `SessionManager.ensureSession` and `getSessionById` fall back to a directory scan over `internal-sessions/` (`findInternalSession` in session-store.ts) when no db row exists. This keeps the user's workspace db clean of platform-tooling rows; channel `/session list` and admin session listings naturally don't see them.
 
 ## Session file format
 
@@ -160,9 +160,9 @@ Content blocks can be either SDK class instances or plain data objects:
 // getToolUseId() handles both.
 ```
 
-## Non-destructive /new
+## Non-destructive /session new
 
-`/new` (session:clear) does not destroy the old session:
+`/session new` (session:clear) does not destroy the old session:
 1. Save the current session to disk
 2. Detach the event listener from the old session tree
 3. Register a background handler for that old session's events
@@ -200,7 +200,7 @@ Three entry points with different quality / safety trade-offs:
 |---|---|---|---|
 | 70% soft threshold (end-of-turn auto) | `commands/compact.ts` called from `onAutoCompact` on `complete` event | **Self-compact** (`selfCompactSession`) — the agent summarizes its own context | The agent already has full context cached (prompt cache hit). No extra model call, no input duplication, no risk of losing tool_result semantics. |
 | Overflow mid-loop (`too many input tokens`) | `runAgentTurn` retry catch → `localCompactMessages` → retry | **Local** — `[role]: <first N chars>` concat, no network call | The model just refused this payload; an LLM round-trip now could stall the recovery path. Local is deterministic and instant; the next end-of-turn can re-summarize via self-compact. |
-| User `/compact` (web, WeChat) | `commands/compact.ts` / `SessionManager.compactSession` | **Self-compact**, with **local fallback** on timeout/error | User explicitly requested it; self-compact reuses the cached context so it's fast. Falls back to local if anything goes wrong. |
+| User `/session compact` (web, WeChat) | `commands/compact.ts` / `SessionManager.compactSession` | **Self-compact**, with **local fallback** on timeout/error | User explicitly requested it; self-compact reuses the cached context so it's fast. Falls back to local if anything goes wrong. |
 
 Self-compact injects a summarization instruction into the agent's own stream, captures the response, then rebuilds messages as `[summary + recent]`. This reuses the provider's prompt cache (no separate model needed) and preserves full semantic context including tool results.
 

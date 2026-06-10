@@ -20,7 +20,7 @@ halo acp adapter ────HTTP/SSE──────────────�
 
 Use ACP when:
 - You want to use Claude Code locally as the chat UI but the agent's tools / workspace live on a remote machine
-- You want one halo server to delegate to **another** halo server on a different host (the `create-halo-acp` flow below)
+- You want one halo server to delegate to **another** halo server on a different host (the `/acp add` flow below)
 - You're integrating with any tool that already speaks ACP
 
 If you just want a browser UI, use the [Web](web.md) channel directly — ACP is overkill.
@@ -65,23 +65,32 @@ Claude Code lets you register a custom agent. Use its `claude-code config agent 
 
 After registration, you can launch a session in Claude Code that streams to the remote halo server transparently — Claude Code thinks it's talking to a local agent, halo thinks it's talking to a Web-channel client.
 
-## Step 3 — (Halo-to-halo) bind a remote with the `create-halo-acp` skill
+## Step 3 — (Halo-to-halo) bind a remote with `/acp add`
 
-The most common use of this adapter isn't a third-party ACP client — it's **another halo agent** delegating out to a remote halo workspace. Halo ships a meta-skill for this. Just ask the agent in chat (e.g. "add an ACP binding to my other halo") — it activates `create-halo-acp` itself; there's no slash command to type.
+The most common use of this adapter isn't a third-party ACP client — it's **another halo agent** delegating out to a remote halo workspace. Halo ships a builtin `acp` skill for this (slash command `/acp`, full access). Type `/acp add` — or just ask in chat (e.g. "add an ACP binding to my other halo").
 
 It walks you through `(label, host, port, workspace, token)` and **stamps out a new skill** named `ask-<label>` containing:
 
 - `SKILL.md` — slash command `/ask-<label>`, instructions tailored to this remote
 - `config.yaml` — declares the binding's params so admin Settings shows a form
-- `ask.py` — bundled JSON-RPC ↔ stdio helper (one copy per binding, intentional — keeps share-workspace bundles self-contained)
+- `ask.py` — bundled JSON-RPC ↔ stdio helper (one copy per binding, intentional — keeps `/ws share` bundles self-contained)
 
 It also writes the connection values into `settings.yaml` (workspace or global, you pick).
 
-After install, the local agent can do `shell_exec: python3 .../ask-<label>/ask.py "<question>"` and halo's runtime substitutes the configured values. **Multiple bindings coexist** — each gets its own slash command, settings namespace, and Admin Settings page.
+After install, the local agent can do `shell_exec: python3 .../ask-<label>/ask.py "<question>"` and halo's runtime substitutes the configured values. **Multiple bindings coexist** — each gets its own slash command, settings namespace, and Admin Settings page. `/acp list` shows the bindings you've generated.
 
-To remove a binding: delete the skill directory and the matching `ask-<label>:` block from `settings.yaml`.
+To remove a binding: `/acp remove` (deletes the skill directory and points out the leftover `ask-<label>:` block in `settings.yaml`).
 
-This is the **only** supported way to set up a halo-to-halo binding — there's no longer a generic single-target `ask-acp-agent` skill, because per-binding namespaces (one token-host-workspace triple per skill id) are required for multi-remote use.
+This is the **only** supported way to set up a halo-to-halo binding — there's no generic single-target `ask-acp-agent` skill, because per-binding namespaces (one token-host-workspace triple per skill id) are required for multi-remote use.
+
+### Direct asks — `/acp kiro` / `/acp claude`
+
+Bindings are for **remote halo servers**. For agents on the **same machine** no binding is needed — the `acp` skill talks to them directly, zero config:
+
+- `/acp claude <question>` — local Claude Code (via npm `@agentclientprotocol/claude-agent-acp`)
+- `/acp kiro <question>` — local Kiro (via `kiro-cli acp`)
+
+The question is passed verbatim — including the other agent's own slash commands (e.g. `/acp kiro /model <full-model-id>` switches Kiro's model). Both coexist with `/ask-<label>` bindings.
 
 ## ACP method coverage
 
@@ -111,7 +120,7 @@ A Web-channel token in halo is bound to one workspace at the database level. The
 - The server gates the `workspace` override on `accessLevel === 'full'` — readonly / workspace tokens cannot escape their bound workspace
 - The adapter sends both fields on every request, so concurrent adapters on the same token but different `--workspace` flags don't step on each other
 
-**Caveat:** sending `/ws <path>` from inside an ACP session still mutates the bound workspace at the **db level** (changing the account's default for everybody using that token). Avoid `/ws` from an adapter — use `--workspace` at adapter launch instead.
+**Caveat:** sending `/ws switch <path>` from inside an ACP session still mutates the bound workspace at the **db level** (changing the account's default for everybody using that token). Avoid `/ws switch` from an adapter — use `--workspace` at adapter launch instead.
 
 ## Reverse fs (parked)
 
@@ -131,7 +140,7 @@ For now: if you want the agent to see a Mac-side file, paste it into the prompt.
 | `403` when launching with `--workspace /some/other/path` | Token is `readonly` / `workspace` access — use a `full` token or omit `--workspace` |
 | Tool calls don't appear in Claude Code | Expected — halo doesn't translate every event back as ACP `tool_call`. See [docs/dev/acp-adapter.md](../../dev/acp-adapter.md) for the full mapping |
 | Two `session/prompt` calls on the same id, second hangs | Halo queues messages when a session is busy; ACP adapter ends the response with `[queued]`. Wait for the first to finish |
-| `/ws <path>` worked but other tokens broke | You changed the db-level default. Switch back with another `/ws`, or stop using slash commands from the adapter |
+| `/ws switch <path>` worked but other tokens broke | You changed the db-level default. Switch back with another `/ws switch`, or stop using slash commands from the adapter |
 
 ## Reference
 

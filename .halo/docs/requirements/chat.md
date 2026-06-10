@@ -8,7 +8,7 @@ The primary surface for talking to an agent.
 - Bottom-left dropdown in the chat panel selects which agent to use
 - Lists every available agent (from `GET /api/agent-configs`; overridden and disabled agents are hidden)
 - Default agent has a "default" badge
-- **Locked during an active session** — the agent is bound to the session; to change, start a new session (/new)
+- **Locked during an active session** — the agent is bound to the session; to change, start a new session (/session new)
 - The Agents panel's "Test" button can also preselect an agent
 
 ### Message rendering
@@ -21,11 +21,11 @@ The primary surface for talking to an agent.
 
 | Command | Type | Purpose |
 |---|---|---|
-| `/new` | client | Start a new session |
-| `/clear` | client | Alias for `/new` |
-| `/context` | client | Show context window usage, agent info |
+| `/session new` | client | Start a new session |
+| `/clear` | client | Alias for `/session new` |
+| `/session context` | client | Show context window usage, agent info |
 | `/help` | client | List available commands |
-| `/compact` | server | LLM-summary compact of the conversation |
+| `/session compact` | server | LLM-summary compact of the conversation |
 | `/model <id>` | server | Switch the current session's model |
 | `/retry` | client | Resend the last user message |
 
@@ -68,7 +68,7 @@ Constraints:
 A second channel beyond text: a visual space the agent drives in real time to express itself. Works everywhere (pure HTML/canvas, no Electron dependency) — desktop **and** plain browser.
 
 - **What it is.** A self-contained animated particle canvas at `<workspace>/.halo/canvas/self.html` — a breathing core that reacts to the cursor (knows when it's watched), can form words/CJK/ASCII-from-emoji, play choreographed sequences, and gesture (pulse/flash/shake). Zero external references (no CDN/remote fonts) — ships and runs offline.
-- **Seeding.** Force-copied from `packages/server/templates/canvas/self.html` into every workspace on open (platform-owned, like built-in skills). The `express-self` built-in skill (wired into the default agent) teaches the agent it has this face and how to drive it.
+- **Seeding.** Force-copied from `packages/server/templates/canvas/self.html` into every workspace on open (platform-owned, like built-in skills). The `self` built-in skill (wired into the default agent) teaches the agent it has this face and how to drive it.
 - **Opening it.** The ✨ button in the chat-input toolbar opens the face in the editor preview (switches to Explorer, render-mode on → lands on the live face) and posts `self.intro()` once it has mounted, so there's always a greeting when a human turns to look. The greeting is driven solely by this open action — the page does **not** self-fire it on load — so it plays exactly once, on both first and subsequent opens. The user can also just open the file directly (no auto-greeting in that path).
 - **Driving it.** The agent emits `<<<SHOW: …js… >>>` markers in a reply; Halo forwards the payload **verbatim** (it never parses it) to the open preview iframe via `postMessage`, where it's `eval`'d against the face's `self` API (`say`/`play`/`react`/`pulse`/`flash`/`shake`/`intro`) inside the sandboxed iframe. Markers are stripped from the rendered chat (like `<<<CAPTURE>>>`) — the user sees the face move, not the code. Multiple markers in one reply **queue and play in order**.
 - **Engine vs. expression.** `self.html` is a stable *engine* (defines how the face can move); the agent expresses itself by sending runtime JS, **never** by editing the file — so the force-copy-on-open never clobbers anything meaningful. The engine only changes when the platform adds a new capability (template edit + `TEMPLATE_VERSION` bump).

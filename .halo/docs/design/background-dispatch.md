@@ -1,10 +1,10 @@
 # Background Session Event Dispatch
 
-When the user hits `/new` while a sub-agent is still running — the old session's agent has to stay alive, its events have to be routed to the right session file, and the user has to see everything seamlessly when they switch back.
+When the user hits `/session new` while a sub-agent is still running — the old session's agent has to stay alive, its events have to be routed to the right session file, and the user has to see everything seamlessly when they switch back.
 
 ## Problem
 
-SessionManager emits events through a per-tree event listener system (`eventListeners: Map<rootId, Set<handler>>`). The WS handler converts events into WS messages for the frontend. When the user hits `/new`:
+SessionManager emits events through a per-tree event listener system (`eventListeners: Map<rootId, Set<handler>>`). The WS handler converts events into WS messages for the frontend. When the user hits `/session new`:
 - A new session starts (fresh conversation)
 - The old session's agent may still be running
 - Old-session events **must not** leak into the new session
@@ -29,17 +29,17 @@ SessionManager.emitEvent(sessionId, event)
 | State | Listener | Events go to |
 |---|---|---|
 | **Connected** | `registerEventListener(rootId, handler)` | `sendWsNotification(event, state, turnId, ctx)` → WS JSON |
-| **Background** (after `/new`) | Inline `bufferDetachedNotification` closure | `pendingEvents[]` (structural events only for later replay) |
+| **Background** (after `/session new`) | Inline `bufferDetachedNotification` closure | `pendingEvents[]` (structural events only for later replay) |
 | **Detached** (WS disconnect) | Same `bufferDetachedNotification` pattern | `pendingEvents[]` on `DetachedSession` |
 
 State is NOT duplicated — all handlers read from `SessionManager.getUIState(rootId)`.
 
-## `/new` (session:clear) flow
+## `/session new` (session:clear) flow
 
 Source: `packages/server/src/commands/session-clear.ts`
 
 ```
-User clicks /new
+User clicks /session new
     │
     ▼
 session:clear handler
@@ -134,7 +134,7 @@ disconnect handler
 
 ## Historical bug fixes (2026-04-20/21)
 
-### 1. After `/new`, sub-agent events routed to the wrong handler
+### 1. After `/session new`, sub-agent events routed to the wrong handler
 **Root cause**: old code captured `const onEvent = this.eventHandler` at session start. When the handler was replaced, already-running sub-agents still used the old reference.
 **Fix**: switched to `emitEvent()` which does a live lookup on `eventListeners.get(rootId)`. New listeners immediately receive events from running sub-agents.
 

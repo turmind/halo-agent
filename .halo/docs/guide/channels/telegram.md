@@ -74,13 +74,11 @@ If nothing happens, check halo server logs for `[telegram]` lines.
 | Command | Effect |
 |---|---|
 | `/start` | Welcome message |
-| `/new` | New session |
-| `/list` | Recent sessions |
-| `/switch <n>` | Switch active session |
-| `/stop` | Cancel the running task |
-| `/compact` | Compress context |
-| `/ws` | Show / change workspace (full access only) |
-| `/help` | List commands |
+| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` |
+| `/agent <verb>` | Manage agents (`list` / `switch` / `desc` open to all; `delete` full; `create` / `update` via skill, full) |
+| `/skill <verb>` | Manage skills (`list` / `desc` open; `disable` / `enable` workspace; `delete` full; `create` / `update` via skill, full) |
+| `/ws <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
+| `/help` | List commands — object commands show only the verbs you can run |
 
 ## Cron jobs targeting Telegram
 

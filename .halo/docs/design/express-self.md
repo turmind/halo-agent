@@ -82,12 +82,12 @@ Provided by `self.html` line 288 onwards. All expression methods are sandboxed t
 ## Key files
 
 - **Engine template:** `packages/server/templates/canvas/self.html` — particle field, mode switching, API surface. ~480 lines. Canonical source; force-copied to every workspace on open.
-- **Skill instruction:** `packages/server/templates/skills/express-self/SKILL.md` — teaches the agent when/how to use the face.
+- **Skill instruction:** `packages/server/templates/skills/self/SKILL.md` — teaches the agent when/how to use the face.
 - **Marker detection:** `packages/admin/src/shared/ws-handlers/chat-handlers.ts:maybeHandleShow()` (lines 38–50) — regex match `<<<SHOW:([\s\S]*?)>>>` on turn completion, deduplicate by message ID + occurrence index.
 - **Iframe registration:** `packages/admin/src/features/editor/face-bridge.ts` — module-level registry of mounted previews; `postToFace()` forwards payloads via `postMessage`.
 - **Preview component:** `packages/admin/src/features/editor/html-preview.tsx` — sandboxed iframe with `allow-scripts` + `allow-same-origin`, calls `registerFaceIframe()` on mount.
 - **Marker stripping:** `packages/admin/src/shared/components/message-list.tsx:TextBlock()` (line 430) — strips both `<<<CAPTURE>>>` and `<<<SHOW:...>>>` before rendering.
-- **Workspace init:** `packages/server/src/init.ts:ensureWorkspaceHalo()` (lines 487–518) — force-copies engine on workspace open. `express-self` is in `BUILTIN_SKILL_IDS` (line 96) so the skill is always available.
+- **Workspace init:** `packages/server/src/init.ts:ensureWorkspaceHalo()` (lines 487–518) — force-copies engine on workspace open. `self` is in `BUILTIN_SKILL_IDS` so the skill is always available.
 
 ## Engine architecture
 
@@ -125,7 +125,7 @@ This separation ensures:
 
 ## Constraints
 
-From `express-self/SKILL.md`:
+From `self/SKILL.md`:
 
 1. **Measure, don't emote** — the face reflects real state, not performance
 2. **Restraint gives weight** — a gesture every message is noise; most replies need nothing

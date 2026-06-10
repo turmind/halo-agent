@@ -57,7 +57,7 @@ Every channel, on every inbound message, runs this sequence:
 2. **Extract.** Pull user ID, workspace binding, text, media. Platform-specific — this is why each channel has its own `types.ts`.
 3. **Resolve workspace.** Look up the bound workspace for this account / user. For Weixin this is a DB column; for Slack you'd use team → workspace mapping.
 4. **Get a SessionManager.** `registry.getOrCreate(workspacePath)` — cheap, memoized per workspace.
-5. **Resolve or create a session.** One user often has multiple sessions over time; keep a "currently active" override per user (Weixin uses an in-memory `activeOverrides` map updated by `/new` / `/switch`).
+5. **Resolve or create a session.** One user often has multiple sessions over time; keep a "currently active" override per user (Weixin uses an in-memory `activeOverrides` map updated by `/session new` / `/session switch`).
 6. **Register an event listener once per session.** `sm.registerEventListener(sessionId, handler)` — handler receives every agent event. Coalesce streamed text into whole outbound messages (platforms hate per-token streams).
 7. **Send the user message.** `sm.sendUserMessage(sessionId, text, images?)`. This returns immediately; the agent runs async and emits events to your listener.
 
@@ -141,7 +141,7 @@ async function handleInbound({ registry, db, account, event, listeners }) {
 
 ### 6. Surface channel context to skills
 
-Inside `handler.ts`, when you build a `CommandContext` for `dispatchCommand`, fill in the structured `channel` field. This is what lets skills like `manage-cron-jobs` default their behaviour to the originating chat (e.g. "remind me at 3pm" creates a cron whose target is *this* slack DM, not a fan-out to every workspace member):
+Inside `handler.ts`, when you build a `CommandContext` for `dispatchCommand`, fill in the structured `channel` field. This is what lets skills like `cron` default their behaviour to the originating chat (e.g. "remind me at 3pm" creates a cron whose target is *this* slack DM, not a fan-out to every workspace member):
 
 ```ts
 const ctx: CommandContext = {
@@ -313,18 +313,18 @@ SessionManager enforces the rest: readonly sessions drop `file_write` / `file_ed
 ### Slash commands
 
 You almost always want:
-- `/new` — start a fresh session, old sessions remain reachable
-- `/list` / `/switch <n>` — session history, switch active
-- `/ws` — show/switch workspace
+- `/session new` — start a fresh session, old sessions remain reachable
+- `/session list` / `/session switch <n>` — session history, switch active
+- `/ws info` / `/ws switch <path>` — show / switch workspace
 - `/help`
 
-Common commands (`/new`, `/list`, `/switch`, `/stop`, `/compact`, `/ws`, `/help`) are handled by `dispatchCommand()` in [channels/shared/commands.ts](../../../packages/server/src/channels/shared/commands.ts). Your channel handler only needs to:
+Common commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/ws` with their builtin verbs — plus fall-through to same-named skills for skill verbs like `/cron …`) are handled by `dispatchCommand()` in [channels/shared/commands.ts](../../../packages/server/src/channels/shared/commands.ts). Your channel handler only needs to:
 
 1. Build a `CommandContext` (including `lang` from the account's `language` field)
 2. Call `dispatchCommand(ctx, command, arg, { channelName: 'slack' })`
-3. Handle the result: check `result.workspace` for `/ws` side-effects (update account + restart), check `result.switchTo` for session switches, then send `result.text` back to the user
+3. Handle the result: check `result.workspace` for `/ws switch` side-effects (update account + restart), check `result.switchTo` for session switches, check `result.startedTurn` (a skill verb kicked the agent — keep the event stream open), then send `result.text` back to the user
 
-Channel-specific commands (e.g. WeChat's `/send`, `/name`) go in a fallback switch after `dispatchCommand` returns `null`. All system messages are i18n'd via `channels/shared/i18n.ts`. Reference: [channels/telegram/handler.ts](../../../packages/server/src/channels/telegram/handler.ts) (cleanest example — uses a loop over command names).
+Channel-specific commands (e.g. WeChat's `/qr`) go in a fallback switch after `dispatchCommand` returns `null`. All system messages are i18n'd via `channels/shared/i18n.ts`. Reference: [channels/telegram/handler.ts](../../../packages/server/src/channels/telegram/handler.ts) (cleanest example — uses a loop over command names).
 
 ### Compact / busy states
 
@@ -338,13 +338,13 @@ sm.sendUserMessage(sid, text, images)
 
 ### Single-instance lock
 
-If your channel uses a polling or socket-mode loop, **respect the server's single-instance lock** (`~/.halo/global/server.pid`). Orphan processes each run an independent loop and fan out duplicate messages to their own session copies. See [design/wechat.md#singleton-note](../design/wechat.md) and [dev/deploy.md](deploy.md).
+If your channel uses a polling or socket-mode loop, **respect the server's single-instance lock** (`~/.halo/global/server.lock`). Orphan processes each run an independent loop and fan out duplicate messages to their own session copies. See [design/wechat.md#singleton-note](../design/wechat.md) and [dev/deploy.md](deploy.md).
 
 ### Workspace resolution
 
 Each channel account has a `workspace_path` column in the unified `channel_accounts` table. If your channel binds user-to-workspace instead of bot-to-workspace, do the lookup at inbound time.
 
-At handler startup, `resolveAccountWorkspace(account)` checks the path exists on disk and calls `ensureWorkspaceHalo()`. If the workspace is missing, the handler skips the account. Users can re-bind via the admin panel or `/ws` command (full access only).
+At handler startup, `resolveAccountWorkspace(account)` checks the path exists on disk and calls `ensureWorkspaceHalo()`. If the workspace is missing, the handler skips the account. Users can re-bind via the admin panel or `/ws switch` command (full access only).
 
 ### Media
 
@@ -363,7 +363,7 @@ No automated test framework for channels — manual for now:
 3. Send a message → verify it lands in `<ws>/.halo/sessions/default/`
 4. Verify agent reply comes back as one or more outbound messages
 5. Test access level: set the account to `readonly`, send "delete all files in /tmp" → should be refused by the tool guard
-6. Test `/new`, `/switch`, busy/compact states, large responses (>3500 chars)
+6. Test `/session new`, `/session switch`, busy/compact states, large responses (>3500 chars)
 
 ---
 

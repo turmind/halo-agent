@@ -31,7 +31,7 @@ Schedules are **durable** — the source of truth is the `cron_jobs` table; in-m
 
 ### Hot-reload + out-of-band edits
 
-REST route mutations call `scheduleJob` / `unscheduleJob` directly. But the `manage-cron-jobs` skill (and manual ops) edit `cron.db` over a *different* sqlite connection. `reconcileFromDb` (10s timer) catches those:
+REST route mutations call `scheduleJob` / `unscheduleJob` directly. But the `cron` skill (and manual ops) edit `cron.db` over a *different* sqlite connection. `reconcileFromDb` (10s timer) catches those:
 
 - Fast path: `PRAGMA data_version` flips only when *another* connection commits. If unchanged since last pass, skip the full select entirely — one pragma read (~µs) vs. a select-all + per-row fingerprint compare.
 - On change: diff db rows against the in-memory `_fingerprint` map (`enabled|schedule|runAt|timezone`); schedule new rows, unschedule deleted ones, re-instantiate croner only for rows whose fingerprint changed. Broadcasts a coalesced `cron:job_changed` per affected job.
@@ -78,7 +78,7 @@ interface CronChannelDispatcher {
 - `packages/server/src/cron/dispatcher.ts` — channel-agnostic dispatch registry (`registerCronDispatcher`, `dispatchToTargets`, `listAllCronTargets`).
 - `packages/server/src/db/cron-db.ts` — `cron_jobs` + `cron_runs` schema, `getCronDb`.
 - `packages/server/src/channels/<ch>/cron-dispatcher.ts` — per-channel `dispatch` + `listTargets`.
-- `packages/server/templates/skills/manage-cron-jobs/SKILL.md` — the agent-facing skill that CRUDs `cron_jobs` (edits the db directly; `reconcileFromDb` picks it up).
+- `packages/server/templates/skills/cron/SKILL.md` — the agent-facing skill that CRUDs `cron_jobs` (edits the db directly; `reconcileFromDb` picks it up).
 
 ## Scope
 

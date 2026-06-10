@@ -433,7 +433,7 @@ async function handleInbound(args: {
   const userText = text || (images.length > 0 ? '[图片]' : '')
   // UI log keeps the clean text. The message actually sent to the agent has
   // a short channel hint prepended so it knows replies are going to WeChat
-  // (and can use the wechat-send skill's MEDIA: marker).
+  // (and can use the send-file skill's MEDIA: marker).
   const agentInput = `[channel: wechat | user: ${fromUserId}]\n${userText}`
   sm.appendUserMessage(sessionId, userText || '[仅图片]')
   sm.sendUserMessage(sessionId, agentInput, images.length > 0 ? images : undefined, sessionAccessLevel).catch((err) => {

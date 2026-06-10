@@ -74,9 +74,9 @@ Three config file types, precedence **env vars > config.yaml / settings.yaml > c
 
 `init.ts` seeds these on first run with a per-category policy:
 
-- **Always overwritten** (platform-owned, refreshed on every server start): `~/.halo/global/{builtin,prompts,models,docs}/`, `INSTRUCTIONS.md`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), required skill ids (`create-agent`, `create-skill`, `organize-workspace`, `share-workspace`, `send-file`).
+- **Always overwritten** (platform-owned, refreshed on every server start): `~/.halo/global/{builtin,prompts,models,docs}/`, `INSTRUCTIONS.md`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), built-in skill ids (`agent`, `skill`, `ws`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`).
 - **Built-in agents** keep the user's `model:` block on overwrite — the admin UI lets users change which model an agent uses, and that choice survives upgrades.
-- **Optional skills** (`tavily-web-search`, `nova-web-search`, `aws-knowledge`) install only when picked via `halo setup`; the opt-in list is `~/.halo/global/.installed-optional-skills`. Picked skills are force-overwritten on every startup so updates propagate.
+- **Optional skills** (`tavily-web-search`) install only when picked via `halo setup`; the opt-in list is `~/.halo/global/.installed-optional-skills`. Picked skills are force-overwritten on every startup so updates propagate.
 - **`secrets/config.yaml`** is leaf-merged: existing leaf `value`s preserved, new leaves added when a server upgrade introduces them.
 - **`secrets/settings.yaml`** is created empty if missing and never touched again. Defaults live in `settings-schema.ts`.
 

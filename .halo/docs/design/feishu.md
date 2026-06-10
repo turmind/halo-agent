@@ -113,7 +113,7 @@ The SDK wraps protobuf marshalling; we just register an `EventDispatcher` callba
 5. Parse content (text / image / file / post) — images extracted as base64 for vision, files noted as `[文件: name]` markers
 6. Download inbound images, save to workspace, generate base64 payloads
 7. Strip mention markup from text (Feishu inserts `<at user_id="ou_xxx">@bot</at>` or `@_user_123` tokens)
-8. Slash command dispatch (p2p only — group threads don't benefit from `/new`, `/list`, etc. since each thread is already its own session)
+8. Slash command dispatch (p2p only — group threads don't benefit from `/session new`, `/session list`, etc. since each thread is already its own session)
 9. Create or retrieve active session for this thread (with inherited access level)
 10. If session is compacting → reply "⏳ 正在整理上下文，请稍后再发消息（通常 30 秒内完成）" and skip queueing
 11. If session is busy → reply "已收到，会在当前轮结束后处理。" and enqueue
@@ -127,12 +127,12 @@ Implemented via `channels/shared/commands.ts` (shared across Telegram, WeChat, S
 | Command | Purpose |
 |---|---|
 | `/start` | Welcome message (p2p only) |
-| `/new` | Create a new session (p2p only) |
-| `/list` | List recent sessions (p2p only) |
-| `/switch <index>` | Switch active session (p2p only) |
-| `/stop` | Abort running task |
-| `/compact` | Compress context |
-| `/ws` | Show or change workspace (full access only) |
+| `/session new` | Create a new session (p2p only) |
+| `/session list` | List recent sessions (p2p only) |
+| `/session switch <index>` | Switch active session (p2p only) |
+| `/session stop` | Abort running task |
+| `/session compact` | Compress context |
+| `/ws info` | Show workspace; `/ws switch <path>` changes it (full access only) |
 | `/help` | List commands |
 
 ## Event coalescing (FeishuResponder)

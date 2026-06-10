@@ -119,7 +119,7 @@ find /path/to/test-workspace/.halo/sessions -name '<deleted-id>*'
 
 | # | Coverage | Scenario | Input | Expected |
 |---|---|---|---|---|
-| F1 | ⬜ | Detached run | Start sub-agent → `/new` → switch back later | Sub-agent finishes in background; result visible |
+| F1 | ⬜ | Detached run | Start sub-agent → `/session new` → switch back later | Sub-agent finishes in background; result visible |
 | F2 | ⬜ | WS disconnect/reconnect | Start sub-agent → close tab → reopen | Sub-agent finishes; reconnect shows report |
 | F3 | ⬜ | Server restart restore | Active session → restart server → reconnect | UIState restored from disk; conversation visible |
 | F4 | ⬜ | UIState flush on release | Start agent, immediately interrupt mid-stream | Disk file `.json` `messages` stays in sync with `rawMessages` (regression for releaseSession flushPersist) |
@@ -139,7 +139,7 @@ find /path/to/test-workspace/.halo/sessions -name '<deleted-id>*'
 |---|---|---|---|---|
 | H1 | ⬜ | Auto-compact at threshold | Read large files until 80% (default `compress_at: 0.8`) | Auto-compact fires; tokens drop |
 | H2 | ⬜ | `general.compact.compress_at` honored | Settings → set 0.5 → start session, fill | Compact fires earlier (50% instead of 80%) |
-| H3 | 🟢 | Manual `/compact` | Type `/compact` or click TokenRing | `compact:progress` → `session:compacted` → `compact:done` |
+| H3 | 🟢 | Manual `/session compact` | Type `/session compact` or click TokenRing | `compact:progress` → `session:compacted` → `compact:done` |
 | H4 | ⬜ | Compact disabled while streaming | Click TokenRing while agent runs | Button disabled (isStreaming guard) |
 | H5 | ⬜ | Stop during compact | Click Stop during compact | Compact cancelled; messageLog unchanged |
 | H6 | ⬜ | **Message during compact drains after** | Send msg during compact | "Queued" notification → after compact ends, message **immediately runs** (regression for `endCompact` drain fix) |
@@ -151,15 +151,15 @@ find /path/to/test-workspace/.halo/sessions -name '<deleted-id>*'
 
 | # | Coverage | Scenario | Method | Expected |
 |---|---|---|---|---|
-| I1 | 🟢 | `/new` | WS `session:clear` | Old session saved; new conversation empty; old in sidebar |
-| I2 | ⬜ | `/new` during sub-agent | `/new` while child running | Sub-agent continues background; new conversation independent |
-| I3 | 🟢 | `/compact` | WS `command:compact` | Summary generated; older messages compressed |
-| I4 | ⬜ | `/context` | UI command | Shows tokens, model, agent's available tools, system prompt |
-| I5 | ⬜ | `/list` (full access) | UI command on web channel (admin-equivalent) | All workspace sessions visible with tags |
-| I6 | ⬜ | `/list` (readonly/workspace user) | wechat/tg readonly user `/list` | **Only own-prefix sessions** (regression for cross-user privacy) |
-| I7 | ⬜ | `/switch` matches `/list` indices | After I6, `/switch 1` for readonly user | Switches to user's first own session |
-| I8 | ⬜ | `/switch` to non-own blocked | readonly tries `/switch` to a global admin session via crafted index | Returns `switch.readonly` rejection (defense-in-depth even though list filtered) |
-| I9 | ⬜ | All builtin `/help`/`/ws`/`/stop` reachable from each channel | Run each through web/tg/wx | Same response shape |
+| I1 | 🟢 | `/session new` | WS `session:clear` | Old session saved; new conversation empty; old in sidebar |
+| I2 | ⬜ | `/session new` during sub-agent | `/session new` while child running | Sub-agent continues background; new conversation independent |
+| I3 | 🟢 | `/session compact` | WS `command:compact` | Summary generated; older messages compressed |
+| I4 | ⬜ | `/session context` | UI command | Shows tokens, model, agent's available tools, system prompt |
+| I5 | ⬜ | `/session list` (full access) | UI command on web channel (admin-equivalent) | All workspace sessions visible with tags |
+| I6 | ⬜ | `/session list` (readonly/workspace user) | wechat/tg readonly user `/session list` | **Only own-prefix sessions** (regression for cross-user privacy) |
+| I7 | ⬜ | `/session switch` matches `/session list` indices | After I6, `/session switch 1` for readonly user | Switches to user's first own session |
+| I8 | ⬜ | `/session switch` to non-own blocked | readonly tries `/session switch` to a global admin session via crafted index | Returns `switch.readonly` rejection (defense-in-depth even though list filtered) |
+| I9 | ⬜ | All builtin `/help`/`/ws`/`/session stop` reachable from each channel | Run each through web/tg/wx | Same response shape |
 | I10 | ⬜ | Server startup descriptor↔dispatch sanity check | Restart server | Throws if a builtin server descriptor is missing a dispatch case |
 
 ## J. Session viewer & Debug
@@ -211,7 +211,7 @@ find /path/to/test-workspace/.halo/sessions -name '<deleted-id>*'
 | M4 | ⬜ | Inbound voice/audio (web) | Paste audio file | Saved under `assets/web/inbound/`; `[语音已保存]` marker |
 | M5 | ⬜ | `inferImageMime` magic byte detection | Various jpg/png/webp/gif | All correct after the dedupe to shared/media-store |
 | M6 | ⬜ | `resolveAccountWorkspace` after dedupe | Disable a workspace path on disk, send msg | All channels return early, no broken sm calls |
-| M7 | ⬜ | Two wechat users in same workspace, isolation | User A `/list` doesn't show user B's session titles | Confirms post-fix `/list` filtering |
+| M7 | ⬜ | Two wechat users in same workspace, isolation | User A `/session list` doesn't show user B's session titles | Confirms post-fix `/session list` filtering |
 | M8 | ⬜ | Compact-during-tg-message drain | Trigger compact while tg user sends a message | Message processed right after compact ends (regression for endCompact) |
 | M9 | ⬜ | tg compaction status feedback | Send message during compact | "compacting" reply (parity with web/wechat) |
 
@@ -234,9 +234,9 @@ node packages/cli/bin/halo.js --help
 | N2 | ⬜ | TUI launch | `halo tui` | Starts, shows agent picker, accepts input |
 | N3 | ⬜ | TUI single turn | `halo tui` → say "what is 2+2" | Reply rendered with usage badge `think medium` (or model default) |
 | N4 | ⬜ | TUI session id has `cli_` prefix | After N3 | `~/.halo/sessions/default/cli_<...>.json` exists |
-| N7 | ⬜ | TUI `/new` | `/new` | New session, default-scoped |
-| N8 | ⬜ | TUI `/stop` | "sleep 30 then say hi" → Ctrl-C or `/stop` | Clean abort |
-| N9 | ⬜ | TUI `/compact` | Build up 8+ messages → `/compact` | Compact runs; ctx tokens drop in next prompt |
+| N7 | ⬜ | TUI `/session new` | `/session new` | New session, default-scoped |
+| N8 | ⬜ | TUI `/session stop` | "sleep 30 then say hi" → Ctrl-C or `/session stop` | Clean abort |
+| N9 | ⬜ | TUI `/session compact` | Build up 8+ messages → `/session compact` | Compact runs; ctx tokens drop in next prompt |
 | N10 | ⬜ | TUI tool call rendering | Ask file_read | Tool card renders inline in tui |
 | N11 | ⬜ | TUI thinking display (manual mode) | Switch to Haiku 4.5 agent | Usage badge shows `think 8192` (or whatever budget_tokens), not `think medium` |
 | N12 | ⬜ | TUI session resume across restart | N3 then exit + restart `halo tui --resume` (or whatever the resume cmd is) | History visible |
@@ -246,7 +246,7 @@ node packages/cli/bin/halo.js --help
 | N16 | ⬜ | TUI sandbox enforced | `tui --access-level readonly` (if flag exists) → try `file_write` | Tool refused / sandbox blocks |
 | N17 | ⬜ | TUI uses **same** SessionManager.persistSessionFile path | Run a session in TUI, then start the WS server pointing at same workspace | UI shows the TUI session in sidebar (single source of truth) |
 
-> **Note on TUI commands**: I've listed commands by name above (`/new`, `/stop`, `/compact`, etc.). If your TUI uses different keybindings instead, swap the trigger column accordingly — the **expected behavior** is what we're checking.
+> **Note on TUI commands**: I've listed commands by name above (`/session new`, `/session stop`, `/session compact`, etc.). If your TUI uses different keybindings instead, swap the trigger column accordingly — the **expected behavior** is what we're checking.
 
 ---
 
@@ -299,7 +299,7 @@ node packages/cli/bin/halo.js --help
 
 **Steps:**
 1. Build a session with 9+ messages.
-2. Trigger `/compact`.
+2. Trigger `/session compact`.
 3. While `compact:progress` event is in flight, send a new message.
 4. Observe the order of events.
 

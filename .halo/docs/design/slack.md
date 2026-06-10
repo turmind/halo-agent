@@ -133,7 +133,7 @@ A mention on a top-level message starts a thread and creates a session keyed by 
 
 The `getOrCreateSessionForThread()` helper:
 1. Build session prefix: `slack:${channelId}:${rootTs}:`
-2. Check per-user activeOverrides (set by `/switch` command in DMs)
+2. Check per-user activeOverrides (set by `/session switch` command in DMs)
 3. Look for an existing session matching the prefix + userId
 4. If none found, create a new session with ID `${prefix}${Date.now().toString(36)}`
 5. Store in activeOverrides for future messages from this user
@@ -168,12 +168,12 @@ Only available in DMs (to avoid noise in channels where threads are already boun
 
 | Command | Purpose |
 |---|---|
-| `!new` | Create a new session; old ones accessible via `!list` + `!switch` |
-| `!list` | List recent sessions (newest first, up to 20) |
-| `!switch <index>` | Switch active session |
-| `!stop` | Abort running task |
-| `!compact` | Compress context |
-| `!ws` | Show or change workspace (full access only) |
+| `!session new` | Create a new session; old ones accessible via `!session list` + `!session switch` |
+| `!session list` | List recent sessions (newest first, up to 20) |
+| `!session switch <index>` | Switch active session |
+| `!session stop` | Abort running task |
+| `!session compact` | Compress context |
+| `!ws info` | Show workspace; `!ws switch <path>` changes it (full access only) |
 | `!help` | List commands |
 
 Channels/groups have no slash commands — a thread's context is already preserved, so creating a new session per thread is the design.

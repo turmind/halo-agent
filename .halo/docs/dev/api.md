@@ -153,9 +153,9 @@ File: `packages/server/src/routes/commands.ts`
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/commands?projectId=` | List every registered command (built-in + skill; excludes hidden) |
+| GET | `/api/commands?projectId=[&sessionId=][&agentId=]` | List registered commands (built-in + skill; excludes hidden) |
 
-Returns `{ commands: CommandDescriptor[] }`. When `projectId` is provided, workspace skill directories are scanned for skill-as-command entries. See [design/command.md](../design/command.md).
+Returns `{ commands: CommandDescriptor[] }`. Skill commands are only included with session/agent context: `sessionId+projectId` (or pre-session `agentId+projectId`) filters them by the agent's skill whitelist + access level. Without that context the response is **builtins only** — listing skills unfiltered leaked full-access commands into readonly palettes. See [design/command.md](../design/command.md).
 
 ## Settings
 
@@ -534,7 +534,7 @@ Attach this connection to a session's event stream. Sent on initial connect and 
 
 ### `session:clear` (C→S)
 
-Detach from the current session (for `/new`). Server unsubscribes the event listener without deleting the session.
+Detach from the current session (for `/session new`). Server unsubscribes the event listener without deleting the session.
 
 ```json
 { "type": "session:clear", "sessionId": "sid_abc" }

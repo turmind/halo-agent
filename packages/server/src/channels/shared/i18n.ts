@@ -14,8 +14,8 @@ const messages: Record<string, Record<Lang, string>> = {
   // ── /ws builtin verbs ──
   'verb.ws.info':   { zh: '显示当前 workspace', en: 'Show the current workspace' },
   'verb.ws.switch': { zh: '切换 workspace（绝对路径）', en: 'Switch workspace (absolute path)' },
-  'verb.ws.setup':  { zh: '初始化 .halo 知识库（organize-workspace skill）', en: 'Set up the .halo knowledge files (organize-workspace skill)' },
-  'verb.ws.tidy':   { zh: '整理/清理 .halo 知识库（organize-workspace skill）', en: 'Tidy/prune the .halo knowledge files (organize-workspace skill)' },
+  'verb.ws.setup':  { zh: '初始化 .halo 知识库（ws skill）', en: 'Set up the .halo knowledge files (ws skill)' },
+  'verb.ws.tidy':   { zh: '整理/清理 .halo 知识库（ws skill）', en: 'Tidy/prune the .halo knowledge files (ws skill)' },
   'verb.ws.share':  { zh: '打包 workspace 配置为可分享 zip（share-workspace skill）', en: 'Package the workspace config as a shareable zip (share-workspace skill)' },
   'ws.switch_usage': { zh: '用法：/ws switch <绝对路径>', en: 'Usage: /ws switch <absolute path>' },
   'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },

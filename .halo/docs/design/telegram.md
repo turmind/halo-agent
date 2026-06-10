@@ -53,7 +53,7 @@ Halo can send to a Telegram chat without that user having messaged the bot first
 
 The telegram cron-dispatcher (`channels/telegram/cron-dispatcher.ts`) registers itself with `cron/dispatcher.ts`'s registry at boot. On a fire it picks recipients in this order:
 
-1. **Explicit `chatId` on the target** — set when the cron was created from inside a chat (e.g. the `manage-cron-jobs` skill activated from telegram defaults targets to `telegram:<account>:<chatId>`). Sends only to that chat.
+1. **Explicit `chatId` on the target** — set when the cron was created from inside a chat (e.g. the `cron` skill activated from telegram defaults targets to `telegram:<account>:<chatId>`). Sends only to that chat.
 2. **Fan-out to every numeric id in `allowedUsers`** — Telegram's private-chat id == user id, so a whitelisted user is automatically a valid send target. Each recipient yields its own row in `cron_runs.dispatch_results` so the admin UI shows per-recipient ✓/✗ at a glance. `@username` entries are skipped (Bot API only accepts numeric ids).
 3. **`lastActiveChatId` fallback** — used when neither path yields a chat id, e.g. a single-user bot where the whitelist is empty.
 
@@ -100,12 +100,12 @@ Photos / documents trigger the same flow with file metadata in the text.
 | Command | Purpose |
 |---|---|
 | `/start` | Welcome message |
-| `/new` | Create a new session |
-| `/list` | List recent sessions (up to 20) |
-| `/switch <index>` | Switch active session |
-| `/stop` | Abort running task |
-| `/compact` | Compress context |
-| `/ws` | Show or change workspace (full only) |
+| `/session new` | Create a new session |
+| `/session list` | List recent sessions (up to 20) |
+| `/session switch <index>` | Switch active session |
+| `/session stop` | Abort running task |
+| `/session compact` | Compress context |
+| `/ws info` | Show workspace; `/ws switch <path>` changes it (full only) |
 | `/help` | List commands |
 
 ## Event coalescing (TelegramResponder)
@@ -121,7 +121,7 @@ Same strategy as WeChat:
 
 Inbound: text, photos (file URL in text), documents (file URL in text).
 
-Outbound: the `telegram-send` skill produces `MEDIA:<path>` markers. The responder sends files via grammy's `InputFile`:
+Outbound: the `send-file` skill produces `MEDIA:<path>` markers. The responder sends files via grammy's `InputFile`:
 - `.jpg/.png/.gif/.webp/.bmp` → `sendPhoto`
 - `.mp4/.mov/.webm` → `sendVideo`
 - `.ogg/.oga` → `sendVoice`
@@ -135,11 +135,9 @@ Outbound: the `telegram-send` skill produces `MEDIA:<path>` markers. The respond
 2. Optional: `/setcommands` to register the command menu:
    ```
    start - 开始
-   new - 新会话
-   list - 会话列表
-   switch - 切换会话
-   stop - 中断任务
-   compact - 压缩上下文
+   session - 会话管理（new/list/switch/stop/compact…）
+   agent - Agent 管理
+   skill - Skill 管理
    ws - 查看/切换workspace
    help - 帮助
    ```

@@ -13,7 +13,7 @@ Halo server (9527) ──┤── channels/telegram/             ├── Sess
                            ilinkai.weixin.qq.com
 ```
 
-All channels are peers — each one is a subscriber + caller against SessionManager. Common slash commands (`/new`, `/list`, `/switch`, `/stop`, `/compact`, `/ws`, `/help`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter that builds a `CommandContext` and formats the result for its transport.
+All channels are peers — each one is a subscriber + caller against SessionManager. Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/ws`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter that builds a `CommandContext` and formats the result for its transport.
 
 ## Data model
 
@@ -99,7 +99,7 @@ loop {
 2. Process inbound media: images → base64 attached to the agent message; voice / video / files → saved under the workspace with a `[voice saved: ...]` etc. marker appended to the text
 3. If the text begins with `/`, dispatch a slash command (see below) — if it returns `handled`, stop here
 4. sm = `registry.getOrCreate(account.workspacePath)`
-5. Resolve the active session for this user (override from `/new`/`/switch`; otherwise the most recent non-archived session matching the user prefix)
+5. Resolve the active session for this user (override from `/session new`/`/session switch`; otherwise the most recent non-archived session matching the user prefix)
 6. If no active session exists, create one with the inherited access level
 7. If the session is compacting, reply with `⏳ integrating context, try again in ~30s` and skip queueing
 8. If the session is busy, reply with `🔄 still processing last message, queued` and still enqueue
@@ -112,13 +112,11 @@ Implemented in `handler.ts`'s `handleSlashCommand()`:
 
 | Command | Purpose |
 |---|---|
-| `/new` | Create a new session; old sessions remain accessible via `/list` + `/switch` (nothing is archived) |
-| `/list` | List recent sessions (newest first, up to 20); the active one is marked `→` |
-| `/switch <index>` | Switch the active session to the indexed entry from `/list`. Override is in-memory per user per account. Readonly bot 仅能切到自己 prefix 下的 session（跨用户会话拒绝）。 |
-| `/ws` | Show the current workspace. `/ws <path>` 切换（绝对路径），**仅 full 权限 bot 可用**；切换后重启 account loop。readonly 切换等于绕过沙箱，直接拒绝。 |
-| `/name` | Show or change the bot label |
-| `/send <path>` | Send a file (workspace-relative or absolute) as media |
-| `/organize-workspace` | Triggers the `organize-workspace` skill (registered as a skill-command) — init mode for new workspaces (creates INDEX.md / INSTRUCTIONS.md / memory), organize mode for cleanup of existing ones |
+| `/session new` | Create a new session; old sessions remain accessible via `/session list` + `/session switch` (nothing is archived) |
+| `/session list` | List recent sessions (newest first, up to 20); the active one is marked `→` |
+| `/session switch <index>` | Switch the active session to the indexed entry from `/session list`. Override is in-memory per user per account. Readonly bot 仅能切到自己 prefix 下的 session（跨用户会话拒绝）。 |
+| `/ws info` | Show the current workspace. `/ws switch <path>` 切换（绝对路径），**仅 full 权限 bot 可用**；切换后重启 account loop。readonly 切换等于绕过沙箱，直接拒绝。 |
+| `/ws setup` / `/ws tidy` | Triggers the `ws` skill — setup for new workspaces (creates INDEX.md / INSTRUCTIONS.md / memory), tidy for cleanup of existing ones |
 | `/help` | List available commands |
 
 Unknown `/` input falls through to normal message handling.
@@ -130,7 +128,7 @@ WeChat `sendMessage` is block-send, while LLMs stream. Coalesce strategy:
 - 3 s silence → flush
 - `complete` event → flush remainder
 - Tool calls are not forwarded (the user uses web for details); errors are forwarded
-- Media send: the `wechat-send` skill produces `MEDIA: <path>` markers, which the responder turns into actual media uploads
+- Media send: the `send-file` skill produces `MEDIA: <path>` markers, which the responder turns into actual media uploads
 
 ## Supported inbound media
 

@@ -86,21 +86,30 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | Command | Description |
 |---|---|
 | `/help` | Show available commands |
-| `/new` | Start a new session |
-| `/list` | List recent sessions |
-| `/switch <n>` | Switch to session by number |
-| `/stop` | Stop current agent task (ends the turn, no re-run) |
-| `/interrupt` | Interrupt the running turn now (aborts a command mid-run); any messages queued while busy then run as one follow-up turn |
-| `/compact` | Compact session context |
-| `/ws` | Show current workspace |
-| `/ws <path>` | Switch workspace (full access only) |
+| `/session new` | Start a new session |
+| `/session list` | List recent sessions |
+| `/session switch <n>` | Switch to session by number |
+| `/session stop` | Stop current agent task (ends the turn, no re-run) |
+| `/session interrupt` | Interrupt the running turn now (aborts a command mid-run); any messages queued while busy then run as one follow-up turn |
+| `/session compact` | Compact session context |
+| `/session context` | Show context window + agent info |
+| `/agent <verb>` | Manage agents: `list` / `switch <name\|index>` / `desc` / `delete` / `create` / `update` |
+| `/skill <verb>` | Manage skills: `list` / `desc` / `disable` / `enable` / `delete` / `create` / `update` |
+| `/ws info` | Show current workspace |
+| `/ws switch <path>` | Switch workspace (full access only) |
+| `/ws setup` / `/ws tidy` / `/ws share` | Set up / tidy the `.halo/` knowledge files, or export a shareable bundle (ws skill) |
+| `/cron <verb>` | Manage scheduled agent runs: `create` / `list` / `update` / `enable` / `disable` / `delete` |
+| `/acp <verb>` | Ask other agents over ACP (`kiro <q>` / `claude <q>`) and manage `ask-*` bindings (`add` / `list` / `remove`) |
+| `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
 | `/quit` | Exit |
+
+Bare `/<obj>` (or `/<obj> help`) lists the verbs you may run. Verbs gated above your access level are hidden.
 
 ### Keybindings
 
 | Key | Action |
 |---|---|
-| `Esc` (while running) | Interrupt the current turn immediately — aborts a command mid-execution, then any messages typed while it was running are folded into one follow-up turn. Same as `/interrupt`. |
+| `Esc` (while running) | Interrupt the current turn immediately — aborts a command mid-execution, then any messages typed while it was running are folded into one follow-up turn. Same as `/session interrupt`. |
 | `Ctrl+C` | Graceful exit; press twice to force |
 | `Ctrl+O` | Toggle the sub-agent navigator — lists every sub-agent spawned this session, each showing its agent name, task title (same as the session list), and status (`●` running green / `○` idle grey / `✕` stopped red, plus a `▢ archived` marker when the session is archived); `↑↓` to move, `Enter` to view that sub-agent's log, `Esc`/`q` to close. (Was `Shift+Tab`, but Windows terminals consume that as backtab.) The log viewer auto-refreshes while the viewed session is still running (a `● live` hint shows in the header) and follows the bottom as new output lands — unless you've scrolled up to read, in which case it stays put (`G` jumps back to the bottom and resumes following). |
 | `↑` / `↓` | Walk input history (when no popup is open) |

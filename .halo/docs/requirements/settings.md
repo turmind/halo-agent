@@ -17,6 +17,7 @@ general:                                  # built-in declarer (server itself)
   sandbox:
     hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker"
     hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig"
+    writable_dirs: ""                     # e.g. ~/.kiro,~/.local/share/kiro-cli — rw bind-mounts in bwrap; ignored for readonly sessions
   logging:
     level: warn
 

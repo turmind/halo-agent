@@ -32,7 +32,7 @@ Your answers are written to `~/.halo/global/USER.md`; from then on every root ag
 
 ### Workspace onboarding
 
-The global `INSTRUCTIONS.md` template explains Halo's `.halo/` conventions (`INDEX.md`, `INSTRUCTIONS.md`, `memory/`). When the current workspace has no `INDEX.md`, the system prompt also nudges the agent to offer drafting one from the README / package.json. If you want a guided setup — or later want to clean up an existing workspace — type `/organize-workspace`. The `organize-workspace` skill runs in **init mode** when there's no INDEX.md (interview + draft) or **organize mode** when one exists (review + prune + reshape).
+The global `INSTRUCTIONS.md` template explains Halo's `.halo/` conventions (`INDEX.md`, `INSTRUCTIONS.md`, `memory/`). When the current workspace has no `INDEX.md`, the system prompt also nudges the agent to offer drafting one from the README / package.json. If you want a guided setup, type `/ws setup`; to clean up an existing workspace later, type `/ws tidy` — both backed by the `ws` skill (setup: interview + draft; tidy: review + prune + reshape).
 
 ## Send a message
 
@@ -50,12 +50,12 @@ You can keep typing while it replies — messages queue and run at the next safe
 | Action | Shortcut / Method |
 |---|---|
 | File mention | Type `@` in the input, pick a file |
-| Slash command | Type `/`, auto-complete pops up (`/new`, `/compact`, …) |
+| Slash command | Type `/`, auto-complete pops up (`/session`, `/agent`, …) |
 | Quick find file | `Cmd/Ctrl+P` |
 | Save file | `Cmd/Ctrl+S` |
-| New conversation | `/new` |
-| Compact context | `/compact` |
-| Set up / reorganize workspace | `/organize-workspace` |
+| New conversation | `/session new` |
+| Compact context | `/session compact` |
+| Set up / reorganize workspace | `/ws setup` / `/ws tidy` |
 
 ## What `~/.halo/` looks like
 
@@ -77,7 +77,7 @@ After `halo setup`:
     └── channels/channels.db  ← per-channel account state
 ```
 
-**Server-overwritten on every startup**: `builtin/`, `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`create-agent`, `create-skill`, `organize-workspace`, `share-workspace`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
+**Server-overwritten on every startup**: `builtin/`, `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`agent`, `skill`, `ws`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
 
 **Never overwritten**: anything else under `agents/` or `skills/` (your own creations), and everything under `secrets/`.
 

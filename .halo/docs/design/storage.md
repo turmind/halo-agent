@@ -460,9 +460,9 @@ Path: `.halo/skills/{skill-id}/SKILL.md`
 
 ```markdown
 ---
-name: Skill Display Name
+name: skill-id        # kebab-case, = directory name
 description: One-line description for agent discovery
-command: /review      # optional, auto-registers a slash command
+command: /review      # optional, explicit opt-in registers a slash command
 ---
 
 # Skill Title
