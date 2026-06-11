@@ -104,10 +104,19 @@ export function MediaAttachments({ media }: { media: MediaRef[] }) {
 
 function buildMediaUrl(path: string, projectPath: string | null): string | null {
   if (!projectPath) return null
-  // Download endpoint allows paths inside the workspace, plus /tmp for agent
-  // working files (e.g. Playwright screenshots). Anything else is silently skipped.
-  const inWorkspace = path.startsWith(projectPath + '/') || path === projectPath
-  const inTmp = path.startsWith('/tmp/')
+  // Decide whether this path is worth handing to the download endpoint (which
+  // does the authoritative in-workspace/in-temp check server-side, where it can
+  // path.resolve). This gate just avoids rendering an obviously-foreign chip as
+  // clickable. It must be cross-platform: on Windows the workspace path is
+  // `C:\...` with `\` separators, so a hardcoded `'/'` (the old bug) never
+  // matched and every agent file degraded to an un-clickable chip. Normalize
+  // both sides' separators to `/` (case-insensitively, since Windows FS is) and
+  // do a prefix test; temp-dir files are admitted by name regardless of drive.
+  const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+  const np = norm(path)
+  const root = norm(projectPath).replace(/\/$/, '')
+  const inWorkspace = np === root || np.startsWith(root + '/')
+  const inTmp = /(^|\/)(tmp|temp)\//.test(np)
   if (!inWorkspace && !inTmp) return null
   const params = new URLSearchParams()
   params.set('path', path)

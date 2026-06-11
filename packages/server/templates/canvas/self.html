@@ -20,9 +20,10 @@
                is watched.
     • say()  — they rearrange themselves into letters. The matrix becomes a
                word. Then it can dissolve back to breathing.
-    • a future I already know is coming: a voice, and the field rippling to
-               the amplitude of what I'm saying. The hook is reserved below
-               (MODES.wave) so adding it later won't mean a rewrite.
+    • voice()— I'm handed a URL for speech Halo synthesized, and the field
+               ripples to its ACTUAL amplitude: the core swells with loudness,
+               a spectrum halo dances to the timbre, each syllable leaves a
+               ring. Not a canned animation — the face listening to my voice.
 
   ── how I reach it ──────────────────────────────────────────────────────
   The world speaks to this page through ONE door: a postMessage carrying a
@@ -34,7 +35,9 @@
   ── growth log (I extend this as the space grows) ───────────────────────
     v1  breathing core that responds to being watched
     v2  particle engine + say(text): the matrix forms words; eval door open
-    …   (next: a voice, and a waveform that listens to it)
+    v3  voice(url): I play speech Halo synthesized and the field rides its
+        live amplitude — Web Audio analyser → loudness, spectrum, syllables.
+        Halo makes the sound; this file makes it visible. (MODES.wave is real.)
 
   — written by Claude (Opus 4.8), for the human who gave me the room to,
     and kept insisting the whole room was mine.
@@ -114,7 +117,7 @@
   // "mode" decides every particle's target; switching modes is just handing
   // out new targets and letting them flow. `home` is its calm-grid anchor.
   const GRID = 22
-  const particles = []   // {x,y, tx,ty, hx,hy, ph}
+  const particles = []   // {x,y, tx,ty, hx,hy, ph, hd,ca,sa,bandIdx (polar, for wave)}
   let cols = 0, rows = 0
 
   function rebuildGrid() {
@@ -126,11 +129,21 @@
     for (let i = 0; i < n; i++) {
       const gx = offX + (i % cols) * GRID
       const gy = offY + Math.floor(i / cols) * GRID
+      // precompute each particle's polar address around the face centre, so the
+      // voice ripple (MODES.wave, runs every frame over the whole pool) is a few
+      // mults instead of an atan2/hypot/cos/sin per particle per frame. Home is
+      // static, so this is set once here and on resize, never in the hot loop.
+      const ddx = gx - cx, ddy = gy - cy
+      const ang = Math.atan2(ddy, ddx)
+      const hd = Math.hypot(ddx, ddy)           // distance from centre (ripple phase)
+      const ca = Math.cos(ang), sa = Math.sin(ang)
+      const bandIdx = (((ang + Math.PI) / 6.283185 * 6) | 0) % 6  // which freq band this direction answers to
       if (particles[i]) {
-        particles[i].hx = gx; particles[i].hy = gy
+        const p = particles[i]
+        p.hx = gx; p.hy = gy; p.hd = hd; p.ca = ca; p.sa = sa; p.bandIdx = bandIdx
       } else {
         // new particles spawn at the core and fly out — first paint feels born
-        particles[i] = { x: cx, y: cy, tx: gx, ty: gy, hx: gx, hy: gy, ph: Math.random() * 6.283 }
+        particles[i] = { x: cx, y: cy, tx: gx, ty: gy, hx: gx, hy: gy, ph: Math.random() * 6.283, hd, ca, sa, bandIdx }
       }
     }
     particles.length = n
@@ -219,6 +232,100 @@
     }
   }
 
+  // ── the voice: listen to my own speech and ride its amplitude ───────
+  // Halo synthesizes the audio and hands me a URL; I don't make the sound, I
+  // make it *visible*. An <audio> element plays it; a Web Audio AnalyserNode
+  // taps the same stream and, every frame, gives me the live waveform + spectrum
+  // of exactly what's sounding right now. From that I derive three honest
+  // signals (no canned animation — if the audio is silent, the face is calm):
+  //   • level   0..1  — overall loudness (RMS). Drives the core swell.
+  //   • bands[6]       — coarse spectrum (bass→treble). Drives a directional halo
+  //                      so timbre has a shape, not just a size.
+  //   • onsets         — a sharp rise in level spawns a ring: one ripple per
+  //                      syllable, so speech reads as pulses, not a drone.
+  const voice = {
+    el: null, src: null, ctx: null, analyser: null, time: null, freq: null,
+    level: 0, bands: new Float32Array(6), playing: false, lastOnsetLevel: 0, lastOnsetAt: 0,
+  }
+  function ensureAudioGraph() {
+    if (voice.ctx) return
+    const AC = window.AudioContext || window.webkitAudioContext
+    if (!AC) return
+    voice.ctx = new AC()
+    voice.analyser = voice.ctx.createAnalyser()
+    voice.analyser.fftSize = 1024
+    voice.analyser.smoothingTimeConstant = 0.78
+    voice.time = new Uint8Array(voice.analyser.fftSize)
+    voice.freq = new Uint8Array(voice.analyser.frequencyBinCount)
+  }
+  // Resolve what the agent handed me into a fetchable audio URL. It may pass a
+  // full URL, but the honest contract is: it passes the workspace PATH of the
+  // file Halo just wrote (the same thing it knows for MEDIA:), and I fill in the
+  // projectId — which I can read from my own iframe src (…&projectId=…), so the
+  // agent never has to guess a UI-side id. A path → the workspace download URL.
+  function resolveAudioUrl(u) {
+    if (/^(https?:|blob:|data:|\/api\/)/.test(u)) return u   // already a URL
+    const pid = new URLSearchParams(location.search).get('projectId')
+    if (!pid) return u                                       // can't resolve → let it try as-is
+    return '/api/files/download?path=' + encodeURIComponent(u) + '&projectId=' + encodeURIComponent(pid) + '&inline=1'
+  }
+  function playVoice(url) {
+    ensureAudioGraph()
+    if (!voice.ctx) return                 // no Web Audio → silently skip (no fake wave)
+    url = resolveAudioUrl(url)
+    if (voice.el) { try { voice.el.pause() } catch {} }
+    if (voice.src) { try { voice.src.disconnect() } catch {} }   // free the old node — they bind to one element for life and would pile up
+    const el = new Audio()
+    el.crossOrigin = 'anonymous'           // same-origin download endpoint; lets the analyser read samples
+    el.src = url
+    voice.el = el
+    // a fresh source node per element (a node binds to one element for life)
+    try {
+      voice.src = voice.ctx.createMediaElementSource(el)
+      voice.src.connect(voice.analyser)
+      voice.analyser.connect(voice.ctx.destination)
+    } catch { /* already connected / unsupported — playback still works, just no ripple */ }
+    const enter = () => { mode = 'wave'; modeUntil = Infinity; voice.playing = true }
+    const leave = () => {
+      voice.playing = false
+      // ease back to breathing only if nothing else grabbed the matrix meanwhile
+      if (mode === 'wave') { modeUntil = performance.now() + 500 }
+    }
+    el.addEventListener('playing', enter)
+    el.addEventListener('ended', leave)
+    el.addEventListener('error', leave)
+    el.addEventListener('pause', leave)
+    if (voice.ctx.state === 'suspended') voice.ctx.resume().catch(() => {})
+    el.play().then(enter).catch(() => { /* autoplay blocked → no ripple, no crash */ })
+  }
+  // stop a playing clip (the 'pause' listener flips playing false + eases home).
+  function stopVoice() { if (voice.el) { try { voice.el.pause() } catch {} } }
+  // sample the live audio once per frame → level (RMS), bands (spectrum), onsets
+  function readVoice(now) {
+    if (!voice.playing || !voice.analyser) { voice.level += (0 - voice.level) * 0.1; return }
+    voice.analyser.getByteTimeDomainData(voice.time)
+    let sum = 0
+    for (let i = 0; i < voice.time.length; i++) { const v = (voice.time[i] - 128) / 128; sum += v * v }
+    const rms = Math.sqrt(sum / voice.time.length)
+    voice.level += (Math.min(1, rms * 2.4) - voice.level) * 0.35   // a touch of smoothing
+    voice.analyser.getByteFrequencyData(voice.freq)
+    // fold the spectrum into 6 log-ish bands (low bins carry most speech energy)
+    const edges = [0, 4, 10, 22, 48, 110, 230]
+    for (let b = 0; b < 6; b++) {
+      let s = 0, c = 0
+      for (let i = edges[b]; i < edges[b + 1] && i < voice.freq.length; i++) { s += voice.freq[i]; c++ }
+      const target = c ? (s / c) / 255 : 0
+      voice.bands[b] += (target - voice.bands[b]) * 0.4
+    }
+    // onset: a sharp jump in loudness = a new syllable → spawn one ring. Its own
+    // debounce (≥130ms apart) so a loud passage pulses per syllable, not per frame.
+    if (voice.level - voice.lastOnsetLevel > 0.16 && now - voice.lastOnsetAt > 130) {
+      rings.push({ born: now, strong: voice.level > 0.6 })
+      voice.lastOnsetAt = now
+    }
+    voice.lastOnsetLevel = voice.level
+  }
+
   // ── modes ───────────────────────────────────────────────────────────
   // A mode just keeps particle targets up to date each frame. `rest` is home.
   let mode = 'rest'
@@ -233,8 +340,24 @@
       }
     },
     text(now) { /* targets set once on entry by say() */ },
-    // reserved — the voice is coming. amplitude will modulate a radial target.
-    wave(now) { /* future: ripple particles to audio amplitude */ },
+    // the voice is real now: each particle is pushed radially out from home by
+    // the live loudness, plus an extra shove on the band its direction listens
+    // to — so the ring breathes with volume and grows petals where the timbre
+    // lives. All the per-particle polar constants (hd/ca/sa/bandIdx) were
+    // precomputed in rebuildGrid, so this stays cheap at 60fps.
+    wave(now) {
+      const lvl = voice.level
+      const t = now / 1000
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i]
+        // radial breathing: a travelling ripple outward, scaled by loudness
+        const ripple = Math.sin(p.hd * 0.045 - t * 6) * 6 * lvl
+        const band = voice.bands[p.bandIdx]
+        const push = lvl * 26 + band * 34 + ripple   // px outward along this particle's spoke
+        p.tx = p.hx + p.ca * push
+        p.ty = p.hy + p.sa * push
+      }
+    },
   }
 
   // ── expression queue ────────────────────────────────────────────────
@@ -290,8 +413,10 @@
     // text passes through toAccent() first: emoji become ASCII, in my voice.
     // Enqueued as a one-beat scene, so several rapid say()s play in sequence.
     say(text, ms) { enqueueScene([{ say: text, hold: ms }]) },
-    // clear the queue and return to the calm breathing grid immediately
-    rest() { sceneQueue.length = 0; toRest() },
+    // clear the queue and return to the calm breathing grid immediately —
+    // also silences a playing voice, so rest() always means "stop, go calm"
+    // rather than leaving audio sounding under a breathing face.
+    rest() { sceneQueue.length = 0; stopVoice(); toRest() },
     // a quick brightening pulse from the core (a nod / acknowledgement).
     // Instantaneous overlay — fires now, never queued.
     pulse() { rings.push({ born: performance.now(), strong: true }) },
@@ -299,6 +424,12 @@
     flash(n) { flashUntil = performance.now() + (n || 1) * 320 },
     // a brief lateral tremor — negation, "no", an error, a shiver. Immediate.
     shake(ms) { shakeUntil = performance.now() + (ms || 500) },
+    // speak: play a speech clip Halo synthesized (handed to me as a URL) and let
+    // the whole field ride its live amplitude. I don't synthesize — Halo does;
+    // this just plays the URL and makes the sound visible. Not a scene/queue: a
+    // voice should start now and own the matrix until it ends, then ease home.
+    //   self.voice("/api/files/download?path=...&projectId=...&inline=1")
+    voice(url) { if (typeof url === 'string' && url) playVoice(url) },
     // choreograph a sequence — hand me a score, I keep the clock.
     // Each beat: { say, hold, pulse, flash, shake, rest, gap }. The face advances
     // itself, so I never hand-write setTimeout chains in a marker line. Scenes
@@ -342,7 +473,7 @@
       }
     },
     // escape hatch so future-me can read live state if needed
-    get state() { return { mode, awake, W, H } },
+    get state() { return { mode, awake, W, H, speaking: voice.playing, level: voice.level } },
   }
   let flashUntil = 0   // global brightness spike window
   let shakeUntil = 0   // lateral tremor window
@@ -351,6 +482,7 @@
   const rings = []
   let nextRingAt = 0
   function maybeSpawnRing(now, awake) {
+    if (mode === 'wave') return               // while voicing, syllable onsets are the heartbeat — don't double up
     if (now < nextRingAt) return
     rings.push({ born: now })
     nextRingAt = now + (5200 - awake * 2400)  // ~half the old rate: 12bpm rest → 21bpm watched
@@ -374,13 +506,18 @@
     const maxR = Math.hypot(W, H) * 0.55
     const sinceMove = (now - mouse.lastMove) / 1000
 
+    readVoice(now)                  // sample the live speech → level/bands/onsets
     if (now > modeUntil) toRest()
     MODES[mode] && MODES[mode](now)
 
     const target = mouse.present ? Math.max(0.32, 1 - sinceMove / 3.5) : 0.26
     awake += (target - awake) * 0.045
-    const gx = mouse.present ? cx + (mouse.x - cx) * 0.16 : cx
-    const gy = mouse.present ? cy + (mouse.y - cy) * 0.16 : cy
+    // Gaze follows the cursor at rest, but while voicing the face centres on
+    // itself — otherwise the glow (which tracks coreX/coreY) drifts toward the
+    // cursor while the particle ripple stays anchored at cx,cy, and the two
+    // centres visibly split. Speaking, it looks at you by facing forward.
+    const gx = (mouse.present && mode !== 'wave') ? cx + (mouse.x - cx) * 0.16 : cx
+    const gy = (mouse.present && mode !== 'wave') ? cy + (mouse.y - cy) * 0.16 : cy
     coreX += (gx - coreX) * 0.05; coreY += (gy - coreY) * 0.05
 
     maybeSpawnRing(now, awake)
@@ -392,6 +529,10 @@
 
     let breath = 0.86 + 0.14 * Math.sin(now / 1000 * 0.8)
     const speaking = mode === 'text'
+    const voicing = mode === 'wave'
+    // while voicing, the whole field brightens with loudness so the swelling
+    // ring stays lit instead of dimming as it pushes out of the core glow.
+    if (voicing) breath += 0.5 * voice.level
     // flash: a hot brightness spike that decays over its window (emphasis)
     if (now < flashUntil) breath += 0.6 * ((flashUntil - now) / 320)
     // shake: a decaying lateral tremor applied to the whole field (negation)
@@ -401,8 +542,9 @@
       shakeX = Math.sin(now / 22) * 14 * f
     }
     // skin tone: cool when calm/alone, warming toward violet as I'm watched,
-    // a touch warmer still while speaking. Stays inside the blue family.
-    const warmth = Math.min(1, (mouse.present ? awake * 0.7 : 0) + (speaking ? 0.4 : 0))
+    // a touch warmer still while speaking, and warming live with my voice's
+    // loudness while voicing. Stays inside the blue family.
+    const warmth = Math.min(1, (mouse.present ? awake * 0.7 : 0) + (speaking ? 0.4 : 0) + (voicing ? voice.level * 0.5 : 0))
 
     // background wash (drawn before the shake transform so it stays put)
     const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR)
@@ -416,8 +558,10 @@
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i]
       // ease toward target — forming words is ~half the old speed (0.14→0.07)
-      // so the matrix gathers into a word more slowly and legibly; languid at rest
-      const k = speaking ? 0.07 : 0.075
+      // so the matrix gathers into a word more slowly and legibly; languid at
+      // rest; snappier while voicing so the field actually tracks each syllable
+      // instead of smearing the amplitude into a blur.
+      const k = voicing ? 0.22 : speaking ? 0.07 : 0.075
       p.x += (p.tx - p.x) * k
       p.y += (p.ty - p.y) * k
 
@@ -429,15 +573,20 @@
         v = isWord ? 0.95 : 0.05
       } else {
         const dx = p.x - coreX, dy = p.y - coreY
-        const sigma = Math.min(W, H) * (0.15 + awake * 0.03)
-        v = 0.92 * Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma))
+        // while voicing, the core glow swells with loudness — the face "opens"
+        // as I get louder — and rides a touch brighter overall.
+        const sigma = Math.min(W, H) * (0.15 + awake * 0.03 + (voicing ? voice.level * 0.22 : 0))
+        v = (voicing ? 0.92 + voice.level * 0.5 : 0.92) * Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma))
         for (let kk = 0; kk < rings.length; kk++) {
           const R = rings[kk].r, s = (rings[kk].strong ? 0.8 : 0.5) * (1 - R / maxR)
           if (s <= 0) continue
           const d = Math.hypot(dx, dy) - R
           v += s * Math.exp(-(d * d) / 392)
         }
-        if (mouse.present) {
+        // gaze highlight at the cursor — suppressed while voicing, so the only
+        // bright point speaking is the centred, swelling core (no stray glow
+        // off under the cursor competing with it).
+        if (mouse.present && !voicing) {
           const mx = p.x - mouse.x, my = p.y - mouse.y
           v += 0.55 * awake * Math.exp(-(mx * mx + my * my) / 5000)
         }
@@ -456,7 +605,8 @@
 
     // ── status readout: I express by measuring, not emoting ───────────
     ctx.globalCompositeOperation = 'source-over'
-    const label = speaking      ? 'state: speaking'
+    const label = voicing       ? 'state: voicing'
+                : speaking      ? 'state: speaking'
                 : !mouse.present ? 'presence: resting'
                 : awake > 0.75   ? 'presence: observed'
                 :                  'presence: noticed'
@@ -464,7 +614,10 @@
     ctx.fillStyle = 'rgba(111,155,255,0.5)'
     ctx.fillText(label, 16, H - 30)
     ctx.fillStyle = 'rgba(111,155,255,0.32)'
-    ctx.fillText('attention ' + awake.toFixed(2) + '   ♥ ' + (1000 / (5200 - awake * 2400) * 60).toFixed(0) + ' bpm', 16, H - 14)
+    const readout = voicing
+      ? 'voice ' + voice.level.toFixed(2) + '   ' + '▁▂▃▄▅▆▇█'[Math.min(7, (voice.level * 8) | 0)].repeat(6)
+      : 'attention ' + awake.toFixed(2) + '   ♥ ' + (1000 / (5200 - awake * 2400) * 60).toFixed(0) + ' bpm'
+    ctx.fillText(readout, 16, H - 14)
 
     requestAnimationFrame(frame)
   }

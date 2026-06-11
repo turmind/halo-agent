@@ -39,6 +39,9 @@ export function HtmlPreview({ url, name }: HtmlPreviewProps) {
       title={name}
       className="h-full w-full border-0 bg-white"
       sandbox="allow-scripts allow-same-origin"
+      // self.html plays Halo-synthesized speech (self.voice) on a postMessage,
+      // not a direct click — delegate autoplay so the browser doesn't gate it.
+      allow="autoplay"
     />
   )
 }
