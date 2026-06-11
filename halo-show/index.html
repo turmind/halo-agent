@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Halo Show · 像素工坊</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- The whole world lives on one canvas; everything else is HUD overlay. -->
+  <canvas id="stage"></canvas>
+
+  <!-- Top HUD ------------------------------------------------------------ -->
+  <header id="hud" class="hidden">
+    <div class="hud-left">
+      <div class="logo">
+        <span class="logo-mark">◆</span>
+        <span class="logo-text">HALO<span class="logo-dim">·SHOW</span></span>
+      </div>
+      <div class="stats" id="stats"></div>
+    </div>
+    <div class="hud-right">
+      <div id="conn" class="conn"><i></i><span>连接中…</span></div>
+      <button id="btn-settings" class="icon-btn" title="设置">⚙</button>
+    </div>
+  </header>
+
+  <!-- Legend ------------------------------------------------------------- -->
+  <footer id="legend" class="hidden">
+    <span class="lg"><i class="dot run"></i>干活中</span>
+    <span class="lg"><i class="dot idle"></i>摸鱼</span>
+    <span class="lg"><i class="dot stop"></i>休息</span>
+    <span class="lg pixel-hint">滚轮缩放 · 拖拽平移 · 点小人看详情</span>
+  </footer>
+
+  <!-- Inspector (slides in from the right when something is clicked) ----- -->
+  <aside id="inspector" class="hidden">
+    <button id="insp-close" class="icon-btn insp-close" title="关闭">✕</button>
+    <div id="insp-body"></div>
+  </aside>
+
+  <!-- Setup / connection modal ------------------------------------------ -->
+  <div id="setup" class="modal-backdrop">
+    <div class="modal">
+      <h1>欢迎来到 Halo 像素工坊</h1>
+      <p class="sub">输入你的 Halo 服务器地址与 Web Token，开始围观 agent 们干活。</p>
+      <label>服务器地址
+        <input id="in-api" type="text" placeholder="http://localhost:9527" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>Web Token
+        <input id="in-token" type="password" placeholder="full 权限的 web token" autocomplete="off" spellcheck="false" />
+      </label>
+      <div class="modal-row">
+        <label class="chk"><input id="in-remember" type="checkbox" checked /> 记住（存于本机 localStorage）</label>
+      </div>
+      <div id="setup-err" class="err"></div>
+      <button id="btn-connect" class="primary">进入工坊 →</button>
+      <p class="tiny">本页只读、纯本地渲染，不消耗任何模型 token。</p>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

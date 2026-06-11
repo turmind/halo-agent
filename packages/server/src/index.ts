@@ -18,6 +18,7 @@ import { createSkillRoutes } from './routes/skills.js'
 import { createSettingsRoutes, onSettingsChange } from './routes/settings.js'
 import { createEvolutionRoutes } from './routes/evolution.js'
 import { createSessionRoutes } from './routes/sessions.js'
+import { createShowRoutes } from './routes/show.js'
 import { createCommandRoutes } from './routes/commands.js'
 import { commandRegistry } from './commands/index.js'
 import { DISPATCH_COMMANDS } from './channels/shared/commands.js'
@@ -236,7 +237,11 @@ app.use('/*', cors({
     ? (origin) => (origin && allowlist.includes(origin) ? origin : null)
     : (origin) => origin ?? '*',
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  // `x-token` is the documented auth header for the public web API
+  // (/api/web/*, /api/show/state). Browser-based custom frontends — the
+  // web-demo, halo-show — are cross-origin to the server, so the header has
+  // to be in the CORS allowlist or the preflight strips it.
+  allowHeaders: ['Content-Type', 'Authorization', 'x-token'],
   exposeHeaders: ['Content-Length'],
   maxAge: 86400,
   credentials: true,
@@ -319,6 +324,11 @@ const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
 
 const sessionRoutes = createSessionRoutes(registry)
 app.route('/api', sessionRoutes)
+
+// halo-show world snapshot — token-authed public endpoint (added to
+// PUBLIC_PATHS in auth.ts so it bypasses the admin cookie like /api/web/*).
+const showRoutes = createShowRoutes(registry)
+app.route('/api', showRoutes)
 
 const commandRoutes = createCommandRoutes(commandRegistry, registry)
 app.route('/api', commandRoutes)

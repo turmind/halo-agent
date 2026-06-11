@@ -217,7 +217,7 @@ export function createAuthRoutes() {
 
 // ---------- Middleware ----------
 
-const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/check', '/api/auth/logout', '/api/health', '/api/web/chat', '/api/web/stop', '/api/web/history', '/api/web/subscribe', '/api/web/file']
+const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/check', '/api/auth/logout', '/api/health', '/api/web/chat', '/api/web/stop', '/api/web/history', '/api/web/subscribe', '/api/web/file', '/api/show/state']
 
 export function authMiddleware() {
   return async (c: { req: { path: string }; json: (data: unknown, status?: number) => Response } & Record<string, unknown>, next: () => Promise<void>) => {
