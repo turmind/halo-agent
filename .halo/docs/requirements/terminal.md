@@ -33,12 +33,12 @@ When the WebSocket drops:
 5. Server replays the entire output buffer, reattaches live I/O, and responds with `terminal:reattached { terminalIds: [...] }`
 6. If the grace timer expires first, the PTY is killed and the detach entry removed
 
-The client also probes for stale connections on `visibilitychange` / `window.focus`: if no message has been received for ≥ 5 s, it force-closes the socket so the auto-reconnect path runs immediately. This avoids the half-dead TCP state after laptop sleep / proxy idle timeouts where `onclose` never fires on its own. There is no application-level heartbeat — staleness is detected on demand, not polled.
+Connection-level liveness and reconnect (server keepalive tolerance, client self-check timer, auth-expiry handling) are owned by the shared WS client — see [design/ws.md](../design/ws.md#client-side-liveness--reconnect).
 
 On the reattach handler ([packages/admin/src/features/terminal/terminal-panel.tsx](../../../packages/admin/src/features/terminal/terminal-panel.tsx)), each id in `terminalIds` is dispatched by whether a local xterm instance already exists:
 
 - **Already exists** (typical after a transient WS reconnect): only a `terminal:resize` is sent so server PTY dimensions resync; the existing instance keeps its scrollback and continues receiving live output.
-- **Does not exist** (first mount, or the previous instance was disposed): a fresh xterm container is created and bound to that id.
+- **Does not exist** (first mount, or the previous instance was disposed): a fresh xterm container is created and bound to that id. Bracketed paste mode is resynced by locally writing `\x1b[?2004h` into the new instance — bash enabled the mode on the PTY at spawn time, but that sequence went to the disposed instance; without the resync, a multi-line paste into the reattached terminal would be sent unbracketed and execute line by line.
 
 ### Environment
 - Shell: `$SHELL` or `/bin/bash`

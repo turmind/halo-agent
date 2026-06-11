@@ -10,9 +10,15 @@ File: `packages/server/src/ws/handler.ts`
 - Auth: `verifyClient` callback validates the JWT cookie
 - All messages are JSON-encoded
 
-### Client-side reconnect strategy
+### Server-side keepalive
 
-The browser client ([packages/admin/src/shared/ws-client.ts](../../../packages/admin/src/shared/ws-client.ts)) has no application-level heartbeat. Instead, on `visibilitychange` (tab becomes visible) and `window.focus`, it calls `reconnectIfStale(staleMs = 5000)`: if the socket hasn't received any message for ≥ 5 s, it force-closes so the existing exponential-backoff reconnect path runs immediately. This catches the half-dead TCP state after laptop sleep / proxy idle timeouts where `onclose` never fires, without paying for periodic ping traffic during normal use.
+The server pings every connection at the WS protocol level every 10 s (keeps reverse-proxy idle timeouts from closing the socket). It tolerates **2 consecutive missed pongs** (~20-30 s of silence) before `ws.terminate()` — a single miss is routinely just laptop sleep/wake or a browser event-loop stall, not a dead peer.
+
+### Client-side liveness & reconnect
+
+The browser client ([packages/admin/src/shared/ws-client.ts](../../../packages/admin/src/shared/ws-client.ts)) runs a 15 s self-check timer (`startLiveness`) that catches three half-dead states: socket stuck in `CONNECTING` >10 s, `CLOSED` without `onclose` firing, and an `OPEN` socket whose send buffer stops draining (probed with an app-level `__ping__` the server ignores). Any of these force-closes the socket so the exponential-backoff reconnect (1 s → 30 s cap) runs. The OS `online` event additionally triggers an immediate `reconnectIfStale(0)`. (Earlier `visibilitychange`/`focus` probes were removed — inside iframes they fire constantly and tore down healthy connections.)
+
+**Auth expiry**: when the WS handshake itself is rejected (close before `onopen` — `verifyClient` returns 401 on an expired JWT cookie, but the browser WS API hides the HTTP status), the client probes `/api/auth/check`. On 401 it stops reconnecting and emits `_auth_expired`; the admin page listens and swaps to the login screen. Any other probe outcome (server restarting, network blip) falls through to normal backoff.
 
 After a successful `_connected` event, all subscribers re-issue their session-resume messages: `subscribe` (chat / agent state) and `terminal:reattach` (PTY pool). Both are idempotent on the server.
 

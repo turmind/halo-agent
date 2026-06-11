@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { WorkspaceLayout } from '@/features/workspace/workspace-layout'
 import { useWebSocket } from '@/shared/use-websocket'
+import { wsClient } from '@/shared/ws-client'
 import { LoginPage } from '@/features/auth/login-page'
 
 export default function HomePage() {
@@ -17,6 +18,15 @@ export default function HomePage() {
       .catch(() => {
         setAuthState('login')
       })
+  }, [])
+
+  // JWT cookie expired mid-session: WsClient detects the rejected WS
+  // handshake (verifyClient 401), stops retrying, and emits this event.
+  // Swap to the login page instead of reconnecting forever.
+  useEffect(() => {
+    return wsClient.on('_auth_expired', () => {
+      setAuthState('login')
+    })
   }, [])
 
   const handleLoginSuccess = useCallback(() => {

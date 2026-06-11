@@ -200,16 +200,21 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     // to 60s, and some ingress configs go as low as 30s. Pinging every 10s
     // gives a comfortable margin against any reasonable proxy idle setting
     // while still being cheap (one frame per connection, no payload).
-    let isAlive = true
-    ws.on('pong', () => { isAlive = true })
+    //
+    // Tolerate 2 consecutive missed pongs before terminating: a single miss
+    // is routinely just laptop sleep/wake or a browser event-loop stall, and
+    // terminating on the first miss caused frequent spurious disconnects.
+    // ~20-30s of silence (2 unanswered pings) means a genuinely dead peer.
+    let missedPongs = 0
+    ws.on('pong', () => { missedPongs = 0 })
     const keepaliveTimer = setInterval(() => {
-      if (!isAlive) {
-        // Server-side liveness probe failed (no pong since last ping) —
-        // terminate forces a close so the client's reconnect path runs.
+      if (missedPongs >= 2) {
+        // Server-side liveness probe failed repeatedly — terminate forces a
+        // close so the client's reconnect path runs.
         ws.terminate()
         return
       }
-      isAlive = false
+      missedPongs++
       try { ws.ping() } catch { /* socket dying; close handler will clean up */ }
     }, 10_000)
 

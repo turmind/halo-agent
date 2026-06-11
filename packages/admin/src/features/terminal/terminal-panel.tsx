@@ -255,6 +255,16 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
         term.open(container)
         fit.fit()
 
+        // Resync bracketed paste mode (DECSET 2004). Bash readline enabled it
+        // when the PTY's current prompt was drawn — but that sequence went to
+        // the previous xterm instance, destroyed with the old page. A fresh
+        // instance starts with the flag off, so a multi-line paste would be
+        // fed to the shell unbracketed and execute line by line. Writing the
+        // sequence here only flips xterm's internal flag (no visible output,
+        // nothing sent to the PTY); bash keeps it in sync from the next
+        // prompt onward.
+        term.write('\x1b[?2004h')
+
         term.onData((data) => {
           wsClient.send({ type: 'terminal:input', data, terminalId: id })
         })

@@ -24,10 +24,14 @@ class WsClient {
     this.startLiveness()
 
     try {
+      // Per-attempt flag: onclose distinguishes "was connected then dropped"
+      // from "handshake never completed" (see auth probe below).
+      let opened = false
       this.ws = new WebSocket(this.url)
 
       this.ws.onopen = () => {
         console.log('[WsClient] Connected')
+        opened = true
         this.reconnectDelay = 1000
         this.lastReceiveTs = Date.now()
         // Flush pending messages
@@ -55,7 +59,16 @@ class WsClient {
         console.log('[WsClient] Disconnected')
         this.ws = null
         this.emit('_disconnected', {})
-        if (!this.intentionalClose) {
+        if (this.intentionalClose) return
+        // Handshake-level failure (onopen never fired): the server's
+        // verifyClient may have rejected us with 401 because the JWT cookie
+        // expired. The browser WS API hides the HTTP status, so probe
+        // /api/auth/check to tell "auth dead" apart from "server down".
+        // Without this, an expired cookie meant infinite backoff retries
+        // that could never succeed, with no hint to re-login.
+        if (!opened) {
+          void this.checkAuthThenReconnect()
+        } else {
           this.reconnect()
         }
       }
@@ -230,6 +243,25 @@ class WsClient {
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
       this.connect(this.url)
     }, this.reconnectDelay)
+  }
+
+  /**
+   * The WS handshake failed before opening. If /api/auth/check says 401, the
+   * cookie is expired/invalid — retrying the WS is pointless, so emit
+   * `_auth_expired` (page.tsx listens and swaps to the login screen) and stop.
+   * Any other outcome (server restarting, network blip) → normal backoff.
+   */
+  private async checkAuthThenReconnect(): Promise<void> {
+    try {
+      const res = await fetch('/api/auth/check', { credentials: 'include' })
+      if (res.status === 401) {
+        console.log('[WsClient] Auth expired — stopping reconnect, login required')
+        this.stopLiveness()
+        this.emit('_auth_expired', {})
+        return
+      }
+    } catch { /* server unreachable — fall through to backoff */ }
+    if (!this.intentionalClose) this.reconnect()
   }
 
   private getDefaultUrl(): string {
