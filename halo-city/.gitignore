@@ -1,0 +1,8 @@
+# Dev-only scratch — never commit
+.breaktest.mjs
+.devmock.mjs
+.floortest.html
+.picktest.html
+.shot.mjs
+.simtest.html
+.zlabel.mjs

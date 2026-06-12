@@ -94,11 +94,11 @@ The agent has a second channel beyond text: a living particle face at `<workspac
 
 Driven from `packages/server/templates/canvas/self.html` (engine) + `packages/server/templates/skills/self/` (skill) + `packages/admin/src/shared/ws-handlers/chat-handlers.ts` (marker detection) + `packages/admin/src/features/editor/face-bridge.ts` (preview forwarding).
 
-## Halo Show (pixel runtime visualizer)
+## Halo City (pixel runtime visualizer)
 
-A standalone, read-only pixel-art view of a server's runtime — workspaces are rooms, sessions are pixel people (walking/working/coffee/arcade/sleeping by status), skills are furniture that glows when an agent `activate_skill`s on it. Click anyone to inspect their live status / active skill / last tool / tokens. Pure client-side canvas animation, **no LLM / zero model tokens**; the only traffic is one `GET /api/show/state` every few seconds. Token (web-channel) auth: full → all workspaces, otherwise own.
+A standalone, read-only pixel **city block** view of a server's runtime — each workspace is a building, each session is a chibi animal citizen who climbs real stairs to a real desk (working / coffee / arcade / smoke break by status), skills are stations that glow when an agent `activate_skill`s on them. Click anyone to inspect their live session log / active skill / last tool / tokens. Pure client-side canvas animation, **no LLM / zero model tokens**; the only traffic is one `GET /api/show/state` poll plus `GET /api/show/session` while an inspector panel is open. Token (web-channel) auth: full → all workspaces, otherwise own.
 
-Lives at [halo-show/](halo-show/) (plain static files, no build). Backed by `packages/server/src/routes/show.ts` (`/api/show/state`, added to `PUBLIC_PATHS`). See [halo-show/README.md](halo-show/README.md).
+Lives at [halo-city/](halo-city/) (plain static files, no build). Backed by `packages/server/src/routes/show.ts` (`/api/show/state`, added to `PUBLIC_PATHS`). See [halo-city/README.md](halo-city/README.md) and design notes in [design/halo-city.md](docs/design/halo-city.md).
 
 ## Memory
 

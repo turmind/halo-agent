@@ -117,14 +117,14 @@ See [design/web.md](../design/web.md).
 
 File: `packages/server/src/routes/show.ts`. Token auth (same `x-token` as the
 Web channel; shares its brute-force lockout bucket). Read-only, cross-workspace
-snapshot powering the `halo-show` pixel visualizer — one call returns the whole
+snapshot powering the `halo-city` pixel visualizer — one call returns the whole
 runtime so the frontend can render rooms (workspaces) + characters (sessions).
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/show/state` | Full-access token → every known workspace; otherwise the account's own. Returns `{ serverTime, uptime, accessLevel, skills[], workspaces[] }` |
 
-Each `workspace` = `{ path, key, label, counts{running,idle,stopped}, totalSessions, skills[], sessions[] }`; each `session` = `{ id, parentId, depth, agentName, description, status, lastTool, activeSkill, contextTokens, outputTokens, updatedAt }`. `lastTool` / `activeSkill` come from the live in-memory UI log (empty when the session isn't loaded). Sessions per room are capped (`totalSessions` reports the true total). Frontend: `halo-show/` at repo root.
+Each `workspace` = `{ path, key, label, counts{running,idle,stopped}, totalSessions, skills[], sessions[] }`; each `session` = `{ id, parentId, depth, agentName, description, status, lastTool, activeSkill, contextTokens, outputTokens, updatedAt }`. `lastTool` / `activeSkill` come from the live in-memory UI log (empty when the session isn't loaded). Sessions per room are capped (`totalSessions` reports the true total). Frontend: `halo-city/` at repo root.
 
 ## Agent Configs
 

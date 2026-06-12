@@ -239,7 +239,7 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
     return { ok: true as const, account }
   }
 
-  // GET /api/show/state — cross-workspace world snapshot for halo-show.
+  // GET /api/show/state — cross-workspace world snapshot for halo-city.
   //   Full-access token → every known workspace. Otherwise → the account's
   //   own bound workspace only.
   app.get('/show/state', (c) => {

@@ -239,7 +239,7 @@ app.use('/*', cors({
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   // `x-token` is the documented auth header for the public web API
   // (/api/web/*, /api/show/state). Browser-based custom frontends — the
-  // web-demo, halo-show — are cross-origin to the server, so the header has
+  // web-demo, halo-city — are cross-origin to the server, so the header has
   // to be in the CORS allowlist or the preflight strips it.
   allowHeaders: ['Content-Type', 'Authorization', 'x-token'],
   exposeHeaders: ['Content-Length'],
@@ -325,7 +325,7 @@ const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
 const sessionRoutes = createSessionRoutes(registry)
 app.route('/api', sessionRoutes)
 
-// halo-show world snapshot — token-authed public endpoint (added to
+// halo-city world snapshot — token-authed public endpoint (added to
 // PUBLIC_PATHS in auth.ts so it bypasses the admin cookie like /api/web/*).
 const showRoutes = createShowRoutes(registry)
 app.route('/api', showRoutes)

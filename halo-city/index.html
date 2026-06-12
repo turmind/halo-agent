@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Halo Show</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- The whole world lives on one canvas; everything else is HUD overlay. -->
+  <canvas id="stage"></canvas>
+
+  <header id="hud" class="hidden">
+    <div class="hud-left">
+      <div class="logo" id="btn-zen" data-i18n-title="zenTitle" title="纯净模式：只看像素世界（H 键切换）" role="button" tabindex="0">
+        <img class="logo-mark" src="favicon.svg" alt="" width="22" height="22" />
+        <span class="logo-text">HALO<span class="logo-dim">·CITY</span></span>
+      </div>
+      <div class="stats" id="stats"></div>
+    </div>
+    <div class="hud-right">
+      <div id="clock" class="clock"></div>
+      <div id="uptime" class="uptime"></div>
+      <div id="conn" class="conn"><i></i><span data-i18n="connecting">连接中…</span></div>
+      <button id="btn-lang" class="icon-btn lang-btn" data-i18n-title="langTitle" title="切换语言 / Switch language">中</button>
+      <button id="btn-settings" class="icon-btn" data-i18n-title="settings" title="设置">⚙</button>
+    </div>
+  </header>
+
+  <section id="ticker" class="hidden">
+    <div class="ticker-head" id="ticker-head" data-i18n-title="tickerToggle" title="点击收起 / 展开">
+      <span class="rec"></span><span class="ticker-title" data-i18n="tickerTitle">街区动态</span>
+      <span class="t-count" id="ticker-count"></span>
+      <span class="t-chev" id="ticker-chev">▾</span>
+    </div>
+    <div id="ticker-feed" class="ticker-feed"></div>
+  </section>
+
+  <footer id="legend" class="hidden">
+    <span class="lg"><i class="dot run"></i><span data-i18n="lgRun">干活中</span></span>
+    <span class="lg"><i class="dot idle"></i><span data-i18n="lgIdle">摸鱼</span></span>
+    <span class="lg"><i class="dot stop"></i><span data-i18n="lgStop">休息</span></span>
+    <span class="lg pixel-hint" data-i18n="pixelHint">滚轮 / 拖条缩放 · 拖拽平移 · 点小人看日志 · F 全街区</span>
+  </footer>
+
+  <div id="zoombar" class="hidden">
+    <button id="zb-out" class="zb-btn" data-i18n-title="zoomOut" title="缩小">−</button>
+    <div id="zb-track" class="zb-track">
+      <div id="zb-fill" class="zb-fill"></div>
+      <div id="zb-thumb" class="zb-thumb"></div>
+    </div>
+    <button id="zb-in" class="zb-btn" data-i18n-title="zoomIn" title="放大">+</button>
+    <span id="zb-val" class="zb-val">2×</span>
+  </div>
+
+  <aside id="inspector" class="hidden">
+    <button id="insp-close" class="icon-btn insp-close" data-i18n-title="close" title="关闭">✕</button>
+    <div id="insp-body"></div>
+  </aside>
+
+  <div id="setup" class="modal-backdrop">
+    <div class="modal">
+      <h1 data-i18n="setupTitle">欢迎来到 Halo 像素街区</h1>
+      <p class="sub" data-i18n="setupSub">输入你的 Halo 服务器地址与 Web Token，看 agent 们在城里上班。</p>
+      <label><span data-i18n="fieldServer">服务器地址</span>
+        <input id="in-api" type="text" placeholder="http://localhost:9527" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>Web Token
+        <input id="in-token" type="password" data-i18n-ph="tokenPlaceholder" placeholder="full 权限的 web token" autocomplete="off" spellcheck="false" />
+      </label>
+      <div class="modal-row">
+        <label class="chk"><input id="in-remember" type="checkbox" checked /> <span data-i18n="remember">记住（存于本机 localStorage）</span></label>
+      </div>
+      <div id="setup-err" class="err"></div>
+      <button id="btn-connect" class="primary" data-i18n="connect">上街 →</button>
+      <p class="tiny" data-i18n="setupTiny">本页只读、纯本地渲染，不消耗任何模型 token。</p>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
