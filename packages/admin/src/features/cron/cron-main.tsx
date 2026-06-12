@@ -238,6 +238,7 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
                         'rounded px-1.5 py-0.5 text-[10px] uppercase',
                         r.status === 'succeeded' ? 'bg-emerald-700 text-emerald-50' :
                         r.status === 'running' ? 'bg-amber-700 text-amber-50' :
+                        r.status === 'skipped' ? 'bg-zinc-700 text-zinc-50' :
                         'bg-red-700 text-red-50',
                       )}>{r.status}</span>
                       <span className="text-[var(--muted-foreground)]">{new Date(r.startedAt).toLocaleString()}</span>

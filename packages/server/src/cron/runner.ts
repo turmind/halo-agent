@@ -27,11 +27,13 @@ import { broadcast } from '../ws/broadcast.js'
 const DAY_MS = 24 * 60 * 60 * 1000
 
 /** How long any single cron-fired cli is allowed to run, in seconds.
- *  Long enough for a daily report (multi-step grep + summary), short
- *  enough that a runaway model loop doesn't burn the whole day. Enforced by a
- *  Node timer that kills the child and reports exit code 124 (cross-platform;
- *  no dependency on the Linux-only `timeout(1)` binary). */
-const CLI_TIMEOUT_SEC = 600
+ *  Long enough for a deep multi-step run, short enough that a truly stuck
+ *  child still gets reaped within the hour. Concurrency overlap of the same
+ *  job is now blocked up-front by `_inflight` (see runJob), so this no
+ *  longer needs to be tight. Enforced by a Node timer that kills the child
+ *  and reports exit code 124 (cross-platform; no dependency on the
+ *  Linux-only `timeout(1)` binary). */
+const CLI_TIMEOUT_SEC = 3600
 
 /** How many `cron_runs` rows to keep per job. The oldest get pruned every
  *  time a new run lands. 100 is plenty to spot a regression pattern
@@ -64,6 +66,18 @@ interface ActiveSchedule {
 /** Map of `cron_jobs.id` → croner instance. Drives `start/stopAll` +
  *  hot-reload after CRUD operations. */
 const _active = new Map<string, ActiveSchedule>()
+
+/** Set of jobIds currently executing in this server process. Same job
+ *  firing again (whether croner-scheduled or a manual run-now click) while
+ *  the previous run is still in-flight is rejected immediately with a
+ *  `skipped` cron_runs row — the cli child uses a stable session id
+ *  `cron-<jobId>`, so two overlapping runs would double-write the same
+ *  on-disk session state. SessionManager's per-session lock is
+ *  in-process, but cron spawns a fresh cli child per fire, so the lock
+ *  never sees the contention; this set is the cheapest place to enforce
+ *  serialization without touching the cli or session layer. Lost on
+ *  process restart by design — no stale-entry cleanup needed. */
+const _inflight = new Set<string>()
 
 /** Per-jobId fingerprint of the schedule we last instantiated croner with.
  *  Lets `reconcileFromDb` skip rows whose schedule/timezone/enabled
@@ -316,6 +330,31 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   const logPath = logPathFor(runId)
   fs.mkdirSync(logsDir(), { recursive: true })
 
+  // Concurrency guard: same job already running in this process. Applies
+  // to both scheduled fires (cron expression too dense / previous run
+  // overran its interval) and manual run-now clicks while a run is
+  // in-flight. Record a 'skipped' audit row so the UI surfaces it, then
+  // bail without spawning anything.
+  if (_inflight.has(jobId)) {
+    db.insert(cronRuns).values({
+      id: runId,
+      jobId,
+      triggerKind,
+      status: 'skipped',
+      startedAt,
+      completedAt: startedAt,
+      output: null,
+      exitCode: null,
+      failureReason: 'previous run still in progress',
+      logPath: null,
+      dispatchResults: null,
+    }).run()
+    broadcast({ type: 'cron:run_changed', jobId, runId, status: 'skipped' })
+    return runId
+  }
+  _inflight.add(jobId)
+  try {
+
   // Persist a 'running' row up front so the UI sees the run mid-flight.
   db.insert(cronRuns).values({
     id: runId,
@@ -465,6 +504,9 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   pruneOldRuns(jobId)
 
   return runId
+  } finally {
+    _inflight.delete(jobId)
+  }
 }
 
 interface FinalizeArgs {

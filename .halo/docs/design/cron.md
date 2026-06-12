@@ -40,14 +40,15 @@ REST route mutations call `scheduleJob` / `unscheduleJob` directly. But the `cro
 
 Each fire:
 
-1. Insert a `cron_runs` row with `status='running'` up front (UI sees it mid-flight); broadcast `cron:run_changed`.
-2. Check `job.workspacePath` exists — fail loudly if the workspace was moved/deleted.
-3. Spawn `halo cli -a <agent> -s cron-<jobId> -w <workspace>`, prompt on **stdin** (avoids Windows argv length limits). The stable `cron-<jobId>` session id means each fire *resumes the same session*, so the conversation accumulates and is reviewable in the admin Sessions tab.
-4. Tee stdout + stderr live to `~/.halo/global/logs/cron/<runId>.log`; capture stdout to memory for dispatch.
-5. Enforce a **600s timeout** via a Node timer (kills child, reports exit code 124 — cross-platform, not the Linux-only `timeout(1)`).
-6. Classify: exit 124 → `timeout`; non-zero → `failed`; zero but empty stdout → `failed` ("nothing to dispatch"); else `succeeded`.
-7. On success only, `dispatchToTargets(stdout, targets)`. If every target fails, downgrade to `failed`.
-8. `finalize`: write the terminal `cron_runs` row, update `cron_jobs.lastRun*`, disable one-shot jobs, broadcast.
+1. **Concurrency guard**: if the same `jobId` is already running in this process (in-memory `_inflight` set), insert a `cron_runs` row with `status='skipped'`, `failureReason='previous run still in progress'`, broadcast, and bail without spawning. Applies to both scheduled fires and manual run-now clicks. Two overlapping cli children would double-write the same `cron-<jobId>` on-disk session state; SessionManager's per-session lock is in-process and can't see across cli children, so this set is the cheapest place to enforce serialization. Lost on server restart by design — no stale-entry cleanup needed.
+2. Insert a `cron_runs` row with `status='running'` up front (UI sees it mid-flight); broadcast `cron:run_changed`.
+3. Check `job.workspacePath` exists — fail loudly if the workspace was moved/deleted.
+4. Spawn `halo cli -a <agent> -s cron-<jobId> -w <workspace>`, prompt on **stdin** (avoids Windows argv length limits). The stable `cron-<jobId>` session id means each fire *resumes the same session*, so the conversation accumulates and is reviewable in the admin Sessions tab.
+5. Tee stdout + stderr live to `~/.halo/global/logs/cron/<runId>.log`; capture stdout to memory for dispatch.
+6. Enforce a **3600s timeout** via a Node timer (kills child, reports exit code 124 — cross-platform, not the Linux-only `timeout(1)`). Generous because overlap-of-the-same-job is already blocked up-front in step 1; this is just the long-stop reaper for a truly stuck child.
+7. Classify: exit 124 → `timeout`; non-zero → `failed`; zero but empty stdout → `failed` ("nothing to dispatch"); else `succeeded`.
+8. On success only, `dispatchToTargets(stdout, targets)`. If every target fails, downgrade to `failed`.
+9. `finalize`: write the terminal `cron_runs` row, update `cron_jobs.lastRun*`, disable one-shot jobs, broadcast. The `_inflight` entry is released in `finally`, regardless of outcome.
 
 The cli executable is resolved via `resolveHaloCli()` (`$HALO_CLI` override; `halo.cmd` on Windows to dodge the GUI `Halo.exe` on PATH).
 
