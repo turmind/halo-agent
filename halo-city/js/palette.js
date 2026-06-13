@@ -17,6 +17,7 @@ export const C = {
   dusk: '#3a4466', indigo: '#262b44', ink: '#181425',
   hotPink: '#ff0044', purple: '#68386c', mauve: '#b55088', salmon: '#f6757a',
   skin1: '#ffe0c2', skin2: '#e8b796', skin3: '#c28569', skin4: '#9b6a4a', skin5: '#7a4f35',
+  outline: '#241a20',   // warm near-black for the citizen silhouette edge
 }
 
 export function shade(hex, amt) {

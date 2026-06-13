@@ -18,8 +18,11 @@ import { fnv } from './util.js'
 
 export const RIGHT = 1, LEFT = -1
 
+// When _outline is set, every px() paints that flat color instead of its own —
+// used to stamp a dark silhouette behind the body for a crisp 1px edge.
+let _outline = null
 function px(ctx, x, y, w, h, c) {
-  ctx.fillStyle = c
+  ctx.fillStyle = _outline || c
   ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h))
 }
 
@@ -92,43 +95,55 @@ export function drawPerson(ctx, x, y, look, opts = {}) {
   const legL = 7 + look.tall
   const torH = 11
   const hipY = sit ? -legL + 3 : -legL
+  const ty = hipY - torH + bob
 
-  // ── legs (tiny, under the big body) ──
-  const pantsLo = shade(look.pants, 0.25)
-  if (sit) {
-    px(ctx, -2, hipY, 8, 3, look.pants)
-    px(ctx, 4, hipY + 2, 4, legL - 4, pantsLo)
-    px(ctx, 4, -2, 5, 2, look.furLo)                      // paw
-  } else {
-    const sw = walk ? cyc * 2.6 : 0
-    px(ctx, -3 - sw, hipY + Math.max(0, sw), 4, legL - Math.max(0, sw), pantsLo)
-    px(ctx, 1 + sw, hipY + Math.max(0, -sw), 4, legL - Math.max(0, -sw), look.pants)
-    px(ctx, -4 - sw * 1.2, -2, 5, 2, look.furLo)          // paws
-    px(ctx, 0 + sw * 1.2, -2, 5, 2, look.fur)
+  // The whole critter, drawn at the current origin. Run once per outline
+  // offset (as a flat dark silhouette) then once for real.
+  const body = () => {
+    // ── legs (tiny, under the big body) ──
+    const pantsLo = shade(look.pants, 0.25)
+    if (sit) {
+      px(ctx, -2, hipY, 8, 3, look.pants)
+      px(ctx, 4, hipY + 2, 4, legL - 4, pantsLo)
+      px(ctx, 4, -2, 5, 2, look.furLo)                      // paw
+    } else {
+      const sw = walk ? cyc * 2.6 : 0
+      px(ctx, -3 - sw, hipY + Math.max(0, sw), 4, legL - Math.max(0, sw), pantsLo)
+      px(ctx, 1 + sw, hipY + Math.max(0, -sw), 4, legL - Math.max(0, -sw), look.pants)
+      px(ctx, -4 - sw * 1.2, -2, 5, 2, look.furLo)          // paws
+      px(ctx, 0 + sw * 1.2, -2, 5, 2, look.fur)
+    }
+
+    // ── tail (species, behind the torso) ──
+    tail(ctx, look, hipY, walk, cyc, t)
+
+    // ── torso (the uniform shirt) ──
+    px(ctx, -5, ty, 11, torH, look.shirt)
+    px(ctx, -5, ty, 11, 1, tint(look.shirt, 0.2))           // lit shoulders
+    px(ctx, -5, ty, 1, torH, tint(look.shirt, 0.08))        // lit front edge
+    px(ctx, 4, ty + 1, 2, torH - 1, shade(look.shirt, 0.24))// shaded back/side
+    px(ctx, -5, ty + torH - 2, 11, 2, shade(look.shirt, 0.24)) // hem shadow
+    px(ctx, -1, ty + 5, 1, torH - 6, shade(look.shirt, 0.14)) // center placket fold
+    px(ctx, -4, ty + 6, 1, 1, tint(look.shirt, 0.22))       // belly highlight fleck
+    px(ctx, -2, ty, 4, 2, shade(look.shirt, 0.18))          // collar notch
+    px(ctx, -1, ty, 2, 1, look.muzzle)                      // bit of chest fur at collar
+    px(ctx, -5, ty + 3, 11, 1, alpha(look.accent, 0.95))    // team stripe
+    px(ctx, -5, ty + 2, 11, 1, alpha(tint(look.accent, 0.4), 0.5)) // stripe highlight
+
+    // ── arm (paw; action-driven) ──
+    arm(ctx, look, ty, action, walk, cyc, t)
+
+    // ── the big head ──
+    head(ctx, look, ty, t, action)
   }
 
-  // ── tail (species, behind the torso) ──
-  tail(ctx, look, hipY, walk, cyc, t)
-
-  // ── torso (the uniform shirt) ──
-  const ty = hipY - torH + bob
-  px(ctx, -5, ty, 11, torH, look.shirt)
-  px(ctx, -5, ty, 11, 1, tint(look.shirt, 0.2))           // lit shoulders
-  px(ctx, -5, ty, 1, torH, tint(look.shirt, 0.08))        // lit front edge
-  px(ctx, 4, ty + 1, 2, torH - 1, shade(look.shirt, 0.24))// shaded back/side
-  px(ctx, -5, ty + torH - 2, 11, 2, shade(look.shirt, 0.24)) // hem shadow
-  px(ctx, -1, ty + 5, 1, torH - 6, shade(look.shirt, 0.14)) // center placket fold
-  px(ctx, -4, ty + 6, 1, 1, tint(look.shirt, 0.22))       // belly highlight fleck
-  px(ctx, -2, ty, 4, 2, shade(look.shirt, 0.18))          // collar notch
-  px(ctx, -1, ty, 2, 1, look.muzzle)                      // bit of chest fur at collar
-  px(ctx, -5, ty + 3, 11, 1, alpha(look.accent, 0.95))    // team stripe
-  px(ctx, -5, ty + 2, 11, 1, alpha(tint(look.accent, 0.4), 0.5)) // stripe highlight
-
-  // ── arm (paw; action-driven) ──
-  arm(ctx, look, ty, action, walk, cyc, t)
-
-  // ── the big head ──
-  head(ctx, look, ty, t, action)
+  // ── dark outline: stamp the silhouette at 4 offsets, then the real body ──
+  _outline = C.outline
+  for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    ctx.save(); ctx.translate(ox, oy); body(); ctx.restore()
+  }
+  _outline = null
+  body()
 
   ctx.restore()
 }
