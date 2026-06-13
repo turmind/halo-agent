@@ -72,6 +72,7 @@ packages/desktop/resources/icon.icns
 packages/desktop/resources/icon.ico
 packages/desktop/resources/icon.png
 packages/desktop/resources/Halo.iconset/
+packages/desktop/resources/halo-version
 # Local-only stage state: which target resources/ currently holds (drives
 # `--fast` re-stage) + cached node binary archives (per-target subdirs).
 packages/desktop/resources/.stage-meta
