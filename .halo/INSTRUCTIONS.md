@@ -29,6 +29,30 @@
 - When multiple interpretations exist, pick the simplest approach — don't guess
 - When unsure about impact scope, grep all call sites before changing
 
+### Engineering Judgment
+
+Counterweight to Minimal Implementation: minimal doesn't mean lazy. Before writing, ask:
+
+- **How often does this code run?** Per inbound message? Per render? Per request? On a hot path, any synchronous DB write, repeated select, or O(n) full-table scan needs a process-local cache / hash to skip. Don't write to disk on every event when nothing changed
+- **Is this write idempotent?** Before any update, ask "is the current value already the target?". If yes, skip. Don't churn `updated_at`, don't trigger downstream notification storms with no-op writes
+- **Push or poll?** When the client wants to know server state changed, default to push. Catch yourself writing `setInterval(fetch, ...)` and stop — there's almost certainly a server-side state-change point that can broadcast over the existing WS channel. Polling is the lazy answer that wastes traffic and CPU 24/7
+- **Repetition is a smell, not a virtue.** "Three lines beats a premature abstraction" applies to genuinely single-use logic. The same `magic_number * 60 * 1000`, the same path join, the same split-trim-filter showing up in 3 places already lost — extract immediately. Don't wait for the 4th occurrence
+- **Interface consistency over local cleverness.** REST error shape, naming style (`do/handle/process`), path construction, log format — look at adjacent code's choices and match. A reviewer's first impression is "do these files feel like they were written by the same person?"
+
+### Stop signals
+
+When you catch yourself doing any of these, stop and reconsider:
+
+- **Adding a filter / fallback / retry to make the bug go away** — symptom-treatment. Ask the root question: why did this data reach the wrong place? Why does this need a fallback?
+- **"It only works because we also do X over there"** — the code is reaching across a boundary that should be sealed. The right fix is at the boundary, not at the symptom site
+- **"This block looks duplicated but slightly different"** — usually means you're seeing surface variation, not real divergence. Sit with the common invariant; an extracted helper falls out
+- **Three temporary hacks accumulating** — when you've left 3+ "this is temporary, root cause is elsewhere" comments without fixing any, stop adding new code and pay one down
+
+### Technical-debt hygiene
+
+- Every workaround / filter / hack gets a 1-2 line comment naming the root cause and where the real fix belongs
+- Performance defaults: any `setInterval` deserves a "why not event-driven?" review; any hot-path I/O deserves a "why not cached?" review; any full-list response deserves a "what at N=10k?" review
+
 ## Important Notes
 
 - **Requirement consistency check**: Before adding features or fixing bugs, read the corresponding module docs under `.halo/docs/` to confirm the description matches the current implementation / proposed change. If inconsistent, clarify which is the source of truth before writing code
