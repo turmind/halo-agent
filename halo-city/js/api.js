@@ -34,17 +34,17 @@ async function asJson(res) {
 }
 
 export async function fetchState(signal) {
-  return asJson(await fetch(`${base()}/api/show/state`, { headers: { 'x-token': conn.token }, signal }))
+  return asJson(await fetch(`${base()}/api/show/state`, { headers: { 'x-token': conn.token }, credentials: 'include', signal }))
 }
 
 /** Per-session detail: trimmed message log + true token caps. */
 export async function fetchSession(wsPath, sessionId, signal) {
   const q = `ws=${encodeURIComponent(wsPath)}&id=${encodeURIComponent(sessionId)}`
-  return asJson(await fetch(`${base()}/api/show/session?${q}`, { headers: { 'x-token': conn.token }, signal }))
+  return asJson(await fetch(`${base()}/api/show/session?${q}`, { headers: { 'x-token': conn.token }, credentials: 'include', signal }))
 }
 
 export async function probe(api, token) {
-  const res = await fetch(`${api.replace(/\/+$/, '')}/api/show/state`, { headers: { 'x-token': token } })
+  const res = await fetch(`${api.replace(/\/+$/, '')}/api/show/state`, { headers: { 'x-token': token }, credentials: 'include' })
   return asJson(res)
 }
 
