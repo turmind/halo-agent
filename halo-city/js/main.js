@@ -289,10 +289,25 @@ if (hash.get('token')) {
 }
 
 conn.load()
-if (conn.token && conn.api) {
-  probe(conn.api, conn.token)
-    .then((s) => { hideSetup(); boot(s) })
-    .catch(() => showSetup())
-} else {
+// Auto-connect, same-origin first. A real deployment (e.g. halo-city-dev,
+// which reverse-proxies /api to its halo server) should talk to its OWN
+// origin, not whatever cross-origin address was last typed in — a cross-site
+// fetch trips the target origin's Midway SSO, gets 307'd to a login page with
+// no CORS header, and surfaces in the browser as a bogus CORS error.
+// Same-origin sidesteps it entirely. We only fall back to a stored
+// cross-origin api when same-origin can't answer (e.g. a local static server
+// deliberately pointed at a remote halo).
+;(async () => {
+  if (!conn.token) { showSetup(); return }
+  const tryList = (conn.api && conn.api !== location.origin)
+    ? [location.origin, conn.api]
+    : [conn.api || location.origin]
+  for (const api of tryList) {
+    try {
+      const s = await probe(api, conn.token)
+      conn.api = api
+      hideSetup(); boot(s); return
+    } catch { /* try next candidate */ }
+  }
   showSetup()
-}
+})()
