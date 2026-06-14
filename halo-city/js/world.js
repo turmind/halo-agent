@@ -180,6 +180,10 @@ export class World {
     // road vehicles + construction effects — in front of buildings & people
     this.traffic.drawFg(ctx, sk)
 
+    // greenway trees sit closer to camera than the road, so they paint last and
+    // occlude any bus/car passing behind them
+    this.city.drawStreetFg(ctx, t, sk, view)
+
     // selection adorners
     if (this.selection?.type === 'agent') {
       const cz = this.citizens.get(this.selection.id)

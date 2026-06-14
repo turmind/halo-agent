@@ -43,6 +43,14 @@ const COMMONS_EXTRA = ['arcade', 'aquarium', 'cattree']
 // alley loadout pool, rolled per gap
 const ALLEY_KINDS = ['cart', 'picnic', 'hoop', 'bikes']
 
+// Seaside cross-section bands by y (smaller y = further up-screen / further from
+// camera): coastal road → greenway → sea wall → beach → infinite sea. Shared by
+// drawStreet (background) and drawGreenwayTrees (foreground), so the greenway
+// trees can be drawn after the road vehicles and correctly occlude them.
+const ROAD_TOP = 11, ROAD_BOT = 27
+const GREEN_TOP = ROAD_BOT, GREEN_BOT = 40
+const WALL_TOP = GREEN_BOT, BEACH_TOP = 48, BEACH_BOT = 62
+
 function px(ctx, x, y, w, h, c) {
   ctx.fillStyle = c
   ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h))
@@ -575,10 +583,6 @@ export class City {
   }
 
   drawStreet(ctx, t, sk, view) {
-    const ROAD_TOP = 11, ROAD_BOT = 27
-    // seaside bands below the road (#task C): greenway → sea wall → beach → sea
-    const GREEN_TOP = ROAD_BOT, GREEN_BOT = 40
-    const WALL_TOP = GREEN_BOT, BEACH_TOP = 48, BEACH_BOT = 62
     // ── promenade walkway (people + props stand here, y≈0) ──
     px(ctx, view.x, 0, view.w, 8, '#9094a8')
     px(ctx, view.x, 0, view.w, 1, '#b0b4c8')
@@ -613,32 +617,50 @@ export class City {
   /** Seaside greenway between the road and the sea wall: a grassy lawn with a
    *  stone kerb, mottled turf, and tree / bush / bench / litter-bin amenities
    *  tiled along it at stable hashed intervals. Greens darken into the evening
-   *  so the band sits in the scene at night. Tiles infinitely with the view. */
-  drawGreenway(ctx, t, sk, view, top, bot) {
+   *  so the band sits in the scene at night. Tiles infinitely with the view.
+   *
+   *  The greenway sits in front of the road (closer to camera), so its tall
+   *  trees should occlude road vehicles. Trees are therefore split into a
+   *  foreground pass: `treesOnly=false` (default) draws the lawn + low props
+   *  but skips the trees; `treesOnly=true` draws only the trees and is called
+   *  after the vehicle layer. Both passes share this one hashed slot loop so a
+   *  tree always lands on the exact lawn slot it was rolled for. */
+  drawGreenway(ctx, t, sk, view, top, bot, treesOnly = false) {
     const lit = clamp(sk.amb, 0, 1)
-    const h = bot - top
-    const grass = shade(C.grass, (1 - lit) * 0.5)
-    const grassLo = shade(C.forest, (1 - lit) * 0.45)
-    const grassHi = shade(C.green, (1 - lit) * 0.4)
-    px(ctx, view.x, top, view.w, 2, shade('#8b8fa3', (1 - lit) * 0.4))    // stone kerb
-    px(ctx, view.x, top, view.w, 1, shade('#a3a7bb', (1 - lit) * 0.35))   // kerb lit edge
-    px(ctx, view.x, top + 2, view.w, h - 2, grass)                        // lawn
-    px(ctx, view.x, top + 2, view.w, 1, grassHi)                          // lit blade line
-    // mottled turf: little darker clumps on a stable hash grid
-    ctx.fillStyle = alpha(grassLo, 0.5)
-    for (let x = Math.floor(view.x / 7) * 7; x < view.x + view.w; x += 7) {
-      const r = (Math.imul((x | 0) >>> 0, 0x85ebca6b) >>> 0) / 4294967296
-      ctx.fillRect(x, top + 4 + Math.floor(r * (h - 5)), 2, 1)
+    if (!treesOnly) {
+      const h = bot - top
+      const grass = shade(C.grass, (1 - lit) * 0.5)
+      const grassLo = shade(C.forest, (1 - lit) * 0.45)
+      const grassHi = shade(C.green, (1 - lit) * 0.4)
+      px(ctx, view.x, top, view.w, 2, shade('#8b8fa3', (1 - lit) * 0.4))  // stone kerb
+      px(ctx, view.x, top, view.w, 1, shade('#a3a7bb', (1 - lit) * 0.35)) // kerb lit edge
+      px(ctx, view.x, top + 2, view.w, h - 2, grass)                      // lawn
+      px(ctx, view.x, top + 2, view.w, 1, grassHi)                        // lit blade line
+      // mottled turf: little darker clumps on a stable hash grid
+      ctx.fillStyle = alpha(grassLo, 0.5)
+      for (let x = Math.floor(view.x / 7) * 7; x < view.x + view.w; x += 7) {
+        const r = (Math.imul((x | 0) >>> 0, 0x85ebca6b) >>> 0) / 4294967296
+        ctx.fillRect(x, top + 4 + Math.floor(r * (h - 5)), 2, 1)
+      }
     }
     // amenities tiled every 58px; type rolled per slot from a stable hash
     for (let s = Math.floor((view.x - 30) / 58); s * 58 < view.x + view.w + 30; s++) {
       const gx = s * 58 + 14
       const r = (Math.imul((s ^ 0x27d4eb2f) >>> 0, 0x9e3779b1) >>> 0) / 4294967296
-      if (r < 0.34) this.greenTree(ctx, gx, top, lit)
+      if (r < 0.34) { if (treesOnly) this.greenTree(ctx, gx, top, lit) }
+      else if (treesOnly) continue          // low props belong to the background pass only
       else if (r < 0.6) this.greenBush(ctx, gx, bot - 2, lit)
       else if (r < 0.82) this.greenBench(ctx, gx, bot - 2, lit)
       else this.greenBin(ctx, gx, bot - 2, lit)
     }
+  }
+
+  /** Street foreground pass: the greenway's tall trees, drawn after the road
+   *  vehicle layer so they occlude buses/cars passing behind them (the greenway
+   *  is closer to camera than the road). Called from the renderer right after
+   *  the traffic foreground. */
+  drawStreetFg(ctx, t, sk, view) {
+    this.drawGreenway(ctx, t, sk, view, GREEN_TOP, GREEN_BOT, true)
   }
 
   /** A small ornamental tree on the greenway: a short trunk and a rounded,
