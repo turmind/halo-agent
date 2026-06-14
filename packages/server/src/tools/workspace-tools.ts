@@ -17,6 +17,11 @@ import { TOOL_ERROR_MARKER, TOOL_WARN_MARKER } from '../agents/agent-loop.js'
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', '.halo'])
 
+// Safety backstop for glob: cap how many matches we accumulate. The real fix
+// for runaway walks is lstat (see walkDir) — this just bounds the result
+// string when a pattern legitimately matches an enormous tree.
+const GLOB_MAX_RESULTS = 5000
+
 const HOME = homedir()
 
 function resolvePath(filePath: string, workspaceRoot: string): string {
@@ -31,8 +36,18 @@ function resolvePath(filePath: string, workspaceRoot: string): string {
 /**
  * Recursively walk a directory, yielding file paths.
  * Skips node_modules, .git, and other non-essential dirs.
+ *
+ * Uses lstat (not stat) so symlinks are never followed — a symlink to a
+ * directory is reported as a symlink, not recursed into. Without this, a
+ * circular symlink (e.g. inside a conda env) sends the walk into infinite
+ * recursion that pins the CPU and can't be interrupted. `find`/`ripgrep`
+ * default to the same non-following behaviour.
+ *
+ * The optional signal lets a caller abort a long walk; we check it once per
+ * directory level so a stopped session actually unwinds the recursion.
  */
-async function* walkDir(dir: string): AsyncGenerator<string> {
+async function* walkDir(dir: string, signal?: AbortSignal): AsyncGenerator<string> {
+  if (signal?.aborted) return
   let names: string[]
   try {
     names = await fs.readdir(dir)
@@ -40,16 +55,17 @@ async function* walkDir(dir: string): AsyncGenerator<string> {
     return
   }
   for (const name of names) {
+    if (signal?.aborted) return
     if (SKIP_DIRS.has(name)) continue
     const fullPath = path.join(dir, name)
-    let stat: Awaited<ReturnType<typeof fs.stat>>
+    let stat: Awaited<ReturnType<typeof fs.lstat>>
     try {
-      stat = await fs.stat(fullPath)
+      stat = await fs.lstat(fullPath)
     } catch {
       continue
     }
     if (stat.isDirectory()) {
-      yield* walkDir(fullPath)
+      yield* walkDir(fullPath, signal)
     } else if (stat.isFile()) {
       yield fullPath
     }
@@ -637,7 +653,7 @@ export function createWorkspaceTools(
       },
       required: ['pattern'],
     },
-    callback: async (_input: unknown) => {
+    callback: async (_input: unknown, signal?: AbortSignal) => {
       const input = _input as { pattern: string; path?: string; include?: string; max_results?: number }
       const searchDir = resolvePath(input.path ?? '.', workspaceRoot)
       assertPathAllowed(searchDir, sbOpts)
@@ -652,7 +668,7 @@ export function createWorkspaceTools(
 
       const results: string[] = []
 
-      for await (const filePath of walkDir(searchDir)) {
+      for await (const filePath of walkDir(searchDir, signal)) {
         if (results.length >= maxResults) break
 
         if (input.include && !matchInclude(path.basename(filePath), input.include)) {
@@ -706,13 +722,14 @@ export function createWorkspaceTools(
       },
       required: ['pattern'],
     },
-    callback: async (_input: unknown) => {
+    callback: async (_input: unknown, signal?: AbortSignal) => {
       const input = _input as { pattern: string; path?: string }
       const searchDir = resolvePath(input.path ?? '.', workspaceRoot)
       assertPathAllowed(searchDir, sbOpts)
       const results: string[] = []
 
-      for await (const filePath of walkDir(searchDir)) {
+      for await (const filePath of walkDir(searchDir, signal)) {
+        if (results.length >= GLOB_MAX_RESULTS) break
         const relativePath = path.relative(workspaceRoot, filePath)
         if (matchGlob(relativePath, input.pattern)) {
           results.push(relativePath)
