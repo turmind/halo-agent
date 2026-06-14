@@ -1,16 +1,12 @@
 'use client'
 
-import { useRef, useCallback } from 'react'
+import { useCallback } from 'react'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionList } from '@/shared/use-session-list'
 import { SessionListDropdown, SessionHistoryLink } from '@/shared/components/session-list-dropdown'
 import type { SessionMeta } from '@/shared/components/session-list-dropdown'
 
 export type { SessionMeta }
-
-export interface SessionListHandle {
-  refresh: () => void
-}
 
 /**
  * Hook: manages explorer session list for the main chat.
@@ -32,13 +28,7 @@ interface SessionListProps {
  * Uses the shared dropdown UI for consistency.
  */
 export function SessionList({ currentSessionId, onSelect, onNew, onDelete }: SessionListProps) {
-  const { sessions, refresh, remove } = useExplorerSessions()
-  const refreshRef = useRef(refresh)
-  refreshRef.current = refresh
-
-  // Re-export refresh for parent imperative access
-  const parentRef = useRef<SessionListHandle>({ refresh })
-  parentRef.current.refresh = refresh
+  const { sessions, remove } = useExplorerSessions()
 
   const handleDelete = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()

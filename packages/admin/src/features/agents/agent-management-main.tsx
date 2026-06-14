@@ -353,9 +353,10 @@ function AgentEditorWithChat({ agent, modelsRegistry, onSaved }: { agent: AgentM
   }, [])
 
   // Refs used across the load/save effects; declared up-front so they're defined
-  // when loadFromDisk below captures them.
+  // when loadFromDisk below captures them. Keep onSavedRef current after commit
+  // (read only in async save flow, never during render).
   const onSavedRef = useRef(onSaved)
-  onSavedRef.current = onSaved
+  useEffect(() => { onSavedRef.current = onSaved })
   const lastSavedYamlRef = useRef<string | null>(null)
 
   // Load yaml (form) + md (preview) every time we (re)enter form view or switch agent —

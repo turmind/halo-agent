@@ -14,8 +14,10 @@ export function FloatingBottomPanel({ cwd }: { cwd?: string }) {
   const setRect = useEditorStore((s) => s.setBottomFloatRect)
   const maximized = useEditorStore((s) => s.bottomMaximized)
   const dragHandleRef = useRef<HTMLDivElement | null>(null)
+  // Latest rect for the drag/resize mousedown handlers to read without
+  // re-binding listeners. Written after commit, not during render.
   const rectRef = useRef(rect)
-  rectRef.current = rect
+  useEffect(() => { rectRef.current = rect })
 
   // Drag to move — mousedown on tab bar. Skip while maximized: the panel
   // covers the viewport and there's nowhere meaningful to drag it to.
@@ -61,8 +63,25 @@ export function FloatingBottomPanel({ cwd }: { cwd?: string }) {
     return () => window.removeEventListener('resize', onResize)
   }, [setRect])
 
-  function startResize(edges: Edges) {
-    return (e: React.MouseEvent) => {
+  // Resize handles: bind mousedown via an effect (like the drag handle above)
+  // rather than render-time `onMouseDown={startResize(...)}` factories — the
+  // latter reads rectRef.current during render. Each handle carries its edges
+  // in a `data-edges` attribute (e.g. "top left"); we parse them on press.
+  const resizeZoneRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const zone = resizeZoneRef.current
+    if (!zone || maximized) return
+
+    function onMouseDown(e: MouseEvent) {
+      const target = (e.target as HTMLElement).closest('[data-edges]')
+      if (!target) return
+      const edgeStr = target.getAttribute('data-edges') ?? ''
+      const edges: Edges = {
+        top: edgeStr.includes('top'),
+        bottom: edgeStr.includes('bottom'),
+        left: edgeStr.includes('left'),
+        right: edgeStr.includes('right'),
+      }
       e.preventDefault()
       e.stopPropagation()
       const startX = e.clientX
@@ -102,7 +121,10 @@ export function FloatingBottomPanel({ cwd }: { cwd?: string }) {
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     }
-  }
+
+    zone.addEventListener('mousedown', onMouseDown)
+    return () => zone.removeEventListener('mousedown', onMouseDown)
+  }, [setRect, maximized])
 
   // Maximized: cover the full viewport regardless of saved rect. Restore
   // (clicking minimize) just clears `bottomMaximized` and the saved rect
@@ -121,19 +143,19 @@ export function FloatingBottomPanel({ cwd }: { cwd?: string }) {
       </div>
 
       {!maximized && (
-        <>
+        <div ref={resizeZoneRef}>
           {/* Edges (4) — thin hit zones that extend slightly outside the border */}
-          <div onMouseDown={startResize({ top: true })} className="absolute -top-1 left-3 right-3 h-2 cursor-ns-resize" />
-          <div onMouseDown={startResize({ bottom: true })} className="absolute -bottom-1 left-3 right-3 h-2 cursor-ns-resize" />
-          <div onMouseDown={startResize({ left: true })} className="absolute -left-1 top-3 bottom-3 w-2 cursor-ew-resize" />
-          <div onMouseDown={startResize({ right: true })} className="absolute -right-1 top-3 bottom-3 w-2 cursor-ew-resize" />
+          <div data-edges="top" className="absolute -top-1 left-3 right-3 h-2 cursor-ns-resize" />
+          <div data-edges="bottom" className="absolute -bottom-1 left-3 right-3 h-2 cursor-ns-resize" />
+          <div data-edges="left" className="absolute -left-1 top-3 bottom-3 w-2 cursor-ew-resize" />
+          <div data-edges="right" className="absolute -right-1 top-3 bottom-3 w-2 cursor-ew-resize" />
 
           {/* Corners (4) — larger hit zones, override edges */}
-          <div onMouseDown={startResize({ top: true, left: true })} className="absolute -top-1 -left-1 h-3 w-3 cursor-nwse-resize" />
-          <div onMouseDown={startResize({ top: true, right: true })} className="absolute -top-1 -right-1 h-3 w-3 cursor-nesw-resize" />
-          <div onMouseDown={startResize({ bottom: true, left: true })} className="absolute -bottom-1 -left-1 h-3 w-3 cursor-nesw-resize" />
-          <div onMouseDown={startResize({ bottom: true, right: true })} className="absolute -bottom-1 -right-1 h-3 w-3 cursor-nwse-resize" />
-        </>
+          <div data-edges="top left" className="absolute -top-1 -left-1 h-3 w-3 cursor-nwse-resize" />
+          <div data-edges="top right" className="absolute -top-1 -right-1 h-3 w-3 cursor-nesw-resize" />
+          <div data-edges="bottom left" className="absolute -bottom-1 -left-1 h-3 w-3 cursor-nesw-resize" />
+          <div data-edges="bottom right" className="absolute -bottom-1 -right-1 h-3 w-3 cursor-nwse-resize" />
+        </div>
       )}
     </div>
   )

@@ -239,6 +239,16 @@ function UsageLine({ message }: { message: ChatMessage }) {
 /** Render a single message — debug mode adds usage/context/agent badges inline */
 function MessageItem({ message, debugMode, usages }: { message: ChatMessage; debugMode?: boolean; usages?: ChatMessage[] }) {
   const t = inferMessageType(message)
+  const isAssistant = t === 'assistant'
+
+  // Build usage lookup by turnId (debug mode only). Must run before any early
+  // return — hooks can't be called conditionally (rules-of-hooks).
+  const usageByTurn = useMemo(() => {
+    if (!debugMode || !isAssistant || !usages?.length) return null
+    const map = new Map<string, ChatMessage>()
+    for (const u of usages) { if (u.turnId) map.set(u.turnId, u) }
+    return map.size > 0 ? map : null
+  }, [debugMode, isAssistant, usages])
 
   // tool_call / tool_result: always hidden (already shown inline in assistant messages)
   if (t === 'tool_call' || t === 'tool_result') return null
@@ -261,7 +271,6 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
   }
 
   // Assistant + notification: render the same in both modes
-  const isAssistant = t === 'assistant'
   const hasBlocks = isAssistant && message.contentBlocks && message.contentBlocks.length > 0
 
   if (message.streaming && !message.content && !message.toolCalls?.length) {
@@ -272,14 +281,6 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
       </div>
     )
   }
-
-  // Build usage lookup by turnId (debug mode only)
-  const usageByTurn = useMemo(() => {
-    if (!debugMode || !isAssistant || !usages?.length) return null
-    const map = new Map<string, ChatMessage>()
-    for (const u of usages) { if (u.turnId) map.set(u.turnId, u) }
-    return map.size > 0 ? map : null
-  }, [debugMode, isAssistant, usages])
 
   const elements: React.ReactNode[] = []
 

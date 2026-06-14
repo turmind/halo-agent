@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next build --no-lint && node scripts/copy-monaco.mjs && next start --port 3000",
     "build": "next build && node scripts/copy-monaco.mjs",
+    "lint": "eslint src",
     "start": "next start --port 3000"
   },
   "dependencies": {

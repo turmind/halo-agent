@@ -1,5 +1,11 @@
 'use client'
 
+/* eslint-disable react-hooks/refs --
+ * The useImageZoom() hook returns { containerRef, scale, translate, ... }. The
+ * rule can't see across the hook boundary, so it flags every `zoom.*` access in
+ * JSX as a render-time ref read — including `ref={zoom.containerRef}` (standard)
+ * and `zoom.scale`/`zoom.translate` (state, not refs). All false positives here. */
+
 import { useRef, useState, useCallback, useEffect, type WheelEvent as ReactWheelEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { Printer, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
 import type { PreviewProps } from '../types'

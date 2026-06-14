@@ -3,12 +3,11 @@
 // OFF (they need per-package tsconfig wiring and are slow); this is a syntax +
 // obvious-mistake pass only.
 //
-// Scope: server (backend) + cli (Ink/React TUI). admin is a Next.js front-end
-// whose react-hooks lint is a separate, larger effort (~100 findings) — not yet
-// bundled into the build gate.
+// Scope: server (backend), cli (Ink/React TUI), admin (Next.js front-end).
 import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
+import nextPlugin from '@next/eslint-plugin-next'
 
 // Lenient rules shared by every linted package — calibrated to this codebase's
 // deliberate idioms (see each comment for the why).
@@ -33,9 +32,26 @@ const baseRules = {
   'no-useless-assignment': 'off',
 }
 
+// react-hooks rules for React component files (.tsx). The genuine violations
+// (conditional hook calls, render-time ref reads) stay as errors; the noisy ones
+// are downgraded with a rationale.
+const reactHooksRules = {
+  ...reactHooks.configs.recommended.rules,
+  // Benign derived-state corrections (clamp a cursor when its list shrinks;
+  // follow-the-bottom on a growing log) — all if-guarded, no render loop.
+  'react-hooks/set-state-in-effect': 'warn',
+  // React Compiler optimization hints, not correctness bugs: manual deps that are
+  // more specific than the compiler's inference (e.g. `activeProject?.path` vs
+  // `activeProject`) just skip auto-memoization — the code still works correctly.
+  'react-hooks/preserve-manual-memoization': 'warn',
+  // Fires on imperative DOM mutation of values reached through a ref (e.g.
+  // xterm container `.style.display = ...` in an effect) — legitimate here.
+  'react-hooks/immutability': 'warn',
+}
+
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/dist-pub/**', '**/node_modules/**', '**/*.cjs', '**/*.mjs'],
+    ignores: ['**/dist/**', '**/dist-pub/**', '**/out/**', '**/.next/**', '**/node_modules/**', '**/*.cjs', '**/*.mjs'],
   },
   // server: pure backend, no React.
   {
@@ -44,25 +60,22 @@ export default tseslint.config(
     languageOptions: { ecmaVersion: 2023, sourceType: 'module' },
     rules: baseRules,
   },
-  // cli: Ink/React TUI. Base rules on all source.
+  // cli + admin: base rules on all source.
   {
-    files: ['packages/cli/src/**/*.{ts,tsx}'],
+    files: ['packages/cli/src/**/*.{ts,tsx}', 'packages/admin/src/**/*.{ts,tsx}'],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module' },
     rules: baseRules,
   },
-  // react-hooks rules ONLY on .tsx (real component files). Pure-logic .ts (e.g.
-  // setup-prompts.ts, whose `useRichPrompts()` is a TTY check, not a Hook) must
-  // not be judged by Hook rules.
+  // react-hooks rules. cli: ONLY .tsx — its pure-logic .ts (setup-prompts.ts,
+  // whose `useRichPrompts()` is a TTY check, not a Hook) would be misjudged.
+  // admin: .ts too — it has custom-hook .ts files (e.g. use-preview-fetch.ts)
+  // that legitimately carry react-hooks disable comments, and no use-prefixed
+  // non-hook helpers. @next plugin is registered so admin's existing
+  // `@next/next/*` disable comments resolve.
   {
-    files: ['packages/cli/src/**/*.tsx'],
-    plugins: { 'react-hooks': reactHooks },
-    rules: {
-      ...reactHooks.configs.recommended.rules,
-      // Most flagged sites are benign derived-state corrections (clamp a cursor
-      // when its list shrinks; follow-the-bottom on a growing log) — all guarded
-      // by an `if`, so no render loop. Keep as a hint, don't fail the gate.
-      'react-hooks/set-state-in-effect': 'warn',
-    },
+    files: ['packages/cli/src/**/*.tsx', 'packages/admin/src/**/*.{ts,tsx}'],
+    plugins: { 'react-hooks': reactHooks, '@next/next': nextPlugin },
+    rules: reactHooksRules,
   },
 )

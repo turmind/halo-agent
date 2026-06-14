@@ -107,11 +107,12 @@ export function MarkdownPreview({ content, filePath, projectId }: MarkdownPrevie
   const headings = useMemo(() => extractHeadings(content), [content])
 
   // Per-render heading counter: ReactMarkdown renders headings in document
-  // order, so the Nth heading element gets headings[N].slug. Reset before each
-  // render pass. (A ref, not state — bumping it must not trigger a re-render.)
-  const headingIdx = useRef(0)
-  headingIdx.current = 0
-  const nextHeadingId = () => headings[headingIdx.current++]?.slug
+  // order, so the Nth heading element gets headings[N].slug. A plain local
+  // (not a ref) — its lifetime is exactly this render pass, and the `heading`
+  // renderers below close over it, so it counts up correctly as ReactMarkdown
+  // walks the tree. Avoids writing a ref during render.
+  let headingIdx = 0
+  const nextHeadingId = () => headings[headingIdx++]?.slug
 
   const scrollToHeading = (slug: string) => {
     const root = rootRef.current

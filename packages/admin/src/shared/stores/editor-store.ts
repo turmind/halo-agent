@@ -622,7 +622,12 @@ const EditorStoreContext = createContext<EditorStoreApi | null>(null)
 
 export function EditorStoreProvider({ children }: { children: ReactNode }) {
   const storeRef = useRef<EditorStoreApi | null>(null)
+  // Lazy one-time ref init (React's documented "avoid recreating ref contents"
+  // pattern). The render-time read/write is safe: written once when null, then
+  // idempotent. react-hooks/refs flags it conservatively.
+  // eslint-disable-next-line react-hooks/refs
   if (!storeRef.current) storeRef.current = createEditorStore()
+  // eslint-disable-next-line react-hooks/refs
   return createElement(EditorStoreContext.Provider, { value: storeRef.current }, children)
 }
 
