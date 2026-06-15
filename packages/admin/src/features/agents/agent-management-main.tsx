@@ -6,7 +6,7 @@ import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSkillStore } from '@/features/skills/skills-sidebar'
 import type { Skill } from '@/shared/types'
-import { Bot, Plus, Trash2, Crown, Globe, FolderOpen, ChevronRight, Play, Pencil, ArrowLeft, RefreshCw, Cog } from 'lucide-react'
+import { Bot, Plus, Trash2, Crown, Globe, FolderOpen, ChevronRight, Play, Pencil, ArrowLeft, RefreshCw, Cog, Eye, EyeOff } from 'lucide-react'
 import { cn, promptInput, confirmAction } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import { AgentForm } from './agent-form'
@@ -185,6 +185,19 @@ export function AgentManagementMain() {
     }
   }
 
+  // Disable hides an agent from the orchestrator's roster + list_agents (so it
+  // can't be delegated to) without deleting its files. Toggle writes to the
+  // workspace DB; trust the returned `disabled` rather than optimistic-flipping.
+  async function handleToggle(agent: AgentMeta) {
+    try {
+      const { disabled } = await api.agentConfigs.toggle(agent.id, { scope: agent.scope, projectId })
+      setAgents((prev) => prev.map((a) => agentKey(a) === agentKey(agent) ? { ...a, disabled } : a))
+      bumpAgentBus()
+    } catch (err) {
+      console.error('[AgentManagement] Toggle failed:', err)
+    }
+  }
+
   // Internal agents (e.g. self-evolution) get their own section so they stay
   // out of users' way until explicitly opened. They're always global-scoped
   // but treating them as a separate "scope" in the UI keeps the regular
@@ -233,19 +246,36 @@ export function AgentManagementMain() {
               className={cn(
                 'group flex w-full items-center gap-2 pl-7 pr-2 py-1.5 cursor-pointer transition-colors',
                 selectedKey === key ? 'bg-[var(--secondary)]' : 'hover:bg-[var(--secondary)]/50',
-                agent.overridden && 'opacity-40',
+                (agent.overridden || agent.disabled) && 'opacity-40',
               )}
               onClick={() => setSelectedKey(key)}
             >
               <Bot className="h-3 w-3 shrink-0 text-[var(--muted-foreground)]" />
               <div className="min-w-0 flex-1">
                 <p className="text-[11px] font-medium text-[var(--foreground)] truncate">{agent.name}</p>
-                {(agent.overridden || agent.description) && (
+                {(agent.overridden || agent.disabled || agent.description) && (
                   <p className="text-[10px] text-[var(--muted-foreground)] truncate">
-                    {agent.overridden ? 'overridden' : agent.description}
+                    {agent.overridden ? 'overridden' : agent.disabled ? 'disabled' : agent.description}
                   </p>
                 )}
               </div>
+              {/* Disable toggle — hides the agent from the roster / list_agents
+                  without deleting it. Not offered for internal agents (already
+                  hidden from delegation by their `internal` flag), nor when no
+                  workspace is open (disabled state lives in the workspace DB,
+                  so there's nowhere to persist it). */}
+              {scope !== 'internal' && projectId && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleToggle(agent) }}
+                  title={agent.disabled ? 'Enable (show in roster)' : 'Disable (hide from roster)'}
+                  className={cn(
+                    'shrink-0 rounded p-0.5 text-[var(--muted-foreground)] transition-opacity hover:text-[var(--foreground)]',
+                    agent.disabled ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+                  )}
+                >
+                  {agent.disabled ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                </button>
+              )}
               {agent.scope === 'global' ? (
                 <span title="Global agent (cannot delete)"><Crown className="h-3 w-3 shrink-0 text-amber-500" /></span>
               ) : (
