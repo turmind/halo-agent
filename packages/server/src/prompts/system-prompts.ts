@@ -1,22 +1,21 @@
 /**
- * Load system prompts from prompts/{bootstrap,all,root}/ + builtin/.
+ * Load system prompts from prompts/{bootstrap,all,root}/.
  *
  * Each subdirectory maps to an injection scope:
  *   - bootstrap/  injected only when a root agent has no USER.md yet
  *   - all/        injected into every agent
  *   - root/       injected only into root agents (parentId === null)
- *   - builtin/    server-owned, version-tied, NOT user-editable. Currently
- *                 holds PLATFORM_KNOWLEDGE.md (Halo self-description). The
- *                 contents are prepended to the `root` scope, so root agents
- *                 see them but sub-agents don't.
+ *
+ * Platform self-knowledge (the old `builtin/PLATFORM_KNOWLEDGE.md`) used to be
+ * force-injected here; it now lives in the `halo` skill (loaded on demand via
+ * `activate_skill`) so it doesn't sit in every root agent's system prompt.
  *
  * Within a subdirectory, all `.md` files are concatenated in filename ascending
  * order. Empty / missing subdirectories are treated as an empty string.
  *
  * Precedence: workspace > global. If <ws>/.halo/prompts/<scope>/ directory
  * exists, it entirely replaces the global one (no merge). This mirrors the
- * agent.yaml / AGENT.md override semantics. `builtin/` is global-only — there
- * is no workspace override, since it's platform self-knowledge.
+ * agent.yaml / AGENT.md override semantics.
  *
  * Read on every `buildAgentInstance` call so user edits take effect on the next
  * session without a server restart. File I/O is a few KB per call — negligible.
@@ -25,7 +24,6 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { homedir } from 'node:os'
 const GLOBAL_PROMPTS_DIR = path.join(homedir(), '.halo', 'global', 'prompts')
-const GLOBAL_BUILTIN_DIR = path.join(homedir(), '.halo', 'global', 'builtin')
 
 // Empty-string fallback when neither the workspace nor the global prompt dir
 // has any .md files. `init.ts` seeds the global dir from `templates/prompts/`
@@ -36,11 +34,10 @@ const GLOBAL_BUILTIN_DIR = path.join(homedir(), '.halo', 'global', 'builtin')
 export interface SystemPrompts {
   bootstrap: string
   all: string
-  /** Combined `builtin/` + `root/` content; root agents see this. */
   root: string
-  dirs: { bootstrap: string; all: string; root: string; builtin: string }
+  dirs: { bootstrap: string; all: string; root: string }
   /** Absolute paths of the .md files actually loaded for each scope. Empty when built-in fallback is used. */
-  files: { bootstrap: string[]; all: string[]; root: string[]; builtin: string[] }
+  files: { bootstrap: string[]; all: string[]; root: string[] }
 }
 
 /** Check if a directory exists. */
@@ -128,28 +125,20 @@ export async function loadSystemPrompts(workspaceRoot?: string): Promise<SystemP
     resolvePromptsDir('all', workspaceRoot),
     resolvePromptsDir('root', workspaceRoot),
   ])
-  const [bootstrap, all, root, builtin] = await Promise.all([
+  const [bootstrap, all, root] = await Promise.all([
     loadDir(bootstrapDir, ''),
     loadDir(allDir, ''),
     loadDir(rootDir, ''),
-    loadDir(GLOBAL_BUILTIN_DIR, ''),
   ])
-  // Builtin sits at the front of the `root` scope — root agents see Halo's
-  // self-description first, then any workspace/global root prompts the user
-  // configured. Sub-agents skip both.
-  const rootCombined = builtin.content && root.content
-    ? `${builtin.content}\n\n${root.content}`
-    : (builtin.content || root.content)
   return {
     bootstrap: bootstrap.content,
     all: all.content,
-    root: rootCombined,
-    dirs: { bootstrap: bootstrapDir, all: allDir, root: rootDir, builtin: GLOBAL_BUILTIN_DIR },
+    root: root.content,
+    dirs: { bootstrap: bootstrapDir, all: allDir, root: rootDir },
     files: {
       bootstrap: bootstrap.files,
       all: all.files,
       root: root.files,
-      builtin: builtin.files,
     },
   }
 }

@@ -40,6 +40,7 @@ import { createAuthRoutes, authMiddleware, getTokenFromCookieHeader, isAuthentic
 import { initLogger } from './logger.js'
 import { config, reloadSandboxConfig } from './config.js'
 import { initBwrapCheck, isBwrapCached, setSandboxHiddenPaths } from './tools/sandbox.js'
+import { ensureHaloHome, readSeedVersion, TEMPLATE_VERSION } from './init.js'
 
 // ------------------------------------------------------------------
 // Configuration
@@ -148,11 +149,28 @@ const PROJECT_ROOT = findProjectRoot()
 const HALO_HOME = path.join(homedir(), '.halo')
 
 // ~/.halo/ must be initialized via `halo setup` before the server can run.
-// We do not auto-seed at startup any more — that step belongs to the explicit
-// install command so users (and ops) know when state is being created.
+// First-time seeding only happens through `halo setup` so users / ops have an
+// explicit moment when state gets created.
 if (!fs.existsSync(path.join(HALO_HOME, 'global', '.template-version'))) {
   process.stderr.write('\x1b[31m[Server] ~/.halo/global/ not initialized. Run `halo setup` first.\x1b[0m\n')
   process.exit(1)
+}
+
+// Already-initialized installs do auto-refresh on startup when the bundled
+// templates have moved ahead of the on-disk seed (typical case: user just
+// `npm upgrade`d). `ensureHaloHome` is idempotent and follows the same
+// platform-owned vs user-owned policy as `halo setup`, so user state survives.
+{
+  const seedVersion = readSeedVersion(HALO_HOME)
+  if (seedVersion > 0 && seedVersion < TEMPLATE_VERSION) {
+    console.log(`[Server] Templates outdated (v${seedVersion} → v${TEMPLATE_VERSION}), refreshing ~/.halo/global/`)
+    try {
+      ensureHaloHome(HALO_HOME)
+    } catch (err) {
+      console.error(`[Server] Template refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+      // Non-fatal — fall through and start with the older seed.
+    }
+  }
 }
 
 if (!config.server.password || !config.server.jwtSecret) {

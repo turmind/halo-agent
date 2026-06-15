@@ -7,13 +7,12 @@
  *   version upgrades take effect without user action. Users editing
  *   these are expected to lose their changes — flagged in docs.
  *   Includes:
- *     - `templates/builtin/`           → server-internal platform self-knowledge
  *     - `templates/INSTRUCTIONS.md`    → global instructions
  *     - `templates/prompts/{bootstrap,all,root}/*` → system prompts
  *     - `templates/models/*.yaml`      → model registry
  *     - bundled platform docs (BUNDLED_DOCS list) → ~/.halo/global/docs/
  *     - the 6 built-in agent IDs       → ~/.halo/global/agents/<id>/
- *     - the 7 built-in skill IDs       → ~/.halo/global/skills/<id>/
+ *     - the built-in skill IDs         → ~/.halo/global/skills/<id>/
  *
  * - **User-owned files** are left alone:
  *     - any agent under templates/ that's NOT in BUILTIN_AGENT_IDS
@@ -53,8 +52,22 @@ function resolveDocsSource(): string | null {
   return null
 }
 
-const TEMPLATE_VERSION = 28
+/** Bumped whenever platform-owned templates change. Server startup compares
+ *  this against the marker in `~/.halo/global/.template-version` and re-runs
+ *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
+ *  without having to remember to run `halo setup`. */
+export const TEMPLATE_VERSION = 29
 const VERSION_FILE = '.template-version'
+
+/** Read the seed version stamped into `~/.halo/global/.template-version`.
+ *  Returns 0 when the file is missing or unparseable. Used by the server to
+ *  decide whether to refresh templates at startup. */
+export function readSeedVersion(haloHome: string): number {
+  try {
+    const raw = fs.readFileSync(path.join(haloHome, 'global', VERSION_FILE), 'utf-8')
+    return parseInt(raw.trim(), 10) || 0
+  } catch { return 0 }
+}
 
 const SKIP_NAMES = new Set(['.DS_Store', 'schema.sql', '__pycache__', '.pytest_cache'])
 
@@ -97,6 +110,11 @@ const BUILTIN_SKILL_IDS = new Set([
   // it can drive in real time by emitting `<<<SHOW: …js… >>>`, which the admin
   // forwards verbatim to the open preview. A second channel beyond text.
   'self',
+  // Platform self-knowledge — replaces the legacy `templates/builtin/`
+  // root-prompt injection. Loaded on demand via `activate_skill('halo')`
+  // when the user asks anything about Halo itself (config dirs, MD scopes,
+  // doc lookup table). user-invocable: false — no `/halo` command.
+  'halo',
 ])
 
 /** Docs bundled into `~/.halo/global/docs/` so the platform-knowledge
@@ -407,9 +425,6 @@ export function ensureHaloHome(haloHome: string): void {
   }
 
   // ── Always-overwrite: platform-owned files ──────────────────────────────
-
-  // builtin/ — server self-knowledge (PLATFORM_KNOWLEDGE.md, etc.)
-  forceCopyDir(path.join(TEMPLATES_DIR, 'builtin'), path.join(globalDir, 'builtin'))
 
   // INSTRUCTIONS.md
   const instrSrc = path.join(TEMPLATES_DIR, 'INSTRUCTIONS.md')

@@ -489,7 +489,7 @@ agent's tools and skills. When you do delegate, say so in one line and keep goin
     }
     if (mdContents.projectIndex) mdFiles.push({ label: 'INDEX.md', path: mdPaths.projectIndex ?? '' })
     if (mdContents.userMd) mdFiles.push({ label: 'USER.md', path: (mdPaths.workspaceUserMd ?? mdPaths.globalUserMd) })
-    const pushPromptScope = (scope: 'all' | 'root' | 'bootstrap' | 'builtin') => {
+    const pushPromptScope = (scope: 'all' | 'root' | 'bootstrap') => {
       const loaded = systemPrompts.files[scope]
       if (loaded.length > 0) {
         for (const file of loaded) {
@@ -500,9 +500,6 @@ agent's tools and skills. When you do delegate, say so in one line and keep goin
       }
     }
     if (systemPrompts.all) pushPromptScope('all')
-    // Root agents see builtin self-knowledge + their root prompts; sub-agents
-    // skip both. List builtin first so /context displays it before user-set root.
-    if (isRoot && systemPrompts.files.builtin.length > 0) pushPromptScope('builtin')
     if (isRoot && systemPrompts.files.root.length > 0) pushPromptScope('root')
     if (isRoot && mdContents.needsBootstrap && systemPrompts.bootstrap) pushPromptScope('bootstrap')
     return {
