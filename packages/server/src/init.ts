@@ -53,7 +53,7 @@ function resolveDocsSource(): string | null {
   return null
 }
 
-const TEMPLATE_VERSION = 27
+const TEMPLATE_VERSION = 28
 const VERSION_FILE = '.template-version'
 
 const SKIP_NAMES = new Set(['.DS_Store', 'schema.sql', '__pycache__', '.pytest_cache'])
