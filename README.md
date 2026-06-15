@@ -40,6 +40,7 @@ halo server start     # launch on :9527 (default)
 
 Then open **http://localhost:9527**.
 
+- **Upgrade**: `halo upgrade && halo server restart`. The server's startup check refreshes bundled docs / agents / skills automatically when the on-disk template version is behind.
 - **Docker / CI**: `halo setup --non-interactive` and supply credentials via the `HALO_PASSWORD` env var.
 - **From source**: `pnpm install && pnpm build`.
 

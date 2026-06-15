@@ -18,10 +18,8 @@ Entry point: `session-manager.ts` `buildAgentInstance(agentId, sessionId, parent
 │   ├── bootstrap/BOOTSTRAP.md             ← first-run guidance
 │   ├── all/                               ← every-agent rules (TOOL_GUIDELINES.md, TOOL_SHELL[.windows].md)
 │   └── root/                              ← root-agent-only (empty by default; user-set)
-├── builtin/                ← server-owned, version-tied, NOT user-editable
-│   └── PLATFORM_KNOWLEDGE.md              ← platform self-knowledge, prepended to root scope
 ├── agents/<id>/{agent.yaml, AGENT.md}
-└── skills/<id>/SKILL.md
+└── skills/<id>/SKILL.md       ← built-in `halo` skill carries platform self-knowledge (loaded on demand via activate_skill)
 ```
 
 ### Workspace
@@ -113,7 +111,8 @@ First startup writes the four default MDs to `~/.halo/global/prompts/{bootstrap,
 - For each user-editable scope (`bootstrap`, `all`, `root`): if `<ws>/.halo/prompts/<scope>/` **directory exists**, use it; otherwise fall back to `~/.halo/global/prompts/<scope>/`.
 - Override is at the **directory level** — the workspace directory entirely replaces the global one (no per-file merge).
 - Within the resolved directory, the `.md` files are filtered by `selectForPlatform` (see below), then concatenated by filename ascending.
-- The `builtin/` scope (`~/.halo/global/builtin/*.md`) is loaded separately. It is **global-only** — there is no workspace override — and is force-copied from `templates/builtin/` on every startup (so platform self-knowledge stays version-tied to the server). Its content is prepended to the resolved `root` scope: root agents see `builtin + root`, sub-agents see neither.
+
+> Historical: a `builtin/` scope used to be force-prepended to `root`, carrying `PLATFORM_KNOWLEDGE.md`. That content has moved to the built-in `halo` skill (see `templates/skills/halo/SKILL.md`), loaded on demand via `activate_skill('halo')`. Root agents no longer pay context for platform self-knowledge they don't need this turn.
 
 #### Platform variant files (`*.windows.md`)
 
@@ -129,7 +128,7 @@ Replacement is **whole-file**, not per-section — so split the platform-diverge
 Result:
 - `prompts/bootstrap/*.md` → `bootstrapPrompt`
 - `prompts/all/*.md` → `allPrompt`
-- `builtin/*.md` (global-only) + `prompts/root/*.md` → `rootPrompt` (concatenated, builtin first)
+- `prompts/root/*.md` → `rootPrompt`
 
 Missing directory or read failure: warn + use built-in fallback.
 
@@ -387,6 +386,6 @@ Schema declared by each package + values stored centrally is the same model VSCo
 - **Sub-agent does not inject**: USER.md / `prompts/root/` / `prompts/bootstrap/`
 - **Internal agents (`internal: true`)**: get no workspace context at all — USER.md / INSTRUCTIONS.md / INDEX.md / `prompts/{all,root,bootstrap}` all cleared; only their own AGENT.md + tool list remain
 - **Bootstrap trigger**: `!parentId && !userMd`
-- **System prompts are external**: resolved from workspace then global `prompts/{bootstrap,all,root}/*.md`, read live, sorted by filename. The `builtin/` scope is global-only (server-owned, no workspace override) and gets prepended to the resolved root scope for root agents.
+- **System prompts are external**: resolved from workspace then global `prompts/{bootstrap,all,root}/*.md`, read live, sorted by filename.
 - **System prompt missing**: warn + use built-in fallback; `system-prompts.ts` is the seed source and fallback
 - **`.halo/` is not grep/globbed**: use `file_read` + INDEX.md navigation

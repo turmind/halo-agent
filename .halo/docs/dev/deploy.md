@@ -140,11 +140,17 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 |---|---|
 | `halo setup` | Interactive password / port / model keys / optional skills setup |
 | `halo setup --non-interactive` (alias `-y`) | Skip every prompt — seed templates only, supply password via `HALO_PASSWORD` env. Use in Dockerfiles / CI. |
+| `halo upgrade` | Bump the npm install in place. Compares the bundled version against `npm view @turmind/halo version`; no-op if already latest, otherwise runs `npm install -g @turmind/halo@latest` and prints a server-restart hint. On EACCES, suggests retrying with `sudo`. |
 | `halo server start` | Launch HTTP/WS server (foreground). Add `-d` for daemon. |
 | `halo server stop` / `restart` / `status` / `logs` | Server lifecycle |
 | `halo tui` | Interactive TUI client |
 | `halo cli "<prompt>"` | One-shot prompt → reply, exit |
 | `halo agents` / `halo sessions` | List agents / sessions |
+
+### Upgrade flow
+
+1. `halo upgrade` — bumps the on-disk npm package
+2. `halo server restart` — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts. Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
 
 The published package contains a single bundled JS entry (~620 KB), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint ≈ 120 MB after npm dedupes shared deps.
 

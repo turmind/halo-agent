@@ -64,24 +64,25 @@ After `halo setup`:
 ```
 ~/.halo/
 ├── global/                   ← server-managed, see overwrite policy below
-│   ├── INSTRUCTIONS.md       ← always overwritten on startup
-│   ├── builtin/              ← always overwritten (PLATFORM_KNOWLEDGE.md etc.)
-│   ├── prompts/{bootstrap,all,root}/   ← always overwritten
-│   ├── models/<provider>.yaml          ← always overwritten
-│   ├── docs/                 ← always overwritten (bundled platform docs)
-│   ├── agents/               ← built-in ids overwritten; user-added ones untouched
-│   └── skills/               ← built-in ids overwritten; user-added ones untouched
+│   ├── INSTRUCTIONS.md       ← refreshed on upgrade
+│   ├── prompts/{bootstrap,all,root}/   ← refreshed on upgrade
+│   ├── models/<provider>.yaml          ← refreshed on upgrade
+│   ├── docs/                 ← refreshed on upgrade (bundled platform docs)
+│   ├── agents/               ← built-in ids refreshed; user-added ones untouched
+│   └── skills/               ← built-in ids refreshed; user-added ones untouched
 └── secrets/                  ← never overwritten after first creation
     ├── config.yaml           ← leaf-merged: new server knobs added, existing values kept
     ├── settings.yaml         ← created empty if missing; otherwise untouched
     └── channels/channels.db  ← per-channel account state
 ```
 
-**Server-overwritten on every startup**: `builtin/`, `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`agent`, `skill`, `ws`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
+**When does "refreshed on upgrade" actually run?** `halo setup` always re-runs the seed; the server's startup check also re-runs it automatically when `~/.halo/global/.template-version` is behind the bundled `TEMPLATE_VERSION`. So the routine flow `halo upgrade && halo server restart` is enough — no need to remember `halo setup`.
+
+**Server-refreshed**: `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`agent`, `skill`, `ws`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`, `halo`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
 
 **Never overwritten**: anything else under `agents/` or `skills/` (your own creations), and everything under `secrets/`.
 
-**`secrets/config.yaml`** is leaf-merged on each startup — new keys introduced by a server upgrade are added, your existing `value`s (password, port, jwt_secret) are kept.
+**`secrets/config.yaml`** is leaf-merged on each refresh — new keys introduced by a server upgrade are added, your existing `value`s (password, port, jwt_secret) are kept.
 
 ## Next
 
