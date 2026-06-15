@@ -13,7 +13,7 @@
 import { eq } from 'drizzle-orm'
 import { agentSessions } from '../db/schema.js'
 import { config } from '../config.js'
-import { loadAgentYaml, scanAvailableAgents, loadSkillMetadata } from './agent-loader.js'
+import { loadAgentYaml, scanAvailableAgents, loadSkillMetadata, isAgentDisabled } from './agent-loader.js'
 import { loadScopeInstructions } from '../prompts/md-loader.js'
 import { getDisabledSet } from '../db/index.js'
 import type { ToolDef } from './bedrock-agent.js'
@@ -50,6 +50,12 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       // Internal agents (self-evolution etc.) are not delegatable. Treat them
       // as not-found so an agent guessing the id can't reach them either.
       if (agentYaml.internal === true) return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" not found. Use list_agents to see available agents.` })
+      // Disabled agents are hidden from list_agents/roster, but the id could be
+      // guessed or remembered from a prior turn — block delegation too, else
+      // "disabled" only hides the agent without actually disabling it.
+      if (isAgentDisabled(params.agent_id, sm.workspaceRoot, getDisabledSet(sm.getDb(), 'agent'))) {
+        return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" not found. Use list_agents to see available agents.` })
+      }
 
       const depth = sessionId.split('>').length
       if (depth >= config.session.maxNestingDepth) {
@@ -278,10 +284,13 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       const { agent_id } = input as { agent_id: string }
       const yamlConfig = await loadAgentYaml(agent_id, sm.workspaceRoot)
       if (!yamlConfig) return JSON.stringify({ code: 1, error: `agent "${agent_id}" not found.` })
-      // Mirror list_agents: internal agents (e.g. self-evolution) are
-      // invisible to callers, so query_agent should report them as not-found
-      // rather than leaking config. Admin tooling reads the yaml directly.
+      // Mirror list_agents: internal agents (e.g. self-evolution) and disabled
+      // agents are invisible to callers, so query_agent reports them as
+      // not-found rather than leaking config. Admin tooling reads the yaml directly.
       if (yamlConfig.internal === true) return JSON.stringify({ code: 1, error: `agent "${agent_id}" not found.` })
+      if (isAgentDisabled(agent_id, sm.workspaceRoot, getDisabledSet(sm.getDb(), 'agent'))) {
+        return JSON.stringify({ code: 1, error: `agent "${agent_id}" not found.` })
+      }
       // Use the parent session's access level so skill listing matches
       // what the actual sub-agent run would see (skills tagged
       // `requiresAccess: full` won't surface in a readonly channel).

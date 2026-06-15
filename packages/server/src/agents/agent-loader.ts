@@ -47,6 +47,21 @@ export function agentSourceDir(agentId: string, workspaceRoot?: string): string 
   return path.join(GLOBAL_AGENTS_DIR, agentId)
 }
 
+/**
+ * Is the *effective* agent for this id disabled? `disabledSet` is keyed
+ * `scope:id` (from getDisabledSet), so we resolve which scope actually serves
+ * the id — workspace wins when its dir exists, mirroring agentSourceDir — and
+ * check that scope's key. Used by the by-id resolution paths (start_session,
+ * query_agent) so a disabled agent is unreachable by delegation too, not just
+ * hidden from the listing tools. Kept here (not db/index) so agent-loader stays
+ * db-free: callers pass the already-computed set.
+ */
+export function isAgentDisabled(agentId: string, workspaceRoot: string | undefined, disabledSet: Set<string>): boolean {
+  const scope = workspaceRoot && fsSync.existsSync(path.join(workspaceRoot, '.halo', 'agents', agentId))
+    ? 'workspace' : 'global'
+  return disabledSet.has(`${scope}:${agentId}`)
+}
+
 /** Load agent.yaml from the agent's source dir (workspace dir wholly
  *  overrides global — see agentSourceDir). */
 export async function loadAgentYaml(agentId: string, workspaceRoot?: string): Promise<AgentYamlConfig | null> {
