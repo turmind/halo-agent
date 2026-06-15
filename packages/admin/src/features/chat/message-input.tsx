@@ -604,6 +604,10 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const activeProject = useProjectStore((s) => s.activeProject)
+  // -1 = not yet loaded (treat as allow). 0 = every agent disabled → block
+  // sending, since no agent can pick up the message.
+  const usableAgentCount = useChatStore((s) => s.usableAgentCount)
+  const noUsableAgent = usableAgentCount === 0
 
   // Show context chip: prefer selection if available, otherwise show active file
   const contextLabel = useMemo(() => {
@@ -787,6 +791,8 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   const handleSend = useCallback(async () => {
     const trimmed = text.trim()
     if (!trimmed && pendingFiles.length === 0) return
+    // Every agent is disabled — nothing can answer, so don't let the message go.
+    if (noUsableAgent) return
 
     // A verb candidate is highlighted (e.g. `/skill dis` → disable): Enter
     // completes it instead of sending the partial verb as an argument.
@@ -837,7 +843,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     setMentionedFiles([])
     setText('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-  }, [text, pendingFiles, onSend, matchedCmds, cmdIndex, selectCommand, mentionedFiles, matchedVerbs, verbIndex, selectVerb])
+  }, [text, pendingFiles, onSend, matchedCmds, cmdIndex, selectCommand, mentionedFiles, matchedVerbs, verbIndex, selectVerb, noUsableAgent])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -955,7 +961,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
         <textarea
           ref={textareaRef} value={text} onChange={handleInput} onKeyDown={handleKeyDown} onPaste={handlePaste}
           onSelect={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart)}
-          placeholder={isStreaming ? 'Send to interrupt current response...' : 'Type @ to reference files...'}
+          placeholder={noUsableAgent ? 'All agents are disabled — enable one in the Agents tab to chat' : isStreaming ? 'Send to interrupt current response...' : 'Type @ to reference files...'}
           rows={1}
           className="w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-sm text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none max-h-[200px]"
         />
@@ -1024,11 +1030,11 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
               <Square className="h-3.5 w-3.5 fill-current" />
             </button>
           ) : (
-            <button onClick={handleSend} disabled={!text.trim() && pendingFiles.length === 0}
-              title={isStreaming && text.trim() ? 'Send (interrupts current response)' : 'Send (Enter)'}
+            <button onClick={handleSend} disabled={noUsableAgent || (!text.trim() && pendingFiles.length === 0)}
+              title={noUsableAgent ? 'All agents are disabled — enable one to chat' : isStreaming && text.trim() ? 'Send (interrupts current response)' : 'Send (Enter)'}
               className={cn(
                 'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors',
-                text.trim() || pendingFiles.length > 0
+                !noUsableAgent && (text.trim() || pendingFiles.length > 0)
                   ? isStreaming ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-blue-600'
                   : 'text-[var(--muted-foreground)] cursor-not-allowed',
               )}>

@@ -42,6 +42,10 @@ function AgentSelector() {
         .map((a) => ({ id: a.id, name: a.name, scope: a.scope, priority: a.priority ?? 0 }))
         .sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name))
       setAgents(opts)
+      // Surface the usable count so the composer can block sending when every
+      // agent is disabled (0). AgentSelector returns null at <=1 agent, but the
+      // count still needs to flow out — read by MessageInput via the store.
+      useChatStore.getState().setUsableAgentCount(opts.length)
       // Promote the highest-priority agent to selected when not locked into a
       // session and the current selection is still the seed value `'default'`.
       // After the user explicitly picks something else, we leave it alone.

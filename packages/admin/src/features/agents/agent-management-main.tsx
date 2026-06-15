@@ -6,7 +6,7 @@ import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSkillStore } from '@/features/skills/skills-sidebar'
 import type { Skill } from '@/shared/types'
-import { Bot, Plus, Trash2, Crown, Globe, FolderOpen, ChevronRight, Play, Pencil, ArrowLeft, RefreshCw, Cog, Eye, EyeOff } from 'lucide-react'
+import { Bot, Plus, Trash2, Crown, Globe, FolderOpen, ChevronRight, Play, Pencil, ArrowLeft, RefreshCw, Cog, ToggleLeft, ToggleRight } from 'lucide-react'
 import { cn, promptInput, confirmAction } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import { AgentForm } from './agent-form'
@@ -273,7 +273,7 @@ export function AgentManagementMain() {
                     agent.disabled ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
                   )}
                 >
-                  {agent.disabled ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                  {agent.disabled ? <ToggleLeft className="h-4.5 w-4.5" /> : <ToggleRight className="h-4.5 w-4.5 text-blue-500" />}
                 </button>
               )}
               {agent.scope === 'global' ? (

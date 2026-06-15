@@ -75,6 +75,11 @@ interface ChatStore {
   isCompacting: boolean
   /** Selected agent for new sessions (default: 'default') */
   selectedAgentId: string
+  /** Count of agents selectable for a new chat (set by AgentSelector after it
+   *  loads + filters out disabled/internal/overridden). 0 means every agent is
+   *  disabled — the composer blocks sending since nothing can answer. -1 = not
+   *  yet loaded, treated as "allow" so we never block on first paint. */
+  usableAgentCount: number
   /** Bound source for the "let the AI see something" capture feature — either a
    *  shared screen/window (`kind:'screen'`, grabbed via desktopCapturer) or the
    *  webcam (`kind:'camera'`, grabbed via getUserMedia). Desktop-only, in-memory
@@ -96,6 +101,7 @@ interface ChatStore {
   setMaxContextTokens(max: number): void
   setCompacting(v: boolean): void
   setSelectedAgentId(id: string): void
+  setUsableAgentCount(n: number): void
   setCaptureSource(source: { id: string; name: string; thumb: string; kind: 'screen' | 'camera' } | null): void
   addPendingMessage(text: string): void
   removePendingMessage(index: number): void
@@ -118,6 +124,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   maxContextTokens: 0,
   isCompacting: false,
   selectedAgentId: 'default',
+  usableAgentCount: -1,
   captureSource: null,
 
   addMessage(msg) {
@@ -314,6 +321,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   setSelectedAgentId(id: string) {
     set({ selectedAgentId: id })
+  },
+
+  setUsableAgentCount(n: number) {
+    set({ usableAgentCount: n })
   },
 
   setCaptureSource(source) {
