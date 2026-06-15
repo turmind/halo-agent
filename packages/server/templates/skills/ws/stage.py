@@ -80,19 +80,28 @@ BUILTIN_SKILL_IDS = {
 # --- helpers ---------------------------------------------------------------
 
 def load_disabled(db_path: Path):
-    """Return (disabled_global_agents, disabled_global_skills) from workspace DB."""
+    """Return disabled items from the workspace DB, split by scope:
+    (global_agents, global_skills, ws_agents, ws_skills).
+
+    A disabled item never ships in the bundle (share == "don't take it
+    along"). We track global and workspace scopes separately because the two
+    take different code paths below — workspace agents are staged from one
+    loop, un-overridden globals from another."""
     if not db_path.exists():
-        return set(), set()
+        return set(), set(), set(), set()
     try:
         conn = sqlite3.connect(db_path)
-        cur = conn.execute("SELECT item_type, item_id FROM disabled_items WHERE scope='global'")
-        agents, skills = set(), set()
-        for item_type, item_id in cur:
-            (agents if item_type == "agent" else skills).add(item_id)
+        cur = conn.execute("SELECT item_type, item_id, scope FROM disabled_items")
+        g_agents, g_skills, w_agents, w_skills = set(), set(), set(), set()
+        for item_type, item_id, scope in cur:
+            if scope == "global":
+                (g_agents if item_type == "agent" else g_skills).add(item_id)
+            else:
+                (w_agents if item_type == "agent" else w_skills).add(item_id)
         conn.close()
-        return agents, skills
+        return g_agents, g_skills, w_agents, w_skills
     except sqlite3.DatabaseError:
-        return set(), set()
+        return set(), set(), set(), set()
 
 
 def load_yaml(path: Path):
@@ -211,7 +220,7 @@ def main():
         "redactions": {"yaml_params": [], "markdown_auto": [], "markdown_suspicious": []},
     }
 
-    disabled_agents, disabled_skills = load_disabled(ws_halo / "halo.db")
+    disabled_agents, disabled_skills, ws_disabled_agents, ws_disabled_skills = load_disabled(ws_halo / "halo.db")
 
     # --- INSTRUCTIONS.md (root + sub-dir chain), with global fallback if no root ws version
     ws_root_instr = ws_halo / "INSTRUCTIONS.md"
@@ -250,10 +259,16 @@ def main():
                     manifest["included"]["docs"].append(str(rel))
 
     # --- agents (workspace + un-disabled-and-not-overridden global)
+    # A workspace agent disabled in this workspace is dropped from ws_agent_ids
+    # entirely. That mirrors runtime (loadUsableAgents skips the disabled
+    # record): it isn't staged, AND it no longer shadows a same-id global — so
+    # if the workspace disabled its own `foo`, an un-disabled global `foo` still
+    # ships, exactly as the running agent would fall back to it.
     ws_agents_dir = ws_halo / "agents"
     global_agents_dir = home_global / "agents"
     ws_agent_ids = {d.name for d in ws_agents_dir.iterdir()
-                    if ws_agents_dir.is_dir() and d.is_dir() and (d / "agent.yaml").exists()} \
+                    if ws_agents_dir.is_dir() and d.is_dir() and (d / "agent.yaml").exists()
+                    and d.name not in ws_disabled_agents} \
         if ws_agents_dir.is_dir() else set()
 
     referenced_skills = set()
@@ -325,8 +340,12 @@ def main():
     # built-ins, which the receiver's server seeds itself.
     ws_skills_dir = ws_halo / "skills"
     global_skills_dir = home_global / "skills"
+    # Same rule as agents: a workspace skill disabled in this workspace doesn't
+    # ship, and no longer shadows a same-id global (so an agent that references
+    # it still resolves to the global copy in the bundle, mirroring runtime).
     ws_skill_ids = {d.name for d in ws_skills_dir.iterdir()
-                    if ws_skills_dir.is_dir() and d.is_dir() and (d / "SKILL.md").exists()} \
+                    if ws_skills_dir.is_dir() and d.is_dir() and (d / "SKILL.md").exists()
+                    and d.name not in ws_disabled_skills} \
         if ws_skills_dir.is_dir() else set()
 
     def stage_skill(skill_dir: Path, scope: str):

@@ -8,6 +8,7 @@ import { loadAllMdContents, composeMdPrompt, resolveMdPaths } from '../prompts/m
 import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveThinkingMode, resolveVerbosity } from '../config.js'
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
+  scanAvailableAgents,
   type AgentYamlConfig,
 } from './agent-loader.js'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
@@ -253,15 +254,25 @@ export class SessionAgentBuilder {
     let systemPrompt: string
 
     if (isRoot) {
-      // Root: MD layers + workspace info + all-scope + root-scope prompts
+      // Live roster of delegatable agents, injected right after the MD layer
+      // (AGENT.md) so the "who's on my team" read lands early — delegation is
+      // the first decision an orchestrator makes, and the model's attention is
+      // strongest at the head of the prompt. Internal agents (evo/score/apply)
+      // are platform tooling, not orchestrators — they get no roster (and the
+      // scan is skipped). Empty string when there's no team, so the prompt is
+      // byte-identical to the pre-roster behaviour in a single-agent workspace.
+      const roster = yamlConfig?.internal ? '' : await this.buildAgentRoster(agentId)
+      // Root: MD layers + roster + workspace info + all-scope + root-scope prompts
       if (mdPrompt) {
         systemPrompt = mdPrompt + `\n\nThe project workspace is at: ${this.host.workspaceRoot}\n`
         if (workingDir && path.resolve(workingDir) !== path.resolve(this.host.workspaceRoot)) {
           systemPrompt += `Working directory: ${workingDir}\n`
         }
-        systemPrompt += '\n' + systemPrompts.all + '\n\n' + systemPrompts.root
+        systemPrompt += roster + '\n' + systemPrompts.all + '\n\n' + systemPrompts.root
       } else {
-        systemPrompt = yamlConfig?.system_prompt ?? `You are a root Agent of Halo, a multi-agent collaboration workspace.\n\nThe project workspace is at: ${this.host.workspaceRoot}\n\n${systemPrompts.all}\n\n${systemPrompts.root}`
+        // Fallback: no AGENT.md (or a fully custom system_prompt). There's no
+        // MD layer to slot the roster behind, so append it at the tail.
+        systemPrompt = (yamlConfig?.system_prompt ?? `You are a root Agent of Halo, a multi-agent collaboration workspace.\n\nThe project workspace is at: ${this.host.workspaceRoot}\n\n${systemPrompts.all}\n\n${systemPrompts.root}`) + roster
       }
       if (mdContents.needsBootstrap) {
         systemPrompt = systemPrompts.bootstrap + '\n\n---\n\n' + systemPrompt
@@ -304,6 +315,53 @@ export class SessionAgentBuilder {
     }
 
     return { systemPrompt, skillTools, mdContents, systemPrompts }
+  }
+
+  /**
+   * Build the orchestration block injected into a root agent's prompt: a
+   * delegation-principles header plus a live roster of the agents it can
+   * spawn. Same filter as `list_agents` (drop disabled + internal), and
+   * additionally drops the agent itself — an agent delegating to itself is
+   * never the intended read of this list.
+   *
+   * Root-only by design. Sub-agents get no roster, which is the mechanism
+   * that keeps delegation from cascading into endless re-subcontracting:
+   * the chain can only start at the root, where a human is watching.
+   *
+   * Returns '' when the roster would be empty (single-agent workspace) — no
+   * point injecting "here's your team" when there's no team. The caller
+   * appends nothing in that case.
+   */
+  private async buildAgentRoster(selfAgentId: string): Promise<string> {
+    const agentDisabled = getDisabledSet(this.db, 'agent')
+    const agents = await scanAvailableAgents(this.host.workspaceRoot, agentDisabled)
+    const team = agents.filter((a) => !a.disabled && !a.internal && a.id !== selfAgentId)
+    if (team.length === 0) return ''
+
+    const roster = team.map((a) => `- \`${a.id}\` — ${a.name}: ${a.description}`).join('\n')
+    return `\n\n## Know Your Team Before You Act
+
+You are an orchestrator, not a solo worker. Before starting any non-trivial
+task, take stock of which agents you can delegate to. Your team right now:
+
+${roster}
+
+Default to delegation for work that fits a specialist or a parallelizable
+executor. Handle it yourself only when the task is genuinely small (a single
+file read, a one-off command, a quick question) or when the user clearly
+wants to watch each step unfold. "I'll just do it myself" is the right call
+far less often than it feels — a multi-file change, a build/test loop, or
+research across many sources belongs in a sub-session, both to stay fast and
+to keep your own context clean.
+
+You can spawn **multiple instances of the same agent** in parallel — there is
+no one-instance-per-agent limit. When a task splits into independent parts,
+fan them out to several sessions at once and let them run concurrently,
+rather than feeding the work through one session serially. Reserve serial
+execution for steps that genuinely depend on each other's output.
+
+\`list_agents\` returns this same set with full detail; \`query_agent\` shows one
+agent's tools and skills. When you do delegate, say so in one line and keep going.`
   }
 
   /**
