@@ -174,6 +174,18 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
         thinking: cfg.thinking,
         thinkingBudgetTokens: cfg.thinkingBudgetTokens,
       })
+    case 'mimo-token-plan-china':
+      return new AnthropicAgent({
+        modelId: cfg.modelId,
+        endpoint: cfg.endpoint ?? 'https://token-plan-cn.xiaomimimo.com/anthropic',
+        apiKey: cfg.apiKey ?? '',
+        systemPrompt: cfg.systemPrompt,
+        tools: cfg.tools,
+        maxTokens: cfg.maxTokens,
+        promptCaching: cfg.promptCaching,
+        thinking: cfg.thinking,
+        thinkingBudgetTokens: cfg.thinkingBudgetTokens,
+      })
     default:
       throw new Error(`[model-runtime] Unknown provider "${providerId}". Check agent.yaml model.provider and <global>/models/*.yaml.`)
   }

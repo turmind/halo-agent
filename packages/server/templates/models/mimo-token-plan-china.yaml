@@ -1,0 +1,61 @@
+id: mimo-token-plan-china
+displayName: Mimo Token Plan (China)
+displayName_zh: Mimo Token Plan（中国）
+description: Mimo Token Plan — Xiaomi's Anthropic-compatible gateway for MiMo models in China. Supports 1M context window.
+description_zh: Mimo Token Plan — 小米中国区 Anthropic 兼容网关，支持 MiMo 模型，1M 上下文窗口。
+defaultEndpoint: https://token-plan-cn.xiaomimimo.com/anthropic
+defaultModelId: mimo-v2.5
+endpointPresets:
+  - https://token-plan-cn.xiaomimimo.com/anthropic
+
+secrets:
+  - key: api_key
+    description: Mimo Token Plan API Key. Format starts with tp-.
+    description_zh: Mimo Token Plan API Key，tp- 开头
+    default: <<MIMO_API_KEY>>
+    secret: true
+
+models:
+  - id: mimo-v2.5-pro
+    displayName: MiMo v2.5 Pro
+    maxOutputTokens: 131072
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+
+  - id: mimo-v2.5
+    displayName: MiMo v2.5
+    maxOutputTokens: 131072
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }
