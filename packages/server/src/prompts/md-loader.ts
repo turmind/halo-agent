@@ -172,7 +172,7 @@ export async function loadAllMdContents(
  * Compose MD contents into a single prompt injection string.
  * Only includes sections that have content.
  */
-export function composeMdPrompt(contents: MdContents): string {
+export function composeMdPrompt(contents: MdContents, roster = ''): string {
   const sections: string[] = []
 
   // User profile comes first — sets the tone for the entire conversation
@@ -182,10 +182,22 @@ export function composeMdPrompt(contents: MdContents): string {
 
   if (contents.agentMd) {
     sections.push(contents.agentMd)
+    // Agent roster (the delegatable team) rides directly behind AGENT.md so the
+    // "who's on my team" read lands while model attention is still high —
+    // delegation is an orchestrator's first decision. Only a root session
+    // passes a non-empty roster; sub-agents and internal agents pass ''.
+    // Joined like any other section, so it gets the same `---` separators
+    // instead of being glued to whatever follows.
+    if (roster) sections.push(roster)
   }
 
+  // Global and workspace INSTRUCTIONS are mutually exclusive — workspace
+  // overrides global (see loadAllMdContents: effectiveGlobalInstructions is
+  // blanked when a workspace file exists), so only one ever lands in a given
+  // prompt. Same heading for both: there's no sibling section to disambiguate
+  // from, so a "(Global)" suffix would be noise.
   if (contents.globalInstructions) {
-    sections.push(`## User Instructions (Global)\n\n${contents.globalInstructions}`)
+    sections.push(`## User Instructions\n\n${contents.globalInstructions}`)
   }
 
   // Workspace-root INSTRUCTIONS.md (sub-dir instructions are injected per-turn,

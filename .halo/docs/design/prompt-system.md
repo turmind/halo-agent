@@ -137,25 +137,30 @@ Missing directory or read failure: warn + use built-in fallback.
 
 ## Step 5 — Compose the MD prompt
 
-`composeMdPrompt(contents)` joins non-empty sections with `\n\n---\n\n`:
+`composeMdPrompt(contents, roster = '')` joins non-empty sections with `\n\n---\n\n`:
 
 1. `## User Profile` (USER.md) — root agent only
 2. AGENT.md body
-3. `## User Instructions (Global)` — `~/.halo/global/INSTRUCTIONS.md` (suppressed when the workspace root has its own — see Step 2)
-4. `## User Instructions` — `<ws>/.halo/INSTRUCTIONS.md` (workspace root). Sub-dir INSTRUCTIONS.md are not here; they inject per-turn via `@scope`.
-5. `## Project Knowledge` — `<ws>/.halo/INDEX.md` (skipped entirely when no INDEX.md exists)
+3. `## Know Your Team Before You Act` — the live agent roster, slotted directly behind AGENT.md (see [Agent roster](#agent-roster) below). Empty string for sub-agents / internal agents / single-agent workspaces, so the section is dropped.
+4. `## User Instructions` — `~/.halo/global/INSTRUCTIONS.md` (suppressed when the workspace root has its own — see Step 2)
+5. `## User Instructions` — `<ws>/.halo/INSTRUCTIONS.md` (workspace root). Sub-dir INSTRUCTIONS.md are not here; they inject per-turn via `@scope`.
+6. `## Project Knowledge` — `<ws>/.halo/INDEX.md` (skipped entirely when no INDEX.md exists)
+
+Global and workspace-root INSTRUCTIONS share the same `## User Instructions` heading: they're mutually exclusive (workspace overrides global, see Step 2), so only one ever lands in a prompt and there's no sibling to disambiguate from. The roster rides as section 3 — passing it through `composeMdPrompt` rather than concatenating it afterward gives it the same `---` separators as every other section (no glue-to-next-block).
 
 ## Step 6 — Layer in the system prompts
 
 ### Root agent (`!parentId`)
 
 ```
-mdPrompt
+mdPrompt                                         ← incl. roster, slotted behind AGENT.md
 + "\n\nThe project workspace is at: {workspaceRoot}\n"
 + [optional] "Working directory: {workingDir}\n"
 + allPrompt
 + rootPrompt
 ```
+
+The roster is computed once (`isRoot && !internal` → `buildAgentRoster`, else `''`) and handed to `composeMdPrompt`, so it lands inside `mdPrompt` behind AGENT.md. Only when there's no AGENT.md at all (the fallback branch) is a non-empty roster appended at the tail instead — there's no MD layer to slot it behind.
 
 When `needsBootstrap`, the whole block is prefixed with `bootstrapPrompt + "\n\n---\n\n"`.
 
@@ -183,6 +188,18 @@ The self-evolution agents (`__evo_agent__`, `__score__`, `__apply_agent__`) are 
 If `mdPrompt` is empty:
 - Use `yamlConfig.system_prompt` if present
 - Otherwise use the hard-coded default string
+
+## Agent roster
+
+`buildAgentRoster(selfAgentId)` ([session-agent-builder.ts](../../../packages/server/src/agents/session-agent-builder.ts)) builds a live `## Know Your Team Before You Act` block listing the agents this session can delegate to — one `- \`<id>\` — <name>: <description>` line per teammate, followed by static delegation guidance.
+
+**Who's on the list.** Same filter as the `list_agents` tool: `scanAvailableAgents` minus `disabled` (workspace `disabled_items` table) minus `internal: true`, and additionally minus the agent itself (self-delegation is never the intended read). When the result is empty (single-agent workspace), it returns `''` and the section is dropped — a single-agent prompt is byte-identical to the pre-roster era.
+
+**Root-only, by design.** A roster is computed only for root sessions (`isRoot && !internal`); sub-agents and internal agents always get `''`. Denying sub-agents a roster is the mechanism that stops delegation cascading into endless re-subcontracting — the chain can only start at the root, where a human is watching.
+
+**Placement.** The roster is passed into `composeMdPrompt` as section 3, landing directly behind AGENT.md so the "who's on my team" read happens while model attention is still high (delegation is an orchestrator's first decision). Routing it through `composeMdPrompt` — rather than string-concatenating it after `mdPrompt` — is what gives it proper `\n\n---\n\n` separators on both sides; an earlier version appended it with a single `\n` and it glued onto the following `allPrompt` heading.
+
+**Static vs. runtime.** The roster is a *static* teammate list baked into the system prompt at session creation. It is **not** the output of the `list_agents` tool — that tool returns the same set with full detail (tools, skills, model) at runtime, as a `tool_result` in the message stream, and never appears in the system prompt. The roster exists precisely so an orchestrator knows its team *without* having to call `list_agents` every turn.
 
 ## Step 7 — Append skills and tool list
 
@@ -218,7 +235,8 @@ It exists because a plain-text answer is single-pass: the agent loop only re-cal
 [bootstrapPrompt]                                ← prefixed when needsBootstrap (ws > global)
 USER.md                                          ← workspace > global
 AGENT.md                                         ← workspace > global
-## User Instructions (Global)                    ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
+## Know Your Team Before You Act                 ← agent roster (root only; dropped when team empty)
+## User Instructions                             ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
 ## User Instructions                             ← <ws>/.halo/INSTRUCTIONS.md (workspace root)
 ## Project Knowledge                             ← <ws>/.halo/INDEX.md (or nudge)
 "The project workspace is at: ..."
@@ -234,8 +252,8 @@ Your available tools: ...
 ### Sub-agent
 
 ```
-AGENT.md
-## User Instructions (Global)                   ← suppressed when ws has its own
+AGENT.md                                        ← no roster: sub-agents can't delegate further
+## User Instructions                            ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
 ## User Instructions                            ← <ws>/.halo/INSTRUCTIONS.md (workspace root)
 ## Project Knowledge
 "The workspace root is: ..."

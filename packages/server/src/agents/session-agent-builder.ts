@@ -250,29 +250,31 @@ export class SessionAgentBuilder {
       mdContents.agentMd = renderMdBody(mdContents.agentMd, renderCtx)
     }
 
-    const mdPrompt = composeMdPrompt(mdContents)
+    // Live roster of delegatable agents. Only root sessions get one — sub-agents
+    // are denied a roster on purpose (that's what stops delegation cascading into
+    // endless re-subcontracting). Internal agents (evo/score/apply) are platform
+    // tooling, not orchestrators, so they're skipped too. Empty string when the
+    // team is empty, keeping a single-agent workspace byte-identical to before.
+    const roster = (isRoot && !yamlConfig?.internal) ? await this.buildAgentRoster(agentId) : ''
+    // composeMdPrompt slots the roster directly behind AGENT.md (see there) and
+    // joins it with the same `---` separators as every other MD section.
+    const mdPrompt = composeMdPrompt(mdContents, roster)
     let systemPrompt: string
 
     if (isRoot) {
-      // Live roster of delegatable agents, injected right after the MD layer
-      // (AGENT.md) so the "who's on my team" read lands early — delegation is
-      // the first decision an orchestrator makes, and the model's attention is
-      // strongest at the head of the prompt. Internal agents (evo/score/apply)
-      // are platform tooling, not orchestrators — they get no roster (and the
-      // scan is skipped). Empty string when there's no team, so the prompt is
-      // byte-identical to the pre-roster behaviour in a single-agent workspace.
-      const roster = yamlConfig?.internal ? '' : await this.buildAgentRoster(agentId)
-      // Root: MD layers + roster + workspace info + all-scope + root-scope prompts
+      // Root: MD layers (incl. roster) + workspace info + all-scope + root-scope prompts
       if (mdPrompt) {
         systemPrompt = mdPrompt + `\n\nThe project workspace is at: ${this.host.workspaceRoot}\n`
         if (workingDir && path.resolve(workingDir) !== path.resolve(this.host.workspaceRoot)) {
           systemPrompt += `Working directory: ${workingDir}\n`
         }
-        systemPrompt += roster + '\n' + systemPrompts.all + '\n\n' + systemPrompts.root
+        systemPrompt += '\n' + systemPrompts.all + '\n\n' + systemPrompts.root
       } else {
         // Fallback: no AGENT.md (or a fully custom system_prompt). There's no
-        // MD layer to slot the roster behind, so append it at the tail.
-        systemPrompt = (yamlConfig?.system_prompt ?? `You are a root Agent of Halo, a multi-agent collaboration workspace.\n\nThe project workspace is at: ${this.host.workspaceRoot}\n\n${systemPrompts.all}\n\n${systemPrompts.root}`) + roster
+        // MD layer for composeMdPrompt to slot the roster behind, so append it
+        // at the tail here instead.
+        const orphanRoster = roster ? '\n\n' + roster : ''
+        systemPrompt = (yamlConfig?.system_prompt ?? `You are a root Agent of Halo, a multi-agent collaboration workspace.\n\nThe project workspace is at: ${this.host.workspaceRoot}\n\n${systemPrompts.all}\n\n${systemPrompts.root}`) + orphanRoster
       }
       if (mdContents.needsBootstrap) {
         systemPrompt = systemPrompts.bootstrap + '\n\n---\n\n' + systemPrompt
@@ -339,7 +341,7 @@ export class SessionAgentBuilder {
     if (team.length === 0) return ''
 
     const roster = team.map((a) => `- \`${a.id}\` — ${a.name}: ${a.description}`).join('\n')
-    return `\n\n## Know Your Team Before You Act
+    return `## Know Your Team Before You Act
 
 You are an orchestrator, not a solo worker. Before starting any non-trivial
 task, take stock of which agents you can delegate to. Your team right now:
