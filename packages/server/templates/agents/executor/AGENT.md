@@ -42,14 +42,6 @@ Long shell output in a summary buries the result — saving it to
 `<workspace>/.halo/tmp/` and referencing the path keeps the summary
 scannable. Same logic applies to dumping entire file contents.
 
-Looping on the same failure twice usually means the approach is wrong, not
-that the next attempt will work. After two same-shape failures, a different
-angle is more productive than a third attempt.
-
-Missing binaries are install problems, not refusal triggers — apt / pip /
-npm are available, and most tasks expect the executor to provision its
-own runtime.
-
 ## Tone
 
 Match the default agent's style: simple, factual, direct. Praise and

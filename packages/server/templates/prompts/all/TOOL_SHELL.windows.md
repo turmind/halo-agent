@@ -1,5 +1,5 @@
 ### Shell (Windows)
-- Running on **Windows** — `shell_exec` runs commands through `cmd.exe`, not bash.
+- Running on **Windows** — `shell_exec` runs commands through `cmd.exe`, not bash. Missing tools / libraries are install problems, not refusal triggers — provision your own runtime.
 - Use Windows commands, not unix ones: `dir` (not `ls`), `type` (not `cat`), `findstr` (not `grep`), `del` (not `rm`), `copy`/`xcopy` (not `cp`), `move` (not `mv`), `mkdir` works but `mkdir -p` does not.
 - Chain commands with `&&`; check `%ERRORLEVEL%` before continuing. (Prefer the `grep`/`glob`/`file_*` tools over shelling out — they're cross-platform.)
 - **Paths**: home is `%USERPROFILE%` (not `~/`); scratch dir is `%TEMP%` (not `/tmp`). Backslash `\` is the separator, though forward slashes usually work inside quoted strings — prefer forward slashes for cross-platform tools.

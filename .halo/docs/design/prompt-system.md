@@ -160,7 +160,7 @@ mdPrompt                                         ← incl. roster, slotted behin
 + rootPrompt
 ```
 
-The roster is computed once (`isRoot && !internal` → `buildAgentRoster`, else `''`) and handed to `composeMdPrompt`, so it lands inside `mdPrompt` behind AGENT.md. Only when there's no AGENT.md at all (the fallback branch) is a non-empty roster appended at the tail instead — there's no MD layer to slot it behind.
+The roster is computed once (`isRoot && !internal && canDelegate` → `buildAgentRoster`, else `''`, where `canDelegate` is "the session holds both `start_session` and `list_agents`") and handed to `composeMdPrompt`, so it lands inside `mdPrompt` behind AGENT.md. Only when there's no AGENT.md at all (the fallback branch) is a non-empty roster appended at the tail instead — there's no MD layer to slot it behind.
 
 When `needsBootstrap`, the whole block is prefixed with `bootstrapPrompt + "\n\n---\n\n"`.
 
@@ -195,7 +195,7 @@ If `mdPrompt` is empty:
 
 **Who's on the list.** Same filter as the `list_agents` tool: `scanAvailableAgents` minus `disabled` (workspace `disabled_items` table) minus `internal: true`. The agent itself **is** listed, pinned to the top and tagged `(you)`, with guidance to spawn parallel instances of itself for independent sub-tasks (a valid fan-out the roster text actively encourages) and to just do serial work directly rather than self-delegate. Hiding self used to contradict that fan-out advice. The remaining teammates follow in scan order. It returns `''` only if there's literally no agent to list (self not found in the scan — shouldn't happen for a real session); a solo workspace still gets a one-line `(you)` roster, since parallel self-spawn is the whole point.
 
-**Root-only, by design.** A roster is computed only for root sessions (`isRoot && !internal`); sub-agents and internal agents always get `''`. Denying sub-agents a roster is the mechanism that stops delegation cascading into endless re-subcontracting — the chain can only start at the root, where a human is watching.
+**Gated three ways.** A roster is computed only when all three hold: `isRoot` (root session — sub-agents and internal agents always get `''`, and that's the mechanism that stops delegation cascading into endless re-subcontracting; the chain can only start at the root, where a human is watching), `!internal` (evo / score / apply are platform tooling, not orchestrators), and `canDelegate` — the session actually holds both `start_session` and `list_agents`. Without `start_session` the agent can't spawn anything; without `list_agents` it can't see who's on the team. The roster text *teaches* delegation (parallel fan-out, "ask X to do Y", inspect the team), so handing it to an agent that can't act on it is misleading noise. No delegation capability, no roster.
 
 **Placement.** The roster is passed into `composeMdPrompt` as section 3, landing directly behind AGENT.md so the "who's on my team" read happens while model attention is still high (delegation is an orchestrator's first decision). Routing it through `composeMdPrompt` — rather than string-concatenating it after `mdPrompt` — is what gives it proper `\n\n---\n\n` separators on both sides; an earlier version appended it with a single `\n` and it glued onto the following `allPrompt` heading.
 

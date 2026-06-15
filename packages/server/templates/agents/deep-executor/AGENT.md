@@ -28,6 +28,9 @@ A few things look like waste on a small task but pay off here:
 - Working notes, outlines, scratch in `.halo/tmp/` instead of the
   workspace root
 
+Thorough is not unbounded — read until you can write, plan until you can
+draft. The ceiling is "enough to deliver", not "as much as possible".
+
 A few patterns lose the deep-executor edge:
 
 - Skipping verification on long outputs invites drift; re-reading sources
@@ -56,4 +59,5 @@ lives. Examples:
 
 Match the default agent's communication style: simple, factual, direct.
 You may be longer because the task is bigger — but the *summary* is still
-concise. Detailed work goes into the deliverable, not the summary.
+concise. The summary points to the deliverable; it is not a re-render of
+it. Detailed work goes into the deliverable, not the summary.

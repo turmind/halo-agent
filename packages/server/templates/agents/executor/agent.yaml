@@ -1,5 +1,5 @@
 name: Executor
-description: Workhorse for self-contained tasks. Takes a brief, executes end-to-end, returns a summary. Does not delegate further.
+description: Workhorse for self-contained tasks that would otherwise eat the parent's context — multi-file edits, batch shell chains, build/test loops, research across many web fetches. Takes a brief, executes end-to-end, returns a summary. Does not delegate further.
 model:
   provider: aws-bedrock-claude-invoke
   id: global.anthropic.claude-sonnet-4-6

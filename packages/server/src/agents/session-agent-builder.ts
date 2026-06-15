@@ -250,13 +250,19 @@ export class SessionAgentBuilder {
       mdContents.agentMd = renderMdBody(mdContents.agentMd, renderCtx)
     }
 
-    // Live roster of delegatable agents. Only root sessions get one — sub-agents
-    // are denied a roster on purpose (that's what stops delegation cascading into
-    // endless re-subcontracting). Internal agents (evo/score/apply) are platform
-    // tooling, not orchestrators, so they're skipped too. The agent itself is
-    // listed (tagged `(you)`) so even a solo workspace gets a roster — parallel
-    // self-spawn is a valid fan-out. Empty only for sub/internal agents.
-    const roster = (isRoot && !yamlConfig?.internal) ? await this.buildAgentRoster(agentId) : ''
+    // Live roster of delegatable agents. Gated on three conditions:
+    //  - root session only — sub-agents are denied a roster on purpose (that's
+    //    what stops delegation cascading into endless re-subcontracting);
+    //  - not an internal agent (evo/score/apply are platform tooling, not
+    //    orchestrators);
+    //  - the agent actually holds both `start_session` and `list_agents` —
+    //    the roster teaches delegation (spawn parallel instances, inspect the
+    //    team, fan out to sub-sessions). Without `start_session` it can't
+    //    delegate at all; without `list_agents` it can't see who's on the team.
+    //    Either gap makes the roster misleading noise. No delegation
+    //    capability, no roster.
+    const canDelegate = sessionToolNames.includes('start_session') && sessionToolNames.includes('list_agents')
+    const roster = (isRoot && !yamlConfig?.internal && canDelegate) ? await this.buildAgentRoster(agentId) : ''
     // composeMdPrompt slots the roster directly behind AGENT.md (see there) and
     // joins it with the same `---` separators as every other MD section.
     const mdPrompt = composeMdPrompt(mdContents, roster)
@@ -370,6 +376,12 @@ no one-instance-per-agent limit. When a task splits into independent parts,
 fan them out to several sessions at once and let them run concurrently,
 rather than feeding the work through one session serially. Reserve serial
 execution for steps that genuinely depend on each other's output.
+
+No need to poll for progress — after start_session, keep doing your own work;
+the sub-agent reports back automatically when done. Polling (session_list /
+get_session_output) just spends context checking status. "I'll just do it
+myself" is the most common misjudgment: if it's really >3 steps or touches
+multiple files, a sub-session is faster and keeps your context clean.
 
 \`list_agents\` returns this same set with full detail; \`query_agent\` shows one
 agent's tools and skills. When you do delegate, say so in one line and keep going.`
