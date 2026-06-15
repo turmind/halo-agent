@@ -253,8 +253,9 @@ export class SessionAgentBuilder {
     // Live roster of delegatable agents. Only root sessions get one — sub-agents
     // are denied a roster on purpose (that's what stops delegation cascading into
     // endless re-subcontracting). Internal agents (evo/score/apply) are platform
-    // tooling, not orchestrators, so they're skipped too. Empty string when the
-    // team is empty, keeping a single-agent workspace byte-identical to before.
+    // tooling, not orchestrators, so they're skipped too. The agent itself is
+    // listed (tagged `(you)`) so even a solo workspace gets a roster — parallel
+    // self-spawn is a valid fan-out. Empty only for sub/internal agents.
     const roster = (isRoot && !yamlConfig?.internal) ? await this.buildAgentRoster(agentId) : ''
     // composeMdPrompt slots the roster directly behind AGENT.md (see there) and
     // joins it with the same `---` separators as every other MD section.
@@ -322,25 +323,33 @@ export class SessionAgentBuilder {
   /**
    * Build the orchestration block injected into a root agent's prompt: a
    * delegation-principles header plus a live roster of the agents it can
-   * spawn. Same filter as `list_agents` (drop disabled + internal), and
-   * additionally drops the agent itself — an agent delegating to itself is
-   * never the intended read of this list.
+   * spawn. Same filter as `list_agents` (drop disabled + internal). The agent
+   * itself IS listed — tagged `(you)` — because spawning parallel instances of
+   * yourself for independent sub-tasks is a valid fan-out, and the roster text
+   * actively encourages it; hiding self contradicted that. Self is pinned first
+   * so "who am I" reads before "who else is around".
    *
    * Root-only by design. Sub-agents get no roster, which is the mechanism
    * that keeps delegation from cascading into endless re-subcontracting:
    * the chain can only start at the root, where a human is watching.
    *
-   * Returns '' when the roster would be empty (single-agent workspace) — no
-   * point injecting "here's your team" when there's no team. The caller
-   * appends nothing in that case.
+   * Returns '' only when there's literally no agent to list (self not found in
+   * the scan — shouldn't happen for a real session). A solo workspace still
+   * gets a roster: a single `(you)` line is meaningful since parallel self-spawn
+   * is the whole point.
    */
   private async buildAgentRoster(selfAgentId: string): Promise<string> {
     const agentDisabled = getDisabledSet(this.db, 'agent')
     const agents = await scanAvailableAgents(this.host.workspaceRoot, agentDisabled)
-    const team = agents.filter((a) => !a.disabled && !a.internal && a.id !== selfAgentId)
-    if (team.length === 0) return ''
+    const visible = agents.filter((a) => !a.disabled && !a.internal)
+    const self = visible.find((a) => a.id === selfAgentId)
+    const others = visible.filter((a) => a.id !== selfAgentId)
+    if (!self && others.length === 0) return ''
 
-    const roster = team.map((a) => `- \`${a.id}\` — ${a.name}: ${a.description}`).join('\n')
+    const lines: string[] = []
+    if (self) lines.push(`- \`${self.id}\` — ${self.name} (you): spawn parallel instances of yourself to fan out independent sub-tasks; for serial work just do it directly rather than delegating to yourself.`)
+    for (const a of others) lines.push(`- \`${a.id}\` — ${a.name}: ${a.description}`)
+    const roster = lines.join('\n')
     return `## Know Your Team Before You Act
 
 You are an orchestrator, not a solo worker. Before starting any non-trivial
