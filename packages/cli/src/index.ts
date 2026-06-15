@@ -16,6 +16,7 @@ const HELP_TOP = `Usage: halo <command> [options]
 
 Commands:
   setup                Initialize ~/.halo/global/ (run once after install)
+  upgrade              Check npm for a newer halo and install it
   tui                  Start interactive TUI
   cli "<prompt>"       Run a one-shot prompt and exit (or pipe via stdin)
   server               Start the HTTP/WS server + admin web UI
@@ -51,6 +52,24 @@ Options:
 
 Forgot the password? Blank server.password.value in
 ~/.halo/secrets/config.yaml and re-run \`halo setup\`.
+`
+
+const HELP_UPGRADE = `Usage: halo upgrade
+
+Check the npm registry for a newer @turmind/halo and install it globally.
+If the installed version is already the latest, exit without touching
+anything. Will not auto-restart the running server — print a hint instead
+so you can pick the moment.
+
+Behaviour:
+  - reads installed version from the package directory
+  - reads latest from \`npm view @turmind/halo version\`
+  - if equal: print "already latest" and exit 0
+  - else: run \`npm install -g @turmind/halo@latest\`
+  - if that fails with EACCES: tell you to retry with sudo
+
+This wraps npm — if your halo wasn't installed via npm, run your installer
+of choice instead.
 `
 
 const HELP_TUI = `Usage: halo tui [options]
@@ -167,6 +186,7 @@ ACP method coverage:
 
 const HELP_BY_CMD: Record<string, string> = {
   setup: HELP_SETUP,
+  upgrade: HELP_UPGRADE,
   tui: HELP_TUI,
   cli: HELP_CLI,
   server: HELP_SERVER,
@@ -569,6 +589,76 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
   }
 }
 
+/**
+ * Self-upgrade — wraps `npm install -g @turmind/halo@latest`. Skips the install
+ * when the on-disk version already matches the registry's `latest` tag, so a
+ * routine `halo upgrade` on an already-current install is a no-op + a one-line
+ * message.
+ *
+ * Shells out to `npm view` for the registry lookup and `npm install -g` for
+ * the install — same `npm` the user has on PATH, no API key / token needed.
+ *
+ * On EACCES (typical when /usr/lib/node_modules is root-owned and the user
+ * isn't), don't auto-sudo — tell the user to retry with sudo. Auto-sudo would
+ * have to handle TTY prompts, environment scrubbing, and works differently per
+ * distro; "tell them" is one line and zero footguns.
+ */
+async function cmdUpgrade(): Promise<void> {
+  const PKG = '@turmind/halo'
+
+  // 1. Read the version bundled with this binary. The cli imports template
+  //    helpers via @turmind/halo-server, so the versions are kept in lock-
+  //    step at build time — VERSION is the right "installed" reference.
+  const installed = VERSION
+  if (installed === 'dev') {
+    process.stderr.write(
+      `halo: this build is running from source (VERSION=dev). \`halo upgrade\` only works on npm-installed binaries.\n`,
+    )
+    process.exit(1)
+  }
+
+  // 2. Ask npm for the latest published version.
+  const { spawnSync } = await import('node:child_process')
+  process.stderr.write(`Checking npm for the latest ${PKG}…\n`)
+  const view = spawnSync('npm', ['view', PKG, 'version'], { encoding: 'utf-8' })
+  if (view.error || view.status !== 0) {
+    const err = view.error?.message ?? view.stderr?.trim() ?? `exit ${view.status}`
+    process.stderr.write(`halo: \`npm view\` failed — ${err}\n`)
+    process.exit(1)
+  }
+  const latest = view.stdout.trim()
+  if (!latest) {
+    process.stderr.write(`halo: \`npm view\` returned empty output\n`)
+    process.exit(1)
+  }
+
+  // 3. Already current — say so and stop.
+  if (latest === installed) {
+    process.stderr.write(`Already on the latest version (${installed}).\n`)
+    return
+  }
+
+  // 4. Install the upgrade. Inherit stdio so npm's progress / errors flow
+  //    through to the user's terminal.
+  process.stderr.write(`Upgrading ${installed} → ${latest}…\n`)
+  const install = spawnSync('npm', ['install', '-g', `${PKG}@latest`], { stdio: 'inherit' })
+  if (install.status === 0) {
+    process.stderr.write(
+      `\nUpgraded to ${latest}. Run \`halo server restart\` (or your service manager's restart) to pick up the new templates.\n`,
+    )
+    return
+  }
+
+  // 5. Failed — give an actionable hint for the most common cause (EACCES on
+  //    a system-wide node_modules dir).
+  const hint =
+    process.platform === 'win32'
+      ? 'Try opening an Administrator PowerShell and re-running.'
+      : `If that's a permission error, retry with sudo: \`sudo npm install -g ${PKG}@latest\``
+  process.stderr.write(`\nhalo: upgrade failed (npm exited ${install.status}). ${hint}\n`)
+  process.exit(1)
+}
+
 async function cmdAgents(flags: HarnessFlags): Promise<void> {
   await initRuntime()
   const workspace = path.resolve(flags.workspace ?? process.cwd())
@@ -893,6 +983,13 @@ async function main(): Promise<void> {
 
   if (cmd === 'setup') {
     await cmdSetup(subArgs)
+    return
+  }
+
+  // `halo upgrade` is a thin wrapper around `npm install -g` — it only needs
+  // the binary itself to be on PATH, never reads ~/.halo/. Skip the setup gate.
+  if (cmd === 'upgrade') {
+    await cmdUpgrade()
     return
   }
 
