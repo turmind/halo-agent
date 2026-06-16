@@ -220,6 +220,23 @@ const adminOut = path.join(ADMIN_ROOT, 'out')
 if (fs.existsSync(adminOut)) {
   copyTree(adminOut, path.join(PUB_DIR, 'admin-out'))
   console.log('[build-bundle] copied admin-out/')
+
+  // Copy Monaco's min/vs into admin-out/monaco/vs so the editor works offline.
+  // copy-monaco.mjs does this for the local dev/next-start flow; here we
+  // replicate it for the published bundle (monaco-editor is a devDependency and
+  // isn't installed at the user's machine, so the files must ship inside admin-out).
+  const { createRequire } = await import('node:module')
+  const req = createRequire(import.meta.url)
+  try {
+    const monacoPkg = req.resolve('monaco-editor/package.json')
+    const vsSrc = path.join(path.dirname(monacoPkg), 'min', 'vs')
+    const vsDst = path.join(PUB_DIR, 'admin-out', 'monaco', 'vs')
+    fs.mkdirSync(path.dirname(vsDst), { recursive: true })
+    fs.cpSync(vsSrc, vsDst, { recursive: true })
+    console.log('[build-bundle] copied monaco min/vs → admin-out/monaco/vs')
+  } catch (e) {
+    console.warn(`[build-bundle] WARNING: could not copy monaco-editor: ${e.message}`)
+  }
 } else {
   console.warn('[build-bundle] WARNING: packages/admin/out/ not found — run `pnpm --filter @turmind/halo-admin build` first')
 }
