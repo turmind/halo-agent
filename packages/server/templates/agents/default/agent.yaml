@@ -8,9 +8,12 @@ system_prompt: >
   questions that deserve care.
 model:
   provider: aws-bedrock-claude-invoke
-  id: global.anthropic.claude-sonnet-4-6
+  id: global.anthropic.claude-opus-4-8
   endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
   promptCaching: 1h
+  thinking:
+    enabled: true
+    effort: xhigh
 context:
   maxTokens: 200000
   compressAt: 0.8
