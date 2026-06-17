@@ -807,7 +807,22 @@ async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
     process.env.HALO_PORT = String(n)
   }
 
-  // Bail if a server is already running, regardless of mode.
+  if (!values.daemon) {
+    // Foreground: import the server module — its top-level statements take
+    // over the process (lock, listen, signal handlers). No PID-probe precheck
+    // here — the server's own flock guard is authoritative and, unlike a bare
+    // process.kill(pid,0) probe, can't be fooled by a stale lockfile PID the OS
+    // has recycled to an unrelated process (systemd restart loop seen in the
+    // wild: lock pid reused by irqbalance → false "already running" → unit
+    // wedged in a crash loop).
+    await import('@turmind/halo-server')
+    return
+  }
+
+  // Daemon: precheck so a real duplicate fails fast with a clear terminal
+  // message instead of a 10s pidfile-poll timeout. The child's flock guard is
+  // still the real gate, so the stale-PID false positive above is harmless here
+  // (worst case the child starts and the duplicate is rejected by flock).
   const existing = readServerPid()
   if (existing != null && isAlive(existing)) {
     process.stderr.write(`Server already running (PID ${existing}).\n`)
@@ -815,14 +830,7 @@ async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
     return
   }
 
-  if (!values.daemon) {
-    // Foreground: import the server module — its top-level statements take
-    // over the process (lock, listen, signal handlers).
-    await import('@turmind/halo-server')
-    return
-  }
-
-  // Daemon: spawn a child process and detach. We re-exec the same `halo`
+  // Spawn a child process and detach. We re-exec the same `halo`
   // binary with `server start` (no -d) so the child runs foreground inside
   // its own session.
   const { spawn } = await import('node:child_process')
