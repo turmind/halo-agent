@@ -18,6 +18,7 @@
  * terminal showed garbled output / phantom input.
  */
 import { homedir } from 'node:os'
+import { basename } from 'node:path'
 import * as pty from 'node-pty'
 import { config } from '../config.js'
 import { sendJson } from './event-processor.js'
@@ -104,7 +105,16 @@ export class TerminalManager {
     const termEnv = { ...process.env } as Record<string, string>
     delete termEnv.npm_config_prefix
 
-    const child = pty.spawn(shell, [], { name: 'xterm-256color', cols, rows, cwd, env: termEnv })
+    // Start POSIX shells as a login shell (`-l`) so they source the user's
+    // profile (~/.profile, ~/.bash_profile, ~/.zprofile) — otherwise PATH
+    // additions (nvm/pyenv/brew), env vars and aliases are missing. cmd /
+    // powershell have no such concept, so spawn them with no extra args.
+    const shellName = basename(shell).toLowerCase()
+    const args = ['bash', 'zsh', 'sh', 'fish'].some((s) => shellName.startsWith(s))
+      ? ['-l']
+      : []
+
+    const child = pty.spawn(shell, args, { name: 'xterm-256color', cols, rows, cwd, env: termEnv })
 
     const t: PersistentTerminal = {
       pty: child,
