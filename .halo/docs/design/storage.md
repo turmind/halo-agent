@@ -332,6 +332,13 @@ A value of the form `<<ENV_NAME>>` is replaced at read time with `process.env.EN
 | `general.compact.max_summary_input` | 15000 | Local truncation fallback total char cap |
 | `general.compact.max_message_slice` | 800 | Local truncation per-message char cap |
 | `general.compact.summarize_timeout_sec` | 300 | LLM summary timeout |
+| `general.limits.shell_output_bytes` | 5242880 | Max bytes captured from one `shell_exec` (stdout+stderr); excess truncated with a `[truncated]` marker |
+| `general.limits.web_fetch_bytes` | 51200 | Max bytes downloaded by one `web_fetch` |
+| `general.limits.grep_default_matches` | 50 | Default `grep` match cap when no explicit `max` is passed |
+| `general.limits.tool_result_render_chars` | 8000 | Per-tool-result cap on the content **fed to the LLM** (truncated with a re-run marker to protect the context window / prompt cache). The UI gets a much larger slice — see `tool_result_ui_chars` and `agent-loop.ts` (`resultContent` = LLM cap, `resultTextFull` = UI cap) |
+| `general.limits.tool_result_ui_chars` | 65536 | Per-tool-result cap on the content **stored for UI display** (admin/web chat panel). Far larger than the LLM cap so a normal command's full output stays visible, but bounded so a multi-MB `cat` can't bloat the session file / WS payload / browser render; excess truncated with a marker pointing at `file_read` |
+| `general.limits.ws_event_buffer` | 5000 | Events buffered per detached WS session before oldest are dropped on reattach |
+| `general.limits.terminal_scrollback_bytes` | 50000 | Off-screen scrollback bytes retained per detached persistent terminal |
 | `general.sandbox.hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker` | bwrap tmpfs overlay (Linux only) |
 | `general.sandbox.hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig` | bwrap /dev/null bind (Linux only) |
 | `general.logging.level` | warn | `debug` / `info` / `warn` / `error` |

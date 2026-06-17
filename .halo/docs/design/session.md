@@ -198,11 +198,13 @@ Three entry points with different quality / safety trade-offs:
 
 | Trigger | Path | Compaction used | Rationale |
 |---|---|---|---|
-| 80% soft threshold (end-of-turn auto) | `commands/compact.ts` called from `onAutoCompact` on `complete` event | **Self-compact** (`selfCompactSession`) — the agent summarizes its own context | The agent already has full context cached (prompt cache hit). No extra model call, no input duplication, no risk of losing tool_result semantics. |
+| 80% soft threshold (mid-turn auto) | `maybeAutoCompact()` via agent-loop's `beforeCallModel` hook — runs before each model call within a turn | **Self-compact** (`selfCompactSession`) — the agent summarizes its own context, then a tail micro-compact pass clears bulk tool output | The agent already has full context cached (prompt cache hit). No extra model call, no input duplication, no risk of losing tool_result semantics. Firing mid-turn (not just at turn end) stops a single long turn that accumulates many large tool results from blowing the window. |
 | Overflow mid-loop (`too many input tokens`) | `runAgentTurn` retry catch → `localCompactMessages` → retry | **Local** — `[role]: <first N chars>` concat, no network call | The model just refused this payload; an LLM round-trip now could stall the recovery path. Local is deterministic and instant; the next end-of-turn can re-summarize via self-compact. |
 | User `/session compact` (web, WeChat) | `commands/compact.ts` / `SessionManager.compactSession` | **Self-compact**, with **local fallback** on timeout/error | User explicitly requested it; self-compact reuses the cached context so it's fast. Falls back to local if anything goes wrong. |
 
 Self-compact injects a summarization instruction into the agent's own stream, captures the response, then rebuilds messages as `[summary + recent]`. This reuses the provider's prompt cache (no separate model needed) and preserves full semantic context including tool results.
+
+As a final byte-trimming step, self-compact runs **micro-compact** over the kept tail (`microCompactMessages(cleanRecent, 1)`). Each kept-recent message may still carry a large tool result (e.g. a 50 KB `file_read`), so after summarizing it would otherwise re-cross the threshold immediately. Micro keeps only the newest `tool_result`'s content and clears the rest in place, preserving `tool_use_id` pairing so the next API call stays valid — no extra LLM round-trip. Micro-compact is **not** a standalone compaction path; `selfCompactSession` is its only call site. (The ported Claude Code original ran micro every loop iteration and escalated to full compaction only when micro couldn't free enough; halo inverts that — self-compact is the entry point, micro is its tail cleanup.)
 
 All paths share the same split logic: keep the last `keepMessages` turns, advance the cut forward past any orphan `tool_result`-first user message (otherwise the next API call gets `unexpected tool_use_id`).
 

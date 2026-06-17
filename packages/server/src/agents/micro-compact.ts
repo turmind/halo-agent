@@ -1,29 +1,35 @@
 /**
  * Micro-compact — clear old tool_result content in place.
  *
- * Cheaper sibling of `selfCompactSession` (the LLM-summary path). Walks the
- * messages array, finds tool_use → tool_result pairs for high-volume tools
- * (file_read / grep / glob / shell_exec / web_fetch / file_write / file_edit),
- * keeps the last N pairs intact, and replaces the older ones' result
- * content with a placeholder string. Tool_use_id pairing is preserved so
- * the conversation stays valid; only the OUTPUT bytes are dropped.
+ * Tail cleanup step of `selfCompactSession` (the LLM-summary path), not a
+ * standalone compaction route. Walks the messages array, finds
+ * tool_use → tool_result pairs for high-volume tools (file_read / grep /
+ * glob / shell_exec / web_fetch / file_write / file_edit), keeps the last N
+ * pairs intact, and replaces the older ones' result content with a
+ * placeholder string. Tool_use_id pairing is preserved so the conversation
+ * stays valid; only the OUTPUT bytes are dropped.
  *
- * Why a separate path from full compaction:
+ * How it's wired in halo (selfCompactSession is the ONLY call site):
  *
- *  - LLM summary is lossy and turns the entire history into one big "old
- *    summary" message — fine when needed, but if a single tool returned 50
- *    KB of grep output that's now stale, we'd prefer to drop just THAT
- *    50 KB and leave the conversation structure alone.
+ *  1. Self-compact summarizes the older messages with one LLM call, reusing
+ *     the provider's prompt cache — the agent already holds the full context
+ *     cached, so no input is re-sent.
+ *  2. It rebuilds history as [summary, ...recent keepMessages].
+ *  3. It then runs micro-compact over that kept tail (keepRecent=1): if those
+ *     few "recent" messages each still carry a 50 KB tool result, the
+ *     post-summary state can blow the threshold again. Micro clears all but
+ *     the newest result's content in place — no extra LLM round-trip.
  *
- *  - Self-compact is one LLM call (slow + expensive); micro-compact is a
- *    pure local string substitution. Run it on every loop iteration alongside
- *    the threshold check; full compaction only fires when micro-compact
- *    can't free enough.
+ * Micro never fires on its own from the loop: the threshold hook
+ * (maybeAutoCompact) goes straight to self-compact, and micro is its final
+ * byte-trimming pass.
  *
- * Ported from Claude Code's `services/compact/microCompact.ts`. We keep the
- * core idea — clear old tool results for known high-output tools — and skip
- * the cached-MC / time-based / forked-agent branches that are specific to
- * Anthropic's deployment.
+ * Ported from Claude Code's `services/compact/microCompact.ts`, but inverted:
+ * the original runs micro every loop iteration and only escalates to full
+ * compaction when micro can't free enough; here full (self-)compact is the
+ * entry point and micro is its tail cleanup. We keep the core idea (clear old
+ * tool results for known high-output tools) and skip the cached-MC /
+ * time-based / forked-agent branches specific to Anthropic's deployment.
  */
 import type { AnthropicMessage, ContentBlock } from './agent-loop.js'
 
