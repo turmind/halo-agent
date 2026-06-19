@@ -26,7 +26,7 @@ One bot (= one Slack app install) is bound to one workspace. A workspace can bin
 - **DMs: one Slack user → one ongoing session** (keyed by DM channel id, preserved across messages)
 - **Channels/groups: each thread → one session** (thread root message or explicit thread_ts anchors the session)
 - Session ID format: `slack_<channelId>:<rootTs>_<createdAtBase36>` (e.g. `slack_C0123:1700.0_m1abc`)
-- Sessions live under the bot's bound workspace and use the `default` agent
+- Sessions live under the bot's bound workspace and use the highest-priority agent (falls back to `default` only when none exists)
 - The web side sees these sessions in the session list (labelled `Slack: <channelId>/<threadTs>`)
 - Access level inherited from the bot account
 

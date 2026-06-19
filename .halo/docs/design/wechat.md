@@ -25,7 +25,7 @@ One bot (= one `ilink_bot_id` from a QR scan) is bound to one workspace. A works
 
 - **One WeChat user → many sessions (one active at a time)**
 - Session ID format: `wx_<normalizedUserId>_<createdAtBase36>` (e.g. `a1b2c3@im.wechat` → `wx_a1b2c3-im-wechat_<ts>`)
-- Sessions live under the bot's bound workspace and use the `default` agent
+- Sessions live under the bot's bound workspace and use the highest-priority agent (falls back to `default` only when none exists)
 - The web side sees these sessions in the session list (labelled `WeChat: <user>`)
 - Access level inherited from the bot account (see below)
 

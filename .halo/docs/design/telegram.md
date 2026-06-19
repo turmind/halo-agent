@@ -25,7 +25,7 @@ One bot (= one BotFather token) is bound to one workspace. A workspace can bind 
 
 - **One Telegram user → many sessions (one active at a time)**
 - Session ID format: `tg_<userId>_<createdAtBase36>` (e.g. `tg_123456789_m1abc`)
-- Sessions live under the bot's bound workspace and use the `default` agent
+- Sessions live under the bot's bound workspace and use the highest-priority agent (falls back to `default` only when none exists)
 - The web side sees these sessions in the session list (labelled `Telegram: <userId>`)
 - Access level inherited from the bot account
 

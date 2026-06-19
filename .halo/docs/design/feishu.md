@@ -28,7 +28,7 @@ One Feishu app (= one appId + appSecret pair) is bound to one workspace. A works
 - Session ID format: `feishu_<chatId>:<rootId>_<createdAtBase36>`
 - In p2p (DM): rootId anchored to `dm` for a stable key across multiple messages
 - In group: each thread is its own bounded session, keyed by the thread's root message id
-- Sessions live under the bot's bound workspace and use the `default` agent
+- Sessions live under the bot's bound workspace and use the highest-priority agent (falls back to `default` only when none exists)
 - Access level inherited from the account's `accessLevel` field (see below)
 
 ### Access level

@@ -33,7 +33,7 @@ Web-specific config JSON fields: `token` (auto-generated base64url, 24 bytes).
 - **One account → many sessions (one active at a time)**
 - Session ID format: `web_<accountId>_<createdAtBase36>`
 - Active session tracked in memory (`activeOverrides` Map); defaults to most recent
-- Sessions live under the account's bound workspace using the `default` agent
+- Sessions live under the account's bound workspace using the highest-priority agent (falls back to `default` only when none exists)
 - Admin panel and other channels see these sessions in their `/session list` (tagged `[web]`)
 - Access level inherited from the account
 
