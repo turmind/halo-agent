@@ -32,7 +32,7 @@ import { formatForFeishu } from '../shared/markdown.js'
 import { classifyMedia, isInTempDir } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
-import { findActiveSessionId as sharedFindActive, dispatchCommand, type CommandContext } from '../shared/commands.js'
+import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
 import { getLang } from '../shared/i18n.js'
 
@@ -350,7 +350,7 @@ async function handleInbound(args: {
 
   const sm = registry.getOrCreate(workspace)
   const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  const sessionId = await getOrCreateSessionForThread({ sm, chatId, rootId, userId, accessLevel, state })
+  const sessionId = await getOrCreateSessionForThread({ sm, chatId, rootId, userId, accessLevel, state, workspacePath: workspace })
 
   if (sm.isSessionCompacting(sessionId)) {
     await replyToInbound({ account, inboundMessageId, isP2P, chatId, text: '⏳ 正在整理上下文，请稍后再发消息（通常 30 秒内完成）' })
@@ -560,16 +560,18 @@ async function getOrCreateSessionForThread(args: {
   userId: string
   accessLevel: 'readonly' | 'workspace' | null
   state: AccountState
+  workspacePath: string
 }): Promise<string> {
-  const { sm, chatId, rootId, userId, accessLevel, state } = args
+  const { sm, chatId, rootId, userId, accessLevel, state, workspacePath } = args
   const prefix = buildSessionPrefixForThread(chatId, rootId)
   const tagKey = `${userId}@${chatId}:${rootId}`
   const existing = sharedFindActive(sm, tagKey, prefix, state.activeOverrides, accessLevel === null ? 'full' : accessLevel)
   if (existing) return existing
   const newId = `${prefix}${Date.now().toString(36)}`
-  // agentName omitted → createSession resolves the real agent.yaml `name`
-  // (e.g. a renamed `default` slot shows "Producer", not "default").
-  await sm.createSession('default', null, `Feishu: ${chatId}/${rootId}`, undefined, newId, undefined, accessLevel)
+  // agentId resolved by priority (highest non-disabled, non-internal agent wins);
+  // agentName omitted → createSession resolves the real agent.yaml `name`.
+  const agentId = await resolveDefaultAgentId(sm, workspacePath)
+  await sm.createSession(agentId, null, `Feishu: ${chatId}/${rootId}`, undefined, newId, undefined, accessLevel)
   state.activeOverrides.set(tagKey, newId)
   return newId
 }

@@ -8,7 +8,7 @@ import { getAccountByToken } from './accounts.js'
 import { updateAccount } from './accounts.js'
 import { saveInboundMedia } from '../shared/media-store.js'
 import { resolveAccountWorkspace } from '../shared/accounts.js'
-import { findActiveSessionId, dispatchCommand, type CommandContext } from '../shared/commands.js'
+import { findActiveSessionId, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { t, getLang } from '../shared/i18n.js'
 
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
@@ -213,8 +213,10 @@ export function createWebChannel(deps: {
       sessionId = `${prefix}${Date.now().toString(36)}`
     }
     if (!sessionExists) {
-      const agentId = opts?.agentId || 'default'
+      // agentId resolved by priority (highest non-disabled, non-internal agent wins);
+      // explicit opts.agentId takes precedence (ACP / admin panel).
       // agentName omitted → createSession resolves the real agent.yaml `name`.
+      const agentId = opts?.agentId || await resolveDefaultAgentId(sm, workspace)
       await sm.createSession(agentId, null, `Web: ${account.label || account.accountId}`, undefined, sessionId, undefined, accessLevel)
       // Only flip the account's `active` pointer when no explicit session
       // was requested — otherwise an ACP adapter creating a side session

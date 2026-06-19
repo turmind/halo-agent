@@ -211,6 +211,20 @@ export function execCompact(ctx: CommandContext, logPrefix: string): CommandResu
   return { text: t('compact.started', ctx.lang) }
 }
 
+/** Resolve the entry agent for a channel-created session: highest-priority
+ *  non-disabled, non-internal agent. On equal priority, workspace-scoped
+ *  agents win over global ones (workspace agents are listed last by
+ *  scanAvailableAgents, so the secondary sort key flips the tie in their
+ *  favour). Falls back to 'default' only when no eligible agent exists. */
+export async function resolveDefaultAgentId(sm: SessionManager, workspacePath: string): Promise<string> {
+  const disabledSet = getDisabledSet(sm.getDb(), 'agent')
+  const all = await scanAvailableAgents(workspacePath, disabledSet)
+  const top = all
+    .filter((a) => !a.disabled && !a.internal)
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || (a.scope === 'workspace' ? -1 : 1))[0]
+  return top?.id ?? 'default'
+}
+
 export async function execNew(ctx: CommandContext): Promise<CommandResult> {
   const disabledSet = getDisabledSet(ctx.sm.getDb(), 'agent')
   const all = await scanAvailableAgents(ctx.workspacePath, disabledSet)

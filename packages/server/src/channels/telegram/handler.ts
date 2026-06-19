@@ -8,7 +8,7 @@ import type { TelegramAccount } from './types.js'
 import { TelegramResponder } from './event-adapter.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
-import { findActiveSessionId as sharedFindActive, dispatchCommand, type CommandContext } from '../shared/commands.js'
+import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
 import { builtinCommandNames } from '../../commands/index.js'
 
@@ -347,7 +347,7 @@ async function handleUserMessage(args: {
 
   const sm = registry.getOrCreate(workspace)
   const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  const sessionId = await getOrCreateActiveSession(sm, userId, activeOverrides, accessLevel)
+  const sessionId = await getOrCreateActiveSession(sm, userId, activeOverrides, accessLevel, workspace)
 
   if (sm.isSessionCompacting(sessionId)) {
     await ctx.reply(t('handler.compacting', lang))
@@ -411,12 +411,14 @@ async function getOrCreateActiveSession(
   userId: number,
   activeOverrides: Map<string, string>,
   accessLevel: 'readonly' | 'workspace' | null,
+  workspacePath: string,
 ): Promise<string> {
   const existing = findActiveTgSession(sm, userId, activeOverrides, accessLevel === null ? 'full' : accessLevel)
   if (existing) return existing
   const newId = `${buildTgSessionPrefix(userId)}${Date.now().toString(36)}`
-  // agentName omitted → createSession resolves the real agent.yaml `name`
-  // (e.g. a renamed `default` slot shows "Producer", not "default").
-  await sm.createSession('default', null, `Telegram: ${userId}`, undefined, newId, undefined, accessLevel)
+  // agentId resolved by priority (highest non-disabled, non-internal agent wins);
+  // agentName omitted → createSession resolves the real agent.yaml `name`.
+  const agentId = await resolveDefaultAgentId(sm, workspacePath)
+  await sm.createSession(agentId, null, `Telegram: ${userId}`, undefined, newId, undefined, accessLevel)
   return newId
 }

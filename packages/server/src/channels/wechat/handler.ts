@@ -22,7 +22,7 @@ import { isInTempDir, tempDir } from '../shared/media.js'
 import { sendMediaFile } from './send-media.js'
 import { startLogin, waitLogin } from './login.js'
 import QRCode from 'qrcode'
-import { findActiveSessionId as sharedFindActive, dispatchCommand, type CommandContext } from '../shared/commands.js'
+import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
 
 /** Allow files under workspace or the OS temp dir (agent-generated temp files like screenshots) */
@@ -323,13 +323,15 @@ async function getOrCreateActiveSession(
   fromUserId: string,
   activeOverrides: Map<string, string>,
   accessLevel: 'readonly' | 'workspace' | null,
+  workspacePath: string,
 ): Promise<string> {
   const existing = findActiveWxSession(sm, fromUserId, activeOverrides, accessLevel === null ? 'full' : accessLevel)
   if (existing) return existing
   const newId = `${buildWxSessionPrefix(fromUserId)}${Date.now().toString(36)}`
-  // agentName omitted → createSession resolves the real agent.yaml `name`
-  // (e.g. a renamed `default` slot shows "Producer", not "default").
-  await sm.createSession('default', null, `WeChat: ${fromUserId}`, undefined, newId, undefined, accessLevel)
+  // agentId resolved by priority (highest non-disabled, non-internal agent wins);
+  // agentName omitted → createSession resolves the real agent.yaml `name`.
+  const agentId = await resolveDefaultAgentId(sm, workspacePath)
+  await sm.createSession(agentId, null, `WeChat: ${fromUserId}`, undefined, newId, undefined, accessLevel)
   return newId
 }
 
@@ -386,7 +388,7 @@ async function handleInbound(args: {
 
   const sm = registry.getOrCreate(account.workspacePath)
   const sessionAccessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  const sessionId = await getOrCreateActiveSession(sm, fromUserId, activeOverrides, sessionAccessLevel)
+  const sessionId = await getOrCreateActiveSession(sm, fromUserId, activeOverrides, sessionAccessLevel, account.workspacePath)
 
   // If the session is currently compacting or mid-turn, send an immediate hint
   // so the WeChat user doesn't stare at a silent chat for 30+ seconds.
