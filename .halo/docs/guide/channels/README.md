@@ -26,7 +26,7 @@ This folder has one onboarding guide per channel. Pick the one you want and foll
                           SessionManager (per workspace)
 ```
 
-Each channel handler is a thin adapter between its native protocol and halo's `SessionManager`. Slash commands (`/session` `/agent` `/skill` `/ws` `/cron` `/acp` `/evo` `/help`) are shared across all of them — see `channels/shared/commands.ts`.
+Each channel handler is a thin adapter between its native protocol and halo's `SessionManager`. Slash commands (`/session` `/agent` `/skill` `/workspace` `/cron` `/acp` `/evo` `/help`) are shared across all of them — see `channels/shared/commands.ts`.
 
 The ACP adapter is **not** a channel — it's a stdio bridge that translates ACP JSON-RPC into the web channel's HTTP+SSE. Counted here only because users go through the same "set up an account, get a token" flow.
 
@@ -48,7 +48,7 @@ Every channel account carries an `accessLevel`:
 
 - `readonly` (default) — sandboxed, workspace mounted read-only, secrets dir not mounted, only read-only tools (`file_read`, `view_image`, `file_list`, `grep`, `glob`) injected
 - `workspace` — sandboxed, workspace mounted read-write, secrets dir not mounted
-- `full` — no sandbox, all tools, can `/ws <path>` to another workspace
+- `full` — no sandbox, all tools, can `/workspace <path>` to another workspace
 
 When in doubt start at `readonly` and raise it later. The setting is on the **account row**, so a single Slack workspace can have one `readonly` bot account in #general and a separate `full` account in #ops.
 

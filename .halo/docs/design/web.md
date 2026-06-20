@@ -14,7 +14,7 @@ Halo server (9527) ──┤── channels/telegram/               ├── Se
                          or any HTTP client
 ```
 
-Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/ws`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter.
+Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/workspace`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter.
 
 Web channel is a public HTTP API on Halo. `packages/web-demo` is a standalone demo frontend that proxies requests through its own auth layer.
 
@@ -49,8 +49,8 @@ Slash commands are intercepted before reaching the agent:
 | `/session switch <n>` | Switch to session by number (readonly can only switch to own) |
 | `/session stop` | Interrupt current running task |
 | `/session compact` | Compress session context |
-| `/ws info` | Show current workspace |
-| `/ws switch <path>` | Switch workspace (full access only) |
+| `/workspace info` | Show current workspace |
+| `/workspace switch <path>` | Switch workspace (full access only) |
 
 ### Media handling
 
@@ -187,7 +187,7 @@ node server.js
 - SSE streaming with tool call display (collapsible)
 - Auto-reconnect: if session is running on page load, subscribes to live stream
 - Message queue: can send while agent is running, messages queue and send sequentially
-- Slash commands (`/help`, `/session`, `/agent`, `/skill`, `/ws`)
+- Slash commands (`/help`, `/session`, `/agent`, `/skill`, `/workspace`)
 - Image upload (file picker + camera capture)
 - Voice recording (webm audio saved to workspace, path given to agent)
 - Stop/interrupt button

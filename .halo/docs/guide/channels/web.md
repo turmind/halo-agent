@@ -99,7 +99,7 @@ Slash commands are intercepted before they reach the agent — same set as every
 | `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` |
 | `/agent <verb>` | Manage agents (`list` / `switch` / `desc` open to all; `delete` full; `create` / `update` via skill, full) |
 | `/skill <verb>` | Manage skills (`list` / `desc` open; `disable` / `enable` workspace; `delete` full; `create` / `update` via skill, full) |
-| `/ws <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
+| `/workspace <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
 | `/help` | List commands — object commands show only the verbs you can run |
 
 Send a slash command exactly like a normal message — the server detects the leading `/`.
@@ -139,7 +139,7 @@ The demo holds your token server-side and exposes its own password-based session
 - **Tokens are unhashed** in `~/.halo/secrets/channels/channels.db`. Restrict that file to the user that runs halo
 - **No rate limit at the channel level** — if you expose the API on the public internet, put a reverse proxy with rate limits in front
 - **Admin endpoints** (`POST /api/web/accounts`, `PATCH`, `DELETE`) require admin cookie auth, **not** the token. They're for the admin panel, not for the token holder
-- A `full`-access token can call `/ws <abs-path>` to switch the bound workspace database-side. If you don't want that, give out `workspace` or `readonly` tokens instead
+- A `full`-access token can call `/workspace <abs-path>` to switch the bound workspace database-side. If you don't want that, give out `workspace` or `readonly` tokens instead
 
 ## Reference
 

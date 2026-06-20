@@ -315,14 +315,14 @@ SessionManager enforces the rest: readonly sessions drop `file_write` / `file_ed
 You almost always want:
 - `/session new` — start a fresh session, old sessions remain reachable
 - `/session list` / `/session switch <n>` — session history, switch active
-- `/ws info` / `/ws switch <path>` — show / switch workspace
+- `/workspace info` / `/workspace switch <path>` — show / switch workspace
 - `/help`
 
-Common commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/ws` with their builtin verbs — plus fall-through to same-named skills for skill verbs like `/cron …`) are handled by `dispatchCommand()` in [channels/shared/commands.ts](../../../packages/server/src/channels/shared/commands.ts). Your channel handler only needs to:
+Common commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/workspace` with their builtin verbs — plus fall-through to same-named skills for skill verbs like `/cron …`) are handled by `dispatchCommand()` in [channels/shared/commands.ts](../../../packages/server/src/channels/shared/commands.ts). Your channel handler only needs to:
 
 1. Build a `CommandContext` (including `lang` from the account's `language` field)
 2. Call `dispatchCommand(ctx, command, arg, { channelName: 'slack' })`
-3. Handle the result: check `result.workspace` for `/ws switch` side-effects (update account + restart), check `result.switchTo` for session switches, check `result.startedTurn` (a skill verb kicked the agent — keep the event stream open), then send `result.text` back to the user
+3. Handle the result: check `result.workspace` for `/workspace switch` side-effects (update account + restart), check `result.switchTo` for session switches, check `result.startedTurn` (a skill verb kicked the agent — keep the event stream open), then send `result.text` back to the user
 
 Channel-specific commands (e.g. WeChat's `/qr`) go in a fallback switch after `dispatchCommand` returns `null`. All system messages are i18n'd via `channels/shared/i18n.ts`. Reference: [channels/telegram/handler.ts](../../../packages/server/src/channels/telegram/handler.ts) (cleanest example — uses a loop over command names).
 
@@ -344,7 +344,7 @@ If your channel uses a polling or socket-mode loop, **respect the server's singl
 
 Each channel account has a `workspace_path` column in the unified `channel_accounts` table. If your channel binds user-to-workspace instead of bot-to-workspace, do the lookup at inbound time.
 
-At handler startup, `resolveAccountWorkspace(account)` checks the path exists on disk and calls `ensureWorkspaceHalo()`. If the workspace is missing, the handler skips the account. Users can re-bind via the admin panel or `/ws switch` command (full access only).
+At handler startup, `resolveAccountWorkspace(account)` checks the path exists on disk and calls `ensureWorkspaceHalo()`. If the workspace is missing, the handler skips the account. Users can re-bind via the admin panel or `/workspace switch` command (full access only).
 
 ### Media
 

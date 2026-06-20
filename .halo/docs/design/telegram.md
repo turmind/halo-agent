@@ -103,7 +103,7 @@ Photos / documents trigger the same flow with file metadata in the text.
 | `/session switch <index>` | Switch active session |
 | `/session stop` | Abort running task |
 | `/session compact` | Compress context |
-| `/ws info` | Show workspace; `/ws switch <path>` changes it (full only) |
+| `/workspace info` | Show workspace; `/workspace switch <path>` changes it (full only) |
 | `/help` | List commands |
 
 ## Event coalescing (TelegramResponder)

@@ -159,7 +159,7 @@ find /path/to/test-workspace/.halo/sessions -name '<deleted-id>*'
 | I6 | ⬜ | `/session list` (readonly/workspace user) | wechat/tg readonly user `/session list` | **Only own-prefix sessions** (regression for cross-user privacy) |
 | I7 | ⬜ | `/session switch` matches `/session list` indices | After I6, `/session switch 1` for readonly user | Switches to user's first own session |
 | I8 | ⬜ | `/session switch` to non-own blocked | readonly tries `/session switch` to a global admin session via crafted index | Returns `switch.readonly` rejection (defense-in-depth even though list filtered) |
-| I9 | ⬜ | All builtin `/help`/`/ws`/`/session stop` reachable from each channel | Run each through web/tg/wx | Same response shape |
+| I9 | ⬜ | All builtin `/help`/`/workspace`/`/session stop` reachable from each channel | Run each through web/tg/wx | Same response shape |
 | I10 | ⬜ | Server startup descriptor↔dispatch sanity check | Restart server | Throws if a builtin server descriptor is missing a dispatch case |
 
 ## J. Session viewer & Debug

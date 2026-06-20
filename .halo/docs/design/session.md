@@ -198,9 +198,31 @@ Frontend network issues don't affect the backend:
 |---|---|
 | User abort / graceful interrupt (`AbortError`) | Repair, clean exit |
 | Context overflow (`too many input tokens`) | **Local** (non-LLM) compact + retry — the model already refused this payload, so calling an LLM risks a second stall |
+| Account-level error (insufficient balance / suspended / invalid key / unauthorized) | Unrecoverable — report to user, **no** retry |
 | Rate limiting / throttling | Exponential backoff (`2s * 2^attempt` + jitter, capped at 60s: 2s/4s/8s/16s…), retry |
+| **Transient server-side error (5xx / timeout)** | Same exponential backoff as throttling — see [Transient server-error classification](#transient-server-error-classification) below |
+| Transient transport error (`fetch failed`, `ECONNRESET`, headers timeout, …) | Short backoff (`1s * 2^attempt` + jitter), retry |
 | Corrupted messages (`tool_use ids without tool_result`) | Repair + retry |
 | Unrecoverable error | Report to user, stop |
+
+### Transient server-error classification
+
+The transient-5xx branch is the one that all providers share, and getting the **HTTP status** out of a failure is the crux — without it, a generic Bedrock 500 would kill the turn on the first attempt.
+
+**httpStatus extraction — three-step fallback** (top of the `catch` block):
+
+1. **AWS SDK structured field** — `err.$metadata.httpStatusCode`. Present on every Bedrock error.
+2. **Regex parse of the message string** — for the nine fetch-based providers (anthropic / openai / deepseek / doubao / hunyuan / kimi / minimax / qwen / mantle), which throw plain string `Error`s with the status embedded. The patterns cover `API error <NNN>`, `] <NNN>`, and `status=<NNN>`.
+3. **`undefined`** — neither source yielded a status; the error falls through to the keyword/name-based branches instead.
+
+**Retry decision** — a failure is treated as a transient server-side error (→ retry with backoff) when **either**:
+
+- `err.name` is `InternalServerException`, `ModelTimeoutException`, or `ServiceUnavailableException`; **or**
+- the extracted `httpStatus` is one of `500` / `502` / `503` / `504` / `529` (Anthropic "Overloaded") / `408` (request/model timeout).
+
+Backoff is identical to throttling: `2s * 2^attempt` + up to 1s jitter, capped at 60s, for up to `config.agent.maxRetries` (5) attempts.
+
+**Why this matters (original pain point)**: Bedrock returns a generic 500 with the message `"… is unable to process your request"` — no `Throttling`/`Overloaded`/`rate limit` keyword. The old logic, which classified retryable errors only by message-string keywords, matched nothing and let the turn die on attempt 1. Keying the retry on the **structured** `errName` / `httpStatus` instead of substrings is what makes the 5xx/timeout retry fire across every provider, Bedrock included.
 
 ## Compaction paths
 

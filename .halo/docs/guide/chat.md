@@ -53,7 +53,7 @@ Most commands are noun-verb **object commands**: `/<obj> <verb> [args]`. Bare `/
 | `/clear` | Admin-UI alias for `/session new` |
 | `/agent <verb>` | Manage agents — `list` / `switch <name\|index>` / `desc` (built-in, open to all) · `delete` (built-in, full access) · `create` / `update` (handled by the `agent` skill, full access) |
 | `/skill <verb>` | Manage skills — `list` / `desc` (built-in, open to all) · `disable` / `enable` (built-in, workspace access) · `delete` (built-in, full access) · `create` / `update` (handled by the `skill` skill, full access) |
-| `/ws <verb>` | Manage the workspace — `info` (built-in, open to all) · `switch <path>` (built-in, full access) · `setup` / `tidy` (ws skill, workspace access; init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) · `share` (ws skill, full access; export a shareable bundle) |
+| `/workspace <verb>` | Manage the workspace — `info` (built-in, open to all) · `switch <path>` (built-in, full access) · `setup` / `tidy` (workspace skill, workspace access; init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) · `share` (workspace skill, full access; export a shareable bundle) |
 | `/cron <verb>` | Scheduled agent runs — `create` / `list` / `update` / `enable` / `disable` / `delete` (cron skill, full access) |
 | `/acp <verb>` | Talk to other agents over ACP — `kiro <q>` / `claude <q>` ask a local agent directly; `add` / `list` / `remove` manage generated `ask-<label>` bindings (acp skill, full access) |
 | `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
@@ -70,7 +70,7 @@ If you're chatting from WeChat, the same shared commands are available (routed t
 | `/session new` | Create a new session; old sessions stay accessible via `/session list` + `/session switch` (nothing is archived) |
 | `/session list` | List recent sessions (newest first); the active one is marked `→` |
 | `/session switch <index>` | Switch the active session to the indexed one (readonly bot 仅能切到自己的 [我] 会话) |
-| `/ws info` / `/ws switch <path>` | Show or switch workspace (absolute path; 切换仅 full 权限 bot 可用) |
+| `/workspace info` / `/workspace switch <path>` | Show or switch workspace (absolute path; 切换仅 full 权限 bot 可用) |
 | `/qr [level]` | Generate an invite QR for a new bot account (full 权限 bot 专用) |
 | `/help` | Show help |
 

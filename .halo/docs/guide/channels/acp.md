@@ -73,7 +73,7 @@ It walks you through `(label, host, port, workspace, token)` and **stamps out a 
 
 - `SKILL.md` — slash command `/ask-<label>`, instructions tailored to this remote
 - `config.yaml` — declares the binding's params so admin Settings shows a form
-- `ask.py` — bundled JSON-RPC ↔ stdio helper (one copy per binding, intentional — keeps `/ws share` bundles self-contained)
+- `ask.py` — bundled JSON-RPC ↔ stdio helper (one copy per binding, intentional — keeps `/workspace share` bundles self-contained)
 
 It also writes the connection values into `settings.yaml` (workspace or global, you pick).
 
@@ -120,7 +120,7 @@ A Web-channel token in halo is bound to one workspace at the database level. The
 - The server gates the `workspace` override on `accessLevel === 'full'` — readonly / workspace tokens cannot escape their bound workspace
 - The adapter sends both fields on every request, so concurrent adapters on the same token but different `--workspace` flags don't step on each other
 
-**Caveat:** sending `/ws switch <path>` from inside an ACP session still mutates the bound workspace at the **db level** (changing the account's default for everybody using that token). Avoid `/ws switch` from an adapter — use `--workspace` at adapter launch instead.
+**Caveat:** sending `/workspace switch <path>` from inside an ACP session still mutates the bound workspace at the **db level** (changing the account's default for everybody using that token). Avoid `/workspace switch` from an adapter — use `--workspace` at adapter launch instead.
 
 ## Reverse fs (parked)
 
@@ -140,7 +140,7 @@ For now: if you want the agent to see a Mac-side file, paste it into the prompt.
 | `403` when launching with `--workspace /some/other/path` | Token is `readonly` / `workspace` access — use a `full` token or omit `--workspace` |
 | Tool calls don't appear in Claude Code | Expected — halo doesn't translate every event back as ACP `tool_call`. See [docs/dev/acp-adapter.md](../../dev/acp-adapter.md) for the full mapping |
 | Two `session/prompt` calls on the same id, second hangs | Halo queues messages when a session is busy; ACP adapter ends the response with `[queued]`. Wait for the first to finish |
-| `/ws switch <path>` worked but other tokens broke | You changed the db-level default. Switch back with another `/ws switch`, or stop using slash commands from the adapter |
+| `/workspace switch <path>` worked but other tokens broke | You changed the db-level default. Switch back with another `/workspace switch`, or stop using slash commands from the adapter |
 
 ## Reference
 

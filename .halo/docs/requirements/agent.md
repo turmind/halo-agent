@@ -50,7 +50,7 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 ### Disable / Enable
 - Toggle switch on each agent row in the admin sidebar. Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Both global and workspace agents can be independently toggled per workspace.
 - Disabled agents are greyed out (opacity-40) with sub-text "disabled"; the toggle stays visible.
-- Hidden from: `list_agents` tool, chat agent selector, `/ws share` export.
+- Hidden from: `list_agents` tool, chat agent selector, `/workspace share` export.
 - Still visible in the admin management sidebar for re-enabling.
 
 ### Tool selection

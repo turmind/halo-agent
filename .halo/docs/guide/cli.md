@@ -122,9 +122,9 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | `/session context` | Show context window + agent info |
 | `/agent <verb>` | Manage agents: `list` / `switch <name\|index>` / `desc` / `delete` / `create` / `update` |
 | `/skill <verb>` | Manage skills: `list` / `desc` / `disable` / `enable` / `delete` / `create` / `update` |
-| `/ws info` | Show current workspace |
-| `/ws switch <path>` | Switch workspace (full access only) |
-| `/ws setup` / `/ws tidy` / `/ws share` | Set up / tidy the `.halo/` knowledge files, or export a shareable bundle (ws skill) |
+| `/workspace info` | Show current workspace |
+| `/workspace switch <path>` | Switch workspace (full access only) |
+| `/workspace setup` / `/workspace tidy` / `/workspace share` | Set up / tidy the `.halo/` knowledge files, or export a shareable bundle (workspace skill) |
 | `/cron <verb>` | Manage scheduled agent runs: `create` / `list` / `update` / `enable` / `disable` / `delete` |
 | `/acp <verb>` | Ask other agents over ACP (`kiro <q>` / `claude <q>`) and manage `ask-*` bindings (`add` / `list` / `remove`) |
 | `/evo [hint]` | Queue a self-evolution run on this session (full access only) |

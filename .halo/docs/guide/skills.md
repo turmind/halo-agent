@@ -30,7 +30,7 @@ Putting those in AGENT.md would bloat the system prompt. Skills use **progressiv
 
 Workspace overrides global (same id).
 
-**Built-in skills** (`agent`, `skill`, `ws`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`) are server-shipped and **force-overwritten on every server startup**. Local edits to these directories under `~/.halo/global/skills/` will be lost. To customize one, copy it into `<project>/.halo/skills/<id>/` (workspace replaces global) and edit there. Other skills under `~/.halo/global/skills/` — including any the user created via the admin UI — are untouched by the seeder.
+**Built-in skills** (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`) are server-shipped and **force-overwritten on every server startup**. Local edits to these directories under `~/.halo/global/skills/` will be lost. To customize one, copy it into `<project>/.halo/skills/<id>/` (workspace replaces global) and edit there. Other skills under `~/.halo/global/skills/` — including any the user created via the admin UI — are untouched by the seeder.
 
 ## SKILL.md format
 
@@ -152,7 +152,7 @@ Halo seeds these skills on every startup (the ids in `BUILTIN_SKILL_IDS`, `packa
 |---|---|
 | agent | Create / update agents — backs the `create` / `update` verbs of `/agent` |
 | skill | Create / update skills — backs the `create` / `update` verbs of `/skill` |
-| ws | Workspace maintenance — backs `/ws setup` / `tidy` (init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) and `/ws share` (export a shareable bundle) |
+| workspace | Workspace maintenance — backs `/workspace setup` / `tidy` (init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) and `/workspace share` (export a shareable bundle) |
 | cron | Create / list / update / enable / disable / delete scheduled agent runs — backs `/cron` |
 | acp | Talk to other agents over ACP (`/acp kiro\|claude <q>`) and manage `ask-<label>` bindings for halo-to-halo delegation (`/acp add\|list\|remove`) |
 | send-file | Deliver an image/video/file as a channel attachment by emitting `MEDIA:<absolute_path>` — works on Web / WeChat / Telegram / Slack / Feishu (no command; model-activated, workspace access) |
@@ -194,7 +194,7 @@ user-invocable: false                # optional (standard), never becomes a slas
 | disable-model-invocation | no | Standard — `true` keeps the slash command but the skill isn't injected for the model (no auto-activation) |
 | user-invocable | no | Standard — `false` means no slash command ever; the model can still activate it |
 
-> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md). Toggle via admin sidebar or `/skill disable|enable`; disabled skills are excluded from system prompt injection, activate_skill tool, agent form picker, and `/ws share` export. Still visible in admin sidebar (dimmed + toggle switch).
+> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md). Toggle via admin sidebar or `/skill disable|enable`; disabled skills are excluded from system prompt injection, activate_skill tool, agent form picker, and `/workspace share` export. Still visible in admin sidebar (dimmed + toggle switch).
 
 **Minimal SKILL.md**: frontmatter with `name` + `description` + body; everything else is optional.
 

@@ -184,7 +184,7 @@ skills:
 
 ```
 
-> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Toggle via admin sidebar; disabled agents are hidden from `list_agents`, chat selector, and `/ws share` export. Still visible in admin sidebar (dimmed + toggle switch).
+> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Toggle via admin sidebar; disabled agents are hidden from `list_agents`, chat selector, and `/workspace share` export. Still visible in admin sidebar (dimmed + toggle switch).
 
 **Field source**: `packages/server/src/agents/agent-loader.ts`, `AgentYamlConfig` interface.
 

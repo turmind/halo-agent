@@ -32,7 +32,7 @@ WS handler special-cases `/session compact` because it needs UI progress callbac
 1. Channel receives a slash command from user input (or WS `command:<name>` message)
 2. Channel builds a `CommandContext` (shared interface: sm, userId, sessionPrefix, accessLevel, workspacePath, lang)
 3. Channel calls `dispatchCommand(ctx, '/command', args)`
-4. `dispatchCommand` switch: `/help` and `/evo` call `exec*` directly; object commands (`/session`, `/agent`, `/skill`, `/ws`) and the default case route through `routeObjectOrSkill`
+4. `dispatchCommand` switch: `/help` and `/evo` call `exec*` directly; object commands (`/session`, `/agent`, `/skill`, `/workspace`) and the default case route through `routeObjectOrSkill`
 5. `routeObjectOrSkill` tries the builtin noun-verb table first (`SUBCOMMAND_ROUTES`, per-verb access via `verbAccessMap`), else falls through to `execSkillCommand` for the same-named skill — verb/permission model in [requirements/command.md](../requirements/command.md)
 6. Returns `CommandResult { text, switchTo?, workspace? }` — channel formats and sends to user
 

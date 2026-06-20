@@ -62,7 +62,7 @@ Remote halo servers are **not** a direct verb: each remote needs its own host/to
 
 - `SKILL.md` — slash command `/ask-<label>`, instructions tailored to this remote
 - `config.yaml` — declares the binding's params so admin Settings shows a form
-- `ask.py` — bundled JSON-RPC ↔ stdio helper (one copy per binding, intentional — keeps `/ws share` bundles self-contained)
+- `ask.py` — bundled JSON-RPC ↔ stdio helper (one copy per binding, intentional — keeps `/workspace share` bundles self-contained)
 - writes the connection values into `settings.yaml` (workspace or global, user picks)
 
 After install, the local agent can simply do `shell_exec: python3 .../ask-<label>/ask.py "<question>" --host {{params.host}} ...` and halo's runtime substitutes the configured values. **Multiple bindings coexist** — each gets its own slash command, settings namespace, and Admin Settings page.
@@ -127,7 +127,7 @@ A single web-channel token in halo is bound to one workspace at the database lev
 - Server gates the workspace override on `accessLevel === 'full'` — readonly / workspace tokens cannot escape their account-bound workspace.
 - The adapter sends both fields on every request, so concurrent adapters on the same token but different `--workspace` flags don't step on each other.
 
-Caveat: `/ws switch <path>` slash commands still mutate the bound workspace at the *db* level (changing the account row's default). Avoid sending `/ws switch` from an adapter — its side effects leak to all other clients of the same token. Use `--workspace` at adapter launch instead.
+Caveat: `/workspace switch <path>` slash commands still mutate the bound workspace at the *db* level (changing the account row's default). Avoid sending `/workspace switch` from an adapter — its side effects leak to all other clients of the same token. Use `--workspace` at adapter launch instead.
 
 ## Reverse fs (parked)
 

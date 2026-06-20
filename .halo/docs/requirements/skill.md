@@ -39,7 +39,7 @@ The Skills sidebar mirrors the Agents sidebar layout:
 - Each section header has its own **+ button** — scope is implicit from which button is clicked, no pop-up picker
 - Creating a name that collides with the other scope prompts a one-time confirmation explaining the runtime override
 - Items overridden by a workspace skill are rendered dimmed with "overridden" subtitle
-- Disabled skills are rendered dimmed with "disabled" subtitle and a toggle switch (always visible). Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md frontmatter). Both global and workspace skills can be independently toggled per workspace. Disabled skills are excluded from system prompt injection, activate_skill tool, agent form skill picker, and `/ws share` export.
+- Disabled skills are rendered dimmed with "disabled" subtitle and a toggle switch (always visible). Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md frontmatter). Both global and workspace skills can be independently toggled per workspace. Disabled skills are excluded from system prompt injection, activate_skill tool, agent form skill picker, and `/workspace share` export.
 - Selection uses a composite `id:scope` key (localStorage `halo_skills_selectedKey`) so the same id in different scopes can coexist
 
 ### Auto-sync behaviour (workspace vs. global)
@@ -87,9 +87,9 @@ A skill can declare a minimum session access level in frontmatter:
 
 ```yaml
 ---
-name: ws
+name: workspace
 description: ...
-command: /ws
+command: /workspace
 requiresAccess: workspace
 ---
 ```

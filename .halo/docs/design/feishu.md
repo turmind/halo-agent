@@ -132,7 +132,7 @@ Implemented via `channels/shared/commands.ts` (shared across Telegram, WeChat, S
 | `/session switch <index>` | Switch active session (p2p only) |
 | `/session stop` | Abort running task |
 | `/session compact` | Compress context |
-| `/ws info` | Show workspace; `/ws switch <path>` changes it (full access only) |
+| `/workspace info` | Show workspace; `/workspace switch <path>` changes it (full access only) |
 | `/help` | List commands |
 
 ## Event coalescing (FeishuResponder)

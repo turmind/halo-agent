@@ -32,7 +32,7 @@ Your answers are written to `~/.halo/global/USER.md`; from then on every root ag
 
 ### Workspace onboarding
 
-The global `INSTRUCTIONS.md` template explains Halo's `.halo/` conventions (`INDEX.md`, `INSTRUCTIONS.md`, `memory/`). When the current workspace has no `INDEX.md`, the system prompt also nudges the agent to offer drafting one from the README / package.json. If you want a guided setup, type `/ws setup`; to clean up an existing workspace later, type `/ws tidy` — both backed by the `ws` skill (setup: interview + draft; tidy: review + prune + reshape).
+The global `INSTRUCTIONS.md` template explains Halo's `.halo/` conventions (`INDEX.md`, `INSTRUCTIONS.md`, `memory/`). When the current workspace has no `INDEX.md`, the system prompt also nudges the agent to offer drafting one from the README / package.json. If you want a guided setup, type `/workspace setup`; to clean up an existing workspace later, type `/workspace tidy` — both backed by the `workspace` skill (setup: interview + draft; tidy: review + prune + reshape).
 
 ## Send a message
 
@@ -55,7 +55,7 @@ You can keep typing while it replies — messages queue and run at the next safe
 | Save file | `Cmd/Ctrl+S` |
 | New conversation | `/session new` |
 | Compact context | `/session compact` |
-| Set up / reorganize workspace | `/ws setup` / `/ws tidy` |
+| Set up / reorganize workspace | `/workspace setup` / `/workspace tidy` |
 
 ## What `~/.halo/` looks like
 
@@ -78,7 +78,7 @@ After `halo setup`:
 
 **When does "refreshed on upgrade" actually run?** `halo setup` always re-runs the seed; the server's startup check also re-runs it automatically when `~/.halo/global/.template-version` is behind the bundled `TEMPLATE_VERSION`. So the routine flow `halo upgrade && halo server restart` is enough — no need to remember `halo setup`.
 
-**Server-refreshed**: `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`agent`, `skill`, `ws`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`, `halo`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
+**Server-refreshed**: `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`, `halo`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
 
 **Never overwritten**: anything else under `agents/` or `skills/` (your own creations), and everything under `secrets/`.
 

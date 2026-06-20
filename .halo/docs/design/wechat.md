@@ -13,7 +13,7 @@ Halo server (9527) ──┤── channels/telegram/             ├── Sess
                            ilinkai.weixin.qq.com
 ```
 
-All channels are peers — each one is a subscriber + caller against SessionManager. Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/ws`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter that builds a `CommandContext` and formats the result for its transport.
+All channels are peers — each one is a subscriber + caller against SessionManager. Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/workspace`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter that builds a `CommandContext` and formats the result for its transport.
 
 ## Data model
 
@@ -115,8 +115,8 @@ Implemented in `handler.ts`'s `handleSlashCommand()`:
 | `/session new` | Create a new session; old sessions remain accessible via `/session list` + `/session switch` (nothing is archived) |
 | `/session list` | List recent sessions (newest first, up to 20); the active one is marked `→` |
 | `/session switch <index>` | Switch the active session to the indexed entry from `/session list`. Override is in-memory per user per account. Readonly bot 仅能切到自己 prefix 下的 session（跨用户会话拒绝）。 |
-| `/ws info` | Show the current workspace. `/ws switch <path>` 切换（绝对路径），**仅 full 权限 bot 可用**；切换后重启 account loop。readonly 切换等于绕过沙箱，直接拒绝。 |
-| `/ws setup` / `/ws tidy` | Triggers the `ws` skill — setup for new workspaces (creates INDEX.md / INSTRUCTIONS.md / memory), tidy for cleanup of existing ones |
+| `/workspace info` | Show the current workspace. `/workspace switch <path>` 切换（绝对路径），**仅 full 权限 bot 可用**；切换后重启 account loop。readonly 切换等于绕过沙箱，直接拒绝。 |
+| `/workspace setup` / `/workspace tidy` | Triggers the `workspace` skill — setup for new workspaces (creates INDEX.md / INSTRUCTIONS.md / memory), tidy for cleanup of existing ones |
 | `/help` | List available commands |
 
 Unknown `/` input falls through to normal message handling.
