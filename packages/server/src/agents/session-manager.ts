@@ -1074,6 +1074,16 @@ export class SessionManager implements SessionManagerInternals {
         session.abortController = null
         const msg = err instanceof Error ? err.message : String(err)
         const errName = err instanceof Error ? err.name : ''
+        // Prefer the AWS SDK's structured HTTP status; fall back to parsing it
+        // out of the message for the fetch-based providers (anthropic / openai /
+        // deepseek / doubao / hunyuan / kimi / minimax / qwen / mantle), which
+        // throw plain string Errors with the status embedded — without this,
+        // the transient-5xx retry below only ever fires for Bedrock.
+        const httpStatusFromMeta = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode
+        const httpStatusFromMsg = msg.match(/API error (\d{3})/)?.[1]
+          ?? msg.match(/\]\s+(\d{3})\b/)?.[1]
+          ?? msg.match(/status=(\d{3})/)?.[1]
+        const httpStatus = httpStatusFromMeta ?? (httpStatusFromMsg ? Number(httpStatusFromMsg) : undefined)
 
         // 1. Abort / graceful interrupt
         if (errName === 'AbortError' || msg.includes('cancelled') || msg.includes('aborted')) {
@@ -1120,10 +1130,39 @@ export class SessionManager implements SessionManagerInternals {
           }
         }
 
-        // 3c. Transient network errors (TCP reset, undici headers timeout,
-        // DNS hiccups, intermittent gateway 502/503) → short backoff retry.
-        // These are seen mostly with self-hosted / overseas endpoints under
-        // flaky links. Without a retry, one bad packet kills the whole turn
+        // 3b-2. Transient server-side errors (500/502/503/504 server-side +
+        // 408 model timeout). Identified by the AWS SDK error's structured
+        // fields, NOT the message string — Bedrock's 500/503 messages are
+        // generic ("is unable to process your request") and match no keyword,
+        // which is exactly why they slipped past retry and killed the turn on
+        // attempt 1. Same exponential backoff as throttling.
+        if (
+          errName === 'InternalServerException'
+          || errName === 'ModelTimeoutException'
+          || errName === 'ServiceUnavailableException'
+          || httpStatus === 500
+          || httpStatus === 502
+          || httpStatus === 503
+          || httpStatus === 504
+          || httpStatus === 529  // Anthropic Overloaded — transient
+          || httpStatus === 408
+        ) {
+          if (attempt + 1 < maxRetries) {
+            const baseDelay = 2000 * Math.pow(2, attempt)
+            const jitter = Math.random() * 1000
+            const delay = Math.min(baseDelay + jitter, 60_000)
+            console.debug(`[SessionManager] Session ${session.id} transient server error ${errName || httpStatus}, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`)
+            this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} hit a transient server error, retrying in ${Math.round(delay / 1000)}s...` })
+            await sleep(delay)
+            continue
+          }
+        }
+
+        // 3c. Transient transport-layer errors (TCP reset, undici headers
+        // timeout, DNS hiccups) → short backoff retry. HTTP 5xx gateway errors
+        // are handled by the transient-server branch above (by status code);
+        // this branch only catches connection-level errno markers that carry
+        // no HTTP status. Without a retry, one bad packet kills the whole turn
         // and the user has to /new — not great UX. The substring check is
         // conservative: only obvious network-layer markers, never anything
         // that could be a model-side semantic error.
@@ -1136,9 +1175,6 @@ export class SessionManager implements SessionManagerInternals {
           || msg.includes('ECONNREFUSED')
           || msg.includes('ETIMEDOUT')
           || msg.includes('EAI_AGAIN')
-          || msg.includes('API error 502')
-          || msg.includes('API error 503')
-          || msg.includes('API error 504')
         ) {
           if (attempt + 1 < maxRetries) {
             const delay = 1000 * Math.pow(2, attempt) + Math.random() * 500 // 1s, 2s, 4s, 8s + jitter
@@ -1174,9 +1210,10 @@ export class SessionManager implements SessionManagerInternals {
         }
 
         // 5. Unrecoverable
-        console.error(`[SessionManager] Session ${session.id} error (attempt ${attempt + 1}/${maxRetries}): ${msg}`)
+        const errDetail = [errName, httpStatus ? `HTTP ${httpStatus}` : ''].filter(Boolean).join(' ')
+        console.error(`[SessionManager] Session ${session.id} error (attempt ${attempt + 1}/${maxRetries})${errDetail ? ` [${errDetail}]` : ''}: ${msg}`)
         this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
-        resultText = `Error: ${msg}`
+        resultText = `Error: ${errName ? `${errName}: ` : ''}${msg}`
         break
       }
     }
