@@ -94,6 +94,13 @@ interface AgentSession {
 
 **Both must be stored separately.** Before this distinction was made explicit, `agentName` fell back to `agentId` at persist time — meaning a `default`-slot agent with `name: Producer` would show up as `default` in session lists. The fix: resolve `agentName` once at `createSession` (caller-provided → `createdYaml.name` → `agentId` as last resort) and carry it on `AgentSession` so all downstream writes (`session-state-store`, channel handlers, `session-ui-store`) use the real name, never the slot id.
 
+**The inverse must never happen either: `agentName` must never stand in for `agentId` when resolving a directory.** A sub-session's UI log used to take the directory id from `event.agentId ?? agentName` (in `ui-log-builder.initSubSessionLog`), and `processSessionEvent` emitted bare sub-session events (stream/thinking/tool_call/tool_result/usage) carrying only `agentName`, not `agentId`. After a restart rebuilt a sub-session lazily, the first event to arrive could be one of those bare events (before `agent_start`), so the fallback fired and keyed the log on the **display name** — splitting one session across two dirs (`sessions/Developer/` vs `sessions/developer/`). This stayed dormant until the agentName/agentId distinction above made the two values diverge. Symptom: the admin detail panel showed no Prompt button, because `findSessionFileData` scans agent dirs in `readdir` order and an uppercase dir (`Developer`, ASCII 68) is returned before the lowercase one (`developer`, ASCII 100) — and the uppercase half lacked the `context` message that carries `systemPrompt`.
+
+Fix (the rule: **agentId is the only identity; nothing that locates or persists may fall back to the display name**):
+- `processSessionEvent` stamps `agentId: session.agentId` on all five bare sub-session events.
+- `persistSubSession` no longer trusts the event-reconstructed `sub.agentId`; it resolves the authoritative id by `taskId` (in-memory session → db row, process-cached) — the same source `persistUIState` uses. This honours the "persistent operations must not depend on in-memory rebuilt state" rule.
+- `ui-log-builder`'s three `initSubSessionLog` call sites changed `?? agentName` → `?? ''`; an empty id is harmless because `persistSubSession` re-resolves the real id by `taskId`.
+
 ### Session ID format
 
 Hierarchical encoding: `root_id>child_segment>grandchild_segment`.
