@@ -948,17 +948,24 @@ export class SessionManager implements SessionManagerInternals {
     // not the slot id — so a renamed `default` slot shows "Producer" on
     // every assistant/tool/usage line in the transcript, not "default".
     const agentName = session.agentName
+    // agentId is the *identity* (slot id), carried on every sub-session event
+    // so the receiver can route/persist by id without reconstructing it from
+    // the display name. agentName is a label only; never let it stand in for
+    // the id. Without this, a bare stream/tool/usage event arriving before
+    // agent_start (e.g. after a restart rebuilt the sub-session lazily) would
+    // leave the sub-session log keyed on the display name → split dirs.
+    const agentId = session.agentId
     const taskId = session.parentId ? session.id : undefined
 
     switch (event.type) {
       case 'text': {
         session.output += event.text ?? ''
-        this.emitEvent(session.id, { type: 'stream', text: event.text, agentName, taskId })
+        this.emitEvent(session.id, { type: 'stream', text: event.text, agentName, agentId, taskId })
         break
       }
 
       case 'thinking': {
-        this.emitEvent(session.id, { type: 'thinking', text: event.text, agentName, taskId })
+        this.emitEvent(session.id, { type: 'thinking', text: event.text, agentName, agentId, taskId })
         break
       }
 
@@ -967,7 +974,7 @@ export class SessionManager implements SessionManagerInternals {
         if (loopStatus === 'warn') {
           this.emitEvent(session.id, { type: 'system', text: `⚠️ Tool "${event.toolName}" called repeatedly with identical input. Consider a different approach.` })
         }
-        this.emitEvent(session.id, { type: 'tool_call', toolName: event.toolName, toolInput: event.toolInput, agentName, taskId })
+        this.emitEvent(session.id, { type: 'tool_call', toolName: event.toolName, toolInput: event.toolInput, agentName, agentId, taskId })
         break
       }
 
@@ -976,7 +983,7 @@ export class SessionManager implements SessionManagerInternals {
         // toolResult is LLM-facing only — already applied in agent-loop.ts
         // before the event was yielded. Don't re-truncate here.
         const resultStr = event.toolResultFull ?? event.toolResult ?? ''
-        this.emitEvent(session.id, { type: 'tool_result', toolResult: resultStr, durationMs: event.durationMs, agentName, taskId })
+        this.emitEvent(session.id, { type: 'tool_result', toolResult: resultStr, durationMs: event.durationMs, agentName, agentId, taskId })
         break
       }
 
@@ -991,6 +998,7 @@ export class SessionManager implements SessionManagerInternals {
           cacheWriteInputTokens: u.cacheWriteInputTokens ?? 0,
           modelId: session.currentModelId,
           agentName,
+          agentId,
           taskId,
           e2eMs: event.durationMs,
           thinkingEffort: session.thinkingEffort,

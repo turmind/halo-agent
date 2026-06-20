@@ -291,9 +291,15 @@ export class SessionUIStore {
     if (!sub || sub.messageLog.length === 0) return
     try {
       const projectPath = this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot
+      // Directory id MUST be the authoritative slot agentId, never the
+      // event-reconstructed `sub.agentId` (which can degrade to the display
+      // name when a bare event arrived before agent_start). Resolve from the
+      // in-memory session / db row by taskId — the same source `persistUIState`
+      // uses — so the on-disk layout never depends on rebuilt memory state.
+      const agentId = this.resolveAgentId(taskId)
       // Merge with existing on-disk messages — sub-session logs are re-initialized
       // each query_session/start_session, so only the current turn is in memory
-      const existing = loadSessionMessages(taskId, projectPath, sub.agentId)
+      const existing = loadSessionMessages(taskId, projectPath, agentId)
       const seen = new Set(existing.map((m) => m.id).filter(Boolean))
       const merged = [...existing, ...sub.messageLog.filter((m) => !m.id || !seen.has(m.id))]
       const parts = taskId.split('>')
@@ -301,12 +307,29 @@ export class SessionUIStore {
       this.host.persistSessionFile({
         sessionId: taskId, projectPath, messages: merged,
         contextTokens: 0, outputTokens: 0,
-        agentId: sub.agentId, agentName: sub.agentName,
+        agentId, agentName: sub.agentName,
         source: 'delegated', description: sub.description, parentSessionId: directParentId,
       })
     } catch (err) {
       console.error(`[SessionUIStore] persistSubSession failed for ${taskId}: ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  /** Process-local cache of taskId → authoritative agentId, so the hot persist
+   *  path doesn't hit the db on every sub-session write. */
+  private agentIdCache: Map<string, string> = new Map()
+
+  /** Resolve a session's authoritative slot agentId from the in-memory session
+   *  (preferred — covers internal sessions with no db row) or the db row, never
+   *  from a display name. Cached process-locally. */
+  private resolveAgentId(sessionId: string): string {
+    const cached = this.agentIdCache.get(sessionId)
+    if (cached) return cached
+    const inMem = this.host.getSession(sessionId)
+    const agentId = inMem?.agentId
+      ?? this.db.select().from(agentSessions).where(eq(agentSessions.id, sessionId)).get()?.agentId
+    if (agentId) this.agentIdCache.set(sessionId, agentId)
+    return agentId ?? 'default'
   }
 
   // ── UIState access ──────────────────────────────────────────────────

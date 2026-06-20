@@ -304,7 +304,11 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
       && event.type !== 'agent_start'
       && event.type !== 'agent_done'
       && !state.subSessionLogs.has(taskId)) {
-    initSubSessionLog(state, taskId, event.agentId ?? agentName, agentName, '')
+    // agentId is identity; never fall back to the display name (`agentName`)
+    // — that's what split the on-disk dir into `Developer/` vs `developer/`.
+    // An empty id here is harmless: persistSubSession resolves the real id
+    // from the session/db by taskId, not from this field.
+    initSubSessionLog(state, taskId, event.agentId ?? '', agentName, '')
   }
 
   switch (event.type) {
@@ -324,7 +328,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
           timestamp: Date.now(), agentName, taskId,
         })
       }
-      if (taskId) initSubSessionLog(state, taskId, event.agentId ?? agentName, agentName, event.text ?? '')
+      if (taskId) initSubSessionLog(state, taskId, event.agentId ?? '', agentName, event.text ?? '')
       break
 
     case 'agent_done':
@@ -421,10 +425,11 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
         state.messageLog.push(ctxMsg)
       } else {
         if (!state.subSessionLogs.has(taskId)) {
-          // Must use event.agentId (e.g. "test-agent") not agentName.toLowerCase()
-          // — the latter produces ghost dirs like "test agent/" when the display
-          // name contains spaces/caps. Matches the agent_start branch above.
-          initSubSessionLog(state, taskId, event.agentId ?? agentName, agentName, '')
+          // agentId is identity; never fall back to the display name. The real
+          // dir id is resolved by taskId in persistSubSession, so an empty id
+          // here is harmless. (Earlier `?? agentName` caused split dirs like
+          // `Developer/` vs `developer/`.)
+          initSubSessionLog(state, taskId, event.agentId ?? '', agentName, '')
         }
         state.subSessionLogs.get(taskId)!.messageLog.push(ctxMsg)
         result.subSessionSave = taskId
