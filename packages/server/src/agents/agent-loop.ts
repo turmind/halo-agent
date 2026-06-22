@@ -61,6 +61,11 @@ export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence
 export interface AgentEvent {
   type: 'text' | 'thinking' | 'tool_call' | 'tool_result' | 'usage' | 'stop'
   text?: string
+  /** For 'text' events: true only on the wrap-up reply (stopReason !== 'tool_use'),
+   *  i.e. the model is done and won't call another tool. Lets consumers persist
+   *  only the final summary into session.output, dropping mid-turn filler text
+   *  emitted before tool calls. UI streaming ignores this and shows all text. */
+  final?: boolean
   toolName?: string
   toolUseId?: string
   toolInput?: unknown
@@ -166,7 +171,7 @@ export abstract class AgentLoop {
       }
 
       if (result.text) {
-        yield { type: 'text', text: result.text }
+        yield { type: 'text', text: result.text, final: result.stopReason !== 'tool_use' }
       }
 
       // tool_calls MUST be emitted before usage. The ui-log-builder rotates

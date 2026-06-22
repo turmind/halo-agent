@@ -86,7 +86,14 @@ interface AgentSession {
   agentName: string
   agent: ModelRuntime
   description: string
+  /** All assistant text from the latest turn (mid-turn filler + wrap-up),
+   *  reset per turn. Fed to get_session_output and persisted to disk. */
   output: string
+  /** Only the wrap-up reply (event.final) from the latest turn — the text the
+   *  model produced when it was done and stopped calling tools. Fed to the
+   *  auto-report to the parent so the parent gets the summary, not the
+   *  mid-turn "let me check X" filler. Reset per turn alongside output. */
+  finalOutput: string
   promise: Promise<string> | null
   abortController: AbortController | null
   messageQueue: QueuedMessage[]
@@ -482,6 +489,7 @@ export class SessionManager implements SessionManagerInternals {
       id, parentId, agentId, agentName, agent, description,
       draftReset,
       output: '',
+      finalOutput: '',
       promise: null,
       abortController: null,
       messageQueue: [],
@@ -958,7 +966,11 @@ export class SessionManager implements SessionManagerInternals {
 
     switch (event.type) {
       case 'text': {
+        // output: all turn text (filler + wrap-up) → get_session_output + disk.
+        // finalOutput: only the wrap-up reply → auto-report to the parent, so
+        // the parent gets the summary, not the mid-turn "let me check X" filler.
         session.output += event.text ?? ''
+        if (event.final) session.finalOutput += event.text ?? ''
         this.emitEvent(session.id, { type: 'stream', text: event.text, agentName, agentId, taskId })
         break
       }
@@ -1033,6 +1045,7 @@ export class SessionManager implements SessionManagerInternals {
     // Reset per-turn output so get_session_output returns only this turn's text,
     // not the concatenation of every turn since the session was created.
     session.output = ''
+    session.finalOutput = ''
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       session.abortController = new AbortController()
@@ -1334,13 +1347,17 @@ export class SessionManager implements SessionManagerInternals {
       .where(eq(agentSessions.id, session.id))
       .run()
 
-    const result = session.output || '(no output)'
+    // Report the wrap-up reply (finalOutput), not the full turn text. Fall back
+    // to the full output when the last turn ended without a closing message
+    // (e.g. it stopped right after a tool call) so the parent still gets
+    // something useful instead of "(no output)".
+    const result = session.finalOutput || session.output || '(no output)'
     console.debug(`[SessionManager] Auto-report: ${session.id} → parent ${session.parentId} — result: ${result.slice(0, 150)}`)
 
     // Truncate the auto-report, but tell the parent WHEN we did — a bare slice
     // silently drops the tail, so the parent can't tell a short answer from a
     // cut-off one. The marker names get_session_output as the way to pull the
-    // full text (the child's last turn is preserved in session.output).
+    // full text (get_session_output returns the full latest turn).
     const reportCap = config.limits.autoReportMax
     const truncatedReport = result.length > reportCap
       ? result.slice(0, reportCap) + `\n\n[Report truncated: ${result.length} chars total, showing first ${reportCap}. Use get_session_output("${session.id}") for the full result.]`

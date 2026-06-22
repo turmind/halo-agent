@@ -28,7 +28,7 @@ import type { SessionManagerInternals } from './session-manager.js'
 export function buildSessionTools(sm: SessionManagerInternals, sessionId: string): ToolDef[] {
   const startSessionTool: ToolDef = {
     name: 'start_session',
-    description: 'Start a new sub-agent session that runs asynchronously. Result will be automatically delivered to you. Long results may be truncated — use get_session_output for full output. Use list_agents if unsure about the agent_id. Returns JSON with code 0 on success.',
+    description: "Start a new sub-agent session that runs asynchronously. When it finishes, its wrap-up reply (the closing summary, not the mid-task progress chatter) is delivered to you automatically — but a long summary is cut to its opening portion, dropping the tail (a marker flags when this happens). Treat the delivered text as possibly incomplete: to read the full summary, call get_session_output. Use list_agents if unsure about the agent_id. Returns JSON with code 0 on success.",
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -233,7 +233,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
 
   const getSessionOutputTool: ToolDef = {
     name: 'get_session_output',
-    description: "Read the text output of an agent session's most recent turn (not the full history — only the latest response). Returns JSON with code 0 on success.",
+    description: "Read the complete, untruncated text of the sub-agent's reply to its most recent message — the full response spanning every step it took for that message (one message can drive many steps: narration, tool calls, more narration), which is more than the possibly-cut auto-report delivered when it finishes. Scoped to that one message's reply, not the session's whole history. Returns JSON with code 0 on success.",
     inputSchema: {
       type: 'object' as const,
       properties: { session_id: { type: 'string' as const, description: 'Session ID to read output from' } },
