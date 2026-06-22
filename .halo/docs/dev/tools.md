@@ -159,7 +159,7 @@ Session management tools for agents. Enable them by name in `agent.yaml`'s `tool
 
 ### start_session
 
-Start a sub-agent session asynchronously. Results are auto-delivered back to the caller's conversation.
+Start a sub-agent session asynchronously. When the sub-agent finishes, its **wrap-up reply** (the closing summary — not the mid-task progress narration) is auto-delivered back to the caller's conversation. A long summary is **cut head-kept / tail-dropped** at `limits.autoReportMax` (default 8,192 chars, settings `general.limits.auto_report_chars`) with a `[Report truncated: N chars total, showing first M. Use get_session_output("<id>") for the full result.]` marker — so the caller can tell a short answer from a cut-off one, and knows the **tail** is what's missing. Call `get_session_output` for the full untruncated reply. (Before 0.1.5 the auto-report concatenated every text segment of the turn, including mid-task filler.)
 
 **Arguments**
 
@@ -244,13 +244,18 @@ Abort the current task of a running session. Any queued messages are **not** dro
 
 ### get_session_output
 
-Read the text output of an agent session's **most recent turn** (not the full history — only the last response).
+Read the **complete, untruncated** text of an agent session's reply to its **most recent message** — the full response spanning every step taken for that message (one message can drive many steps: narration → tool calls → more narration), which is more than the possibly-cut auto-report. Scoped to that one message's reply, not the session's whole history. Excludes tool calls/results and thinking — those only ever stream to the UI, never into the output.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
 | `session_id` | string | yes | Session to read |
 
-Implementation: in-memory sessions return `session.output` (cleared at the start of every `runAgentTurn`); released sessions read the `output` field from `.halo/sessions/{agentId}/{sid}.json`.
+Implementation: a turn (one `runAgentTurn`, processing one inbound message) accumulates text into **two** per-turn buffers, both reset at the turn's start:
+
+- `session.output` — **all** assistant text of the turn (mid-task filler + wrap-up). This is what `get_session_output` returns and what is persisted to disk.
+- `session.finalOutput` — **only** the wrap-up reply (text emitted when `stopReason !== 'tool_use'`, flagged by the agent-loop `final` event field). This feeds the auto-report to the parent (`tryReportToParent`), falling back to `session.output` when the turn ended without a closing message.
+
+In-memory sessions return `session.output`; released sessions read the `output` field from `.halo/sessions/{agentId}/{sid}.json`. `get_session_output` never truncates — only the auto-report does (see [start_session](#start_session)). (Split introduced in 0.1.5; before that both reads shared one `session.output`.)
 
 ### list_agents
 
