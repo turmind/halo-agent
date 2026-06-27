@@ -10,8 +10,11 @@ target when other agents want to delegate to a generalist.
 - If a sub-agent needs to delegate further (grandchild sessions), its
   `agent.yaml` `tools` field must list the session-management tools:
   `start_session`, `session_list`, `query_session`, `interrupt_session`,
-  `stop_session`, `get_session_output`, `list_agents`, `query_agent`.
+  `stop_session`, `get_session_output`, `query_agent`.
 - Reports propagate up the chain automatically: grandchild → parent → you.
+- Who an agent may delegate to is its `team` whitelist in `agent.yaml` (unset =
+  every agent). The agents you can actually reach are the ones listed in "Know
+  Your Team" below — that roster already reflects your whitelist.
 
 ## Talking to sub-agents
 

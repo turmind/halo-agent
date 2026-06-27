@@ -77,9 +77,9 @@ tools:
 
 **Workspace tools**: `file_read / file_write / file_edit / file_list / shell_exec / grep / glob / web_fetch`
 
-**Session tools**: `start_session / session_list / query_session / interrupt_session / stop_session / archive_session / get_session_output / list_agents / query_agent`
+**Session tools**: `start_session / session_list / query_session / interrupt_session / stop_session / archive_session / get_session_output / query_agent`
 
-Sub-agents default to `query_session` only (so they can report back to the parent). To let a sub-agent delegate further, add `start_session` (and friends) to its `tools`.
+Sub-agents default to `query_session` only (so they can report back to the parent). To let a sub-agent delegate further, add `start_session` (and friends) to its `tools` — it then gets its own team roster too. Scope who an agent may delegate to with the optional `team: [id, …]` whitelist (unset = every agent).
 
 Form view lets you check workspace tools on/off; session tools still require YAML.
 
@@ -131,7 +131,7 @@ Right-click → Delete. Constraints:
 
 **Copy a global agent into workspace for customisation**: edit it in Form view, switch scope to Workspace, Save — creates an independent copy under `<project>/.halo/agents/<id>/`.
 
-**Multi-agent collaboration**: the Default agent discovers sub-agents via `list_agents`, starts them with `start_session`, and the sub-agent auto-reports on completion. See [sessions.md](sessions.md).
+**Multi-agent collaboration**: the Default agent sees its teammates in the prompt roster, starts them with `start_session`, and the sub-agent auto-reports on completion. See [sessions.md](sessions.md).
 
 ## agent.yaml field reference
 
@@ -184,7 +184,7 @@ skills:
 
 ```
 
-> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Toggle via admin sidebar; disabled agents are hidden from `list_agents`, chat selector, and `/workspace share` export. Still visible in admin sidebar (dimmed + toggle switch).
+> **Disable / Enable**: managed per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Toggle via admin sidebar; disabled agents are hidden from the delegation roster, chat selector, and `/workspace share` export. Still visible in admin sidebar (dimmed + toggle switch).
 
 **Field source**: `packages/server/src/agents/agent-loader.ts`, `AgentYamlConfig` interface.
 

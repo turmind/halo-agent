@@ -190,7 +190,7 @@ export interface SessionView {
 export interface SessionManagerInternals {
   workspaceRoot: string
   /** In-memory active sessions, keyed by hierarchical session id. */
-  sessions: { get(id: string): { accessLevel: 'readonly' | 'workspace' | null } | undefined }
+  sessions: { get(id: string): { agentId: string; accessLevel: 'readonly' | 'workspace' | null } | undefined }
   getDb(): HaloDb
   getSessionById(sessionId: string): SessionInfo | null
   listSessions(opts?: {
@@ -925,7 +925,7 @@ export class SessionManager implements SessionManagerInternals {
   // ── Loop detection ──────────────────────────────────────────────────
 
   private static readonly LOOP_EXEMPT_TOOLS = new Set([
-    'session_list', 'get_session_output', 'list_agents', 'query_agent',
+    'session_list', 'get_session_output', 'query_agent',
   ])
 
   private checkLoop(session: AgentSession, toolName: string, toolInput: unknown): 'warn' | null {

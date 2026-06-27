@@ -38,7 +38,7 @@ export const MICRO_COMPACT_PLACEHOLDER = '[Old tool result content cleared]'
 /** Tools whose output is typically dominated by bytes the model doesn't
  *  need to re-read after a few turns: file inspection + shell + web. The
  *  list is conservative on purpose — we never clear results from tools the
- *  model might still be reasoning about (e.g. activate_skill, list_agents). */
+ *  model might still be reasoning about (e.g. activate_skill, query_agent). */
 const COMPACTABLE_TOOLS = new Set<string>([
   'file_read',
   'file_write',

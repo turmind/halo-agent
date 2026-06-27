@@ -27,7 +27,7 @@ interface AgentMeta {
   priority: number
   overridden?: boolean
   disabled?: boolean
-  /** Hidden from `list_agents` tool (e.g. self-evolution agents). Shown in
+  /** Hidden from the delegation roster (e.g. self-evolution agents). Shown in
    *  admin with a small "internal" badge so users know it's system-managed. */
   internal?: boolean
 }
@@ -185,7 +185,7 @@ export function AgentManagementMain() {
     }
   }
 
-  // Disable hides an agent from the orchestrator's roster + list_agents (so it
+  // Disable hides an agent from the orchestrator's roster (so it
   // can't be delegated to) without deleting its files. Toggle writes to the
   // workspace DB; trust the returned `disabled` rather than optimistic-flipping.
   async function handleToggle(agent: AgentMeta) {
@@ -205,6 +205,16 @@ export function AgentManagementMain() {
   const internalAgents = agents.filter((a) => a.internal)
   const globalAgents = agents.filter((a) => a.scope === 'global' && !a.internal)
   const workspaceAgents = agents.filter((a) => a.scope === 'workspace' && !a.internal)
+
+  // Delegation targets for the Team picker: non-internal agents, deduped by id
+  // (a workspace agent can shadow a global one with the same id — the `team`
+  // whitelist keys on id, so one chip per id). Workspace wins the label since
+  // that's the effective config.
+  const delegatableAgents = (() => {
+    const byId = new Map<string, { id: string; name: string }>()
+    for (const a of [...globalAgents, ...workspaceAgents]) byId.set(a.id, { id: a.id, name: a.name })
+    return [...byId.values()]
+  })()
 
   type SectionScope = 'global' | 'workspace' | 'internal'
 
@@ -259,7 +269,7 @@ export function AgentManagementMain() {
                   </p>
                 )}
               </div>
-              {/* Disable toggle — hides the agent from the roster / list_agents
+              {/* Disable toggle — hides the agent from the roster
                   without deleting it. Not offered for internal agents (already
                   hidden from delegation by their `internal` flag), nor when no
                   workspace is open (disabled state lives in the workspace DB,
@@ -322,6 +332,7 @@ export function AgentManagementMain() {
           <AgentEditorWithChat
             key={agentKey(selected)}
             agent={selected}
+            allAgents={delegatableAgents}
             modelsRegistry={modelsRegistry}
             onSaved={(updated) => {
               setAgents((prev) => prev.map((a) => agentKey(a) === agentKey(updated) ? updated : a))
@@ -357,7 +368,7 @@ function testAgent(agentId: string, projectId?: string) {
 }
 
 /** Form + YAML + MD editor */
-function AgentEditorWithChat({ agent, modelsRegistry, onSaved }: { agent: AgentMeta; modelsRegistry: ModelsRegistry; onSaved: (a: AgentMeta) => void }) {
+function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { agent: AgentMeta; allAgents: Array<{ id: string; name: string }>; modelsRegistry: ModelsRegistry; onSaved: (a: AgentMeta) => void }) {
   const t = useT()
   const { skills: availableSkills } = useSkillStore()
   const activeProject = useProjectStore((s) => s.activeProject)
@@ -537,6 +548,8 @@ function AgentEditorWithChat({ agent, modelsRegistry, onSaved }: { agent: AgentM
               data={parsedData}
               availableSkills={availableSkills}
               availableTools={availableTools}
+              allAgents={allAgents}
+              selfId={agent.id}
               modelsRegistry={modelsRegistry}
               onUpdate={updateData}
               onUpdateNested={updateNested}

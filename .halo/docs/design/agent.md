@@ -60,8 +60,7 @@ Agents manage other sessions with these tools (enable them by name in `agent.yam
 | `stop_session` | Fold the queue into history (preserve, don't drop) + abort + repair, no re-run |
 | `archive_session` | Archive a session and all its descendants (sets archivedAt) |
 | `get_session_output` | Read the latest text output of a session |
-| `list_agents` | Discover available agents (disabled-in-workspace and `internal: true` agents excluded) |
-| `query_agent` | Get an agent's full details (AGENT.md, YAML config, skills) |
+| `query_agent` | Get an agent's full details (AGENT.md, YAML config, skills); team-gated to the agent's roster |
 
 Plus the workspace tools for direct work. The tool set varies by access level and bwrap availability:
 

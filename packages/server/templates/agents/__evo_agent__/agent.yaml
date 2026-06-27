@@ -1,5 +1,5 @@
 name: Evolution Agent
-description: System agent for self-evolution. Analyzes a session, drafts a prompt patch, runs a sandbox dry-run to score it. Hidden from list_agents.
+description: System agent for self-evolution. Analyzes a session, drafts a prompt patch, runs a sandbox dry-run to score it. Hidden from delegation.
 internal: true
 priority: -1
 model:

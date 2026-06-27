@@ -188,8 +188,8 @@ interface SubstitutionResult { cmd: string; secrets: string[] }
  *
  * `allowedNamespaces` limits which `<id>` values are eligible. Pass the
  * agent's own id plus the ids of skills it has access to — anything else
- * (including a placeholder pointing at another skill the agent could see in
- * `list_agents` output but isn't authorized to use) stays as the literal
+ * (including a placeholder pointing at another skill the agent could name but
+ * isn't authorized to use) stays as the literal
  * `{{...}}` string, so the call fails loudly at the API layer instead of
  * silently using someone else's secret.
  *

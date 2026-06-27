@@ -225,6 +225,8 @@ export const zh: Record<string, string> = {
   'agent.context': '上下文',
   'agent.sessionTools': '会话工具',
   'agent.sessionToolsHint': '(选择该 agent 可使用的委派工具)',
+  'agent.team': '团队',
+  'agent.teamHint': '(该 agent 可委派的成员 — 默认全选；取消勾选即限制范围)',
   'agent.loadingTools': '加载中...',
   'agent.noSkills': '暂无可用 Skills。请先创建。',
 

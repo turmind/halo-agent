@@ -215,11 +215,16 @@ type ModelsRegistry = { providers: ProviderEntry[] } | null
 
 /** Data-driven form: renders from parsed YAML object */
 export function AgentForm({
-  data, availableSkills, availableTools, modelsRegistry, onUpdate, onUpdateNested, onToggleArrayItem,
+  data, availableSkills, availableTools, allAgents, selfId, modelsRegistry, onUpdate, onUpdateNested, onToggleArrayItem,
 }: {
   data: Record<string, unknown>
   availableSkills: Array<{ id: string; name: string; description: string; scope: string; disabled?: boolean }>
   availableTools: Array<{ name: string; description: string }>
+  /** All delegatable agents in the workspace — feeds the Team whitelist picker.
+   *  Excludes internal agents (they're never delegation targets). */
+  allAgents: Array<{ id: string; name: string }>
+  /** This agent's own id — pinned in the Team picker as "(self, always allowed)". */
+  selfId: string
   modelsRegistry: ModelsRegistry
   onUpdate: (key: string, value: unknown) => void
   onUpdateNested: (parentKey: string, childKey: string, value: unknown) => void
@@ -230,6 +235,10 @@ export function AgentForm({
   const context = (data.context ?? {}) as Record<string, string | number>
   const skills = Array.isArray(data.skills) ? (data.skills as string[]) : []
   const tools = Array.isArray(data.tools) ? (data.tools as string[]) : []
+  // `team` whitelist: absent = all agents (default). The picker shows all
+  // candidates checked when absent; unchecking writes an explicit list.
+  const team = Array.isArray(data.team) ? (data.team as string[]) : undefined
+  const canDelegate = tools.includes('start_session')
 
   // Flatten all models from registry for lookup
   const allModels: ModelEntry[] = modelsRegistry?.providers?.flatMap((p) => p.models) ?? []
@@ -588,7 +597,6 @@ export function AgentForm({
         <div className="flex flex-wrap gap-2">
           {([
             // Discover
-            { name: 'list_agents', description: 'Discover available agents (global + workspace)' },
             { name: 'query_agent', description: 'Inspect an agent\'s full config, AGENT.md, and skills' },
             // Create
             { name: 'start_session', description: 'Start a new sub-agent session (async; reports back when done)' },
@@ -623,6 +631,54 @@ export function AgentForm({
         </div>
       </section>
 
+      {/* Team whitelist — which agents this one may delegate to via
+          start_session. Only meaningful when start_session is enabled.
+          Default (no `team` field) = all agents checked. Unchecking writes an
+          explicit list; re-checking everything drops the field back to default. */}
+      {canDelegate && (
+        <section className="space-y-3">
+          <div className="flex items-center gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{t('agent.team')}</h3>
+            <span className="text-[9px] text-[var(--muted-foreground)] opacity-60">{t('agent.teamHint')}</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {allAgents.map((a) => {
+              const isSelf = a.id === selfId
+              // Self is always allowed and not part of the stored list — render
+              // it as a fixed, non-toggle chip so it's clear it can't be removed.
+              const checked = isSelf || team === undefined || team.includes(a.id)
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  disabled={isSelf}
+                  title={isSelf ? `${a.name} (self — always allowed)` : a.id}
+                  onClick={() => {
+                    if (isSelf) return
+                    // Current effective whitelist (everyone when unset), then
+                    // toggle this id. If the result is "all candidates", drop
+                    // the field (back to default); else store the explicit list.
+                    const candidateIds = allAgents.map((x) => x.id).filter((id) => id !== selfId)
+                    const current = team === undefined ? candidateIds : candidateIds.filter((id) => team.includes(id))
+                    const next = current.includes(a.id) ? current.filter((id) => id !== a.id) : [...current, a.id]
+                    onUpdate('team', next.length === candidateIds.length ? undefined : next)
+                  }}
+                  className={cn(
+                    'rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                    isSelf ? 'cursor-default opacity-70' : 'cursor-pointer',
+                    checked
+                      ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
+                      : 'bg-[var(--secondary)] text-[var(--muted-foreground)] hover:bg-[var(--secondary)]/80 hover:text-[var(--foreground)]',
+                  )}
+                >
+                  {a.name}{isSelf ? ' (self)' : ''}
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
       {/* Tools */}
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Tools</h3>
@@ -631,7 +687,7 @@ export function AgentForm({
         ) : (() => {
           const availableNames = new Set(availableTools.map((t) => t.name))
           const SESSION_TOOL_NAMES = new Set([
-            'list_agents', 'query_agent', 'start_session', 'session_list',
+            'query_agent', 'start_session', 'session_list',
             'get_session_output', 'query_session', 'interrupt_session',
             'stop_session', 'archive_session',
           ])

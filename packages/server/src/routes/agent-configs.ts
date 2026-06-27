@@ -42,7 +42,7 @@ interface AgentMeta {
   overridden?: boolean
   disabled?: boolean
   /** True for agents flagged `internal: true` in agent.yaml (e.g. self-evolution agents).
-   *  Hidden from `list_agents` tool but surfaced in admin UI so users can edit them. */
+   *  Hidden from the delegation roster but surfaced in admin UI so users can edit them. */
   internal?: boolean
 }
 

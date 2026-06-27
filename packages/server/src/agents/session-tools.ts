@@ -11,7 +11,7 @@
  * returned array. SessionManager.createSessionTools just delegates here.
  */
 import { config } from '../config.js'
-import { loadAgentYaml, scanAvailableAgents, loadSkillMetadata, isAgentDisabled } from './agent-loader.js'
+import { loadAgentYaml, loadSkillMetadata, isAgentDisabled, isTeamMember } from './agent-loader.js'
 import { loadScopeInstructions } from '../prompts/md-loader.js'
 import { getDisabledSet } from '../db/index.js'
 import type { ToolDef } from './bedrock-agent.js'
@@ -25,14 +25,24 @@ import type { SessionManagerInternals } from './session-manager.js'
  * SessionManager owns all the locking and lifecycle — these are thin
  * adapters between Anthropic-shaped tool calls and SessionManager methods.
  */
+/** Load the caller agent's `team` whitelist (undefined = all agents). Resolves
+ *  the caller's agentId from its live session, then reads its agent.yaml. Shared
+ *  by start_session + query_agent so both gate on the same list. */
+async function callerTeamFor(sm: SessionManagerInternals, sessionId: string): Promise<string[] | undefined> {
+  const callerId = sm.sessions.get(sessionId)?.agentId
+  if (!callerId) return undefined
+  const yaml = await loadAgentYaml(callerId, sm.workspaceRoot)
+  return yaml?.team
+}
+
 export function buildSessionTools(sm: SessionManagerInternals, sessionId: string): ToolDef[] {
   const startSessionTool: ToolDef = {
     name: 'start_session',
-    description: "Start a new sub-agent session that runs asynchronously. When it finishes, its wrap-up reply (the closing summary, not the mid-task progress chatter) is delivered to you automatically — but a long summary is cut to its opening portion, dropping the tail (a marker flags when this happens). Treat the delivered text as possibly incomplete: to read the full summary, call get_session_output. Use list_agents if unsure about the agent_id. Returns JSON with code 0 on success.",
+    description: "Start a new sub-agent session that runs asynchronously. When it finishes, its wrap-up reply (the closing summary, not the mid-task progress chatter) is delivered to you automatically — but a long summary is cut to its opening portion, dropping the tail (a marker flags when this happens). Treat the delivered text as possibly incomplete: to read the full summary, call get_session_output. The agents you can delegate to are listed in your system prompt; query_agent inspects one before you commit. Returns JSON with code 0 on success.",
     inputSchema: {
       type: 'object' as const,
       properties: {
-        agent_id: { type: 'string' as const, description: 'The agent ID. Call list_agents first if unsure — do not invent ids.' },
+        agent_id: { type: 'string' as const, description: 'The agent ID — must be one of the agents listed in your system prompt. Do not invent ids.' },
         message: { type: 'string' as const, description: 'Task description / initial message for the agent' },
         system_prompt_context: { type: 'string' as const, description: 'Optional context to inject' },
         working_dir: { type: 'string' as const, description: "Optional focus directory for the sub-agent (workspace-relative or absolute; must be inside the workspace). On the sub-agent's FIRST turn, the platform injects the directory-scoped INSTRUCTIONS.md found along the path from the workspace root down to this directory, and tags its prompt with this focus. Does NOT change where tools run (shell/file tools still operate from the project root). Omit for project-root scope." },
@@ -44,15 +54,23 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       if (!params.agent_id || !params.message) return JSON.stringify({ code: 1, error: 'agent_id and message are required' })
 
       const agentYaml = await loadAgentYaml(params.agent_id, sm.workspaceRoot)
-      if (!agentYaml) return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" not found. Use list_agents to see available agents.` })
+      if (!agentYaml) return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" not found. The agents you can delegate to are listed in your system prompt.` })
       // Internal agents (self-evolution etc.) are not delegatable. Treat them
       // as not-found so an agent guessing the id can't reach them either.
-      if (agentYaml.internal === true) return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" not found. Use list_agents to see available agents.` })
-      // Disabled agents are hidden from list_agents/roster, but the id could be
-      // guessed or remembered from a prior turn — block delegation too, else
-      // "disabled" only hides the agent without actually disabling it.
+      if (agentYaml.internal === true) return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" not found. The agents you can delegate to are listed in your system prompt.` })
+      // Disabled agents are hidden from the roster, but the id could be guessed
+      // or remembered from a prior turn — block delegation too, else "disabled"
+      // only hides the agent without actually disabling it.
       if (isAgentDisabled(params.agent_id, sm.workspaceRoot, getDisabledSet(sm.getDb(), 'agent'))) {
-        return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" not found. Use list_agents to see available agents.` })
+        return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" not found. The agents you can delegate to are listed in your system prompt.` })
+      }
+      // Enforce the caller's `team` whitelist server-side — the roster only
+      // *shows* the allowed set, but an agent could guess/remember an id, so
+      // the actual wall is here. Same isTeamMember check query_agent uses.
+      const callerTeam = await callerTeamFor(sm, sessionId)
+      const callerId = sm.sessions.get(sessionId)?.agentId
+      if (callerId && !isTeamMember(callerTeam, callerId, params.agent_id)) {
+        return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" is not in your team. The agents you can delegate to are listed in your system prompt.` })
       }
 
       const depth = sessionId.split('>').length
@@ -245,22 +263,6 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
     },
   }
 
-  const listAgentsTool: ToolDef = {
-    name: 'list_agents',
-    description: 'List all configured agents. Returns JSON with code 0 on success.',
-    inputSchema: { type: 'object' as const, properties: {}, required: [] as string[] },
-    callback: async () => {
-      const agentDisabled = getDisabledSet(sm.getDb(), 'agent')
-      const agents = await scanAvailableAgents(sm.workspaceRoot, agentDisabled)
-      // Hide `internal: true` agents (e.g. self-evolution agents) so callers
-      // can't delegate to them via start_session.
-      const listed = agents
-        .filter((a) => !a.disabled && !a.internal)
-        .map((a) => ({ id: a.id, name: a.name, description: a.description }))
-      return JSON.stringify({ code: 0, agents: listed, count: listed.length }, null, 2)
-    },
-  }
-
   const queryAgentTool: ToolDef = {
     name: 'query_agent',
     description: "Get detailed information about an agent: AGENT.md content, model config, tools, and skill descriptions. Use this to decide if an agent fits your task before start_session. Returns JSON with code 0 on success.",
@@ -273,11 +275,19 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       const { agent_id } = input as { agent_id: string }
       const yamlConfig = await loadAgentYaml(agent_id, sm.workspaceRoot)
       if (!yamlConfig) return JSON.stringify({ code: 1, error: `agent "${agent_id}" not found.` })
-      // Mirror list_agents: internal agents (e.g. self-evolution) and disabled
-      // agents are invisible to callers, so query_agent reports them as
-      // not-found rather than leaking config. Admin tooling reads the yaml directly.
+      // Internal agents (e.g. self-evolution) and disabled agents are invisible
+      // to callers, so query_agent reports them as not-found rather than leaking
+      // config. Admin tooling reads the yaml directly.
       if (yamlConfig.internal === true) return JSON.stringify({ code: 1, error: `agent "${agent_id}" not found.` })
       if (isAgentDisabled(agent_id, sm.workspaceRoot, getDisabledSet(sm.getDb(), 'agent'))) {
+        return JSON.stringify({ code: 1, error: `agent "${agent_id}" not found.` })
+      }
+      // Same team-whitelist gate as start_session: an agent outside the caller's
+      // team is unreachable, so it must also be uninspectable — otherwise the
+      // roster could be bypassed by querying a hidden id directly.
+      const callerTeam = await callerTeamFor(sm, sessionId)
+      const callerId = sm.sessions.get(sessionId)?.agentId
+      if (callerId && !isTeamMember(callerTeam, callerId, agent_id)) {
         return JSON.stringify({ code: 1, error: `agent "${agent_id}" not found.` })
       }
       // Use the parent session's access level so skill listing matches
@@ -312,6 +322,6 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
   return [
     startSessionTool, sessionListTool, querySessionTool,
     interruptSessionTool, stopSessionTool, archiveSessionTool,
-    getSessionOutputTool, listAgentsTool, queryAgentTool,
+    getSessionOutputTool, queryAgentTool,
   ]
 }

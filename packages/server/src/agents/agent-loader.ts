@@ -26,10 +26,16 @@ export interface AgentYamlConfig {
   context?: { maxTokens?: number; compressAt?: number }
   /** Sort weight — higher sorts first. Default 0. Seed `default` agent uses 99. */
   priority?: number
-  /** Hidden from `list_agents` (so other agents can't delegate to it) but
-   *  still listed in admin's agent management. Used by the self-evolution
+  /** Hidden from the delegation roster (so other agents can't delegate to it)
+   *  but still listed in admin's agent management. Used by the self-evolution
    *  agents (`__evo_agent__`, `__apply_agent__`). */
   internal?: boolean
+  /** Delegation whitelist — which agent ids this agent may spawn via
+   *  `start_session`. Absent/undefined means "all agents" (the default, also
+   *  applies to agents created before this field existed). An explicit list
+   *  restricts both the injected roster and start_session/query_agent to those
+   *  ids. Only meaningful when the agent holds `start_session`. */
+  team?: string[]
 }
 
 /** Whole-folder override: a workspace agent dir (`<ws>/.halo/agents/<id>/`)
@@ -373,8 +379,8 @@ export interface ScannedAgent {
   priority: number
   disabled?: boolean
   /** True for agents flagged `internal: true` in their agent.yaml. Hidden
-   *  from `list_agents` so other agents can't delegate to them. Admin UI
-   *  still shows them with a badge. */
+   *  from the delegation roster so other agents can't delegate to them. Admin
+   *  UI still shows them with a badge. */
   internal?: boolean
 }
 
@@ -425,4 +431,23 @@ export async function scanAvailableAgents(workspaceRoot?: string, disabledSet?: 
 export function filterTools(allTools: ToolDef[], allowedNames?: string[]): ToolDef[] {
   const nameSet = new Set(allowedNames ?? [])
   return allTools.filter((t) => nameSet.has(t.name))
+}
+
+/**
+ * Is `targetId` a delegation target the agent owning `team` may reach?
+ *
+ * The single source of truth for the delegation whitelist, shared by the
+ * roster builder, `start_session`, and `query_agent` so the three never drift
+ * (a target hidden from the roster must also be unreachable by start_session
+ * and uninspectable by query_agent — otherwise the wall is half-built).
+ *
+ * `team` absent/undefined → all agents allowed (the default; also covers
+ * agents authored before the field existed). An explicit list — including the
+ * empty array — restricts to exactly its members. An agent may always target
+ * itself (parallel self-spawn) regardless of the list.
+ */
+export function isTeamMember(team: string[] | undefined, selfId: string, targetId: string): boolean {
+  if (targetId === selfId) return true
+  if (team === undefined) return true
+  return team.includes(targetId)
 }

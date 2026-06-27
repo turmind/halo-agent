@@ -8,7 +8,7 @@ import { loadAllMdContents, composeMdPrompt, resolveMdPaths } from '../prompts/m
 import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveThinkingMode, resolveVerbosity } from '../config.js'
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
-  scanAvailableAgents,
+  scanAvailableAgents, isTeamMember,
   type AgentYamlConfig,
 } from './agent-loader.js'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
@@ -250,19 +250,20 @@ export class SessionAgentBuilder {
       mdContents.agentMd = renderMdBody(mdContents.agentMd, renderCtx)
     }
 
-    // Live roster of delegatable agents. Gated on three conditions:
-    //  - root session only — sub-agents are denied a roster on purpose (that's
-    //    what stops delegation cascading into endless re-subcontracting);
+    // Live roster of delegatable agents. Gated on two conditions:
     //  - not an internal agent (evo/score/apply are platform tooling, not
     //    orchestrators);
-    //  - the agent actually holds both `start_session` and `list_agents` —
-    //    the roster teaches delegation (spawn parallel instances, inspect the
-    //    team, fan out to sub-sessions). Without `start_session` it can't
-    //    delegate at all; without `list_agents` it can't see who's on the team.
-    //    Either gap makes the roster misleading noise. No delegation
-    //    capability, no roster.
-    const canDelegate = sessionToolNames.includes('start_session') && sessionToolNames.includes('list_agents')
-    const roster = (isRoot && !yamlConfig?.internal && canDelegate) ? await this.buildAgentRoster(agentId) : ''
+    //  - the agent holds `start_session` — the roster teaches delegation (who's
+    //    on the team, spawn parallel instances, fan out). Without it the agent
+    //    can't delegate at all, so the roster would be misleading noise.
+    // Root and sub-agents follow the same rule: a sub-agent that holds
+    // start_session gets a roster too. Runaway re-subcontracting is bounded by
+    // the per-agent `team` whitelist (below) + maxNestingDepth, not by a
+    // blanket "root only" ban. The roster — and start_session/query_agent — are
+    // scoped to `yamlConfig.team` when set; absent means all agents (the
+    // default, also covering agents authored before this field existed).
+    const canDelegate = sessionToolNames.includes('start_session')
+    const roster = (!yamlConfig?.internal && canDelegate) ? await this.buildAgentRoster(agentId, yamlConfig?.team) : ''
     // composeMdPrompt slots the roster directly behind AGENT.md (see there) and
     // joins it with the same `---` separators as every other MD section.
     const mdPrompt = composeMdPrompt(mdContents, roster)
@@ -327,27 +328,28 @@ export class SessionAgentBuilder {
   }
 
   /**
-   * Build the orchestration block injected into a root agent's prompt: a
-   * delegation-principles header plus a live roster of the agents it can
-   * spawn. Same filter as `list_agents` (drop disabled + internal). The agent
-   * itself IS listed — tagged `(you)` — because spawning parallel instances of
-   * yourself for independent sub-tasks is a valid fan-out, and the roster text
-   * actively encourages it; hiding self contradicted that. Self is pinned first
-   * so "who am I" reads before "who else is around".
+   * Build the orchestration block injected into a delegating agent's prompt: a
+   * delegation-principles header plus a live roster of the agents it can spawn.
+   * Drops disabled + internal agents, then narrows to the agent's `team`
+   * whitelist (via isTeamMember — the same filter start_session/query_agent
+   * enforce, so the roster never lists someone the agent can't actually reach).
+   * The agent itself IS listed — tagged `(you)` — because spawning parallel
+   * instances of yourself for independent sub-tasks is a valid fan-out, and the
+   * roster text actively encourages it. Self is pinned first so "who am I"
+   * reads before "who else is around".
    *
-   * Root-only by design. Sub-agents get no roster, which is the mechanism
-   * that keeps delegation from cascading into endless re-subcontracting:
-   * the chain can only start at the root, where a human is watching.
+   * Injected for any agent holding `start_session` (root or sub-agent alike) —
+   * runaway re-subcontracting is bounded by `team` + maxNestingDepth, not by a
+   * root-only ban.
    *
-   * Returns '' only when there's literally no agent to list (self not found in
-   * the scan — shouldn't happen for a real session). A solo workspace still
-   * gets a roster: a single `(you)` line is meaningful since parallel self-spawn
-   * is the whole point.
+   * Returns '' only when there's literally no agent to list (self not found and
+   * the team is empty). A solo workspace still gets a roster: a single `(you)`
+   * line is meaningful since parallel self-spawn is the whole point.
    */
-  private async buildAgentRoster(selfAgentId: string): Promise<string> {
+  private async buildAgentRoster(selfAgentId: string, team: string[] | undefined): Promise<string> {
     const agentDisabled = getDisabledSet(this.db, 'agent')
     const agents = await scanAvailableAgents(this.host.workspaceRoot, agentDisabled)
-    const visible = agents.filter((a) => !a.disabled && !a.internal)
+    const visible = agents.filter((a) => !a.disabled && !a.internal && isTeamMember(team, selfAgentId, a.id))
     const self = visible.find((a) => a.id === selfAgentId)
     const others = visible.filter((a) => a.id !== selfAgentId)
     if (!self && others.length === 0) return ''
@@ -383,8 +385,8 @@ get_session_output) just spends context checking status. "I'll just do it
 myself" is the most common misjudgment: if it's really >3 steps or touches
 multiple files, a sub-session is faster and keeps your context clean.
 
-\`list_agents\` returns this same set with full detail; \`query_agent\` shows one
-agent's tools and skills. When you do delegate, say so in one line and keep going.`
+\`query_agent\` shows one agent's tools and skills before you delegate. When you
+do delegate, say so in one line and keep going.`
   }
 
   /**

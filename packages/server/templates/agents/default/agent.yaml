@@ -29,7 +29,6 @@ tools:
   - grep
   - glob
   - web_fetch
-  - list_agents
   - query_agent
   - start_session
   - session_list

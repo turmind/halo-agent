@@ -91,7 +91,7 @@ Agents can manage other sessions via tools. Enable them per-agent in `agent.yaml
 | `stop_session` | Stop (no re-run, recoverable) |
 | `archive_session` | Cascade archive (not recoverable) |
 | `get_session_output` | Read a session's latest turn output |
-| `list_agents` / `query_agent` | Discover / inspect other agents |
+| `query_agent` | Inspect another agent (team-gated to the roster) |
 
 See [dev/tools.md](../dev/tools.md).
 

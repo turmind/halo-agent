@@ -24,7 +24,6 @@ Manual smoke + regression checklist before a release. Last refreshed for the 202
 | A2 | 🟢 | Workspace agents visible | `GET /api/agent-configs?projectId=...` | `sleeper` + `test-agent` listed alongside global ones |
 | A3 | 🟢 | Create workspace agent via API | `POST /api/agent-configs` then `GET .../yaml` | YAML round-trips name/description/model |
 | A4 | 🟢 | Delete workspace agent | `DELETE /api/agent-configs/:id?scope=workspace` | 200; gone from list |
-| A5 | 🟢 | `list_agents` tool | Chat: "Use list_agents to show available agents" | Returns id+name+description (no model/tools) |
 | A6 | 🟢 | `query_agent` tool | Chat: "Use query_agent to inspect 'sleeper'" | Full fields (model/tools/skills) |
 | A8 | ⬜ | Provider switch carries over thinking effort if still valid | UI: change Bedrock → Bedrock other model with same effort presets | Effort label stays highlighted |
 | A9 | ⬜ | Provider switch resets effort when vocabulary differs | UI: Bedrock (effort=medium) → Kimi | Effort resets to Kimi's `defaultEnabled` config |

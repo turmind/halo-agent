@@ -225,6 +225,8 @@ export const en: Record<string, string> = {
   'agent.context': 'Context',
   'agent.sessionTools': 'Session Tools',
   'agent.sessionToolsHint': '(select which delegation tools this agent can use)',
+  'agent.team': 'Team',
+  'agent.teamHint': '(which agents this one may delegate to — all selected by default; deselect to restrict)',
   'agent.loadingTools': 'Loading tools...',
   'agent.noSkills': 'No skills available. Create skills first.',
 

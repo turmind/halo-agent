@@ -1,5 +1,5 @@
 name: Apply Agent
-description: System agent for self-evolution. Merges approved patches into a wrapper-built sandbox. Wrapper handles validation via __score__. Hidden from list_agents.
+description: System agent for self-evolution. Merges approved patches into a wrapper-built sandbox. Wrapper handles validation via __score__. Hidden from delegation.
 internal: true
 priority: -1
 model:

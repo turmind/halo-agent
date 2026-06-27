@@ -1,5 +1,5 @@
 name: Score
-description: System agent for self-evolution. Reads a patch + dry-run output + original snapshot and writes score.json. Hidden from list_agents. Reused at apply time as the regression gate.
+description: System agent for self-evolution. Reads a patch + dry-run output + original snapshot and writes score.json. Hidden from delegation. Reused at apply time as the regression gate.
 internal: true
 priority: -1
 model:

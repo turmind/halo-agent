@@ -50,13 +50,20 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 ### Disable / Enable
 - Toggle switch on each agent row in the admin sidebar. Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Both global and workspace agents can be independently toggled per workspace.
 - Disabled agents are greyed out (opacity-40) with sub-text "disabled"; the toggle stays visible.
-- Hidden from: `list_agents` tool, chat agent selector, `/workspace share` export.
+- Hidden from: the delegation roster, chat agent selector, `/workspace share` export.
 - Still visible in the admin management sidebar for re-enabling.
 
 ### Tool selection
-- **Session tools**: `start_session` / `session_list` / `query_session` / `interrupt_session` / `stop_session` / `archive_session` / `get_session_output` / `list_agents` / `query_agent` (enable by name in `agent.yaml tools`)
+- **Session tools**: `start_session` / `session_list` / `query_session` / `interrupt_session` / `stop_session` / `archive_session` / `get_session_output` / `query_agent` (enable by name in `agent.yaml tools`)
 - **Workspace tools**: `file_read` / `file_write` / `file_edit` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`, returned by `GET /api/agent-configs/tools`
 - **`activate_skill`**: auto-injected whenever the YAML lists `skills`; loads the full SKILL.md on demand
+
+### Team (delegation whitelist)
+- Optional `team: [id, …]` field in `agent.yaml`. Controls which agents this agent may delegate to (via `start_session` / `query_agent`) and which appear in its prompt roster.
+- **Unset = every agent** (the default; also covers agents authored before the field existed). A present list restricts delegation to exactly those ids; removing an agent from the list kicks it off the team.
+- Enforced server-side on `start_session` and `query_agent`, not just in the roster — a call to a non-team agent is rejected.
+- `self` is always reachable (parallel self-spawn never breaks), so it's never stored in the whitelist.
+- **Admin form**: the Team multi-select appears only when `start_session` is enabled. Self is pinned and locked-on; all teammates are checked by default. Unchecking some writes an explicit whitelist; re-checking everyone clears the field (back to "all").
 
 ### Skill selection
 `GET /api/skills?projectId=xxx` lists available skills; `agent.yaml`'s `skills` references them by id.
@@ -79,6 +86,6 @@ API: `GET/PUT /api/agent-configs/:id/md/:fileType`
 - **Not rendered for internal agents** (`internal: true`) — they're delegated to by other agents, never driven directly
 
 ### Internal agents
-Agents flagged `internal: true` in agent.yaml (e.g. `__evo_agent__`, `__apply_agent__`, `__score__`) are platform tooling. They are hidden from every user-facing surface: `list_agents` tool, `/session new` default pick, and the chat agent selector — and have no Test button. They stay editable in the management sidebar's collapsed **Internal** group.
+Agents flagged `internal: true` in agent.yaml (e.g. `__evo_agent__`, `__apply_agent__`, `__score__`) are platform tooling. They are hidden from every user-facing surface: the delegation roster, `/session new` default pick, and the chat agent selector — and have no Test button. They stay editable in the management sidebar's collapsed **Internal** group.
 
 Replaces the old built-in test chat panel, giving a more realistic environment (full workspace tools + session persistence).

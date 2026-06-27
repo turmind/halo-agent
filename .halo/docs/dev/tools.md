@@ -257,13 +257,9 @@ Implementation: a turn (one `runAgentTurn`, processing one inbound message) accu
 
 In-memory sessions return `session.output`; released sessions read the `output` field from `.halo/sessions/{agentId}/{sid}.json`. `get_session_output` never truncates — only the auto-report does (see [start_session](#start_session)). (Split introduced in 0.1.5; before that both reads shared one `session.output`.)
 
-### list_agents
-
-List every available agent (global + workspace). Disabled agents (per workspace DB `disabled_items` table) and internal agents (`internal: true` in agent.yaml — e.g. self-evolution agents) are excluded. No arguments, returns JSON.
-
 ### query_agent
 
-Get an agent's full details: AGENT.md, model config, tools, skills. Use it before `start_session` to decide if an agent fits.
+Get an agent's full details: AGENT.md, model config, tools, skills. Use it before `start_session` to decide if an agent fits. Team-gated: an agent can only inspect agents on its own roster (the `team` whitelist — see [agent roster](../design/prompt-system.md#agent-roster)); querying a non-team agent is rejected.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
