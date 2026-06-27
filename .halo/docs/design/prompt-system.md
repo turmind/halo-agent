@@ -140,7 +140,7 @@ Missing directory or read failure: warn + use built-in fallback.
 
 1. `## User Profile` (USER.md) — root agent only
 2. AGENT.md body
-3. `## Know Your Team Before You Act` — the live agent roster, slotted directly behind AGENT.md (see [Agent roster](#agent-roster) below). Empty string for sub-agents / internal agents / single-agent workspaces, so the section is dropped.
+3. The live agent roster (`## Know Your Team Before You Act` for root, `## Your Team` for sub-agents), slotted directly behind AGENT.md (see [Agent roster](#agent-roster) below). Empty string for non-delegating agents (no `start_session`) / internal agents / whitelists that admit nobody, so the section is dropped.
 4. `## User Instructions` — `~/.halo/global/INSTRUCTIONS.md` (suppressed when the workspace root has its own — see Step 2)
 5. `## User Instructions` — `<ws>/.halo/INSTRUCTIONS.md` (workspace root). Sub-dir INSTRUCTIONS.md are not here; they inject per-turn via `@scope`.
 6. `## Project Knowledge` — `<ws>/.halo/INDEX.md` (skipped entirely when no INDEX.md exists)
@@ -242,24 +242,27 @@ It exists because a plain-text answer is single-pass: the agent loop only re-cal
 [bootstrapPrompt]                                ← prefixed when needsBootstrap (ws > global)
 USER.md                                          ← workspace > global
 AGENT.md                                         ← workspace > global
-## Know Your Team Before You Act                 ← agent roster (root only; dropped when team empty)
+## Know Your Team Before You Act                 ← root's roster framing (dropped without start_session / empty whitelist)
 ## User Instructions                             ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
 ## User Instructions                             ← <ws>/.halo/INSTRUCTIONS.md (workspace root)
 ## Project Knowledge                             ← <ws>/.halo/INDEX.md (or nudge)
 "The project workspace is at: ..."
 "Working directory: ..."                         ← if workingDir is set
-allPrompt                                        ← prompts/all/*.md (ws > global)
 rootPrompt                                       ← prompts/root/*.md (ws > global)
+allPrompt                                        ← prompts/all/*.md (ws > global)
 <available_skills>                               ← if yaml.skills non-empty
 Your available tools: ...
 ```
+
+root-scope leads all-scope: root-only orchestrator guidance lands while attention is high, the generic tool layer trails (same rationale as the roster riding behind AGENT.md).
 
 (Sub-dir INSTRUCTIONS.md are not in this prompt — they inject per-turn via `@scope`, below.)
 
 ### Sub-agent
 
 ```
-AGENT.md                                        ← no roster: sub-agents can't delegate further
+AGENT.md
+## Your Team                                    ← lean roster (only when the agent holds start_session)
 ## User Instructions                            ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
 ## User Instructions                            ← <ws>/.halo/INSTRUCTIONS.md (workspace root)
 ## Project Knowledge
@@ -269,6 +272,8 @@ allPrompt                                        ← prompts/all/*.md (ws > glob
 <available_skills>
 Your available tools: ...
 ```
+
+(Sub-agents get the lean `## Your Team` roster — not the root's `## Know Your Team Before You Act` block — and only when they hold `start_session`; no USER.md, no root-scope prompts.)
 
 ## Directory-scoped instructions (`@scope`)
 

@@ -15,8 +15,10 @@ Read file content.
 | Arg | Type | Required | Description |
 |---|---|---|---|
 | path | string | yes | File path (relative / absolute / `~/`) |
+| offset | integer | no | 1-based line to start at (default 1) |
+| limit | integer | no | Number of lines to return (default 2000) |
 
-Returns: string.
+Returns: string (`cat -n` format, 1-based line-number prefix per line). Files over 2 MB read without an explicit `offset`/`limit` range are **rejected** — grep to locate the section first, or page through with `offset`+`limit`.
 
 ### file_write
 

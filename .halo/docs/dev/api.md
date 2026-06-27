@@ -2,7 +2,7 @@
 
 All REST endpoints are served by Hono on port 9527 at `/api/`.
 
-Auth: every `/api/*` route (except `/api/auth/*`) requires a valid JWT cookie (`halo_token`).
+Auth: most `/api/*` routes require a valid JWT cookie (`halo_token`). Exceptions in `PUBLIC_PATHS` (`middleware/auth.ts`) bypass the cookie: `/api/auth/*`, the web-channel routes (`/api/web/chat|stop|history|subscribe|file`), `/api/show/state|session`, and `/api/metrics` — these are unauthenticated or use a web-channel `x-token` instead.
 
 ## Health
 
@@ -249,10 +249,19 @@ File: `packages/server/src/routes/settings.ts`
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/settings/schema?projectId=` | Schema (provider/skill declarations) + resolved values + orphans — drives the new Settings page |
-| GET | `/api/settings?projectId=` | Raw merged settings (legacy, kept for older tooling) |
 | PUT | `/api/settings` | Replace a scope's full settings |
 | PATCH | `/api/settings` | Update a single key |
 | DELETE | `/api/settings` | Delete a key |
+
+## Metrics
+
+File: `packages/server/src/routes/metrics.ts`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/metrics` | Prometheus text exposition (gauges) of deployment-wide runtime: `halo_uptime_seconds`, `halo_workspaces`, `halo_sessions{status=}`, `halo_sessions_total`, `halo_context_tokens`, `halo_output_tokens` |
+
+In `PUBLIC_PATHS` (no admin cookie). Auth is a web-channel `x-token` (header or `?token=`) with a **global** scope — `full` or `observer` (the read-only role minted for dashboards/scrapes); a workspace-scoped token gets 403. Session counts come from each workspace's `listSessions`; token sums read the in-memory UIState of sessions this process actively drives.
 
 ## Self-Evolution
 
@@ -511,22 +520,6 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:` and `skills/<id>/co
 ```
 
 `<<ENV_NAME>>` references in stored values are returned **as literals** (the browser never sees the resolved env var). Secret values are masked (`AK****ST`); env-var refs pass through unmasked since they're not real secrets.
-
-### GET `/api/settings?projectId=<abs>` (legacy)
-
-```json
-// 200
-{
-  "settings": { /* merged: defaults + global + workspace */ },
-  "layers": {
-    "defaults": { /* hard-coded defaults (now empty after schema migration) */ },
-    "global": { /* ~/.halo/secrets/settings.yaml */ },
-    "workspace": { /* <ws>/.halo/settings.yaml */ }
-  }
-}
-```
-
-Kept for older tooling. Env `<<…>>` placeholders are not substituted here.
 
 ### PATCH `/api/settings`
 
