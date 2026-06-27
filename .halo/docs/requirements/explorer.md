@@ -58,6 +58,7 @@ Items shown depend on the click target:
 | Download | File only | `GET /api/files/download?path=...` |
 | Rename | Single file/folder | `POST /api/files/rename` |
 | Delete | Single or multi-select | `DELETE /api/files?path=...` (with confirm) |
+| Open as Workspace | Folder only | Switches the active workspace to that folder, reusing the path-input switch flow (validate → persist → reload). Shown at the bottom of the menu |
 
 The menu auto-clamps to the viewport, so right-clicking near the window edge does not clip the bottom items.
 

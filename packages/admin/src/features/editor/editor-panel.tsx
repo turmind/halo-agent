@@ -604,6 +604,17 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         return
       }
 
+      if (action.type === 'open-as-workspace') {
+        // Switch the active workspace to the right-clicked folder. Delegate to
+        // workspace-layout's openFolderPath (validate → persist → reload) via a
+        // CustomEvent so the switch logic lives in one place. Needs the absolute
+        // path: action.path is workspace-relative.
+        if (!action.isDir || !workspaceRoot) return
+        const absPath = action.path ? `${workspaceRoot}/${action.path}` : workspaceRoot
+        window.dispatchEvent(new CustomEvent('halo:open-workspace', { detail: { path: absPath } }))
+        return
+      }
+
       if (action.type === 'download') {
         const url = api.files.downloadUrl(action.path, projectId)
         const a = document.createElement('a')

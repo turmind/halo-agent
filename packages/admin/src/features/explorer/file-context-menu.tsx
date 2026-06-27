@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Download, Pencil, Trash2, FilePlus, FolderPlus, Terminal, SplitSquareHorizontal } from 'lucide-react'
+import { Download, Pencil, Trash2, FilePlus, FolderPlus, Terminal, SplitSquareHorizontal, FolderOpen } from 'lucide-react'
 
 export interface ContextMenuAction {
-  type: 'download' | 'rename' | 'delete' | 'new-file' | 'new-folder' | 'open-terminal' | 'open-to-side'
+  type: 'download' | 'rename' | 'delete' | 'new-file' | 'new-folder' | 'open-terminal' | 'open-to-side' | 'open-as-workspace'
   path: string
   isDir: boolean
   /** For bulk operations — all selected paths */
@@ -109,7 +109,10 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
             ]
           : []),
         { icon: Pencil, label: 'Rename', type: 'rename' },
-        { icon: Trash2, label: 'Delete', type: 'delete', danger: true },
+        { icon: Trash2, label: 'Delete', type: 'delete', danger: true, separatorAfter: isDir },
+        ...(isDir
+          ? [{ icon: FolderOpen, label: 'Open as Workspace', type: 'open-as-workspace' as const }]
+          : []),
       ]
 
   return (

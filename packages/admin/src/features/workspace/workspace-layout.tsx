@@ -184,6 +184,18 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
     return () => window.removeEventListener('halo:navigate', handler)
   }, [])
 
+  // "Open as Workspace" from the file-tree context menu — switch the active
+  // workspace to the right-clicked folder. openFolderPath has no state deps
+  // (validate → persist → reload), so binding once with [] is safe.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const path = (e as CustomEvent).detail?.path
+      if (path) openFolderPath(path)
+    }
+    window.addEventListener('halo:open-workspace', handler)
+    return () => window.removeEventListener('halo:open-workspace', handler)
+  }, [])
+
   // Persist sidebar state to localStorage
   useEffect(() => {
     localStorage.setItem('halo_sidebar_tab', activeTab)
