@@ -270,19 +270,22 @@ export class SessionAgentBuilder {
     let systemPrompt: string
 
     if (isRoot) {
-      // Root: MD layers (incl. roster) + workspace info + all-scope + root-scope prompts
+      // Root: MD layers (incl. roster) + workspace info + root-scope + all-scope prompts.
+      // root-scope leads all-scope: root-only orchestrator guidance lands while
+      // attention is high, the generic tool layer trails (same rationale as the
+      // roster riding behind AGENT.md).
       if (mdPrompt) {
         systemPrompt = mdPrompt + `\n\nThe project workspace is at: ${this.host.workspaceRoot}\n`
         if (workingDir && path.resolve(workingDir) !== path.resolve(this.host.workspaceRoot)) {
           systemPrompt += `Working directory: ${workingDir}\n`
         }
-        systemPrompt += '\n' + systemPrompts.all + '\n\n' + systemPrompts.root
+        systemPrompt += '\n' + systemPrompts.root + '\n\n' + systemPrompts.all
       } else {
         // Fallback: no AGENT.md (or a fully custom system_prompt). There's no
         // MD layer for composeMdPrompt to slot the roster behind, so append it
         // at the tail here instead.
         const orphanRoster = roster ? '\n\n' + roster : ''
-        systemPrompt = (yamlConfig?.system_prompt ?? `You are a root Agent of Halo, a multi-agent collaboration workspace.\n\nThe project workspace is at: ${this.host.workspaceRoot}\n\n${systemPrompts.all}\n\n${systemPrompts.root}`) + orphanRoster
+        systemPrompt = (yamlConfig?.system_prompt ?? `You are a root Agent of Halo, a multi-agent collaboration workspace.\n\nThe project workspace is at: ${this.host.workspaceRoot}\n\n${systemPrompts.root}\n\n${systemPrompts.all}`) + orphanRoster
       }
       if (mdContents.needsBootstrap) {
         systemPrompt = systemPrompts.bootstrap + '\n\n---\n\n' + systemPrompt
@@ -529,8 +532,8 @@ do delegate, say so in one line and keep going.`
         mdFiles.push({ label: `prompt/${scope} (built-in fallback)`, path: systemPrompts.dirs[scope] })
       }
     }
-    if (systemPrompts.all) pushPromptScope('all')
     if (isRoot && systemPrompts.files.root.length > 0) pushPromptScope('root')
+    if (systemPrompts.all) pushPromptScope('all')
     if (isRoot && mdContents.needsBootstrap && systemPrompts.bootstrap) pushPromptScope('bootstrap')
     return {
       toolNames: allToolNames,
