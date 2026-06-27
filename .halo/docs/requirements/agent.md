@@ -62,7 +62,7 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 - Optional `team: [id, …]` field in `agent.yaml`. Controls which agents this agent may delegate to (via `start_session` / `query_agent`) and which appear in its prompt roster.
 - **Unset = every agent** (the default; also covers agents authored before the field existed). A present list restricts delegation to exactly those ids; removing an agent from the list kicks it off the team.
 - Enforced server-side on `start_session` and `query_agent`, not just in the roster — a call to a non-team agent is rejected.
-- `self` is always reachable (parallel self-spawn never breaks), so it's never stored in the whitelist.
+- `self` is treated like any other agent: shown in the picker tagged `(you)` and checked by default. Uncheck it and the agent can no longer spawn parallel instances of itself — self follows the same whitelist, no special-casing.
 - **Admin form**: the Team multi-select appears only when `start_session` is enabled. Self is pinned and locked-on; all teammates are checked by default. Unchecking some writes an explicit whitelist; re-checking everyone clears the field (back to "all").
 
 ### Skill selection

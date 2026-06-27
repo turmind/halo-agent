@@ -105,8 +105,9 @@ Omit the `team` field and the agent may delegate to every agent in the
 workspace (the default). Add `team: [agent-id, ...]` to restrict it to exactly
 those ids — the injected roster, `start_session`, and `query_agent` all honor
 the list. Use this to scope a sub-agent so it can only reach the few agents
-relevant to its job. The agent can always spawn parallel copies of itself
-regardless of the list.
+relevant to its job. Self is treated like any other agent: included by default
+(so the agent can spawn parallel copies of itself), but if you write an explicit
+`team` that omits the agent's own id, self-spawn is blocked too.
 
 Then write **`AGENT.md`** (behavior doc, read as part of the system prompt) —
 keep `system_prompt` brief and put the detail here:

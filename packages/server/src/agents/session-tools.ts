@@ -69,7 +69,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       // the actual wall is here. Same isTeamMember check query_agent uses.
       const callerTeam = await callerTeamFor(sm, sessionId)
       const callerId = sm.sessions.get(sessionId)?.agentId
-      if (callerId && !isTeamMember(callerTeam, callerId, params.agent_id)) {
+      if (callerId && !isTeamMember(callerTeam, params.agent_id)) {
         return JSON.stringify({ code: 1, error: `agent "${params.agent_id}" is not in your team. The agents you can delegate to are listed in your system prompt.` })
       }
 
@@ -287,7 +287,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       // roster could be bypassed by querying a hidden id directly.
       const callerTeam = await callerTeamFor(sm, sessionId)
       const callerId = sm.sessions.get(sessionId)?.agentId
-      if (callerId && !isTeamMember(callerTeam, callerId, agent_id)) {
+      if (callerId && !isTeamMember(callerTeam, agent_id)) {
         return JSON.stringify({ code: 1, error: `agent "${agent_id}" not found.` })
       }
       // Use the parent session's access level so skill listing matches

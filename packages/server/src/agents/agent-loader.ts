@@ -443,11 +443,11 @@ export function filterTools(allTools: ToolDef[], allowedNames?: string[]): ToolD
  *
  * `team` absent/undefined → all agents allowed (the default; also covers
  * agents authored before the field existed). An explicit list — including the
- * empty array — restricts to exactly its members. An agent may always target
- * itself (parallel self-spawn) regardless of the list.
+ * empty array — restricts to exactly its members. Self is treated like any
+ * other agent: present in the list (the default) → reachable; removed →
+ * unreachable, so parallel self-spawn follows the same whitelist.
  */
-export function isTeamMember(team: string[] | undefined, selfId: string, targetId: string): boolean {
-  if (targetId === selfId) return true
+export function isTeamMember(team: string[] | undefined, targetId: string): boolean {
   if (team === undefined) return true
   return team.includes(targetId)
 }

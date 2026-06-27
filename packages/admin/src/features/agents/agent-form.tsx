@@ -223,7 +223,9 @@ export function AgentForm({
   /** All delegatable agents in the workspace — feeds the Team whitelist picker.
    *  Excludes internal agents (they're never delegation targets). */
   allAgents: Array<{ id: string; name: string }>
-  /** This agent's own id — pinned in the Team picker as "(self, always allowed)". */
+  /** This agent's own id — shown in the Team picker like any other agent,
+   *  tagged `(you)`. Self follows the same whitelist: uncheck it and parallel
+   *  self-spawn is blocked too. */
   selfId: string
   modelsRegistry: ModelsRegistry
   onUpdate: (key: string, value: unknown) => void
@@ -643,35 +645,29 @@ export function AgentForm({
           </div>
           <div className="flex flex-wrap gap-2">
             {allAgents.map((a) => {
-              const isSelf = a.id === selfId
-              // Self is always allowed and not part of the stored list — render
-              // it as a fixed, non-toggle chip so it's clear it can't be removed.
-              const checked = isSelf || team === undefined || team.includes(a.id)
+              const checked = team === undefined || team.includes(a.id)
               return (
                 <button
                   key={a.id}
                   type="button"
-                  disabled={isSelf}
-                  title={isSelf ? `${a.name} (self — always allowed)` : a.id}
+                  title={a.id}
                   onClick={() => {
-                    if (isSelf) return
                     // Current effective whitelist (everyone when unset), then
                     // toggle this id. If the result is "all candidates", drop
                     // the field (back to default); else store the explicit list.
-                    const candidateIds = allAgents.map((x) => x.id).filter((id) => id !== selfId)
+                    const candidateIds = allAgents.map((x) => x.id)
                     const current = team === undefined ? candidateIds : candidateIds.filter((id) => team.includes(id))
                     const next = current.includes(a.id) ? current.filter((id) => id !== a.id) : [...current, a.id]
                     onUpdate('team', next.length === candidateIds.length ? undefined : next)
                   }}
                   className={cn(
-                    'rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                    isSelf ? 'cursor-default opacity-70' : 'cursor-pointer',
+                    'rounded-full px-3 py-1 text-xs font-medium transition-colors cursor-pointer',
                     checked
                       ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                       : 'bg-[var(--secondary)] text-[var(--muted-foreground)] hover:bg-[var(--secondary)]/80 hover:text-[var(--foreground)]',
                   )}
                 >
-                  {a.name}{isSelf ? ' (self)' : ''}
+                  {a.name}{a.id === selfId ? ' (you)' : ''}
                 </button>
               )
             })}

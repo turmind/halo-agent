@@ -263,7 +263,7 @@ export class SessionAgentBuilder {
     // scoped to `yamlConfig.team` when set; absent means all agents (the
     // default, also covering agents authored before this field existed).
     const canDelegate = sessionToolNames.includes('start_session')
-    const roster = (!yamlConfig?.internal && canDelegate) ? await this.buildAgentRoster(agentId, yamlConfig?.team) : ''
+    const roster = (!yamlConfig?.internal && canDelegate) ? await this.buildAgentRoster(agentId, yamlConfig?.team, isRoot) : ''
     // composeMdPrompt slots the roster directly behind AGENT.md (see there) and
     // joins it with the same `---` separators as every other MD section.
     const mdPrompt = composeMdPrompt(mdContents, roster)
@@ -328,36 +328,64 @@ export class SessionAgentBuilder {
   }
 
   /**
-   * Build the orchestration block injected into a delegating agent's prompt: a
-   * delegation-principles header plus a live roster of the agents it can spawn.
-   * Drops disabled + internal agents, then narrows to the agent's `team`
-   * whitelist (via isTeamMember — the same filter start_session/query_agent
-   * enforce, so the roster never lists someone the agent can't actually reach).
-   * The agent itself IS listed — tagged `(you)` — because spawning parallel
-   * instances of yourself for independent sub-tasks is a valid fan-out, and the
-   * roster text actively encourages it. Self is pinned first so "who am I"
-   * reads before "who else is around".
+   * Build the team block injected into a delegating agent's prompt: a live
+   * roster of the agents it can spawn, with framing that depends on `isRoot`.
+   *
+   * - **Root** gets the full orchestrator block (`## Know Your Team Before You
+   *   Act`): the roster plus delegation principles (prefer delegation, fan-out
+   *   in parallel, don't poll). A root session's job is to orchestrate.
+   * - **Sub-agent** gets a lean block (`## Your Team`): the same roster plus a
+   *   single line on when to hand off. A sub-agent's job is to finish what it
+   *   was handed, so the orchestrator pep-talk would be noise (or push it to
+   *   over-subcontract).
+   *
+   * Roster membership is identical for both: drops disabled + internal agents,
+   * then narrows to the agent's `team` whitelist (via isTeamMember — the same
+   * filter start_session/query_agent enforce, so it never lists an unreachable
+   * agent). Self is treated like any other agent: it appears only when the
+   * whitelist admits it (the default), tagged `(you)` and pinned first purely
+   * as reading order. Remove self from `team` and it drops off and self-spawn
+   * is blocked, same as any agent.
    *
    * Injected for any agent holding `start_session` (root or sub-agent alike) —
    * runaway re-subcontracting is bounded by `team` + maxNestingDepth, not by a
    * root-only ban.
    *
-   * Returns '' only when there's literally no agent to list (self not found and
-   * the team is empty). A solo workspace still gets a roster: a single `(you)`
-   * line is meaningful since parallel self-spawn is the whole point.
+   * Returns '' only when the whitelist admits nobody. A solo workspace still
+   * gets a roster: a single `(you)` line is meaningful since parallel
+   * self-spawn is the point there.
    */
-  private async buildAgentRoster(selfAgentId: string, team: string[] | undefined): Promise<string> {
+  private async buildAgentRoster(selfAgentId: string, team: string[] | undefined, isRoot: boolean): Promise<string> {
     const agentDisabled = getDisabledSet(this.db, 'agent')
     const agents = await scanAvailableAgents(this.host.workspaceRoot, agentDisabled)
-    const visible = agents.filter((a) => !a.disabled && !a.internal && isTeamMember(team, selfAgentId, a.id))
+    const visible = agents.filter((a) => !a.disabled && !a.internal && isTeamMember(team, a.id))
     const self = visible.find((a) => a.id === selfAgentId)
     const others = visible.filter((a) => a.id !== selfAgentId)
     if (!self && others.length === 0) return ''
 
+    const selfSuffix = isRoot
+      ? ' (you): spawn parallel instances of yourself to fan out independent sub-tasks; for serial work just do it directly rather than delegating to yourself.'
+      : ' (you)'
     const lines: string[] = []
-    if (self) lines.push(`- \`${self.id}\` — ${self.name} (you): spawn parallel instances of yourself to fan out independent sub-tasks; for serial work just do it directly rather than delegating to yourself.`)
+    if (self) lines.push(`- \`${self.id}\` — ${self.name}${selfSuffix}`)
     for (const a of others) lines.push(`- \`${a.id}\` — ${a.name}: ${a.description}`)
     const roster = lines.join('\n')
+
+    // Sub-agents get a lean roster: the team list plus one line on how to use
+    // it. The full orchestrator pep-talk ("you're not a solo worker", "I'll
+    // just do it myself is rarely right", fan-out, don't-poll) is root-only —
+    // a sub-agent's job is usually to finish the task it was handed, not to
+    // keep re-subcontracting, so that framing is noise (or worse) for it.
+    if (!isRoot) {
+      return `## Your Team
+
+These are the agents you can delegate to with \`start_session\` if part of your
+task is better handed off (\`query_agent\` inspects one first). Your job is to
+finish what you were asked — delegate only when a sub-task clearly warrants it.
+
+${roster}`
+    }
+
     return `## Know Your Team Before You Act
 
 You are an orchestrator, not a solo worker. Before starting any non-trivial
