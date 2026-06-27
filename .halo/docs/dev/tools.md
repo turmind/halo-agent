@@ -193,6 +193,7 @@ No arguments. Returns JSON:
       "id": "root>sid_xxx",
       "agentId": "coder",
       "agentName": "Coder",
+      "title": "Implement login page",
       "description": "Implement login page",
       "status": "running",
       "createdAt": 1714000000000
@@ -203,6 +204,11 @@ No arguments. Returns JSON:
 ```
 
 `status`: `running` / `idle` / `stopped`. Archived sessions are excluded.
+
+`title` is the human-assigned label (set by renaming the session in the admin
+sidebar), read from the per-session jsonl log so it matches what the UI shows.
+It falls back to `description` (the `start_session` task summary) when no title
+was set, so the field is never empty — lets a caller dispatch work by title.
 
 ### query_session
 
