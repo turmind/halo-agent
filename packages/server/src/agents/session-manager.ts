@@ -1189,6 +1189,7 @@ export class SessionManager implements SessionManagerInternals {
         // that could be a model-side semantic error.
         if (
           msg === 'fetch failed'
+          || msg === 'Model request timed out'  // agent-loop MODEL_TIMEOUT_ERROR — hung model call, treat as transport failure
           || msg.includes('UND_ERR_HEADERS_TIMEOUT')
           || msg.includes('HeadersTimeoutError')
           || msg.includes('socket hang up')

@@ -23,6 +23,12 @@ import { config } from '../config.js'
 export const TOOL_ERROR_MARKER = '__TOOL_ERROR__'
 export const TOOL_WARN_MARKER = '__TOOL_WARN__'
 
+/** Thrown by the agent loop when a single model call exceeds
+ *  `config.timeout.modelRequest`. SessionManager's catch matches this to route
+ *  the failure into the transient-network retry branch (a hung connection is a
+ *  transport failure, not a model-semantic error). */
+export const MODEL_TIMEOUT_ERROR = 'Model request timed out'
+
 // ── Types ────────────────────────────────────────────────────────────
 
 /** A single block in a tool result. Mirrors Anthropic's tool_result content shape. */
@@ -160,7 +166,33 @@ export abstract class AgentLoop {
         if (options.cancelSignal?.aborted) return
       }
 
-      const result = await this.callModel(options?.cancelSignal)
+      // Bound each model call with a wall-clock timeout, merged into the
+      // caller's cancel signal. A bare fetch has no default timeout, so a
+      // half-open connection (peer accepted but never sends bytes, no RST)
+      // would hang this await forever. Manual controller + clearTimeout so a
+      // fast response doesn't leave a 30-min timer dangling; unref so a pending
+      // timer never blocks process exit.
+      const timeoutController = new AbortController()
+      const timer = setTimeout(() => timeoutController.abort(), config.timeout.modelRequest)
+      timer.unref?.()
+      const callSignal = options?.cancelSignal
+        ? AbortSignal.any([options.cancelSignal, timeoutController.signal])
+        : timeoutController.signal
+      let result: ModelCallResult
+      try {
+        result = await this.callModel(callSignal)
+      } catch (err) {
+        // Distinguish the two abort sources merged into callSignal: a timeout
+        // is a transport failure the SessionManager should retry, so rethrow it
+        // as a recognizable error. A caller cancel (user interrupt) is handled
+        // by the `cancelSignal?.aborted` checks above/below — let it propagate.
+        if (timeoutController.signal.aborted && !options?.cancelSignal?.aborted) {
+          throw new Error(MODEL_TIMEOUT_ERROR)
+        }
+        throw err
+      } finally {
+        clearTimeout(timer)
+      }
 
       if (result.assistantBlocks.length > 0) {
         this.messages.push({ role: 'assistant', content: result.assistantBlocks })
