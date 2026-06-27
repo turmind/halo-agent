@@ -78,8 +78,11 @@ export class Building {
     const roots = ws.sessions.filter((s) => (s.depth || 0) === 0)
     // one root session = one work floor (uncapped: busy workspace = tall tower)
     const workNeed = Math.max(roots.length, 1)
-    // floors only grow; shrink only when need halves (no per-poll breathing)
-    if (this.workFloors == null || workNeed > this.workFloors || workNeed * 2 <= this.workFloors) {
+    // Floor count hugs the live root-session count so every floor maps to a
+    // real session and the tower never stands half-empty up top. Grow on
+    // demand; shrink back down but keep 1 floor of slack so a session count
+    // that flickers by ±1 between polls doesn't make the roof bob every tick.
+    if (this.workFloors == null || workNeed > this.workFloors || workNeed + 1 < this.workFloors) {
       this.workFloors = workNeed
     }
     // build the floor stack: lobby is floor -1; stacked floors 0..n-1 follow

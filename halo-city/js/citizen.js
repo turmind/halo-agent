@@ -48,9 +48,16 @@ export class Citizen {
       this.habits.push(pool.splice(k, 1)[0])
     }
 
-    this.placed = !!opts.placed      // first-paint inject: drop straight at the desk (#3)
-    this.floor = -1                  // -1 = lobby/street level
-    this.x = opts.entering ? building.lounge().door : 20 + this.r() * (INNER_W - 40)
+    // A citizen is BORN ON ITS OWN FLOOR — not down in the lobby. Both the
+    // first-paint inject (placed) and a live new session (entering) appear on
+    // the session's own work floor and just walk from the stairwell to the
+    // desk; nobody climbs the tower from the street (#1). `entering` keeps a
+    // short stairwell→desk walk for a touch of life; `placed` snaps in place.
+    this.placed = !!opts.placed
+    this.entering = !!opts.entering
+    const born = this.placed || this.entering
+    this.floor = born ? this.bornFloor() : -1
+    this.x = this.entering ? STAIR_X : (born ? STAIR_X : 20 + this.r() * (INNER_W - 40))
     this.y = 0
     this.face = LEFT
     this.t = this.r() * 10
@@ -68,7 +75,7 @@ export class Citizen {
     this._sx = null; this._sy = null
 
     this.sync(session, true)
-    if (this.placed) this.snapToTarget()    // first-paint: appear at the desk, no climb (#3)
+    if (this.placed) this.snapToTarget()    // first-paint: drop straight at the target, no walk
   }
 
   sync(s, initial = false) {
@@ -100,8 +107,10 @@ export class Citizen {
     const b = this.b
 
     if (this.status === 'stopped') {
-      // sleep on the nearest public-floor couch (lobby counts as one)
-      const rf = b.nearestRest(this.floor)
+      // sleep on the rest floor nearest its OWN desk — a stopped high-floor
+      // session shouldn't trek all the way down to the lobby couch (#1).
+      const seat = b.assignSeat(this.id)
+      const rf = b.nearestRest(seat ? seat.floor : this.floor)
       const cx = b.restSpots(rf).couch
       this.go(rf, cx + (r() < 0.5 ? -5 : 6), { pose: 'sleep', wait: 1e9 })
       return
@@ -125,19 +134,26 @@ export class Citizen {
         if (this.runBreak(habit, 2.5 + r() * 2.5)) return
       }
       this._broke = false
+      const seat = b.assignSeat(this.id)
+      // A session works AT ITS OWN DESK (#3). The skill station is only a detour
+      // when it sits on this session's own work floor — otherwise the agent
+      // stays on its floor and the station still glows (glow is driven by
+      // active-skill state in world.js, not by anyone standing on it).
       const st = this.activeSkill && b.stationOf(this.activeSkill)
-      if (st) {
+      if (st && seat && st.floor === seat.floor) {
         this.seat = null
         const use = STATION_POSE[st.kind]
         this.go(st.floor, st.x + use.dx, { pose: use.pose, action: use.action, face: use.face === -1 ? LEFT : RIGHT, wait: 9 + r() * 12 })
         return
       }
-      const seat = b.assignSeat(this.id)
       if (seat) {
         this.seat = seat
         this.go(seat.floor, seat.x + 11, { pose: 'sit', action: r() < 0.28 ? 'read' : 'type', face: LEFT, wait: 9 + r() * 14 })
       } else {
-        this.go(-1, b.lounge().couch - 10, { pose: 'stand', action: 'phone', wait: 6 + r() * 6 })
+        // no dedicated desk yet (its floor isn't built) — wait on the nearest
+        // rest floor, not all the way down in the lobby (#2)
+        const rf = b.nearestRest(this.floor)
+        this.go(rf, b.restSpots(rf).couch - 10, { pose: 'stand', action: 'phone', wait: 6 + r() * 6 })
       }
       return
     }
@@ -149,12 +165,17 @@ export class Citizen {
     for (const p of weights) { if (roll < p.w) { pick = p; break } roll -= p.w }
 
     if (pick.k === 'wander') {
-      this.go(this.floor === -1 ? -1 : this.floor, 26 + r() * (INNER_W - 52), { pose: 'stand', action: r() < 0.3 ? 'lean' : '', wait: 3 + r() * 4 })
+      // wander AROUND the home floor, not wherever it last drifted to
+      const hf = this.bornFloor()
+      this.go(hf, 26 + r() * (INNER_W - 52), { pose: 'stand', action: r() < 0.3 ? 'lean' : '', wait: 3 + r() * 4 })
       return
     }
     if (pick.k === 'stretch') { this.pose = 'stand'; this.action = 'stretch'; this.wait = 2 + r() * 2; return }
     if (!this.runBreak(pick.k, 4 + r() * 5)) {
-      this.go(-1, 26 + r() * (INNER_W - 52), { pose: 'stand', wait: 3 + r() * 3 })
+      // fall back to a stroll on the rest floor nearest HOME, not nearest the
+      // spot it last drifted to (which would let it sink toward the lobby)
+      const rf = b.nearestRest(this.bornFloor())
+      this.go(rf, 26 + r() * (INNER_W - 52), { pose: 'stand', wait: 3 + r() * 3 })
     }
   }
 
@@ -166,7 +187,12 @@ export class Citizen {
   runBreak(kind, wait) {
     const b = this.b
     const r = this.r
-    const here = this.seat ? this.seat.floor : this.floor
+    // Anchor breaks to the citizen's HOME floor (its own desk), NOT wherever it
+    // currently stands. Otherwise each break re-bases on the last rest floor and
+    // an idle agent drifts steadily downward, all of them eventually piling onto
+    // the lowest commons (F3). Home-anchored, a 12th-floor agent always rests on
+    // F11, never sinks to F3.
+    const here = this.bornFloor()
     const rf = b.nearestRest(here)                    // -1 = lobby (always valid)
     const S = b.restSpots(rf)
     switch (kind) {
@@ -199,14 +225,20 @@ export class Citizen {
         this.go(fl, b.commonsSpots().extra - 9, { pose: 'stand', action: 'point', face: RIGHT, wait }); return true
       }
       case 'phone': {
-        // call from the balcony if there is one (privacy!), else the lobby
+        // take the call on the nearest commons balcony (privacy!); if this is
+        // the lobby itself, step out to the front of the lobby. Never trek down
+        // the tower just to make a call (#2).
         const cf = b.nearestCommons(here)
-        if (cf >= 0 && r() < 0.6) this.go(cf, INNER_W + WALL + 8, { pose: 'stand', action: 'phone', face: RIGHT, wait })
-        else this.go(-1, 30 + r() * 40, { pose: 'stand', action: 'phone', wait })
+        if (cf >= 0) this.go(cf, INNER_W + WALL + 8, { pose: 'stand', action: 'phone', face: RIGHT, wait })
+        else this.go(rf, 30 + r() * 40, { pose: 'stand', action: 'phone', wait })
         return true
       }
       case 'alley': {
-        // stroll out to the alley hangout right of this building
+        // "下楼遛弯" goes all the way down to the street. A high-floor session
+        // must NOT cross the whole tower for it (#2) — only the lower floors
+        // (≤5, a cheap trip down) actually stroll out; higher up we bail so the
+        // caller falls back to a nearby rest-floor spot instead.
+        if (here > 5) return false
         const ax = INNER_W + WALL + 8 + r() * (ALLEY - 28)
         this.go(-1, ax, { pose: 'stand', action: r() < 0.4 ? 'lean' : 'chat', face: r() < 0.5 ? LEFT : RIGHT, wait: wait + 2 })
         return true
@@ -226,6 +258,18 @@ export class Citizen {
       if (f.kind === 'commons' && f.extra === kind) return i
     }
     return null
+  }
+
+  /** The floor a citizen is born on (#1): its own desk floor; for a sub-agent,
+   *  its parent's desk floor; failing both, the lobby. */
+  bornFloor() {
+    const seat = this.b.assignSeat(this.id)
+    if (seat) return seat.floor
+    if (this.parentId) {
+      const ps = this.b.assignSeat(this.parentId)
+      if (ps) return ps.floor
+    }
+    return -1
   }
 
   parentSpot() {
