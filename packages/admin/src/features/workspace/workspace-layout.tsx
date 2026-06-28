@@ -15,6 +15,7 @@ import { SessionChatPanel } from '@/features/agents/session-chat-panel'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
+import { useGitDecorationsSync } from '@/features/explorer/git-decorations'
 import { api } from '@/shared/api-client'
 import { getLanguageFromPath, cn, confirmAction } from '@/shared/utils'
 import { SettingsMain } from '@/features/settings/settings-main'
@@ -24,12 +25,14 @@ import { EvolutionMain } from '@/features/evolution/evolution-main'
 import { EvolutionSidebar } from '@/features/evolution/evolution-sidebar'
 import { CronMain } from '@/features/cron/cron-main'
 import { CronSidebar } from '@/features/cron/cron-sidebar'
-import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, Wifi, WifiOff, Pin, PinOff } from 'lucide-react'
+import { SourceControlSidebar } from '@/features/source-control/source-control-sidebar'
+import { SourceControlMain } from '@/features/source-control/source-control-main'
+import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, Wifi, WifiOff, Pin, PinOff } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
-type SidebarTab = 'explorer' | 'sessions' | 'management' | 'skills' | 'channels' | 'evolution' | 'cron' | 'settings'
+type SidebarTab = 'explorer' | 'source-control' | 'sessions' | 'management' | 'skills' | 'channels' | 'evolution' | 'cron' | 'settings'
 
-const TABS_WITH_SIDEBAR: SidebarTab[] = ['explorer', 'sessions', 'skills', 'channels', 'evolution', 'cron']
+const TABS_WITH_SIDEBAR: SidebarTab[] = ['explorer', 'source-control', 'sessions', 'skills', 'channels', 'evolution', 'cron']
 
 interface WorkspaceLayoutProps {
   connected: boolean
@@ -266,6 +269,7 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
 
   const tabs: { id: SidebarTab; icon: typeof FolderTree; label: string; position?: 'bottom' }[] = [
     { id: 'explorer', icon: FolderTree, label: t('nav.explorer') },
+    { id: 'source-control', icon: GitBranch, label: t('nav.sourceControl') },
     { id: 'sessions', icon: MessageSquare, label: t('nav.sessions') },
     { id: 'skills', icon: Zap, label: 'Skills' },
     { id: 'management', icon: Bot, label: 'Agents' },
@@ -279,6 +283,8 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
   const bottomTabs = tabs.filter((t) => t.position === 'bottom')
 
   const projectId = activeProject?.id ?? null
+  // Keep the Explorer's git status decorations in sync for the active workspace.
+  useGitDecorationsSync(projectId)
   const maximized = useEditorStore((s) => s.maximized)
   const bottomFloating = useEditorStore((s) => s.bottomFloating)
   const bottomMaximized = useEditorStore((s) => s.bottomMaximized)
@@ -372,6 +378,7 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
           <PanelGroup direction="horizontal" autoSaveId="halo-h-sidebar" className="flex-1">
             <Panel defaultSize={22} minSize={15} maxSize={40}>
               <div className="h-full overflow-hidden">
+                {activeTab === 'source-control' && <SourceControlSidebar />}
                 {activeTab === 'sessions' && <AgentSessionsSidebar />}
                 {activeTab === 'skills' && <SkillsSidebar />}
                 {activeTab === 'channels' && <ChannelsSidebar />}
@@ -484,6 +491,7 @@ function ExplorerMainArea({ projectId, showBottom }: { projectId: string | null;
 
 /** Non-explorer tabs keep their original conditional-render behavior — destroyed/rebuilt each switch. */
 function NonExplorerMainArea({ activeTab }: { activeTab: SidebarTab }) {
+  if (activeTab === 'source-control') return <SourceControlMain />
   if (activeTab === 'sessions') return <SessionChatPanel />
   if (activeTab === 'management') return <AgentManagementMain />
   if (activeTab === 'skills') return <SkillsMain />

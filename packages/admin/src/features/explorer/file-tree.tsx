@@ -4,6 +4,8 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import type { FileTreeNode } from '@/shared/stores/editor-store'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { loadDirChildren } from './use-file-tree'
+import { useGitDecorations, MIXED, isPathIgnored } from './git-decorations'
+import { statusMeta, MIXED_STATUS_COLOR } from '@/features/source-control/status-meta'
 import { cn } from '@/shared/utils'
 import {
   ChevronRight,
@@ -291,6 +293,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
 
   const modifiedPaths = useEditorStore((s) => s.modifiedPaths)
   const activeTab = useEditorStore((s) => s.activeTab)
+  const gitDecorations = useGitDecorations(projectId)
 
   const isRoot = depth === 0 && !node.path
 
@@ -390,6 +393,18 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
   const isActive = activeTab === node.path
   const isSelected = selectedPaths?.has(node.path) ?? false
   const { Icon: FileIcon, color: fileColor } = getFileIcon(node.path)
+
+  // Git status decoration: leaf files get a colored name + letter badge;
+  // folders get a colored name + a dot (status color, or gray when the subtree
+  // mixes change kinds). Both come from the precomputed status maps so collapsed
+  // folders still light up.
+  const gitChar = isDir ? gitDecorations.dirs.get(node.path) : gitDecorations.files.get(node.path)
+  const gitMeta = gitChar && gitChar !== MIXED ? statusMeta(gitChar) : null
+  const gitColor = gitChar === MIXED ? MIXED_STATUS_COLOR : gitMeta?.color
+  // Gitignored nodes are dimmed (VSCode-style) — but a change always wins (a
+  // force-added file can be both ignored and modified), so only dim when there's
+  // no status decoration on this node.
+  const gitIgnored = !gitChar && isPathIgnored(gitDecorations.ignored, node.path)
 
   // Single click = select; double click = open/expand
   const handleClick = (e: React.MouseEvent) => {
@@ -571,18 +586,31 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
 
         {isDir ? (
           expanded ? (
-            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-blue-400" />
+            <FolderOpen className={cn('h-3.5 w-3.5 shrink-0 text-blue-400', gitIgnored && 'opacity-60')} />
           ) : (
-            <Folder className="h-3.5 w-3.5 shrink-0 text-blue-400" />
+            <Folder className={cn('h-3.5 w-3.5 shrink-0 text-blue-400', gitIgnored && 'opacity-60')} />
           )
         ) : (
-          <FileIcon className={cn('h-3.5 w-3.5 shrink-0', fileColor)} />
+          <FileIcon className={cn('h-3.5 w-3.5 shrink-0', fileColor, gitIgnored && 'opacity-60')} />
         )}
-        <span className="truncate">{node.name}</span>
+        <span className={cn('truncate', gitIgnored && 'text-[var(--muted-foreground)] opacity-60')} style={gitColor ? { color: gitColor } : undefined}>{node.name}</span>
 
-        {(isModified || hasModifiedChild) && (
-          <Circle className="ml-auto mr-2 h-1.5 w-1.5 shrink-0 fill-amber-400 text-amber-400" />
-        )}
+        <span className="ml-auto flex shrink-0 items-center gap-1 pl-1 pr-2">
+          {(isModified || hasModifiedChild) && (
+            <Circle className="h-1.5 w-1.5 shrink-0 fill-amber-400 text-amber-400" />
+          )}
+          {isDir
+            ? gitColor && <Circle className="h-1.5 w-1.5 shrink-0" style={{ fill: gitColor, color: gitColor }} />
+            : gitMeta && (
+                <span
+                  className="w-3 text-center font-mono text-[11px] font-semibold"
+                  style={{ color: gitMeta.color }}
+                  title={gitMeta.label}
+                >
+                  {gitMeta.letter}
+                </span>
+              )}
+        </span>
       </button>
 
       {isDir && expanded && loadingChildren && !node.children && (

@@ -252,6 +252,137 @@ export const api = {
     },
   },
 
+  git: {
+    status(projectId: string) {
+      return request<{
+        // false when the folder isn't a git work-tree root (no repo, or nested
+        // inside an ancestor's repo) — the rest of the fields are absent then.
+        isRepo?: boolean
+        branch: string | null
+        tracking: string | null
+        ahead: number
+        behind: number
+        files: Array<{ path: string; index: string; workingDir: string; from?: string }>
+      }>(`/git/status?projectId=${encodeURIComponent(projectId)}`)
+    },
+
+    ignored(projectId: string) {
+      return request<{ ignored: string[] }>(`/git/ignored?projectId=${encodeURIComponent(projectId)}`)
+    },
+
+    diff(projectId: string, path: string, staged: boolean, from?: string, commit?: string) {
+      const params = new URLSearchParams()
+      params.set('projectId', projectId)
+      params.set('path', path)
+      params.set('staged', staged ? '1' : '0')
+      if (from) params.set('from', from)
+      if (commit) params.set('commit', commit)
+      return request<{ path: string; original: string; modified: string }>(`/git/diff?${params.toString()}`)
+    },
+
+    log(projectId: string, limit?: number) {
+      const params = new URLSearchParams({ projectId })
+      if (limit) params.set('limit', String(limit))
+      return request<{
+        commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string; refs: string }>
+      }>(`/git/log?${params.toString()}`)
+    },
+
+    commitFiles(projectId: string, hash: string) {
+      const params = new URLSearchParams({ projectId, hash })
+      return request<{
+        files: Array<{ path: string; status: string; from?: string }>
+      }>(`/git/commit-files?${params.toString()}`)
+    },
+
+    stage(projectId: string, paths: string[]) {
+      return request<{ ok: boolean }>('/git/stage', {
+        method: 'POST',
+        body: JSON.stringify({ projectId, paths }),
+      })
+    },
+
+    unstage(projectId: string, paths: string[]) {
+      return request<{ ok: boolean }>('/git/unstage', {
+        method: 'POST',
+        body: JSON.stringify({ projectId, paths }),
+      })
+    },
+
+    commit(projectId: string, message: string) {
+      return request<{ ok: boolean; hash: string }>('/git/commit', {
+        method: 'POST',
+        body: JSON.stringify({ projectId, message }),
+      })
+    },
+
+    push(projectId: string) {
+      return request<{ ok: boolean }>('/git/push', {
+        method: 'POST',
+        body: JSON.stringify({ projectId }),
+      })
+    },
+
+    pull(projectId: string) {
+      return request<{ ok: boolean }>('/git/pull', {
+        method: 'POST',
+        body: JSON.stringify({ projectId }),
+      })
+    },
+
+    init(projectId: string) {
+      return request<{ ok: boolean }>('/git/init', {
+        method: 'POST',
+        body: JSON.stringify({ projectId }),
+      })
+    },
+
+    remotes(projectId: string) {
+      return request<{ remotes: Array<{ name: string; url: string }> }>(
+        `/git/remotes?projectId=${encodeURIComponent(projectId)}`,
+      )
+    },
+
+    addRemote(projectId: string, url: string, name?: string) {
+      return request<{ ok: boolean }>('/git/remote', {
+        method: 'POST',
+        body: JSON.stringify({ projectId, url, name }),
+      })
+    },
+
+    getCredentials() {
+      return request<{ configured: boolean; host: string; username: string }>('/git/credentials')
+    },
+
+    saveCredentials(data: { host: string; username: string; token: string }) {
+      return request<{ ok: boolean }>('/git/credentials', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      })
+    },
+
+    sshKeys() {
+      return request<{ keys: Array<{ name: string; path: string; encrypted: boolean }> }>('/git/ssh/keys')
+    },
+
+    sshAgent() {
+      return request<{ agentRunning: boolean; loadedKeys: string[] }>('/git/ssh/agent')
+    },
+
+    getRemoteProtocol(projectId: string) {
+      return request<{ url: string; protocol: 'https' | 'ssh' | 'other' }>(
+        `/git/remote/protocol?projectId=${encodeURIComponent(projectId)}`,
+      )
+    },
+
+    setRemoteProtocol(projectId: string, to: 'https' | 'ssh') {
+      return request<{ ok: boolean; url: string }>('/git/remote/protocol', {
+        method: 'POST',
+        body: JSON.stringify({ projectId, to }),
+      })
+    },
+  },
+
   agentConfigs: {
     list(projectId?: string) {
       const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
