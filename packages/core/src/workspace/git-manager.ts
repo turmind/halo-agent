@@ -167,12 +167,18 @@ export class GitManager {
     }
   }
 
-  /** Full hashes of commits on HEAD that aren't yet on the branch's upstream —
-   *  the "local ahead, not pushed" set the Graph view highlights. One git call,
-   *  not per-commit. Three cases:
+  /** Full hashes of commits on HEAD that aren't yet on a remote — the "local
+   *  ahead, not pushed" set the Graph view highlights. One git call, not
+   *  per-commit. Three cases:
    *   - upstream configured → `rev-list @{upstream}..HEAD` (the ahead commits).
-   *   - no upstream but a remote exists (branch never pushed) → every HEAD commit
-   *     is unpushed, so `rev-list HEAD`.
+   *   - no upstream but a remote exists (e.g. a feature branch never pushed, on a
+   *     repo whose main is tracked) → compare against ALL remote-tracking
+   *     branches: `rev-list HEAD --not --remotes` = commits on HEAD not reachable
+   *     from any `origin/*`. So commits already on the remote via another branch
+   *     (e.g. merged to origin/main) read as pushed; only the genuinely
+   *     local-only ones highlight. (Plain `rev-list HEAD` was wrong here — it
+   *     painted the whole history as unpushed just because this branch lacked an
+   *     upstream, ignoring the origin/* refs git plainly has.)
    *   - no remote at all → empty set (nothing to compare against; commits read as
    *     neutral/pushed rather than painting the whole graph as unpushed).
    *  Any failure degrades to an empty set so getLog never throws over this. */
@@ -182,15 +188,15 @@ export class GitManager {
         .revparse(['--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
         .then(() => true)
         .catch(() => false);
-      let range: string;
+      let args: string[];
       if (hasUpstream) {
-        range = '@{upstream}..HEAD';
+        args = ['rev-list', '@{upstream}..HEAD'];
       } else {
         const remotes = await this.git.getRemotes(false);
         if (remotes.length === 0) return new Set();
-        range = 'HEAD';
+        args = ['rev-list', 'HEAD', '--not', '--remotes'];
       }
-      const raw = await this.git.raw(['rev-list', range]);
+      const raw = await this.git.raw(args);
       return new Set(raw.split('\n').map((l) => l.trim()).filter(Boolean));
     } catch {
       return new Set();

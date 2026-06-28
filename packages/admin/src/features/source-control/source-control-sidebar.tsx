@@ -56,10 +56,9 @@ export function SourceControlSidebar() {
   const [changesCollapsed, setChangesCollapsed] = useState(false)
   const [view, setView] = useState<'changes' | 'graph'>('changes')
   // Remote-state gate (③): null = not loaded; [] = repo with no remote → guide
-  // the user to add one. `hasCommits` gates the publish prompt (VSCode only
-  // offers Publish after a first commit).
+  // the user to add one. Adding a remote is a purely local `git remote add`,
+  // so it's offered regardless of whether the repo has any commits yet.
   const [remotes, setRemotes] = useState<Array<{ name: string; url: string }> | null>(null)
-  const [hasCommits, setHasCommits] = useState(false)
   const [remoteUrl, setRemoteUrl] = useState('')
 
   const refresh = useCallback(async () => {
@@ -78,18 +77,10 @@ export function SourceControlSidebar() {
       setStatus(res)
       setNotRepo(false)
       setError(null)
-      // Once we know it's a repo, learn whether a remote is configured. Only
-      // probe for commits (cheap log(1)) when there's no remote — that's the
-      // single case where the publish prompt needs to know if there's anything
-      // to publish. With a remote, the normal push/pull UI applies.
+      // Once we know it's a repo, learn whether a remote is configured — that
+      // alone gates the add-remote prompt (gate ③) vs the push/pull UI.
       const r = await api.git.remotes(projectId)
       setRemotes(r.remotes)
-      if (r.remotes.length === 0) {
-        const log = await api.git.log(projectId, 1)
-        setHasCommits(log.commits.length > 0)
-      } else {
-        setHasCommits(true)
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -262,10 +253,12 @@ export function SourceControlSidebar() {
         )}
       </div>
 
-      {/* Gate ③: repo has commits but no remote → guide the user to add one.
-          Replaces the push affordance (there's nowhere to push yet). An empty
-          repo with no commits shows nothing here — there's nothing to publish. */}
-      {!hasRemote && hasCommits && view === 'changes' && (
+      {/* Gate ③: repo with no remote → guide the user to add one. Replaces the
+          push affordance (there's nowhere to push yet). Shown even on a
+          brand-new repo with no commits: `git remote add` is local config and
+          doesn't need a commit, so a user can wire up the remote first, then
+          commit and push. */}
+      {!hasRemote && view === 'changes' && (
         <div className="flex shrink-0 flex-col gap-1.5 border-b border-[var(--border)] p-2">
           <div className="flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">
             <Upload className="h-3.5 w-3.5 shrink-0" />
