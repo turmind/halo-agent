@@ -284,7 +284,7 @@ export const api = {
       const params = new URLSearchParams({ projectId })
       if (limit) params.set('limit', String(limit))
       return request<{
-        commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string; refs: string }>
+        commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string; refs: string; pushed: boolean }>
       }>(`/git/log?${params.toString()}`)
     },
 

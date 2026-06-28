@@ -206,6 +206,7 @@ export function GitGraph({ projectId }: { projectId: string }) {
       {commits.map((commit, i) => {
         const isFirst = i === 0
         const isExpanded = expandedHash === commit.hash
+        const dotColor = commit.pushed ? 'var(--muted-foreground)' : 'var(--primary)'
         const files = filesByHash[commit.hash]
         const refs = commit.refs
           ? parseRefs(commit.refs)
@@ -229,14 +230,24 @@ export function GitGraph({ projectId }: { projectId: string }) {
                 className="absolute left-1/2 w-px -translate-x-1/2 bg-[var(--primary)] opacity-30"
                 style={{ top: DOT_CENTER, bottom: 0 }}
               />
+              {/* Pushed commits dim to muted (they've "sunk" onto the remote);
+                  local-only commits stay primary so they stand out, mirroring
+                  VSCode's graph. The isFirst hollow ring uses the same color on
+                  its border instead of a fill. */}
               <div
                 className={cn(
                   'absolute left-1/2 z-10 -translate-x-1/2 rounded-full',
-                  isFirst
-                    ? 'border-2 border-[var(--primary)] bg-[var(--background)]'
-                    : 'bg-[var(--primary)]',
+                  isFirst && 'border-2 bg-[var(--background)]',
                 )}
-                style={{ top: DOT_CENTER - DOT / 2, width: DOT, height: DOT }}
+                style={{
+                  top: DOT_CENTER - DOT / 2,
+                  width: DOT,
+                  height: DOT,
+                  ...(isFirst
+                    ? { borderColor: dotColor }
+                    : { backgroundColor: dotColor }),
+                }}
+                title={commit.pushed ? t('sc.pushed') : t('sc.unpushed')}
               />
             </div>
 

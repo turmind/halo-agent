@@ -310,6 +310,8 @@ export const zh: Record<string, string> = {
   'sc.viewGraph': '提交历史',
   'sc.noCommits': '暂无提交',
   'sc.noCommitFiles': '无文件变更',
+  'sc.pushed': '已推送到远程',
+  'sc.unpushed': '仅本地 — 未推送',
   'sc.cred.title': 'Git 凭据',
   'sc.cred.tabHttps': 'HTTPS',
   'sc.cred.tabSsh': 'SSH',

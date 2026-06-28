@@ -38,6 +38,10 @@ export interface GitLogEntry {
   date: string;
   /** Branch/tag decorations git reports (e.g. "HEAD -> main, tag: v1"); '' when none. */
   refs: string;
+  /** Whether this commit is already on the branch's upstream. false = local-only
+   *  (the Graph view highlights it). True for every commit when there's no remote
+   *  to compare against, so the graph isn't painted entirely as "unpushed". */
+  pushed: boolean;
 }
 
 /** One file changed by a commit, for the Graph view's per-commit file list.
@@ -143,10 +147,12 @@ export class GitManager {
 
   /** Recent commits as structured entries for the Graph view. simple-git's
    *  default log fields already carry hash/date/message/refs/author — map them
-   *  through. Empty array when there are no commits yet. */
+   *  through, plus a `pushed` flag (see getUnpushedHashes). Empty array when
+   *  there are no commits yet. */
   async getLog(count = 50): Promise<GitLogEntry[]> {
     try {
       const log = await this.git.log({ maxCount: count });
+      const unpushed = await this.getUnpushedHashes();
       return log.all.map((entry) => ({
         hash: entry.hash,
         shortHash: entry.hash.slice(0, 7),
@@ -154,9 +160,40 @@ export class GitManager {
         author: entry.author_name,
         date: entry.date,
         refs: entry.refs,
+        pushed: !unpushed.has(entry.hash),
       }));
     } catch {
       return [];
+    }
+  }
+
+  /** Full hashes of commits on HEAD that aren't yet on the branch's upstream —
+   *  the "local ahead, not pushed" set the Graph view highlights. One git call,
+   *  not per-commit. Three cases:
+   *   - upstream configured → `rev-list @{upstream}..HEAD` (the ahead commits).
+   *   - no upstream but a remote exists (branch never pushed) → every HEAD commit
+   *     is unpushed, so `rev-list HEAD`.
+   *   - no remote at all → empty set (nothing to compare against; commits read as
+   *     neutral/pushed rather than painting the whole graph as unpushed).
+   *  Any failure degrades to an empty set so getLog never throws over this. */
+  private async getUnpushedHashes(): Promise<Set<string>> {
+    try {
+      const hasUpstream = await this.git
+        .revparse(['--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
+        .then(() => true)
+        .catch(() => false);
+      let range: string;
+      if (hasUpstream) {
+        range = '@{upstream}..HEAD';
+      } else {
+        const remotes = await this.git.getRemotes(false);
+        if (remotes.length === 0) return new Set();
+        range = 'HEAD';
+      }
+      const raw = await this.git.raw(['rev-list', range]);
+      return new Set(raw.split('\n').map((l) => l.trim()).filter(Boolean));
+    } catch {
+      return new Set();
     }
   }
 

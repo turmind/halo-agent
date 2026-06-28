@@ -310,6 +310,8 @@ export const en: Record<string, string> = {
   'sc.viewGraph': 'Graph',
   'sc.noCommits': 'No commits yet',
   'sc.noCommitFiles': 'No files changed',
+  'sc.pushed': 'Pushed to remote',
+  'sc.unpushed': 'Local only — not pushed',
   'sc.cred.title': 'Git Credentials',
   'sc.cred.tabHttps': 'HTTPS',
   'sc.cred.tabSsh': 'SSH',
