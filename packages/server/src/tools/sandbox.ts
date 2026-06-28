@@ -74,7 +74,20 @@ async function bwrapExec(args: string[], opts?: { timeout?: number; maxBuffer?: 
  *
  * Contract mirrors promisify(exec): resolve `{ stdout, stderr }` on exit 0;
  * reject with an Error carrying `.message`/`.stdout`/`.stderr`/`.code` otherwise.
+ *
+ * KILL ESCALATION (two-layer, both required): a plain SIGTERM to the group is
+ * not enough. A command that does `setsid` (or otherwise leaves the group) or
+ * ignores SIGTERM keeps the wrapping `sh` blocked in wait(), so `close` never
+ * fires and the Promise hangs forever — the 80-minute-stuck-shell_exec bug.
+ *   1. After SIGTERM, a short grace timer escalates to SIGKILL on the group.
+ *   2. If `close` STILL hasn't fired a moment later (the worker escaped the
+ *      group via setsid, so neither signal reached it), force-settle the
+ *      Promise anyway so the agent loop unwinds instead of blocking forever.
+ *      The escaped grandchild is unreachable from here; reaping it is the OS's
+ *      job. We must not let it pin the turn.
  */
+const KILL_GRACE_MS = 2000
+
 function spawnGroupExec(
   command: string,
   opts: { cwd: string; timeout?: number; maxBuffer?: number; signal?: AbortSignal },
@@ -93,10 +106,25 @@ function spawnGroupExec(
       try { if (child.pid) process.kill(-child.pid, sig) } catch { /* already dead */ }
     }
 
+    // SIGTERM now; if the group is still alive after the grace window, SIGKILL
+    // it and force-settle (in case `close` can't fire — see header comment).
+    let escalation: NodeJS.Timeout | null = null
+    const escalateKill = (reason: 'timeout' | 'abort'): void => {
+      killReason = reason
+      killGroup('SIGTERM')
+      if (escalation) return
+      escalation = setTimeout(() => {
+        killGroup('SIGKILL')
+        // Give the kernel a tick to deliver SIGKILL and fire `close`; if it
+        // doesn't (escaped group), settle ourselves so the turn never hangs.
+        setTimeout(() => settleKill(reason), 200)
+      }, KILL_GRACE_MS)
+    }
+
     const timer = opts.timeout
-      ? setTimeout(() => { killReason = 'timeout'; killGroup('SIGTERM') }, opts.timeout)
+      ? setTimeout(() => escalateKill('timeout'), opts.timeout)
       : null
-    const onAbort = (): void => { killReason = 'abort'; killGroup('SIGTERM') }
+    const onAbort = (): void => escalateKill('abort')
     if (opts.signal) {
       if (opts.signal.aborted) onAbort()
       else opts.signal.addEventListener('abort', onAbort, { once: true })
@@ -104,6 +132,7 @@ function spawnGroupExec(
 
     const cleanup = (): void => {
       if (timer) clearTimeout(timer)
+      if (escalation) clearTimeout(escalation)
       opts.signal?.removeEventListener('abort', onAbort)
     }
     const settle = (fn: () => void): void => {
@@ -112,14 +141,25 @@ function spawnGroupExec(
       cleanup()
       fn()
     }
+    // Force-reject when the process escaped the group and `close` will never
+    // fire. Shapes the rejection exactly like the normal close-path kill case.
+    const settleKill = (reason: 'timeout' | 'abort'): void => {
+      settle(() => {
+        if (reason === 'abort') {
+          reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError', stdout, stderr, code: null }))
+        } else {
+          reject(Object.assign(new Error('Command timed out'), { stdout, stderr, killed: true, signal: 'SIGKILL' }))
+        }
+      })
+    }
 
     child.stdout?.on('data', (d: Buffer) => {
       stdout += d.toString('utf-8')
-      if (stdout.length > maxBuffer) { stdout = stdout.slice(0, maxBuffer); killReason = 'timeout'; killGroup('SIGTERM') }
+      if (stdout.length > maxBuffer) { stdout = stdout.slice(0, maxBuffer); escalateKill('timeout') }
     })
     child.stderr?.on('data', (d: Buffer) => {
       stderr += d.toString('utf-8')
-      if (stderr.length > maxBuffer) { stderr = stderr.slice(0, maxBuffer); killReason = 'timeout'; killGroup('SIGTERM') }
+      if (stderr.length > maxBuffer) { stderr = stderr.slice(0, maxBuffer); escalateKill('timeout') }
     })
 
     child.on('error', (err) => {

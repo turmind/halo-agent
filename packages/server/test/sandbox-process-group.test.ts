@@ -83,4 +83,35 @@ describe('sandboxExec full-access abort kills the whole process group', () => {
     await delay(2200)
     expect(existsSync(sentinel)).toBe(false)
   })
+
+  /**
+   * Regression: a command that `setsid`s its worker into a NEW session escapes
+   * the spawned group, so SIGTERM/SIGKILL to `-pid` never reach it AND the
+   * wrapping sh stays blocked in wait() → `close` never fires. Before the fix
+   * this hung the tool call (and the whole agent loop) forever — a real
+   * 80-minute stuck shell_exec was traced to exactly this. The fix force-settles
+   * the Promise after the SIGKILL grace window. The bite: the call must REJECT
+   * within the deadline + grace (~2.3s here), not hang past the test timeout.
+   */
+  it('timeout on a setsid-escaped worker still rejects (no infinite hang)', async () => {
+    const start = Date.now()
+    await expect(
+      sandboxExec('setsid -w sleep 600', { workspaceRoot: dir, accessLevel: 'full', timeout: 300 }),
+    ).rejects.toMatchObject({ killed: true })
+    // 300ms deadline + 2000ms SIGKILL grace + 200ms settle ≈ 2.5s ceiling.
+    expect(Date.now() - start).toBeLessThan(4000)
+  }, 8000)
+
+  it('abort on a setsid-escaped worker still rejects (no infinite hang)', async () => {
+    const ctrl = new AbortController()
+    const start = Date.now()
+    const run = sandboxExec('setsid -w sleep 600', {
+      workspaceRoot: dir,
+      accessLevel: 'full',
+      signal: ctrl.signal,
+    })
+    setTimeout(() => ctrl.abort('interrupt'), 300)
+    await expect(run).rejects.toMatchObject({ name: 'AbortError' })
+    expect(Date.now() - start).toBeLessThan(4000)
+  }, 8000)
 })
