@@ -73,7 +73,7 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 |---|---|---|
 | `state:snapshot` | handler.ts on connect | Initial state (agents, messages, sessionId) |
 | `chat:queued` | `sendUserMessage` returning queued | User-message-queued notification |
-| `file:changed` | WorkspaceWatcher | File change notification (path + action) |
+| `file:changed` | WorkspaceWatcher · GitDirWatcher · `routes/git.ts` | File change notification (path + action). Three sources: (1) **WorkspaceWatcher** — recursive workspace watch, deliberately excludes `.git`; (2) **`routes/git.ts`** — every git mutation route re-broadcasts `path:'.git'` itself (the recursive watcher ignores `.git`); (3) **GitDirWatcher** — a non-recursive `.git`-dir watch for command-line git ops, *plus* a degraded "watch the workspace root for `.git` appearing" phase that fires `path:'.git'` on a terminal `git init`/`clone` so the Source Control entry auto-surfaces. See [source-control.md](../requirements/source-control.md#auto-refresh-no-polling). |
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |
 | `session:changed` | `SessionManager` (broadcast to all clients) | Root session list changed — re-fetch. Fires on root-session create *and* on each root turn `complete` (so channel-driven messages refresh the count/title/ordering, not just admin's own turns). |
 | `session:cleared` | session:clear handler | /session new complete |

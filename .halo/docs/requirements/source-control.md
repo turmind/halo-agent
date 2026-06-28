@@ -4,9 +4,19 @@ A focused Git panel for **viewing changes, committing, pushing, and managing cre
 
 Backed by `GET/POST/DELETE /api/git/*` (see [dev/api.md](../dev/api.md#source-control-git)). Core lives in `packages/core/src/workspace/git-manager.ts` (simple-git wrapper); routes in `packages/server/src/routes/git.ts`; panel UI in `packages/admin/src/features/source-control/`.
 
+## Entry visibility (git-gated)
+
+The Source Control **activity-bar entry itself is hidden in non-git workspaces** — a non-developer's notes folder shouldn't carry a panel that doesn't apply to it. Visibility is a three-state signal (`useIsRepo`) derived from the *same* `GET /api/git/status` call that already drives the Explorer decorations (no extra fetch):
+
+- **`'unknown'`** (status not yet resolved) → **show**. Defaulting to visible means no first-paint flicker, and a clean repo (no changes) is never momentarily mis-hidden while its status is in flight.
+- **`true`** (confirmed repo, including a clean one) → **show**.
+- **`false`** (confirmed non-repo) → **hide**. If `localStorage` had restored the active tab to Source Control, the layout falls back to Explorer — guarded on the confirmed-`false` state so an in-flight check can't kick the user off the tab.
+
+**Auto-surface on `git init`**: creating a repo (panel **Initialize** *or* a terminal `git init` / `git clone`) makes the entry appear on its own, no page refresh. The backend's `GitDirWatcher` runs in a degraded "watch the workspace root for `.git` appearing" mode while the folder is a non-repo; the moment `.git` shows up it fires a `file:changed`, the frontend re-queries status, the repo signal flips `true`, and the entry surfaces. See [Auto-refresh](#auto-refresh-no-polling) for the two-phase watcher.
+
 ## Panel states (three-gate onboarding)
 
-The panel resolves to one of these on open, driven by `GET /api/git/status`:
+Once the entry is shown, the panel resolves to one of these on open, driven by `GET /api/git/status`:
 
 1. **Not a repo** (`{isRepo: false}`) — the folder has no git work-tree at its root (either no repo at all, or it only sits *inside* an ancestor's repo). Shows an **Initialize Repository** empty state. Never a 500/console error — a non-repo folder is a normal state.
 2. **Repo, no remote** — `GET /api/git/remotes` is empty. Shows an **Add Remote** prompt to guide first publish.
@@ -36,6 +46,7 @@ The panel, the history graph, and the Explorer git decorations all refresh on th
 
 - **Panel-driven writes**: every git mutation route (stage/unstage/commit/push/pull/init/remote) re-broadcasts `file:changed` (path `.git`) itself, because the workspace file watcher deliberately ignores `.git`. So after a commit the CHANGES list auto-clears with no manual refresh.
 - **Command-line writes**: a lightweight, **non-recursive** watch on the `.git` directory's top-level `HEAD` / `index` files (separate from the recursive workspace watcher, which excludes `.git` to avoid being overwhelmed by object-store inodes) catches terminal `git commit` / `checkout` / `add` / `reset` and broadcasts the same `file:changed`. `.lock` churn is filtered; the operation's events are debounced into a single refresh. So a commit made in the integrated terminal updates the panel without a manual refresh.
+- **Two-phase watcher**: `GitDirWatcher` adapts to whether the workspace is a repo yet. A real work-tree watches `.git` directly (the steady state above). A **non-git folder** instead watches the workspace *root* (still non-recursive) for one thing only — `.git` appearing — so a terminal `git init` / `git clone` is noticed and upgrades the watcher onto `.git`, firing once so the [entry auto-surfaces](#entry-visibility-git-gated). The root-watch handler compares the event filename before any disk IO (ordinary file churn costs one string compare), and a real repo never enters this degraded mode.
 
 ## Explorer git decorations
 
