@@ -86,6 +86,20 @@ function run(cmd, cwd = REPO_ROOT) {
 
 function rmrf(p) { fs.rmSync(p, { recursive: true, force: true }) }
 
+// Hard gate: the staged admin-out MUST carry Monaco's loader.js. It's produced
+// by copy-monaco.mjs during the admin `build` script; a bare `next build` skips
+// that step, leaving out/monaco/ empty. Without the loader the editor fetches
+// loader.js, gets the 404 HTML fallback, and throws "Unexpected token '<'" —
+// the 0.1.7 regression. Fail loudly here rather than ship a monaco-less app.
+function assertMonacoStaged(adminOutDir) {
+  const loaderJs = path.join(adminOutDir, 'monaco', 'vs', 'loader.js')
+  if (!fs.existsSync(loaderJs)) {
+    console.error(`[stage] FATAL: ${loaderJs} missing — Monaco editor would 404. Run \`pnpm --filter @turmind/halo-admin build\` (it runs copy-monaco) before staging.`)
+    process.exit(1)
+  }
+  console.log('[stage] verified monaco loader.js present')
+}
+
 // Sanity: make sure builds are fresh enough.
 const serverDist = path.join(REPO_ROOT, 'packages', 'server', 'dist', 'index.js')
 const adminOut = path.join(REPO_ROOT, 'packages', 'admin', 'out', 'index.html')
@@ -94,7 +108,7 @@ if (!fs.existsSync(serverDist)) {
   process.exit(1)
 }
 if (!fs.existsSync(adminOut)) {
-  console.error('[stage] missing packages/admin/out/index.html — run `cd packages/admin && npx next build --no-lint` first')
+  console.error('[stage] missing packages/admin/out/index.html — run `cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs` first')
   process.exit(1)
 }
 
@@ -446,6 +460,7 @@ function stageCliRuntime() {
 // 3. admin out
 console.log('[stage] copying admin-out/')
 fs.cpSync(path.join(REPO_ROOT, 'packages', 'admin', 'out'), ADMIN_OUT_DST, { recursive: true })
+assertMonacoStaged(ADMIN_OUT_DST)
 
 // 4. node binary (for the server child process). We bundle it because
 //    Electron's own ELECTRON_RUN_AS_NODE uses the embedded node 20, but
@@ -635,6 +650,7 @@ async function fastResync() {
 
   // 3. resources/admin-out (served by the desktop server).
   syncDir(path.join(REPO_ROOT, 'packages', 'admin', 'out'), ADMIN_OUT_DST, 'admin-out')
+  assertMonacoStaged(ADMIN_OUT_DST)
 
   console.log('[fast] done — run electron-builder next (e.g. pnpm dist:win-fast)')
 }

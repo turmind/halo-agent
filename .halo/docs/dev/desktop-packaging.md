@@ -37,7 +37,7 @@ one.
 ```bash
 cd packages/halo   # repo root
 # 1. build the two upstream artifacts the stage script consumes
-cd packages/admin && npx next build --no-lint && cd ../..
+cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs && cd ../..
 cd packages/server && ./node_modules/.bin/tsc && cd ../..
 
 # 2. stage + package (arm64)
@@ -210,6 +210,39 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   in `~/.halo/global/server.lock`. The server now probes whether that PID is
   alive on startup and self-heals (removes the lock + continues) instead of
   exiting 1. See `acquireSingleInstanceLock` in `packages/server/src/index.ts`.
+
+- **Build admin with `pnpm --filter @turmind/halo-admin build`, NOT a bare
+  `next build` — Monaco won't ship otherwise.** The editor self-hosts Monaco
+  (no CDN at runtime): `scripts/copy-monaco.mjs` stages `monaco-editor/min/vs`
+  into `admin/out/monaco/vs`, and the admin `build` script chains it
+  (`next build && copy-monaco.mjs`). Both downstream consumers (cli
+  `build-bundle.mjs`, desktop `stage-runtime.mjs`) copy `admin/out` wholesale,
+  so a missing `out/monaco/` propagates into every artifact. Symptom: editor
+  opening *any* file throws `Uncaught SyntaxError: Unexpected token '<'` at
+  `loader.js` — the server returned the 404 HTML page because Monaco's loader
+  isn't there. This is exactly how a monaco-less 0.1.7 shipped: packaging ran a
+  bare `npx next build --no-lint` (skipping copy-monaco), and cli's backstop
+  copy silently failed because it resolved `monaco-editor` from cli's
+  node_modules (it's *admin's* devDependency). Now hard-gated: both
+  `build-bundle.mjs` and `stage-runtime.mjs` `process.exit(1)` if
+  `admin-out/monaco/vs/loader.js` is absent, and every doc's build command ends
+  with `&& node scripts/copy-monaco.mjs`. If you must run `next build`
+  directly, append the copy step yourself.
+
+- **Changing anything under `templates/` requires bumping `TEMPLATE_VERSION`
+  (`packages/server/src/init.ts`) — otherwise the change never reaches existing
+  installs.** Server startup only re-runs `ensureHaloHome` (the template
+  reseed) when the on-disk `~/.halo/global/.template-version` is *strictly less
+  than* the compiled `TEMPLATE_VERSION` (`index.ts` startup block). Equal → the
+  whole reseed is skipped, so a template edit with no version bump is invisible
+  to every machine that already has the prior version stamped. This bit the
+  `team`-delegation rewrite: `default/AGENT.md` gained the "team whitelist"
+  paragraph but `TEMPLATE_VERSION` stayed put, so upgraded users' `default`
+  agent kept reading the old AGENT.md and didn't know what `team` was. It's an
+  integer, not a hash — it must increase monotonically (a git sha would compare
+  nonsensically and can decrease). Fresh `halo setup` always reseeds regardless,
+  which is why it's easy to miss in dev. Rule: touch `templates/` → `+1` the
+  version in the same commit.
 
 - **Crash diagnostics.** Server stdout/stderr is tee'd to
   `~/.halo/logs/desktop.log`; the last 30 lines also surface in the crash

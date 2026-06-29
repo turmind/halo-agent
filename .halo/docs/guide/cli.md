@@ -26,7 +26,7 @@ published directly (it has `workspace:*` deps); the bundle flattens them.
 # 2. build the upstream artifacts the bundle consumes
 pnpm --filter @turmind/halo-core build
 pnpm --filter @turmind/halo-server build
-cd packages/admin && npx next build --no-lint && cd ../..
+cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs && cd ../..
 # 3. stage the release bundle — HALO_RELEASE=1 stamps the bare version
 #    (0.1.2), NOT the default <version>-<sha>: a `-<sha>` suffix is a semver
 #    prerelease that `npm install` skips and never tags as `latest`.

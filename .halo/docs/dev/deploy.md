@@ -29,7 +29,7 @@ pnpm install
 
 pnpm --filter @turmind/halo-core build
 pnpm --filter @turmind/halo-server build
-cd packages/admin && npx next build --no-lint && cd ../..
+cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs && cd ../..
 ```
 
 ## 2. Create the runtime directory
@@ -117,7 +117,7 @@ Browser: http://localhost:9527
 ```bash
 cd /path/to/halo
 
-cd packages/admin && npx next build --no-lint && cd ../..
+cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs && cd ../..
 pnpm --filter @turmind/halo-server build
 
 # 用 lock 文件里的 pid 确保旧进程彻底退出（避免孤儿进程继续长轮询）

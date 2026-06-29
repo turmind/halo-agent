@@ -16,7 +16,7 @@
 ### Frontend build (web only)
 
 ```bash
-cd packages/admin && npx next build --no-lint
+cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs
 ```
 
 ### Backend redeploy (server only)
@@ -31,7 +31,7 @@ nohup node dist/index.js >> /dev/null 2>&1 &   # HALO_PASSWORD read from env/con
 ### Full deploy in one go
 
 ```bash
-cd packages/admin && npx next build --no-lint
+cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs
 cd ../server && npx tsc
 kill -9 $(ss -tlnp | grep ':9527' | grep -oP 'pid=\K\d+') 2>/dev/null
 sleep 1

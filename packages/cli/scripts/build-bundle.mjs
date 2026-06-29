@@ -222,11 +222,15 @@ if (fs.existsSync(adminOut)) {
   console.log('[build-bundle] copied admin-out/')
 
   // Copy Monaco's min/vs into admin-out/monaco/vs so the editor works offline.
-  // copy-monaco.mjs does this for the local dev/next-start flow; here we
-  // replicate it for the published bundle (monaco-editor is a devDependency and
-  // isn't installed at the user's machine, so the files must ship inside admin-out).
+  // copy-monaco.mjs already stages this into admin/out during the admin `build`
+  // script, so the copyTree above usually carries monaco across already. We
+  // re-copy here as a backstop (monaco-editor is admin's devDependency, not
+  // installed on the user's machine, so the files must ship inside admin-out).
+  // Resolve from ADMIN_ROOT, NOT this script's dir: monaco-editor lives in
+  // admin/node_modules, never cli's, so createRequire(import.meta.url) can't
+  // find it — that silent miss is how a monaco-less 0.1.7 shipped.
   const { createRequire } = await import('node:module')
-  const req = createRequire(import.meta.url)
+  const req = createRequire(path.join(ADMIN_ROOT, 'package.json'))
   try {
     const monacoPkg = req.resolve('monaco-editor/package.json')
     const vsSrc = path.join(path.dirname(monacoPkg), 'min', 'vs')
@@ -235,8 +239,19 @@ if (fs.existsSync(adminOut)) {
     fs.cpSync(vsSrc, vsDst, { recursive: true })
     console.log('[build-bundle] copied monaco min/vs → admin-out/monaco/vs')
   } catch (e) {
-    console.warn(`[build-bundle] WARNING: could not copy monaco-editor: ${e.message}`)
+    console.warn(`[build-bundle] WARNING: backstop monaco copy failed: ${e.message}`)
   }
+
+  // Hard gate: whether monaco came from admin/out or the backstop above, the
+  // loader MUST exist. Without it the editor fetches loader.js, gets the 404
+  // HTML fallback, and throws "Unexpected token '<'" — exactly the 0.1.7
+  // regression. Never ship a silently monaco-less bundle again: fail loudly.
+  const loaderJs = path.join(PUB_DIR, 'admin-out', 'monaco', 'vs', 'loader.js')
+  if (!fs.existsSync(loaderJs)) {
+    console.error('[build-bundle] FATAL: admin-out/monaco/vs/loader.js missing — Monaco editor would 404. Run `pnpm --filter @turmind/halo-admin build` (it runs copy-monaco) before bundling.')
+    process.exit(1)
+  }
+  console.log('[build-bundle] verified monaco loader.js present')
 } else {
   console.warn('[build-bundle] WARNING: packages/admin/out/ not found — run `pnpm --filter @turmind/halo-admin build` first')
 }
