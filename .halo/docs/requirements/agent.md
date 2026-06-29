@@ -63,7 +63,8 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 - **Unset or empty `[]` = no delegation** — no session tools, no roster. (Breaking change from the earlier "unset = every agent reachable" default; agents that relied on implicit-all must now list their team explicitly.)
 - Enforced server-side on `start_session` and `query_agent`, not just in the roster — a call to a non-team agent is rejected.
 - `self` is treated like any other agent: shown in the picker tagged `(you)`. Include the agent's own id to allow parallel self-spawn (the seed `default` agent lists `default`); omit it to block self-spawn — no special-casing.
-- **Admin form**: the Team multi-select appears only when `start_session` is enabled. Self is pinned and locked-on; all teammates are checked by default. Unchecking some writes an explicit whitelist; re-checking everyone clears the field (back to "all").
+- **Admin form**: the Team is an always-present chip picker (one chip per delegatable agent, `self` tagged `(you)`). Checking a chip toggles that id in the `team` list; unchecking the last one drops the field entirely (`undefined` = delegation off), mirroring the server's "non-empty team" switch.
+- **Picker only offers effective, enabled agents.** A chip shows iff the *effective* agent for that id is runnable — same resolve-then-check the runtime uses: a workspace agent shadows the same-id global (the overridden global is skipped), then anything disabled is dropped. So a global stays out of the picker when its workspace override is disabled, even though that global's own record isn't flagged disabled. Matches the chat / cron selectors and the runtime roster — you can never pick a teammate that can't actually run.
 
 ### Skill selection
 `GET /api/skills?projectId=xxx` lists available skills; `agent.yaml`'s `skills` references them by id.

@@ -206,13 +206,19 @@ export function AgentManagementMain() {
   const globalAgents = agents.filter((a) => a.scope === 'global' && !a.internal)
   const workspaceAgents = agents.filter((a) => a.scope === 'workspace' && !a.internal)
 
-  // Delegation targets for the Team picker: non-internal agents, deduped by id
-  // (a workspace agent can shadow a global one with the same id — the `team`
-  // whitelist keys on id, so one chip per id). Workspace wins the label since
-  // that's the effective config.
+  // Delegation targets for the Team picker. A target is offerable iff the
+  // *effective* agent for that id is runnable — same resolve-then-check the
+  // runtime uses (isAgentDisabled): workspace shadows global for the same id,
+  // so skip the overridden global shadow first, then drop whatever's disabled.
+  // Checking each record's own `disabled` flag would be wrong: a global that
+  // happens to be enabled must still be excluded when its workspace override is
+  // disabled. Matches the chat / cron selectors' `!overridden && !disabled`.
   const delegatableAgents = (() => {
     const byId = new Map<string, { id: string; name: string }>()
-    for (const a of [...globalAgents, ...workspaceAgents]) byId.set(a.id, { id: a.id, name: a.name })
+    for (const a of [...globalAgents, ...workspaceAgents]) {
+      if (a.overridden || a.disabled) continue
+      byId.set(a.id, { id: a.id, name: a.name })
+    }
     return [...byId.values()]
   })()
 
