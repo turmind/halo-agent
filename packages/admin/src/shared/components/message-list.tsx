@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage, ToolCallInfo, ContentBlock } from '@/shared/types'
@@ -56,29 +56,51 @@ function ExchangeView({ messages, debugMode }: { messages: ChatMessage[]; debugM
   return (
     <div className="flex flex-col">
       {exchanges.map((ex) => (
-        <div key={ex.user.id} className="border-b border-[var(--border)]/50 last:border-b-0">
-          {ex.user.role === 'user' ? (
-            parseSubAgentReport(ex.user.content) ? (
-              <SubAgentReport content={ex.user.content} />
-            ) : parseCompactSummary(ex.user.content) ? (
-              <CompactSummary content={ex.user.content} />
-            ) : (
-              <UserExchangeHeader content={ex.user.content} localImages={ex.user.localImages} />
-            )
-          ) : (
-            <div className="px-3 py-2">
-              <MessageItem message={ex.user} debugMode={debugMode} />
-            </div>
-          )}
-
-          {ex.responses.length > 0 && (
-            <ExchangeResponses responses={ex.responses} debugMode={debugMode} />
-          )}
-        </div>
+        <ExchangeRow key={ex.user.id} user={ex.user} responses={ex.responses} debugMode={debugMode} />
       ))}
     </div>
   )
 }
+
+/**
+ * One user-turn + its responses, memoized. During streaming the store mutates
+ * only the active assistant message (immutably — every other message keeps its
+ * object reference), so all prior exchanges get identical props and skip
+ * re-render. Without this the whole list re-ran ReactMarkdown on every token,
+ * which made typing stutter as the conversation grew. `buildExchanges` rebuilds
+ * the `responses` array each call, so the custom comparator does a shallow
+ * element-wise compare instead of trusting the array identity.
+ */
+const ExchangeRow = memo(function ExchangeRow({
+  user, responses, debugMode,
+}: { user: ChatMessage; responses: ChatMessage[]; debugMode?: boolean }) {
+  return (
+    <div className="border-b border-[var(--border)]/50 last:border-b-0">
+      {user.role === 'user' ? (
+        parseSubAgentReport(user.content) ? (
+          <SubAgentReport content={user.content} />
+        ) : parseCompactSummary(user.content) ? (
+          <CompactSummary content={user.content} />
+        ) : (
+          <UserExchangeHeader content={user.content} localImages={user.localImages} />
+        )
+      ) : (
+        <div className="px-3 py-2">
+          <MessageItem message={user} debugMode={debugMode} />
+        </div>
+      )}
+
+      {responses.length > 0 && (
+        <ExchangeResponses responses={responses} debugMode={debugMode} />
+      )}
+    </div>
+  )
+}, (prev, next) =>
+  prev.user === next.user &&
+  prev.debugMode === next.debugMode &&
+  prev.responses.length === next.responses.length &&
+  prev.responses.every((m, i) => m === next.responses[i]),
+)
 
 /**
  * Sub-agent report detection — messages forwarded from a child session by the
