@@ -249,7 +249,7 @@ It exists because a plain-text answer is single-pass: the agent loop only re-cal
 [bootstrapPrompt]                                ← prefixed when needsBootstrap (ws > global)
 USER.md                                          ← workspace > global
 AGENT.md                                         ← workspace > global
-## Know Your Team Before You Act                 ← root's roster framing (dropped without start_session / empty whitelist)
+## Know Your Team Before You Act                 ← root's roster framing (dropped when team is empty/unset)
 ## User Instructions                             ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
 ## User Instructions                             ← <ws>/.halo/INSTRUCTIONS.md (workspace root)
 ## Project Knowledge                             ← <ws>/.halo/INDEX.md (or nudge)
@@ -281,7 +281,7 @@ allPrompt                                        ← prompts/all/*.md (ws > glob
 Your available tools: ...
 ```
 
-(Sub-agents get the lean `## Your Team` roster — not the root's `## Know Your Team Before You Act` block — and only when they hold `start_session`; no USER.md, no root-scope prompts.)
+(Sub-agents get the lean `## Your Team` roster — not the root's `## Know Your Team Before You Act` block — and only when the agent has a non-empty team; no USER.md, no root-scope prompts.)
 
 ## Directory-scoped instructions
 

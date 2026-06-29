@@ -7,6 +7,7 @@ Manual smoke + regression checklist before a release. Last refreshed for the 202
 - Password: `HALO_PASSWORD` env var (or the random one printed on first startup)
 - Workspace under test: `/path/to/test-workspace`
 - Required workspace agents: `default`, `sleeper`, `test-agent`
+- **Delegation gating (since the team-driven switch):** the agent that *initiates* a delegation must list the target in its `agent.yaml` `team`. The seed `default`'s team is `[default, executor, deep-executor]`, which does **not** include `sleeper` / `test-agent` — so the delegation/inspection cases (A6 `query_agent sleeper`, D1/D5 `start_session sleeper`, G3 `test-agent → sleeper`) require the initiating agent's `team` to contain `sleeper` (and `test-agent`). Add them to the test agent's `team`, or these cases fail with "not in your team / no session tools".
 - Required env vars for the LLM-touching cases: at least one of `KIMI_API_KEY` / `DEEPSEEK_API_KEY` / AWS credentials, configured via Settings page.
 
 **How to use this doc**:

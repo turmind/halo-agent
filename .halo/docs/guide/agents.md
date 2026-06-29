@@ -167,18 +167,23 @@ context:
   maxTokens: 200000                  # max context (default 200000)
   compressAt: 0.8                    # auto-compact trigger (0.8 = compact when 80% full)
 
-# Tool allowlist (strict by name; unlisted tools are not injected)
+# Tool allowlist (strict by name; unlisted tools are not injected).
+# Session/delegation tools are NOT listed here — see `team` below.
 tools:
   - file_read
   - file_write
   - shell_exec
-  - start_session                    # session tools also go in this list
-  - query_session
 
 # Available skills (referenced by ID)
 # When YAML lists skills, the agent automatically receives the activate_skill tool
 skills:
   - code-review
+
+# Delegation: a non-empty `team` is the on/off switch. It grants the whole
+# session-tool bundle (start_session, query_agent, …) AND scopes which agents
+# this one may delegate to. Omit / leave empty = no delegation.
+team:
+  - executor
 
 ```
 

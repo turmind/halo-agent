@@ -307,14 +307,11 @@ Workspace tools are enabled strictly by name in `agent.yaml`'s `tools` list:
 tools:
   - file_read
   - shell_exec
-  - start_session
-  - session_list
-  - query_session
 skills:
   - code-review    # auto-injects activate_skill
 ```
 
-Tools not listed are not injected. `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`).
+Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`).
 
 There is **no implicit default tool set**: `filterTools()` (in `agent-loader.ts`) returns only the tools whose names appear in `agent.yaml`'s `tools:` list. If the field is absent or empty, the agent has zero workspace tools. The admin UI's "Create agent" form scaffolds a fresh agent with an empty `tools: []` for the same reason — fill it in deliberately. The `default` agent's bundled `agent.yaml` lists the common set (`file_read` / `file_write` / `file_edit` / `view_image` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`) that most agents will want, plus `draft` (see Self-review tool above); copy that line if you're starting from scratch.
 

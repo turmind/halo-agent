@@ -80,7 +80,7 @@ Right-click a session → Delete:
 
 ## Session tools (agent-side)
 
-Agents can manage other sessions via tools. Enable them per-agent in `agent.yaml`'s `tools`:
+Agents can manage other sessions via tools. The whole bundle is granted automatically when an agent declares a non-empty `team` in `agent.yaml` (no separate tool checklist); empty or absent `team` = no delegation:
 
 | Tool | Purpose |
 |---|---|

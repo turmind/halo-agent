@@ -2,7 +2,7 @@
  * Comprehensive integration test for the unified session architecture.
  *
  * Covers:
- *   - A: Agent system (init, YAML, list_agents, query_agent, delete protection)
+ *   - A: Agent system (init, YAML, query_agent, delete protection)
  *   - B: Default agent basics (chat, tool calling, multi-turn)
  *   - C: Agent capabilities (prompt caching, thinking mode)
  *   - D: Session tools (start_session, session_list, query_session, stop_session)
@@ -355,7 +355,9 @@ async function main() {
 
   const sessionIdD = `test_session_tools_${Date.now()}`
 
-  // A5 + A6: list_agents + query_agent (tested here because needs LLM)
+  // A6: query_agent (tested here because needs LLM). Target `executor`, which is
+  // in the seed `default`'s team — query_agent is team-gated, so an off-team
+  // target (e.g. sleeper) would be reported not-found.
   {
     send(ws, { type: 'session:clear', sessionId: sessionIdC })
     await waitForType(ws, 'session:cleared')
@@ -363,17 +365,7 @@ async function main() {
     send(ws, { type: 'subscribe', sessionId: sessionIdD, projectId: PROJECT_ID })
     await waitForType(ws, 'state:snapshot')
 
-    // A5: list_agents
-    send(ws, { type: 'chat', sessionId: sessionIdD, projectId: PROJECT_ID, message: 'Use the list_agents tool to show me all available agents. Just list the results, nothing else.' })
-    const eventsA5 = await collectUntil(ws, 'chat:complete', 60000)
-    const listCall = eventsA5.find(e => e.type === 'agent:tool_call' && e.tool === 'list_agents')
-    assert(!!listCall, 'A5: list_agents tool was called')
-
-    const a5Stream = eventsA5.filter(e => e.type === 'chat:stream').map(e => e.text).join('')
-    assert(a5Stream.toLowerCase().includes('sleeper') || a5Stream.toLowerCase().includes('default'), 'A5: list_agents result shown')
-
-    // A6: query_agent
-    send(ws, { type: 'chat', sessionId: sessionIdD, projectId: PROJECT_ID, message: 'Now use query_agent to get detailed info about the "sleeper" agent. Show the results.' })
+    send(ws, { type: 'chat', sessionId: sessionIdD, projectId: PROJECT_ID, message: 'Use query_agent to get detailed info about the "executor" agent. Show the results.' })
     const eventsA6 = await collectUntil(ws, 'chat:complete', 60000)
     const queryCall = eventsA6.find(e => e.type === 'agent:tool_call' && e.tool === 'query_agent')
     assert(!!queryCall, 'A6: query_agent tool was called')
@@ -388,7 +380,7 @@ async function main() {
     send(ws, { type: 'subscribe', sessionId: sessionIdDel, projectId: PROJECT_ID })
     await waitForType(ws, 'state:snapshot')
 
-    send(ws, { type: 'chat', sessionId: sessionIdDel, projectId: PROJECT_ID, message: 'Use start_session to ask the "sleeper" agent: "What is your name? Reply in one sentence."' })
+    send(ws, { type: 'chat', sessionId: sessionIdDel, projectId: PROJECT_ID, message: 'Use start_session to ask the "executor" agent: "What is your name? Reply in one sentence."' })
 
     // Wait longer — delegation involves sub-agent startup + execution + auto-report
     const events = await collectUntil(ws, 'chat:complete', 120000)
@@ -400,11 +392,12 @@ async function main() {
 
     // Verify SQLite has sub-session — query the workspace DB directly
     // (no public REST endpoint lists agent_sessions; admin queries via WS).
+    // Target `executor` is in the seed `default`'s team (delegation is team-gated).
     const dbPath = path.join(PROJECT_ID, '.halo', 'halo.db')
     const { execFileSync } = await import('node:child_process')
     const sqlOut = execFileSync('sqlite3', [dbPath, `select agent_id from agent_sessions where parent_id LIKE '${sessionIdDel}%';`], { encoding: 'utf-8' })
-    const hasSleeper = sqlOut.split('\n').some(line => line.trim() === 'sleeper')
-    assert(hasSleeper, 'D1: Sub-session created for sleeper in SQLite')
+    const hasExecutor = sqlOut.split('\n').some(line => line.trim() === 'executor')
+    assert(hasExecutor, 'D1: Sub-session created for executor in SQLite')
 
     // D7: session_list — ask the agent to list sessions
     send(ws, { type: 'chat', sessionId: sessionIdDel, projectId: PROJECT_ID, message: 'Use the session_list tool to show me all active sessions.' })

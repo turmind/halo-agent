@@ -49,7 +49,7 @@ See [prompt-system.md](prompt-system.md).
 
 ## Session tools
 
-Agents manage other sessions with these tools (enable them by name in `agent.yaml`'s `tools` list). Full schema in [dev/tools.md](../dev/tools.md#session-tools).
+Agents manage other sessions with these tools. The whole 8-tool bundle is granted automatically by a non-empty `team` in `agent.yaml` (listing them under `tools:` has no effect); the `team` ids also scope who's reachable. Full schema in [dev/tools.md](../dev/tools.md#session-tools), gating in [prompt-system.md](prompt-system.md#agent-roster).
 
 | Tool | Purpose |
 |------|---------|
