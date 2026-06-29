@@ -19,7 +19,7 @@ The Source Control **activity-bar entry itself is hidden in non-git workspaces**
 Once the entry is shown, the panel resolves to one of these on open, driven by `GET /api/git/status`:
 
 1. **Not a repo** (`{isRepo: false}`) — the folder has no git work-tree at its root (either no repo at all, or it only sits *inside* an ancestor's repo). Shows an **Initialize Repository** empty state. Never a 500/console error — a non-repo folder is a normal state.
-2. **Repo, no remote** — `GET /api/git/remotes` is empty. Shows an **Add Remote** prompt to guide first publish.
+2. **Repo, no remote** — `GET /api/git/remotes` is empty. Shows an **Add Remote** prompt to guide first publish. Adding a remote is a purely local op with **no commit precondition** — a freshly-`init`'d empty repo can set its remote URL right away (not gated behind "must have a commit first", which would be a mis-applied VSCode *Publish* gate).
 3. **Repo with remote** — the full panel: CHANGES list, commit box, history graph.
 
 ### Ancestor-repo guard
@@ -61,6 +61,10 @@ The file tree colors and badges files by git status (VSCode-style), driven by th
 
 - Commit list from `GET /api/git/log`, newest first; each commit expands to its changed files (`GET /api/git/commit-files`), each file drills into the commit's own diff (`GET /api/git/diff?commit=`).
 - **Ref badges, tiered coloring**: local branch (e.g. `main`) solid/highlighted; remote branch (`origin/main`) dimmed outline, no fill; tag amber; current `HEAD` blue.
+- **Node coloring by push state** (two independent dimensions, mirrors VSCode's graph):
+  - *Color* — a **local-only** commit (not yet on any remote) is bright `--primary` blue so it stands out; a **pushed** commit dims to `--muted-foreground` gray (it has "sunk" onto the remote). Driven by the `pushed: boolean` each commit carries from `GET /api/git/log`.
+  - *Shape* — the **newest** commit (`HEAD`, list head) is a hollow ring (colored border, background fill); every commit below is a solid dot. So the topmost local-only commit reads as a **blue hollow ring**, older unpushed ones as blue solid dots, pushed ones as gray solid dots.
+  - **Pushed判定**: `git-manager` computes unpushed hashes from the *current branch's upstream* when one is set; when the branch has **no upstream but a remote exists**, it falls back to `rev-list HEAD --not --remotes` (commits on HEAD but on no remote branch) — **not** `rev-list HEAD`, which would wrongly paint the entire history local-only and ignore the visible `origin/*` tracking branches.
 - **Infinite scroll**: an IntersectionObserver sentinel at the bottom raises `limit` by a page (50) at a time (`log` is capped server-side at 2000). Stops automatically when fewer than `limit` commits come back (reached the root).
 
 ## Credentials & SSH
@@ -70,7 +74,7 @@ The file tree colors and badges files by git status (VSCode-style), driven by th
   - List shows configured `{host, username}` rows; **the token is never returned to the client / never re-displayed**.
   - Add a new credential without closing the modal (supports adding several in a row).
   - Delete is per-host with an **inline two-step confirm**; deleting actually removes the line from `~/.git-credentials` (idempotent).
-- **SSH**: read-only visibility — lists private keys in `~/.ssh` (with an `encrypted` flag, never key contents) and ssh-agent reachability + loaded-key count.
+- **SSH**: lists private keys in `~/.ssh` (with an `encrypted` flag, never key contents) and ssh-agent reachability + loaded-key count. An encrypted, not-yet-loaded key shows an **Unlock** button → inline passphrase field → on submit, loads the key into the shared ssh-agent (`POST /api/git/ssh/unlock`) and flips it to **Loaded** — no copying an `ssh-add` command into the terminal. The passphrase reaches `ssh-add` only through a throwaway `SSH_ASKPASS` helper (never argv / disk / log), and the helper is **answer-once** so a wrong passphrase fails fast instead of hanging on a retry prompt. "Restart needs re-unlock" note retained (the agent is process-scoped).
 - **Remote protocol switch**: rewrite `origin` between HTTPS and scp-style SSH (`GET/POST /api/git/remote/protocol`).
 
 ## Out of scope (this round)
