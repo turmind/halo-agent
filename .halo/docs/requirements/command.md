@@ -34,7 +34,7 @@ Built-in verb (no access gate beyond ownership). Prints the **session tree** for
 - Each line carries the agent name, a **status glyph** — 🟢 running / ⏹ stopped / 📦 archived — and two timestamps: created (`建` / `new`) and last-active (`活` / `act`).
 - A header line names the root id (last 12 chars) and its title.
 
-Resolution starts from the caller's active session, walks up to its root (`id.split('>')[0]`), then lists descendants via `SessionManager.listDescendants`. **Access scoping**: non-`full` users only see a tree whose root id starts with their own `sessionPrefix` — otherwise the command refuses (a readonly/guest user can't inspect another user's tree).
+Resolution starts from the caller's active session, walks up to its root (`id.split('>')[0]`), then lists descendants via `SessionManager.listDescendants`. **Access scoping**: non-`full` users only see a tree whose root id starts with their own `sessionPrefix` — otherwise the command refuses (a readonly/guest user can't inspect another user's tree). The same own-tree scoping applies to **agents**: the by-id session tools (`query_session` / `interrupt_session` / `stop_session` / `archive_session` / `get_session_output`) only act on sessions sharing the caller's root id — see [session.md → By-id tool scoping](../design/session.md#by-id-tool-scoping).
 
 ## Command aliases
 
