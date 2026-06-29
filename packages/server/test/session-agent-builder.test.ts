@@ -218,3 +218,57 @@ describe('delegation — the session-tool bundle is gated on a non-empty team', 
     expect(prompt).not.toContain('Matey')
   })
 })
+
+describe('delegation — by-id session tools are scoped to the caller\'s own tree', () => {
+  // query/interrupt/stop/archive/get_session_output take an arbitrary session_id.
+  // Without an ownership gate, an agent on one root could stop/archive/read a
+  // foreign user's tree on a shared workspace. The gate is "same root id"
+  // (left-most `>` segment); a cross-tree id must be refused as not-found and
+  // must NOT reach the SessionManager method underneath.
+  function toolByName(sm: SessionManager, callerId: string, name: string) {
+    const tool = sm.createSessionTools(callerId).find((t) => t.name === name)
+    if (!tool) throw new Error(`tool ${name} not built`)
+    return tool
+  }
+
+  it('refuses cross-tree stop/archive/query/get_output without touching the target', async () => {
+    const sm = new SessionManager(ws)
+    // Caller lives on root A; victim is an unrelated root B with a child.
+    seedSession(sm, 'web_a_root', 'agent', null)
+    seedSession(sm, 'web_b_root', 'agent', null)
+    seedSession(sm, 'web_b_root>child', 'agent', 'web_b_root')
+
+    for (const [name, args] of [
+      ['stop_session', { session_id: 'web_b_root' }],
+      ['archive_session', { session_id: 'web_b_root' }],
+      ['query_session', { target_session_id: 'web_b_root', message: 'hi' }],
+      ['get_session_output', { session_id: 'web_b_root>child' }],
+      ['interrupt_session', { session_id: 'web_b_root', message: 'stop' }],
+    ] as const) {
+      const out = await toolByName(sm, 'web_a_root', name).callback(args)
+      const parsed = JSON.parse(out as string)
+      expect(parsed.code).toBe(1)
+      expect(parsed.error).toMatch(/not found/)
+    }
+
+    // The victim tree must be untouched: not archived, not stopped.
+    const rows = sm.getDb().select().from(agentSessions).all()
+    for (const r of rows.filter((x) => x.id.startsWith('web_b_root'))) {
+      expect(r.archivedAt).toBeNull()
+      expect(r.stoppedAt).toBeNull()
+    }
+  })
+
+  it('allows operating on a session in the caller\'s own tree (gate lets it through)', async () => {
+    const sm = new SessionManager(ws)
+    seedSession(sm, 'web_a_root', 'agent', null)
+    seedSession(sm, 'web_a_root>kid', 'agent', 'web_a_root')
+
+    // Stopping a same-root (cold, DB-only) session passes the gate and reaches
+    // stopSession, which marks stoppedAt by id — no network, no model.
+    const out = await toolByName(sm, 'web_a_root', 'stop_session').callback({ session_id: 'web_a_root>kid' })
+    expect(JSON.parse(out as string).code).toBe(0)
+    const kid = sm.getDb().select().from(agentSessions).all().find((r) => r.id === 'web_a_root>kid')
+    expect(kid?.stoppedAt).not.toBeNull()
+  })
+})

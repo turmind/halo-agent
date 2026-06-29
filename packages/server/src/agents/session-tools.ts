@@ -35,6 +35,18 @@ async function callerTeamFor(sm: SessionManagerInternals, sessionId: string): Pr
   return yaml?.team
 }
 
+/** Object-level authorization for the by-id session tools (query / interrupt /
+ *  stop / archive / get_output). Hierarchical session ids are `root>child>…`,
+ *  so the root is the left-most `>` segment (mirrors SessionManager's private
+ *  findRootSessionId). A caller may only touch sessions in its own tree —
+ *  without this, any agent could enumerate `.halo/sessions/` for a foreign
+ *  root id and stop/archive/read another user's tree on a shared workspace.
+ *  Pure string math, no DB; gate at the callback (not in the shared SM methods,
+ *  which are also reached by already-authorized user paths + auto-report). */
+function isSameTree(a: string, b: string): boolean {
+  return a.split('>')[0] === b.split('>')[0]
+}
+
 export function buildSessionTools(sm: SessionManagerInternals, sessionId: string): ToolDef[] {
   const startSessionTool: ToolDef = {
     name: 'start_session',
@@ -152,6 +164,10 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       const params = input as { target_session_id: string; message: string }
       console.debug(`[SessionManager] query_session tool called by ${sessionId} → target ${params.target_session_id} — message: ${params.message.slice(0, 150)}`)
 
+      if (!isSameTree(params.target_session_id, sessionId)) {
+        return JSON.stringify({ code: 1, error: `session ${params.target_session_id} not found` })
+      }
+
       const message = params.message
 
       // Emit agent_start so the root session's event-processor initializes a sub-session
@@ -181,6 +197,10 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
     callback: async (input: unknown) => {
       const params = input as { session_id: string; message: string }
       try {
+        if (!isSameTree(params.session_id, sessionId)) {
+          return JSON.stringify({ code: 1, error: `session ${params.session_id} not found` })
+        }
+
         const message = params.message
 
         const sessionInfo = sm.getSessionById(params.session_id)
@@ -211,6 +231,9 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
     callback: async (input: unknown) => {
       const params = input as { session_id: string }
       try {
+        if (!isSameTree(params.session_id, sessionId)) {
+          return JSON.stringify({ code: 1, error: `session ${params.session_id} not found` })
+        }
         await sm.stopSession(params.session_id)
         return JSON.stringify({ code: 0, message: `Session ${params.session_id} stopped.` })
       } catch (err) {
@@ -230,6 +253,9 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
     callback: async (input: unknown) => {
       const params = input as { session_id: string }
       try {
+        if (!isSameTree(params.session_id, sessionId)) {
+          return JSON.stringify({ code: 1, error: `session ${params.session_id} not found` })
+        }
         const count = await sm.archiveSessionTree(params.session_id)
         return JSON.stringify({ code: 0, message: `Archived ${count} session(s).` })
       } catch (err) {
@@ -248,6 +274,9 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
     },
     callback: (input: unknown) => {
       const params = input as { session_id: string }
+      if (!isSameTree(params.session_id, sessionId)) {
+        return JSON.stringify({ code: 1, error: `session ${params.session_id} not found` })
+      }
       return sm.getSessionOutput(params.session_id)
     },
   }
