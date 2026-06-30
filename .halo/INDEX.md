@@ -18,7 +18,7 @@ For Docker / CI use `halo setup --non-interactive` and supply credentials via `H
 
 ## Tech Stack
 
-- **Monorepo**: pnpm workspace (packages/core, server, admin, cli)
+- **Monorepo**: pnpm workspace (packages/core, server, admin, cli, desktop)
 - **packages/server**: Hono + WebSocket (API + agent orchestration + static frontend), port 9527
 - **packages/admin**: Next.js 15 static export → `out/`, served directly by Hono
 - **Agent framework**: custom agent loop + per-provider runtime (AWS Bedrock Claude / Kimi / DeepSeek / MiniMax / Qwen / Hunyuan / Doubao / generic OpenAI / generic Anthropic)
@@ -34,8 +34,8 @@ When no existing category fits, create a new folder. File names match module nam
 - [requirements/](docs/requirements/) — Product requirements ("what to build"), organized by module
 - [design/](docs/design/) — Architecture / protocols / data flow ("how it works")
 - [dev/](docs/dev/) — API, tools, deployment, environment ("how to run it")
-- [test/](docs/test/) — Test cases ("how to verify")
-- [plans/](docs/plans/) — WIP proposals and open issues ("what's next")
+
+`docs/plans/` (WIP proposals, "what's next") and `docs/test/` (test cases) are **local-only** — gitignored and excluded from the published npm bundle, so they exist on a maintainer's checkout but not in the public repo or installed package.
 
 ## Channels
 
@@ -67,7 +67,7 @@ Outbound delegation is what the `acp` skill exists for. As soon as you run more 
 
 ## Self-Evolution
 
-Active workspaces learn from their own conversations: when a user invokes `/evo` (or pre-compact fires), an `__evo_agent__` analyzes the session, drafts a prompt-file improvement, runs a sandbox dry-run, and an `__score__` agent grades the result. Reviewer approves in the **Evolution** admin tab → `__apply_agent__` merges into a sandbox, wrapper re-runs regression scoring, then publishes to the workspace's `.halo/`. See [design/evolution.md](docs/design/evolution.md) for the full design (wrapper-orchestrated Run/Apply phases); early proposal notes in [plans/self-evolution.md](docs/plans/self-evolution.md).
+Active workspaces learn from their own conversations: when a user invokes `/evo` (or pre-compact fires), an `__evo_agent__` analyzes the session, drafts a prompt-file improvement, runs a sandbox dry-run, and an `__score__` agent grades the result. Reviewer approves in the **Evolution** admin tab → `__apply_agent__` merges into a sandbox, wrapper re-runs regression scoring, then publishes to the workspace's `.halo/`. See [design/evolution.md](docs/design/evolution.md) for the full design (wrapper-orchestrated Run/Apply phases); early proposal notes in `plans/self-evolution.md` (local-only).
 
 Key state lives in:
 - `~/.halo/global/evo.db` — global queue tables `evolution_runs` + `evolution_applies` (separate from per-workspace sqlite)
@@ -80,7 +80,7 @@ Driven from `packages/server/src/evolution/` (ticker, wrapper, enqueue helpers) 
 
 ## Cron Tasks
 
-Scheduled agent runs (cross-workspace) from the **Cron** admin tab. A user defines `(workspace, agent, prompt, schedule-or-runAt, channel-targets)`; the server schedules via croner; on fire, a `halo cli` child runs the prompt with a stable session id `cron-<jobId>` (created on first run, resumed on subsequent runs so the conversation accumulates over time and the user can review history in the Sessions tab); captured stdout fans out to bound channel accounts and the run is recorded in an audit log. UI updates are pushed via WS (`cron:job_changed` / `cron:run_changed`) — no client polling. Two trigger modes: **recurring** (5-field cron expression) and **one-shot at-mode** (`runAt` epoch ms, auto-disables after fire). See [design/cron.md](docs/design/cron.md) for the full design; early proposal notes in [plans/cron-tasks.md](docs/plans/cron-tasks.md).
+Scheduled agent runs (cross-workspace) from the **Cron** admin tab. A user defines `(workspace, agent, prompt, schedule-or-runAt, channel-targets)`; the server schedules via croner; on fire, a `halo cli` child runs the prompt with a stable session id `cron-<jobId>` (created on first run, resumed on subsequent runs so the conversation accumulates over time and the user can review history in the Sessions tab); captured stdout fans out to bound channel accounts and the run is recorded in an audit log. UI updates are pushed via WS (`cron:job_changed` / `cron:run_changed`) — no client polling. Two trigger modes: **recurring** (5-field cron expression) and **one-shot at-mode** (`runAt` epoch ms, auto-disables after fire). See [design/cron.md](docs/design/cron.md) for the full design; early proposal notes in `plans/cron-tasks.md` (local-only).
 
 Channel dispatch is **registry-based**: each channel module ships its own `cron-dispatcher.ts` and registers at boot via `registerCronDispatcher({ channelType, dispatch, listTargets? })`. `cron/dispatcher.ts` itself is channel-agnostic (no switch). Adding a new channel = one file + one registration line; no edits in `cron/` or `routes/cron.ts`.
 

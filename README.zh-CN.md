@@ -12,7 +12,7 @@
 
 ## 亮点
 
-**🧬 会自我进化。** Halo 从自己的对话里学习。执行 `/note`（或 pre-compact 触发）后，内置的进化 Agent 会分析本次会话、起草对自身提示词文件的改进、在沙箱里 dry-run，再由打分 Agent 评估结果。你在 **Evolution** 标签页审核通过 → 改动合并回工作区。Agent 真的在打磨自己的指令，而你是审核人。
+**🧬 会自我进化。** Halo 从自己的对话里学习。执行 `/evo`（或 pre-compact 触发）后，内置的进化 Agent 会分析本次会话、起草对自身提示词文件的改进、在沙箱里 dry-run，再由打分 Agent 评估结果。你在 **Evolution** 标签页审核通过 → 改动合并回工作区。Agent 真的在打磨自己的指令，而你是审核人。
 
 ![Agents 面板 —— 全局 Agent，以及驱动自进化的内置 Apply / Evolution / Score Agent](assets/agents.jpg)
 
@@ -132,10 +132,6 @@ Halo 还很年轻，且为单人维护。它能跑，但请把它当作早期项
 - **单人维护，外部验证有限。** 预期会有粗糙之处；API 与磁盘格式在版本间仍可能变化。
 
 如果你遇到问题或意外行为，欢迎提 issue——现阶段早期反馈非常有价值。
-
-## Roadmap
-
-见 [`.halo/docs/plans/roadmap.md`](.halo/docs/plans/roadmap.md)。
 
 ## License
 

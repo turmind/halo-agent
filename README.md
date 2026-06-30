@@ -12,7 +12,7 @@
 
 ## Highlights
 
-**🧬 It improves itself.** Halo learns from its own conversations. Run `/note` (or let pre-compact fire) and an internal evolution agent analyzes the session, drafts an improvement to its own prompt files, dry-runs it in a sandbox, and a scoring agent grades the result. You approve in the **Evolution** tab → the change merges back into the workspace. The agent literally refines its own instructions, with you as the reviewer.
+**🧬 It improves itself.** Halo learns from its own conversations. Run `/evo` (or let pre-compact fire) and an internal evolution agent analyzes the session, drafts an improvement to its own prompt files, dry-runs it in a sandbox, and a scoring agent grades the result. You approve in the **Evolution** tab → the change merges back into the workspace. The agent literally refines its own instructions, with you as the reviewer.
 
 ![Agents panel — global agents plus the internal Apply / Evolution / Score agents that power self-evolution](assets/agents.jpg)
 
@@ -133,10 +133,6 @@ Halo is young and single-maintainer. It runs, but treat it as an early-stage pro
 - **Single maintainer, minimal external validation.** Expect rough edges; APIs and on-disk formats may still change between versions.
 
 If you hit something broken or surprising, please open an issue — early feedback is genuinely useful right now.
-
-## Roadmap
-
-See [`.halo/docs/plans/roadmap.md`](.halo/docs/plans/roadmap.md) for what's coming next.
 
 ## License
 

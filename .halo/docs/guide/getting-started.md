@@ -6,8 +6,9 @@ What to do the first time you open Halo.
 
 Open `http://localhost:9527` (or your deployment URL) in a browser and enter the password.
 
-- The default password is printed to the **server console** (auto-generated if you haven't set `HALO_PASSWORD`)
-- You can also pin a password via `server.password` in `~/.halo/secrets/config.yaml`
+- Set the password during `halo setup` (interactive) — it's stored as a scrypt hash in `~/.halo/secrets/config.yaml`
+- Or supply it via the `HALO_PASSWORD` env var (handy for CI / Docker), which takes precedence over the stored hash
+- If neither is set, the server refuses to start (it prints `admin password not configured` and exits)
 
 ## Open a workspace
 
