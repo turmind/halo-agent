@@ -705,29 +705,35 @@ function CollapsibleContent({ children, maxLines = 2, className }: { children: R
   const [clamped, setClamped] = useState(false)
   const [expanded, setExpanded] = useState(false)
 
-  // Debounced measure. The previous synchronous setClamped on every
-  // `children` change caused React error #185 (max update depth) when
-  // a streaming agent's tool_result chunk pushed `scrollHeight` right
-  // through the `maxLines * 20 + 4` threshold: setClamped → re-render
-  // with `maxHeight` style applied → scrollHeight clamps just under the
-  // boundary → setClamped(false) → ... feedback loop. Schedule the
-  // measure via setTimeout(0) (not rAF — rAF can fire mid-render under
-  // React 19 concurrent mode and re-trigger the loop) so we always
-  // measure *after* the current render tree commits and never inside
-  // it. Also gate the read of scrollHeight to the post-commit phase.
+  // Measure with a ResizeObserver, not a one-shot setTimeout. The content
+  // lives inside a `display:none`-toggled panel (the chat tab in
+  // bottom-panel.tsx hides via `'hidden'` rather than unmounting), and
+  // sub-agent reports arrive asynchronously — usually while the user is on
+  // another tab, so the panel is hidden at mount. A `display:none` element
+  // reports `scrollHeight === 0`, so a one-shot measure read 0, decided "not
+  // overflowing", and — because ExchangeRow is memoized and the report
+  // content never changes again — never re-measured: the Show more button
+  // never appeared and long reports rendered fully expanded. A
+  // ResizeObserver re-fires when the panel becomes visible (0 → real
+  // height), so the measure self-corrects.
+  //
+  // The callback runs after layout (never mid-render), and the idempotent
+  // `prev === next ? prev` guard plus the hysteresis gap (threshold
+  // `maxLines*20 + 4` vs the `maxLines*20` clamp height) keep it from
+  // oscillating — the feedback loop that previously caused React error #185.
+  // After the clamp lands, the element's box height stops changing, so the
+  // observer goes quiet instead of re-triggering on every streamed chunk.
   useEffect(() => {
     const el = contentRef.current
     if (!el) return
-    const handle = setTimeout(() => {
-      // Read after commit. Use a small hysteresis so we don't oscillate
-      // around the exact threshold when the rendered DOM clamps height
-      // to `maxLines * 20`.
-      const threshold = maxLines * 20 + 4
+    const threshold = maxLines * 20 + 4
+    const ro = new ResizeObserver(() => {
       const next = el.scrollHeight > threshold
       setClamped((prev) => prev === next ? prev : next)
-    }, 0)
-    return () => clearTimeout(handle)
-  }, [children, maxLines])
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [maxLines])
 
   return (
     <div className={cn('relative', className)}>
