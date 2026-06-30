@@ -19,15 +19,29 @@
  */
 import { homedir } from 'node:os'
 import { basename } from 'node:path'
-import * as pty from 'node-pty'
+import { createRequire } from 'node:module'
+import type * as ptyTypes from 'node-pty'
 import { config } from '../config.js'
 import { sendJson } from './event-processor.js'
 import type { WebSocket } from 'ws'
 
+// Load node-pty lazily on first terminal spawn, not at module eval. A static
+// `import * as pty from 'node-pty'` is hoisted to the bundle top, so the native
+// pty binary loads for every process that merely bundles server code —
+// including lightweight cli paths (halo acp / setup) that never open a
+// terminal. createRequire keeps it a runtime require esbuild won't hoist; the
+// result is cached after the first call. start() stays synchronous.
+const requireFromHere = createRequire(import.meta.url)
+let ptyModule: typeof ptyTypes | null = null
+function getPty(): typeof ptyTypes {
+  if (!ptyModule) ptyModule = requireFromHere('node-pty') as typeof ptyTypes
+  return ptyModule
+}
+
 const TERMINAL_GRACE_MS = config.timeout.terminalGrace
 
 interface PersistentTerminal {
-  pty: pty.IPty
+  pty: ptyTypes.IPty
   id: string
   /** Active WS to forward output to. null while detached. */
   currentWs: WebSocket | null
@@ -114,7 +128,7 @@ export class TerminalManager {
       ? ['-l']
       : []
 
-    const child = pty.spawn(shell, args, { name: 'xterm-256color', cols, rows, cwd, env: termEnv })
+    const child = getPty().spawn(shell, args, { name: 'xterm-256color', cols, rows, cwd, env: termEnv })
 
     const t: PersistentTerminal = {
       pty: child,

@@ -111,7 +111,16 @@ export function main(argv: string[] = process.argv.slice(2)): void {
   process.stderr.write(`[acp-adapter] connected to ${config.baseUrl}, workspace=${config.workspace}\n`)
 }
 
-// Run when invoked directly. Allows `node dist/index.js …` and `halo acp …`.
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('/acp-adapter/dist/index.js')) {
+// Run only when this file is the process entry point (`node …/acp-adapter/dist/index.js`).
+// `halo acp` does NOT rely on this guard — cmdAcp calls `mod.main(subArgs)` explicitly.
+//
+// The guard is intentionally NOT `import.meta.url === file://${process.argv[1]}`: in the
+// desktop bundle esbuild inlines this module into the cli's single-file `dist/index.js`,
+// where `import.meta.url` resolves to that cli entry — identical to `process.argv[1]`. That
+// made the guard fire on `halo acp`, calling main() with no argv (defaulting to
+// process.argv.slice(2) = ['acp']) before cmdAcp ran, so the parser rejected `acp` itself
+// with "unknown argument: acp". The path-suffix check can only match a standalone adapter
+// file, never the inlined cli entry, so it is safe under bundling.
+if (process.argv[1]?.endsWith('/acp-adapter/dist/index.js')) {
   main()
 }

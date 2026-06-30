@@ -11,7 +11,7 @@
  * stays responsive, and a file created in a deep, never-"expanded" subdirectory
  * still fires — no lazy per-directory subscription needed.
  */
-import watcher, { type AsyncSubscription } from '@parcel/watcher'
+import type { AsyncSubscription } from '@parcel/watcher'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -100,6 +100,10 @@ export class WorkspaceWatcher {
 
     this.workspaceRoot = workspaceRoot
     try {
+      // Dynamic import so the native @parcel/watcher binary loads only when a
+      // watch actually starts — keeps lightweight cli paths (halo acp / setup)
+      // from pulling it in just by being bundled alongside server code.
+      const { default: watcher } = await import('@parcel/watcher')
       this.subscription = await watcher.subscribe(workspaceRoot, (err, events) => {
         if (err) {
           console.warn(`[FileWatcher] watcher error on ${workspaceRoot}: ${err.message}`)

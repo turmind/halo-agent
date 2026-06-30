@@ -3,10 +3,17 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { homedir } from 'node:os'
 import { parseArgs } from 'node:util'
-import { initRuntime, createHarness, listAgents, type Harness } from './harness.js'
-import { runCli } from './cli.js'
-import { runTui } from './tui.js'
+import type { Harness } from './harness.js'
 import type { Lang } from '@turmind/halo-server/channels/shared/i18n'
+
+// harness.js / cli.js / tui.js statically import the whole @turmind/halo-server
+// world (SessionManager, db, sandbox, file-watching, logger). Keeping them as
+// top-level *value* imports meant every subcommand booted that runtime — even
+// `halo acp`, a thin stdio bridge that never touches it, which made the heavy
+// tree (e.g. @parcel/watcher) load (and on a trimmed bundle, fail) before the
+// adapter ran. Load them dynamically inside the commands that actually need a
+// harness (tui / cli / agents / sessions); acp / setup / upgrade / server stay
+// lightweight. `Harness` is a type-only import above (erased at compile time).
 
 // Replaced with a string literal by esbuild's `define` at bundle time (see
 // build-bundle.mjs); 'dev' under tsx. Single source of truth = cli package.json.
@@ -238,6 +245,7 @@ function parseHarnessFlags(argv: string[]): HarnessFlags {
 }
 
 async function buildHarnessFromFlags(flags: HarnessFlags): Promise<Harness> {
+  const { createHarness } = await import('./harness.js')
   return createHarness({
     workspace: flags.workspace ?? process.cwd(),
     agentId: flags.agent,
@@ -660,6 +668,7 @@ async function cmdUpgrade(): Promise<void> {
 }
 
 async function cmdAgents(flags: HarnessFlags): Promise<void> {
+  const { initRuntime, listAgents } = await import('./harness.js')
   await initRuntime()
   const workspace = path.resolve(flags.workspace ?? process.cwd())
   const agents = await listAgents(workspace)
@@ -675,9 +684,9 @@ async function cmdAgents(flags: HarnessFlags): Promise<void> {
 }
 
 async function cmdSessions(flags: HarnessFlags): Promise<void> {
+  const { initRuntime, listSessions } = await import('./harness.js')
   await initRuntime()
   const workspace = path.resolve(flags.workspace ?? process.cwd())
-  const { listSessions } = await import('./harness.js')
   const sessions = listSessions(workspace)
   if (sessions.length === 0) {
     process.stderr.write('No sessions found.\n')
@@ -691,6 +700,8 @@ async function cmdSessions(flags: HarnessFlags): Promise<void> {
 }
 
 async function cmdTui(flags: HarnessFlags): Promise<void> {
+  const { initRuntime } = await import('./harness.js')
+  const { runTui } = await import('./tui.js')
   await initRuntime()
   const harness = await buildHarnessFromFlags(flags)
   attachSigint(harness)
@@ -703,6 +714,8 @@ async function cmdTui(flags: HarnessFlags): Promise<void> {
 }
 
 async function cmdCli(flags: HarnessFlags): Promise<void> {
+  const { initRuntime } = await import('./harness.js')
+  const { runCli } = await import('./cli.js')
   await initRuntime()
 
   // Combine positional args + stdin into the prompt.
