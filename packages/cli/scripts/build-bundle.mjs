@@ -190,12 +190,12 @@ console.log('[build-bundle] wrote bin/halo.js')
 
 // ── 3. copy templates / bundled-docs / admin-out ──────────────────────────
 
-function copyTree(src, dst) {
+function copyTree(src, dst, filter) {
   if (!fs.existsSync(src)) {
     console.warn(`[build-bundle] missing source ${src}, skipping`)
     return
   }
-  fs.cpSync(src, dst, { recursive: true })
+  fs.cpSync(src, dst, { recursive: true, filter })
 }
 
 copyTree(
@@ -212,8 +212,54 @@ const bundledDocsCandidates = [
 ]
 const docsSrc = bundledDocsCandidates.find((p) => fs.existsSync(p))
 if (docsSrc) {
-  copyTree(docsSrc, path.join(PUB_DIR, 'bundled-docs'))
-  console.log(`[build-bundle] copied bundled-docs/ from ${path.relative(REPO_ROOT, docsSrc)}`)
+  // The bundle must never ship anything gitignored. That's the single rule —
+  // *.local.md (host infra: AWS account id, internal domains, EC2/CloudFront
+  // ids), plans/ and test/ (internal WIP) are all gitignored, and so is
+  // anything the maintainer ignores in the future. Rather than hard-code the
+  // list (which drifts out of sync with .gitignore — the root cause of the
+  // 0.1.2–0.1.8 infra leak), ask git directly: gitignored → not shipped.
+  //
+  // `git check-ignore --stdin` answers in one call. It only works when docsSrc
+  // lives inside the git work tree (the `.halo/docs` candidate does; the
+  // `server/bundled-docs` packaging candidate may not, and git may be absent
+  // when building from an unpacked tarball) — so we fall back to a `.local.md`
+  // suffix guard, which is the one exclusion that is itself a hard security
+  // requirement regardless of git.
+  // Feed git every path under docsSrc — both files AND directories — so the
+  // returned set contains ignored dirs (e.g. `plans`, `test`) directly, not
+  // just the files under them. cpSync's filter is asked about each dir before
+  // recursing, so an ignored dir in the set means we skip it whole (no empty
+  // shell left behind).
+  const ignored = (() => {
+    try {
+      const paths = []
+      const walk = (dir) => {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const f = path.join(dir, e.name)
+          paths.push(f)
+          if (e.isDirectory()) walk(f)
+        }
+      }
+      walk(docsSrc)
+      const out = execSync('git check-ignore --stdin', {
+        cwd: docsSrc, input: paths.join('\n'), stdio: ['pipe', 'pipe', 'ignore'],
+      }).toString()
+      return new Set(out.split('\n').map((s) => s.trim()).filter(Boolean))
+    } catch {
+      return null // git unavailable or docsSrc outside a work tree → fall back
+    }
+  })()
+  const docsFilter = (p) => {
+    if (p.endsWith('.local.md')) return false           // hard security guard, git-independent
+    if (ignored) return !ignored.has(p)                  // primary rule: gitignored (file or dir) → excluded
+    // Fallback when git can't answer: replicate the known gitignored dirs.
+    const rel = path.relative(docsSrc, p)
+    if (rel === 'plans' || rel.startsWith('plans' + path.sep)) return false
+    if (rel === 'test' || rel.startsWith('test' + path.sep)) return false
+    return true
+  }
+  copyTree(docsSrc, path.join(PUB_DIR, 'bundled-docs'), docsFilter)
+  console.log(`[build-bundle] copied bundled-docs/ from ${path.relative(REPO_ROOT, docsSrc)}${ignored ? ` (excluded ${ignored.size} gitignored)` : ' (git unavailable — used static fallback)'}`)
 }
 
 const adminOut = path.join(ADMIN_ROOT, 'out')

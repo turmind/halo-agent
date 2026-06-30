@@ -396,6 +396,26 @@ function fixParcelWatcherIn(parcelScope, watcherPkgDir) {
   fs.rmSync(path.join(parcelScope, tgz), { force: true })
 }
 
+// SECURITY: delete any *.local.md from a staged tree. These hold host-local
+// infra details (AWS account id, internal domains, EC2/CloudFront ids) and are
+// gitignored — but the cli bundle copies the whole bundled-docs tree, so a
+// belt-and-braces sweep here keeps them out of the shipped dmg/exe even if an
+// upstream dist-pub ever leaks one (root cause of the 0.1.2–0.1.8 npm leak).
+function stripLocalDocs(root) {
+  const docsDir = path.join(root, 'bundled-docs')
+  if (!fs.existsSync(docsDir)) return
+  let removed = 0
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (e.name.endsWith('.local.md')) { fs.rmSync(p, { force: true }); removed++ }
+    }
+  }
+  walk(docsDir)
+  if (removed > 0) console.log(`[stage] stripped ${removed} *.local.md from ${path.relative(REPO_ROOT, root)}`)
+}
+
 // Stage the CLI runtime (halo tui / cli / setup / acp) as a self-contained
 // tree under resources/cli-runtime: the esbuild single-file bundle + its own
 // flat prod node_modules. It's deliberately separate from server-runtime —
@@ -416,6 +436,7 @@ function stageCliRuntime() {
   //    so this is the lean tree; deps are installed next.
   console.log('[stage] copying cli bundle → cli-runtime')
   fs.cpSync(CLI_PUB, CLI_RT, { recursive: true })
+  stripLocalDocs(CLI_RT)
 
   // 3. Install prod deps with npm (not pnpm): dist-pub/package.json is a plain
   //    flat dependency list, and npm produces a flat real-directory
@@ -647,6 +668,7 @@ async function fastResync() {
     const src = path.join(CLI_PUB, sub)
     if (fs.existsSync(src)) syncDir(src, path.join(CLI_RT, sub), `cli-runtime/${sub}`)
   }
+  stripLocalDocs(CLI_RT)
 
   // 3. resources/admin-out (served by the desktop server).
   syncDir(path.join(REPO_ROOT, 'packages', 'admin', 'out'), ADMIN_OUT_DST, 'admin-out')

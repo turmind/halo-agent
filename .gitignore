@@ -93,6 +93,12 @@ packages/cli/dist-pub/
 .halo/docs/dev/desktop-packaging.local.md
 .halo/docs/dev/dev-environment.local.md
 
+# Internal WIP — proposals/drafts and test cases. Kept local (the team uses
+# them) but not published to the public repo or the npm bundle; they leak
+# stale info and read as noise to anyone browsing the source.
+.halo/docs/plans/
+.halo/docs/test/
+
 # Local-only scratch — one-off review changelogs and the repo-root tmp/ work
 # dir (migration scripts, verify checklists). Not shipped.
 /tmp/
