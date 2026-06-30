@@ -81,9 +81,34 @@ Two shipped artifacts per release, each built on its native-ish host:
 The `dist:x64` script still exists in `package.json` but is not part of any
 release; don't cut one.
 
-> Linux→win build is freshly established (v0.1.9). Host-specific details
-> (verify commands run on Linux, any Linux-only gotchas) are captured in
-> `desktop-packaging.local.md` if present — read it before building.
+### Building the Windows exe on Linux (the standard path)
+
+```bash
+# from repo root — build upstream artifacts in order (see step 1 below), then:
+cd packages/desktop
+HALO_STAGE_FULL=1 CI=true pnpm dist:win
+```
+
+`HALO_STAGE_FULL=1` is **mandatory** here: a cross-stage must re-run the
+per-target native fixups (`@parcel/watcher-win32-x64` swap, `better-sqlite3`
+win prebuild), which the fast path skips. `wine` must be installed (electron-
+builder runs the nsis maker through it).
+
+Verified on the v0.1.9 build (Linux x86_64 host → win-x64):
+- **No poisoned arm64 dmg to discard.** Unlike a mac host, a Linux `--win` run
+  never triggers the yml's mac target — `dist/` contains only `Halo Setup
+  <ver>.exe` + `.exe.blockmap` + `win-unpacked/`. The "discard the stray
+  arm64 dmg" gotcha below is mac-host-only.
+- **Native arch check** — every staged `.node` must be PE32+ x86-64, no ELF:
+  `find dist/win-unpacked -path '*watcher-*' -name '*.node' | xargs file` and
+  `file dist/win-unpacked/resources/node.exe` (should read `PE32+ ... x86-64`).
+- **Two benign warnings**, both expected: `file source doesn't exist
+  from=.../resources/node` (win bundles `node.exe`, not the Unix `node` — the
+  yml lists both, electron-builder skips the absent one) and `signing is
+  skipped` (no Windows code-sign cert). Neither fails the build.
+
+> A `desktop-packaging.local.md` (gitignored, per-host) may carry extra
+> machine-specific setup — read it first if present.
 
 ## Faster rebuilds
 
