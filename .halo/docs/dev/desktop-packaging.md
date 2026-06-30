@@ -1,9 +1,12 @@
 # Desktop Packaging (Electron / DMG)
 
-How to build the macOS desktop app (`Halo-0.1.5-arm64.dmg`). The desktop
-build is a thin Electron shell (`packages/desktop`) that bundles a self-
-contained server runtime + a private `node` binary + the admin static export,
-then spawns the server as a child process and points a `BrowserWindow` at it.
+How to build the desktop app. We ship two artifacts: **Windows x64**
+(`Halo Setup <ver>.exe`, built on a Linux host) and **macOS arm64**
+(`Halo-<ver>-arm64.dmg`, built on Apple Silicon) — see the target matrix
+below. The desktop build is a thin Electron shell (`packages/desktop`) that
+bundles a self-contained server runtime + a private `node` binary + the admin
+static export, then spawns the server as a child process and points a
+`BrowserWindow` at it.
 
 See [design](../design/) for the server itself; this doc is only about the
 packaging pipeline.
@@ -65,8 +68,22 @@ Output: `packages/desktop/dist/Halo-0.1.5-arm64.dmg` (~143 MB).
 `gen-icon` → `prepack-dmg` (`scripts/stage-runtime.mjs`) → `electron-builder
 --mac --arm64`.
 
-Other targets: `pnpm dist:x64` (Intel mac), `pnpm dist:win` (Windows nsis,
-cross-staged from mac).
+## Release target matrix (current policy)
+
+Two shipped artifacts per release, each built on its native-ish host:
+
+| Target | Host we build on | Command | Notes |
+|--------|------------------|---------|-------|
+| **Windows x64** (`Halo Setup <ver>.exe`, nsis) | **Linux x86_64** | `HALO_STAGE_FULL=1 CI=true pnpm dist:win` | host arch == target arch (x64), so native fixups are low-risk. This is now the standard path — *not* cross-staged from mac. |
+| **macOS arm64** (`Halo-<ver>-arm64.dmg`) | macOS (Apple Silicon) | `CI=true pnpm dist:arm64` | Apple Silicon only. |
+
+**`pnpm dist:x64` (Intel mac) is retired — we no longer ship an Intel build.**
+The `dist:x64` script still exists in `package.json` but is not part of any
+release; don't cut one.
+
+> Linux→win build is freshly established (v0.1.9). Host-specific details
+> (verify commands run on Linux, any Linux-only gotchas) are captured in
+> `desktop-packaging.local.md` if present — read it before building.
 
 ## Faster rebuilds
 
