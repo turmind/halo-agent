@@ -56,6 +56,10 @@ done   # all five must read the same x.y.z, and match the tag you're about to cu
 pnpm --filter @turmind/halo-core build
 pnpm --filter @turmind/halo-server build
 pnpm --filter @turmind/halo-admin build
+# NOTE: acp-adapter is NOT listed here on purpose — build-bundle.mjs now
+# builds every workspace:* dep (core / server / acp-adapter) itself before
+# esbuild inlines them, so its dist can't go stale. This block only covers
+# artifacts the stage script consumes directly (server dist, admin-out).
 
 # 2. stage + package (arm64)
 cd packages/desktop

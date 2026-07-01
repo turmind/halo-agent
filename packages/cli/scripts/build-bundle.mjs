@@ -71,28 +71,42 @@ const stubReactDevtoolsPlugin = {
   },
 }
 
-// Build the external list explicitly: every dep declared in cli + server +
-// core's package.json, except workspace packages. esbuild bundles what's not
-// external — so the workspace deps (reached through pnpm's symlinks) get
-// inlined automatically, no plugin needed. Identify them by their
-// `workspace:` version range rather than a hard-coded name prefix, so a
-// rebrand of the package scope can never silently push them back to external
-// (which would leave the bundle importing a package that isn't installed).
+// Split cli + server + core's declared deps into two lists by their version
+// range: `workspace:` ranges get INLINED by esbuild (reached through pnpm's
+// symlinks), everything else stays EXTERNAL (installed by npm at the user's
+// machine). Identify workspace packages by the range rather than a hard-coded
+// name prefix, so a rebrand of the package scope can never silently push them
+// back to external (which would leave the bundle importing a package that
+// isn't installed).
 function readDepsList() {
   const cli    = JSON.parse(fs.readFileSync(path.join(CLI_ROOT,    'package.json'), 'utf-8'))
   const server = JSON.parse(fs.readFileSync(path.join(SERVER_ROOT, 'package.json'), 'utf-8'))
   const core   = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages', 'core', 'package.json'), 'utf-8'))
-  const names = new Set()
+  const external = new Set()
+  const workspace = new Set()
   for (const pkg of [cli, server, core]) {
     for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {
-      if (typeof range === 'string' && range.startsWith('workspace:')) continue   // workspace — inline
-      names.add(name)
+      if (typeof range === 'string' && range.startsWith('workspace:')) workspace.add(name)
+      else external.add(name)
     }
   }
-  return [...names]
+  return { external: [...external], workspace: [...workspace] }
 }
 
-const EXTERNAL = readDepsList()
+const { external: EXTERNAL, workspace: WORKSPACE_DEPS } = readDepsList()
+
+// esbuild resolves each inlined `workspace:*` dep through its package.json
+// "main" (= dist/, the tsc output), NOT its TS source. So a stale or missing
+// dist means the bundle silently ships old code — this is exactly how an
+// acp-adapter change could get built, committed, and packaged yet never reach
+// users. Build every workspace dep first (one pnpm invocation — pnpm orders
+// them by the dependency graph and dedupes; tsc is incremental so unchanged
+// packages cost ~nothing).
+if (WORKSPACE_DEPS.length > 0) {
+  const filters = WORKSPACE_DEPS.map((n) => `--filter ${n}`).join(' ')
+  console.log(`[build-bundle] building workspace deps before bundling: ${WORKSPACE_DEPS.join(', ')}`)
+  execSync(`pnpm ${filters} build`, { cwd: REPO_ROOT, stdio: 'inherit' })
+}
 
 // Version stamped into the bundle as a compile-time constant. The bundle is a
 // single file with no package.json beside the source, so the server can't read
