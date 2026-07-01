@@ -1,7 +1,7 @@
 {
   "name": "@turmind/halo-desktop",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "Halo desktop wrapper (Electron)",
   "license": "MIT",
   "main": "src/main.cjs",

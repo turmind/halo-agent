@@ -12,6 +12,14 @@ VS Code-style file tree sidebar with multi-select, drag-drop, right-click menu.
 ### Path input
 - Explorer top bar has a path input + 📁🔍 picker button
 - Pressing Enter calls `GET /api/fs/exists?path=...` first — a miss shows an alert, no switch
+- **Recent-workspaces dropdown**: focusing the input shows the most-recently-used list; typing filters it by substring. Each row shows the folder name + full path; clicking one switches to it; a hover "×" removes a single entry. Entries are recorded only after a switch validates the path (so invalid paths never land), in canonical resolved form, MRU-ordered and deduped, capped at 8. Persisted in localStorage (`halo_recent_workspaces`)
+
+### Desktop windows (multi-window)
+Desktop app only — the browser has one tab per window natively.
+- **New window**: `Cmd+N` (macOS, via the File menu) / `Ctrl+N` (Windows/Linux, bound at the webContents level since those platforms have no app menu). Each window is a fresh view onto the **one shared local server** — no second server process spawns.
+- **Per-window workspace**: windows share the server origin, hence one localStorage, so a window tracks its own workspace via its URL `?folder=` (not localStorage, which would clobber across windows). Different windows can sit on different workspaces; the same workspace can be open in two windows.
+- **Quit semantics** (platform split): on macOS, closing every window keeps the app in the Dock (only `Cmd+Q` truly exits) and clicking the Dock icon reopens a window; on Windows/Linux there's no Dock to resummon from, so closing the last window quits.
+- **Pin (always-on-top)** acts per-window — each window pins independently.
 
 ### Directory picker (FolderPicker modal)
 Visual directory browser opened by the 📁🔍 button:
