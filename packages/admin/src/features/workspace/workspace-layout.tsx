@@ -30,7 +30,7 @@ import { CronMain } from '@/features/cron/cron-main'
 import { CronSidebar } from '@/features/cron/cron-sidebar'
 import { SourceControlSidebar } from '@/features/source-control/source-control-sidebar'
 import { SourceControlMain } from '@/features/source-control/source-control-main'
-import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, Wifi, WifiOff, Pin, PinOff } from 'lucide-react'
+import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, Wifi, WifiOff, Pin, PinOff, Bell, BellOff } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
 type SidebarTab = 'explorer' | 'source-control' | 'sessions' | 'management' | 'skills' | 'channels' | 'evolution' | 'cron' | 'settings'
@@ -73,6 +73,24 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
     if (pin) void pin.toggle().then(setPinned)
   }, [])
 
+  // Notify-on-finish toggle — desktop only (needs window.haloNotify, injected by
+  // preload). Off by default; persisted per-machine in localStorage. false = not
+  // desktop → button hidden, mirroring the pin toggle above. Lazy-initialized
+  // from localStorage like the sidebar prefs, so no mount effect / setState.
+  const notifyAvailable = typeof window !== 'undefined'
+    && !!(window as unknown as { haloNotify?: unknown }).haloNotify
+  const [notifyOnFinish, setNotifyOnFinish] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return localStorage.getItem('halo_notify_on_finish') === 'true'
+  })
+  const toggleNotify = useCallback(() => {
+    setNotifyOnFinish((prev) => {
+      const next = !prev
+      try { localStorage.setItem('halo_notify_on_finish', String(next)) } catch { /* ignore */ }
+      return next
+    })
+  }, [])
+
   // Dynamic window title + finished-notification, driven by agent busy state.
   // Runs in every environment — document.title is harmless in a plain browser
   // (the tab label just tracks agent state too), and window.haloNotify only
@@ -97,7 +115,8 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
     prevStreamingRef.current = isStreaming
     prevSessionIdRef.current = sessionId
     if (
-      wasStreaming && !isStreaming
+      notifyOnFinish
+      && wasStreaming && !isStreaming
       && prevSessionId === sessionId && sessionId != null
       && !document.hasFocus()
     ) {
@@ -106,7 +125,7 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
       }).haloNotify
       if (notify) notify.notify({ title: name ? `Halo — ${name}` : 'Halo', body: t('status.notifyBody') })
     }
-  }, [isStreaming, sessionId, activeProject?.name, t])
+  }, [isStreaming, sessionId, activeProject?.name, t, notifyOnFinish])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -438,6 +457,18 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
             )}
           >
             {pinned ? <Pin className="h-5 w-5" /> : <PinOff className="h-5 w-5" />}
+          </button>
+        )}
+        {notifyAvailable && (
+          <button
+            onClick={toggleNotify}
+            title={notifyOnFinish ? t('workspace.notifyOn') : t('workspace.notifyOff')}
+            className={cn(
+              'flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
+              notifyOnFinish ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]',
+            )}
+          >
+            {notifyOnFinish ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
           </button>
         )}
         <div className="pb-2" title={connected ? 'Connected' : 'Disconnected'}>
