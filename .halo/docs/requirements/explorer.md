@@ -20,6 +20,7 @@ Desktop app only — the browser has one tab per window natively.
 - **Per-window workspace**: windows share the server origin, hence one localStorage, so a window tracks its own workspace via its URL `?folder=` (not localStorage, which would clobber across windows). Different windows can sit on different workspaces; the same workspace can be open in two windows.
 - **Quit semantics** (platform split): on macOS, closing every window keeps the app in the Dock (only `Cmd+Q` truly exits) and clicking the Dock icon reopens a window; on Windows/Linux there's no Dock to resummon from, so closing the last window quits.
 - **Pin (always-on-top)** acts per-window — each window pins independently.
+- **Activity awareness**: while the agent streams a reply the sidebar's workspace name carries an amber pulsing dot (emerald when idle) and the window title gains a `●` prefix (`● Halo — <name>` busy vs `Halo — <name>` idle) — both are plain web behaviour that Electron mirrors to the native title bar. Desktop-only: finishing a reply while its window is **unfocused** fires a silent native notification (no sound) through the `window.haloNotify` preload bridge, gated to the busy→idle edge of the *same* still-open session; clicking it focuses the window (macOS bounces the Dock icon, Windows/Linux flashes the taskbar).
 
 ### Directory picker (FolderPicker modal)
 Visual directory browser opened by the 📁🔍 button:
