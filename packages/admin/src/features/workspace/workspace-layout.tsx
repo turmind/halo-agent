@@ -73,28 +73,42 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
     if (pin) void pin.toggle().then(setPinned)
   }, [])
 
-  // Notify-on-finish toggle — desktop only (needs window.haloNotify, injected by
-  // preload). Off by default; persisted per-machine in localStorage. false = not
-  // desktop → button hidden, mirroring the pin toggle above. Lazy-initialized
-  // from localStorage like the sidebar prefs, so no mount effect / setState.
+  // Notify-on-finish toggle. Available when we can actually raise a
+  // notification: the desktop shell (window.haloNotify, injected by preload) or
+  // a plain browser that supports the Web Notification API. Off by default;
+  // persisted per-machine in localStorage. false = neither → button hidden,
+  // mirroring the pin toggle above. Lazy-initialized from localStorage like the
+  // sidebar prefs, so no mount effect / setState.
   const notifyAvailable = typeof window !== 'undefined'
-    && !!(window as unknown as { haloNotify?: unknown }).haloNotify
+    && (!!(window as unknown as { haloNotify?: unknown }).haloNotify || 'Notification' in window)
   const [notifyOnFinish, setNotifyOnFinish] = useState(() => {
     if (typeof window === 'undefined') return false
     return localStorage.getItem('halo_notify_on_finish') === 'true'
   })
-  const toggleNotify = useCallback(() => {
+  const toggleNotify = useCallback(async () => {
+    // Turning it ON in a plain browser needs Notification permission, and the
+    // browser only grants requestPermission() from a user gesture — this click
+    // is that gesture. Desktop (haloNotify) manages permission natively, so
+    // skip the prompt there. If the user denied it, don't flip on (the toggle
+    // would be a lie); the browser won't re-prompt until they reset it in site
+    // settings.
+    const isDesktop = !!(window as unknown as { haloNotify?: unknown }).haloNotify
+    if (!notifyOnFinish && !isDesktop && 'Notification' in window) {
+      let perm = Notification.permission
+      if (perm === 'default') perm = await Notification.requestPermission()
+      if (perm !== 'granted') return
+    }
     setNotifyOnFinish((prev) => {
       const next = !prev
       try { localStorage.setItem('halo_notify_on_finish', String(next)) } catch { /* ignore */ }
       return next
     })
-  }, [])
+  }, [notifyOnFinish])
 
   // Dynamic window title + finished-notification, driven by agent busy state.
   // Runs in every environment — document.title is harmless in a plain browser
-  // (the tab label just tracks agent state too), and window.haloNotify only
-  // exists in the desktop shell, so the notification path self-gates to Electron.
+  // (the tab label just tracks agent state too), and the notification fires
+  // through the desktop bridge or the Web Notification API, whichever exists.
   const prevStreamingRef = useRef(isStreaming)
   const prevSessionIdRef = useRef(sessionId)
   useEffect(() => {
@@ -120,10 +134,19 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
       && prevSessionId === sessionId && sessionId != null
       && !document.hasFocus()
     ) {
+      const title = name ? `Halo — ${name}` : 'Halo'
+      const body = t('status.notifyBody')
       const notify = (window as unknown as {
         haloNotify?: { notify: (p: { title: string; body: string }) => void }
       }).haloNotify
-      if (notify) notify.notify({ title: name ? `Halo — ${name}` : 'Halo', body: t('status.notifyBody') })
+      if (notify) {
+        // Desktop: native banner + Dock/taskbar attention via the main process.
+        notify.notify({ title, body })
+      } else if ('Notification' in window && Notification.permission === 'granted') {
+        // Browser: raise a Web Notification; clicking it refocuses this tab.
+        const n = new Notification(title, { body })
+        n.onclick = () => { window.focus(); n.close() }
+      }
     }
   }, [isStreaming, sessionId, activeProject?.name, t, notifyOnFinish])
 
