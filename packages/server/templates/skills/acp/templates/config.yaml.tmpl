@@ -12,6 +12,11 @@ params:
     description_zh: 远端 halo server 端口。
     default: "{{PORT}}"
 
+  - key: scheme
+    description: URL scheme to reach the remote halo server — http or https.
+    description_zh: 连接远端 halo server 的协议 — http 或 https。
+    default: "{{SCHEME}}"
+
   - key: workspace
     description: Absolute path of the remote workspace to drive.
     description_zh: 要驱动的远端 workspace 绝对路径。

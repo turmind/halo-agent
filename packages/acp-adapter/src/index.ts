@@ -12,6 +12,7 @@ import { JsonRpcConnection } from './jsonrpc.js'
 interface ParsedArgs {
   host: string
   port: number
+  scheme: 'http' | 'https'
   token: string
   workspace: string
   agentId?: string
@@ -40,6 +41,12 @@ function parseArgs(argv: string[]): ParsedArgs | { error: string } {
       out.port = n
       continue
     }
+    const scheme = eat('scheme')
+    if (scheme !== undefined) {
+      if (scheme !== 'http' && scheme !== 'https') return { error: `invalid --scheme: ${scheme}` }
+      out.scheme = scheme
+      continue
+    }
     const token = eat('token')
     if (token !== undefined) { out.token = token; continue }
     const ws = eat('workspace')
@@ -53,6 +60,7 @@ function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   if (!out.port) return { error: '--port is required' }
   if (!out.token) return { error: '--token is required' }
   if (!out.workspace) return { error: '--workspace is required' }
+  if (!out.scheme) out.scheme = 'http'
   return out as ParsedArgs
 }
 
@@ -65,6 +73,8 @@ Usage:
 Flags:
   --host        halo server hostname or IP (e.g. localhost, ec2-...).
   --port        halo server port (e.g. 9527).
+  --scheme      http or https (default http). Use https for a server
+                behind a TLS reverse proxy.
   --token       a web-channel token (admin → Channels → Web → copy token).
                 For multi-workspace use, the token must be created with
                 full access — readonly/workspace tokens cannot override
@@ -89,7 +99,7 @@ export function main(argv: string[] = process.argv.slice(2)): void {
   }
 
   const config: AdapterConfig = {
-    baseUrl: `http://${parsed.host}:${parsed.port}`,
+    baseUrl: `${parsed.scheme}://${parsed.host}:${parsed.port}`,
     token: parsed.token,
     workspace: parsed.workspace,
     agentId: parsed.agentId,

@@ -28,6 +28,7 @@ shell_exec: python3 {{SKILL_DIR}}/ask.py \
   "<the user's question, in the language they asked it>" \
   --host {{params.host}} \
   --port {{params.port}} \
+  --scheme {{params.scheme}} \
   --workspace {{params.workspace}} \
   --token {{params.token}}
 ```
@@ -51,7 +52,7 @@ Sequences of related questions ("what's the AWS bill", "now break down Bedrock",
 ```bash
 shell_exec: python3 {{SKILL_DIR}}/ask.py \
   "<follow-up question>" \
-  --host {{params.host}} --port {{params.port}} \
+  --host {{params.host}} --port {{params.port}} --scheme {{params.scheme}} \
   --workspace {{params.workspace}} --token {{params.token}} \
   --session-id <id-from-previous-call>
 ```

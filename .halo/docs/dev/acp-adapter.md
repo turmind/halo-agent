@@ -43,7 +43,7 @@ Claude Code on a developer's laptop wants to talk to a halo agent running in an 
 
 The most common use of this adapter isn't a third-party ACP client — it's *another halo agent* calling out over ACP. Halo ships a builtin skill `acp` (slash command `/acp`, full access). Its bundled `templates/ask.py` is a unified ACP client; `--kind` picks the peer:
 
-- `halo` (default) — spawns `halo acp --host --port --token --workspace` (this adapter) to reach a **remote halo server**
+- `halo` (default) — spawns `halo acp --host --port --scheme --token --workspace` (this adapter) to reach a **remote halo server** (`--scheme` optional, default `http`; pass `https` for a TLS-fronted server)
 - `claude` — spawns `claude-agent-acp` (npm `@agentclientprotocol/claude-agent-acp`): local Claude Code, zero config, just `--cwd`
 - `kiro` — spawns `kiro-cli acp --trust-all-tools`: local Kiro, zero config `--cwd`, optional `--agent-id`
 
@@ -58,7 +58,7 @@ The question text reaches the peer **verbatim — including the peer's own slash
 
 ### `ask-*` bindings — the multi-remote-halo path
 
-Remote halo servers are **not** a direct verb: each remote needs its own host/token/workspace, so `/acp add` walks the user through (label, host, port, workspace, token), then **stamps out a new skill** named `ask-<label>` containing:
+Remote halo servers are **not** a direct verb: each remote needs its own host/token/workspace, so `/acp add` walks the user through (label, host, port, scheme, workspace, token), then **stamps out a new skill** named `ask-<label>` containing:
 
 - `SKILL.md` — slash command `/ask-<label>`, instructions tailored to this remote
 - `config.yaml` — declares the binding's params so admin Settings shows a form
@@ -77,6 +77,7 @@ To remove a binding: `/acp remove` (deletes the skill directory and points out t
 |------------------|----------|------------------------------------------------------------------------------------------|
 | `--host`         | yes      | Halo server hostname / IP (e.g. `localhost`, `ec2-1-2-3-4.compute…`).                  |
 | `--port`         | yes      | Halo server port (e.g. `9527`).                                                        |
+| `--scheme`       | no       | URL scheme — `http` or `https` (default `http`). Use `https` when the server sits behind a TLS reverse proxy. Invalid values are rejected at the adapter boundary. |
 | `--token`        | yes      | Web-channel token from admin UI. `full` access required for multi-workspace use.         |
 | `--workspace`    | yes      | Absolute server-side path for the workspace this adapter drives.                         |
 | `--agent-id`     | no       | Halo agent profile to use when ACP `session/new` creates a new halo session. Default: `default`. |
@@ -299,7 +300,7 @@ halo cli -a default -n -w /home/ubuntu/halo-test \
   '/acp add 参数：label=foo，host=localhost，port=9527，workspace=/home/ubuntu/sa-agent，token=<token>，scope=workspace。不要问后续问题，全自动创建。'
 ```
 
-Expect: agent creates `.halo/skills/ask-foo/{SKILL.md,config.yaml,ask.py}`, writes `ask-foo` block to `<workspace>/.halo/settings.yaml` with **all 5 user values** (host/port/workspace/label/token), wires the binding into the current agent's skills list. Reply confirms the four paths.
+Expect: agent creates `.halo/skills/ask-foo/{SKILL.md,config.yaml,ask.py}`, writes `ask-foo` block to `<workspace>/.halo/settings.yaml` with **all 5 user values** (host/port/workspace/label/token) plus `scheme: http` (defaulted — the prompt omits it), wires the binding into the current agent's skills list. Reply confirms the four paths.
 
 **4.2 invoke the freshly-generated binding**
 
@@ -321,7 +322,7 @@ rm -rf /home/ubuntu/halo-test/.halo/skills/ask-foo
 
 Open admin → Settings → Skills → **Ask SA Agent** (or whichever binding):
 
-**5.1** All 6 fields render: `host`, `port`, `workspace`, `label`, `agent_id`, `token` (with mask icon).
+**5.1** All 7 fields render: `host`, `port`, `scheme`, `workspace`, `label`, `agent_id`, `token` (with mask icon).
 
 **5.2** Each field's source label says **workspace** (not "继承自 global"), because values live in `<halo-test>/.halo/settings.yaml`.
 

@@ -81,6 +81,7 @@ Required from the user:
 | `label` | Slug — lowercase, hex/dash only (regex `^[a-z][a-z0-9-]*$`). Used for the skill id (`ask-<label>`), slash command (`/ask-<label>`), and settings namespace. Must not collide with an existing skill. Example: `sa-agent`, `prod-cluster`, `audit-ws`. |
 | `host` | Remote halo server hostname / IP. |
 | `port` | Remote halo server port. (halo kind only) |
+| `scheme` | URL scheme to reach the remote — `http` or `https`. Default `http`; only set `https` if the remote is behind a TLS proxy. (halo kind only) |
 | `workspace` | Absolute path of the remote workspace on its server. |
 | `token` | Web-channel token from the remote halo's admin (Channels → Web → copy). Should be a `full` access token if you'll later want to override workspace per call. |
 
@@ -127,6 +128,7 @@ Both `SKILL.md.tmpl` and `config.yaml.tmpl` use `{{NAME}}` markers. Substitute t
 | `{{LABEL_DISPLAY}}` | display name (defaults to `label_display` or capitalized label) |
 | `{{HOST}}` | host |
 | `{{PORT}}` | port |
+| `{{SCHEME}}` | scheme (`http` / `https`; default `http`) |
 | `{{WORKSPACE}}` | remote workspace path |
 | `{{SKILL_DIR}}` | absolute path of the new skill dir; use this in the `python3 …/ask.py` line so the cmd works regardless of cwd |
 
@@ -137,6 +139,7 @@ LABEL=sa-agent
 LABEL_DISPLAY="SA Agent"
 HOST=ec2-1-2-3-4.compute.amazonaws.com
 PORT=9527
+SCHEME=http                                   # or https if the remote is behind a TLS proxy
 WORKSPACE=/home/ubuntu/sa-agent
 SCOPE_DIR=$HOME/.halo/global/skills           # or the workspace's .halo/skills
 SKILL_DIR=$SCOPE_DIR/ask-$LABEL
@@ -147,6 +150,7 @@ sed -e "s|{{LABEL}}|$LABEL|g" \
     -e "s|{{LABEL_DISPLAY}}|$LABEL_DISPLAY|g" \
     -e "s|{{HOST}}|$HOST|g" \
     -e "s|{{PORT}}|$PORT|g" \
+    -e "s|{{SCHEME}}|$SCHEME|g" \
     -e "s|{{WORKSPACE}}|$WORKSPACE|g" \
     -e "s|{{SKILL_DIR}}|$SKILL_DIR|g" \
     "$TPL/SKILL.md.tmpl" > "$SKILL_DIR/SKILL.md"
@@ -154,6 +158,7 @@ sed -e "s|{{LABEL}}|$LABEL|g" \
     -e "s|{{LABEL_DISPLAY}}|$LABEL_DISPLAY|g" \
     -e "s|{{HOST}}|$HOST|g" \
     -e "s|{{PORT}}|$PORT|g" \
+    -e "s|{{SCHEME}}|$SCHEME|g" \
     -e "s|{{WORKSPACE}}|$WORKSPACE|g" \
     "$TPL/config.yaml.tmpl" > "$SKILL_DIR/config.yaml"
 cp "$TPL/ask.py" "$SKILL_DIR/ask.py"
@@ -164,7 +169,7 @@ If any path contains `|` (rare), pick a different sed delimiter or use Python.
 
 ## Step 4 — write **all** params to settings.yaml
 
-Halo's shell_exec `{{<id>.params.X}}` substitution reads from `settings.yaml` and does NOT fall back to `config.yaml` `default:`. Config.yaml defaults are *only* used as form placeholders in the admin Settings UI. So at install time we must write every value the helper script needs (host, port, workspace, token, label) into settings.yaml — otherwise the SKILL.md's `python3 ask.py ... --host {{params.host}}` will pass through as a literal `{{...}}` to shell_exec and break.
+Halo's shell_exec `{{<id>.params.X}}` substitution reads from `settings.yaml` and does NOT fall back to `config.yaml` `default:`. Config.yaml defaults are *only* used as form placeholders in the admin Settings UI. So at install time we must write every value the helper script needs (host, port, scheme, workspace, token, label) into settings.yaml — otherwise the SKILL.md's `python3 ask.py ... --host {{params.host}}` will pass through as a literal `{{...}}` to shell_exec and break.
 
 Choose the file by scope:
 
@@ -178,6 +183,7 @@ ask-<label>:
   params:
     host: <host>
     port: "<port>"             # quote so YAML keeps it as a string
+    scheme: "<scheme>"         # http (default) or https
     workspace: <workspace>
     label: <label_display>
     token: <token>
@@ -196,6 +202,7 @@ ns = data.setdefault("ask-<label>", {})
 params = ns.setdefault("params", {})
 params["host"] = "<host>"
 params["port"] = "<port>"
+params["scheme"] = "<scheme>"
 params["workspace"] = "<workspace>"
 params["label"] = "<label_display>"
 params["token"] = "<token>"

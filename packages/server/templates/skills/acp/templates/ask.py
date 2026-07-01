@@ -25,6 +25,7 @@ def main() -> None:
                    help="halo: remote halo server via `halo acp`; claude: local Claude Code via `claude-agent-acp`; kiro: local Kiro via `kiro-cli acp`.")
     p.add_argument("--host")
     p.add_argument("--port")
+    p.add_argument("--scheme", default="http")
     p.add_argument("--token")
     p.add_argument("--workspace")
     p.add_argument("--cwd", default=None, help="claude kind: working directory for the session (defaults to CWD).")
@@ -58,7 +59,7 @@ def main() -> None:
         if shutil.which(halo) is None and not os.path.isabs(halo):
             fail(f"`{halo}` not found in PATH. Install @turmind/halo or set --halo-bin.", 2)
         cmd = [halo, "acp", "--host", args.host, "--port", str(args.port),
-               "--token", args.token, "--workspace", args.workspace]
+               "--scheme", args.scheme, "--token", args.token, "--workspace", args.workspace]
     # Drop `--agent-id` when blank OR an unsubstituted `{{...}}` literal.
     # Both mean "user hasn't configured this optional field" — the first
     # because settings.yaml has `agent_id: ""`, the second because the

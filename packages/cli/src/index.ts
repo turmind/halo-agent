@@ -167,7 +167,7 @@ Options:
   -h, --help                 Show this help
 `
 
-const HELP_ACP = `Usage: halo acp --host <h> --port <p> --token <t> --workspace <path> [--agent-id <id>]
+const HELP_ACP = `Usage: halo acp --host <h> --port <p> --token <t> --workspace <path> [--scheme <http|https>] [--agent-id <id>]
 
 Bridge a running halo server to an ACP (Agent Client Protocol) client
 such as Claude Code. Reads JSON-RPC requests on stdin, writes responses
@@ -176,6 +176,8 @@ such as Claude Code. Reads JSON-RPC requests on stdin, writes responses
 Flags:
   --host <h>             halo server hostname / IP
   --port <p>             halo server port (e.g. 9527)
+  --scheme <s>           http or https (default: http). Use https for a
+                          server behind a TLS reverse proxy.
   --token <t>            web-channel token (admin → Channels → Web → copy
                           token). For multi-workspace use, must be a
                           full-access token.
