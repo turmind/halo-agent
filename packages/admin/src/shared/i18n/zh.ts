@@ -488,8 +488,8 @@ export const zh: Record<string, string> = {
   // ── 工作区（桌面端）──
   'workspace.pin': '窗口置顶',
   'workspace.unpin': '取消置顶',
-  'workspace.notifyOn': '完成回复时通知(窗口失焦)—— 已开',
-  'workspace.notifyOff': '完成回复时通知(窗口失焦)—— 已关',
+  'workspace.notifyOn': '完成回复时响提示音(失焦时另弹通知)—— 已开',
+  'workspace.notifyOff': '完成回复时响提示音(失焦时另弹通知)—— 已关',
 
   // ── 屏幕捕获（桌面端）──
   'capture.button': '共享一个窗口/屏幕给 AI 查看',

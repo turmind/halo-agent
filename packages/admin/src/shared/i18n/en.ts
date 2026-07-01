@@ -488,8 +488,8 @@ export const en: Record<string, string> = {
   // ── Workspace (desktop) ──
   'workspace.pin': 'Keep window on top',
   'workspace.unpin': 'Stop keeping on top',
-  'workspace.notifyOn': 'Notify when agent finishes (window unfocused) — on',
-  'workspace.notifyOff': 'Notify when agent finishes (window unfocused) — off',
+  'workspace.notifyOn': 'Chime when agent finishes (banner too if unfocused) — on',
+  'workspace.notifyOff': 'Chime when agent finishes (banner too if unfocused) — off',
 
   // ── Screen capture (desktop) ──
   'capture.button': 'Share a window/screen for the AI to see',

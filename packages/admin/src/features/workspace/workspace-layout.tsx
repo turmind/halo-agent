@@ -37,6 +37,36 @@ type SidebarTab = 'explorer' | 'source-control' | 'sessions' | 'management' | 's
 
 const TABS_WITH_SIDEBAR: SidebarTab[] = ['explorer', 'source-control', 'sessions', 'skills', 'channels', 'evolution', 'cron']
 
+// Short two-note "ding-dong" chime synthesized on the fly, so there's no audio
+// file to bundle/serve. Reuses one lazily-created AudioContext (browsers cap the
+// number of live contexts). No-op if WebAudio is unavailable or blocked.
+let chimeCtx: AudioContext | null = null
+function playChime() {
+  try {
+    const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctor) return
+    if (!chimeCtx) chimeCtx = new Ctor()
+    const ctx = chimeCtx
+    // Autoplay policy can leave the context suspended until a gesture; the bell
+    // toggle click already unlocked it, but resume() is harmless if already running.
+    void ctx.resume()
+    const now = ctx.currentTime
+    ;[[880, 0], [1174.66, 0.15]].forEach(([freq, at]) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      // Quick attack, gentle decay — a soft bell, not a beep.
+      gain.gain.setValueAtTime(0.0001, now + at)
+      gain.gain.exponentialRampToValueAtTime(0.2, now + at + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + at + 0.35)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(now + at)
+      osc.stop(now + at + 0.4)
+    })
+  } catch { /* WebAudio unavailable/blocked — no sound, no crash */ }
+}
+
 interface WorkspaceLayoutProps {
   connected: boolean
 }
@@ -128,24 +158,31 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
     const prevSessionId = prevSessionIdRef.current
     prevStreamingRef.current = isStreaming
     prevSessionIdRef.current = sessionId
-    if (
-      notifyOnFinish
+    // Real busy→idle completion of the *still-subscribed* session.
+    const finished = notifyOnFinish
       && wasStreaming && !isStreaming
       && prevSessionId === sessionId && sessionId != null
-      && !document.hasFocus()
-    ) {
-      const title = name ? `Halo — ${name}` : 'Halo'
-      const body = t('status.notifyBody')
-      const notify = (window as unknown as {
-        haloNotify?: { notify: (p: { title: string; body: string }) => void }
-      }).haloNotify
-      if (notify) {
-        // Desktop: native banner + Dock/taskbar attention via the main process.
-        notify.notify({ title, body })
-      } else if ('Notification' in window && Notification.permission === 'granted') {
-        // Browser: raise a Web Notification; clicking it refocuses this tab.
-        const n = new Notification(title, { body })
-        n.onclick = () => { window.focus(); n.close() }
+    if (finished) {
+      // Sound plays regardless of focus — the whole point is an audible cue even
+      // when you're looking at the tab (a native banner would be noise there, so
+      // that still waits for blur below). Self-synthesized so there's no audio
+      // asset to bundle; browsers/Electron gate WebAudio behind a prior user
+      // gesture, which the bell toggle click already satisfied.
+      playChime()
+      if (!document.hasFocus()) {
+        const title = name ? `Halo — ${name}` : 'Halo'
+        const body = t('status.notifyBody')
+        const notify = (window as unknown as {
+          haloNotify?: { notify: (p: { title: string; body: string }) => void }
+        }).haloNotify
+        if (notify) {
+          // Desktop: native banner + Dock/taskbar attention via the main process.
+          notify.notify({ title, body })
+        } else if ('Notification' in window && Notification.permission === 'granted') {
+          // Browser: raise a Web Notification; clicking it refocuses this tab.
+          const n = new Notification(title, { body })
+          n.onclick = () => { window.focus(); n.close() }
+        }
       }
     }
   }, [isStreaming, sessionId, activeProject?.name, t, notifyOnFinish])
