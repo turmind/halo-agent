@@ -383,11 +383,13 @@ export class SessionAgentBuilder {
     }
     const visible = [...effective.values()].filter((a) => !a.disabled && !a.internal && isTeamMember(team, a.id))
     const self = visible.find((a) => a.id === selfAgentId)
-    const others = visible.filter((a) => a.id !== selfAgentId)
+    // Priority descending, so the preferred workhorse leads and ordering is
+    // deterministic (scan order is readdir order, which isn't guaranteed).
+    const others = visible.filter((a) => a.id !== selfAgentId).sort((a, b) => b.priority - a.priority)
     if (!self && others.length === 0) return ''
 
     const selfSuffix = isRoot
-      ? ' (you): spawn parallel instances of yourself to fan out independent sub-tasks; for serial work just do it directly rather than delegating to yourself.'
+      ? ' (you): spawn parallel instances of yourself only for sub-tasks that themselves need delegation or your full generality — each instance runs your own (expensive) model; for well-scoped work prefer the cheaper executor. For serial work just do it directly rather than delegating to yourself.'
       : ' (you)'
     const lines: string[] = []
     if (self) lines.push(`- \`${self.id}\` — ${self.name}${selfSuffix}`)
@@ -432,9 +434,7 @@ execution for steps that genuinely depend on each other's output.
 
 No need to poll for progress — after start_session, keep doing your own work;
 the sub-agent reports back automatically when done. Polling (session_list /
-get_session_output) just spends context checking status. "I'll just do it
-myself" is the most common misjudgment: if it's really >3 steps or touches
-multiple files, a sub-session is faster and keeps your context clean.
+get_session_output) just spends context checking status.
 
 \`query_agent\` shows one agent's tools and skills before you delegate. When you
 do delegate, say so in one line and keep going.`
