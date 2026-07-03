@@ -120,7 +120,7 @@ When the user sends a new message while the agent is working (the **soft** inter
 1. The message is pushed onto the single `messageQueue` (no `sourceSessionId` — it's a user entry) and `interruptRequested` is set
 2. Inside `runAgentTurn`'s event loop, when `event.type === 'tool_result'` and `interruptRequested` is true → `abortController.abort('interrupt')` — the abort waits for the current tool, so a mid-flight `shell_exec` is **not** killed
 3. The loop terminates (AbortError or cancelled)
-4. **Conversation repair** (`repairConversationMessages`) cleans up orphan `toolUse` / `toolResult` blocks
+4. **Conversation repair** (`repairConversationMessages`) fixes orphaned pairs — an orphan `toolUse` gets a synthesized `[interrupted]` error `tool_result` (so the model knows the call was cut short and doesn't re-issue it), an orphan `toolResult` is stripped (see [session.md](session.md#conversation-repair))
 5. Control returns to `runSession`, whose `drainQueue` folds the queued message into one merged follow-up turn
 
 **Hard stop** is the Stop button — immediate abort, then repair. It does **not** discard the queue: the un-drained messages are folded into history first so nothing is lost (see the three-tier interrupt model + stop/archive contrast in [session.md](session.md#message-queue-and-drain)).

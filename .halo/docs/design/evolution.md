@@ -91,7 +91,7 @@ Restart-safe: no in-memory state. On server reboot, ticker re-evaluates db on fi
 
 Located: `/packages/server/src/evolution/evo-wrapper.ts` (compiled to `.js`, spawned by ticker)
 
-The wrapper is the orchestrator; individual agents do focused work only.
+The wrapper is the orchestrator; individual agents do focused work only. Every phase spawns a **fresh** cli session (`-n`) — no message history is inherited. The source conversation reaches evo/score as disk files (`tool-flow.md` for a fast skim, `source-snapshot.json` for the full record), with inline base64 images decoded to `images/` so the agents can `view_image` them; the briefs direct agents to write run-dir artifacts (patch.md, .skip.md, score.json) with absolute paths because relative tool paths resolve against the sandbox.
 
 ### Phase A — Draft
 
@@ -127,7 +127,7 @@ Fix budget design:
 
 `spawn('halo', ['cli', '-a', '__score__', '-n', '-w', '<runDir>/sandbox', '<score-brief>'])`
 
-Reads patch.md + dry-run-output.txt + source-snapshot.json, writes `score.json`:
+The score brief packs patch.md + dry-run-output.txt + meta.json + evo-context.json inline; the baseline conversation stays on disk (`tool-flow.md` / `source-snapshot.json`) and the brief directs the scorer to `file_read` it so behavior is graded against the actual baseline. Writes `score.json`:
 
 ```json
 {
@@ -161,6 +161,13 @@ Wrapper builds **fresh sandbox** (whitelist-cp from **current main** workspace),
 `spawn('halo', ['cli', '-a', '__apply_agent__', '-n', '-w', '<applyDir>/sandbox', '<merge-brief>'])`
 
 Agent reads each source run's `patch.md` (latest version!), merges changes into sandbox. Respects platform override matrix (workspace replaces global wholesale for agents/, skills/, prompts/). Agent writes `apply.log` (audit trail), edits only under `sandbox/.halo/`.
+
+**Success criteria** (checked in order):
+1. cli exit code ≠ 0 → fail (`apply cli exited <code>`).
+2. `<applyDir>/ABORT.md` exists → fail (`apply agent aborted: <first line, ≤300 chars>`). ABORT.md is the agent's only abort channel — the cli always exits 0 when the agent finishes a turn, so "exit non-zero on conflict" is not something an agent can do. On an irreconcilable merge conflict (or another dead end) it writes the diagnosis to ABORT.md; the wrapper checks the sentinel **before** the apply.log gate, so a conflicted merge can't publish just because apply.log also exists.
+3. `apply.log` missing → fail (`apply agent didn't produce apply.log` — the agent likely bailed early).
+
+The wrapper clears any stale ABORT.md (from a crashed previous attempt) at the start of the phase, before spawning the agent — otherwise a leftover sentinel would insta-fail the new attempt.
 
 ### Phase B' — Regress
 
@@ -203,6 +210,8 @@ Per-workspace mutex in ticker prevents two applies from racing on the same works
     meta.json
     sandbox/                  # cp from main at phase A', edited by agent
     apply.log                 # agent audit trail
+    ABORT.md                  # apply agent's abort sentinel (merge conflict
+                              # diagnosis; first line becomes failureReason)
     regress/<runId>/          # one per source run
       dry-run-output.txt
       score.json

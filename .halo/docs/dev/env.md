@@ -87,7 +87,7 @@ Source: `packages/server/src/config.ts`
 | Variable | Default | Config path | Description |
 |---|---|---|---|
 | `HALO_PORT` | `9527` | `config.yaml server.port` | Hono listen port |
-| `HALO_PASSWORD` | (none) | `config.yaml server.password` (scrypt hash) | Plaintext login password. When set, takes precedence over the stored hash and bypasses scrypt entirely — intended for Docker / systemd / CI. The hash is set by `halo setup` for interactive installs. |
+| `HALO_PASSWORD` | (none) | `config.yaml server.password` (scrypt hash) | Plaintext login password. When set, takes precedence over the stored hash and bypasses scrypt entirely — intended for Docker / systemd / CI. It also satisfies the **startup gate**: the server refuses to boot with no password configured, and env plaintext counts as a first-class credential there, so an env-only deployment (`halo setup -y && HALO_PASSWORD=... halo server start`, no stored hash) boots fine. The hash is set by `halo setup` for interactive installs. |
 | `HALO_CORS_ORIGINS` | empty (reflect any origin) | `config.yaml server.cors_origins` | CORS allowlist (comma-separated). Empty = reflect any incoming Origin so credentials work cross-origin. Set explicit list to enforce strict CORS. |
 | `HALO_FRONTEND_DIR` | `packages/admin/out` | — | Static frontend dir (resolved as absolute path from project root) |
 | `HALO_MAX_CONTEXT_TOKENS` | `200000` | — | Model max context |
@@ -117,6 +117,8 @@ settings.yaml only (no env override):
 - `kimi.secrets.api_key` — Kimi (Moonshot AI)
 - `deepseek.secrets.api_key` — DeepSeek
 
+When a provider manifest declares a `default: <<NAME>>` for a secret, `halo setup` offers a "Use env $NAME" action. Picking it **writes the literal `<<NAME>>` placeholder into settings.yaml**, which the standard env-var interpolation ([storage.md](../design/storage.md#env-var-interpolation-env_name)) expands against `process.env` at read time. There is no separate runtime env fallback — the placeholder in the file is the only mechanism (an unset env var leaves the literal `<<NAME>>` visible in the request, failing loudly).
+
 `<skill-id>.params.*` (referenceable from skills via `{{<skill-id>.params.<key>}}`, or short form `{{params.<key>}}` inside SKILL.md; declared in `skills/<id>/config.yaml`):
 - `tavily-search.params.api_key` — example only; declared by whichever skill needs it
 
@@ -136,7 +138,7 @@ settings.yaml-driven `general.limits.*` (no env override):
 Two ways to authenticate:
 
 1. **Interactive** — run `halo setup`, pick "Set / change password". The value is scrypt-hashed and written to `~/.halo/secrets/config.yaml server.password`. Best for personal installs.
-2. **Env** — export `HALO_PASSWORD=...` before launching the server. The plaintext value is compared directly (no hashing) and takes precedence over any stored hash. Best for Docker / systemd / CI where a secrets manager already protects the env.
+2. **Env** — export `HALO_PASSWORD=...` before launching the server. The plaintext value is compared directly (no hashing) and takes precedence over any stored hash. A stored hash isn't required at all — env plaintext alone satisfies the startup gate, so env-only deployments are legal. Best for Docker / systemd / CI where a secrets manager already protects the env.
 
 ## Verify
 

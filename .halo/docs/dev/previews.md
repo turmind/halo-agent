@@ -27,6 +27,9 @@ previews/
     ├── docx.tsx / docx-view.tsx
     ├── xlsx.tsx / xlsx-view.tsx
     ├── pptx.tsx / pptx-view.tsx
+    ├── pptx-notes.ts         pptx zip helpers: speaker-notes extraction (jszip +
+    │                         DOMParser, play order via sldIdLst) + Content_Types
+    │                         repair for decks with dangling Override parts
     └── media.tsx / media-view.tsx
 ```
 

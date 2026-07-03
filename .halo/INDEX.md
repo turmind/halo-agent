@@ -72,8 +72,8 @@ Active workspaces learn from their own conversations: when a user invokes `/evo`
 Key state lives in:
 - `~/.halo/global/evo.db` — global queue tables `evolution_runs` + `evolution_applies` (separate from per-workspace sqlite)
 - `~/.halo/global/internal-sessions/__{evo_agent,score,apply_agent}__/` — internal-agent session transcripts (kept out of user workspaces; `internal: true` agents are platform tooling)
-- `<workspace>/.halo/evo/runs/<id>/` — per-evaluation artifacts (`patch.md`, `score.json`, optional `.skip.md` and `system-suggestions.md`, `sandbox/`)
-- `<workspace>/.halo/evo/applies/<id>/` — per-apply artifacts (`apply.log`, `sandbox/`, `regress/<runId>/`)
+- `<workspace>/.halo/evo/runs/<id>/` — per-evaluation artifacts (`patch.md`, `score.json`, optional `.skip.md`, `sandbox/`)
+- `<workspace>/.halo/evo/applies/<id>/` — per-apply artifacts (`apply.log`, optional `ABORT.md` abort sentinel, `sandbox/`, `regress/<runId>/`)
 - `<workspace>/.halo/evo/history/apply-<id>/` — pre-apply rollback snapshot (`MANIFEST.json` + the overwritten files)
 
 Driven from `packages/server/src/evolution/` (ticker, wrapper, enqueue helpers) + `packages/server/templates/agents/__{evo_agent,score,apply_agent}__/` (the three internal agents).

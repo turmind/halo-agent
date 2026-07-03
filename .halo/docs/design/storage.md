@@ -58,6 +58,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   └── archive/                       #   zipped runs/applies past the retention window
 ├── tmp/                                 # Agent scratch files (logs, downloads, intermediate artifacts) — convention from TOOL_GUIDELINES, not auto-created
 ├── assets/<channel>/inbound/<accountId>/<date>/  # Inbound media per channel (image/voice/video/file)
+├── runtime.lock                       # Workspace runtime ownership marker (pid) — see below
 ├── halo.db                           # Per-workspace sqlite (sessions metadata, command registry, disabled-items)
 └── docs/                               # Project docs (requirements/design/dev/test/plans)
 ```
@@ -67,6 +68,18 @@ Precedence: workspace > global, **at folder granularity**. For the same id, a wo
 ### Path constructors
 
 All `.halo/...` path math goes through `packages/server/src/paths.ts` (e.g. `wsHaloDir(ws)`, `wsEvoRunDir(ws, runId)`, `globalInternalSessionFile(agentId, seg)`, `cronLogFile(runId)`). Treat `paths.ts` as the canonical reference for the layout above; if the layout changes, update `paths.ts` first and call sites follow.
+
+### Workspace runtime lock
+
+`<workspace>/.halo/runtime.lock` — a pid marker that records which process owns this workspace's *runtime* (gates `reconcileOrphansOnBoot`; see [session.md](session.md#boot-reconcile-of-crash-orphans-reconcileorphansonboot)). It exists because `~/.halo/global/server.lock` can't arbitrate the case of two servers with different `HALO_HOME` sharing one workspace — the ownership marker has to live in the shared resource itself. Implementation: `packages/server/src/agents/workspace-runtime-lock.ts`.
+
+Protocol (single-machine scope; NFS / cross-host explicitly out):
+- **Claim** = `O_EXCL` create with own pid; first claimer owns the runtime.
+- **EEXIST** → read the holder pid and probe with `kill(pid, 0)`. Holder alive (`EPERM` counts as alive — false-dead is the dangerous direction) → return false, caller skips reconcile. Holder is own pid → already owned.
+- **Dead / unreadable holder** → stale takeover via write-tmp + atomic rename (keeps the path existent at all times, so a third comer always sees *some* holder).
+- **No explicit release**: pid liveness *is* the release — graceful exit and SIGKILL converge on the same "pid dead → next boot takes over" path, so there is no exit hook to forget or crash past.
+
+Bias is deliberate: pid reuse can read a stale pid as "alive," which only costs one missed cleanup round; a false-dead could stop another process's live sessions. Full race analysis in the file's header comment.
 
 ## Session file format (v1)
 

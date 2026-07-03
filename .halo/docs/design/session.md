@@ -120,6 +120,12 @@ Hierarchical encoding: `root_id>child_segment>grandchild_segment`.
 
 - **interruptSession**: fire-and-forget abort of the in-flight turn — it sets `interruptRequested` so `runAgentTurn`'s unwind repairs (not errors), then aborts. It does **not** await or re-run: once the aborted turn unwinds, `runSession`'s finally sees the non-empty queue and `drainQueue` folds the queued message into one merged follow-up turn. The `interrupt_session` tool reaches this via `querySession(..., interrupt=true)` (enqueue + abort), so there is no separate re-run path or `skipRelease` bookkeeping.
 
+### Boot reconcile of crash orphans (`reconcileOrphansOnBoot`)
+
+A sub-session whose process was killed mid-run never got its `stoppedAt` written, so it stays `stoppedAt IS NULL` forever — displaying as a false "running" and permanently blocking its parent's auto-report bubbling (`tryReportToParent` sees a "live" child that will never report back). When the server process first builds a workspace's SessionManager, `reconcileOrphansOnBoot` batch-stamps `stoppedAt` on every non-root, non-stopped, non-archived session. Only the long-lived server passes `reconcileOrphansOnBoot: true` through the registry — CLI/TUI/channel-subprocess/evo-wrapper share the same db while the server may be running sessions, so they never reconcile. If an orphan is later revived via `query_session`, that path clears `stoppedAt` again, so nothing is trapped permanently.
+
+**Workspace-level gate (`.halo/runtime.lock`)**: `server.lock` ownership alone is not sufficient — two servers with different `HALO_HOME` (e.g. prod + dev) each hold their own `server.lock` yet can point at the *same* workspace directory, and one server's boot reconcile would batch-stop the other's actually-live sub-sessions (the incident this gate exists for). So the reconcile additionally requires `claimWorkspaceRuntime(workspaceRoot)` (`agents/workspace-runtime-lock.ts`) — a pid marker at `<workspace>/.halo/runtime.lock` with a liveness probe. Claim fails → skip reconcile and log a warning: **prefer missing a crash-orphan cleanup over stopping another process's live sessions**. `reconcileOrphansOnBoot: true` therefore means "reconcile if the workspace claim succeeds," not "always." Lock protocol details in [storage.md](storage.md#workspace-runtime-lock); known residual: when two servers both actively use one workspace long-term, the non-owner never reconciles — its own crash orphans stay un-cleaned until the owner restarts and takes over.
+
 ### Message queue and drain
 
 > **History**: earlier builds ran **two** parallel queues — `messageQueue` for agent→agent (`query_session` / `interrupt_session` / auto-report) and `pendingUserMessages` for user→agent (channel sends during a busy turn), each with its own enqueue / drain / stop-clear / fold paths. They are now unified into a **single `messageQueue` + single `drainQueue` + single `runSession` loop**. Entries keep their meaningful differences (a `sourceSessionId` marks agent entries; user entries carry `images` and no source), but they share one queue and one drain path.
@@ -208,8 +214,23 @@ A `toolUseId`-based algorithm that repairs message arrays damaged by abort / int
 ### Algorithm (3-phase forward scan)
 
 1. **Phase 1 — Sanitize**: drop null entries, patch messages missing role/content, filter null content blocks
-2. **Phase 2 — Pair validation**: for every assistant message, match `toolUse.toolUseId` against the `toolResult.toolUseId` in the next user message. Strip unmatched blocks on both sides.
+2. **Phase 2 — Pair validation**: for every assistant message, match `toolUse.toolUseId` against the `toolResult.toolUseId` in the next user message. An orphaned `toolUse` gets a **synthesized error `tool_result`** (`[tool execution interrupted — no result. Do not automatically retry…]`, `is_error: true`); an orphaned `toolResult` (a result whose request is gone) is still stripped — fabricating a matching `toolUse` would invent a call the model never made.
 3. **Phase 3 — Compact**: remove messages whose content array is now empty
+
+**Why synthesize instead of strip** (Phase 2): stripping an orphaned `toolUse` made the model believe the call *never happened*, so after an Esc / `interrupt_session` / stop aborted an in-flight tool, the next turn dutifully re-issued the same call — an interrupted `sleep 30` re-ran in full, doubling time and tokens. The synthesized result keeps the pair protocol-valid *and* tells the model the call was cut short, with wording that steers it away from an automatic retry. It lives in the shared repair path (not at each abort call site) because every interrupt flavor, crash recovery on reload, and the API-400 repair-retry all funnel through here. Idempotent: a synthesized result pairs its `toolUse`, so a later pass sees a match and does nothing.
+
+**Provider-side consumers**: the OpenAI-style agents (DeepSeek / Kimi / Doubao / Hunyuan / Mantle / generic OpenAI) convert a user turn's `tool_result` blocks into tool-role messages — any non-`tool_result` content coalesced into the same turn (e.g. the synthesized result landing alongside real user text, or a stop-fold) is emitted as a following user message rather than silently dropped.
+
+### UI-side interrupt marker (`markPendingToolCallsInterrupted`)
+
+The synthesized `[interrupted]` result above is **model-facing only** (`agent.messages`). The session UI log has a parallel problem: on a hard abort, `runAgentTurn`'s consumer loop breaks on `signal.aborted` before it processes the in-flight tool's real `tool_result` event, so pending tool-call blocks stayed "running" forever. `SessionManager.markPendingToolCallsInterrupted(sessionId)` scans the session's cached UI state for tool calls with no output yet and emits a synthetic `[interrupted by user]` `tool_result` for each through the normal `emitEvent` pipeline — ui-log-builder persistence, admin WS push, and TUI rendering pick it up unchanged. It never touches `agent.messages`. Called at the four abort sites:
+
+1. **Graceful-interrupt-after-tool_result** in `runAgentTurn` — in a parallel-tool turn, tool_calls after the current one were already announced (agent-loop yields all upfront) but will never execute; close their blocks.
+2. **`interruptSession`** (hard interrupt).
+3. **`stopSession`**'s cascade — per descendant, before awaiting the aborted promise (runSession's finally emits `complete`, which flushes and clears the pending buffers this scans).
+4. **`stopUserSession`** (the user Stop button).
+
+Idempotent — completed tools (output already set) are never overwritten. Two supporting details: `session-ui-store.flushSubSession()` persists a stopped sub-session's log explicitly (it never gets a later usage/agent_done to trigger its usual flush, so the marker would otherwise die with the process); `ui-log-builder.setToolResult` attaches an incoming result to the **first** entry without an output (not the last entry) and never overwrites a completed one — fixes reversed attachment under parallel tool calls and keeps the marker idempotent.
 
 ### SDK block format handling
 

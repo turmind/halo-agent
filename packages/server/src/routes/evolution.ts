@@ -189,7 +189,6 @@ export function createEvolutionRoutes(): Hono {
       subCliLog = await fs.readFile(path.join(dir, 'sub-cli.log'), 'utf-8')
     } catch { /* no sub-cli ran yet, or pre-tee old run */ }
 
-    // Optional platform-level suggestions written by evo when it notices
     // .skip.md is evo's "no patch worth proposing" marker, with a brief
     // human-readable reason. Present iff status === 'skipped'.
     let skipReasonMd: string | null = null

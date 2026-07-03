@@ -314,7 +314,7 @@ File: `packages/server/src/routes/evolution.ts`. Surfaces the global `evolution_
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/evolution/runs` | List all evolution runs across workspaces. Carries the latest `apply_id`/`apply_status` per run. (Score isn't surfaced in the list — it's read from `score.json` on the detail fetch only.) |
-| GET | `/api/evolution/runs/:id` | Detail: db row + `patch.md` + `score.json` + `system-suggestions.md` (optional, evo writes when it has platform-level feedback) + `.skip.md` (when `status='skipped'`) + a snapshot summary (first user message + first assistant reply + message count). |
+| GET | `/api/evolution/runs/:id` | Detail: db row + `patch.md` + `score.json` + `.skip.md` (when `status='skipped'`) + wrapper/sub-cli logs + a snapshot summary (first user message + first assistant reply + message count). Row carries `failureReason` (and `applyFailureReason` from the latest apply) — apply-side values include `phase A': apply cli exited <code>`, `phase A': apply agent aborted: <first line of ABORT.md>`, and `phase A': apply agent didn't produce apply.log`. |
 | POST | `/api/evolution/runs/:id/approve` `{reviewerHint?}` | Move run from `awaiting_review` → `approved`, insert a pending `evolution_applies` row that the ticker will pick up. |
 | POST | `/api/evolution/runs/:id/reject` | Move run from `awaiting_review` → `rejected`. |
 | POST | `/api/evolution/runs/:id/retry` `{hint}` | Reset a finished run back to `pending` with the supplied (required) hint so the wrapper picks it up again. Rejected with 409 when the run is already `running` / `pending`. |
