@@ -6,49 +6,119 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-**A multi-agent collaborative workspace you drive through natural language.** Describe what you want built; a primary agent decomposes the work, spawns sub-agents, and delivers it — while you watch, redirect, or take over at any point. Everything lives as files in a workspace you can read, edit, fork, and share.
+**Throw in an idea. A team of agents builds it.**
 
-![Halo workspace — file explorer, code canvas, and chat in one tab](assets/workspace.jpg)
+Halo is a multi-agent workspace you drive in plain language. A primary agent reads your intent, breaks the work down, and fans it out to sub-agents that run in parallel — while every reasoning step and tool call streams by live, and you interrupt, redirect, or take over whenever you like. Everything the team knows and produces is plain files in a workspace you can read, edit, `git clone`, and share. No hidden memory. No opaque state.
 
-## Highlights
+![Halo admin — a landing page assembled by parallel sub-agents, previewing live in Canvas](assets/workspace-hero.jpg)
+<p align="center"><sub>One prompt — <i>“Build a landing page for our coffee roastery… split the sections across sub-agents in parallel, then assemble.”</i> Executors fan out, report back, and the assembled page previews in Canvas, all in one browser tab.</sub></p>
 
-**🧬 It improves itself.** Halo learns from its own conversations. Run `/evo` (or let pre-compact fire) and an internal evolution agent analyzes the session, drafts an improvement to its own prompt files, dry-runs it in a sandbox, and a scoring agent grades the result. You approve in the **Evolution** tab → the change merges back into the workspace. The agent literally refines its own instructions, with you as the reviewer.
+## Install
 
-![Agents panel — global agents plus the internal Apply / Evolution / Score agents that power self-evolution](assets/agents.jpg)
+```bash
+npm install -g @turmind/halo   # one binary, all subcommands
+halo setup                     # interactive: password / port / model keys / optional skills
+halo server start              # → open http://localhost:9527
+```
 
-**🌐 One workspace, every channel.** Start a task in the browser, check progress from WeChat on your phone, give follow-up instructions over Telegram or Slack. Every channel connects to the *same* workspace and session — the workspace is the collaboration anchor, not the chat window.
+> [!IMPORTANT]
+> **First message fails with `Could not load credentials from any providers`?** API keys entered during `halo setup` are stored but **not auto-bound to any agent** — the built-in `default` agent initially points at AWS Bedrock. Open **Agents → default** in the admin and switch its model provider to the one you configured. (Bedrock users with a working AWS credential chain are unaffected.) Details in [Quick Start](#quick-start).
 
-**🧠 Provider-agnostic models.** A single `ModelRuntime` interface drives 10 model providers, configured per-agent. Run Claude on Bedrock for the heavy lifting and a cheaper local-region model for routine sub-tasks — no code changes.
+## Why Halo
 
-**👁 Transparent orchestration.** Every agent's reasoning, tool call, and file change is visible in real time. Interrupts are graceful (conversation repair, not a hard abort), and sub-agents auto-report when done. You stay in the loop instead of running and praying.
+### 🧬 It rewrites its own prompts — and you review the diff
 
-**🖥 IDE-like admin UI.** Chat + Monaco editor + file explorer + terminal (xterm.js), all in one browser tab. No switching between "talking to the AI" and "looking at the code."
+Halo learns from its own conversations. Run `/evo` (or let pre-compact trigger it): an internal evolution agent analyzes the session, drafts a patch to the workspace's own prompt files, dry-runs the patched agent in a sandbox against the original scenario, and a scoring agent grades the outcome. You approve or reject in the **Evolution** tab; approved patches merge back into the workspace. Real file diffs reviewed by you — not silent fine-tuning.
 
-**📁 The workspace is a portable unit.** Agent configs, skills, session history, and project docs are all just files under `.halo/` — no hidden memory, no opaque state. Because the whole agent lives in one directory, the unit you share is the *entire workspace*, not a single skill: copy `.halo/` (or `git clone` it) and the recipient gets a complete, runnable agent — persona, every skill, and config — that starts working on arrival. This is also what makes self-evolution possible: the evolution agent rewrites real files in the workspace, dry-runs them, and merges on approval.
+![Evolution tab — a run awaiting review with scores, dry-run reasoning, and the patch](assets/evolution-review.jpg)
+<p align="center"><sub>A real run awaiting review: lint / behavior / scope scores, the grader's reasoning, and the patch itself — one click merges it into the workspace.</sub></p>
 
-**🔒 Permission isolation.** Three access levels (`full` / `workspace` / `readonly`) enforced by a bubblewrap sandbox. Hand someone a `readonly` entry point and they can use your agents without write access to your files. (Filesystem isolation only — see [Status & Limitations](#status--limitations).)
+### 📁 The whole agent team is one folder
+
+Personas, skills, knowledge, session history — the entire agent team lives under `.halo/` as plain files:
+
+```
+my-project/
+├─ .halo/
+│  ├─ agents/     # who's on the team — persona, model, tools per agent
+│  ├─ skills/     # what they can do — markdown, injected on demand
+│  ├─ docs/       # what they've learned — knowledge they read & write
+│  ├─ memory/     # dated decision notes
+│  └─ sessions/   # every conversation, replayable
+└─ src/ …         # your actual project
+```
+
+`git clone` the workspace and the recipient gets a complete, runnable agent team — not an export, the real thing. It's also what makes self-evolution possible: the evolution agent edits real files, and you review real diffs.
+
+### 🌐 One workspace, every screen
+
+Kick off a build in the browser, check progress from WeChat on the metro, drop a follow-up in Telegram or Slack, finish in the terminal. Every channel connects to the *same* workspace and session — channels are doors, the workspace is the room.
+
+<p align="center">
+  <img src="assets/wechat-phone.jpg" alt="Halo in WeChat" width="270" />
+  &nbsp;&nbsp;
+  <img src="assets/telegram-phone.jpg" alt="Halo in Telegram" width="270" />
+</p>
+<p align="center"><sub>The same workspace, continued from WeChat and Telegram on a phone.</sub></p>
+
+### 👁 Watch it think
+
+Every reasoning step, tool call, and file change streams in real time — including inside sub-agents. Interrupts are graceful (conversation repair, not a hard kill), and sub-agents report back when done. You stay in the loop instead of running and praying.
+
+![Chat panel — the primary agent dispatching three executor sub-agents in parallel](assets/orchestration.jpg)
+<p align="center"><sub>The primary agent fans out three executors in parallel — every <code>start_session</code> and tool call visible as it happens.</sub></p>
+
+And when you'd rather have ambience than logs: [Halo City](#halo-city) renders the same runtime as a living pixel town.
+
+## Also in the box
+
+- **11 model providers, one runtime** — provider and model set per-agent: Claude on Bedrock for the heavy lifting, a cheap regional model for routine sub-tasks. No code changes.
+- **IDE-grade admin** — chat + Monaco editor + file explorer + git panel + terminal (xterm.js) in one browser tab.
+- **Skills** — markdown skill definitions injected into prompts on demand; workspace-scoped or global, no code required.
+- **Cron tasks** — scheduled agent runs (recurring or one-shot) whose output fans out to your chat channels.
+- **Permission isolation** — `full` / `workspace` / `readonly` access levels enforced by a bubblewrap sandbox (filesystem only — see [Status & Limitations](#status--limitations)).
+- **ACP adapter** — plug a halo workspace into Claude Code as a native ACP agent, or let one halo delegate to another.
+- **Structured sessions** — hierarchical parent ↔ child sessions with async coordination and auto-reports on completion.
+
+## New in v0.2.1
+
+- 🎨 **Four UI themes** — dark, light, midnight, warm; synced server-side so every browser gets your pick.
+- ⌨️ **TUI overhaul** — reworked input, verbose mode, and persistent history in the standalone terminal client.
+- 🏙 **Halo City performance** — viewport culling + offscreen skyline; smooth on busy servers.
+- 📊 **PPTX speaker-notes sidebar** — the slide preview now shows the notes lane alongside slides.
+- ✂️ **Graceful interrupts, fully surfaced** — interrupted tool calls are repaired and shown in the session UI instead of vanishing.
+
+![Four themes — dark, light, midnight, warm](assets/themes.jpg)
 
 ## Quick Start
 
-Published on npm as [`@turmind/halo`](https://www.npmjs.com/package/@turmind/halo) — one binary, all subcommands:
+Published on npm as [`@turmind/halo`](https://www.npmjs.com/package/@turmind/halo) — one binary, all subcommands. After the three install commands above, open **http://localhost:9527**.
 
-```bash
-npm install -g @turmind/halo
-halo setup            # interactive: password / port / model keys / optional skills
-halo server start     # launch on :9527 (default)
-```
+| Prerequisite | Notes |
+|---|---|
+| Node.js >= 22 | the only hard system requirement |
+| An API key for any supported model provider | entered during `halo setup`; AWS Bedrock users can leave keys unset and use the standard credential chain (env / `~/.aws` / instance role) instead |
+| pnpm >= 9 | source builds only |
 
-Then open **http://localhost:9527**.
-
-- **Upgrade**: `halo upgrade && halo server restart`. The server's startup check refreshes bundled docs / agents / skills automatically when the on-disk template version is behind.
+- **Bind your provider to the agent**: `halo setup` stores keys; agents choose providers. The built-in `default` agent ships pointing at AWS Bedrock, so if you configured a different provider, switch it once in **Agents → default → model provider** — your first conversation will thank you.
+- **Upgrade**: `halo upgrade && halo server restart`. The startup check refreshes bundled docs / agents / skills automatically when the on-disk template version is behind.
 - **Docker / CI**: `halo setup --non-interactive` and supply credentials via the `HALO_PASSWORD` env var.
 - **From source**: `pnpm install && pnpm build`.
 
-| Prerequisite | Version |
-|---|---|
-| Node.js | >= 22 |
-| pnpm (source builds only) | >= 9 |
-| AWS credentials | Bedrock access, default region `us-east-1` |
+### Talk to it from curl
+
+Every workspace can expose a token-authenticated HTTP + SSE endpoint — the Web channel, aka the "build your own UI" channel:
+
+1. In the admin, open **Channels → Web → Add Account**, pick a workspace and access level, and copy the token (shown once).
+2. Stream a conversation:
+
+```bash
+curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"message":"What files are in this workspace?"}' \
+  http://localhost:9527/api/web/chat
+```
+
+The response is SSE frames — `session` / `thinking` / `tool_call` / `stream` / `complete` — full protocol in [`.halo/docs/guide/channels/web.md`](.halo/docs/guide/channels/web.md).
 
 ## Models
 
@@ -63,6 +133,7 @@ Configured per-agent through one provider-agnostic runtime. AWS Bedrock Claude i
 | DeepSeek | |
 | Kimi (Moonshot AI) | |
 | MiniMax | |
+| Mimo (Xiaomi) | Anthropic-compatible gateway, 1M context |
 | Qwen (Aliyun) | |
 | Hunyuan (Tencent) | |
 | Doubao (Volcengine) | |
@@ -76,7 +147,7 @@ Every channel shares the same workspace and session state. Onboarding guides liv
 | Channel | Transport | Notes |
 |---|---|---|
 | **Admin** | WebSocket | Full-featured browser UI |
-| **Web** | HTTP + SSE | Token-authenticated API, independently deployable |
+| **Web** | HTTP + SSE | Token-authenticated API, independently deployable — see [curl example](#talk-to-it-from-curl) |
 | **CLI / TUI** | local | Standalone terminal client, embedded agent loop (no server required) |
 | **Telegram** | Bot API | Long polling |
 | **Slack** | Socket Mode | No public webhook required |
@@ -84,30 +155,21 @@ Every channel shares the same workspace and session state. Onboarding guides liv
 | **WeChat** | QR bind | Scan to bind, mobile access |
 | **ACP adapter** | stdio JSON-RPC | Bridges ACP clients (Claude Code, etc.) onto the Web channel |
 
-<p align="center">
-  <img src="assets/wechat-phone.jpg" alt="Halo in WeChat" width="270" />
-  &nbsp;&nbsp;
-  <img src="assets/telegram-phone.jpg" alt="Halo in Telegram" width="270" />
-</p>
-<p align="center"><sub>Same workspace, driven from WeChat and Telegram on a phone.</sub></p>
+![Halo TUI — delegation and reporting streamed in the terminal](assets/tui.jpg)
+<p align="center"><sub>The TUI runs the same agent loop in your terminal — here delegating to an executor and consolidating its report, no server needed.</sub></p>
 
-## More Capabilities
+## Halo City
 
-- **Multi-agent collaboration** — root agent decomposes tasks and spawns sub-agents; hierarchical sessions with async parent-child coordination.
-- **Workspace tools** — `file_read` / `file_write` / `file_edit`, sandboxed `shell_exec`, `grep` / `glob`, `web_fetch`, `view_image`, plus session tools (`start_session`, `query_session`, `interrupt_session`, …) for multi-agent control.
-- **Skills system** — Markdown-based skill definitions injected into agent prompts on demand; workspace-scoped or global, extensible without code changes.
-- **Cron tasks** — scheduled agent runs (recurring or one-shot) that fan output out to bound channel accounts.
-- **Halo City** — a read-only pixel **city block** that visualizes a server's runtime: each workspace is a building, each session an animal citizen at a desk, click anyone to inspect their live session log. Pure client-side canvas, zero model tokens. Lives at [`halo-city/`](halo-city/) — see [design notes](.halo/docs/design/halo-city.md).
+A read-only pixel city that visualizes a live halo server: each workspace is a building, each session an animal citizen — at a desk when working, grabbing coffee or hitting the arcade when idle. Click any citizen to inspect the real thing: live session log, delegation chain, last tool call, token usage. Pure client-side canvas on a single polling endpoint — **zero model tokens burned**.
 
-![Halo City — a pixel city block visualizing the server runtime](assets/halo-city.jpg)
+![Halo City street level — sub-agent citizens at work, one inspected](assets/halo-city-street.jpg)
+<p align="center"><sub>Street level: three sub-agent citizens heads-down in the <code>aurora-cafe</code> building; the inspector shows one executor's live log and delegation chain.</sub></p>
 
-![Skills panel — global and workspace skills, extensible without code changes](assets/skills.jpg)
-
-![Halo CLI / TUI](assets/cli.jpg)
+Lives at [`halo-city/`](halo-city/) (plain static files, no build) — see the [design notes](.halo/docs/design/halo-city.md).
 
 ## Tech Stack
 
-- **Monorepo**: pnpm workspace (`packages/core`, `server`, `admin`, `cli`)
+- **Monorepo**: pnpm workspace (`core`, `server`, `admin`, `cli`, `desktop`, `acp-adapter`, `web-demo`)
 - **Backend**: Hono + WebSocket, single Node.js process on port 9527
 - **Frontend**: Next.js 15 static export, served directly by Hono
 - **Agent**: custom orchestration loop, provider-agnostic `ModelRuntime` interface
@@ -120,6 +182,7 @@ Every channel shares the same workspace and session state. Onboarding guides liv
 - [`.halo/docs/requirements/overview.md`](.halo/docs/requirements/overview.md) — product concept
 - [`.halo/docs/design/architecture.md`](.halo/docs/design/architecture.md) — backend architecture
 - [`.halo/docs/design/evolution.md`](.halo/docs/design/evolution.md) — self-evolution design
+- [`.halo/docs/guide/channels/`](.halo/docs/guide/channels/) — per-channel onboarding guides
 - [`.halo/docs/dev/deploy.md`](.halo/docs/dev/deploy.md) — deployment (systemd / Nginx)
 - [`.halo/docs/dev/env.md`](.halo/docs/dev/env.md) — env vars, build commands
 - [`CLAUDE.md`](CLAUDE.md) — development instructions for Claude Code
