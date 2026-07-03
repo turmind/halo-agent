@@ -25,6 +25,8 @@ export interface ChatBlock {
   /** For 'tool' blocks: tool name + duration. */
   toolName?: string
   durationMs?: number
+  /** For 'tool' blocks: one-glance key-argument summary (path / command / …). */
+  toolArg?: string
   /** For 'tool' blocks (verbose mode): JSON-stringified tool input. */
   toolInput?: string
   /** For 'tool' blocks (verbose mode): truncated tool result text. */

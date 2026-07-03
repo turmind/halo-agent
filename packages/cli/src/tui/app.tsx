@@ -8,6 +8,7 @@ import { resolveRefs } from '../resolve-refs.js'
 import type { ChatBlock } from './types.js'
 import { Messages } from './components/messages.js'
 import { Streaming } from './components/streaming.js'
+import { loadHistory, appendHistory } from './history.js'
 import { StatusBar } from './components/status-bar.js'
 import { InputBox } from './components/input-box.js'
 import { LogNavigator } from './components/log-navigator.js'
@@ -19,8 +20,7 @@ const MAX_CONTEXT_TOKENS_FALLBACK = 200_000
 
 interface AppProps {
   harness: Harness
-  /** Verbose mode set at startup via `halo tui -v`. Affects all tool blocks
-   *  for the lifetime of the TUI. Cannot be toggled at runtime. */
+  /** Initial verbose mode (`halo tui -v`); /verbose toggles it at runtime. */
   verbose: boolean
 }
 
@@ -51,11 +51,22 @@ interface State {
   rootAgentName: string
   /** Active sub-agents keyed by taskId — tracks tool count + current tool for live display. */
   subAgents: Map<string, SubAgentStats>
-  /** Verbose mode (set at startup via `halo tui -v`). When true, tool blocks
-   *  include args + truncated result. Immutable for the lifetime of the App. */
+  /** Verbose mode. Seeded from `halo tui -v`, toggled at runtime with
+   *  /verbose. Committed <Static> blocks are immutable, so a toggle only
+   *  affects blocks rendered after it. */
   verbose: boolean
   /** Buffered root-tool input awaiting its tool_result (for verbose mode). */
   pendingToolInput: string | null
+  /** Buffered key-argument summary (path / command / …) for the same block. */
+  pendingToolArg: string | null
+  /** Buffered root-tool name awaiting its tool_result. The server's
+   *  tool_result event carries no toolName (only tool_call does), so without
+   *  this the block renders as "⚙ ?". Root runs tools sequentially, so a
+   *  single slot (not a map) is enough. */
+  pendingToolName: string | null
+  /** Epoch ms when the current turn started — drives the elapsed-seconds
+   *  counter next to the spinner. Null when idle. */
+  turnStartedAt: number | null
 }
 
 type Action =
@@ -66,6 +77,7 @@ type Action =
   | { type: 'turn-start' }
   | { type: 'workspace-switched'; text: string }
   | { type: 'load-history'; blocks: ChatBlock[] }
+  | { type: 'toggle-verbose' }
 
 let blockSeq = 0
 function nextId(): string { return `b${++blockSeq}` }
@@ -84,12 +96,58 @@ function initialState(verbose: boolean): State {
     subAgents: new Map(),
     verbose,
     pendingToolInput: null,
+    pendingToolArg: null,
+    pendingToolName: null,
+    turnStartedAt: null,
   }
 }
 
 function truncate(s: string, maxLen: number): string {
   if (s.length <= maxLen) return s
   return s.slice(0, maxLen) + '…'
+}
+
+/** Keep the tail of a path-like string — the filename end is the telling part. */
+function truncateTail(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s
+  return '…' + s.slice(-maxLen)
+}
+
+/**
+ * One-glance summary of a tool call's key argument for the tool block header:
+ * `⚙ file_read hello.txt 5ms` instead of `⚙ file_read 5ms`. Best-effort — an
+ * unknown tool (or missing field) just renders no summary.
+ */
+function summarizeToolInput(toolName: string, input: unknown): string | null {
+  if (input == null || typeof input !== 'object') return null
+  const o = input as Record<string, unknown>
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null)
+  switch (toolName) {
+    case 'file_read':
+    case 'file_write':
+    case 'file_edit':
+    case 'view_image':
+      return truncateTail(str(o.path) ?? '', 40) || null
+    case 'file_list':
+      return truncateTail(str(o.path) ?? '.', 40)
+    case 'shell_exec': {
+      const cmd = str(o.command)
+      if (!cmd) return null
+      return truncate(cmd.split('\n')[0]!, 40)
+    }
+    case 'grep':
+    case 'glob':
+      return truncate(str(o.pattern) ?? '', 40) || null
+    case 'web_fetch':
+      return truncateTail(str(o.url) ?? '', 40) || null
+    case 'activate_skill':
+      return str(o.skill_id)
+    case 'start_session':
+    case 'query_agent':
+      return str(o.agent_id)
+    default:
+      return null
+  }
 }
 
 function truncateLines(s: string, maxLines: number, maxLineLen: number): string {
@@ -232,10 +290,18 @@ function messagesToBlocks(messages: unknown[]): ChatBlock[] {
       content?: string
       agentName?: string
       toolName?: string
+      toolInput?: unknown
       durationMs?: number
     }
     if (m.toolName) {
-      blocks.push({ id: nextId(), kind: 'tool', text: '', toolName: m.toolName, durationMs: m.durationMs })
+      blocks.push({
+        id: nextId(),
+        kind: 'tool',
+        text: '',
+        toolName: m.toolName,
+        toolArg: summarizeToolInput(m.toolName, m.toolInput) ?? undefined,
+        durationMs: m.durationMs,
+      })
       continue
     }
     const content = (m.content ?? '').trim()
@@ -281,7 +347,7 @@ function reducer(state: State, action: Action): State {
       // fine and keeps chronological order (history first, then new turns).
       return { ...state, blocks: [...action.blocks, ...state.blocks] }
     case 'turn-start':
-      return { ...state, running: true, spinnerLabel: 'thinking', liveText: '', liveThinking: null }
+      return { ...state, running: true, spinnerLabel: 'thinking', liveText: '', liveThinking: null, turnStartedAt: Date.now() }
     case 'workspace-switched': {
       // Soft reset: append a divider so the user sees the boundary, but keep
       // already-committed blocks in <Static> (it's append-only — clearing
@@ -300,8 +366,14 @@ function reducer(state: State, action: Action): State {
         agentNameByTaskId: new Map(),
         rootAgentName: 'agent',
         subAgents: new Map(),
+        pendingToolInput: null,
+        pendingToolArg: null,
+        pendingToolName: null,
+        turnStartedAt: null,
       }
     }
+    case 'toggle-verbose':
+      return { ...state, verbose: !state.verbose }
     case 'event': {
       const e = action.event
       const isSub = !!e.taskId
@@ -389,7 +461,16 @@ function reducer(state: State, action: Action): State {
               pending = '[unserializable]'
             }
           }
-          return { ...state, spinnerLabel: e.toolName ?? 'tool', pendingToolInput: pending }
+          const arg = e.toolName ? summarizeToolInput(e.toolName, e.toolInput) : null
+          // Buffer the tool name too — belt-and-braces for a tool_result that
+          // arrives without toolName (older server builds didn't attach it).
+          return {
+            ...state,
+            spinnerLabel: arg ? `${e.toolName} ${arg}` : (e.toolName ?? 'tool'),
+            pendingToolInput: pending,
+            pendingToolArg: arg,
+            pendingToolName: e.toolName ?? null,
+          }
         }
         case 'tool_result': {
           if (isSub && e.taskId) {
@@ -399,17 +480,21 @@ function reducer(state: State, action: Action): State {
             subs.set(e.taskId, { ...stats, currentTool: null })
             return { ...state, subAgents: subs }
           }
+          // tool_result now carries toolName (server fix); the name buffered
+          // at tool_call time stays as fallback for older event streams.
+          const toolName = e.toolName ?? state.pendingToolName ?? '?'
           const block: ChatBlock = {
             id: nextId(),
             kind: 'tool',
             text: '',
-            toolName: e.toolName ?? '?',
+            toolName,
+            toolArg: state.pendingToolArg ?? undefined,
             durationMs: e.durationMs,
           }
           // shell_exec output is the one tool whose result the user almost
           // always wants to see — show it even without -v, with a more
           // generous line cap. Other tools stay verbose-gated.
-          const isShell = e.toolName === 'shell_exec'
+          const isShell = toolName === 'shell_exec'
           if ((state.verbose || isShell) && state.pendingToolInput) block.toolInput = state.pendingToolInput
           if (e.toolResult && (state.verbose || isShell)) {
             block.toolResult = truncateLines(e.toolResult, isShell ? 20 : 5, 200)
@@ -419,6 +504,8 @@ function reducer(state: State, action: Action): State {
             blocks: [...state.blocks, block],
             spinnerLabel: 'thinking',
             pendingToolInput: null,
+            pendingToolArg: null,
+            pendingToolName: null,
           }
         }
         case 'usage': {
@@ -490,9 +577,10 @@ function reducer(state: State, action: Action): State {
               liveThinking: null,
               spinnerLabel: null,
               running: false,
+              turnStartedAt: null,
             }
           }
-          return { ...state, running: false, spinnerLabel: null, liveThinking: null }
+          return { ...state, running: false, spinnerLabel: null, liveThinking: null, turnStartedAt: null }
         default:
           return state
       }
@@ -503,7 +591,7 @@ function reducer(state: State, action: Action): State {
 export function App({ harness, verbose }: AppProps): ReactElement {
   const { exit } = useApp()
   const [state, dispatch] = useReducer(reducer, verbose, initialState)
-  const [history, setHistory] = useState<string[]>([])
+  const [history, setHistory] = useState<string[]>(() => loadHistory())
   const [interruptArmed, setInterruptArmed] = useState(false)
   const interruptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** When set, render the LogNavigator overlay instead of the input box. */
@@ -516,6 +604,9 @@ export function App({ harness, verbose }: AppProps): ReactElement {
   const lastInterruptRef = useRef(0)
   /** Slash command list — refreshed on mount + on /ws switch. */
   const [commands, setCommands] = useState<SlashItem[]>([])
+  /** Real context window size for the current session's agent — fetched once
+   *  per session (mount / /ws / /switch); hardcoded fallback until it lands. */
+  const [maxContextTokens, setMaxContextTokens] = useState<number | null>(null)
 
   // Subscribe to harness events.
   useEffect(() => {
@@ -554,6 +645,17 @@ export function App({ harness, verbose }: AppProps): ReactElement {
     }).catch(() => { /* best-effort */ })
     return () => { cancelled = true }
   }, [harness, harness.workspace])
+
+  // Fetch the real context window size for ctx% — per-agent config, not the
+  // hardcoded 200K guess. Re-fetch when the session changes (/session new,
+  // /session switch, /ws all rebind harness.sessionId and trigger a render).
+  useEffect(() => {
+    let cancelled = false
+    harness.getMaxContextTokens().then((max) => {
+      if (!cancelled && max != null && max > 0) setMaxContextTokens(max)
+    }).catch(() => { /* keep fallback */ })
+    return () => { cancelled = true }
+  }, [harness, harness.sessionId])
 
   // Cleanup any pending interrupt timer on unmount.
   useEffect(() => () => {
@@ -610,6 +712,7 @@ export function App({ harness, verbose }: AppProps): ReactElement {
     const trimmed = raw.trim()
     if (!trimmed) return
     setHistory((h) => (h[h.length - 1] === trimmed ? h : [...h, trimmed]))
+    appendHistory(trimmed)
 
     // Slash commands
     if (trimmed.startsWith('/')) {
@@ -625,10 +728,20 @@ export function App({ harness, verbose }: AppProps): ReactElement {
         return
       }
       if (cmd === '/clear') {
-        // Alias for /new — server creates a new session and reports it via
-        // result.switchTo, which harness.command picks up. Rewrite the cmd
-        // so dispatchCommand routes it correctly (server has no /clear).
-        return handleSubmit('/new ' + rest.join(' '))
+        // Alias for /session new — server creates a new session and reports
+        // it via result.switchTo, which harness.command picks up. (There is
+        // no bare /new; session lifecycle is the /session object command.)
+        return handleSubmit(['/session new', ...rest].join(' '))
+      }
+      if (cmd === '/verbose') {
+        // Runtime toggle of the -v flag. <Static> blocks are immutable, so it
+        // only affects blocks committed from now on; the status bar reflects
+        // the current state ("v" badge).
+        dispatch({ type: 'append-user', text: trimmed })
+        const next = !state.verbose
+        dispatch({ type: 'toggle-verbose' })
+        dispatch({ type: 'append-system', text: `verbose ${next ? 'on' : 'off'} (affects new output; status bar shows "v" when on)` })
+        return
       }
       if (cmd === '/help') {
         dispatch({ type: 'append-user', text: trimmed })
@@ -692,17 +805,18 @@ export function App({ harness, verbose }: AppProps): ReactElement {
     if (status === 'running') {
       dispatch({ type: 'turn-start' })
     } else {
-      // queued — server will interrupt the current turn at the next safe
-      // checkpoint (after the in-flight tool/stream) and run this next, same
-      // as admin's explorer chat. Leave running as-is; surface a hint.
-      dispatch({ type: 'append-system', text: '(will interrupt current response at the next checkpoint)' })
+      // queued — server soft-interrupts: the in-flight tool/stream finishes,
+      // then queued messages fold into one merged follow-up turn (same as
+      // admin's explorer chat). Leave running as-is; surface a hint.
+      dispatch({ type: 'append-system', text: '(queued — current step will finish, then this message runs)' })
     }
   }
 
   const ctxPercent = useMemo(() => {
     if (state.contextTokens == null) return null
-    return Math.round((state.contextTokens / MAX_CONTEXT_TOKENS_FALLBACK) * 100)
-  }, [state.contextTokens])
+    const max = maxContextTokens ?? MAX_CONTEXT_TOKENS_FALLBACK
+    return Math.round((state.contextTokens / max) * 100)
+  }, [state.contextTokens, maxContextTokens])
 
   const placeholder = state.running ? 'send to interrupt current response…' : 'ask a question or describe a task'
   const hint = interruptArmed ? 'press Ctrl+C again to exit' : (state.running ? 'esc to interrupt' : '/help · /quit · /log (ctrl+o)')
@@ -779,6 +893,7 @@ export function App({ harness, verbose }: AppProps): ReactElement {
         activeSubs={Array.from(state.subAgents.values()).map((s) => ({
           taskId: s.taskId, agentName: s.agentName, toolCount: s.toolCount, currentTool: s.currentTool,
         }))}
+        turnStartedAt={state.turnStartedAt}
       />
 
       {viewer ? (

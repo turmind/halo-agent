@@ -707,14 +707,81 @@ async function cmdSessions(flags: HarnessFlags): Promise<void> {
 async function cmdTui(flags: HarnessFlags): Promise<void> {
   const { initRuntime } = await import('./harness.js')
   const { runTui } = await import('./tui.js')
-  await initRuntime()
-  const harness = await buildHarnessFromFlags(flags)
-  attachSigint(harness)
+
+  // Guard the boot window (~1-2s of harness init before ink mounts): in
+  // cooked mode, early keystrokes echo into the middle of the first frame
+  // (torn borders) and a line terminated by Enter is consumed by the tty
+  // line editor — the classic "typed too early, first message lost". Flip to
+  // raw mode NOW (no echo, no line buffering), buffer whatever arrives, and
+  // hand it to ink once it has mounted, so typed-ahead input lands in the
+  // input box instead of on the floor. Bracketed paste is enabled early too,
+  // so a pre-mount paste reaches ink as one marked event. Raw mode
+  // suppresses keyboard SIGINT, so ^C is watched by hand.
+  const earlyChunks: Buffer[] = []
+  let buffering = false
+  const onEarlyData = (chunk: Buffer) => {
+    // Once ink's stdin reader exists it owns arriving bytes (read() in
+    // paused mode also re-emits 'data' — capturing those would duplicate).
+    if (process.stdin.listenerCount('readable') > 0) return
+    if (chunk.includes(0x03)) { // ^C while booting — restore tty and bail
+      process.stdout.write('\x1b[?2004l')
+      process.stdin.setRawMode(false)
+      process.exit(130)
+    }
+    earlyChunks.push(chunk)
+  }
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true)
+    process.stdout.write('\x1b[?2004h')
+    process.stdin.on('data', onEarlyData)
+    buffering = true
+  }
+  /** Boot failed — detach and restore cooked mode so the shell is usable.
+   *  NOTE: never stdin.pause() on the success path — pause() stops the uv
+   *  read handle, and ink's later 'readable' attach won't restart it while
+   *  the stream still thinks a read is in flight (state.reading), leaving
+   *  the event loop empty → the process exits right after mount. */
+  const restoreTty = () => {
+    if (buffering) {
+      buffering = false
+      process.stdin.off('data', onEarlyData)
+      process.stdin.pause()
+    }
+    process.stdout.write('\x1b[?2004l')
+    process.stdin.setRawMode(false)
+  }
+  /** Once ink's useInput has attached its 'readable' listener (a passive
+   *  effect shortly after first render), stop buffering and requeue the
+   *  type-ahead bytes at the front of the stream for ink's parser. */
+  const forwardEarlyInput = async () => {
+    if (!buffering) return
+    for (let i = 0; i < 200 && process.stdin.listenerCount('readable') === 0; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    buffering = false
+    process.stdin.off('data', onEarlyData)
+    // unshift prepends — reverse to preserve arrival order. The unshift
+    // triggers 'readable', so ink drains them immediately.
+    for (const chunk of earlyChunks.reverse()) process.stdin.unshift(chunk)
+  }
+
   try {
-    await runTui(harness, { verbose: flags.verbose })
-  } finally {
-    await harness.stop().catch(() => { /* best-effort */ })
-    harness.destroy()
+    await initRuntime()
+    const harness = await buildHarnessFromFlags(flags)
+    attachSigint(harness)
+    try {
+      const tuiDone = runTui(harness, { verbose: flags.verbose })
+      void forwardEarlyInput()
+      await tuiDone
+    } finally {
+      await harness.stop().catch(() => { /* best-effort */ })
+      harness.destroy()
+    }
+  } catch (err) {
+    // Boot failed (or ink crashed) — leave the terminal usable. Restore is
+    // idempotent, so overlapping ink's own teardown is safe.
+    if (process.stdin.isTTY) restoreTty()
+    throw err
   }
 }
 

@@ -60,6 +60,7 @@ function Block({ block }: { block: ChatBlock }): React.ReactElement {
         <Box flexDirection="column" marginLeft={2}>
           <Text color="yellow">
             ⚙ {block.toolName}
+            {block.toolArg ? <Text color="gray" dimColor>{` ${block.toolArg}`}</Text> : null}
             {block.durationMs != null ? ` ${block.durationMs}ms` : ''}
           </Text>
           {block.toolInput ? (

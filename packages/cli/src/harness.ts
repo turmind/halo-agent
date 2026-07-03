@@ -88,6 +88,12 @@ export interface Harness {
    * tui-local). Used by the input box to power the auto-suggest popup.
    */
   listCommands(): Promise<CommandDescriptor[]>
+  /**
+   * The current session's real context window size (per-agent config, falls
+   * back to the global model default server-side). Used by the status bar's
+   * ctx% so it doesn't divide by a hardcoded 200K.
+   */
+  getMaxContextTokens(): Promise<number | null>
 }
 
 const SESSION_PREFIX = 'cli_'
@@ -305,6 +311,11 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     return state.sm.isSessionRunning(sessionId)
   }
 
+  async function getMaxContextTokens(): Promise<number | null> {
+    const info = await state.sm.getSessionContext(state.sessionId)
+    return info?.maxContextTokens ?? null
+  }
+
   async function listCommands(): Promise<CommandDescriptor[]> {
     const builtins = commandRegistry.listDescriptors()
     // Only show skills the *current agent* is allowed to invoke. The
@@ -324,6 +335,15 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     }
     if (!merged.has('log')) {
       merged.set('log', { name: 'log', slashName: '/log', description: 'Browse the session tree and view a session log', type: 'client', source: 'builtin' })
+    }
+    if (!merged.has('clear')) {
+      merged.set('clear', { name: 'clear', slashName: '/clear', description: 'Start a new session (alias for /session new)', type: 'client', source: 'builtin' })
+    }
+    if (!merged.has('retry')) {
+      merged.set('retry', { name: 'retry', slashName: '/retry', description: 'Resend the last user message', type: 'client', source: 'builtin' })
+    }
+    if (!merged.has('verbose')) {
+      merged.set('verbose', { name: 'verbose', slashName: '/verbose', description: 'Toggle verbose tool output (args + results)', type: 'client', source: 'builtin' })
     }
     return Array.from(merged.values()).sort((a, b) => a.slashName.localeCompare(b.slashName))
   }
@@ -364,5 +384,6 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     getSessionMessages,
     isSessionRunning,
     listCommands,
+    getMaxContextTokens,
   }
 }
