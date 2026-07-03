@@ -164,6 +164,10 @@ Two-level dispatch:
 
 `emitEvent` captures the turnId *before* reducing the event but hands listeners the state *after* — sub-agent events carry their own `taskId`/`currentTurnId`, so a single post-reduce turnId would collapse every sub-agent block into one bubble. Persistence is split: `complete` flushes synchronously (and broadcasts `session:changed` so admin lists re-fetch), every other save-worthy event takes the 500ms debounce. Characterized in `test/session-ui-store.test.ts`.
 
+Two event-field notes (`agents/agent-events.ts`):
+- **`agent_start` carries `text` + optional `fullText`.** `text` is a 200-char preview for parent-side rendering (the `agent:start` WS message, in-flight panel); `fullText` is the un-truncated task brief (`system_prompt_context` + message, without the `[Session id]` assembly) that `ui-log-builder.initSubSessionLog` uses to seed the sub-session UI log's opening user message — so the child's log shows the whole brief, not a cut-off preview.
+- **`tool_result` carries `toolName`** (stamped in `session-manager.ts`'s event fan-out, same as `tool_call`). Direct event consumers (TUI tool blocks, web-channel SSE) can label a result without buffering the name from the preceding `tool_call`; the TUI keeps that buffer only as a fallback for older event streams.
+
 ### By-id tool scoping
 
 The five session tools that take an existing `session_id` — `query_session`, `interrupt_session`, `stop_session`, `archive_session`, `get_session_output` — are scoped to the **caller's own session tree**. The check is the same root-prefix primitive used everywhere else: `targetId.split('>')[0] === callerId.split('>')[0]` (mirrors `findRootSessionId`). A cross-tree id is refused as `{"code": 1, "error": "session <id> not found"}` — not-found phrasing avoids leaking a foreign session's existence.

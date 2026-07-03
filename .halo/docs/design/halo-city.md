@@ -110,3 +110,34 @@ js/
   token 上限。鉴权同 `/api/show/state`(x-token;非 full 只能看自己 workspace)
 - `/api/show/state` — 无活跃 UIState 的会话(idle/stopped/重启后)token
   从会话文件头读取(mtime 缓存,不随轮询刷盘),不显示 0;含 `messageCount` 字段
+
+## 性能设计
+
+原则:一个纯只读可视化页面,轮询**不得对服务端会话生命周期产生任何副作用**,
+前端渲染成本随"画面里实际可见、实际变化的东西"伸缩,而不是随世界大小。
+
+### 轮询零副作用(服务端)
+
+show 路由只用 `registry.peek()`(只查内存 Map,**绝不创建** SessionManager——
+构造函数是写重的:boot 孤儿回收会批量 stop 子会话行、还会往目录里播 `.halo/`)。
+peek miss 时降级为**只读 sqlite 快照**:readonly 模式直开该 workspace 的
+`.halo/halo.db`(连接进程内缓存,DB 缺失静默降级为空),行直接投影成 wire shape。
+代价是非内存会话的数据滞后到上次持久化点、live 信号(lastTool/activeSkill)为空
+——对可视化用途是正确取舍。详见 [dev/api.md](../dev/api.md#show-world-snapshot)。
+
+### 前端渲染(js/ 各文件的注释有完整细节)
+
+- **palette 记忆化**(palette.js):`shade/tint/alpha/mix` 纯函数按输入两级 Map
+  缓存;alpha 比例 8-bit 量化、sky 颜色按 5s 量化,确定性验证像素 0 差异
+- **vGradient 缓存**(city.js):sky/beach/sea/haze 的 `createLinearGradient`
+  按几何+颜色 key 缓存,相机静止时 steady-state 分配归零
+- **skyline offscreen layer**(city.js `Layer`):天际线剪影带在相机静止时每 5s
+  sky tick 渲一次,其余帧一次 blit。**gradient 填充不得入 layer**——Skia 的
+  gradient dither 锚定 device y,带偏移 blit 会整片移相(drawSea 因此回退直绘,
+  教训详见 [memory/2026-07-02-canvas-gradient-dither.md](../../memory/2026-07-02-canvas-gradient-dither.md))
+- **视口剔除**:楼整体(`buildingVisible`)与楼内逐层(`drawFloors`)双级剔除;
+  市民绘制列表同样剔除(但位置模拟不剔——否则回屏跳变)
+- **stateSig 签名比对**(main.js):快照签名(剔除 serverTime、uptime 取分钟粒度)
+  未变时跳过整个 ingest/diff/rebuild,空闲服务器的轮询近乎零成本
+- **后台停轮询**(api.js / inspector.js):`document.hidden` 时停止轮询,
+  `visibilitychange` 恢复并立即刷一次——后台标签页零流量零 CPU

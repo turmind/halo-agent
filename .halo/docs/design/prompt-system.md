@@ -16,7 +16,7 @@ Entry point: `session-manager.ts` `buildAgentInstance(agentId, sessionId, parent
 ├── INSTRUCTIONS.md         ← global user preferences
 ├── prompts/                ← user-editable system prompts (externalised)
 │   ├── bootstrap/BOOTSTRAP.md             ← first-run guidance
-│   ├── all/                               ← every-agent rules (TOOL_GUIDELINES.md, TOOL_SHELL[.windows].md)
+│   ├── all/                               ← every-agent rules (TOOL_GUIDELINES.md, TOOL_SHELL[.windows].md, WORKSPACE_CONVENTIONS.md)
 │   └── root/                              ← root-agent-only (empty by default; user-set)
 ├── agents/<id>/{agent.yaml, AGENT.md}
 └── skills/<id>/SKILL.md       ← built-in `halo` skill carries platform self-knowledge (loaded on demand via activate_skill)
@@ -106,7 +106,7 @@ interface MdContents {
 [system-prompts.ts](../../../packages/server/src/prompts/system-prompts.ts) keeps the hard-coded defaults for seeding and fallback.
 
 ### Seed (init.ts startup hook)
-First startup writes the four default MDs to `~/.halo/global/prompts/{bootstrap,all,root}/`. Existing files are not overwritten.
+Startup seeds `templates/prompts/{bootstrap,all,root}/` into `~/.halo/global/prompts/` (currently `BOOTSTRAP.md`; `TOOL_GUIDELINES.md`, `TOOL_SHELL[.windows].md`, `WORKSPACE_CONVENTIONS.md`; `WORKSPACE_MEMORY.md`). These are **platform-owned, force-overwritten** on template refresh (`TEMPLATE_VERSION` gate) — user customization belongs in the workspace `prompts/` override, not in the global copies.
 
 ### Live load (every `buildAgentInstance`)
 `loadSystemPrompts(workspaceRoot?)` resolves each scope directory with workspace > global precedence:
@@ -197,7 +197,7 @@ If `mdPrompt` is empty:
 
 `buildAgentRoster(selfAgentId, team, isRoot)` ([session-agent-builder.ts](../../../packages/server/src/agents/session-agent-builder.ts)) builds a live team block listing the agents this session can delegate to — one `- \`<id>\` — <name>: <description>` line per teammate. The framing depends on `isRoot` (see "Root vs. sub-agent framing" below): a root gets the full `## Know Your Team Before You Act` orchestrator block, a sub-agent a lean `## Your Team` block.
 
-**Who's on the list.** `scanAvailableAgents` minus `disabled` (workspace `disabled_items` table) minus `internal: true`, then narrowed to the agent's `team` whitelist via `isTeamMember(team, id)` — the same filter `start_session` / `query_agent` enforce server-side, so the roster never lists someone the agent can't actually reach. Self is treated like any other agent: it appears only when the agent's own id is in `team`. When listed it's pinned to the top and tagged `(you)` — purely a reading order ("who am I" before "who else") — with guidance to spawn parallel instances of itself for independent sub-tasks and to do serial work directly rather than self-delegate. The remaining teammates follow in scan order. (Add the agent's own id to its `team` to enable parallel self-spawn — the seed `default` agent does exactly this.)
+**Who's on the list.** `scanAvailableAgents` minus `disabled` (workspace `disabled_items` table) minus `internal: true`, collapsed to the effective record per id (workspace shadows global — so a stale global shadow whose workspace record is disabled never gets listed-but-uncallable), then narrowed to the agent's `team` whitelist via `isTeamMember(team, id)` — the same filter `start_session` / `query_agent` enforce server-side, so the roster never lists someone the agent can't actually reach. Self is treated like any other agent: it appears only when the agent's own id is in `team`. When listed it's pinned to the top and tagged `(you)` — purely a reading order ("who am I" before "who else") — and the root framing adds a **cost warning**: spawn parallel instances of yourself only for sub-tasks that need delegation or your full generality (each instance runs your own expensive model; prefer the cheaper executor for well-scoped work), and do serial work directly rather than self-delegate. The remaining teammates are sorted by `priority` **descending** — the preferred workhorse leads and ordering is deterministic (scan order is readdir order, which isn't guaranteed). (Add the agent's own id to its `team` to enable parallel self-spawn — the seed `default` agent does exactly this.)
 
 **Gated on a non-empty team.** A roster is computed only when `canDelegate(yaml)` ([agent-loader.ts](../../../packages/server/src/agents/agent-loader.ts)) holds: `!internal` (evo / score / apply are platform tooling, not orchestrators) **and** a non-empty `team`. The very same predicate gates the session-tool bundle in `resolveBaseToolSet` — so the roster and the tools that act on it are granted together or not at all, never half. No team, no delegation: no session tools, no roster.
 

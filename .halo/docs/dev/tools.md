@@ -181,6 +181,8 @@ Start a sub-agent session asynchronously. When the sub-agent finishes, its **wra
 - Depth exceeded: `{"code": 1, "error": "Maximum nesting depth (N) reached..."}`
 - Working dir invalid: `{"code": 1, "error": "working_dir \"...\" is outside the workspace"}` (or does-not-exist / not-a-directory)
 
+UI note: the `agent_start` event this emits carries both a 200-char `text` preview (parent-side rendering) and the full un-truncated brief as `fullText`, which seeds the sub-session log's opening user message — so viewing the child session shows the complete task brief (`system_prompt_context` + `message`), not a cut-off preview. See [session.md → Event routing](../design/session.md#event-routing).
+
 ### session_list
 
 List direct child sessions of the current session and their status.
@@ -293,7 +295,7 @@ Returns: full SKILL.md content (body + resource files list). For progressive dis
 |---|---|---|---|
 | `content` | string | yes | The complete draft answer. Required and must be non-empty |
 
-The tool **description is deliberately plain** — "Submit a draft answer for self-review; returns a checklist that critiques the draft." It does NOT say *when* to call it (no "call this for complex questions / when unsure"). An earlier version that did embed such self-referential guidance made some models (notably GPT-5.x) thrash. Steering toward *using* draft belongs in the agent's `system_prompt` (e.g. the bundled `default` agents say "hold your answers to a high standard… don't reply off the cuff"), not in the tool description. Empty `content` is rejected with an error **without consuming a draft round**.
+The tool **description is deliberately plain** — "Submit a draft answer for self-review; returns a checklist that critiques the draft." It does NOT say *when* to call it (no "call this for complex questions / when unsure"). An earlier version that did embed such self-referential guidance made some models (notably GPT-5.x) thrash. Steering toward *using* draft belongs in the agent's prompt files (the bundled `default` agent's AGENT.md says "hold your answers to a high standard… don't reply off the cuff" — it lives in AGENT.md because the yaml `system_prompt` is only a fallback when the MD layer is empty), not in the tool description. Empty `content` is rejected with an error **without consuming a draft round**.
 
 **Why it exists:** the agent loop only makes another model call when the model emits a `tool_use` block. A plain-text answer (`end_turn`) is single-pass — `thinking` runs *before* the answer in the same call, so the model never gets to look at its *finished* answer and revise it. `draft` closes that gap without touching the loop: the model writes its answer into `content` (materialised into the conversation as a `tool_use` block — uncapped, never echoed back), and the tool_result hands back an adversarial review checklist (framed as a hostile reviewer: list every factual claim and tag its source, verify the unverified ones with tools *now*, check directness/tone, flag gaps). The next model call then critiques that now-concrete draft and either revises (calls `draft` again) or writes the final answer.
 

@@ -235,10 +235,12 @@ runtime so the frontend can render rooms (workspaces) + characters (sessions).
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/show/state` | Full-access token → every known workspace; otherwise the account's own. Returns `{ serverTime, uptime, accessLevel, skills[], workspaces[] }` |
-| GET | `/api/show/session?ws=&id=` | Inspector-panel detail for a single session. Trimmed message log (last 40, content/tool I/O capped) plus `contextTokens` / `outputTokens` / `maxContextTokens` / `isRunning`. Non-full tokens may only read their own workspace. |
+| GET | `/api/show/state` | `full` or `observer` token → every known workspace; otherwise the account's own. Returns `{ serverTime, uptime, accessLevel, skills[], workspaces[] }` |
+| GET | `/api/show/session?ws=&id=` | Inspector-panel detail for a single session. Trimmed message log (last 40, content/tool I/O capped) plus `contextTokens` / `outputTokens` / `maxContextTokens` / `isRunning`. Non-`full`/`observer` tokens may only read their own workspace. |
 
-Each `workspace` = `{ path, key, label, counts{running,idle,stopped}, totalSessions, skills[], sessions[] }`; each `session` = `{ id, parentId, depth, agentName, description, status, lastTool, activeSkill, contextTokens, outputTokens, updatedAt }`. `lastTool` / `activeSkill` come from the live in-memory UI log (empty when the session isn't loaded). Sessions per room are capped (`totalSessions` reports the true total). Frontend: `halo-city/` at repo root.
+Each `workspace` = `{ path, key, label, counts{running,idle,stopped}, totalSessions, skills[], sessions[] }`; each `session` = `{ id, parentId, depth, agentName, description, status, lastTool, activeSkill, contextTokens, outputTokens, messageCount, updatedAt }`. `lastTool` / `activeSkill` come from the live in-memory UI log (empty when the session isn't loaded). Sessions per room are capped (`totalSessions` reports the true total). Frontend: `halo-city/` at repo root.
+
+**Read-only by construction — degraded snapshots.** Both endpoints resolve a workspace's runtime via `registry.peek()` — in-memory lookup only, **never** `getOrCreate`: constructing a SessionManager has write side effects (boot orphan-reconciliation batch-stops live sub-session rows; `.halo/` scaffolding), so a pure visualization poll must not trigger it. When no live SessionManager exists in this process, the handler opens that workspace's `.halo/halo.db` **read-only** (cached connection; missing db/tables silently degrade to an empty room) and projects rows / the persisted session file into the same wire shape. Sessions not in memory therefore return a **persisted snapshot**: `status` / token counts / `messageCount` may lag behind the last persistence point, and the live-only signals (`lastTool` / `activeSkill`) are empty by definition. The degraded `/api/show/session` path reports `maxContextTokens: 0` (the real cap needs a live agent config; the city inspector hides the meter when the cap is unknown).
 
 ## Agent Configs
 

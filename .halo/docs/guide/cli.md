@@ -46,11 +46,13 @@ End users then install with `npm install -g @turmind/halo`.
 Run a one-shot prompt and exit:
 
 ```bash
-halo "review this PR"
-halo -w /path/to/workspace "analyze code"
-echo "review the changes" | halo
-cat prompt.txt | halo -w /path/to/review-ws
+halo cli "review this PR"
+halo cli -w /path/to/workspace "analyze code"
+echo "review the changes" | halo cli
+cat prompt.txt | halo cli -w /path/to/review-ws
 ```
+
+To list agents or sessions without running a prompt, use the dedicated subcommands `halo agents` / `halo sessions` (same `-w` flag).
 
 ### Options
 
@@ -59,11 +61,10 @@ cat prompt.txt | halo -w /path/to/review-ws
 | `--workspace` | `-w` | cwd | Workspace path |
 | `--agent` | `-a` | `default` | Agent ID |
 | `--session` | `-s` | auto | Resume session by ID |
+| `--new` | `-n` | off | Always start a new session |
 | `--format` | `-f` | `text` | Output format: `text` or `json` |
 | `--verbose` | `-v` | off | Show thinking, tool calls, usage on stderr |
 | `--access` | | `full` | Access level: `full`, `workspace`, `readonly` |
-| `--agents` | | | List available agents and exit |
-| `--sessions` | | | List recent sessions and exit |
 | `--lang` | | `en` | Language: `en` or `zh` |
 
 ### Output
@@ -91,21 +92,22 @@ cat prompt.txt | halo -w /path/to/review-ws
 
 ```bash
 # Code review in CI
-halo -w /path/to/review-ws "review the diff" --format json | jq '.text'
+halo cli -w /path/to/review-ws "review the diff" --format json | jq '.text'
 
 # Pipe content in
-git diff HEAD~1 | halo -w /path/to/review-ws "review this diff"
+git diff HEAD~1 | halo cli -w /path/to/review-ws "review this diff"
 
 # Exit code: 0 = success, 1 = error, 130 = SIGINT
-halo "check for issues" && echo "OK" || echo "FAILED"
+halo cli "check for issues" && echo "OK" || echo "FAILED"
 ```
 
 ## TUI Mode (interactive)
 
 ```bash
-halo -i
-halo -i -w /path/to/workspace
-halo -i -s sid_abc123   # resume session
+halo tui
+halo tui -w /path/to/workspace
+halo tui -s sid_abc123   # resume session
+halo tui -n              # always start a new session
 ```
 
 Multi-turn conversation. Supports all standard Halo slash commands:
@@ -130,6 +132,16 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
 | `/quit` | Exit |
 
+TUI-only client commands (handled locally, also visible in the completion popup):
+
+| Command | Description |
+|---|---|
+| `/clear` | Start a new session (alias for `/session new`) |
+| `/retry` | Resend the last user message |
+| `/verbose` | Toggle verbose tool output (args + truncated results) at runtime — same as launching with `-v`; the status bar shows a `v` badge while on |
+| `/log` | Browse the session tree and view a session log (same as `Ctrl+O`) |
+| `/exit` | Alias for `/quit` |
+
 Bare `/<obj>` (or `/<obj> help`) lists the verbs you may run. Verbs gated above your access level are hidden.
 
 ### Keybindings
@@ -139,9 +151,15 @@ Bare `/<obj>` (or `/<obj> help`) lists the verbs you may run. Verbs gated above 
 | `Esc` (while running) | Interrupt the current turn immediately — aborts a command mid-execution, then any messages typed while it was running are folded into one follow-up turn. Same as `/session interrupt`. |
 | `Ctrl+C` | Graceful exit; press twice to force |
 | `Ctrl+O` | Toggle the sub-agent navigator — lists every sub-agent spawned this session, each showing its agent name, task title (same as the session list), and status (`●` running green / `○` idle grey / `✕` stopped red, plus a `▢ archived` marker when the session is archived); `↑↓` to move, `Enter` to view that sub-agent's log, `Esc`/`q` to close. (Was `Shift+Tab`, but Windows terminals consume that as backtab.) The log viewer auto-refreshes while the viewed session is still running (a `● live` hint shows in the header) and follows the bottom as new output lands — unless you've scrolled up to read, in which case it stays put (`G` jumps back to the bottom and resumes following). |
-| `↑` / `↓` | Walk input history (when no popup is open) |
+| `↑` / `↓` | Walk input history (when no popup is open). History persists across restarts in `~/.halo/global/tui-history.json` (last 100 entries, shared across workspaces) |
+| `←` / `→`, `Home` / `End` | Move the cursor within the input; text is inserted/deleted at the cursor (CJK and emoji safe) |
+| `Ctrl+A` / `Ctrl+E` | Jump to start / end of input |
+| `Ctrl+W` / `Alt+Backspace` | Delete the word before the cursor |
+| `Ctrl+U` / `Ctrl+K` | Delete to start / to end of input |
 
-On resume (`-s <id>`, or the default latest session), the TUI replays the session's prior conversation on screen so you see where you left off. `shell_exec` output is shown inline by default (other tools' output needs `-v`).
+On resume (`-s <id>`, or the default latest session), the TUI replays the session's prior conversation on screen so you see where you left off. `shell_exec` output is shown inline by default (other tools' output needs `-v`). Tool lines show a short argument summary and duration, e.g. `⚙ file_read hello.txt 4ms`.
+
+**Multi-line paste**: pasting text with newlines (or >800 chars) collapses into a compact placeholder like `[#1 pasted 3 lines]` in the input; you can keep typing around it, and the original text is expanded back in full on submit. Pasted content is inserted at the cursor position.
 
 ## File, Image, and Scope References
 
@@ -174,10 +192,16 @@ Attach files or images to your message with `@file` and `@image`, or pull a dire
 ```
 packages/cli/
   src/
-    index.ts        — Entry: arg parsing, mode dispatch, SIGINT handling
+    index.ts        — Entry: subcommand dispatch (tui/cli/agents/sessions/server/setup/acp), SIGINT handling
     harness.ts      — Shared agent harness wrapping SessionManager
     cli.ts          — Non-interactive: stdin/args → agent → stdout → exit
-    tui.ts          — Interactive: readline loop + event display + commands
+    tui.tsx         — Interactive entry: mounts the ink app
+    tui/
+      app.tsx       — Root component: event reducer, blocks, submit/command handling
+      line-editor.ts — Grapheme-aware pure line-editing functions (cursor, insert, delete)
+      history.ts    — Persistent input history (~/.halo/global/tui-history.json)
+      components/   — input-box, text-input, messages, streaming, status-bar,
+                      slash-suggest, path-suggest, log-navigator, log-viewer, banner
     format-usage.ts — Usage-line formatter (mirrors admin UsageLine badge order)
     resolve-refs.ts — @file / @image reference resolution with size limits
     render-md.ts    — Terminal markdown rendering (marked + marked-terminal)
