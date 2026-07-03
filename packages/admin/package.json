@@ -7,12 +7,11 @@
     "dev": "next build --no-lint && node scripts/copy-monaco.mjs && next start --port 3000",
     "build": "next build && node scripts/copy-monaco.mjs",
     "lint": "eslint src",
+    "test": "vitest run",
     "start": "next start --port 3000"
   },
   "dependencies": {
-    "@turmind/halo-core": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
-    "monaco-editor": "^0.55.1",
     "@radix-ui/react-dialog": "^1.1.0",
     "@radix-ui/react-dropdown-menu": "^2.1.0",
     "@radix-ui/react-scroll-area": "^1.2.0",
@@ -21,6 +20,7 @@
     "@radix-ui/react-tabs": "^1.1.0",
     "@radix-ui/react-tooltip": "^1.1.0",
     "@tailwindcss/typography": "^0.5.19",
+    "@turmind/halo-core": "workspace:*",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.0",
@@ -28,6 +28,7 @@
     "jszip": "^3.10.1",
     "lucide-react": "^0.469.0",
     "mammoth": "^1.12.0",
+    "monaco-editor": "^0.55.1",
     "next": "^15.3.0",
     "pptx-preview": "^1.0.7",
     "qrcode": "^1.5.4",
@@ -47,7 +48,9 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.8"
   }
 }

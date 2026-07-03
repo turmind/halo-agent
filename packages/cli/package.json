@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc",
     "lint": "eslint src",
+    "test": "vitest run",
     "dev": "tsx src/index.ts",
     "clean": "rm -rf dist dist-pub",
     "bundle": "node scripts/build-bundle.mjs"
@@ -30,6 +31,7 @@
     "@types/react-dom": "^19.2.3",
     "esbuild": "^0.28.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.8"
   }
 }
