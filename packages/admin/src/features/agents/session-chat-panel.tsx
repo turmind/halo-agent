@@ -60,7 +60,9 @@ export function SessionChatPanel() {
     const fileBase = selectedSessionId.split('>').pop() ?? selectedSessionId
     const unsub = wsClient.on('file:changed', (data) => {
       const msg = data as { path: string; action: string }
-      if (msg.action !== 'change') return
+      // Session files are written atomically (tmp + rename-over-existing), which
+      // the native watcher reports as `create` → action 'add', not 'change'.
+      if (msg.action !== 'change' && msg.action !== 'add') return
       if (!msg.path.startsWith('.halo/sessions/')) return
       if (!msg.path.endsWith(`/${fileBase}.json`)) return
       api.sessionLogs.get(selectedSessionId, activeProject.path)
