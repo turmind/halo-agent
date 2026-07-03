@@ -74,6 +74,16 @@ describe('assertPathAllowed symlink boundary', () => {
       .toThrow(/outside the allowed sandbox/)
   })
 
+  it('denies ~/.git-credentials to non-full sessions (plaintext git tokens)', () => {
+    // Halo itself writes git tokens there (git-credentials.ts) — a
+    // workspace/readonly session must never be able to read it. $HOME is
+    // outside the workspace, so the boundary check rejects it whether or not
+    // the file exists on this machine.
+    const cred = path.join(os.homedir(), '.git-credentials')
+    expect(() => assertPathAllowed(cred, opts('workspace'))).toThrow(/outside the allowed sandbox/)
+    expect(() => assertPathAllowed(cred, opts('readonly'))).toThrow(/outside the allowed sandbox/)
+  })
+
   it('readonly session cannot write even inside the workspace', () => {
     const real = path.join(workspace, 'f.txt')
     fs.writeFileSync(real, 'x')

@@ -245,11 +245,27 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
       return c.json({ error: 'path traversal not allowed' }, 403)
     }
 
-    if (!fs.existsSync(resolved)) return c.json({ error: 'file not found' }, 404)
-    const stat = fs.statSync(resolved)
+    // The lexical check above doesn't follow symlinks — a link inside the
+    // workspace pointing outside (ws/escape -> /etc) passes startsWith yet
+    // readFileSync reads out of bounds. Resolve symlinks and re-check against
+    // the realpath'd root (same pattern as show.ts / assertPathAllowed).
+    let real: string
+    let realRoot: string
+    try {
+      real = fs.realpathSync(resolved)
+      realRoot = fs.realpathSync(root)
+    } catch {
+      // ENOENT — target (or root) doesn't exist.
+      return c.json({ error: 'file not found' }, 404)
+    }
+    if (real !== realRoot && !real.startsWith(realRoot + path.default.sep)) {
+      return c.json({ error: 'path traversal not allowed' }, 403)
+    }
+
+    const stat = fs.statSync(real)
     if (stat.isDirectory()) return c.json({ error: 'cannot serve directory' }, 400)
 
-    const ext = path.default.extname(resolved).toLowerCase()
+    const ext = path.default.extname(real).toLowerCase()
     const mimeMap: Record<string, string> = {
       '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
       '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
@@ -258,7 +274,7 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     }
     const contentType = mimeMap[ext] || 'application/octet-stream'
     const fileName = path.default.basename(resolved)
-    const data = fs.readFileSync(resolved)
+    const data = fs.readFileSync(real)
 
     c.header('content-type', contentType)
     c.header('content-disposition', `inline; filename="${fileName}"`)

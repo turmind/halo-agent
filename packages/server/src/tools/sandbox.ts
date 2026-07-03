@@ -258,11 +258,20 @@ const DEFAULT_HIDDEN_DIRS = [
   '~/.ssh',
   '~/.gnupg',
   '~/.docker',
+  '~/.config/gh',
 ]
+// Keep in sync with the schema default in settings-schema.ts and the callsite
+// fallback in config.ts — the server overwrites this list at boot via
+// setSandboxHiddenPaths(config.sandbox.*), so a file added only here never
+// reaches a running server.
 const DEFAULT_HIDDEN_FILES = [
   '~/.npmrc',
   '~/.bash_history',
   '~/.gitconfig',
+  // Halo's own git-credential store (git-credentials.ts writes tokens here
+  // in plaintext) — must be hidden like ~/.aws & co.
+  '~/.git-credentials',
+  '~/.netrc',
 ]
 
 let _hiddenDirs: string[] = DEFAULT_HIDDEN_DIRS

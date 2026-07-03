@@ -48,6 +48,12 @@ export async function verifyPassword(plain: string, stored: string): Promise<boo
 
   const salt = Buffer.from(saltB64, 'base64')
   const expected = Buffer.from(hashB64, 'base64')
+  // A degenerate digest (empty / pure-padding / invalid base64 decodes to 0
+  // bytes; a truncated hash to fewer) must read as "wrong password": scrypt
+  // happily derives a key of `expected.length` bytes, and for length 0
+  // timingSafeEqual(empty, empty) is true — ANY password would pass. We only
+  // ever write KEY_LEN-byte digests, so pin the length before deriving.
+  if (expected.length !== KEY_LEN) return false
   // Root cause: scrypt REJECTS invalid cost params (e.g. a hand-edited
   // `N=3` — not a power of two) instead of returning a mismatch. Without
   // this catch a corrupt stored hash turned /auth/login into a 500; a

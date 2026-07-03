@@ -4,6 +4,7 @@ import path from 'node:path'
 import { channelAccounts, getChannelDb } from '../db/channel-db.js'
 import { getAccountByToken } from '../channels/web/accounts.js'
 import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
+import { readonlySessionCounts, dropRoReader } from './show.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionInfo } from '../agents/session-manager.js'
 
@@ -77,9 +78,21 @@ export function createMetricsRoutes(registry: SessionManagerRegistry) {
 
     for (const wsPath of discoverWorkspaces(registry)) {
       try {
-        const sm = registry.getOrCreate(wsPath)
-        const { sessions } = sm.listSessions({ includeArchived: false, limit: SESSIONS_PER_WS })
+        // peek, never getOrCreate — same rule as show.ts: this is a read-only
+        // surface, and constructing a SessionManager has write side effects
+        // (ensureWorkspaceHalo scaffolds .halo/, reconcileOrphansOnBoot stamps
+        // stoppedAt over live sub-session rows). No live runtime in this
+        // process → degraded read-only db counts (token gauges stay 0 there:
+        // nothing in this process drives those sessions).
+        const sm = registry.peek(wsPath)
         workspaces++
+        if (!sm) {
+          const counts = readonlySessionCounts(wsPath, SESSIONS_PER_WS)
+          running += counts.running; idle += counts.idle; stopped += counts.stopped; total += counts.total
+          continue
+        }
+        dropRoReader(wsPath) // live runtime took over — retire the ro connection
+        const { sessions } = sm.listSessions({ includeArchived: false, limit: SESSIONS_PER_WS })
         for (const r of sessions as SessionInfo[]) {
           total++
           if (r.status === 'running') running++

@@ -254,8 +254,9 @@ function roReader(rawPath: string): RoReader | null {
 /** Drop (and close) a cached read-only connection — after a query error (db
  *  file may have been deleted/replaced; next poll reopens fresh) or when a
  *  live SessionManager takes the workspace over. No-op when nothing is
- *  cached (the steady state once every workspace has a live runtime). */
-function dropRoReader(rawPath: string): void {
+ *  cached (the steady state once every workspace has a live runtime).
+ *  Exported for metrics.ts, which shares the reader cache. */
+export function dropRoReader(rawPath: string): void {
   if (_roReaders.size === 0) return
   let wsPath = rawPath
   try { wsPath = fs.realpathSync(rawPath) } catch { /* keep raw as the key */ }
@@ -309,6 +310,30 @@ function snapshotWorkspaceReadonly(wsPath: string, label: string): ShowWorkspace
     totalSessions: counts.total,
     skills: scanSkills(path.join(wsPath, '.halo', 'skills')),
   }
+}
+
+/** Degraded status counts for /api/metrics — same read-only db snapshot (and
+ *  status derivation) as snapshotWorkspaceReadonly, sharing the reader cache,
+ *  without the per-session projection metrics doesn't need. Returns zeros when
+ *  the workspace has no readable db (nothing ever ran there). */
+export function readonlySessionCounts(wsPath: string, limit: number): { running: number; idle: number; stopped: number; total: number } {
+  const counts = { running: 0, idle: 0, stopped: 0, total: 0 }
+  const reader = roReader(wsPath)
+  if (!reader) return counts
+  try {
+    const rows = reader.listPage.all(limit)
+    const liveParents = new Set(reader.liveParents.all().map((r) => r.parent_id))
+    counts.total = rows.length
+    for (const r of rows) {
+      if (r.stopped_at) counts.stopped++
+      else if (liveParents.has(r.id)) counts.running++
+      else counts.idle++
+    }
+  } catch (err) {
+    console.log(`[Show] read-only query failed ${wsPath}: ${err instanceof Error ? err.message : String(err)}`)
+    dropRoReader(wsPath)
+  }
+  return counts
 }
 
 /** Wire shape shared by both /show/session paths: last N messages, content

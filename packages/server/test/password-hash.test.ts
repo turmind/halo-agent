@@ -37,6 +37,22 @@ describe('password-hash', () => {
     expect(await verifyPassword('pw', 'scrypt$x=1,y=2,z=3$c2FsdA==$aGFzaA==')).toBe(false)
   })
 
+  it('degenerate digest segments return false, never true (regression)', async () => {
+    // A 0-length digest made scrypt derive a 0-byte key and
+    // timingSafeEqual(empty, empty) → true: ANY password passed. The digest
+    // must be exactly KEY_LEN (32) bytes.
+    const stored = await hashPassword('pw')
+    const [, params, salt] = stored.split('$')
+    // empty digest
+    expect(await verifyPassword('pw', `scrypt$${params}$${salt}$`)).toBe(false)
+    // pure-padding digest (decodes to 0 bytes)
+    expect(await verifyPassword('pw', `scrypt$${params}$${salt}$====`)).toBe(false)
+    // garbage base64 digest (decodes to 0 bytes)
+    expect(await verifyPassword('pw', `scrypt$${params}$${salt}$!!!!`)).toBe(false)
+    // truncated digest (< 32 bytes) — wrong length even if valid base64
+    expect(await verifyPassword('pw', `scrypt$${params}$${salt}$c2hvcnQ=`)).toBe(false)
+  })
+
   it('invalid scrypt cost params return false, not a throw (regression)', async () => {
     // A hand-edited/corrupt hash with N=3 (not a power of two) made
     // crypto.scrypt reject → unhandled in /auth/login → 500. Must be false.
