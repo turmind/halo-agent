@@ -55,14 +55,57 @@ describe('repairConversationMessages', () => {
     expect(out).toHaveLength(3)
   })
 
-  it('strips an orphan tool_use with no following tool_result', () => {
+  // ── Interrupted-tool synthesis (replaces the old strip-orphan-tool_use) ──
+  // Stripping taught the model the call "never happened", so the turn after an
+  // interrupt re-issued the same tool (an interrupted sleep 30 re-ran in
+  // full). Orphan tool_use now gets a synthesized is_error tool_result whose
+  // text tells the model it was interrupted and not to auto-retry.
+
+  it('orphan tool_use with no following message: keeps it and synthesizes an [interrupted] tool_result', () => {
     const input: AnthropicMessage[] = [
       { role: 'assistant', content: [text('thinking'), toolUse('t1')] }, // aborted before result
     ]
     const out = repairConversationMessages(input)
     assertValidForApi(out)
-    // The text block survives, the orphan tool_use is gone.
-    expect(out[0].content).toEqual([text('thinking')])
+    // The assistant message survives intact — tool_use NOT stripped.
+    expect(out[0].content).toEqual([text('thinking'), toolUse('t1')])
+    // A user message with the synthesized result follows.
+    expect(out).toHaveLength(2)
+    expect(out[1].role).toBe('user')
+    const blocks = out[1].content as ContentBlock[]
+    expect(blocks).toHaveLength(1)
+    const r = blocks[0] as ContentBlock & { type: 'tool_result' }
+    expect(r.type).toBe('tool_result')
+    expect(r.tool_use_id).toBe('t1')
+    expect(r.is_error).toBe(true)
+    expect(String(r.content)).toContain('interrupted')
+    expect(String(r.content)).toContain('Do not automatically retry')
+  })
+
+  it('orphan tool_use followed by a plain user text message: synthesized result lands FIRST in that message', () => {
+    // The Esc-interrupt-then-type-again shape: abort killed the in-flight
+    // tool, the next user turn is ordinary text with no tool_results.
+    const input: AnthropicMessage[] = [
+      { role: 'assistant', content: [toolUse('t1')] },
+      { role: 'user', content: [text('never mind, do something else')] },
+    ]
+    const out = repairConversationMessages(input)
+    assertValidForApi(out)
+    expect(out).toHaveLength(2)
+    const blocks = out[1].content as ContentBlock[]
+    // tool_result blocks must precede other content in a user message.
+    expect(blocks[0].type).toBe('tool_result')
+    expect((blocks[0] as { tool_use_id?: string }).tool_use_id).toBe('t1')
+    expect(blocks[1]).toEqual(text('never mind, do something else'))
+  })
+
+  it('synthesis is idempotent: repairing twice changes nothing further', () => {
+    const input: AnthropicMessage[] = [
+      { role: 'assistant', content: [toolUse('t1')] },
+    ]
+    const once = repairConversationMessages(input)
+    const twice = repairConversationMessages(JSON.parse(JSON.stringify(once)) as AnthropicMessage[])
+    expect(twice).toEqual(once)
   })
 
   it('strips an orphan tool_result with no matching tool_use', () => {
@@ -96,17 +139,27 @@ describe('repairConversationMessages', () => {
     expect(out[0].content).toEqual([text('keep me')])
   })
 
-  it('partially-matched tool batch: keeps matched pairs, strips the unmatched one', () => {
+  it('partially-matched tool batch: keeps matched pairs, synthesizes a result for the unmatched one', () => {
+    // The graceful-interrupt shape: tool 1 finished (result recorded), the
+    // abort fired before tool 2 ran. t2 must NOT be stripped — the model
+    // should see it was interrupted, not that it never called it.
     const input: AnthropicMessage[] = [
       { role: 'assistant', content: [toolUse('t1'), toolUse('t2')] },
       { role: 'user', content: [toolResult('t1')] }, // t2 never got a result
     ]
     const out = repairConversationMessages(input)
     assertValidForApi(out)
-    // t1 pair preserved across both messages.
-    const ids = out.flatMap((m) => (Array.isArray(m.content) ? m.content : []))
-      .flatMap((b) => (b.type === 'tool_use' ? [b.id] : b.type === 'tool_result' ? [b.tool_use_id] : []))
-    expect(ids).toEqual(['t1', 't1'])
+    // Both tool_use blocks survive; t2 gained a synthesized error result.
+    expect(out[0].content).toEqual([toolUse('t1'), toolUse('t2')])
+    const results = (out[1].content as ContentBlock[]).filter((b): b is ContentBlock & { type: 'tool_result' } => b.type === 'tool_result')
+    expect(results.map((r) => r.tool_use_id).sort()).toEqual(['t1', 't2'])
+    const synth = results.find((r) => r.tool_use_id === 't2')!
+    expect(synth.is_error).toBe(true)
+    expect(String(synth.content)).toContain('interrupted')
+    // The real result is untouched.
+    const real = results.find((r) => r.tool_use_id === 't1')!
+    expect(real.content).toBe('ok')
+    expect(real.is_error).toBeUndefined()
   })
 
   it('compaction slice leaving a bare leading tool_result: strips it', () => {

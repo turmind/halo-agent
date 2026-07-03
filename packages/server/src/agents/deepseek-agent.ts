@@ -140,6 +140,16 @@ export class DeepSeekAgent extends AgentLoop {
       if (msg.role === 'user') {
         if (typeof msg.content !== 'string' && msg.content.some((b) => b.type === 'tool_result')) {
           msgs.push(...this.convertToolResults(msg.content))
+          // A user turn can mix tool_result blocks with real user content —
+          // e.g. an interrupted tool's repaired (synthesized) result with the
+          // user's next message coalesced in, or a stop-fold landing on a
+          // tool_results turn. Converting only the tool_results would silently
+          // drop that text from the model's view — emit the remainder as a
+          // user message right after the tool messages.
+          const rest = msg.content.filter((b) => b.type !== 'tool_result')
+          if (rest.length > 0) {
+            msgs.push({ role: 'user', content: this.convertUserContent(rest) })
+          }
         } else {
           msgs.push({ role: 'user', content: this.convertUserContent(msg.content) })
         }

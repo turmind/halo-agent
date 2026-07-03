@@ -12,12 +12,14 @@
  *   Phase 1 — Sanitize: remove nulls, fix broken entries
  *   Phase 2 — Pair validation: for every assistant message, match each
  *             toolUse.toolUseId to a toolResult.toolUseId in the immediately
- *             following user message. Strip unmatched blocks from both sides.
+ *             following user message. Orphaned toolUse gets a SYNTHESIZED
+ *             "[interrupted]" tool_result (see note at Phase 2); orphaned
+ *             toolResult is stripped.
  *   Phase 3 — Compact: remove messages left with empty content
  *
  * Shared by Orchestrator and SessionManager.
  */
-import type { AnthropicMessage } from './bedrock-agent.js'
+import type { AnthropicMessage, ContentBlock } from './bedrock-agent.js'
 
 /**
  * Extract tool_use id from a content block (Anthropic format).
@@ -68,23 +70,51 @@ export function repairConversationMessages(raw: AnthropicMessage[], label = '[Re
     }
   }
 
-  // Phase 2: toolUse <-> toolResult pair validation
+  // Phase 2: toolUse <-> toolResult pair validation.
+  //
+  // Orphaned toolUse is NOT stripped — it gets a synthesized error
+  // tool_result instead. Root cause: stripping made the model believe the
+  // call NEVER HAPPENED (the request "was never answered"), so after an
+  // Esc/interrupt/stop aborted an in-flight tool, the next turn dutifully
+  // re-issued the same call — an interrupted `sleep 30` re-ran in full,
+  // doubling time and tokens. Synthesizing "[interrupted]" keeps the pair
+  // protocol-valid AND tells the model the call was cut short, with wording
+  // that steers it away from an automatic retry. This is deliberately in the
+  // shared repair path (not at each abort site): every interrupt flavor
+  // (Esc soft-interrupt, interrupt_session, stop_session, user stop button),
+  // crash recovery on reload, and the API-400 repair-retry all funnel through
+  // here, so one fix covers them all. For non-interrupt corruption (process
+  // crash) the text is still accurate — the call produced no result.
+  // Idempotent: a synthesized result pairs its toolUse, so a later pass
+  // sees a match and does nothing.
+  const interruptedResult = (id: string): ContentBlock => ({
+    type: 'tool_result',
+    tool_use_id: id,
+    content: '[tool execution interrupted — no result. Do not automatically retry; ask the user or proceed without it.]',
+    is_error: true,
+  })
+
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
     if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue
 
-    const toolUseIds = new Set<string>()
+    const toolUseIds: string[] = []
     for (const block of msg.content) {
       const id = getToolUseId(block)
-      if (id) toolUseIds.add(id)
+      // Dedupe defensively — synthesizing TWO results for one id would
+      // itself be an API-rejected shape.
+      if (id && !toolUseIds.includes(id)) toolUseIds.push(id)
     }
-    if (toolUseIds.size === 0) continue
+    if (toolUseIds.length === 0) continue
 
     const next = messages[i + 1]
     if (!next || next.role !== 'user' || !Array.isArray(next.content)) {
-      // No valid user message follows — strip ALL toolUse from assistant
-      const content = msg.content as unknown[]
-      ;(msg as unknown as { content: unknown[] }).content = content.filter((b) => !getToolUseId(b))
+      // No valid user message follows (abort before any result landed, or a
+      // string-content neighbor that Phase 3 will drop) — insert a user
+      // message holding a synthesized result per toolUse. Role alternation
+      // stays valid: we only ever insert a user message after an assistant.
+      messages.splice(i + 1, 0, { role: 'user', content: toolUseIds.map(interruptedResult) })
+      console.log(`${label} Synthesized ${toolUseIds.length} interrupted tool_result(s) for assistant message ${i} (no following user message)`)
       continue
     }
 
@@ -94,27 +124,25 @@ export function repairConversationMessages(raw: AnthropicMessage[], label = '[Re
       if (id) toolResultIds.add(id)
     }
 
-    const matched = new Set<string>()
-    for (const id of toolUseIds) {
-      if (toolResultIds.has(id)) matched.add(id)
+    const unmatched = toolUseIds.filter((id) => !toolResultIds.has(id))
+
+    // Synthesize results for unmatched toolUse, at the FRONT of the user
+    // message (tool_result blocks must precede other content).
+    if (unmatched.length > 0) {
+      ;(next.content as ContentBlock[]).unshift(...unmatched.map(interruptedResult))
+      console.log(`${label} Synthesized ${unmatched.length} interrupted tool_result(s) for assistant message ${i}`)
     }
 
-    // Strip unmatched toolUse blocks from assistant
-    if (matched.size < toolUseIds.size) {
-      const content = msg.content as unknown[]
-      ;(msg as unknown as { content: unknown[] }).content = content.filter((b) => {
-        const id = getToolUseId(b)
-        return !id || matched.has(id)
-      })
-      console.log(`${label} Stripped ${toolUseIds.size - matched.size} orphaned toolUse block(s) from assistant message ${i}`)
-    }
-
-    // Strip unmatched toolResult blocks from user
-    if (matched.size < toolResultIds.size) {
+    // Strip unmatched toolResult blocks from user (results whose request is
+    // gone have no anchor — fabricating a matching tool_use would invent a
+    // call the model never made, worse than dropping the stale result).
+    const matchedResultCount = [...toolResultIds].filter((id) => toolUseIds.includes(id)).length
+    if (matchedResultCount < toolResultIds.size) {
+      const useIdSet = new Set(toolUseIds)
       const content = next.content as unknown[]
       ;(next as unknown as { content: unknown[] }).content = content.filter((b) => {
         const id = getToolResultId(b)
-        return !id || matched.has(id)
+        return !id || useIdSet.has(id)
       })
     }
   }

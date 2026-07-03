@@ -163,6 +163,13 @@ export class HunyuanAgent extends AgentLoop {
       if (msg.role === 'user') {
         if (typeof msg.content !== 'string' && msg.content.some((b) => b.type === 'tool_result')) {
           msgs.push(...this.convertToolResults(msg.content))
+          // Mixed tool_result + user-content turn (interrupt-repair synthesis
+          // coalesced with the next user message, or a stop-fold): emit the
+          // non-tool_result remainder too, or that user text silently vanishes.
+          const rest = msg.content.filter((b) => b.type !== 'tool_result')
+          if (rest.length > 0) {
+            msgs.push({ role: 'user', content: this.convertUserContent(rest) })
+          }
         } else {
           msgs.push({ role: 'user', content: this.convertUserContent(msg.content) })
         }
