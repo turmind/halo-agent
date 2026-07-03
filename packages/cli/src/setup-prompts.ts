@@ -37,13 +37,29 @@ function useRichPrompts(): boolean {
 export function promptText(question: string, defaultValue?: string): Promise<string | null> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
   return new Promise((resolve) => {
+    let settled = false
+    const done = (val: string | null) => {
+      if (settled) return
+      settled = true
+      resolve(val)
+    }
     const display = defaultValue !== undefined ? `${question} [${defaultValue}]: ` : `${question}: `
     rl.question(display, (answer) => {
-      rl.close()
       const trimmed = answer.trim()
-      resolve(trimmed.length === 0 && defaultValue !== undefined ? defaultValue : trimmed)
+      done(trimmed.length === 0 && defaultValue !== undefined ? defaultValue : trimmed)
+      rl.close()
     })
-    rl.on('SIGINT', () => { rl.close(); resolve(null) })
+    rl.on('SIGINT', () => { done(null); rl.close() })
+    // EOF (piped stdin ran out of lines, `< /dev/null`, closed terminal):
+    // readline emits 'close' without ever firing the question callback. Without
+    // this handler the promise stays pending forever and the process silently
+    // exits 0 — a fake-green in CI. Resolve null so callers abort non-zero.
+    rl.on('close', () => {
+      if (!settled) {
+        process.stderr.write('\n[setup] stdin closed before an answer was received\n')
+        done(null)
+      }
+    })
   })
 }
 

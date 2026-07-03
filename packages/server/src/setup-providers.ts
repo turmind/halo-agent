@@ -18,8 +18,10 @@ export interface SecretSpec {
   description_zh?: string
   /** True for password-like fields (mask on display). */
   secret?: boolean
-  /** Fallback env var name parsed out of a `default: <<NAME>>` declaration.
-   *  When set, leaving this field blank is fine — runtime will read $NAME. */
+  /** Env var name parsed out of a `default: <<NAME>>` declaration. Runtime
+   *  never reads this manifest default (resolveApiKey has no fallback chain);
+   *  it only signals setup to offer writing a literal `<<NAME>>` placeholder
+   *  into settings.yaml, which config.ts expands against process.env. */
   envFallback?: string
 }
 

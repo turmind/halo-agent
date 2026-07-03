@@ -175,8 +175,12 @@ if (!fs.existsSync(path.join(HALO_HOME, 'global', '.template-version'))) {
   }
 }
 
-if (!config.server.password || !config.server.jwtSecret) {
-  process.stderr.write('\x1b[31m[Server] admin password not configured. Run `halo setup` to set one.\x1b[0m\n')
+// HALO_PASSWORD env (plaintext) is a first-class credential, not just a login
+// bypass: the Docker/CI flow (`halo setup -y && HALO_PASSWORD=... halo server
+// start`) never stores a scrypt hash, so the gate must accept either. The
+// login path in middleware/auth.ts already compares env plaintext first.
+if ((!config.server.password && !config.server.passwordEnvPlaintext) || !config.server.jwtSecret) {
+  process.stderr.write('\x1b[31m[Server] admin password not configured. Run `halo setup` to set one, or set the HALO_PASSWORD env.\x1b[0m\n')
   process.exit(1)
 }
 

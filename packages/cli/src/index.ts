@@ -539,48 +539,54 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
       const current = readSetting(dotPath)
       const isSet = current != null && current.length > 0
 
-      // Env fallback semantics: a yaml `default: <<NAME>>` means runtime
-      // will read process.env.NAME if the user leaves the field unset.
-      // We surface this so the user knows "leaving blank ≠ broken".
+      // Env semantics: runtime does NOT read the manifest's `default: <<NAME>>`
+      // (resolveApiKey deliberately has no fallback chain — config.ts). The
+      // only env channel is a literal `<<NAME>>` placeholder stored in
+      // settings.yaml, expanded against process.env at read time. So the
+      // "Use env" option below must actually write that placeholder — leaving
+      // the leaf unset would be a false promise (runtime reads nothing).
       const envName = field.envFallback
+      const envPlaceholder = envName ? `<<${envName}>>` : undefined
+      const usesEnv = envPlaceholder != null && current === envPlaceholder
       const envVal = envName ? process.env[envName] : undefined
       const envHasVal = envVal != null && envVal.length > 0
 
-      const display = isSet
-        ? (field.secret ? maskSecret(current!) : current!)
-        : envName
-          ? (envHasVal
-              ? `(unset — will use env $${envName} = ${field.secret ? maskSecret(envVal!) : envVal})`
-              : `(unset — will use env $${envName}, currently empty)`)
+      const display = usesEnv
+        ? `${envPlaceholder} (expands from env $${envName}, currently ${envHasVal ? 'set' : 'EMPTY'})`
+        : isSet
+          ? (field.secret ? maskSecret(current!) : current!)
           : '(not set)'
       process.stderr.write(`  ${field.key}: ${display}\n`)
       if (field.description) {
         process.stderr.write(`    \x1b[2m${field.description}\x1b[0m\n`)
       }
 
-      // Build action list. The "keep / skip" label adapts to the current
-      // state and the existence of an env fallback.
-      const keepLabel = isSet
-        ? 'Keep current value'
-        : envName
-          ? `Use env $${envName}`
-          : 'Skip (leave unset)'
+      // Build action list. Non-env installs get keep/change/clear; when the
+      // manifest declares an env default, offer writing the placeholder.
+      const keepLabel = isSet ? 'Keep current value' : 'Skip (leave unset)'
 
       const action = await promptSelect('  ?', [
         { value: 'keep',   label: keepLabel },
         { value: 'change', label: isSet ? 'Change' : 'Set explicit value' },
+        ...(envName && !usesEnv
+          ? [{ value: 'env', label: `Use env $${envName} (writes ${envPlaceholder} placeholder, expanded at runtime)` }]
+          : []),
         ...(isSet ? [{ value: 'clear', label: 'Clear' }] : []),
       ])
       if (action == null) abort()
       if (action === 'keep') continue
+      if (action === 'env') {
+        writeSetting(dotPath, envPlaceholder!)
+        process.stderr.write(`    saved ${envPlaceholder} — expands from $${envName} at runtime (export it before launching the server)\n`)
+        continue
+      }
       if (action === 'clear') {
         writeSetting(dotPath, null)
         process.stderr.write(`    cleared\n`)
         continue
       }
       // 'change'
-      const skipHint = envName ? `Enter to use env $${envName}` : 'Enter to leave unset'
-      const promptLabel = `  New ${field.key} (${skipHint})`
+      const promptLabel = `  New ${field.key} (Enter to leave unchanged)`
       const newVal = field.secret
         ? await promptPassword(promptLabel)
         : await promptText(promptLabel)
