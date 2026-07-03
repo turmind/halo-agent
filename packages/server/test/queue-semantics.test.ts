@@ -222,6 +222,57 @@ describe('querySession cap counts only agent-sourced entries', () => {
   })
 })
 
+// ── interrupt/stop closes out pending UI tool blocks ──
+// A hard interrupt aborts the in-flight tool, so its real tool_result never
+// arrives (runAgentTurn's consumer breaks on signal.aborted first) — the UI
+// block would dangle "running" forever. interruptSession / stopUserSession must
+// mark every pending tool call with a synthetic '[interrupted by user]' result,
+// without touching completed ones (idempotency) or agent.messages (UI-only).
+
+describe('interrupt marks pending UI tool calls as interrupted', () => {
+  it('interruptSession fills pending tool output with [interrupted by user]', () => {
+    seedRow('web_int1')
+    fakeBusySession('web_int1')
+    sm.emitEvent('web_int1', { type: 'tool_call', toolName: 'shell_exec', toolInput: { command: 'sleep 20' } })
+
+    sm.interruptSession('web_int1')
+
+    const state = sm.getCachedUIState('web_int1')!
+    expect(state.turnToolCalls).toHaveLength(1)
+    expect(state.turnToolCalls[0].output).toBe('[interrupted by user]')
+    // The synthetic tool_result also lands in the message log (persisted shape).
+    const trMsg = state.messageLog.find((m) => m.type === 'tool_result')
+    expect(trMsg?.toolOutput).toBe('[interrupted by user]')
+  })
+
+  it('does NOT overwrite a tool that already completed', () => {
+    seedRow('web_int2')
+    fakeBusySession('web_int2')
+    sm.emitEvent('web_int2', { type: 'tool_call', toolName: 'shell_exec', toolInput: { command: 'echo hi' } })
+    sm.emitEvent('web_int2', { type: 'tool_result', toolName: 'shell_exec', toolResult: 'hi', durationMs: 5 })
+
+    sm.interruptSession('web_int2')
+
+    const state = sm.getCachedUIState('web_int2')!
+    expect(state.turnToolCalls[0].output).toBe('hi')
+    // No synthetic marker emitted — exactly one tool_result in the log.
+    expect(state.messageLog.filter((m) => m.type === 'tool_result')).toHaveLength(1)
+  })
+
+  it('stopUserSession marks pending tool calls too', () => {
+    seedRow('web_int3')
+    fakeBusySession('web_int3', {
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+    })
+    sm.emitEvent('web_int3', { type: 'tool_call', toolName: 'file_read', toolInput: { path: 'a.txt' } })
+
+    sm.stopUserSession('web_int3')
+
+    const state = sm.getCachedUIState('web_int3')!
+    expect(state.turnToolCalls[0].output).toBe('[interrupted by user]')
+  })
+})
+
 // ── query_session on a BUSY target soft-interrupts (merge-answer parity) ──
 // A plain query_session (interrupt=false) into a busy session must set
 // `interruptRequested` so the in-flight turn unwinds after its current tool and

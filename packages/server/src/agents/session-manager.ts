@@ -1081,6 +1081,10 @@ export class SessionManager implements SessionManagerInternals {
           if (session.interruptRequested && event.type === 'tool_result') {
             console.debug(`[SessionManager] Graceful interrupt after tool result in ${session.id}`)
             session.abortController?.abort('interrupt')
+            // In a parallel-tool turn, tool_calls after the current one were
+            // already announced (agent-loop yields all upfront) but will never
+            // execute — close their UI blocks so they don't dangle. UI-only.
+            this.markPendingToolCallsInterrupted(session.id)
           }
         }
 
@@ -1493,6 +1497,47 @@ export class SessionManager implements SessionManagerInternals {
   // ── Session operations ─────────────────────────────────────────────
 
   /**
+   * UI-only repair for an aborted turn: emit a synthetic `tool_result` for
+   * every pending tool call (tool_call seen, no output yet) in the session's
+   * cached UI log. On abort, runAgentTurn's consumer loop breaks on
+   * `signal.aborted` BEFORE processing the in-flight tool's real tool_result
+   * event, so without this the UI block stays "running" forever. Routing
+   * through the normal emitEvent pipeline means ui-log-builder persistence,
+   * admin WS push, and TUI rendering all pick it up unchanged. Never touches
+   * agent.messages — the model-facing repair is conversation-repair's
+   * synthesized [interrupted] tool_result. Idempotent: completed tools
+   * (output already set) are never overwritten. Call BEFORE awaiting the
+   * aborted turn's promise — its finally emits `complete`, which flushes and
+   * clears the pending buffers this scans.
+   */
+  private markPendingToolCallsInterrupted(sessionId: string): void {
+    const rootId = this.findRootSessionId(sessionId)
+    const state = this.uiStore.getCachedUIState(rootId)
+    if (!state) return
+    // Sub-session logs live in the root's UIState under subSessionLogs —
+    // same routing getTarget uses when the event is reduced back in.
+    const target = sessionId === rootId ? state : state.subSessionLogs.get(sessionId)
+    if (!target) return
+    const pending = target.turnToolCalls.filter((tc) => !tc.output)
+    if (pending.length === 0) return
+    const session = this.sessions.get(sessionId)
+    for (const tc of pending) {
+      this.emitEvent(sessionId, {
+        type: 'tool_result',
+        toolName: tc.name,
+        toolResult: '[interrupted by user]',
+        agentName: session?.agentName,
+        agentId: session?.agentId,
+        taskId: sessionId === rootId ? undefined : sessionId,
+      })
+    }
+    // Sub-session logs only hit their own file on usage/agent_done — a stopped
+    // sub gets neither, so flush explicitly or the marker dies with the process.
+    if (sessionId !== rootId) this.uiStore.flushSubSession(sessionId)
+    console.debug(`[SessionManager] Marked ${pending.length} pending tool call(s) as interrupted in ${sessionId}`)
+  }
+
+  /**
    * Interrupt the current loop immediately — including a tool/command that is
    * mid-execution (the abort signal propagates to shell_exec → SIGTERM). The
    * single semantic shared by esc (TUI / admin) and the `interrupt_session`
@@ -1519,6 +1564,9 @@ export class SessionManager implements SessionManagerInternals {
     session.interruptRequested = true
     session.abortController.abort('interrupt')
     session.abortController = null
+    // UI-only: close out pending tool blocks now — the aborted tool will never
+    // emit its real tool_result (runAgentTurn's loop breaks on signal.aborted).
+    this.markPendingToolCallsInterrupted(sessionId)
     console.debug(`[SessionManager] Interrupted session ${sessionId}`)
   }
 
@@ -1588,6 +1636,10 @@ export class SessionManager implements SessionManagerInternals {
         if (session.abortController) {
           session.abortController.abort('stop')
           session.abortController = null
+          // UI-only, and BEFORE awaiting the promise: runSession's finally
+          // emits `complete`, which flushes + clears the pending tool buffers
+          // this scans. Cascades naturally — the loop visits every descendant.
+          this.markPendingToolCallsInterrupted(id)
         }
         if (session.promise) {
           try { await session.promise } catch { /* expected */ }
@@ -2454,6 +2506,9 @@ export class SessionManager implements SessionManagerInternals {
     if (session.abortController) {
       session.abortController.abort()
       session.abortController = null
+      // UI-only: close out pending tool blocks — the aborted tool will never
+      // emit its real tool_result.
+      this.markPendingToolCallsInterrupted(sessionId)
     }
     this.cancelCompact(sessionId)
     session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${sessionId}]`)

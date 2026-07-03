@@ -124,12 +124,16 @@ function setToolResult(target: TurnState, rawResult: unknown, durationMs?: numbe
   // Store the full result string — truncation is the render layer's job
   // (InlineToolCall already previews at 120 chars; expand shows everything).
   const resultStr = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult ?? '')
-  if (target.turnToolCalls.length > 0) {
-    const last = target.turnToolCalls[target.turnToolCalls.length - 1]
-    last.output = resultStr; last.durationMs = durationMs
+  // Attach to the FIRST entry without an output — results arrive in call
+  // order (agent-loop executes tool_use blocks serially), so first-pending is
+  // the one this result belongs to. Never overwrite a completed entry: that
+  // keeps the interrupt marker (markPendingToolCallsInterrupted) idempotent
+  // and fixes reversed attachment when a turn has parallel tool calls.
+  const entry = target.turnToolCalls.find((tc) => !tc.output)
+  if (entry) {
+    entry.output = resultStr; entry.durationMs = durationMs
   }
-  for (let i = target.turnContentBlocks.length - 1; i >= 0; i--) {
-    const b = target.turnContentBlocks[i]
+  for (const b of target.turnContentBlocks) {
     if (b.type === 'tool_call' && !b.toolCall.output) {
       b.toolCall.output = resultStr; b.toolCall.durationMs = durationMs; break
     }

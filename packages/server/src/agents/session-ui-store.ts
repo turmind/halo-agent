@@ -410,6 +410,18 @@ export class SessionUIStore {
     if (state) this.flushPersist(rootId, state)
   }
 
+  /** Flush a sub-session's UI log to its own file. Needed after synthetic
+   *  interrupted tool_results on interrupt/stop: applyEvent's tool_result case
+   *  never sets `subSessionSave`, and a stopped sub gets no later event
+   *  (usage/agent_done) to trigger the usual persist — without this the marker
+   *  would live only in memory and vanish on restart. No-op if the root state
+   *  isn't loaded. */
+  flushSubSession(taskId: string): void {
+    const rootId = this.findRootSessionId(taskId)
+    const state = this.uiStates.get(rootId)
+    if (state) this.persistSubSession(state, rootId, taskId)
+  }
+
   /**
    * Prepare a session's UIState for a view request. When the session isn't
    * self-driven by this process (`selfDriven=false`), evict the cached state
