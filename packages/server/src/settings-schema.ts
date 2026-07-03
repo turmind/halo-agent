@@ -131,6 +131,9 @@ function generalSection(): SchemaSection {
       // agent scaffold
       { key: 'agent.default_provider', type: 'enum', options: providerIds, description: 'Provider used when scaffolding a new agent. Model id, endpoint, prompt-caching TTL, and thinking defaults are read from that provider\'s YAML.', description_zh: '新建 agent 时使用的供应商。模型 id、endpoint、提示缓存 TTL、Thinking 默认值都从该供应商的 YAML 读取。', default: defaultProvider },
       { key: 'agent.max_retries', type: 'int', description: 'Max attempts per model call on transient errors (rate limit, 5xx, network). Backoff grows between attempts.', description_zh: '单次模型调用遇到瞬态错误（限流、5xx、网络）时的最大尝试次数，重试间隔递增。', default: '5' },
+      // server — network-facing knobs; global-only since they alter how the
+      // server itself authenticates clients.
+      { key: 'server.trust_proxy', type: 'boolean', globalOnly: true, description: 'Trust the x-forwarded-for header for client IP resolution (brute-force rate limiting). Enable ONLY when a reverse proxy you control sits in front and rewrites the header — otherwise clients can forge it to bypass lockouts.', description_zh: '信任 x-forwarded-for 请求头解析客户端 IP（暴力破解限速用）。仅当前面有你控制的反向代理并会重写该头时才开启——否则客户端可伪造绕过锁定。', default: 'false' },
       // session
       { key: 'session.max_queue_size', type: 'int', description: 'Maximum queued messages per session', description_zh: '每个会话最大排队消息数', default: '256' },
       { key: 'session.max_nesting_depth', type: 'int', description: 'Maximum session nesting depth for agent delegation', description_zh: 'Agent 委派的最大会话嵌套深度', default: '16' },
@@ -140,10 +143,12 @@ function generalSection(): SchemaSection {
       { key: 'compact.max_summary_input', type: 'int', description: 'Max chars fed into local truncation fallback', description_zh: '本地截断兜底时的总输入字符上限', default: '15000' },
       { key: 'compact.max_message_slice', type: 'int', description: 'Max chars kept per old message during local truncation', description_zh: '本地截断兜底时每条旧消息保留的最大字符数', default: '800' },
       { key: 'compact.summarize_timeout_sec', type: 'int', description: 'LLM summarization timeout (seconds)', description_zh: 'LLM 摘要超时时间（秒）', default: '300' },
-      // sandbox (Linux bwrap only)
-      { key: 'sandbox.hidden_dirs', description: 'Comma-separated dirs hidden by bwrap (Linux only)', description_zh: '通过 bwrap tmpfs 隐藏的目录（逗号分隔，仅 Linux）', default: '~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh' },
-      { key: 'sandbox.writable_dirs', description: 'Comma-separated dirs bind-mounted read-write inside the bwrap sandbox (Linux only) — for external CLIs that keep local state, e.g. ~/.kiro,~/.local/share/kiro-cli. Not applied to readonly sessions.', description_zh: '在 bwrap 沙箱内以可写方式挂载的目录（逗号分隔，仅 Linux）——给需要本地状态的外部 CLI 用，如 ~/.kiro,~/.local/share/kiro-cli。readonly 会话不生效。', default: '' },
-      { key: 'sandbox.hidden_files', description: 'Comma-separated files hidden by bwrap (Linux only)', description_zh: '通过 /dev/null bind 隐藏的文件（逗号分隔，仅 Linux）', default: '~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc' },
+      // sandbox (Linux bwrap only) — global-only: these define the security
+      // boundary agents run inside; a workspace overriding them could lift
+      // its own sandbox constraints.
+      { key: 'sandbox.hidden_dirs', globalOnly: true, description: 'Comma-separated dirs hidden by bwrap (Linux only)', description_zh: '通过 bwrap tmpfs 隐藏的目录（逗号分隔，仅 Linux）', default: '~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh' },
+      { key: 'sandbox.writable_dirs', globalOnly: true, description: 'Comma-separated dirs bind-mounted read-write inside the bwrap sandbox (Linux only) — for external CLIs that keep local state, e.g. ~/.kiro,~/.local/share/kiro-cli. Not applied to readonly sessions.', description_zh: '在 bwrap 沙箱内以可写方式挂载的目录（逗号分隔，仅 Linux）——给需要本地状态的外部 CLI 用，如 ~/.kiro,~/.local/share/kiro-cli。readonly 会话不生效。', default: '' },
+      { key: 'sandbox.hidden_files', globalOnly: true, description: 'Comma-separated files hidden by bwrap (Linux only)', description_zh: '通过 /dev/null bind 隐藏的文件（逗号分隔，仅 Linux）', default: '~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc' },
       // logging
       { key: 'logging.level', type: 'enum', options: ['debug', 'info', 'warn', 'error'], description: 'Log level', description_zh: '日志级别', default: 'warn' },
       // self-evolution (see plans/self-evolution.md). All evo settings are

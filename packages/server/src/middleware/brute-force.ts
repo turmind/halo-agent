@@ -17,6 +17,10 @@
  * losing this state.
  */
 
+import type { Context } from 'hono'
+import { getConnInfo } from '@hono/node-server/conninfo'
+import { config } from '../config.js'
+
 const MAX_ATTEMPTS = 5
 const LOCKOUT_MS = 15 * 60 * 1000
 
@@ -40,14 +44,24 @@ function bucket(name: string): Map<string, AttemptRecord> {
   return b
 }
 
-/** Read the client IP from the first hop's `x-forwarded-for`, falling
- *  back to `'unknown'`. Honoring a single header level is fine for the
- *  halo deployment shape (one reverse proxy in front, or no proxy at
- *  all). For a multi-hop deployment the operator should configure the
- *  proxy to enforce trust. */
-export function getClientIp(c: { req: { header: (name: string) => string | undefined } }): string {
-  const forwarded = c.req.header('x-forwarded-for')
-  if (forwarded) return forwarded.split(',')[0].trim()
+/** Resolve the client IP for rate-limit bucketing.
+ *
+ *  Default: the direct socket address (`getConnInfo`). `x-forwarded-for`
+ *  is client-supplied — honoring it unconditionally let an attacker mint
+ *  a fresh bucket per request and never trip the 5-strike lockout. Only
+ *  when the operator sets `general.server.trust_proxy: true` in
+ *  settings.yaml (i.e. a reverse proxy they control sits in front and
+ *  rewrites the header) do we read the first XFF hop. Falls back to
+ *  `'unknown'` when neither source yields an address. */
+export function getClientIp(c: Context): string {
+  if (config.server.trustProxy) {
+    const forwarded = c.req.header('x-forwarded-for')
+    if (forwarded) return forwarded.split(',')[0].trim()
+  }
+  try {
+    const addr = getConnInfo(c).remote.address
+    if (addr) return addr
+  } catch { /* no node socket on this context (tests / non-node runtime) */ }
   return 'unknown'
 }
 

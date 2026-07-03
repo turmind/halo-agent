@@ -143,11 +143,13 @@ function copyTemplate(srcAbs: string, dstAbs: string): void {
   fs.writeFileSync(dstAbs, content, 'utf-8')
 }
 
-/** writeIfMissing — create the file only when it doesn't exist. */
-function writeIfMissing(filePath: string, content: string): void {
+/** writeIfMissing — create the file only when it doesn't exist. Pass `mode`
+ *  for secret-bearing files (settings.yaml) so they never sit world-readable
+ *  under the default umask. */
+function writeIfMissing(filePath: string, content: string, mode?: number): void {
   if (fs.existsSync(filePath)) return
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  fs.writeFileSync(filePath, content, 'utf-8')
+  fs.writeFileSync(filePath, content, mode === undefined ? { encoding: 'utf-8' } : { encoding: 'utf-8', mode })
   console.log(`[Init] Created ${filePath}`)
 }
 
@@ -307,7 +309,7 @@ function forceCopyDir(srcDir: string, dstDir: string): void {
 function migrateSecrets(haloHome: string): void {
   const globalDir = path.join(haloHome, 'global')
   const secretsDir = path.join(haloHome, 'secrets')
-  fs.mkdirSync(secretsDir, { recursive: true })
+  fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 })
 
   const fileMoves: Array<[string, string]> = [
     [path.join(globalDir, 'settings.yaml'), path.join(secretsDir, 'settings.yaml')],
@@ -409,7 +411,11 @@ export function ensureHaloHome(haloHome: string): void {
   const globalDir = path.join(haloHome, 'global')
   const secretsDir = path.join(haloHome, 'secrets')
   fs.mkdirSync(globalDir, { recursive: true })
-  fs.mkdirSync(secretsDir, { recursive: true })
+  fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 })
+  // `mode` only applies when the dir is freshly created — chmod tightens
+  // pre-existing installs (paths.ts documents 0700 as the expected perms;
+  // the dir holds config.yaml / settings.yaml with plaintext credentials).
+  try { fs.chmodSync(secretsDir, 0o700) } catch { /* best-effort */ }
 
   migrateSecrets(haloHome)
 
@@ -496,8 +502,9 @@ export function ensureHaloHome(haloHome: string): void {
   mergeConfigYaml(path.join(TEMPLATES_DIR, 'config.yaml'), path.join(secretsDir, 'config.yaml'))
 
   // settings.yaml — create empty placeholder if missing; never touch
-  // afterwards. Defaults live in settings-schema.ts.
-  writeIfMissing(path.join(secretsDir, 'settings.yaml'), '')
+  // afterwards. Defaults live in settings-schema.ts. 0600: it will hold
+  // plaintext API keys once the user fills it in.
+  writeIfMissing(path.join(secretsDir, 'settings.yaml'), '', 0o600)
 
   // Command aliases — seed once, never overwritten (user-editable).
   const aliasesSrc = path.join(TEMPLATES_DIR, 'aliases.yaml')

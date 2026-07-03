@@ -13,6 +13,7 @@ import { homedir } from 'node:os'
 import { sandboxExec, sandboxReadFile, sandboxReadBinaryFile, sandboxWriteFile, sandboxStat, sandboxReaddir, assertPathAllowed, isBwrapCached } from './sandbox.js'
 import type { AccessLevel, SandboxOptions } from './sandbox.js'
 import { loadMergedSettings } from '../prompts/md-vars.js'
+import { loadSettingsSchema } from '../settings-schema.js'
 import { inferImageMime } from '../channels/shared/media-store.js'
 import { TOOL_ERROR_MARKER, TOOL_WARN_MARKER } from '../agents/agent-loop.js'
 
@@ -229,6 +230,16 @@ async function substituteSecrets(
 
   const secrets: string[] = []
   const settings = await loadMergedSettings(workspaceRoot)
+  // Params declared `secret: true` in a skill/agent config.yaml are masked in
+  // the admin UI — their resolved literal value must join the masking list
+  // too, or a failed command echoing the plaintext (auth errors quoting the
+  // token) would expose it in the tool result.
+  const declaredSecretParams = new Set<string>()
+  for (const section of loadSettingsSchema(workspaceRoot)) {
+    for (const f of section.fields) {
+      if (f.kind === 'param' && f.secret === true) declaredSecretParams.add(`${section.namespaceId}.${f.key}`)
+    }
+  }
   const result = cmd.replace(PARAMS_PATTERN, (_match, namespace: string, dotted: string) => {
     if (allowedNamespaces && !allowedNamespaces.has(namespace)) {
       console.log(`[workspace-tools] {{${namespace}.params.${dotted}}} rejected — namespace not in allowed list`)
@@ -269,11 +280,13 @@ async function substituteSecrets(
       return val
     })
     // Mask the resolved string only if any portion came from an env
-    // var. Plain literal params (host names, ports, workspace paths)
+    // var OR the param is declared `secret: true` in its config.yaml.
+    // Plain literal params (host names, ports, workspace paths)
     // don't get masked — masking everything turned tool errors into
     // unreadable `connect to *** failed`. If you have a sensitive
-    // literal (a token), put it behind <<TOKEN_ENV>> to opt into masking.
-    if (envInjected && expanded !== '') secrets.push(expanded)
+    // literal (a token), declare it `secret: true` or put it behind
+    // <<TOKEN_ENV>> to opt into masking.
+    if ((envInjected || declaredSecretParams.has(`${namespace}.${dotted}`)) && expanded !== '') secrets.push(expanded)
     return expanded
   })
 

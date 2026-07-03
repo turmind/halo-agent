@@ -267,6 +267,12 @@ export const config = {
     jwtSecret: systemString('HALO_JWT_SECRET', 'server.jwt_secret', null),
     // Empty allowlist means "reflect any origin" (see CORS setup in index.ts).
     corsOrigins: systemStringArray('HALO_CORS_ORIGINS', 'server.cors_origins', []),
+    /** Trust `x-forwarded-for` for client-IP resolution (brute-force
+     *  buckets). Off by default — the header is client-forgeable unless a
+     *  reverse proxy the operator controls rewrites it. */
+    get trustProxy(): boolean {
+      return settingsBool('general.server.trust_proxy', false)
+    },
   },
 
   // `model.compressAt` is intentionally a getter — it reads from

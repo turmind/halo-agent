@@ -18,7 +18,10 @@ async function readSettingsFile(filePath: string): Promise<Record<string, unknow
 
 async function writeSettingsFile(filePath: string, data: Record<string, unknown>): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, YAML.stringify(data, { lineWidth: 120 }), 'utf-8')
+  await fs.writeFile(filePath, YAML.stringify(data, { lineWidth: 120 }), { encoding: 'utf-8', mode: 0o600 })
+  // `mode` only applies at file creation — chmod fixes pre-existing 0644
+  // files (settings.yaml holds plaintext API keys; keep it owner-only).
+  try { await fs.chmod(filePath, 0o600) } catch { /* best-effort */ }
 }
 
 /** Plain deep merge: workspace values override global leaf-by-leaf. */
