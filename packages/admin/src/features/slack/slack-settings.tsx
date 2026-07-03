@@ -210,7 +210,7 @@ function AccountRow(props: {
 
   return (
     <li className="flex items-center gap-3 px-4 py-3">
-      <div className={cn('h-2 w-2 rounded-full', account.enabled ? 'bg-emerald-500' : 'bg-zinc-500')} />
+      <div className={cn('h-2 w-2 rounded-full', account.enabled ? 'bg-emerald-500' : 'bg-[var(--muted-foreground)]')} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-[var(--foreground)]">{account.label || account.teamId}</span>

@@ -144,10 +144,10 @@ export function SessionChatPanel() {
               <span className="shrink-0 rounded bg-blue-900/50 px-1.5 py-0.5 text-[8px] text-blue-400">live</span>
             )}
             {selectedSession?.parentSessionId && (
-              <span className="shrink-0 rounded bg-zinc-800 px-1 py-0.5 text-[8px] text-zinc-400" title="Sub-session">sub</span>
+              <span className="shrink-0 rounded bg-[var(--secondary)] px-1 py-0.5 text-[8px] text-[var(--muted-foreground)]" title="Sub-session">sub</span>
             )}
             {selectedSession?.stoppedAt && (
-              <span className="shrink-0 rounded bg-zinc-800 px-1 py-0.5 text-[8px] text-zinc-400">stopped</span>
+              <span className="shrink-0 rounded bg-[var(--secondary)] px-1 py-0.5 text-[8px] text-[var(--muted-foreground)]">stopped</span>
             )}
             {selectedSession?.archivedAt && (
               <span
@@ -235,14 +235,14 @@ export function SessionChatPanel() {
           </div>
         ) : !selectedSessionId ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-            <Bot className="h-8 w-8 text-zinc-700" />
+            <Bot className="h-8 w-8 text-[var(--muted-foreground)]" />
             <p className="text-sm text-[var(--muted-foreground)]">
               Select a session from the sidebar to view messages
             </p>
           </div>
         ) : messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-            <Bot className="h-8 w-8 text-zinc-700" />
+            <Bot className="h-8 w-8 text-[var(--muted-foreground)]" />
             <p className="text-sm text-[var(--muted-foreground)]">No messages in this session</p>
           </div>
         ) : (

@@ -275,7 +275,7 @@ export function SkillsSidebar() {
         {projectId && renderSection('workspace', FolderOpen, t('common.workspace'), workspaceSkills)}
         {skills.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-2 p-6 text-center">
-            <Zap className="h-8 w-8 text-zinc-700" />
+            <Zap className="h-8 w-8 text-[var(--muted-foreground)]" />
             <p className="text-xs text-[var(--muted-foreground)]">{t('skill.noSkills')}</p>
           </div>
         )}

@@ -204,7 +204,7 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
           <EditorPanel projectId={projectId} mode="tree-only" />
         ) : (
           <div className="flex flex-col items-center justify-center gap-2 p-6 text-center">
-            <FolderOpen className="h-8 w-8 text-zinc-700" />
+            <FolderOpen className="h-8 w-8 text-[var(--muted-foreground)]" />
             <p className="text-xs text-[var(--muted-foreground)]">Enter a folder path to explore files</p>
           </div>
         )}

@@ -150,11 +150,11 @@ export function CronSidebar() {
                   <div className="flex items-center gap-2">
                     <span className={cn(
                       'inline-block h-2 w-2 rounded-full',
-                      j.enabled === 0 ? 'bg-zinc-500' :
+                      j.enabled === 0 ? 'bg-[var(--muted-foreground)]' :
                         status === 'succeeded' ? 'bg-emerald-500' :
                         status === 'running' ? 'bg-amber-400 animate-pulse' :
                         status === 'failed' || status === 'timeout' ? 'bg-red-500' :
-                        'bg-zinc-400',
+                        'bg-[var(--muted-foreground)]',
                     )} />
                     <span className="truncate font-medium text-[var(--foreground)]">{j.label || j.id}</span>
                   </div>

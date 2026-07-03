@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { api } from '@/shared/api-client'
 import { Save, BookOpen, Loader2 } from 'lucide-react'
 import { cn } from '@/shared/utils'
+import { useTheme, monacoThemeFor, defineMonacoThemes } from '@/shared/theme'
 import '@/features/editor/monaco-loader'
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false })
@@ -47,6 +48,7 @@ export function MdEditorPanel({
   const [files, setFiles] = useState<Record<string, MdFileState>>({})
   const [loading, setLoading] = useState(true)
   const contentRef = useRef<Record<string, string>>({})
+  const { theme } = useTheme()
 
   // Load all MD files
   const loadAll = useCallback(async () => {
@@ -189,7 +191,8 @@ export function MdEditorPanel({
           key={`${agentId}-${activeTab}-${scope}`}
           height="100%"
           language="markdown"
-          theme="vs-dark"
+          beforeMount={defineMonacoThemes}
+          theme={monacoThemeFor(theme)}
           value={activeFile?.content ?? ''}
           onChange={(value) => updateContent(activeTab, value ?? '')}
           options={{

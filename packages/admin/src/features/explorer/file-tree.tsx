@@ -161,7 +161,7 @@ function EditInputRow({
       style={{ paddingLeft: `${depth * 12 + 8}px` }}
     >
       <span className="w-3.5 shrink-0" />
-      <Icon className={cn('h-3.5 w-3.5 shrink-0', iconKind === 'folder' ? 'text-blue-400' : 'fill-zinc-500 text-zinc-500')} />
+      <Icon className={cn('h-3.5 w-3.5 shrink-0', iconKind === 'folder' ? 'text-blue-400' : 'fill-[var(--muted-foreground)] text-[var(--muted-foreground)]')} />
       <input
         ref={inputRef}
         type="text"

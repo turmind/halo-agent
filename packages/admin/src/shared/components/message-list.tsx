@@ -119,7 +119,7 @@ function SubAgentReport({ content }: { content: string }) {
   const parsed = parseSubAgentReport(content)!
   const shortId = parsed.sessionId.split('>').pop() ?? parsed.sessionId
   return (
-    <div className="sticky top-0 z-10 px-3 py-2 border-b border-slate-900 border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
+    <div className="sticky top-0 z-10 px-3 py-2 border-b border-[var(--border)] border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
       <div className="mb-1 flex items-center gap-2 text-[10px] font-medium text-emerald-400">
         <span>Report from sub-session</span>
         <span className="rounded bg-emerald-900/40 px-1 py-0.5 font-mono text-emerald-300/80">{shortId}</span>
@@ -405,9 +405,11 @@ function UserExchangeHeader({ content, localImages }: { content: string; localIm
   const [zoom, setZoom] = useState<string | null>(null)
   return (
     <>
-      <div className="sticky top-0 z-10 bg-slate-800 border-b border-slate-900 border-l-2 border-l-blue-500 px-4 py-2.5 shadow-sm">
+      {/* accent bg/fg: on dark these resolve to the old slate-800 bg and a
+          near-identical slate fg; on other themes they follow the palette */}
+      <div className="sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 border-l-blue-500 px-4 py-2.5 shadow-sm">
         <CollapsibleContent maxLines={2}>
-          <div className="text-xs text-slate-100 leading-relaxed whitespace-pre-wrap">
+          <div className="text-xs text-[var(--accent-foreground)] leading-relaxed whitespace-pre-wrap">
             {text || (media.length > 0 || localImages?.length ? '(attachment)' : '')}
           </div>
         </CollapsibleContent>

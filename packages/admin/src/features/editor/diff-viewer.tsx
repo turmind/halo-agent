@@ -3,6 +3,7 @@
 import { DiffEditor } from '@monaco-editor/react'
 import './monaco-loader'
 import { getLanguageFromPath } from '@/shared/utils'
+import { useTheme, monacoThemeFor, defineMonacoThemes } from '@/shared/theme'
 
 interface DiffViewerProps {
   original: string
@@ -12,6 +13,7 @@ interface DiffViewerProps {
 
 export function DiffViewer({ original, modified, path }: DiffViewerProps) {
   const language = getLanguageFromPath(path)
+  const { theme } = useTheme()
 
   return (
     <DiffEditor
@@ -19,7 +21,8 @@ export function DiffViewer({ original, modified, path }: DiffViewerProps) {
       language={language}
       original={original}
       modified={modified}
-      theme="vs-dark"
+      beforeMount={defineMonacoThemes}
+      theme={monacoThemeFor(theme)}
       options={{
         fontSize: 13,
         lineHeight: 20,

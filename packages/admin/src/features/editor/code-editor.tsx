@@ -4,6 +4,7 @@ import { useCallback, useRef, useEffect } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import './monaco-loader'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
+import { useTheme, monacoThemeFor, defineMonacoThemes } from '@/shared/theme'
 
 interface CodeEditorProps {
   path: string
@@ -17,6 +18,7 @@ interface CodeEditorProps {
 export function CodeEditor({ path, content, language, onChange, onSave, onClose }: CodeEditorProps) {
   const useEditorStore = useScopedEditorStore()
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null)
+  const { theme } = useTheme()
 
   // Clear selection tracking when editor unmounts or path changes
   useEffect(() => {
@@ -84,8 +86,9 @@ export function CodeEditor({ path, content, language, onChange, onSave, onClose 
       language={language}
       value={content}
       onChange={handleChange}
+      beforeMount={defineMonacoThemes}
       onMount={handleMount}
-      theme="vs-dark"
+      theme={monacoThemeFor(theme)}
       options={{
         fontSize: 13,
         lineHeight: 20,

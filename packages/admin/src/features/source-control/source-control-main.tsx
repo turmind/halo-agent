@@ -40,7 +40,7 @@ export function SourceControlMain() {
   if (!selected) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-[var(--background)] text-center">
-        <GitCompare className="h-10 w-10 text-zinc-700" />
+        <GitCompare className="h-10 w-10 text-[var(--muted-foreground)]" />
         <p className="mt-2 text-sm text-[var(--muted-foreground)]">{t('sc.selectFile')}</p>
       </div>
     )

@@ -36,7 +36,7 @@ function EmptyState({ label }: { label: string }) {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const cls = STATUS_COLORS[status] ?? 'bg-zinc-700 text-zinc-200'
+  const cls = STATUS_COLORS[status] ?? 'bg-[var(--accent)] text-[var(--foreground)]'
   return (
     <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', cls)}>
       {status.replace('_', ' ')}
@@ -45,12 +45,12 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-zinc-700 text-zinc-200',
+  pending: 'bg-[var(--accent)] text-[var(--foreground)]',
   running: 'bg-blue-700 text-blue-100',
   awaiting_review: 'bg-amber-600 text-amber-50',
   approved: 'bg-emerald-700 text-emerald-50',
   applied: 'bg-emerald-800 text-emerald-100',
-  skipped: 'bg-zinc-600 text-zinc-100',
+  skipped: 'bg-[var(--accent)] text-[var(--foreground)]',
   rejected: 'bg-red-700 text-red-50',
   failed: 'bg-red-800 text-red-100',
   timeout: 'bg-orange-700 text-orange-100',
@@ -238,7 +238,7 @@ function RunDetailPane({ id }: { id: string }) {
           </div>
         )}
         {run.status === 'skipped' && (
-          <div className="mt-2 rounded bg-zinc-800 p-2 text-xs text-[var(--muted-foreground)]">
+          <div className="mt-2 rounded bg-[var(--accent)] p-2 text-xs text-[var(--muted-foreground)]">
             {t('evolution.detail.skipped')}
           </div>
         )}
@@ -271,7 +271,7 @@ function RunDetailPane({ id }: { id: string }) {
           <button
             disabled={busy}
             onClick={() => setShowHint((v) => !v)}
-            className="flex items-center gap-1 rounded bg-zinc-700 px-2 py-1 text-xs text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
+            className="flex items-center gap-1 rounded bg-[var(--accent)] px-2 py-1 text-xs text-[var(--foreground)] hover:bg-[var(--accent)]/80 disabled:opacity-50"
           >
             <MessageSquarePlus className="h-3.5 w-3.5" /> {t('evolution.action.addHint')}
           </button>
@@ -324,7 +324,7 @@ function RunDetailPane({ id }: { id: string }) {
             <button
               disabled={busy}
               onClick={() => { setShowRetry(false); setRetryHint('') }}
-              className="rounded bg-zinc-700 px-2 py-1 text-xs text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
+              className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-[var(--foreground)] hover:bg-[var(--accent)]/80 disabled:opacity-50"
             >{t('evolution.action.cancel')}</button>
           </div>
         </div>
@@ -351,14 +351,14 @@ function RunDetailPane({ id }: { id: string }) {
             <button
               disabled={busy}
               onClick={() => { setShowApprove(false); setReviewerHint('') }}
-              className="rounded bg-zinc-700 px-2 py-1 text-xs text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
+              className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-[var(--foreground)] hover:bg-[var(--accent)]/80 disabled:opacity-50"
             >{t('evolution.action.cancel')}</button>
           </div>
         </div>
       )}
 
       {isAwaiting && showHint && (
-        <div className="border-b border-[var(--border)] bg-zinc-950/40 px-4 py-2">
+        <div className="border-b border-[var(--border)] bg-[var(--background)]/40 px-4 py-2">
           <div className="text-xs text-[var(--muted-foreground)]">
             {t('evolution.hint.title')}
           </div>
@@ -373,12 +373,12 @@ function RunDetailPane({ id }: { id: string }) {
             <button
               disabled={busy || !hintInput.trim()}
               onClick={() => { void onAddHint() }}
-              className="rounded bg-zinc-700 px-2 py-1 text-xs text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
+              className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-[var(--foreground)] hover:bg-[var(--accent)]/80 disabled:opacity-50"
             >{t('evolution.action.add')}</button>
             <button
               disabled={busy}
               onClick={() => { setShowHint(false); setHintInput('') }}
-              className="rounded bg-zinc-700 px-2 py-1 text-xs text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
+              className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-[var(--foreground)] hover:bg-[var(--accent)]/80 disabled:opacity-50"
             >{t('evolution.action.cancel')}</button>
           </div>
         </div>
@@ -429,7 +429,7 @@ function RunDetailPane({ id }: { id: string }) {
         {skipReasonMd && (
           <div className="mb-4">
             <div className="mb-2 text-sm font-medium">{t('evolution.skip.title')}</div>
-            <pre className="whitespace-pre-wrap rounded border border-zinc-700/40 bg-zinc-800/40 p-3 text-xs leading-relaxed">{skipReasonMd}</pre>
+            <pre className="whitespace-pre-wrap rounded border border-[var(--border)]/40 bg-[var(--secondary)]/40 p-3 text-xs leading-relaxed">{skipReasonMd}</pre>
           </div>
         )}
         <div className="mb-2 text-sm font-medium">{t('evolution.patch.title')}</div>
@@ -467,7 +467,7 @@ function CollapsibleLog({ title, body }: { title: string; body: string }) {
         <span className="text-xs text-[var(--muted-foreground)]">({(body.length / 1024).toFixed(1)} KB)</span>
       </button>
       {open && (
-        <pre className="mt-2 whitespace-pre-wrap break-words rounded border border-zinc-700/40 bg-zinc-900/40 p-3 font-mono text-[11px] leading-relaxed">{body}</pre>
+        <pre className="mt-2 whitespace-pre-wrap break-words rounded border border-[var(--border)]/40 bg-[var(--background)]/40 p-3 font-mono text-[11px] leading-relaxed">{body}</pre>
       )}
     </div>
   )

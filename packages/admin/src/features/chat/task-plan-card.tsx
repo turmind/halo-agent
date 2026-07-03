@@ -25,11 +25,11 @@ const statusConfig: Record<
   TaskNodeStatus,
   { icon: typeof Circle; color: string; label: string }
 > = {
-  pending: { icon: Circle, color: 'text-zinc-500', label: 'Pending' },
+  pending: { icon: Circle, color: 'text-[var(--muted-foreground)]', label: 'Pending' },
   running: { icon: Loader2, color: 'text-blue-400', label: 'Running' },
   completed: { icon: CheckCircle2, color: 'text-emerald-400', label: 'Done' },
   failed: { icon: XCircle, color: 'text-red-400', label: 'Failed' },
-  skipped: { icon: SkipForward, color: 'text-zinc-500', label: 'Skipped' },
+  skipped: { icon: SkipForward, color: 'text-[var(--muted-foreground)]', label: 'Skipped' },
 }
 
 export function TaskPlanCard({ plan }: TaskPlanCardProps) {
@@ -201,7 +201,7 @@ function PlanStatusBadge({ status }: { status: string }) {
     running: 'bg-blue-900/50 text-blue-300 border-blue-700',
     completed: 'bg-emerald-900/50 text-emerald-300 border-emerald-700',
     failed: 'bg-red-900/50 text-red-300 border-red-700',
-    rejected: 'bg-zinc-800 text-zinc-400 border-zinc-600',
+    rejected: 'bg-[var(--secondary)] text-[var(--muted-foreground)] border-[var(--border)]',
   }
 
   const labels: Record<string, string> = {
@@ -217,7 +217,7 @@ function PlanStatusBadge({ status }: { status: string }) {
     <span
       className={cn(
         'rounded-full border px-2 py-0.5 text-[10px] font-medium',
-        variants[status] ?? 'bg-zinc-800 text-zinc-400 border-zinc-600',
+        variants[status] ?? 'bg-[var(--secondary)] text-[var(--muted-foreground)] border-[var(--border)]',
       )}
     >
       {labels[status] ?? status}

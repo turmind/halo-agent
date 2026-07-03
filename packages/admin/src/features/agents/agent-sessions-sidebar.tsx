@@ -181,7 +181,7 @@ function SessionTree({
                     </p>
                   )}
                   {isStopped && (
-                    <span title="Stopped"><StopCircle className="h-2.5 w-2.5 shrink-0 text-zinc-500" /></span>
+                    <span title="Stopped"><StopCircle className="h-2.5 w-2.5 shrink-0 text-[var(--muted-foreground)]" /></span>
                   )}
                   {isArchived && (
                     <span title="Archived"><Archive className="h-2.5 w-2.5 shrink-0 text-amber-500" /></span>
@@ -581,7 +581,7 @@ export function AgentSessionsSidebar() {
           </div>
         ) : tree.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 p-6 text-center">
-            <Bot className="h-8 w-8 text-zinc-700" />
+            <Bot className="h-8 w-8 text-[var(--muted-foreground)]" />
             <p className="text-xs text-[var(--muted-foreground)]">No session history yet</p>
             <p className="text-[10px] text-[var(--muted-foreground)]">Start a conversation in the Chat panel</p>
           </div>

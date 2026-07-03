@@ -285,7 +285,7 @@ function SshTab({ projectId, onClose }: { projectId: string; onClose: () => void
 
         {/* Agent status */}
         <div className="flex items-center gap-2 rounded bg-[var(--secondary)] px-2.5 py-1.5 text-xs">
-          <span className={cn('h-2 w-2 rounded-full', agentRunning ? 'bg-emerald-400' : 'bg-zinc-600')} />
+          <span className={cn('h-2 w-2 rounded-full', agentRunning ? 'bg-emerald-400' : 'bg-[var(--muted-foreground)]')} />
           <span className="text-[var(--muted-foreground)]">
             {agentRunning ? t('sc.cred.sshAgentOn', { count: String(loadedKeys.length) }) : t('sc.cred.sshAgentOff')}
           </span>

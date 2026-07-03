@@ -84,9 +84,9 @@ export function getFileIcon(path: string): { Icon: LucideIcon; color: string } {
 
   // Special filenames
   if (name === 'dockerfile' || name.startsWith('dockerfile.')) return { Icon: Terminal, color: 'text-cyan-400' }
-  if (name === '.gitignore' || name === '.gitattributes') return { Icon: Settings, color: 'text-zinc-400' }
+  if (name === '.gitignore' || name === '.gitattributes') return { Icon: Settings, color: 'text-[var(--muted-foreground)]' }
   if (name === '.env' || name.startsWith('.env.')) return { Icon: Settings, color: 'text-yellow-300' }
-  if (name === 'makefile' || name === 'cmake') return { Icon: Terminal, color: 'text-zinc-400' }
+  if (name === 'makefile' || name === 'cmake') return { Icon: Terminal, color: 'text-[var(--muted-foreground)]' }
 
   return {
     Icon: EXT_ICON[ext] ?? File,

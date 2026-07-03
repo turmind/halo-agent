@@ -6,6 +6,7 @@ import { useProjectStore } from '@/shared/stores/project-store'
 import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { useI18n } from '@/shared/i18n'
+import { useTheme } from '@/shared/theme'
 
 type Schema = Awaited<ReturnType<typeof api.settings.getSchema>>
 type Section = Schema['sections'][number]
@@ -29,6 +30,7 @@ type Field = Section['fields'][number]
  */
 export function SettingsMain() {
   const { t, refreshFromServer: refreshI18nLang } = useI18n()
+  const { refreshFromServer: refreshTheme } = useTheme()
   const activeProject = useProjectStore((s) => s.activeProject)
   const [scope, setScope] = useState<'global' | 'workspace'>('global')
   const [schema, setSchema] = useState<Schema | null>(null)
@@ -82,12 +84,13 @@ export function SettingsMain() {
         await api.settings.patch(scope, dotPath, coerced, projectId)
       }
       refresh()
-      // Settings can affect cross-cutting state. Right now the only one we
-      // need to refresh in-place is the i18n context (`general.language`)
-      // — saving it should re-render the whole app in the new language
+      // Settings can affect cross-cutting state. The ones we refresh in-place
+      // are the i18n context (`general.language`) and the theme context
+      // (`general.theme`) — saving either should re-render the whole app
       // without a page reload. Cheap to call unconditionally; if other
       // global settings start needing this, generalize the hook.
       void refreshI18nLang()
+      void refreshTheme()
     } catch (err) {
       console.error('[Settings] save failed:', err)
     } finally {
@@ -104,6 +107,7 @@ export function SettingsMain() {
       await api.settings.remove(scope, dotPath, projectId)
       refresh()
       void refreshI18nLang()
+      void refreshTheme()
     } catch (err) {
       console.error('[Settings] reset failed:', err)
     } finally {

@@ -149,7 +149,7 @@ export function SourceControlSidebar() {
   if (!projectId) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-[var(--background)] p-6 text-center">
-        <GitBranch className="h-8 w-8 text-zinc-700" />
+        <GitBranch className="h-8 w-8 text-[var(--muted-foreground)]" />
         <p className="mt-2 text-xs text-[var(--muted-foreground)]">{t('sc.noWorkspace')}</p>
       </div>
     )
@@ -161,7 +161,7 @@ export function SourceControlSidebar() {
   if (notRepo) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--background)] p-6 text-center">
-        <FolderGit2 className="h-8 w-8 text-zinc-700" />
+        <FolderGit2 className="h-8 w-8 text-[var(--muted-foreground)]" />
         <p className="max-w-[240px] text-xs text-[var(--muted-foreground)]">{t('sc.initRepoDesc')}</p>
         <button
           onClick={initRepo}

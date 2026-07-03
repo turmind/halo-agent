@@ -125,6 +125,9 @@ function generalSection(): SchemaSection {
       // that don't load INSTRUCTIONS.md, and available to anything else that
       // wants a language hint without inspecting per-session state.
       { key: 'language', type: 'enum', options: ['en-US', 'zh-CN'], optionLabels: ['English', '中文'], globalOnly: true, description: 'System language (BCP-47). Drives the admin UI language and any internal agents (evo / score) that don\'t load INSTRUCTIONS.md. Single source of truth.', description_zh: '系统语言（BCP-47 区域码）。admin UI 与不加载 INSTRUCTIONS.md 的内部 agent（evo / score）共用。单一来源。', default: 'en-US' },
+      // admin UI color theme. Consumed only by the admin frontend (shared/theme);
+      // stored server-side so the choice follows the user across browsers.
+      { key: 'theme', type: 'enum', options: ['dark', 'light', 'midnight', 'warm'], optionLabels: ['Dark', 'Light', 'Midnight', 'Warm'], globalOnly: true, description: 'Admin UI color theme.', description_zh: 'Admin 界面配色主题。', default: 'dark' },
       // agent scaffold
       { key: 'agent.default_provider', type: 'enum', options: providerIds, description: 'Provider used when scaffolding a new agent. Model id, endpoint, prompt-caching TTL, and thinking defaults are read from that provider\'s YAML.', description_zh: '新建 agent 时使用的供应商。模型 id、endpoint、提示缓存 TTL、Thinking 默认值都从该供应商的 YAML 读取。', default: defaultProvider },
       // session

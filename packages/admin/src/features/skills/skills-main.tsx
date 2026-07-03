@@ -12,7 +12,7 @@ export function SkillsMain() {
   if (!selected) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center bg-[var(--background)]">
-        <Zap className="h-10 w-10 text-zinc-700" />
+        <Zap className="h-10 w-10 text-[var(--muted-foreground)]" />
         <p className="text-sm text-[var(--muted-foreground)]">Select a skill to edit, or create a new one</p>
       </div>
     )

@@ -1,6 +1,13 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/*
+ * Theme system — <html data-theme="..."> selects a variable set. :root holds
+ * the default (dark) values, so a missing/unknown attribute degrades to the
+ * original look. The inline script in layout.tsx applies localStorage's
+ * `halo_theme` before first paint; shared/theme/context.tsx keeps the
+ * attribute in sync with the server's `general.theme` setting afterwards.
+ */
 :root {
   --background: #0a0a0a;
   --foreground: #ededed;
@@ -19,6 +26,162 @@
   --destructive: #ef4444;
   --ring: #3b82f6;
   --radius: 0.5rem;
+  --scrollbar-thumb: #333333;
+  --scrollbar-thumb-hover: #555555;
+}
+
+[data-theme="light"] {
+  --background: #ffffff;
+  --foreground: #171717;
+  --card: #fafafa;
+  --card-foreground: #171717;
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f5f5f5;
+  --secondary-foreground: #525252;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --accent: #e2e8f0;
+  --accent-foreground: #1e293b;
+  --destructive: #dc2626;
+  --ring: #2563eb;
+  --scrollbar-thumb: #d4d4d4;
+  --scrollbar-thumb-hover: #a3a3a3;
+}
+
+[data-theme="midnight"] {
+  --background: #0b1220;
+  --foreground: #dbe4f3;
+  --card: #111a2e;
+  --card-foreground: #dbe4f3;
+  --border: #1e2a47;
+  --input: #1e2a47;
+  --primary: #38bdf8;
+  /* primary is a light sky tone here — dark text keeps buttons readable */
+  --primary-foreground: #0b1220;
+  --secondary: #16213a;
+  --secondary-foreground: #93a5c8;
+  --muted: #16213a;
+  --muted-foreground: #64769b;
+  --accent: #1c2b4d;
+  --accent-foreground: #d6e2f5;
+  --destructive: #f87171;
+  --ring: #38bdf8;
+  --scrollbar-thumb: #243252;
+  --scrollbar-thumb-hover: #33456e;
+}
+
+[data-theme="warm"] {
+  --background: #f6f1e7;
+  --foreground: #3d3427;
+  --card: #fdfaf3;
+  --card-foreground: #3d3427;
+  --border: #ddd2bd;
+  --input: #ddd2bd;
+  --primary: #b45309;
+  --primary-foreground: #ffffff;
+  --secondary: #efe7d8;
+  --secondary-foreground: #6b5d48;
+  --muted: #efe7d8;
+  --muted-foreground: #7d6e55;
+  --accent: #e9dfc9;
+  --accent-foreground: #4a3f2e;
+  --destructive: #b91c1c;
+  --ring: #b45309;
+  --scrollbar-thumb: #d3c5a9;
+  --scrollbar-thumb-hover: #b7a67f;
+}
+
+/*
+ * Status-color readability on the two light themes. The ~150 hardcoded
+ * text-red-400 / bg-amber-900/50 / … call sites compile to
+ * `var(--color-red-400)` etc, so we remap the problem shades wholesale here
+ * instead of touching every call site: pale text shades darken (200→800,
+ * 300→700, 400→600; amber/yellow 400→700 since their 600 is still too pale as
+ * text), and the translucent dark chip backgrounds go pastel (900→200,
+ * 950→100) so `bg-purple-900/50 text-purple-300`-style chips stay coherent.
+ *
+ * Values are Tailwind v4 palette literals (node_modules/tailwindcss/theme.css)
+ * — we can't write var(--color-red-800) here because Tailwind tree-shakes
+ * --color-* definitions that no utility references, so the target shade may
+ * not exist at runtime. Only hue×shade pairs actually used in src/ are
+ * remapped; solid -500…-800 chips and their -50/-100 text are left alone
+ * (they carry their own dark background and already read fine on light
+ * surfaces).
+ */
+[data-theme="light"],
+[data-theme="warm"] {
+  /* text shades: 200 → 800 */
+  --color-red-200: oklch(44.4% 0.177 26.899);
+  --color-amber-200: oklch(47.3% 0.137 46.201);
+  /* text shades: 300 → 700 */
+  --color-red-300: oklch(50.5% 0.213 27.518);
+  --color-orange-300: oklch(55.3% 0.195 38.402);
+  --color-amber-300: oklch(55.5% 0.163 48.998);
+  --color-yellow-300: oklch(55.4% 0.135 66.442);
+  --color-green-300: oklch(52.7% 0.154 150.069);
+  --color-emerald-300: oklch(50.8% 0.118 165.612);
+  --color-teal-300: oklch(51.1% 0.096 186.391);
+  --color-cyan-300: oklch(52% 0.105 223.128);
+  --color-sky-300: oklch(50% 0.134 242.749);
+  --color-blue-300: oklch(48.8% 0.243 264.376);
+  --color-indigo-300: oklch(45.7% 0.24 277.023);
+  --color-purple-300: oklch(49.6% 0.265 301.924);
+  --color-pink-300: oklch(52.5% 0.223 3.958);
+  /* text/dot shades: 400 → 600 (amber/yellow → 700) */
+  --color-red-400: oklch(57.7% 0.245 27.325);
+  --color-orange-400: oklch(64.6% 0.222 41.116);
+  --color-amber-400: oklch(55.5% 0.163 48.998);
+  --color-yellow-400: oklch(55.4% 0.135 66.442);
+  --color-green-400: oklch(62.7% 0.194 149.214);
+  --color-emerald-400: oklch(59.6% 0.145 163.225);
+  --color-cyan-400: oklch(60.9% 0.126 221.723);
+  --color-blue-400: oklch(54.6% 0.245 262.881);
+  --color-purple-400: oklch(55.8% 0.288 302.321);
+  --color-pink-400: oklch(59.2% 0.249 0.584);
+  /* translucent chip backgrounds: 900 → 200 */
+  --color-red-900: oklch(88.5% 0.062 18.334);
+  --color-amber-900: oklch(92.4% 0.12 95.746);
+  --color-emerald-900: oklch(90.5% 0.093 164.15);
+  --color-blue-900: oklch(88.2% 0.059 254.128);
+  --color-purple-900: oklch(90.2% 0.063 306.703);
+  /* translucent chip backgrounds: 950 → 100 */
+  --color-red-950: oklch(93.6% 0.032 17.717);
+  --color-amber-950: oklch(96.2% 0.059 95.617);
+  --color-emerald-950: oklch(95% 0.052 163.051);
+  --color-purple-950: oklch(94.6% 0.033 307.174);
+  --color-sky-950: oklch(95.1% 0.026 236.824);
+}
+
+/*
+ * Typography: chat markdown and previews use `prose prose-invert` (tuned for
+ * the dark themes). On light themes, redirect the invert palette to the theme
+ * variables instead of swapping classes in TSX — prose-invert resolves every
+ * --tw-prose-* through its --tw-prose-invert-* counterpart, and these
+ * declarations out-specify the `.prose` defaults ([data-theme] .prose = 0,2,0).
+ */
+[data-theme="light"] .prose,
+[data-theme="warm"] .prose {
+  --tw-prose-invert-body: var(--foreground);
+  --tw-prose-invert-headings: var(--foreground);
+  --tw-prose-invert-lead: var(--muted-foreground);
+  --tw-prose-invert-links: var(--primary);
+  --tw-prose-invert-bold: var(--foreground);
+  --tw-prose-invert-counters: var(--muted-foreground);
+  --tw-prose-invert-bullets: var(--muted-foreground);
+  --tw-prose-invert-hr: var(--border);
+  --tw-prose-invert-quotes: var(--foreground);
+  --tw-prose-invert-quote-borders: var(--border);
+  --tw-prose-invert-captions: var(--muted-foreground);
+  --tw-prose-invert-kbd: var(--foreground);
+  --tw-prose-invert-kbd-shadows: rgb(0 0 0 / 0.1);
+  --tw-prose-invert-code: var(--foreground);
+  --tw-prose-invert-pre-code: var(--foreground);
+  --tw-prose-invert-pre-bg: var(--secondary);
+  --tw-prose-invert-th-borders: var(--border);
+  --tw-prose-invert-td-borders: var(--border);
 }
 
 * {
@@ -41,12 +204,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333;
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Panel resize handle */

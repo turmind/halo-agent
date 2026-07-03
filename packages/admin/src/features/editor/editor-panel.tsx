@@ -1001,7 +1001,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                         return (
                           <div className="flex h-full items-center justify-center">
                             <div className="text-center">
-                              <Code2 className="mx-auto h-8 w-8 text-zinc-700" />
+                              <Code2 className="mx-auto h-8 w-8 text-[var(--muted-foreground)]" />
                               <p className="mt-2 text-sm text-[var(--muted-foreground)]">
                                 Open a file to start editing
                               </p>

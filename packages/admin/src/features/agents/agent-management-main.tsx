@@ -346,7 +346,7 @@ export function AgentManagementMain() {
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <Bot className="h-10 w-10 text-zinc-700" />
+            <Bot className="h-10 w-10 text-[var(--muted-foreground)]" />
             <p className="text-sm text-[var(--muted-foreground)]">{t('agent.selectToEdit')}</p>
           </div>
         )}
