@@ -23,6 +23,7 @@ import { createDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools } from './session-tools.js'
+import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
 import { saveSessionToFile, fileSegment, findInternalSession } from '../sessions/session-store.js'
@@ -314,7 +315,22 @@ export class SessionManager implements SessionManagerInternals {
     // and holds server.lock) passes this. CLI/TUI/channel-subprocess/evo-wrapper
     // share the same db while the server may be actively running sessions — they
     // must NOT reconcile, or they'd mark the server's live sub-agents stopped.
-    if (opts?.reconcileOrphansOnBoot) this.reconcileOrphansOnBoot()
+    //
+    // server.lock alone is NOT sufficient: two servers with different
+    // HALO_HOME (prod + dev) each hold their own server.lock yet can share
+    // one workspace — the incident where a dev server's first getOrCreate
+    // batch-stopped the prod server's live sub-sessions. So the reconcile is
+    // additionally gated on claiming `<workspace>/.halo/runtime.lock` (pid
+    // marker + liveness probe — see workspace-runtime-lock.ts for the full
+    // protocol + race analysis). Not claimed → skip: prefer missing a
+    // crash-orphan cleanup over stopping another process's live sessions.
+    if (opts?.reconcileOrphansOnBoot) {
+      if (claimWorkspaceRuntime(workspaceRoot)) {
+        this.reconcileOrphansOnBoot()
+      } else {
+        console.warn(`[SessionManager] Boot reconcile skipped for ${workspaceRoot}: workspace runtime is owned by another live process (.halo/runtime.lock)`)
+      }
+    }
   }
 
   /**

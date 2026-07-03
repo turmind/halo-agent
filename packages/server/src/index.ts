@@ -348,7 +348,10 @@ startArchiveDaemon()
 // Server owns the workspace runtime (holds server.lock) — reconcile
 // crash-orphaned sub-sessions when each workspace's manager is first built.
 // CLI/TUI registries deliberately omit this so they never disturb a running
-// server's sessions on the shared db.
+// server's sessions on the shared db. Ownership is additionally verified
+// per-workspace via `.halo/runtime.lock` (two servers with different
+// HALO_HOME can share one workspace — server.lock can't see that), so this
+// flag means "reconcile if the workspace claim succeeds", not "always".
 const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
 
 const sessionRoutes = createSessionRoutes(registry)

@@ -12,6 +12,9 @@ export class SessionManagerRegistry {
    *   the workspace runtime and holds server.lock. CLI/TUI registries must
    *   leave it off — they share the same db while the server may be running
    *   sessions, and reconciling there would stop the server's live sub-agents.
+   *   Even with the flag set, the reconcile only runs if the per-workspace
+   *   `.halo/runtime.lock` claim succeeds (two servers with different
+   *   HALO_HOME can share one workspace — see workspace-runtime-lock.ts).
    */
   constructor(private opts: { reconcileOrphansOnBoot?: boolean } = {}) {}
 
