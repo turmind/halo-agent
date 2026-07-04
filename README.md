@@ -189,11 +189,11 @@ Lives at [`halo-city/`](halo-city/) (plain static files, no build) — see the [
 
 ## Status & Limitations
 
-Halo is young and single-maintainer. It runs, but treat it as an early-stage project, not a hardened product:
+Halo is young — treat it as an early-stage project:
 
 - **Sandbox isolates the filesystem, not the network.** The bubblewrap sandbox covers access levels and filesystem reach (host paths, `~/.aws`/`~/.ssh` masked), but does **not** isolate the network — code running inside it can still make outbound connections. The threat model is accidental damage and path escape by a trusted agent, **not** containment of a deliberately malicious skill exfiltrating data. Network isolation is on the roadmap.
-- **No automated test suite yet.** Correctness rests on review and manual verification. Targeted tests for the externally-fixed contracts (session-file format, WS protocol) are planned over broad unit coverage.
-- **Single maintainer, minimal external validation.** Expect rough edges; APIs and on-disk formats may still change between versions.
+- **Test coverage is unit/regression-level, not end-to-end.** 345 tests across the four packages (core, server, cli, admin) run on every push via CI, covering core logic — path-boundary checks, session repair, channel message formatting, the TUI engine, and more. There's no end-to-end or integration suite yet.
+- **APIs and on-disk formats may still change between versions.** Expect rough edges while things stabilize.
 
 If you hit something broken or surprising, please open an issue — early feedback is genuinely useful right now.
 
