@@ -152,6 +152,14 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 1. `halo upgrade` — bumps the on-disk npm package
 2. `halo server restart` — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts. Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
 
+### Release checklist (before `npm publish`)
+
+1. **Bump version** in root `package.json` (and any workspace `package.json` that mirrors it).
+2. **Update `CHANGELOG.md`**: rename `[Unreleased]` → `[x.y.z] - YYYY-MM-DD`, add a fresh empty `[Unreleased]` section above it.
+3. **Bump `TEMPLATE_VERSION`** in `packages/server/src/init.ts` if any file under `templates/` was touched.
+4. **Build admin**: `pnpm --filter @turmind/halo-admin build` — verify `admin/out/monaco/vs/loader.js` exists.
+5. Commit, tag `vx.y.z`, push, then publish.
+
 The published package contains a single bundled JS entry (~620 KB), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint ≈ 120 MB after npm dedupes shared deps.
 
 ### Non-interactive (Docker / CI) details
