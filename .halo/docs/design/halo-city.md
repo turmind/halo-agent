@@ -107,9 +107,17 @@ js/
 ## 服务端配套
 
 - `GET /api/show/session?ws=&id=` — 只读会话详情:裁剪后的消息日志 + 真实
-  token 上限。鉴权同 `/api/show/state`(x-token;非 full 只能看自己 workspace)
+  token 上限。鉴权同 `/api/show/state`(x-token;`full`/`observer` 可跨
+  workspace 读取,其余 accessLevel 只能看自己 workspace)
 - `/api/show/state` — 无活跃 UIState 的会话(idle/stopped/重启后)token
   从会话文件头读取(mtime 缓存,不随轮询刷盘),不显示 0;含 `messageCount` 字段
+
+> **`observer` token 的权限面**:除了 `/show/state` 的聚合计数外,`observer`
+> 还能调 `/show/session` 读取**任意 workspace** 任意会话的明细——最近 40 条
+> 消息(每条截断到 600 字,tool input 截到 200 字)。它是"看板/监控"用的
+> 全局只读角色,但这条 transcript 读取能力不止是计数;签发 observer token 时
+> 要知道它相当于给了跨 workspace 的会话内容只读权限,不要把它当成纯粹的
+> "数字仪表盘"凭证随手发放。
 
 ## 性能设计
 

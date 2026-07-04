@@ -296,8 +296,8 @@ general:                                  # built-in declarer (the server itself
     max_message_slice: 800
     summarize_timeout_sec: 300
   sandbox:
-    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker"
-    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig"
+    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh"
+    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc"
   logging:
     level: warn
 
@@ -352,8 +352,8 @@ A value of the form `<<ENV_NAME>>` is replaced at read time with `process.env.EN
 | `general.limits.tool_result_ui_chars` | 65536 | Per-tool-result cap on the content **stored for UI display** (admin/web chat panel). Far larger than the LLM cap so a normal command's full output stays visible, but bounded so a multi-MB `cat` can't bloat the session file / WS payload / browser render; excess truncated with a marker pointing at `file_read` |
 | `general.limits.ws_event_buffer` | 5000 | Events buffered per detached WS session before oldest are dropped on reattach |
 | `general.limits.terminal_scrollback_bytes` | 50000 | Off-screen scrollback bytes retained per detached persistent terminal |
-| `general.sandbox.hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker` | bwrap tmpfs overlay (Linux only) |
-| `general.sandbox.hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig` | bwrap /dev/null bind (Linux only) |
+| `general.sandbox.hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh` | bwrap tmpfs overlay (Linux only) |
+| `general.sandbox.hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc` | bwrap /dev/null bind (Linux only) |
 | `general.logging.level` | warn | `debug` / `info` / `warn` / `error` |
 
 Schema source: [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`.

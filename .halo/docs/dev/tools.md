@@ -137,10 +137,10 @@ Configured in `settings.yaml` under `general.sandbox`:
 
 | Setting | Default | Method |
 |---|---|---|
-| `hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker` | `--tmpfs` overlay (empty directory) |
-| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig` | `--ro-bind /dev/null` (empty file) |
+| `hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh` | `--tmpfs` overlay (empty directory) |
+| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc` | `--ro-bind /dev/null` (empty file) |
 
-Changes take effect immediately — `config.ts` reads settings.yaml via an mtime-watched lazy cache, so the next `shell_exec` reads the latest values. A workspace-level `settings.yaml` can override these the same way it overrides any other key (no global-scope lock).
+Changes take effect immediately — `config.ts` reads settings.yaml via an mtime-watched lazy cache, so the next `shell_exec` reads the latest values. These keys are `globalOnly` in the schema — a workspace `settings.yaml` cannot override them, since they define the security boundary agents run inside.
 
 `/tmp` is not in the hidden list — it receives a standalone `--tmpfs` mount for process isolation (each bwrap invocation gets its own empty `/tmp`), not for hiding secrets.
 

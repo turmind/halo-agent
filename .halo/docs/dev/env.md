@@ -108,8 +108,9 @@ settings.yaml only (no env override):
 - `general.compact.max_summary_input` (default 15000) — local compaction fallback input cap
 - `general.compact.max_message_slice` (default 800) — local compaction per-message cap
 - `general.compact.summarize_timeout_sec` (default 300) — self-compact timeout
-- `general.sandbox.hidden_dirs` (default `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker`) — bwrap tmpfs overlays, scope: global
-- `general.sandbox.hidden_files` (default `~/.npmrc,~/.bash_history,~/.gitconfig`) — bwrap /dev/null binds, scope: global
+- `general.server.trust_proxy` (default `false`) — trust `x-forwarded-for` for client IP resolution, scope: global (enable only behind a reverse proxy you control)
+- `general.sandbox.hidden_dirs` (default `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh`) — bwrap tmpfs overlays, scope: global
+- `general.sandbox.hidden_files` (default `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc`) — bwrap /dev/null binds, scope: global
 - `general.logging.level` (default `warn`) — log level: debug | info | warn | error
 
 `<provider-id>.secrets.*` (server-only, hard-rejected by `{{}}` substitution; declared in `models/<provider-id>.yaml` `secrets:`):

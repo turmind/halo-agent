@@ -196,3 +196,5 @@ server {
     }
 }
 ```
+
+Behind a reverse proxy, set `general.server.trust_proxy: true` in `settings.yaml` (global scope only). Without it, brute-force rate-limiting / lockout resolves the client IP from the direct socket address — which behind a proxy is the proxy's own IP, so every client collapses into one bucket and can't be told apart. Only enable this when the proxy in front is one you control and it rewrites `x-forwarded-for` itself; otherwise a client can forge the header and bypass lockouts. Default is `false` (direct-connect deployments).

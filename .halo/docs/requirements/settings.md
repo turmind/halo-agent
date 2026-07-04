@@ -7,6 +7,8 @@ Global + workspace configuration. The shape mirrors VSCode's `contributes.config
 ```yaml
 # ~/.halo/secrets/settings.yaml — values only
 general:                                  # built-in declarer (server itself)
+  server:
+    trust_proxy: false                    # true only behind a reverse proxy you control — see below
   session:
     max_queue_size: 256
     max_nesting_depth: 16
@@ -15,8 +17,8 @@ general:                                  # built-in declarer (server itself)
     max_summary_input: 15000
     ...
   sandbox:
-    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker"
-    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig"
+    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh"
+    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc"
     writable_dirs: ""                     # e.g. ~/.kiro,~/.local/share/kiro-cli — rw bind-mounts in bwrap; ignored for readonly sessions
   logging:
     level: warn
@@ -91,7 +93,11 @@ secrets: []
 
 ### General — built-in
 
-Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `agent.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `evolution.*`, `limits.*`.
+Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `agent.*`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `evolution.*`, `limits.*`.
+
+`server.trust_proxy` (boolean, default `false`, `globalOnly`): whether the brute-force rate limiter (`middleware/brute-force.ts` `getClientIp`) trusts the `x-forwarded-for` header for client IP resolution. Direct-connect deployments leave it `false` and get the socket address. Behind a reverse proxy (nginx / Cloudflare / etc.), set it to `true` so the real client IP is honored instead of the proxy's — but only when that proxy is one you control and rewrites the header itself, otherwise a client can forge XFF to dodge lockouts.
+
+`sandbox.hidden_dirs` / `sandbox.hidden_files` / `sandbox.writable_dirs` are `globalOnly` — they define the security boundary agents run inside, so a workspace `settings.yaml` cannot override them (a workspace overriding them could lift its own sandbox constraints).
 
 `evolution.*` controls the self-evolution subsystem (see [plans/self-evolution.md](../plans/self-evolution.md)). All `evolution.*` keys are `globalOnly` — they live in `~/.halo/secrets/settings.yaml` only, not workspace settings. Notable knobs: `evolution.level` (`L0` = off, `L1` = human + LLM assist), `evolution.max_concurrent_run` / `max_concurrent_apply` (wrapper concurrency caps), `evolution.run_timeout_minutes` / `apply_timeout_minutes` (heartbeat timeouts), `evolution.max_attempts` (per-row retry cap), `evolution.triggers.pre_compact` (snapshot session before compaction).
 
@@ -106,6 +112,7 @@ Declared in [packages/server/src/settings-schema.ts](../../../packages/server/sr
 | `description_zh` | no | Chinese description (UI picks based on lang) |
 | `default` | no | Placeholder shown when the value is unset; supports `<<ENV>>` |
 | `secret` | no | `true` → masked in API responses + password input in UI |
+| `globalOnly` | no | `true` → read from global settings only; workspace overrides are ignored at runtime. UI disables the workspace input and shows a "global only" hint |
 
 ## Scope: global vs. workspace
 
