@@ -172,6 +172,7 @@ Start a sub-agent session asynchronously. When the sub-agent finishes, its **wra
 | `agent_id` | string | yes | Agent ID (e.g. `"coder"`) |
 | `message` | string | yes | Task description |
 | `system_prompt_context` | string | no | Extra context prepended to the initial message |
+| `title` | string | no | Session title shown in the admin sidebar. When omitted, auto-generated from the task message (first 60 chars of `description`). |
 | `working_dir` | string | no | Sub-agent's focus directory (absolute or workspace-relative; default: project root). It's persistent session identity (stored in the DB, restored on resume), so the directory-chain `.halo/INSTRUCTIONS.md` along the path root→dir is baked into the sub-agent's **system prompt every turn** (it never forgets the directory's rules), and the prompt is tagged with this focus. Does **not** change where tools run. |
 
 **Output (JSON string)**
