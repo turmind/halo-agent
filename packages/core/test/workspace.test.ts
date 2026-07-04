@@ -60,6 +60,40 @@ describe('Workspace.validatePath', () => {
   it('allows mid-path ../ that stays inside', () => {
     expect(ws.validatePath('a/b/../c.txt')).toBe(path.join(root, 'a', 'c.txt'))
   })
+
+  it('accepts a path that does not exist yet (new-file case)', () => {
+    // realpath throws ENOENT for missing targets — must not block file creation.
+    expect(ws.validatePath('brand/new/file.txt')).toBe(path.join(root, 'brand', 'new', 'file.txt'))
+  })
+
+  // Symlink cases: creating symlinks can fail on Windows without the
+  // SeCreateSymbolicLinkPrivilege — skip (not fail) when the link can't be made.
+  function trySymlink(target: string, link: string): boolean {
+    try {
+      // 'junction' only applies to directory links on Windows; ignored elsewhere.
+      fs.symlinkSync(target, link, 'junction')
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  it('rejects a symlink inside the workspace pointing outside', () => {
+    const outside = `${root}-secret`
+    fs.mkdirSync(outside, { recursive: true })
+    fs.writeFileSync(path.join(outside, 'token.txt'), 'secret')
+    if (!trySymlink(outside, path.join(root, 'escape'))) return // no symlink perm — skip
+    // Lexical check passes (root/escape/token.txt is inside), realpath must catch it.
+    expect(() => ws.validatePath('escape/token.txt')).toThrow(WorkspaceError)
+    expect(() => ws.validatePath('escape')).toThrow(WorkspaceError)
+  })
+
+  it('accepts a symlink pointing inside the workspace', () => {
+    fs.mkdirSync(path.join(root, 'real-dir'))
+    fs.writeFileSync(path.join(root, 'real-dir', 'a.txt'), 'x')
+    if (!trySymlink(path.join(root, 'real-dir'), path.join(root, 'alias'))) return
+    expect(ws.validatePath('alias/a.txt')).toBe(path.join(root, 'alias', 'a.txt'))
+  })
 })
 
 describe('Workspace file ops', () => {

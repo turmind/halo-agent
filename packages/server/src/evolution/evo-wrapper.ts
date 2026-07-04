@@ -45,6 +45,7 @@ import { eq, and } from 'drizzle-orm'
 import YAML from 'yaml'
 import { createEvoDb, evolutionRuns, evolutionApplies, setEvoDb, getEvoDb } from '../db/evo-db.js'
 import { config } from '../config.js'
+import { cleanChildEnv } from '../child-env.js'
 
 type Mode = 'run' | 'apply'
 
@@ -208,7 +209,7 @@ function spawnProc(
       // (Windows CreateProcess caps the command line at ~32KB → ENAMETOOLONG
       // if a multi-KB brief rides as an argv element).
       stdio: [stdinInput === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: cleanChildEnv(),
       // Own process group (POSIX) so the timeout can signal the whole tree —
       // the cli plus every shell_exec grandchild — not just the direct PID.
       // No-op contract on Windows, where we kill by PID via taskkill /T below.

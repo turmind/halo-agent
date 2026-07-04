@@ -11,6 +11,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { EvoSpawner } from './ticker.js'
+import { cleanChildEnv } from '../child-env.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -23,7 +24,7 @@ export const realEvoSpawner: EvoSpawner = (mode, id) => {
   const child = spawn(process.execPath, [WRAPPER_PATH, `--mode=${mode}`, `--id=${id}`], {
     detached: true,
     stdio: 'ignore',
-    env: process.env,
+    env: cleanChildEnv(),
     // Without this, a detached console process on Windows gets a freshly
     // allocated console window (a black box pops up for every evo/score/apply
     // run). cron doesn't hit this — it spawns the cli inline, not via a

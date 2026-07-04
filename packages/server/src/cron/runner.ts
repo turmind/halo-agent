@@ -23,6 +23,7 @@ import { eq, lt } from 'drizzle-orm'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
 import { dispatchToTargets, type CronTarget, type DispatchResult } from './dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
+import { cleanChildEnv } from '../child-env.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -418,7 +419,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     // equivalent `timeout` command).
     const child = spawn(spawnBin, spawnArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: cleanChildEnv(),
       // Suppress the console window the `cmd.exe /c` wrapper would otherwise
       // pop up on Windows (CREATE_NO_WINDOW). No-op on macOS/Linux.
       windowsHide: true,

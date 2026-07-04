@@ -1,4 +1,5 @@
 import { readFile, writeFile, mkdir, readdir, stat, access } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { resolve, relative, join, isAbsolute, sep } from 'node:path';
 
 export class WorkspaceError extends Error {
@@ -84,6 +85,25 @@ export class Workspace {
       throw new WorkspaceError(
         `Path "${path}" is outside the workspace directory "${this.projectRoot}"`,
       );
+    }
+
+    // The lexical check above doesn't follow symlinks — a link inside the
+    // workspace pointing outside (ws/escape -> /etc) passes startsWith yet
+    // reads out of bounds. Resolve symlinks and re-check against the
+    // realpath'd root (same pattern as server's assertPathAllowed).
+    // realpathSync resolves Windows junctions/symlinks too.
+    try {
+      const real = realpathSync(fullPath);
+      const realRoot = realpathSync(root);
+      if (real !== realRoot && !real.startsWith(realRoot + sep)) {
+        throw new WorkspaceError(
+          `Path "${path}" is outside the workspace directory "${this.projectRoot}"`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof WorkspaceError) throw err;
+      // ENOENT etc. — target doesn't exist yet (new-file case); no symlink
+      // to follow, the lexical check above is sufficient.
     }
 
     return fullPath;
