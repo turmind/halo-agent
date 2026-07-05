@@ -134,6 +134,8 @@ Environment variables:
 
 The demo holds your token server-side and exposes its own password-based session — the browser never sees the halo token. Open `http://localhost:9528` to use it.
 
+Alternatively, the gear icon (header / login screen) opens **direct-connect mode**: enter any halo server's URL + a web-channel token and the browser talks to that server's `/api/web/*` directly, skipping the proxy and its password. Handy for pointing one deployed web-demo at several halo servers. The token is kept in that browser's localStorage — only use it on devices you trust; clear it in the same panel to return to proxy mode.
+
 ## Security notes
 
 - **Tokens are unhashed** in `~/.halo/secrets/channels/channels.db`. Restrict that file to the user that runs halo

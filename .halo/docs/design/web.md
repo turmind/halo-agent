@@ -170,10 +170,8 @@ node server.js
 
 ### Security model
 
-- `HALO_TOKEN` and `HALO_API` are server-side only, never exposed to the browser
-- Frontend uses same-origin relative paths (`/chat`, `/history`, etc.)
-- web-demo server proxies all requests to Halo, injecting the token in `x-token` header
-- Session auth: random hex token stored in `x-session` header + localStorage
+- **Proxy mode (default)**: `HALO_TOKEN` and `HALO_API` are server-side only, never exposed to the browser; frontend uses same-origin relative paths (`/chat`, `/history`, etc.); web-demo server proxies all requests to Halo, injecting the token in `x-token` header. Session auth: HMAC token in `x-session` header + localStorage. All proxy routes including `GET /file` are gated by the auth middleware.
+- **Direct-connect mode (opt-in)**: the gear panel takes a halo server URL + web-channel token; the browser then calls `<server>/api/web/*` directly with `x-token`, bypassing the proxy (no password step). The token is stored in that browser's localStorage by explicit user choice — the UI says so next to the field. One slot; clearing it returns to proxy mode. Works because the server CORS reflects any origin and allowlists `x-token`.
 
 ### Proxy routes
 
@@ -183,17 +181,21 @@ node server.js
 | `POST /stop` | `POST /api/web/stop` |
 | `GET /history` | `GET /api/web/history` |
 | `GET /subscribe` | `GET /api/web/subscribe` |
+| `GET /file` | `GET /api/web/file` |
 
 ### Features
 
-- SSE streaming with tool call display (collapsible)
-- Auto-reconnect: if session is running on page load, subscribes to live stream
+- Markdown rendering for assistant text (marked@12, gfm + breaks) with typewriter streaming; user text stays escaped plain text
+- SSE streaming with collapsible thinking / tool-call step blocks
+- Auto-reconnect: if session is running on page load, subscribes to live stream; history renders rebuild-from-scratch (never append)
 - Message queue: can send while agent is running, messages queue and send sequentially
-- Slash commands (`/help`, `/session`, `/agent`, `/skill`, `/workspace`)
-- Image upload (file picker + camera capture)
+- Slash commands (`/help`, `/session`, `/agent`, `/skill`, `/workspace`), session/agent switcher menus
+- Image upload + camera capture (camera button is mobile-only — the `capture` attribute is a no-op on desktop, where it would duplicate the file picker)
 - Voice recording (webm audio saved to workspace, path given to agent)
 - Stop/interrupt button
 - i18n: auto-detects browser language (`navigator.language`), toggle button in header, persists to `localStorage`
+- Mobile-first layout: 100dvh-safe, safe-area insets, ≥44px touch targets, bottom-sheet menus/settings on small widths, visual language shared with `packages/agentcore-demo`
+- Page load needs internet for two CDN deps (tailwindcss, marked) — no longer fully self-contained
 
 ## Integration guide (custom frontend)
 
