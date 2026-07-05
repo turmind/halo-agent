@@ -1,1275 +1,1378 @@
 <!DOCTYPE html>
-<html lang="zh-CN" id="htmlRoot">
+<html lang="zh-CN" id="htmlRoot" class="dark">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Halo Web Demo</title>
-  <link rel="icon" type="image/svg+xml" href="/icon.svg">
-  <link rel="icon" type="image/x-icon" href="/favicon.ico">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    :root {
-      --bg: #1a1a2e;
-      --surface: #16213e;
-      --border: #2a2a4a;
-      --text: #e0e0e0;
-      --muted: #8888aa;
-      --primary: #4a6cf7;
-      --primary-hover: #3b5de7;
-      --user-bg: #2d3a5e;
-      --bot-bg: #1e2a45;
-      --danger: #ef4444;
-      --tool-bg: rgba(74,108,247,0.08);
-      --tool-border: rgba(74,108,247,0.3);
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      height: 100dvh;
-      overflow: hidden;
-    }
-    .hidden { display: none !important; }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Halo Web Demo</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg" />
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          surface: { 950: '#07090f', 900: '#0b0e17', 800: '#121624', 700: '#1a2032', 600: '#242c44' },
+          accent: { 400: '#7dd3fc', 500: '#38bdf8', 600: '#0ea5e9' },
+          halo: { 400: '#a78bfa', 500: '#8b5cf6' },
+        },
+        fontFamily: {
+          sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+          mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        },
+      },
+    },
+  }
+</script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    /* Login */
-    .login {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100dvh;
-      gap: 16px;
-      padding: 20px;
-    }
-    .login input {
-      width: 100%;
-      max-width: 320px;
-      padding: 10px 14px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
-      font-size: 14px;
-      outline: none;
-    }
-    .login input:focus { border-color: var(--primary); }
-    .login button {
-      padding: 10px 24px;
-      border-radius: 8px;
-      border: none;
-      background: var(--primary);
-      color: white;
-      font-size: 14px;
-      cursor: pointer;
-    }
-    .login button:hover { background: var(--primary-hover); }
-    .login .error { color: var(--danger); font-size: 12px; }
+  html, body { height: 100%; }
+  body {
+    /* dvh tracks the iOS Safari collapsing URL bar; vh is the fallback */
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    background:
+      radial-gradient(1200px 500px at 80% -10%, rgba(139,92,246,.14), transparent 60%),
+      radial-gradient(900px 400px at 10% -10%, rgba(56,189,248,.10), transparent 60%),
+      #07090f;
+  }
 
-    /* Chat layout */
-    #chatView {
-      display: flex;
-      flex-direction: column;
-      height: 100dvh;
-    }
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 16px;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-      flex-shrink: 0;
-    }
-    .header h1 { font-size: 14px; font-weight: 600; }
-    .header .status {
-      font-size: 11px;
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .header .status .dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #10b981;
-    }
-    .header .status .dot.running {
-      background: var(--primary);
-      animation: pulse 1s infinite;
-    }
-    .header .status .dot.disconnected { background: var(--danger); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #242c44; border-radius: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
 
-    /* Messages */
-    .messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      min-height: 0;
-    }
-    .msg {
-      max-width: 88%;
-      padding: 10px 14px;
-      border-radius: 12px;
-      font-size: 13px;
-      line-height: 1.6;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .msg.user {
-      align-self: flex-end;
-      background: var(--user-bg);
-      border-bottom-right-radius: 4px;
-    }
-    .msg.bot {
-      align-self: flex-start;
-      background: var(--bot-bg);
-      border-bottom-left-radius: 4px;
-      border: 1px solid var(--border);
-    }
-    .msg.system {
-      align-self: center;
-      color: var(--muted);
-      font-size: 11px;
-      padding: 4px 12px;
-      background: transparent;
-    }
-    .msg .bot-text { }
-    .msg .thinking-block {
-      color: var(--muted);
-      font-style: italic;
-      font-size: 11px;
-      margin-bottom: 6px;
-      padding: 4px 8px;
-      background: rgba(255,255,255,0.02);
-      border-radius: 4px;
-      max-height: 60px;
-      overflow: hidden;
-      cursor: pointer;
-      transition: max-height 0.2s;
-    }
-    .msg .thinking-block.expanded { max-height: none; }
-    .msg .tool-block {
-      font-size: 11px;
-      margin: 6px 0;
-      padding: 6px 10px;
-      background: var(--tool-bg);
-      border-radius: 6px;
-      border-left: 3px solid var(--tool-border);
-      cursor: pointer;
-    }
-    .msg .tool-block .tool-header {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      color: var(--primary);
-      font-weight: 500;
-    }
-    .msg .tool-block .tool-detail {
-      color: var(--muted);
-      margin-top: 4px;
-      font-family: monospace;
-      font-size: 10px;
-      max-height: 0;
-      overflow: hidden;
-      transition: max-height 0.2s;
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
-    .msg .tool-block.expanded .tool-detail { max-height: 300px; overflow-y: auto; }
-    .msg .tool-block .tool-result {
-      color: var(--muted);
-      margin-top: 4px;
-      font-size: 10px;
-      font-family: monospace;
-      max-height: 0;
-      overflow: hidden;
-      transition: max-height 0.2s;
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
-    .msg .tool-block.expanded .tool-result { max-height: 200px; overflow-y: auto; }
+  /* Markdown body */
+  .md { line-height: 1.65; word-break: break-word; }
+  .md > *:first-child { margin-top: 0; }
+  .md > *:last-child { margin-bottom: 0; }
+  .md p { margin: .5em 0; }
+  .md h1, .md h2, .md h3, .md h4 { font-weight: 600; color: #e2e8f0; margin: 1em 0 .4em; }
+  .md h1 { font-size: 1.25em; } .md h2 { font-size: 1.15em; } .md h3 { font-size: 1.05em; }
+  .md ul { list-style: disc; padding-left: 1.4em; margin: .5em 0; }
+  .md ol { list-style: decimal; padding-left: 1.4em; margin: .5em 0; }
+  .md li { margin: .2em 0; }
+  .md a { color: #7dd3fc; text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+  .md blockquote { border-left: 3px solid #38bdf8; padding-left: .8em; color: #94a3b8; margin: .6em 0; }
+  .md code { background: #1a2032; border: 1px solid #242c44; border-radius: 5px; padding: .1em .4em; font-size: .86em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #a5f3fc; }
+  .md pre { background: #0b0e17; border: 1px solid #242c44; border-radius: 10px; padding: .8em 1em; overflow-x: auto; margin: .6em 0; max-width: 100%; }
+  .md pre code { background: none; border: none; padding: 0; color: #cbd5e1; font-size: .84em; }
+  .md table { border-collapse: collapse; margin: .6em 0; font-size: .9em; display: block; overflow-x: auto; max-width: 100%; }
+  .md th, .md td { border: 1px solid #242c44; padding: .35em .7em; }
+  .md th { background: #121624; }
+  .md hr { border-color: #242c44; margin: 1em 0; }
 
-    /* Input area */
-    .input-area {
-      border-top: 1px solid var(--border);
-      background: var(--surface);
-      padding: 10px 16px;
-      display: flex;
-      gap: 8px;
-      align-items: flex-end;
-      flex-shrink: 0;
-    }
-    .input-area textarea {
-      flex: 1;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      color: var(--text);
-      font-size: 13px;
-      font-family: inherit;
-      resize: none;
-      min-height: 40px;
-      max-height: 120px;
-      line-height: 1.4;
-      outline: none;
-    }
-    .input-area textarea:focus { border-color: var(--primary); }
-    .input-area button {
-      width: 36px;
-      height: 36px;
-      border-radius: 8px;
-      border: none;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-    .btn-send { background: var(--primary); color: white; }
-    .btn-send:hover { background: var(--primary-hover); }
-    .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-stop { background: var(--danger); color: white; }
-    .btn-stop:hover { opacity: 0.9; }
-    .btn-icon {
-      background: transparent;
-      border: 1px solid var(--border) !important;
-      color: var(--muted);
-    }
-    .btn-icon:hover { color: var(--text); border-color: var(--text) !important; }
-    .btn-icon.recording { color: var(--danger); border-color: var(--danger) !important; animation: pulse 1s infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  /* Blinking streaming caret */
+  .caret::after { content: '▍'; color: #38bdf8; animation: blink 1s steps(1) infinite; margin-left: 1px; }
+  @keyframes blink { 50% { opacity: 0; } }
 
-    /* Queue indicator */
-    .queue-indicator {
-      font-size: 10px;
-      color: var(--muted);
-      padding: 2px 16px;
-      background: var(--surface);
-      border-top: 1px solid var(--border);
-      flex-shrink: 0;
-    }
+  /* Typing dots */
+  .dots span { animation: dot 1.4s infinite; display: inline-block; }
+  .dots span:nth-child(2) { animation-delay: .2s; }
+  .dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes dot { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
 
-    /* Toolbar */
-    .toolbar-wrap { position: relative; }
-    .toolbar-btn {
-      width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border);
-      background: transparent; color: var(--muted); cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .toolbar-btn:hover { color: var(--text); border-color: var(--text); }
-    .toolbar-menu {
-      display: none;
-      position: absolute; top: 38px; right: 0; z-index: 100;
-      min-width: 160px; background: var(--surface); border: 1px solid var(--border);
-      border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-      padding: 4px 0; flex-direction: column;
-    }
-    .toolbar-menu.show { display: flex; }
-    .toolbar-item {
-      padding: 8px 14px; font-size: 13px; cursor: pointer;
-      display: flex; align-items: center; gap: 8px; white-space: nowrap;
-    }
-    .toolbar-item:hover { background: rgba(74,108,247,0.1); }
-    .toolbar-item .arrow { margin-left: auto; color: var(--muted); font-size: 10px; }
-    .toolbar-sep { height: 1px; background: var(--border); margin: 4px 0; }
-    .toolbar-sub {
-      display: none; position: absolute; top: 0; right: 100%; margin-right: 4px;
-      min-width: 180px; max-height: 300px; overflow-y: auto;
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); padding: 4px 0;
-    }
-    .toolbar-sub.show { display: flex; flex-direction: column; }
-    .toolbar-sub .toolbar-item { font-size: 12px; }
-    .toolbar-sub .toolbar-item.active { color: var(--primary); }
-    .toolbar-sub .loading { padding: 12px 14px; color: var(--muted); font-size: 11px; }
+  /* Message entrance */
+  .msg-in { animation: rise .25s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-    .lang-toggle {
-      font-size: 12px; padding: 4px 8px; border-radius: 4px;
-      border: 1px solid var(--border); background: transparent;
-      color: var(--muted); cursor: pointer; margin-right: 8px;
-    }
-    .lang-toggle:hover { color: var(--text); border-color: var(--text); }
+  /* Bottom-sheet entrance (mobile) */
+  @media (max-width: 640px) {
+    .sheet-card { animation: sheetup .22s ease-out; }
+    @keyframes sheetup { from { transform: translateY(24px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
+  }
 
-    .media-btns { display: flex; gap: 6px; }
-    .media-toggle { display: none; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; align-items: center; justify-content: center; flex-shrink: 0; }
-    .media-toggle:hover { color: var(--text); border-color: var(--text); }
+  /* Stop button / recording pulse */
+  .pulse-ring { animation: pulsering 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+  @keyframes pulsering { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 
-    /* Mobile */
-    @media (max-width: 600px) {
-      .input-area textarea { font-size: 16px; }
-      .input-area { padding-bottom: env(safe-area-inset-bottom, 10px); }
-      .login input { font-size: 16px; }
-      .media-btns { display: none; }
-      .media-btns.show { display: flex; }
-      .media-toggle { display: flex; }
-    }
+  /* Collapsible step blocks */
+  details.step > summary { list-style: none; cursor: pointer; user-select: none; }
+  details.step > summary::-webkit-details-marker { display: none; }
+  details.step[open] .chev { transform: rotate(90deg); }
+  .chev { transition: transform .15s ease; }
+  .sub-chev { transition: transform .15s ease; }
+  .sub-chev.open { transform: rotate(90deg); }
 
-    /* Image preview */
-    .image-preview {
-      display: flex;
-      gap: 6px;
-      padding: 4px 0;
-      flex-wrap: wrap;
-    }
-    .image-preview .thumb {
-      position: relative;
-      width: 48px;
-      height: 48px;
-      border-radius: 6px;
-      overflow: hidden;
-      border: 1px solid var(--border);
-    }
-    .image-preview .thumb img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-    .image-preview .thumb .remove {
-      position: absolute;
-      top: 2px;
-      right: 2px;
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      background: var(--danger);
-      color: white;
-      border: none;
-      font-size: 9px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-    }
-  </style>
+  /* Media buttons: collapsed behind a "+" toggle on mobile */
+  .media-btns { display: flex; gap: 6px; }
+  .media-toggle { display: none; }
+  @media (max-width: 640px) {
+    .media-btns { display: none; }
+    .media-btns.show { display: flex; }
+    .media-toggle { display: flex; }
+    /* ≥16px inputs prevent the iOS focus zoom-jump */
+    #msgInput, #passwordInput, #serverUrlInput, #tokenInput { font-size: 16px !important; }
+  }
+</style>
 </head>
-<body>
-  <div id="loginView" class="login">
-    <h2>Halo Web Demo</h2>
-    <p id="loginSubtitle" style="color: var(--muted); font-size: 12px;"></p>
-    <input id="passwordInput" type="password" placeholder="" autofocus onkeydown="if(event.key==='Enter')doLogin()">
-    <button id="loginBtn" onclick="doLogin()"></button>
-    <div id="loginError" class="error hidden"></div>
-  </div>
+<body class="text-slate-300 font-sans antialiased flex flex-col">
 
-  <div id="chatView" class="hidden">
-    <div class="header">
-      <div>
-        <h1>Halo Web Demo</h1>
-        <div class="status">
-          <span class="dot" id="statusDot"></span>
-          <span id="statusText"></span>
-        </div>
+<!-- ── Login ─────────────────────────────────────────────────────── -->
+<div id="loginView" class="flex-1 flex flex-col items-center justify-center px-4 overflow-y-auto">
+  <div class="w-full max-w-sm">
+    <div class="flex flex-col items-center mb-6">
+      <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-halo-400 to-accent-500 flex items-center justify-center shadow-lg shadow-halo-500/20 mb-3">
+        <svg viewBox="0 0 24 24" fill="none" class="w-6 h-6"><circle cx="12" cy="12" r="4.2" fill="white"/><ellipse cx="12" cy="12" rx="9.2" ry="3.6" stroke="white" stroke-width="1.6" transform="rotate(-24 12 12)"/></svg>
       </div>
-      <button class="lang-toggle" id="langToggle" onclick="toggleLang()">EN</button>
-      <div class="toolbar-wrap" id="toolbarWrap">
-        <button class="toolbar-btn" id="toolbarBtn" onclick="toggleToolbar()" title="" data-i18n-title="toolbar.title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
-          </svg>
-        </button>
-        <div class="toolbar-menu" id="toolbarMenu">
-          <div class="toolbar-item" onmouseenter="showSub('sessions')" onclick="showSub('sessions')">
-            <span>📋</span><span id="menuSessions"></span><span class="arrow">▸</span>
-            <div class="toolbar-sub" id="subSessions"></div>
-          </div>
-          <div class="toolbar-item" onmouseenter="showSub('agents')" onclick="showSub('agents')">
-            <span>🤖</span><span>Agents</span><span class="arrow">▸</span>
-            <div class="toolbar-sub" id="subAgents"></div>
-          </div>
-          <div class="toolbar-sep"></div>
-          <div class="toolbar-item" onclick="execCmd('/session new')"><span>✨</span><span id="menuNew"></span></div>
-          <div class="toolbar-item" onclick="execCmd('/session compact')"><span>🗜</span><span id="menuCompact"></span></div>
-          <div class="toolbar-item" onclick="closeToolbar(); stopGeneration()"><span>⏹</span><span id="menuStop"></span></div>
-          <div class="toolbar-item" onclick="promptWs()"><span>📂</span><span id="menuWs"></span></div>
-          <div class="toolbar-item" onclick="execCmd('/help')"><span>❓</span><span id="menuHelp"></span></div>
-        </div>
+      <h1 class="text-lg font-semibold text-slate-100">Halo Web Demo</h1>
+      <p id="loginSubtitle" class="text-[11px] text-slate-500 mt-1"></p>
+    </div>
+    <form id="loginForm" class="bg-surface-800 border border-surface-600 rounded-2xl px-5 py-5 space-y-3">
+      <input id="passwordInput" type="password" autocomplete="current-password" placeholder=""
+        class="w-full bg-surface-900 border border-surface-600 rounded-xl px-3 py-2.5 text-[14px] text-slate-200 outline-none focus:border-accent-500/50 transition-colors" />
+      <p id="loginError" class="hidden text-[12px] text-red-400"></p>
+      <button type="submit" id="loginBtn"
+        class="w-full bg-accent-600 hover:bg-accent-500 text-white text-[14px] font-medium rounded-xl py-2.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"></button>
+    </form>
+    <button id="loginDirectLink" onclick="openSettings()"
+      class="block w-full text-center text-[12px] text-slate-500 hover:text-accent-400 mt-4 py-2 underline underline-offset-2 transition-colors"></button>
+  </div>
+</div>
+
+<!-- ── App ───────────────────────────────────────────────────────── -->
+<div id="chatView" class="hidden flex-1 flex-col min-h-0">
+
+<header class="shrink-0 border-b border-surface-700/60 bg-surface-900/70 backdrop-blur-md z-10">
+  <div class="max-w-3xl mx-auto px-4 py-2.5 flex items-center justify-between gap-2">
+    <div class="flex items-center gap-2.5 min-w-0">
+      <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-halo-400 to-accent-500 flex items-center justify-center shadow-lg shadow-halo-500/20 shrink-0">
+        <svg viewBox="0 0 24 24" fill="none" class="w-5 h-5"><circle cx="12" cy="12" r="4.2" fill="white"/><ellipse cx="12" cy="12" rx="9.2" ry="3.6" stroke="white" stroke-width="1.6" transform="rotate(-24 12 12)"/></svg>
+      </div>
+      <div class="min-w-0">
+        <div class="font-semibold text-slate-100 leading-tight">Halo</div>
+        <div id="headerSub" class="text-[11px] text-slate-500 leading-tight truncate">Web Demo</div>
       </div>
     </div>
-    <div class="messages" id="messages"></div>
-    <div class="queue-indicator hidden" id="queueIndicator"></div>
-    <div class="input-area">
-      <button class="media-toggle" onclick="toggleMediaBtns()" title="附件" data-i18n-title="btn.attach">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <div class="flex items-center gap-1.5 shrink-0">
+      <span id="connDot" class="w-2 h-2 rounded-full bg-emerald-400 shrink-0 mr-1"></span>
+      <button id="langToggle" onclick="toggleLang()"
+        class="h-11 sm:h-8 px-3 text-[12px] rounded-xl border border-surface-600 text-slate-500 hover:text-slate-300 hover:bg-surface-700 transition-colors">EN</button>
+      <button id="settingsBtn" onclick="openSettings()" title="" data-i18n-title="settings.title"
+        class="w-11 h-11 sm:w-8 sm:h-8 rounded-xl border border-surface-600 text-slate-500 hover:text-slate-300 hover:bg-surface-700 transition-colors flex items-center justify-center">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <button id="toolbarBtn" onclick="openToolbar()" title="" data-i18n-title="toolbar.title"
+        class="w-11 h-11 sm:w-8 sm:h-8 rounded-xl border border-surface-600 text-slate-500 hover:text-slate-300 hover:bg-surface-700 transition-colors flex items-center justify-center">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="scroller" class="flex-1 overflow-y-auto overscroll-contain">
+  <div id="messages" class="max-w-3xl mx-auto px-4 py-6 space-y-5">
+    <div class="text-center py-10 msg-in" id="emptyState">
+      <div class="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-halo-400/20 to-accent-500/20 border border-surface-600 flex items-center justify-center mb-4">
+        <svg viewBox="0 0 24 24" fill="none" class="w-7 h-7"><circle cx="12" cy="12" r="4.2" fill="#8b5cf6"/><ellipse cx="12" cy="12" rx="9.2" ry="3.6" stroke="#38bdf8" stroke-width="1.4" transform="rotate(-24 12 12)"/></svg>
+      </div>
+      <h1 id="emptyTitle" class="text-lg font-semibold text-slate-200"></h1>
+      <p id="emptyDesc" class="text-sm text-slate-500 mt-1.5 max-w-sm mx-auto"></p>
+    </div>
+  </div>
+</main>
+
+<footer class="shrink-0 border-t border-surface-700/60 bg-surface-900/70 backdrop-blur-md" style="padding-bottom: env(safe-area-inset-bottom, 0px);">
+  <div class="max-w-3xl mx-auto px-4 pt-3 pb-2">
+    <div id="imagePreview" class="hidden flex-wrap gap-1.5 mb-2"></div>
+    <form id="composer" class="relative flex items-end gap-2 bg-surface-800 border border-surface-600 rounded-2xl px-2.5 sm:px-3.5 py-2 sm:py-2.5 focus-within:border-accent-500/50 focus-within:shadow-lg focus-within:shadow-accent-500/5 transition-all">
+      <button type="button" class="media-toggle shrink-0 w-11 h-11 rounded-xl border border-surface-600 text-slate-500 hover:text-slate-300 items-center justify-center transition-colors" onclick="toggleMediaBtns()" title="" data-i18n-title="btn.attach">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
       </button>
       <div class="media-btns" id="mediaBtns">
-        <button class="btn-icon" id="voiceBtn" onclick="toggleVoice()" title="录音" data-i18n-title="btn.voice">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <button type="button" class="shrink-0 w-11 h-11 sm:w-9 sm:h-9 rounded-xl border border-surface-600 text-slate-500 hover:text-slate-300 flex items-center justify-center transition-colors" id="voiceBtn" onclick="toggleVoice()" title="" data-i18n-title="btn.voice">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
             <line x1="12" y1="19" x2="12" y2="23"/>
             <line x1="8" y1="23" x2="16" y2="23"/>
           </svg>
         </button>
-        <button class="btn-icon" id="imageBtn" onclick="pickImage()" title="上传图片" data-i18n-title="btn.image">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <button type="button" class="shrink-0 w-11 h-11 sm:w-9 sm:h-9 rounded-xl border border-surface-600 text-slate-500 hover:text-slate-300 flex items-center justify-center transition-colors" id="imageBtn" onclick="pickImage()" title="" data-i18n-title="btn.image">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
             <circle cx="8.5" cy="8.5" r="1.5"/>
             <polyline points="21 15 16 10 5 21"/>
           </svg>
         </button>
-        <button class="btn-icon" id="cameraBtn" onclick="captureCamera()" title="拍照" data-i18n-title="btn.camera">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <!-- capture="environment" is a mobile-only hint; desktop browsers treat
+             this identically to the file picker, so hide it at ≥sm widths. -->
+        <button type="button" class="shrink-0 w-11 h-11 rounded-xl border border-surface-600 text-slate-500 hover:text-slate-300 flex items-center justify-center transition-colors sm:hidden" id="cameraBtn" onclick="captureCamera()" title="" data-i18n-title="btn.camera">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
             <circle cx="12" cy="13" r="4"/>
           </svg>
         </button>
       </div>
-      <div style="flex:1; display:flex; flex-direction:column; gap:4px;">
-        <div class="image-preview hidden" id="imagePreview"></div>
-        <textarea id="msgInput" placeholder="" rows="1" onkeydown="handleKey(event)"></textarea>
-      </div>
-      <button class="btn-send" id="sendBtn" onclick="sendMessage()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="22" y1="2" x2="11" y2="13"/>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-        </svg>
+      <textarea id="msgInput" rows="1" placeholder=""
+        class="flex-1 min-w-0 bg-transparent resize-none outline-none text-[15px] text-slate-200 placeholder-slate-500 max-h-40 py-2 sm:py-1.5"></textarea>
+      <button type="button" id="stopBtn" onclick="stopGeneration()" title="" data-i18n-title="toolbar.stop"
+        class="hidden shrink-0 w-11 h-11 sm:w-9 sm:h-9 rounded-xl bg-red-500/15 border border-red-500/40 items-center justify-center hover:bg-red-500/25 transition-colors">
+        <span class="w-3 h-3 rounded-[3px] bg-red-400 pulse-ring block"></span>
       </button>
-      <button class="btn-stop hidden" id="stopBtn" onclick="stopGeneration()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-          <rect x="4" y="4" width="16" height="16" rx="2"/>
-        </svg>
+      <button type="submit" id="sendBtn" title="Send"
+        class="shrink-0 w-11 h-11 sm:w-9 sm:h-9 rounded-xl bg-accent-600 flex items-center justify-center hover:bg-accent-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+        <svg viewBox="0 0 24 24" fill="none" class="w-5 h-5"><path d="M5 12h13M13 6l6 6-6 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </form>
+    <div class="flex items-center justify-between mt-2 px-1 pb-1 gap-3">
+      <span id="statusLine" class="text-[11px] text-slate-600 truncate">&nbsp;</span>
+      <span class="text-[11px] text-slate-600 shrink-0">
+        Built with <a href="https://github.com/turmind/halo-agent" target="_blank" rel="noopener" class="text-slate-400 hover:text-accent-400 underline underline-offset-2 transition-colors">Halo</a>
+      </span>
+    </div>
+  </div>
+</footer>
+
+<input type="file" id="fileInput" accept="image/*" multiple class="hidden" onchange="handleFiles(this.files)" />
+<input type="file" id="cameraInput" accept="image/*" capture="environment" class="hidden" onchange="handleFiles(this.files)" />
+
+</div>
+
+<!-- ── Commands menu (bottom sheet on mobile, centered card on desktop) ── -->
+<div id="menuOverlay" class="hidden fixed inset-0 z-40 bg-black/60 items-end sm:items-center justify-center" onclick="if(event.target===this)closeToolbar()">
+  <div class="sheet-card w-full sm:max-w-sm bg-surface-800 border border-surface-600 rounded-t-2xl sm:rounded-2xl py-2 max-h-[80dvh] overflow-y-auto flex flex-col" style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);">
+    <div class="w-10 h-1 rounded-full bg-surface-600 mx-auto mt-1 mb-2 sm:hidden"></div>
+    <button class="w-full flex items-center gap-2.5 px-5 py-3 text-[14px] text-slate-300 hover:bg-surface-700/70 text-left transition-colors" onclick="toggleSub('sessions')">
+      <span>📋</span><span id="menuSessions"></span>
+      <svg class="sub-chev ml-auto w-3 h-3 text-slate-600" id="chevSessions" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+    <div id="subSessions" class="hidden flex-col border-y border-surface-700/60 bg-surface-900/50"></div>
+    <button class="w-full flex items-center gap-2.5 px-5 py-3 text-[14px] text-slate-300 hover:bg-surface-700/70 text-left transition-colors" onclick="toggleSub('agents')">
+      <span>🤖</span><span id="menuAgents">Agents</span>
+      <svg class="sub-chev ml-auto w-3 h-3 text-slate-600" id="chevAgents" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+    <div id="subAgents" class="hidden flex-col border-y border-surface-700/60 bg-surface-900/50"></div>
+    <div class="h-px bg-surface-600/70 my-1 mx-4"></div>
+    <button class="w-full flex items-center gap-2.5 px-5 py-3 text-[14px] text-slate-300 hover:bg-surface-700/70 text-left transition-colors" onclick="execCmd('/session new')"><span>✨</span><span id="menuNew"></span></button>
+    <button class="w-full flex items-center gap-2.5 px-5 py-3 text-[14px] text-slate-300 hover:bg-surface-700/70 text-left transition-colors" onclick="execCmd('/session compact')"><span>🗜</span><span id="menuCompact"></span></button>
+    <button class="w-full flex items-center gap-2.5 px-5 py-3 text-[14px] text-slate-300 hover:bg-surface-700/70 text-left transition-colors" onclick="closeToolbar(); stopGeneration()"><span>⏹</span><span id="menuStop"></span></button>
+    <button class="w-full flex items-center gap-2.5 px-5 py-3 text-[14px] text-slate-300 hover:bg-surface-700/70 text-left transition-colors" onclick="promptWs()"><span>📂</span><span id="menuWs"></span></button>
+    <button class="w-full flex items-center gap-2.5 px-5 py-3 text-[14px] text-slate-300 hover:bg-surface-700/70 text-left transition-colors" onclick="execCmd('/help')"><span>❓</span><span id="menuHelp"></span></button>
+  </div>
+</div>
+
+<!-- ── Server settings (direct-connect) ──────────────────────────── -->
+<div id="settingsOverlay" class="hidden fixed inset-0 z-50 bg-black/60 items-end sm:items-center justify-center" onclick="if(event.target===this)closeSettings()">
+  <div class="sheet-card w-full sm:max-w-md bg-surface-800 border border-surface-600 rounded-t-2xl sm:rounded-2xl px-5 pt-4 space-y-3 max-h-[90dvh] overflow-y-auto" style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1.25rem);">
+    <div class="w-10 h-1 rounded-full bg-surface-600 mx-auto mb-1 sm:hidden"></div>
+    <div class="flex items-center justify-between">
+      <h2 id="settingsTitle" class="text-[15px] font-semibold text-slate-100"></h2>
+      <button onclick="closeSettings()" class="w-11 h-11 sm:w-8 sm:h-8 -mr-2 flex items-center justify-center text-slate-500 hover:text-slate-300 transition-colors">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
-    <input type="file" id="fileInput" accept="image/*" multiple class="hidden" onchange="handleFiles(this.files)">
-    <input type="file" id="cameraInput" accept="image/*" capture="environment" class="hidden" onchange="handleFiles(this.files)">
+    <p id="settingsHint" class="text-[12px] text-slate-500 leading-relaxed"></p>
+    <div>
+      <label id="serverUrlLabel" for="serverUrlInput" class="block text-[12px] text-slate-500 mb-1"></label>
+      <input id="serverUrlInput" type="url" inputmode="url" autocomplete="off" placeholder="http://localhost:9527"
+        class="w-full bg-surface-900 border border-surface-600 rounded-xl px-3 py-2.5 text-[14px] text-slate-200 outline-none focus:border-accent-500/50 transition-colors" />
+    </div>
+    <div>
+      <label id="tokenLabel" for="tokenInput" class="block text-[12px] text-slate-500 mb-1"></label>
+      <input id="tokenInput" type="password" autocomplete="off"
+        class="w-full bg-surface-900 border border-surface-600 rounded-xl px-3 py-2.5 text-[14px] text-slate-200 outline-none focus:border-accent-500/50 transition-colors" />
+      <p id="tokenNote" class="text-[11px] text-slate-600 mt-1"></p>
+    </div>
+    <p id="settingsError" class="hidden text-[12px] text-red-400"></p>
+    <div class="flex gap-2 pt-1">
+      <button id="settingsSaveBtn" onclick="saveSettings()"
+        class="flex-1 bg-accent-600 hover:bg-accent-500 text-white text-[14px] font-medium rounded-xl py-2.5 transition-colors"></button>
+      <button id="settingsClearBtn" onclick="clearDirect()"
+        class="hidden flex-1 border border-surface-600 text-slate-400 hover:text-slate-200 hover:bg-surface-700 text-[13px] rounded-xl py-2.5 transition-colors"></button>
+    </div>
   </div>
+</div>
 
-  <script>
-    // ── i18n ──
+<script>
+  // ── i18n ──
 
-    const i18n = {
-      en: {
-        'login.subtitle': 'Enter password',
-        'login.placeholder': 'Password...',
-        'login.submit': 'Enter',
-        'login.error': 'Wrong password',
-        'login.connFailed': 'Connection failed',
-        'login.expired': 'Session expired, please log in again',
-        'status.connected': 'Connected',
-        'status.generating': 'Generating...',
-        'status.disconnected': 'Disconnected',
-        'toolbar.title': 'Commands',
-        'toolbar.sessions': 'Sessions',
-        'toolbar.new': 'New session',
-        'toolbar.compact': 'Compact context',
-        'toolbar.stop': 'Stop',
-        'toolbar.workspace': 'Workspace',
-        'toolbar.help': 'Help',
-        'toolbar.wsPrompt': 'Enter workspace path (leave empty to view current):',
-        'toolbar.loading': 'Loading...',
-        'toolbar.loadFailed': 'Failed to load',
-        'toolbar.noSessions': 'No sessions',
-        'toolbar.noAgents': 'No agents',
-        'btn.attach': 'Attach',
-        'btn.voice': 'Record',
-        'btn.image': 'Upload image',
-        'btn.camera': 'Camera',
-        'input.placeholder': 'Type a message... (/ for commands)',
-        'chat.stopped': '(Stopped)',
-        'chat.connError': '❌ Connection error: ',
-        'chat.imageLabel': '🖼 [Image]',
-        'chat.imageSent': '(User sent images)',
-        'chat.queued': '{n} message(s) queued...',
-        'chat.voiceLabel': '🎤 [Voice message]',
-        'chat.voiceSent': '(User sent a voice message)',
-        'chat.micError': 'Cannot access microphone: ',
-      },
-      zh: {
-        'login.subtitle': '输入密码',
-        'login.placeholder': '密码...',
-        'login.submit': '进入',
-        'login.error': '密码错误',
-        'login.connFailed': '连接失败',
-        'login.expired': '会话过期，请重新登录',
-        'status.connected': '已连接',
-        'status.generating': '生成中...',
-        'status.disconnected': '连接断开',
-        'toolbar.title': '命令菜单',
-        'toolbar.sessions': '会话',
-        'toolbar.new': '新建会话',
-        'toolbar.compact': '压缩上下文',
-        'toolbar.stop': '停止',
-        'toolbar.workspace': '工作区',
-        'toolbar.help': '帮助',
-        'toolbar.wsPrompt': '输入工作区路径（留空查看当前）：',
-        'toolbar.loading': '加载中...',
-        'toolbar.loadFailed': '加载失败',
-        'toolbar.noSessions': '暂无会话',
-        'toolbar.noAgents': '暂无 Agent',
-        'btn.attach': '附件',
-        'btn.voice': '录音',
-        'btn.image': '上传图片',
-        'btn.camera': '拍照',
-        'input.placeholder': '输入消息... (/ 开头为命令)',
-        'chat.stopped': '（已停止）',
-        'chat.connError': '❌ 连接错误: ',
-        'chat.imageLabel': '🖼 [图片]',
-        'chat.imageSent': '(用户发送了图片)',
-        'chat.queued': '队列中还有 {n} 条消息等待发送...',
-        'chat.voiceLabel': '🎤 [语音消息]',
-        'chat.voiceSent': '(用户发送了一段语音消息)',
-        'chat.micError': '无法访问麦克风: ',
-      }
+  const i18n = {
+    en: {
+      'login.subtitle': 'Enter password',
+      'login.placeholder': 'Password...',
+      'login.submit': 'Enter',
+      'login.error': 'Wrong password',
+      'login.connFailed': 'Connection failed',
+      'login.expired': 'Session expired, please log in again',
+      'login.direct': 'Or connect directly to a Halo server',
+      'status.connected': 'Connected',
+      'status.generating': 'Generating… you can keep typing, or stop the reply',
+      'status.disconnected': 'Disconnected',
+      'toolbar.title': 'Commands',
+      'toolbar.sessions': 'Sessions',
+      'toolbar.agents': 'Agents',
+      'toolbar.new': 'New session',
+      'toolbar.compact': 'Compact context',
+      'toolbar.stop': 'Stop',
+      'toolbar.workspace': 'Workspace',
+      'toolbar.help': 'Help',
+      'toolbar.wsPrompt': 'Enter workspace path (leave empty to view current):',
+      'toolbar.loading': 'Loading...',
+      'toolbar.loadFailed': 'Failed to load',
+      'toolbar.noSessions': 'No sessions',
+      'toolbar.noAgents': 'No agents',
+      'settings.title': 'Server settings',
+      'settings.hint': 'Connect directly to a Halo server with a web-channel token, or leave both fields empty to use the built-in proxy (password login).',
+      'settings.serverUrl': 'Halo server URL',
+      'settings.token': 'Web channel token',
+      'settings.tokenNote': 'The token is stored in this browser only.',
+      'settings.save': 'Save & connect',
+      'settings.clear': 'Use proxy mode',
+      'settings.needBoth': 'Server URL and token are both required',
+      'settings.invalidUrl': 'Invalid server URL (must start with http:// or https://)',
+      'settings.badAuth': 'The server rejected this token — check it and try again',
+      'btn.attach': 'Attach',
+      'btn.voice': 'Record',
+      'btn.image': 'Upload image',
+      'btn.camera': 'Camera',
+      'input.placeholder': 'Type a message... (/ for commands)',
+      'chat.stopped': '(Stopped)',
+      'chat.connError': 'Connection error: ',
+      'chat.imageLabel': '🖼 [Image]',
+      'chat.imageSent': '(User sent images)',
+      'chat.queued': '{n} message(s) queued...',
+      'chat.queuedTag': '⏳ queued — will send after the current reply',
+      'chat.voiceLabel': '🎤 [Voice message]',
+      'chat.voiceSent': '(User sent a voice message)',
+      'chat.micError': 'Cannot access microphone: ',
+      'step.thinking': 'Thinking',
+      'step.tool': 'Tool',
+      'empty.title': 'Chat with your Halo agent',
+      'empty.desc': 'Ask anything — you can keep typing while the agent works, or stop it mid-reply.',
+      'agent.label': 'Halo Agent',
+    },
+    zh: {
+      'login.subtitle': '输入密码',
+      'login.placeholder': '密码...',
+      'login.submit': '进入',
+      'login.error': '密码错误',
+      'login.connFailed': '连接失败',
+      'login.expired': '会话过期，请重新登录',
+      'login.direct': '或直连 Halo 服务器',
+      'status.connected': '已连接',
+      'status.generating': '生成中…可以继续输入，也可以随时停止',
+      'status.disconnected': '连接断开',
+      'toolbar.title': '命令菜单',
+      'toolbar.sessions': '会话',
+      'toolbar.agents': 'Agent',
+      'toolbar.new': '新建会话',
+      'toolbar.compact': '压缩上下文',
+      'toolbar.stop': '停止',
+      'toolbar.workspace': '工作区',
+      'toolbar.help': '帮助',
+      'toolbar.wsPrompt': '输入工作区路径（留空查看当前）：',
+      'toolbar.loading': '加载中...',
+      'toolbar.loadFailed': '加载失败',
+      'toolbar.noSessions': '暂无会话',
+      'toolbar.noAgents': '暂无 Agent',
+      'settings.title': '服务器设置',
+      'settings.hint': '填写 Halo 服务器地址和 web 渠道 token 即可直连服务器；两项都留空则使用内置代理（密码登录）。',
+      'settings.serverUrl': 'Halo 服务器地址',
+      'settings.token': 'Web 渠道 token',
+      'settings.tokenNote': 'token 仅保存在当前浏览器中。',
+      'settings.save': '保存并连接',
+      'settings.clear': '改用代理模式',
+      'settings.needBoth': '服务器地址和 token 都必填',
+      'settings.invalidUrl': '服务器地址无效（需以 http:// 或 https:// 开头）',
+      'settings.badAuth': '服务器拒绝了该 token，请检查后重试',
+      'btn.attach': '附件',
+      'btn.voice': '录音',
+      'btn.image': '上传图片',
+      'btn.camera': '拍照',
+      'input.placeholder': '输入消息... (/ 开头为命令)',
+      'chat.stopped': '（已停止）',
+      'chat.connError': '连接错误: ',
+      'chat.imageLabel': '🖼 [图片]',
+      'chat.imageSent': '(用户发送了图片)',
+      'chat.queued': '队列中还有 {n} 条消息等待发送...',
+      'chat.queuedTag': '⏳ 排队中——当前回复结束后发送',
+      'chat.voiceLabel': '🎤 [语音消息]',
+      'chat.voiceSent': '(用户发送了一段语音消息)',
+      'chat.micError': '无法访问麦克风: ',
+      'step.thinking': '思考',
+      'step.tool': '工具',
+      'empty.title': '与你的 Halo agent 对话',
+      'empty.desc': '想问什么都可以——agent 工作时你可以继续输入，也可以随时停止回复。',
+      'agent.label': 'Halo Agent',
     }
+  }
 
-    function getLang() {
-      return localStorage.getItem('halo_lang') || (navigator.language.startsWith('zh') ? 'zh' : 'en')
-    }
+  function getLang() {
+    return localStorage.getItem('halo_lang') || (navigator.language.startsWith('zh') ? 'zh' : 'en')
+  }
 
-    function T(key) {
-      const lang = getLang()
-      return (i18n[lang] && i18n[lang][key]) || (i18n.en[key]) || key
-    }
+  function T(key) {
+    const lang = getLang()
+    return (i18n[lang] && i18n[lang][key]) || (i18n.en[key]) || key
+  }
 
-    function toggleLang() {
-      const next = getLang() === 'zh' ? 'en' : 'zh'
-      localStorage.setItem('halo_lang', next)
-      applyLang()
-    }
-
-    function applyLang() {
-      const lang = getLang()
-      document.getElementById('htmlRoot').lang = lang === 'zh' ? 'zh-CN' : 'en'
-      document.getElementById('langToggle').textContent = lang === 'zh' ? '中' : 'EN'
-      document.getElementById('loginSubtitle').textContent = T('login.subtitle')
-      document.getElementById('passwordInput').placeholder = T('login.placeholder')
-      document.getElementById('loginBtn').textContent = T('login.submit')
-      document.getElementById('menuSessions').textContent = T('toolbar.sessions')
-      document.getElementById('menuNew').textContent = T('toolbar.new')
-      document.getElementById('menuCompact').textContent = T('toolbar.compact')
-      document.getElementById('menuStop').textContent = T('toolbar.stop')
-      document.getElementById('menuWs').textContent = T('toolbar.workspace')
-      document.getElementById('menuHelp').textContent = T('toolbar.help')
-      document.getElementById('msgInput').placeholder = T('input.placeholder')
-      document.querySelectorAll('[data-i18n-title]').forEach(el => {
-        el.title = T(el.dataset.i18nTitle)
-      })
-      if (!generating) {
-        document.getElementById('statusText').textContent = T('status.connected')
-      }
-    }
-
-    let session = localStorage.getItem('halo_web_demo_session') || ''
-    let generating = false
-    let abortController = null
-    let pendingImages = []
-    let messageQueue = []
-
-    if (session) enterChat()
+  function toggleLang() {
+    const next = getLang() === 'zh' ? 'en' : 'zh'
+    localStorage.setItem('halo_lang', next)
     applyLang()
-
-    async function doLogin() {
-      const input = document.getElementById('passwordInput')
-      const password = input ? input.value.trim() : ''
-      try {
-        const res = await fetch('/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password }),
-        })
-        const data = await res.json()
-        if (!res.ok) {
-          showLoginError(data.error || T('login.error'))
-          return
-        }
-        session = data.session || ''
-        localStorage.setItem('halo_web_demo_session', session)
-        enterChat()
-      } catch {
-        showLoginError(T('login.connFailed'))
-      }
-    }
-
-    function showLoginError(msg) {
-      const el = document.getElementById('loginError')
-      el.textContent = msg
-      el.classList.remove('hidden')
-    }
-
-    function enterChat() {
-      document.getElementById('loginView').classList.add('hidden')
-      document.getElementById('chatView').classList.remove('hidden')
-      document.getElementById('msgInput').focus()
-      loadHistory()
-    }
-
-    // ── History & Reconnect ──
-
-    async function loadHistory() {
-      try {
-        const res = await fetch('/history', { headers: { 'x-session': session } })
-        if (res.status === 401) { logout(); return }
-        if (!res.ok) return
-        const data = await res.json()
-        const container = document.getElementById('messages')
-        container.innerHTML = ''
-        if (data.messages && data.messages.length > 0) {
-          for (const msg of data.messages) {
-            if (msg.role === 'user') {
-              appendMsg('user', msg.content)
-            } else if (msg.role === 'assistant') {
-              const botDiv = appendBotMessage()
-              if (msg.contentBlocks && msg.contentBlocks.length > 0) {
-                for (const block of msg.contentBlocks) {
-                  if (block.type === 'thinking' && block.text) {
-                    updateThinking(botDiv, block.text, true)
-                  } else if (block.type === 'tool_call' && block.toolCall) {
-                    appendToolBlock(botDiv, block.toolCall.name, block.toolCall.input, block.toolCall.output || null)
-                  }
-                }
-              }
-              if (msg.content) {
-                const mediaRe = /^MEDIA:\s*(\S.*?)\s*$/gm
-                const files = []
-                const cleaned = msg.content.replace(mediaRe, (_, p) => { files.push(p); return '' })
-                // History replay: write synchronously. setTextContent
-                // batches via a single global RAF slot which is the
-                // right behaviour for streaming (one buffer per turn),
-                // but in a history loop every iteration overwrites the
-                // pending slot — only the last assistant message's text
-                // would land, all earlier ones came up blank with just
-                // their thinking block visible.
-                if (cleaned.trim()) {
-                  const el = botDiv.querySelector('.bot-text')
-                  if (el) el.textContent = cleaned.trim()
-                }
-                for (const f of files) appendFileBlock(botDiv, f)
-              }
-            }
-          }
-        }
-        if (data.running) {
-          subscribeToRunning()
-        }
-      } catch { /* ignore */ }
-    }
-
-    async function subscribeToRunning() {
-      setStatus('running', T('status.generating'))
-      setGenerating(true)
-      abortController = new AbortController()
-
-      const botDiv = appendBotMessage()
-      let fullText = ''
-
-      try {
-        const res = await fetch('/subscribe', {
-          headers: { 'x-session': session },
-          signal: abortController.signal,
-        })
-        if (!res.ok) { setGenerating(false); return }
-
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue
-            try {
-              const event = JSON.parse(line.slice(6))
-              fullText = handleSSEEvent(event, botDiv, fullText)
-              if (event.type === 'complete' || event.type === 'error') break
-            } catch { /* skip */ }
-          }
-        }
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          console.log('[subscribe] stream ended:', err.message)
-        }
-      } finally {
-        setGenerating(false)
-        abortController = null
-        if (!fullText && !botDiv.querySelector('.bot-text')?.textContent && !botDiv.querySelector('.tool-block')) {
-          botDiv.remove()
-        }
-        processQueue()
-      }
-    }
-
-    // ── Send Message ──
-
-    function handleKey(e) {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-        e.preventDefault()
-        sendMessage()
-      }
-    }
-
-    function sendMessage() {
-      const input = document.getElementById('msgInput')
-      const text = input.value.trim()
-      if (!text && pendingImages.length === 0) return
-
-      input.value = ''
-      autoResize(input)
-
-      const images = pendingImages.length > 0 ? [...pendingImages] : undefined
-      clearImagePreview()
-
-      if (text) appendMsg('user', text)
-      else if (images) appendMsg('user', T('chat.imageLabel'))
-
-      if (generating) {
-        messageQueue.push({ message: text || T('chat.imageLabel'), images })
-        updateQueueIndicator()
-      } else {
-        doChat(text || T('chat.imageSent'), images)
-      }
-    }
-
-    async function doChat(message, images) {
-      setGenerating(true)
-      setStatus('running', T('status.generating'))
-      abortController = new AbortController()
-
-      const botDiv = appendBotMessage()
-      let fullText = ''
-
-      try {
-        const body = { message }
-        if (images) body.images = images
-
-        const res = await fetch('/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-session': session },
-          body: JSON.stringify(body),
-          signal: abortController.signal,
-        })
-
-        if (res.status === 401) { logout(); return }
-
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue
-            try {
-              const event = JSON.parse(line.slice(6))
-              fullText = handleSSEEvent(event, botDiv, fullText)
-              if (event.type === 'complete' || event.type === 'error') break
-            } catch { /* skip */ }
-          }
-        }
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          if (!fullText) appendTextToBot(botDiv, T('chat.stopped'))
-        } else {
-          console.log('[chat] connection error:', err.message)
-          if (!fullText) appendTextToBot(botDiv, T('chat.connError') + err.message)
-        }
-      } finally {
-        setGenerating(false)
-        abortController = null
-        if (!fullText && !botDiv.querySelector('.bot-text')?.textContent && !botDiv.querySelector('.tool-block')) {
-          botDiv.remove()
-        }
-        processQueue()
-      }
-    }
-
-    function handleSSEEvent(event, botDiv, fullText) {
-      switch (event.type) {
-        case 'stream':
-          fullText += event.text
-          setTextContent(botDiv, fullText)
-          scrollToBottom()
-          break
-        case 'thinking':
-          updateThinking(botDiv, event.text)
-          break
-        case 'tool_call':
-          appendToolBlock(botDiv, event.toolName, event.toolInput, null)
-          scrollToBottom()
-          break
-        case 'tool_result':
-          updateLastToolResult(botDiv, event.toolName, event.result)
-          break
-        case 'file':
-          appendFileBlock(botDiv, event.path)
-          scrollToBottom()
-          break
-        case 'error':
-          appendTextToBot(botDiv, '❌ ' + event.error)
-          break
-        case 'switch':
-          setTimeout(() => loadHistory(), 100)
-          break
-        case 'complete':
-          break
-      }
-      return fullText
-    }
-
-    // ── Queue processing ──
-
-    async function processQueue() {
-      if (messageQueue.length === 0) {
-        updateQueueIndicator()
-        return
-      }
-      const next = messageQueue.shift()
-      updateQueueIndicator()
-      await doChat(next.message, next.images)
-    }
-
-    function updateQueueIndicator() {
-      const el = document.getElementById('queueIndicator')
-      if (messageQueue.length > 0) {
-        el.textContent = T('chat.queued').replace('{n}', messageQueue.length)
-        el.classList.remove('hidden')
-      } else {
-        el.classList.add('hidden')
-      }
-    }
-
-    // ── Stop ──
-
-    async function stopGeneration() {
-      if (abortController) abortController.abort()
-      try {
-        await fetch('/stop', { method: 'POST', headers: { 'x-session': session } })
-      } catch { /* ignore */ }
-    }
-
-    // ── DOM helpers ──
-
-    function appendMsg(role, content) {
-      const div = document.createElement('div')
-      div.className = `msg ${role}`
-      div.textContent = content
-      document.getElementById('messages').appendChild(div)
-      scrollToBottom()
-      return div
-    }
-
-    function appendBotMessage() {
-      const div = document.createElement('div')
-      div.className = 'msg bot'
-      const textEl = document.createElement('div')
-      textEl.className = 'bot-text'
-      div.appendChild(textEl)
-      document.getElementById('messages').appendChild(div)
-      scrollToBottom()
-      return div
-    }
-
-    let _renderRAF = null
-    let _pendingRender = null
-    function setTextContent(botDiv, text) {
-      _pendingRender = { botDiv, text }
-      if (_renderRAF) return
-      _renderRAF = requestAnimationFrame(() => {
-        _renderRAF = null
-        if (_pendingRender) {
-          const el = _pendingRender.botDiv.querySelector('.bot-text')
-          if (el) el.textContent = _pendingRender.text
-          _pendingRender = null
-        }
-      })
-    }
-
-    function appendTextToBot(botDiv, text) {
-      const el = botDiv.querySelector('.bot-text')
-      if (el) el.textContent += text
-    }
-
-    function updateThinking(botDiv, text, replace) {
-      let el = botDiv.querySelector('.thinking-block')
-      if (!el) {
-        el = document.createElement('div')
-        el.className = 'thinking-block'
-        el._fullText = ''
-        el.onclick = () => {
-          el.classList.toggle('expanded')
-          renderThinkingText(el)
-        }
-        botDiv.insertBefore(el, botDiv.firstChild)
-      }
-      el._fullText = replace ? text : (el._fullText + text)
-      renderThinkingText(el)
-    }
-
-    function renderThinkingText(el) {
-      const t = el._fullText
-      if (el.classList.contains('expanded')) {
-        el.textContent = '💭 ' + t
-      } else {
-        el.textContent = '💭 ' + (t.length > 120 ? t.slice(-120) + '…' : t)
-      }
-    }
-
-    function appendToolBlock(botDiv, toolName, toolInput, result) {
-      const block = document.createElement('div')
-      block.className = 'tool-block'
-      block.onclick = () => block.classList.toggle('expanded')
-
-      const header = document.createElement('div')
-      header.className = 'tool-header'
-      header.textContent = '🔧 ' + toolName
-
-      const detail = document.createElement('div')
-      detail.className = 'tool-detail'
-      if (toolInput) {
-        detail.textContent = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput, null, 2)
-      }
-
-      const resultEl = document.createElement('div')
-      resultEl.className = 'tool-result'
-      if (result) resultEl.textContent = result
-
-      block.appendChild(header)
-      block.appendChild(detail)
-      block.appendChild(resultEl)
-
-      const textEl = botDiv.querySelector('.bot-text')
-      botDiv.insertBefore(block, textEl)
-    }
-
-    function updateLastToolResult(botDiv, toolName, result) {
-      const blocks = botDiv.querySelectorAll('.tool-block')
-      for (let i = blocks.length - 1; i >= 0; i--) {
-        const header = blocks[i].querySelector('.tool-header')
-        if (header && header.textContent.includes(toolName)) {
-          const resultEl = blocks[i].querySelector('.tool-result')
-          if (resultEl) resultEl.textContent = result || ''
-          break
-        }
-      }
-    }
-
-    function appendFileBlock(botDiv, filePath) {
-      const block = document.createElement('div')
-      block.className = 'file-block'
-      const name = filePath.split('/').pop() || filePath
-      const ext = name.split('.').pop()?.toLowerCase() || ''
-      const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']
-      const url = '/file?path=' + encodeURIComponent(filePath)
-
-      if (imageExts.includes(ext)) {
-        const img = document.createElement('img')
-        img.src = url
-        img.style.maxWidth = '100%'
-        img.style.maxHeight = '300px'
-        img.style.borderRadius = '6px'
-        img.style.marginTop = '4px'
-        block.appendChild(img)
-      }
-
-      const link = document.createElement('a')
-      link.href = url
-      link.target = '_blank'
-      link.textContent = '📎 ' + name
-      link.style.display = 'block'
-      link.style.marginTop = '4px'
-      link.style.color = 'var(--primary)'
-      link.style.fontSize = '12px'
-      block.appendChild(link)
-
-      const textEl = botDiv.querySelector('.bot-text')
-      botDiv.insertBefore(block, textEl)
-    }
-
-    function scrollToBottom() {
-      const el = document.getElementById('messages')
-      el.scrollTop = el.scrollHeight
-    }
-
-    function autoResize(el) {
-      el.style.height = 'auto'
-      el.style.height = Math.min(el.scrollHeight, 120) + 'px'
-    }
-
-    document.getElementById('msgInput')?.addEventListener('input', function() { autoResize(this) })
-
-    function setGenerating(v) {
-      generating = v
-      document.getElementById('sendBtn').classList.toggle('hidden', v)
-      document.getElementById('stopBtn').classList.toggle('hidden', !v)
-      if (!v) setStatus('connected', T('status.connected'))
-    }
-
-    function setStatus(state, text) {
-      const dot = document.getElementById('statusDot')
-      const txt = document.getElementById('statusText')
-      dot.className = 'dot' + (state === 'running' ? ' running' : state === 'disconnected' ? ' disconnected' : '')
-      txt.textContent = text
-    }
-
-    function logout() {
-      localStorage.removeItem('halo_web_demo_session')
-      session = ''
-      document.getElementById('chatView').classList.add('hidden')
-      document.getElementById('loginView').classList.remove('hidden')
-      showLoginError(T('login.expired'))
-    }
-
-    // ── Image upload ──
-
-    function pickImage() {
-      document.getElementById('fileInput').click()
-    }
-
-    function captureCamera() {
-      document.getElementById('cameraInput').click()
-    }
-
-    function handleFiles(files) {
-      for (const file of files) {
-        if (!file.type.startsWith('image/')) continue
-        const reader = new FileReader()
-        reader.onload = () => {
-          const base64 = reader.result.split(',')[1]
-          pendingImages.push({ data: base64, mimeType: file.type })
-          renderImagePreview()
-        }
-        reader.readAsDataURL(file)
-      }
-      document.getElementById('fileInput').value = ''
-      document.getElementById('cameraInput').value = ''
-    }
-
-    function renderImagePreview() {
-      const container = document.getElementById('imagePreview')
-      container.innerHTML = ''
-      if (pendingImages.length === 0) {
-        container.classList.add('hidden')
-        return
-      }
-      container.classList.remove('hidden')
-      pendingImages.forEach((img, idx) => {
-        const thumb = document.createElement('div')
-        thumb.className = 'thumb'
-        const imgEl = document.createElement('img')
-        imgEl.src = `data:${img.mimeType};base64,${img.data}`
-        const btn = document.createElement('button')
-        btn.className = 'remove'
-        btn.textContent = '×'
-        btn.onclick = (e) => { e.stopPropagation(); pendingImages.splice(idx, 1); renderImagePreview() }
-        thumb.appendChild(imgEl)
-        thumb.appendChild(btn)
-        container.appendChild(thumb)
-      })
-    }
-
-    function clearImagePreview() {
-      pendingImages = []
-      renderImagePreview()
-    }
-
-    // ── Voice recording ──
-
-    let mediaRecorder = null
-    let audioChunks = []
-    let recording = false
-
-    function toggleVoice() {
-      if (recording) stopRecording()
-      else startRecording()
-    }
-
-    async function startRecording() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
-        audioChunks = []
-
-        mediaRecorder.ondataavailable = (e) => {
-          if (e.data.size > 0) audioChunks.push(e.data)
-        }
-
-        mediaRecorder.onstop = async () => {
-          stream.getTracks().forEach(t => t.stop())
-          const blob = new Blob(audioChunks, { type: 'audio/webm' })
-          const reader = new FileReader()
-          reader.onload = async () => {
-            const base64 = reader.result.split(',')[1]
-            appendMsg('user', T('chat.voiceLabel'))
-            const images = [{ data: base64, mimeType: 'audio/webm' }]
-            if (generating) {
-              messageQueue.push({ message: T('chat.voiceSent'), images })
-              updateQueueIndicator()
-            } else {
-              await doChat(T('chat.voiceSent'), images)
-            }
-          }
-          reader.readAsDataURL(blob)
-        }
-
-        mediaRecorder.start()
-        recording = true
-        document.getElementById('voiceBtn').classList.add('recording')
-      } catch (err) {
-        alert(T('chat.micError') + err.message)
-      }
-    }
-
-    function stopRecording() {
-      if (mediaRecorder && mediaRecorder.state === 'recording') {
-        mediaRecorder.stop()
-      }
-      recording = false
-      document.getElementById('voiceBtn').classList.remove('recording')
-    }
-
-    // ── Media toggle (mobile) ──
-
-    function toggleMediaBtns() {
-      document.getElementById('mediaBtns').classList.toggle('show')
-    }
-
-    // ── Toolbar ──
-
-    function toggleToolbar() {
-      const menu = document.getElementById('toolbarMenu')
-      const isOpen = menu.classList.contains('show')
-      closeToolbar()
-      if (!isOpen) menu.classList.add('show')
-    }
-
-    function closeToolbar() {
-      document.getElementById('toolbarMenu').classList.remove('show')
-      document.querySelectorAll('.toolbar-sub').forEach(el => el.classList.remove('show'))
-    }
-
-    document.addEventListener('click', (e) => {
-      if (!document.getElementById('toolbarWrap').contains(e.target)) closeToolbar()
+  }
+
+  function applyEmptyState() {
+    const t = document.getElementById('emptyTitle')
+    const d = document.getElementById('emptyDesc')
+    if (t) t.textContent = T('empty.title')
+    if (d) d.textContent = T('empty.desc')
+  }
+
+  function applyLang() {
+    const lang = getLang()
+    document.getElementById('htmlRoot').lang = lang === 'zh' ? 'zh-CN' : 'en'
+    document.getElementById('langToggle').textContent = lang === 'zh' ? '中' : 'EN'
+    document.getElementById('loginSubtitle').textContent = T('login.subtitle')
+    document.getElementById('passwordInput').placeholder = T('login.placeholder')
+    document.getElementById('loginBtn').textContent = T('login.submit')
+    document.getElementById('loginDirectLink').textContent = T('login.direct')
+    document.getElementById('menuSessions').textContent = T('toolbar.sessions')
+    document.getElementById('menuAgents').textContent = T('toolbar.agents')
+    document.getElementById('menuNew').textContent = T('toolbar.new')
+    document.getElementById('menuCompact').textContent = T('toolbar.compact')
+    document.getElementById('menuStop').textContent = T('toolbar.stop')
+    document.getElementById('menuWs').textContent = T('toolbar.workspace')
+    document.getElementById('menuHelp').textContent = T('toolbar.help')
+    document.getElementById('msgInput').placeholder = T('input.placeholder')
+    document.getElementById('settingsTitle').textContent = T('settings.title')
+    document.getElementById('settingsHint').textContent = T('settings.hint')
+    document.getElementById('serverUrlLabel').textContent = T('settings.serverUrl')
+    document.getElementById('tokenLabel').textContent = T('settings.token')
+    document.getElementById('tokenNote').textContent = T('settings.tokenNote')
+    document.getElementById('settingsSaveBtn').textContent = T('settings.save')
+    document.getElementById('settingsClearBtn').textContent = T('settings.clear')
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+      el.title = T(el.dataset.i18nTitle)
     })
+    applyEmptyState()
+    updateConnDot()
+    updateStatusLine()
+  }
 
-    function execCmd(cmd) {
-      closeToolbar()
-      const input = document.getElementById('msgInput')
-      input.value = cmd
-      sendMessage()
+  // ── Markdown ──
+
+  marked.setOptions({ breaks: true, gfm: true })
+
+  // ── DOM refs & state ──
+
+  const $ = (id) => document.getElementById(id)
+  const scroller = $('scroller'), messagesEl = $('messages'), inputEl = $('msgInput')
+  const statusLine = $('statusLine'), connDot = $('connDot')
+
+  let session = localStorage.getItem('halo_web_demo_session') || ''
+  let generating = false
+  let abortController = null
+  let pendingImages = []
+  let messageQueue = []   // { message, images, wrap }
+  let current = null      // { wrap, steps, body, files, dotsEl, textBuf, lastThinking }
+  let typeQueue = ''
+  let typeTimer = null
+
+  // ── Direct-connect mode ──
+  // When configured, all API calls go straight to <serverUrl>/api/web/* with
+  // the x-token header (halo's CORS allowlists x-token; no credentials needed),
+  // bypassing the server.js proxy and its password login entirely.
+
+  const DIRECT_KEY = 'halo_web_demo_direct'
+  let direct = loadDirect()   // { serverUrl, token } | null
+
+  function loadDirect() {
+    try {
+      const d = JSON.parse(localStorage.getItem(DIRECT_KEY))
+      return (d && d.serverUrl && d.token) ? d : null
+    } catch { return null }
+  }
+
+  function api(path) {
+    return direct ? direct.serverUrl + '/api/web' + path : path
+  }
+
+  function authHeaders(extra) {
+    const base = direct ? { 'x-token': direct.token } : { 'x-session': session }
+    return extra ? Object.assign(base, extra) : base
+  }
+
+  function fileUrl(path) {
+    // <img src> can't carry headers — the web channel also accepts ?token=
+    let url = api('/file') + '?path=' + encodeURIComponent(path)
+    if (direct) url += '&token=' + encodeURIComponent(direct.token)
+    return url
+  }
+
+  function handleAuthFail() {
+    messageQueue = []
+    if (direct) openSettings(T('settings.badAuth'))
+    else logout()
+  }
+
+  // Snapshot the welcome card so a rebuild to an empty session can restore it.
+  const emptyStateHTML = $('emptyState') ? $('emptyState').outerHTML : ''
+  function removeEmptyState() { const el = $('emptyState'); if (el) el.remove() }
+  function restoreEmptyState() {
+    if (!$('emptyState') && emptyStateHTML) {
+      messagesEl.insertAdjacentHTML('afterbegin', emptyStateHTML)
+      applyEmptyState()
     }
+  }
 
-    function promptWs() {
-      closeToolbar()
-      const path = prompt(T('toolbar.wsPrompt'))
-      if (path === null) return
-      execCmd(path ? '/ws switch ' + path.trim() : '/ws info')
+  function atBottom() { return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80 }
+  function scrollDown(force) { if (force || atBottom()) scroller.scrollTop = scroller.scrollHeight }
+
+  function updateStatusLine() {
+    if (messageQueue.length > 0) statusLine.textContent = T('chat.queued').replace('{n}', messageQueue.length)
+    else if (generating) statusLine.textContent = T('status.generating')
+    else statusLine.innerHTML = '&nbsp;'
+  }
+
+  function updateConnDot() {
+    connDot.className = 'w-2 h-2 rounded-full shrink-0 mr-1 ' + (generating ? 'bg-accent-500 animate-pulse' : 'bg-emerald-400')
+    connDot.title = generating ? T('status.generating') : T('status.connected')
+  }
+
+  function setGenerating(v) {
+    generating = v
+    const stopBtn = $('stopBtn')
+    stopBtn.classList.toggle('hidden', !v)
+    stopBtn.classList.toggle('flex', v)
+    updateConnDot()
+    updateStatusLine()
+  }
+
+  // ── Auth (proxy mode) ──
+
+  async function doLogin() {
+    const input = $('passwordInput')
+    const password = input ? input.value.trim() : ''
+    const btn = $('loginBtn')
+    btn.disabled = true
+    try {
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        showLoginError(data.error || T('login.error'))
+        return
+      }
+      session = data.session || ''
+      localStorage.setItem('halo_web_demo_session', session)
+      enterChat()
+    } catch {
+      showLoginError(T('login.connFailed'))
+    } finally {
+      btn.disabled = false
     }
+  }
 
-    async function showSub(type) {
-      document.querySelectorAll('.toolbar-sub').forEach(el => el.classList.remove('show'))
-      const subEl = type === 'sessions' ? document.getElementById('subSessions') : document.getElementById('subAgents')
-      subEl.innerHTML = '<div class="loading">' + T('toolbar.loading') + '</div>'
-      subEl.classList.add('show')
+  function showLoginError(msg) {
+    const el = $('loginError')
+    el.textContent = msg
+    el.classList.remove('hidden')
+  }
 
-      if (type === 'sessions') {
-        await loadSessionList(subEl)
+  function enterChat() {
+    const login = $('loginView'), chat = $('chatView')
+    login.classList.add('hidden')
+    login.classList.remove('flex')
+    chat.classList.remove('hidden')
+    chat.classList.add('flex')
+    const sub = $('headerSub')
+    if (direct) {
+      try { sub.textContent = '⚡ ' + new URL(direct.serverUrl).host } catch { sub.textContent = '⚡ ' + direct.serverUrl }
+    } else {
+      sub.textContent = 'Web Demo'
+    }
+    inputEl.focus()
+    loadHistory()
+  }
+
+  function showLogin() {
+    const login = $('loginView'), chat = $('chatView')
+    chat.classList.add('hidden')
+    chat.classList.remove('flex')
+    login.classList.remove('hidden')
+    login.classList.add('flex')
+  }
+
+  function logout() {
+    localStorage.removeItem('halo_web_demo_session')
+    session = ''
+    showLogin()
+    showLoginError(T('login.expired'))
+  }
+
+  $('loginForm').addEventListener('submit', (e) => { e.preventDefault(); doLogin() })
+
+  // ── Server settings (direct-connect) ──
+
+  function openSettings(errMsg) {
+    closeToolbar()
+    $('serverUrlInput').value = direct ? direct.serverUrl : ''
+    $('tokenInput').value = direct ? direct.token : ''
+    const err = $('settingsError')
+    if (errMsg) { err.textContent = errMsg; err.classList.remove('hidden') }
+    else err.classList.add('hidden')
+    $('settingsClearBtn').classList.toggle('hidden', !direct)
+    const ov = $('settingsOverlay')
+    ov.classList.remove('hidden')
+    ov.classList.add('flex')
+  }
+
+  function closeSettings() {
+    const ov = $('settingsOverlay')
+    ov.classList.add('hidden')
+    ov.classList.remove('flex')
+  }
+
+  function showSettingsError(msg) {
+    const err = $('settingsError')
+    err.textContent = msg
+    err.classList.remove('hidden')
+  }
+
+  function saveSettings() {
+    const url = $('serverUrlInput').value.trim().replace(/\/+$/, '')
+    const token = $('tokenInput').value.trim()
+    if (!url && !token) { clearDirect(); return }
+    if (!url || !token) { showSettingsError(T('settings.needBoth')); return }
+    try {
+      const u = new URL(url)
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad protocol')
+    } catch { showSettingsError(T('settings.invalidUrl')); return }
+    if (abortController) abortController.abort()
+    messageQueue = []
+    direct = { serverUrl: url, token }
+    localStorage.setItem(DIRECT_KEY, JSON.stringify(direct))
+    closeSettings()
+    enterChat()
+  }
+
+  function clearDirect() {
+    if (abortController) abortController.abort()
+    messageQueue = []
+    direct = null
+    localStorage.removeItem(DIRECT_KEY)
+    closeSettings()
+    if (session) enterChat()
+    else { showLogin(); $('loginError').classList.add('hidden') }
+  }
+
+  // ── Message bubbles ──
+
+  function addUserMessage(text, queued) {
+    removeEmptyState()
+    const wrap = document.createElement('div')
+    wrap.className = 'flex justify-end msg-in'
+    wrap.innerHTML = `
+      <div class="max-w-[85%] sm:max-w-[75%] min-w-0">
+        <div class="bubble bg-accent-600/20 border border-accent-500/30 rounded-2xl rounded-br-md px-4 py-2.5 text-[15px] text-slate-100 whitespace-pre-wrap break-words"></div>
+        ${queued ? '<div class="text-[11px] text-amber-400/80 text-right mt-1 pr-1 queued-tag"></div>' : ''}
+      </div>`
+    wrap.querySelector('.bubble').textContent = text
+    if (queued) wrap.querySelector('.queued-tag').textContent = T('chat.queuedTag')
+    messagesEl.appendChild(wrap)
+    scrollDown(true)
+    return wrap
+  }
+
+  function beginAssistantMessage() {
+    removeEmptyState()
+    const wrap = document.createElement('div')
+    wrap.className = 'flex justify-start msg-in'
+    wrap.innerHTML = `
+      <div class="max-w-[92%] sm:max-w-[85%] w-full min-w-0">
+        <div class="flex items-center gap-1.5 mb-1.5 pl-1">
+          <div class="w-4 h-4 rounded-md bg-gradient-to-br from-halo-400 to-accent-500 flex items-center justify-center">
+            <svg viewBox="0 0 24 24" fill="none" class="w-2.5 h-2.5"><circle cx="12" cy="12" r="5" fill="white"/></svg>
+          </div>
+          <span class="text-[11px] font-medium text-slate-500"></span>
+        </div>
+        <div class="steps space-y-1.5"></div>
+        <div class="body md text-[15px] text-slate-300"></div>
+        <div class="files space-y-2"></div>
+        <div class="thinking-dots text-slate-500 text-sm pl-1 dots"><span>●</span> <span>●</span> <span>●</span></div>
+      </div>`
+    wrap.querySelector('span').textContent = T('agent.label')
+    messagesEl.appendChild(wrap)
+    scrollDown(true)
+    current = {
+      wrap,
+      steps: wrap.querySelector('.steps'),
+      body: wrap.querySelector('.body'),
+      files: wrap.querySelector('.files'),
+      dotsEl: wrap.querySelector('.thinking-dots'),
+      textBuf: '',
+      lastThinking: null,
+    }
+    return current
+  }
+
+  function hideDots() { if (current && current.dotsEl) { current.dotsEl.remove(); current.dotsEl = null } }
+
+  /* Collapsible step (thinking / tool call) */
+  function addStep(kind, title, detail) {
+    if (!current) return null
+    hideDots()
+    flushTypewriterNow()
+    const el = document.createElement('details')
+    el.className = 'step bg-surface-800/60 border border-surface-700 rounded-xl px-3 py-2 text-[13px]'
+    const icon = kind === 'thinking'
+      ? '<svg viewBox="0 0 24 24" fill="none" class="w-3.5 h-3.5 text-halo-400 shrink-0"><path d="M12 3a7 7 0 0 0-4 12.7V18a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 3Z" stroke="currentColor" stroke-width="1.8"/><path d="M10 21h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" class="w-3.5 h-3.5 text-accent-400 shrink-0"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4l-2.4 2.4-2.4-.6-.6-2.4 2.4-2.4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>'
+    el.innerHTML = `
+      <summary class="flex items-center gap-2 py-1 text-slate-400 hover:text-slate-300">
+        <svg class="chev w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        ${icon}
+        <span class="truncate font-medium"></span>
+      </summary>
+      <div class="detail mt-2 pl-5 text-slate-500 font-mono text-[12px] whitespace-pre-wrap break-words max-h-52 overflow-y-auto"></div>`
+    el.querySelector('summary span').textContent = title
+    el.querySelector('.detail').textContent = detail || ''
+    current.steps.appendChild(el)
+    scrollDown()
+    return el
+  }
+
+  /* Thinking streams in chunks — append into the current thinking step until
+   * a tool call / text breaks the run, then a fresh chunk opens a new step. */
+  function appendThinking(text) {
+    if (!current) return
+    if (!current.lastThinking) {
+      current.lastThinking = addStep('thinking', T('step.thinking'), '')
+    }
+    const d = current.lastThinking.querySelector('.detail')
+    d.textContent += text
+  }
+
+  function addToolStep(toolName, toolInput, output) {
+    if (!current) return
+    current.lastThinking = null
+    let detail = ''
+    if (toolInput != null) {
+      try { detail = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput, null, 2) } catch { detail = String(toolInput) }
+    }
+    const el = addStep('tool', `${T('step.tool')}: ${toolName || 'unknown'}`, detail)
+    if (el) {
+      el.dataset.tool = toolName || 'unknown'
+      if (output) appendStepResult(el, output)
+    }
+  }
+
+  function appendStepResult(el, result) {
+    const d = el.querySelector('.detail')
+    d.textContent += (d.textContent ? '\n\n' : '') + '→ ' + result
+  }
+
+  function attachToolResult(toolName, result) {
+    if (!current || !result) return
+    const steps = current.steps.querySelectorAll('details.step[data-tool]')
+    for (let i = steps.length - 1; i >= 0; i--) {
+      if (steps[i].dataset.tool === (toolName || 'unknown')) {
+        appendStepResult(steps[i], result)
+        return
+      }
+    }
+  }
+
+  function addFile(cur, filePath) {
+    if (!cur) return
+    const name = filePath.split('/').pop() || filePath
+    const ext = name.split('.').pop()?.toLowerCase() || ''
+    const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']
+    const url = fileUrl(filePath)
+
+    const block = document.createElement('div')
+    block.className = 'mt-2'
+    if (imageExts.includes(ext)) {
+      const img = document.createElement('img')
+      img.src = url
+      img.className = 'max-w-full max-h-72 rounded-xl border border-surface-600'
+      img.loading = 'lazy'
+      block.appendChild(img)
+    }
+    const link = document.createElement('a')
+    link.href = url
+    link.target = '_blank'
+    link.textContent = '📎 ' + name
+    link.className = 'block mt-1 text-[12px] text-accent-400 hover:text-accent-500 underline underline-offset-2 break-all'
+    block.appendChild(link)
+    cur.files.appendChild(block)
+    scrollDown()
+  }
+
+  /* ── Typewriter streaming (smooth per-char reveal) ── */
+  function enqueueText(text) {
+    if (!current) return
+    hideDots()
+    current.lastThinking = null
+    typeQueue += text
+    if (!typeTimer) typeTimer = setInterval(tickTypewriter, 16)
+  }
+
+  function tickTypewriter() {
+    if (!current) { typeQueue = ''; stopTypewriter(); return }
+    if (!typeQueue) { stopTypewriter(); renderBody(false); return }
+    // Adaptive: reveal faster when the buffer backs up so we never lag far
+    // behind the model, but keep a smooth per-frame cadence.
+    const n = Math.max(1, Math.ceil(typeQueue.length / 24))
+    current.textBuf += typeQueue.slice(0, n)
+    typeQueue = typeQueue.slice(n)
+    renderBody(true)
+    scrollDown()
+  }
+
+  function stopTypewriter() { if (typeTimer) { clearInterval(typeTimer); typeTimer = null } }
+
+  function flushTypewriterNow() {
+    if (typeQueue && current) { current.textBuf += typeQueue; typeQueue = '' }
+    stopTypewriter()
+    if (current) renderBody(generating)
+  }
+
+  function renderBody(withCaret) {
+    if (!current) return
+    current.body.innerHTML = marked.parse(current.textBuf)
+    current.body.classList.toggle('caret', !!withCaret && generating)
+  }
+
+  function showError(text) {
+    if (!current) return
+    hideDots()
+    flushTypewriterNow()
+    const err = document.createElement('div')
+    err.className = 'err mt-2 text-[13px] text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2 break-words'
+    err.textContent = text
+    current.body.after(err)
+    scrollDown()
+  }
+
+  // ── SSE event handling (shared by /chat and /subscribe) ──
+
+  function handleSSEEvent(event) {
+    switch (event.type) {
+      case 'stream':
+        enqueueText(event.text || '')
+        break
+      case 'thinking':
+        hideDots()
+        appendThinking(event.text || '')
+        scrollDown()
+        break
+      case 'tool_call':
+        addToolStep(event.toolName, event.toolInput, null)
+        break
+      case 'tool_result':
+        attachToolResult(event.toolName, event.result)
+        break
+      case 'file':
+        hideDots()
+        addFile(current, event.path)
+        break
+      case 'error':
+        showError(event.error || 'Unknown error')
+        break
+      case 'switch':
+        // Session switched server-side — reload the new session's history
+        // once the command's stream has drained.
+        setTimeout(() => loadHistory(), 100)
+        break
+      case 'session':
+      case 'complete':
+        break
+    }
+  }
+
+  async function consumeSSE(res) {
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    outer: while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        let event
+        try { event = JSON.parse(line.slice(6)) } catch { continue }
+        handleSSEEvent(event)
+        if (event.type === 'complete' || event.type === 'error') break outer
+      }
+    }
+  }
+
+  function finishReply(cur) {
+    flushTypewriterNow()
+    hideDots()
+    if (cur) {
+      cur.body.classList.remove('caret')
+      const hasContent = cur.textBuf || cur.steps.children.length || cur.files.children.length || cur.wrap.querySelector('.err')
+      if (!hasContent) cur.wrap.remove()
+    }
+    current = null
+    setGenerating(false)
+    document.querySelectorAll('.queued-tag').forEach((el) => el.remove())
+    scrollDown()
+  }
+
+  // ── History & Reconnect ──
+
+  function extractMedia(content) {
+    const files = []
+    const cleaned = content.replace(/^MEDIA:\s*(\S.*?)\s*$/gm, (_, p) => { files.push(p); return '' })
+    return { cleaned: cleaned.trim(), files }
+  }
+
+  async function loadHistory() {
+    try {
+      const res = await fetch(api('/history'), { headers: authHeaders() })
+      if (res.status === 401) { handleAuthFail(); return }
+      if (!res.ok) return
+      const data = await res.json()
+      // Rebuild from scratch — the server snapshot is the source of truth,
+      // appending on top of existing DOM would duplicate messages.
+      messagesEl.innerHTML = ''
+      if (data.messages && data.messages.length > 0) {
+        for (const msg of data.messages) {
+          if (msg.role === 'user') {
+            addUserMessage(msg.content, false)
+          } else if (msg.role === 'assistant') {
+            const cur = beginAssistantMessage()
+            hideDots()
+            if (msg.contentBlocks && msg.contentBlocks.length > 0) {
+              for (const block of msg.contentBlocks) {
+                if (block.type === 'thinking' && block.text) {
+                  addStep('thinking', T('step.thinking'), block.text)
+                } else if (block.type === 'tool_call' && block.toolCall) {
+                  addToolStep(block.toolCall.name, block.toolCall.input, block.toolCall.output || null)
+                }
+              }
+            }
+            if (msg.content) {
+              const { cleaned, files } = extractMedia(msg.content)
+              if (cleaned) { cur.textBuf = cleaned; renderBody(false) }
+              for (const f of files) addFile(cur, f)
+            }
+            const hasContent = cur.textBuf || cur.steps.children.length || cur.files.children.length
+            if (!hasContent) cur.wrap.remove()
+            current = null
+          }
+        }
+        scrollDown(true)
       } else {
-        await loadAgentList(subEl)
+        restoreEmptyState()
       }
+      if (data.running) subscribeToRunning()
+    } catch { /* ignore */ }
+  }
+
+  async function subscribeToRunning() {
+    setGenerating(true)
+    abortController = new AbortController()
+    const cur = beginAssistantMessage()
+
+    try {
+      const res = await fetch(api('/subscribe'), {
+        headers: authHeaders(),
+        signal: abortController.signal,
+      })
+      if (res.status === 401) { handleAuthFail(); return }
+      if (!res.ok) return
+      await consumeSSE(res)
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.log('[subscribe] stream ended:', err.message)
+      }
+    } finally {
+      abortController = null
+      finishReply(cur)
+      processQueue()
     }
+  }
 
-    async function loadSessionList(container) {
-      try {
-        const res = await fetch('/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-session': session },
-          body: JSON.stringify({ message: '/session list' }),
-        })
-        if (!res.ok) { container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'; return }
+  // ── Send Message ──
 
-        const text = await readSSEText(res)
-        const lines = text.split('\n').filter(l => l.trim())
-        container.innerHTML = ''
+  function sendMessage() {
+    const text = inputEl.value.trim()
+    if (!text && pendingImages.length === 0) return
 
-        let found = false
-        for (const line of lines) {
-          const match = line.match(/^\s*[→]?\s*(\d+)\.\s*(.+)$/)
-          if (!match) continue
-          found = true
-          const num = match[1]
-          const label = match[2].replace(/\[(我|me)\]\s*/, '').trim()
-          const isCurrent = line.trimStart().startsWith('→')
-          const item = document.createElement('div')
-          item.className = 'toolbar-item' + (isCurrent ? ' active' : '')
-          item.textContent = (isCurrent ? '● ' : '') + label
-          item.onclick = () => { if (!isCurrent) execCmd('/session switch ' + num) }
-          container.appendChild(item)
+    inputEl.value = ''
+    autoResize(inputEl)
+
+    const images = pendingImages.length > 0 ? [...pendingImages] : undefined
+    clearImagePreview()
+
+    const display = text || T('chat.imageLabel')
+    const wrap = addUserMessage(display, generating)
+
+    if (generating) {
+      messageQueue.push({ message: text || T('chat.imageSent'), images, wrap })
+      updateStatusLine()
+    } else {
+      doChat(text || T('chat.imageSent'), images)
+    }
+  }
+
+  async function doChat(message, images) {
+    setGenerating(true)
+    abortController = new AbortController()
+    const cur = beginAssistantMessage()
+
+    try {
+      const body = { message }
+      if (images) body.images = images
+
+      const res = await fetch(api('/chat'), {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+        signal: abortController.signal,
+      })
+
+      if (res.status === 401) { handleAuthFail(); return }
+      await consumeSSE(res)
+    } catch (err) {
+      flushTypewriterNow()
+      if (err.name === 'AbortError') {
+        if (!cur.textBuf) { cur.textBuf = T('chat.stopped'); renderBody(false) }
+      } else {
+        console.log('[chat] connection error:', err.message)
+        if (!cur.textBuf) showError(T('chat.connError') + err.message)
+      }
+    } finally {
+      abortController = null
+      finishReply(cur)
+      processQueue()
+    }
+  }
+
+  // ── Queue processing ──
+
+  async function processQueue() {
+    updateStatusLine()
+    if (messageQueue.length === 0) return
+    const next = messageQueue.shift()
+    if (next.wrap) { const tag = next.wrap.querySelector('.queued-tag'); if (tag) tag.remove() }
+    updateStatusLine()
+    await doChat(next.message, next.images)
+  }
+
+  // ── Stop ──
+
+  async function stopGeneration() {
+    if (abortController) abortController.abort()
+    try {
+      await fetch(api('/stop'), { method: 'POST', headers: authHeaders() })
+    } catch { /* ignore */ }
+  }
+
+  // ── Composer ──
+
+  function autoResize(el) {
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+  }
+
+  inputEl.addEventListener('input', function() { autoResize(this) })
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault()
+      $('composer').requestSubmit()
+    }
+  })
+  $('composer').addEventListener('submit', (e) => { e.preventDefault(); sendMessage() })
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closeSettings(); closeToolbar() }
+  })
+
+  // ── Image upload ──
+
+  function pickImage() {
+    $('fileInput').click()
+  }
+
+  function captureCamera() {
+    $('cameraInput').click()
+  }
+
+  function handleFiles(files) {
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue
+      const reader = new FileReader()
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1]
+        pendingImages.push({ data: base64, mimeType: file.type })
+        renderImagePreview()
+      }
+      reader.readAsDataURL(file)
+    }
+    $('fileInput').value = ''
+    $('cameraInput').value = ''
+  }
+
+  function renderImagePreview() {
+    const container = $('imagePreview')
+    container.innerHTML = ''
+    if (pendingImages.length === 0) {
+      container.classList.add('hidden')
+      container.classList.remove('flex')
+      return
+    }
+    container.classList.remove('hidden')
+    container.classList.add('flex')
+    pendingImages.forEach((img, idx) => {
+      const thumb = document.createElement('div')
+      thumb.className = 'relative w-14 h-14 rounded-lg overflow-hidden border border-surface-600'
+      const imgEl = document.createElement('img')
+      imgEl.src = `data:${img.mimeType};base64,${img.data}`
+      imgEl.className = 'w-full h-full object-cover'
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.textContent = '×'
+      btn.className = 'absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-red-500 text-white text-[11px] leading-none flex items-center justify-center'
+      btn.onclick = (e) => { e.stopPropagation(); pendingImages.splice(idx, 1); renderImagePreview() }
+      thumb.appendChild(imgEl)
+      thumb.appendChild(btn)
+      container.appendChild(thumb)
+    })
+  }
+
+  function clearImagePreview() {
+    pendingImages = []
+    renderImagePreview()
+  }
+
+  // ── Voice recording ──
+
+  let mediaRecorder = null
+  let audioChunks = []
+  let recording = false
+
+  function toggleVoice() {
+    if (recording) stopRecording()
+    else startRecording()
+  }
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+      audioChunks = []
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.push(e.data)
+      }
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop())
+        const blob = new Blob(audioChunks, { type: 'audio/webm' })
+        const reader = new FileReader()
+        reader.onload = async () => {
+          const base64 = reader.result.split(',')[1]
+          const wrap = addUserMessage(T('chat.voiceLabel'), generating)
+          const images = [{ data: base64, mimeType: 'audio/webm' }]
+          if (generating) {
+            messageQueue.push({ message: T('chat.voiceSent'), images, wrap })
+            updateStatusLine()
+          } else {
+            await doChat(T('chat.voiceSent'), images)
+          }
         }
+        reader.readAsDataURL(blob)
+      }
 
-        if (!found) container.innerHTML = '<div class="loading">' + T('toolbar.noSessions') + '</div>'
-      } catch {
-        container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'
+      mediaRecorder.start()
+      recording = true
+      const btn = $('voiceBtn')
+      btn.classList.add('text-red-400', 'border-red-500/60', 'pulse-ring')
+      btn.classList.remove('text-slate-500')
+    } catch (err) {
+      alert(T('chat.micError') + err.message)
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop()
+    }
+    recording = false
+    const btn = $('voiceBtn')
+    btn.classList.remove('text-red-400', 'border-red-500/60', 'pulse-ring')
+    btn.classList.add('text-slate-500')
+  }
+
+  // ── Media toggle (mobile) ──
+
+  function toggleMediaBtns() {
+    $('mediaBtns').classList.toggle('show')
+  }
+
+  // ── Commands menu ──
+
+  function openToolbar() {
+    const ov = $('menuOverlay')
+    ov.classList.remove('hidden')
+    ov.classList.add('flex')
+  }
+
+  function closeToolbar() {
+    const ov = $('menuOverlay')
+    ov.classList.add('hidden')
+    ov.classList.remove('flex')
+    for (const t of ['Sessions', 'Agents']) {
+      $('sub' + t).classList.add('hidden')
+      $('sub' + t).classList.remove('flex')
+      $('chev' + t).classList.remove('open')
+    }
+  }
+
+  function execCmd(cmd) {
+    closeToolbar()
+    inputEl.value = cmd
+    sendMessage()
+  }
+
+  function promptWs() {
+    closeToolbar()
+    const path = prompt(T('toolbar.wsPrompt'))
+    if (path === null) return
+    execCmd(path ? '/ws switch ' + path.trim() : '/ws info')
+  }
+
+  function subLoadingItem(text) {
+    return `<div class="px-6 py-3 text-[12px] text-slate-500">${text}</div>`
+  }
+
+  async function toggleSub(type) {
+    const cap = type === 'sessions' ? 'Sessions' : 'Agents'
+    const subEl = $('sub' + cap)
+    const chev = $('chev' + cap)
+    const isOpen = !subEl.classList.contains('hidden')
+    if (isOpen) {
+      subEl.classList.add('hidden')
+      subEl.classList.remove('flex')
+      chev.classList.remove('open')
+      return
+    }
+    subEl.innerHTML = subLoadingItem(T('toolbar.loading'))
+    subEl.classList.remove('hidden')
+    subEl.classList.add('flex')
+    chev.classList.add('open')
+
+    if (type === 'sessions') {
+      await loadSessionList(subEl)
+    } else {
+      await loadAgentList(subEl)
+    }
+  }
+
+  function subItem(label, active, onclick) {
+    const item = document.createElement('button')
+    item.className = 'w-full text-left px-6 py-3 text-[13px] hover:bg-surface-700/70 transition-colors truncate' + (active ? ' text-accent-400' : ' text-slate-400')
+    item.textContent = label
+    item.onclick = onclick
+    return item
+  }
+
+  async function loadSessionList(container) {
+    try {
+      const res = await fetch(api('/chat'), {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ message: '/session list' }),
+      })
+      if (!res.ok) { container.innerHTML = subLoadingItem(T('toolbar.loadFailed')); return }
+
+      const text = await readSSEText(res)
+      const lines = text.split('\n').filter(l => l.trim())
+      container.innerHTML = ''
+
+      let found = false
+      for (const line of lines) {
+        const match = line.match(/^\s*[→]?\s*(\d+)\.\s*(.+)$/)
+        if (!match) continue
+        found = true
+        const num = match[1]
+        const label = match[2].replace(/\[(我|me)\]\s*/, '').trim()
+        const isCurrent = line.trimStart().startsWith('→')
+        container.appendChild(subItem((isCurrent ? '● ' : '') + label, isCurrent, () => {
+          if (!isCurrent) execCmd('/session switch ' + num)
+        }))
+      }
+
+      if (!found) container.innerHTML = subLoadingItem(T('toolbar.noSessions'))
+    } catch {
+      container.innerHTML = subLoadingItem(T('toolbar.loadFailed'))
+    }
+  }
+
+  async function loadAgentList(container) {
+    try {
+      const res = await fetch(api('/chat'), {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ message: '/agent list' }),
+      })
+      if (!res.ok) { container.innerHTML = subLoadingItem(T('toolbar.loadFailed')); return }
+
+      const text = await readSSEText(res)
+      const lines = text.split('\n').filter(l => l.trim())
+      container.innerHTML = ''
+
+      let found = false
+      for (const line of lines) {
+        const match = line.match(/^\s*(\d+)\.\s*(?:\[.+?\]\s*)?(\S+?)(?:\s*—.*)?$/)
+        if (!match) continue
+        found = true
+        const num = match[1]
+        const name = match[2]
+        container.appendChild(subItem(name, false, () => execCmd('/agent switch ' + num)))
+      }
+
+      if (!found) container.innerHTML = subLoadingItem(T('toolbar.noAgents'))
+    } catch {
+      container.innerHTML = subLoadingItem(T('toolbar.loadFailed'))
+    }
+  }
+
+  async function readSSEText(res) {
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = '', result = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        try {
+          const ev = JSON.parse(line.slice(6))
+          if (ev.type === 'stream') result += ev.text
+        } catch {}
       }
     }
+    return result
+  }
 
-    async function loadAgentList(container) {
-      try {
-        const res = await fetch('/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-session': session },
-          body: JSON.stringify({ message: '/agent list' }),
-        })
-        if (!res.ok) { container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'; return }
+  // ── Init ──
 
-        const text = await readSSEText(res)
-        const lines = text.split('\n').filter(l => l.trim())
-        container.innerHTML = ''
-
-        let found = false
-        for (const line of lines) {
-          const match = line.match(/^\s*(\d+)\.\s*(?:\[.+?\]\s*)?(\S+?)(?:\s*—.*)?$/)
-          if (!match) continue
-          found = true
-          const num = match[1]
-          const name = match[2]
-          const item = document.createElement('div')
-          item.className = 'toolbar-item'
-          item.textContent = name
-          item.onclick = () => execCmd('/agent switch ' + num)
-          container.appendChild(item)
-        }
-
-        if (!found) container.innerHTML = '<div class="loading">' + T('toolbar.noAgents') + '</div>'
-      } catch {
-        container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'
-      }
-    }
-
-    async function readSSEText(res) {
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = '', result = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop() || ''
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          try {
-            const ev = JSON.parse(line.slice(6))
-            if (ev.type === 'stream') result += ev.text
-          } catch {}
-        }
-      }
-      return result
-    }
-  </script>
+  applyLang()
+  if (direct || session) enterChat()
+</script>
 </body>
 </html>

@@ -184,7 +184,7 @@ app.get('/subscribe', authMiddleware, async (req, res) => {
   }
 })
 
-app.get('/file', async (req, res) => {
+app.get('/file', authMiddleware, async (req, res) => {
   const filePath = req.query.path
   if (!filePath) return res.status(400).json({ error: 'path required' })
 
