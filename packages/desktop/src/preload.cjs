@@ -186,6 +186,20 @@ window.haloReveal = {
   reveal: (fullPath, isDir) => ipcRenderer.invoke('halo:reveal', fullPath, isDir),
 }
 
+// Cmd/Ctrl+W bridge. main.cjs intercepts the shortcut in before-input-event
+// (a page keydown handler can't beat the macOS windowMenu Close accelerator)
+// and forwards it here; the admin closes the active editor tab, or calls
+// closeWindow() when none is open. Undefined in a plain browser — there the
+// admin's Alt+W fallback applies (browsers reserve Cmd+W for the tab).
+// One ipc listener, replace-on-register callback: a React effect re-running
+// onTrigger must not stack a second listener.
+let closeShortcutFn = null
+ipcRenderer.on('halo:close-shortcut', () => { if (closeShortcutFn) closeShortcutFn() })
+window.haloCloseShortcut = {
+  onTrigger: (fn) => { closeShortcutFn = fn },
+  closeWindow: () => ipcRenderer.invoke('halo:close-window'),
+}
+
 // Screen/window capture bridge for the "let the AI see an app" feature. Only
 // defined in the desktop shell — in a plain browser `window.haloCapture` is
 // undefined, so the chat UI hides the capture button and skips prompt

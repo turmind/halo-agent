@@ -323,21 +323,35 @@ function createWindow() {
     shell.openExternal(url)
     return { action: 'deny' }
   })
-  // Windows/Linux have no app menu (macOS-only, see setupAppMenu), so there's
-  // no menu accelerator to open a new window. Bind Ctrl+N at the webContents
-  // level instead — this avoids adding a native menu bar (which would change
-  // the windows' chrome) just for one shortcut. macOS uses the File menu item.
-  if (process.platform !== 'darwin') {
-    win.webContents.on('before-input-event', (event, input) => {
-      // Fires on every keystroke — short-circuit on the modifier before the
-      // string compare so the common (no-Ctrl) case does no extra work.
-      if (!input.control || input.alt || input.meta) return
-      if (input.key.toLowerCase() === 'n') {
-        event.preventDefault()
-        createWindow()
-      }
-    })
-  }
+  // Keyboard shortcuts bound at the webContents level (before-input-event
+  // fires before page handlers AND menu accelerators — preventDefault stops
+  // both, which is what lets Cmd+W reach the editor instead of the macOS
+  // windowMenu "Close" accelerator killing the whole window).
+  win.webContents.on('before-input-event', (event, input) => {
+    // Fires on every keystroke — short-circuit on the modifier before the
+    // string compares so the common (unmodified) case does no extra work.
+    const primary = process.platform === 'darwin' ? input.meta : input.control
+    // Down-events arrive as 'keyDown' or 'rawKeyDown' depending on platform/
+    // version — filter by exclusion so both work; keyUp/char must not re-fire.
+    if (input.type === 'keyUp' || input.type === 'char') return
+    if (!primary || input.alt || input.shift) return
+    const key = input.key.toLowerCase()
+    // Ctrl+N → new window. Windows/Linux only: they have no app menu (macOS-
+    // only, see setupAppMenu), so there's no menu accelerator for this; and
+    // binding here avoids adding a native menu bar just for one shortcut.
+    // macOS uses the File menu item instead.
+    if (key === 'n' && process.platform !== 'darwin' && !input.meta) {
+      event.preventDefault()
+      createWindow()
+    }
+    // Cmd/Ctrl+W → close the active editor tab. The renderer owns tab state,
+    // so just forward; it calls halo:close-window back when no tab is open
+    // (restoring the platform-standard "close window" meaning of Cmd+W).
+    if (key === 'w') {
+      event.preventDefault()
+      win.webContents.send('halo:close-shortcut')
+    }
+  })
   return win
 }
 
@@ -358,6 +372,14 @@ ipcMain.handle('halo:pin-toggle', (e) => {
   const next = !win.isAlwaysOnTop()
   win.setAlwaysOnTop(next, 'floating')
   return next
+})
+
+// Cmd/Ctrl+W fallback: the renderer calls this when the shortcut fires with
+// no editor tab open — restoring the platform-standard "close window"
+// meaning (the before-input-event handler swallowed the menu accelerator).
+ipcMain.handle('halo:close-window', (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender)
+  if (win) win.close()
 })
 
 // Reveal a file/folder in the OS file manager (Finder / Explorer / Linux file

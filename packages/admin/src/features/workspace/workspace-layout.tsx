@@ -243,6 +243,26 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [])
 
+  // Close the active editor tab (confirming unsaved changes); returns false
+  // when there was no tab to close. Shared by Alt+W (browser) and the desktop
+  // shell's Cmd/Ctrl+W bridge.
+  const closeActiveTab = useCallback((): boolean => {
+    const store = useEditorStore.getState()
+    const activeTab = store.activeTab
+    if (!activeTab) return false
+    const tab = store.tabs.find((t) => t.path === activeTab)
+    // confirmAction is async (Electron can't block on a native dialog);
+    // callers run in a sync keyboard path, so defer confirm + close into a
+    // microtask.
+    void (async () => {
+      if (tab?.modified) {
+        if (!(await confirmAction(`"${tab.path.split('/').pop()}" has unsaved changes. Close anyway?`))) return
+      }
+      store.closeTab(activeTab)
+    })()
+    return true
+  }, [])
+
   // Global keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -260,26 +280,28 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
       // Alt + W → Close active editor tab (Cmd+W can't be overridden in browsers)
       if (e.altKey && e.key === 'w') {
         e.preventDefault()
-        const store = useEditorStore.getState()
-        const activeTab = store.activeTab
-        if (activeTab) {
-          const tab = store.tabs.find((t) => t.path === activeTab)
-          // confirmAction is async (Electron can't block on a native dialog);
-          // preventDefault already ran synchronously above, so defer the
-          // confirm + close into a microtask.
-          void (async () => {
-            if (tab?.modified) {
-              if (!(await confirmAction(`"${tab.path.split('/').pop()}" has unsaved changes. Close anyway?`))) return
-            }
-            store.closeTab(activeTab)
-          })()
-        }
+        closeActiveTab()
       }
     }
     // Use capture phase to intercept Cmd+W before Monaco or browser handles it
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [])
+  }, [closeActiveTab])
+
+  // Desktop shell Cmd/Ctrl+W: main.cjs swallows the native accelerator in
+  // before-input-event and forwards over IPC (window.haloCloseShortcut,
+  // preload-injected). Close the active editor tab; with none open, restore
+  // the platform-standard meaning and close the window. Undefined in a plain
+  // browser — there Alt+W applies (browsers reserve Cmd+W for the tab).
+  useEffect(() => {
+    const bridge = (window as unknown as {
+      haloCloseShortcut?: { onTrigger: (fn: () => void) => void; closeWindow: () => void }
+    }).haloCloseShortcut
+    if (!bridge) return
+    bridge.onTrigger(() => {
+      if (!closeActiveTab()) bridge.closeWindow()
+    })
+  }, [closeActiveTab])
 
   // ESC exits editor maximize — skip when focus is in Monaco / inputs / QuickOpen so they can handle ESC first
   useEffect(() => {
