@@ -27,7 +27,13 @@ const CLIMB = 26
 const STAIR_X = 12
 
 // The full break-activity catalog. `where` resolves a target when chosen.
-const BREAKS = ['smoke', 'coffee', 'tea', 'snack', 'read', 'arcade', 'aquarium', 'cat', 'phone', 'alley', 'couch']
+// deskgame/deskscroll are DESK-BASED slacking (#3): stay in the own chair,
+// the monitor shows a game / the phone comes out — no trip anywhere.
+const BREAKS = ['smoke', 'coffee', 'tea', 'snack', 'read', 'arcade', 'aquarium', 'cat', 'phone', 'alley', 'couch', 'deskgame', 'deskscroll']
+
+// How far a citizen may roam from its home floor for a break (#2). Venues
+// beyond this band are skipped (the caller falls back to a nearby spot).
+const ROAM = 4
 
 export class Citizen {
   constructor(session, building, opts = {}) {
@@ -213,15 +219,15 @@ export class Citizen {
       case 'snack': this.go(rf, S.fridge + 9, { pose: 'stand', action: '', face: LEFT, wait }); return true
       case 'read': this.go(rf, S.shelf + 9, { pose: 'stand', action: 'read', face: LEFT, wait: wait + 2 }); return true
       case 'arcade': {
-        const fl = this.findExtra('arcade'); if (fl == null) return false
+        const fl = this.findExtra('arcade', here); if (fl == null) return false
         this.go(fl, b.commonsSpots().extra - 9, { pose: 'stand', action: 'game', face: RIGHT, wait: wait + 3 }); return true
       }
       case 'aquarium': {
-        const fl = this.findExtra('aquarium'); if (fl == null) return false
+        const fl = this.findExtra('aquarium', here); if (fl == null) return false
         this.go(fl, b.commonsSpots().extra - 11, { pose: 'stand', action: 'point', face: RIGHT, wait }); return true
       }
       case 'cat': {
-        const fl = this.findExtra('cattree'); if (fl == null) return false
+        const fl = this.findExtra('cattree', here); if (fl == null) return false
         this.go(fl, b.commonsSpots().extra - 9, { pose: 'stand', action: 'point', face: RIGHT, wait }); return true
       }
       case 'phone': {
@@ -234,11 +240,10 @@ export class Citizen {
         return true
       }
       case 'alley': {
-        // "下楼遛弯" goes all the way down to the street. A high-floor session
-        // must NOT cross the whole tower for it (#2) — only the lower floors
-        // (≤5, a cheap trip down) actually stroll out; higher up we bail so the
-        // caller falls back to a nearby rest-floor spot instead.
-        if (here > 5) return false
+        // "下楼遛弯" goes all the way down to the street (floor -1). Only homes
+        // within the roam band of the street actually stroll out (#2); higher
+        // up we bail so the caller falls back to a nearby rest-floor spot.
+        if (here + 1 > ROAM) return false
         const ax = INNER_W + WALL + 8 + r() * (ALLEY - 28)
         this.go(-1, ax, { pose: 'stand', action: r() < 0.4 ? 'lean' : 'chat', face: r() < 0.5 ? LEFT : RIGHT, wait: wait + 2 })
         return true
@@ -247,24 +252,50 @@ export class Citizen {
         this.go(rf, S.couch + (r() < 0.5 ? -6 : 7), { pose: 'sit', action: r() < 0.5 ? 'chat' : '', face: r() < 0.5 ? LEFT : RIGHT, wait: wait + 2 })
         return true
       }
+      // ── desk slacking (#3): goof off in the OWN chair, zero commute ──
+      case 'deskgame': {      // the work monitor quietly runs a game
+        const seat = b.assignSeat(this.id); if (!seat) return false
+        this.seat = seat
+        this.go(seat.floor, seat.x + 11, { pose: 'sit', action: 'deskgame', face: LEFT, wait: wait + 3 })
+        return true
+      }
+      case 'deskscroll': {    // slumped in the chair, doomscrolling the phone
+        const seat = b.assignSeat(this.id); if (!seat) return false
+        this.seat = seat
+        this.go(seat.floor, seat.x + 11, { pose: 'sit', action: 'phone', face: LEFT, wait: wait + 2 })
+        return true
+      }
     }
     return false
   }
 
-  /** Which commons floor carries a given extra; null if none. */
-  findExtra(kind) {
+  /** Which commons floor carries a given extra WITHIN the roam band of the
+   *  home floor (#2); null if none. Nearest first, so a valid venue two
+   *  floors up beats one four floors down. */
+  findExtra(kind, home) {
+    let best = null, bd = 1e9
     for (let i = 0; i < this.b.stack.length; i++) {
       const f = this.b.stack[i]
-      if (f.kind === 'commons' && f.extra === kind) return i
+      if (f.kind !== 'commons' || f.extra !== kind) continue
+      const d = Math.abs(i - home)
+      if (d <= ROAM && d < bd) { bd = d; best = i }
     }
-    return null
+    return best
   }
 
-  /** The floor a citizen is born on (#1): its own desk floor; for a sub-agent,
-   *  its parent's desk floor; failing both, the lobby. */
+  /** The floor a citizen is born on (#1): its own desk floor; for a sub-agent
+   *  at ANY depth, its root session's desk floor (halo sub-session ids embed
+   *  the chain: `root>sub>subsub`, so depth≥2 subs — whose direct parent has
+   *  no desk either — still resolve, instead of falling to the lobby); then
+   *  the direct parent's desk (mock/legacy ids without `>`); else the lobby. */
   bornFloor() {
     const seat = this.b.assignSeat(this.id)
     if (seat) return seat.floor
+    const rootId = this.id.split('>')[0]
+    if (rootId !== this.id) {
+      const rs = this.b.assignSeat(rootId)
+      if (rs) return rs.floor
+    }
     if (this.parentId) {
       const ps = this.b.assignSeat(this.parentId)
       if (ps) return ps.floor
@@ -306,7 +337,10 @@ export class Citizen {
       this.action = a.action || ''
       if (a.face != null) this.face = a.face
       this.wait = a.wait != null ? a.wait : 3
-      if (this.seat) this.seat.busy = this.pose === 'sit' && (this.action === 'type' || this.action === 'read')
+      if (this.seat) {
+        this.seat.busy = this.pose === 'sit' && (this.action === 'type' || this.action === 'read')
+        this.seat.game = this.pose === 'sit' && this.action === 'deskgame'   // monitor runs a game (#3)
+      }
       this.targetFloor = null; this.targetX = null
       return
     }
@@ -334,7 +368,7 @@ export class Citizen {
     this.advance()                          // empty plan → applies onArrive in place
   }
 
-  unbusy() { if (this.seat) this.seat.busy = false }
+  unbusy() { if (this.seat) { this.seat.busy = false; this.seat.game = false } }
 
   depart() {
     this.leaving = true

@@ -61,7 +61,7 @@ const DICT = {
     // status / doing
     stRunning: '干活中', stIdle: '摸鱼中', stStopped: '休息中',
     doWalk: '正在走动', doStairs: '在爬楼梯', doWork: '伏案敲代码', doRead: '翻阅资料',
-    doCoffee: '在喝咖啡', doGame: '打街机', doPhone: '打电话', doChat: '聊天中',
+    doCoffee: '在喝咖啡', doGame: '打街机', doDeskGame: '用工位电脑摸鱼打游戏', doPhone: '打电话', doChat: '聊天中',
     doWater: '在浇花', doStretch: '伸懒腰', doSleep: '睡着了', doIdleStand: '发呆中',
     doLook: '看热闹', doLean: '靠着歇会',
     // inspector
@@ -158,7 +158,7 @@ const DICT = {
     tickerCount: (n) => `${n}`,
     stRunning: 'Working', stIdle: 'Idle', stStopped: 'Resting',
     doWalk: 'walking', doStairs: 'on the stairs', doWork: 'heads-down coding', doRead: 'reading docs',
-    doCoffee: 'getting coffee', doGame: 'at the arcade', doPhone: 'on a call', doChat: 'chatting',
+    doCoffee: 'getting coffee', doGame: 'at the arcade', doDeskGame: 'gaming at their desk', doPhone: 'on a call', doChat: 'chatting',
     doWater: 'watering plants', doStretch: 'stretching', doSleep: 'asleep', doIdleStand: 'spacing out',
     doLook: 'rubbernecking', doLean: 'taking a breather',
     msgCount: (n) => `${n} messages`,

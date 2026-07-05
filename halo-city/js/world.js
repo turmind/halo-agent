@@ -397,9 +397,11 @@ export class World {
       if (!b) return null
       const kind = sel.floor === -1 ? 'lobby' : b.stack[sel.floor]?.kind || 'work'
       const all = [...this.citizens.values()].filter((c) => this.buildingOf.get(c.id) === sel.key)
-      // Sessions anchored to this floor: workers whose desk/station is here,
+      // Sessions anchored to this floor: workers whose DESK is here (even if
+      // they're momentarily off on a break — the floor is still theirs, #5),
       // plus whoever is physically on it right now (loungers, smokers).
-      const onFloor = all.filter((c) => this.anchorFloor(c) === sel.floor)
+      const onFloor = all.filter((c) =>
+        this.anchorFloor(c) === sel.floor || b.assignSeat(c.id)?.floor === sel.floor)
       // Delegation trees: roots on this floor + their descendants (wherever
       // those are), so the floor panel reads as "who runs here, with whom".
       const ids = new Set(onFloor.map((c) => c.id))
@@ -427,7 +429,7 @@ export class World {
   doing(cz) {
     if (cz.pose === 'walk') return cz.step?.type === 'climb' ? 'stairs' : 'walk'
     if (cz.pose === 'sleep') return 'sleep'
-    const m = { type: 'work', read: 'read', drink: 'coffee', game: 'game', water: 'water', phone: 'phone', chat: 'chat', stretch: 'stretch', point: 'look', lean: 'lean' }
+    const m = { type: 'work', read: 'read', drink: 'coffee', game: 'game', deskgame: 'deskgame', water: 'water', phone: 'phone', chat: 'chat', stretch: 'stretch', point: 'look', lean: 'lean' }
     return m[cz.action] || (cz.status === 'running' ? 'work' : 'idle_stand')
   }
 }

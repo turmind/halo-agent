@@ -11,8 +11,9 @@ function px(ctx, x, y, w, h, c) {
 
 // ── The worker desk ──────────────────────────────────────────────────────
 // Monitor at the left, chair at the right; its occupant sits facing LEFT.
-// `on` lights the screen with scrolling code + a blinking cursor.
-export function desk(ctx, x, y, t, on, accent) {
+// `on` lights the screen with scrolling code + a blinking cursor; `game`
+// swaps the code for a sneaky falling-blocks game (desk slacking, #3).
+export function desk(ctx, x, y, t, on, accent, game) {
   // task chair: wheels, stem, seat cushion, padded backrest
   px(ctx, x + 7, y - 2, 3, 2, C.ink); px(ctx, x + 12, y - 2, 3, 2, C.ink)      // wheels
   px(ctx, x + 8, y - 1, 1, 1, alpha(C.steel, 0.5)); px(ctx, x + 13, y - 1, 1, 1, alpha(C.steel, 0.5))
@@ -42,8 +43,17 @@ export function desk(ctx, x, y, t, on, accent) {
   px(ctx, x - 11, y - 30, 11, 1, tint(C.ink, 0.45))                            // top bezel highlight
   px(ctx, x - 11, y - 30, 1, 13, tint(C.ink, 0.3))                            // left bezel highlight
   px(ctx, x - 1, y - 30, 1, 13, '#000')                                        // right bezel shadow
-  px(ctx, x - 10, y - 29, 9, 11, on ? '#0a2410' : '#0c1c33')                   // screen
-  if (on) {
+  px(ctx, x - 10, y - 29, 9, 11, game ? '#141034' : on ? '#0a2410' : '#0c1c33') // screen
+  if (game) {
+    // sneaky falling-blocks: a piece drifts down the well, a stack waits below
+    const drop = ((t * 4) | 0) % 6
+    px(ctx, x - 10, y - 29, 9, 1, '#241a4a')                                   // game top bar
+    px(ctx, x - 6 + (((t * 1.3) | 0) % 3), y - 28 + drop, 2, 2, C.cyan)        // falling piece
+    px(ctx, x - 9, y - 21, 3, 2, C.mauve); px(ctx, x - 5, y - 20, 4, 1, C.amber) // settled stack
+    px(ctx, x - 9, y - 19, 8, 1, C.green)
+    px(ctx, x - 3, y - 28, 1, 1, C.yellow)                                     // score blip
+    px(ctx, x - 10, y - 29, 4, 1, alpha(C.white, 0.12))                        // screen glare
+  } else if (on) {
     px(ctx, x - 10, y - 29, 9, 2, '#10341a')                                   // editor top bar
     px(ctx, x - 9, y - 28, 1, 1, C.red); px(ctx, x - 7, y - 28, 1, 1, C.amber); px(ctx, x - 5, y - 28, 1, 1, C.green)
     for (let i = 0; i < 4; i++) {

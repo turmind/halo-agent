@@ -8,3 +8,5 @@
 .simtest.html
 .zlabel.mjs
 .count.mjs
+.fixtest.mjs
+.fixshot.mjs

@@ -13,7 +13,7 @@ const swatch = (name) => makeLook(name).shirt
 const STATUS_KEY = { running: 'stRunning', idle: 'stIdle', stopped: 'stStopped' }
 const DOING_KEY = {
   walk: 'doWalk', stairs: 'doStairs', work: 'doWork', read: 'doRead',
-  coffee: 'doCoffee', game: 'doGame', phone: 'doPhone', chat: 'doChat',
+  coffee: 'doCoffee', game: 'doGame', deskgame: 'doDeskGame', phone: 'doPhone', chat: 'doChat',
   water: 'doWater', stretch: 'doStretch', sleep: 'doSleep', idle_stand: 'doIdleStand',
   look: 'doLook', lean: 'doLean',
 }

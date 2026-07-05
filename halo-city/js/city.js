@@ -113,6 +113,7 @@ export class Building {
     this.neon = neon(ws.key)
     this.seed = fnv(ws.key)
     this._seatBy = new Map()
+    this._deskOrdBy = new Map()   // session id → stable work-floor ordinal
     this.update(ws)
   }
 
@@ -157,18 +158,41 @@ export class Building {
       x: STATION_X,
       glow: false,
     }))
-    // one root session = one dedicated work floor, assigned by snapshot order
-    // (#1). Keyed by session id so parallel sessions of one agent never collide.
+    // one root session = one dedicated work floor (#1/#4). The floor ordinal
+    // is STABLE: assigned once (lowest free slot) when a session first
+    // appears and kept for its lifetime. It must NOT follow snapshot order —
+    // that order is updated_at DESC, which reshuffles on every poll, so
+    // keying floors on it made every desk migrate whenever any session was
+    // touched (the "comes back to the 2nd floor, not its own" bug: the
+    // freshest session always grabbed the lowest work floor). Slots free up
+    // when sessions leave the snapshot; a session whose slot ended up above
+    // a shrunken tower is re-slotted into the lowest free one.
     // workFloors >= roots.length always holds (it shrinks only down to the
-    // live count + 1 slack), so every root gets a floor; a spare floor above
-    // stays empty until filled.
+    // live count + 1 slack), so every root gets a floor.
+    const alive = new Set(roots.map((s) => s.id))
+    for (const id of [...this._deskOrdBy.keys()]) if (!alive.has(id)) this._deskOrdBy.delete(id)
+    const used = new Set(this._deskOrdBy.values())
+    const freeOrd = () => { let o = 0; while (used.has(o)) o++; used.add(o); return o }
+    for (const s of roots) {
+      const ord = this._deskOrdBy.get(s.id)
+      if (ord == null || ord >= workIdxs.length) {
+        if (ord != null) used.delete(ord)
+        this._deskOrdBy.set(s.id, freeOrd())
+      }
+    }
+    // Seat objects keep their IDENTITY across polls (mutate in place, never
+    // recreate): a seated citizen holds `this.seat` and writes busy/game to
+    // it — a fresh object per poll would strand that reference and leave the
+    // old flags glowing on a desk nobody sits at.
     const next = new Map()
-    roots.forEach((s, i) => {
-      const floor = workIdxs[i]
-      if (floor == null) return
-      const prev = this._seatBy.get(s.id)
-      next.set(s.id, { floor, x: DESK_XS[1], agentName: s.agentName || s.agentId, busy: prev ? prev.busy : false })
-    })
+    for (const s of roots) {
+      const floor = workIdxs[this._deskOrdBy.get(s.id)]
+      if (floor == null) continue
+      const seat = this._seatBy.get(s.id) || { floor, x: DESK_XS[1], agentName: '', busy: false, game: false }
+      seat.floor = floor
+      seat.agentName = s.agentName || s.agentId
+      next.set(s.id, seat)
+    }
     this._seatBy = next
     this._seatIndexDirty = true
     const r = rng(this.seed)
@@ -204,8 +228,10 @@ export class Building {
     return { x0: bx0 + 3, x1: bx0 + BALCONY_W - 4, y, doorX: INNER_W - 6 }
   }
 
-  /** This session's dedicated desk { floor, x, agentName?, busy? } (assigned in
-   *  update() by snapshot order); null if its floor isn't built yet. */
+  /** This session's dedicated desk { floor, x, agentName?, busy? } (assigned
+   *  once in update() via the stable _deskOrdBy ordinal — snapshot order
+   *  reshuffles every poll, so it must never drive placement); null if its
+   *  floor isn't built yet. */
   assignSeat(sessionId) { return this._seatBy.get(sessionId) || null }
   releaseSeat(sessionId) { this._seatBy.delete(sessionId) }
   stationOf(skillId) { return this.stations.find((s) => s.skill.id === skillId) || null }
@@ -365,7 +391,7 @@ export class Building {
     }
     for (const dx of DESK_XS) {
       const seat = this._seatAt.get(idx + '|' + dx)
-      desk(ctx, this.ix(dx), fy, t, seat ? !!seat.busy : false, this.itr.accent)
+      desk(ctx, this.ix(dx), fy, t, seat ? !!seat.busy : false, this.itr.accent, seat ? !!seat.game : false)
     }
     // per-floor flavor prop at the right end
     const flv = this.ix(INNER_W - 10)

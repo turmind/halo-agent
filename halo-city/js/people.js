@@ -83,7 +83,7 @@ export function makeLook(agentName, sessionId) {
 /**
  * Draw a citizen, feet anchored at (x, y).
  * opts: pose 'stand'|'walk'|'sit'|'sleep' · action ''|'type'|'read'|'drink'|
- *       'phone'|'chat'|'game'|'stretch'|'water'|'lean'|'point'|'smoke' ·
+ *       'phone'|'chat'|'game'|'deskgame'|'stretch'|'water'|'lean'|'point'|'smoke' ·
  *       face RIGHT|LEFT · t · alpha · scale
  */
 export function drawPerson(ctx, x, y, look, opts = {}) {
@@ -213,6 +213,13 @@ function arm(ctx, look, ty, action, walk, cyc, t) {
       px(ctx, 4, sy + 3, 4, 3, sleeve)
       px(ctx, 7, sy + 3 + tick, 3, 2, paw)
       return
+    case 'deskgame': {                                    // mashing keys, way faster than typing
+      const mash = Math.sin(t * 22) > 0 ? 0 : 1
+      px(ctx, 2, sy, 3, 4, sleeve)
+      px(ctx, 4, sy + 3, 4, 3, sleeve)
+      px(ctx, 7, sy + 3 + mash, 3, 2, paw)
+      return
+    }
     case 'read':
       px(ctx, 2, sy, 3, 5, sleeve)
       px(ctx, 4, sy + 4, 3, 2, paw)
