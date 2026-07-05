@@ -17,15 +17,17 @@ const FADE_S = 1                // toggle fade in/out (no clicks/pops)
 const CHORD_S = 24              // seconds per chord
 const XFADE_S = 8               // attack/release overlap between chords
 
-// MIDI voicings, low & open. C major, no leading-tone tension:
+// MIDI voicings, C major, no leading-tone tension:
 //   Cmaj9 → Am9 → Fmaj9 → G(add9)
+// Bass sits at C3+ — sub-100Hz sustained tones (old F2/G2 roots) read as a
+// headache-inducing hum, so everything below C3 was lifted an octave.
 const CHORDS = [
   [48, 55, 64, 71, 74],         // C3 G3 E4 B4 D5 — Cmaj9
-  [45, 52, 60, 67, 71],         // A2 E3 C4 G4 B4 — Am9
-  [41, 48, 64, 67, 69],         // F2 C3 E4 G4 A4 — Fmaj9
-  [43, 50, 59, 69, 74],         // G2 D3 B3 A4 D5 — G(add9)
+  [57, 64, 60, 67, 71],         // A3 E4 C4 G4 B4 — Am9
+  [53, 60, 64, 67, 69],         // F3 C4 E4 G4 A4 — Fmaj9
+  [55, 62, 59, 69, 74],         // G3 D4 B3 A4 D5 — G(add9)
 ]
-const NOTE_LEVELS = [0.16, 0.13, 0.09, 0.07, 0.06]  // quieter as we go up
+const NOTE_LEVELS = [0.14, 0.11, 0.09, 0.07, 0.06]  // quieter as we go up
 const PLUCK_NOTES = [60, 62, 64, 67, 69, 72]        // C major pentatonic C4–C5
                                                     // (was C5–C6 — an octave too
                                                     // eerie at night; keep it low)
@@ -115,18 +117,17 @@ function playChord() {
     const ng = ctx.createGain()
     ng.gain.value = NOTE_LEVELS[i] || 0.06
     ng.connect(chordGain)
-    // Fixed ±0.2Hz offset, NOT cents: cents scale with pitch, so high notes
-    // beat 2-3×/s — reads as a nervous fast shimmer. A constant Hz offset
-    // gives every note the same slow ~0.4Hz breathing beat.
-    for (const [type, dHz] of [['sine', -0.2], ['triangle', 0.2]]) {
-      const o = ctx.createOscillator()
-      o.type = type
-      o.frequency.value = hz(m) + dHz
-      o.connect(ng)
-      o.start(now)
-      o.stop(end + 0.1)
-      oscs.push(o)
-    }
+    // One pure sine per note. The old sine+triangle pair hummed two ways:
+    // the triangle's odd harmonics buzz in the low register, and any pair
+    // of oscillators beats. Pure sines have no harmonics at all — nothing
+    // left to buzz.
+    const o = ctx.createOscillator()
+    o.type = 'sine'
+    o.frequency.value = hz(m)
+    o.connect(ng)
+    o.start(now)
+    o.stop(end + 0.1)
+    oscs.push(o)
   })
   const voice = { gain: chordGain, oscs }
   voices.push(voice)
