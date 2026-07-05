@@ -268,6 +268,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
   const [dragOver, setDragOver] = useState(false)
   const [loadingChildren, setLoadingChildren] = useState(false)
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dragExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isDir = node.type === 'directory'
   const needsLoad = isDir && node.hasChildren !== false && node.children === undefined
@@ -497,15 +498,35 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
       e.stopPropagation()
       e.dataTransfer.dropEffect = 'move'
       setDragOver(true)
-      if (!expanded) setExpanded(true)
+      // Spring-loaded expand (VSCode/Finder style): only unfold after the
+      // drag lingers here — expanding instantly on dragover meant every
+      // folder the drag merely passed through burst open.
+      if (!expanded && !dragExpandTimerRef.current) {
+        dragExpandTimerRef.current = setTimeout(() => {
+          dragExpandTimerRef.current = null
+          setExpanded(true)
+        }, 600)
+      }
     }
   }
-  const handleDragLeave = () => setDragOver(false)
+  const cancelDragExpand = () => {
+    if (dragExpandTimerRef.current) {
+      clearTimeout(dragExpandTimerRef.current)
+      dragExpandTimerRef.current = null
+    }
+  }
+  const handleDragLeave = () => {
+    setDragOver(false)
+    cancelDragExpand()
+  }
   const handleDrop = async (e: React.DragEvent) => {
     if (!isDir) return
     e.preventDefault()
     e.stopPropagation()
     setDragOver(false)
+    cancelDragExpand()
+    // Dropping INTO this folder is an explicit action — unfold to show the result
+    if (!expanded) setExpanded(true)
     const raw = e.dataTransfer.getData(DRAG_TYPE)
     if (raw) {
       try {
