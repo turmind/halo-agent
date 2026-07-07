@@ -249,7 +249,31 @@ export function MarkdownPreview({ content, filePath, projectId }: MarkdownPrevie
             components={{
               h1: heading('h1'), h2: heading('h2'), h3: heading('h3'),
               h4: heading('h4'), h5: heading('h5'), h6: heading('h6'),
-              img({ src, alt, ...rest }) {
+              // Open links in a new tab — default same-tab navigation leaves the
+              // admin (and in Electron used to navigate the whole app window).
+              // In-document anchors (#…) keep default behavior and scroll in
+              // place; remark percent-encodes CJK anchor text, so decode before
+              // matching against our slug ids. `node` (hast element, from
+              // react-markdown's passNode) is pulled out so the spread doesn't
+              // leak it onto the DOM element.
+              a({ href, children, node: _node, ...props }) {
+                if (href?.startsWith('#')) {
+                  return (
+                    <a
+                      href={href}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        let slug = href.slice(1)
+                        try { slug = decodeURIComponent(slug) } catch { /* keep raw */ }
+                        scrollToHeading(slug)
+                      }}
+                      {...props}
+                    >{children}</a>
+                  )
+                }
+                return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
+              },
+              img({ src, alt, node: _node, ...rest }) {
                 const resolved = resolveSrc(typeof src === 'string' ? src : '', filePath, projectId)
                 if (!resolved) {
                   // Unresolvable — don't let the browser hit the current origin and 404

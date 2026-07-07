@@ -462,6 +462,17 @@
 
   marked.setOptions({ breaks: true, gfm: true })
 
+  // Links inside rendered markdown have no target=_blank — default same-tab
+  // navigation would leave the chat (and lose the conversation view). One
+  // delegated listener beats patching every marked re-render.
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[href]')
+    if (!a || a.target === '_blank') return
+    if (a.getAttribute('href').startsWith('#')) return // in-page anchor
+    e.preventDefault()
+    window.open(a.href, '_blank', 'noopener')
+  })
+
   // ── DOM refs & state ──
 
   const $ = (id) => document.getElementById(id)

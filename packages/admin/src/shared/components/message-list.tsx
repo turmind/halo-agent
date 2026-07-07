@@ -461,8 +461,15 @@ function TextBlock({ text }: { text: string }) {
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
+            // Open links in a new tab — default same-tab navigation leaves the
+            // admin (and in Electron used to navigate the whole app window).
+            // `node` (hast element, from react-markdown's passNode) is pulled
+            // out so the spread doesn't leak it onto the DOM element.
+            a({ href, children, node: _node, ...props }) {
+              return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
+            },
             pre({ children }) { return <pre className="overflow-x-auto">{children}</pre> },
-            code({ className, children, ...props }) {
+            code({ className, children, node: _node, ...props }) {
               const isBlock = className?.startsWith('language-') || String(children).includes('\n')
               if (isBlock) return <ChatCodeBlock className={className}>{children}</ChatCodeBlock>
               return <code className={className} {...props}>{children}</code>

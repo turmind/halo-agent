@@ -317,11 +317,26 @@ function createWindow() {
   // looks like a no-op. Auto-allow the unload.
   win.webContents.on('will-prevent-unload', (event) => { event.preventDefault() })
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith(`http://127.0.0.1:${PORT}`) || url.startsWith(`http://localhost:${PORT}`)) {
+    // about:blank = window.open('') from the renderer (e.g. the print helper,
+    // which writes HTML into the popup) — must stay in-app, and openExternal
+    // on it would fail anyway.
+    if (
+      url === 'about:blank' ||
+      url.startsWith(`http://127.0.0.1:${PORT}`) || url.startsWith(`http://localhost:${PORT}`)
+    ) {
       return { action: 'allow' }
     }
     shell.openExternal(url)
     return { action: 'deny' }
+  })
+  // Same-tab navigation to a non-local URL (e.g. a plain <a href> without
+  // target=_blank) would replace the whole admin UI — send it to the system
+  // browser instead. Local navigations (workspace switch via location.href)
+  // stay allowed.
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith(`http://127.0.0.1:${PORT}`) || url.startsWith(`http://localhost:${PORT}`)) return
+    event.preventDefault()
+    shell.openExternal(url)
   })
   // Keyboard shortcuts bound at the webContents level (before-input-event
   // fires before page handlers AND menu accelerators — preventDefault stops
