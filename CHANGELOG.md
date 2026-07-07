@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-06
+
+### Added
+
+- Desktop: Cmd/Ctrl+W closes the active editor tab (same confirm-unsaved path as Alt+W); with no tab open it closes the window, preserving the platform-standard meaning. Browser behaviour unchanged.
+
+### Fixed
+
+- Markdown links now open in a new tab instead of navigating the current page away — admin chat and md preview (in-document `#anchors` still scroll in place), web demo, and AgentCore demo. In the desktop app, external links (including same-tab navigations) open in the system browser via `will-navigate` interception; `about:blank` is allowed again, un-breaking the docx/media Print popup.
+- Admin editor: Alt+W close-tab shortcut never fired on macOS — Option+W types '∑' so the `e.key` check couldn't match; now matches on physical `e.code` KeyW.
+
 ## [0.2.3] - 2026-07-05
 
 ### Fixed
@@ -228,7 +239,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/turmind/halo-agent/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/turmind/halo-agent/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/turmind/halo-agent/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/turmind/halo-agent/compare/v0.2.0...v0.2.1
