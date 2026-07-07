@@ -11,6 +11,16 @@
 - Password: set via `halo setup` (stored as scrypt hash in `~/.halo/secrets/config.yaml server.password`) **or** `HALO_PASSWORD` env (plaintext — preferred for Docker / CI). Env wins over hash if both are set.
 - Workspace path: any absolute directory you want to bind
 
+## Dev mode (hot reload)
+
+```bash
+pnpm run dev   # root script: runs all packages' dev in parallel
+```
+
+- **admin**: `next dev` on :3000 (`next start` is not an option — it rejects `output: 'export'`); API/WS requests are proxied to :9527 via `next.config.ts` rewrites, so the server must be running too
+- **Monaco in dev**: `copy-monaco.mjs --dev` stages `min/vs` into `packages/admin/public/monaco/` (gitignored) so `/monaco/vs` resolves on :3000; the production build path (`out/monaco/vs`) is unchanged
+- **server**: `tsx watch src/index.ts` on :9527
+
 ## Deploy commands
 
 ### Frontend build (web only)
