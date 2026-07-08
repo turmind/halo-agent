@@ -459,6 +459,14 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         client.unsubscribeEvents?.()
         client.sessionId = await sm.createSession(agentId, null, 'Explorer chat', undefined, msg.sessionId)
         client.unsubscribeEvents = sm.registerEventListener(client.sessionId, createEventListener(client))
+        // The client's TokenRing denominator is still the connect-time global
+        // default: the subscribe that preceded this chat ran before the
+        // session row existed (getSessionView → null), so the agent's real
+        // context.maxTokens was never sent. Push it now that the session is
+        // built. Empty recentMessages is safe — the frontend only replaces
+        // its message list for non-empty snapshots.
+        const ctxConfig = await sm.getContextConfig(client.sessionId)
+        sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: [], sessionId: client.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId } })
       } else if (client.sessionId !== msg.sessionId) {
         client.unsubscribeEvents?.()
         client.sessionId = msg.sessionId

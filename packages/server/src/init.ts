@@ -155,15 +155,17 @@ function writeIfMissing(filePath: string, content: string, mode?: number): void 
 
 /**
  * Field-level merge for built-in agent yaml. We force-overwrite agent.yaml on
- * every startup (to keep system_prompt / tools / skills / context aligned with
- * the platform), but **the `model:` block is preserved** if the user already
- * set one — they're allowed to switch the agent's model from the admin UI and
- * we don't want to clobber that on every restart.
+ * every startup (to keep system_prompt / tools / skills aligned with the
+ * platform), but **the `model:` and `context:` blocks are preserved** if the
+ * user already set them — both are editable from the admin Agents form (model
+ * switch, context.maxTokens / compressAt) and we don't want to clobber those
+ * on every restart. Overwriting `context:` was the "agent max context resets
+ * to 200K after restart" bug: the desktop shell reseeds on every launch.
  *
- * First install: copy the template as-is (template has a default model).
- * Existing install: parse both, swap template.model with user.model if user has one.
+ * First install: copy the template as-is (template has default model/context).
+ * Existing install: parse both, keep the user's model/context blocks.
  */
-function mergeAgentYaml(srcAbs: string, dstAbs: string): void {
+export function mergeAgentYaml(srcAbs: string, dstAbs: string): void {
   if (!fs.existsSync(dstAbs)) {
     copyTemplate(srcAbs, dstAbs)
     return
@@ -175,6 +177,10 @@ function mergeAgentYaml(srcAbs: string, dstAbs: string): void {
     if (userModel != null) {
       templateDoc.set('model', userModel)
     }
+    const userContext = userDoc.get('context')
+    if (userContext != null) {
+      templateDoc.set('context', userContext)
+    }
     fs.writeFileSync(dstAbs, templateDoc.toString(), 'utf-8')
   } catch (err) {
     console.log(`[Init] mergeAgentYaml fallback (force-copy) for ${dstAbs}: ${err instanceof Error ? err.message : String(err)}`)
@@ -182,8 +188,9 @@ function mergeAgentYaml(srcAbs: string, dstAbs: string): void {
   }
 }
 
-/** Force-copy a built-in agent directory, with model-block preservation on
- *  the agent.yaml. Other files (AGENT.md, USER.md, etc.) are plain overwrites. */
+/** Force-copy a built-in agent directory, with model/context-block
+ *  preservation on the agent.yaml. Other files (AGENT.md, USER.md, etc.)
+ *  are plain overwrites. */
 function forceCopyAgentDir(srcDir: string, dstDir: string): void {
   if (!fs.existsSync(srcDir)) return
   fs.mkdirSync(dstDir, { recursive: true })
