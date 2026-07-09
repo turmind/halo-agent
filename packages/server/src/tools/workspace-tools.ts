@@ -440,6 +440,24 @@ export function createWorkspaceTools(
       const mediaType = inferImageMime(buf)
       const md5 = crypto.createHash('md5').update(buf).digest('hex').slice(0, 8)
 
+      // Decode-validate BEFORE the bytes reach the model. A corrupt/truncated
+      // image doesn't just fail this turn: the image block is baked into the
+      // conversation history and replayed with every subsequent request, so
+      // the vision API rejects them all ("Could not process image") and the
+      // session is permanently bricked. Magic-byte sniffing can't catch this
+      // (a truncated jpeg still starts with ffd8) — only a real decode can.
+      // jimp gates png/jpeg/gif; webp has no jimp codec and passes through on
+      // the byte-size check alone, as before.
+      const { Jimp } = await import('jimp')
+      let img: Awaited<ReturnType<typeof Jimp.read>> | undefined
+      if (mediaType !== 'image/webp') {
+        try {
+          img = await Jimp.read(buf)
+        } catch (err) {
+          return `${TOOL_WARN_MARKER}\nError: "${input.path}" does not decode as a valid image (${err instanceof Error ? err.message : String(err)}) — the file is corrupt or truncated, so it was NOT sent to the model (a bad image block would make the API reject every later request in this session). Re-export / re-download the image and retry.`
+        }
+      }
+
       // Anthropic caps a single image at ~5 MB of *base64* (not raw bytes), and
       // base64 inflates ~33%, so a ~3.8 MB raw image already overflows the API
       // limit and the whole request errors out. The model often screenshots at
@@ -464,8 +482,8 @@ export function createWorkspaceTools(
       let note = ''
       if (tooManyBytes || tooBig) {
         try {
-          const { Jimp } = await import('jimp')
-          const img = await Jimp.read(buf)
+          // webp skipped decode-validation above, so decode it here.
+          img ??= await Jimp.read(buf)
           // Cap the long edge to MAX_EDGE, then re-encode as JPEG, stepping
           // quality down until the base64 fits. JPEG (not PNG) so photographic
           // screenshots shrink hard; mirrors the camera/screen-capture path.
