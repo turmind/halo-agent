@@ -14,7 +14,7 @@
  * don't need conversation history. Sessions that need state can read
  * from `<workspace>/.halo/memory/` via `file_read` in the prompt.
  */
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
@@ -35,6 +35,13 @@ const DAY_MS = 24 * 60 * 60 * 1000
  *  and reports exit code 124 (cross-platform; no dependency on the
  *  Linux-only `timeout(1)` binary). */
 const CLI_TIMEOUT_SEC = 3600
+
+/** Grace window between the timeout's SIGTERM (which the cli handles by
+ *  finishing the in-flight tool, repairing the conversation and flushing the
+ *  session to disk before exiting 143) and the SIGKILL tree-reap. Long enough
+ *  for one in-flight tool to finish, short enough to reap a stuck child
+ *  promptly. */
+const KILL_GRACE_SEC = 30
 
 /** How many `cron_runs` rows to keep per job. The oldest get pruned every
  *  time a new run lands. 100 is plenty to spot a regression pattern
@@ -59,6 +66,84 @@ function resolveHaloCli(): string {
   return process.platform === 'win32' ? 'halo.cmd' : 'halo'
 }
 
+/** POSIX: list every live descendant of `rootPid` (children, grandchildren, …)
+ *  from one `ps` snapshot. A ppid walk — NOT a process-group kill — because the
+ *  cli's shell_exec sandbox spawns its workers `detached:true` into their OWN
+ *  process groups (see tools/sandbox.ts spawnGroupExec), so `kill(-pid)` on the
+ *  child's group would miss exactly the grandchildren we're trying to reap.
+ *  Snapshot must be taken BEFORE killing the root: once the root dies its
+ *  descendants reparent to init and the walk finds nothing. Rare path (timeout
+ *  escalation only), so a sync exec is fine. */
+function listDescendants(rootPid: number): number[] {
+  let snapshot: string
+  try {
+    snapshot = execFileSync('ps', ['-e', '-o', 'pid=,ppid='], { encoding: 'utf-8' })
+  } catch {
+    return []
+  }
+  const childrenOf = new Map<number, number[]>()
+  for (const line of snapshot.split('\n')) {
+    const parts = line.trim().split(/\s+/)
+    if (parts.length !== 2) continue
+    const pid = Number(parts[0])
+    const ppid = Number(parts[1])
+    if (!Number.isFinite(pid) || !Number.isFinite(ppid)) continue
+    const arr = childrenOf.get(ppid)
+    if (arr) arr.push(pid)
+    else childrenOf.set(ppid, [pid])
+  }
+  const out: number[] = []
+  const queue = [rootPid]
+  while (queue.length > 0) {
+    const p = queue.shift()!
+    for (const c of childrenOf.get(p) ?? []) {
+      out.push(c)
+      queue.push(c)
+    }
+  }
+  return out
+}
+
+/** SIGKILL the child and its whole descendant tree.
+ *
+ *  Design decision — attached child + ps-walk, NOT `detached:true` + group
+ *  kill (the evo-wrapper approach): cron children are deliberately attached so
+ *  they stay in the server's process group and die with the server (Ctrl-C on
+ *  a foreground server signals the whole foreground group) — the in-memory
+ *  `_inflight` guard assumes exactly that; a detached child surviving a server
+ *  death would race the restarted server's next fire as a second writer on the
+ *  same `cron-<jobId>` session. And a group kill wouldn't even reach shell_exec
+ *  grandchildren, which lead their own groups (see listDescendants). */
+function killTreeHard(rootPid: number): void {
+  if (process.platform === 'win32') {
+    // Windows has no process groups; taskkill /T walks the tree, /F forces.
+    try { spawn('taskkill', ['/PID', String(rootPid), '/T', '/F']) } catch { /* best effort */ }
+    return
+  }
+  const descendants = listDescendants(rootPid)
+  try { process.kill(rootPid, 'SIGKILL') } catch { /* already dead */ }
+  for (const pid of descendants) {
+    try { process.kill(pid, 'SIGKILL') } catch { /* already dead */ }
+  }
+}
+
+/** POSIX: verify that `pid` is (still) the cron cli child for `jobId` by
+ *  checking its command line for the stable session id `cron-<jobId>`
+ *  (the cli is spawned with `-s cron-<jobId>`, see runJob). Guards the
+ *  orphan sweep against pid reuse — a recorded pid may have been recycled
+ *  by the OS for an unrelated process after the original cli died, and we
+ *  must never signal a stranger. Returns false when the pid is dead
+ *  (`ps -p` exits non-zero). Rare path (boot-time sweep only), so a sync
+ *  exec is fine. */
+function isCronCliProcess(pid: number, jobId: string): boolean {
+  try {
+    const args = execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf-8' })
+    return args.includes(`cron-${jobId}`)
+  } catch {
+    return false
+  }
+}
+
 interface ActiveSchedule {
   jobId: string
   cron: Cron
@@ -77,8 +162,10 @@ const _active = new Map<string, ActiveSchedule>()
  *  in-process, but cron spawns a fresh cli child per fire, so the lock
  *  never sees the contention; this set is the cheapest place to enforce
  *  serialization without touching the cli or session layer. Lost on
- *  process restart by design — no stale-entry cleanup needed. */
-const _inflight = new Set<string>()
+ *  process restart by design — no stale-entry cleanup needed (the
+ *  boot-time sweepOrphanRuns re-registers jobs whose previous-generation
+ *  cli may still be alive). Exported for tests only. */
+export const _inflight = new Set<string>()
 
 /** Per-jobId fingerprint of the schedule we last instantiated croner with.
  *  Lets `reconcileFromDb` skip rows whose schedule/timezone/enabled
@@ -100,12 +187,114 @@ function newRunId(): string {
 }
 
 /**
+ * Boot-time orphan sweep — reap the previous server generation's leftover
+ * cron cli children.
+ *
+ * Why: `_inflight` (the overlap guard) is in-memory and croner schedules are
+ * rebuilt from db on boot. If the previous server died hard (SIGKILL), its
+ * attached cli children reparent to init on POSIX and keep running — and the
+ * restarted server's next fire would spawn a second writer on the same
+ * stable `cron-<jobId>` session. Per project rule, the sweep trusts ONLY the
+ * db: any `cron_runs` row still 'running' at boot must be a previous
+ * generation's leftover (this process hasn't run anything yet).
+ *
+ * Per row:
+ *   a. register jobId in `_inflight` FIRST — the core invariant: while an
+ *      orphan may be alive, no new cli is spawned for that job.
+ *   b. POSIX + recorded pid: verify identity via the process command line
+ *      (must contain `cron-<jobId>`, guarding against pid reuse), then
+ *      SIGTERM (cli handles it gracefully) with a SIGKILL-tree escalation
+ *      after the grace window — same two-phase contract as the in-run
+ *      timeout path.
+ *   c. no pid / already dead / identity mismatch: no kill, log only.
+ *      Windows: never kill — there's no cheap way to verify the pid still
+ *      belongs to our cli (no `ps -o args=`; WMI/PowerShell are heavyweight),
+ *      so with pid reuse a `taskkill /T /F` risks taking down an unrelated
+ *      process tree. Mis-kill risk outweighs the double-write risk we accept.
+ *   d. mark the row 'failed' regardless so the UI drops the ghost 'running'.
+ *   e. release `_inflight` once the orphan is confirmed dead (or immediately
+ *      when there was nothing to kill).
+ *
+ * Non-blocking: the synchronous part only queries, registers and marks rows;
+ * the kill grace runs on an unref'd async timer.
+ *
+ * `graceMs` is a test-only override of the SIGTERM→SIGKILL grace window.
+ */
+export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
+  const graceMs = opts?.graceMs ?? KILL_GRACE_SEC * 1000
+  const db = getCronDb()
+  const rows = db.select().from(cronRuns).where(eq(cronRuns.status, 'running')).all()
+  const now = Date.now()
+  for (const row of rows) {
+    const { id: runId, jobId, pid } = row
+    // (a) Block new fires for this job while its orphan may still be alive.
+    _inflight.add(jobId)
+
+    let needsKill = false
+    let disposition: string
+    if (process.platform === 'win32') {
+      disposition = pid == null
+        ? 'no pid recorded'
+        : `pid ${pid} not killed (Windows: cannot verify process identity)`
+    } else if (pid == null) {
+      disposition = 'no pid recorded'
+    } else if (!isCronCliProcess(pid, jobId)) {
+      disposition = `pid ${pid} already dead (or pid reused by another process); not killed`
+    } else {
+      needsKill = true
+      disposition = `pid ${pid} still alive — SIGTERM sent, SIGKILL tree after ${Math.round(graceMs / 1000)}s if needed`
+    }
+
+    // (d) Mark the row failed regardless — the UI must not show a ghost
+    // 'running' row from a dead server generation.
+    db.update(cronRuns).set({
+      status: 'failed',
+      failureReason: `orphaned by server restart: ${disposition}`,
+      completedAt: now,
+    }).where(eq(cronRuns.id, runId)).run()
+    broadcast({ type: 'cron:run_changed', jobId, runId, status: 'failed' })
+    console.log(`[cron] orphan sweep: run ${runId} (job ${jobId}) — ${disposition}`)
+
+    if (!needsKill || pid == null) {
+      // (e) Nothing alive to wait for — release immediately.
+      _inflight.delete(jobId)
+      continue
+    }
+
+    // (b) Two-phase kill. SIGTERM the verified orphan (the cli finishes its
+    // in-flight tool, repairs + flushes the session, exits 143); if it's
+    // still alive after the grace window, SIGKILL the whole descendant tree.
+    try { process.kill(pid, 'SIGTERM') } catch { /* died between check and kill */ }
+    const timer = setTimeout(() => {
+      // Re-verify identity before the hard kill — the pid may have been
+      // recycled during the grace window.
+      if (isCronCliProcess(pid, jobId)) {
+        console.log(`[cron] orphan sweep: pid ${pid} (job ${jobId}) survived SIGTERM — SIGKILL tree`)
+        killTreeHard(pid)
+      }
+      // (e) Orphan gone (SIGKILL is immediate; graceful exit already
+      // happened otherwise) — let the job fire again.
+      _inflight.delete(jobId)
+    }, graceMs)
+    // Best effort: don't hold the process open for a pending grace timer.
+    // If the server dies inside the window the row is already marked and
+    // the SIGTERM'd cli exits on its own in all but wedged cases.
+    timer.unref()
+  }
+}
+
+/**
  * Start every enabled job in `cron_jobs`. Idempotent — schedules already
  * running get torn down and re-created so the in-memory state matches db
  * (used after CRUD via the `reload` hook from REST routes).
  */
 export function startCronDaemon(): void {
   fs.mkdirSync(logsDir(), { recursive: true })
+  // Reap the previous server generation's leftovers BEFORE croner is
+  // rebuilt — sweepOrphanRuns registers surviving orphans' jobIds in
+  // _inflight, so a schedule that fires immediately after reloadAll can't
+  // double-write a session an orphan cli is still holding.
+  sweepOrphanRuns()
   reloadAll()
   // Daily log prune. Cheap; keep WAL bloat down.
   setInterval(pruneOldLogs, DAY_MS)
@@ -424,13 +613,36 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
       // pop up on Windows (CREATE_NO_WINDOW). No-op on macOS/Linux.
       windowsHide: true,
     })
+    // Persist the child pid onto the running row so a future server
+    // generation's boot-time orphan sweep can find (and verify + reap) this
+    // cli if we die before finalize — on POSIX a SIGKILL'd server leaves the
+    // child alive (reparented to init), where it would race the restarted
+    // server's next fire as a second writer on the same cron-<jobId> session.
+    if (child.pid !== undefined) {
+      db.update(cronRuns).set({ pid: child.pid }).where(eq(cronRuns.id, runId)).run()
+    }
     // Guard stdin: if the child exits/closes before reading the whole prompt,
     // the write raises EPIPE — an unhandled stream error would crash the server.
     child.stdin?.on('error', () => { /* child closed stdin early; ignore */ })
     child.stdin?.write(job.userPrompt)
     child.stdin?.end()
     let timedOut = false
-    const killTimer = setTimeout(() => { timedOut = true; child.kill('SIGTERM') }, CLI_TIMEOUT_SEC * 1000)
+    // Two-phase kill on timeout: SIGTERM the direct child only — the cli
+    // handles it gracefully (finishes the in-flight tool, repairs + flushes
+    // the session, kills its own shell_exec process groups on the way out,
+    // exits 143). If it hasn't exited when the grace timer fires (wedged LLM
+    // stream, SIGTERM-ignoring child), SIGKILL the whole descendant tree so
+    // no grandchild survives to double-write the workspace on the next fire.
+    let graceTimer: ReturnType<typeof setTimeout> | null = null
+    const killTimer = setTimeout(() => {
+      timedOut = true
+      teeStream.write(`\n[runner] timeout ${CLI_TIMEOUT_SEC}s — SIGTERM, grace ${KILL_GRACE_SEC}s\n`)
+      try { child.kill('SIGTERM') } catch { /* already dead */ }
+      graceTimer = setTimeout(() => {
+        teeStream.write(`[runner] still alive ${KILL_GRACE_SEC}s after SIGTERM — SIGKILL tree\n`)
+        if (child.pid) killTreeHard(child.pid)
+      }, KILL_GRACE_SEC * 1000)
+    }, CLI_TIMEOUT_SEC * 1000)
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf-8')
       teeStream.write(chunk)
@@ -441,6 +653,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     })
     child.on('exit', (code) => {
       clearTimeout(killTimer)
+      if (graceTimer) clearTimeout(graceTimer)
       const exitCode = timedOut ? 124 : (code ?? 1)
       teeStream.write(`\n[runner] exit code=${code}${timedOut ? ' (timed out → 124)' : ''}\n`)
       teeStream.end()
@@ -448,6 +661,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     })
     child.on('error', (err) => {
       clearTimeout(killTimer)
+      if (graceTimer) clearTimeout(graceTimer)
       teeStream.write(`\n[runner] spawn error: ${err.message}\n`)
       teeStream.end()
       resolve({ exitCode: 1 })

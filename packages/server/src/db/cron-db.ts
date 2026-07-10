@@ -73,6 +73,12 @@ export const cronRuns = sqliteTable('cron_runs', {
   /** Per-target dispatch outcomes — JSON array of `{channelType, accountId, ok, error?}`.
    *  Lets the UI show "sent to telegram (1234), wechat failed: no chatId". */
   dispatchResults: text('dispatch_results'),
+  /** OS pid of the spawned cli child, written right after spawn. Lets the
+   *  boot-time orphan sweep (cron/runner.ts sweepOrphanRuns) identify and
+   *  reap a previous server generation's still-running cli — identity is
+   *  re-verified against the process command line before any kill, so a
+   *  reused pid is never killed by mistake. */
+  pid: integer('pid'),
 })
 
 const CREATE_SQL = `
@@ -107,7 +113,8 @@ CREATE TABLE IF NOT EXISTS cron_runs (
   exit_code        INTEGER,
   failure_reason   TEXT,
   log_path         TEXT,
-  dispatch_results TEXT
+  dispatch_results TEXT,
+  pid              INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_cron_runs_status ON cron_runs(status);
@@ -125,6 +132,11 @@ export function createCronDb(globalDir: string) {
   const cols = sqlite.prepare(`PRAGMA table_info(cron_jobs)`).all() as Array<{ name: string }>
   if (!cols.some((c) => c.name === 'run_at')) {
     sqlite.exec(`ALTER TABLE cron_jobs ADD COLUMN run_at INTEGER`)
+  }
+  // Same pattern for `pid` on cron_runs (added with the orphan sweep).
+  const runCols = sqlite.prepare(`PRAGMA table_info(cron_runs)`).all() as Array<{ name: string }>
+  if (!runCols.some((c) => c.name === 'pid')) {
+    sqlite.exec(`ALTER TABLE cron_runs ADD COLUMN pid INTEGER`)
   }
   return drizzle(sqlite, { schema: { cronJobs, cronRuns } })
 }
