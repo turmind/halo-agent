@@ -118,7 +118,7 @@ Options:
   -v, --verbose              Show tool calls + usage on stderr
   -h, --help                 Show this help
 
-Exit codes: 0 = ok, 1 = error, 130 = SIGINT.
+Exit codes: 0 = ok, 1 = error, 130 = SIGINT, 143 = SIGTERM.
 
 Examples:
   halo cli "review this diff"
@@ -261,8 +261,8 @@ async function buildHarnessFromFlags(flags: HarnessFlags): Promise<Harness> {
   })
 }
 
-function attachSigint(harness: Harness): void {
-  // First hit: graceful stop + destroy; second hit: hard exit.
+function attachSignalHandlers(harness: Harness): void {
+  // SIGINT — first hit: graceful stop + destroy; second hit: hard exit.
   let sigintCount = 0
   process.on('SIGINT', () => {
     sigintCount++
@@ -273,6 +273,20 @@ function attachSigint(harness: Harness): void {
     harness.stop().finally(() => {
       harness.destroy()
       process.exit(130)
+    })
+  })
+  // SIGTERM (e.g. the cron runner's timeout) — same graceful shape as the
+  // first-SIGINT branch: harness.stop() routes to SessionManager.stopSession,
+  // which waits for the in-flight tool, aborts, repairs the conversation and
+  // flushes to disk. One shot is enough — the parent escalates to SIGKILL if
+  // we don't exit within its grace window. Exit 143 = 128+15 (SIGTERM
+  // convention). Windows note: child.kill('SIGTERM') there terminates the
+  // process without delivering a catchable signal, so this handler simply
+  // never runs on Windows — acceptable, no workaround.
+  process.on('SIGTERM', () => {
+    harness.stop().finally(() => {
+      harness.destroy()
+      process.exit(143)
     })
   })
 }
@@ -837,7 +851,7 @@ async function cmdTui(flags: HarnessFlags): Promise<void> {
   try {
     await initRuntime()
     const harness = await buildHarnessFromFlags(flags)
-    attachSigint(harness)
+    attachSignalHandlers(harness)
     try {
       const tuiDone = runTui(harness, { verbose: flags.verbose })
       void forwardEarlyInput()
@@ -879,7 +893,7 @@ async function cmdCli(flags: HarnessFlags): Promise<void> {
   }
 
   const harness = await buildHarnessFromFlags(flags)
-  attachSigint(harness)
+  attachSignalHandlers(harness)
   try {
     const exitCode = await runCli(harness, message, { format: flags.format, verbose: flags.verbose })
     process.exitCode = exitCode
