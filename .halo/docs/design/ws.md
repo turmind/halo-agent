@@ -12,15 +12,29 @@ File: `packages/server/src/ws/handler.ts`
 
 ### Server-side keepalive
 
-The server pings every connection at the WS protocol level every 10 s (keeps reverse-proxy idle timeouts from closing the socket). It tolerates **2 consecutive missed pongs** (~20-30 s of silence) before `ws.terminate()` — a single miss is routinely just laptop sleep/wake or a browser event-loop stall, not a dead peer.
+The server pings every connection at the WS protocol level every 10 s (keeps reverse-proxy idle timeouts from closing the socket). It tolerates **2 consecutive missed pongs** (~20-30 s of silence) before `ws.terminate()` — a single miss is routinely just laptop sleep/wake or a browser event-loop stall, not a dead peer. Protocol-level pings serve the *server's* view only — browser JS never sees them — so the client runs its own **application-level** probe on top: it sends `{type:'__ping__'}` and the server answers `{type:'__pong__'}`, giving the client an inbound frame it can observe.
 
 ### Client-side liveness & reconnect
 
-The browser client ([packages/admin/src/shared/ws-client.ts](../../../packages/admin/src/shared/ws-client.ts)) runs a 15 s self-check timer (`startLiveness`) that catches three half-dead states: socket stuck in `CONNECTING` >10 s, `CLOSED` without `onclose` firing, and an `OPEN` socket whose send buffer stops draining (probed with an app-level `__ping__` the server ignores). Any of these force-closes the socket so the exponential-backoff reconnect (1 s → 30 s cap) runs. The OS `online` event additionally triggers an immediate `reconnectIfStale(0)`. (Earlier `visibilitychange`/`focus` probes were removed — inside iframes they fire constantly and tore down healthy connections.)
+The browser client ([packages/admin/src/shared/ws-client.ts](../../../packages/admin/src/shared/ws-client.ts)) runs a 15 s self-check timer (`startLiveness`) that catches three half-dead states: socket stuck in `CONNECTING` >10 s, `CLOSED` without `onclose` firing, and a **zombie-OPEN** socket — `readyState === OPEN` but the underlying TCP is dead (laptop sleep, NAT/proxy idle timeout; the server terminated its side but the FIN never arrived). Zombies are proven by a missed round-trip: every tick sends an app-level `__ping__` which the server answers with `__pong__`, so a healthy link sees inbound traffic newer than the previous probe on every tick; **2 consecutive probes with no inbound reply** → force-close so the exponential-backoff reconnect (1 s → 30 s cap) runs. Miss-counting is probe-relative, not wall-clock, so background-tab timer throttling doesn't misread a healthy-but-idle link as dead. (An earlier `bufferedAmount`-drain heuristic was removed — a ~20-byte probe is handed to the kernel instantly even when the peer is gone, so it never detected anything; the kernel keeps retransmitting for ~15 min before `onclose` fires.)
+
+Two OS/browser signals supplement the timer:
+
+- **`online` event** → `reconnectIfStale(0)`: the NIC was provably down, so the socket is torn down unconditionally (a stalled `CONNECTING` socket included).
+- **`visibilitychange`** → `reconnectIfStale(LINK_STALE_MS)` (45 s), double-gated: the tab must have been **hidden ≥ 5 min** AND inbound traffic must actually be stale. Ungated visibility/focus probes were removed once before — inside iframes (code-server preview, embedded admin) they fire constantly and tore down healthy connections in an endless loop. The hidden-duration gate keeps that fix (iframe flapping hides the tab for milliseconds, never minutes) while restoring coverage for wake-from-sleep on a zombie link where no `online` event ever fires; the staleness gate means a healthy connection (background tabs keep receiving WS traffic fine) sails through untouched.
 
 **Auth expiry**: when the WS handshake itself is rejected (close before `onopen` — `verifyClient` returns 401 on an expired JWT cookie, but the browser WS API hides the HTTP status), the client probes `/api/auth/check`. On 401 it stops reconnecting and emits `_auth_expired`; the admin page listens and swaps to the login screen. Any other probe outcome (server restarting, network blip) falls through to normal backoff.
 
 After a successful `_connected` event, all subscribers re-issue their session-resume messages: `subscribe` (chat / agent state) and `terminal:reattach` (PTY pool). Both are idempotent on the server.
+
+### Chat delivery: ack / resend / dedup
+
+Liveness probes bound how long a zombie lives, but a chat sent *into* the zombie window would still vanish silently (`ws.send()` on a zombie-OPEN socket reports nothing). Chat is the one message class that must survive this, so it rides a dedicated ack/resend protocol; everything else stays fire-and-forget.
+
+- **Client** ([ws-client.ts](../../../packages/admin/src/shared/ws-client.ts)): every chat carries a client-generated `clientMsgId` and enters a pending-ack table (capacity 100 — past that the oldest entry is failed visibly) before transmission. Transmission is gated on freshness: if inbound has been silent > 30 s, the socket is torn down first and the chat rides the reconnect instead of being trusted to a suspect link. **5 s without `chat:ack`** → force-close, and the `onopen` flush retransmits every unacked entry in insertion order. After **3 transmit attempts** the client stops tearing the link down on that chat's behalf (rapid network flaps would otherwise turn one chat into endless connection churn) but the entry stays pending and still rides every flush. A **2 min wall-clock deadline** per entry is the final arbiter: every chat terminates either in an ack or in a visible `_chat_send_failed` (red "send failed" badge on the bubble + its empty placeholder converged) — no infinite lurking.
+- **Server** ([handler.ts](../../../packages/server/src/ws/handler.ts)): ack semantics = *the message is in the session log*. Each `handleChat` branch calls `rememberChat` **synchronously right after `appendUserMessage`** (no `await` in between — an await there opens a double-append window against a racing resend), then replies `{type:'chat:ack', clientMsgId}` once enqueueing is done. Resends are deduped against a handler-scoped FIFO of the last 500 acked ids (handler-scoped because a resend arrives on a *new* connection): a duplicate is re-acked without re-appending. At-least-once resend + server dedup ≈ exactly-once in the session log.
+- **Indicator**: the connection light is tri-state (`fresh` / `stale` / `down`, [use-websocket.ts](../../../packages/admin/src/shared/use-websocket.ts)) driven by inbound-traffic age rather than last-known socket state — `stale` (amber) at > 45 s of silence (3× probe interval), `down` (red) on close. A zombie link can no longer sit green.
+- **Known boundary (accepted)**: the dedup FIFO is in-memory. If the server restarts inside the narrow window between "ack sent but lost in flight" and the client's resend, the new process re-appends the message and the agent runs it twice. The overlap is seconds-rare, and persisting the table would put a synchronous disk write on the chat hot path — not worth it unless observed in practice.
 
 ## Client → Server
 
@@ -29,7 +43,8 @@ Source: [handler.ts](../../../packages/server/src/ws/handler.ts) — top-level `
 | Type | Purpose |
 |---|---|
 | `subscribe` | Subscribe to a session (load history, re-attach detached) |
-| `chat` | Send a user message (queued when the agent is busy) |
+| `chat` | Send a user message (queued when the agent is busy); acked per `clientMsgId` — see [Chat delivery](#chat-delivery-ack--resend--dedup) |
+| `__ping__` | Application-level liveness probe; server replies `__pong__` |
 | `chat:stop` | Hard-abort the current generation (ends the turn, no re-run) → `stopUserSession` |
 | `chat:interrupt` | Interrupt the in-flight turn now (aborts a command mid-run); the server then folds any queued messages into one follow-up turn → `interruptSession`. Admin chat esc maps to this. A compacting session cancels the compact instead (same as `chat:stop`). |
 | `session:clear` | Non-destructive /session new: save the current, detach, create fresh (handled inline) |
@@ -45,6 +60,7 @@ Source: [handler.ts](../../../packages/server/src/ws/handler.ts) — top-level `
 Optional `chat` fields:
 - `images`: `Array<{data: base64, mimeType}>` — multimodal
 - `agentId`: specify the agent this session should use
+- `clientMsgId`: client-generated id for the ack/resend/dedup protocol (admin always sends it)
 
 ## Server → Client
 
@@ -73,6 +89,8 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | Type | Source | Purpose |
 |---|---|---|
 | `state:snapshot` | handler.ts on connect | Initial state (agents, messages, sessionId) |
+| `chat:ack` | `handleChat` | Chat with `clientMsgId` is persisted in the session log — releases the client's pending-ack entry (see [Chat delivery](#chat-delivery-ack--resend--dedup)) |
+| `__pong__` | `__ping__` handler | Reply to the client's application-level liveness probe |
 | `chat:queued` | `sendUserMessage` returning queued | User-message-queued notification |
 | `file:changed` | WorkspaceWatcher · GitDirWatcher · `routes/git.ts` | File change notification (path + action). Three sources: (1) **WorkspaceWatcher** — recursive workspace watch, deliberately excludes `.git`; (2) **`routes/git.ts`** — every git mutation route re-broadcasts `path:'.git'` itself (the recursive watcher ignores `.git`); (3) **GitDirWatcher** — a non-recursive `.git`-dir watch for command-line git ops, *plus* a degraded "watch the workspace root for `.git` appearing" phase that fires `path:'.git'` on a terminal `git init`/`clone` so the Source Control entry auto-surfaces. See [source-control.md](../requirements/source-control.md#auto-refresh-no-polling). |
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |

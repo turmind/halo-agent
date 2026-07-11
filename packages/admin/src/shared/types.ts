@@ -158,6 +158,20 @@ export interface ChatMessage {
    *  immediate visual confirmation of what was sent, before the server-saved
    *  copy shows up on the next snapshot. */
   localImages?: string[]
+  /** Client-generated id carried on the WS `chat` send (user bubbles only).
+   *  Links this bubble to the ack/resend protocol in ws-client — when the
+   *  server never acks, `_chat_send_failed` marks the bubble by this id.
+   *  Client-only, not persisted. */
+  clientMsgId?: string
+  /** The chat send exhausted its ack retries — the server never confirmed
+   *  receipt. Rendered as a red "send failed" badge on the user bubble so a
+   *  zombie-socket loss is visible instead of silent (root cause:
+   *  idle-reconnect message loss). Client-only, not persisted. */
+  sendFailed?: boolean
+  /** A streaming placeholder that never received any event and was converged
+   *  by the 30s watchdog (or by a send failure) — shown as an "interrupted"
+   *  note instead of an eternal "Thinking…". Client-only, not persisted. */
+  interrupted?: boolean
 }
 
 /** Infer MessageType from legacy messages that lack the type field */
@@ -247,26 +261,6 @@ export type WsServerMessage =
   | WsFileChangedMsg
   | WsPlanCompleteMsg
   | WsSnapshotMsg
-
-// WebSocket messages (client -> server)
-export interface WsChatMsg {
-  type: 'chat'
-  sessionId: string
-  message: string
-}
-
-export interface WsApproveMsg {
-  type: 'approve'
-  planId: string
-}
-
-export interface WsRejectMsg {
-  type: 'reject'
-  planId: string
-  feedback: string
-}
-
-export type WsClientMessage = WsChatMsg | WsApproveMsg | WsRejectMsg
 
 // ─── Message filter predicates ───
 

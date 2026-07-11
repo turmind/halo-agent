@@ -3,6 +3,35 @@ import type { ChatMessage, ToolCallInfo } from '@/shared/types'
 import { generateId } from '@/shared/utils'
 import { isMainConversationMessage } from '@/shared/types'
 
+/** How long an EMPTY optimistic streaming placeholder may sit with zero
+ *  events before it's treated as abandoned. Normal turns produce something
+ *  (stream text / thinking block / tool call) well before this; a placeholder
+ *  still empty after 30s almost always means the chat send vanished into a
+ *  zombie socket (root cause: .halo/tmp/idle-reconnect-msg-loss.md). */
+export const STREAMING_PLACEHOLDER_STALE_MS = 30_000
+
+/** An empty streaming placeholder that has received no event for the stale
+ *  window. Shared by the chat-handlers watchdog (which converges these) and
+ *  the state-handlers snapshot guard (which must NOT let one of these block
+ *  a snapshot replace forever — the R4 amplifier in the RCA). Emptiness
+ *  checks contentBlocks too: a thinking-only turn keeps `content === ''`
+ *  while blocks stream in, and that's a live turn, not a zombie. */
+export function isStaleStreamingPlaceholder(m: ChatMessage, now: number = Date.now()): boolean {
+  return !!m.streaming && !m.content && !m.toolCalls?.length && !m.contentBlocks?.length
+    && now - m.timestamp > STREAMING_PLACEHOLDER_STALE_MS
+}
+
+/** Wall-clock of the most recent WS `_disconnected` edge. Module-level, not
+ *  store state — nothing renders from it. The watchdog only converges
+ *  placeholders that lived through a link drop; a healthy connection's long
+ *  legitimate silences (first-token latency on a big context / provider
+ *  backoff, turns queued behind a compact, long tools after reattach) never
+ *  see one, so they can't be misdiagnosed as lost. */
+let lastLinkDropAt = 0
+export function noteLinkDrop(): void {
+  lastLinkDropAt = Date.now()
+}
+
 /**
  * When a streaming event arrives with a turnId that doesn't match the current
  * streaming assistant's last block, it means a new server turn has begun
@@ -106,6 +135,13 @@ interface ChatStore {
   addPendingMessage(text: string): void
   removePendingMessage(index: number): void
   shiftPendingMessage(): string | undefined
+  /** ws-client exhausted the chat ack retries — mark the user bubble red and
+   *  converge its (empty) streaming placeholder so "Thinking…" doesn't spin
+   *  forever over a message the server never received. */
+  markChatSendFailed(clientMsgId: string): void
+  /** Watchdog sweep: converge empty streaming placeholders that have gone
+   *  STREAMING_PLACEHOLDER_STALE_MS with zero events (see chat-handlers). */
+  convergeStaleStreaming(): void
   clear(): void
 }
 
@@ -148,6 +184,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       modelId: msg.modelId,
       durationMs: msg.durationMs,
       localImages: msg.localImages,
+      clientMsgId: msg.clientMsgId,
     }
     set((state) => {
       const mainBefore = state.messages.filter(isMainConversationMessage).length
@@ -345,6 +382,44 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const [first, ...rest] = current
     set({ pendingMessages: rest })
     return first
+  },
+
+  markChatSendFailed(clientMsgId: string) {
+    set((state) => {
+      const idx = state.messages.findIndex((m) => m.clientMsgId === clientMsgId)
+      if (idx === -1) return state
+      const messages = state.messages.map((m, i) => {
+        if (i === idx) return { ...m, sendFailed: true }
+        // Converge the empty assistant placeholder that followed this send —
+        // only an EMPTY one (a turn that produced output got its content from
+        // some other, delivered message and will settle via normal events).
+        if (i > idx && m.streaming && !m.taskId && !m.content && !m.toolCalls?.length && !m.contentBlocks?.length) {
+          return { ...m, streaming: false, interrupted: true }
+        }
+        return m
+      })
+      return { messages, isStreaming: messages.some((m) => m.streaming && !m.taskId) }
+    })
+  },
+
+  convergeStaleStreaming() {
+    // Only converge placeholders that lived through a link drop — created
+    // before the last `_disconnected` and still empty past the stale window.
+    // A placeholder on an unbroken connection is just a slow turn (first
+    // token pending, queued behind other work); calling it interrupted would
+    // invite the user to resend and duplicate the run. And while a compact
+    // is in flight, queued turns legitimately sit empty for minutes — skip.
+    if (get().isCompacting || lastLinkDropAt === 0) return
+    const now = Date.now()
+    const lost = (m: ChatMessage) =>
+      m.timestamp <= lastLinkDropAt && isStaleStreamingPlaceholder(m, now)
+    if (!get().messages.some(lost)) return
+    set((state) => {
+      const messages = state.messages.map((m) =>
+        lost(m) ? { ...m, streaming: false, interrupted: true } : m,
+      )
+      return { messages, isStreaming: messages.some((m) => m.streaming && !m.taskId) }
+    })
   },
 
   clear() {

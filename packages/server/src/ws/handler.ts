@@ -51,6 +51,11 @@ interface ClientMessage {
    *  workspacePath as the PTY ownership key — terminals from one browser
    *  are invisible to another. */
   browserId?: string
+  /** Client-generated id for `chat` messages. The client resends a chat over
+   *  a fresh connection when the ack doesn't arrive (zombie-socket recovery,
+   *  see admin ws-client.ts), so the server acks with this id after folding
+   *  the message into the session log, and dedupes resends by it. */
+  clientMsgId?: string
 }
 
 interface ConnectedClient {
@@ -73,6 +78,23 @@ interface ConnectedClient {
 export function setupWebSocketHandler(deps: WsHandlerDeps): void {
   const { wss, registry } = deps
   const clients = new Set<ConnectedClient>()
+
+  // Chat dedup for the client's ack/resend protocol. A resend arrives on a
+  // NEW connection (the client tears down the zombie socket first), so this
+  // must outlive any single client — hence handler-scope, not per-client.
+  // Covers the "ack lost in flight" case: message was appended, the ack
+  // never reached the client, the client resends — we re-ack without
+  // appending a duplicate. Bounded FIFO; 500 ids ≈ far more in-flight chats
+  // than any browser session produces before the entries stop mattering.
+  const ackedChatIds = new Set<string>()
+  const ACKED_CHAT_IDS_LIMIT = 500
+  function rememberAckedChat(id: string): void {
+    if (ackedChatIds.size >= ACKED_CHAT_IDS_LIMIT) {
+      const oldest = ackedChatIds.values().next().value
+      if (oldest !== undefined) ackedChatIds.delete(oldest)
+    }
+    ackedChatIds.add(id)
+  }
 
   // ── Path resolution + session persistence ──────────────────────────
 
@@ -286,10 +308,16 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         return
       }
 
-      // Client liveness probe (see WsClient.startLiveness). The byte itself
-      // carries the signal — the server only needs to NOT respond with
-      // "Unknown message type", which would clutter the chat with errors.
-      if ((msg.type as string) === '__ping__') return
+      // Client liveness probe (see WsClient.startLiveness). Answer with
+      // `__pong__` so the probe is a round-trip: the client's only JS-visible
+      // deadness signal is inbound traffic (protocol-level pongs never surface
+      // to the browser), and an unanswered probe is what lets it detect a
+      // zombie-OPEN socket instead of waiting ~15min for kernel TCP retries
+      // to exhaust (root cause: idle-reconnect message loss).
+      if ((msg.type as string) === '__ping__') {
+        sendJson(ws, { type: '__pong__' })
+        return
+      }
 
       messageQueue = messageQueue.then(async () => {
         try {
@@ -508,9 +536,33 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       return client.sessionId
     }
 
+    /** Record the chat id in the dedup table. MUST run synchronously after
+     *  appendUserMessage — any await between append and remember opens a
+     *  double-append window (enqueue throwing after append, or a resend
+     *  racing in on a new connection while the original chat is parked
+     *  behind a slow handler on the old one). */
+    function rememberChat(msg: ClientMessage): void {
+      if (msg.clientMsgId) rememberAckedChat(msg.clientMsgId)
+    }
+
+    /** Confirm to the client that its chat is now in the session log — the
+     *  signal its pending-ack table waits on before trusting the delivery. */
+    function ackChat(msg: ClientMessage): void {
+      if (!msg.clientMsgId) return
+      sendJson(ws, { type: 'chat:ack', clientMsgId: msg.clientMsgId })
+    }
+
     async function handleChat(client: ConnectedClient, msg: ClientMessage): Promise<void> {
       if (!msg.sessionId || !msg.message || !msg.projectId) {
         sendJson(ws, { type: 'error', error: 'chat requires sessionId, projectId, and message' })
+        return
+      }
+      // Resend of a chat we already appended (its ack was lost when the old
+      // connection died). Re-ack, don't re-append — this is what makes the
+      // client's at-least-once resend exactly-once in the session log.
+      if (msg.clientMsgId && ackedChatIds.has(msg.clientMsgId)) {
+        console.debug(`[WS] Duplicate chat resend acked: clientMsgId=${msg.clientMsgId}`)
+        sendJson(ws, { type: 'chat:ack', clientMsgId: msg.clientMsgId })
         return
       }
       const projectPath = resolveProjectPath(msg.projectId)
@@ -548,7 +600,9 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       if (sm.isSessionCompacting(sid)) {
         console.debug(`[WS] Chat queued (compact in progress): session=${msg.sessionId}`)
         sm.appendUserMessage(sid, uiMessage, { local: true })
+        rememberChat(msg)
         await sm.enqueueUserMessage(sid, msg.message, msg.images)
+        ackChat(msg)
         sendJson(ws, { type: 'chat:queued', reason: 'compact', message: 'Context compacting, message queued — will process after compact completes.' })
         return
       }
@@ -556,11 +610,15 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       if (sm.isSessionRunning(sid)) {
         console.debug(`[WS] Chat queued (agent busy): session=${msg.sessionId}`)
         sm.appendUserMessage(sid, uiMessage, { local: true })
+        rememberChat(msg)
         await sm.enqueueUserMessage(sid, msg.message, msg.images)
+        ackChat(msg)
         return
       }
 
       sm.appendUserMessage(sid, uiMessage, { local: true })
+      rememberChat(msg)
+      ackChat(msg)
       console.debug(`[WS] Chat: session=${msg.sessionId}, project=${msg.projectId}, agent=${msg.agentId ?? client.agentId}`)
 
       sm.sendUserMessage(sid, msg.message, msg.images).catch((err) => {

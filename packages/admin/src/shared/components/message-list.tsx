@@ -12,7 +12,8 @@ import { useChatStore } from '@/features/chat/chat-store'
 import { useSessionViewStore } from '@/features/agents/agent-sessions-sidebar'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { wsClient } from '@/shared/ws-client'
-import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
+import { useT } from '@/shared/i18n'
+import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2, AlertTriangle } from 'lucide-react'
 
 /**
  * Resolve which (sessionId, projectId) a rendered message belongs to. MessageList
@@ -129,7 +130,7 @@ const ExchangeRow = memo(function ExchangeRow({
         ) : parseCompactSummary(user.content) ? (
           <CompactSummary content={user.content} />
         ) : (
-          <UserExchangeHeader content={user.content} localImages={user.localImages} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} />
+          <UserExchangeHeader content={user.content} localImages={user.localImages} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} sendFailed={user.sendFailed} />
         )
       ) : (
         <div className="px-3 py-2">
@@ -309,6 +310,7 @@ function UsageLine({ message }: { message: ChatMessage }) {
 
 /** Render a single message — debug mode adds usage/context/agent badges inline */
 function MessageItem({ message, debugMode, usages }: { message: ChatMessage; debugMode?: boolean; usages?: ChatMessage[] }) {
+  const tr = useT()
   const t = inferMessageType(message)
   const isAssistant = t === 'assistant'
 
@@ -343,6 +345,19 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
 
   // Assistant + notification: render the same in both modes
   const hasBlocks = isAssistant && message.contentBlocks && message.contentBlocks.length > 0
+
+  // The watchdog / send-failure path converged this placeholder — it never
+  // received any event and never will (the turn was lost, see chat-store's
+  // convergeStaleStreaming). Show an explicit interrupted note instead of
+  // rendering nothing (an empty settled bubble).
+  if (message.interrupted && !message.content && !message.toolCalls?.length) {
+    return (
+      <div className="flex items-center gap-1.5 py-1">
+        <AlertTriangle className="h-3 w-3 text-amber-400" />
+        <span className="text-xs text-[var(--muted-foreground)]">{tr('chat.interrupted')}</span>
+      </div>
+    )
+  }
 
   if (message.streaming && !message.content && !message.toolCalls?.length) {
     return (
@@ -449,7 +464,8 @@ function ThinkingBlock({ text }: { text: string }) {
  *  The chips are rendered outside the sticky block so that the next exchange's sticky header
  *  doesn't cover them when scrolled.
  */
-function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messageId, deletable }: { content: string; localImages?: string[]; userOrdinal: number; deleted: boolean; messageId: string; deletable: boolean }) {
+function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messageId, deletable, sendFailed }: { content: string; localImages?: string[]; userOrdinal: number; deleted: boolean; messageId: string; deletable: boolean; sendFailed?: boolean }) {
+  const tr = useT()
   const { text, media } = useMemo(() => parseMediaMarkers(content), [content])
   const [zoom, setZoom] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -470,9 +486,17 @@ function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messag
     <>
       {/* accent bg/fg: on dark these resolve to the old slate-800 bg and a
           near-identical slate fg; on other themes they follow the palette */}
-      <div className={cn('group sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted ? 'border-l-red-500/60' : 'border-l-blue-500')}>
+      <div className={cn('group sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted || sendFailed ? 'border-l-red-500/60' : 'border-l-blue-500')}>
         <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
           {deleted && <span className="mr-1 rounded bg-red-900/30 px-1 py-px text-[9px] font-medium text-red-400">deleted</span>}
+          {/* Ack/resend gave up — the server never confirmed this message
+              (zombie-socket loss). Make the failure visible on the bubble
+              instead of losing it silently. */}
+          {sendFailed && !deleted && (
+            <span className="mr-1 inline-flex items-center gap-0.5 rounded bg-red-900/30 px-1 py-px text-[9px] font-medium text-red-400" title={tr('chat.sendFailed')}>
+              <AlertTriangle className="h-2.5 w-2.5" />{tr('chat.sendFailedBadge')}
+            </span>
+          )}
           <button onClick={handleCopy} title="Copy message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-[var(--background)]/40 transition-opacity">
             {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
           </button>

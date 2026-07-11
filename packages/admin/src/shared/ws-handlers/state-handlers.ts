@@ -1,5 +1,5 @@
 import type { WsClient } from '../ws-client-types'
-import { useChatStore } from '@/features/chat/chat-store'
+import { useChatStore, isStaleStreamingPlaceholder } from '@/features/chat/chat-store'
 import { useTaskStore } from '@/shared/stores/task-store'
 import { bumpSessionBus } from '@/shared/session-bus'
 import type { WsSnapshotMsg, ChatMessage } from '@/shared/types'
@@ -31,7 +31,16 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
       // / not realtime" bug. Skip the snapshot replace entirely while
       // anything is streaming — the server-side state will be reconciled
       // by the existing chunk-handling path in chat-store.
-      const inFlight = useChatStore.getState().messages.some((m) => m.streaming)
+      //
+      // Exemption: an EMPTY placeholder that has sat event-less past the
+      // stale window doesn't count as in-flight. Such a placeholder means
+      // the turn was lost (zombie-socket send, see RCA) and no events will
+      // ever converge it — treating it as in-flight made every post-reconnect
+      // snapshot get skipped, so the UI stayed on "Thinking…" even after the
+      // link recovered (R4 in .halo/tmp/idle-reconnect-msg-loss.md).
+      const inFlight = useChatStore.getState().messages.some(
+        (m) => m.streaming && !isStaleStreamingPlaceholder(m),
+      )
       if (!inFlight) {
         if (snapshot.recentMessages && snapshot.recentMessages.length > 0) {
           useChatStore.getState().setMessages(snapshot.recentMessages)

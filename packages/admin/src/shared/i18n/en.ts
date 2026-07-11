@@ -195,6 +195,14 @@ export const en: Record<string, string> = {
 
   // ── Chat ──
   'chat.imageSent': '[Sent {n} image(s)]',
+  'chat.sendFailed': 'Send failed — the server never confirmed receipt. Please resend.',
+  'chat.sendFailedBadge': 'send failed',
+  'chat.interrupted': 'No response received — the connection may have dropped. Resend if needed.',
+
+  // ── Connection link light ──
+  'link.fresh': 'Connected',
+  'link.stale': 'Connection stale — probing…',
+  'link.down': 'Disconnected',
 
   // ── Agent management ──
   'agent.agents': 'Agents',

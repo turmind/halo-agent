@@ -1,5 +1,56 @@
 type MessageHandler = (data: Record<string, unknown>) => void
 
+/** Liveness probe cadence (app-level `__ping__`, answered by the server). */
+const LIVENESS_INTERVAL_MS = 15_000
+/** Chat sends are not trusted on a socket with no inbound traffic for this
+ *  long — the link gets torn down and the chat rides the reconnect instead.
+ *  With the server answering every probe, a healthy link never gets close
+ *  to this in the foreground (worst case ~15s between pongs). */
+const FRESH_SEND_LIMIT_MS = 30_000
+/** How long a sent chat may wait for the server's `chat:ack` before we
+ *  declare the socket zombie and force a reconnect (which resends it). */
+const ACK_TIMEOUT_MS = 5_000
+/** Transmit attempts per chat before we stop tearing the link down on its
+ *  behalf (rapid network flaps can burn these in seconds). Exhaustion does
+ *  NOT fail the chat — the entry stays pending, still rides every onopen
+ *  flush, and the wall-clock deadline below is the final arbiter. */
+const ACK_MAX_ATTEMPTS = 3
+/** Wall-clock ceiling per pending chat, counted from when it entered the
+ *  table. Guarantees every chat terminates visibly: either the server acks
+ *  it, or `_chat_send_failed` marks the bubble red. Without this, a chat
+ *  queued while the server is unreachable (attempts=0, no ack timer) could
+ *  lurk indefinitely and then double-run the agent after the user, seeing
+ *  no feedback, retyped it. */
+const PENDING_CHAT_DEADLINE_MS = 2 * 60_000
+/** Cap on the pending-ack table (mirrors pendingQueue's QUEUE_LIMIT): past
+ *  this, the oldest entry is dropped and visibly failed rather than letting
+ *  the table grow without bound during a long outage. */
+const PENDING_ACKS_LIMIT = 100
+
+/**
+ * A chat message awaiting the server's `{type:'chat:ack', clientMsgId}`.
+ *
+ * Why this exists (root cause: .halo/tmp/idle-reconnect-msg-loss.md): a
+ * zombie-OPEN socket (laptop sleep, NAT/proxy idle timeout — server already
+ * terminated its side but the FIN never reached us) swallows `ws.send()`
+ * without any error. Fire-and-forget chat sends on such a socket vanished
+ * silently: the UI showed the optimistic bubble + "Thinking…" forever, and
+ * a refresh revealed the message never reached the server. Tracking every
+ * chat until the server confirms it was folded into the session log (and
+ * resending over a fresh connection when the ack doesn't come) closes that
+ * hole. The server dedupes resends by clientMsgId, so at-least-once here is
+ * exactly-once end to end.
+ */
+interface PendingChat {
+  message: Record<string, unknown>
+  attempts: number
+  ackTimer: ReturnType<typeof setTimeout> | null
+  /** Final arbiter: fires PENDING_CHAT_DEADLINE_MS after the chat entered
+   *  the table and fails it visibly if still unacked (see the constant's
+   *  doc for why attempts alone can't be trusted to terminate). */
+  deadlineTimer: ReturnType<typeof setTimeout>
+}
+
 class WsClient {
   private ws: WebSocket | null = null
   private listeners = new Map<string, Set<MessageHandler>>()
@@ -9,7 +60,14 @@ class WsClient {
   private url: string = ''
   private intentionalClose = false
   private pendingQueue: object[] = []
+  private pendingAcks = new Map<string, PendingChat>()
   private lastReceiveTs = 0
+  /** When the last liveness probe was written, and how many consecutive
+   *  probes got no inbound reply by the next tick. Probe-relative (not
+   *  wall-clock) so background-tab timer throttling — which stretches the
+   *  interval to 1min+ — doesn't misread a healthy-but-idle link as dead. */
+  private lastProbeTs = 0
+  private missedProbes = 0
   private connectStartedAt = 0
   private livenessTimer: ReturnType<typeof setInterval> | null = null
 
@@ -34,11 +92,20 @@ class WsClient {
         opened = true
         this.reconnectDelay = 1000
         this.lastReceiveTs = Date.now()
+        this.lastProbeTs = 0
+        this.missedProbes = 0
         // Flush pending messages
         for (const msg of this.pendingQueue) {
           this.ws!.send(JSON.stringify(msg))
         }
         this.pendingQueue = []
+        // Resend chats that never got their ack — the previous socket died
+        // under them (or they arrived while disconnected). Insertion order
+        // preserves the user's send order. Server-side clientMsgId dedup
+        // makes a resend of an actually-delivered chat a no-op.
+        for (const [id, entry] of this.pendingAcks) {
+          this.transmitChat(id, entry)
+        }
         this.emit('_connected', {})
       }
 
@@ -47,6 +114,7 @@ class WsClient {
         try {
           const data = JSON.parse(event.data as string) as Record<string, unknown>
           const type = data.type as string
+          if (type === 'chat:ack') this.resolveAck(data.clientMsgId)
           if (type) {
             this.emit(type, data)
           }
@@ -89,6 +157,13 @@ class WsClient {
       this.reconnectTimer = null
     }
     this.stopLiveness()
+    // Page teardown: stop pending ack/deadline timers so they can't fire
+    // (and emit `_chat_send_failed` into an unmounted app) after we're gone.
+    for (const entry of this.pendingAcks.values()) {
+      if (entry.ackTimer) clearTimeout(entry.ackTimer)
+      clearTimeout(entry.deadlineTimer)
+    }
+    this.pendingAcks.clear()
     if (this.ws) {
       this.ws.close()
       this.ws = null
@@ -99,14 +174,27 @@ class WsClient {
    * Continuous self-check that runs regardless of focus / visibility events.
    * Server pings (WS protocol-level) keep the connection technically alive
    * but pongs don't surface to JS, so the client can't tell from `onmessage`
-   * alone whether traffic is flowing. We instead detect two failure modes:
+   * alone whether traffic is flowing. Failure modes detected:
    *
    *  1. socket stuck in `CONNECTING` for >10s — common during NIC bounce,
    *     where the new WebSocket() never resolves and `onclose` never fires.
-   *  2. socket says `OPEN` but the underlying TCP is dead — only proven by
-   *     a missed application-layer probe. Send a `chat:ping` (a no-op the
-   *     server already ignores) every 15s; if `bufferedAmount` grows past
-   *     a threshold, the OS send buffer is congested → tear down.
+   *  2. socket says `OPEN` but the underlying TCP is dead — proven by a
+   *     missed round-trip: we send a `__ping__` every tick and the server
+   *     answers `__pong__` (ws/handler.ts), so on a healthy link every tick
+   *     sees inbound traffic newer than the previous probe. Two consecutive
+   *     probes with no inbound reply → zombie, tear down so reconnect runs.
+   *
+   * The old bufferedAmount heuristic could NOT detect mode 2: a ~20-byte
+   * probe is handed to the kernel instantly (bufferedAmount drops to 0 even
+   * when the peer is gone) and the kernel keeps retransmitting for ~15min
+   * before the browser ever fires onclose. During that whole window the
+   * socket read OPEN and chat sends vanished silently — the "idle tab, green
+   * light, message lost" bug (.halo/tmp/idle-reconnect-msg-loss.md).
+   *
+   * Probe-miss counting is tick-relative, not wall-clock: background-tab
+   * throttling stretches ticks to 1min+, but "the previous probe got no
+   * reply by the time the next one runs" stays a valid deadness signal at
+   * any tick spacing.
    */
   private startLiveness(): void {
     this.stopLiveness()
@@ -128,20 +216,25 @@ class WsClient {
         this.reconnect()
         return
       }
-      // OPEN: probe with a write. Successful sends drain immediately, so a
-      // bufferedAmount that climbs across ticks is a strong half-dead signal.
-      try {
-        const before = this.ws.bufferedAmount
-        this.ws.send(JSON.stringify({ type: '__ping__' }))
-        if (before > 0 && this.ws.bufferedAmount >= before) {
-          console.log(`[WsClient] bufferedAmount stuck (${before} → ${this.ws.bufferedAmount}), forcing reconnect`)
+      // OPEN: check the previous probe's round-trip before sending the next.
+      if (this.lastProbeTs > 0 && this.lastReceiveTs < this.lastProbeTs) {
+        this.missedProbes++
+        if (this.missedProbes >= 2) {
+          console.log('[WsClient] 2 liveness probes unanswered, closing zombie socket')
           try { this.ws.close() } catch { /* ignore */ }
+          return
         }
+      } else {
+        this.missedProbes = 0
+      }
+      try {
+        this.ws.send(JSON.stringify({ type: '__ping__' }))
+        this.lastProbeTs = Date.now()
       } catch (err) {
         console.log('[WsClient] send threw on liveness probe, forcing reconnect:', err)
         try { this.ws.close() } catch { /* ignore */ }
       }
-    }, 15_000)
+    }, LIVENESS_INTERVAL_MS)
   }
 
   private stopLiveness(): void {
@@ -152,6 +245,13 @@ class WsClient {
   }
 
   send(message: object): void {
+    // Chat messages ride the ack/resend path — they are the one thing that
+    // must survive a zombie socket (root cause: idle-reconnect message loss).
+    const { type, clientMsgId } = message as { type?: string; clientMsgId?: string }
+    if (type === 'chat' && clientMsgId) {
+      this.sendChat(clientMsgId, message as Record<string, unknown>)
+      return
+    }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message))
       return
@@ -162,7 +262,6 @@ class WsClient {
     // reconnect dump them all to the server in a single burst (which both
     // floods the server and ties up the client's main thread serializing the
     // queue, manifesting to the user as "the terminal locked up").
-    const type = (message as { type?: string }).type
     if (type === '__ping__' || type === 'terminal:input' || type === 'terminal:resize') return
     // Cap the queue. Anything beyond this is structural (subscribe, command:*)
     // — drop the oldest so a fresh request still gets through after a long
@@ -170,6 +269,95 @@ class WsClient {
     const QUEUE_LIMIT = 100
     if (this.pendingQueue.length >= QUEUE_LIMIT) this.pendingQueue.shift()
     this.pendingQueue.push(message)
+  }
+
+  /** Track a chat in the pending-ack table, then transmit if the socket is
+   *  both OPEN and fresh. Otherwise the entry just waits — every `onopen`
+   *  flushes the table, so the chat rides the next (re)connection. */
+  private sendChat(id: string, message: Record<string, unknown>): void {
+    // Capacity cap, mirroring pendingQueue's QUEUE_LIMIT: fail the oldest
+    // entry so the newest chat still gets tracked during a marathon outage.
+    if (this.pendingAcks.size >= PENDING_ACKS_LIMIT) {
+      const oldest = this.pendingAcks.keys().next().value
+      if (oldest !== undefined) this.failPendingChat(oldest)
+    }
+    const entry: PendingChat = {
+      message,
+      attempts: 0,
+      ackTimer: null,
+      deadlineTimer: setTimeout(() => this.failPendingChat(id), PENDING_CHAT_DEADLINE_MS),
+    }
+    this.pendingAcks.set(id, entry)
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    // Freshness gate: no inbound traffic for a long stretch means the socket
+    // can't be trusted with a message that matters (a zombie-OPEN send is a
+    // silent void). Tear it down now — reconnect typically completes in ~1s
+    // and the onopen flush delivers the chat, instead of burning the full
+    // ACK_TIMEOUT on a socket we already suspect.
+    if (Date.now() - this.lastReceiveTs > FRESH_SEND_LIMIT_MS) {
+      console.log('[WsClient] Link stale at chat send, reconnecting first')
+      try { this.ws.close() } catch { /* ignore */ }
+      return
+    }
+    this.transmitChat(id, entry)
+  }
+
+  private transmitChat(id: string, entry: PendingChat): void {
+    // A reconnect can complete inside the previous attempt's ack window
+    // (onopen flush re-transmits everything unacked) — clear the stale timer
+    // so two timers never race for the same entry.
+    if (entry.ackTimer) {
+      clearTimeout(entry.ackTimer)
+      entry.ackTimer = null
+    }
+    entry.attempts++
+    try {
+      this.ws!.send(JSON.stringify(entry.message))
+    } catch {
+      // Socket died between the OPEN check and the write — the entry stays
+      // in the table and the reconnect's onopen flush retries it.
+      try { this.ws?.close() } catch { /* ignore */ }
+      return
+    }
+    entry.ackTimer = setTimeout(() => {
+      entry.ackTimer = null
+      if (!this.pendingAcks.has(id)) return
+      if (entry.attempts >= ACK_MAX_ATTEMPTS) {
+        // Sent this many times without an ack — stop tearing the link down
+        // on this chat's behalf (rapid flaps would otherwise turn one chat
+        // into endless connection churn). The entry stays pending: it still
+        // rides every onopen flush, and its deadlineTimer is the final
+        // arbiter between a late ack and a visible failure.
+        console.log(`[WsClient] Chat ${id} unacked after ${entry.attempts} attempts, waiting for deadline`)
+        return
+      }
+      // No ack in time → the socket is suspect. Close it; the reconnect's
+      // onopen flush resends this entry (attempts carries across).
+      console.log(`[WsClient] Chat ${id} unacked after ${ACK_TIMEOUT_MS}ms (attempt ${entry.attempts}), forcing reconnect`)
+      try { this.ws?.close() } catch { /* ignore */ }
+    }, ACK_TIMEOUT_MS)
+  }
+
+  /** Remove a pending chat and surface it as visibly failed (red bubble via
+   *  `_chat_send_failed`). Reached from the wall-clock deadline and from the
+   *  capacity cap — never from a mere attempts count. */
+  private failPendingChat(id: string): void {
+    const entry = this.pendingAcks.get(id)
+    if (!entry) return
+    if (entry.ackTimer) clearTimeout(entry.ackTimer)
+    clearTimeout(entry.deadlineTimer)
+    this.pendingAcks.delete(id)
+    console.log(`[WsClient] Chat ${id} unacked after ${entry.attempts} transmit(s), giving up`)
+    this.emit('_chat_send_failed', { clientMsgId: id })
+  }
+
+  private resolveAck(clientMsgId: unknown): void {
+    if (typeof clientMsgId !== 'string') return
+    const entry = this.pendingAcks.get(clientMsgId)
+    if (!entry) return
+    if (entry.ackTimer) clearTimeout(entry.ackTimer)
+    clearTimeout(entry.deadlineTimer)
+    this.pendingAcks.delete(clientMsgId)
   }
 
   on(type: string, handler: MessageHandler): () => void {
@@ -193,13 +381,20 @@ class WsClient {
     return this.ws?.readyState === WebSocket.OPEN
   }
 
+  /** Milliseconds since the last inbound frame — the connection indicator's
+   *  staleness input. With the server answering every liveness probe, a
+   *  healthy foreground link keeps this under ~15s; anything much older
+   *  means the round-trip is broken (or the tab was throttled — either way
+   *  the link deserves an amber "probing" light, not a confident green). */
+  get lastReceiveAgeMs(): number {
+    return this.lastReceiveTs === 0 ? Infinity : Date.now() - this.lastReceiveTs
+  }
+
   /**
    * Force-close the socket if it looks stale, so the auto-reconnect kicks in.
-   * Called on `visibilitychange`/`focus` — covers laptop sleep/wake, tab switch,
-   * and proxy idle timeouts where the TCP connection is half-dead but `onclose`
-   * never fires. `staleMs` is the silence threshold; default 5s is enough that
-   * a healthy connection (which receives at least subscribe acks/events) won't
-   * trip it during normal use.
+   * Called on OS `online` and on tab-visible-after-long-hidden — covers
+   * laptop sleep/wake and proxy idle timeouts where the TCP connection is
+   * half-dead but `onclose` never fires. `staleMs` is the silence threshold.
    */
   reconnectIfStale(staleMs = 5000): void {
     if (!this.ws) {

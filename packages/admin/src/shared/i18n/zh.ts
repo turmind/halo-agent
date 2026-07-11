@@ -195,6 +195,14 @@ export const zh: Record<string, string> = {
 
   // ── Chat ──
   'chat.imageSent': '[已发送 {n} 张图片]',
+  'chat.sendFailed': '发送失败——服务器未确认收到这条消息,请重新发送。',
+  'chat.sendFailedBadge': '发送失败',
+  'chat.interrupted': '未收到响应——连接可能已断开,如有需要请重发。',
+
+  // ── Connection link light ──
+  'link.fresh': '已连接',
+  'link.stale': '连接不稳定——探测中…',
+  'link.down': '连接已断开',
 
   // ── Agent management ──
   'agent.agents': 'Agents',

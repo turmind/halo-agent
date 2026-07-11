@@ -32,6 +32,7 @@ import { SourceControlSidebar } from '@/features/source-control/source-control-s
 import { SourceControlMain } from '@/features/source-control/source-control-main'
 import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, Wifi, WifiOff, Pin, PinOff, Bell, BellOff } from 'lucide-react'
 import { useT } from '@/shared/i18n'
+import type { LinkState } from '@/shared/use-websocket'
 
 type SidebarTab = 'explorer' | 'source-control' | 'sessions' | 'management' | 'skills' | 'channels' | 'evolution' | 'cron' | 'settings'
 
@@ -68,10 +69,10 @@ function playChime() {
 }
 
 interface WorkspaceLayoutProps {
-  connected: boolean
+  linkState: LinkState
 }
 
-export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
+export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   const t = useT()
   const activeProject = useProjectStore((s) => s.activeProject)
   const openFolder = useProjectStore((s) => s.openFolder)
@@ -555,8 +556,15 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
             {notifyOnFinish ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
           </button>
         )}
-        <div className="pb-2" title={connected ? 'Connected' : 'Disconnected'}>
-          {connected ? <Wifi className="h-4 w-4 text-emerald-400" /> : <WifiOff className="h-4 w-4 text-[var(--destructive)]" />}
+        {/* Tri-state link light. Green used to mean only "last known state
+            was open" — a zombie socket kept it green while sends vanished
+            (see .halo/tmp/idle-reconnect-msg-loss.md). Now: green = inbound
+            traffic is fresh, amber = OPEN but silent past the stale window
+            (probing), red = down/reconnecting. */}
+        <div className="pb-2" title={t(`link.${linkState}`)}>
+          {linkState === 'fresh' ? <Wifi className="h-4 w-4 text-emerald-400" />
+            : linkState === 'stale' ? <Wifi className="h-4 w-4 text-amber-400 animate-pulse" />
+              : <WifiOff className="h-4 w-4 text-[var(--destructive)]" />}
         </div>
       </div>
 

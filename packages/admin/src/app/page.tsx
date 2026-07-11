@@ -7,7 +7,7 @@ import { wsClient } from '@/shared/ws-client'
 import { LoginPage } from '@/features/auth/login-page'
 
 export default function HomePage() {
-  const { connected } = useWebSocket()
+  const { linkState } = useWebSocket()
   const [authState, setAuthState] = useState<'checking' | 'login' | 'authenticated'>('checking')
 
   useEffect(() => {
@@ -49,7 +49,7 @@ export default function HomePage() {
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[var(--background)]">
-      <WorkspaceLayout connected={connected} />
+      <WorkspaceLayout linkState={linkState} />
     </div>
   )
 }

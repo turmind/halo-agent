@@ -1,5 +1,5 @@
 import type { WsClient } from '../ws-client-types'
-import { useChatStore } from '@/features/chat/chat-store'
+import { useChatStore, noteLinkDrop } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { generateId } from '@/shared/utils'
 import { postToFace } from '@/features/editor/face-bridge'
@@ -78,6 +78,10 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
   const sessionId = store.sessionId
   if (!project || !sessionId) return
 
+  // Same ack/resend protection as use-chat's dispatchMessage — this is a real
+  // chat send and must not vanish into a zombie socket either.
+  const clientMsgId = generateId()
+
   // The reply goes through raw wsClient.send (not use-chat's dispatchMessage),
   // so the capture instruction is NOT re-injected on it — that's what stops a
   // capture loop. We still echo a user bubble + streaming slot so the UI shows
@@ -105,6 +109,7 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
     role: 'user',
     content: base64 ? `[📷 ${source.name}]` : failNote,
     timestamp: Date.now(),
+    clientMsgId,
     // Show the captured frame inline on the bubble so the user can see exactly
     // what was sent to the model (the server-saved copy only appears after the
     // next snapshot, so without this the bubble would be text-only).
@@ -124,6 +129,7 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
     sessionId,
     projectId: project.id,
     message: base64 ? (isCamera ? `[Photo from the camera]` : `[Screenshot of "${source.name}"]`) : failMsg,
+    clientMsgId,
     ...(agentId !== 'default' ? { agentId } : {}),
     ...(base64 ? { images: [{ data: base64, mimeType }] } : {}),
   })
@@ -131,6 +137,30 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
 
 export function registerChatHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
+
+  // ws-client gave up on a chat (no server ack after all retries): mark the
+  // user bubble red + converge its placeholder so the loss is visible.
+  unsubs.push(
+    wsClient.on('_chat_send_failed', (data) => {
+      const msg = data as { clientMsgId?: string }
+      if (msg.clientMsgId) useChatStore.getState().markChatSendFailed(msg.clientMsgId)
+    }),
+  )
+
+  // Streaming-placeholder watchdog. An empty placeholder whose events never
+  // arrive (turn lost to a dead connection in a way the ack path doesn't
+  // cover — e.g. server restarted mid-turn) would otherwise show "Thinking…"
+  // forever AND block state-handlers' snapshot replace on reconnect (the R4
+  // amplifier in .halo/tmp/idle-reconnect-msg-loss.md). Time-based by nature
+  // (it detects the *absence* of events), so an interval — not push — is the
+  // right shape here. Gated on a link drop (see noteLinkDrop) so healthy
+  // turns with long pre-first-token silence are never falsely converged;
+  // the sweep exits on a cheap `some()` when nothing qualifies.
+  unsubs.push(wsClient.on('_disconnected', () => noteLinkDrop()))
+  const watchdog = setInterval(() => {
+    useChatStore.getState().convergeStaleStreaming()
+  }, 5_000)
+  unsubs.push(() => clearInterval(watchdog))
 
   unsubs.push(
     wsClient.on('chat:thinking', (data) => {

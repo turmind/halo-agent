@@ -634,6 +634,7 @@ Full WS protocol in [design/ws.md](../design/ws.md). The four high-traffic clien
   "projectId": "/abs/ws",
   "message": "hello",
   "agentId": "default",                                    // optional override
+  "clientMsgId": "abc123",                                 // optional — ack/resend dedup id
   "images": [ { "data": "<base64>", "mimeType": "image/png" } ]  // optional
 }
 ```
@@ -643,6 +644,7 @@ Server behaviour ([handler.ts `handleChat`](../../../packages/server/src/ws/hand
 - Persists pasted images to `<ws>/.halo/web/inbound/<date>/`
 - If the model does not support image input (`capabilities.image: false`), images are filtered out and a text notice is appended instead of sending to the API
 - Queues if busy/compacting; otherwise runs the agent turn
+- When `clientMsgId` is present, replies `{ "type": "chat:ack", "clientMsgId" }` once the message is appended to the session log; resends with an already-acked id are re-acked without re-appending (dedup — see [design/ws.md](../design/ws.md#chat-delivery-ack--resend--dedup))
 - Streams events back via `message`, `tool_call`, `usage`, etc.
 
 ### `subscribe` (C→S)

@@ -156,11 +156,17 @@ export function useChat() {
         const placeholder = t('chat.imageSent', { n: images.length })
         displayContent = displayContent ? `${placeholder}\n${displayContent}` : placeholder
       }
+      // Links the optimistic bubble to ws-client's ack/resend protocol: the
+      // server acks receipt by this id, and `_chat_send_failed` marks the
+      // bubble red when the ack never comes (zombie-socket loss, see RCA in
+      // .halo/tmp/idle-reconnect-msg-loss.md).
+      const clientMsgId = generateId()
       store.addMessage({
         id: generateId(),
         role: 'user',
         content: displayContent,
         timestamp: Date.now(),
+        clientMsgId,
         // Show the sent images inline on the bubble. The server-saved copy only
         // surfaces (as a [图片已保存] marker) on the next snapshot/refresh, so
         // without this the bubble is just the "image sent" placeholder text and
@@ -191,6 +197,7 @@ export function useChat() {
         sessionId: currentSessionId,
         projectId: activeProject.id,
         message: fullMessage,
+        clientMsgId,
         ...(agentId !== 'default' ? { agentId } : {}),
         ...(images?.length ? { images } : {}),
       })
