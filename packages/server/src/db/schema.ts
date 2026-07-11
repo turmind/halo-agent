@@ -21,6 +21,11 @@ export const agentSessions = sqliteTable('agent_sessions', {
   updatedAt: integer('updated_at').notNull(),
   stoppedAt: integer('stopped_at'),
   archivedAt: integer('archived_at'),
+  // Goal mode (see docs/plans/loop-mode.md): on G's row, `goal` holds the
+  // binding JSON ({workerSessionId, round, caps, ...}); on W's row,
+  // `goalSessionId` back-points to G so the delivery point routes without scanning.
+  goal: text('goal'),
+  goalSessionId: text('goal_session_id'),
 })
 
 export const disabledItems = sqliteTable('disabled_items', {

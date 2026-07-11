@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   stopped_at INTEGER,
-  archived_at INTEGER
+  archived_at INTEGER,
+  goal TEXT,
+  goal_session_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS disabled_items (

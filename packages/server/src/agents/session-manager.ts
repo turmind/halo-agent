@@ -23,6 +23,7 @@ import { createDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools } from './session-tools.js'
+import { deliverGoalRound, sweepActiveGoals, buildGoalTools } from './goal-mode.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
@@ -355,6 +356,9 @@ export class SessionManager implements SessionManagerInternals {
     if (opts?.reconcileOrphansOnBoot) {
       if (claimWorkspaceRuntime(workspaceRoot)) {
         this.reconcileOrphansOnBoot()
+        // Goal mode: nudge goal sessions that were mid-loop when the process
+        // died — same ownership gate as the reconcile (db is the truth).
+        sweepActiveGoals(this)
       } else {
         console.warn(`[SessionManager] Boot reconcile skipped for ${workspaceRoot}: workspace runtime is owned by another live process (.halo/runtime.lock)`)
       }
@@ -499,6 +503,12 @@ export class SessionManager implements SessionManagerInternals {
    */
   createSessionTools(sessionId: string): ToolDef[] {
     return buildSessionTools(this, sessionId)
+  }
+
+  /** Goal-mode tool set — injected only for the `goal` agent (see
+   *  session-agent-builder / goal-mode.ts). */
+  createGoalTools(sessionId: string): ToolDef[] {
+    return buildGoalTools(this, sessionId)
   }
 
   // ── Agent instance building (delegated to SessionAgentBuilder) ──────
@@ -1380,6 +1390,12 @@ export class SessionManager implements SessionManagerInternals {
         this.emitEvent(session.id, { type: 'complete' })
       }
       this.tryReportToParent(session)
+      // Goal mode: a goal-bound root worker's turn end is a round end — route
+      // the wrap-up to its goal session (fire-and-forget, like tryReportToParent's
+      // querySession). No-op unless the row carries a goal_session_id.
+      deliverGoalRound(this, session).catch((err) => {
+        console.error(`[GoalMode] deliverGoalRound failed for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
+      })
       this.releaseSession(sessionId)
     }
   }

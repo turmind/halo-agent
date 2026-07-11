@@ -28,6 +28,10 @@ export function createDb(dataDir: string) {
   if (!hasWorkingDir) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN working_dir TEXT`)
   const hasAccessLevel = agentSessionsCols.some((c) => c.name === 'access_level')
   if (!hasAccessLevel) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN access_level TEXT`)
+  const hasGoal = agentSessionsCols.some((c) => c.name === 'goal')
+  if (!hasGoal) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN goal TEXT`)
+  const hasGoalSessionId = agentSessionsCols.some((c) => c.name === 'goal_session_id')
+  if (!hasGoalSessionId) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN goal_session_id TEXT`)
 
   // Indexes for the hot listing path (channel /list, admin sidebar, sub-agent
   // children lookup). Without these, `listSessions` falls back to a full table
