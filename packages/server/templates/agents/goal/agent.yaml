@@ -23,9 +23,12 @@ context:
   compressAt: 0.8
 tools:
   - file_read
+  - view_image
   - file_write
+  - file_edit
   - file_list
+  - shell_exec
   - grep
   - glob
-  - shell_exec
+  - web_fetch
 skills: []
