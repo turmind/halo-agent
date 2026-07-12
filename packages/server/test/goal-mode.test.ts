@@ -105,7 +105,7 @@ describe('goal state + routing overlay', () => {
     const s = readGoalState(sm.getDb(), 'goal_a')!
     expect(s.status).toBe('intake')
     expect(s.workerSessionId).toBe('w1')
-    expect(s.caps.maxRounds).toBe(50)
+    expect(s.caps.maxRounds).toBe(10)
   })
 
   it('findLatestGoal activeOnly skips terminal goals', () => {
@@ -163,7 +163,7 @@ describe('deliverGoalRound', () => {
     expect(host.deliveries).toHaveLength(1)
     expect(host.deliveries[0].target).toBe('goal_a')
     expect(host.deliveries[0].from).toBe('w1')
-    expect(host.deliveries[0].text).toMatch(/^\[Goal round 1\/50/)
+    expect(host.deliveries[0].text).toMatch(/^\[Goal round 1\/10/)
     expect(host.deliveries[0].text).toContain('did stuff')
     expect(readGoalState(sm.getDb(), 'goal_a')!.round).toBe(1)
   })
@@ -219,7 +219,7 @@ describe('deliverGoalRound', () => {
 
     const host = stubHost()
     await deliverGoalRound(host, workerShape('w1', { finalOutput: `blocked on a fork ${NEED_INPUT_MARKER} which db?` }))
-    expect(host.deliveries[0].text).toMatch(/^\[Goal question-stop · round 3\/50/)
+    expect(host.deliveries[0].text).toMatch(/^\[Goal question-stop · round 3\/10/)
     expect(readGoalState(sm.getDb(), 'goal_a')!.round).toBe(3) // unchanged
   })
 
@@ -327,7 +327,7 @@ describe('buildGoalTools', () => {
     const wrong = JSON.parse(await tool(host, 'goal_a', 'query_session').callback({ session_id: 'other', message: 'hi' }) as string)
     expect(wrong.error).toMatch(/only your bound worker/)
     await tool(host, 'goal_a', 'query_session').callback({ session_id: 'w1', message: 'next order' })
-    expect(host.deliveries[0].text).toMatch(/^\[Goal work order · round 3\/50\]\nnext order/)
+    expect(host.deliveries[0].text).toMatch(/^\[Goal work order · round 3\/10\]\nnext order/)
     // Halt → revoked, state re-read from db on every call.
     const s = readGoalState(sm.getDb(), 'goal_a')!
     s.status = 'halted'
@@ -463,7 +463,7 @@ describe('/goal verbs', () => {
   it('status prints round / caps / state from the db', async () => {
     seedGoal('goal_x', 'web_w1', (s) => { s.status = 'running'; s.round = 7; s.startedAt = Date.now() })
     const res = await dispatchCommand(ctxFor('full'), '/goal', 'status')
-    expect(res?.text).toContain('status: running · round 7/50')
+    expect(res?.text).toContain('status: running · round 7/10')
     expect(res?.text).toContain('worker: web_w1')
   })
 
@@ -549,7 +549,7 @@ describe('GET /sessions/goal (banner refresh seed)', () => {
     expect(running.goalSessionId).toBe('goal_a')
     expect(running.status).toBe('running')
     expect(running.round).toBe(7)
-    expect(running.maxRounds).toBe(50)
+    expect(running.maxRounds).toBe(10)
 
     // Terminal-but-displayable states still seed the banner…
     const s = readGoalState(sm.getDb(), 'goal_a')!

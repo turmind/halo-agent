@@ -45,7 +45,7 @@ export interface GoalCaps {
 }
 
 export const DEFAULT_GOAL_CAPS: GoalCaps = {
-  maxRounds: 50,
+  maxRounds: 10,
   maxWallMs: 4 * 3600_000,
   maxTokens: null,
 }
@@ -484,7 +484,7 @@ export function buildGoalTools(host: GoalHost, gSessionId: string): ToolDef[] {
         kickoff: { type: 'string' as const, description: 'The round-1 work order sent to the worker verbatim (a work-order header is prepended by the platform).' },
         caps: {
           type: 'object' as const,
-          description: 'Optional cap overrides pinned during intake. Omitted fields keep defaults (50 rounds / 4h / no token budget).',
+          description: 'Optional cap overrides pinned during intake. Omitted fields keep defaults (10 rounds / 4h / no token budget).',
           properties: {
             max_rounds: { type: 'number' as const },
             max_hours: { type: 'number' as const },
