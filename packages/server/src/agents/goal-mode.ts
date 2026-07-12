@@ -567,7 +567,10 @@ export function buildGoalTools(host: GoalHost, gSessionId: string): ToolDef[] {
  * Called once from the SessionManager constructor, only for the process that
  * owns the workspace runtime (same gate as the orphan reconcile).
  */
-export function sweepActiveGoals(host: GoalHost & { sendUserMessage(sessionId: string, message: string): Promise<'running' | 'queued'> }): void {
+export function sweepActiveGoals(host: GoalHost & {
+  sendUserMessage(sessionId: string, message: string): Promise<'running' | 'queued'>
+  appendUserMessage(sessionId: string, text: string): void
+}): void {
   const rows = host.getDb().select({ id: agentSessions.id, goal: agentSessions.goal })
     .from(agentSessions)
     .where(isNotNull(agentSessions.goal))
@@ -578,10 +581,11 @@ export function sweepActiveGoals(host: GoalHost & { sendUserMessage(sessionId: s
     try { s = JSON.parse(row.goal) as GoalState } catch { continue }
     if (s.status !== 'running') continue
     console.log(`[GoalMode] Restart sweep: nudging goal session ${row.id} (round ${s.round}/${s.caps.maxRounds})`)
-    host.sendUserMessage(
-      row.id,
-      `[goal-mode] The server restarted; the in-flight round was lost. Call goal_context, re-read GOAL_SPEC.md and your own transcript, then re-dispatch the current work order to the worker via query_session. Counters and caps were preserved.`,
-    ).catch((err) => {
+    // Append-then-send, same as channel inbound — sendUserMessage alone never
+    // writes the nudge to the UI transcript (see execGoalCreate).
+    const nudge = `[goal-mode] The server restarted; the in-flight round was lost. Call goal_context, re-read GOAL_SPEC.md and your own transcript, then re-dispatch the current work order to the worker via query_session. Counters and caps were preserved.`
+    host.appendUserMessage(row.id, nudge)
+    host.sendUserMessage(row.id, nudge).catch((err) => {
       console.error(`[GoalMode] Restart nudge failed for ${row.id}: ${err instanceof Error ? err.message : String(err)}`)
     })
   }

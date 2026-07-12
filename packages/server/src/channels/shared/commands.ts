@@ -544,7 +544,14 @@ async function execGoalCreate(ctx: CommandContext, arg: string): Promise<Command
   // the greeting; others catch up on the user's next message, which the
   // routing overlay delivers to G).
   const hint = arg.trim()
-  ctx.sm.sendUserMessage(gId, `[goal-mode] Intake started via /goal create.${hint ? ` The user's initial goal description: "${hint}".` : ''} Call goal_context, read the worker transcript for scene, and begin the intake conversation with the user.`).catch((err) => {
+  const kick = `[goal-mode] Intake started via /goal create.${hint ? ` The user's initial goal description: "${hint}".` : ''} Call goal_context, read the worker transcript for scene, and begin the intake conversation with the user.`
+  // Persist the kick to G's UI transcript BEFORE dispatch — mirrors the channel
+  // inbound path (appendUserMessage, then sendUserMessage). sendUserMessage
+  // alone only feeds the LLM context: the kick (and the user's goal hint) never
+  // reached the on-disk UI log, so G's transcript opened with tool noise and
+  // the hint was invisible after any reload.
+  ctx.sm.appendUserMessage(gId, kick)
+  ctx.sm.sendUserMessage(gId, kick).catch((err) => {
     console.error(`[GoalMode] intake kick failed for ${gId}: ${err instanceof Error ? err.message : String(err)}`)
   })
   return { text: t('goal.created', ctx.lang, { goal: gId, worker: workerId }), switchTo: gId }
@@ -580,7 +587,10 @@ async function execGoalResume(ctx: CommandContext): Promise<CommandResult> {
   const { goalSessionId, state } = latest
   state.status = 'running'
   writeGoalState(ctx.sm.getDb(), goalSessionId, state)
-  ctx.sm.sendUserMessage(goalSessionId, '[goal-mode] The user resumed the goal. Call goal_context, re-read GOAL_SPEC.md and your own transcript (the user may have made manual changes while paused), then re-dispatch the current work order to the worker via query_session.').catch((err) => {
+  // Append-then-send, same as the create kick — see execGoalCreate.
+  const nudge = '[goal-mode] The user resumed the goal. Call goal_context, re-read GOAL_SPEC.md and your own transcript (the user may have made manual changes while paused), then re-dispatch the current work order to the worker via query_session.'
+  ctx.sm.appendUserMessage(goalSessionId, nudge)
+  ctx.sm.sendUserMessage(goalSessionId, nudge).catch((err) => {
     console.error(`[GoalMode] resume nudge failed for ${goalSessionId}: ${err instanceof Error ? err.message : String(err)}`)
   })
   return { text: t('goal.resumed', ctx.lang), switchTo: goalSessionId }

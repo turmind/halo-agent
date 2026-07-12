@@ -376,6 +376,36 @@ describe('/goal verbs', () => {
     expect(res?.text).toMatch(/No active root session/)
   })
 
+  it('create appends the intake kick (with hint) to G\'s UI transcript before dispatch', async () => {
+    seedSession('web_w1')
+    const appended: Array<{ sid: string; text: string }> = []
+    const sent: Array<{ sid: string; text: string }> = []
+    ;(sm as unknown as { appendUserMessage: (sid: string, text: string) => void }).appendUserMessage
+      = (sid: string, text: string) => { appended.push({ sid, text }) }
+    ;(sm as unknown as { sendUserMessage: (sid: string, text: string) => Promise<string> }).sendUserMessage
+      = async (sid: string, text: string) => { sent.push({ sid, text }); return 'queued' }
+    const res = await dispatchCommand(ctxFor('full', new Map([['u1', 'web_w1']])), '/goal', 'create ship the tests')
+    const gId = res!.switchTo!
+    // The kick must land in the UI log (appendUserMessage) — sendUserMessage
+    // alone only feeds the LLM context; the hint was invisible after reload.
+    expect(appended).toHaveLength(1)
+    expect(appended[0].sid).toBe(gId)
+    expect(appended[0].text).toContain('ship the tests')
+    // And the exact same text goes to the model.
+    expect(sent).toHaveLength(1)
+    expect(sent[0].text).toBe(appended[0].text)
+  })
+
+  it('resume appends the nudge to G\'s UI transcript', async () => {
+    seedGoal('goal_x', 'web_w1', (s) => { s.status = 'paused' })
+    const appended: string[] = []
+    ;(sm as unknown as { appendUserMessage: (sid: string, text: string) => void }).appendUserMessage
+      = (_sid: string, text: string) => { appended.push(text) }
+    await dispatchCommand(ctxFor('full'), '/goal', 'resume')
+    expect(appended).toHaveLength(1)
+    expect(appended[0]).toContain('resumed the goal')
+  })
+
   it('create mints G, writes both binding halves, switches the surface', async () => {
     seedSession('web_w1')
     const res = await dispatchCommand(ctxFor('full', new Map([['u1', 'web_w1']])), '/goal', 'create ship the tests')
