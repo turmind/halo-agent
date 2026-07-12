@@ -37,6 +37,9 @@ The full command list is fetched from `GET /api/commands` per session and includ
 
 See [requirements/command.md](command.md) for the full command surface.
 
+### Goal-mode banner
+When a goal is bound to the current session (see [command.md → `/goal`](command.md) / [design/goal-mode.md](../design/goal-mode.md)), a strip above the composer shows status (intake / running round N/max / paused / halted / done); a label click jumps to the goal session, a `Worker →` button jumps back to the worker. Terminal states (done/halted) are dismissible — dismissal persists per-project in `localStorage` so it survives a page refresh; a new goal gets a different id and un-suppresses automatically. Active states (intake/running/paused) are not dismissible while the lock they explain is still in force.
+
 ### Graceful interrupt
 Sending a new message while the agent is generating **does not** abort — the message goes to the server queue, the agent finishes the current turn at the next safe checkpoint (after a tool call), and then runs the queued message. Queueing multiple messages is supported; they run in order.
 
