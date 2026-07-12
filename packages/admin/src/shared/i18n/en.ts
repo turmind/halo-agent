@@ -199,6 +199,18 @@ export const en: Record<string, string> = {
   'chat.sendFailedBadge': 'send failed',
   'chat.interrupted': 'No response received — the connection may have dropped. Resend if needed.',
 
+  // ── Goal mode ──
+  'goal.banner.intake': '🎯 Goal mode · intake — define the goal contract',
+  'goal.banner.running': '🎯 Goal mode · round {round}/{max}',
+  'goal.banner.paused': '⏸ Goal paused — talk to the worker directly, /goal resume to continue',
+  'goal.banner.halted': '⛔ Goal halted — view the diagnosis in the goal session',
+  'goal.banner.done': '✅ Goal done — view the final report',
+  'goal.banner.jump': 'Go to the goal session',
+  'goal.banner.worker': 'Worker →',
+  'goal.banner.jump_worker': 'Go to the worker session',
+  'goal.banner.dismiss': 'Dismiss',
+  'goal.inputLocked': 'Goal mode is driving this session — talk in the goal session, or /goal pause to take over',
+
   // ── Connection link light ──
   'link.fresh': 'Connected',
   'link.stale': 'Connection stale — probing…',

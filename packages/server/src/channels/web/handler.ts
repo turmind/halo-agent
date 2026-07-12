@@ -9,6 +9,7 @@ import { updateAccount } from './accounts.js'
 import { saveInboundMedia } from '../shared/media-store.js'
 import { resolveAccountWorkspace } from '../shared/accounts.js'
 import { findActiveSessionId, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
+import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { t, getLang } from '../shared/i18n.js'
 
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
@@ -225,6 +226,12 @@ export function createWebChannel(deps: {
       // would clobber the browser tab's notion of "current session".
       if (!opts?.sessionId) activeOverrides.set(account.accountId, sessionId)
     }
+
+    // Goal-mode overlay: a goal-bound worker's inbound chat diverts to its
+    // goal session (the active pointer above is untouched — see
+    // docs/plans/loop-mode.md). The `session` SSE event below carries the
+    // routed id, so the client streams from G.
+    sessionId = resolveGoalRoute(sm.getDb(), sessionId)
 
     yield sseData({ type: 'session', sessionId })
 

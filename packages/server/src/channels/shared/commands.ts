@@ -10,6 +10,10 @@ import { t, type Lang } from './i18n.js'
 import { execSkillCommand, getCommandSkillInfo } from '../../commands/skill-command.js'
 import { commandRegistry } from '../../commands/index.js'
 import { enqueueEvoRun } from '../../evolution/enqueue.js'
+import {
+  GOAL_AGENT_ID, initialGoalState, writeGoalState, setWorkerBackptr, clearWorkerBackptr,
+  findLatestGoal, goalDir, fmtElapsed,
+} from '../../agents/goal-mode.js'
 
 // ── Command alias expansion ──────────────────────────────────────────────────
 
@@ -489,6 +493,123 @@ export function execNote(ctx: CommandContext, arg: string): CommandResult {
   return { text: t('evo.queued', ctx.lang) }
 }
 
+// ── /goal verbs (goal mode — see docs/plans/loop-mode.md) ────────────────────
+
+/** Format one goal's status block (shared by create-refusal and /goal status). */
+function formatGoalStatus(goalSessionId: string, s: import('../../agents/goal-mode.js').GoalState, lang: Lang): string {
+  const lines = [
+    t('goal.status_head', lang, { status: s.status, round: s.round, cap: s.caps.maxRounds }),
+    t('goal.status_meta', lang, {
+      elapsed: s.startedAt ? fmtElapsed(Date.now() - s.startedAt) : '-',
+      noProgress: s.noProgress,
+      decisions: s.delegatedCount,
+    }),
+    `worker: ${s.workerSessionId}`,
+    `goal session: ${goalSessionId}`,
+  ]
+  if (s.haltReason) lines.push(t('goal.status_halt', lang, { reason: s.haltReason }))
+  return lines.join('\n')
+}
+
+/**
+ * `/goal create [description]` — mint G (the goal session), write the binding
+ * (G's `goal` JSON + W's back-pointer), and kick G's intake. Goals are
+ * serialized per workspace (loop-mode.md open-question #3): a second create
+ * while one is active prints the active goal's status instead.
+ */
+async function execGoalCreate(ctx: CommandContext, arg: string): Promise<CommandResult> {
+  const active = findLatestGoal(ctx.sm.getDb(), { activeOnly: true })
+  if (active) {
+    return { text: `${t('goal.already_active', ctx.lang)}\n${formatGoalStatus(active.goalSessionId, active.state, ctx.lang)}` }
+  }
+  const workerId = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
+  if (!workerId) return { text: t('goal.no_session', ctx.lang) }
+  // The worker must be a root session — sub-agents report to their parent,
+  // not to a goal session (the delivery point is root-only).
+  if (workerId.includes('>')) return { text: t('goal.no_session', ctx.lang) }
+  if (workerId.startsWith('goal_')) return { text: t('goal.cannot_bind_goal', ctx.lang) }
+
+  const gId = `goal_${Date.now().toString(36)}`
+  const accessLevel = ctx.accessLevel === 'full' ? null : 'workspace' // create is gated at workspace+
+  try {
+    await ctx.sm.createSession(GOAL_AGENT_ID, null, `Goal for ${workerId}`, undefined, gId, undefined, accessLevel, '🎯 Goal')
+  } catch (err) {
+    return { text: t('goal.create_failed', ctx.lang, { error: err instanceof Error ? err.message : String(err) }) }
+  }
+  fs.mkdirSync(goalDir(ctx.workspacePath, gId), { recursive: true })
+  writeGoalState(ctx.sm.getDb(), gId, initialGoalState(gId, workerId))
+  setWorkerBackptr(ctx.sm.getDb(), workerId, gId)
+
+  // Kick G's intake (fire and forget — channels subscribed via switchTo see
+  // the greeting; others catch up on the user's next message, which the
+  // routing overlay delivers to G).
+  const hint = arg.trim()
+  const kick = `[goal-mode] Intake started via /goal create.${hint ? ` The user's initial goal description: "${hint}".` : ''} Call goal_context (its workerRecent field carries the worker's recent dialogue for scene), then begin the intake conversation with the user.`
+  // Persist the kick to G's UI transcript BEFORE dispatch — mirrors the channel
+  // inbound path (appendUserMessage, then sendUserMessage). sendUserMessage
+  // alone only feeds the LLM context: the kick (and the user's goal hint) never
+  // reached the on-disk UI log, so G's transcript opened with tool noise and
+  // the hint was invisible after any reload.
+  ctx.sm.appendUserMessage(gId, kick)
+  ctx.sm.sendUserMessage(gId, kick).catch((err) => {
+    console.error(`[GoalMode] intake kick failed for ${gId}: ${err instanceof Error ? err.message : String(err)}`)
+  })
+  return { text: t('goal.created', ctx.lang, { goal: gId, worker: workerId }), switchTo: gId }
+}
+
+/** `/goal status` — print the latest goal's state from the db. */
+function execGoalStatus(ctx: CommandContext): CommandResult {
+  const latest = findLatestGoal(ctx.sm.getDb())
+  if (!latest) return { text: t('goal.none', ctx.lang) }
+  return { text: formatGoalStatus(latest.goalSessionId, latest.state, ctx.lang) }
+}
+
+/** `/goal pause` — interrupt the whole formation (W + subtree, then G) and
+ *  mark the goal paused. Paused lifts the routing overlay so the user can
+ *  talk to W directly (manual-takeover escape hatch). */
+async function execGoalPause(ctx: CommandContext): Promise<CommandResult> {
+  const latest = findLatestGoal(ctx.sm.getDb(), { activeOnly: true })
+  if (!latest || latest.state.status !== 'running') return { text: t('goal.not_running', ctx.lang) }
+  const { goalSessionId, state } = latest
+  // Status first: the worker's abort still runs runSession's finally → the
+  // delivery point must already see `paused` and skip the round.
+  state.status = 'paused'
+  writeGoalState(ctx.sm.getDb(), goalSessionId, state)
+  await ctx.sm.stopSession(state.workerSessionId)
+  await ctx.sm.stopSession(goalSessionId)
+  return { text: t('goal.paused', ctx.lang) }
+}
+
+/** `/goal resume` — paused → running, nudge G to re-dispatch. */
+async function execGoalResume(ctx: CommandContext): Promise<CommandResult> {
+  const latest = findLatestGoal(ctx.sm.getDb(), { activeOnly: true })
+  if (!latest || latest.state.status !== 'paused') return { text: t('goal.not_paused', ctx.lang) }
+  const { goalSessionId, state } = latest
+  state.status = 'running'
+  writeGoalState(ctx.sm.getDb(), goalSessionId, state)
+  // Append-then-send, same as the create kick — see execGoalCreate.
+  const nudge = '[goal-mode] The user resumed the goal. Call goal_context, re-read GOAL_SPEC.md and your own transcript (the user may have made manual changes while paused), then re-dispatch the current work order to the worker via query_session.'
+  ctx.sm.appendUserMessage(goalSessionId, nudge)
+  ctx.sm.sendUserMessage(goalSessionId, nudge).catch((err) => {
+    console.error(`[GoalMode] resume nudge failed for ${goalSessionId}: ${err instanceof Error ? err.message : String(err)}`)
+  })
+  return { text: t('goal.resumed', ctx.lang), switchTo: goalSessionId }
+}
+
+/** `/goal clear` — tear down the binding (any non-terminal state) and return
+ *  the surface to W. The goal record stays on G's row as history. */
+async function execGoalClear(ctx: CommandContext): Promise<CommandResult> {
+  const latest = findLatestGoal(ctx.sm.getDb(), { activeOnly: true })
+  if (!latest) return { text: t('goal.none_active', ctx.lang) }
+  const { goalSessionId, state } = latest
+  state.status = 'cleared'
+  writeGoalState(ctx.sm.getDb(), goalSessionId, state)
+  clearWorkerBackptr(ctx.sm.getDb(), state.workerSessionId)
+  await ctx.sm.stopSession(state.workerSessionId)
+  await ctx.sm.stopSession(goalSessionId)
+  return { text: t('goal.cleared', ctx.lang, { worker: state.workerSessionId }) }
+}
+
 /**
  * Names of every slash command this dispatcher actually handles. Imported by
  * `commands/index.ts` to assert that every `type: 'server'` descriptor has a
@@ -499,7 +620,7 @@ export function execNote(ctx: CommandContext, arg: string): CommandResult {
  * channel's frontend or by WS handler before reaching dispatch).
  */
 export const DISPATCH_COMMANDS = [
-  '/help', '/workspace', '/evo', '/session', '/agent', '/skill',
+  '/help', '/workspace', '/evo', '/session', '/agent', '/skill', '/goal',
 ] as const
 
 export async function dispatchCommand(
@@ -523,6 +644,9 @@ export async function dispatchCommand(
     // and the startup descriptor↔dispatch assertion is satisfied.
     case '/agent': return routeObjectOrSkill(ctx, command, arg)
     case '/skill': return routeObjectOrSkill(ctx, command, arg)
+    // Goal mode (docs/plans/loop-mode.md): all verbs are builtin (no backing
+    // skill) — create/status/pause/resume/clear in SUBCOMMAND_ROUTES.
+    case '/goal': return routeObjectOrSkill(ctx, command, arg)
     default:
       // Skill-defined slash commands — same routing, but
       // reached only when the command isn't a builtin above.
@@ -621,6 +745,16 @@ const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
     disable: { handler: (ctx, subArg) => execSkillSetDisabled(ctx, subArg, true), requiresAccess: 'workspace', descKey: 'verb.skill.disable' },
     enable: { handler: (ctx, subArg) => execSkillSetDisabled(ctx, subArg, false), requiresAccess: 'workspace', descKey: 'verb.skill.enable' },
     delete: { handler: (ctx, subArg) => execSkillDelete(ctx, subArg), requiresAccess: 'full', descKey: 'verb.skill.delete' },
+  },
+  '/goal': {
+    // Goal mode drives an autonomous multi-round loop (G dispatches work
+    // orders that write files, runs shell checks, consumes rounds of model
+    // budget) — user ruling: full-access only, all verbs including status.
+    create: { handler: (ctx, subArg) => execGoalCreate(ctx, subArg), requiresAccess: 'full', descKey: 'verb.goal.create' },
+    status: { handler: (ctx) => execGoalStatus(ctx), requiresAccess: 'full', descKey: 'verb.goal.status' },
+    pause: { handler: (ctx) => execGoalPause(ctx), requiresAccess: 'full', descKey: 'verb.goal.pause' },
+    resume: { handler: (ctx) => execGoalResume(ctx), requiresAccess: 'full', descKey: 'verb.goal.resume' },
+    clear: { handler: (ctx) => execGoalClear(ctx), requiresAccess: 'full', descKey: 'verb.goal.clear' },
   },
 }
 

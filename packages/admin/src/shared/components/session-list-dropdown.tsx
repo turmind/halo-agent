@@ -15,6 +15,9 @@ export interface SessionMeta {
   updatedAt: number
   messageCount: number
   agentSnapshot?: Record<string, unknown>
+  /** Goal-mode back-pointer: non-null while this session is the bound worker
+   *  of an active goal → 🎯 badge. */
+  goalSessionId?: string | null
 }
 
 export function timeAgo(date: string | number): string {
@@ -126,7 +129,10 @@ export function SessionListDropdown({
                   )}
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="text-[11px] text-[var(--foreground)] truncate">{s.title}</p>
+                    <p className="text-[11px] text-[var(--foreground)] truncate">
+                      {s.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
+                      {s.title}
+                    </p>
                     <p className="text-[9px] text-[var(--muted-foreground)]">
                       {s.messageCount} msgs · {timeAgo(s.updatedAt)}
                       {typeof s.agentSnapshot?.model === 'string' && (

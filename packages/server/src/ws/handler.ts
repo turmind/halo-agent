@@ -20,6 +20,7 @@ import { saveInboundMedia } from '../channels/shared/media-store.js'
 import { sendJson, sendWsNotification, bufferDetachedNotification } from './event-processor.js'
 import { TerminalManager } from './terminal-manager.js'
 import { dispatchCommand as sharedDispatchCommand, type CommandContext as SharedCommandContext } from '../channels/shared/commands.js'
+import { resolveGoalRoute } from '../agents/goal-mode.js'
 
 export interface WsHandlerDeps {
   wss: WebSocketServer
@@ -410,7 +411,14 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
                 // text would land in the system tray but the chat panel
                 // would still be wired to the old session.
                 if (result.switchTo) {
+                  // Rebind this client's event stream to the new session (same
+                  // mechanics as the goal-divert path in handleChat). Without
+                  // the rebind, streaming events from the switched-to session
+                  // (e.g. G's intake greeting after /goal create) never reach
+                  // this connection — the listener still points at the old id.
+                  client.unsubscribeEvents?.()
                   client.sessionId = result.switchTo
+                  client.unsubscribeEvents = sm.registerEventListener(result.switchTo, createEventListener(client))
                   sendJson(ws, { type: 'session:switched', sessionId: result.switchTo })
                 }
               } else {
@@ -566,12 +574,25 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         return
       }
       const projectPath = resolveProjectPath(msg.projectId)
-      const sid = await bindOrCreateSession(client, msg)
+      let sid = await bindOrCreateSession(client, msg)
       if (!sid || !client.sessionManager) {
         sendJson(ws, { type: 'error', error: 'Cannot resolve project path' })
         return
       }
       const sm = client.sessionManager
+
+      // Goal-mode routing overlay (docs/plans/loop-mode.md): chat aimed at a
+      // goal-bound worker diverts to its goal session — stray chat can never
+      // contaminate a round. Rebind this client's event stream to the goal
+      // session and tell the frontend (same mechanics as a command switchTo).
+      const goalRouted = resolveGoalRoute(sm.getDb(), sid)
+      if (goalRouted !== sid) {
+        sid = goalRouted
+        client.unsubscribeEvents?.()
+        client.sessionId = sid
+        client.unsubscribeEvents = sm.registerEventListener(sid, createEventListener(client))
+        sendJson(ws, { type: 'session:switched', sessionId: sid })
+      }
 
       // Persist pasted/uploaded images to disk so a [图片已保存: /path] marker
       // survives session reload and renders as a thumbnail on the same code

@@ -199,6 +199,18 @@ export const zh: Record<string, string> = {
   'chat.sendFailedBadge': '发送失败',
   'chat.interrupted': '未收到响应——连接可能已断开,如有需要请重发。',
 
+  // ── Goal mode ──
+  'goal.banner.intake': '🎯 目标模式 · 契约制定中——正在和你确认目标',
+  'goal.banner.running': '🎯 目标模式 · 第 {round}/{max} 轮',
+  'goal.banner.paused': '⏸ 目标已暂停——可直接与工作会话对话,/goal resume 继续',
+  'goal.banner.halted': '⛔ 目标已中止——到目标会话查看诊断',
+  'goal.banner.done': '✅ 目标完成——查看最终报告',
+  'goal.banner.jump': '跳转到目标会话',
+  'goal.banner.worker': '工作会话 →',
+  'goal.banner.jump_worker': '跳转到工作会话',
+  'goal.banner.dismiss': '关闭',
+  'goal.inputLocked': '目标模式接管中——请在目标会话中对话,或 /goal pause 手动接管',
+
   // ── Connection link light ──
   'link.fresh': '已连接',
   'link.stale': '连接不稳定——探测中…',

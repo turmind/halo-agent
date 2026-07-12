@@ -3,6 +3,8 @@
 import { useRef, useEffect, useMemo, useCallback, useState } from 'react'
 import { MessageList } from '@/shared/components/message-list'
 import { MessageInput } from './message-input'
+import { GoalBanner } from './goal-banner'
+import { refreshGoal } from './goal-store'
 import { useChat } from '@/features/chat/use-chat'
 import { refreshCommands } from './slash-commands'
 import { useExplorerSessions, SessionHistoryLink } from './session-list'
@@ -138,6 +140,12 @@ export function ChatPanel() {
     setTimeout(() => setLoadingSession(false), 2000)
   }, [activeProject])
 
+  // Seed the goal banner / input lock on mount + project switch — live
+  // updates ride the `goal:changed` WS push (state-handlers re-fetches).
+  useEffect(() => {
+    if (activeProject?.path) void refreshGoal(activeProject.path)
+  }, [activeProject?.path])
+
   const handleNew = useCallback(() => {
     clearSession()
     // Give the server a moment to persist the new session row, then notify
@@ -233,6 +241,7 @@ export function ChatPanel() {
       </div>
 
       <div className="shrink-0">
+        <GoalBanner currentSessionId={sessionId} onJump={loadSession} />
         <MessageInput
           onSend={sendMessage}
           isStreaming={isStreaming}

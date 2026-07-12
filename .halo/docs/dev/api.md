@@ -64,8 +64,9 @@ Unified session log API — list + read session files across all agents.
 | GET | `/api/sessions/logs/:id?projectId=` | Full session log (scans across agent dirs) |
 | DELETE | `/api/sessions/logs/:id?projectId=` | Delete the session log |
 | PATCH | `/api/sessions/logs/:id?projectId=` | Rename a session (admin-only) — updates the log file's title. Accepts any session id (root or sub-agent); the sidebar exposes the rename affordance on every row |
+| GET | `/api/sessions/goal?projectId=` | Latest goal binding for the workspace (goal-mode banner / input-lock seed) — see [detail](#get-apisessionsgoalprojectidabs) |
 
-The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / messageCount / parentSessionId / stoppedAt / contextTokens / totalOutputTokens). The frontend builds the tree from `parentSessionId`.
+The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / messageCount / parentSessionId / stoppedAt / contextTokens / totalOutputTokens / goalSessionId). The frontend builds the tree from `parentSessionId`; `goalSessionId` (non-null on a goal-bound worker row) drives the 🎯 badge.
 
 The get endpoint returns the full session file. If only `rawMessages` is present (no event-log `messages`), `convertRawMessages()` transforms it into display format on the fly.
 
@@ -524,6 +525,25 @@ Returns the full session file. If only `rawMessages` is present (sub-agent sessi
   "totalOutputTokens": 6058,
   "messages": [ /* SessionMessage[] — see design/storage.md */ ],
   "rawMessages": [ /* optional */ ]
+}
+```
+
+### GET `/api/sessions/goal?projectId=<abs>`
+
+Source: `packages/server/src/routes/sessions.ts` (`findLatestGoal` in `agents/goal-mode.ts`)
+
+Latest goal binding for the workspace — goals are serialized per workspace, so "the" goal is unambiguous. Refresh seed for the admin's goal banner / worker input lock: `goal:changed` WS pushes keep a live tab current, this endpoint restores state after a page reload. Returns `{ "goal": null }` when there is no goal or the latest one is `cleared` (a dismissed record, not a displayable state). See [design/goal-mode.md](../design/goal-mode.md).
+
+```json
+// 200
+{
+  "goal": {
+    "goalSessionId": "goal_mabc123",
+    "workerSessionId": "sid_abc",
+    "status": "running",        // intake | running | paused | halted | done
+    "round": 3,
+    "maxRounds": 50
+  }
 }
 ```
 

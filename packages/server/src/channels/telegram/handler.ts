@@ -9,6 +9,7 @@ import { TelegramResponder } from './event-adapter.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
 import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
+import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
 import { builtinCommandNames } from '../../commands/index.js'
 
@@ -347,7 +348,9 @@ async function handleUserMessage(args: {
 
   const sm = registry.getOrCreate(workspace)
   const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  const sessionId = await getOrCreateActiveSession(sm, userId, activeOverrides, accessLevel, workspace)
+  // Goal-mode overlay: a goal-bound worker's inbound chat diverts to its goal
+  // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
+  const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateActiveSession(sm, userId, activeOverrides, accessLevel, workspace))
 
   if (sm.isSessionCompacting(sessionId)) {
     await ctx.reply(t('handler.compacting', lang))

@@ -4,6 +4,7 @@ import { getWorkspaceDb } from '../db/index.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import { sessions, agentSessions } from '../db/schema.js'
 import { findSessionFileData, findAndDeleteSessionFile, findAndUpdateSessionTitle, readSessionFileMeta } from '../sessions/session-store.js'
+import { findLatestGoal } from '../agents/goal-mode.js'
 import { broadcast } from '../ws/broadcast.js'
 
 /** Raw content block — supports both Bedrock and Anthropic API formats */
@@ -252,6 +253,9 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
         archivedAt: s.archivedAt,
         contextTokens: meta?.contextTokens,
         totalOutputTokens: meta?.totalOutputTokens,
+        // Goal-mode: non-null while this session is the bound worker of an
+        // active goal — session lists render a 🎯 badge off this.
+        goalSessionId: s.goalSessionId,
       }
     }
 
@@ -341,6 +345,28 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
     // Push so every admin session list re-fetches the new title live.
     broadcast({ type: 'session:changed' })
     return c.json({ ok: true })
+  })
+
+  // GET /sessions/goal?projectId=xxx — latest goal binding for the workspace
+  // (goals are serialized per workspace, so "the" goal is unambiguous).
+  // Refresh seed for the admin's goal banner / input lock: `goal:changed` WS
+  // pushes keep a live tab current, this endpoint restores the state after a
+  // page reload. `cleared` is a dismissed record, not a displayable state.
+  app.get('/sessions/goal', (c) => {
+    const projectId = c.req.query('projectId')
+    if (!projectId) return c.json({ error: 'projectId required' }, 400)
+    const { db } = getWorkspaceDb(projectId)
+    const latest = findLatestGoal(db)
+    if (!latest || latest.state.status === 'cleared') return c.json({ goal: null })
+    return c.json({
+      goal: {
+        goalSessionId: latest.goalSessionId,
+        workerSessionId: latest.state.workerSessionId,
+        status: latest.state.status,
+        round: latest.state.round,
+        maxRounds: latest.state.caps.maxRounds,
+      },
+    })
   })
 
   // ── Regular sessions (SQLite-based) ──

@@ -101,7 +101,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_CORS_ORIGINS` | empty (reflect any origin) | `config.yaml server.cors_origins` | CORS allowlist (comma-separated). Empty = reflect any incoming Origin so credentials work cross-origin. Set explicit list to enforce strict CORS. |
 | `HALO_FRONTEND_DIR` | `packages/admin/out` | — | Static frontend dir (resolved as absolute path from project root) |
 | `HALO_MAX_CONTEXT_TOKENS` | `200000` | — | Model max context |
-| `HALO_SHELL_TIMEOUT` | `120000` | `config.yaml timeout.shell_exec` | Shell command timeout (ms) |
+| `HALO_SHELL_TIMEOUT` | `600000` | `config.yaml timeout.shell_exec` | Shell command timeout (ms) |
 | `HALO_WEB_FETCH_TIMEOUT` | `10000` | `config.yaml timeout.web_fetch` | web_fetch timeout |
 | `HALO_MODEL_TIMEOUT` | `1800000` | `config.yaml timeout.model_request` | Per model-call wall-clock cap (ms, 30 min). A bare fetch has no default timeout, so a half-open connection would hang the request forever; on expiry the call aborts and the agent loop retries with backoff. |
 | `HALO_SESSION_GRACE` | `300000` | `config.yaml timeout.session_grace` | WS-disconnect session grace |

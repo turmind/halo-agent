@@ -292,6 +292,15 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
       const store = useChatStore.getState()
       store.clear()
       store.setSessionId(msg.sessionId)
+      // Subscribe to the switched-to session — the same path clicking a
+      // session in the list takes. The server replies with a state:snapshot
+      // (disk-seeded via getSessionView) so a session that already has a
+      // transcript (e.g. G after /goal create or resume) renders its history
+      // instead of a blank panel; for a fresh /new session the snapshot is
+      // empty and this is a no-op.
+      if (project) {
+        wsClient.send({ type: 'subscribe', sessionId: msg.sessionId, projectId: project.id })
+      }
     }),
   )
 

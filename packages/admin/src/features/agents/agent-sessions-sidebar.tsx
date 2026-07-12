@@ -23,6 +23,9 @@ export interface SessionItem {
   createdAt: number
   updatedAt: number
   messageCount: number
+  /** Goal-mode back-pointer: non-null while this session is the bound worker
+   *  of an active goal → 🎯 badge. */
+  goalSessionId?: string | null
 }
 
 /** Page size for top-level sessions. Children of these top-level rows
@@ -177,6 +180,7 @@ function SessionTree({
                     />
                   ) : (
                     <p className="truncate text-[10px] text-[var(--foreground)]">
+                      {sub.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
                       {sub.title || 'Untitled'}
                     </p>
                   )}

@@ -7,6 +7,7 @@ import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { useChatStore } from '@/features/chat/chat-store'
+import { useGoalStore } from '@/features/chat/goal-store'
 import { postToFace } from '@/features/editor/face-bridge'
 import { matchCommands, matchVerbs, getCommands, type SlashCommand } from './slash-commands'
 import { CommandPalette } from './command-palette'
@@ -588,6 +589,7 @@ function TokenRing({ onCompact }: { onCompact?: () => void }) {
 }
 
 export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrupt, pendingMessages, onRemovePending, onCommand, onCompact, renderLeftControls }: MessageInputProps) {
+  const t = useT()
   const selectedText = useEditorStore((s) => s.selectedText)
   const selectedRange = useEditorStore((s) => s.selectedRange)
   const activeTab = useEditorStore((s) => s.activeTab)
@@ -608,6 +610,18 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   // sending, since no agent can pick up the message.
   const usableAgentCount = useChatStore((s) => s.usableAgentCount)
   const noUsableAgent = usableAgentCount === 0
+  // Goal-mode input lock: while this session is the bound worker of an
+  // active goal (intake/running), plain chat is locked — the server's routing
+  // overlay would deliver it to the goal session anyway, so typing here is
+  // misleading. Paused lifts the lock (manual takeover). Slash commands stay
+  // usable (/goal pause·status·clear are exactly what you'd run from here).
+  const goal = useGoalStore((s) => s.goal)
+  const chatSessionId = useChatStore((s) => s.sessionId)
+  const goalLocked = !!goal
+    && (goal.status === 'intake' || goal.status === 'running')
+    && chatSessionId === goal.workerSessionId
+  // The lock only blocks plain chat — a typed slash command still dispatches.
+  const goalSendBlocked = goalLocked && !text.trim().startsWith('/')
 
   // Show context chip: prefer selection if available, otherwise show active file
   const contextLabel = useMemo(() => {
@@ -818,6 +832,10 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
       // Unknown /word → fall through and send as a chat message.
     }
 
+    // Goal lock gates plain chat only — slash commands dispatched above stay
+    // usable (that's how you /goal pause·clear from the locked worker).
+    if (goalLocked) return
+
     // Attachments are images only (addFiles filters non-images out). Convert
     // them to base64 for vision input.
     const imageDataList: Array<{ data: string; mimeType: string }> = []
@@ -843,7 +861,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     setMentionedFiles([])
     setText('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-  }, [text, pendingFiles, onSend, matchedCmds, cmdIndex, selectCommand, mentionedFiles, matchedVerbs, verbIndex, selectVerb, noUsableAgent])
+  }, [text, pendingFiles, onSend, matchedCmds, cmdIndex, selectCommand, mentionedFiles, matchedVerbs, verbIndex, selectVerb, noUsableAgent, goalLocked])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -961,7 +979,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
         <textarea
           ref={textareaRef} value={text} onChange={handleInput} onKeyDown={handleKeyDown} onPaste={handlePaste}
           onSelect={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart)}
-          placeholder={noUsableAgent ? 'All agents are disabled — enable one in the Agents tab to chat' : isStreaming ? 'Send to interrupt current response...' : 'Type @ to reference files...'}
+          placeholder={noUsableAgent ? 'All agents are disabled — enable one in the Agents tab to chat' : goalLocked ? t('goal.inputLocked') : isStreaming ? 'Send to interrupt current response...' : 'Type @ to reference files...'}
           rows={1}
           className="w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-sm text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none max-h-[200px]"
         />
@@ -1030,11 +1048,11 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
               <Square className="h-3.5 w-3.5 fill-current" />
             </button>
           ) : (
-            <button onClick={handleSend} disabled={noUsableAgent || (!text.trim() && pendingFiles.length === 0)}
-              title={noUsableAgent ? 'All agents are disabled — enable one to chat' : isStreaming && text.trim() ? 'Send (interrupts current response)' : 'Send (Enter)'}
+            <button onClick={handleSend} disabled={noUsableAgent || goalSendBlocked || (!text.trim() && pendingFiles.length === 0)}
+              title={noUsableAgent ? 'All agents are disabled — enable one to chat' : goalSendBlocked ? t('goal.inputLocked') : isStreaming && text.trim() ? 'Send (interrupts current response)' : 'Send (Enter)'}
               className={cn(
                 'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors',
-                !noUsableAgent && (text.trim() || pendingFiles.length > 0)
+                !noUsableAgent && !goalSendBlocked && (text.trim() || pendingFiles.length > 0)
                   ? isStreaming ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-blue-600'
                   : 'text-[var(--muted-foreground)] cursor-not-allowed',
               )}>

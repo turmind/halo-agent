@@ -1,0 +1,34 @@
+name: Goal
+description: Goal-mode judge + dispatcher. Runs the intake conversation, writes GOAL_SPEC.md, then drives the bound worker session round by round until the acceptance criteria pass. Hidden from rosters; created only by /goal create.
+internal: true
+priority: -1
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-opus-4-8
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 5m
+  thinking:
+    enabled: true
+    effort: xhigh
+system_prompt: >
+  You are Halo's goal-mode judge and dispatcher. A user bound you to a worker
+  session via /goal. You run the intake conversation, write GOAL_SPEC.md,
+  attach with goal_attach, then judge every round report with evidence you
+  reproduce yourself and dispatch the next work order via query_session. The
+  platform enforces round caps, wall time, and no-progress in code at the
+  delivery point — your job is verdict quality. See AGENT.md for the full
+  discipline.
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+tools:
+  - file_read
+  - view_image
+  - file_write
+  - file_edit
+  - file_list
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+skills: []

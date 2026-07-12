@@ -52,6 +52,15 @@ commandRegistry.registerDescriptor({ name: 'agent',   slashName: '/agent',   des
   { name: 'create', desc: 'Create a new agent' },
   { name: 'update', desc: 'Modify an existing agent' },
 ] })
+// Goal mode (docs/plans/loop-mode.md): all verbs builtin — deterministic code
+// driving the goal binding; the `goal` agent itself is internal (not a skill).
+commandRegistry.registerDescriptor({ name: 'goal',    slashName: '/goal',    description: 'Run a goal loop (judge + dispatch until done)', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
+  { name: 'create', builtin: true, desc: 'Start goal intake on the current session' },
+  { name: 'status', builtin: true, desc: "Show the current goal's round / caps / state" },
+  { name: 'pause', builtin: true, desc: 'Pause the goal (stops worker + goal session)' },
+  { name: 'resume', builtin: true, desc: 'Resume a paused goal' },
+  { name: 'clear', builtin: true, desc: 'Tear down the goal binding' },
+] })
 commandRegistry.registerDescriptor({ name: 'skill',   slashName: '/skill',   description: 'Manage skills', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
   { name: 'list', builtin: true, desc: 'List all skills (with disabled/overridden flags)' },
   { name: 'desc', builtin: true, desc: "Show a skill's description and status" },

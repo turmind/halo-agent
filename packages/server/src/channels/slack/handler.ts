@@ -28,6 +28,7 @@ import { isInTempDir } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
 import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
+import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
 import { builtinCommandNames } from '../../commands/index.js'
 import { getLang } from '../shared/i18n.js'
@@ -459,7 +460,9 @@ async function handleInbound(args: {
 
   const sm = registry.getOrCreate(workspace)
   const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  const sessionId = await getOrCreateSessionForThread({ sm, channelId, rootTs, userId, accessLevel, state, workspacePath: workspace })
+  // Goal-mode overlay: a goal-bound worker's inbound chat diverts to its goal
+  // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
+  const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateSessionForThread({ sm, channelId, rootTs, userId, accessLevel, state, workspacePath: workspace }))
 
   if (sm.isSessionCompacting(sessionId)) {
     await postMessage({ botToken: account.botToken, channel: channelId, threadTs: replyTs, text: '⏳ 正在整理上下文，请稍后再发消息（通常 30 秒内完成）' })

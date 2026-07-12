@@ -95,6 +95,8 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | `file:changed` | WorkspaceWatcher · GitDirWatcher · `routes/git.ts` | File change notification (path + action). Three sources: (1) **WorkspaceWatcher** — recursive workspace watch, deliberately excludes `.git`; (2) **`routes/git.ts`** — every git mutation route re-broadcasts `path:'.git'` itself (the recursive watcher ignores `.git`); (3) **GitDirWatcher** — a non-recursive `.git`-dir watch for command-line git ops, *plus* a degraded "watch the workspace root for `.git` appearing" phase that fires `path:'.git'` on a terminal `git init`/`clone` so the Source Control entry auto-surfaces. See [source-control.md](../requirements/source-control.md#auto-refresh-no-polling). |
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |
 | `session:changed` | `SessionManager` (broadcast to all clients) | Root session list changed — re-fetch. Fires on root-session create *and* on each root turn `complete` (so channel-driven messages refresh the count/title/ordering, not just admin's own turns). |
+| `session:switched` | handler.ts (this client only) | The server rebound this connection to a different session — see [switchTo rebind](#switchto-rebind--sessionswitched) |
+| `goal:changed` | `writeGoalState` (`agents/goal-mode.ts`, broadcast to all clients) | Goal-mode state transition: `{goalSessionId, workerSessionId, status, round, maxRounds}`. Emitted on every goal state write (every transition routes through `writeGoalState`, so the push can never be forgotten) plus the goal-session-delete dissolve path. **No workspace marker** — the admin re-fetches through `GET /api/sessions/goal` under its active project, which naturally filters cross-workspace events. Drives the goal banner, worker input lock, and 🎯 badge refresh. See [goal-mode.md](goal-mode.md#admin-surface--ws). |
 | `session:cleared` | session:clear handler | /session new complete |
 | `session:compacted` | compact handler | Compaction complete |
 | `compact:started` / `compact:summarizing` / `compact:done` | compact handler | Compaction progress |
@@ -127,6 +129,12 @@ UI state (messageLog / streamBuffer / turnToolCalls / tokens) belongs to Session
 - `session:clear` / `session:delete` — handled inline (save/detach/delete logic specific to WS client lifecycle)
 - `command:session` with `compact` verb — calls `sm.compactSession(sid, { onProgress })` directly for real-time progress feedback
 - All other `command:*` — builds a shared `CommandContext` and routes through `dispatchCommand()` (see [command.md](command.md))
+
+### switchTo rebind & `session:switched`
+
+When a command result carries `switchTo` (e.g. `/new`, `/goal create`, `/goal resume`), the WS handler doesn't just report the new id — it **rebinds this client's event stream**: unsubscribe the old listener, set `client.sessionId`, `registerEventListener` on the target, then send `session:switched {sessionId}`. Without the rebind, streaming events from the switched-to session (e.g. the goal agent's intake greeting right after `/goal create`) would never reach the connection — the listener would still point at the old id.
+
+The same mechanics run on the **goal-routing overlay** in `handleChat`: a chat aimed at a goal-bound worker is diverted to its goal session (`resolveGoalRoute`), the listener is rebound, and `session:switched` is sent. On receipt the admin clears its chat store, sets the new session id, and **re-subscribes** to pull the disk-seeded snapshot so the target session's existing transcript renders (`chat-handlers.ts`).
 
 ### Message flow
 

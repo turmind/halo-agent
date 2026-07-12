@@ -6,7 +6,7 @@ Unified command processing — all slash commands (built-in + skill) are dispatc
 
 Source: [commands/index.ts](../../../packages/server/src/commands/index.ts) (descriptors) + [channels/shared/commands.ts](../../../packages/server/src/channels/shared/commands.ts) (execution)
 
-Top-level built-in slash commands: `/help` `/evo` `/session` `/agent` `/skill` `/workspace`. (`/cron` and `/acp` look like top-level commands too but are provided by same-name skills — see the verb table below; they aren't registered in `commands/index.ts` or `DISPATCH_COMMANDS`.)
+Top-level built-in slash commands: `/help` `/evo` `/session` `/agent` `/skill` `/workspace` `/goal`. (`/cron` and `/acp` look like top-level commands too but are provided by same-name skills — see the verb table below; they aren't registered in `commands/index.ts` or `DISPATCH_COMMANDS`.)
 
 | Name | Slash | Type | Purpose |
 |---|---|---|---|
@@ -23,8 +23,19 @@ The rest are noun-verb **object commands**: `/<obj> <verb> [args]`. Some verbs a
 | `/workspace` | info (built-in, no gate) · switch (built-in, full) · setup / tidy (skill verb, workspace) · share (skill verb, full) — `/w` is a built-in alias (see [Command aliases](#command-aliases)) |
 | `/cron` | create / list / update / enable / disable / delete — all skill verbs, full |
 | `/acp` | kiro / claude (ask a local agent directly; question = rest of line) · add / list / remove (manage generated ask-* bindings) — all full |
+| `/goal` | create \[description\] / status / pause / resume / clear — all built-in, **all full** (no skill fall-through; the `goal` agent is internal, not a skill). See [design/goal-mode.md](../design/goal-mode.md) |
 
 Session lifecycle actions (`session:clear`, `session:delete`) are handled inline by the WS handler, not as slash commands.
+
+### `/goal` verbs
+
+All five verbs are gated `requiresAccess: full` — **including `status`** (user ruling): goal mode drives an autonomous multi-round loop (the goal session dispatches work orders that write files, run shell checks, and burn rounds of model budget), so no verb is exposed to workspace-level callers.
+
+- `create [description]` — start goal intake on the current session (which becomes the worker; must be a root session and not itself a goal session). Refuses while a goal is active — goals are serialized per workspace — printing the active goal's status instead. Returns `switchTo` to the new goal session so the surface lands in the intake conversation.
+- `status` — print the latest goal (any state): status, round/cap, elapsed, no-progress counter, delegated decisions, both session ids, halt reason if any.
+- `pause` — running → paused, then stop the worker (cascading to its subtree) **and** the goal session. Paused lifts the routing overlay: the user talks to the worker directly (manual takeover).
+- `resume` — paused → running, nudges the goal session to re-read spec + transcript and re-dispatch; returns `switchTo` to the goal session.
+- `clear` — tear down the binding from any active state; worker + goal session stopped, surface returns to the worker. The goal record stays on the goal session's row as history.
 
 ### `/session info`
 

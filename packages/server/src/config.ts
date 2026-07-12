@@ -349,7 +349,7 @@ export const config = {
   },
 
   timeout: {
-    shellExec: systemInt('HALO_SHELL_TIMEOUT', 'timeout.shell_exec', 120_000),
+    shellExec: systemInt('HALO_SHELL_TIMEOUT', 'timeout.shell_exec', 600_000),
     webFetch: systemInt('HALO_WEB_FETCH_TIMEOUT', 'timeout.web_fetch', 10_000),
     // Per model-call wall-clock cap. A bare fetch has no default timeout, so a
     // half-open connection (server accepted but never sends bytes / sends no

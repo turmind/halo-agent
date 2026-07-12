@@ -682,6 +682,12 @@ export function createWorkspaceTools(
       'truncated with an explicit `[Content truncated…]` marker. For commands',
       'that produce a lot of output, redirect to a file (`> /tmp/out.log`) and',
       'use `grep` / `file_read` with `offset`+`limit` to inspect what you need.',
+      '',
+      `Commands are killed after ${config.timeout.shellExec / 1000}s. For anything that may run`,
+      'longer (big builds, long test suites, deploys), start it in the background',
+      'and return immediately — e.g. `nohup <command> > /tmp/xxx.log 2>&1 &` —',
+      'then poll the log file or process status with follow-up shell_exec calls',
+      'instead of letting a single call sit past the timeout.',
     ].join('\n'),
     inputSchema: {
       type: 'object' as const,

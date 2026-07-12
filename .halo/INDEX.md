@@ -94,6 +94,16 @@ Key state:
 
 Driven from `packages/server/src/cron/` (runner + registry) + per-channel `cron-dispatcher.ts` files (telegram / wechat / slack / feishu) + `packages/server/templates/skills/cron/` (the agent-facing skill, which receives `{{channel.type/account_id/chat_id}}` placeholders so it can default targets to the current chat when invoked from any of the four channels, and uses `list --chat-id <id>` to reverse-look-up subscriptions when the user asks "delete my cron" from inside a chat).
 
+## Goal Mode
+
+Hands the two roles a user unconsciously plays in long agent collaborations — the **pusher** ("continue") and the **evaluator** ("is it actually done?") — to a dedicated judge, keeping only decision authority and final acceptance with the human. `/goal create` in any session mints a peer root **goal session** (G, built-in internal agent `goal`) bound to the current session as **worker** (W): an intake conversation pins the contract (`GOAL_SPEC.md`), then `goal_attach` starts the loop — G dispatches work orders, W's wrap-ups return as round reports via a code seam in `runSession`'s finally (`deliverGoalRound`), G judges against the spec and re-dispatches until acceptance (`goal_finish`) or a guardrail halts it (10 rounds / 4h wall / 3 zero-progress rounds / optional token budget — all enforced in code, and a halt revokes G's lateral edge so runaway is impossible). While a goal runs, inbound chat on W diverts to G (routing overlay; `paused` = manual takeover), the admin shows a goal banner + 🎯 badge and locks W's composer, and `goal:changed` WS pushes keep it live. All five `/goal` verbs (create/status/pause/resume/clear) are full-access only. See [design/goal-mode.md](docs/design/goal-mode.md).
+
+Key state:
+- Workspace sqlite `agent_sessions` — G's row `goal` JSON column (status/round/caps/counters) + W's row `goal_session_id` back-pointer; survives restarts (a boot sweep nudges `running` goals to re-dispatch)
+- `<workspace>/.halo/goal/<goalId>/` — `GOAL_SPEC.md` (hash-stamped at attach, tamper-checked every round) + `decision-<n>.md` per delegated fork (cap 5)
+
+Driven from `packages/server/src/agents/goal-mode.ts` (state, overlay, delivery point, G-only tools, restart sweep) + `packages/server/templates/agents/goal/` (the judge agent) + `channels/shared/commands.ts` (`/goal` verbs) + `packages/admin/src/features/chat/goal-{banner,store}` (admin surface).
+
 ## Express Self (visual face)
 
 The agent has a second channel beyond text: a living particle face at `<workspace>/.halo/canvas/self.html` it can drive in real time. It emits a `<<<SHOW: self.say("HI") >>>` marker in a reply; the admin detects it, forwards the payload verbatim to the open `self.html` preview via `postMessage`, and strips the marker from rendered chat. The `self` API (say/play/react/pulse/flash/shake/intro/voice) is a stable engine, force-copied into every workspace on open; the agent expresses itself purely through runtime `<<<SHOW>>>` markers, never by editing the file. `self.voice(path)` plays a clip Halo synthesized and rides its live amplitude (Web Audio analyser → loudness/spectrum/syllable rings); Halo makes the sound, the face makes it visible. Taught by the built-in `self` skill. See [design/express-self.md](docs/design/express-self.md).

@@ -1,6 +1,8 @@
 import type { WsClient } from '../ws-client-types'
 import { useChatStore, isStaleStreamingPlaceholder } from '@/features/chat/chat-store'
+import { refreshGoal } from '@/features/chat/goal-store'
 import { useTaskStore } from '@/shared/stores/task-store'
+import { useProjectStore } from '@/shared/stores/project-store'
 import { bumpSessionBus } from '@/shared/session-bus'
 import type { WsSnapshotMsg, ChatMessage } from '@/shared/types'
 
@@ -69,6 +71,20 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
   // admin's own delete already bumps locally; this covers the push direction.
   unsubs.push(
     wsClient.on('session:changed', () => bumpSessionBus()),
+  )
+
+  // Goal-mode state transition (create/attach/round/pause/halt/done/clear —
+  // every writeGoalState broadcasts). The event carries the new state, but we
+  // re-fetch through the seed endpoint instead of applying it directly: the
+  // broadcast is server-global while the banner is per-workspace, and the
+  // fetch resolves against the active project. Binding changes also affect
+  // the session lists' 🎯 badge → bump the bus.
+  unsubs.push(
+    wsClient.on('goal:changed', () => {
+      const projectId = useProjectStore.getState().activeProject?.path
+      if (projectId) void refreshGoal(projectId)
+      bumpSessionBus()
+    }),
   )
 
   return () => unsubs.forEach((fn) => fn())

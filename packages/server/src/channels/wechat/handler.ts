@@ -23,6 +23,7 @@ import { sendMediaFile } from './send-media.js'
 import { startLogin, waitLogin } from './login.js'
 import QRCode from 'qrcode'
 import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
+import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
 
 /** Allow files under workspace or the OS temp dir (agent-generated temp files like screenshots) */
@@ -388,7 +389,9 @@ async function handleInbound(args: {
 
   const sm = registry.getOrCreate(account.workspacePath)
   const sessionAccessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  const sessionId = await getOrCreateActiveSession(sm, fromUserId, activeOverrides, sessionAccessLevel, account.workspacePath)
+  // Goal-mode overlay: a goal-bound worker's inbound chat diverts to its goal
+  // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
+  const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateActiveSession(sm, fromUserId, activeOverrides, sessionAccessLevel, account.workspacePath))
 
   // If the session is currently compacting or mid-turn, send an immediate hint
   // so the WeChat user doesn't stare at a silent chat for 30+ seconds.

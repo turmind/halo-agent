@@ -148,7 +148,7 @@ function spawnGroupExec(
         if (reason === 'abort') {
           reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError', stdout, stderr, code: null }))
         } else {
-          reject(Object.assign(new Error('Command timed out'), { stdout, stderr, killed: true, signal: 'SIGKILL' }))
+          reject(Object.assign(new Error(`Command timed out after ${opts.timeout}ms`), { stdout, stderr, killed: true, signal: 'SIGKILL' }))
         }
       })
     }
@@ -171,7 +171,7 @@ function spawnGroupExec(
           // Match execAsync's abort shape so callers detect cancellation.
           reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError', stdout, stderr, code }))
         } else if (killReason === 'timeout') {
-          reject(Object.assign(new Error(`Command timed out`), { stdout, stderr, killed: true, signal }))
+          reject(Object.assign(new Error(`Command timed out after ${opts.timeout}ms`), { stdout, stderr, killed: true, signal }))
         } else if (code === 0) {
           resolve({ stdout, stderr })
         } else {

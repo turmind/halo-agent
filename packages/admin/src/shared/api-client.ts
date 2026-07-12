@@ -545,9 +545,16 @@ export const api = {
       if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
       const qs = params.toString() ? `?${params}` : ''
       return request<{
-        sessions: Array<{ id: string; agentId: string; agentName: string; title: string; createdAt: number; updatedAt: number; messageCount: number; parentSessionId?: string; stoppedAt?: number | null; archivedAt?: number | null; contextTokens?: number; totalOutputTokens?: number }>
+        sessions: Array<{ id: string; agentId: string; agentName: string; title: string; createdAt: number; updatedAt: number; messageCount: number; parentSessionId?: string; stoppedAt?: number | null; archivedAt?: number | null; contextTokens?: number; totalOutputTokens?: number; goalSessionId?: string | null }>
         nextCursor: number | null
       }>(`/sessions/logs${qs}`)
+    },
+    /** Latest goal binding for the workspace (refresh seed for the goal
+     *  banner — live updates ride the `goal:changed` WS push). */
+    goal(projectId: string) {
+      return request<{
+        goal: { goalSessionId: string; workerSessionId: string; status: string; round: number; maxRounds: number } | null
+      }>(`/sessions/goal?projectId=${encodeURIComponent(projectId)}`)
     },
     /** Get full session log by ID */
     get(sessionId: string, projectId?: string) {

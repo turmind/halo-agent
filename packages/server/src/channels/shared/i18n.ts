@@ -136,6 +136,28 @@ const messages: Record<string, Record<Lang, string>> = {
   'agent.delete_usage': { zh: '用法：/agent delete <名称或编号>', en: 'Usage: /agent delete <name or number>' },
   'agent.delete_done': { zh: '🗑 已删除 agent "{name}"（{scope}）', en: '🗑 Deleted agent "{name}" ({scope})' },
 
+  // ── /goal verbs (goal mode) ──
+  'verb.goal.create': { zh: '在当前会话上启动 goal 意图对话', en: 'Start goal intake on the current session' },
+  'verb.goal.status': { zh: '查看当前 goal 的轮次 / 上限 / 状态', en: "Show the current goal's round / caps / state" },
+  'verb.goal.pause':  { zh: '暂停 goal（停止 worker 和 goal 会话）', en: 'Pause the goal (stops worker + goal session)' },
+  'verb.goal.resume': { zh: '恢复已暂停的 goal', en: 'Resume a paused goal' },
+  'verb.goal.clear':  { zh: '拆除 goal 绑定', en: 'Tear down the goal binding' },
+  'goal.already_active': { zh: '⚠️ 已有进行中的 goal（每个 workspace 同时只跑一个）：', en: '⚠️ A goal is already active (one per workspace at a time):' },
+  'goal.no_session': { zh: '当前没有可绑定的 root 会话。', en: 'No active root session to bind.' },
+  'goal.cannot_bind_goal': { zh: '不能在 goal 会话上再建 goal。', en: 'Cannot create a goal on a goal session.' },
+  'goal.create_failed': { zh: '创建 goal 失败：{error}', en: 'Failed to create goal: {error}' },
+  'goal.created': { zh: '🎯 Goal 会话已创建：{goal}\n（worker: {worker}）接下来和 goal 会话对话，确认目标后它会开始调度。', en: '🎯 Goal session created: {goal}\n(worker: {worker}) Talk to the goal session to define the contract; it dispatches once you confirm.' },
+  'goal.none': { zh: '这个 workspace 还没有 goal。', en: 'No goal in this workspace yet.' },
+  'goal.none_active': { zh: '没有进行中的 goal。', en: 'No active goal.' },
+  'goal.not_running': { zh: '没有正在运行的 goal。', en: 'No running goal.' },
+  'goal.not_paused': { zh: '没有已暂停的 goal。', en: 'No paused goal.' },
+  'goal.paused': { zh: '⏸ Goal 已暂停（worker 和 goal 会话都已停止）。/goal resume 恢复。', en: '⏸ Goal paused (worker + goal session stopped). /goal resume to continue.' },
+  'goal.resumed': { zh: '▶️ Goal 已恢复，goal 会话将重新派发当前任务。', en: '▶️ Goal resumed — the goal session will re-dispatch the current work order.' },
+  'goal.cleared': { zh: '🗑 Goal 绑定已拆除，会话回到 {worker}。', en: '🗑 Goal binding cleared — the surface returns to {worker}.' },
+  'goal.status_head': { zh: '状态: {status} · 轮次 {round}/{cap}', en: 'status: {status} · round {round}/{cap}' },
+  'goal.status_meta': { zh: '已运行 {elapsed} · 无进展 {noProgress}/3 · 代答 {decisions}/5', en: 'elapsed {elapsed} · no-progress {noProgress}/3 · delegated decisions {decisions}/5' },
+  'goal.status_halt': { zh: '停机原因: {reason}', en: 'halt reason: {reason}' },
+
   // ── Skill activation ──
   'skill.activated': { zh: '已激活 Skill {cmd}', en: 'Skill {cmd} activated' },
   'skill.no_session': { zh: '无法解析会话 {session} 以做权限检查。', en: 'Cannot resolve session {session} for permission check.' },

@@ -12,6 +12,7 @@ import {
   type AgentYamlConfig, type ScannedAgent,
 } from './agent-loader.js'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
+import { GOAL_AGENT_ID } from './goal-mode.js'
 
 /** Agent metadata snapshot captured at build time — used by /context command. */
 export interface AgentMeta {
@@ -42,6 +43,7 @@ export interface SessionAgentBuilderHost {
   readonly workspaceRoot: string
   getDb(): HaloDb
   createSessionTools(sessionId: string): ToolDef[]
+  createGoalTools(sessionId: string): ToolDef[]
 }
 
 /**
@@ -177,7 +179,12 @@ export class SessionAgentBuilder {
     // (evo/score/apply) never delegate.
     const nameSet = new Set(yamlConfig?.tools ?? [])
     const delegates = canDelegate(yamlConfig)
-    const sessionTools = delegates ? this.host.createSessionTools(sessionId) : []
+    // The goal agent (internal, no team → never delegates) gets its own tool
+    // set instead: goal_context/attach/decide/finish + a goal-scoped
+    // query_session / get_session_output lateral edge. See goal-mode.ts.
+    const sessionTools = delegates
+      ? this.host.createSessionTools(sessionId)
+      : agentId === GOAL_AGENT_ID ? this.host.createGoalTools(sessionId) : []
 
     // `draft` is an opt-in self-review tool with no workspace/session deps —
     // build it only when whitelisted, and surface its per-turn reset so the

@@ -299,10 +299,17 @@ export function useChat() {
         storeSessionId(activeProject.id, currentSessionId)
       }
       const cmdName = cmd.name.slice(1)
+      const agentId = useChatStore.getState().selectedAgentId
       const payload: Record<string, unknown> = {
         type: `command:${cmdName}`,
         sessionId: currentSessionId,
         projectId: activeProject.id,
+        // Same fallback risk as dispatchMessage: without this, a fresh
+        // session's first message being a slash command (e.g. switch agent
+        // then `/goal create`) hits bindOrCreateSession's `client.agentId`
+        // fallback, which is never updated off its connect-time 'default' —
+        // the session gets created on the wrong agent.
+        ...(agentId !== 'default' ? { agentId } : {}),
       }
       if (args.trim()) payload.message = args.trim()
       wsClient.send(payload)
