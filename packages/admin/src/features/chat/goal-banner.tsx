@@ -17,9 +17,10 @@ const STATUS_STYLE: Record<GoalStatus, string> = {
  * Workspace-level goal-mode strip above the composer (goals are serialized
  * per workspace, so one banner represents "the" goal). Live via the
  * `goal:changed` WS push → refreshGoal; seeded on mount / project switch so
- * it survives a page refresh. Click jumps to the goal session G; terminal
- * states (done / halted) are dismissible — active ones are not, the lock
- * they explain is still in force.
+ * it survives a page refresh. The label click jumps to the goal session G,
+ * the "Worker →" button jumps to the worker session W; terminal states
+ * (done / halted) are dismissible — active ones are not, the lock they
+ * explain is still in force.
  */
 export function GoalBanner({ currentSessionId, onJump }: {
   currentSessionId: string | null
@@ -36,6 +37,7 @@ export function GoalBanner({ currentSessionId, onJump }: {
 
   const label = t(`goal.banner.${goal.status}`, { round: goal.round, max: goal.maxRounds })
   const onGoal = currentSessionId === goal.goalSessionId
+  const onWorker = currentSessionId === goal.workerSessionId
 
   return (
     <div className={cn(
@@ -48,6 +50,13 @@ export function GoalBanner({ currentSessionId, onJump }: {
         className={cn('min-w-0 flex-1 truncate text-left', !onGoal && 'hover:underline cursor-pointer')}
       >
         {label}
+      </button>
+      <button
+        onClick={() => !onWorker && onJump(goal.workerSessionId)}
+        title={onWorker ? undefined : t('goal.banner.jump_worker')}
+        className={cn('shrink-0', !onWorker && 'hover:underline cursor-pointer')}
+      >
+        {t('goal.banner.worker')}
       </button>
       {terminal && (
         <button

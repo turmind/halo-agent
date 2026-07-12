@@ -206,6 +206,8 @@ export const en: Record<string, string> = {
   'goal.banner.halted': '⛔ Goal halted — view the diagnosis in the goal session',
   'goal.banner.done': '✅ Goal done — view the final report',
   'goal.banner.jump': 'Go to the goal session',
+  'goal.banner.worker': 'Worker →',
+  'goal.banner.jump_worker': 'Go to the worker session',
   'goal.banner.dismiss': 'Dismiss',
   'goal.inputLocked': 'Goal mode is driving this session — talk in the goal session, or /goal pause to take over',
 

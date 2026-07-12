@@ -206,6 +206,8 @@ export const zh: Record<string, string> = {
   'goal.banner.halted': '⛔ 目标已中止——到目标会话查看诊断',
   'goal.banner.done': '✅ 目标完成——查看最终报告',
   'goal.banner.jump': '跳转到目标会话',
+  'goal.banner.worker': '工作会话 →',
+  'goal.banner.jump_worker': '跳转到工作会话',
   'goal.banner.dismiss': '关闭',
   'goal.inputLocked': '目标模式接管中——请在目标会话中对话,或 /goal pause 手动接管',
 
