@@ -23,7 +23,7 @@ import { createDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools } from './session-tools.js'
-import { deliverGoalRound, sweepActiveGoals, buildGoalTools } from './goal-mode.js'
+import { deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
@@ -2534,6 +2534,13 @@ export class SessionManager implements SessionManagerInternals {
       }
     }
     collectDescendants(sessionId)
+
+    // Dissolve any active goal bindings touching the doomed ids BEFORE the
+    // rows go away — the goal record lives on G's row, so this is the last
+    // moment it can be read. Deleting G would otherwise leave W's dangling
+    // back-pointer (🎯 badge, stale banner); deleting W would leave a
+    // forever-"active" goal with no worker. Reads the db, not memory.
+    dissolveGoalBindingsFor(this.db, allIds)
 
     // Batch delete from SQLite
     for (const id of allIds) {

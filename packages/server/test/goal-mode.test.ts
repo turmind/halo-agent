@@ -468,6 +468,37 @@ describe('/goal verbs', () => {
   })
 })
 
+// ── Delete cascade ───────────────────────────────────────────────────
+
+describe('deleteSession dissolves active goal bindings', () => {
+  it("deleting G clears W's dangling back-pointer", async () => {
+    seedGoal('goal_a', 'w1') // intake (active)
+    await sm.deleteSession('goal_a')
+    const wRow = sm.getDb().select().from(agentSessions).where(eq(agentSessions.id, 'w1')).get()!
+    expect(wRow.goalSessionId).toBeNull()
+    // Overlay no longer diverts; banner seed finds nothing.
+    expect(resolveGoalRoute(sm.getDb(), 'w1')).toBe('w1')
+    expect(findLatestGoal(sm.getDb(), { activeOnly: true })).toBeNull()
+  })
+
+  it("deleting W marks G's goal cleared", async () => {
+    seedGoal('goal_a', 'w1', (s) => { s.status = 'running'; s.startedAt = Date.now() })
+    await sm.deleteSession('w1')
+    expect(readGoalState(sm.getDb(), 'goal_a')!.status).toBe('cleared')
+    expect(findLatestGoal(sm.getDb(), { activeOnly: true })).toBeNull()
+  })
+
+  it('terminal goals are left untouched', async () => {
+    seedGoal('goal_a', 'w1', (s) => { s.status = 'done' })
+    // done already cleared the back-pointer in real flow; simulate that.
+    sm.getDb().update(agentSessions).set({ goalSessionId: null }).where(eq(agentSessions.id, 'w1')).run()
+    await sm.deleteSession('goal_a')
+    // No crash, w1 survives unbound.
+    const wRow = sm.getDb().select().from(agentSessions).where(eq(agentSessions.id, 'w1')).get()!
+    expect(wRow.goalSessionId).toBeNull()
+  })
+})
+
 // ── Admin seed endpoint ──────────────────────────────────────────────
 
 describe('GET /sessions/goal (banner refresh seed)', () => {

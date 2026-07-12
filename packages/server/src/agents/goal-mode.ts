@@ -177,6 +177,58 @@ export function isActiveGoalStatus(status: GoalStatus): boolean {
   return status === 'intake' || status === 'running' || status === 'paused'
 }
 
+/**
+ * Dissolve any ACTIVE goal bindings that involve sessions about to be
+ * deleted. Called by SessionManager.deleteSession BEFORE the rows are
+ * removed (the goal record lives on G's row — after the delete there is
+ * nothing left to read). Queries the db directly, never in-memory state.
+ *
+ *  - deleting G: clear W's dangling back-pointer (otherwise the 🎯 badge and
+ *    the routing overlay's field check outlive the goal) and broadcast
+ *    `goal:changed` so the banner refreshes — G's row IS the banner's data
+ *    source, so no writeGoalState is possible/needed.
+ *  - deleting W: mark G's goal `cleared` (writeGoalState broadcasts) — a goal
+ *    without its worker is over, and a stale `intake`/`running` record would
+ *    keep the banner up forever.
+ *
+ * Terminal goals (done/halted/cleared) already dropped their back-pointer at
+ * the terminal transition — nothing to do.
+ */
+export function dissolveGoalBindingsFor(db: HaloDb, ids: string[]): void {
+  const idSet = new Set(ids)
+  for (const id of ids) {
+    const row = db.select({ goal: agentSessions.goal, goalSessionId: agentSessions.goalSessionId })
+      .from(agentSessions).where(eq(agentSessions.id, id)).get()
+    if (!row) continue
+    if (row.goal) {
+      // id is a G carrying a goal record.
+      let s: GoalState | null = null
+      try { s = JSON.parse(row.goal) as GoalState } catch { /* corrupt record — nothing to dissolve */ }
+      if (s && isActiveGoalStatus(s.status)) {
+        if (!idSet.has(s.workerSessionId)) clearWorkerBackptr(db, s.workerSessionId)
+        broadcast({
+          type: 'goal:changed',
+          goalSessionId: id,
+          workerSessionId: s.workerSessionId,
+          status: 'cleared',
+          round: s.round,
+          maxRounds: s.caps.maxRounds,
+        })
+        console.log(`[GoalMode] Dissolved goal ${id} (session deleted)`)
+      }
+    }
+    if (row.goalSessionId && !idSet.has(row.goalSessionId)) {
+      // id is a W bound to a surviving G.
+      const s = readGoalState(db, row.goalSessionId)
+      if (s && isActiveGoalStatus(s.status)) {
+        s.status = 'cleared'
+        writeGoalState(db, row.goalSessionId, s)
+        console.log(`[GoalMode] Cleared goal ${row.goalSessionId} (worker ${id} deleted)`)
+      }
+    }
+  }
+}
+
 export function goalDir(workspaceRoot: string, goalId: string): string {
   return path.join(workspaceRoot, '.halo', 'goal', goalId)
 }
