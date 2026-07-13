@@ -422,6 +422,18 @@ function createWindow() {
       event.preventDefault()
       win.webContents.send('halo:close-shortcut')
     }
+    // Cmd/Ctrl+F is intentionally NOT intercepted here (unlike Cmd+W above).
+    // There's no macOS menu accelerator contesting it (no Find menu item),
+    // so the renderer's own DOM keydown handler (workspace-layout.tsx) can
+    // own it directly — and must, so it can fall through to Monaco's native
+    // find when focus is inside the code editor. Intercepting at this
+    // native layer would preventDefault unconditionally and break that.
+  })
+  // Match results for webContents.findInPage — a webContents-instance event
+  // (unlike the ipcMain.handle bridges below), so it's registered per-window
+  // here. Forwarded to the renderer's find bar for the "x/y" match counter.
+  win.webContents.on('found-in-page', (_event, result) => {
+    win.webContents.send('halo:find-result', result)
   })
   return win
 }
@@ -451,6 +463,19 @@ ipcMain.handle('halo:pin-toggle', (e) => {
 ipcMain.handle('halo:close-window', (e) => {
   const win = BrowserWindow.fromWebContents(e.sender)
   if (win) win.close()
+})
+
+// In-page find bridge (preload exposes `window.haloFind`). findInPage /
+// stopFindInPage are webContents APIs the renderer can't call itself; both
+// are fire-and-forget (results arrive via the per-window found-in-page
+// forwarder above), so plain `on` rather than `handle`.
+ipcMain.on('halo:find', (e, text, options) => {
+  const win = BrowserWindow.fromWebContents(e.sender)
+  win?.webContents.findInPage(text, options)
+})
+ipcMain.on('halo:find-stop', (e, action) => {
+  const win = BrowserWindow.fromWebContents(e.sender)
+  win?.webContents.stopFindInPage(action)
 })
 
 // Reveal a file/folder in the OS file manager (Finder / Explorer / Linux file

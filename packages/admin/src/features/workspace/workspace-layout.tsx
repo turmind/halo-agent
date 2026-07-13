@@ -7,6 +7,7 @@ import { EditorPanel } from '@/features/editor/editor-panel'
 import { BottomPanel } from '@/features/workspace/bottom-panel'
 import { FloatingBottomPanel } from '@/features/workspace/floating-bottom-panel'
 import { QuickOpen } from '@/features/explorer/quick-open'
+import { FindBar } from '@/features/workspace/find-bar'
 import { ExplorerSidebar } from '@/features/explorer/explorer-sidebar'
 import { AgentSessionsSidebar } from '@/features/agents/agent-sessions-sidebar'
 import { AgentManagementMain } from '@/features/agents/agent-management-main'
@@ -91,6 +92,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   })
   const [pathInput, setPathInput] = useState('')
   const [showQuickOpen, setShowQuickOpen] = useState(false)
+  const [showFindBar, setShowFindBar] = useState(false)
 
   // Always-on-top toggle — only present in the desktop shell (preload injects
   // window.haloPin). null = not desktop → button hidden. See preload.cjs.
@@ -271,6 +273,20 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'p') {
         e.preventDefault()
         setShowQuickOpen((v) => !v)
+      }
+      // Ctrl/Cmd + F → in-page find bar. Desktop shell only (window.haloFind,
+      // preload-injected) — plain browsers keep native Ctrl+F. Not handled
+      // in main.cjs (unlike Cmd+W): there's no menu accelerator contesting
+      // it, and staying at the DOM layer lets Monaco's own find win when
+      // focus is inside the code editor (Monaco's virtualized DOM can't be
+      // searched by webContents.findInPage anyway — it only sees rendered
+      // rows, not the full file).
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f' && (window as unknown as { haloFind?: unknown }).haloFind) {
+        const el = document.activeElement as HTMLElement | null
+        if (!el?.closest('.monaco-editor')) {
+          e.preventDefault()
+          setShowFindBar((v) => !v)
+        }
       }
       // Ctrl/Cmd + ` → Switch to terminal tab
       if ((e.metaKey || e.ctrlKey) && e.key === '`') {
@@ -615,6 +631,9 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       {showQuickOpen && (
         <QuickOpen onSelect={handleQuickOpenSelect} onClose={() => setShowQuickOpen(false)} />
       )}
+
+      {/* In-page find (Cmd/Ctrl+F) — desktop shell only, see find-bar.tsx */}
+      {showFindBar && <FindBar onClose={() => setShowFindBar(false)} />}
 
       {/* Floating Chat + Terminal panel — the panel itself is portaled into
           this frame's slot (see bottomHost above), so floating is just another

@@ -200,6 +200,22 @@ window.haloCloseShortcut = {
   closeWindow: () => ipcRenderer.invoke('halo:close-window'),
 }
 
+// In-page find bridge (Cmd/Ctrl+F). Electron ships findInPage but no find UI,
+// so the admin owns the shortcut + renders its own find bar (see
+// workspace-layout.tsx — it falls through to Monaco's native find when focus
+// is in the code editor, so this can't be intercepted at the main-process
+// input-event layer like Cmd+W). find/stop call back into
+// webContents.findInPage / stopFindInPage; found-in-page results (match
+// counts) return via onResult. Undefined in a plain browser — there Cmd/Ctrl+F
+// stays with the browser's native find.
+let findResultFn = null
+ipcRenderer.on('halo:find-result', (_e, result) => { if (findResultFn) findResultFn(result) })
+window.haloFind = {
+  onResult: (fn) => { findResultFn = fn },
+  find: (text, options) => ipcRenderer.send('halo:find', text, options),
+  stop: (action) => ipcRenderer.send('halo:find-stop', action),
+}
+
 // Screen/window capture bridge for the "let the AI see an app" feature. Only
 // defined in the desktop shell — in a plain browser `window.haloCapture` is
 // undefined, so the chat UI hides the capture button and skips prompt
