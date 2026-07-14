@@ -283,7 +283,12 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       // rows, not the full file).
       if ((e.metaKey || e.ctrlKey) && e.key === 'f' && (window as unknown as { haloFind?: unknown }).haloFind) {
         const el = document.activeElement as HTMLElement | null
-        if (!el?.closest('.monaco-editor')) {
+        if (el?.closest('.monaco-editor')) {
+          // Monaco owns Cmd/Ctrl+F here (its own find widget). If halo's find
+          // bar was left open from elsewhere, close it — otherwise the two
+          // find UIs show at once.
+          setShowFindBar(false)
+        } else {
           e.preventDefault()
           setShowFindBar((v) => !v)
         }

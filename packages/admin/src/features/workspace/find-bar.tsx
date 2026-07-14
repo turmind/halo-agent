@@ -32,8 +32,15 @@ export function FindBar({ onClose }: FindBarProps) {
 
   // found-in-page results (fires per keystroke and per next/prev jump).
   // Single-slot callback in preload — registering replaces, no stacking.
+  // webContents.findInPage steals focus from the page as a side effect
+  // (electron/electron#22880, unfixed) — the result event fires right after
+  // that native highlight happens, so reclaim focus here rather than
+  // immediately after calling find() (too early, findInPage hasn't run yet).
   useEffect(() => {
-    getHaloFind()?.onResult(setResult)
+    getHaloFind()?.onResult((r) => {
+      setResult(r)
+      inputRef.current?.focus()
+    })
   }, [])
 
   // Clear highlights on unmount — covers every close path (Esc, ✕ button,
