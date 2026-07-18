@@ -80,12 +80,12 @@ And when you'd rather have ambience than logs: [Halo City](#halo-city) renders t
 - **ACP adapter** — plug a halo workspace into Claude Code as a native ACP agent, or let one halo delegate to another.
 - **Structured sessions** — hierarchical parent ↔ child sessions with async coordination and auto-reports on completion.
 
-## New in v0.2.1
+## Recent highlights
 
+- 🎯 **Goal Mode** — `/goal create` hands the two roles you unconsciously play in long collaborations — the pusher ("continue") and the evaluator ("is it actually done?") — to a dedicated judge agent: it pins the goal contract with you, then dispatches work orders round by round and judges the results until acceptance, with guardrails enforced in code (round / wall-clock / no-progress caps).
+- ☁️ **AgentCore runtime mode** — run the same server as an Amazon Bedrock AgentCore Runtime container (`HALO_RUNTIME_MODE=agentcore`), with per-user EFS-backed workspaces.
 - 🎨 **Four UI themes** — dark, light, midnight, warm; synced server-side so every browser gets your pick.
 - ⌨️ **TUI overhaul** — reworked input, verbose mode, and persistent history in the standalone terminal client.
-- 🏙 **Halo City performance** — viewport culling + offscreen skyline; smooth on busy servers.
-- 📊 **PPTX speaker-notes sidebar** — the slide preview now shows the notes lane alongside slides.
 - ✂️ **Graceful interrupts, fully surfaced** — interrupted tool calls are repaired and shown in the session UI instead of vanishing.
 
 ![Four themes — dark, light, midnight, warm](assets/themes.jpg)
@@ -169,7 +169,7 @@ Lives at [`halo-city/`](halo-city/) (plain static files, no build) — see the [
 
 ## Tech Stack
 
-- **Monorepo**: pnpm workspace (`core`, `server`, `admin`, `cli`, `desktop`, `acp-adapter`, `web-demo`)
+- **Monorepo**: pnpm workspace (`core`, `server`, `admin`, `cli`, `desktop`, `acp-adapter`, `web-demo`, `agentcore-demo`)
 - **Backend**: Hono + WebSocket, single Node.js process on port 9527
 - **Frontend**: Next.js 15 static export, served directly by Hono
 - **Agent**: custom orchestration loop, provider-agnostic `ModelRuntime` interface
@@ -192,7 +192,7 @@ Lives at [`halo-city/`](halo-city/) (plain static files, no build) — see the [
 Halo is young — treat it as an early-stage project:
 
 - **Sandbox isolates the filesystem, not the network.** The bubblewrap sandbox covers access levels and filesystem reach (host paths, `~/.aws`/`~/.ssh` masked), but does **not** isolate the network — code running inside it can still make outbound connections. The threat model is accidental damage and path escape by a trusted agent, **not** containment of a deliberately malicious skill exfiltrating data. Network isolation is on the roadmap.
-- **Test coverage is unit/regression-level, not end-to-end.** 345 tests across the four packages (core, server, cli, admin) run on every push via CI, covering core logic — path-boundary checks, session repair, channel message formatting, the TUI engine, and more. There's no end-to-end or integration suite yet.
+- **Test coverage is unit/regression-level, not end-to-end.** 433 tests across the four packages (core, server, cli, admin) run on every push via CI, covering core logic — path-boundary checks, session repair, channel message formatting, the TUI engine, and more. There's no end-to-end or integration suite yet.
 - **APIs and on-disk formats may still change between versions.** Expect rough edges while things stabilize.
 
 If you hit something broken or surprising, please open an issue — early feedback is genuinely useful right now.

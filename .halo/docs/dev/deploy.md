@@ -32,13 +32,9 @@ pnpm --filter @turmind/halo-server build
 pnpm --filter @turmind/halo-admin build   # next build + copy-monaco; never a bare next build (Monaco would 404)
 ```
 
-## 2. Create the runtime directory
+## 2. Runtime data locations
 
-```bash
-mkdir -p /path/to/halo/data
-```
-
-SQLite databases are created automatically under `data/` on first start.
+No directory needs to be created by hand. SQLite databases are created automatically on first use: per-workspace state at `<workspace>/.halo/halo.db`, plus global queues at `~/.halo/global/evo.db` and `~/.halo/global/cron.db`.
 
 ## 3. Run `halo setup`
 
@@ -154,7 +150,7 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 
 ### Release checklist (before `npm publish`)
 
-1. **Bump version** in root `package.json` (and any workspace `package.json` that mirrors it).
+1. **Bump version** in the five workspace `package.json` files (`packages/{cli,server,core,admin,desktop}/package.json`) — the root `package.json` has no version field.
 2. **Update `CHANGELOG.md`**: rename `[Unreleased]` → `[x.y.z] - YYYY-MM-DD`, add a fresh empty `[Unreleased]` section above it.
 3. **Bump `TEMPLATE_VERSION`** in `packages/server/src/init.ts` if any file under `templates/` was touched.
 4. **Build admin**: `pnpm --filter @turmind/halo-admin build` — verify `admin/out/monaco/vs/loader.js` exists.

@@ -130,6 +130,7 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | `/cron <verb>` | Manage scheduled agent runs: `create` / `list` / `update` / `enable` / `disable` / `delete` |
 | `/acp <verb>` | Ask other agents over ACP (`kiro <q>` / `claude <q>`) and manage `ask-*` bindings (`add` / `list` / `remove`) |
 | `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
+| `/goal <verb>` | Goal Mode: `create` / `status` / `pause` / `resume` / `clear` (full access only) |
 | `/quit` | Exit |
 
 TUI-only client commands (handled locally, also visible in the completion popup):

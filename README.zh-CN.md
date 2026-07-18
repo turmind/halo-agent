@@ -80,12 +80,12 @@ my-project/
 - **ACP 适配器** —— 把 halo 工作区作为原生 ACP Agent 接进 Claude Code，或让一个 halo 委派另一个 halo。
 - **结构化会话** —— 父子层级会话、异步协同、完工自动汇报。
 
-## v0.2.1 新亮点
+## 近期亮点
 
+- 🎯 **Goal Mode（目标模式）** —— `/goal create` 把长协作里你不自觉扮演的两个角色 —— 催进度的（「继续」）和验收的（「真的做完了吗？」）—— 交给一个专职评审 Agent：先和你确认目标契约，然后逐轮下发工单、评判结果，直到验收通过；轮数 / 时长 / 无进展上限全部由代码强制。
+- ☁️ **AgentCore 运行时模式** —— 同一套 server 可作为 Amazon Bedrock AgentCore Runtime 容器运行（`HALO_RUNTIME_MODE=agentcore`），按用户隔离的 EFS 工作区。
 - 🎨 **四套 UI 主题** —— dark / light / midnight / warm，服务端同步，换个浏览器也是你选的那套。
 - ⌨️ **TUI 大改** —— 独立终端客户端重做了输入体验，新增 verbose 模式和历史持久化。
-- 🏙 **Halo City 性能** —— 视口裁剪 + 离屏天际线，繁忙服务器上依然流畅。
-- 📊 **PPTX 演讲备注侧栏** —— 幻灯片预览现在带备注栏。
 - ✂️ **优雅打断，全程可见** —— 被打断的工具调用会被修复并显示在会话里，不再凭空消失。
 
 ![四套主题 —— dark、light、midnight、warm](assets/themes.jpg)
@@ -169,7 +169,7 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
 
 ## 技术栈
 
-- **Monorepo**：pnpm workspace（`core`、`server`、`admin`、`cli`、`desktop`、`acp-adapter`、`web-demo`）
+- **Monorepo**：pnpm workspace（`core`、`server`、`admin`、`cli`、`desktop`、`acp-adapter`、`web-demo`、`agentcore-demo`）
 - **后端**：Hono + WebSocket，单 Node.js 进程，端口 9527
 - **前端**：Next.js 15 静态导出，由 Hono 直接托管
 - **Agent**：自研编排循环，provider 无关的 `ModelRuntime` 接口
@@ -192,7 +192,7 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
 Halo 还年轻——请把它当早期项目看待：
 
 - **沙箱隔离的是文件系统，不是网络。** bubblewrap 沙箱覆盖访问级别与文件系统边界（宿主路径、`~/.aws`/`~/.ssh` 屏蔽），但**不做**网络隔离 —— 沙箱内代码仍可对外连接。威胁模型是「可信 Agent 的误操作与路径逃逸」，**不是**「恶意技能的数据外泄防护」。网络隔离在路线图上。
-- **测试覆盖停留在单测/回归层，还没有端到端测试。** core / server / cli / admin 四个包共 345 个测试，每次 push 由 CI 跑一遍，覆盖路径边界检查、会话修复、渠道消息格式化、TUI 引擎等核心逻辑，但还没有端到端或集成测试。
+- **测试覆盖停留在单测/回归层，还没有端到端测试。** core / server / cli / admin 四个包共 433 个测试，每次 push 由 CI 跑一遍，覆盖路径边界检查、会话修复、渠道消息格式化、TUI 引擎等核心逻辑，但还没有端到端或集成测试。
 - **API 和磁盘格式在版本间仍可能变化。** 还在打磨阶段，会有毛边。
 
 碰到坏掉或奇怪的行为，请开 issue —— 现阶段的早期反馈真的很有用。

@@ -325,6 +325,10 @@ File: `packages/server/src/routes/evolution.ts`. Surfaces the global `evolution_
 | DELETE | `/api/evolution/runs/:id` | Delete a finished run: its on-disk artifacts (run dir + archive zip) **and** the DB row. Rejected with 409 for in-flight states (`pending` / `running` / `approved`) so a live wrapper / queued apply isn't pulled out from under. Broadcasts `evolution:run_changed` with `kind:'deleted'`. |
 | GET | `/api/evolution/applies` | List apply rows (used for status badges). |
 
+## AgentCore adapter (runtime-mode only)
+
+File: `packages/server/src/routes/agentcore.ts`. Mounted **only** when `HALO_RUNTIME_MODE=agentcore` (see [design/agentcore.md](../design/agentcore.md)): `GET /ping` (health, `HealthyBusy` while any agent session runs), `POST /invocations` (prompt in / reply out), and streaming `WS /ws`. Not present in normal server mode.
+
 ---
 
 ## Request / Response schemas

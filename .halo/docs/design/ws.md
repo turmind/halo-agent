@@ -98,8 +98,12 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | `session:switched` | handler.ts (this client only) | The server rebound this connection to a different session — see [switchTo rebind](#switchto-rebind--sessionswitched) |
 | `goal:changed` | `writeGoalState` (`agents/goal-mode.ts`, broadcast to all clients) | Goal-mode state transition: `{goalSessionId, workerSessionId, status, round, maxRounds}`. Emitted on every goal state write (every transition routes through `writeGoalState`, so the push can never be forgotten) plus the goal-session-delete dissolve path. **No workspace marker** — the admin re-fetches through `GET /api/sessions/goal` under its active project, which naturally filters cross-workspace events. Drives the goal banner, worker input lock, and 🎯 badge refresh. See [goal-mode.md](goal-mode.md#admin-surface--ws). |
 | `session:cleared` | session:clear handler | /session new complete |
+| `session:deleted` | session:delete handler (this client only) | Session delete complete — `{sessionId}` |
+| `chat:stopped` | `chat:stop` / `chat:interrupt` handlers (this client only) | Stop/interrupt acknowledged — `{sessionId}` |
 | `session:compacted` | compact handler | Compaction complete |
 | `compact:started` / `compact:summarizing` / `compact:done` | compact handler | Compaction progress |
+| `cron:job_changed` / `cron:run_changed` | `cron/runner.ts` + `routes/cron.ts` (broadcast) | Cron job/run state changed — the Cron tab re-fetches instead of polling. See [cron.md](cron.md). |
+| `evolution:run_changed` / `evolution:apply_changed` | `evolution/ticker.ts` + `routes/evolution.ts` (broadcast) | Evolution run/apply state changed — drives the Evolution tab. See [evolution.md](evolution.md). |
 
 ## WS Handler as a thin session client
 

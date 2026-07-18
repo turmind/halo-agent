@@ -137,8 +137,9 @@ Configured in `settings.yaml` under `general.sandbox`:
 
 | Setting | Default | Method |
 |---|---|---|
-| `hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh` | `--tmpfs` overlay (empty directory) |
-| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc` | `--ro-bind /dev/null` (empty file) |
+| `hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs` | `--tmpfs` overlay (empty directory) |
+| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron}.db` + their `-wal`/`-shm` files | `--ro-bind /dev/null` (empty file) |
+| `writable_dirs` | (empty) | `--bind` read-write — for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions |
 
 Changes take effect immediately — `config.ts` reads settings.yaml via an mtime-watched lazy cache, so the next `shell_exec` reads the latest values. These keys are `globalOnly` in the schema — a workspace `settings.yaml` cannot override them, since they define the security boundary agents run inside.
 
@@ -379,7 +380,7 @@ There is **no implicit default tool set**: `filterTools()` (in `agent-loader.ts`
 
 | Config key | Default | Purpose |
 |---|---|---|
-| `timeout.shellExec` | 120,000 ms | Shell command timeout |
+| `timeout.shellExec` | 600,000 ms | Shell command timeout |
 | `timeout.webFetch` | 10,000 ms | HTTP timeout |
 | `limits.shellOutputBuffer` | 5 MB | Shell output buffer |
 | `limits.webFetchMaxBody` | 50 KB | web_fetch body cap |
