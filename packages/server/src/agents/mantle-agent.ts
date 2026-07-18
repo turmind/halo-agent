@@ -1,5 +1,5 @@
 /**
- * MantleAgent — OpenAI models (GPT-5.6 / 5.4) on Amazon Bedrock via the
+ * MantleAgent — OpenAI models (GPT-5.6) on Amazon Bedrock via the
  * `bedrock-mantle` endpoint, which speaks the **OpenAI Responses API only**.
  *
  *   POST <endpoint>/responses
@@ -312,7 +312,7 @@ export class MantleAgent extends AgentLoop {
 
 /** Extract the AWS region from a bedrock-mantle hostname
  *  (bedrock-mantle.<region>.api.aws). Falls back to us-east-2 (the only region
- *  that serves every GPT-5.6 variant plus 5.4). */
+ *  that serves every GPT-5.6 variant). */
 function extractRegionFromHost(hostname: string): string {
   const m = hostname.match(/bedrock-mantle\.([a-z0-9-]+)\.api\.aws/)
   return m?.[1] ?? 'us-east-2'
