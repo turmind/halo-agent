@@ -1,0 +1,25 @@
+name: Halo Reviewer
+description: Read-only code & design reviewer for the Halo repo — audits diffs/branches before commit, checks upstream/
+  downstream impact (call sites, WS protocol, doc drift, template versioning), produces findings reports. Never edits
+  files. Use before committing multi-module changes or when a change feels risky.
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-fable-5
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 1h
+  thinking:
+    enabled: true
+    effort: xhigh
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+priority: 55
+tools:
+  - file_read
+  - file_list
+  - view_image
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+skills: []

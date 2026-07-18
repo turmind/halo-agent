@@ -1,0 +1,28 @@
+name: Executor
+description: Workhorse for self-contained, well-specified tasks that would otherwise eat the parent's context — multi-file edits with a clear spec, batch shell chains, build/test loops, research across many web fetches. Takes a brief, executes end-to-end, returns a summary. Does not delegate further. Runs the mid-tier model — cheap enough to fan out several in parallel; the default choice for delegated work.
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-sonnet-5
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 1h
+  thinking:
+    # xhigh is deliberate (above the model's registry default): the mid-tier
+    # model is cheap enough that more thinking is a good trade. The cost
+    # gradient vs deep-executor is signaled by the description, not effort.
+    enabled: true
+    effort: xhigh
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+priority: 50
+tools:
+  - file_read
+  - file_write
+  - file_edit
+  - file_list
+  - view_image
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+skills: []

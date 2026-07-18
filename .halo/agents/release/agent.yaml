@@ -1,0 +1,25 @@
+name: Halo Release
+description: Build / package / deploy operator for the Halo repo — scoped pnpm builds, dev-server deployment, npm
+  publish, desktop packaging (exe/dmg), TEMPLATE_VERSION and monaco gate checks. Reads the deploy docs before acting,
+  never packages from memory. Use for any "build it / ship it / deploy to dev" task.
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-sonnet-5
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 1h
+  thinking:
+    enabled: true
+    effort: xhigh
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+priority: 45
+tools:
+  - file_read
+  - file_list
+  - view_image
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+skills: []

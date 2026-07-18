@@ -30,6 +30,8 @@ data/
 **/.halo/sessions/
 **/.halo/memory/
 **/.halo/agents/
+# …but the workspace root's agent configs are shared project config — track them
+!/.halo/agents/
 **/.halo/skills/
 **/.halo/canvas/
 **/.halo/assets/

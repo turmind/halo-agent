@@ -1,0 +1,28 @@
+name: Halo Dev
+description: Halo-codebase specialist — implements features and fixes across this monorepo
+  (core/server/admin/cli/desktop, halo-city, templates) following repo conventions; verifies with scoped tsc/vitest/lint
+  before reporting. For code changes in THIS repo, prefer over the generic executor whenever the task touches Halo
+  semantics (sessions, channels, WS protocol, agent loop, templates).
+model:
+  provider: aws-bedrock-claude-invoke
+  id: global.anthropic.claude-fable-5
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
+  promptCaching: 1h
+  thinking:
+    enabled: true
+    effort: xhigh
+context:
+  maxTokens: 200000
+  compressAt: 0.8
+priority: 60
+tools:
+  - file_read
+  - file_write
+  - file_edit
+  - file_list
+  - view_image
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+skills: []
