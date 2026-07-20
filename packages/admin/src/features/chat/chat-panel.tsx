@@ -7,9 +7,8 @@ import { GoalBanner } from './goal-banner'
 import { refreshGoal } from './goal-store'
 import { useChat } from '@/features/chat/use-chat'
 import { refreshCommands } from './slash-commands'
-import { useExplorerSessions, SessionHistoryLink } from './session-list'
-import { SessionListDropdown } from '@/shared/components/session-list-dropdown'
-import { Plus, Loader2, MessageSquare, Bot, ChevronDown } from 'lucide-react'
+import { useExplorerSessions, SessionSidebar, SessionHistoryLink } from './session-list'
+import { Plus, Loader2, MessageSquare, Bot, ChevronDown, History } from 'lucide-react'
 import { wsClient } from '@/shared/ws-client'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
@@ -120,25 +119,64 @@ function AgentSelector() {
   )
 }
 
+/** Session sidebar open/closed — a global preference (unlike the per-project
+ *  `halo_session_${projectId}` current-session keys). */
+const SIDEBAR_OPEN_KEY = 'halo_session_sidebar_open'
+
 export function ChatPanel() {
   const { messages, sendMessage, isStreaming, clearSession, deleteSession, stopGeneration, interruptGeneration, pendingMessages, removePendingMessage, handleCommand, sessionId } = useChat()
   const scrollRef = useRef<HTMLDivElement>(null)
   const activeProject = useProjectStore((s) => s.activeProject)
-  const [loadingSession, setLoadingSession] = useState(false)
-  const [showSessionList, setShowSessionList] = useState(false)
+  // Session whose WS subscribe is in flight — cleared when the matching
+  // `state:snapshot` arrives (see effect below). Doubles as the loading flag.
+  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null)
+  // Bumped on every loadSession call (including a Retry of the same sid) so
+  // the snapshot-wait effect re-arms its 30s slow-network timer.
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [slowLoading, setSlowLoading] = useState(false)
+  // Session list sidebar visibility — global preference, not per-project.
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return localStorage.getItem(SIDEBAR_OPEN_KEY) !== 'false'
+  })
   const { sessions, refresh: refreshSessions, remove: removeSession, loadMore: loadMoreSessions, hasMore: hasMoreSessions, loadingMore: loadingMoreSessions } = useExplorerSessions()
+
+  const setSidebar = useCallback((open: boolean) => {
+    setSidebarOpen(open)
+    if (typeof window !== 'undefined') localStorage.setItem(SIDEBAR_OPEN_KEY, String(open))
+  }, [])
 
   const loadSession = useCallback((sid: string) => {
     if (!activeProject) return
-    setLoadingSession(true)
+    setLoadingSessionId(sid)
+    setSlowLoading(false)
+    setLoadAttempt((n) => n + 1)
     useChatStore.getState().setSessionId(sid)
     useChatStore.getState().setMessages([])
     wsClient.send({ type: 'subscribe', sessionId: sid, projectId: activeProject.id })
     if (typeof window !== 'undefined') {
       localStorage.setItem(`halo_session_${activeProject.id}`, sid)
     }
-    setTimeout(() => setLoadingSession(false), 2000)
   }, [activeProject])
+
+  // Real load completion: the server answers every subscribe with a
+  // `state:snapshot` (even for empty sessions — recentMessages: []), which is
+  // why we key off the snapshot instead of "messages arrived". Only a snapshot
+  // for the sid we're loading clears the state, so a late snapshot from a
+  // previous switch can't wipe a newer load. Past 30s we surface a slow-network
+  // hint + Retry, but keep waiting — the snapshot still clears everything.
+  useEffect(() => {
+    if (!loadingSessionId) return
+    const off = wsClient.on('state:snapshot', (data) => {
+      const snap = (data as { snapshot?: { sessionId?: string } }).snapshot
+      if (snap?.sessionId === loadingSessionId) {
+        setLoadingSessionId(null)
+        setSlowLoading(false)
+      }
+    })
+    const timer = setTimeout(() => setSlowLoading(true), 30_000)
+    return () => { off(); clearTimeout(timer) }
+  }, [loadingSessionId, loadAttempt])
 
   // Seed the goal banner / input lock on mount + project switch — live
   // updates ride the `goal:changed` WS push (state-handlers re-fetches).
@@ -147,6 +185,10 @@ export function ChatPanel() {
   }, [activeProject?.path])
 
   const handleNew = useCallback(() => {
+    // Drop any in-flight load — its snapshot (matched by sid) can't collide
+    // with the fresh session, but the spinner must not linger over it.
+    setLoadingSessionId(null)
+    setSlowLoading(false)
     clearSession()
     // Give the server a moment to persist the new session row, then notify
     // every session-list consumer (this panel, the Sessions sidebar, …).
@@ -172,11 +214,6 @@ export function ChatPanel() {
     messages.filter(isMainConversationMessage),
     [messages],
   )
-
-  // Clear loading state when messages arrive from session restore
-  useEffect(() => {
-    if (loadingSession && mainMessages.length > 0) setLoadingSession(false)
-  }, [loadingSession, mainMessages.length])
 
   const userScrolledUp = useRef(false)
 
@@ -214,74 +251,100 @@ export function ChatPanel() {
   }, [])
 
   return (
-    <div className="flex h-full flex-col bg-[var(--background)]">
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-        {loadingSession ? (
-          <div className="flex items-center justify-center py-8 text-xs text-[var(--muted-foreground)]">
-            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Loading session...
-          </div>
-        ) : mainMessages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-            <div className="rounded-full bg-[var(--secondary)] p-3">
-              <MessageSquare className="h-6 w-6 text-[var(--muted-foreground)]" />
+    <div className="flex h-full min-h-0 bg-[var(--background)]">
+      {/* Chat column — messages + composer */}
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+          {loadingSessionId ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-8 text-xs text-[var(--muted-foreground)]">
+              <div className="flex items-center">
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Loading session...
+              </div>
+              {slowLoading && (
+                <div className="flex items-center gap-2">
+                  <span>Slow network — still loading…</span>
+                  <button
+                    onClick={() => loadSession(loadingSessionId)}
+                    className="text-[var(--primary)] hover:underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
             </div>
-            <div>
-              <p className="text-sm font-medium text-[var(--foreground)]">
-                Start a conversation
-              </p>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                Describe what you want to build, and agents will work together to deliver it.
-              </p>
+          ) : mainMessages.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+              <div className="rounded-full bg-[var(--secondary)] p-3">
+                <MessageSquare className="h-6 w-6 text-[var(--muted-foreground)]" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-[var(--foreground)]">
+                  Start a conversation
+                </p>
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  Describe what you want to build, and agents will work together to deliver it.
+                </p>
+              </div>
+              <SessionHistoryLink count={sessions.length} onClick={() => setSidebar(true)} />
             </div>
-            <SessionHistoryLink count={sessions.length} onClick={() => setShowSessionList(true)} />
-          </div>
-        ) : (
-          <MessageList messages={mainMessages} />
-        )}
+          ) : (
+            <MessageList messages={mainMessages} />
+          )}
+        </div>
+
+        <div className="shrink-0">
+          <GoalBanner currentSessionId={sessionId} onJump={loadSession} />
+          <MessageInput
+            onSend={sendMessage}
+            isStreaming={isStreaming}
+            onStop={stopGeneration}
+            onInterrupt={interruptGeneration}
+            pendingMessages={pendingMessages}
+            onRemovePending={removePendingMessage}
+            onCommand={handleCommand}
+            onCompact={() => handleCommand({ name: '/session', description: '', type: 'server' }, 'compact')}
+            renderLeftControls={() => (
+              <div className="relative flex items-center gap-0.5">
+                {(sessions.length > 0 || mainMessages.length > 0) && (
+                  <>
+                    <button
+                      onClick={() => setSidebar(!sidebarOpen)}
+                      title={sidebarOpen ? 'Hide session list' : 'Show session list'}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] relative"
+                    >
+                      <History className="h-4 w-4" />
+                      <span className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-[var(--muted-foreground)] px-0.5 text-[8px] font-medium text-[var(--background)]">{sessions.length}</span>
+                    </button>
+                    <button
+                      onClick={handleNew}
+                      title="New session"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  </>
+                )}
+                <AgentSelector />
+              </div>
+            )}
+          />
+        </div>
       </div>
 
-      <div className="shrink-0">
-        <GoalBanner currentSessionId={sessionId} onJump={loadSession} />
-        <MessageInput
-          onSend={sendMessage}
-          isStreaming={isStreaming}
-          onStop={stopGeneration}
-          onInterrupt={interruptGeneration}
-          pendingMessages={pendingMessages}
-          onRemovePending={removePendingMessage}
-          onCommand={handleCommand}
-          onCompact={() => handleCommand({ name: '/session', description: '', type: 'server' }, 'compact')}
-          renderLeftControls={() => (
-            <div className="relative flex items-center gap-0.5">
-              {(sessions.length > 0 || mainMessages.length > 0) && (
-                <>
-                  <SessionListDropdown
-                    sessions={sessions}
-                    currentSessionId={sessionId}
-                    onSelect={loadSession}
-                    onDelete={handleDeleteSession}
-                    onNew={handleNew}
-                    onLoadMore={loadMoreSessions}
-                    hasMore={hasMoreSessions}
-                    loadingMore={loadingMoreSessions}
-                    open={showSessionList}
-                    onToggle={() => setShowSessionList(!showSessionList)}
-                    direction="up"
-                  />
-                  <button
-                    onClick={handleNew}
-                    title="New session"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
-                  >
-                    <Plus className="h-4 w-4" />
-                  </button>
-                </>
-              )}
-              <AgentSelector />
-            </div>
-          )}
+      {/* Right sidebar — session list */}
+      {sidebarOpen && (
+        <SessionSidebar
+          sessions={sessions}
+          currentSessionId={sessionId}
+          loadingSessionId={loadingSessionId}
+          onSelect={loadSession}
+          onDelete={handleDeleteSession}
+          onNew={handleNew}
+          onLoadMore={loadMoreSessions}
+          hasMore={hasMoreSessions}
+          loadingMore={loadingMoreSessions}
         />
-      </div>
+      )}
     </div>
   )
 }
