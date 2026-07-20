@@ -18,10 +18,17 @@ The primary surface for talking to an agent.
 - Streaming text has a cursor animation
 
 ### User-message actions (Copy / Delete / Show)
-Hover actions on the blue sticky user bubble — real user prompts only (sub-agent report / compact-summary callouts, though user-role, get no buttons):
+Hover actions on user-role turns: the blue sticky user bubble, plus the sub-agent-report (green) and compact-summary (purple) callouts — all three share the same Copy/Delete pair. On the callouts, Copy copies the body only (the `(from: session X)` / `[Conversation Summary…]` marker line is stripped); a deleted callout greys out and gains a "deleted" badge like the bubble does:
 - **Copy** — copies the prompt text to the clipboard
 - **Show more/less** — the existing clamp toggle, shown when the text overflows
 - **Delete** (confirm dialog) — removes the whole exchange (the user turn + all responses up to the next user turn) with **two-layer semantics**: the LLM context (`rawMessages`) drops the turn physically — the model never sees it again, freeing context; the UI keeps the messages, rendered greyed-out with a "deleted" tag, as an audit trail. No undo; a deleted exchange loses its Delete button. Rejected with an error toast while the agent is running or compacting. Root sessions only (sub-session logs don't offer Delete). If the turn was already compacted out of raw context, only the UI marking happens (silent degrade). Design details in [design/session.md](../design/session.md#exchange-deletion-soft-ui--hard-raw), protocol in [design/ws.md](../design/ws.md).
+
+### Session sidebar (right side)
+A fixed, collapsible list of the workspace's root sessions on the right edge of the chat panel (terminal-list style, ~200px). Replaces the old popup dropdown — the History button (with count badge) left of the composer and the "N previous sessions" link in the empty state both just toggle it now. Open/collapsed state persists globally in `localStorage` (`halo_session_sidebar_open`), default open.
+
+- Each row: 🎯 goal badge, title, `N msgs · time-ago`, model tail; hover reveals **rename** (pencil) and **delete** buttons; infinite scroll pages older sessions; "+ New Session" footer
+- **Inline rename**: pencil → input in place, Enter/blur commits (`PATCH /sessions/logs/:id`), Esc cancels; empty or unchanged title is a no-op. Other session-list consumers refresh via the `session:changed` WS push
+- **Switch loading**: clicking a row shows a spinner on that row + a "Loading session…" state in the message area, cleared only when the server's `state:snapshot` for that exact sessionId arrives (empty sessions included). Past 30s it degrades to "Slow network — still loading…" plus a Retry button (re-subscribes) — slow ≠ failed, nothing aborts on its own
 
 ### Slash commands
 

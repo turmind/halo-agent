@@ -66,8 +66,8 @@ Unified session logs API (recommended):
 | Delete | `DELETE /api/sessions/logs/:id?projectId=...` |
 
 The List endpoint serves two consumers: this tree view (default — roots + all
-descendants, paginated, rebuilt into a tree client-side) and the chat-header
-recent-sessions dropdown (`rootOnly=1` — a flat list of roots). Both paginate
+descendants, paginated, rebuilt into a tree client-side) and the chat panel's
+session sidebar (`rootOnly=1` — a flat list of roots). Both paginate
 via `cursor` / `nextCursor`. See [dev/api.md](../dev/api.md#get-apisessionslogsprojectidabsrootonly01includearchived01cursormslimitn) for the full contract.
 
 Implementation detail: [design/session.md](../design/session.md).
