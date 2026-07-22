@@ -39,7 +39,7 @@ export interface MantleAgentConfig {
   systemPrompt: string
   tools: ToolDef[]
   maxTokens?: number
-  /** thinking.enabled=true + effort=low|medium|high → reasoning.effort.
+  /** thinking.enabled=true + effort=low|medium|high|xhigh|max → reasoning.effort.
    *  thinking.enabled=false → omit reasoning (model picks its own minimal). */
   thinking?: { enabled: boolean; effort?: string }
   /** Output length for the final answer (Responses API `text.verbosity`).
@@ -75,12 +75,14 @@ export class MantleAgent extends AgentLoop {
       ...(tools.length > 0 ? { tools } : {}),
     }
 
-    // Reasoning is opt-in. Responses API only accepts low|medium|high; map
-    // Halo's extra labels (xhigh/max) down to high so a misconfigured agent
+    // Reasoning is opt-in. GPT-5.6 accepts the full effort ladder
+    // low|medium|high|xhigh|max, so pass those through untouched. Any other
+    // (unknown/legacy) label still clamps to high so a misconfigured agent
     // doesn't 400.
     if (this.config.thinking?.enabled && this.config.thinking.effort) {
       const e = this.config.thinking.effort
-      body.reasoning = { effort: e === 'low' || e === 'medium' || e === 'high' ? e : 'high' }
+      const allowed = ['low', 'medium', 'high', 'xhigh', 'max']
+      body.reasoning = { effort: allowed.includes(e) ? e : 'high' }
     }
 
     const payload = JSON.stringify(body)
