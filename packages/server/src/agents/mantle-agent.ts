@@ -29,6 +29,10 @@ import { defaultProvider } from '@aws-sdk/credential-provider-node'
 import { AgentLoop } from './agent-loop.js'
 import type { AnthropicMessage, ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
 
+/** Reasoning effort ladder GPT-5.6 accepts on the Responses API. Any label
+ *  outside this set is clamped to 'high' so a misconfigured agent doesn't 400. */
+const MANTLE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+
 export interface MantleAgentConfig {
   modelId: string
   endpoint: string
@@ -39,7 +43,7 @@ export interface MantleAgentConfig {
   systemPrompt: string
   tools: ToolDef[]
   maxTokens?: number
-  /** thinking.enabled=true + effort=low|medium|high → reasoning.effort.
+  /** thinking.enabled=true + effort=low|medium|high|xhigh|max → reasoning.effort.
    *  thinking.enabled=false → omit reasoning (model picks its own minimal). */
   thinking?: { enabled: boolean; effort?: string }
   /** Output length for the final answer (Responses API `text.verbosity`).
@@ -75,12 +79,12 @@ export class MantleAgent extends AgentLoop {
       ...(tools.length > 0 ? { tools } : {}),
     }
 
-    // Reasoning is opt-in. Responses API only accepts low|medium|high; map
-    // Halo's extra labels (xhigh/max) down to high so a misconfigured agent
-    // doesn't 400.
+    // Reasoning is opt-in. GPT-5.6 accepts the full effort ladder
+    // (MANTLE_EFFORT_LEVELS); pass a recognised label through untouched and
+    // clamp anything else to 'high' so a misconfigured agent doesn't 400.
     if (this.config.thinking?.enabled && this.config.thinking.effort) {
       const e = this.config.thinking.effort
-      body.reasoning = { effort: e === 'low' || e === 'medium' || e === 'high' ? e : 'high' }
+      body.reasoning = { effort: (MANTLE_EFFORT_LEVELS as readonly string[]).includes(e) ? e : 'high' }
     }
 
     const payload = JSON.stringify(body)
