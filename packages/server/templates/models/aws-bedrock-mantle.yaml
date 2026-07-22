@@ -30,10 +30,8 @@ secrets:
 #   - promptCaching: AUTOMATIC (prefix ≥1024 tok, ~5min idle TTL). No cache_control
 #     is sent and there's no 1h option — single 5m preset reflects reality, the
 #     runtime never writes cache control, it only reads cached_tokens back.
-#   - thinking: adaptive via reasoning.effort = low|medium|high|xhigh (GPT-5.6
-#     enum per OpenAI's deployment checklist; default medium; no budget_tokens
-#     mode). Halo's `max` label has no wire equivalent and is clamped to xhigh
-#     (the API ceiling) by the runtime. Note: Mantle
+#   - thinking: adaptive via reasoning.effort = low|medium|high|xhigh|max
+#     (GPT-5.6 accepts all five; default medium; no budget_tokens mode). Note: Mantle
 #     never surfaces reasoning summaries — output[].reasoning.summary stays empty
 #     even with reasoning.summary=detailed (verified against the live endpoint;
 #     reasoning_tokens > 0 proves thinking runs). So no thinking text is shown in
@@ -63,7 +61,6 @@ models:
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: xhigh, label: XHigh }
-          # `max` has no OpenAI wire enum; runtime clamps it to xhigh.
           - { value: max, label: Max }
       # Output length of the final answer (Responses API `text.verbosity`),
       # separate from reasoning effort. Default low = terse + cheaper, best for
@@ -97,7 +94,6 @@ models:
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: xhigh, label: XHigh }
-          # `max` has no OpenAI wire enum; runtime clamps it to xhigh.
           - { value: max, label: Max }
       # See GPT-5.6 Sol above — final-answer length, default low, per-agent overridable.
       verbosity:
@@ -129,7 +125,6 @@ models:
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: xhigh, label: XHigh }
-          # `max` has no OpenAI wire enum; runtime clamps it to xhigh.
           - { value: max, label: Max }
       # See GPT-5.6 Sol above — final-answer length, default low, per-agent overridable.
       verbosity:

@@ -39,8 +39,7 @@ export interface MantleAgentConfig {
   systemPrompt: string
   tools: ToolDef[]
   maxTokens?: number
-  /** thinking.enabled=true + effort=low|medium|high|xhigh → reasoning.effort
-   *  (`max` clamps to `xhigh`, the API ceiling).
+  /** thinking.enabled=true + effort=low|medium|high|xhigh|max → reasoning.effort.
    *  thinking.enabled=false → omit reasoning (model picks its own minimal). */
   thinking?: { enabled: boolean; effort?: string }
   /** Output length for the final answer (Responses API `text.verbosity`).
@@ -76,16 +75,15 @@ export class MantleAgent extends AgentLoop {
       ...(tools.length > 0 ? { tools } : {}),
     }
 
-    // Reasoning is opt-in. The Responses API `reasoning.effort` enum for GPT-5.6
-    // is low|medium|high|xhigh (per OpenAI's deployment checklist; default is
-    // medium). Halo's `max` label has no wire equivalent here, so clamp it to
-    // the ceiling (xhigh). Any unrecognized label falls back to `high` so a
-    // misconfigured agent never 400s.
+    // Reasoning is opt-in. GPT-5.6 accepts low|medium|high|xhigh|max on the
+    // Responses API `reasoning.effort` — pass those through as-is. Only a
+    // genuinely unrecognized label falls back to `high` so a misconfigured
+    // agent never 400s.
     if (this.config.thinking?.enabled && this.config.thinking.effort) {
       const e = this.config.thinking.effort
-      const effort = e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh'
+      const effort = e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh' || e === 'max'
         ? e
-        : e === 'max' ? 'xhigh' : 'high'
+        : 'high'
       body.reasoning = { effort }
     }
 
