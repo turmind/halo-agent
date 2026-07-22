@@ -30,8 +30,8 @@ secrets:
 #   - promptCaching: AUTOMATIC (prefix ≥1024 tok, ~5min idle TTL). No cache_control
 #     is sent and there's no 1h option — single 5m preset reflects reality, the
 #     runtime never writes cache control, it only reads cached_tokens back.
-#   - thinking: adaptive via reasoning.effort = low|medium|high (no budget_tokens
-#     mode; xhigh/max would be mapped down to high by the runtime). Note: Mantle
+#   - thinking: adaptive via reasoning.effort = low|medium|high|xhigh|max
+#     (GPT-5.6 accepts all five; default medium; no budget_tokens mode). Note: Mantle
 #     never surfaces reasoning summaries — output[].reasoning.summary stays empty
 #     even with reasoning.summary=detailed (verified against the live endpoint;
 #     reasoning_tokens > 0 proves thinking runs). So no thinking text is shown in
@@ -60,6 +60,8 @@ models:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
       # Output length of the final answer (Responses API `text.verbosity`),
       # separate from reasoning effort. Default low = terse + cheaper, best for
       # tool-driven agent turns. Override per-agent via agent.yaml model.verbosity.
@@ -91,6 +93,8 @@ models:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
       # See GPT-5.6 Sol above — final-answer length, default low, per-agent overridable.
       verbosity:
         default: low
@@ -120,6 +124,8 @@ models:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
       # See GPT-5.6 Sol above — final-answer length, default low, per-agent overridable.
       verbosity:
         default: low
