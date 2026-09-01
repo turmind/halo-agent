@@ -161,6 +161,12 @@ interface AgentSession {
    *  auto-report to the parent so the parent gets the summary, not the
    *  mid-turn "let me check X" filler. Reset per turn alongside output. */
   finalOutput: string
+  /** Set when the latest turn was terminated by an unrecoverable error (retry
+   *  budget exhausted or account-level failure) — holds the error text. Reset
+   *  per turn alongside output. tryReportToParent reads it to mark the
+   *  auto-report as an abnormal termination, so the parent LLM can tell
+   *  partial/empty output from a completed wrap-up. */
+  turnError: string | null
   promise: Promise<string> | null
   abortController: AbortController | null
   messageQueue: QueuedMessage[]
@@ -601,6 +607,7 @@ export class SessionManager implements SessionManagerInternals {
       draftReset,
       output: '',
       finalOutput: '',
+      turnError: null,
       promise: null,
       abortController: null,
       messageQueue: [],
@@ -1190,6 +1197,7 @@ export class SessionManager implements SessionManagerInternals {
     // not the concatenation of every turn since the session was created.
     session.output = ''
     session.finalOutput = ''
+    session.turnError = null
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       session.abortController = new AbortController()
@@ -1282,6 +1290,7 @@ export class SessionManager implements SessionManagerInternals {
         if (msg.includes('insufficient balance') || msg.includes('suspended') || msg.includes('invalid api key') || msg.includes('Invalid API Key') || msg.includes('Unauthorized') || msg.includes('authentication')) {
           console.error(`[SessionManager] Session ${session.id} account error: ${msg}`)
           this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
+          session.turnError = msg
           resultText = `Error: ${msg}`
           break
         }
@@ -1338,6 +1347,7 @@ export class SessionManager implements SessionManagerInternals {
         if (
           msg === 'fetch failed'
           || msg === 'Model request timed out'  // agent-loop MODEL_TIMEOUT_ERROR — hung model call, treat as transport failure
+          || msg.includes('http2 request did not get a response')  // AWS SDK NodeHttp2Handler requestTimeout — hung Bedrock stream, same class as MODEL_TIMEOUT
           || msg.includes('UND_ERR_HEADERS_TIMEOUT')
           || msg.includes('HeadersTimeoutError')
           || msg.includes('socket hang up')
@@ -1415,6 +1425,7 @@ export class SessionManager implements SessionManagerInternals {
         const errDetail = [errName, httpStatus ? `HTTP ${httpStatus}` : ''].filter(Boolean).join(' ')
         console.error(`[SessionManager] Session ${session.id} error (attempt ${attempt + 1}/${maxRetries})${errDetail ? ` [${errDetail}]` : ''}: ${msg}`)
         this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
+        session.turnError = errName ? `${errName}: ${msg}` : msg
         resultText = `Error: ${errName ? `${errName}: ` : ''}${msg}`
         break
       }
@@ -1538,7 +1549,19 @@ export class SessionManager implements SessionManagerInternals {
     // to the full output when the last turn ended without a closing message
     // (e.g. it stopped right after a tool call) so the parent still gets
     // something useful instead of "(no output)".
-    const result = session.finalOutput || session.output || '(no output)'
+    let result = session.finalOutput || session.output || '(no output)'
+    // Abnormal termination (retry budget exhausted / account error): the turn
+    // died mid-flight, so whatever accumulated in output is a partial trace,
+    // not a wrap-up. Without an explicit marker the parent LLM cannot tell the
+    // two apart — it consumed "Now let me check X…" fragments (and literal
+    // "(no output)") as completed reports. Prefix, don't suppress: skipping
+    // the report entirely would leave the parent waiting forever, and the
+    // partial trace still has diagnostic value.
+    if (session.turnError) {
+      result = `[SUB-AGENT ABORTED: the last turn was terminated by an unrecoverable error, NOT completed. `
+        + `Error: ${session.turnError}. The text below is a partial trace of the aborted turn — do not treat it as a finished result. `
+        + `Re-dispatch with query_session("${session.id}", ...) to let it resume.]\n\n${result}`
+    }
     console.debug(`[SessionManager] Auto-report: ${session.id} → parent ${session.parentId} — result: ${result.slice(0, 150)}`)
 
     // Truncate the auto-report, but tell the parent WHEN we did — a bare slice
