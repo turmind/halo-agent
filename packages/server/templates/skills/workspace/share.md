@@ -53,7 +53,7 @@ Agents (2):
 Skills (3):
   - repo-conventions (workspace)
   - aws-knowledge (global)
-  - nova-web-search (global)
+  - web-search (global)
 
 Instructions: .halo/INSTRUCTIONS.md (global fallback)
 INDEX.md → 2 docs followed: docs/architecture/auth.md, docs/dev/api.md

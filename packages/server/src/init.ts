@@ -56,7 +56,7 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 50
+export const TEMPLATE_VERSION = 51
 const VERSION_FILE = '.template-version'
 
 /** Read the seed version stamped into `~/.halo/global/.template-version`.
@@ -107,7 +107,7 @@ const BUILTIN_SKILL_IDS = new Set([
   // Capability skills, model-invoked only (user-invocable: false — no slash
   // command). Preinstalled because they're broadly useful out of the box.
   'aws-knowledge',
-  'nova-web-search',
+  'web-search',
   // The agent's visual "face": teaches it that `.halo/canvas/self.html`
   // (seeded per-workspace, see ensureWorkspaceHalo) is a live self-portrait
   // it can drive in real time by emitting `<<<SHOW: …js… >>>`, which the admin
@@ -520,6 +520,18 @@ export function ensureHaloHome(haloHome: string): void {
   if (fs.existsSync(staleWsSkill)) {
     fs.rmSync(staleWsSkill, { recursive: true, force: true })
     console.log('[Init] Removed stale `ws` skill (renamed to `workspace`)')
+  }
+
+  // One-time migration: `nova-web-search` (and the short-lived
+  // `openai-web-search`) merged into the two-gear `web-search` skill. Remove
+  // the stale dirs; agent.yaml entries pointing at the old ids resolve to
+  // nothing and should be renamed to `web-search`.
+  for (const staleId of ['nova-web-search', 'openai-web-search']) {
+    const staleDir = path.join(globalDir, 'skills', staleId)
+    if (fs.existsSync(staleDir)) {
+      fs.rmSync(staleDir, { recursive: true, force: true })
+      console.log(`[Init] Removed stale \`${staleId}\` skill (merged into \`web-search\`)`)
+    }
   }
 
   // ── Bundled platform docs ──────────────────────────────────────────────

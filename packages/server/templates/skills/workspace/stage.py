@@ -74,7 +74,7 @@ BUILTIN_AGENT_IDS = {
 }
 BUILTIN_SKILL_IDS = {
     "agent", "skill", "workspace", "cron", "send-file", "acp",
-    "aws-knowledge", "nova-web-search", "self",
+    "aws-knowledge", "web-search", "self",
 }
 
 # --- helpers ---------------------------------------------------------------
