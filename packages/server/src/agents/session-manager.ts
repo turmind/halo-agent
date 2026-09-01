@@ -1038,6 +1038,14 @@ export class SessionManager implements SessionManagerInternals {
     return this.uiStore.getCachedUIState(rootSessionId)
   }
 
+  /** Whether a root's cached UIState holds local mutations not yet persisted.
+   *  The WS save paths gate on this — a clean state (pure disk seed, or
+   *  already flushed) must not be written back over a file that another
+   *  process (cron `halo cli` child) may have advanced since. */
+  isUIStateDirty(rootSessionId: string): boolean {
+    return this.uiStore.isUIStateDirty(rootSessionId)
+  }
+
   getUIState(rootSessionId: string): UIState | null {
     return this.uiStore.getUIState(rootSessionId)
   }

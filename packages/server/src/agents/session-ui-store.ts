@@ -80,6 +80,17 @@ export class SessionUIStore {
   /** Last activity (event reduced / view built) per uiStates key — the idle
    *  sweep's eviction clock. Invariant: every uiStates key has an entry. */
   private uiStateTouched: Map<string, number> = new Map()
+  /** Roots whose in-memory UIState holds local mutations (event reduced in,
+   *  notification appended, log replaced) **not yet persisted** — marked on
+   *  every mutation, cleared once persistUIState lands the snapshot. A state
+   *  not in this set adds nothing to what's on disk: either it's a pure disk
+   *  seed (built to *view* a session another process may be driving — a cron
+   *  `halo cli` child shares the workspace's session files and keeps appending
+   *  after the seed), or its mutations were already flushed. The WS
+   *  detach/switch saves gate on `isUIStateDirty`: writing a clean state back
+   *  would overwrite the other process's newer messages with this process's
+   *  frozen snapshot (the cron-session UI-log truncation incident). */
+  private uiStateDirty: Set<string> = new Set()
 
   constructor(private host: SessionUIStoreHost) {
     this.db = host.getDb()
@@ -205,6 +216,11 @@ export class SessionUIStore {
   private reduceIntoUIState(rootId: string, event: AgentSessionEvent): void {
     try {
       const state = this.ensureUIState(rootId)
+      // Events are process-local, so reducing one in means THIS process is
+      // driving (part of) the session — from here on its snapshot is at least
+      // as fresh as anything it could overwrite. That's the exact predicate
+      // the WS detach saves need (see isUIStateDirty).
+      this.uiStateDirty.add(rootId)
       const result = applyEvent(state, event)
       if (result.subSessionSave) {
         this.persistSubSession(state, rootId, result.subSessionSave)
@@ -315,6 +331,10 @@ export class SessionUIStore {
         archiveCount: archive?.count,
         archivedUserDelta: archive?.userDelta,
       })
+      // Snapshot landed — memory adds nothing over disk now. Cleared here (not
+      // in the catch): a failed write keeps the state dirty so a later
+      // detach-save still retries it.
+      this.uiStateDirty.delete(rootId)
     } catch (err) {
       console.error(`[SessionUIStore] persistUIState failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -455,6 +475,15 @@ export class SessionUIStore {
     return this.uiStates.get(rootSessionId) ?? null
   }
 
+  /** Whether the cached UIState holds local mutations not yet persisted.
+   *  False for a state that was only seeded from disk (view of a session
+   *  another process drives) or whose mutations already flushed — writing
+   *  such a state back is at best a no-op and at worst overwrites a fresher
+   *  file (see uiStateDirty). */
+  isUIStateDirty(rootSessionId: string): boolean {
+    return this.uiStateDirty.has(rootSessionId)
+  }
+
   /**
    * Get the UIState for a session, restoring it from disk if it isn't
    * in memory yet. Returns null only when the session id doesn't exist
@@ -483,6 +512,9 @@ export class SessionUIStore {
       id: genId(), type: 'notification', role: 'system',
       content: text, timestamp: Date.now(), agentName,
     })
+    // Mark before the persist (which clears on success) so a swallowed write
+    // error leaves the state dirty and a later detach-save retries it.
+    this.uiStateDirty.add(rootId)
     this.persistUIState(rootId, state)
   }
 
@@ -497,6 +529,8 @@ export class SessionUIStore {
     state.streamBuffer = ''
     state.turnToolCalls = []
     state.turnContentBlocks = []
+    // Same mark-before-persist as appendNotification.
+    this.uiStateDirty.add(rootId)
     this.persistUIState(rootId, state)
   }
 
@@ -518,6 +552,9 @@ export class SessionUIStore {
     this.uiStates.delete(sessionId)
     this.uiStateProjectPaths.delete(sessionId)
     this.uiStateTouched.delete(sessionId)
+    // The flag describes the dropped object; a later ensureUIState re-seed
+    // from disk starts clean and must not inherit it.
+    this.uiStateDirty.delete(sessionId)
   }
 
   /**
@@ -575,7 +612,14 @@ export class SessionUIStore {
    * session evolving elsewhere would freeze on the first snapshot.
    */
   prepareForView(sessionId: string, selfDriven: boolean): UIState {
-    if (!selfDriven) this.uiStates.delete(sessionId)
+    if (!selfDriven) {
+      this.uiStates.delete(sessionId)
+      // The re-seed below starts as a pure disk copy; a dirty flag left over
+      // from an earlier epoch (this process drove the session, then released
+      // it) must not survive onto the fresh seed or a detach-save would write
+      // the seed back over another process's newer messages.
+      this.uiStateDirty.delete(sessionId)
+    }
     this.uiStateProjectPaths.set(sessionId, this.host.workspaceRoot)
     return this.ensureUIState(sessionId)
   }
@@ -586,6 +630,7 @@ export class SessionUIStore {
     this.uiStates.delete(id)
     this.uiStateProjectPaths.delete(id)
     this.uiStateTouched.delete(id)
+    this.uiStateDirty.delete(id)
     const timer = this.persistTimers.get(id)
     if (timer) {
       clearTimeout(timer)

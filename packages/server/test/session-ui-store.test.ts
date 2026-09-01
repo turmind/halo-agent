@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { AgentSessionEvent } from '../src/agents/agent-events.js'
 import type { UIState } from '../src/sessions/ui-log-builder.js'
+import type { SessionMessage } from '../src/sessions/session-types.js'
 
 // broadcast is a module-level singleton over the live WSS; stub it so the
 // `complete` → session:changed contract can be asserted without a server.
@@ -9,9 +10,12 @@ vi.mock('../src/ws/broadcast.js', () => ({ broadcast: (e: Record<string, unknown
 // session-store touches disk for seeding/persisting; the store under test only
 // calls persistSessionFile through the host, but ensureUIState reads via
 // loadSessionMessages. Stub the lot to keep this a pure in-memory unit test.
+// `diskMessages` lets individual tests present an on-disk log to seed from
+// (the dirty-flag tests need a state that was built WITHOUT local mutation).
+const diskMessages: { value: unknown[] } = { value: [] }
 vi.mock('../src/sessions/session-store.js', () => ({
   getSessionDir: () => '/tmp/none',
-  loadSessionMessages: () => [],
+  loadSessionMessages: () => diskMessages.value,
   fileSegment: (id: string) => id,
 }))
 
@@ -46,6 +50,7 @@ function makeHost(over: Partial<Host> = {}): { host: Host; persisted: Array<{ se
 
 beforeEach(() => {
   broadcastSpy.mockClear()
+  diskMessages.value = []
 })
 
 describe('SessionUIStore event routing', () => {
@@ -187,6 +192,78 @@ describe('SessionUIStore UIState access', () => {
     expect(store.getCachedUIState('s1')).not.toBeNull()
     store.dropUIState('s1')
     expect(store.getCachedUIState('s1')).toBeNull()
+  })
+})
+
+describe('SessionUIStore dirty flag (cron-session UI-log truncation guard)', () => {
+  /** Host whose db knows the session and whose disk has an existing log —
+   *  the shape of subscribing to a session a cron `halo cli` child drives. */
+  function makeSeededHost(over: Partial<Host> = {}) {
+    diskMessages.value = [
+      { id: 'm1', type: 'user', role: 'user', content: 'from cli', timestamp: 1 } satisfies SessionMessage,
+    ]
+    return makeHost({
+      getDb: () => ({ select: () => ({ from: () => ({ where: () => ({ get: () => ({ agentId: 'default' }) }) }) }) }) as never,
+      ...over,
+    })
+  }
+
+  it('a state seeded from disk for viewing is NOT dirty — the WS detach save must skip it', () => {
+    const { host } = makeSeededHost()
+    const store = new SessionUIStore(host)
+    // Subscribe path for a session this process isn't driving (cron cli child).
+    const state = store.prepareForView('cron-1', false)
+    expect(state.messageLog).toHaveLength(1)  // seed really happened
+    // Clean: writing this snapshot back would overwrite the cli's newer
+    // messages with a frozen copy — exactly the truncation incident.
+    expect(store.isUIStateDirty('cron-1')).toBe(false)
+  })
+
+  it('a locally reduced event marks dirty; the debounced persist clears it', () => {
+    vi.useFakeTimers()
+    try {
+      const { host, persisted } = makeHost()
+      const store = new SessionUIStore(host)
+      store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
+      // Mutated but not yet flushed — a detach save NOW must still write.
+      expect(store.isUIStateDirty('s1')).toBe(true)
+      vi.advanceTimersByTime(500)
+      expect(persisted.some((p) => p.sessionId === 's1')).toBe(true)
+      // Snapshot landed — memory adds nothing over disk anymore.
+      expect(store.isUIStateDirty('s1')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a failed persist keeps the state dirty so a later detach-save retries', () => {
+    const { host } = makeHost({ persistSessionFile: () => { throw new Error('disk full') } })
+    const store = new SessionUIStore(host)
+    store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
+    store.emitEvent('s1', { type: 'complete' } as AgentSessionEvent)  // sync flush → throws inside
+    expect(store.isUIStateDirty('s1')).toBe(true)
+  })
+
+  it('prepareForView(!selfDriven) clears a stale dirty flag from an earlier epoch', () => {
+    const { host } = makeSeededHost()
+    const store = new SessionUIStore(host)
+    // Epoch 1: this process drove the session (e.g. before releasing it).
+    store.emitEvent('cron-1', { type: 'user', text: 'old epoch' } as AgentSessionEvent)
+    expect(store.isUIStateDirty('cron-1')).toBe(true)
+    // Epoch 2: view it as another process's session — fresh disk seed must
+    // not inherit the flag, or a detach-save would write the seed back.
+    store.prepareForView('cron-1', false)
+    expect(store.isUIStateDirty('cron-1')).toBe(false)
+  })
+
+  it('dropUIState clears the flag along with the state', () => {
+    const { host } = makeHost({ persistSessionFile: () => { throw new Error('disk full') } })
+    const store = new SessionUIStore(host)
+    store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
+    store.emitEvent('s1', { type: 'complete' } as AgentSessionEvent)  // flush fails → stays dirty
+    store.dropUIState('s1')
+    // The flag described the dropped object; a re-seed starts clean.
+    expect(store.isUIStateDirty('s1')).toBe(false)
   })
 })
 

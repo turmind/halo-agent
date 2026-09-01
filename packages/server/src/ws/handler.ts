@@ -177,6 +177,15 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     if (!client.sessionId || !client.projectId || !client.sessionManager) return
     const state = getState(client)
     if (!state) return
+    // Only write back a state THIS process has mutated and not yet flushed.
+    // A clean state is either a pure disk seed — the subscribe built it to
+    // view a session a cron `halo cli` child is driving, and that child keeps
+    // appending to the file after our seed — or already persisted by the
+    // store's own flush. Writing it here would clobber the fresher file with
+    // a frozen snapshot (the cron-session UI-log truncation incident: the
+    // detach/grace save landed minutes after the cli exited and erased its
+    // final messages).
+    if (!client.sessionManager.isUIStateDirty(client.sessionId)) return
     const projectPath = resolveProjectPath(client.projectId)
     const snapshot = createSaveSnapshot(state)
     if (snapshot.length === 0) return
