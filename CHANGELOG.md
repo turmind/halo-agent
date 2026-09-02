@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-09-02
+
+### Added
+
+- Web search: merged the two web-search skills into one `web-search` skill with a fast/deep gear switch — fast (default, Nova grounding, ~3s) for routine lookups, `--deep` (GPT-5.6 via Bedrock Mantle, ~20-40s) for exhaustive multi-round research with per-claim citations. Auth is automatic in both gears, nothing to configure. The old `nova-web-search` skill is retired; existing installs auto-clean its stale global directory on upgrade.
+- Models: added Claude Fable 5.1 to the Bedrock invoke model list.
+
+### Fixed
+
+- Admin: viewing a cron-driven session no longer clobbers messages the cron `halo cli` child appended afterward — WS detach-save now only writes back the session snapshot when it's actually dirty, instead of unconditionally overwriting on disconnect/switch.
+- Server: transient Bedrock HTTP/2 hangs (`http2 request did not get a response`) now retry instead of failing the turn outright; sub-agent and goal-mode round reports for turns that end in an unrecoverable error are now prefixed `[SUB-AGENT ABORTED]` / `[WORKER ABORTED]` so the parent agent / goal judge doesn't mistake a partial trace for a finished result.
+
 ## [1.1.3] - 2026-09-01
 
 ### Added
@@ -388,7 +400,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.4...HEAD
+[1.1.4]: https://github.com/turmind/halo-agent/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/turmind/halo-agent/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/turmind/halo-agent/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/turmind/halo-agent/compare/v1.1.0...v1.1.1
