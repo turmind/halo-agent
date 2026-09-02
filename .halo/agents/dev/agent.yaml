@@ -5,7 +5,7 @@ description: Halo-codebase specialist — implements features and fixes across t
   semantics (sessions, channels, WS protocol, agent loop, templates).
 model:
   provider: aws-bedrock-claude-invoke
-  id: global.anthropic.claude-fable-5
+  id: global.anthropic.claude-fable-5-1
   endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
   promptCaching: 1h
   thinking:

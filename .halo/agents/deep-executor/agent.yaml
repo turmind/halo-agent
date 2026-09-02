@@ -5,7 +5,7 @@ description: Heavy-lift worker for creation- and reasoning-intensive tasks — l
   visibly pays, not as a "better executor".
 model:
   provider: aws-bedrock-claude-invoke
-  id: global.anthropic.claude-fable-5
+  id: global.anthropic.claude-fable-5-1
   endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
   promptCaching: 1h
   thinking:

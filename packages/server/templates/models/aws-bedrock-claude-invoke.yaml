@@ -35,6 +35,34 @@ secrets:
 #   thinking.default           → effort selected when Thinking is on (adaptive)
 #   thinking.defaultBudgetTokens → budget selected when Thinking is on (manual)
 models:
+  - id: global.anthropic.claude-fable-5-1
+    displayName: Claude Fable 5.1
+    maxOutputTokens: 128000
+    contextWindow: 1000000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        # Fable 5.1 — Mythos-class flagship refresh. Adaptive effort set
+        # confirmed by an invalid-value probe against Bedrock (2026-09-02):
+        # low / medium / high / xhigh / max, same as Fable 5. 1M context,
+        # 128K output. Smoke-tested on invoke (xhigh).
+        mode: adaptive
+        defaultEnabled: true
+        default: high       # flagship-of-flagships — high by default; xhigh/max on demand
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+
   - id: global.anthropic.claude-fable-5
     displayName: Claude Fable 5
     maxOutputTokens: 128000
