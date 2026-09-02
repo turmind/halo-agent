@@ -62,13 +62,14 @@ function stubHost(): GoalHost & { deliveries: Array<{ target: string; from: stri
   }
 }
 
-function workerShape(id: string, over?: Partial<{ parentId: string | null; queueLen: number; finalOutput: string; output: string }>) {
+function workerShape(id: string, over?: Partial<{ parentId: string | null; queueLen: number; finalOutput: string; output: string; turnError: string | null }>) {
   return {
     id,
     parentId: over?.parentId ?? null,
     messageQueue: { length: over?.queueLen ?? 0 },
     finalOutput: over?.finalOutput ?? 'round report',
     output: over?.output ?? '',
+    turnError: over?.turnError ?? null,
   }
 }
 
@@ -267,6 +268,70 @@ describe('deliverGoalRound', () => {
     const host = stubHost()
     await deliverGoalRound(host, workerShape('w1'))
     expect(readGoalState(sm.getDb(), 'goal_a')!.haltReason).toMatch(/wall-time/)
+  })
+
+  // Aborted-round marker (same shape as tryReportToParent's SUB-AGENT ABORTED
+  // fix): a turn terminated by an unrecoverable error must not reach G looking
+  // like a normal wrap-up — G would misjudge progress or accept a fragment.
+  it('prefixes a WORKER ABORTED marker (with the error) when turnError is set', async () => {
+    seedGoal('goal_a', 'w1', (s) => { s.status = 'running'; s.startedAt = Date.now() })
+    const s0 = readGoalState(sm.getDb(), 'goal_a')!
+    s0.specHash = writeSpec('goal_a')
+    writeGoalState(sm.getDb(), 'goal_a', s0)
+
+    const host = stubHost()
+    await deliverGoalRound(host, workerShape('w1', {
+      finalOutput: '',
+      output: 'Now let me check persistSessionFile…',   // mid-turn fragment, no wrap-up
+      turnError: 'TimeoutError: Unexpected error: http2 request did not get a response',
+    }))
+    expect(host.deliveries).toHaveLength(1)
+    const text = host.deliveries[0].text
+    expect(text).toMatch(/^\[Goal round 1\/10/)          // header still leads
+    expect(text).toContain('[WORKER ABORTED')
+    expect(text).toContain('TimeoutError: Unexpected error: http2 request did not get a response')
+    expect(text).toContain('Now let me check persistSessionFile…') // partial trace still delivered
+    expect(readGoalState(sm.getDb(), 'goal_a')!.round).toBe(1)     // aborted round still counts
+  })
+
+  it('marks the empty-output shape too (the literal "(no output)" sample)', async () => {
+    seedGoal('goal_a', 'w1', (s) => { s.status = 'running'; s.startedAt = Date.now() })
+    const s0 = readGoalState(sm.getDb(), 'goal_a')!
+    s0.specHash = writeSpec('goal_a')
+    writeGoalState(sm.getDb(), 'goal_a', s0)
+
+    const host = stubHost()
+    await deliverGoalRound(host, workerShape('w1', { finalOutput: '', turnError: 'Error: boom' }))
+    expect(host.deliveries[0].text).toContain('[WORKER ABORTED')
+    expect(host.deliveries[0].text).toContain('(no output)')
+  })
+
+  it('marker survives the truncation cap (prepended before the slice)', async () => {
+    seedGoal('goal_a', 'w1', (s) => { s.status = 'running'; s.startedAt = Date.now() })
+    const s0 = readGoalState(sm.getDb(), 'goal_a')!
+    s0.specHash = writeSpec('goal_a')
+    writeGoalState(sm.getDb(), 'goal_a', s0)
+
+    const host = stubHost()
+    await deliverGoalRound(host, workerShape('w1', {
+      finalOutput: '',
+      output: 'x'.repeat(20_000),                        // well past autoReportMax (8192)
+      turnError: 'Error: boom',
+    }))
+    const text = host.deliveries[0].text
+    expect(text).toContain('[WORKER ABORTED')
+    expect(text).toContain('[Report truncated:')
+  })
+
+  it('leaves a normal completed round unmarked', async () => {
+    seedGoal('goal_a', 'w1', (s) => { s.status = 'running'; s.startedAt = Date.now() })
+    const s0 = readGoalState(sm.getDb(), 'goal_a')!
+    s0.specHash = writeSpec('goal_a')
+    writeGoalState(sm.getDb(), 'goal_a', s0)
+
+    const host = stubHost()
+    await deliverGoalRound(host, workerShape('w1', { finalOutput: 'All done, 3 files changed.' }))
+    expect(host.deliveries[0].text).not.toContain('ABORTED')
   })
 })
 

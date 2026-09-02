@@ -325,7 +325,7 @@ export const NEED_INPUT_MARKER = '<NEED_INPUT>'
  */
 export async function deliverGoalRound(
   host: GoalHost,
-  worker: { id: string; parentId: string | null; messageQueue: { length: number }; finalOutput: string; output: string },
+  worker: { id: string; parentId: string | null; messageQueue: { length: number }; finalOutput: string; output: string; turnError: string | null },
 ): Promise<void> {
   if (worker.parentId !== null) return
   const db = host.getDb()
@@ -352,7 +352,19 @@ export async function deliverGoalRound(
     .all()
   if (activeChildren.length > 0 || worker.messageQueue.length > 0) return
 
-  const report = worker.finalOutput || worker.output || '(no output)'
+  let report = worker.finalOutput || worker.output || '(no output)'
+  // Abnormal termination (retry budget exhausted / account error): the turn
+  // died mid-flight, so whatever accumulated is a partial trace, not a
+  // wrap-up. Without an explicit marker G cannot tell the two apart and may
+  // misjudge progress or even accept the goal on a fragment. Prefix, don't
+  // suppress (mirrors tryReportToParent): skipping delivery would stall the
+  // loop, and the trace has diagnostic value. Prepended BEFORE deliver()'s
+  // truncation cap so the marker always survives.
+  if (worker.turnError) {
+    report = `[WORKER ABORTED: this round was terminated by an unrecoverable error, NOT a normal wrap-up. `
+      + `Error: ${worker.turnError}. The text below is a partial trace of the aborted turn — judge this as an `
+      + `interrupted round, do not score it as a completed result. Re-dispatch with query_session to let the worker resume.]\n\n${report}`
+  }
   const caps = state.caps
 
   // Spec tamper gate: GOAL_SPEC.md is the contract; a changed or missing file
