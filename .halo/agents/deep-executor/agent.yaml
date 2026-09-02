@@ -26,5 +26,3 @@ tools:
   - grep
   - glob
   - web_fetch
-skills:
-  - canvas-pptx
