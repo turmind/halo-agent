@@ -4,12 +4,18 @@
  * was created from inside a chat), followed by any `MEDIA:` attachments the
  * run emitted. WeChat is single-recipient for cron — unlike telegram,
  * there's no whitelist to fan out to.
+ *
+ * The text is chunked at WECHAT_TEXT_LIMIT like a chat reply: the gateway
+ * rejects a sendmessage body over 16 KB with `ret=-2 "prepare failed"`, so a
+ * long report shipped as one call silently failed every time.
  */
 import { getChannelDb } from '../../db/channel-db.js'
 import { getAccount as getSharedAccount } from '../shared/accounts.js'
 import { getAccount as getWechatAccount, listAccounts as listWechatAccounts } from './accounts.js'
 import { sendToUser as sendWechatMessage } from './handler.js'
 import { sendMediaFile } from './send-media.js'
+import { WECHAT_TEXT_LIMIT } from './event-adapter.js'
+import { splitText } from '../shared/chunk.js'
 import { isMediaPathAllowed } from '../shared/media.js'
 import { registerCronDispatcher, type CronMedia, type CronTargetOption, type DispatchResult } from '../../cron/dispatcher.js'
 
@@ -37,10 +43,20 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
     throw new Error('no wechat target — bind the account first (the QR-login owner becomes the default cron recipient)')
   }
   // A marker-only run has no text left after MEDIA extraction — send the
-  // attachments alone rather than an empty WeChat message.
+  // attachments alone rather than an empty WeChat message. Chunks go out
+  // sequentially so a long report arrives in order; one result row per text.
+  // A failed chunk rethrows with its index so the admin run row shows how
+  // much of the report already landed (chunks before it were delivered).
   const out: DispatchResult[] = []
   if (text) {
-    await sendWechatMessage({ account: acct, toUserId: chatId, text })
+    const chunks = splitText(text, WECHAT_TEXT_LIMIT)
+    for (const [i, chunk] of chunks.entries()) {
+      try {
+        await sendWechatMessage({ account: acct, toUserId: chatId, text: chunk })
+      } catch (err) {
+        throw new Error(`chunk ${i + 1}/${chunks.length}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     out.push({ channelType: 'wechat', accountId, chatId, ok: true })
   }
   // One result row per attachment so a failed upload is visible in the

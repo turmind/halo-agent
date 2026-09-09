@@ -173,7 +173,7 @@ describe('A-M2 — responder replies to the LATEST inbound user, never the first
     // userA opens the conversation.
     const sid1 = await deliver({ bridge, overrides, fromUserId: 'userA', text: 'hi from A', contextToken: 'tok-A' })
     expect(sid1).toBe(SID)
-    sm.emitEvent(SID, { type: 'stream', text: 'reply to A' })
+    sm.emitEvent(SID, { type: 'stream', text: 'reply to A', final: true })
     sm.emitEvent(SID, { type: 'complete' })
     await tick()
     expect(sends).toHaveLength(1)
@@ -188,7 +188,7 @@ describe('A-M2 — responder replies to the LATEST inbound user, never the first
     // Listener was registered once — the SAME responder must now send to B.
     // Pre-fix, the closure had locked fromUserId=userA at registration time.
     expect(listenerCount(SID)).toBe(1)
-    sm.emitEvent(SID, { type: 'stream', text: 'reply to B' })
+    sm.emitEvent(SID, { type: 'stream', text: 'reply to B', final: true })
     sm.emitEvent(SID, { type: 'complete' })
     await tick()
     expect(sends).toHaveLength(2)
@@ -227,7 +227,7 @@ describe('A-M2 — responder replies to the LATEST inbound user, never the first
 
     await deliver({ bridge, overrides: new Map(), fromUserId: 'userA', text: 'hi', contextToken: 'tok-A' })
     // Stream text WITHOUT complete — stays in the responder buffer.
-    sm.emitEvent(SID, { type: 'stream', text: 'partial reply' })
+    sm.emitEvent(SID, { type: 'stream', text: 'partial reply', final: true })
 
     bridge.dropListener(SID)
     await tick()
@@ -255,7 +255,11 @@ describe('A-M2 — responder replies to the LATEST inbound user, never the first
     bridge.closeAll()
     expect(listenerCount(A)).toBe(0)
     expect(listenerCount(B)).toBe(0)
-    // The internal map is the leaked resource pre-fix — must be empty now.
+    // The internal map is the leaked resource pre-fix — must be empty once the
+    // responders have drained. WechatResponder serializes its sends (same
+    // chain as slack/feishu) and hands the bridge a drain promise, so the
+    // route is released after it settles, not synchronously.
+    await tick()
     expect((bridge as unknown as { routes: Map<string, unknown> }).routes.size).toBe(0)
   })
 })
@@ -294,7 +298,7 @@ describe('A-M5 — dispatchChannelCommand wires route + listener on startedTurn'
     expect(bridge.getRoute(SID)).toMatchObject({ fromUserId: 'userA', contextToken: 'tok-1' })
 
     // The skill body's eventual reply actually lands with the user.
-    sm.emitEvent(SID, { type: 'stream', text: 'echo says hi' })
+    sm.emitEvent(SID, { type: 'stream', text: 'echo says hi', final: true })
     sm.emitEvent(SID, { type: 'complete' })
     await tick()
     expect(sends).toHaveLength(1)

@@ -187,17 +187,17 @@ export async function sendMessage(params: {
   })
   // The gateway returns HTTP 200 even when delivery fails; the real status
   // is in the body's `ret`/`errcode`. Without checking, silent drops look
-  // like success up to the cron dispatcher. ret=-2 in particular fires
-  // when the bot tries to push to a user that's never messaged it — the
-  // ilink protocol gates outbound messages behind a prior inbound to
-  // prevent spam, similar to Telegram's `/start` requirement.
+  // like success up to the cron dispatcher. ret=-2 ("prepare failed") is a
+  // generic rejection: observed both for oversized payloads (every body
+  // > 16 KB in the cron audit log) and for a push to a user with no recent
+  // inbound message — the ilink protocol gates outbound behind a prior
+  // inbound to prevent spam, similar to Telegram's `/start` requirement.
   try {
     const parsed = JSON.parse(raw) as { ret?: number; errcode?: number; errmsg?: string }
     if ((parsed.ret !== undefined && parsed.ret !== 0) || (parsed.errcode !== undefined && parsed.errcode !== 0)) {
-      // ret=-2 specifically means the target user has no inbound history
-      // with this bot. The gateway gates first-time outbound on a prior
-      // inbound, so the user must DM the bot once before any push works.
-      const hint = parsed.ret === -2 ? ' (target user has never messaged this bot — they must send any message first)' : ''
+      // ret=-2 has more than one cause; name both so the operator checks the
+      // payload size before telling the user to DM the bot first.
+      const hint = parsed.ret === -2 ? ' (gateway rejected the message — payload too large (>16KB observed) or the target user has no recent inbound message with this bot)' : ''
       throw new Error(`[wechat:sendmessage] gateway error ret=${parsed.ret} errcode=${parsed.errcode} ${parsed.errmsg ?? ''}${hint}`)
     }
   } catch (err) {

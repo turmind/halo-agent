@@ -34,13 +34,17 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
   const resolvedMessage = ref.text
   const resolvedImages = ref.images.length > 0 ? ref.images : undefined
 
-  const chunks: string[] = []
+  // Per-root-turn text, reset when a drained turn starts (`queued_message`).
+  // stdout carries only the LAST turn's reply: `turnFinal` is the wrap-up
+  // (stream events flagged `final`), `turnAll` every root stream chunk —
+  // the fallback when the turn ended without a closing message.
+  let turnFinal = ''
+  let turnAll = ''
   const toolCalls: Array<{ name: string; durationMs?: number }> = []
   let errorText = ''
   let usage: AgentSessionEvent | null = null
   let lastToolName = ''
 
-  let hadOutput = false
   let hadMeta = false
   const agentNames = new Map<string, string>()
   let spinnerTimer: ReturnType<typeof setInterval> | null = null
@@ -94,14 +98,23 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
         if (event.text) {
           stopSpinner()
           if (opts.verbose && hadMeta) { process.stderr.write('\n'); hadMeta = false }
-          if (event.taskId) {
-            if (opts.verbose) process.stderr.write(`${tag}\x1b[2m${event.text}\x1b[0m\n`)
-          } else {
-            if (opts.format === 'text') process.stdout.write(renderMarkdown(event.text) + '\n')
-            chunks.push(event.text)
-            hadOutput = true
+          // Nothing is written to stdout live — it gets the final answer once
+          // the run ends (see `answer` below). Verbose echoes every stream to
+          // stderr as progress: sub-agents tagged, root text tag-less.
+          if (opts.verbose) process.stderr.write(`${tag}\x1b[2m${event.text}\x1b[0m\n`)
+          if (!event.taskId) {
+            turnAll += event.text
+            if (event.final) turnFinal += event.text
           }
         }
+        break
+      case 'queued_message':
+        // drainQueue starts a new root turn (folded user messages / sub-agent
+        // reports). Only the last turn's reply goes to stdout, so drop the
+        // previous turn's text. Root-only by construction; `complete` with
+        // `batchBoundary` is NOT a reset point (no complete separates the
+        // opening turn from the first drained one).
+        if (!event.taskId) { turnFinal = ''; turnAll = '' }
         break
       case 'thinking':
         if (opts.verbose && event.text) {
@@ -134,7 +147,6 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
         usage = event
         if (opts.verbose) {
           stopSpinner()
-          if (hadOutput) { process.stdout.write('\n'); hadOutput = false }
           process.stderr.write(`\n${tag}${formatUsageLine(event)}\n`)
           hadMeta = true
         }
@@ -152,13 +164,21 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
   }
   stopSpinner()
 
+  // Mirror tryReportToParent's `finalOutput || output`: the wrap-up reply,
+  // falling back to the whole turn when it ended without one (e.g. stopped
+  // right after a tool call) so a consumer still gets something.
+  const answer = turnFinal || turnAll
   if (opts.format === 'text') {
-    if (chunks.length > 0 && !chunks[chunks.length - 1].endsWith('\n')) {
-      process.stdout.write('\n')
+    if (answer) {
+      // Styled markdown only for a human at a terminal. Piped stdout (cron
+      // dispatch, scripts) gets the raw markdown — marked-terminal's 80-col
+      // reflow and box-drawing tables inflate bytes and read badly in chat.
+      const out = process.stdout.isTTY ? renderMarkdown(answer) : answer
+      process.stdout.write(out.endsWith('\n') ? out : out + '\n')
     }
   } else {
     const result = {
-      text: chunks.join(''),
+      text: answer,
       sessionId: harness.sessionId,
       toolCalls,
       usage: usage ? {

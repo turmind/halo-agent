@@ -1,4 +1,5 @@
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
+import { splitText } from '../shared/chunk.js'
 import { extractMediaMessage } from '../shared/media.js'
 
 const HARD_CHARS = 4000
@@ -23,7 +24,9 @@ export class TelegramResponder {
 
     switch (event.type) {
       case 'stream':
-        if (event.text) this.append(event.text)
+        // Only the wrap-up reply (`final`) reaches the chat. The filler the
+        // model emits before a tool call stays in the web UI, not here.
+        if (event.final && event.text) this.append(event.text)
         break
       case 'error':
         if (event.error) {
@@ -51,34 +54,18 @@ export class TelegramResponder {
 
   private append(text: string): void {
     this.buffer += text
-    while (this.buffer.length >= HARD_CHARS) {
-      const cut = this.findSplitPoint(this.buffer, HARD_CHARS)
-      const chunk = this.buffer.slice(0, cut)
-      this.buffer = this.buffer.slice(cut).trimStart()
-      void this.dispatchChunk(chunk)
-    }
+    if (this.buffer.length <= HARD_CHARS) return
+    const chunks = splitText(this.buffer, HARD_CHARS)
+    // The last piece is the under-limit remainder — keep buffering it.
+    this.buffer = chunks.pop() ?? ''
+    for (const chunk of chunks) void this.dispatchChunk(chunk)
   }
 
   private flushAll(): void {
     if (!this.buffer) return
-    while (this.buffer.length > HARD_CHARS) {
-      const cut = this.findSplitPoint(this.buffer, HARD_CHARS)
-      const chunk = this.buffer.slice(0, cut)
-      this.buffer = this.buffer.slice(cut).trimStart()
-      void this.dispatchChunk(chunk)
-    }
-    if (this.buffer) {
-      const text = this.buffer
-      this.buffer = ''
-      void this.dispatchChunk(text)
-    }
-  }
-
-  private findSplitPoint(text: string, limit: number): number {
-    const window = text.slice(0, limit)
-    const lastPara = window.lastIndexOf('\n\n')
-    if (lastPara > limit / 2) return lastPara + 2
-    return limit
+    const chunks = splitText(this.buffer, HARD_CHARS)
+    this.buffer = ''
+    for (const chunk of chunks) void this.dispatchChunk(chunk)
   }
 
   private async dispatchChunk(chunk: string): Promise<void> {

@@ -12,6 +12,7 @@
  * slice as its own message in the same thread.
  */
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
+import { splitText } from '../shared/chunk.js'
 import { formatForSlack } from '../shared/markdown.js'
 import { extractMediaMessage } from '../shared/media.js'
 
@@ -41,7 +42,9 @@ export class SlackResponder {
 
     switch (event.type) {
       case 'stream':
-        if (event.text) this.buffer += event.text
+        // Only the wrap-up reply (`final`) reaches the chat. The filler the
+        // model emits before a tool call stays in the web UI, not here.
+        if (event.final && event.text) this.buffer += event.text
         break
       case 'system':
         if (event.text) {
@@ -72,24 +75,9 @@ export class SlackResponder {
 
   private flushBuffer(): void {
     if (!this.buffer) return
-    while (this.buffer.length > HARD_CHARS) {
-      const cut = this.findSplitPoint(this.buffer, HARD_CHARS)
-      const chunk = this.buffer.slice(0, cut)
-      this.buffer = this.buffer.slice(cut).trimStart()
-      this.enqueueChunk(chunk)
-    }
-    if (this.buffer) {
-      const text = this.buffer
-      this.buffer = ''
-      this.enqueueChunk(text)
-    }
-  }
-
-  private findSplitPoint(text: string, limit: number): number {
-    const window = text.slice(0, limit)
-    const lastPara = window.lastIndexOf('\n\n')
-    if (lastPara > limit / 2) return lastPara + 2
-    return limit
+    const chunks = splitText(this.buffer, HARD_CHARS)
+    this.buffer = ''
+    for (const chunk of chunks) this.enqueueChunk(chunk)
   }
 
   /**

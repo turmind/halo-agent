@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { SlackResponder } from '../src/channels/slack/event-adapter.js'
 import { FeishuResponder } from '../src/channels/feishu/event-adapter.js'
+import { WechatResponder, WECHAT_TEXT_LIMIT } from '../src/channels/wechat/event-adapter.js'
 import { InboundBridge } from '../src/channels/shared/inbound.js'
 import type { AgentSessionEvent } from '../src/agents/agent-events.js'
 
@@ -55,7 +56,9 @@ function descendingDelaySender(sent: string[], count: number) {
   }
 }
 
-const streamEvent = (text: string): AgentSessionEvent => ({ type: 'stream', text } as AgentSessionEvent)
+// `final: true` — responders only buffer the wrap-up text; see
+// channel-responder-final-only.test.ts for the filler-drop contract.
+const streamEvent = (text: string): AgentSessionEvent => ({ type: 'stream', text, final: true } as AgentSessionEvent)
 const completeEvent = (): AgentSessionEvent => ({ type: 'complete' } as AgentSessionEvent)
 
 /** Paragraph-shaped body that forces `parts` splits at `hardChars`. Each
@@ -63,7 +66,7 @@ const completeEvent = (): AgentSessionEvent => ({ type: 'complete' } as AgentSes
 function buildSplittableBody(hardChars: number, parts: number): string {
   const paras: string[] = []
   for (let i = 0; i < parts; i++) {
-    // Slightly over half the hard limit → findSplitPoint cuts at the paragraph
+    // Slightly over half the hard limit → splitText cuts at the paragraph
     // break after each one, yielding one chunk per paragraph.
     paras.push(`P${i}-${'x'.repeat(Math.floor(hardChars * 0.6))}`)
   }
@@ -78,6 +81,9 @@ function arrivalOrder(sent: string[]): number[] {
 describe.each([
   { name: 'SlackResponder', hardChars: 35_000, make: (deps: { sendText: (t: string) => Promise<void>; sendMedia: (p: string) => Promise<void> }) => new SlackResponder(deps) },
   { name: 'FeishuResponder', hardChars: 4500, make: (deps: { sendText: (t: string) => Promise<void>; sendMedia: (p: string) => Promise<void> }) => new FeishuResponder(deps) },
+  // WeChat splits mid-stream in `append` too (not only on flush) — the same
+  // chain must cover both paths, or a long wrap-up can still land shuffled.
+  { name: 'WechatResponder', hardChars: WECHAT_TEXT_LIMIT, make: (deps: { sendText: (t: string) => Promise<void>; sendMedia: (p: string) => Promise<void> }) => new WechatResponder(deps) },
 ])('$name chunk ordering', ({ hardChars, make }) => {
   it('sends split chunks in buffer order despite descending send latencies', async () => {
     const sent: string[] = []

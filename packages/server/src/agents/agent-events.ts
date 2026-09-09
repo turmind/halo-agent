@@ -54,6 +54,12 @@ export interface AgentSessionEvent {
    *  local desktop/admin send). Must NOT be echoed back over WS or the user's
    *  message shows up twice. */
   localEcho?: boolean
+  /** For `stream` events: true only on the wrap-up text (the model call ended
+   *  with stopReason !== 'tool_use'), false/absent on filler emitted before a
+   *  tool call ("let me check X…"). Block-oriented channels (wechat/telegram/
+   *  slack/feishu) and the cli use it to deliver the reply only; streaming UIs
+   *  (admin WS, web SSE) ignore it and show all text. */
+  final?: boolean
   /** Marks a `complete` emitted BETWEEN drain batches (drainQueue runs N merged
    *  turns; each but the last is a batch boundary). Block-oriented channels
    *  (wechat/telegram/slack/feishu) flush their text buffer per `complete`, so

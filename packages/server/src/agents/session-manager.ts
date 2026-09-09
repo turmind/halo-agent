@@ -1122,7 +1122,7 @@ export class SessionManager implements SessionManagerInternals {
         // the parent gets the summary, not the mid-turn "let me check X" filler.
         session.output += event.text ?? ''
         if (event.final) session.finalOutput += event.text ?? ''
-        this.emitEvent(session.id, { type: 'stream', text: event.text, agentName, agentId, taskId })
+        this.emitEvent(session.id, { type: 'stream', text: event.text, final: event.final, agentName, agentId, taskId })
         break
       }
 
@@ -1655,6 +1655,10 @@ export class SessionManager implements SessionManagerInternals {
       // Open a fresh streaming assistant bubble for this merged turn (root only;
       // sub-agents split per turnId inside their own bubble). The text is
       // cosmetic — event-processor forwards only `{chat:followup, agentName}`.
+      // The cli (packages/cli/src/cli.ts) also relies on this event as the
+      // "new root turn starts" marker to reset its per-turn text buffers: no
+      // `complete` separates the opening turn from the first drained turn, so
+      // this is the only reliable boundary. Don't drop or make it conditional.
       if (session.parentId === null) {
         this.emitEvent(session.id, { type: 'queued_message', text: '', agentName: session.agentName })
       }

@@ -1,24 +1,28 @@
 /**
- * Coalesce streaming agent events into chunked WeChat text messages.
+ * Coalesce agent events into chunked WeChat text messages.
  *
- * WeChat sendMessage is block-oriented, not streaming. So we buffer the LLM
- * stream and flush when either:
- *   - Accumulated text reaches MIN_CHARS
- *   - Idle for IDLE_MS (no new chunk arrived)
- *   - `complete` event is received
- *
- * Tool calls are not echoed to WeChat (detail lives in the web UI). Errors are
- * always flushed immediately.
+ * WeChat sendMessage is block-oriented, not streaming. Only the root agent's
+ * wrap-up text (`stream` events flagged `final`) is buffered; the filler the
+ * model emits before tool calls, and all tool activity, stays in the web UI.
+ * The buffer is flushed on `complete`, and ahead of an `error` / `system`
+ * notice so the notice lands after the text it follows. Anything over
+ * WECHAT_TEXT_LIMIT is cut with the shared `splitText` (mid-stream in
+ * `append`, and again on flush), and every chunk goes through one serialized
+ * send chain (`sendTail`) so a long reply arrives in order.
  */
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
+import { splitText } from '../shared/chunk.js'
 import { extractMediaMessage } from '../shared/media.js'
 
 /**
- * WeChat sendMessage rejects payloads beyond ~4000 chars. When the buffer
- * approaches this ceiling we must split — prefer paragraph boundary, fall
- * back to a hard cut.
+ * Per-message ceiling in JS string chars (UTF-16 units), not bytes. The
+ * gateway rejects a sendmessage body over 16 KB with `ret=-2 "prepare failed"`;
+ * a char is at most 3 UTF-8 bytes (CJK — a 4-byte emoji is two chars), so
+ * 3500 chars is ≤ ~10.5 KB and fits alongside the JSON envelope. Splits
+ * prefer a paragraph boundary, else hard-cut. Shared with the cron
+ * dispatcher so a scheduled push obeys the same limit as a chat reply.
  */
-const HARD_CHARS = 3500
+export const WECHAT_TEXT_LIMIT = 3500
 
 export interface WechatResponderDeps {
   sendText: (text: string) => Promise<void>
@@ -29,6 +33,8 @@ export class WechatResponder {
   private buffer = ''
   private deps: WechatResponderDeps
   private closed = false
+  /** Tail of the per-responder send chain — see `enqueueChunk`. */
+  private sendTail: Promise<void> = Promise.resolve()
 
   constructor(deps: WechatResponderDeps) {
     this.deps = deps
@@ -43,18 +49,20 @@ export class WechatResponder {
 
     switch (event.type) {
       case 'stream':
-        if (event.text) this.append(event.text)
+        // Only the wrap-up reply (`final`) reaches the chat. The filler the
+        // model emits before a tool call stays in the web UI, not here.
+        if (event.final && event.text) this.append(event.text)
         break
       case 'error':
         if (event.error) {
           this.flushAll()
-          void this.dispatchChunk(`❌ ${event.error}`)
+          this.enqueueChunk(`❌ ${event.error}`)
         }
         break
       case 'system':
         if (event.text) {
           this.flushAll()
-          void this.dispatchChunk(`ℹ️ ${event.text}`)
+          this.enqueueChunk(`ℹ️ ${event.text}`)
         }
         break
       case 'complete':
@@ -64,49 +72,46 @@ export class WechatResponder {
     }
   }
 
-  close(): void {
-    if (this.closed) return
+  /** Returns the drain promise so the bridge keeps the reply route alive
+   *  until the last queued chunk has actually been sent. */
+  close(): Promise<void> {
+    if (this.closed) return this.sendTail
     this.flushAll()
     this.closed = true
+    return this.sendTail
   }
 
   private append(text: string): void {
     this.buffer += text
     // Only split when we hit WeChat's hard length ceiling. Otherwise keep
     // buffering — 'complete' will flush the whole response as one message.
-    while (this.buffer.length >= HARD_CHARS) {
-      const cut = this.findSplitPoint(this.buffer, HARD_CHARS)
-      const chunk = this.buffer.slice(0, cut)
-      this.buffer = this.buffer.slice(cut).trimStart()
-      void this.dispatchChunk(chunk)
-    }
+    if (this.buffer.length <= WECHAT_TEXT_LIMIT) return
+    const chunks = splitText(this.buffer, WECHAT_TEXT_LIMIT)
+    // The last piece is the under-limit remainder — keep buffering it.
+    this.buffer = chunks.pop() ?? ''
+    for (const chunk of chunks) this.enqueueChunk(chunk)
   }
 
   private flushAll(): void {
     if (!this.buffer) return
-    // Even on flush, respect the 3500 hard limit in case of a single huge response.
-    while (this.buffer.length > HARD_CHARS) {
-      const cut = this.findSplitPoint(this.buffer, HARD_CHARS)
-      const chunk = this.buffer.slice(0, cut)
-      this.buffer = this.buffer.slice(cut).trimStart()
-      void this.dispatchChunk(chunk)
-    }
-    if (this.buffer) {
-      const text = this.buffer
-      this.buffer = ''
-      void this.dispatchChunk(text)
-    }
+    // Even on flush, respect the hard limit in case of a single huge response.
+    const chunks = splitText(this.buffer, WECHAT_TEXT_LIMIT)
+    this.buffer = ''
+    for (const chunk of chunks) this.enqueueChunk(chunk)
   }
 
   /**
-   * Pick an index ≤ `limit` to split `text` at. Prefer the last paragraph
-   * break (`\n\n`) within the limit; fall back to a hard cut at `limit`.
+   * Serialize sends per responder — same rationale as the Slack adapter
+   * (audit A-L3): a flush emits several chunks in one synchronous loop, and
+   * firing their HTTP sends concurrently gave arrival order no guarantee.
+   * Each chunk waits for the previous send to settle; the `catch` keeps a
+   * rejected link from poisoning the chain (dispatchChunk already logs
+   * per-send failures).
    */
-  private findSplitPoint(text: string, limit: number): number {
-    const window = text.slice(0, limit)
-    const lastPara = window.lastIndexOf('\n\n')
-    if (lastPara > limit / 2) return lastPara + 2
-    return limit
+  private enqueueChunk(chunk: string): void {
+    this.sendTail = this.sendTail
+      .then(() => this.dispatchChunk(chunk))
+      .catch(() => { /* already logged in dispatchChunk */ })
   }
 
   /**
