@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.5] - 2026-09-10
+
+### Fixed
+
+- Channels: WeChat / Telegram / Slack / Feishu replies now carry only the agent's closing text of each turn — the interim "thinking aloud" it emits before tool calls is no longer forwarded to the chat. Under the hood the agent loop's `final` flag on text blocks is now propagated through `AgentSessionEvent`, so channel responders can gate on it.
+- Cron → WeChat: reports longer than the ilink gateway's 16 KB per-message ceiling failed outright (`ret=-2 "prepare failed"`) — the stock-report job hit this whenever its run was long enough. Dispatch now splits at 3500 chars (same shared `splitText` the chat responders use) and sends chunks in order; a mid-chunk failure is recorded as `chunk i/n: <error>` so the run row shows how much landed. The `ret=-2` hint in the WeChat API wrapper no longer claims "user never messaged the bot" — the same code also means oversized payload.
+- CLI: `halo cli` stdout is now the final answer of the last root turn (fallback: that turn's full text) instead of every streamed text block of the whole run — a multi-turn director session that absorbed a dozen sub-agent reports used to dump ~40 KB of interim wrap-ups into cron output. When stdout is not a TTY the text is written as raw markdown (no terminal styling); `-v` echoes root text to stderr as it streams.
+- Channels: WeChat streaming replies are now sent in strict order over a serialized send chain (was fire-and-forget), matching Slack / Feishu; Telegram / Slack / Feishu responders share the one `splitText` chunker instead of three private copies.
+
 ## [1.1.4] - 2026-09-02
 
 ### Added
@@ -400,7 +409,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.4...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.5...HEAD
+[1.1.5]: https://github.com/turmind/halo-agent/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/turmind/halo-agent/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/turmind/halo-agent/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/turmind/halo-agent/compare/v1.1.1...v1.1.2
