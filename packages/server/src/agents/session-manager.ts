@@ -27,7 +27,7 @@ import { deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBinding
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
-import { saveSessionToFile, fileSegment, findInternalSession, atomicWriteSessionFile } from '../sessions/session-store.js'
+import { saveSessionToFile, fileSegment, findInternalSession, atomicWriteSessionFile, stripTurnStamp } from '../sessions/session-store.js'
 import { readArchiveCount } from '../sessions/session-archive.js'
 import { VISION_IMAGE_MIME_TYPES } from '../channels/shared/media-store.js'
 import type { SessionMessage } from '../sessions/session-types.js'
@@ -1198,6 +1198,28 @@ export class SessionManager implements SessionManagerInternals {
     session.output = ''
     session.finalOutput = ''
     session.turnError = null
+
+    // Arrival-time stamp. The model has no clock — the only time signal it ever
+    // saw was the `[System @ <iso>]` sibling-status suffix — so it couldn't tell
+    // a user who came back two days later from one who replied instantly, or
+    // how long a sub-agent report took to land. Every user-role turn funnels
+    // through here (opening turn + each drained batch; agent reports read
+    // `[<iso>] (from: session X)\n…`). Stamped ONCE, before the retry loop, so
+    // every attempt re-runs the identical input (the 4xx multimodal degrade
+    // below rebuilds `message` from this copy). New array/blocks, never in
+    // place — the caller still holds the original. The compact instruction
+    // bypasses runAgentTurn and stays unstamped; the UI log keeps the raw text
+    // (deleteRawTurn strips the stamp when matching the two).
+    const stamp = `[${new Date().toISOString()}]`
+    const stamped = (text: string): string => (text ? `${stamp} ${text}` : stamp)
+    if (typeof message === 'string') {
+      message = stamped(message)
+    } else {
+      const i = message.findIndex((b) => b.type === 'text')
+      message = i === -1
+        ? [{ type: 'text', text: stamp }, ...message]
+        : message.map((b, j): ContentBlock => (j === i && b.type === 'text' ? { type: 'text', text: stamped(b.text) } : b))
+    }
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       session.abortController = new AbortController()
@@ -2714,7 +2736,7 @@ export class SessionManager implements SessionManagerInternals {
     let start = -1
     for (let i = 0; i < raw.length; i++) {
       if (!isRawTurnStart(raw[i])) continue
-      if (stripImageMarkers(rawMessageText(raw[i])) === target) {
+      if (stripImageMarkers(stripTurnStamp(rawMessageText(raw[i]))) === target) {
         seen++
         if (seen === rank) { start = i; break }
       }

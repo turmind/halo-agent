@@ -84,6 +84,15 @@ export function fileSegment(sessionId: string): string {
   return parts[parts.length - 1]
 }
 
+/** Strip the arrival-time stamp runAgentTurn prepends to every model-facing user
+ *  turn (`[2026-09-12T15:17:44.153Z] `). The UI log keeps the user's raw text,
+ *  so anything that matches or displays a `rawMessages` user turn against it
+ *  (deleteExchange's turn locator, the cold-path raw→display fallback) must
+ *  drop the stamp first. */
+export function stripTurnStamp(s: string): string {
+  return s.replace(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] ?/, '')
+}
+
 /** Resolve the path for a session file. Always uses the segment-based name —
  *  hierarchical IDs (`a>b>c`) only matter at runtime; on disk the file is the
  *  leaf segment. */

@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import { getWorkspaceDb, mirrorSessionMeta } from '../db/index.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import { agentSessions } from '../db/schema.js'
-import { findSessionFileData, findAndDeleteSessionFile, findAndUpdateSessionTitle, readSessionFileMeta } from '../sessions/session-store.js'
+import { findSessionFileData, findAndDeleteSessionFile, findAndUpdateSessionTitle, readSessionFileMeta, stripTurnStamp } from '../sessions/session-store.js'
 import { findLatestGoal } from '../agents/goal-mode.js'
 import { broadcast } from '../ws/broadcast.js'
 
@@ -93,7 +93,9 @@ function convertRawMessages(raw: RawMessage[], agentName: string): DisplayMessag
       const texts: string[] = []
       for (const block of blocks) {
         if (block.text && !block.toolResult && block.type !== 'tool_result') {
-          const text = block.text
+          // Arrival stamp first — the prefix regexes below are ^-anchored and a
+          // sub-session opening turn reads `[<iso>] [Session …]`.
+          const text = stripTurnStamp(block.text)
             .replace(/^\[Session [^\]]+\]\s*\n*/i, '')
             .replace(/^\[(?:Message|Report) from [^\]]+\]\s*\n*/i, '')
             .trim()
