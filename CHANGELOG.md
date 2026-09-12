@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-09-12
+
+### Added
+
+- Agent: every user-role turn that reaches the model now carries its arrival time as a leading `[2026-09-12T15:17:44.153Z] ` stamp (ISO-8601 UTC, same format as the existing `[System @ …]` sibling-status line) — the model previously had no clock and could not tell a reply that came two days later from one that came instantly, or how long a sub-agent report took to land. Sub-agent reports read `[<iso>] (from: session X)`. Only the model-facing history changes; the admin chat still shows the user's raw text. Exchange deletion and the cold-path raw→display fallback strip the stamp before matching, so they keep working.
+
 ## [1.1.5] - 2026-09-10
 
 ### Fixed
@@ -409,7 +415,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.5...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.6...HEAD
+[1.1.6]: https://github.com/turmind/halo-agent/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/turmind/halo-agent/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/turmind/halo-agent/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/turmind/halo-agent/compare/v1.1.2...v1.1.3
