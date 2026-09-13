@@ -108,9 +108,9 @@ Unlike Telegram (grammy polling) or WeChat (HTTP long-poll), Socket Mode elimina
 ### Outbound (SlackResponder)
 
 1. SessionManager emits AgentSessionEvent stream chunks
-2. SlackResponder buffers chunks until `complete` event
+2. SlackResponder buffers only chunks flagged `final` (the turn's wrap-up text; pre-tool-call filler is dropped) until `complete` event
 3. On `complete` or when buffer hits 35k chars:
-   - Split at paragraph boundary if needed (Slack hard-caps messages at ~40k)
+   - Split at paragraph boundary if needed via the shared `splitText` (`channels/shared/chunk.ts`; Slack hard-caps messages at ~40k)
    - Extract `MEDIA: <path>` markers (sent as native file uploads)
    - Convert CommonMark → Slack's mrkdwn format
    - Post as a single message (or series of messages if split)

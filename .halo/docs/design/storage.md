@@ -112,7 +112,7 @@ Path: `.halo/sessions/{agentId}/{sessionId}.json`
   "archiveCount": 2,                 // committed UI-log archive segments; absent = never archived
   "archivedUserCount": 30,           // main user turns that moved into segments
   "messages": [SessionMessage],       // UI event-log format (written by WS handler / UIState reducer)
-  "rawMessages": [AnthropicMessage],  // raw Bedrock API shape (written by SessionManager saveAgentState)
+  "rawMessages": [AnthropicMessage],  // raw Bedrock API shape (written by SessionManager saveAgentState); user text blocks start with the `[<iso>] ` arrival stamp — strip it (stripTurnStamp) before matching against `messages`
   "output": "..."                     // accumulated assistant text from the latest turn
 }
 ```

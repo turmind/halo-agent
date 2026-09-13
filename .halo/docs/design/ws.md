@@ -101,6 +101,8 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 
 `chat:thinking` / `chat:stream` / `chat:followup` / `agent:tool_call` / `agent:tool_result` additionally carry `replay: true` when synthesized by the reattach path (never on live events) — see [Reconnect flow](#reconnect-flow) step 6.
 
+Server-internal flags on `AgentSessionEvent` that are **not** carried into the WS frame: `stream.final` (marks the turn's wrap-up text vs. pre-tool filler — consumed by channel responders and the cli, see [session.md](session.md#message-queue-and-drain)) and `complete.batchBoundary`. The admin renders every streamed block, so neither is needed on the wire.
+
 ### Other Server → Client messages
 
 | Type | Source | Purpose |

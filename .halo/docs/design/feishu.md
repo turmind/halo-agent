@@ -139,9 +139,9 @@ Implemented via `channels/shared/commands.ts` (shared across Telegram, WeChat, S
 
 Feishu's text message limit (~5000 chars), smaller than Slack. Strategy:
 
-- Buffer streamed text until `complete` event
+- Buffer only streamed text flagged `final` (the turn's wrap-up; pre-tool-call filler is dropped) until `complete` event
 - Flush fires on **any** `complete` — the responder doesn't read its `batchBoundary` flag, so a multi-round queue drain ships each merged turn as its own message instead of one blob (see [session.md](session.md#message-queue-and-drain))
-- If buffer exceeds 4500 chars, split at paragraph boundary (`\n\n`)
+- If buffer exceeds 4500 chars, split at paragraph boundary (`\n\n`) via the shared `splitText` (`channels/shared/chunk.ts`)
 - Otherwise hard-cut at 4500 chars
 - `system` and `error` events flush early so users always see something before the run ends
 - Media markers (`MEDIA:<path>`) intercepted and sent via native media upload

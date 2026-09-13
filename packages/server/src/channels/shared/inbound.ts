@@ -51,8 +51,8 @@ import type { Lang } from './i18n.js'
 export interface ChannelResponder {
   handle(event: AgentSessionEvent): void
   /** May return a promise that settles once every buffered chunk has been
-   *  sent (slack / feishu serialize their sends — audit A-L3). The bridge
-   *  keeps the reply route alive until it settles. */
+   *  sent (slack / feishu / wechat serialize their sends — audit A-L3). The
+   *  bridge keeps the reply route alive until it settles. */
   close(): void | Promise<void>
 }
 
@@ -103,8 +103,8 @@ export class InboundBridge<Route> {
     const unsubscribe = sm.registerEventListener(sessionId, (event: AgentSessionEvent) => responder.handle(event))
     this.unsubscribers.set(sessionId, () => {
       // close() flushes the pending buffer — it must still see the route, so
-      // the route entry is deleted after, not before. Slack/feishu send their
-      // chunks serially and hand back a drain promise, so "after" means after
+      // the route entry is deleted after, not before. Slack/feishu/wechat send
+      // their chunks serially and hand back a drain promise, so "after" means after
       // that settles; dropping the route synchronously would strand the tail
       // of a split reply with nowhere to send.
       const drained = responder.close()

@@ -61,6 +61,8 @@ The wechat cron-dispatcher (`channels/wechat/cron-dispatcher.ts`) registers itse
 
 WeChat is single-recipient per dispatch (no fan-out across `allowedUsers` like telegram has). If none of the three yields an id, dispatch fails with a clear "no wechat target — bind the account first" message.
 
+The text is chunked exactly like a chat reply — `splitText(text, WECHAT_TEXT_LIMIT)` (3500 chars, see [Event coalescing](#event-coalescing-wechatresponder)) — and the chunks are sent sequentially so a long report arrives in order. Before this, a whole report went out in one `sendmessage` call and anything over the gateway's 16 KB ceiling failed outright with `ret=-2 "prepare failed"` (the stock-report job hit it routinely). A mid-chunk failure rethrows as `chunk i/n: <error>`, so the run row's dispatch result shows how much of the report already landed (chunks before `i` were delivered). Note `ret=-2` is a generic rejection with two observed causes — an oversized payload, or a push to a user with **no recent inbound message** (the ilink protocol gates outbound behind a prior inbound, like Telegram's `/start`); `api.ts`'s error hint names both instead of blaming the user's inbox.
+
 ## Modules
 
 Files: `packages/server/src/channels/wechat/`
@@ -72,7 +74,7 @@ Files: `packages/server/src/channels/wechat/`
 - `media-store.ts` (in `channels/shared/`) — saves inbound media to the workspace. Shared with the web chat channel: WeChat uses `<workspace>/.halo/assets/weixin/inbound/<accountId>/<date>/` (the `weixin` path segment is kept for backward compatibility with already-saved assets — the code, routes and db all say `wechat`), web pasted images land in `<workspace>/.halo/assets/web/inbound/<date>/`. Both emit `[图片已保存: /abs/path]` markers that the UI turns into media chips.
 - `send-media.ts` — uploads and sends files/images out
 - `handler.ts` — long-poll main loop, routes messages to SessionManager + slash-command dispatch
-- `event-adapter.ts` — LLM streaming events → WeChat whole-message send (coalesce by 200 chars / 3s silence / complete flush)
+- `event-adapter.ts` — LLM streaming events → WeChat whole-message send (buffer `final` stream text only, cut at `WECHAT_TEXT_LIMIT` via shared `splitText`, flush on complete, serialized send chain)
 
 ## SessionManager dependencies
 
@@ -117,10 +119,11 @@ Unknown `/` input falls through to normal message handling.
 
 ## Event coalescing (WechatResponder)
 
-WeChat `sendMessage` is block-send, while LLMs stream. The current strategy is "buffer the whole turn, flush as one message":
-- `stream` events accumulate in a single buffer
+WeChat `sendMessage` is block-send, while LLMs stream. The current strategy is "buffer the turn's reply, flush as one message":
+- Only `stream` events flagged `final` (the wrap-up text of a turn — see [session.md](session.md#message-queue-and-drain)) accumulate in a single buffer; the filler the model emits before a tool call is dropped (it stays in the web UI)
 - `complete` → flush the whole buffer as one (or more) messages. The responder flushes on **any** `complete` and does not read its `batchBoundary` flag — so when the root drains a multi-message queue across several merged turns (see [session.md](session.md#message-queue-and-drain)), each round's batch-boundary `complete` ships that round as its own message instead of buffering every round into one blob that lands only at the terminal `complete` (the "8 reports in one lump" bug)
-- Hard cap `HARD_CHARS = 3500` (WeChat rejects >~4000) — when the buffer reaches it mid-stream, split at the nearest paragraph break and dispatch; remaining text keeps accumulating
+- Hard cap `WECHAT_TEXT_LIMIT = 3500` **chars** (JS string length, not bytes — the ilink gateway rejects a `sendmessage` body over 16 KB with `ret=-2 "prepare failed"`; 3500 chars is ≤ ~10.5 KB of CJK plus the JSON envelope). When the buffer exceeds it mid-stream, the shared `splitText` (`channels/shared/chunk.ts`) cuts at the nearest paragraph break (or hard-cuts) and dispatches; the under-limit remainder keeps accumulating. Exported so the cron dispatcher obeys the same limit (see [Proactive sending](#proactive-sending-cron))
+- Every chunk goes through one serialized send chain per responder (`sendTail`, same as Slack / Feishu) so a long reply arrives in order; `close()` returns the drain promise and `InboundBridge` keeps the reply route alive until it settles
 - `error` → immediate flush + send a `[错误] …` message; `system` → immediate flush + send a `[系统] …` message
 - Tool calls / tool results / thinking are dropped (detail lives in the web UI)
 - Media: the agent emits `MEDIA: <path>` markers, which the responder extracts and turns into actual media uploads

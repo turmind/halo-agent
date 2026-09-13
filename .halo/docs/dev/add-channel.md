@@ -146,14 +146,14 @@ async function handleInbound({ registry, db, account, event, bridge, activeOverr
 
 ### 5. Write the event adapter
 
-`event-adapter.ts`: buffers streamed text and sends whole messages. WeChat's flushes on either a 3500-char hard ceiling (platform limit) or a `complete` event; see [packages/server/src/channels/wechat/event-adapter.ts](../../../packages/server/src/channels/wechat/event-adapter.ts). Slack has a 40k char limit but users dislike huge messages — consider splitting at paragraph boundaries.
+`event-adapter.ts`: buffers streamed text and sends whole messages. WeChat's flushes on either a 3500-char hard ceiling (`WECHAT_TEXT_LIMIT`, the ilink gateway rejects >16 KB) or a `complete` event; see [packages/server/src/channels/wechat/event-adapter.ts](../../../packages/server/src/channels/wechat/event-adapter.ts). Use the shared `splitText(text, limit)` from `channels/shared/chunk.ts` for the cut (paragraph boundary, then hard-cut) — all four existing responders do; don't write a private splitter. Slack has a 40k char limit but users dislike huge messages, so it splits at 35k. Serialize your sends through one promise chain per responder (see wechat's `sendTail`) and return it from `close()` so the bridge keeps the route alive until the tail has gone out.
 
 Its send primitives take **no destination argument** — they read `bridge.getRoute(sessionId)` on each send (see step 4). A responder that captured a chat/user id at construction time is the A-M2 bug.
 
 **What to forward, what to drop**:
 - Drop `tool_call` / `tool_result` / `thinking` events — they're chatter the user doesn't want in IM
 - Drop events where `event.taskId` is set (those are sub-agent events; the root agent's text is enough)
-- Forward `stream` text (coalesced), `error` (immediately, with a `[error]` prefix), `complete` (flush remaining buffer)
+- Forward `stream` text **only when `event.final` is set** — that's the turn's closing reply; the filler the model emits before a tool call ("let me check…") is chatter in IM too. `error` goes out immediately with a `[error]` prefix; `complete` flushes the remaining buffer
 - Forward `system` if the platform can render it (e.g. Slack ephemeral messages)
 
 ### 6. Surface channel context to skills
