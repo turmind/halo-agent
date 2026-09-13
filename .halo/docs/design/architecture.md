@@ -170,6 +170,9 @@ File: `ws/terminal-manager.ts`. Spawns a shell via node-pty. On disconnect, deta
 ### Self-Evolution — workspace prompt-tuning loop
 Files: `evolution/{ticker,evo-wrapper,enqueue,spawn,archive}.ts`, `db/evo-db.ts`, `routes/evolution.ts`. Internal agents `__evo_agent__` / `__score__` / `__apply_agent__` (in `templates/agents/`) drive a 12-phase orchestration: snapshot → evo drafts → wrapper dry-runs → scorer grades → reviewer approves → apply agent merges → wrapper history-snapshots + cps to main. Per-task wrapper Node child process owns all sub-cli calls; ticker is stateless and lives in the server. State in `~/.halo/global/evo.db`. See [plans/self-evolution.md](../plans/self-evolution.md).
 
+### Run ledger — restart nudge for interrupted roots
+Files: `agents/run-ledger.ts` (sweep + skip rules) + `db/runs-db.ts` (the global `~/.halo/global/runs.db` table `running_sessions`, same singleton pattern as `evo.db`/`cron.db`). `runSession` inserts its session id on entry and deletes it in the finally (server-only, gated on `reconcileOrphansOnBoot`), so whatever is left at boot is exactly what the previous process was mid-run on; the sweep drains those rows and nudges each interrupted root. `index.ts` runs this eagerly: right after constructing the `SessionManagerRegistry` and before `bootChannels`, it loops `listRunningWorkspaces()` and claims+builds a `SessionManager` for each one that isn't already owned by another live server, rather than waiting for someone to open the workspace. See [design/session.md](session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb).
+
 ## REST routes
 
 See [dev/api.md](../dev/api.md).

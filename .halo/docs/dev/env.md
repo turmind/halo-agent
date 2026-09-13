@@ -67,7 +67,7 @@ Your deployment scripts should also prepend this line.
 
 ## Runtime directories
 
-- SQLite: `<workspace>/.halo/halo.db` (per-workspace, auto-created on first use) + global queues `~/.halo/global/evo.db` and `~/.halo/global/cron.db`
+- SQLite: `<workspace>/.halo/halo.db` (per-workspace, auto-created on first use) + global queues `~/.halo/global/evo.db`, `~/.halo/global/cron.db` and `~/.halo/global/runs.db`
 - Session files: `.halo/sessions/{agentId}/{sessionId}.json`
 - Global config: `~/.halo/global/`
 - Per-project config: `<workspace>/.halo/`
@@ -126,7 +126,7 @@ settings.yaml only (no env override):
 - `general.server.trust_proxy` (default `false`) — trust `x-forwarded-for` for client IP resolution, scope: global (enable only behind a reverse proxy you control)
 - `general.sandbox.hidden_dirs` (default `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs`) — bwrap tmpfs overlays, scope: global
 - `general.sandbox.writable_dirs` (default empty) — dirs bind-mounted read-write inside the bwrap sandbox, for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions, scope: global
-- `general.sandbox.hidden_files` (default `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron}.db` + their `-wal`/`-shm` files) — bwrap /dev/null binds, scope: global
+- `general.sandbox.hidden_files` (default `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files) — bwrap /dev/null binds, scope: global
 - `general.logging.level` (default `warn`) — log level: debug | info | warn | error
 
 `<provider-id>.secrets.*` (server-only, hard-rejected by `{{}}` substitution; declared in `models/<provider-id>.yaml` `secrets:`):

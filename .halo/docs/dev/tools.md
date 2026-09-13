@@ -138,7 +138,7 @@ Sensitive directories and files are hidden from workspace/readonly sessions via 
 | Setting | Default | Method |
 |---|---|---|
 | `hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs` | `--tmpfs` overlay (empty directory) |
-| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron}.db` + their `-wal`/`-shm` files | `--ro-bind /dev/null` (empty file) |
+| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files | `--ro-bind /dev/null` (empty file) |
 | `writable_dirs` | (empty) | `--bind` read-write — for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions |
 
 Changes take effect immediately — `config.ts` reads settings.yaml via an mtime-watched lazy cache, so the next `shell_exec` reads the latest values. These keys are `globalOnly` in the schema — a workspace `settings.yaml` cannot override them, since they define the security boundary agents run inside.

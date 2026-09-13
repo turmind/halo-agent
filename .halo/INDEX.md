@@ -105,6 +105,15 @@ Key state:
 
 Driven from `packages/server/src/agents/goal-mode.ts` (state, overlay, delivery point, G-only tools, restart sweep) + `packages/server/templates/agents/goal/` (the judge agent) + `channels/shared/commands.ts` (`/goal` verbs) + `packages/admin/src/features/chat/goal-{banner,store}` (admin surface).
 
+## Run Ledger
+
+A root agent that dispatched sub-agents and was waiting on their reports never learns the server restarted — the boot reconcile stamps its children stopped, but the root itself just sits there. A global `~/.halo/global/runs.db` table tracks which sessions the server is mid-run on: `runSession` inserts on entry and deletes in its finally, so the steady state is an empty table and whatever is left at boot is exactly what the previous process died in the middle of. A boot sweep (right after `sweepActiveGoals`, same `.halo/runtime.lock` ownership gate) drains each workspace's rows and sends one restart nudge per interrupted root — skipping goal sessions, goal-bound workers while their goal is `running`, `cron-*` ids, and `internal` agents. `index.ts` runs this eagerly at startup for every workspace with leftover rows instead of waiting for someone to open it.
+
+Key state:
+- `~/.halo/global/runs.db` — global table `running_sessions(workspace, session_id, started_at)`; steady state empty, non-empty rows at boot are exactly the previous process's interrupted runs
+
+Driven from `packages/server/src/agents/run-ledger.ts` (sweep + skip rules) + `db/runs-db.ts` (table + singleton) + `session-manager.ts` (`ledgerWrite` hooks around `runSession`) + `index.ts` (eager boot loop). See [design/session.md](docs/design/session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb).
+
 ## Express Self (visual face)
 
 The agent has a second channel beyond text: a living particle face at `<workspace>/.halo/canvas/self.html` it can drive in real time. It emits a `<<<SHOW: self.say("HI") >>>` marker in a reply; the admin detects it, forwards the payload verbatim to the open `self.html` preview via `postMessage`, and strips the marker from rendered chat. The `self` API (say/play/react/pulse/flash/shake/intro/voice) is a stable engine, force-copied into every workspace on open; the agent expresses itself purely through runtime `<<<SHOW>>>` markers, never by editing the file. `self.voice(path)` plays a clip Halo synthesized and rides its live amplitude (Web Audio analyser → loudness/spectrum/syllable rings); Halo makes the sound, the face makes it visible. Taught by the built-in `self` skill. See [design/express-self.md](docs/design/express-self.md).

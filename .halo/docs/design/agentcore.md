@@ -50,6 +50,7 @@ So **1 user = 1 runtime session id = 1 workspace**: users never see each
 other's history; reconnecting with the same id resumes the same conversation.
 `HALO_WORKSPACE` points at an EFS mount (`/mnt/efs`) — microVMs are ephemeral,
 EFS makes the workspaces survive session termination and image rollouts.
+`~/.halo/global/runs.db` (the [run ledger](session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb)) lives under the container's `HALO_HOME`, which is **not** on EFS — it dies with the microVM, so the restart nudge doesn't apply in agentcore mode (the writes themselves are harmless, just moot).
 
 ## WS protocol quirks (why /init exists)
 

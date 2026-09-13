@@ -34,7 +34,7 @@ pnpm --filter @turmind/halo-admin build   # next build + copy-monaco; never a ba
 
 ## 2. Runtime data locations
 
-No directory needs to be created by hand. SQLite databases are created automatically on first use: per-workspace state at `<workspace>/.halo/halo.db`, plus global queues at `~/.halo/global/evo.db` and `~/.halo/global/cron.db`.
+No directory needs to be created by hand. SQLite databases are created automatically on first use: per-workspace state at `<workspace>/.halo/halo.db`, plus global queues at `~/.halo/global/evo.db`, `~/.halo/global/cron.db` and `~/.halo/global/runs.db`.
 
 ## 3. Run `halo setup`
 

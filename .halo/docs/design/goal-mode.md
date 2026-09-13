@@ -121,6 +121,8 @@ All five verbs are builtin deterministic code (`SUBCOMMAND_ROUTES`, no backing s
 
 Continuation over death-handling: in-flight promises die with the process, goal state survives in the db. The SessionManager constructor (gated on `reconcileOrphansOnBoot` **and** the `.halo/runtime.lock` workspace claim — same ownership gate as the orphan reconcile) sweeps every goal at status `running` and delivers a deterministic nudge to G: *"server restarted, the in-flight round was lost; call goal_context, re-read GOAL_SPEC.md and your own transcript, re-dispatch."* Counters and caps were already in the db, so nothing is forgotten. `intake` needs no nudge (the user drives it); `paused` / `halted` / terminal goals stay put — a user-initiated pause still requires an explicit `/goal resume`.
 
+Plain root sessions get the equivalent treatment from the run-ledger sweep (`sweepInterruptedRuns`, right after `sweepActiveGoals` in the same constructor chain — see [session.md](session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb)). A goal-bound W is excluded from that sweep **only** while its goal is `running` — that's the one state where this sweep above re-dispatches it, so a direct nudge would land a bogus round report on G. In `intake` or `paused`, G isn't re-dispatching anything, so W is nudged like any plain root.
+
 ## Admin surface & WS
 
 - **`goal:changed`** is broadcast on every `writeGoalState` (and on the G-delete dissolve path) with `{goalSessionId, workerSessionId, status, round, maxRounds}`. The broadcast is **server-global with no workspace marker**; the admin re-fetches through the seed endpoint under its active project, which naturally filters cross-workspace events. See [ws.md](ws.md).

@@ -25,6 +25,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   │   └── <sessionId>.json
 │   ├── evo.db                         # Cross-workspace evolution queue (evolution_runs + evolution_applies)
 │   ├── cron.db                        # Cross-workspace cron jobs + run history (cron_jobs + cron_runs)
+│   ├── runs.db                        # Run ledger: (workspace, session_id) rows for server-driven runs in flight; steady state empty (running_sessions)
 │   ├── logs/                          # Runtime logs
 │   │   ├── evo/                       # Per-evo-run wrapper logs
 │   │   └── cron/                      # Per-cron-run cli stdout/stderr (30-day retention)
@@ -327,7 +328,7 @@ general:                                  # built-in declarer (the server itself
     summarize_timeout_sec: 300
   sandbox:
     hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh"
-    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc"
+    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm"
   logging:
     level: warn
 
@@ -383,7 +384,7 @@ A value of the form `<<ENV_NAME>>` is replaced at read time with `process.env.EN
 | `general.limits.ws_event_buffer` | 5000 | Events buffered per detached WS session before oldest are dropped on reattach |
 | `general.limits.terminal_scrollback_bytes` | 50000 | Off-screen scrollback bytes retained per detached persistent terminal |
 | `general.sandbox.hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh` | bwrap tmpfs overlay (Linux only) |
-| `general.sandbox.hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc` | bwrap /dev/null bind (Linux only) |
+| `general.sandbox.hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm` | bwrap /dev/null bind (Linux only) |
 | `general.logging.level` | warn | `debug` / `info` / `warn` / `error` |
 
 Schema source: [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`.
