@@ -287,6 +287,9 @@ const DEFAULT_HIDDEN_FILES = [
   '~/.halo/global/cron.db',
   '~/.halo/global/cron.db-wal',
   '~/.halo/global/cron.db-shm',
+  '~/.halo/global/runs.db',
+  '~/.halo/global/runs.db-wal',
+  '~/.halo/global/runs.db-shm',
 ]
 
 // Workspace-relative runtime state hidden from workspace/readonly sessions.

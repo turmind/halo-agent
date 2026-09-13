@@ -24,6 +24,8 @@ import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools } from './session-tools.js'
 import { deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
+import { sweepInterruptedRuns } from './run-ledger.js'
+import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
@@ -362,6 +364,11 @@ export class SessionManager implements SessionManagerInternals {
   /** How long a tombstone guards against a racing background save before it's
    *  swept. Must exceed the persist debounce (500ms) with comfortable margin. */
   private static readonly TOMBSTONE_TTL_MS = 60_000
+  /** Run-ledger writes (`~/.halo/global/runs.db`, see run-ledger.ts) are
+   *  server-only: `reconcileOrphansOnBoot` is exactly the "I am the long-lived
+   *  server process" flag (CLI/TUI/evo-wrapper never pass it), so it doubles
+   *  as the ledger switch. Off → insert/delete are no-ops. */
+  private readonly ledgerEnabled: boolean
   isSessionDeleted(sessionId: string): boolean {
     return this.deletedSessionIds.has(sessionId)
   }
@@ -403,6 +410,7 @@ export class SessionManager implements SessionManagerInternals {
     this.agentBuilder = new SessionAgentBuilder(this)
     this.skillCommands = new SessionSkillCommands(this)
     this.stateStore = new SessionStateStore(this)
+    this.ledgerEnabled = opts?.reconcileOrphansOnBoot === true
     // Only the long-lived server process (which owns this workspace's runtime
     // and holds server.lock) passes this. CLI/TUI/channel-subprocess/evo-wrapper
     // share the same db while the server may be actively running sessions — they
@@ -422,6 +430,9 @@ export class SessionManager implements SessionManagerInternals {
         // Goal mode: nudge goal sessions that were mid-loop when the process
         // died — same ownership gate as the reconcile (db is the truth).
         sweepActiveGoals(this)
+        // Run ledger: nudge plain root sessions that were mid-run when the
+        // process died (their sub-agents were just reconciled stopped above).
+        sweepInterruptedRuns(this)
       } else {
         console.warn(`[SessionManager] Boot reconcile skipped for ${workspaceRoot}: workspace runtime is owned by another live process (.halo/runtime.lock)`)
       }
@@ -1380,7 +1391,10 @@ export class SessionManager implements SessionManagerInternals {
         ) {
           if (attempt + 1 < maxRetries) {
             const delay = 1000 * Math.pow(2, attempt) + Math.random() * 500 // 1s, 2s, 4s, 8s + jitter
-            console.debug(`[SessionManager] Session ${session.id} transient network error, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries}): ${msg}`)
+            // warn, not debug: a hung Bedrock stream costs 15 min per attempt
+            // (SDK h2 requestTimeout) and the file log only keeps warn+ — at
+            // debug, three back-to-back stalls left zero trace on disk.
+            console.warn(`[SessionManager] Session ${session.id} transient network error, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries}): ${msg}`)
             this.emitEvent(session.id, { type: 'system', text: `Network hiccup, retrying in ${Math.round(delay / 1000)}s...` })
             await sleep(delay)
             continue
@@ -1514,6 +1528,9 @@ export class SessionManager implements SessionManagerInternals {
       return result
     }
 
+    // Run ledger (server-only): the row lives exactly as long as the promise,
+    // so anything still in the table at next boot was cut off mid-run.
+    this.ledgerWrite(insertRunning, sessionId)
     session.promise = runFn()
     try {
       return await session.promise
@@ -1523,6 +1540,7 @@ export class SessionManager implements SessionManagerInternals {
       // `promise !== null`. Emitting complete first would leave the session
       // still "running" at the moment the client decides whether to close.
       session.promise = null
+      this.ledgerWrite(deleteRunning, sessionId)
       if (session.parentId === null) {
         this.emitEvent(session.id, { type: 'complete' })
       }
@@ -1534,6 +1552,21 @@ export class SessionManager implements SessionManagerInternals {
         console.error(`[GoalMode] deliverGoalRound failed for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
       })
       this.releaseSession(sessionId)
+    }
+  }
+
+  /**
+   * Ledger write that never propagates: a failing ~/.halo/global (disk full,
+   * EIO) must not swallow the user's message or leave the session stuck at
+   * `promise = null` without a `complete`. Worst case is one stale/missing
+   * row → one spurious/missed nudge at next boot.
+   */
+  private ledgerWrite(op: (workspace: string, sessionId: string) => void, sessionId: string): void {
+    if (!this.ledgerEnabled) return
+    try {
+      op(this.workspaceRoot, sessionId)
+    } catch (err) {
+      console.warn(`[RunLedger] ledger write failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

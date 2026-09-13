@@ -84,10 +84,10 @@ describe('assertPathAllowed symlink boundary', () => {
     expect(() => assertPathAllowed(cred, opts('readonly'))).toThrow(/outside the allowed sandbox/)
   })
 
-  it('denies hidden ~/.halo/global paths to non-full sessions (evo/cron dbs, internal-sessions, logs)', () => {
+  it('denies hidden ~/.halo/global paths to non-full sessions (evo/cron/runs dbs, internal-sessions, logs)', () => {
     // ~/.halo/global is readable by design (skills/agents/prompts), but the
-    // hidden lists carve out cross-workspace state: evo.db / cron.db (+ WAL
-    // sidecars), internal-agent session transcripts, and server/cron logs.
+    // hidden lists carve out cross-workspace state: evo.db / cron.db / runs.db
+    // (+ WAL sidecars), internal-agent session transcripts, and server/cron logs.
     // On the no-bwrap fallback assertPathAllowed is the only boundary, so it
     // must reject these even though they sit inside the global read allowance.
     const global = path.join(os.homedir(), '.halo', 'global')
@@ -96,6 +96,8 @@ describe('assertPathAllowed symlink boundary', () => {
       path.join(global, 'evo.db-wal'),
       path.join(global, 'cron.db'),
       path.join(global, 'cron.db-shm'),
+      path.join(global, 'runs.db'),
+      path.join(global, 'runs.db-wal'),
       path.join(global, 'internal-sessions', '__evo_agent__', 'x.json'),
       path.join(global, 'logs', 'cron', 'r1.log'),
     ]) {

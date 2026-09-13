@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { claimWorkspaceRuntime, RUNTIME_LOCK_FILE } from '../src/agents/workspace-runtime-lock.js'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
+import { createRunsDb, setRunsDb } from '../src/db/runs-db.js'
 import { eq } from 'drizzle-orm'
 
 /**
@@ -40,6 +41,9 @@ function lockPath(): string {
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'halo-runtime-lock-'))
   mkdirSync(join(ws, '.halo'), { recursive: true })
+  // A server-mode SessionManager's constructor chain now ends in the run-ledger
+  // sweep, which reads the global runs db — point it at this scratch dir.
+  setRunsDb(createRunsDb(join(ws, 'global')))
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })

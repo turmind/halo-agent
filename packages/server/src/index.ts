@@ -31,8 +31,10 @@ import { DISPATCH_COMMANDS } from './channels/shared/commands.js'
 import { setupWebSocketHandler } from './ws/handler.js'
 import { setBroadcastWss } from './ws/broadcast.js'
 import { SessionManagerRegistry } from './agents/session-manager-registry.js'
+import { claimWorkspaceRuntime } from './agents/workspace-runtime-lock.js'
 import { createChannelDb, setChannelDb } from './db/channel-db.js'
 import { createCronDb, setCronDb } from './db/cron-db.js'
+import { createRunsDb, setRunsDb, listRunningWorkspaces } from './db/runs-db.js'
 import { startCronDaemon, stopCronDaemon } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
 import { createEvoDb, setEvoDb } from './db/evo-db.js'
@@ -391,6 +393,9 @@ setEvoDb(createEvoDb(path.join(HALO_HOME, 'global')))
 // dispatcher / runner read the db via getCronDb() rather than receiving
 // it via DI.
 setCronDb(createCronDb(path.join(HALO_HOME, 'global')))
+// Run ledger global db (which sessions the server is mid-run on; see
+// agents/run-ledger.ts). Same singleton pattern.
+setRunsDb(createRunsDb(path.join(HALO_HOME, 'global')))
 // Cron dispatchers are registered per-channel by `bootChannels(...)`
 // further down (each descriptor's `registerCronDispatcher`). Daemon
 // is started after the channels boot so the registry is fully populated
@@ -414,6 +419,28 @@ if (!AGENTCORE) {
 // HALO_HOME can share one workspace — server.lock can't see that), so this
 // flag means "reconcile if the workspace claim succeeds", not "always".
 const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
+
+// Run ledger eager sweep: build the SessionManager NOW for every workspace
+// that has leftover `running_sessions` rows, so its constructor chain
+// (runtime.lock claim → orphan reconcile → sweepActiveGoals →
+// sweepInterruptedRuns) fires at boot rather than whenever someone next
+// opens the workspace — an interrupted root with nobody around is exactly
+// the one that must nudge itself. A vanished workspace is skipped and its
+// rows stay. A workspace another live server owns is skipped BEFORE the SM
+// is built: getOrCreate would cache a non-owner SM for this whole process
+// lifetime (never reconciles, never nudges, even after the holder exits),
+// whereas skipping keeps the rows and lets the first real touch claim
+// normally. claimWorkspaceRuntime is idempotent for our own pid, so the
+// constructor's own claim just re-confirms.
+for (const ws of listRunningWorkspaces()) {
+  if (!fs.existsSync(path.join(ws, '.halo'))) continue
+  if (!claimWorkspaceRuntime(ws)) continue
+  try {
+    registry.getOrCreate(ws)
+  } catch (err) {
+    console.error(`[RunLedger] Boot sweep could not open ${ws}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
 
 const sessionRoutes = createSessionRoutes(registry)
 app.route('/api', sessionRoutes)
