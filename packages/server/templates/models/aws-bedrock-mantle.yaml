@@ -1,15 +1,19 @@
 id: aws-bedrock-mantle
-displayName: AWS Bedrock Mantle (OpenAI GPT-5.x)
-displayName_zh: AWS Bedrock Mantle（OpenAI GPT-5.x）
-description: OpenAI GPT-5.6 (Sol / Terra / Luna) on Amazon Bedrock via the bedrock-mantle endpoint (OpenAI Responses API only — not Converse/InvokeModel).
-description_zh: 通过 Bedrock Mantle 端点调用 OpenAI GPT-5.6（Sol / Terra / Luna）（仅 OpenAI Responses API，不支持 Converse/InvokeModel）。
+displayName: AWS Bedrock Mantle (OpenAI GPT-6 / 5.6)
+displayName_zh: AWS Bedrock Mantle（OpenAI GPT-6 / 5.6）
+description: OpenAI GPT-6 Astra and GPT-5.6 (Sol / Terra / Luna) on Amazon Bedrock via the bedrock-mantle endpoint (OpenAI Responses API only — not Converse/InvokeModel). Astra is served from the us-west-2 endpoint only.
+description_zh: 通过 Bedrock Mantle 端点调用 OpenAI GPT-6 Astra 与 GPT-5.6（Sol / Terra / Luna）（仅 OpenAI Responses API，不支持 Converse/InvokeModel）。Astra 仅 us-west-2 端点提供。
 # Mantle is a distinct endpoint from bedrock-runtime; the OpenAI surface lives
-# under /openai/v1. Regions: us-east-2 serves ALL models below; us-west-2
-# additionally serves Terra / Luna but NOT Sol. We ship the us-east-2
-# endpoint that covers everything.
+# under /openai/v1. Region split (live-probed 2026-09-13, both directions 404
+# on the wrong endpoint): us-east-2 serves every 5.6 model; us-west-2 serves
+# GPT-6 Astra + Terra / Luna but NOT Sol. No model is on both endpoints
+# except Terra / Luna, so the endpoint is a per-agent pick — the default
+# stays us-east-2 (existing Sol configs), Astra users select the us-west-2
+# preset in the agent form.
 defaultEndpoint: https://bedrock-mantle.us-east-2.api.aws/openai/v1
 endpointPresets:
   - https://bedrock-mantle.us-east-2.api.aws/openai/v1
+  - https://bedrock-mantle.us-west-2.api.aws/openai/v1
 
 defaultModelId: openai.gpt-5.6-sol
 
@@ -44,6 +48,45 @@ secrets:
 #   - maxOutputTokens for the 5.6 variants: not disclosed in the 5.6 model card —
 #     conservatively carried over from GPT-5.5's 64000.
 models:
+  # GPT-6 Astra — OpenAI's current flagship (Bedrock GA 2026-09-08). us-west-2
+  # endpoint ONLY (404 on us-east-2). Context 1,050,000 / max output 128,000
+  # per the Bedrock model card + OpenAI model page. Live-probed 2026-09-13
+  # with invalid-value requests: reasoning.effort accepts none/low/medium/
+  # high/xhigh/max (`max` now on the official list, unlike 5.6), text.verbosity
+  # accepts low/medium/high — same surface as 5.6, so MantleAgent needs no
+  # change. Pricing note: input beyond 272K tokens bills at 2x, so the huge
+  # window is a ceiling, not a free lunch — leave context.maxTokens unset in
+  # agent.yaml only if you accept that.
+  - id: openai.gpt-6-astra
+    displayName: GPT-6 Astra
+    maxOutputTokens: 128000
+    contextWindow: 1050000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      # See GPT-5.6 Sol below — final-answer length, default low, per-agent overridable.
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
   # GPT-5.6 flagship.
   - id: openai.gpt-5.6-sol
     displayName: GPT-5.6 Sol
