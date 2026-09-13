@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-09-13
+
+### Added
+
+- Agent: a durable run ledger (`~/.halo/global/runs.db`) nudges root sessions that were mid-run when the server restarted — previously `reconcileOrphansOnBoot` stamped their cut-off sub-agents stopped but never told the root, which then sat waiting forever and answered "waiting on reports" if asked. `runSession` now inserts/deletes its row on entry/exit, so whatever's left at boot is exactly the runs the prior process died in the middle of; a boot sweep appends and sends each affected root a restart notice telling it sub-agents are stopped but revivable via `query_session`. Transient Bedrock transport retries are now logged at warn instead of debug so a hung h2 stream (15 min per attempt) leaves a trace in the file log.
+- Models: added GPT-6 Astra to the Bedrock Mantle template (context 1,050,000 / max output 128,000), served from a new us-west-2 endpoint preset alongside the existing us-east-2 default — the Mantle fleet is region-split (us-east-2 serves GPT-5.6 but 404s on Astra; us-west-2 serves Astra + Terra/Luna but 404s on Sol).
+
 ## [1.1.6] - 2026-09-12
 
 ### Added
@@ -415,7 +422,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.6...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.7...HEAD
+[1.1.7]: https://github.com/turmind/halo-agent/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/turmind/halo-agent/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/turmind/halo-agent/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/turmind/halo-agent/compare/v1.1.3...v1.1.4
