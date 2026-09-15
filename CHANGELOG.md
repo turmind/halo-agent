@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-09-15
+
+### Fixed
+
+- Channels: WeChat cron dispatch now echoes the recipient's `context_token` from their most recent inbound message — the gateway intermittently rejected cron sends with `ret=-2 "prepare failed"` even under the 16 KB cap because the chat-reply path carried the token but cron dispatch sent bare `to_user_id + text`.
+
 ## [1.1.7] - 2026-09-13
 
 ### Added
@@ -422,7 +428,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.7...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.8...HEAD
+[1.1.8]: https://github.com/turmind/halo-agent/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/turmind/halo-agent/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/turmind/halo-agent/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/turmind/halo-agent/compare/v1.1.4...v1.1.5
