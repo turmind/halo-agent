@@ -97,6 +97,7 @@ Fan-out across multiple WeChat users is not supported — one bot, one owner.
 | Two halo processes both poll the same bot | Each process gets a copy of every message, replied twice. Make sure only one server runs — see `~/.halo/global/server.pid` |
 | Group chat doesn't trigger the bot | Expected — groups aren't supported in v1 |
 | Sent voice message returns no reply | Check that the account has `workspace` or `full` access; readonly cannot save inbound media |
+| Cron push fails with `ret=-2 prepare failed` while chat replies work | Two causes: the report exceeds 16 KB (halo chunks at 3500 chars, so this is rare now), or the account has no stored `context_token` for the recipient yet — the gateway wants outbound to echo the user's latest inbound token, which halo persists on every inbound message since 1.1.8. Send the bot any message once and the next cron push carries it |
 
 ## Multi-workspace / multi-bot
 

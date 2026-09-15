@@ -46,10 +46,11 @@ Sub-sessions inherit the parent's access level — a readonly channel can't dele
 
 WeChat bot accounts are stored in the unified channel DB: `~/.halo/secrets/channels/channels.db`, table `channel_accounts` with `channel_type = 'wechat'`. See [storage.md](storage.md#channel_accounts) for the full schema.
 
-WeChat-specific config JSON fields: `botToken`, `baseUrl`, `userId`, `syncBuf`, `lastActiveChatId`.
+WeChat-specific config JSON fields: `botToken`, `baseUrl`, `userId`, `syncBuf`, `lastActiveChatId`, `contextTokens`.
 
 - `userId` is the QR-bind owner (the ilink_user_id of whoever scanned the QR code to register this bot). Used by the wechat cron-dispatcher as the default proactive-send target — sending here means cron output goes back to the bot's owner, which is the common-case "report to me on a schedule" intent.
 - `lastActiveChatId` is a runtime cache of the most recent inbound `from_user_id`. Written by `rememberLastActiveChat()` in `channels/shared/accounts.ts` with a per-process hash so unchanged values never touch the db (idempotent — hot path stays in memory). Used as a fallback for cron sends in the shared-bot case where you want to reply to whoever talked last.
+- `contextTokens` is a `Record<userId, context_token>` — the most recent inbound `context_token` per user, written by `rememberWechatContextToken()` (same in-process dedupe / write-on-change shape as `lastActiveChatId`). The ilink gateway expects every outbound `sendmessage` to echo the recipient's latest inbound token; the chat-reply path already carries it in the in-memory bridge route, but cron dispatch runs long after the inbound and needs a persisted copy.
 
 ### Proactive sending (cron)
 
@@ -61,7 +62,7 @@ The wechat cron-dispatcher (`channels/wechat/cron-dispatcher.ts`) registers itse
 
 WeChat is single-recipient per dispatch (no fan-out across `allowedUsers` like telegram has). If none of the three yields an id, dispatch fails with a clear "no wechat target — bind the account first" message.
 
-The text is chunked exactly like a chat reply — `splitText(text, WECHAT_TEXT_LIMIT)` (3500 chars, see [Event coalescing](#event-coalescing-wechatresponder)) — and the chunks are sent sequentially so a long report arrives in order. Before this, a whole report went out in one `sendmessage` call and anything over the gateway's 16 KB ceiling failed outright with `ret=-2 "prepare failed"` (the stock-report job hit it routinely). A mid-chunk failure rethrows as `chunk i/n: <error>`, so the run row's dispatch result shows how much of the report already landed (chunks before `i` were delivered). Note `ret=-2` is a generic rejection with two observed causes — an oversized payload, or a push to a user with **no recent inbound message** (the ilink protocol gates outbound behind a prior inbound, like Telegram's `/start`); `api.ts`'s error hint names both instead of blaming the user's inbox.
+The text is chunked exactly like a chat reply — `splitText(text, WECHAT_TEXT_LIMIT)` (3500 chars, see [Event coalescing](#event-coalescing-wechatresponder)) — and the chunks are sent sequentially so a long report arrives in order. Before this, a whole report went out in one `sendmessage` call and anything over the gateway's 16 KB ceiling failed outright with `ret=-2 "prepare failed"` (the stock-report job hit it routinely). A mid-chunk failure rethrows as `chunk i/n: <error>`, so the run row's dispatch result shows how much of the report already landed (chunks before `i` were delivered). Every chunk carries the recipient's persisted `context_token` (`config.contextTokens[chatId]`, see above) — the ilink gateway expects outbound to echo the latest inbound token, and sending without it was the second `ret=-2` cause: 6 failures in 10 days on payloads far under 16 KB, one of them 6 minutes after the user had just been chatting with the bot, which rules out the earlier "no recent inbound message" theory. Accounts with no inbound since 1.1.8 have no token yet and still send bare (as before) until the owner's next message. `api.ts`'s `ret=-2` hint names both causes (oversized payload / missing token).
 
 ## Modules
 

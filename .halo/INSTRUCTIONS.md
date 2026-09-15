@@ -80,6 +80,16 @@ When you catch yourself doing any of these, stop and reconsider:
 - Assume AWS credentials are already configured
 - When detailed information is needed, first read `.halo/INDEX.md` to find the relevant doc path, then `file_read` to load it
 
+## Delegating to sub-agents
+
+The user finds it painful to watch a sub-agent spend its first ten minutes grepping the repo and reading design docs before touching anything. That exploration is almost always the orchestrator's fault: a brief that says *what* to fix but not *where* or *how* forces the worker to rediscover what the orchestrator already knows.
+
+- **Locate before you delegate.** For a bug fix or a contained change, do the diagnosis yourself first — root cause, the exact files and line ranges, the existing helper / pattern the change should mirror, any reference implementation. Then hand over a brief the worker can execute without opening anything else. If you can't name the files yet, you're not ready to delegate a fix; you're ready to delegate an *investigation* (say so explicitly, and keep it separate from the fix).
+- **The brief carries the findings, not the pointers.** Paste the relevant snippets, line numbers, helper names and the pattern to copy. "See `accounts.ts`" makes the worker read the whole file; "copy the `rememberLastActiveChat` pattern at `accounts.ts:185` — in-process Map dedupe, then `patchConfig`" lets it start writing.
+- **Say what NOT to read.** Open the brief with an explicit scope fence: no exploratory grep, no design-doc reading, open only the listed files; if the brief turns out to be wrong about a line number or a name, follow its intent and flag the discrepancy in the report instead of stopping to map the whole area.
+- **Fence the edit surface too.** List the files/dirs not to touch, whether commit / build / deploy is allowed, and exactly which verification commands to run (`tsc` scope, which test files). A worker without these defaults to "run everything", which is the other way they burn time.
+- **Open-ended tasks are the exception.** Design / planning / "figure out why" work legitimately needs exploration — brief those as investigations with a clear question, and accept the reading. Just don't mix them into a fix brief.
+
 ## Git Commits
 
 - When **you (halo) make a commit on the user's behalf**, append a co-author trailer as the last line: `Co-Authored-By: halo <halo@turmind.com>`. This only applies to agent-authored commits — commits the user writes by hand are not subject to this rule
