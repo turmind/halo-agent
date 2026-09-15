@@ -20,7 +20,7 @@ import path from 'node:path'
  */
 
 const sends = vi.hoisted(() => ({
-  wechatText: [] as { toUserId: string; text: string }[],
+  wechatText: [] as { toUserId: string; text: string; contextToken?: string }[],
   wechatMedia: [] as string[],
   arrived: [] as string[],
   inFlight: 0,
@@ -31,10 +31,10 @@ const sends = vi.hoisted(() => ({
 }))
 
 vi.mock('../src/channels/wechat/handler.js', () => ({
-  sendToUser: async (p: { toUserId: string; text: string }) => {
+  sendToUser: async (p: { toUserId: string; text: string; contextToken?: string }) => {
     sends.calls += 1
     if (sends.failAt && sends.calls === sends.failAt.at) throw new Error(sends.failAt.msg)
-    sends.wechatText.push({ toUserId: p.toUserId, text: p.text })
+    sends.wechatText.push({ toUserId: p.toUserId, text: p.text, contextToken: p.contextToken })
     sends.inFlight += 1
     sends.maxInFlight = Math.max(sends.maxInFlight, sends.inFlight)
     // Descending delay: were the sends concurrent, the first chunk would
@@ -53,8 +53,9 @@ vi.mock('../src/channels/wechat/send-media.js', () => ({
 }))
 
 import { dispatchToTargets, type CronTarget } from '../src/cron/dispatcher.js'
-import { createChannelDb, setChannelDb } from '../src/db/channel-db.js'
+import { createChannelDb, getChannelDb, setChannelDb } from '../src/db/channel-db.js'
 import { insertAccount as insertWechatAccount } from '../src/channels/wechat/accounts.js'
+import { getAccount as getSharedAccount, rememberWechatContextToken } from '../src/channels/shared/accounts.js'
 import { registerWechatCronDispatcher } from '../src/channels/wechat/cron-dispatcher.js'
 import { WECHAT_TEXT_LIMIT } from '../src/channels/wechat/event-adapter.js'
 import { splitText } from '../src/channels/shared/chunk.js'
@@ -141,6 +142,27 @@ describe('wechat cron chunking', () => {
     expect(results[0].ok).toBe(false)
     expect(results[0].error).toContain('chunk 1/3')
     expect(results[0].error).toContain('ret=-2')
+  })
+
+  it('echoes the persisted inbound context_token on every chunk, and sends without one when none was recorded', async () => {
+    // No inbound seen yet for this user → backward-compatible: no token.
+    await dispatchToTargets('hi', [WX], tmpDir)
+    expect(sends.wechatText).toHaveLength(1)
+    expect(sends.wechatText[0].contextToken).toBeUndefined()
+
+    // Inbound handler persisted a token for (account, user) → cron echoes it.
+    rememberWechatContextToken(getChannelDb(), 'wx1', 'wx-owner', 'ctx-abc')
+    expect(getSharedAccount(getChannelDb(), 'wx1')?.config.contextTokens).toEqual({ 'wx-owner': 'ctx-abc' })
+    sends.wechatText.length = 0
+    await dispatchToTargets(paragraphs(3, 3000), [WX], tmpDir)
+    expect(sends.wechatText).toHaveLength(3)
+    for (const s of sends.wechatText) expect(s.contextToken).toBe('ctx-abc')
+
+    // Token keyed per user: a different recipient does not inherit it.
+    sends.wechatText.length = 0
+    await dispatchToTargets('hi', [{ ...WX, chatId: 'wx-other' }], tmpDir)
+    expect(sends.wechatText[0].toUserId).toBe('wx-other')
+    expect(sends.wechatText[0].contextToken).toBeUndefined()
   })
 
   it('a mid-report rejection stops after the delivered chunks and skips the attachments', async () => {

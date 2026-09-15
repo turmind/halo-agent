@@ -195,6 +195,28 @@ export function rememberLastActiveChat(db: ChannelDb, accountId: string, chatId:
   _lastActiveChatCache.set(accountId, chatId)
 }
 
+/**
+ * Persist the wechat ilink `context_token` per `(accountId, userId)` into
+ * `config.contextTokens`. ilink requires every outbound sendmessage to echo
+ * the recipient's most recent inbound token verbatim; the chat reply path
+ * carries it in-memory (bridge route), but cron dispatch runs long after the
+ * inbound and had nothing to send → intermittent `ret=-2 prepare failed`.
+ * Same hot-path shape as `rememberLastActiveChat`: in-process dedupe, db
+ * write only when the value changes.
+ */
+const _wechatContextTokenCache = new Map<string, string>()
+
+export function rememberWechatContextToken(db: ChannelDb, accountId: string, userId: string, token: string): void {
+  const key = `${accountId}:${userId}`
+  if (_wechatContextTokenCache.get(key) === token) return
+  const existing = getAccount(db, accountId)
+  if (!existing) return
+  const tokens = (existing.config.contextTokens ?? {}) as Record<string, string>
+  if (tokens[userId] !== token) {
+    patchConfig(db, accountId, { contextTokens: { ...tokens, [userId]: token } })
+  }
+  _wechatContextTokenCache.set(key, token)
+}
 
 export function patchConfig(db: ChannelDb, accountId: string, configPatch: Record<string, unknown>): void {
   const existing = getAccount(db, accountId)

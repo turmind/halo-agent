@@ -13,7 +13,7 @@ import type { ChannelDb } from '../../db/channel-db.js'
 import { getUpdates, sendMessage, notifyStart, notifyStop } from './api.js'
 import { MessageItemType, MessageState, MessageType, type WechatMessage, type MessageItem, type SendMessageReq } from './types.js'
 import { listEnabledAccounts, getAccount, insertAccount, saveSyncBuf, updateAccount, normalizeAccountId, type WechatAccount, type AccessLevel } from './accounts.js'
-import { resolveAccountWorkspace } from '../shared/accounts.js'
+import { resolveAccountWorkspace, rememberWechatContextToken } from '../shared/accounts.js'
 import { WechatResponder } from './event-adapter.js'
 import { downloadAndDecrypt, downloadPlain } from './cdn.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
@@ -361,6 +361,8 @@ async function handleInbound(args: {
   const fromUserId = msg.from_user_id ?? ''
   if (!fromUserId) return
   const lang = getLang(storedAccount)
+  // Cron dispatch to this user later needs the latest inbound token.
+  if (msg.context_token) rememberWechatContextToken(db, storedAccount.accountId, fromUserId, msg.context_token)
 
   // Resolve the current workspace path (handles user-renamed directories).
   // If the workspace is gone, tell the user and bail.

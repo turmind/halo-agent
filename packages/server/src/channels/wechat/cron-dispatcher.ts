@@ -26,6 +26,16 @@ function readLastActiveChatId(accountId: string): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null
 }
 
+/** Latest inbound `context_token` for this user — ilink wants it echoed on
+ *  every outbound; absent for accounts that haven't received a message since
+ *  the token started being persisted (then we send without, as before). */
+function readContextToken(accountId: string, userId: string): string | undefined {
+  const acct = getSharedAccount(getChannelDb(), accountId)
+  const tokens = acct?.config?.contextTokens as Record<string, unknown> | undefined
+  const v = tokens?.[userId]
+  return typeof v === 'string' && v.length > 0 ? v : undefined
+}
+
 async function dispatch(accountId: string, text: string, explicitChatId?: string, media?: CronMedia): Promise<DispatchResult[]> {
   const acct = getWechatAccount(getChannelDb(), accountId)
   if (!acct) throw new Error(`wechat account ${accountId} not found`)
@@ -49,10 +59,11 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   // much of the report already landed (chunks before it were delivered).
   const out: DispatchResult[] = []
   if (text) {
+    const contextToken = readContextToken(accountId, chatId)
     const chunks = splitText(text, WECHAT_TEXT_LIMIT)
     for (const [i, chunk] of chunks.entries()) {
       try {
-        await sendWechatMessage({ account: acct, toUserId: chatId, text: chunk })
+        await sendWechatMessage({ account: acct, toUserId: chatId, text: chunk, contextToken })
       } catch (err) {
         throw new Error(`chunk ${i + 1}/${chunks.length}: ${err instanceof Error ? err.message : String(err)}`)
       }
