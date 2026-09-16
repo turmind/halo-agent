@@ -2458,22 +2458,31 @@ export class SessionManager implements SessionManagerInternals {
 
     const timeoutMs = config.compact.summarize_timeout_sec * 1000
     const timeoutCtrl = new AbortController()
-    const timer = setTimeout(() => timeoutCtrl.abort('compact-timeout'), timeoutMs)
+    const timer = setTimeout(() => timeoutCtrl.abort(abortReason('compact-timeout')), timeoutMs)
+
+    // Snapshot the keep-region BEFORE running the compact turn. The run below
+    // feeds the agent a throwaway "summarize yourself" instruction and mutates
+    // session.agent.messages in place. agent-loop.run() coalesces a new user
+    // turn INTO the trailing user message when one already exists (a mid-turn
+    // tool_result, or pending user input) instead of appending a separate
+    // message — so the instruction can land *inside* the last kept message
+    // rather than after it. Rebuilding from the post-run array (the old
+    // `slice(cut, preRunLen)`) then left "Summarize the conversation…" stuck
+    // in the kept tail, and the model answered it as a real reply next turn.
+    // A pre-run deep snapshot sidesteps where the instruction landed entirely.
+    const cleanRecent = messages.slice(cut).map((m) => structuredClone(m))
+    // Same leak on the FAILURE paths (timeout / cancel → throw, empty summary →
+    // null): run() has already coalesced or appended the instruction and never
+    // undoes it, so every retry stacked another copy. Record length + a deep
+    // copy of the trailing message so `finally` can roll the array back
+    // whenever the success path didn't replace it.
+    const preRunLen = messages.length
+    const preRunTail = structuredClone(messages[preRunLen - 1])
+    let rebuilt = false
 
     try {
-      // Snapshot the keep-region BEFORE running the compact turn. The run below
-      // feeds the agent a throwaway "summarize yourself" instruction and mutates
-      // session.agent.messages in place. agent-loop.run() coalesces a new user
-      // turn INTO the trailing user message when one already exists (a mid-turn
-      // tool_result, or pending user input) instead of appending a separate
-      // message — so the instruction can land *inside* the last kept message
-      // rather than after it. Rebuilding from the post-run array (the old
-      // `slice(cut, preRunLen)`) then left "Summarize the conversation…" stuck
-      // in the kept tail, and the model answered it as a real reply next turn.
-      // A pre-run deep snapshot sidesteps where the instruction landed entirely.
-      const cleanRecent = messages.slice(cut).map((m) => structuredClone(m))
       let summaryText = ''
-      if (signal) signal.addEventListener('abort', () => timeoutCtrl.abort('compact-cancelled'), { once: true })
+      if (signal) signal.addEventListener('abort', () => timeoutCtrl.abort(abortReason('compact-cancelled')), { once: true })
       const iter = session.agent.run(compactInstruction, {
         cancelSignal: timeoutCtrl.signal,
       })
@@ -2501,6 +2510,7 @@ export class SessionManager implements SessionManagerInternals {
       const tailMicro = microCompactMessages(cleanRecent, 1)
       const finalTail = tailMicro.compacted ? tailMicro.messages : cleanRecent
       session.agent.messages = [summaryMsg, ...finalTail]
+      rebuilt = true
 
       // The UI log's only shrink point. rawMessages just collapsed to
       // [summary, ...recent]; the UI log keeps the full conversation and would
@@ -2519,6 +2529,13 @@ export class SessionManager implements SessionManagerInternals {
       return { summary: summaryText, olderCount, estimatedTokens }
     } finally {
       clearTimeout(timer)
+      if (!rebuilt) {
+        // Roll back the compact turn: drop whatever run() appended (instruction
+        // and any partial assistant reply) and put back the pre-run trailing
+        // message in case the instruction was coalesced into it.
+        session.agent.messages.length = preRunLen
+        session.agent.messages[preRunLen - 1] = preRunTail
+      }
     }
   }
 
@@ -2805,7 +2822,7 @@ export class SessionManager implements SessionManagerInternals {
     const session = this.sessions.get(sessionId)
     if (session) {
       if (session.abortController) {
-        session.abortController.abort('delete')
+        session.abortController.abort(abortReason('delete'))
         session.abortController = null
       }
       if (session.promise) {
@@ -2825,7 +2842,7 @@ export class SessionManager implements SessionManagerInternals {
         const childSession = this.sessions.get(child.id)
         if (childSession) {
           if (childSession.abortController) {
-            childSession.abortController.abort('delete')
+            childSession.abortController.abort(abortReason('delete'))
             childSession.abortController = null
           }
           this.sessions.delete(child.id)
@@ -2902,7 +2919,7 @@ export class SessionManager implements SessionManagerInternals {
     const session = this.sessions.get(sessionId)
     if (session) {
       if (session.abortController) {
-        session.abortController.abort('archive')
+        session.abortController.abort(abortReason('archive'))
         session.abortController = null
       }
       if (session.promise) {

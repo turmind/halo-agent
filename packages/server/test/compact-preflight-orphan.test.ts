@@ -40,7 +40,8 @@ class FakeAgent {
   }
 
   async *run(input: string, _opts?: unknown): AsyncGenerator<{ type: string; text?: string; final?: boolean }> {
-    if (this.mode === 'throw') throw new Error('model exploded')
+    // Coalesce FIRST, like the real loop: run() lands the user turn in
+    // this.messages before callModel can fail, so a throw leaves it behind.
     const userContent = [{ type: 'text', text: input }]
     const last = this.messages[this.messages.length - 1]
     if (last?.role === 'user' && Array.isArray(last.content)) {
@@ -48,6 +49,7 @@ class FakeAgent {
     } else {
       this.messages.push({ role: 'user', content: userContent })
     }
+    if (this.mode === 'throw') throw new Error('model exploded')
     if (this.mode === 'empty') return // LLM produced no text events
     const summary = 'SUMMARY_TEXT'
     this.messages.push({ role: 'assistant', content: [{ type: 'text', text: summary }] })
@@ -164,8 +166,9 @@ describe('auto-compact (maybeAutoCompact) — preflight only when compaction wil
   })
 
   it('closes out the preflight when the LLM returns an empty summary', async () => {
-    const { session } = seedSession('s4', textMessages(keep + 5), 'empty')
+    const { session, agent } = seedSession('s4', textMessages(keep + 5), 'empty')
     const events = captureEvents('s4')
+    const before = structuredClone(agent.messages)
 
     await runAutoCompact(session)
 
@@ -174,11 +177,14 @@ describe('auto-compact (maybeAutoCompact) — preflight only when compaction wil
     // The orphan fix: a close-out notice must follow the preflight
     const closeIdx = events.findIndex((e) => e.type === 'system' && e.text === 'Compaction skipped — no summary produced')
     expect(closeIdx).toBeGreaterThan(events.findIndex(isPreflight))
+    // Rollback: the "Summarize the conversation…" instruction must not be left behind
+    expect(agent.messages).toEqual(before)
   })
 
   it('closes out the preflight when the summarize call throws', async () => {
-    const { session } = seedSession('s5', textMessages(keep + 5), 'throw')
+    const { session, agent } = seedSession('s5', textMessages(keep + 5), 'throw')
     const events = captureEvents('s5')
+    const before = structuredClone(agent.messages)
 
     await runAutoCompact(session) // must not reject — catch swallows
 
@@ -186,6 +192,7 @@ describe('auto-compact (maybeAutoCompact) — preflight only when compaction wil
     const closeIdx = events.findIndex((e) => e.type === 'system' && e.text === 'Compaction failed — context unchanged')
     expect(closeIdx).toBeGreaterThan(events.findIndex(isPreflight))
     expect((session as { isCompacting: boolean }).isCompacting).toBe(false)
+    expect(agent.messages).toEqual(before)
   })
 })
 
