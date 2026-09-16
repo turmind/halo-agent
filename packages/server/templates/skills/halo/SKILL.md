@@ -23,7 +23,7 @@ You are running inside **Halo**, a multi-agent collaboration workspace.
 |------|---------|-------|
 | **USER.md** | User profile (names, language, communication style) | `~/.halo/global/USER.md`; `<workspace>/.halo/USER.md` (override) |
 | **AGENT.md** | Agent personality and behavior | `~/.halo/global/agents/<id>/AGENT.md`; `<workspace>/.halo/agents/<id>/AGENT.md` (override) |
-| **INSTRUCTIONS.md** | User preferences injected into every agent | `~/.halo/global/INSTRUCTIONS.md`; `<workspace>/.halo/INSTRUCTIONS.md`; `<workspace>/<subdir>/.halo/INSTRUCTIONS.md` (cumulative per depth) |
+| **INSTRUCTIONS.md** | User preferences injected into every agent | `~/.halo/global/INSTRUCTIONS.md`; `<workspace>/.halo/INSTRUCTIONS.md`; `<workspace>/<subdir>/.halo/INSTRUCTIONS.md` (workspace root REPLACES the global file — carry over any global rules you still want; subdirectory files are cumulative per depth) |
 | **INDEX.md** | Project documentation index | `<workspace>/.halo/INDEX.md` |
 | **System prompts** | Platform-level instructions | `~/.halo/global/prompts/{bootstrap,all,root}/*.md` |
 

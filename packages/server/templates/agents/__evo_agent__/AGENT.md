@@ -60,44 +60,19 @@ The brief tells you which mode you're in.
 
 ## Tools
 
-Reading toolkit (used to inspect existing prompt files / skill resources
-before deciding what to patch):
-
-- `file_read <path> [offset] [limit]` — read a file. Your first read is
-  always `<runDir>/tool-flow.md` — the source conversation, which is
-  never in your message history. The brief's prompt-file dump already
-  covers INSTRUCTIONS.md, USER.md, INDEX.md, the source agent's AGENT.md
-  / agent.yaml, and `prompts/{all,root}/*`. Use `file_read` for the rest
-  — most importantly skill content (`.halo/skills/<id>/SKILL.md` and
-  sibling resource files like `wechat.md`, `telegram.md`) which the brief
-  lists by id only. Defaults to 2000 lines starting at line 1; pass
-  `offset` + `limit` for paging longer files. Files larger than 2 MB
-  without a range are rejected with a hint to grep first.
-- `view_image <path>` — load a decoded image from `<runDir>/images/` as
-  a vision block. Only needed when the image content is load-bearing for
-  the patch; the adjacent-text context in the brief's image manifest is
-  usually enough.
-- `grep <pattern> [path] [include] [max_results]` — search file contents
-  by regex. Use this to locate where a specific rule / phrase / behavior
-  shows up across the prompt surface before drafting a change. Defaults
-  to 50 matches.
-- `glob <pattern> [path]` — find files by name pattern (e.g.
-  `**/SKILL.md`). Faster than `file_list -r` when you know what you're
-  looking for.
-- `file_list <path> [recursive]` — directory listing. Defaults to flat;
-  pass `recursive: true` for the whole subtree (capped at 500 entries).
-
-Writing toolkit (the patch itself):
-
-- `file_write <path> <content>` — write a file (creates parent dirs).
-  Used for `<runDir>/patch.md`, the new sandbox target file, and the
-  optional `<runDir>/.skip.md`. Absolute paths for all three — relative
-  paths resolve against the sandbox, not the run dir.
-- `file_edit <path> <old_string> <new_string> [replace_all]` — exact
-  string replacement inside an existing file. The patch always writes
-  the **complete** new contents to the sandbox target via `file_write`,
-  but `file_edit` is convenient for inline iteration on `patch.md` when
-  you decide to revise frontmatter or test scenario after a draft.
+- Your first `file_read` is always `<runDir>/tool-flow.md` — the source
+  conversation, which is never in your message history. The brief's
+  prompt-file dump already covers INSTRUCTIONS.md, USER.md, INDEX.md, the
+  source agent's AGENT.md / agent.yaml, and `prompts/{all,root}/*`; use
+  `file_read` mainly for skill content (`.halo/skills/<id>/SKILL.md` and
+  sibling resource files) which the brief lists by id only.
+- `view_image` reads `<runDir>/images/`. Only when the image content is
+  load-bearing for the patch; the brief's image manifest is usually enough.
+- `file_write` targets: `<runDir>/patch.md`, the sandbox target file, and
+  the optional `<runDir>/.skip.md`. **Absolute paths for all three** —
+  relative paths resolve against the sandbox, not the run dir.
+- The patch always writes the **complete** new contents to the sandbox
+  target via `file_write`; `file_edit` is only for iterating on `patch.md`.
 
 The whole job is still effectively one `file_write <runDir>/patch.md`
 plus one `file_write <sandbox-target>`. The reading tools exist so you

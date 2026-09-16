@@ -54,6 +54,7 @@ Sensible defaults if user didn't say:
 | targets    | none (log only — the run shows in admin Cron tab)             |
 | label      | summarize from prompt + schedule                              |
 | timeout    | leave unset (3600s) — see `--timeout-sec` below               |
+| prompt     | cron runs unattended; unless the user's prompt already says so, prepend: "This runs unattended — nobody will answer questions. Deliver the result directly; if genuinely blocked, state what's blocked in one line and stop." |
 
 ### 2. Translate the schedule
 
@@ -140,12 +141,13 @@ chat context (`{{channel.*}}` is empty). Either:
 
 ### 4. Apply the change
 
-Helper script lives in this skill's directory; agents invoking from elsewhere should
-substitute the right path (often `~/.halo/global/skills/manage-cron-jobs/manage-cron.py`).
+Helper script: `manage-cron.py` in this skill's directory (see *Resource files* below).
+Use `<workspace>/.halo/skills/cron/manage-cron.py` if that exists, else
+`~/.halo/global/skills/cron/manage-cron.py`.
 
 **Create (from inside a chat — pin the result back to that chat):**
 ```bash
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py create \
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
   --label "Daily status digest" \
   --workspace /home/ubuntu/sa-agent \
   --agent default \
@@ -157,7 +159,7 @@ shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py create
 
 **Create (silent — no push, just appears in the cron log):**
 ```bash
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py create \
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
   --label "Nightly index rebuild" \
   --workspace /home/ubuntu/sa-agent \
   --prompt "Rebuild the search index." \
@@ -166,30 +168,30 @@ shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py create
 
 **Update (change schedule or any other field):**
 ```bash
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py update <id> \
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py update <id> \
   --schedule "0 10 * * 1"
 ```
 
 **Pause / unpause:**
 ```bash
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py disable <id>
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py enable <id>
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py disable <id>
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py enable <id>
 ```
 
 **Delete:**
 ```bash
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py delete <id>
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py delete <id>
 ```
 
 **List:**
 ```bash
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py list
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py list
 ```
 
 **List jobs that push to the current chat (use this from inside a channel
 when the user asks "what crons do I have?" / "remove the one I subscribed to earlier"):**
 ```bash
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py list --chat-id {{channel.chat_id}}
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py list --chat-id {{channel.chat_id}}
 ```
 
 The user inside a chat doesn't know the cron `id` — they think in terms of
@@ -199,8 +201,8 @@ to find the matching job(s), confirm with the user which one, then call
 
 **One job's run history (paginated, latest first):**
 ```bash
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py runs <jobId> --limit 20
-shell_exec: python3 ~/.halo/global/skills/manage-cron-jobs/manage-cron.py runs <jobId> --limit 20 --before <oldestRunIdFromPrev>
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py runs <jobId> --limit 20
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py runs <jobId> --limit 20 --before <oldestRunIdFromPrev>
 ```
 
 ### 5. Confirm and summarize

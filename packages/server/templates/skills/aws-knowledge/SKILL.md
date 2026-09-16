@@ -13,6 +13,9 @@ Wraps `https://knowledge-mcp.global.api.aws` — official AWS MCP server. No aut
 python3 ~/.halo/global/skills/aws-knowledge/scripts/aws_kb.py <command> [args]
 ```
 
+Use `<workspace>/.halo/skills/aws-knowledge/scripts/aws_kb.py` if that exists, else
+`~/.halo/global/skills/aws-knowledge/scripts/aws_kb.py`.
+
 ## Commands
 
 ### search — use this first for almost everything

@@ -26,6 +26,7 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
+import { parseUserMdFrontmatter } from './md-vars.js'
 
 const HALO_HOME = path.join(homedir(), '.halo', 'global')
 
@@ -177,9 +178,13 @@ export async function loadAllMdContents(
 export function composeMdPrompt(contents: MdContents, roster = '', scopeBody = ''): string {
   const sections: string[] = []
 
-  // User profile comes first — sets the tone for the entire conversation
+  // User profile comes first — sets the tone for the entire conversation.
+  // `lang` from the frontmatter is pinned as an explicit rule: the only other
+  // language rule lives in global INSTRUCTIONS.md, which a workspace
+  // INSTRUCTIONS.md replaces wholesale (see loadAllMdContents).
   if (contents.userMd) {
-    sections.push(`## User Profile\n\n${contents.userMd}`)
+    const lang = parseUserMdFrontmatter(contents.userMd)?.lang
+    sections.push(`## User Profile\n\n${contents.userMd}${lang ? `\n\nReply language: ${lang} unless the user switches.` : ''}`)
   }
 
   if (contents.agentMd) {

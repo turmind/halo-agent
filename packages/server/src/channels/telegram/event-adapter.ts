@@ -2,7 +2,7 @@ import type { AgentSessionEvent } from '../../agents/agent-events.js'
 import { splitText } from '../shared/chunk.js'
 import { extractMediaMessage } from '../shared/media.js'
 
-const HARD_CHARS = 4000
+const HARD_CHARS = 4000  // mirrored in templates/prompts/all/RUNTIME.md
 
 export interface TelegramResponderDeps {
   sendText: (text: string) => Promise<void>

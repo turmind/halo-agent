@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { renderMdBody } from '../src/prompts/md-vars.js'
+import { renderMdBody, parseUserMdFrontmatter } from '../src/prompts/md-vars.js'
 import type { RenderContext } from '../src/prompts/md-vars.js'
 
 /**
@@ -85,5 +85,17 @@ describe('renderMdBody placeholder resolution', () => {
       settings: { s: { params: { gone: null } } },
     }))
     expect(out).toBe('v={{s.params.gone}}')
+  })
+})
+
+describe('parseUserMdFrontmatter', () => {
+  it('parses user_name / ai_name / lang (CRLF tolerant)', () => {
+    const raw = '---\r\nuser_name: Ada\r\nai_name: Halo\r\nlang: zh-CN\r\n---\r\n\n## Communication Style\n'
+    expect(parseUserMdFrontmatter(raw)).toEqual({ user_name: 'Ada', ai_name: 'Halo', lang: 'zh-CN' })
+  })
+
+  it('lang absent → undefined; no frontmatter → null', () => {
+    expect(parseUserMdFrontmatter('---\nuser_name: Ada\n---\n')?.lang).toBeUndefined()
+    expect(parseUserMdFrontmatter('## No frontmatter\n')).toBeNull()
   })
 })

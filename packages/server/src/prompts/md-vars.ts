@@ -199,27 +199,35 @@ export function renderMdBody(body: string, ctx: RenderContext): string {
   })
 }
 
-/** Parse USER.md frontmatter for user_name / ai_name. */
-async function readUserMd(workspaceRoot?: string): Promise<{ user_name?: string; ai_name?: string }> {
+/** Parse USER.md frontmatter for user_name / ai_name / lang. Null when the
+ *  content has no frontmatter block. Shared with md-loader's composeMdPrompt,
+ *  which pins `lang` into the `## User Profile` section. */
+export function parseUserMdFrontmatter(raw: string): { user_name?: string; ai_name?: string; lang?: string } | null {
+  const fm = raw.match(/^---\s*\n([\s\S]*?)\n---/)
+  if (!fm) return null
+  const out: { user_name?: string; ai_name?: string; lang?: string } = {}
+  for (const line of fm[1].split('\n')) {
+    // Strip a trailing CR so a USER.md saved with CRLF (Windows editors)
+    // still matches the `$`-anchored pattern below — without this, `\r`
+    // sits before end-of-line and the value capture fails silently.
+    const m = line.replace(/\r$/, '').match(/^(\w+):\s*(.+)$/)
+    if (!m) continue
+    if (m[1] === 'user_name') out.user_name = m[2].trim()
+    if (m[1] === 'ai_name') out.ai_name = m[2].trim()
+    if (m[1] === 'lang') out.lang = m[2].trim()
+  }
+  return out
+}
+
+/** Read USER.md (workspace > global) frontmatter for user_name / ai_name / lang. */
+async function readUserMd(workspaceRoot?: string): Promise<{ user_name?: string; ai_name?: string; lang?: string }> {
   const candidates: string[] = []
   if (workspaceRoot) candidates.push(path.join(workspaceRoot, '.halo', 'USER.md'))
   candidates.push(path.join(homedir(), '.halo', 'global', 'USER.md'))
   for (const p of candidates) {
     try {
-      const raw = await fs.readFile(p, 'utf-8')
-      const fm = raw.match(/^---\s*\n([\s\S]*?)\n---/)
-      if (!fm) continue
-      const out: { user_name?: string; ai_name?: string } = {}
-      for (const line of fm[1].split('\n')) {
-        // Strip a trailing CR so a USER.md saved with CRLF (Windows editors)
-        // still matches the `$`-anchored pattern below — without this, `\r`
-        // sits before end-of-line and the value capture fails silently.
-        const m = line.replace(/\r$/, '').match(/^(\w+):\s*(.+)$/)
-        if (!m) continue
-        if (m[1] === 'user_name') out.user_name = m[2].trim()
-        if (m[1] === 'ai_name') out.ai_name = m[2].trim()
-      }
-      return out
+      const out = parseUserMdFrontmatter(await fs.readFile(p, 'utf-8'))
+      if (out) return out
     } catch { /* try next */ }
   }
   return {}

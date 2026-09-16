@@ -1,6 +1,6 @@
 ---
 name: web-search
-description: Real-time web search with two gears. Fast (default, Amazon Nova grounding, ~3s, cheap) — current events, news, prices, any routine lookup. Deep (--deep, OpenAI GPT-5.6 web_search via Bedrock Mantle, ~20-40s, token-expensive) — multi-round retrieval with first-hand sources and per-claim citations, for verifying facts behind important decisions or double-checking weak/contradictory fast results. Default to fast; escalate to deep only when the question deserves depth.
+description: Real-time web search with two gears. Fast (default, Amazon Nova grounding, ~3s, cheap) — current events, news, prices, any routine lookup. Deep (--deep, OpenAI GPT-5.6 web_search via Bedrock Mantle, ~20-40s, token-expensive) — multi-round retrieval with first-hand sources and per-claim citations, for verifying facts behind important decisions or double-checking weak/contradictory fast results. Default to fast; escalate to deep only when the question deserves depth. For AWS documentation, service announcements or regional availability, use the aws-knowledge skill instead.
 user-invocable: false
 ---
 # Web Search
@@ -18,6 +18,9 @@ searches against official sites), leans toward authoritative first-hand sources
 **expensive and slow, but thorough and it doesn't make things up**.
 
 ## Usage
+
+Use `<workspace>/.halo/skills/web-search/search.py` if that exists, else
+`~/.halo/global/skills/web-search/search.py`.
 
 ```bash
 # fast (default) — everyday lookups

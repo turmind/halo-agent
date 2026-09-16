@@ -22,7 +22,7 @@ import { extractMediaMessage } from '../shared/media.js'
  * prefer a paragraph boundary, else hard-cut. Shared with the cron
  * dispatcher so a scheduled push obeys the same limit as a chat reply.
  */
-export const WECHAT_TEXT_LIMIT = 3500
+export const WECHAT_TEXT_LIMIT = 3500  // mirrored in templates/prompts/all/RUNTIME.md
 
 export interface WechatResponderDeps {
   sendText: (text: string) => Promise<void>

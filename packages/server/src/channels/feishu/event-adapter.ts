@@ -15,7 +15,7 @@ import { splitText } from '../shared/chunk.js'
 import { formatForFeishu } from '../shared/markdown.js'
 import { extractMediaMessage } from '../shared/media.js'
 
-const HARD_CHARS = 4500
+const HARD_CHARS = 4500  // mirrored in templates/prompts/all/RUNTIME.md
 
 export interface FeishuResponderDeps {
   sendText: (text: string) => Promise<void>
