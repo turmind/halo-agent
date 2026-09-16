@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
+import { execSkillCommand } from '../src/commands/skill-command.js'
 
 /**
  * INTEGRATION coverage for SessionSkillCommands (fourth knife). The interesting,
@@ -106,6 +107,21 @@ describe('access gate — requiresAccess vs session access level', () => {
     const sm = new SessionManager(ws)
     const cmds = await sm.listAvailableSkillCommandsForAgent('gated')  // no accessLevel arg
     expect(cmds.map((c) => c.skillId ?? c.name)).toContain('admin_tool')
+  })
+
+  // execSkillCommand's gate used a private {readonly,workspace,full} rank table;
+  // an `observer` row indexed to undefined and `x > undefined` is always false,
+  // so the gate silently let observer sessions run full-only skills.
+  it('execSkillCommand rejects a full-only skill for a persisted observer session', async () => {
+    writeSkill('admin_tool', '/admin', 'full')
+    writeAgent('gated', ['admin_tool'])
+    const sm = new SessionManager(ws)
+    seed(sm, 's_obs', 'gated', 'observer')
+    const result = await execSkillCommand('/admin', '', sm, 's_obs', ws)
+    expect(result).not.toBe('ok')
+    expect(result).not.toBe('not_found')
+    expect(result).toContain('requires full access')
+    expect(result).toContain('observer')
   })
 })
 

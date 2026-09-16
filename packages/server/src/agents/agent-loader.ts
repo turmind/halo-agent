@@ -257,7 +257,7 @@ export interface SkillMeta {
  *  visible only when the session's level is at least as permissive.
  *  `observer` ranks with `readonly` — it's globally-scoped but read-only,
  *  so for command/skill gating (a capability question) it's the floor. */
-const ACCESS_RANK: Record<'readonly' | 'workspace' | 'full' | 'observer', number> = {
+export const ACCESS_RANK: Record<'readonly' | 'workspace' | 'full' | 'observer', number> = {
   readonly: 0,
   observer: 0,
   workspace: 1,

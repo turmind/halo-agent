@@ -3,7 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import YAML from 'yaml'
 import type { SessionManager } from '../../agents/session-manager.js'
-import { scanAvailableAgents, GLOBAL_AGENTS_DIR, GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter } from '../../agents/agent-loader.js'
+import { scanAvailableAgents, GLOBAL_AGENTS_DIR, GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter, ACCESS_RANK } from '../../agents/agent-loader.js'
 import { ensureWorkspaceHalo } from '../../init.js'
 import { getDisabledSet, toggleDisabled } from '../../db/index.js'
 import { t, type Lang } from './i18n.js'
@@ -169,7 +169,7 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
       const skillAvail = await skillCommandAvailable(ctx, d.slashName)
       const access = await verbAccessMap(d.slashName, ctx.workspacePath, skillAvail)
       const runnable = [...access.entries()]
-        .filter(([, ra]) => !ra || RANK[ra] <= RANK[ctx.accessLevel])
+        .filter(([, ra]) => !ra || ACCESS_RANK[ra] <= ACCESS_RANK[ctx.accessLevel])
         .map(([name]) => name)
       if (runnable.length === 0) continue
       objectVerbs.set(d.slashName, runnable)
@@ -759,9 +759,6 @@ const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
 }
 
 type Access = 'full' | 'workspace' | 'readonly'
-// observer ranks with readonly for command gating — globally-scoped but
-// read-only, so it's the capability floor (it can run only readonly-level verbs).
-const RANK = { readonly: 0, observer: 0, workspace: 1, full: 2 } as const
 
 /** Collapse observer→readonly for capability-layer consumers (skill listing,
  *  skill exec, session building) that only know full/workspace/readonly.
@@ -1060,7 +1057,7 @@ async function tryRouteSubcommand(
   // gated here too, not left to execSkillCommand, so verb-level access holds
   // even with no object-level requiresAccess. Unset → open to everyone.
   const required = (await verbAccessMap(command, ctx.workspacePath)).get(verb)
-  if (required && RANK[required] > RANK[ctx.accessLevel]) {
+  if (required && ACCESS_RANK[required] > ACCESS_RANK[ctx.accessLevel]) {
     return { text: t('skill.access_required', ctx.lang, { cmd: `${command} ${verb}`, required, current: ctx.accessLevel }) }
   }
 
@@ -1089,7 +1086,7 @@ async function renderObjectHelp(ctx: CommandContext, command: string): Promise<C
   const access = await verbAccessMap(command, ctx.workspacePath, skillAvail)
   const canRun = (verb: string): boolean => {
     const required = access.get(verb)
-    return !required || RANK[required] <= RANK[ctx.accessLevel]
+    return !required || ACCESS_RANK[required] <= ACCESS_RANK[ctx.accessLevel]
   }
 
   const rows: Array<{ name: string; desc: string }> = []

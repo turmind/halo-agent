@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { CommandDescriptor } from './types.js'
 import { commandRegistry } from './index.js'
-import { GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter, type SkillVerb } from '../agents/agent-loader.js'
+import { ACCESS_RANK, GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter, type SkillVerb } from '../agents/agent-loader.js'
 import { buildRenderContext, renderMdBody } from '../prompts/md-vars.js'
 import { getDisabledSet } from '../db/index.js'
 import { t, type Lang } from '../channels/shared/i18n.js'
@@ -211,11 +211,15 @@ export async function execSkillCommand(
   // prior bug: that map only holds active sessions, so an idle one fell
   // through to "no gate" and bypassed the check.
   if (freshRequiresAccess) {
+    // `access_level` is a free-text column cast at read time, so an `observer`
+    // row is possible even though channels normalize it away today. A private
+    // rank table without that key turned the check into `x > undefined` →
+    // always false, i.e. the gate silently opened. ACCESS_RANK (agent-loader)
+    // knows all four levels — observer ranks as readonly.
     const sessionLevel = channelAccessLevel
-      ?? ((sessionInfo.accessLevel as 'readonly' | 'workspace' | 'full' | null | undefined) ?? null)
-    const RANK = { readonly: 0, workspace: 1, full: 2 } as const
-    const sessionRank = sessionLevel ? RANK[sessionLevel] : RANK.full
-    if (RANK[freshRequiresAccess] > sessionRank) {
+      ?? ((sessionInfo.accessLevel as keyof typeof ACCESS_RANK | null | undefined) ?? null)
+    const sessionRank = sessionLevel ? ACCESS_RANK[sessionLevel] : ACCESS_RANK.full
+    if (ACCESS_RANK[freshRequiresAccess] > sessionRank) {
       return t('skill.access_required', lang, { cmd: `/${cmdName}`, required: freshRequiresAccess, current: sessionLevel ?? 'restricted' })
     }
   }

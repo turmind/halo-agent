@@ -1,27 +1,25 @@
 import { eq } from 'drizzle-orm'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
-import { loadAgentYaml } from './agent-loader.js'
+import { loadAgentYaml, ACCESS_RANK } from './agent-loader.js'
 import { scanSkillDescriptors } from '../commands/skill-command.js'
 import type { CommandDescriptor } from '../commands/types.js'
-
-const VIS_RANK = { readonly: 0, workspace: 1, full: 2 } as const
 
 /** A command's /help visibility threshold = the lowest gate among its verbs
  *  (each verb's own requiresAccess, else the command's object-level one). No
  *  verbs → just the object-level requiresAccess. undefined → no gate (some
  *  verb open to everyone). Mirrors the verb-access rule on the dispatch side;
- *  kept here (not imported) to avoid a channels→agents layering cycle. */
+ *  the rank table is the shared `ACCESS_RANK` from agent-loader. */
 function commandVisibilityGate(d: CommandDescriptor): 'full' | 'workspace' | 'readonly' | undefined {
   if (!d.verbs || d.verbs.length === 0) return d.requiresAccess
   let min: number | undefined
   for (const v of d.verbs) {
     const ra = v.requiresAccess ?? d.requiresAccess
-    const r = ra ? VIS_RANK[ra] : 0
+    const r = ra ? ACCESS_RANK[ra] : 0
     min = min === undefined ? r : Math.min(min, r)
   }
   if (min === undefined || min === 0) return undefined
-  return min === VIS_RANK.full ? 'full' : 'workspace'
+  return min === ACCESS_RANK.full ? 'full' : 'workspace'
 }
 
 /**
@@ -93,10 +91,9 @@ export class SessionSkillCommands {
     if (allowed.size === 0) return []
     const disabledSet = getDisabledSet(this.db, 'skill')
     const all = await scanSkillDescriptors(this.host.workspaceRoot)
-    const RANK = { readonly: 0, workspace: 1, full: 2 } as const
     // null means "no gate" (CLI / pre-session admin UI), explicit 'full'
     // also means full access.
-    const sessionRank = accessLevel ? RANK[accessLevel] : RANK.full
+    const sessionRank = accessLevel ? ACCESS_RANK[accessLevel] : ACCESS_RANK.full
     return all.filter((d) => {
       const skillId = d.skillId ?? d.name
       if (!allowed.has(skillId)) return false
@@ -106,7 +103,7 @@ export class SessionSkillCommands {
       // no verbs just uses its object-level requiresAccess. Show it if the user
       // clears that lowest bar — which verbs exactly is refined by `/cmd help`.
       const gate = commandVisibilityGate(d)
-      if (gate && RANK[gate] > sessionRank) return false
+      if (gate && ACCESS_RANK[gate] > sessionRank) return false
       return true
     })
   }
