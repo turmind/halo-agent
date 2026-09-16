@@ -148,7 +148,7 @@ describe('runAgentTurn stamps the arrival time on every user-role turn', () => {
     expect(text.indexOf('[System @ ')).toBeGreaterThan(0)
   })
 
-  it('stamps exactly once per turn — a retried attempt re-runs the identical stamped input', async () => {
+  it('stamps exactly once per turn — a retried attempt resumes on the stamped input already in history', async () => {
     seedRow('t5')
     const agent = new FakeAgent(1)  // attempt 1 throws a transient network error → retry
     fakeSession('t5', agent)
@@ -156,10 +156,12 @@ describe('runAgentTurn stamps the arrival time on every user-role turn', () => {
     await sm.runSession('t5', 'retry me')
 
     expect(agent.inputs).toHaveLength(2)
-    expect(agent.inputs[0]).toBe(agent.inputs[1])
     expect(agent.inputs[0]).toMatch(new RegExp(`^\\[${ISO}\\] retry me$`))
-    // Not double-stamped.
-    expect((agent.inputs[1] as string).match(/\[\d{4}-/g)).toHaveLength(1)
+    expect(agent.inputs[1]).toEqual([])  // resume — nothing re-landed
+    // The model sees the stamp once (see turn-retry-idempotent.test.ts for the
+    // full resume contract).
+    const text = agent.messages[0].content.map((b) => b.text ?? '').join('')
+    expect(text.match(/\[\d{4}-/g)).toHaveLength(1)
   }, 10_000)  // transient-transport backoff sleeps ~1-1.5s before attempt 2
 
   it('keeps the UI log unstamped and deleteExchange still matches the raw turn', async () => {

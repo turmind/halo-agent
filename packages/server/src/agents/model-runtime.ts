@@ -47,6 +47,9 @@ export interface ModelRuntimeConfig {
 export interface ModelRuntime {
   /** Conversation state — mutated externally during compaction/repair */
   messages: AnthropicMessage[]
+  /** Empty `input` (`[]`) = resume: skip the user push and call the model on
+   *  the existing history. SessionManager's retry loop uses this so a failed
+   *  attempt's already-landed input isn't stacked again. */
   run(
     input: string | ContentBlock[],
     options?: {

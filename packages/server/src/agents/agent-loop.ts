@@ -152,7 +152,12 @@ export abstract class AgentLoop {
     // can be left by an aborted turn (assistant stripped on abort) or parked by
     // stopSession's queue-preservation fold — the next run must merge into it.
     const last = this.messages[this.messages.length - 1]
-    if (last?.role === 'user' && Array.isArray(last.content)) {
+    if (userContent.length === 0) {
+      // Resume: the caller already landed this turn's input on an earlier
+      // attempt (SessionManager's retry after a mid-turn model failure) —
+      // nothing to push, go straight to the next model call on the existing
+      // history.
+    } else if (last?.role === 'user' && Array.isArray(last.content)) {
       last.content.push(...userContent)
     } else {
       this.messages.push({ role: 'user', content: userContent })

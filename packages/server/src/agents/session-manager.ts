@@ -1215,9 +1215,9 @@ export class SessionManager implements SessionManagerInternals {
     // a user who came back two days later from one who replied instantly, or
     // how long a sub-agent report took to land. Every user-role turn funnels
     // through here (opening turn + each drained batch; agent reports read
-    // `[<iso>] (from: session X)\n…`). Stamped ONCE, before the retry loop, so
-    // every attempt re-runs the identical input (the 4xx multimodal degrade
-    // below rebuilds `message` from this copy). New array/blocks, never in
+    // `[<iso>] (from: session X)\n…`). Stamped ONCE, before the retry loop;
+    // only attempt 0 hands it to run() — retries resume on the history that
+    // attempt already landed (see the loop). New array/blocks, never in
     // place — the caller still holds the original. The compact instruction
     // bypasses runAgentTurn and stays unstamped; the UI log keeps the raw text
     // (deleteRawTurn strips the stamp when matching the two).
@@ -1242,6 +1242,17 @@ export class SessionManager implements SessionManagerInternals {
       // the agent doesn't declare the `draft` tool.
       session.draftReset?.()
 
+      // Attempt 0 lands the input; a retry RESUMES on the history that attempt
+      // already left behind (run() with empty input skips the user push and
+      // goes straight to the model call). run() never undoes its push on a
+      // model error, so re-handing `message` stacked one more copy of the
+      // input per attempt — 5 retries, 5 copies (and 5× the image tokens) —
+      // while a retry after a mid-turn failure also merged the input into the
+      // trailing tool_result message. Re-land only when a recovery branch
+      // (repair / local compact) dropped the trailing user turn.
+      const last = session.agent.messages[session.agent.messages.length - 1]
+      const input = attempt === 0 || last?.role !== 'user' ? message : []
+
       try {
         session.turnStartTime = Date.now()
         // Mid-turn auto-compact hook. Runs at the top of every loop
@@ -1249,7 +1260,7 @@ export class SessionManager implements SessionManagerInternals {
         // next model call. Without this, a single turn that accumulates
         // many large tool results (file_read, grep on large dirs) blows the
         // window before runSession's finally block can compact.
-        const iter = session.agent.run(message, {
+        const iter = session.agent.run(input, {
           cancelSignal: signal,
           beforeCallModel: () => this.maybeAutoCompact(session),
         })
@@ -1440,8 +1451,8 @@ export class SessionManager implements SessionManagerInternals {
         ) {
           const replaced = replaceImageBlocks(session.agent.messages, 'rejected by model provider')
           if (replaced > 0) {
-            // The retry's agent.run(message) re-coalesces the input blocks into
-            // the trailing user message — degrade the local input too, or the
+            // A re-landed input (the attempt-top `input` pick) would coalesce
+            // these blocks back in — degrade the local copy too, or the
             // rejected image walks right back into history.
             if (Array.isArray(message)) {
               message = message.map((b): ContentBlock => b.type === 'image' ? { type: 'text', text: '[image removed: rejected by model provider]' } : b)
