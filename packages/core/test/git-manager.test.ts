@@ -64,6 +64,11 @@ describe('GitManager', () => {
       await mgr(root).init()
       expect(fs.existsSync(path.join(root, '.git'))).toBe(true)
       expect(fs.existsSync(path.join(root, '.gitignore'))).toBe(true)
+      // Halo runtime state (session transcripts, sqlite) must never land in
+      // the first commit.
+      const gitignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf-8')
+      expect(gitignore).toContain('.halo/sessions/')
+      expect(gitignore).toContain('.halo/halo.db')
       expect(git(root, 'log', '--oneline').trim().split('\n')).toHaveLength(1)
     })
 

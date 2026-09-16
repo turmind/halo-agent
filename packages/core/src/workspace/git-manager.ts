@@ -89,6 +89,7 @@ export class GitManager {
         console.log(`[GitManager] Initialized git repo at ${this.workspace.projectRoot}`);
 
         // Create initial .gitignore
+        // Mirrors WORKSPACE_HIDDEN_{DIRS,FILES} in server/src/tools/sandbox.ts + tmp/USER.md
         const gitignoreContent = [
           'node_modules/',
           'dist/',
@@ -97,6 +98,15 @@ export class GitManager {
           '.env.local',
           '*.log',
           '.DS_Store',
+          '# Halo runtime',
+          '.halo/sessions/',
+          '.halo/logs/',
+          '.halo/tmp/',
+          '.halo/evo/',
+          '.halo/halo.db',
+          '.halo/halo.db-shm',
+          '.halo/halo.db-wal',
+          '.halo/USER.md',
           '',
         ].join('\n');
 
