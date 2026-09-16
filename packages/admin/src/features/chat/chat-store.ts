@@ -553,8 +553,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   setMessages(messages: ChatMessage[]) {
-    const prev = get().messages
-    console.debug(`[ChatStore:setMessages] ${prev.length} -> ${messages.length}`, new Error().stack?.split('\n').slice(1, 4).join(' <- '))
     // Wholesale replace — every position may have changed, so the hot-path
     // indexes must be rebuilt in lockstep (snapshot restore, reattach-replay
     // rebuild, and the []-reset on session switch all land here).
@@ -643,7 +641,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   clear() {
-    console.debug(`[ChatStore:clear] dropping ${get().messages.length} messages`, new Error().stack?.split('\n').slice(1, 4).join(' <- '))
     // Preserve selectedAgentId — once the user picked an agent (or it was
     // promoted from priority), the next "new session" should still use it.
     // Resetting it back to 'default' here would override that choice every
