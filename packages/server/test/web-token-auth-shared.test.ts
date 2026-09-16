@@ -25,7 +25,8 @@ import type { WebChannel } from '../src/channels/web/handler.js'
  *    JSON. Statuses are common (401/401/429) and shared.
  *  - **accessLevel gating**: metrics requires a global-scope token (full /
  *    observer) → 403; show downgrades non-global tokens to their own workspace
- *    instead of rejecting; the web channel doesn't gate at all.
+ *    instead of rejecting; the web channel doesn't gate the token itself (its
+ *    explicit `sessionId` override is prefix-scoped — last describe below).
  *
  * Mutation check (must fail on revert): in `resolveTokenAuth`, drop the
  * `!account.enabled` clause → the disabled-account cases go red on all three
@@ -51,8 +52,12 @@ const TOKEN_BUCKET = 'web-token'
 
 const registry = new SessionManagerRegistry()
 /** Auth runs before any channel call on every route under test, so the surfaces
- *  never touch this. `/web/file` (the web-side probe) is channel-free anyway. */
-const webStub = {} as WebChannel
+ *  never touch this. `/web/file` (the web-side probe) is channel-free anyway.
+ *  The one method stubbed, `getHistory`, lets the session-ownership cases
+ *  below tell "gate passed" (200) from "gate refused" (403). */
+const webStub = {
+  getHistory: (_token: string, opts?: { sessionId?: string }) => ({ sessionId: opts?.sessionId ?? 'stub', messages: [], running: false }),
+} as unknown as WebChannel
 
 const webApp = () => createWebRoutes({ db, channel: webStub })
 const showApp = () => createShowRoutes(registry)
@@ -223,5 +228,57 @@ describe('per-surface accessLevel gating stays at the call site', () => {
     const res = await webApp().request(`/web/file?path=note.txt&token=${WS_TOKEN}`)
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('hello')
+  })
+})
+
+/** The explicit `sessionId` override on /web/{chat,stop,history,subscribe}
+ *  and /show/session is scoped like `/session switch`: a non-full token may
+ *  only name sessions under its own `web_<accountId>_` prefix. 403, not 404 —
+ *  the session may well exist, it just isn't the caller's. `/show/session`
+ *  answers `forbidden` before it even looks the session up, so the missing
+ *  workspace runtime in this process never turns the refusal into a 404. */
+describe('sessionId override is prefix-scoped for non-full tokens', () => {
+  const OTHERS = 'web_someone-else_abc'
+  const MINE = 'web_ws1_abc'   // ws1 = the accountId seeded for WS_TOKEN
+
+  it('GET /web/history with another account\'s sessionId → 403', async () => {
+    const res = await webApp().request(`/web/history?sessionId=${OTHERS}&token=${WS_TOKEN}`)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ error: 'session not owned by this token' })
+  })
+
+  it('GET /web/history with an own-prefix sessionId passes the gate', async () => {
+    const res = await webApp().request(`/web/history?sessionId=${MINE}&token=${WS_TOKEN}`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ sessionId: MINE })
+  })
+
+  it('a full token may address any sessionId', async () => {
+    const res = await webApp().request(`/web/history?sessionId=${OTHERS}&token=${FULL_TOKEN}`)
+    expect(res.status).toBe(200)
+  })
+
+  it('POST /web/chat, POST /web/stop, GET /web/subscribe refuse the same way', async () => {
+    const chat = await webApp().request(`/web/chat?token=${WS_TOKEN}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hi', sessionId: OTHERS }),
+    })
+    expect(chat.status).toBe(403)
+    // header form of the override is gated too
+    const stop = await webApp().request(`/web/stop?token=${WS_TOKEN}`, { method: 'POST', headers: { 'x-session-id': OTHERS } })
+    expect(stop.status).toBe(403)
+    const sub = await webApp().request(`/web/subscribe?sessionId=${OTHERS}&token=${WS_TOKEN}`)
+    expect(sub.status).toBe(403)
+  })
+
+  it('GET /show/session pins a non-global token to its own sessions, not just its workspace', async () => {
+    const other = await showApp().request(`/show/session?ws=${encodeURIComponent(ws)}&id=${OTHERS}&token=${WS_TOKEN}`)
+    expect(other.status).toBe(403)
+    expect(await other.json()).toMatchObject({ error: 'forbidden' })
+    // Own prefix clears the ownership gate; the id then simply doesn't exist
+    // (no runtime / halo.db for this workspace in-process) → 404, not 403.
+    const mine = await showApp().request(`/show/session?ws=${encodeURIComponent(ws)}&id=${MINE}&token=${WS_TOKEN}`)
+    expect(mine.status).toBe(404)
   })
 })

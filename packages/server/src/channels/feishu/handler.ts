@@ -22,7 +22,7 @@ import path from 'node:path'
 import * as Lark from '@larksuiteoapi/node-sdk'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
-import { listEnabledAccounts, getAccount } from './accounts.js'
+import { listEnabledAccounts, getAccount, updateAccount } from './accounts.js'
 import type { FeishuAccount, FeishuMessageEvent, FeishuTextContent } from './types.js'
 import { FeishuResponder } from './event-adapter.js'
 import { downloadResource, sendMessage, replyMessage, uploadImage, uploadFile } from './api.js'
@@ -371,6 +371,13 @@ async function handleInbound(args: {
         channelName: 'feishu',
       })
       if (result) {
+        // `/workspace switch` — persist the new binding. No restart needed
+        // (unlike telegram): `account` is re-read from the db on every
+        // inbound event, so the next message already lands in the new
+        // workspace.
+        if (result.workspace) {
+          updateAccount(db, account.accountId, { workspacePath: result.workspace.path })
+        }
         await replyToInbound({ account, inboundMessageId, isP2P, chatId, text: formatForFeishu(result.text) })
         return
       }

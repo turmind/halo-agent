@@ -344,6 +344,7 @@ export function createAgentConfigRoutes() {
   // GET /agent-configs/:id/yaml — get raw YAML for Monaco editor
   app.get('/agent-configs/:id/yaml', async (c) => {
     const id = c.req.param('id')
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid agent id' }, 400)
     const scope = c.req.query('scope') ?? 'global'
     const projectId = c.req.query('projectId')
 
@@ -366,6 +367,7 @@ export function createAgentConfigRoutes() {
   // PUT /agent-configs/:id/yaml — save raw YAML from Monaco editor
   app.put('/agent-configs/:id/yaml', async (c) => {
     const id = c.req.param('id')
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid agent id' }, 400)
     const body = await c.req.json<{
       yaml: string
       scope?: 'global' | 'workspace'
@@ -442,6 +444,7 @@ export function createAgentConfigRoutes() {
   // PATCH /agent-configs/:id/toggle — toggle disabled state in workspace DB
   app.patch('/agent-configs/:id/toggle', async (c) => {
     const id = c.req.param('id')
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid agent id' }, 400)
     const scope = (c.req.query('scope') ?? 'global') as 'global' | 'workspace'
     const projectId = c.req.query('projectId')
     if (!projectId) return c.json({ error: 'projectId required' }, 400)
@@ -469,6 +472,7 @@ export function createAgentConfigRoutes() {
   // GET /agent-configs/:id/md/:fileType?scope=xxx&projectId=xxx
   app.get('/agent-configs/:id/md/:fileType', async (c) => {
     const id = c.req.param('id')
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid agent id' }, 400)
     const fileType = c.req.param('fileType')
     if (!isMdFileType(fileType)) return c.json({ error: `Invalid file type: ${fileType}` }, 400)
 
@@ -489,6 +493,7 @@ export function createAgentConfigRoutes() {
   // PUT /agent-configs/:id/md/:fileType — save MD file content
   app.put('/agent-configs/:id/md/:fileType', async (c) => {
     const id = c.req.param('id')
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid agent id' }, 400)
     const fileType = c.req.param('fileType')
     if (!isMdFileType(fileType)) return c.json({ error: `Invalid file type: ${fileType}` }, 400)
     if (!isMdWritable(fileType)) return c.json({ error: `${fileType} is read-only (agent-maintained)` }, 400)
@@ -507,6 +512,7 @@ export function createAgentConfigRoutes() {
   // GET /agent-configs/:id/md-all?scope=xxx&projectId=xxx — get all MD files at once
   app.get('/agent-configs/:id/md-all', async (c) => {
     const id = c.req.param('id')
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid agent id' }, 400)
     const scope = (c.req.query('scope') ?? 'global') as 'global' | 'workspace'
     const projectId = c.req.query('projectId')
 

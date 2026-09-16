@@ -4,13 +4,14 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { imageMimeFromExt } from '@turmind/halo-core'
 import type { ChannelDb } from '../db/channel-db.js'
-import type { WebChannel } from '../channels/web/handler.js'
+import { canAddressSession, type WebChannel } from '../channels/web/handler.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/web/accounts.js'
 import type { WebAccount } from '../channels/web/types.js'
 import { accessLevelError, ACCOUNT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
 import { resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
+import { isHiddenWorkspacePath } from '../tools/sandbox.js'
 
 export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
   const { db, channel } = deps
@@ -134,6 +135,17 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     return auth
   }
 
+  /** 403 when a non-full token names a session outside its own prefix via
+   *  the `sessionId` override (see canAddressSession); null = allowed. Runs
+   *  before the channel call so chat/subscribe can refuse with a status
+   *  instead of an SSE error event. */
+  function sessionOverrideError(c: Context, account: WebAccount, sessionId: string | undefined): Response | null {
+    if (sessionId && !canAddressSession(account, sessionId)) {
+      return c.json({ error: 'session not owned by this token' }, 403)
+    }
+    return null
+  }
+
   app.post('/web/chat', async (c) => {
     const auth = authToken(c)
     if (!auth.ok) return auth.response
@@ -158,6 +170,8 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
       sessionId: body.sessionId ?? headerOpts.sessionId,
       agentId: body.agentId ?? headerOpts.agentId,
     }
+    const denied = sessionOverrideError(c, auth.account, opts.sessionId)
+    if (denied) return denied
     return streamSSE(c, async (stream) => {
       for await (const chunk of channel.handleMessage(token, body.message ?? '', body.images, opts)) {
         await stream.write(chunk)
@@ -169,7 +183,10 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     const auth = authToken(c)
     if (!auth.ok) return auth.response
 
-    const stopped = await channel.handleStop(auth.token, readOverrides(c))
+    const opts = readOverrides(c)
+    const denied = sessionOverrideError(c, auth.account, opts.sessionId)
+    if (denied) return denied
+    const stopped = await channel.handleStop(auth.token, opts)
     return c.json({ stopped })
   })
 
@@ -178,6 +195,8 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     if (!auth.ok) return auth.response
 
     const overrides = readOverrides(c)
+    const denied = sessionOverrideError(c, auth.account, overrides.sessionId)
+    if (denied) return denied
     const result = channel.getHistory(auth.token, overrides)
     if (!result) {
       // When the caller asked for a specific sessionId and we got null
@@ -198,6 +217,8 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     c.req.raw.signal.addEventListener('abort', () => abortController.abort())
 
     const opts = readOverrides(c)
+    const denied = sessionOverrideError(c, auth.account, opts.sessionId)
+    if (denied) return denied
     return streamSSE(c, async (stream) => {
       for await (const chunk of channel.subscribe(auth.token, abortController.signal, opts)) {
         await stream.write(chunk)
@@ -240,6 +261,13 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     }
     if (real !== realRoot && !real.startsWith(realRoot + path.default.sep)) {
       return c.json({ error: 'path traversal not allowed' }, 403)
+    }
+    // Workspace runtime state (.halo/sessions, halo.db, logs, evo) is hidden
+    // for EVERY access level — same table the tool sandbox enforces
+    // (isHiddenWorkspacePath). Without it any token on this workspace could
+    // read other users' transcripts via ?path=.halo/sessions/<agent>/<sid>.json.
+    if (isHiddenWorkspacePath(real, realRoot)) {
+      return c.json({ error: 'path is not accessible' }, 403)
     }
 
     const stat = fs.statSync(real)

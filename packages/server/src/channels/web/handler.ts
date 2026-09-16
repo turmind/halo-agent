@@ -20,6 +20,19 @@ function buildWebSessionPrefix(accountId: string): string {
 }
 
 /**
+ * Whether a token may address `sessionId` via the explicit `?sessionId=`
+ * override. Non-full tokens are pinned to their own `web_<accountId>_`
+ * namespace — the HTTP counterpart of `/session switch`'s prefix check
+ * (channels/shared/commands.ts execSwitch). Without it a readonly token
+ * could read / post into / stop any session in the workspace just by
+ * naming it. The routes call this before touching the channel so the
+ * refusal is a real 403, not an SSE error event.
+ */
+export function canAddressSession(account: WebAccount, sessionId: string): boolean {
+  return account.accessLevel === 'full' || sessionId.startsWith(buildWebSessionPrefix(account.accountId))
+}
+
+/**
  * Per-request overrides used by external integrations (ACP adapter,
  * future server-to-server callers) to address a specific halo session
  * and/or a workspace different from the account's default binding.

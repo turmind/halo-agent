@@ -15,6 +15,10 @@ import { createSettingsRoutes } from '../src/routes/settings.js'
  * endpoints (the B-H1 family):
  *
  *   - DELETE /agent-configs/:id                      (recursive rm)
+ *   - GET/PUT /agent-configs/:id/yaml                 (file read / atomic write)
+ *   - PATCH /agent-configs/:id/toggle
+ *   - GET/PUT /agent-configs/:id/md/:fileType         (file read / write)
+ *   - GET /agent-configs/:id/md-all
  *   - GET/DELETE /agent-configs/:id/sessions          (dir list / bulk rm)
  *   - GET/DELETE /agent-configs/:id/sessions/:sessionId (file read / rm)
  *   - POST /agent-configs/:id/sessions body.id        (arbitrary write)
@@ -100,6 +104,62 @@ describe('route guards (attack shapes → 400, legit ids unaffected)', () => {
     const res = await agentApp.request(`/agent-configs/doomed?scope=workspace&projectId=${encodeURIComponent(ws)}`, { method: 'DELETE' })
     expect(res.status).toBe(200)
     expect(fs.existsSync(dir)).toBe(false)
+  })
+
+  // ── GET/PUT /agent-configs/:id/yaml ──
+  it('GET yaml rejects traversal agent id', async () => {
+    const res = await agentApp.request(`/agent-configs/..%2F..%2Fetc/yaml?scope=workspace&projectId=${encodeURIComponent(ws)}`)
+    expect(res.status).toBe(400)
+  })
+
+  it('PUT yaml rejects traversal agent id and writes nothing', async () => {
+    // With `..%2F..%2Fagents-evil` the unguarded join lands on a sibling of
+    // `.halo/agents`; make that dir exist so the `fs.access(agentDir)` check
+    // would pass and only the guard stands between the request and the write.
+    const evilDir = path.join(ws, '.halo', 'agents-evil')
+    fs.mkdirSync(evilDir, { recursive: true })
+    const res = await agentApp.request('/agent-configs/..%2Fagents-evil/yaml', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ yaml: 'name: Evil\n', scope: 'workspace', projectId: ws }),
+    })
+    expect(res.status).toBe(400)
+    expect(fs.existsSync(path.join(evilDir, 'agent.yaml'))).toBe(false)
+  })
+
+  // ── PATCH /agent-configs/:id/toggle ──
+  it('PATCH toggle rejects traversal agent id', async () => {
+    const res = await agentApp.request(`/agent-configs/..%2F..%2Fetc/toggle?scope=workspace&projectId=${encodeURIComponent(ws)}`, { method: 'PATCH' })
+    expect(res.status).toBe(400)
+  })
+
+  // ── GET/PUT /agent-configs/:id/md/:fileType ──
+  it('GET md rejects traversal agent id', async () => {
+    const res = await agentApp.request(`/agent-configs/..%2F..%2Fetc/md/AGENT.md?scope=workspace&projectId=${encodeURIComponent(ws)}`)
+    expect(res.status).toBe(400)
+  })
+
+  it('PUT md rejects traversal agent id and writes nothing', async () => {
+    const evilDir = path.join(ws, '.halo', 'agents-evil-md')
+    fs.mkdirSync(evilDir, { recursive: true })
+    const res = await agentApp.request('/agent-configs/..%2Fagents-evil-md/md/AGENT.md', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '# evil', scope: 'workspace', projectId: ws }),
+    })
+    expect(res.status).toBe(400)
+    expect(fs.existsSync(path.join(evilDir, 'AGENT.md'))).toBe(false)
+  })
+
+  it('GET/PUT md still reject an unknown fileType (whitelist, not traversal)', async () => {
+    const res = await agentApp.request(`/agent-configs/default/md/..%2F..%2Fetc?scope=workspace&projectId=${encodeURIComponent(ws)}`)
+    expect(res.status).toBe(400)
+  })
+
+  // ── GET /agent-configs/:id/md-all ──
+  it('GET md-all rejects traversal agent id', async () => {
+    const res = await agentApp.request(`/agent-configs/..%2F..%2Fetc/md-all?scope=workspace&projectId=${encodeURIComponent(ws)}`)
+    expect(res.status).toBe(400)
   })
 
   // ── GET /agent-configs/:id/sessions ──

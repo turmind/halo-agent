@@ -9,6 +9,7 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { channelAccounts, getChannelDb } from '../db/channel-db.js'
 import { resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
+import { canAddressSession } from '../channels/web/handler.js'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
 import { readSessionFileMeta, loadSessionFileData } from '../sessions/session-store.js'
 import { messageToolCalls } from '../sessions/session-types.js'
@@ -457,12 +458,14 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
     const id = c.req.query('id') ?? ''
     if (!wsPath || !id) return c.json({ error: 'ws and id required' }, 400)
     // full + observer have global read scope; everyone else is pinned to their
-    // own workspace.
+    // own workspace AND their own `web_<accountId>_` sessions — a workspace
+    // holds every channel's transcripts, so the workspace check alone would
+    // let a readonly token read a colleague's session by id.
     const globalView = account.accessLevel === 'full' || account.accessLevel === 'observer'
     if (!globalView) {
       let allowed = false
       try { allowed = fs.realpathSync(wsPath) === fs.realpathSync(account.workspacePath) } catch { /* bad path */ }
-      if (!allowed) return c.json({ error: 'forbidden' }, 403)
+      if (!allowed || !canAddressSession(account, id)) return c.json({ error: 'forbidden' }, 403)
     }
 
     try {

@@ -485,14 +485,17 @@ function isHiddenGlobalPath(resolved: string): boolean {
  *  allowance above would leak `.halo/sessions` transcripts / halo.db to
  *  workspace/readonly sessions on platforms without bwrap. `resolved` and
  *  `wsRoot` are both already realpath'd by the caller, so a symlink pointing
- *  into these paths lands here too. */
-function isHiddenWorkspacePath(resolved: string, wsRoot: string): boolean {
+ *  into these paths lands here too. Exported for `GET /web/file`, which
+ *  serves workspace files to token holders and must honor the same table. */
+export function isHiddenWorkspacePath(resolved: string, wsRoot: string): boolean {
   for (const rel of WORKSPACE_HIDDEN_FILES) {
     if (resolved === path.join(wsRoot, rel)) return true
   }
   for (const rel of WORKSPACE_HIDDEN_DIRS) {
     const dir = path.join(wsRoot, rel)
-    if (resolved === dir || resolved.startsWith(dir + '/')) return true
+    // path.sep, not '/': /web/file relies on this on every platform (the
+    // tool sandbox itself is inert on Windows, see dev/tools.md).
+    if (resolved === dir || resolved.startsWith(dir + path.sep)) return true
   }
   return false
 }

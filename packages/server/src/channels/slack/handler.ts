@@ -17,7 +17,7 @@ import path from 'node:path'
 import { WebSocket } from 'ws'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
-import { listEnabledAccounts, getAccount } from './accounts.js'
+import { listEnabledAccounts, getAccount, updateAccount } from './accounts.js'
 import type { SlackAccount, SlackMessageEvent, SlackAppMentionEvent, SlackFile, SlackSocketEnvelope } from './types.js'
 import { SlackResponder } from './event-adapter.js'
 import { downloadFile, postMessage, openSocketModeConnection, uploadFile } from './api.js'
@@ -478,6 +478,13 @@ async function handleInbound(args: {
         channelName: 'slack',
       })
       if (result) {
+        // `/workspace switch` — persist the new binding. No restart needed
+        // (unlike telegram): `account` is re-read from the db on every
+        // inbound event, so the next message already lands in the new
+        // workspace.
+        if (result.workspace) {
+          updateAccount(db, account.accountId, { workspacePath: result.workspace.path })
+        }
         // Rewrite set = builtins + the active session's skill slash commands
         // (so skill slash commands in /help also become `!…`) + Slack
         // extras. Derived live so it never drifts from the real command list.
