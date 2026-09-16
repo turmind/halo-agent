@@ -129,6 +129,16 @@ Enforcement layers:
 
 Dependency: `bubblewrap` (`apt install bubblewrap`) on Linux. Without it, only layers 2 + 3 are active.
 
+**Windows has no sandbox.** There is no bwrap equivalent, so `sandbox.ts` (`normalizeOptsForPlatform`) promotes every non-full call to `full` before it reaches layer 1 or layer 3 — `assertPathAllowed()` returns immediately without checking the workspace boundary or the hidden-path lists. Only layer 2 (tool filtering) survives, because `isBwrapCached()` is always false there. Net effect on Windows:
+
+| Level | Effective behavior on Windows |
+|---|---|
+| `full` | Unchanged |
+| `workspace` | **Same as `full`** — all 9 tools, `shell_exec` runs unsandboxed, file tools can read/write any path the halo process can |
+| `readonly` | 5 read-only tools (no write / shell / fetch), but **no path boundary** — `file_read` / `grep` / `glob` can reach anything on disk, including `~/.halo/secrets/` and `.halo/sessions/` |
+
+This is a known, unfixed gap (not a bug in a specific route): don't hand out `workspace` / `readonly` channel tokens on a Windows-hosted server expecting isolation — treat them as `full` and `read-anything` respectively. Fixing it properly needs a Windows path-boundary check in `assertPathAllowed` and a Windows equivalent of the shell sandbox, neither of which exists yet.
+
 ### Sandbox hidden paths
 
 Sensitive directories and files are hidden from workspace/readonly sessions via bwrap overlays (and the same lists gate `assertPathAllowed` on the no-bwrap fallback). Paths that don't exist on the filesystem are silently skipped. Two categories coexist:
