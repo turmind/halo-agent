@@ -586,7 +586,7 @@ export function ensureWorkspaceHalo(workspaceRoot: string): void {
   // `canvas/` holds the agent's visual face (self.html), force-copied below.
   // Created up-front so the first /note doesn't race on mkdir.
   const dirs = [
-    'sessions', 'agents', 'skills', 'logs', 'memory', 'canvas',
+    'sessions', 'agents', 'skills', 'logs', 'memory', 'canvas', 'tmp',
     'evo/runs', 'evo/applies', 'evo/history',
   ]
   for (const dir of dirs) {

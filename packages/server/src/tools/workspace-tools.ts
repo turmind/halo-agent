@@ -17,7 +17,15 @@ import { loadSettingsSchema } from '../settings-schema.js'
 import { inferImageMime } from '../channels/shared/media-store.js'
 import { TOOL_ERROR_MARKER, TOOL_WARN_MARKER } from '../agents/agent-loop.js'
 
-const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', '.halo'])
+const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist'])
+
+// `.halo` itself must NOT be in SKIP_DIRS: it holds the agent's own knowledge
+// base (memory/, docs/, INSTRUCTIONS.md, skills/) which grep/glob from the
+// workspace root must reach. Only its machine-generated, potentially huge
+// subtrees (transcripts, logs, evolution sandboxes, scratch, inbound channel
+// media, the canvas engine) are skipped — and only when the direct parent is
+// `.halo`, so a user project's own `logs/` or `tmp/` directory is still walked.
+const SKIP_HALO_SUBDIRS = new Set(['sessions', 'logs', 'evo', 'tmp', 'assets', 'canvas'])
 
 // Safety backstop for glob: cap how many matches we accumulate. The real fix
 // for runaway walks is lstat (see walkDir) — this just bounds the result
@@ -74,6 +82,7 @@ async function* walkDir(dir: string, signal?: AbortSignal): AsyncGenerator<strin
       continue
     }
     if (stat.isDirectory()) {
+      if (path.basename(dir) === '.halo' && SKIP_HALO_SUBDIRS.has(name)) continue
       if (process.platform === 'win32' && await isReparsePoint(fullPath)) continue
       yield* walkDir(fullPath, signal)
     } else if (stat.isFile()) {
@@ -584,9 +593,12 @@ export function createWorkspaceTools(
           return `${TOOL_WARN_MARKER}\nError: old_string appears more than once in ${input.path}. Either expand it with surrounding context until it's unique, or pass replace_all: true.`
         }
       }
+      // Replacer fn, not a bare string: String.prototype.replace(str, str) expands
+      // `$&` / `` $` `` / `$'` / `$1` in the replacement — a literal `$` in new_string
+      // would splice file content into the edit.
       const newContent = input.replace_all
         ? content.split(input.old_string).join(input.new_string)
-        : content.replace(input.old_string, input.new_string)
+        : content.replace(input.old_string, () => input.new_string)
       await sandboxWriteFile(fullPath, newContent, sbOpts)
       return `File edited: ${input.path}`
     },
@@ -680,12 +692,12 @@ export function createWorkspaceTools(
       '',
       'Output is capped at ~8000 chars; a longer combined stdout/stderr is',
       'truncated with an explicit `[Content truncated…]` marker. For commands',
-      'that produce a lot of output, redirect to a file (`> /tmp/out.log`) and',
+      'that produce a lot of output, redirect to a file (`<command> > .halo/tmp/out.log`) and',
       'use `grep` / `file_read` with `offset`+`limit` to inspect what you need.',
       '',
       `Commands are killed after ${config.timeout.shellExec / 1000}s. For anything that may run`,
       'longer (big builds, long test suites, deploys), start it in the background',
-      'and return immediately — e.g. `nohup <command> > /tmp/xxx.log 2>&1 &` —',
+      'and return immediately — e.g. `nohup <command> > .halo/tmp/xxx.log 2>&1 &` —',
       'then poll the log file or process status with follow-up shell_exec calls',
       'instead of letting a single call sit past the timeout.',
     ].join('\n'),
@@ -802,7 +814,7 @@ export function createWorkspaceTools(
       '"**/foo" will NOT find a *directory* named foo (it only matches a file',
       'literally named foo). To check whether a directory exists or see what is',
       'inside it, match the files under it with a trailing "/**" — e.g. "**/foo/**"',
-      '— or use the `list` tool / `shell_exec` with `ls`. A "No files found" result',
+      '— or use the `file_list` tool / `shell_exec` with `ls`. A "No files found" result',
       'means no matching files, NOT necessarily that a directory is missing.',
     ].join('\n'),
     inputSchema: {
@@ -836,7 +848,7 @@ export function createWorkspaceTools(
         // "this path doesn't exist".
         const looksLikeDirName = !/[*?]/.test(input.pattern) && !/\.[a-z0-9]+$/i.test(input.pattern.split('/').pop() ?? '')
         const hint = looksLikeDirName
-          ? ` (glob matches files, not directory names — if "${input.pattern}" is a directory, try "${input.pattern.replace(/\/+$/, '')}/**" to list its files, or use the \`list\` tool)`
+          ? ` (glob matches files, not directory names — if "${input.pattern}" is a directory, try "${input.pattern.replace(/\/+$/, '')}/**" to list its files, or use the \`file_list\` tool)`
           : ''
         return `No files found matching pattern "${input.pattern}"${hint}`
       }

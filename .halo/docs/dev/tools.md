@@ -280,7 +280,7 @@ In-memory sessions return `session.output`; released sessions read the `output` 
 
 ### query_agent
 
-Get an agent's full details: AGENT.md, model config, tools, skills. Use it before `start_session` to decide if an agent fits. Team-gated: an agent can only inspect agents on its own roster (the `team` whitelist — see [agent roster](../design/prompt-system.md#agent-roster)); querying a non-team agent is rejected.
+Show an agent's name, description, model, tool list and skill descriptions — enough to decide whether it fits before `start_session`. Does not include AGENT.md (read `.halo/agents/<id>/AGENT.md` for behavior rules). Team-gated: an agent can only inspect agents on its own roster (the `team` whitelist — see [agent roster](../design/prompt-system.md#agent-roster)); querying a non-team agent is rejected.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|

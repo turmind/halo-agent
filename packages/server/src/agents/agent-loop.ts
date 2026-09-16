@@ -289,7 +289,11 @@ export abstract class AgentLoop {
           ? resultText.slice(0, uiCap) + `\n\n[Content truncated: ${resultText.length} chars total, showing first ${uiCap}. Use file_read for the complete content.]`
           : resultText
 
-        const cap = config.limits.toolResultMax
+        // activate_skill is exempt from the LLM cap: a SKILL.md body is
+        // instructions, not data — truncating it hands the model half a manual
+        // (and the "re-run with narrower scope" hint is meaningless for it).
+        // Skill size is the skill author's responsibility, not a runtime cap's.
+        const cap = tu.name === 'activate_skill' ? Infinity : config.limits.toolResultMax
         const truncationNote = (origLen: number) =>
           `\n\n[Content truncated: ${origLen} chars total, showing first ${cap}. Re-run with narrower scope (e.g. grep / file_read with offset+limit) to see specific sections.]`
         if (typeof resultContent === 'string' && resultContent.length > cap) {

@@ -134,7 +134,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
 
   const sessionListTool: ToolDef = {
     name: 'session_list',
-    description: 'List all active sub-agent sessions. Returns JSON with code 0 on success.',
+    description: 'List this session\'s direct child sessions with their status (includes finished ones). Returns JSON with code 0 on success.',
     inputSchema: { type: 'object' as const, properties: {}, required: [] as string[] },
     callback: () => {
       // Direct children of this session. Cap at 500 — sub-agent fan-out
@@ -285,7 +285,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
 
   const queryAgentTool: ToolDef = {
     name: 'query_agent',
-    description: "Get detailed information about an agent: AGENT.md content, model config, tools, and skill descriptions. Use this to decide if an agent fits your task before start_session. Returns JSON with code 0 on success.",
+    description: "Show an agent's name, description, model, tool list and skill descriptions — enough to decide whether it fits before start_session. Does not include AGENT.md; read `.halo/agents/<id>/AGENT.md` if you need its behavior rules. Returns JSON with code 0 on success.",
     inputSchema: {
       type: 'object' as const,
       properties: { agent_id: { type: 'string' as const, description: 'The agent ID to query' } },
