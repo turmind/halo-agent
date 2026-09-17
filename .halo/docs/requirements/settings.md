@@ -93,7 +93,7 @@ secrets: []
 
 ### General — built-in
 
-Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `agent.*`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `evolution.*`, `limits.*`.
+Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `agent.*`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `evolution.*`, `limits.*`. All `general.*` keys are `globalOnly`: `config.ts` resolves them through `settingsValue()` against `~/.halo/secrets/settings.yaml` only, so a workspace `settings.yaml` cannot override them. Per-workspace layering applies to namespaced `params` / `secrets` (`getServerSecret(ns, key, workspaceRoot)`, `substituteSecrets`).
 
 `server.trust_proxy` (boolean, default `false`, `globalOnly`): whether the brute-force rate limiter (`middleware/brute-force.ts` `getClientIp`) trusts the `x-forwarded-for` header for client IP resolution. Direct-connect deployments leave it `false` and get the socket address. Behind a reverse proxy (nginx / Cloudflare / etc.), set it to `true` so the real client IP is honored instead of the proxy's — but only when that proxy is one you control and rewrites the header itself, otherwise a client can forge XFF to dodge lockouts.
 
@@ -121,7 +121,7 @@ Declared in [packages/server/src/settings-schema.ts](../../../packages/server/sr
 | Global | `~/.halo/secrets/settings.yaml` | Base |
 | Workspace | `<project>/.halo/settings.yaml` | Overrides global, key by key |
 
-Read order: `<schema default> <- <global> <- <workspace>`.
+Read order: `<schema default> <- <global> <- <workspace>` (workspace layer applies to namespaced `params` / `secrets` only — see General above).
 
 The Settings page shows source badges per field:
 - `workspace` (green-blue, override applied here)

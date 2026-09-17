@@ -252,16 +252,17 @@ describe('route guards (attack shapes → 400, legit ids unaffected)', () => {
   })
 
   it('PATCH /settings still writes to a real workspace', async () => {
-    // NB: not `general.language` — that one is globalOnly and 400s at
-    // workspace scope by design (rejectGlobalOnlyAtWorkspace).
+    // NB: not a general.* key — the whole general section is globalOnly and 400s
+    // at workspace scope by design (rejectGlobalOnlyAtWorkspace). Namespaced
+    // params stay per-workspace.
     const res = await settingsApp.request('/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope: 'workspace', projectId: ws, key: 'general.compact.keep_messages', value: '7' }),
+      body: JSON.stringify({ scope: 'workspace', projectId: ws, key: 'demo-skill.params.endpoint', value: 'https://example.test' }),
     })
     expect(res.status).toBe(200)
     const yaml = fs.readFileSync(path.join(ws, '.halo', 'settings.yaml'), 'utf-8')
-    expect(yaml).toContain('keep_messages')
+    expect(yaml).toContain('endpoint')
   })
 
   // ── B-M4: prototype pollution ──

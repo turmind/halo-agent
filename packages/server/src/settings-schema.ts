@@ -120,6 +120,9 @@ function generalSection(): SchemaSection {
     displayName_zh: '常规',
     description: 'Server behavior parameters (session limits, compaction, sandbox, logging).',
     description_zh: '服务端行为参数（会话限制、压缩、沙箱、日志）。',
+    // Every general.* field is globalOnly: config.ts reads them via
+    // settingsValue() from the global settings.yaml only. Per-workspace
+    // layering exists solely for namespaced params/secrets (getServerSecret).
     fields: ([
       // system-wide language preference. Read by internal agents (evo, score)
       // that don't load INSTRUCTIONS.md, and available to anything else that
@@ -129,20 +132,20 @@ function generalSection(): SchemaSection {
       // stored server-side so the choice follows the user across browsers.
       { key: 'theme', type: 'enum', options: ['dark', 'light', 'midnight', 'warm'], optionLabels: ['Dark', 'Light', 'Midnight', 'Warm'], globalOnly: true, description: 'Admin UI color theme.', description_zh: 'Admin 界面配色主题。', default: 'dark' },
       // agent scaffold
-      { key: 'agent.default_provider', type: 'enum', options: providerIds, description: 'Provider used when scaffolding a new agent. Model id, endpoint, prompt-caching TTL, and thinking defaults are read from that provider\'s YAML.', description_zh: '新建 agent 时使用的供应商。模型 id、endpoint、提示缓存 TTL、Thinking 默认值都从该供应商的 YAML 读取。', default: defaultProvider },
-      { key: 'agent.max_retries', type: 'int', description: 'Max attempts per model call on transient errors (rate limit, 5xx, network). Backoff grows between attempts.', description_zh: '单次模型调用遇到瞬态错误（限流、5xx、网络）时的最大尝试次数，重试间隔递增。', default: '5' },
+      { key: 'agent.default_provider', type: 'enum', options: providerIds, globalOnly: true, description: 'Provider used when scaffolding a new agent. Model id, endpoint, prompt-caching TTL, and thinking defaults are read from that provider\'s YAML.', description_zh: '新建 agent 时使用的供应商。模型 id、endpoint、提示缓存 TTL、Thinking 默认值都从该供应商的 YAML 读取。', default: defaultProvider },
+      { key: 'agent.max_retries', type: 'int', globalOnly: true, description: 'Max attempts per model call on transient errors (rate limit, 5xx, network). Backoff grows between attempts.', description_zh: '单次模型调用遇到瞬态错误（限流、5xx、网络）时的最大尝试次数，重试间隔递增。', default: '5' },
       // server — network-facing knobs; global-only since they alter how the
       // server itself authenticates clients.
       { key: 'server.trust_proxy', type: 'boolean', globalOnly: true, description: 'Trust the x-forwarded-for header for client IP resolution (brute-force rate limiting). Enable ONLY when a reverse proxy you control sits in front and rewrites the header — otherwise clients can forge it to bypass lockouts.', description_zh: '信任 x-forwarded-for 请求头解析客户端 IP（暴力破解限速用）。仅当前面有你控制的反向代理并会重写该头时才开启——否则客户端可伪造绕过锁定。', default: 'false' },
       // session
-      { key: 'session.max_queue_size', type: 'int', description: 'Maximum queued messages per session', description_zh: '每个会话最大排队消息数', default: '256' },
-      { key: 'session.max_nesting_depth', type: 'int', description: 'Maximum session nesting depth for agent delegation', description_zh: 'Agent 委派的最大会话嵌套深度', default: '16' },
+      { key: 'session.max_queue_size', type: 'int', globalOnly: true, description: 'Maximum queued messages per session', description_zh: '每个会话最大排队消息数', default: '256' },
+      { key: 'session.max_nesting_depth', type: 'int', globalOnly: true, description: 'Maximum session nesting depth for agent delegation', description_zh: 'Agent 委派的最大会话嵌套深度', default: '16' },
       // compact
-      { key: 'compact.compress_at', type: 'float', description: 'Auto-compact threshold as a fraction of max context (e.g. 0.8 = compact when 80% full)', description_zh: '自动压缩阈值，最大上下文的比例（如 0.8 表示用满 80% 时压缩）', default: '0.8' },
-      { key: 'compact.keep_messages', type: 'int', description: 'Recent messages kept intact during compaction', description_zh: '压缩时保留最后多少条消息不动', default: '5' },
-      { key: 'compact.max_summary_input', type: 'int', description: 'Max chars fed into local truncation fallback', description_zh: '本地截断兜底时的总输入字符上限', default: '15000' },
-      { key: 'compact.max_message_slice', type: 'int', description: 'Max chars kept per old message during local truncation', description_zh: '本地截断兜底时每条旧消息保留的最大字符数', default: '800' },
-      { key: 'compact.summarize_timeout_sec', type: 'int', description: 'LLM summarization timeout (seconds)', description_zh: 'LLM 摘要超时时间（秒）', default: '300' },
+      { key: 'compact.compress_at', type: 'float', globalOnly: true, description: 'Auto-compact threshold as a fraction of max context (e.g. 0.8 = compact when 80% full)', description_zh: '自动压缩阈值，最大上下文的比例（如 0.8 表示用满 80% 时压缩）', default: '0.8' },
+      { key: 'compact.keep_messages', type: 'int', globalOnly: true, description: 'Recent messages kept intact during compaction', description_zh: '压缩时保留最后多少条消息不动', default: '5' },
+      { key: 'compact.max_summary_input', type: 'int', globalOnly: true, description: 'Max chars fed into local truncation fallback', description_zh: '本地截断兜底时的总输入字符上限', default: '15000' },
+      { key: 'compact.max_message_slice', type: 'int', globalOnly: true, description: 'Max chars kept per old message during local truncation', description_zh: '本地截断兜底时每条旧消息保留的最大字符数', default: '800' },
+      { key: 'compact.summarize_timeout_sec', type: 'int', globalOnly: true, description: 'LLM summarization timeout (seconds)', description_zh: 'LLM 摘要超时时间（秒）', default: '300' },
       // sandbox (Linux bwrap only) — global-only: these define the security
       // boundary agents run inside; a workspace overriding them could lift
       // its own sandbox constraints.
@@ -150,7 +153,7 @@ function generalSection(): SchemaSection {
       { key: 'sandbox.writable_dirs', globalOnly: true, description: 'Comma-separated dirs bind-mounted read-write inside the bwrap sandbox (Linux only) — for external CLIs that keep local state, e.g. ~/.kiro,~/.local/share/kiro-cli. Not applied to readonly sessions.', description_zh: '在 bwrap 沙箱内以可写方式挂载的目录（逗号分隔，仅 Linux）——给需要本地状态的外部 CLI 用，如 ~/.kiro,~/.local/share/kiro-cli。readonly 会话不生效。', default: '' },
       { key: 'sandbox.hidden_files', globalOnly: true, description: 'Comma-separated files hidden by bwrap (Linux only)', description_zh: '通过 /dev/null bind 隐藏的文件（逗号分隔，仅 Linux）', default: '~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm' },
       // logging
-      { key: 'logging.level', type: 'enum', options: ['debug', 'info', 'warn', 'error'], description: 'Log level', description_zh: '日志级别', default: 'warn' },
+      { key: 'logging.level', type: 'enum', options: ['debug', 'info', 'warn', 'error'], globalOnly: true, description: 'Log level', description_zh: '日志级别', default: 'warn' },
       // self-evolution (see plans/self-evolution.md). All evo settings are
       // global-only — the worker / ticker live in the server process and
       // would have to reload mid-flight if a workspace could override them.
