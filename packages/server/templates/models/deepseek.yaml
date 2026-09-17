@@ -41,8 +41,12 @@ models:
           - { value: max, label: Max }
           - { value: xhigh, label: XHigh }
 
-  - id: deepseek-v4-flash
-    displayName: DeepSeek V4 Flash
+  # DeepSeek retired the versioned flash ids (deepseek-v4-flash,
+  # deepseek-v4-flash-vision-exp) in favour of a rolling `deepseek-flash`
+  # alias; the old names still resolve server-side (currently to V4.1-Flash)
+  # but the docs say to use the alias.
+  - id: deepseek-flash
+    displayName: DeepSeek Flash
     maxOutputTokens: 65536
     contextWindow: 1000000
     capabilities:
