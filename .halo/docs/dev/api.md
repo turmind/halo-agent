@@ -268,11 +268,11 @@ gets JSON, and additionally gates on `accessLevel`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?, workspace?, sessionId?, agentId?}` (overrides also accepted as `?workspace=`/`?sessionId=` query or `x-workspace`/`x-session-id` headers; `workspace` only honored when token has `accessLevel: full`) |
+| POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?, workspace?, sessionId?, agentId?}` (overrides also accepted as `?workspace=`/`?sessionId=` query or `x-workspace`/`x-session-id` headers; `workspace` only honored when token has `accessLevel: full`). `sessionId` must be owned by the token unless `accessLevel: full` → otherwise 403. |
 | POST | `/api/web/stop` | Stop running task → `{stopped: boolean}` |
 | GET | `/api/web/history` | Active session history → `{sessionId, messages[], running}` |
 | GET | `/api/web/subscribe` | Reconnect SSE to running session |
-| GET | `/api/web/file?path=` | Inline-serve a workspace-relative file (image / video / pdf etc.). Path-traversal-checked against the token's bound workspace: the lexical check is re-verified against the realpath'd root, so a symlink inside the workspace pointing outside it returns 403; a dangling symlink (target doesn't exist) returns 404. |
+| GET | `/api/web/file?path=` | Inline-serve a workspace-relative file (image / video / pdf etc.). Path-traversal-checked against the token's bound workspace: the lexical check is re-verified against the realpath'd root, so a symlink inside the workspace pointing outside it returns 403; a dangling symlink (target doesn't exist) returns 404. Workspace runtime state (`.halo/sessions`, `.halo/logs`, `.halo/evo`, `halo.db*`) is hidden for every access level → 403 `{error: "path is not accessible"}`, checked on the realpath so symlinks into those dirs are caught too. |
 
 See [design/web.md](../design/web.md).
 
@@ -287,7 +287,7 @@ runtime so the frontend can render rooms (workspaces) + characters (sessions).
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/show/state` | `full` or `observer` token → every known workspace; otherwise the account's own. Returns `{ serverTime, uptime, accessLevel, skills[], workspaces[] }` |
-| GET | `/api/show/session?ws=&id=` | Inspector-panel detail for a single session. Trimmed message log (last 40, content/tool I/O capped) plus `contextTokens` / `outputTokens` / `maxContextTokens` / `isRunning`. Non-`full`/`observer` tokens may only read their own workspace. |
+| GET | `/api/show/session?ws=&id=` | Inspector-panel detail for a single session. Trimmed message log (last 40, content/tool I/O capped) plus `contextTokens` / `outputTokens` / `maxContextTokens` / `isRunning`. Non-`full`/`observer` tokens may only read their own workspace, and within it only sessions their own account minted (`web_<accountId>_*`); anything else is 403. |
 
 `observer` is more than an aggregate-counts role: past `/show/state`, it can also call `/show/session` to read **any workspace's** session transcript (last 40 messages, content truncated to 600 chars, tool input to 200 chars). Mint it knowing it grants cross-workspace transcript read access, not just dashboard counters.
 

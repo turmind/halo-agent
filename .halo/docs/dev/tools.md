@@ -68,7 +68,7 @@ Run a shell command. Full shell access.
 |---|---|---|---|
 | command | string | yes | Shell command |
 
-Timeout 600 s (`HALO_SHELL_TIMEOUT`). Max output 5 MB. The tool description surfaces the effective timeout to the agent and advises backgrounding (`nohup … &` + log polling) for longer tasks.
+Timeout 120 s (`HALO_SHELL_TIMEOUT`). Max output 5 MB. The tool description surfaces the effective timeout to the agent and advises backgrounding (`nohup … &` + log polling) for longer tasks.
 
 **Windows output encoding.** The Windows path (`sandbox.ts`) prepends `chcp 65001` so cmd built-ins (`echo`, …) emit UTF-8, then captures raw bytes (`encoding: 'buffer'`) and decodes them strict-UTF-8 with a GBK fallback. This is because native Win32 console tools (`ipconfig`, `systeminfo`, …) ignore `chcp` and still emit the OEM code page (GBK/CP936 on zh-CN); decoding such bytes as UTF-8 produced mojibake. The strict-UTF-8 attempt passes genuine UTF-8 through untouched and only falls back to GBK when the bytes aren't valid UTF-8 (GBK double-byte sequences almost always aren't). mac/Linux are unaffected (UTF-8 throughout).
 
@@ -83,7 +83,7 @@ Regex content search. Returns `file:line:content`.
 | include | string | no | Glob-like filename filter, e.g. `*.ts`, `*.{ts,tsx}`, or a comma-separated list `*.ts,*.tsx` |
 | max_results | number | no | Max matching lines (default 50) |
 
-Skips: `node_modules` / `.git` / `.next` / `dist` / `.halo` / binary files.
+Skips: `node_modules` / `.git` / `.next` / `dist` / binary files. `.halo/` itself IS walked (it holds the agent's knowledge base — memory/, docs/, INSTRUCTIONS.md, skills/); only its machine-generated subtrees `sessions/ logs/ evo/ tmp/ assets/ canvas/` are skipped, and only when the direct parent is `.halo` — a project's own `logs/` or `tmp/` is still searched.
 
 ### glob
 
@@ -173,7 +173,7 @@ Per-channel defaults:
 `grep` and `glob` read the first 512 bytes looking for a null byte and skip binaries.
 
 ### Tool result budget
-The orchestrator truncates tool results over 8000 chars and appends a `[Content truncated]` hint telling the agent to use `grep` for a targeted search.
+The orchestrator truncates tool results over 8000 chars and appends a `[Content truncated]` hint telling the agent to use `grep` for a targeted search. `activate_skill` results are exempt — a SKILL.md body is instructions, not data, and the built-in acp / cron / self skills exceed 8K.
 
 ## Session tools
 
@@ -399,11 +399,11 @@ There is **no implicit default tool set**: `filterTools()` (in `agent-loader.ts`
 
 | Config key | Default | Purpose |
 |---|---|---|
-| `timeout.shellExec` | 600,000 ms | Shell command timeout |
+| `timeout.shellExec` | 120,000 ms | Shell command timeout |
 | `timeout.webFetch` | 10,000 ms | HTTP timeout |
 | `limits.shellOutputBuffer` | 5 MB | Shell output buffer |
 | `limits.webFetchMaxBody` | 50 KB | web_fetch body cap |
 | `limits.grepDefaultMax` | 50 | Default grep result cap |
-| `limits.toolResultMax` | 8,000 chars | Tool result truncation threshold |
+| `limits.toolResultMax` | 8,000 chars | Tool result truncation threshold (`activate_skill` exempt) |
 
 Defined in `packages/server/src/config.ts`.

@@ -98,7 +98,7 @@ data: {"type":"error","error":"..."}
 By default each token is bound 1:1 to the workspace its admin row configured, and `/web/chat` operates on the account's "active" session (most-recently-used or one set by `/session new` / `/session switch`). External integrations — currently the [ACP adapter](../dev/acp-adapter.md) — need finer control:
 
 - `workspace` (string, optional): server-side absolute path. Overrides `account.workspacePath` for this request only. **Gated on `accessLevel === 'full'`** — readonly / workspace tokens cannot escape their account-bound workspace; the gate returns an SSE `error` event.
-- `sessionId` (string, optional): explicit halo session id. Bypasses the account's active-session pointer entirely. If the session doesn't yet exist, the server creates it with the supplied id (so callers can pre-mint stable ids and address them across reconnects).
+- `sessionId` (string, optional): explicit halo session id. Bypasses the account's active-session pointer entirely. **Gated by ownership**: `full` tokens may address any id; readonly / workspace tokens only ids their own account minted (`web_<accountId>_*`) — anything else is refused with HTTP 403 `{error: "session not owned by this token"}` at the route layer (before the SSE stream opens), on `/web/chat`, `/web/stop`, `/web/history` and `/web/subscribe` alike. If the session doesn't yet exist, the server creates it with the supplied id (so callers can pre-mint stable ids and address them across reconnects).
 - `agentId` (string, optional): only consulted when the request is creating a new session (no row yet for `sessionId`). Picks the agent profile to bootstrap with. Defaults to `default`.
 
 Browser web-demo doesn't use any of these — it relies on per-token defaults. Three accepted transports per request, lowest-priority first:
@@ -107,7 +107,7 @@ Browser web-demo doesn't use any of these — it relies on per-token defaults. T
 2. Headers: `x-workspace`, `x-session-id`, `x-agent-id`
 3. POST body fields (highest priority).
 
-`/api/web/stop`, `/api/web/history`, `/api/web/subscribe` accept the same `workspace` + `sessionId` overrides via query string / header. They don't accept `agentId` (no session creation path).
+`/api/web/stop`, `/api/web/history`, `/api/web/subscribe` accept the same `workspace` + `sessionId` overrides via query string / header, and the same ownership gate. They don't accept `agentId` (no session creation path).
 
 ### POST `/api/web/stop`
 

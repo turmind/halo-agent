@@ -16,7 +16,7 @@ Entry point: `session-manager.ts` `buildAgentInstance(agentId, sessionId, parent
 ├── INSTRUCTIONS.md         ← global user preferences
 ├── prompts/                ← user-editable system prompts (externalised)
 │   ├── bootstrap/BOOTSTRAP.md             ← first-run guidance
-│   ├── all/                               ← every-agent rules (TOOL_GUIDELINES.md, TOOL_SHELL[.windows].md, WORKSPACE_CONVENTIONS.md)
+│   ├── all/                               ← every-agent rules (TOOL_GUIDELINES.md, TOOL_SHELL[.windows].md, WORKSPACE_CONVENTIONS.md, RUNTIME.md)
 │   └── root/                              ← root-agent-only (empty by default; user-set)
 ├── agents/<id>/{agent.yaml, AGENT.md}
 └── skills/<id>/SKILL.md       ← built-in `halo` skill carries platform self-knowledge (loaded on demand via activate_skill)
@@ -38,7 +38,7 @@ Entry point: `session-manager.ts` `buildAgentInstance(agentId, sessionId, parent
 └── skills/<id>/SKILL.md
 ```
 
-`.halo/` is listed in grep/glob `SKIP_DIRS`, so agents read via `file_read`.
+`.halo/` is walked by grep/glob (only its runtime subtrees `sessions/ logs/ evo/ tmp/ assets/ canvas/` are skipped), so agents can search the knowledge base directly as well as `file_read` it.
 
 ## Step 1 — Load agent YAML
 
@@ -106,7 +106,7 @@ interface MdContents {
 [system-prompts.ts](../../../packages/server/src/prompts/system-prompts.ts) keeps the hard-coded defaults for seeding and fallback.
 
 ### Seed (init.ts startup hook)
-Startup seeds `templates/prompts/{bootstrap,all,root}/` into `~/.halo/global/prompts/` (currently `BOOTSTRAP.md`; `TOOL_GUIDELINES.md`, `TOOL_SHELL[.windows].md`, `WORKSPACE_CONVENTIONS.md`; `WORKSPACE_MEMORY.md`). These are **platform-owned, force-overwritten** on template refresh (`TEMPLATE_VERSION` gate) — user customization belongs in the workspace `prompts/` override, not in the global copies.
+Startup seeds `templates/prompts/{bootstrap,all,root}/` into `~/.halo/global/prompts/` (currently `BOOTSTRAP.md`; `TOOL_GUIDELINES.md`, `TOOL_SHELL[.windows].md`, `WORKSPACE_CONVENTIONS.md`, `RUNTIME.md`; `WORKSPACE_MEMORY.md`). These are **platform-owned, force-overwritten** on template refresh (`TEMPLATE_VERSION` gate) — user customization belongs in the workspace `prompts/` override, not in the global copies.
 
 ### Live load (every `buildAgentInstance`)
 `loadSystemPrompts(workspaceRoot?)` resolves each scope directory with workspace > global precedence:
@@ -141,6 +141,7 @@ Missing directory or read failure: warn + use built-in fallback.
 `composeMdPrompt(contents, roster = '', scopeBody = '')` joins non-empty sections with `\n\n---\n\n`:
 
 1. `## User Profile` (USER.md) — root agent only
+   - When USER.md frontmatter carries `lang`, the loader appends `Reply language: <lang> unless the user switches.` under this section.
 2. AGENT.md body
 3. The live agent roster (`## Know Your Team Before You Act` for root, `## Your Team` for sub-agents), slotted directly behind AGENT.md (see [Agent roster](#agent-roster) below). Empty string for non-delegating agents (no `team` / empty `team`) / internal agents, so the section is dropped.
 4. `## User Instructions` — `~/.halo/global/INSTRUCTIONS.md` (suppressed when the workspace root has its own — see Step 2)
@@ -185,7 +186,7 @@ Not injected: USER.md / `prompts/root/` / `prompts/bootstrap/`.
 
 The self-evolution agents (`__evo_agent__`, `__score__`, `__apply_agent__`) are platform tooling, not workspace-resident assistants. They get **none** of the workspace context: USER.md, INSTRUCTIONS.md (global + workspace-root), INDEX.md, and all three prompt scopes (`prompts/all` / `root` / `bootstrap`) are cleared in `composeSystemPrompt`. Only their own AGENT.md (which carries the full procedure) plus the tool list remains — this keeps their token budget clean.
 
-> Caveat: `prompts/all` is where `TOOL_SHELL.md` (platform shell guidance) lives, so a `shell_exec`-capable internal agent (`__apply_agent__`) doesn't inherit it. `__apply_agent__`'s AGENT.md carries its own "Shell usage & platform" section to cover this — keep that in mind if adding shell to another internal agent.
+> Caveat: `prompts/all` is where `TOOL_SHELL.md` (platform shell guidance) lives, so a `shell_exec`-capable internal agent (`__apply_agent__`) doesn't inherit it. Both `__apply_agent__`'s and `goal`'s (the goal-mode judge, also an internal agent) AGENT.md carry their own "Shell usage & platform" section to cover this — keep that in mind if adding shell to another internal agent.
 
 ### Fallback
 

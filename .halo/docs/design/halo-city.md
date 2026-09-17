@@ -113,7 +113,9 @@ js/
 
 - `GET /api/show/session?ws=&id=` — 只读会话详情:裁剪后的消息日志 + 真实
   token 上限。鉴权同 `/api/show/state`(x-token;`full`/`observer` 可跨
-  workspace 读取,其余 accessLevel 只能看自己 workspace)
+  workspace 读取,其余 accessLevel 只能看自己 workspace,**且只能看自己
+  token 铸造的会话**(id 以 `web_<accountId>_` 开头);点其它市民会 403,
+  前端在 inspector 里显示加载失败框而不是 transcript
 - `/api/show/state` — 无活跃 UIState 的会话(idle/stopped/重启后)token
   从会话文件头读取(mtime 缓存,不随轮询刷盘),不显示 0;含 `messageCount` 字段
 
