@@ -110,7 +110,7 @@ The SDK wraps protobuf marshalling; we just register an `EventDispatcher` callba
 2. Check if bot was mentioned (p2p: always yes; group: check mentions array for bot's open_id)
 3. Drop non-user senders (bots, apps)
 4. Determine session key: p2p → `(chatId, 'dm')`; group → `(chatId, rootId ?? messageId)` to anchor each thread
-5. Parse content (text / image / file / post) — images extracted as base64 for vision, files downloaded via `downloadResource(type: 'file')` and saved under `.halo/assets/feishu/inbound/`, agent gets `[文件 "name" 已保存: path]`
+5. Parse content (text / image / file / audio / media / post) — images extracted as base64 for vision; files, voice notes (`audio`) and videos (`media`) all go through `downloadResource(type: 'file')` and land under `.halo/assets/feishu/inbound/`, agent gets `[文件 "name" 已保存: path]` / `[语音消息 Ns已保存: path]` / `[视频已保存: path]` (same wording as the wechat handler, so the admin renders them identically). The video's cover `image_key` is not fetched.
 6. Download inbound images, save to workspace, generate base64 payloads
 7. Strip mention markup from text (Feishu inserts `<at user_id="ou_xxx">@bot</at>` or `@_user_123` tokens)
 8. Slash command dispatch (p2p only — group threads don't benefit from `/session new`, `/session list`, etc. since each thread is already its own session)
@@ -162,7 +162,7 @@ trailing chunks of a long reply were dropped.
 
 ## Media support
 
-**Inbound:** text, images (base64 attached to agent message), files (downloaded via `downloadResource(type: 'file')`, saved under `.halo/assets/feishu/inbound/`, agent gets `[文件 "name" 已保存: path]`), voice, video, rich posts.
+**Inbound:** text, images (base64 attached to agent message), files / voice notes / videos (all downloaded via `downloadResource(type: 'file')`, saved under `.halo/assets/feishu/inbound/` — voice as `voice_<ts>_<rand>.opus`, video under its sender filename; agent gets `[文件 "name" 已保存: path]` / `[语音消息 Ns已保存: path]` / `[视频已保存: path]`), rich posts. No speech-to-text — the agent gets the .opus path, same as wechat/telegram.
 
 **Outbound routing:**
 - `.jpg/.png/.gif/.webp/.bmp` → `uploadImage` → `msg_type: 'image'`

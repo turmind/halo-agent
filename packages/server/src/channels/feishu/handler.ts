@@ -118,10 +118,21 @@ function shouldRespond(event: FeishuMessageEvent, botOpenId: string): boolean {
   return false
 }
 
+/** One downloadable attachment. Feishu serves files, voice notes and videos
+ *  from the same `resources/<key>?type=file` endpoint; `kind` only decides
+ *  the saved filename and the note the agent sees. */
+interface InboundFile {
+  key: string
+  kind: 'file' | 'voice' | 'video'
+  /** Sender-side filename; voice notes have none. */
+  name?: string
+  durationMs?: number
+}
+
 interface ParsedContent {
   text: string
   imageKeys: string[]
-  files: Array<{ key: string; name: string }>
+  files: InboundFile[]
 }
 
 /** Parse the JSON-encoded `message.content` for the message types we
@@ -146,7 +157,21 @@ function parseContent(event: FeishuMessageEvent): ParsedContent {
     }
     case 'file': {
       const c = parsed as Record<string, string>
-      if (c.file_key) out.files.push({ key: c.file_key, name: c.file_name ?? 'file' })
+      if (c.file_key) out.files.push({ key: c.file_key, name: c.file_name ?? 'file', kind: 'file' })
+      break
+    }
+    // Voice note: `{ file_key, duration }` — no filename; Feishu records opus.
+    case 'audio': {
+      const c = parsed as { file_key?: string; duration?: number }
+      if (c.file_key) out.files.push({ key: c.file_key, kind: 'voice', durationMs: c.duration })
+      break
+    }
+    // Video: `{ file_key, image_key (cover), file_name, duration }`. The cover
+    // frame is not fed to vision — it's a thumbnail, not something the user
+    // chose to send.
+    case 'media': {
+      const c = parsed as { file_key?: string; file_name?: string; duration?: number }
+      if (c.file_key) out.files.push({ key: c.file_key, kind: 'video', name: c.file_name, durationMs: c.duration })
       break
     }
     case 'post': {
@@ -206,27 +231,40 @@ async function ingestFiles(args: {
   account: FeishuAccount
   workspace: string
   messageId: string
-  files: Array<{ key: string; name: string }>
+  files: InboundFile[]
 }): Promise<string[]> {
   const { account, workspace, messageId, files } = args
   const notes: string[] = []
   for (const f of files) {
+    // Note wording per kind mirrors the wechat handler so the admin's
+    // media-attachments marker parser renders all three the same way.
+    const name = f.name ?? 'file'
+    const label = f.kind === 'voice' ? '语音' : f.kind === 'video' ? '视频' : `文件 "${name}"`
     try {
       const buf = await downloadResource({
         appId: account.appId, appSecret: account.appSecret,
         messageId, fileKey: f.key, type: 'file',
       })
       if (buf.length > MAX_FEISHU_DOWNLOAD_BYTES) {
-        notes.push(`[文件 "${f.name}" 超过 20MB,未保存]`)
+        notes.push(`[${label} 超过 20MB,未保存]`)
         continue
       }
       const savedPath = await saveInboundMedia({
         workspacePath: workspace, accountId: account.accountId, channel: 'feishu',
-        buffer: buf, kind: 'file', originalFilename: f.name,
+        buffer: buf, kind: f.kind, originalFilename: f.name,
+        mimeType: f.kind === 'voice' ? 'audio/opus' : f.kind === 'video' ? 'video/mp4' : undefined,
       })
-      notes.push(`[文件 "${f.name}" 已保存: ${savedPath}]`)
+      if (f.kind === 'voice') {
+        const secs = f.durationMs ? ` ${Math.round(f.durationMs / 1000)}s` : ''
+        notes.push(`[语音消息${secs}已保存: ${savedPath}]`)
+      } else if (f.kind === 'video') {
+        notes.push(`[视频已保存: ${savedPath}]`)
+      } else {
+        notes.push(`[文件 "${name}" 已保存: ${savedPath}]`)
+      }
     } catch (err) {
-      notes.push(`[文件下载失败 ${f.name}: ${err instanceof Error ? err.message : String(err)}]`)
+      const reason = err instanceof Error ? err.message : String(err)
+      notes.push(f.kind === 'file' ? `[文件下载失败 ${name}: ${reason}]` : `[${label}下载失败: ${reason}]`)
     }
   }
   return notes

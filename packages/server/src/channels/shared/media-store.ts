@@ -45,6 +45,7 @@ const EXT_BY_AV_MIME: Record<string, string> = {
   'audio/amr': '.amr',
   'audio/webm': '.webm',
   'audio/ogg': '.ogg',
+  'audio/opus': '.opus',
   'audio/mp4': '.m4a',
   'application/pdf': '.pdf',
 }

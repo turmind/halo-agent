@@ -91,7 +91,7 @@ function seedSessionRow(): void {
   }).run()
 }
 
-function fileEvent(fileName: string): FeishuMessageEvent {
+function mediaEvent(messageType: string, content: Record<string, unknown>): FeishuMessageEvent {
   return {
     sender: { sender_id: { open_id: 'ou_alice' }, sender_type: 'user' },
     message: {
@@ -99,10 +99,14 @@ function fileEvent(fileName: string): FeishuMessageEvent {
       create_time: '1700000000000',
       chat_id: CHAT_ID,
       chat_type: 'p2p',
-      message_type: 'file',
-      content: JSON.stringify({ file_key: FILE_KEY, file_name: fileName }),
+      message_type: messageType,
+      content: JSON.stringify(content),
     },
   }
+}
+
+function fileEvent(fileName: string): FeishuMessageEvent {
+  return mediaEvent('file', { file_key: FILE_KEY, file_name: fileName })
 }
 
 /** Push one event through the registered handler and wait for the async
@@ -176,5 +180,47 @@ describe('feishu inbound file — downloaded + saved, agent gets the local path'
     expect(stub.messageQueue[0].text).toContain('[文件下载失败 report.zip:')
     expect(stub.messageQueue[0].text).not.toContain('已保存')
     expect(fs.existsSync(join(workspace, '.halo', 'assets', 'feishu'))).toBe(false)
+  })
+
+  // `audio` / `media` used to have no parseContent case — a voice note or
+  // video produced no text and no files, so handleInbound returned before
+  // deliverInbound and the agent never heard about it.
+  it('audio (voice note): downloaded as type=file, saved as .opus, wechat-style 语音消息 note with duration', async () => {
+    const stub = injectCompactingSession()
+    await fire(mediaEvent('audio', { file_key: FILE_KEY, duration: 2600 }), stub)
+
+    expect(resourceCalls()).toEqual([
+      `https://open.feishu.cn/open-apis/im/v1/messages/${MESSAGE_ID}/resources/${FILE_KEY}?type=file`,
+    ])
+    const agentText = stub.messageQueue[0].text
+    const savedPath = /已保存: (\S+)\]/.exec(agentText)?.[1]
+    expect(savedPath, `no saved-path marker in: ${agentText}`).toBeTruthy()
+    expect(basename(savedPath!)).toMatch(/^voice_\d{6}_[0-9a-f]{6}\.opus$/)
+    expect(agentText).toContain(`[语音消息 3s已保存: ${savedPath}]`)
+    expect(new Uint8Array(fs.readFileSync(savedPath!))).toEqual(ZIP_BYTES)
+  })
+
+  it('media (video): downloaded as type=file, keeps the sender filename, 视频已保存 note', async () => {
+    const stub = injectCompactingSession()
+    await fire(mediaEvent('media', { file_key: FILE_KEY, image_key: 'img_cover', file_name: 'clip.mp4', duration: 9000 }), stub)
+
+    // Only the video itself is fetched — the cover image_key is not.
+    expect(resourceCalls()).toEqual([
+      `https://open.feishu.cn/open-apis/im/v1/messages/${MESSAGE_ID}/resources/${FILE_KEY}?type=file`,
+    ])
+    const agentText = stub.messageQueue[0].text
+    const savedPath = /已保存: (\S+)\]/.exec(agentText)?.[1]
+    expect(savedPath, `no saved-path marker in: ${agentText}`).toBeTruthy()
+    expect(basename(savedPath!).endsWith('_clip.mp4')).toBe(true)
+    expect(agentText).toContain(`[视频已保存: ${savedPath}]`)
+  })
+
+  it('audio download failure: 语音下载失败 note, still reaches the agent', async () => {
+    stubFetch(() => new Response('nope', { status: 403 }))
+    const stub = injectCompactingSession()
+    await fire(mediaEvent('audio', { file_key: FILE_KEY, duration: 1000 }), stub)
+
+    expect(stub.messageQueue[0].text).toContain('[语音下载失败:')
+    expect(stub.messageQueue[0].text).not.toContain('已保存')
   })
 })
