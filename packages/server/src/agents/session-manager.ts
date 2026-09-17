@@ -66,16 +66,28 @@ function abortReason(reason: string): DOMException {
   return new DOMException(reason, 'AbortError')
 }
 
-/** Rough token estimate from message content — ~3.5 chars per token for mixed CJK/English. */
+/** Rough token estimate from message content — ~3.5 chars per token for mixed CJK/English; images count a flat 1500 each (no dimension decode). */
 function estimateMessageTokens(messages: AnthropicMessage[]): number {
   let chars = 0
+  let images = 0
   for (const m of messages) {
     if (typeof m.content === 'string') { chars += m.content.length; continue }
     for (const b of m.content) {
-      if ('text' in b) chars += (b as { text: string }).text.length
+      switch (b.type) {
+        case 'text': chars += b.text.length; break
+        case 'image': images++; break
+        case 'tool_use': chars += b.name.length + JSON.stringify(b.input ?? {}).length; break
+        case 'tool_result':
+          if (typeof b.content === 'string') { chars += b.content.length; break }
+          for (const c of b.content) {
+            if (c.type === 'text') chars += c.text.length
+            else images++
+          }
+          break
+      }
     }
   }
-  return Math.ceil(chars / 3.5)
+  return Math.ceil(chars / 3.5) + images * 1500
 }
 
 /** Concatenate a raw message's text-block content. Used to match a UI user turn
