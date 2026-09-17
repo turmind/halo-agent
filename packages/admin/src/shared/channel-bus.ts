@@ -1,23 +1,12 @@
 'use client'
 
-import { create } from 'zustand'
+import { createVersionBus } from './version-bus'
 
 /**
  * "Channel data changed / please reload" signal. The Channels sidebar fires
  * this when the user clicks refresh; whichever channel page is currently
- * mounted (wechat / telegram / web) re-fetches its account list. Same shape
- * as skill-bus / agent-bus.
+ * mounted (wechat / telegram / web) re-fetches its account list.
  */
-interface ChannelBus {
-  version: number
-  bump(): void
-}
-
-export const useChannelBus = create<ChannelBus>((set) => ({
-  version: 0,
-  bump: () => set((s) => ({ version: s.version + 1 })),
-}))
-
-export function bumpChannelBus() {
-  useChannelBus.getState().bump()
-}
+const bus = createVersionBus()
+export const useChannelBus = bus.useBus
+export const bumpChannelBus = bus.bump
