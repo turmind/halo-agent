@@ -44,8 +44,9 @@ export function canAddressSession(account: WebAccount, sessionId: string): boole
  * the ACP adapter does, since ACP itself supports multi-session).
  *
  * `agentId` is only consulted on the *creation* of a new halo session
- * (when `sessionId` doesn't yet exist). It picks the agent yaml profile
- * to bootstrap the session with — defaults to `default`.
+ * (when `sessionId` doesn't yet exist, or by `createSession`). It picks
+ * the agent yaml profile to bootstrap the session with — defaults to
+ * `default`.
  */
 export interface WebRequestOverrides {
   workspace?: string
@@ -58,6 +59,7 @@ export interface WebChannel {
   handleStop(token: string, opts?: WebRequestOverrides): Promise<boolean>
   getHistory(token: string, opts?: WebRequestOverrides): { sessionId: string; messages: SessionMessage[]; running: boolean } | null
   subscribe(token: string, signal: AbortSignal, opts?: WebRequestOverrides): AsyncGenerator<string, void, unknown>
+  createSession(token: string, opts?: Pick<WebRequestOverrides, 'workspace' | 'agentId'>): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }>
 }
 
 export function createWebChannel(deps: {
@@ -212,9 +214,8 @@ export function createWebChannel(deps: {
 
     // Resolve the target session id:
     //   - opts.sessionId set + already exists → use it
-    //   - opts.sessionId set + not found → create with that exact id (so
-    //     ACP-style callers can pre-decide ids and `session/load` can
-    //     resume them later)
+    //   - opts.sessionId set + not found → create with that exact id
+    //     (callers may pre-mint ids inside their own prefix)
     //   - opts.sessionId unset → fall back to the account's active
     //     session (web-demo behaviour)
     //   - none → create a fresh `web_<acct>_<ts>` and mark it active
@@ -362,6 +363,33 @@ export function createWebChannel(deps: {
     return { sessionId, messages, running }
   }
 
+  /**
+   * Mint a root session in the token's own `web_<accountId>_` namespace.
+   * External integrations (ACP adapter) call this from `session/new` so
+   * the id passes `canAddressSession` on every later /web/chat|stop|
+   * history|subscribe — the adapter used to mint `web_acp_*` locally,
+   * which readonly / workspace tokens could never address.
+   */
+  async function createSession(token: string, opts?: Pick<WebRequestOverrides, 'workspace' | 'agentId'>): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }> {
+    const account = getAccountByToken(db, token)
+    if (!account || !account.enabled) return { ok: false, error: 'Invalid or disabled token' }
+
+    const ws = resolveWorkspace(account, opts?.workspace)
+    if (!ws.ok) return { ok: false, error: ws.error }
+
+    const sm = registry.getOrCreate(ws.path)
+    const prefix = buildWebSessionPrefix(account.accountId)
+    const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
+
+    // Random tail so two mints in the same ms don't collide. Deliberately
+    // NOT written to activeOverrides — an API-minted session must not
+    // clobber the browser tab's notion of "current session".
+    const sessionId = `${prefix}${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    const agentId = opts?.agentId || await resolveDefaultAgentId(sm, ws.path)
+    await sm.createSession(agentId, null, `Web: ${account.label || account.accountId}`, undefined, sessionId, undefined, accessLevel)
+    return { ok: true, sessionId }
+  }
+
   async function* subscribe(token: string, signal: AbortSignal, opts?: WebRequestOverrides): AsyncGenerator<string, void, unknown> {
     const account = getAccountByToken(db, token)
     if (!account || !account.enabled) {
@@ -419,7 +447,7 @@ export function createWebChannel(deps: {
     }
   }
 
-  return { handleMessage, handleStop, getHistory, subscribe }
+  return { handleMessage, handleStop, getHistory, subscribe, createSession }
 }
 
 function sseData(obj: Record<string, unknown>): string {

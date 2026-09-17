@@ -24,7 +24,7 @@ Claude Code on a developer's laptop wants to talk to a halo agent running in an 
 
 ## Quick start
 
-1. Provision a web-channel token. Admin UI → Channels → Web → Create. Grab the token. **For multi-workspace use, pick `full` access level** — readonly / workspace tokens cannot override the workspace per request.
+1. Provision a web-channel token. Admin UI → Channels → Web → Create. Grab the token. **For multi-workspace use, pick `full` access level** — readonly / workspace tokens cannot override the workspace per request. For single-workspace use a readonly / workspace token works too: sessions are minted server-side in the token's own namespace, so the ownership gate never bites.
 
 2. Launch the adapter from your ACP client. For Claude Code, register it as a custom agent (see Claude Code's docs for `claude-code config agent add`):
 
@@ -116,7 +116,7 @@ Notes:
 |---------------------|--------------|------------------------------------------------------------------------|
 | `initialize`        | ✅           | Declares `protocolVersion: 1`, `promptCapabilities: { image, embeddedContext }`, `loadSession: true`, no auth methods. |
 | `authenticate`      | ✅ (no-op)   | Token already passed via launch flags; ACP-side auth has nothing to do. |
-| `session/new`       | ✅           | Mints a session id (shape `web_acp_<ts>_<rand>`) and registers it locally. Halo creates the row lazily on the first `/web/chat` with that id. |
+| `session/new`       | ✅           | Calls `POST /api/web/sessions`; the server mints `web_<accountId>_<ts>_<rand>` and creates the row immediately. The adapter registers the id locally. |
 | `session/load`      | ✅           | Verifies the supplied id still exists on the halo server (via `/api/web/history` 404), then registers it locally. The ACP client persists ids itself — the adapter holds no on-disk state. |
 | `session/prompt`    | ✅           | Forwards text + image content blocks to halo. Resource / embedded-context blocks log a stderr warning and are dropped (see "Reverse fs" below for why). |
 | `session/cancel`    | ✅           | Aborts the in-flight HTTP/SSE stream and POSTs `/web/stop` server-side. |
@@ -126,7 +126,7 @@ Notes:
 
 ### Session id model
 
-ACP sessionId == halo sessionId. There's no extra mapping layer in the adapter: when `session/new` mints `web_acp_<ts>_<rand>`, that exact string IS the row in `agent_sessions` (created lazily on first `/web/chat`). When the ACP client persists the id and replays it via `session/load`, the adapter just calls `/api/web/history?sessionId=<id>` to verify the row still exists, then registers it in its local in-memory map for prompt / cancel routing.
+ACP sessionId == halo sessionId. There's no extra mapping layer in the adapter: `session/new` asks the server for a fresh session (`POST /api/web/sessions`), which mints `web_<accountId>_<ts>_<rand>` inside the token's own namespace and creates the `agent_sessions` row on the spot — that exact string is what the ACP client gets back. The server has to be the one minting because readonly / workspace tokens can only address ids under their own `web_<accountId>_` prefix (`canAddressSession` in `packages/server/src/channels/web/handler.ts`); an adapter-chosen id would 403 on the first prompt. When the ACP client persists the id and replays it via `session/load`, the adapter just calls `/api/web/history?sessionId=<id>` to verify the row still exists, then registers it in its local in-memory map for prompt / cancel routing.
 
 This keeps the adapter stateless on disk — losing the in-memory map on restart is harmless because the conversation lives on the halo server. **The ACP client is the source of truth for "which sessions are mine"**, which is the right shape: a Mac-side Claude Code knows about *its* sessions, the EC2-side halo agent doesn't need to enumerate them.
 
@@ -254,7 +254,7 @@ python3 .halo/skills/ask-sa-agent/ask.py \
 Expect stdout:
 
 ```
-SESSION: web_acp_<ts>_<rand>
+SESSION: web_<accountId>_<ts>_<rand>
 ---
 本月（2026-05…）EC2 总花费 约 $1,846 …
 ```

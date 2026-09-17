@@ -2,7 +2,7 @@
 
 All REST endpoints are served by Hono on port 9527 at `/api/`.
 
-Auth: most `/api/*` routes require a valid JWT cookie (`halo_token`). Exceptions in `PUBLIC_PATHS` (`middleware/auth.ts`) bypass the cookie: `/api/auth/login|check|logout` (but **not** `/api/auth/change-password`), the web-channel routes (`/api/web/chat|stop|history|subscribe|file`), `/api/show/state|session`, and `/api/metrics` — these are unauthenticated or use a web-channel `x-token` instead.
+Auth: most `/api/*` routes require a valid JWT cookie (`halo_token`). Exceptions in `PUBLIC_PATHS` (`middleware/auth.ts`) bypass the cookie: `/api/auth/login|check|logout` (but **not** `/api/auth/change-password`), the web-channel routes (`/api/web/chat|sessions|stop|history|subscribe|file`), `/api/show/state|session`, and `/api/metrics` — these are unauthenticated or use a web-channel `x-token` instead.
 
 Compression: every response negotiates gzip/deflate via `hono/compress` (`threshold: 1024` — bodies under 1 KiB pass through uncompressed), mounted after CORS so it covers both `/api/*` JSON and the served admin static assets. `text/event-stream` (SSE) is excluded, so `/api/web/chat`'s streamed reply is unaffected; WS upgrades never enter the Hono fetch pipeline either.
 
@@ -269,6 +269,7 @@ gets JSON, and additionally gates on `accessLevel`.
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?, workspace?, sessionId?, agentId?}` (overrides also accepted as `?workspace=`/`?sessionId=` query or `x-workspace`/`x-session-id` headers; `workspace` only honored when token has `accessLevel: full`). `sessionId` must be owned by the token unless `accessLevel: full` → otherwise 403. |
+| POST | `/api/web/sessions` | Mint a root session in the token's own `web_<accountId>_` namespace → `{sessionId}`. Body / query / header: `workspace?` (full tokens only), `agentId?`. Used by the ACP adapter's `session/new`. |
 | POST | `/api/web/stop` | Stop running task → `{stopped: boolean}` |
 | GET | `/api/web/history` | Active session history → `{sessionId, messages[], running}` |
 | GET | `/api/web/subscribe` | Reconnect SSE to running session |

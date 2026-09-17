@@ -98,7 +98,7 @@ The question is passed verbatim — including the other agent's own slash comman
 |---|---|---|
 | `initialize` | ✅ | Declares `protocolVersion: 1`, `loadSession: true`, no auth methods |
 | `authenticate` | ✅ (no-op) | Token is passed via launch flags; ACP-side auth has nothing to do |
-| `session/new` | ✅ | Mints a sessionId of shape `web_acp_<ts>_<rand>`. Halo creates the row lazily on first `/web/chat` |
+| `session/new` | ✅ | Calls `POST /api/web/sessions`; halo mints `web_<accountId>_<ts>_<rand>` and creates the row immediately |
 | `session/load` | ✅ | Verifies the supplied id still exists on the halo server, then registers it locally |
 | `session/prompt` | ✅ | Forwards text + image content blocks. Resource / embedded-context blocks log a stderr warning and are dropped (see "Reverse fs" below) |
 | `session/cancel` | ✅ | Aborts the in-flight HTTP/SSE stream and POSTs `/web/stop` |
@@ -108,7 +108,7 @@ The question is passed verbatim — including the other agent's own slash comman
 
 ### Session id model
 
-ACP `sessionId` **is** the halo session id — there's no extra mapping layer. When `session/new` mints `web_acp_<ts>_<rand>`, that exact string is what gets created in `agent_sessions` (lazily on first `/web/chat`). The ACP client persists ids itself; the adapter holds no on-disk state. Losing the adapter's in-memory map on restart is harmless because the conversation lives on the halo server.
+ACP `sessionId` **is** the halo session id — there's no extra mapping layer. `session/new` asks the server to mint one (`POST /api/web/sessions`); it lands in the token's own `web_<accountId>_` namespace and the `agent_sessions` row exists immediately, so readonly / workspace tokens can drive it too. The ACP client persists ids itself; the adapter holds no on-disk state. Losing the adapter's in-memory map on restart is harmless because the conversation lives on the halo server.
 
 The ACP client is the source of truth for "which sessions are mine" — a Mac-side Claude Code knows about *its* sessions, the EC2-side halo agent doesn't need to enumerate them.
 

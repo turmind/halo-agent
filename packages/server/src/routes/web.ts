@@ -125,8 +125,8 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
    * Authenticate a token-bearing public web request. Wraps the shared
    * `resolveTokenAuth` (token parsing + account lookup + brute-force
    * bookkeeping — see middleware/web-token.ts) into this surface's JSON
-   * error shape. Every public token route (chat / stop / history /
-   * subscribe / file) goes through it so the lockout state is consistent
+   * error shape. Every public token route (chat / sessions / stop /
+   * history / subscribe / file) goes through it so the lockout state is consistent
    * across them.
    */
   function authToken(c: Context): { ok: true; token: string; account: WebAccount } | { ok: false; response: Response } {
@@ -177,6 +177,23 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
         await stream.write(chunk)
       }
     })
+  })
+
+  // Mints a root session in the token's own namespace and returns its id.
+  // The ACP adapter calls this from `session/new` (see handler
+  // `createSession`). No `sessionId` override here by definition.
+  app.post('/web/sessions', async (c) => {
+    const auth = authToken(c)
+    if (!auth.ok) return auth.response
+
+    const body = await c.req.json().catch(() => ({})) as { workspace?: string; agentId?: string }
+    const headerOpts = readOverrides(c)
+    const result = await channel.createSession(auth.token, {
+      workspace: body.workspace ?? headerOpts.workspace,
+      agentId: body.agentId ?? headerOpts.agentId,
+    })
+    if (!result.ok) return c.json({ error: result.error }, 403)
+    return c.json({ sessionId: result.sessionId })
   })
 
   app.post('/web/stop', async (c) => {

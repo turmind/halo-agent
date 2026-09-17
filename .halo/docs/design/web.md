@@ -109,6 +109,16 @@ Browser web-demo doesn't use any of these — it relies on per-token defaults. T
 
 `/api/web/stop`, `/api/web/history`, `/api/web/subscribe` accept the same `workspace` + `sessionId` overrides via query string / header, and the same ownership gate. They don't accept `agentId` (no session creation path).
 
+### POST `/api/web/sessions`
+
+Mints a root session in the token's own `web_<accountId>_<ts>_<rand>` namespace, creates the row immediately, and returns `{ sessionId }`. Accepts `workspace` (full tokens only — same gate as above, refused with 403) and `agentId` (agent profile to bootstrap with, defaults to the workspace's default agent) via body / query / header; there is no `sessionId` override by definition.
+
+Why it exists: the ownership gate above means a readonly / workspace token can only address ids under its own prefix, so an external caller cannot pre-mint an id of its own choosing and expect to drive it. The [ACP adapter](../dev/acp-adapter.md) used to mint `web_acp_*` locally and 403'd on the first prompt for anything but a full token; its `session/new` now calls this endpoint instead, so ACP id === halo id still holds and every later `/web/chat|stop|history|subscribe` with that id passes the gate.
+
+Minting never touches the account's active-session pointer — a side session created by an integration must not clobber the browser tab's notion of "current session".
+
+**Namespace sharing**: sessions minted here live under the same `web_<accountId>_` prefix as browser sessions. When the token has no active-session pointer, `/web/chat` without `sessionId` falls back to the latest root session under that prefix — which may be an API-minted one. Use a dedicated token for ACP if the same token also drives a browser client.
+
 ### POST `/api/web/stop`
 
 Stop the currently running task. Accepts optional `workspace` / `sessionId` overrides as documented above.

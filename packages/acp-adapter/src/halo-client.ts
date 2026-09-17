@@ -1,7 +1,9 @@
 /**
  * Thin client for the halo server's web channel REST + SSE endpoints.
  *
- * Wraps the four endpoints the adapter cares about:
+ * Wraps the five endpoints the adapter cares about:
+ *   POST /api/web/sessions    — mint a session id inside the token's own
+ *                                namespace (backing ACP `session/new`)
  *   POST /api/web/chat        — send a user message, receive SSE stream
  *   POST /api/web/stop        — cancel the running turn
  *   GET  /api/web/history     — probe that a session id still exists on
@@ -74,6 +76,26 @@ export class HaloClient {
       throw new Error(`halo chat ${res.status}: ${msg}`)
     }
     yield* parseSseStream(res.body)
+  }
+
+  /** POST /api/web/sessions — server mints a session id inside the token's
+   *  own namespace (`web_<accountId>_…`) so later chat/stop/history calls
+   *  pass the server's ownership gate for readonly / workspace tokens too. */
+  async createSession(workspace: string, agentId?: string): Promise<string> {
+    const body: Record<string, unknown> = { workspace }
+    if (agentId) body.agentId = agentId
+    const res = await fetch(`${this.opts.baseUrl}/api/web/sessions`, {
+      method: 'POST',
+      headers: this.authHeaders({ 'content-type': 'application/json', 'x-token': this.opts.token }),
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const msg = await safeText(res)
+      throw new Error(`halo session create ${res.status}: ${msg}`)
+    }
+    const data = (await res.json()) as { sessionId?: string }
+    if (typeof data.sessionId !== 'string') throw new Error('halo session create: missing sessionId')
+    return data.sessionId
   }
 
   /** GET /api/web/history with an explicit sessionId, returns true iff

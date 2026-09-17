@@ -130,20 +130,18 @@ export class AcpAdapter {
   }
 
   /**
-   * Mint a fresh session id and register it locally. The id is what we
-   * hand back to the ACP client AND what we send to halo as the
-   * sessionId override on the first chat request — the server creates
-   * the row lazily on first /web/chat with an unknown id (see
-   * `WebRequestOverrides` semantics in
-   * `packages/server/src/channels/web/handler.ts`). The shape
-   * `web_acp_<ts>_<rand>` is just a convention so the admin Sessions tab
-   * can tell at a glance "this came from an ACP adapter".
+   * Ask the server to mint a fresh session (`POST /api/web/sessions`) and
+   * register the id locally. The server picks the id inside the token's
+   * own `web_<accountId>_` namespace and creates the row immediately; the
+   * id we hand back to the ACP client IS that halo session id. The server
+   * must mint because readonly / workspace tokens can only address ids
+   * under their own prefix (see `canAddressSession` in
+   * `packages/server/src/channels/web/handler.ts`) — an adapter-minted
+   * `web_acp_*` id 403'd on the very first prompt for those tokens.
    */
-  private handleSessionNew(_params: unknown): unknown {
-    const sessionId = `web_acp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-    this.sessions.set(sessionId, {
-      workspace: this.config.workspace,
-    })
+  private async handleSessionNew(_params: unknown): Promise<unknown> {
+    const sessionId = await this.client.createSession(this.config.workspace, this.config.agentId)
+    this.sessions.set(sessionId, { workspace: this.config.workspace })
     return { sessionId }
   }
 
