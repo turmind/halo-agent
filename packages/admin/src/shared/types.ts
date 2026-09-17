@@ -190,18 +190,6 @@ export function inferMessageType(m: ChatMessage): MessageType {
 }
 
 // WebSocket message types (server -> client)
-export interface WsStreamMsg {
-  type: 'chat:stream'
-  sessionId: string
-  text: string
-}
-
-export interface WsCompleteMsg {
-  type: 'chat:complete'
-  sessionId: string
-  text: string
-}
-
 export interface WsTaskPlanMsg {
   type: 'task:plan'
   plan: TaskPlan
@@ -211,29 +199,6 @@ export interface WsTaskStatusMsg {
   type: 'task:status'
   taskId: string
   status: TaskNodeStatus
-}
-
-export interface WsAgentStreamMsg {
-  type: 'agent:stream'
-  taskId: string
-  agentId: string
-  text: string
-}
-
-export interface WsAgentToolCallMsg {
-  type: 'agent:tool_call'
-  taskId: string
-  agentId: string
-  tool: string
-  input: Record<string, unknown>
-}
-
-export interface WsFileChangedMsg {
-  type: 'file:changed'
-  path: string
-  changeType: 'created' | 'modified' | 'deleted'
-  diff?: string
-  agentId?: string
 }
 
 export interface WsPlanCompleteMsg {
@@ -257,17 +222,6 @@ export interface WsSnapshotMsg {
     archiveCount?: number
   }
 }
-
-export type WsServerMessage =
-  | WsStreamMsg
-  | WsCompleteMsg
-  | WsTaskPlanMsg
-  | WsTaskStatusMsg
-  | WsAgentStreamMsg
-  | WsAgentToolCallMsg
-  | WsFileChangedMsg
-  | WsPlanCompleteMsg
-  | WsSnapshotMsg
 
 // ─── Message filter predicates ───
 
