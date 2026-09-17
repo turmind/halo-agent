@@ -356,8 +356,9 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   `cli` + `desktop` were already bumped by hand but `server` sat at 0.1.8 and
   `core` / `admin` at 0.1.0 — a `git tag` then would have shipped a build whose
   `halo --version` (stamped from `package.json`) disagreed with the tag. The
-  step-0 version gate in "One-shot build" loops over all five so a lagging one is
-  caught before the tag is cut. (npm only publishes `cli` as `@turmind/halo`, but
+  step-0 version gate in "One-shot build" (a shell loop in that snippet — no
+  script runs it for you) loops over all five so a lagging one is caught before
+  the tag is cut. (npm only publishes `cli` as `@turmind/halo`, but
   the others feed `halo --version` / the admin sidebar, so they still matter.)
 
 - **Changing anything under `templates/` requires bumping `TEMPLATE_VERSION`
@@ -373,7 +374,9 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   integer, not a hash — it must increase monotonically (a git sha would compare
   nonsensically and can decrease). Fresh `halo setup` always reseeds regardless,
   which is why it's easy to miss in dev. Rule: touch `templates/` → `+1` the
-  version in the same commit.
+  version in the same commit. Since v1.1.9 `build-bundle.mjs` (run by every
+  `pnpm bundle` / desktop `dist:*`) enforces it: templates differ from the
+  previous release tag + number unchanged → exit 1 with the file list.
 
 - **Crash diagnostics.** Server stdout/stderr is tee'd to
   `~/.halo/logs/desktop.log`; the last 30 lines also surface in the crash

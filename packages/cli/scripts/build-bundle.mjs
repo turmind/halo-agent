@@ -47,6 +47,39 @@ fs.mkdirSync(path.join(PUB_DIR, 'bin'),  { recursive: true })
 
 console.log('[build-bundle] cleaned dist-pub/')
 
+// ── TEMPLATE_VERSION gate ──────────────────────────────────────────────────
+//
+// Server startup only reseeds ~/.halo/global/ when the on-disk stamp is
+// strictly below the compiled TEMPLATE_VERSION (index.ts). A templates/ edit
+// without a bump therefore never reaches existing installs — it has shipped
+// that way four times. Refuse to bundle when templates/ differs from the
+// previous release tag and the number didn't move. Also covers the desktop
+// packages: stage-runtime.mjs runs this script on both its full and fast paths.
+function templateVersionGate() {
+  const git = (args) => execSync(`git ${args}`, { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+  let baseTag
+  try {
+    // Compare against the PREVIOUS release: at publish time HEAD carries the
+    // freshly cut tag and a diff against it would be vacuously empty.
+    const taggedHead = git('tag --points-at HEAD').length > 0
+    baseTag = git(`describe --tags --abbrev=0 --match "v*" ${taggedHead ? 'HEAD~1' : 'HEAD'}`)
+  } catch {
+    console.log('[build-bundle] no git / no release tag reachable — skipping TEMPLATE_VERSION gate')
+    return
+  }
+  const changed = git(`diff --name-only ${baseTag} -- packages/server/templates`).split('\n').filter(Boolean)
+  if (changed.length === 0) return
+  const readVersion = (src) => Number(/TEMPLATE_VERSION = (\d+)/.exec(src)?.[1])
+  const was = readVersion(git(`show ${baseTag}:packages/server/src/init.ts`))
+  const now = readVersion(fs.readFileSync(path.join(SERVER_ROOT, 'src', 'init.ts'), 'utf-8'))
+  if (!(now > was)) {
+    console.error(`[build-bundle] FATAL: ${changed.length} file(s) under packages/server/templates changed since ${baseTag} but TEMPLATE_VERSION is still ${now} — bump it in packages/server/src/init.ts or existing installs never reseed:\n  ${changed.join('\n  ')}`)
+    process.exit(1)
+  }
+  console.log(`[build-bundle] TEMPLATE_VERSION gate: ${was} → ${now} (${changed.length} template file(s) since ${baseTag})`)
+}
+templateVersionGate()
+
 // ── 1. esbuild bundle ──────────────────────────────────────────────────────
 //
 // Externals: any package with a native binding stays external so npm install

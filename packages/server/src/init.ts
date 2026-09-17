@@ -460,8 +460,12 @@ export function ensureHaloHome(haloHome: string): void {
 
   migrateSecrets(haloHome)
 
-  // Track template version for diagnostic logging only — file behavior is
-  // governed by the per-category overwrite policy, not this number.
+  // Inside this function the version is only logged — which files get
+  // rewritten is decided by the per-category overwrite policy below. But
+  // the number is the reseed GATE: index.ts calls ensureHaloHome at startup
+  // only when the on-disk stamp is below TEMPLATE_VERSION, so a templates/
+  // edit without a bump never reaches existing installs (build-bundle.mjs
+  // refuses to package in that state).
   const versionPath = path.join(globalDir, VERSION_FILE)
   let existingVersion = 0
   try {

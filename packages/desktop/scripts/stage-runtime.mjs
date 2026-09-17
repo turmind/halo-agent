@@ -135,7 +135,7 @@ if (!fs.existsSync(serverDist)) {
   process.exit(1)
 }
 if (!fs.existsSync(adminOut)) {
-  console.error('[stage] missing packages/admin/out/index.html — run `cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs` first')
+  console.error('[stage] missing packages/admin/out/index.html — run `pnpm --filter @turmind/halo-admin build` first (never a bare `next build`: it skips copy-monaco)')
   process.exit(1)
 }
 
