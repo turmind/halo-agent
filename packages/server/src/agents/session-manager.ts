@@ -1318,8 +1318,12 @@ export class SessionManager implements SessionManagerInternals {
           ?? msg.match(/status=(\d{3})/)?.[1]
         const httpStatus = httpStatusFromMeta ?? (httpStatusFromMsg ? Number(httpStatusFromMsg) : undefined)
 
-        // 1. Abort / graceful interrupt
-        if (errName === 'AbortError' || msg.includes('cancelled') || msg.includes('aborted')) {
+        // 1. Abort / graceful interrupt. Decided by OUR signal, not the message:
+        // every interrupt path aborts `session.abortController` via abortReason(),
+        // while an upstream error body can legitimately contain "aborted"
+        // (Bedrock: "The operation was aborted due to …") and must NOT be
+        // swallowed as a user interrupt — that produced silent empty replies.
+        if (signal.aborted || errName === 'AbortError') {
           if (session.interruptRequested) {
             session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${session.id}]`)
           }
@@ -1342,8 +1346,16 @@ export class SessionManager implements SessionManagerInternals {
           }
         }
 
-        // 3a. Account-level errors (insufficient balance, suspended, invalid key) → unrecoverable, don't retry
-        if (msg.includes('insufficient balance') || msg.includes('suspended') || msg.includes('invalid api key') || msg.includes('Invalid API Key') || msg.includes('Unauthorized') || msg.includes('authentication')) {
+        // 3a. Account-level errors (bad key, no balance, suspended) → unrecoverable,
+        // don't retry. HTTP status is authoritative when present: 401/402/403 is
+        // account-level, anything else with a status is NOT, whatever the body
+        // says (a 503 whose body reads "authentication service temporarily
+        // unavailable" must fall through to the transient retry below). The
+        // keyword list only applies when no status could be recovered.
+        const isAccountError = httpStatus !== undefined
+          ? httpStatus === 401 || httpStatus === 402 || httpStatus === 403
+          : msg.includes('insufficient balance') || msg.includes('suspended') || msg.includes('invalid api key') || msg.includes('Invalid API Key') || msg.includes('Unauthorized') || msg.includes('authentication')
+        if (isAccountError) {
           console.error(`[SessionManager] Session ${session.id} account error: ${msg}`)
           this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
           session.turnError = msg
@@ -2635,7 +2647,10 @@ export class SessionManager implements SessionManagerInternals {
       return 'compacted'
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('cancelled') || msg.includes('aborted')) {
+      // Only the cancel selfCompactSession throws itself is a cancel; its
+      // timeout ("Self-compact timed out after …") is a failure and takes the
+      // rethrow path below like any other error.
+      if (msg === 'Self-compact cancelled') {
         this.emitEvent(sessionId, { type: 'system', text: 'Compact cancelled' })
         return 'nothing'
       }

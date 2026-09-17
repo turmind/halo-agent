@@ -150,6 +150,90 @@ describe('runAgentTurn retry is idempotent on the message history', () => {
   }, T)
 })
 
+/**
+ * Scripted FakeAgent: each run() shifts one step — an Error is thrown as-is,
+ * 'ok' lands the assistant reply. `beforeThrow` runs before a throw so a test
+ * can abort the session's controller first (a real interrupt).
+ */
+class ScriptedAgent {
+  messages: Msg[] = []
+  inputs: Array<string | Block[]> = []
+  beforeThrow: (() => void) | null = null
+  constructor(private script: Array<Error | 'ok'>) {}
+
+  async *run(input: string | Block[]): AsyncGenerator<{ type: string; text?: string; final?: boolean }> {
+    this.inputs.push(input)
+    const step = this.script.shift()
+    if (step instanceof Error) {
+      this.beforeThrow?.()
+      throw step
+    }
+    this.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'ok' }] })
+    yield { type: 'text', text: 'ok', final: true }
+  }
+}
+
+describe('runAgentTurn classifies errors by signal / status, not message text', () => {
+  it('upstream "aborted" text is retried, not swallowed as an interrupt', async () => {
+    seedRow('c1')
+    const agent = new ScriptedAgent([new Error('The operation was aborted due to a timeout ECONNRESET'), 'ok'])
+    fakeSession('c1', agent as unknown as FakeAgent)
+
+    const result = await sm.runSession('c1', 'HELLO_MARKER')
+
+    expect(agent.inputs).toHaveLength(2)
+    expect(result).toContain('ok')
+  }, 10_000)
+
+  it('a real interrupt (our signal aborted) still breaks without retry', async () => {
+    seedRow('c2')
+    const err = new Error('interrupt')
+    err.name = 'AbortError'
+    const agent = new ScriptedAgent([err])
+    const session = fakeSession('c2', agent as unknown as FakeAgent)
+    agent.beforeThrow = () => {
+      (session.abortController as AbortController | null)?.abort(new DOMException('interrupt', 'AbortError'))
+    }
+
+    await sm.runSession('c2', 'HELLO_MARKER')
+
+    expect(agent.inputs).toHaveLength(1)
+    expect(session.turnError).toBeNull()
+  }, 10_000)
+
+  it('5xx whose body mentions "authentication" is retried (status is authoritative)', async () => {
+    seedRow('c3')
+    const agent = new ScriptedAgent([new Error('[kimi] 503 authentication service temporarily unavailable'), 'ok'])
+    fakeSession('c3', agent as unknown as FakeAgent)
+
+    await sm.runSession('c3', 'HELLO_MARKER')
+
+    expect(agent.inputs).toHaveLength(2)
+  }, 10_000)
+
+  it('401 is account-level: not retried, turnError set', async () => {
+    seedRow('c4')
+    const agent = new ScriptedAgent([new Error('[kimi] 401 Unauthorized')])
+    const session = fakeSession('c4', agent as unknown as FakeAgent)
+
+    await sm.runSession('c4', 'HELLO_MARKER')
+
+    expect(agent.inputs).toHaveLength(1)
+    expect(session.turnError).toContain('401 Unauthorized')
+  }, 10_000)
+
+  it('no status + "invalid api key" is still terminal', async () => {
+    seedRow('c5')
+    const agent = new ScriptedAgent([new Error('invalid api key')])
+    const session = fakeSession('c5', agent as unknown as FakeAgent)
+
+    await sm.runSession('c5', 'HELLO_MARKER')
+
+    expect(agent.inputs).toHaveLength(1)
+    expect(session.turnError).toBe('invalid api key')
+  }, 10_000)
+})
+
 /** Scripted AgentLoop: throws on the first callModel, succeeds after. */
 class FlakyLoop extends AgentLoop {
   calls = 0
