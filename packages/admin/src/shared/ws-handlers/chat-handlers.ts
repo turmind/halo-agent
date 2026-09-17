@@ -4,6 +4,8 @@ import { useProjectStore } from '@/shared/stores/project-store'
 import { bumpSessionBus } from '@/shared/session-bus'
 import { generateId } from '@/shared/utils'
 import { postToFace } from '@/features/editor/face-bridge'
+import { en } from '@/shared/i18n/en'
+import { zh } from '@/shared/i18n/zh'
 
 /** Marker the LLM emits to request a screenshot of the user's bound window.
  *  Injected as an instruction by use-chat when a capture source is bound.
@@ -113,9 +115,9 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
     base64 = null
   }
 
-  const failNote = isCamera
-    ? `[📷 ${source.name} — 拍照失败:摄像头可能被其他应用占用或权限被关闭]`
-    : `[📷 ${source.name} — 截图失败:该窗口在后台太久被系统回收了画面,切到它再让我截一次]`
+  // Non-React module: no useT(); read the provider's persisted lang cache (i18n/context.tsx) and pick the dict directly.
+  const dict = typeof localStorage !== 'undefined' && localStorage.getItem('halo_lang') === 'zh' ? zh : en
+  const failNote = dict[isCamera ? 'capture.cameraFailNote' : 'capture.failNote'].replace('{name}', source.name)
   const failMsg = isCamera
     ? `[Could not take a photo from the camera — it may be in use by another app, or camera permission was revoked. Ask the user to check, then request the capture again.]`
     : `[Could not capture "${source.name}" — it was likely occluded/minimized long enough that macOS purged its rendered frame (came back blank/black). Ask the user to briefly bring that window to the foreground, then request the capture again.]`

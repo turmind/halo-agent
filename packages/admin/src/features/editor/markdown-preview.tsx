@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
+import { useT } from '@/shared/i18n'
 
 /** Slugify a heading's text into an id/anchor (lowercase, spaces→-, strip
  *  punctuation). Keeps CJK as-is. Mirrors common markdown-anchor behavior. */
@@ -98,6 +99,7 @@ function resolveSrc(src: string, filePath: string | undefined, projectId: string
 }
 
 export function MarkdownPreview({ content, filePath, projectId }: MarkdownPreviewProps) {
+  const t = useT()
   const useEditorStore = useScopedEditorStore()
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -196,8 +198,8 @@ export function MarkdownPreview({ content, filePath, projectId }: MarkdownPrevie
       {headings.length > 1 && !outlineHidden && (
         <nav className="hidden w-56 shrink-0 flex-col overflow-y-auto border-r border-[var(--border)] py-4 md:flex">
           <div className="flex shrink-0 items-center justify-between px-3 pb-2">
-            <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Outline</span>
-            <button onClick={toggleOutline} title="Hide outline" className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">{t('editor.outline')}</span>
+            <button onClick={toggleOutline} title={t('editor.hideOutline')} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
               <PanelLeftClose className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -219,7 +221,7 @@ export function MarkdownPreview({ content, filePath, projectId }: MarkdownPrevie
         {headings.length > 1 && outlineHidden && (
           <button
             onClick={toggleOutline}
-            title="Show outline"
+            title={t('editor.showOutline')}
             className="absolute left-2 top-2 z-10 hidden rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] md:block"
           >
             <PanelLeftOpen className="h-4 w-4" />

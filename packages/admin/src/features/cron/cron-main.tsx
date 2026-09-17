@@ -512,13 +512,13 @@ function CronForm({ initial, onClose, onSaved }: {
       // a search suggestion.
       const validate = (chatId: string): string | null => {
         if (channelType === 'slack' && !/^[DCG][A-Z0-9]+(:[\d.]+)?$/.test(chatId)) {
-          return `Slack chatId 格式错误：「${chatId}」。应该是 D…(DM) / C…(频道) / G…(私有频道)。请用搜索后点击建议项填入，或从 Slack URL 复制。`
+          return t('cron.form.err.chatId.slack', { chatId })
         }
         if (channelType === 'feishu' && !/^oc_[a-zA-Z0-9]+(:[a-zA-Z0-9_-]+)?$/.test(chatId)) {
-          return `飞书 chatId 格式错误：「${chatId}」。应该是 oc_…。请用搜索后点击建议项填入。`
+          return t('cron.form.err.chatId.feishu', { chatId })
         }
         if (channelType === 'telegram' && !/^-?\d+$/.test(chatId)) {
-          return `Telegram chatId 必须是数字（私聊 = user id）。「${chatId}」无效。`
+          return t('cron.form.err.chatId.telegram', { chatId })
         }
         return null
       }
@@ -678,8 +678,8 @@ function CronForm({ initial, onClose, onSaved }: {
                 // the input there.
                 const needsChatId = tg.channelType !== 'wechat'
                 const chatIdHint = tg.channelType === 'slack' ? 'D… (DM) / C… (channel) / C…:1700.0 (thread)'
-                  : tg.channelType === 'telegram' ? '数字 chat id（私聊 = user id）'
-                  : tg.channelType === 'feishu' ? 'oc_… 聊天 id'
+                  : tg.channelType === 'telegram' ? t('cron.form.chatIdHint.telegram')
+                  : tg.channelType === 'feishu' ? t('cron.form.chatIdHint.feishu')
                   : ''
                 return (
                   <div key={key} className={cn('rounded px-1 py-0.5', picked && 'bg-[var(--accent)]')}>
@@ -700,7 +700,7 @@ function CronForm({ initial, onClose, onSaved }: {
                           placeholder={chatIdHint}
                         />
                         <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
-                          多个 chat 用逗号分隔。留空则不推送（仅写日志）。
+                          {t('cron.form.chatIdHelp')}
                         </div>
                       </div>
                     )}
@@ -770,6 +770,7 @@ function ChatIdField({ channelType, accountId, value, onChange, placeholder }: {
   onChange: (next: string) => void
   placeholder: string
 }) {
+  const t = useT()
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<Array<{ id: string; name: string; chatId: string; kind: string; subtitle?: string }>>([])
   const [open, setOpen] = useState(false)
@@ -841,7 +842,7 @@ function ChatIdField({ channelType, accountId, value, onChange, placeholder }: {
       />
       {supportsSearch && open && (loading || hits.length > 0) && (
         <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] shadow-lg">
-          {loading && <div className="px-2 py-1 text-[10px] text-[var(--muted-foreground)]">搜索中…</div>}
+          {loading && <div className="px-2 py-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.searching')}</div>}
           {!loading && hits.map((h) => (
             <button
               key={h.kind + ':' + h.id}

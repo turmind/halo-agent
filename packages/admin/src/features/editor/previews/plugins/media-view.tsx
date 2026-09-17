@@ -12,6 +12,7 @@ import type { PreviewProps } from '../types'
 import { PreviewShell, ToolbarButton } from '../ui/preview-shell'
 import { printHtml } from '../ui/print'
 import { IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS } from './media'
+import { useT } from '@/shared/i18n'
 
 function kindOf(name: string): 'image' | 'video' | 'audio' | null {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
@@ -96,19 +97,20 @@ function useImageZoom() {
 
 export function MediaPreview(props: PreviewProps) {
   const { name, viewUrl, downloadUrl, onOpenAsText } = props
+  const t = useT()
   const kind = kindOf(name)
   const zoom = useImageZoom()
 
   const imageToolbar = kind === 'image' ? (
     <>
-      <ToolbarButton onClick={() => zoom.zoomCenter(1 / ZOOM_STEP)} title="Zoom out">
+      <ToolbarButton onClick={() => zoom.zoomCenter(1 / ZOOM_STEP)} title={t('editor.zoomOut')}>
         <ZoomOut className="h-3 w-3" />
       </ToolbarButton>
       <span className="min-w-[3ch] text-center text-[10px] text-[var(--muted-foreground)]">{Math.round(zoom.scale * 100)}%</span>
-      <ToolbarButton onClick={() => zoom.zoomCenter(ZOOM_STEP)} title="Zoom in">
+      <ToolbarButton onClick={() => zoom.zoomCenter(ZOOM_STEP)} title={t('editor.zoomIn')}>
         <ZoomIn className="h-3 w-3" />
       </ToolbarButton>
-      <ToolbarButton onClick={zoom.reset} title="Reset zoom">
+      <ToolbarButton onClick={zoom.reset} title={t('editor.resetZoom')}>
         <RotateCcw className="h-3 w-3" />
       </ToolbarButton>
       <ToolbarButton
@@ -117,10 +119,10 @@ export function MediaPreview(props: PreviewProps) {
           `<img src="${viewUrl}" />`,
           'margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#fff',
         )}
-        title="Print"
+        title={t('editor.print')}
       >
         <Printer className="h-3 w-3" />
-        <span>Print</span>
+        <span>{t('editor.print')}</span>
       </ToolbarButton>
     </>
   ) : null

@@ -6,9 +6,11 @@ import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import type { PreviewProps } from '../types'
 import { PreviewShell } from '../ui/preview-shell'
 import { extractPptxNotes, repairPptxContentTypes, type PptxNotes } from './pptx-notes'
+import { useT } from '@/shared/i18n'
 
 export function PptxPreview(props: PreviewProps) {
   const { name, viewUrl, downloadUrl, onOpenAsText } = props
+  const t = useT()
   const containerRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -171,8 +173,8 @@ export function PptxPreview(props: PreviewProps) {
         {hasNotes && !notesHidden && (
           <aside className="hidden w-64 shrink-0 flex-col overflow-y-auto border-r border-[var(--border)] bg-[var(--background)] py-3 md:flex">
             <div className="flex items-center justify-between px-3 pb-2">
-              <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Notes</span>
-              <button onClick={toggleNotes} title="Hide notes" className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+              <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">{t('editor.notes')}</span>
+              <button onClick={toggleNotes} title={t('editor.hideNotes')} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
                 <PanelLeftClose className="h-3.5 w-3.5" />
               </button>
             </div>
@@ -192,7 +194,7 @@ export function PptxPreview(props: PreviewProps) {
           {hasNotes && notesHidden && (
             <button
               onClick={toggleNotes}
-              title="Show notes"
+              title={t('editor.showNotes')}
               className="absolute left-2 top-2 z-10 hidden rounded bg-[var(--background)]/80 p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] md:block"
             >
               <PanelLeftOpen className="h-4 w-4" />

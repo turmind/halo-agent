@@ -458,7 +458,7 @@ function FieldRow({
         {field.globalOnly && (
           <span
             className="rounded bg-[var(--secondary)] px-1.5 py-px text-[10px] uppercase text-[var(--muted-foreground)]"
-            title={lang === 'zh' ? '只在全局生效；workspace 级覆盖会被忽略' : 'Honored only at the global layer; workspace overrides are ignored'}
+            title={t('settings.globalOnlyHint')}
           >global only</span>
         )}
         {canReset && (

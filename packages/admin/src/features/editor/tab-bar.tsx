@@ -14,6 +14,7 @@ import {
   GitCompareArrows,
 } from 'lucide-react'
 import { getFileIcon } from '@/shared/file-icons'
+import { useT } from '@/shared/i18n'
 
 // ── Disambiguate same-name tabs ─────────────────────────────────────
 
@@ -152,6 +153,7 @@ interface DragPayload {
 }
 
 export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, renderMode, onToggleRenderMode, showDiffButton, onToggleDiff }: TabBarProps) {
+  const t = useT()
   const useEditorStore = useScopedEditorStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const [showLeft, setShowLeft] = useState(false)
@@ -377,11 +379,11 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
             {showDiffButton && (
               <button
                 onClick={onToggleDiff}
-                title="View unsaved diff"
+                title={t('editor.viewDiff')}
                 className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
               >
                 <GitCompareArrows className="h-3 w-3" />
-                <span>Diff</span>
+                <span>{t('editor.diff')}</span>
               </button>
             )}
           </div>
@@ -390,7 +392,7 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
 
       {canSplit && (
         <button
-          title="Split editor right"
+          title={t('editor.splitRight')}
           onClick={() => useEditorStore.getState().splitToRight()}
           className="ml-1 mr-1 shrink-0 rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
         >

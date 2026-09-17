@@ -294,6 +294,7 @@ export const en: Record<string, string> = {
   'settings.orphans.confirm': 'Remove orphan {key}? This deletes the value from settings.yaml.',
   'settings.empty': 'No section selected.',
   'settings.loading': 'Loading…',
+  'settings.globalOnlyHint': 'Honored only at the global layer; workspace overrides are ignored',
 
   // security (change password + logout)
   'security.changePassword.title': 'Change Password',
@@ -406,6 +407,23 @@ export const en: Record<string, string> = {
   'dataPreview.empty': 'No rows',
   'dataPreview.noTables': 'No tables in this database',
 
+  // ── Editor / previews toolbar ──
+  'editor.hideNotes': 'Hide notes',
+  'editor.showNotes': 'Show notes',
+  'editor.notes': 'Notes',
+  'editor.zoomOut': 'Zoom out',
+  'editor.zoomIn': 'Zoom in',
+  'editor.resetZoom': 'Reset zoom',
+  'editor.print': 'Print',
+  'editor.openAsText': 'Open as text',
+  'editor.download': 'Download',
+  'editor.hideOutline': 'Hide outline',
+  'editor.showOutline': 'Show outline',
+  'editor.outline': 'Outline',
+  'editor.viewDiff': 'View unsaved diff',
+  'editor.diff': 'Diff',
+  'editor.splitRight': 'Split editor right',
+
   // ── Cron jobs ──
   'cron.title': 'Cron Jobs',
   'cron.new': 'New',
@@ -476,6 +494,13 @@ export const en: Record<string, string> = {
   'cron.form.err.runAtPast': 'Fire time must be in the future',
   'cron.form.err.prompt': 'Prompt required',
   'cron.form.err.timeoutSec': 'Max run time must be an integer between 60 and 21600 seconds',
+  'cron.form.err.chatId.slack': 'Invalid Slack chatId “{chatId}” — expected D… (DM) / C… (channel) / G… (private channel). Search and click a suggestion, or copy it from the Slack URL.',
+  'cron.form.err.chatId.feishu': 'Invalid Feishu chatId “{chatId}” — expected oc_…. Search and click a suggestion.',
+  'cron.form.err.chatId.telegram': 'Telegram chatId must be numeric (DM = user id); “{chatId}” is invalid.',
+  'cron.form.chatIdHint.telegram': 'numeric chat id (DM = user id)',
+  'cron.form.chatIdHint.feishu': 'oc_… chat id',
+  'cron.form.chatIdHelp': 'Comma-separate multiple chats. Leave empty to skip pushing (log only).',
+  'cron.form.searching': 'Searching…',
 
   // ── Evolution ──
   'evolution.title': 'Evolution',
@@ -561,6 +586,7 @@ export const en: Record<string, string> = {
   'capture.empty': 'No windows or screens found.',
   'capture.noPreview': 'No preview (grant Screen Recording)',
   'capture.llmPrompt': '[System: the user is sharing the "{name}" window. When you need to see its current contents to answer, output a line containing exactly <<<CAPTURE>>> and the system will screenshot it and send it back to you as the next message. Do not output the marker unless you actually need to look.]',
+  'capture.failNote': '[📷 {name} — screenshot failed: the window sat in the background long enough for the OS to purge its frame — switch to it and ask me to capture again]',
   // ── Camera capture (desktop) ──
   'capture.cameraName': 'Camera',
   'capture.cameraButton': 'Turn on the camera for the AI to take a photo',
@@ -570,6 +596,7 @@ export const en: Record<string, string> = {
   'capture.cameraUse': 'Use this camera',
   'capture.cameraPermissionHint': 'Camera permission is needed. Enable Halo under System Settings → Privacy & Security → Camera.',
   'capture.cameraLlmPrompt': '[System: the user has turned the camera on for you. When you need to see what the camera is pointed at to answer, output a line containing exactly <<<CAPTURE>>> and the system will take a photo and send it back to you as the next message. Do not output the marker unless you actually need to look.]',
+  'capture.cameraFailNote': '[📷 {name} — photo failed: the camera may be in use by another app, or its permission was turned off]',
   'capture.dismiss': 'Dismiss',
   // ── The assistant's face (self.html) ──
   'face.button': "Open the assistant's face",

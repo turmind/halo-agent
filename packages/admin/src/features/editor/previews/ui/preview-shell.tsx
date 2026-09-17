@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react'
 import { ArrowRightLeft, Download as DownloadIcon } from 'lucide-react'
+import { useT } from '@/shared/i18n'
 
 /**
  * Standard outer frame shared by all previews.
@@ -24,6 +25,7 @@ export interface PreviewShellProps {
 }
 
 export function PreviewShell({ name, downloadUrl, onOpenAsText, extraToolbar, loading, error, children }: PreviewShellProps) {
+  const t = useT()
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--card)] px-3">
@@ -31,19 +33,19 @@ export function PreviewShell({ name, downloadUrl, onOpenAsText, extraToolbar, lo
         <div className="flex-1" />
         {extraToolbar}
         {onOpenAsText && (
-          <ToolbarButton onClick={onOpenAsText} title="Open as text">
+          <ToolbarButton onClick={onOpenAsText} title={t('editor.openAsText')}>
             <ArrowRightLeft className="h-3 w-3" />
-            <span>Open as Text</span>
+            <span>{t('editor.openAsText')}</span>
           </ToolbarButton>
         )}
         <a
           href={downloadUrl}
           download
           className="flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
-          title="Download"
+          title={t('editor.download')}
         >
           <DownloadIcon className="h-3 w-3" />
-          <span>Download</span>
+          <span>{t('editor.download')}</span>
         </a>
       </div>
       <div className="relative min-h-0 flex-1">

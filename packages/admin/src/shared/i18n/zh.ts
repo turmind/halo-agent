@@ -294,6 +294,7 @@ export const zh: Record<string, string> = {
   'settings.orphans.confirm': '移除孤儿项 {key}？将从 settings.yaml 删除该值。',
   'settings.empty': '未选中分类。',
   'settings.loading': '加载中…',
+  'settings.globalOnlyHint': '只在全局生效；workspace 级覆盖会被忽略',
 
   // security (change password + logout)
   'security.changePassword.title': '修改密码',
@@ -406,6 +407,23 @@ export const zh: Record<string, string> = {
   'dataPreview.empty': '无数据行',
   'dataPreview.noTables': '该数据库中没有表',
 
+  // ── Editor / previews toolbar ──
+  'editor.hideNotes': '隐藏备注',
+  'editor.showNotes': '显示备注',
+  'editor.notes': '备注',
+  'editor.zoomOut': '缩小',
+  'editor.zoomIn': '放大',
+  'editor.resetZoom': '重置缩放',
+  'editor.print': '打印',
+  'editor.openAsText': '以文本打开',
+  'editor.download': '下载',
+  'editor.hideOutline': '隐藏大纲',
+  'editor.showOutline': '显示大纲',
+  'editor.outline': '大纲',
+  'editor.viewDiff': '查看未保存的差异',
+  'editor.diff': '差异',
+  'editor.splitRight': '向右拆分编辑器',
+
   // ── Cron jobs ──
   'cron.title': '定时任务',
   'cron.new': '新建',
@@ -476,6 +494,13 @@ export const zh: Record<string, string> = {
   'cron.form.err.runAtPast': '触发时刻必须在未来',
   'cron.form.err.prompt': '需要填写提示词',
   'cron.form.err.timeoutSec': '最长运行时间必须是 60–21600 之间的整数（秒）',
+  'cron.form.err.chatId.slack': 'Slack chatId 格式错误：「{chatId}」。应该是 D…(DM) / C…(频道) / G…(私有频道)。请用搜索后点击建议项填入，或从 Slack URL 复制。',
+  'cron.form.err.chatId.feishu': '飞书 chatId 格式错误：「{chatId}」。应该是 oc_…。请用搜索后点击建议项填入。',
+  'cron.form.err.chatId.telegram': 'Telegram chatId 必须是数字（私聊 = user id）。「{chatId}」无效。',
+  'cron.form.chatIdHint.telegram': '数字 chat id（私聊 = user id）',
+  'cron.form.chatIdHint.feishu': 'oc_… 聊天 id',
+  'cron.form.chatIdHelp': '多个 chat 用逗号分隔。留空则不推送（仅写日志）。',
+  'cron.form.searching': '搜索中…',
 
   // ── Evolution ──
   'evolution.title': '自我进化',
@@ -561,6 +586,7 @@ export const zh: Record<string, string> = {
   'capture.empty': '未找到窗口或屏幕。',
   'capture.noPreview': '无预览（请授予屏幕录制权限）',
   'capture.llmPrompt': '[系统：用户正在共享「{name}」窗口。当你需要查看它的当前画面来回答时，单独输出一行 <<<CAPTURE>>>，系统会自动截图并作为下一条消息发给你。不需要查看时不要输出该标记。]',
+  'capture.failNote': '[📷 {name} — 截图失败:该窗口在后台太久被系统回收了画面,切到它再让我截一次]',
   // ── 摄像头捕获（桌面端）──
   'capture.cameraName': '摄像头',
   'capture.cameraButton': '开启摄像头，让 AI 主动拍照',
@@ -570,6 +596,7 @@ export const zh: Record<string, string> = {
   'capture.cameraUse': '使用此摄像头',
   'capture.cameraPermissionHint': '需要「摄像头」权限。请在 系统设置 → 隐私与安全性 → 摄像头 里勾选 Halo。',
   'capture.cameraLlmPrompt': '[系统：用户已为你开启摄像头。当你需要查看摄像头当前画面来回答时，单独输出一行 <<<CAPTURE>>>，系统会自动拍一张照片并作为下一条消息发给你。不需要查看时不要输出该标记。]',
+  'capture.cameraFailNote': '[📷 {name} — 拍照失败:摄像头可能被其他应用占用或权限被关闭]',
   'capture.dismiss': '关闭',
   // ── AI 的面孔（self.html）──
   'face.button': '打开 AI 的面孔',
