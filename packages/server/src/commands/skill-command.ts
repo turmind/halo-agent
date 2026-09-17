@@ -52,28 +52,12 @@ async function scanDir(dir: string): Promise<SkillCommandEntry[]> {
   return entries
 }
 
-let cachedEntries: SkillCommandEntry[] = []
-
-/** Verbs + object-level access of the skill behind an object command, even
- *  when a builtin command shadows the skill from the descriptor list (e.g.
- *  `/agent`). Reads the full scan (cachedEntries), not just listed descriptors,
- *  so `/agent help` can show create/update (skill verbs) alongside the builtin
- *  verbs, and gate them by the skill's requiresAccess. Empty for a command with
- *  no backing skill. */
-export async function getCommandSkillInfo(
-  slashCommand: string,
-  workspaceRoot?: string,
-): Promise<{ skillId?: string; verbs: SkillVerb[]; requiresAccess?: 'full' | 'workspace' | 'readonly' }> {
-  await scanSkillDescriptors(workspaceRoot)
-  const cmd = slashCommand.startsWith('/') ? slashCommand : `/${slashCommand}`
-  const entry = cachedEntries.find((e) => {
-    const slash = e.command.startsWith('/') ? e.command : `/${e.command}`
-    return slash === cmd
-  })
-  return { skillId: entry?.id, verbs: entry?.verbs ?? [], requiresAccess: entry?.requiresAccess }
-}
-
-export async function scanSkillDescriptors(workspaceRoot?: string): Promise<CommandDescriptor[]> {
+/** Global + workspace skill entries merged (workspace wins on id clash).
+ *  Returned, not cached: a module-level variable rebuilt per call raced
+ *  across workspaces (two concurrent scans interleave, the second caller
+ *  reads the first's list). Rescanning ~10 small SKILL.md files per slash
+ *  command is negligible. */
+async function scanSkillEntries(workspaceRoot?: string): Promise<SkillCommandEntry[]> {
   const globalEntries = await scanDir(GLOBAL_SKILLS_DIR)
   let wsEntries: SkillCommandEntry[] = []
   if (workspaceRoot) {
@@ -82,12 +66,36 @@ export async function scanSkillDescriptors(workspaceRoot?: string): Promise<Comm
   const merged = new Map<string, SkillCommandEntry>()
   for (const e of globalEntries) merged.set(e.id, e)
   for (const e of wsEntries) merged.set(e.id, e)
+  return Array.from(merged.values())
+}
+
+/** Verbs + object-level access of the skill behind an object command, even
+ *  when a builtin command shadows the skill from the descriptor list (e.g.
+ *  `/agent`). Reads the full scan, not just listed descriptors,
+ *  so `/agent help` can show create/update (skill verbs) alongside the builtin
+ *  verbs, and gate them by the skill's requiresAccess. Empty for a command with
+ *  no backing skill. */
+export async function getCommandSkillInfo(
+  slashCommand: string,
+  workspaceRoot?: string,
+): Promise<{ skillId?: string; verbs: SkillVerb[]; requiresAccess?: 'full' | 'workspace' | 'readonly' }> {
+  const entries = await scanSkillEntries(workspaceRoot)
+  const cmd = slashCommand.startsWith('/') ? slashCommand : `/${slashCommand}`
+  const entry = entries.find((e) => {
+    const slash = e.command.startsWith('/') ? e.command : `/${e.command}`
+    return slash === cmd
+  })
+  return { skillId: entry?.id, verbs: entry?.verbs ?? [], requiresAccess: entry?.requiresAccess }
+}
+
+export async function scanSkillDescriptors(workspaceRoot?: string): Promise<CommandDescriptor[]> {
+  const entries = await scanSkillEntries(workspaceRoot)
 
   // Load-time conflict detection: a skill's `command:` must not collide with a
   // builtin slash command or with another skill's. Builtins always win — the
   // dispatcher matches them first, so a colliding skill command is unreachable
   // anyway; among skills it's first-come. Colliding entries are dropped here, at
-  // the single source feeding both dispatch (via cachedEntries) and the popup
+  // the single source feeding both dispatch (via scanSkillEntries) and the popup
   // (via the returned descriptors), so a command can never show up in the popup
   // that dispatch is unable to route to ("visible but unreachable").
   const builtinSlashes = new Set(
@@ -96,15 +104,14 @@ export async function scanSkillDescriptors(workspaceRoot?: string): Promise<Comm
       .map((d) => d.slashName),
   )
   const claimed = new Set(builtinSlashes)
-  // `cachedEntries` (consumed by execSkillCommand) keeps EVERY skill, including
+  // The full scan (consumed by execSkillCommand) keeps EVERY skill, including
   // ones whose command is shadowed by a builtin — e.g. the `agent` skill, whose
   // /agent command is now a builtin object command but whose body still serves
   // the create/update verbs via fallback. `listed` is the subset that becomes
   // actual slash-command descriptors (shadowed ones excluded so the palette
   // never shows a command the builtin/another-skill already owns).
-  cachedEntries = Array.from(merged.values())
   const listed: SkillCommandEntry[] = []
-  for (const entry of cachedEntries) {
+  for (const entry of entries) {
     if (!entry.command) continue // no slash command — cached for verb metadata only
     const slashName = entry.command.startsWith('/') ? entry.command : `/${entry.command}`
     if (claimed.has(slashName)) {
@@ -153,9 +160,9 @@ export async function execSkillCommand(
   // a deployed skill) must take effect for subsequent invocations without
   // a server restart. Reading ~10 small SKILL.md files per slash command
   // is negligible vs. the cost of getting access-level wrong.
-  await scanSkillDescriptors(workspaceRoot)
+  const entries = await scanSkillEntries(workspaceRoot)
   const cmdName = slashCommand.startsWith('/') ? slashCommand.slice(1) : slashCommand
-  const entry = cachedEntries.find((e) => {
+  const entry = entries.find((e) => {
     if (!e.command) return false
     const slash = e.command.startsWith('/') ? e.command : `/${e.command}`
     return slash.slice(1) === cmdName
@@ -181,12 +188,10 @@ export async function execSkillCommand(
   }
 
   // Read the SKILL.md fresh from disk for both the access-level check
-  // and the body render. Reading from the cached `entry.requiresAccess`
-  // is unsafe: cachedEntries is rebuilt by scanSkillDescriptors above,
-  // but workspace-scoped skills (which override global skills with the
-  // same id) can drift between scans, and a frontmatter edit between
-  // scans must take effect immediately. One disk read per slash command
-  // is negligible.
+  // and the body render. Reading `entry.requiresAccess` from the scan
+  // above is unsafe: a frontmatter edit between the scan and this read
+  // must take effect immediately. One disk read per slash command is
+  // negligible.
   let body = ''
   let freshRequiresAccess: 'full' | 'workspace' | 'readonly' | undefined
   try {
