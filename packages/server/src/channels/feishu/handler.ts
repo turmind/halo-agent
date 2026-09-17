@@ -121,14 +121,14 @@ function shouldRespond(event: FeishuMessageEvent, botOpenId: string): boolean {
 interface ParsedContent {
   text: string
   imageKeys: string[]
-  fileNames: string[]
+  files: Array<{ key: string; name: string }>
 }
 
 /** Parse the JSON-encoded `message.content` for the message types we
  *  handle. Anything we don't recognize falls through with empty
  *  text — the agent ends up seeing just the file/image notes. */
 function parseContent(event: FeishuMessageEvent): ParsedContent {
-  const out: ParsedContent = { text: '', imageKeys: [], fileNames: [] }
+  const out: ParsedContent = { text: '', imageKeys: [], files: [] }
   let parsed: Record<string, unknown>
   try { parsed = JSON.parse(event.message.content) }
   catch { return out }
@@ -145,8 +145,8 @@ function parseContent(event: FeishuMessageEvent): ParsedContent {
       break
     }
     case 'file': {
-      const name = (parsed as Record<string, string>).file_name ?? 'file'
-      out.fileNames.push(name)
+      const c = parsed as Record<string, string>
+      if (c.file_key) out.files.push({ key: c.file_key, name: c.file_name ?? 'file' })
       break
     }
     case 'post': {
@@ -194,6 +194,42 @@ async function ingestImages(args: {
     }
   }
   return { images, notes }
+}
+
+/** Same cap telegram applies to inbound documents (MAX_TG_DOWNLOAD_BYTES). */
+const MAX_FEISHU_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+/** Download non-image attachments and save them under the workspace's
+ *  inbound assets; the agent gets the local path. Note text mirrors the
+ *  slack handler's ingestFiles so the agent sees one shape across channels. */
+async function ingestFiles(args: {
+  account: FeishuAccount
+  workspace: string
+  messageId: string
+  files: Array<{ key: string; name: string }>
+}): Promise<string[]> {
+  const { account, workspace, messageId, files } = args
+  const notes: string[] = []
+  for (const f of files) {
+    try {
+      const buf = await downloadResource({
+        appId: account.appId, appSecret: account.appSecret,
+        messageId, fileKey: f.key, type: 'file',
+      })
+      if (buf.length > MAX_FEISHU_DOWNLOAD_BYTES) {
+        notes.push(`[文件 "${f.name}" 超过 20MB,未保存]`)
+        continue
+      }
+      const savedPath = await saveInboundMedia({
+        workspacePath: workspace, accountId: account.accountId, channel: 'feishu',
+        buffer: buf, kind: 'file', originalFilename: f.name,
+      })
+      notes.push(`[文件 "${f.name}" 已保存: ${savedPath}]`)
+    } catch (err) {
+      notes.push(`[文件下载失败 ${f.name}: ${err instanceof Error ? err.message : String(err)}]`)
+    }
+  }
+  return notes
 }
 
 export function startFeishuChannel(deps: {
@@ -384,13 +420,14 @@ async function handleInbound(args: {
     }
   }
 
-  // Image attachments → save + feed to vision. Files are listed in
-  // text only; downloading arbitrary user-uploaded files needs the
-  // separate `file` resource type and we leave that to a follow-up.
+  // Image attachments → save + feed to vision; other files → download + save,
+  // agent gets the local path.
   const imgResult = parsed.imageKeys.length > 0
     ? await ingestImages({ account, workspace, messageId: event.message.message_id, imageKeys: parsed.imageKeys })
     : { images: [], notes: [] }
-  const fileNotes = parsed.fileNames.map((n) => `[文件: ${n}]`)
+  const fileNotes = parsed.files.length > 0
+    ? await ingestFiles({ account, workspace, messageId: event.message.message_id, files: parsed.files })
+    : []
 
   const composedText = [cleanText, ...imgResult.notes, ...fileNotes].filter(Boolean).join('\n')
   if (!composedText && imgResult.images.length === 0) return

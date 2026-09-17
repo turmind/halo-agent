@@ -110,7 +110,7 @@ The SDK wraps protobuf marshalling; we just register an `EventDispatcher` callba
 2. Check if bot was mentioned (p2p: always yes; group: check mentions array for bot's open_id)
 3. Drop non-user senders (bots, apps)
 4. Determine session key: p2p → `(chatId, 'dm')`; group → `(chatId, rootId ?? messageId)` to anchor each thread
-5. Parse content (text / image / file / post) — images extracted as base64 for vision, files noted as `[文件: name]` markers
+5. Parse content (text / image / file / post) — images extracted as base64 for vision, files downloaded via `downloadResource(type: 'file')` and saved under `.halo/assets/feishu/inbound/`, agent gets `[文件 "name" 已保存: path]`
 6. Download inbound images, save to workspace, generate base64 payloads
 7. Strip mention markup from text (Feishu inserts `<at user_id="ou_xxx">@bot</at>` or `@_user_123` tokens)
 8. Slash command dispatch (p2p only — group threads don't benefit from `/session new`, `/session list`, etc. since each thread is already its own session)
@@ -162,7 +162,7 @@ trailing chunks of a long reply were dropped.
 
 ## Media support
 
-**Inbound:** text, images (base64 attached to agent message), files (noted as `[文件: name]` markers), voice, video, rich posts.
+**Inbound:** text, images (base64 attached to agent message), files (downloaded via `downloadResource(type: 'file')`, saved under `.halo/assets/feishu/inbound/`, agent gets `[文件 "name" 已保存: path]`), voice, video, rich posts.
 
 **Outbound routing:**
 - `.jpg/.png/.gif/.webp/.bmp` → `uploadImage` → `msg_type: 'image'`
