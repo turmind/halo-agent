@@ -80,6 +80,23 @@ function templateVersionGate() {
 }
 templateVersionGate()
 
+// Release-only: the five workspace packages carry independent `version`
+// fields and nothing syncs them. A lagging one ships a build whose
+// `halo --version` / admin sidebar disagree with the tag (happened at 0.1.9:
+// cli + desktop bumped, server still 0.1.8, core/admin at 0.1.0).
+function lockstepVersionGate() {
+  if (process.env.HALO_RELEASE !== '1') return
+  const pkgs = ['core', 'server', 'admin', 'cli', 'desktop']
+  const versions = pkgs.map((p) => [p, JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages', p, 'package.json'), 'utf-8')).version])
+  const distinct = new Set(versions.map(([, v]) => v))
+  if (distinct.size > 1) {
+    console.error(`[build-bundle] FATAL: package versions out of lockstep (HALO_RELEASE=1):\n  ${versions.map(([p, v]) => `${p.padEnd(8)} ${v}`).join('\n  ')}`)
+    process.exit(1)
+  }
+  console.log(`[build-bundle] lockstep gate: all 5 packages at ${versions[0][1]}`)
+}
+lockstepVersionGate()
+
 // ── 1. esbuild bundle ──────────────────────────────────────────────────────
 //
 // Externals: any package with a native binding stays external so npm install

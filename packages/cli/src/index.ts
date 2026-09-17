@@ -190,7 +190,7 @@ Flags:
                           adapter process binds to one workspace; run N
                           adapters with the same token to drive N
                           workspaces concurrently.
-  --agent-id <id>        optional agent profile (default: 'default')
+  --agent-id <id>        optional agent profile (default: 'default'); --agent also accepted
   --header "N: v"        optional, repeatable. Extra HTTP header on every
                           request (like curl -H). For auth in front of the
                           server: proxy Cookie, CF-Access-*, basic auth.

@@ -53,7 +53,7 @@ function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     if (token !== undefined) { out.token = token; continue }
     const ws = eat('workspace')
     if (ws !== undefined) { out.workspace = ws; continue }
-    const ag = eat('agent-id')
+    const ag = eat('agent-id') ?? eat('agent')
     if (ag !== undefined) { out.agentId = ag; continue }
     const hdr = eat('header')
     if (hdr !== undefined) { rawHeaders.push(hdr); continue }
@@ -97,8 +97,8 @@ Flags:
   --workspace   absolute path of the halo workspace to drive. Each
                 adapter process binds to one workspace; run multiple
                 adapters with the same token for multiple workspaces.
-  --agent-id    optional. Halo agent profile to use when creating new
-                sessions. Defaults to 'default'.
+  --agent-id    optional (alias: --agent). Halo agent profile to use when
+                creating new sessions. Defaults to 'default'.
   --header      optional, repeatable. Extra HTTP header sent on every
                 request, "Name: value" (like curl -H). For auth in front
                 of the halo server — a reverse proxy's session cookie,

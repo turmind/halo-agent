@@ -53,7 +53,7 @@ halo acp \
 | `--port` | yes | Halo server port |
 | `--token` | yes | Web-channel token. `full` access required for multi-workspace use |
 | `--workspace` | yes | Absolute server-side path for this adapter |
-| `--agent-id` | no | Halo agent profile to use when ACP `session/new` creates a fresh session. Default `default` |
+| `--agent-id` | no | Halo agent profile to use when ACP `session/new` creates a fresh session. Default `default` (alias `--agent`) |
 
 Each adapter process binds to **one** workspace. To drive multiple workspaces concurrently from one token, run multiple adapter processes — one per workspace.
 

@@ -80,7 +80,7 @@ To remove a binding: `/acp remove` (deletes the skill directory and points out t
 | `--scheme`       | no       | URL scheme — `http` or `https` (default `http`). Use `https` when the server sits behind a TLS reverse proxy. Invalid values are rejected at the adapter boundary. |
 | `--token`        | yes      | Web-channel token from admin UI. `full` access required for multi-workspace use.         |
 | `--workspace`    | yes      | Absolute server-side path for the workspace this adapter drives.                         |
-| `--agent-id`     | no       | Halo agent profile to use when ACP `session/new` creates a new halo session. Default: `default`. |
+| `--agent-id`     | no       | Halo agent profile to use when ACP `session/new` creates a new halo session. Default: `default`. Alias: `--agent` (matches the main CLI's `--agent`). |
 | `--header`       | no       | Extra HTTP header on every upstream request, `"Name: value"` (like `curl -H`). Repeatable. For auth that sits **in front of** the halo server — see "Upstream auth" below. |
 
 One adapter process binds to one workspace. To drive multiple workspaces concurrently from the same token, run multiple adapter processes — see "Multi-workspace" below.
