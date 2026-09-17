@@ -54,7 +54,7 @@ Sensible defaults if user didn't say:
 | targets    | none (log only — the run shows in admin Cron tab)             |
 | label      | summarize from prompt + schedule                              |
 | timeout    | leave unset (3600s) — see `--timeout-sec` below               |
-| prompt     | cron runs unattended; unless the user's prompt already says so, prepend: "This runs unattended — nobody will answer questions. Deliver the result directly; if genuinely blocked, state what's blocked in one line and stop." |
+| prompt     | pass the user's task as-is — the runner prepends an "unattended run, don't ask questions" notice to every fire, so don't add one yourself |
 
 ### 2. Translate the schedule
 

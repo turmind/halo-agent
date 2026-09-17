@@ -46,6 +46,13 @@ const CLI_TIMEOUT_SEC = 3600
  *  promptly. */
 const KILL_GRACE_SEC = 30
 
+/** Stamped ahead of every job prompt on the cli's stdin. Cron runs are
+ *  unattended by construction, but nothing in the model's view says so — the
+ *  `cron-*` session id is invisible to it, and prompts typed into the admin
+ *  Cron form don't carry the preamble the `cron` skill used to ask the agent
+ *  to prepend. Mirrors the "Unattended runs" wording in prompts/all/RUNTIME.md. */
+const UNATTENDED_PREAMBLE = '[Unattended cron run — nobody will answer questions. Deliver the result directly; if genuinely blocked, state what\'s blocked in one line and stop.]'
+
 /** How many `cron_runs` rows to keep per job. The oldest get pruned every
  *  time a new run lands. 100 is plenty to spot a regression pattern
  *  without bloating the global db. */
@@ -637,7 +644,10 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     // Guard stdin: if the child exits/closes before reading the whole prompt,
     // the write raises EPIPE — an unhandled stream error would crash the server.
     child.stdin?.on('error', () => { /* child closed stdin early; ignore */ })
-    child.stdin?.write(job.userPrompt)
+    // The model never sees that the session id is `cron-*`, and prompts typed
+    // into the admin Cron form don't carry the skill's "runs unattended"
+    // preamble — so the runner stamps it here, unconditionally.
+    child.stdin?.write(`${UNATTENDED_PREAMBLE}\n\n${job.userPrompt}`)
     child.stdin?.end()
     let timedOut = false
     // Two-phase kill on timeout: SIGTERM the direct child only — the cli
