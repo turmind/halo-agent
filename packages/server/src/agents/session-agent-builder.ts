@@ -282,7 +282,7 @@ export class SessionAgentBuilder {
     // isTeamMember). Root and sub-agents follow the same rule: a sub-agent with
     // a non-empty team gets a roster too; runaway re-subcontracting is bounded
     // by the team whitelist + maxNestingDepth, not a blanket "root only" ban.
-    const roster = canDelegate(yamlConfig) ? await this.buildAgentRoster(agentId, yamlConfig?.team, isRoot) : ''
+    const roster = canDelegate(yamlConfig) ? await this.buildAgentRoster(agentId, yamlConfig?.team) : ''
     // A sub-agent's working_dir is persistent session identity (stored in the
     // DB, restored on resume), so its directory-chain INSTRUCTIONS.md ride in
     // the system prompt every turn (composeMdPrompt folds them into the
@@ -358,19 +358,14 @@ export class SessionAgentBuilder {
 
   /**
    * Build the team block injected into a delegating agent's prompt: a live
-   * roster of the agents it can spawn, with framing that depends on `isRoot`.
+   * roster of the agents it can spawn. It states facts only (who is
+   * reachable, how to reach them) — when and how much to delegate is
+   * workspace policy and belongs to INSTRUCTIONS.md, so the builder never
+   * hard-codes a stance that could contradict it.
    *
-   * - **Root** gets the full orchestrator block (`## Know Your Team Before You
-   *   Act`): the roster plus delegation principles (prefer delegation, fan-out
-   *   in parallel, don't poll). A root session's job is to orchestrate.
-   * - **Sub-agent** gets a lean block (`## Your Team`): the same roster plus a
-   *   single line on when to hand off. A sub-agent's job is to finish what it
-   *   was handed, so the orchestrator pep-talk would be noise (or push it to
-   *   over-subcontract).
-   *
-   * Roster membership is identical for both: drops disabled + internal agents,
-   * then narrows to the agent's `team` whitelist (via isTeamMember — the same
-   * filter start_session/query_agent enforce, so it never lists an unreachable
+   * Roster membership: drops disabled + internal agents, then narrows to the
+   * agent's `team` whitelist (via isTeamMember — the same filter
+   * start_session/query_agent enforce, so it never lists an unreachable
    * agent). Self is treated like any other agent: it appears only when the
    * whitelist admits it (the default), tagged `(you)` and pinned first purely
    * as reading order. Remove self from `team` and it drops off and self-spawn
@@ -384,7 +379,7 @@ export class SessionAgentBuilder {
    * gets a roster: a single `(you)` line is meaningful since parallel
    * self-spawn is the point there.
    */
-  private async buildAgentRoster(selfAgentId: string, team: string[] | undefined, isRoot: boolean): Promise<string> {
+  private async buildAgentRoster(selfAgentId: string, team: string[] | undefined): Promise<string> {
     const agentDisabled = getDisabledSet(this.db, 'agent')
     const agents = await scanAvailableAgents(this.host.workspaceRoot, agentDisabled)
     // Collapse same-id global/workspace pairs to the effective record (workspace
@@ -404,56 +399,19 @@ export class SessionAgentBuilder {
     const others = visible.filter((a) => a.id !== selfAgentId).sort((a, b) => b.priority - a.priority)
     if (!self && others.length === 0) return ''
 
-    const selfSuffix = isRoot
-      ? ' (you): spawn parallel instances of yourself only for sub-tasks that themselves need delegation or your full generality — each instance runs your own (expensive) model; for well-scoped work prefer the cheaper executor. For serial work just do it directly rather than delegating to yourself.'
-      : ' (you)'
+    const selfSuffix = ' (you)'
     const lines: string[] = []
     if (self) lines.push(`- \`${self.id}\` — ${self.name}${selfSuffix}`)
     for (const a of others) lines.push(`- \`${a.id}\` — ${a.name}: ${a.description}`)
     const roster = lines.join('\n')
 
-    // Sub-agents get a lean roster: the team list plus one line on how to use
-    // it. The full orchestrator pep-talk ("you're not a solo worker", "I'll
-    // just do it myself is rarely right", fan-out, don't-poll) is root-only —
-    // a sub-agent's job is usually to finish the task it was handed, not to
-    // keep re-subcontracting, so that framing is noise (or worse) for it.
-    if (!isRoot) {
-      return `## Your Team
+    return `## Your Team
 
-These are the agents you can delegate to with \`start_session\` if part of your
-task is better handed off (\`query_agent\` inspects one first). Your job is to
-finish what you were asked — delegate only when a sub-task clearly warrants it.
+These agents can take on parts of your task via \`start_session\`
+(\`query_agent\` inspects one first). How work is split between you and them
+is set by the workspace INSTRUCTIONS.
 
 ${roster}`
-    }
-
-    return `## Know Your Team Before You Act
-
-You are an orchestrator, not a solo worker. Before starting any non-trivial
-task, take stock of which agents you can delegate to. Your team right now:
-
-${roster}
-
-Default to delegation for work that fits a specialist or a parallelizable
-executor. Handle it yourself only when the task is genuinely small (a single
-file read, a one-off command, a quick question) or when the user clearly
-wants to watch each step unfold. "I'll just do it myself" is the right call
-far less often than it feels — a multi-file change, a build/test loop, or
-research across many sources belongs in a sub-session, both to stay fast and
-to keep your own context clean.
-
-You can spawn **multiple instances of the same agent** in parallel — there is
-no one-instance-per-agent limit. When a task splits into independent parts,
-fan them out to several sessions at once and let them run concurrently,
-rather than feeding the work through one session serially. Reserve serial
-execution for steps that genuinely depend on each other's output.
-
-No need to poll for progress — after start_session, keep doing your own work;
-the sub-agent reports back automatically when done. Polling (session_list /
-get_session_output) just spends context checking status.
-
-\`query_agent\` shows one agent's tools and skills before you delegate. When you
-do delegate, say so in one line and keep going.`
   }
 
   /**

@@ -143,7 +143,7 @@ Missing directory or read failure: warn + use built-in fallback.
 1. `## User Profile` (USER.md) — root agent only
    - When USER.md frontmatter carries `lang`, the loader appends `Reply language: <lang> unless the user switches.` under this section.
 2. AGENT.md body
-3. The live agent roster (`## Know Your Team Before You Act` for root, `## Your Team` for sub-agents), slotted directly behind AGENT.md (see [Agent roster](#agent-roster) below). Empty string for non-delegating agents (no `team` / empty `team`) / internal agents, so the section is dropped.
+3. The live agent roster (`## Your Team`), slotted directly behind AGENT.md (see [Agent roster](#agent-roster) below). Empty string for non-delegating agents (no `team` / empty `team`) / internal agents, so the section is dropped.
 4. `## User Instructions` — `~/.halo/global/INSTRUCTIONS.md` (suppressed when the workspace root has its own — see Step 2)
 5. `## User Instructions` — `<ws>/.halo/INSTRUCTIONS.md` (workspace root).
 6. `## User Instructions` — a sub-agent's `working_dir` directory-chain INSTRUCTIONS.md (`loadScopeBody`, plain markdown, headed `### <dir>`), folded into the same region right after #4/#5 so the order reads general → specific. Empty for a root agent / a working_dir with no sub-dir file. (User `@scope` does NOT come through here — it injects per-turn into the message, wrapped in `<workspace-instructions>`.)
@@ -196,17 +196,15 @@ If `mdPrompt` is empty:
 
 ## Agent roster
 
-`buildAgentRoster(selfAgentId, team, isRoot)` ([session-agent-builder.ts](../../../packages/server/src/agents/session-agent-builder.ts)) builds a live team block listing the agents this session can delegate to — one `- \`<id>\` — <name>: <description>` line per teammate. The framing depends on `isRoot` (see "Root vs. sub-agent framing" below): a root gets the full `## Know Your Team Before You Act` orchestrator block, a sub-agent a lean `## Your Team` block.
+`buildAgentRoster(selfAgentId, team)` ([session-agent-builder.ts](../../../packages/server/src/agents/session-agent-builder.ts)) builds a live team block listing the agents this session can delegate to — one `- \`<id>\` — <name>: <description>` line per teammate.
 
-**Who's on the list.** `scanAvailableAgents` minus `disabled` (workspace `disabled_items` table) minus `internal: true`, collapsed to the effective record per id (workspace shadows global — so a stale global shadow whose workspace record is disabled never gets listed-but-uncallable), then narrowed to the agent's `team` whitelist via `isTeamMember(team, id)` — the same filter `start_session` / `query_agent` enforce server-side, so the roster never lists someone the agent can't actually reach. Self is treated like any other agent: it appears only when the agent's own id is in `team`. When listed it's pinned to the top and tagged `(you)` — purely a reading order ("who am I" before "who else") — and the root framing adds a **cost warning**: spawn parallel instances of yourself only for sub-tasks that need delegation or your full generality (each instance runs your own expensive model; prefer the cheaper executor for well-scoped work), and do serial work directly rather than self-delegate. The remaining teammates are sorted by `priority` **descending** — the preferred workhorse leads and ordering is deterministic (scan order is readdir order, which isn't guaranteed). (Add the agent's own id to its `team` to enable parallel self-spawn — the seed `default` agent does exactly this.)
+**Who's on the list.** `scanAvailableAgents` minus `disabled` (workspace `disabled_items` table) minus `internal: true`, collapsed to the effective record per id (workspace shadows global — so a stale global shadow whose workspace record is disabled never gets listed-but-uncallable), then narrowed to the agent's `team` whitelist via `isTeamMember(team, id)` — the same filter `start_session` / `query_agent` enforce server-side, so the roster never lists someone the agent can't actually reach. Self is treated like any other agent: it appears only when the agent's own id is in `team`. When listed it's pinned to the top and tagged `(you)` — purely a reading order ("who am I" before "who else"). The remaining teammates are sorted by `priority` **descending** — the preferred workhorse leads and ordering is deterministic (scan order is readdir order, which isn't guaranteed). (Add the agent's own id to its `team` to enable parallel self-spawn — the seed `default` agent does exactly this.)
 
 **Gated on a non-empty team.** A roster is computed only when `canDelegate(yaml)` ([agent-loader.ts](../../../packages/server/src/agents/agent-loader.ts)) holds: `!internal` (evo / score / apply are platform tooling, not orchestrators) **and** a non-empty `team`. The very same predicate gates the session-tool bundle in `resolveBaseToolSet` — so the roster and the tools that act on it are granted together or not at all, never half. No team, no delegation: no session tools, no roster.
 
 **Root and sub-agents both get a roster** — there's no `isRoot` gate on *whether* a roster appears (any agent with a non-empty `team` gets one). Runaway re-subcontracting used to be stopped by a blanket "root only" ban; it's now bounded by the per-agent `team` whitelist (which is also the delegation switch) plus `maxNestingDepth` (default 16). This lets a sub-agent legitimately delegate further (grandchild sessions) when its `agent.yaml` declares a team, while the depth cap and whitelist keep cascades finite.
 
-**Root vs. sub-agent framing.** `isRoot` controls the *framing* around the roster, not its membership:
-- **Root** gets `## Know Your Team Before You Act` — the roster plus the full orchestrator pep-talk (prefer delegation, fan out in parallel, don't poll, "I'll just do it myself" is rarely right). A root's job is to orchestrate, so the steering is on-message.
-- **Sub-agent** gets `## Your Team` — the same roster plus a single line on when to hand off. A sub-agent's job is to *finish what it was handed*, not to keep re-subcontracting, so the orchestrator pep-talk would be noise (or actively push it to over-delegate). Self's line is also trimmed to just `(you)` (no "spawn parallel instances of yourself" nudge).
+**Facts, not policy.** The block states who is reachable and how (`start_session` / `query_agent`) and explicitly defers *when and how much to delegate* to the workspace INSTRUCTIONS. Root and sub-agents get the identical block — an earlier version gave roots an orchestrator pep-talk ("prefer delegation", "fan out", "don't poll", a self-spawn cost warning) that could contradict whatever stance a workspace's INSTRUCTIONS.md took; delegation policy now lives in exactly one place.
 
 **Team whitelist = the delegation switch.** `agent.yaml` carries an optional `team: [id, …]`. A **non-empty** list is what *enables* delegation — it grants the whole session-tool bundle plus the roster (see `canDelegate`) AND restricts reach to exactly those ids. **Unset or empty `[]` means the agent cannot delegate at all** (no session tools, no roster) — this is a breaking change from the earlier "unset = every agent reachable" default; agents authored before this change that relied on the implicit-all behavior must now list their team explicitly. The `isTeamMember(team, targetId)` predicate still gates the three reach surfaces consistently — the roster (what the agent sees), `start_session`, and `query_agent` (server-side enforcement, so a hand-crafted call to a non-team agent is rejected). Self gets no special-casing: include the agent's own id to allow parallel self-spawn (the seed `default` agent lists `default`), omit it to block self-spawn — exactly like any other agent.
 
@@ -250,7 +248,7 @@ It exists because a plain-text answer is single-pass: the agent loop only re-cal
 [bootstrapPrompt]                                ← prefixed when needsBootstrap (ws > global)
 USER.md                                          ← workspace > global
 AGENT.md                                         ← workspace > global
-## Know Your Team Before You Act                 ← root's roster framing (dropped when team is empty/unset)
+## Your Team                                    ← roster (dropped when team is empty/unset)
 ## User Instructions                             ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
 ## User Instructions                             ← <ws>/.halo/INSTRUCTIONS.md (workspace root)
 ## Project Knowledge                             ← <ws>/.halo/INDEX.md (or nudge)
@@ -270,7 +268,7 @@ root-scope leads all-scope: root-only orchestrator guidance lands while attentio
 
 ```
 AGENT.md
-## Your Team                                    ← lean roster (only when the agent has a non-empty team)
+## Your Team                                    ← roster (only when the agent has a non-empty team)
 ## User Instructions                            ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
 ## User Instructions                            ← <ws>/.halo/INSTRUCTIONS.md (workspace root)
 ## User Instructions                            ← working_dir's directory-chain INSTRUCTIONS.md, headed ### <dir> (when working_dir set)
@@ -282,7 +280,7 @@ allPrompt                                        ← prompts/all/*.md (ws > glob
 Your available tools: ...
 ```
 
-(Sub-agents get the lean `## Your Team` roster — not the root's `## Know Your Team Before You Act` block — and only when the agent has a non-empty team; no USER.md, no root-scope prompts.)
+(Sub-agents get the same `## Your Team` roster as roots, only when the agent has a non-empty team; no USER.md, no root-scope prompts.)
 
 ## Directory-scoped instructions
 

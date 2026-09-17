@@ -173,6 +173,8 @@ describe('delegation — the session-tool bundle is gated on a non-empty team', 
     // roster injected into the system prompt, listing the team member
     const prompt = sm.getSessionSystemPrompt('s_boss') ?? ''
     expect(prompt).toContain('Mate')
+    expect(prompt).toContain('## Your Team')
+    expect(prompt).not.toContain('solo worker')
   })
 
   it('grants no session tools and no roster when team is absent', async () => {
@@ -182,7 +184,6 @@ describe('delegation — the session-tool bundle is gated on a non-empty team', 
     const ctx = await sm.getSessionContext('s_solo')
     for (const name of SESSION_TOOLS) expect(ctx?.meta.toolNames).not.toContain(name)
     const prompt = sm.getSessionSystemPrompt('s_solo') ?? ''
-    expect(prompt).not.toContain('Know Your Team')
     expect(prompt).not.toContain('Your Team')
   })
 
