@@ -35,7 +35,7 @@ interface SubAgentStats {
   currentTool: string | null
 }
 
-interface State {
+export interface State {
   blocks: ChatBlock[]
   liveText: string
   liveThinking: string | null
@@ -70,7 +70,7 @@ interface State {
   turnStartedAt: number | null
 }
 
-type Action =
+export type Action =
   | { type: 'event'; event: AgentSessionEvent }
   | { type: 'append-user'; text: string }
   | { type: 'append-system'; text: string }
@@ -83,7 +83,7 @@ type Action =
 let blockSeq = 0
 function nextId(): string { return `b${++blockSeq}` }
 
-function initialState(verbose: boolean): State {
+export function initialState(verbose: boolean): State {
   return {
     blocks: [],
     liveText: '',
@@ -343,7 +343,7 @@ function safeJson(v: unknown, maxLen: number): string {
   try { return truncate(JSON.stringify(v), maxLen) } catch { return '[unserializable]' }
 }
 
-function reducer(state: State, action: Action): State {
+export function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'append-user':
       return { ...state, blocks: [...state.blocks, { id: nextId(), kind: 'user', text: action.text }] }
