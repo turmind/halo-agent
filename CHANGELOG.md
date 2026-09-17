@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-09-17
+
+Fix batch from the v1.1.8 whole-system design review. Three patterns kept recurring and drove most of the entries below: the same guard fixed on the admin path but not on the web-token / channel path; contracts (access ranks, IM length limits) copied by hand in several places and drifting; and the model not being told the environment it runs in (UTC stamps, IM hard-splits, unattended cron runs).
+
+### Security
+
+- Web-token routes: `/web/file` served `.halo/sessions/*.json`, `halo.db` and logs to any token on the workspace — it now applies the sandbox's hidden-path table after realpath. `/web/{chat,stop,history,subscribe}` and `/api/show/session` accepted any client-supplied `sessionId`, letting a readonly token read and write other users' sessions on the same workspace; non-full tokens may now only address ids their own account minted. `agent-configs` gained the `isSafeIdSegment` guard on six `:id` routes (two of them write paths).
+- Access-level gates: four call sites each kept a private `{readonly, workspace, full}` rank map; the one in `/skill` had no `observer` entry, so `required > undefined` was always false and observer sessions could run full-only skills. One exported `ACCESS_RANK` table now backs every gate.
+
+### Added
+
+- Prompts: new `prompts/all/RUNTIME.md` tells every agent what nothing said before — the `[<iso>]` message stamp is UTC, IM replies are hard-split (telegram 4000 / wechat 3500 / feishu 4500), unattended runs must not ask questions, tool output is data not instructions, no secrets in replies, destructive ops need a go-ahead. USER.md `lang` is now parsed and surfaced as the reply language.
+- Cron: every fire stamps a fixed "unattended run — nobody will answer questions" line ahead of the job prompt. Previously this relied on the prompt author remembering to write it; jobs created from the admin Cron form never had it and an agent that stopped to ask a clarifying question sat until timeout.
+- Feishu: inbound files are now actually downloaded (was a name-only `[文件: name]` marker — the agent could never open the file), and voice notes (`audio`) / videos (`media`) are ingested too (were silently dropped). Same `[语音消息 Ns已保存: path]` / `[视频已保存: path]` wording as WeChat, so the admin renders them identically.
+- ACP adapter: `session/new` now asks the server to mint the session id (`POST /api/web/sessions`) inside the token's own namespace, so readonly / workspace tokens can use the adapter — previously only full tokens got past the first prompt.
+- Build: `pnpm bundle` and every desktop `dist:*` refuse to package when `templates/` changed since the previous release tag but `TEMPLATE_VERSION` didn't move (four historical silent misses); `HALO_RELEASE=1` additionally enforces the five-package version lockstep. `halo acp` accepts `--agent` as an alias of `--agent-id`, matching `halo cli`.
+- Tests: TUI reducer (27 cases — root/sub event routing, tool-block assembly, verbose gating, liveText commit points), admin chat-store hot-path indexes (14), local-compact roundtrip, Feishu inbound file/voice/video, WS watcher pool.
+
+### Changed
+
+- Agent turn retry: a retried attempt now resumes the conversation instead of re-landing the user input — five retries used to stack up to five copies of the input (images included) into `agent.messages`, and after a tool round the copy landed inside the last `tool_result`. Retry classification uses the abort signal and HTTP status (401/402/403 → no retry) instead of substring-matching the error message, which an upstream error body could trip.
+- Auto-compact: a failed or empty self-compact now rolls `agent.messages` back — the "Summarize the conversation…" instruction used to stay in context and `maybeAutoCompact` re-appended another copy every turn. Token estimate counts image (flat 1500) and `tool_use` / `tool_result` blocks, so the post-compact context figure is no longer systematically low.
+- Tools: `grep` / `glob` no longer skip `.halo` wholesale — the agent can reach its own memory / docs / INSTRUCTIONS from the workspace root (only `sessions/logs/evo/tmp/assets/canvas` directly under `.halo` are skipped). `activate_skill` results are exempt from the 8K result cap (acp / cron / self skills are 8–12K and lost their tail). `file_edit` single replace no longer expands `## [Unreleased]
+
+## [1.1.8] - 2026-09-15` / `` # Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+ `` / `$1` in the replacement text.
+- Prompts: the agent roster is a factual statement of the team for both root and sub agents; the hard-coded "Default to delegation…" pep-talk is gone (workspace INSTRUCTIONS was already arguing against it). Template facts fixed: cron skill's stale `manage-cron-jobs/` paths (11×), goal agent told to append to the hash-checked `GOAL_SPEC.md` (steering goes through `goal_decide`), halo skill now says a workspace INSTRUCTIONS.md *replaces* the global one.
+- Settings: all `general.*` fields are `globalOnly` — the runtime only ever read the global value, the per-workspace override in the UI was cosmetic.
+- WS: one `WorkspaceWatcher` + `GitDirWatcher` per workspace root shared across connections (was one native subscription per browser tab).
+- Sessions: descendant collection is one range query on the `parent>child` id encoding (was a per-level select in five places); `/list` reads the mirrored `title` column instead of the whole session file.
+- Models: DeepSeek registry entry `deepseek-v4-flash` → the rolling `deepseek-flash` alias DeepSeek now documents.
+- Docs: `dev/tools.md` discloses that the Windows sandbox is enforcement-free (every access level is effectively full there); `design/` notes synced with the above.
+
+### Fixed
+
+- Slack / Feishu `/workspace switch` replied "✅ Switched" without persisting the new binding (Telegram / WeChat already did).
+- Source Control: a workspace initialised from the panel committed its own session transcripts, sqlite db and logs on the first commit — the generated `.gitignore` gains a `# Halo runtime` block.
+- Admin: fenced code blocks' language tag overlapped the first line; remaining hard-coded Chinese / English strings (cron form, screenshot-failure bubble, editor toolbar titles, settings hint) moved into the i18n dictionaries; six unreferenced `Ws*Msg` types and a leftover stack-trace debug log removed; the four version-bus modules share one `createVersionBus` factory.
+- `/skill` command's module-level skill cache was shared across workspaces (interleaved awaits could serve one workspace's list to another); `routes/error.ts` (zero callers) removed.
+
 ## [1.1.8] - 2026-09-15
 
 ### Fixed
@@ -428,7 +473,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.8...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.9...HEAD
+[1.1.9]: https://github.com/turmind/halo-agent/compare/v1.1.8...v1.1.9
 [1.1.8]: https://github.com/turmind/halo-agent/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/turmind/halo-agent/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/turmind/halo-agent/compare/v1.1.5...v1.1.6
