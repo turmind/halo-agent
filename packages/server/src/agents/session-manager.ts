@@ -304,6 +304,7 @@ export interface SessionManagerInternals {
     cursor?: number
   }): { sessions: SessionInfo[]; nextCursor: number | null }
   listDescendants(rootIds: string[], opts?: { includeArchived?: boolean }): SessionInfo[]
+  listDescendantIds(rootId: string): string[]
   findLatestByPrefix(prefix: string): SessionInfo | null
   resolveWorkingDir(input: string): Promise<string>
   emitEvent(sessionId: string, event: AgentSessionEvent): void
@@ -877,6 +878,10 @@ export class SessionManager implements SessionManagerInternals {
     return this.queryStore.listDescendants(rootIds, opts)
   }
 
+  listDescendantIds(rootId: string): string[] {
+    return this.queryStore.listDescendantIds(rootId)
+  }
+
   findLatestByPrefix(prefix: string): SessionInfo | null {
     return this.queryStore.findLatestByPrefix(prefix)
   }
@@ -926,9 +931,16 @@ export class SessionManager implements SessionManagerInternals {
     return this.queryStore.getSessionTree(rootId)
   }
 
+  /** Title from the mirrored `agent_sessions.title` column. Falls back to the
+   *  session file only for rows written before the mirror columns existed
+   *  (`exchangeCount === null`, same backfill signal routes/sessions.ts uses) —
+   *  channel `/list` calls this per row, and a sync MB-scale JSON read ×50
+   *  stalled the event loop. */
   getSessionTitle(sessionId: string): string | null {
-    const row = this.db.select().from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
+    const row = this.db.select({ agentId: agentSessions.agentId, title: agentSessions.title, exchangeCount: agentSessions.exchangeCount })
+      .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
     if (!row) return null
+    if (row.exchangeCount !== null) return row.title || null
     try {
       const filePath = path.join(this.sessionDir(row.agentId), `${fileSegment(sessionId)}.json`)
       const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
@@ -1896,16 +1908,7 @@ export class SessionManager implements SessionManagerInternals {
   async stopSession(sessionId: string): Promise<void> {
     // Collect the full descendant tree so stop cascades — otherwise sub-agents
     // started via start_session keep burning tokens after the parent is stopped.
-    const allIds: string[] = [sessionId]
-    const collect = (pid: string): void => {
-      const children = this.db.select().from(agentSessions)
-        .where(eq(agentSessions.parentId, pid)).all()
-      for (const child of children) {
-        allIds.push(child.id)
-        collect(child.id)
-      }
-    }
-    collect(sessionId)
+    const allIds: string[] = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
 
     const now = Date.now()
     for (const id of allIds) {
@@ -2858,26 +2861,19 @@ export class SessionManager implements SessionManagerInternals {
       this.sessions.delete(sessionId)
     }
 
-    // Recursively collect all descendant session IDs
-    const allIds: string[] = [sessionId]
-    const collectDescendants = (pid: string): void => {
-      const children = this.db.select().from(agentSessions)
-        .where(eq(agentSessions.parentId, pid)).all()
-      for (const child of children) {
-        allIds.push(child.id)
-        // Stop in-memory children
-        const childSession = this.sessions.get(child.id)
-        if (childSession) {
-          if (childSession.abortController) {
-            childSession.abortController.abort(abortReason('delete'))
-            childSession.abortController = null
-          }
-          this.sessions.delete(child.id)
+    // Collect all descendant session IDs (one range query), then stop the
+    // in-memory children
+    const allIds: string[] = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
+    for (const id of allIds.slice(1)) {
+      const childSession = this.sessions.get(id)
+      if (childSession) {
+        if (childSession.abortController) {
+          childSession.abortController.abort(abortReason('delete'))
+          childSession.abortController = null
         }
-        collectDescendants(child.id)
+        this.sessions.delete(id)
       }
     }
-    collectDescendants(sessionId)
 
     // Dissolve any active goal bindings touching the doomed ids BEFORE the
     // rows go away — the goal record lives on G's row, so this is the last
@@ -2918,16 +2914,7 @@ export class SessionManager implements SessionManagerInternals {
    * view the session in detail. Returns total count of archived sessions.
    */
   async archiveSessionTree(sessionId: string): Promise<number> {
-    const allIds: string[] = [sessionId]
-    const collect = (pid: string): void => {
-      const children = this.db.select().from(agentSessions)
-        .where(eq(agentSessions.parentId, pid)).all()
-      for (const child of children) {
-        allIds.push(child.id)
-        collect(child.id)
-      }
-    }
-    collect(sessionId)
+    const allIds: string[] = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
 
     const now = Date.now()
     for (const id of allIds) {

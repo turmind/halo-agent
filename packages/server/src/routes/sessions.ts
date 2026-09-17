@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { and, eq, gte, lt } from 'drizzle-orm'
 import { getWorkspaceDb, mirrorSessionMeta } from '../db/index.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import { agentSessions } from '../db/schema.js'
@@ -298,16 +298,9 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
       allIds = await sm.deleteSession(id)
     } else {
       const { db } = getWorkspaceDb(projectId)
-      allIds = [id]
-      const collectDescendants = (pid: string): void => {
-        const children = db.select().from(agentSessions)
-          .where(eq(agentSessions.parentId, pid)).all()
-        for (const child of children) {
-          allIds.push(child.id)
-          collectDescendants(child.id)
-        }
-      }
-      collectDescendants(id)
+      // Path-encoded id range = the whole subtree; canonical form is SessionQueryStore.listDescendantIds.
+      allIds = [id, ...db.select({ id: agentSessions.id }).from(agentSessions)
+        .where(and(gte(agentSessions.id, id + '>'), lt(agentSessions.id, id + '>￿'))).all().map((r) => r.id)]
       for (const sid of allIds) {
         db.delete(agentSessions).where(eq(agentSessions.id, sid)).run()
       }

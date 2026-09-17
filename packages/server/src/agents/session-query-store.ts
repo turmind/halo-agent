@@ -162,6 +162,18 @@ export class SessionQueryStore {
     return allRows.map((r) => this.toSessionInfo(r, activeParents))
   }
 
+  /** Every descendant id of `rootId` (any depth, archived included) in one
+   *  range query — ids are path-encoded (`parent>child>grandchild`, see
+   *  SessionManager.createSession), so the `rootId>` prefix range IS the
+   *  subtree. Replaces the per-level `WHERE parent_id = ?` recursion that
+   *  cost one select per node. */
+  listDescendantIds(rootId: string): string[] {
+    return this.db.select({ id: agentSessions.id }).from(agentSessions)
+      .where(and(gte(agentSessions.id, rootId + '>'), lt(agentSessions.id, rootId + '>￿')))
+      .all()
+      .map((r) => r.id)
+  }
+
   /**
    * Find the most-recent session whose id starts with the given prefix.
    *
