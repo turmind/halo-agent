@@ -14,8 +14,7 @@ import type { AgentSessionEvent } from '../agents/agent-events.js'
 import type { UIState } from '../sessions/ui-log-builder.js'
 import { createSaveSnapshot } from '../sessions/ui-log-builder.js'
 import { config } from '../config.js'
-import { WorkspaceWatcher } from './file-watcher.js'
-import { GitDirWatcher } from './git-dir-watcher.js'
+import { WatcherPool } from './watcher-pool.js'
 import { saveInboundMedia } from '../channels/shared/media-store.js'
 import { readArchiveCount } from '../sessions/session-archive.js'
 import { getSessionDir, fileSegment } from '../sessions/session-store.js'
@@ -89,8 +88,6 @@ interface ConnectedClient {
   backgroundSaves: Map<string, () => void>
   unsubscribeEvents: (() => void) | null
   terminalManager: TerminalManager
-  fileWatcher: WorkspaceWatcher
-  gitDirWatcher: GitDirWatcher
   /** Wall-clock ms of the last INBOUND frame from this peer. Proves the peer's
    *  JS is still running — see the abandoned-socket reclaim in the keepalive
    *  tick. Protocol-level pongs deliberately don't count (a kernel answers
@@ -106,6 +103,7 @@ interface ConnectedClient {
 export function setupWebSocketHandler(deps: WsHandlerDeps): void {
   const { wss, registry } = deps
   const clients = new Set<ConnectedClient>()
+  const watchers = new WatcherPool()
 
   // Let `broadcastToWorkspace` (used by routes/git.ts) address only the tabs
   // showing a given workspace. The connection table is private to this
@@ -366,8 +364,6 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
   // ── Connection handler ─────────────────────────────────────────────
 
   wss.on('connection', (ws: WebSocket) => {
-    const fileWatcher = new WorkspaceWatcher()
-    const gitDirWatcher = new GitDirWatcher()
     const terminalManager = new TerminalManager(ws)
 
     const client: ConnectedClient = {
@@ -376,25 +372,12 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       projectId: null,
       sessionManager: null,
       agentId: 'default',
-      fileWatcher,
-      gitDirWatcher,
       terminalManager,
       backgroundSaves: new Map(),
       unsubscribeEvents: null,
       lastClientPingAt: Date.now(),
       commandUserId: `ws-${nextCommandUserId++}`,
     }
-
-    fileWatcher.setCallback((evt) => {
-      sendJson(ws, { type: 'file:changed', path: evt.path, action: evt.action })
-    })
-
-    // Command-line git ops (terminal commit/checkout/add) bypass the SC panel's
-    // own re-broadcast, and WorkspaceWatcher ignores .git. Mirror the panel's
-    // payload (path '.git') so the same debounced refresh fires.
-    gitDirWatcher.setCallback(() => {
-      sendJson(ws, { type: 'file:changed', path: '.git', action: 'change' })
-    })
 
     clients.add(client)
     console.debug(`[WS] Client connected (total: ${clients.size})`)
@@ -637,8 +620,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         client.backgroundSaves.delete(sid)
       }
 
-      void client.fileWatcher.stop()
-      client.gitDirWatcher.stop()
+      watchers.detach(ws)
       console.debug(`[WS] Client disconnected (total: ${clients.size})`)
     }
 
@@ -677,8 +659,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         // a chat that lands without a prior `subscribe` (e.g. after a page
         // reload) leaves the watcher idle and the explorer never gets
         // file:changed events for new files the agent writes.
-        void client.fileWatcher.start(projectPath)
-        client.gitDirWatcher.start(projectPath)
+        watchers.attach(ws, projectPath)
       }
       if (!client.sessionManager) return null
       const sm = client.sessionManager
@@ -927,8 +908,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       const subProjectPath = resolveProjectPath(msg.projectId ?? '')
       if (subProjectPath) {
         client.sessionManager = getSessionManager(subProjectPath)
-        void client.fileWatcher.start(subProjectPath)
-        client.gitDirWatcher.start(subProjectPath)
+        watchers.attach(ws, subProjectPath)
       }
 
       if (msg.sessionId) {

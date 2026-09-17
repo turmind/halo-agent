@@ -106,7 +106,7 @@ cleanupConnection
     ├─ flush every backgroundSaves
     │     for (const [sid, saveFn] of backgroundSaves)
     │       saveFn()
-    └─ stop fileWatcher + gitDirWatcher
+    └─ watchers.detach(ws)   (shared per-workspace watchers stop only when the last socket on that workspace leaves)
 ```
 
 ## Relevant files

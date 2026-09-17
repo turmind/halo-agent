@@ -92,7 +92,7 @@ State: `messages: AnthropicMessage[]` (the full conversation history; external c
 
 File: `ws/handler.ts`. See [design/ws.md](ws.md).
 
-One `ConnectedClient` per WS connection, holding: `sessionManager` / `agentSessionId` / `terminalManager` / `fileWatcher` / `backgroundSaves`. UI state (messageLog / streamBuffer / tokens) belongs to SessionManager's `UIState`, not the client.
+One `ConnectedClient` per WS connection, holding: `sessionManager` / `agentSessionId` / `terminalManager` / `backgroundSaves`. UI state (messageLog / streamBuffer / tokens) belongs to SessionManager's `UIState`, not the client. File watchers live in a per-workspace `WatcherPool` (`ws/watcher-pool.ts`) shared by every connection on that workspace.
 
 Message dispatch:
 - `chat` / `chat:stop` / `subscribe` / `session:clear` / `session:delete` → handled directly in `ws/handler.ts`
@@ -162,7 +162,7 @@ File: `tools/workspace-tools.ts`. 9 tools: file_read / view_image / file_write /
 File: `ws/handler.ts` (`cleanupConnection`) + `bufferDetachedNotification` in `ws/event-processor.ts`. After WS disconnect, an inline handler takes over the session tree's events and buffers structural ones for replay on reconnect. A *cleared* session (`/session new`) gets no handler at all — see [design/background-dispatch.md](background-dispatch.md).
 
 ### WorkspaceWatcher — file watching
-File: `ws/file-watcher.ts`. chokidar → 300ms debounce + per-path Map dedup → callback. Ignores node_modules / .git / .next / dist. `.halo/sessions/` and `.halo/logs/` are **not** ignored — the dedup keeps volume low, and the front-end drops `change` events for files not open in the editor, so Explorer can reflect session deletions/creations while chat streaming stays cheap.
+File: `ws/file-watcher.ts`. `@parcel/watcher` recursive native subscription (one per workspace root, shared across connections via `ws/watcher-pool.ts`) → 300ms debounce + per-path Map dedup → callback. Ignores node_modules / .git / .next / dist. `.halo/sessions/` and `.halo/logs/` are **not** ignored — the dedup keeps volume low, and the front-end drops `change` events for files not open in the editor, so Explorer can reflect session deletions/creations while chat streaming stays cheap.
 
 ### TerminalManager — PTY management
 File: `ws/terminal-manager.ts`. Spawns a shell via node-pty. On disconnect, detaches with a 50KB ring buffer; replays on reconnect.

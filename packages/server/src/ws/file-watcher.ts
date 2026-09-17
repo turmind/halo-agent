@@ -73,10 +73,10 @@ const NATIVE_IGNORE = IS_WIN32
   : IGNORED_SEGMENTS.flatMap((seg) => [seg, `**/${seg}/**`])
 
 /**
- * Process-wide serialization of native subscribe/unsubscribe. Each WS
- * connection owns its own WorkspaceWatcher, so on workspace switch the old
- * connection's stop() races the new connection's start() ACROSS instances —
- * an instance-level guard can't help. @parcel/watcher's native layer is not
+ * Process-wide serialization of native subscribe/unsubscribe. Watchers are
+ * one per workspace root (ws/watcher-pool.ts), so on workspace switch the old
+ * root's stop() races the new root's start() ACROSS instances — an
+ * instance-level guard can't help. @parcel/watcher's native layer is not
  * safe against that overlap on Windows: Backend.cc mutates the static
  * shared-backends map from a threadpool thread with no lock while
  * Backend::getShared reads it on the JS thread, and WindowsBackend's

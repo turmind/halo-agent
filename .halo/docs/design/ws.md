@@ -112,7 +112,7 @@ Server-internal flags on `AgentSessionEvent` that are **not** carried into the W
 | `__pong__` | `__ping__` handler | Reply to the client's application-level liveness probe |
 | `listener:released` | `reclaimIfAbandoned` (this client only) | This connection's event listener was reclaimed (silent >3 min / CLOSED) — `{sessionId}`. Client must re-`subscribe` to reattach. See [Abandoned-listener reclaim](#abandoned-listener-reclaim-and-the-__ping__-contract). |
 | `chat:queued` | `sendUserMessage` returning queued | User-message-queued notification |
-| `file:changed` | WorkspaceWatcher · GitDirWatcher · `routes/git.ts` | File change notification (path + action). Three sources: (1) **WorkspaceWatcher** — recursive workspace watch, deliberately excludes `.git`; (2) **`routes/git.ts`** — every git mutation route re-broadcasts `path:'.git'` itself (the recursive watcher ignores `.git`), via `broadcastToWorkspace` so only clients bound to that workspace are woken (a git write in A used to make every tab showing B refetch status + ignored + log); (3) **GitDirWatcher** — a non-recursive `.git`-dir watch for command-line git ops, *plus* a degraded "watch the workspace root for `.git` appearing" phase that fires `path:'.git'` on a terminal `git init`/`clone` so the Source Control entry auto-surfaces. See [source-control.md](../requirements/source-control.md#auto-refresh-no-polling). |
+| `file:changed` | WorkspaceWatcher · GitDirWatcher · `routes/git.ts` | File change notification (path + action). Three sources: (1) **WorkspaceWatcher** — recursive workspace watch, deliberately excludes `.git`, one per workspace root shared across connections (`ws/watcher-pool.ts`); (2) **`routes/git.ts`** — every git mutation route re-broadcasts `path:'.git'` itself (the recursive watcher ignores `.git`), via `broadcastToWorkspace` so only clients bound to that workspace are woken (a git write in A used to make every tab showing B refetch status + ignored + log); (3) **GitDirWatcher** — a non-recursive `.git`-dir watch for command-line git ops, *plus* a degraded "watch the workspace root for `.git` appearing" phase that fires `path:'.git'` on a terminal `git init`/`clone` so the Source Control entry auto-surfaces. See [source-control.md](../requirements/source-control.md#auto-refresh-no-polling). |
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |
 | `session:changed` | `SessionManager` (broadcast to all clients) | Root session list changed — re-fetch. Fires on root-session create *and* on each root turn `complete` (so channel-driven messages refresh the count/title/ordering, not just admin's own turns). |
 | `session:switched` | handler.ts (this client only) | The server rebound this connection to a different session — see [switchTo rebind](#switchto-rebind--sessionswitched) |
@@ -149,12 +149,12 @@ interface ConnectedClient {
   backgroundSaves: Map<string, () => void>
   unsubscribeEvents: (() => void) | null
   terminalManager: TerminalManager
-  fileWatcher: WorkspaceWatcher
-  gitDirWatcher: GitDirWatcher
   lastClientPingAt: number                 // wall-clock ms of last INBOUND frame — the reclaim's liveness stamp
   commandUserId: string                    // `ws-<n>`, this connection's key into the command layer's active-session map
 }
 ```
+
+File watchers are **not** per connection: `ws/watcher-pool.ts` keeps one `WorkspaceWatcher` + `GitDirWatcher` per workspace root and fans each event out to every socket attached to that root (`attach` on subscribe / chat-bind, `detach` on close; the watchers stop when the last socket leaves). N tabs on one workspace = one native recursive subscription, not N.
 
 UI state (messageLog / streamBuffer / turnToolCalls / tokens) belongs to SessionManager's `UIState`, not the client.
 
