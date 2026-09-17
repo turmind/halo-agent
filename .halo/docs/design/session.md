@@ -128,6 +128,7 @@ Fix (the rule: **agentId is the only identity; nothing that locates or persists 
 Hierarchical encoding: `root_id>child_segment>grandchild_segment`.
 - Depth = `id.split('>').length`
 - Root ID = `id.split('>')[0]` (O(1), no DB walk)
+- All descendants of `X` = the id range `X>` … `X>U+FFFF` — one query, any depth, archived included (`SessionQueryStore.listDescendantIds`; `listDescendants` uses the same range). `stopSession` / `deleteSession` / `archiveSessionTree` and the DELETE route's no-manager fallback all build their cascade set from it — previously four copies of a per-level `WHERE parent_id = ?` recursion, one select per node. The encoding is an invariant: `createSession` mints children as `${parentId}>${segment}`, and every `explicitId` caller passes `parentId: null`.
 
 ### Lifecycle
 
@@ -265,7 +266,7 @@ Status is derived from memory (`promise !== null`) — not stored.
 - **One write seam.** `saveSessionToFile()` returns the header it just wrote (`SessionFileMeta`); `SessionManager.persistSessionFile` — the single funnel every UI-log persist goes through — hands it to `mirrorSessionMeta()`. Nothing else writes these columns except the PATCH rename path, which sets `title` alongside the file rewrite.
 - **Idempotent, and never touches `updated_at`.** `mirrorSessionMeta` selects first and skips the UPDATE when all four values already match; a missing row is a no-op return (sub-sessions of a deleted tree). It deliberately leaves `updated_at` alone — that column drives list ordering and "last activity", and a metadata mirror is not activity.
 - **`exchange_count` is a lifetime count**, `countMainUserMessages(messages) + archivedUserCount`, so it doesn't shrink when a compact archives history (unlike the file's `messageCount`).
-- **Lazy backfill.** The list route treats `exchange_count === null` as "pre-migration row", reads the file once via `readSessionFileMeta`, mirrors it, and never pays that cost again.
+- **Lazy backfill.** The list route treats `exchange_count === null` as "pre-migration row", reads the file once via `readSessionFileMeta`, mirrors it, and never pays that cost again. `getSessionTitle` (channel `/list`, `/tree`) applies the same rule: it returns the `title` column and only opens the file for an un-mirrored row — it used to sync-read and `JSON.parse` the whole session file per row, which at 50 MB-scale sessions stalled the event loop for every other session's stream.
 
 ## Conversation repair
 
@@ -331,15 +332,17 @@ Frontend network issues don't affect the backend:
 
 | Error | Recovery |
 |---|---|
-| User abort / graceful interrupt (`AbortError`) | Repair, clean exit |
+| User abort / graceful interrupt — **our own `signal.aborted`** or `err.name === 'AbortError'` | Repair, clean exit |
 | Context overflow (`too many input tokens`) | **Local** (non-LLM) compact + retry — the model already refused this payload, so calling an LLM risks a second stall |
-| Account-level error (insufficient balance / suspended / invalid key / unauthorized) | Unrecoverable — report to user, **no** retry |
+| Account-level error — **`httpStatus` 401 / 402 / 403** when a status is available; keyword match (insufficient balance / suspended / invalid key / unauthorized / authentication) only when none is | Unrecoverable — report to user, **no** retry |
 | Rate limiting / throttling | Exponential backoff (`2s * 2^attempt` + jitter, capped at 60s: 2s/4s/8s/16s…), retry |
 | **Transient server-side error (5xx / timeout)** | Same exponential backoff as throttling — see [Transient server-error classification](#transient-server-error-classification) below |
 | Transient transport error (`fetch failed`, `ECONNRESET`, headers timeout, …) | Short backoff (`1s * 2^attempt` + jitter), retry |
 | Corrupted messages (`tool_use ids without tool_result`) | Repair + retry |
 | **4xx multimodal rejection** (`Multimodal data is corrupted` / `Could not process image`) | Replace all image blocks in history with text placeholders, persist, retry — see [Multimodal 4xx degrade](#multimodal-4xx-degrade) below |
 | Unrecoverable error | Report to user, stop |
+
+**Classification order: structured signal first, message text last.** The interrupt branch is decided by the attempt's own `AbortController` signal (every interrupt path we own goes through `abortReason()` on it), never by the words `cancelled` / `aborted` in the message — an upstream error body can legitimately read `"The operation was aborted due to …"` (Bedrock), and matching that swallowed a real failure as a user interrupt: silent `break`, no retry, no error event, an empty reply. Likewise the account-level branch trusts `httpStatus` when one was recovered: 401/402/403 is terminal, any *other* status is not, whatever the body says — an OpenAI-compatible 503 whose body reads `"authentication service temporarily unavailable"` used to be classified as a dead key and never retried. The keyword list is only consulted when no status could be extracted. Pinned by `turn-retry-idempotent.test.ts` (five classification cases).
 
 **Abort reasons are normalized through the `abortReason()` helper** — all three abort call sites (graceful interrupt after `tool_result`, `interruptSession`'s hard interrupt, `stopSession`'s stop) wrap the reason string in `new DOMException(reason, 'AbortError')` instead of passing it raw. Node 22 gotcha: `fetch` rejects with the abort reason **as-is**, so `controller.abort('interrupt')` surfaced the bare string `'interrupt'` (not an Error, `errName === ''`) in `runAgentTurn`'s catch — it missed the AbortError branch and logged a fake "Unrecoverable: interrupt" error. Contract pinned by a queue-semantics test.
 
@@ -387,6 +390,10 @@ As a final byte-trimming step, self-compact runs **micro-compact** over that sna
 All paths share the same split logic — the private `compactCut(messages)` on SessionManager (single source of truth, 3 call sites: `selfCompactSession` + the two feasibility gates below): keep the last `keepMessages` turns, advance the cut forward past any orphan `tool_result`-first user message (otherwise the next API call gets `unexpected tool_use_id`). The tail loop only ever moves the cut *up*, so `cut === 0` is exactly the `messages.length <= keepMessages` "nothing to compact" case.
 
 **Notification contract — a "Compacting context…" preflight is only announced when compaction will actually run, and always gets an outcome line.** Both self-compact entry points (`maybeAutoCompact`, manual `compactSession`) check `compactCut() === 0` *before* emitting the preflight and bail silently when there's nothing to compact. After the preflight, every path closes it out: success pairs it with `Auto-compacted N older messages` / `Context compacted: …`; an empty LLM summary (a thinking-heavy model can legally spend its entire response on non-text blocks) emits `Compaction skipped — no summary produced`; a thrown summarize call emits `Compaction failed — context unchanged` (auto path swallows the error, manual path rethrows after emitting). Previously the preflight fired first and `selfCompactSession`'s silent `return null` paths left an orphan "Compacting context…" with no outcome — see `memory/2026-08-04-compact-preflight-orphan.md` for the production forensics.
+
+**Post-compact token estimate.** Every compact ends with `estimateMessageTokens(messages) + estimateMessageTokens(systemPrompt)` written to `session.lastContextTokens` — the number the 80% gate compares against until the next real `usage` event arrives. It is a heuristic (`chars / 3.5` for mixed CJK/English), and it counts every block type: `text` by length, `tool_use` by `name + JSON(input)`, `tool_result` by its string or nested text blocks, and each image — top-level or nested in a `tool_result` — a flat **1500 tokens** (Anthropic's `w*h/750` rule caps near 1600 at max size; we don't decode dimensions). A text-only count under-read image- and tool-heavy histories and pushed the next auto-compact out until the model itself rejected the payload.
+
+**Local compact output is API-legal on its own.** `localCompactMessages` returns `[summary, ...recent]` where `recent` starts past any `tool_result`-first user message, so every kept `tool_result` has its `tool_use` in the kept tail and `repairConversationMessages` is a no-op on the result (also on a second pass over its own output). Pinned by `local-compact-roundtrip.test.ts` — without it the overflow retry would only have "worked" via the later corrupted-conversation repair retry.
 
 Config (see `config.compact`): `keepMessages` / `maxSummaryInput` / `maxMessageSlice` / `summarizeTimeoutSec` — editable in Settings → General → compact.
 
