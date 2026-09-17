@@ -925,7 +925,7 @@ function ChatCodeBlock({ children, className }: { children: React.ReactNode; cla
 
   return (
     <div className="relative group">
-      {lang && <span className="absolute top-1 left-2 text-[9px] text-[var(--muted-foreground)] opacity-60">{lang}</span>}
+      {lang && <span className="block mb-1 text-[9px] leading-none text-[var(--muted-foreground)] opacity-60">{lang}</span>}
       <button onClick={handleCopy} className="absolute top-1 right-1 rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-[var(--accent)] transition-opacity">
         {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
       </button>
