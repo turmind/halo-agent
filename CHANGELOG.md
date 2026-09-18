@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-18
+
+Two changes to how agents hear back from other sessions, both riding the same `runSession` finally seam that already carries sub-agent reports and goal rounds.
+
+### Added
+
+- Relay: a session in one workspace can dispatch work to a session in another workspace on the same server and have the result pushed back, no polling. `relay_send(workspace, session_id, message, agent_id?)` creates the target session if missing, stamps its row with the caller as `reply_to`, and sends (busy target → queued + soft interrupt, so follow-ups and corrections use the same tool); `relay_stop` cascades a stop on the target tree; `relay_read` returns the target's current status / output. When the target root goes idle with its subtree quiet — the same gate `tryReportToParent` and goal rounds use, so a nested dispatch tree reports exactly once, at the end — its wrap-up is appended + sent into the caller's session as a `[Relay report …]` message and `reply_to` is cleared: one dispatch, one report, and a user chatting directly in the department workspace never pings the caller. Opt-in (`tools: [relay_send]` in agent.yaml) and full-access sessions only; CLI / TUI never set the registry, so delivery there is a logged no-op. New `agent_sessions.reply_to` column (createDb ALTER + `schema.sql`).
+
+### Changed
+
+- `get_session_output` now returns `{ status: running|idle|stopped, output, last_activity_at }`, and when the text exceeds the tool-result cap it keeps the **tail** (where the conclusion lives) instead of the head — previously the generic 8K head-keep truncation ate the conclusion and the trailing `output_at` field. Goal sessions get the same shape (the goal-mode wrapper no longer re-wraps it).
+
 ## [1.1.9] - 2026-09-17
 
 Fix batch from the v1.1.8 whole-system design review. Three patterns kept recurring and drove most of the entries below: the same guard fixed on the admin path but not on the web-token / channel path; contracts (access ranks, IM length limits) copied by hand in several places and drifting; and the model not being told the environment it runs in (UTC stamps, IM hard-splits, unattended cron runs).
@@ -473,7 +485,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.9...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/turmind/halo-agent/compare/v1.1.9...v1.2.0
 [1.1.9]: https://github.com/turmind/halo-agent/compare/v1.1.8...v1.1.9
 [1.1.8]: https://github.com/turmind/halo-agent/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/turmind/halo-agent/compare/v1.1.6...v1.1.7
