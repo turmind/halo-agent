@@ -58,7 +58,7 @@ function stubHost(): GoalHost & { deliveries: Array<{ target: string; from: stri
     deliveries,
     getDb: () => sm.getDb(),
     querySession: async (target, from, text) => { deliveries.push({ target, from, text }); return 'ok' },
-    getSessionOutput: () => 'full output',
+    getSessionOutput: () => JSON.stringify({ code: 0, status: 'idle', output: 'full output', last_activity_at: null }),
   }
 }
 

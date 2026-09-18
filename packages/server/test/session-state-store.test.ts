@@ -32,6 +32,7 @@ function session(over: Partial<SavableSession> = {}): SavableSession {
     parentId: over.parentId ?? null,
     description: over.description ?? 'a task',
     output: over.output ?? '',
+    lastActivityAt: over.lastActivityAt ?? null,
     agent: over.agent ?? { messages: [] },
   }
 }
@@ -57,7 +58,7 @@ describe('saveAgentState / loadAgentState roundtrip', () => {
 
   it('writes the expected metadata fields to the file', () => {
     const store = makeStore()
-    store.saveAgentState(session({ id: 's2', agentId: 'default', description: 'do the thing', output: 'result text', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
+    store.saveAgentState(session({ id: 's2', agentId: 'default', description: 'do the thing', output: 'result text', lastActivityAt: '2026-09-18T14:00:00.000Z', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
 
     const file = join(store.sessionDir('default'), 's2.json')
     const data = JSON.parse(readFileSync(file, 'utf-8'))
@@ -68,6 +69,7 @@ describe('saveAgentState / loadAgentState roundtrip', () => {
     // by saveSessionToFile; this path only sees the raw LLM history.
     expect(data.messageCount).toBeUndefined()
     expect(data.output).toBe('result text')
+    expect(data.lastActivityAt).toBe('2026-09-18T14:00:00.000Z')
     expect(data.createdAt).toBeTruthy()
     expect(data.updatedAt).toBeTruthy()
   })

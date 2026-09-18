@@ -170,6 +170,8 @@ interface AgentSession {
   /** All assistant text from the latest turn (mid-turn filler + wrap-up),
    *  reset per turn. Fed to get_session_output and persisted to disk. */
   output: string
+  /** ISO time of the latest text / tool_call / tool_result event of the current turn — "when did this session last do anything". Reset per turn alongside output; null until the turn's first event. Surfaced by get_session_output as last_activity_at. */
+  lastActivityAt: string | null
   /** Only the wrap-up reply (event.final) from the latest turn — the text the
    *  model produced when it was done and stopped calling tools. Fed to the
    *  auto-report to the parent so the parent gets the summary, not the
@@ -630,6 +632,7 @@ export class SessionManager implements SessionManagerInternals {
       id, parentId, agentId, agentName, agent, description,
       draftReset,
       output: '',
+      lastActivityAt: null,
       finalOutput: '',
       turnError: null,
       promise: null,
@@ -1156,6 +1159,7 @@ export class SessionManager implements SessionManagerInternals {
         // finalOutput: only the wrap-up reply → auto-report to the parent, so
         // the parent gets the summary, not the mid-turn "let me check X" filler.
         session.output += event.text ?? ''
+        session.lastActivityAt = new Date().toISOString()
         if (event.final) session.finalOutput += event.text ?? ''
         this.emitEvent(session.id, { type: 'stream', text: event.text, final: event.final, agentName, agentId, taskId })
         break
@@ -1167,6 +1171,7 @@ export class SessionManager implements SessionManagerInternals {
       }
 
       case 'tool_call': {
+        session.lastActivityAt = new Date().toISOString()
         const loopStatus = this.checkLoop(session, event.toolName!, event.toolInput)
         if (loopStatus === 'warn') {
           this.emitEvent(session.id, { type: 'system', text: `⚠️ Tool "${event.toolName}" called repeatedly with identical input. Consider a different approach.` })
@@ -1176,6 +1181,7 @@ export class SessionManager implements SessionManagerInternals {
       }
 
       case 'tool_result': {
+        session.lastActivityAt = new Date().toISOString()
         // UI always receives the full result (toolResultFull). The truncated
         // toolResult is LLM-facing only — already applied in agent-loop.ts
         // before the event was yielded. Don't re-truncate here.
@@ -1231,6 +1237,7 @@ export class SessionManager implements SessionManagerInternals {
     // Reset per-turn output so get_session_output returns only this turn's text,
     // not the concatenation of every turn since the session was created.
     session.output = ''
+    session.lastActivityAt = null
     session.finalOutput = ''
     session.turnError = null
 
@@ -2947,22 +2954,41 @@ export class SessionManager implements SessionManagerInternals {
 
   // ── Session output + status ────────────────────────────────────────
 
+  /** get_session_output rides the generic tool-result cap (agent-loop.ts
+   *  `config.limits.toolResultMax`, head-kept). For a turn transcript the
+   *  conclusion is at the TAIL, so a head-kept cut drops exactly what the
+   *  caller wants and also eats the trailing JSON fields. Self-cap here,
+   *  tail-kept, under the generic cap so the envelope always survives. */
+  private truncateOutputTail(output: string): string {
+    const cap = config.limits.toolResultMax - 500   // headroom for the JSON envelope + marker
+    if (output.length <= cap) return output
+    return `[Output truncated: ${output.length} chars total, showing LAST ${cap}. Earlier text omitted.]\n\n` + output.slice(-cap)
+  }
+
   getSessionOutput(sessionId: string): string {
     const session = this.sessions.get(sessionId)
-    if (session) return JSON.stringify({ code: 0, output: session.output || '(no output yet)' })
+    const meta = this.db.select({ stoppedAt: agentSessions.stoppedAt, agentId: agentSessions.agentId }).from(agentSessions)
+      .where(eq(agentSessions.id, sessionId)).get()
+    if (!session && !meta) return JSON.stringify({ code: 1, error: `session ${sessionId} not found` })
+    // 'running' = a turn is in flight; 'stopped' = row stamped stopped_at (sub-agent
+    // reported / user stopped); otherwise 'idle' — finished its turn, may run again.
+    const status: 'running' | 'idle' | 'stopped' =
+      session?.promise ? 'running' : meta?.stoppedAt ? 'stopped' : 'idle'
 
-    const rows = this.db.select().from(agentSessions)
-      .where(eq(agentSessions.id, sessionId)).all()
-    if (rows.length === 0) return JSON.stringify({ code: 1, error: `session ${sessionId} not found` })
-    const meta = rows[0]
-
-    try {
-      const filePath = path.join(this.sessionDir(meta.agentId), `${fileSegment(sessionId)}.json`)
-      const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
-      if (typeof data.output === 'string' && data.output) return JSON.stringify({ code: 0, output: data.output })
-    } catch { /* file may not exist */ }
-
-    return JSON.stringify({ code: 0, output: '(no output yet)' })
+    let output = ''
+    let lastActivityAt: string | null = null
+    if (session) {
+      output = session.output
+      lastActivityAt = session.lastActivityAt
+    } else {
+      try {
+        const filePath = path.join(this.sessionDir(meta!.agentId), `${fileSegment(sessionId)}.json`)
+        const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
+        output = typeof data.output === 'string' ? data.output : ''
+        lastActivityAt = typeof data.lastActivityAt === 'string' ? data.lastActivityAt : null
+      } catch { /* file may not exist */ }
+    }
+    return JSON.stringify({ code: 0, status, output: this.truncateOutputTail(output) || '(no output yet)', last_activity_at: lastActivityAt })
   }
 
   /**

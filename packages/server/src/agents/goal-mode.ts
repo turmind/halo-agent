@@ -639,7 +639,7 @@ export function buildGoalTools(host: GoalHost, gSessionId: string): ToolDef[] {
       if (!s) return jsonErr('no goal binding on this session')
       if (!isSameTree(params.session_id, s.workerSessionId)) return jsonErr("only the worker session's tree is readable")
       try {
-        return JSON.stringify({ code: 0, output: host.getSessionOutput(params.session_id) })
+        return host.getSessionOutput(params.session_id)
       } catch (err) {
         return jsonErr(err instanceof Error ? err.message : String(err))
       }

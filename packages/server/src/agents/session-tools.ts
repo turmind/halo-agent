@@ -268,7 +268,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
 
   const getSessionOutputTool: ToolDef = {
     name: 'get_session_output',
-    description: "Read the complete, untruncated text of the sub-agent's reply to its most recent message — the full response spanning every step it took for that message (one message can drive many steps: narration, tool calls, more narration), which is more than the possibly-cut auto-report delivered when it finishes. Scoped to that one message's reply, not the session's whole history. Returns JSON with code 0 on success.",
+    description: "Read the full text of the sub-agent's reply to its most recent message — the whole response spanning every step it took for that message (one message can drive many steps: narration, tool calls, more narration), which is more than the head-cut auto-report delivered when it finishes. Scoped to that one message's reply, not the session's whole history. Returns JSON with code 0 on success. The result also carries `status` (running | idle | stopped) and `last_activity_at` (ISO time of the turn's most recent text or tool event; null if none yet) — together they tell you whether the session is still alive. Output longer than the tool cap is truncated head-first (the tail — where the conclusion lives — is kept) with a marker up front.",
     inputSchema: {
       type: 'object' as const,
       properties: { session_id: { type: 'string' as const, description: 'Session ID to read output from' } },

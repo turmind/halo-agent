@@ -17,6 +17,7 @@ export interface SavableSession {
   parentId: string | null
   description: string
   output: string
+  lastActivityAt: string | null
   agent: Pick<ModelRuntime, 'messages'>
 }
 
@@ -77,6 +78,7 @@ export class SessionStateStore {
       // (a different, larger number), and both writing it made the field flap
       // between the two values depending on which write landed last.
       existing.output = session.output
+      existing.lastActivityAt = session.lastActivityAt
       existing.rawMessages = session.agent.messages
       atomicWriteSessionFile(filePath, JSON.stringify(existing))
     } catch (err) {
