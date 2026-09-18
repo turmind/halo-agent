@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   archived_at INTEGER,
   goal TEXT,
   goal_session_id TEXT,
+  reply_to TEXT,
   -- List-visible metadata mirrored from the session file's header on every
   -- write, so the listing path never opens (multi-MB) session files.
   -- NULL = written before these columns existed; the list route backfills.

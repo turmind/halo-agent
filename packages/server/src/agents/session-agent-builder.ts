@@ -44,6 +44,7 @@ export interface SessionAgentBuilderHost {
   getDb(): HaloDb
   createSessionTools(sessionId: string): ToolDef[]
   createGoalTools(sessionId: string): ToolDef[]
+  createRelayTools(sessionId: string): ToolDef[]
 }
 
 /**
@@ -204,6 +205,12 @@ export class SessionAgentBuilder {
       const { tool, reset } = createDraftTool()
       sessionTools.push(tool)
       draftReset = reset
+    }
+
+    // Relay tools are opt-in by name and full-access only: they reach into
+    // OTHER workspaces, so a readonly/workspace-scoped token must never get them.
+    if (nameSet.has('relay_send') && accessLevel === null) {
+      sessionTools.push(...this.host.createRelayTools(sessionId))
     }
 
     return { workspaceTools, sessionTools, allowedNamespaces, draftReset }

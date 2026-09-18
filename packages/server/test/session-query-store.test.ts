@@ -34,6 +34,7 @@ CREATE TABLE agent_sessions (
   archived_at INTEGER,
   goal TEXT,
   goal_session_id TEXT,
+  reply_to TEXT,
   title TEXT,
   exchange_count INTEGER,
   context_tokens INTEGER,

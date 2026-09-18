@@ -17,6 +17,10 @@ export const agentSessions = sqliteTable('agent_sessions', {
   // `goalSessionId` back-points to G so the delivery point routes without scanning.
   goal: text('goal'),
   goalSessionId: text('goal_session_id'),
+  // Relay (see agents/relay.ts): on a dispatched session's row, JSON
+  // `{ workspace, sessionId }` of the caller to report back to when the
+  // subtree goes quiet. Cleared after delivery (one dispatch → one report).
+  replyTo: text('reply_to'),
   // List-visible metadata mirrored from the session file's header on every
   // write (see SessionManager.persistSessionFile). The listing path reads these
   // instead of opening each session file. `null` = row predates the columns —

@@ -33,6 +33,8 @@ export function createDb(dataDir: string) {
   if (!hasGoal) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN goal TEXT`)
   const hasGoalSessionId = agentSessionsCols.some((c) => c.name === 'goal_session_id')
   if (!hasGoalSessionId) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN goal_session_id TEXT`)
+  const hasReplyTo = agentSessionsCols.some((c) => c.name === 'reply_to')
+  if (!hasReplyTo) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN reply_to TEXT`)
   // List-visible session-file metadata (title / counts / tokens) mirrored into
   // the row so listing doesn't read every session file. Nullable on purpose:
   // NULL means "never mirrored" and the list route backfills from the file.

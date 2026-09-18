@@ -24,6 +24,7 @@ import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools } from './session-tools.js'
 import { deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
+import { deliverRelayReport, buildRelayTools } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
@@ -598,6 +599,12 @@ export class SessionManager implements SessionManagerInternals {
    *  session-agent-builder / goal-mode.ts). */
   createGoalTools(sessionId: string): ToolDef[] {
     return buildGoalTools(this, sessionId)
+  }
+
+  /** Relay tool set — opt-in via agent.yaml `tools:` for full-access agents
+   *  (see session-agent-builder / relay.ts). */
+  createRelayTools(sessionId: string): ToolDef[] {
+    return buildRelayTools(this, sessionId)
   }
 
   // ── Agent instance building (delegated to SessionAgentBuilder) ──────
@@ -1604,6 +1611,11 @@ export class SessionManager implements SessionManagerInternals {
       // querySession). No-op unless the row carries a goal_session_id.
       deliverGoalRound(this, session).catch((err) => {
         console.error(`[GoalMode] deliverGoalRound failed for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
+      })
+      // Relay: a session dispatched from another workspace reports its wrap-up
+      // back to the caller (fire-and-forget; no-op without a reply_to row).
+      deliverRelayReport(this, session).catch((err) => {
+        console.error(`[Relay] deliverRelayReport failed for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
       })
       this.releaseSession(sessionId)
     }

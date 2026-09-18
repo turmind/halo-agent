@@ -32,6 +32,7 @@ import { setupWebSocketHandler } from './ws/handler.js'
 import { setBroadcastWss } from './ws/broadcast.js'
 import { SessionManagerRegistry } from './agents/session-manager-registry.js'
 import { claimWorkspaceRuntime } from './agents/workspace-runtime-lock.js'
+import { setRelayRegistry } from './agents/relay.js'
 import { createChannelDb, setChannelDb } from './db/channel-db.js'
 import { createCronDb, setCronDb } from './db/cron-db.js'
 import { createRunsDb, setRunsDb, listRunningWorkspaces } from './db/runs-db.js'
@@ -419,6 +420,7 @@ if (!AGENTCORE) {
 // HALO_HOME can share one workspace — server.lock can't see that), so this
 // flag means "reconcile if the workspace claim succeeds", not "always".
 const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
+setRelayRegistry(registry)
 
 // Run ledger eager sweep: build the SessionManager NOW for every workspace
 // that has leftover `running_sessions` rows, so its constructor chain
