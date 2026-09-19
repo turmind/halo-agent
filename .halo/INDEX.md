@@ -105,6 +105,15 @@ Key state:
 
 Driven from `packages/server/src/agents/goal-mode.ts` (state, overlay, delivery point, G-only tools, restart sweep) + `packages/server/templates/agents/goal/` (the judge agent) + `channels/shared/commands.ts` (`/goal` verbs) + `packages/admin/src/features/chat/goal-{banner,store}` (admin surface).
 
+## Relay (cross-workspace dispatch)
+
+Lets an agent in one workspace hand work to a session in **another workspace on the same server** and get the result pushed back — the in-process counterpart of ACP for the "secretary + departments" layout (one workspace that only knows who knows what). Opt-in via `tools: [relay_send]` in `agent.yaml` (one name grants the set: `relay_send` / `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list`), **full-access sessions only**. `relay_send` creates the target session if missing, stamps its row with the caller as `reply_to`, and sends with a `[channel: relay | from: <ws>]` prefix (busy target → queued + soft interrupt; `relay_interrupt` aborts the in-flight turn first). When the target root goes idle with its subtree quiet — same gate as sub-agent reports and goal rounds, so a nested tree reports once — its wrap-up lands in the caller's session as a `[Relay report · workspace … · session …]` message and `reply_to` is cleared: one dispatch, one report. Server only (CLI / TUI never set the registry). See [design/relay.md](docs/design/relay.md) and [dev/tools.md → Relay tools](docs/dev/tools.md#relay-tools).
+
+Key state:
+- Target workspace sqlite `agent_sessions.reply_to` — JSON `{ workspace, sessionId }` of the caller while a dispatch is pending; null otherwise
+
+Driven from `packages/server/src/agents/relay.ts` (tools + `deliverRelayReport`) + `session-manager.ts` (fourth finally hook) + `session-agent-builder.ts` (opt-in gate) + `index.ts` (`setRelayRegistry`).
+
 ## Run Ledger
 
 A root agent that dispatched sub-agents and was waiting on their reports never learns the server restarted — the boot reconcile stamps its children stopped, but the root itself just sits there. A global `~/.halo/global/runs.db` table tracks which sessions the server is mid-run on: `runSession` inserts on entry and deletes in its finally, so the steady state is an empty table and whatever is left at boot is exactly what the previous process died in the middle of. A boot sweep (right after `sweepActiveGoals`, same `.halo/runtime.lock` ownership gate) drains each workspace's rows and sends one restart nudge per interrupted root — skipping goal sessions, goal-bound workers while their goal is `running`, `cron-*` ids, and `internal` agents. `index.ts` runs this eagerly at startup for every workspace with leftover rows instead of waiting for someone to open it.

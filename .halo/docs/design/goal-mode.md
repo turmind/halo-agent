@@ -97,7 +97,7 @@ Injected only for the `goal` agent; schemas in [dev/tools.md → Goal tools](../
 - `goal_decide` — records a delegated decision as `decision-<n>.md` in the goal dir *before* relaying the answer; counts against the cap of 5.
 - `goal_finish` — final acceptance: `running → done`, dissolves the binding; G then writes the final report as its reply (which must list every delegated decision).
 - `query_session` (goal-scoped) — the lateral edge: only the bound worker is reachable; only while `running`; a `[Goal work order · round N/cap]` header is prepended in code.
-- `get_session_output` (goal-scoped) — read the full latest-turn output of W or any session in W's tree (evidence gathering); works regardless of goal status.
+- `get_session_output` (goal-scoped) — read the full latest-turn output of W or any session in W's tree (evidence gathering); works regardless of goal status. Same `{ code, status, output, last_activity_at }` shape and tail-keeping truncation as the standard tool — the wrapper only adds the tree check and passes `host.getSessionOutput` straight through (it used to re-wrap the result in its own envelope, which the generic head-keep truncation then cut in half).
 
 ## `/goal` verbs
 

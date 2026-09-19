@@ -1,6 +1,6 @@
 # Agent Tool Reference
 
-Agents have two tool categories: workspace tools (files, shell, search) and session tools (managing other sessions). Workspace tools are enabled by name in `agent.yaml`'s `tools` list; the session-tool bundle is granted automatically by a non-empty `team` (see [Session tools](#session-tools)).
+Agents have two tool categories: workspace tools (files, shell, search) and session tools (managing other sessions). Workspace tools are enabled by name in `agent.yaml`'s `tools` list; the session-tool bundle is granted automatically by a non-empty `team` (see [Session tools](#session-tools)). A third, opt-in set — [Relay tools](#relay-tools) — reaches sessions in *other* workspaces on the same server.
 
 ## Workspace tools
 
@@ -183,7 +183,7 @@ Session management tools for agents. **Not enabled by name** — the whole bundl
 
 ### start_session
 
-Start a sub-agent session asynchronously. When the sub-agent finishes, its **wrap-up reply** (the closing summary — not the mid-task progress narration) is auto-delivered back to the caller's conversation. A long summary is **cut head-kept / tail-dropped** at `limits.autoReportMax` (default 8,192 chars, settings `general.limits.auto_report_chars`) with a `[Report truncated: N chars total, showing first M. Use get_session_output("<id>") for the full result.]` marker — so the caller can tell a short answer from a cut-off one, and knows the **tail** is what's missing. Call `get_session_output` for the full untruncated reply. (Before 0.1.5 the auto-report concatenated every text segment of the turn, including mid-task filler.)
+Start a sub-agent session asynchronously. When the sub-agent finishes, its **wrap-up reply** (the closing summary — not the mid-task progress narration) is auto-delivered back to the caller's conversation. A long summary is **cut head-kept / tail-dropped** at `limits.autoReportMax` (default 8,192 chars, settings `general.limits.auto_report_chars`) with a `[Report truncated: N chars total, showing first M. Use get_session_output("<id>") for the full result.]` marker — so the caller can tell a short answer from a cut-off one, and knows the **tail** is what's missing. Call `get_session_output` for the rest — it keeps the tail when it has to cut, so the two are complementary. (Before 0.1.5 the auto-report concatenated every text segment of the turn, including mid-task filler.)
 
 **Arguments**
 
@@ -275,18 +275,22 @@ Abort the current task of a running session. Any queued messages are **not** dro
 
 ### get_session_output
 
-Read the **complete, untruncated** text of an agent session's reply to its **most recent message** — the full response spanning every step taken for that message (one message can drive many steps: narration → tool calls → more narration), which is more than the possibly-cut auto-report. Scoped to that one message's reply, not the session's whole history. Excludes tool calls/results and thinking — those only ever stream to the UI, never into the output.
+Read the text of an agent session's reply to its **most recent message** — the full response spanning every step taken for that message (one message can drive many steps: narration → tool calls → more narration), which is more than the possibly-cut auto-report. Scoped to that one message's reply, not the session's whole history. Excludes tool calls/results and thinking — those only ever stream to the UI, never into the output.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
 | `session_id` | string | yes | Session to read |
+
+**Output (JSON string)**: `{ "code": 0, "status": "running" | "idle" | "stopped", "output": "...", "last_activity_at": "<ISO>" | null }`. `status` is `running` while a turn is in flight (`promise !== null`), `stopped` when the row carries `stopped_at` (sub-agent reported / user stopped), otherwise `idle`. `last_activity_at` is the wall-clock time of the turn's most recent text / `tool_call` / `tool_result` event (reset to `null` at each turn start) — together with `status` it tells the caller whether a long-running session is still alive or has silently stalled. Unknown / out-of-tree id → `{"code": 1, "error": "session <id> not found"}`.
+
+**Truncation keeps the tail.** When `output` exceeds `limits.toolResultMax` (minus 500 chars of envelope headroom) it is cut **head-first** with a `[Output truncated: N chars total, showing LAST M. Earlier text omitted.]` marker up front — the conclusion lives at the end, and the generic head-keep tool-result cap used to eat exactly that (plus the trailing JSON fields). The auto-report's cut is the opposite (head-kept, see [start_session](#start_session)), so the two are complementary: report shows the opening, `get_session_output` shows the ending. (Before 1.2.0 the tool returned the bare output string with no status and the generic head-keep truncation.)
 
 Implementation: a turn (one `runAgentTurn`, processing one inbound message) accumulates text into **two** per-turn buffers, both reset at the turn's start:
 
 - `session.output` — **all** assistant text of the turn (mid-task filler + wrap-up). This is what `get_session_output` returns and what is persisted to disk.
 - `session.finalOutput` — **only** the wrap-up reply (text emitted when `stopReason !== 'tool_use'`, flagged by the agent-loop `final` event field). This feeds the auto-report to the parent (`tryReportToParent`), falling back to `session.output` when the turn ended without a closing message.
 
-In-memory sessions return `session.output`; released sessions read the `output` field from `.halo/sessions/{agentId}/{sid}.json`. `get_session_output` never truncates — only the auto-report does (see [start_session](#start_session)). (Split introduced in 0.1.5; before that both reads shared one `session.output`.)
+In-memory sessions return `session.output` / `session.lastActivityAt`; released sessions read the `output` / `lastActivityAt` fields from `.halo/sessions/{agentId}/{sid}.json` (both written by `saveAgentState`). (Split introduced in 0.1.5; before that both reads shared one `session.output`.)
 
 ### query_agent
 
@@ -355,11 +359,86 @@ G's **lateral edge**: same name as the standard session tool, different implemen
 
 ### get_session_output (goal-scoped)
 
-Read the full latest-turn output of the worker or any session in the worker's subtree (evidence gathering — round reports are truncated at `limits.autoReportMax`). Scoped to the worker's tree; works regardless of goal status.
+Read the full latest-turn output of the worker or any session in the worker's subtree (evidence gathering — round reports are truncated at `limits.autoReportMax`). Scoped to the worker's tree; works regardless of goal status. Same `{ code, status, output, last_activity_at }` shape and tail-keeping truncation as the standard [get_session_output](#get_session_output) — the goal wrapper only adds the tree check and passes `host.getSessionOutput` through.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
 | `session_id` | string | yes | Worker session id or a descendant (`worker>child`) id |
+
+## Relay tools
+
+File: `packages/server/src/agents/relay.ts` (`buildRelayTools`). Design notes in [design/relay.md](../design/relay.md).
+
+Cross-**workspace** dispatch on the same server: a "secretary" agent in workspace S hands a message to a session in workspace D and gets the result pushed back when D is done, no polling. Everything is in-process via the server's `SessionManagerRegistry` (`setRelayRegistry` in `index.ts`) — no HTTP, no tokens. The CLI / TUI never set the registry, so there every relay tool returns `{"code": 1, "error": "relay is unavailable in this runtime (server only)"}`.
+
+**Enabling**: opt-in by the single name `relay_send` in `agent.yaml`'s `tools:` — `session-agent-builder` sees that name and injects the whole set (`relay_send` / `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list`), the other four names are not recognised on their own. **Full-access sessions only** (`accessLevel === null`): a `workspace` / `readonly` session listing `relay_send` gets nothing, because the tools reach into other workspaces' sqlite and session trees. The admin Agents tool picker shows one `relay_send` chip whose description names the whole set (`GET /agent-configs/tools` builds it from `buildRelayTools` against a dummy target).
+
+**Common arguments** (every tool except `relay_list`, where it is optional): `workspace` — absolute path of the target workspace on this server (realpath'd; must contain `.halo/`, else `{"code": 1, "error": "not a halo workspace (no .halo/): …"}`); `session_id` — session id inside that workspace.
+
+**Scope**: the target may be the caller's **own** workspace too — there is no "must be different" check, so relay doubles as a `query_session` without the own-tree scoping (any root session, not just the caller's tree). Reports are only delivered for **root** targets (`parentId === null`); a `parent>child` id receives the message but its wrap-up goes to its parent, never back to the caller.
+
+### relay_send
+
+Dispatch a message to a session in another workspace. Creates the session if `session_id` does not exist there (root session, agent `agent_id` or the target workspace's default agent, description `Relay: <first 60 chars>`), stamps the target row's `reply_to` with `{ workspace: <caller ws>, sessionId: <caller session> }`, appends the raw message to the target's UI transcript and sends it prefixed `[channel: relay | from: <caller ws>]\n\n<message>` — so the target agent knows the message came from another workspace's agent, not the admin UI, and doesn't echo the tag. Busy target → the message is **queued + soft interrupt** (same as `query_session` / a user message mid-turn: the current tool finishes, then the queue drains as one merged turn), so follow-ups and corrections ride the same tool. Returns immediately.
+
+| Arg | Type | Required | Description |
+|---|---|---|---|
+| `workspace` | string | yes | Target workspace path |
+| `session_id` | string | yes | Target session id (created if missing) |
+| `message` | string | yes | The message to deliver |
+| `agent_id` | string | no | Agent to create the session with when it does not exist yet; default = the target workspace's default agent |
+
+Returns `{ "code": 0, "workspace": "<realpath>", "session_id": "…", "state": "running" | "queued" }`.
+
+**Report delivery**: when the target root's turn ends **and its subtree is quiet** (no active children in the db, empty message queue — the same gate `tryReportToParent` and `deliverGoalRound` use, so a nested dispatch tree reports exactly once, at the end), `deliverRelayReport` (fourth hook in `runSession`'s finally) appends + sends into the caller session:
+
+```
+[Relay report · workspace <target ws> · session <id>]
+
+<target's finalOutput || output>
+```
+
+Body capped at `limits.autoReportMax` (head-kept) with a `[Report truncated: N chars total. Use relay_read("<ws>", "<id>") for the full text.]` marker. A turn killed by an unrecoverable error is prefixed `[RELAY TARGET ABORTED: … Error: <text> … Re-send with relay_send to let it resume.]` **before** the cap so it can't be sliced off. `reply_to` is cleared **before** sending: one dispatch → one report, a failed delivery can't double-fire on the next turn end, and a user chatting directly in the department workspace afterwards never pings the secretary.
+
+### relay_interrupt
+
+`relay_send` **plus a hard abort** of the target's in-flight turn — `interrupt_session` semantics across workspaces: the message is enqueued first, and if the target was busy (`state === 'queued'`) its turn is aborted immediately (propagates to `shell_exec`, SIGTERMs the process group) so the drain picks the message up now instead of after the current step. Enqueue-then-abort order matters: the finally never sees an empty queue and so never fires a spurious relay report. Idle target → behaves exactly like `relay_send` (`interrupted: false`). Unlike `relay_send` it does **not** create a missing session (`{"code": 1, "error": "session not found"}`) — there is nothing to interrupt. Use it when the target is heading the wrong way and waiting for its current step is not acceptable; for ordinary follow-ups prefer `relay_send`.
+
+| Arg | Type | Required | Description |
+|---|---|---|---|
+| `workspace` | string | yes | Target workspace path |
+| `session_id` | string | yes | Target session id (must exist) |
+| `message` | string | yes | The message the target runs after the abort |
+
+Returns `{ "code": 0, "workspace", "session_id", "state": "running" | "queued", "interrupted": boolean }`.
+
+### relay_stop
+
+Cascades `stopSession` on the target session and its sub-agents. If the target was mid-turn the caller still receives a relay report describing where it was cut off (the stop ends the turn → finally → `deliverRelayReport`, with the partial trace as body).
+
+| Arg | Type | Required | Description |
+|---|---|---|---|
+| `workspace` | string | yes | Target workspace path |
+| `session_id` | string | yes | Target session id (must exist) |
+
+### relay_read
+
+The target workspace's [get_session_output](#get_session_output) — same `{ code, status, output, last_activity_at }` shape and tail-keeping truncation. Use it to check on progress or to fetch the full text after a truncated relay report.
+
+| Arg | Type | Required | Description |
+|---|---|---|---|
+| `workspace` | string | yes | Target workspace path |
+| `session_id` | string | yes | Target session id |
+
+### relay_list
+
+List a workspace's **root** sessions — most recently active first, capped at 100, archived rows excluded — so the caller can find an existing session to `relay_send` into (instead of minting a new id every time) or see what a department is currently working on. `workspace` is optional and defaults to the caller's own workspace, which makes it a `session_list` for roots you don't own (the standard `session_list` only shows your direct children).
+
+| Arg | Type | Required | Description |
+|---|---|---|---|
+| `workspace` | string | no | Workspace path; omit for the current workspace |
+
+Returns `{ "code": 0, "workspace": "<realpath>", "sessions": [{ id, agentId, agentName, title, status, createdAt, updatedAt }], "count": N }`. `title` falls back to `description` like `session_list`; `status` follows the list semantics (`running` when the root itself or any live child is mid-turn, `stopped` when the row is stamped, else `idle`).
 
 ## Self-review tool
 
@@ -391,7 +470,7 @@ skills:
   - code-review    # auto-injects activate_skill
 ```
 
-Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`).
+Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`). The relay set is the one name-gated bundle: listing `relay_send` alone brings `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list` with it, full-access sessions only (see [Relay tools](#relay-tools)).
 
 There is **no implicit default tool set**: `filterTools()` (in `agent-loader.ts`) returns only the tools whose names appear in `agent.yaml`'s `tools:` list. If the field is absent or empty, the agent has zero workspace tools. The admin UI's "Create agent" form scaffolds a fresh agent with an empty `tools: []` for the same reason — fill it in deliberately. The `default` agent's bundled `agent.yaml` lists the common set (`file_read` / `file_write` / `file_edit` / `view_image` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`) that most agents will want, plus `draft` (see Self-review tool above); copy that line if you're starting from scratch.
 

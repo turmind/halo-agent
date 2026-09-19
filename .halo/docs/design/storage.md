@@ -114,7 +114,8 @@ Path: `.halo/sessions/{agentId}/{sessionId}.json`
   "archivedUserCount": 30,           // main user turns that moved into segments
   "messages": [SessionMessage],       // UI event-log format (written by WS handler / UIState reducer)
   "rawMessages": [AnthropicMessage],  // raw Bedrock API shape (written by SessionManager saveAgentState); user text blocks start with the `[<iso>] ` arrival stamp — strip it (stripTurnStamp) before matching against `messages`
-  "output": "..."                     // accumulated assistant text from the latest turn
+  "output": "...",                    // accumulated assistant text from the latest turn
+  "lastActivityAt": "ISO8601"         // latest turn's last text / tool event; null if none — read by get_session_output for released sessions
 }
 ```
 
@@ -566,6 +567,7 @@ The databases hold session metadata indexes and workspace-scoped preferences (e.
 | stopped_at | INTEGER | Stopped timestamp (null = active) |
 | archived_at | INTEGER | Archived timestamp (null = not archived) |
 | goal / goal_session_id | TEXT | Goal mode — binding JSON on the goal session's row, back-pointer on the worker's |
+| reply_to | TEXT | Relay — JSON `{ workspace, sessionId }` of the caller session in another workspace; set by `relay_send`, cleared on report delivery. Added via idempotent ALTER in `db/index.ts`. |
 | title | TEXT | Mirror of the session file's `title` |
 | exchange_count | INTEGER | Mirror: main user turns over the session's lifetime (kept + archived) |
 | context_tokens | INTEGER | Mirror of the file's `contextTokens` |
@@ -628,3 +630,4 @@ All channel types (telegram, web, wechat, slack, feishu) share one table. Common
 | v1+ | 2026-05-13 | Settings i18n + UI polish: compact keys renamed camelCase → snake_case (`keep_messages`, `max_summary_input`, `max_message_slice`, `summarize_timeout_sec`). Added `description_zh` on all leaf nodes and `description`/`description_zh` on branch nodes (replaces `_hint`/`_hint_zh`). Added `secret: true` attribute for masked input. Added Tavily to default params. Admin UI fully i18n'd (agents, skills, settings, nav). |
 | v1+ | 2026-05-13 | Added `packages/cli` — standalone CLI/TUI client with embedded agent loop (no server required). Imports server agent-core via subpath exports. Session prefix: `cli_`. Added `exports` + `typesVersions` to server `package.json`. |
 | v1+ | 2026-08-08 | Session file slimming (no version bump — additive + reader-compatible): assistant `toolCalls` no longer written (`contentBlocks` is the single copy, `toolCalls` stays read-only legacy); files written as compact JSON; UI-log archiving adds header fields `archiveCount` / `archivedUserCount` plus `{sessionId}.arch.{N}.json.gz` segment files; `agent_sessions` gains mirrored `title` / `exchange_count` / `context_tokens` / `total_output_tokens` columns so listing doesn't parse every file. |
+| v1+ | 2026-09-18 | Relay + liveness (additive, no version bump): `agent_sessions.reply_to` column (idempotent ALTER); session file gains `lastActivityAt` beside `output`, read back by `get_session_output` for released sessions. |

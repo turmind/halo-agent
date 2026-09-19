@@ -33,13 +33,15 @@ These sessions also do **not** get an `agent_sessions` row in the workspace's `h
   "archivedUserCount": 30,
   "messages": [...],
   "rawMessages": [...],
-  "output": "..."
+  "output": "...",
+  "lastActivityAt": "2026-09-18T..."
 }
 ```
 
 - **messages**: event log format (written by the WS handler) — context / usage / tool_call / tool_result / agent_start/done, with full debug info. Assistant rows persist their tool calls **only** in `contentBlocks` (interleaved with text / thinking); the flat `toolCalls` array is no longer written — it duplicated every tool's input *and* output byte-for-byte (measured: 66 MiB of 340 MiB across 195 sessions). Readers are blocks-first with `toolCalls` as a pure legacy fallback (`messageToolCalls()` in `sessions/session-types.ts`; see [storage.md](storage.md#sessionmessage))
 - **rawMessages**: Bedrock API shape (written by SessionManager `saveAgentState`) — raw user/assistant turns with toolUse/toolResult blocks
-- **output**: accumulated assistant text
+- **output**: accumulated assistant text of the latest turn
+- **lastActivityAt**: ISO time of the latest turn's last text / tool event (null if none) — written alongside `output` by `saveAgentState` so a released session's `get_session_output` can still report liveness
 - **archiveCount / archivedUserCount**: UI-log archiving bookkeeping — absent until the first archive. See [UI-log archiving](#ui-log-archiving)
 
 `saveSessionToFile()` uses read-merge-write so both halves survive. When loading, the event log `messages` takes priority; only when `messages` is empty (e.g. a sub-session tracked only by SessionManager) does `rawMessages` get converted to display format.
@@ -95,7 +97,10 @@ interface AgentSession {
   agentId: string
   agent: ModelRuntime
   description: string
-  output: string
+  output: string                   // all assistant text of the current turn (reset per turn)
+  finalOutput: string              // wrap-up text only (stopReason !== 'tool_use') — feeds auto-report / goal round / relay report
+  lastActivityAt: string | null    // ISO of the turn's latest text / tool_call / tool_result event; null at turn start — surfaced by get_session_output
+  turnError: string | null         // set when the turn died on an unrecoverable error — prefixes the report with an ABORTED marker
   promise: Promise<string> | null  // non-null = running
   abortController: AbortController | null
   messageQueue: QueuedMessage[]    // single unified queue: user→agent AND agent→agent
@@ -142,7 +147,7 @@ Hierarchical encoding: `root_id>child_segment>grandchild_segment`.
 
   **Abnormal-termination marker**: when the reported turn was killed by an unrecoverable error (retry budget exhausted / account-level failure), the session's `turnError` field holds the error text and the auto-report is prefixed with an explicit `[SUB-AGENT ABORTED: … Error: <text> … Re-dispatch with query_session(…) to resume.]` block. Without it the parent LLM consumed mid-turn fragments (or a literal "(no output)") as completed reports — the cron-era "sub-agent reported without finishing" incident, root-caused to a Bedrock h2 hang (`TimeoutError: http2 request did not get a response`, now also in the transient-transport retry list). Prefix, don't suppress: skipping the report would leave the parent waiting forever, the partial trace has diagnostic value, and `stoppedAt` is stamped as usual so the child never shows as falsely running. The marker is prepended *before* the truncation cap so it can never be sliced off. (`deliverGoalRound` has the same `finalOutput || output` shape without an error dimension — known gap, unfixed.)
 
-  The full finally-chain order is `tryReportToParent → deliverGoalRound → releaseSession`: after the parent-report check, goal-bound **root** sessions get their round report delivered to the goal session (fire-and-forget; a no-op for everyone else — see [goal-mode.md](goal-mode.md#the-delivery-point-delivergoalround)), then the session is released.
+  The full finally-chain order is `tryReportToParent → deliverGoalRound → deliverRelayReport → releaseSession`: after the parent-report check, goal-bound **root** sessions get their round report delivered to the goal session (fire-and-forget; a no-op for everyone else — see [goal-mode.md](goal-mode.md#the-delivery-point-delivergoalround)), then a root whose row carries a `reply_to` back-pointer (it was dispatched from another workspace via `relay_send`) gets its wrap-up appended + sent into the caller session in that workspace (same subtree-quiet gate, `reply_to` cleared before sending — see [relay.md](relay.md)), then the session is released. Each hook decides on its own db column (`parent_id` / `goal_session_id` / `reply_to`), so the three never fire for the same session.
 
 - **Sibling-status injection for root** (`siblingStatusSuffix`): `tryReportToParent` early-returns for root (`parentId === null`) since there's no parent to bubble up to — so root never learns whether its *other* children are still running, and the root LLM could wrap up early after consuming just one child's report. When root consumes a child report (`querySession` idle branch + `drainQueue`), a sibling-status line is appended to the message fed to the LLM. "All sub-agents done" requires **both** no sibling running in the DB (`parentId = root AND stoppedAt IS NULL`) **and** an empty in-memory `messageQueue` — a child can be stopped while its report is still queued, so the DB check alone would falsely declare completion. The reporting child needs no identity exclusion: it stamped `stoppedAt` before the report was delivered, so `stoppedAt IS NULL` already excludes it (unless re-dispatched a new task, which clears `stoppedAt` — then it correctly counts as running). The line carries per-child `created` + `last active` timestamps so a capable model can tell a freshly dispatched sibling from an original-batch leftover. (Its `[System @ <iso>]` header used to be the *only* wall-clock signal the model ever saw; since 1.1.6 every turn carries an arrival stamp — see [Message queue and drain](#message-queue-and-drain).) Mid-tier parents are excluded by design — their `tryReportToParent` bubble-up already gates them on a fully-drained subtree.
 
@@ -257,6 +262,7 @@ Table `agent_sessions` holds metadata only (no runtime state):
 | stopped_at | INTEGER | null = active |
 | archived_at | INTEGER | null = not archived |
 | goal / goal_session_id | TEXT | Goal mode: binding JSON on G's row, back-pointer on W's — see [goal-mode.md](goal-mode.md) |
+| reply_to | TEXT | Relay: JSON `{ workspace, sessionId }` of the caller in another workspace, set by `relay_send`, cleared when the report is delivered — see [relay.md](relay.md) |
 | title / exchange_count / context_tokens / total_output_tokens | TEXT / INTEGER | List-visible metadata mirrored from the session file header; null = row predates the columns |
 
 Status is derived from memory (`promise !== null`) — not stored.
