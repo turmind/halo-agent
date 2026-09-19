@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-19
+
+### Added
+
+- Relay: `relay_interrupt(workspace, session_id, message)` — the hard twin of `relay_send`. `relay_send` to a busy target is a soft interrupt (the target finishes its current tool, then reads the message); `relay_interrupt` aborts the in-flight turn now — including a command mid-execution — and re-runs the target with the message, same shape as `interrupt_session`. Enqueue-before-abort, so the turn end never sees an empty queue and fires a spurious relay report. Idle target → plain send (`interrupted: false`); missing session → error, it never creates one.
+
+- Relay: `relay_list(workspace?)` — the root sessions of a workspace (id / agent / title / status, newest 100), so a dispatcher can pick up an existing conversation instead of minting a new session id each time, or just see what a department is working on. `workspace` defaults to the caller's own, which makes it the `session_list` for roots outside your own tree.
+
+### Fixed
+
+- Admin: the agent-form tool picker only knew `createWorkspaceTools`, so a hand-written `relay_send` rendered as a red "not available on this server" chip (and a click deleted it from the agent). One `relay_send` chip is now listed, described as the whole relay set — the five tools are switched on by that single name, so listing them separately would suggest they can be picked apart.
+
 ## [1.2.0] - 2026-09-18
 
 Two changes to how agents hear back from other sessions, both riding the same `runSession` finally seam that already carries sub-agent reports and goal rounds.
@@ -485,7 +497,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/turmind/halo-agent/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/turmind/halo-agent/compare/v1.1.9...v1.2.0
 [1.1.9]: https://github.com/turmind/halo-agent/compare/v1.1.8...v1.1.9
 [1.1.8]: https://github.com/turmind/halo-agent/compare/v1.1.7...v1.1.8
