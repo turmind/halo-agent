@@ -136,9 +136,9 @@ describe('genai-spans: span tree', () => {
     const [tool] = byOp(spans, 'execute_tool')
     expect(agent.attributes['gen_ai.task.input']).toBeUndefined()
     expect(agent.attributes['gen_ai.task.output']).toBeUndefined()
+    expect(agent.attributes['gen_ai.system_instructions']).toBeUndefined()
     expect(chat.attributes['gen_ai.input.messages']).toBeUndefined()
     expect(chat.attributes['gen_ai.output.messages']).toBeUndefined()
-    expect(chat.attributes['gen_ai.system_instructions']).toBeUndefined()
     expect(tool.attributes['gen_ai.tool.call.arguments']).toBeUndefined()
     expect(tool.attributes['gen_ai.tool.call.result']).toBeUndefined()
     expect(chat.attributes['gen_ai.usage.input_tokens']).toBe(100)
@@ -156,6 +156,9 @@ describe('genai-spans: span tree', () => {
 
     expect(agent.attributes['gen_ai.task.input']).toBe('list files')
     expect(agent.attributes['gen_ai.task.output']).toBe('Two files.') // finalText only, not the mid-turn filler
+    // system prompt lives on the turn span, once — not repeated per chat span
+    expect(agent.attributes['gen_ai.system_instructions']).toBe('You are a test agent.')
+    expect(chats[0].attributes['gen_ai.system_instructions']).toBeUndefined()
 
     const input1 = JSON.parse(chats[0].attributes['gen_ai.input.messages'] as string)
     expect(input1).toEqual([{ role: 'user', parts: [{ type: 'text', content: 'list files' }] }])
@@ -164,15 +167,29 @@ describe('genai-spans: span tree', () => {
       { type: 'text', content: 'Let me look.' },
       { type: 'tool_call', id: 'tu_1', name: 'shell_exec', arguments: { command: 'ls' } },
     ] }])
-    expect(chats[0].attributes['gen_ai.system_instructions']).toBe('You are a test agent.')
 
-    // second call's input includes the tool_result message with role "tool"
+    // second call's input is the delta only: just the tool_result message with role "tool"
     const input2 = JSON.parse(chats[1].attributes['gen_ai.input.messages'] as string)
-    expect(input2).toHaveLength(3)
-    expect(input2[2]).toEqual({ role: 'tool', parts: [{ type: 'tool_call_response', id: 'tu_1', response: '' }] })
+    expect(input2).toEqual([{ role: 'tool', parts: [{ type: 'tool_call_response', id: 'tu_1', response: '' }] }])
+    const output2 = JSON.parse(chats[1].attributes['gen_ai.output.messages'] as string)
+    expect(output2).toEqual([{ role: 'assistant', parts: [{ type: 'text', content: 'Two files.' }] }])
 
     expect(tool.attributes['gen_ai.tool.call.arguments']).toBe('{"command":"ls"}')
     expect(tool.attributes['gen_ai.tool.call.result']).toBe('[no output]')
+  })
+
+  it('(c2) second turn on a session with history → chat spans carry only this turn\'s delta', () => {
+    observability.captureContent = true
+    const session = makeSession()
+    runOneToolTurn(session)
+    spanExporter.reset()
+    runOneToolTurn(session) // history now holds 8 messages; the first 4 are the previous turn
+    const chats = byOp(spanExporter.getFinishedSpans(), 'chat')
+    const input1 = JSON.parse(chats[0].attributes['gen_ai.input.messages'] as string)
+    expect(input1).toEqual([{ role: 'user', parts: [{ type: 'text', content: 'list files' }] }])
+    const input2 = JSON.parse(chats[1].attributes['gen_ai.input.messages'] as string)
+    expect(input2).toHaveLength(1)
+    expect(input2[0].role).toBe('tool')
   })
 
   it('(d) messagesAttr drops oldest messages first and prepends an omission marker', () => {

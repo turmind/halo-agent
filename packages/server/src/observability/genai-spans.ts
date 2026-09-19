@@ -46,6 +46,9 @@ interface TurnState {
   allText: string
   cycleToolCalls: Array<{ id: string; name: string; args: unknown }>
   pendingTools: Map<string, PendingTool>
+  /** Index into session.agent.messages up to which content has already been
+   *  emitted on a chat span this turn — each chat span carries only the delta. */
+  messageCursor: number
 }
 
 const turns = new Map<string, TurnState>()
@@ -152,6 +155,9 @@ export function beginTurn(session: SpanSessionContext, message: string | Content
       'session.id': session.id,
     },
   })
+  // System prompt once per turn here, not on every chat span — it is identical
+  // across a turn's model calls and was the bulk of the exported bytes.
+  if (captureContent()) span.setAttribute('gen_ai.system_instructions', cap(session.systemPrompt, SYSTEM_PROMPT_CAP))
   turns.set(session.id, {
     span,
     ctx: trace.setSpan(context.active(), span),
@@ -161,6 +167,9 @@ export function beginTurn(session: SpanSessionContext, message: string | Content
     allText: '',
     cycleToolCalls: [],
     pendingTools: new Map(),
+    // The user message is pushed by agent.run() after beginTurn, so the first
+    // chat span's delta starts exactly at it.
+    messageCursor: session.agent.messages.length,
   })
 }
 
@@ -207,9 +216,14 @@ function recordModelCall(session: SpanSessionContext, turn: TurnState, event: Ag
     const messages = session.agent.messages
     const last = messages[messages.length - 1]
     const hasAssistantTail = last?.role === 'assistant'
-    span.setAttribute('gen_ai.input.messages', messagesAttr(hasAssistantTail ? messages.slice(0, -1) : messages))
+    const inputEnd = hasAssistantTail ? messages.length - 1 : messages.length
+    // Only what arrived since this turn's previous chat span (the user message
+    // first, then each cycle's tool_results) — replaying the full history made
+    // a turn's exported bytes O(n²). A mid-turn compact can shrink the history
+    // below the cursor; slice() then yields [] and the cursor re-syncs below.
+    span.setAttribute('gen_ai.input.messages', messagesAttr(messages.slice(turn.messageCursor, inputEnd)))
     if (hasAssistantTail) span.setAttribute('gen_ai.output.messages', messagesAttr([last]))
-    span.setAttribute('gen_ai.system_instructions', cap(session.systemPrompt, SYSTEM_PROMPT_CAP))
+    turn.messageCursor = messages.length
   }
   span.end(now)
 

@@ -68,6 +68,7 @@ One per turn — the root span, opened by `beginTurn` and closed by `endTurn`.
 | `gen_ai.request.model` | ✓ | |
 | `gen_ai.task.input` | | user message text |
 | `gen_ai.task.output` | | final assistant text |
+| `gen_ai.system_instructions` | | system prompt, capped 8 KB — once per turn here, not on every `chat` |
 
 On error: status `ERROR` + the error message, plus a low-cardinality `error.type` attribute (parsed `<ErrName>Error/Exception` prefix, else `_OTHER`).
 
@@ -82,11 +83,12 @@ Child of `invoke_agent`, one per model call — created retroactively on the `us
 | `gen_ai.usage.input_tokens` | ✓ | |
 | `gen_ai.usage.output_tokens` | ✓ | |
 | `gen_ai.response.finish_reasons` | `["tool_use"]` or `["end_turn"]` | |
-| `gen_ai.input.messages` | | semconv JSON (see below) |
+| `gen_ai.input.messages` | | semconv JSON (see below) — **delta only**: messages appended since this turn's previous `chat` span (first call → the user message; later calls → that cycle's `tool_result`s) |
 | `gen_ai.output.messages` | | semconv JSON, only the trailing assistant message |
-| `gen_ai.system_instructions` | | system prompt, capped 8 KB |
 
 Semconv message JSON: `[{role, parts:[{type:"text",content}|{type:"tool_call",id,name,arguments}|{type:"tool_call_response",id,result}]}]`.
+
+`gen_ai.input.messages` is incremental on purpose (since 1.3.1): replaying the full history on every model call made a turn's exported bytes O(n²) and the system prompt alone was ~60% of the volume — a 4-turn / 9-call session dropped from 129 KB to 44 KB of content attributes. Nothing is lost: the full conversation for a trace is the concatenation of its `chat` spans' input + output deltas in order (a `TurnState.messageCursor` tracks the boundary; a mid-turn compact that shrinks the history yields an empty delta and re-syncs the cursor). Verified that AgentCore Evaluations scores are unchanged — its evaluators read `invoke_agent`'s `task.*` and `execute_tool`'s `arguments/result`, not the chat messages.
 
 **Note**: `gen_ai.usage.input_tokens` counts only the prompt-cache MISS increment on Bedrock — small values like `2` are normal, not a bug.
 
