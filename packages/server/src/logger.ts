@@ -17,7 +17,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
+import { SeverityNumber } from '@opentelemetry/api-logs'
 import { config } from './config.js'
+import { enabled as otelEnabled, otelLogger } from './observability/otel.js'
 
 const LOG_FILENAME = 'server.log'
 
@@ -85,6 +87,28 @@ function shouldLog(level: LogLevel): boolean {
   return LEVEL_ORDER[level] >= threshold
 }
 
+const OTEL_SEVERITY: Record<LogLevel, SeverityNumber> = {
+  debug: SeverityNumber.DEBUG,
+  info: SeverityNumber.INFO,
+  warn: SeverityNumber.WARN,
+  error: SeverityNumber.ERROR,
+}
+
+/** Mirror a console line to the OTel logger (no-op unless observability is
+ *  enabled). Callers have already passed the shouldLog gate. The `[Module]`
+ *  prefix becomes a real attribute here since the OTLP consumer can filter on it. */
+function emitOtelLog(level: LogLevel, args: unknown[]): void {
+  if (!otelEnabled) return
+  const body = formatArgs(args)
+  const module = body.match(/^\[([^\]]+)\]/)?.[1]
+  otelLogger.emit({
+    severityNumber: OTEL_SEVERITY[level],
+    severityText: level.toUpperCase(),
+    body,
+    attributes: module ? { 'halo.module': module } : undefined,
+  })
+}
+
 /** Install console interceptors — call once at server startup */
 export function initLogger(): void {
   const origLog = console.log.bind(console)
@@ -96,24 +120,28 @@ export function initLogger(): void {
     if (!shouldLog('debug')) return
     origDebug(...args)
     writeToFile(formatLine('debug', args))
+    emitOtelLog('debug', args)
   }
 
   console.log = (...args: unknown[]) => {
     if (!shouldLog('info')) return
     origLog(...args)
     writeToFile(formatLine('info', args))
+    emitOtelLog('info', args)
   }
 
   console.warn = (...args: unknown[]) => {
     if (!shouldLog('warn')) return
     origWarn(...args)
     writeToFile(formatLine('warn', args))
+    emitOtelLog('warn', args)
   }
 
   console.error = (...args: unknown[]) => {
     if (!shouldLog('error')) return
     origError(...args)
     writeToFile(formatLine('error', args))
+    emitOtelLog('error', args)
   }
 
   if (shouldLog('info')) {

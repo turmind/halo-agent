@@ -154,6 +154,13 @@ function generalSection(): SchemaSection {
       { key: 'sandbox.hidden_files', globalOnly: true, description: 'Comma-separated files hidden by bwrap (Linux only)', description_zh: '通过 /dev/null bind 隐藏的文件（逗号分隔，仅 Linux）', default: '~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm' },
       // logging
       { key: 'logging.level', type: 'enum', options: ['debug', 'info', 'warn', 'error'], globalOnly: true, description: 'Log level', description_zh: '日志级别', default: 'warn' },
+      // observability (OpenTelemetry). Read once at boot by observability/otel.ts
+      // and mapped onto the standard OTEL_* env vars — hence "takes effect on
+      // restart" everywhere below.
+      { key: 'observability.endpoint', type: 'string', globalOnly: true, description: 'OTLP base URL of an OpenTelemetry collector (e.g. http://localhost:4318). Traces, metrics and logs are all exported there over OTLP http/protobuf — http:// or https://, on the collector\'s OTLP/HTTP port (4318 by default); gRPC (4317) is not supported. Empty = observability off. Takes effect on server restart.', description_zh: 'OpenTelemetry collector 的 OTLP 基础地址（如 http://localhost:4318），trace / metrics / 日志三类信号都以 OTLP http/protobuf 发到这里。http:// 或 https:// 均可，端口须是 collector 的 OTLP/HTTP 端口（默认 4318），不支持 gRPC（4317）。留空 = 关闭。重启服务后生效。', default: '' },
+      { key: 'observability.service_name', type: 'string', globalOnly: true, description: 'OTel resource service.name reported for this server. Takes effect on restart.', description_zh: '本服务在 OTel 中上报的 service.name。重启后生效。', default: 'halo' },
+      { key: 'observability.headers', type: 'string', secret: true, globalOnly: true, description: 'Extra headers for every OTLP request, comma-separated k=v (e.g. authorization=Bearer …). Takes effect on restart.', description_zh: '附加到每个 OTLP 请求的 header，逗号分隔的 k=v（如 authorization=Bearer …）。重启后生效。', default: '' },
+      { key: 'observability.capture_content', type: 'boolean', globalOnly: true, description: 'Put prompt / completion / tool argument and result text on spans (gen_ai.*.messages etc.). Off = only metadata (model, tokens, latency, tool names). Takes effect on restart.', description_zh: '是否把提示词 / 模型输出 / 工具参数与结果正文写到 span 上（gen_ai.*.messages 等）。关 = 只上报元数据（模型、token、耗时、工具名）。重启后生效。', default: 'false' },
       // self-evolution (see plans/self-evolution.md). All evo settings are
       // global-only — the worker / ticker live in the server process and
       // would have to reload mid-flight if a workspace could override them.

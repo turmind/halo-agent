@@ -46,6 +46,7 @@ import { bootChannels, shutdownChannels } from './channels/registry.js'
 import { defaultChannelDescriptors } from './channels/descriptors.js'
 import { createAuthRoutes, authMiddleware, getTokenFromCookieHeader, isAuthenticated } from './middleware/auth.js'
 import { initLogger } from './logger.js'
+import { initObservability, shutdownObservability } from './observability/otel.js'
 import { config, reloadSandboxConfig } from './config.js'
 import { initBwrapCheck, isBwrapCached, setSandboxHiddenPaths } from './tools/sandbox.js'
 import { ensureHaloHome, readSeedVersion, TEMPLATE_VERSION } from './init.js'
@@ -256,7 +257,9 @@ if (!AGENTCORE) acquireSingleInstanceLock(path.join(HALO_HOME, 'global', 'server
   }
 }
 
-// Initialize file logger before any console.log calls
+// OTel providers first (the logger interceptors forward to the OTel logger
+// when export is enabled), then the file logger before any console.log calls.
+await initObservability()
 initLogger()
 
 await initBwrapCheck()
@@ -591,6 +594,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
   }
 
   console.log('[Server] Shutdown complete')
+  // Last: flush buffered spans / metrics / log records (bounded to 3s) so the
+  // shutdown line above and any in-flight turn spans reach the collector.
+  await shutdownObservability()
   process.exit(0)
 }
 

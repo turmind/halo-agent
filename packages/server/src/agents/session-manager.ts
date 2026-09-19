@@ -43,6 +43,7 @@ import { SessionQueryStore } from './session-query-store.js'
 import { SessionAgentBuilder, type AgentMeta, type BuiltAgent } from './session-agent-builder.js'
 import { SessionSkillCommands } from './session-skill-commands.js'
 import { SessionStateStore } from './session-state-store.js'
+import { beginTurn, onAgentEvent, endTurn, recordRetry } from '../observability/genai-spans.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1270,6 +1271,10 @@ export class SessionManager implements SessionManagerInternals {
         : message.map((b, j): ContentBlock => (j === i && b.type === 'text' ? { type: 'text', text: stamped(b.text) } : b))
     }
 
+    // OTel invoke_agent span for the whole turn (all attempts) — closed by the
+    // single endTurn at the exit below.
+    beginTurn(session, message)
+
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       session.abortController = new AbortController()
       const signal = session.abortController.signal
@@ -1308,6 +1313,7 @@ export class SessionManager implements SessionManagerInternals {
           if (event.type === 'text') {
             resultText += event.text ?? ''
           }
+          onAgentEvent(session, event)
           this.processSessionEvent(session, event)
 
           // Graceful interrupt: after tool execution completes, if a new user
@@ -1368,7 +1374,10 @@ export class SessionManager implements SessionManagerInternals {
           if (result.compacted) {
             session.agent.messages = result.messages
             this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} context compacted (${result.messages.length} messages remaining, local fallback)` })
-            if (attempt + 1 < maxRetries) continue
+            if (attempt + 1 < maxRetries) {
+              recordRetry('context_overflow')
+              continue
+            }
           }
         }
 
@@ -1396,6 +1405,7 @@ export class SessionManager implements SessionManagerInternals {
             const jitter = Math.random() * 1000
             const delay = Math.min(baseDelay + jitter, 60_000)
             console.debug(`[SessionManager] Session ${session.id} rate limited, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`)
+            recordRetry('throttle')
             this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} rate limited, retrying in ${Math.round(delay / 1000)}s...` })
             await sleep(delay)
             continue
@@ -1424,6 +1434,7 @@ export class SessionManager implements SessionManagerInternals {
             const jitter = Math.random() * 1000
             const delay = Math.min(baseDelay + jitter, 60_000)
             console.debug(`[SessionManager] Session ${session.id} transient server error ${errName || httpStatus}, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`)
+            recordRetry('server_error')
             this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} hit a transient server error, retrying in ${Math.round(delay / 1000)}s...` })
             await sleep(delay)
             continue
@@ -1456,6 +1467,7 @@ export class SessionManager implements SessionManagerInternals {
             // (SDK h2 requestTimeout) and the file log only keeps warn+ — at
             // debug, three back-to-back stalls left zero trace on disk.
             console.warn(`[SessionManager] Session ${session.id} transient network error, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries}): ${msg}`)
+            recordRetry('network')
             this.emitEvent(session.id, { type: 'system', text: `Network hiccup, retrying in ${Math.round(delay / 1000)}s...` })
             await sleep(delay)
             continue
@@ -1470,6 +1482,7 @@ export class SessionManager implements SessionManagerInternals {
           if (attempt + 1 < maxRetries) {
             const delay = 1000 * Math.pow(2, attempt) + Math.random() * 500
             console.debug(`[SessionManager] Session ${session.id} Mantle empty response, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`)
+            recordRetry('empty_response')
             await sleep(delay)
             continue
           }
@@ -1480,6 +1493,7 @@ export class SessionManager implements SessionManagerInternals {
           console.debug(`[SessionManager] Session ${session.id} corrupted conversation (attempt ${attempt + 1}/${maxRetries})`)
           session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${session.id}]`)
           if (attempt + 1 < maxRetries) {
+            recordRetry('corrupted')
             this.emitEvent(session.id, { type: 'system', text: 'Repairing conversation state...' })
             continue
           }
@@ -1512,6 +1526,7 @@ export class SessionManager implements SessionManagerInternals {
             this.saveAgentState(session)
             console.warn(`[SessionManager] Session ${session.id} multimodal 4xx — replaced ${replaced} image block(s) with placeholders (attempt ${attempt + 1}/${maxRetries})`)
             if (attempt + 1 < maxRetries) {
+              recordRetry('multimodal_4xx')
               this.emitEvent(session.id, { type: 'system', text: `Model rejected image data — removed ${replaced} image(s) from history, retrying...` })
               continue
             }
@@ -1529,6 +1544,7 @@ export class SessionManager implements SessionManagerInternals {
     }
 
     session.abortController = null
+    endTurn(session, { error: session.turnError ?? undefined })
     session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${session.id}]`)
 
     this.db.update(agentSessions)

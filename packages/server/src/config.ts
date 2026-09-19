@@ -431,6 +431,15 @@ export const config = {
     maxFiles: systemInt('HALO_LOG_MAX_FILES', 'logging.max_files', 5),
   },
 
+  // OpenTelemetry export. Read once at boot (observability/otel.ts maps these
+  // onto OTEL_* env vars) — changes take effect on restart.
+  observability: {
+    endpoint: settingsStr('general.observability.endpoint', ''),
+    serviceName: settingsStr('general.observability.service_name', 'halo'),
+    headers: settingsStr('general.observability.headers', ''),
+    captureContent: settingsBool('general.observability.capture_content', false),
+  },
+
   // Self-evolution (see plans/self-evolution.md). Getter-based so user edits
   // in settings.yaml take effect on the next ticker run without restart.
   evolution: {
