@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-19
+
+### Changed
+
+- Observability: with `capture_content` on, a `chat` span's `gen_ai.input.messages` now carries only the messages appended since the previous `chat` span of the same turn (the user message on the first call, that cycle's tool results after), and `gen_ai.system_instructions` moves to the `invoke_agent` span, once per turn. Previously every model call replayed the whole history plus the system prompt, so a turn's exported bytes grew quadratically with the conversation — a 4-turn / 9-call session shipped 129 KB of content attributes (~74 KB of it the same system prompt nine times); the same session now ships 44 KB. The full conversation is still the in-order concatenation of the chat spans' input + output; AgentCore Evaluations scores are unchanged.
+
 ## [1.3.0] - 2026-09-19
 
 ### Added
@@ -505,7 +511,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/turmind/halo-agent/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/turmind/halo-agent/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/turmind/halo-agent/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/turmind/halo-agent/compare/v1.1.9...v1.2.0
