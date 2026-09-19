@@ -16,6 +16,8 @@ import {
  *     abort marker, one append + one send on the caller, back-pointer cleared
  *   - relay_send: creates the target session, stamps reply_to, channel-prefixes
  *     the model-bound text; rejects unknown workspaces
+ *   - relay_interrupt: enqueue-then-abort on a busy target, plain send on idle
+ *   - relay_list: root sessions of a workspace, defaulting to the caller's own
  *
  * Two tmp workspaces: `deptWs` (the dispatched-to department) runs a real
  * SessionManager; the secretary's workspace is a stub RelayTarget recording
@@ -71,6 +73,7 @@ function stubCaller(): typeof callerStub {
     interruptSession: () => {},
     stopSession: async () => {},
     getSessionOutput: () => '{}',
+    listSessions: () => ({ sessions: [] }),
   }
 }
 
@@ -79,6 +82,7 @@ beforeEach(() => {
   // registry's path comparison must see the same canonical string.
   deptWs = realpathSync(mkdtempSync(join(tmpdir(), 'halo-relay-dept-')))
   callerWs = realpathSync(mkdtempSync(join(tmpdir(), 'halo-relay-sec-')))
+  mkdirSync(join(callerWs, '.halo'))   // resolveTarget requires it (relay_list defaults to the caller's own ws)
   deptSm = new SessionManager(deptWs)
   writeAgent(deptWs, 'default')
   callerStub = stubCaller()
@@ -216,5 +220,30 @@ describe('relay_interrupt', () => {
     }) as string)
     expect(missing.code).toBe(1)
     expect(deptSm.getSessionById('never-made')).toBeNull()
+  })
+})
+
+describe('relay_list', () => {
+  function relayList() {
+    return buildRelayTools(callerStub, 'sec-1').find((t) => t.name === 'relay_list')!
+  }
+
+  it('lists a workspace\'s root sessions (sub-sessions excluded), title falling back to description', async () => {
+    seedSession(deptSm, 'dept-a')
+    seedSession(deptSm, 'dept-a>child', 'default', 'dept-a')
+    deptSm.getDb().update(agentSessions).set({ description: 'Q3 report' }).where(eq(agentSessions.id, 'dept-a')).run()
+    const res = JSON.parse(await relayList().callback({ workspace: deptWs }) as string)
+    expect(res.code).toBe(0)
+    expect(res.workspace).toBe(deptWs)
+    expect(res.sessions.map((s: { id: string }) => s.id)).toEqual(['dept-a'])
+    // status is the list semantics: a root with a live child counts as running.
+    expect(res.sessions[0]).toMatchObject({ agentId: 'default', title: 'Q3 report', status: 'running' })
+  })
+
+  it('defaults to the caller\'s own workspace when `workspace` is omitted', async () => {
+    const listSpy = vi.spyOn(callerStub, 'listSessions')
+    const res = JSON.parse(await relayList().callback({}) as string)
+    expect(res).toMatchObject({ code: 0, workspace: callerWs, count: 0 })
+    expect(listSpy).toHaveBeenCalledWith({ rootOnly: true, limit: 100 })
   })
 })

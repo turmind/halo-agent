@@ -25,7 +25,7 @@ function getAvailableTools(): Array<{ name: string; description: string }> {
   const { tool: draft } = createDraftTool()
   // Same for relay: built per-session by the manager, switched on by the
   // single `relay_send` name (session-agent-builder), which brings
-  // relay_interrupt / relay_stop / relay_read along. One chip, described as
+  // relay_interrupt / relay_stop / relay_read / relay_list along. One chip, described as
   // the whole set. Callbacks never run; the host stub only needs to exist.
   const relay = buildRelayTools({ workspaceRoot: '/tmp' } as RelayTarget, '')
   const relayChip = {

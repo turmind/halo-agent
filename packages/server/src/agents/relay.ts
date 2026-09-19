@@ -31,6 +31,7 @@ export interface RelayTarget {
   interruptSession(sessionId: string): void
   stopSession(sessionId: string): Promise<void>
   getSessionOutput(sessionId: string): string
+  listSessions(opts: { rootOnly: boolean; limit: number }): { sessions: Array<{ id: string; agentId: string; agentName: string; description: string; title: string | null; status: 'running' | 'idle' | 'stopped'; createdAt: number; updatedAt: number }> }
 }
 export interface RelayRegistry { getOrCreate(workspacePath: string): RelayTarget }
 export interface ReplyTo { workspace: string; sessionId: string }
@@ -272,5 +273,36 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
     },
   }
 
-  return [relaySend, relayInterrupt, relayStop, relayRead]
+  const relayList: ToolDef = {
+    name: 'relay_list',
+    description: 'List the root sessions of a workspace on this server (most recently active first, up to 100) with id / agent / title / status — to find an existing session to relay_send into, or to see what a department is working on. `workspace` defaults to your own.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        workspace: { type: 'string' as const, description: 'Absolute path of the workspace. Omit for the current workspace.' },
+      },
+      required: [] as string[],
+    },
+    callback: async (input: unknown) => {
+      const params = input as { workspace?: string }
+      try {
+        const registry = getRelayRegistry()
+        if (!registry) return jsonErr('relay is unavailable in this runtime (server only)')
+        const resolved = resolveTarget(registry, params.workspace ?? host.workspaceRoot)
+        if (typeof resolved === 'string') return resolved
+        const { sessions } = resolved.target.listSessions({ rootOnly: true, limit: 100 })
+        // `title` falls back to `description` like session_list does, so the
+        // caller always has the name the admin sidebar shows.
+        const rows = sessions.map((s) => ({
+          id: s.id, agentId: s.agentId, agentName: s.agentName, title: s.title || s.description,
+          status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt,
+        }))
+        return JSON.stringify({ code: 0, workspace: resolved.wsPath, sessions: rows, count: rows.length })
+      } catch (err) {
+        return jsonErr(err instanceof Error ? err.message : String(err))
+      }
+    },
+  }
+
+  return [relaySend, relayInterrupt, relayStop, relayRead, relayList]
 }
