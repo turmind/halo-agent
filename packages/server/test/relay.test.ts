@@ -68,6 +68,7 @@ function stubCaller(): typeof callerStub {
     createSession: async () => { throw new Error('not used') },
     appendUserMessage: (sid, text) => { appended.push({ sid, text }) },
     sendUserMessage: async (sid, text) => { sent.push({ sid, text }); return 'running' },
+    interruptSession: () => {},
     stopSession: async () => {},
     getSessionOutput: () => '{}',
   }
@@ -178,5 +179,42 @@ describe('relay_send', () => {
     }) as string)
     expect(res.code).toBe(1)
     expect(res.error).toMatch(/workspace not found/)
+  })
+})
+
+describe('relay_interrupt', () => {
+  function relayInterrupt() {
+    return buildRelayTools(callerStub, 'sec-1').find((t) => t.name === 'relay_interrupt')!
+  }
+
+  it('aborts a busy target after enqueueing, and re-stamps reply_to', async () => {
+    seedSession(deptSm, 'dept-busy')
+    vi.spyOn(deptSm, 'sendUserMessage').mockResolvedValue('queued')
+    vi.spyOn(deptSm, 'appendUserMessage')
+    const interruptSpy = vi.spyOn(deptSm, 'interruptSession').mockImplementation(() => {})
+    const res = JSON.parse(await relayInterrupt().callback({
+      workspace: deptWs, session_id: 'dept-busy', message: 'stop, wrong quarter',
+    }) as string)
+    expect(res).toMatchObject({ code: 0, state: 'queued', interrupted: true })
+    expect(interruptSpy).toHaveBeenCalledWith('dept-busy')
+    expect(readReplyTo(deptSm.getDb(), 'dept-busy')).toEqual({ workspace: callerWs, sessionId: 'sec-1' })
+  })
+
+  it('does not abort an idle target (nothing in flight), never creates sessions', async () => {
+    seedSession(deptSm, 'dept-idle')
+    vi.spyOn(deptSm, 'sendUserMessage').mockResolvedValue('running')
+    vi.spyOn(deptSm, 'appendUserMessage')
+    const interruptSpy = vi.spyOn(deptSm, 'interruptSession')
+    const res = JSON.parse(await relayInterrupt().callback({
+      workspace: deptWs, session_id: 'dept-idle', message: 'hi',
+    }) as string)
+    expect(res).toMatchObject({ code: 0, state: 'running', interrupted: false })
+    expect(interruptSpy).not.toHaveBeenCalled()
+
+    const missing = JSON.parse(await relayInterrupt().callback({
+      workspace: deptWs, session_id: 'never-made', message: 'hi',
+    }) as string)
+    expect(missing.code).toBe(1)
+    expect(deptSm.getSessionById('never-made')).toBeNull()
   })
 })

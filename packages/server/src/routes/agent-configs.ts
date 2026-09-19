@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { createDraftTool } from '../tools/draft-tool.js'
+import { buildRelayTools, type RelayTarget } from '../agents/relay.js'
 import { resolveMdFilePath, writeMdFile } from '../prompts/md-loader.js'
 import { config, getModelsRegistry } from '../config.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
@@ -22,7 +23,16 @@ function getAvailableTools(): Array<{ name: string; description: string }> {
   // description has one source of truth. The throwaway instance's closure
   // counter is discarded.
   const { tool: draft } = createDraftTool()
-  _cachedTools = [...tools, draft].map((t) => ({ name: t.name, description: t.description }))
+  // Same for relay: built per-session by the manager, switched on by the
+  // single `relay_send` name (session-agent-builder), which brings
+  // relay_interrupt / relay_stop / relay_read along. One chip, described as
+  // the whole set. Callbacks never run; the host stub only needs to exist.
+  const relay = buildRelayTools({ workspaceRoot: '/tmp' } as RelayTarget, '')
+  const relayChip = {
+    name: 'relay_send',
+    description: `Cross-workspace relay (one toggle, grants the whole set; full-access sessions only): ${relay.map((t) => t.name).join(', ')}.\n\n${relay[0].description}`,
+  }
+  _cachedTools = [...tools, draft].map((t) => ({ name: t.name, description: t.description })).concat(relayChip)
   return _cachedTools
 }
 

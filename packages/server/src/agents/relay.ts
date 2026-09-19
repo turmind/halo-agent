@@ -28,6 +28,7 @@ export interface RelayTarget {
   createSession(agentId: string, parentId: null, description: string, agentName?: undefined, explicitId?: string): Promise<string>
   appendUserMessage(sessionId: string, text: string): void
   sendUserMessage(sessionId: string, message: string): Promise<'running' | 'queued'>
+  interruptSession(sessionId: string): void
   stopSession(sessionId: string): Promise<void>
   getSessionOutput(sessionId: string): string
 }
@@ -153,7 +154,7 @@ const WORKSPACE_SESSION_PROPS = {
 export function buildRelayTools(host: RelayTarget, callerSessionId: string): ToolDef[] {
   const relaySend: ToolDef = {
     name: 'relay_send',
-    description: 'Dispatch a message to a session in ANOTHER workspace on this server. Creates the session if `session_id` does not exist there (with `agent_id`, or the workspace\'s default agent). If the session is busy the message is queued and the current step is softly interrupted — use this for follow-ups and corrections too. Returns immediately; when the target\'s whole subtree finishes, its wrap-up is delivered to you as a `[Relay report · …]` message. Do not poll — the report arrives on its own. Returns JSON with code 0 on success.',
+    description: 'Dispatch a message to a session in ANOTHER workspace on this server. Creates the session if `session_id` does not exist there (with `agent_id`, or the workspace\'s default agent). If the session is busy the message is queued and the current step is softly interrupted (finishes its current tool, then reads your message) — use this for follow-ups and corrections too. Returns immediately; when the target\'s whole subtree finishes, its wrap-up is delivered to you as a `[Relay report · …]` message. Do not poll — the report arrives on its own. Returns JSON with code 0 on success.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -166,26 +167,62 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
     callback: async (input: unknown) => {
       const params = input as { workspace: string; session_id: string; message: string; agent_id?: string }
       try {
-        const registry = getRelayRegistry()
-        if (!registry) return jsonErr('relay is unavailable in this runtime (server only)')
-        const resolved = resolveTarget(registry, params.workspace)
-        if (typeof resolved === 'string') return resolved
-        const { wsPath, target } = resolved
-        if (!target.getSessionById(params.session_id)) {
-          // resolveDefaultAgentId only touches getDb() + the workspace path,
-          // which RelayTarget carries — the cast bridges its SessionManager type.
-          const agentId = params.agent_id ?? await resolveDefaultAgentId(target as never, wsPath)
-          await target.createSession(agentId, null, `Relay: ${params.message.slice(0, 60)}`, undefined, params.session_id)
-        }
-        writeReplyTo(target.getDb(), params.session_id, { workspace: host.workspaceRoot, sessionId: callerSessionId })
-        const prefixed = `[channel: relay | from: ${host.workspaceRoot}]\n\n${params.message}`
-        target.appendUserMessage(params.session_id, params.message)
-        const state = await target.sendUserMessage(params.session_id, prefixed)
-        return JSON.stringify({ code: 0, workspace: wsPath, session_id: params.session_id, state })
+        return await dispatch(params, false)
       } catch (err) {
         return jsonErr(err instanceof Error ? err.message : String(err))
       }
     },
+  }
+
+  const relayInterrupt: ToolDef = {
+    name: 'relay_interrupt',
+    description: 'Interrupt a running session in another workspace HARD — aborts whatever it is doing right now (including a command mid-execution) and re-runs it with your message. Use when the target is heading the wrong way and waiting for its current step is not acceptable; for ordinary follow-ups prefer relay_send, which lets the current step finish. Returns JSON with code 0 on success.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        ...WORKSPACE_SESSION_PROPS,
+        message: { type: 'string' as const, description: 'The message the target runs after the abort.' },
+      },
+      required: ['workspace', 'session_id', 'message'],
+    },
+    callback: async (input: unknown) => {
+      const params = input as { workspace: string; session_id: string; message: string }
+      try {
+        return await dispatch(params, true)
+      } catch (err) {
+        return jsonErr(err instanceof Error ? err.message : String(err))
+      }
+    },
+  }
+
+  /** Shared body of relay_send / relay_interrupt. `hard` = abort the in-flight
+   *  turn before the message lands (interrupt_session semantics); otherwise
+   *  sendUserMessage's busy branch queues + soft-interrupts on its own. */
+  async function dispatch(params: { workspace: string; session_id: string; message: string; agent_id?: string }, hard: boolean): Promise<string> {
+    const registry = getRelayRegistry()
+    if (!registry) return jsonErr('relay is unavailable in this runtime (server only)')
+    const resolved = resolveTarget(registry, params.workspace)
+    if (typeof resolved === 'string') return resolved
+    const { wsPath, target } = resolved
+    if (!target.getSessionById(params.session_id)) {
+      if (hard) return jsonErr('session not found')
+      // resolveDefaultAgentId only touches getDb() + the workspace path,
+      // which RelayTarget carries — the cast bridges its SessionManager type.
+      const agentId = params.agent_id ?? await resolveDefaultAgentId(target as never, wsPath)
+      await target.createSession(agentId, null, `Relay: ${params.message.slice(0, 60)}`, undefined, params.session_id)
+    }
+    writeReplyTo(target.getDb(), params.session_id, { workspace: host.workspaceRoot, sessionId: callerSessionId })
+    const prefixed = `[channel: relay | from: ${host.workspaceRoot}]\n\n${params.message}`
+    target.appendUserMessage(params.session_id, params.message)
+    const state = await target.sendUserMessage(params.session_id, prefixed)
+    // Hard interrupt: `queued` means the target was busy and the message is
+    // already in its queue — abort the in-flight turn now so runSession's
+    // drain picks it up immediately instead of after the current step. Same
+    // order as querySession(interrupt=true): enqueue first, then abort, so
+    // the finally never sees an empty queue and fires a spurious report.
+    const interrupted = hard && state === 'queued'
+    if (interrupted) target.interruptSession(params.session_id)
+    return JSON.stringify({ code: 0, workspace: wsPath, session_id: params.session_id, state, ...(hard ? { interrupted } : {}) })
   }
 
   const relayStop: ToolDef = {
@@ -235,5 +272,5 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
     },
   }
 
-  return [relaySend, relayStop, relayRead]
+  return [relaySend, relayInterrupt, relayStop, relayRead]
 }
