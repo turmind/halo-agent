@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-19
+
+### Added
+
+- Observability: the server now speaks OpenTelemetry. Set `general.observability.endpoint` to an OTLP collector (e.g. `http://localhost:4318`) and traces, metrics and logs leave over OTLP http/protobuf; leave it empty and nothing is loaded — the SDK is a dynamic import behind a single `enabled` gate, so an unconfigured server (and the CLI, which shares `logger.ts`) pays one boolean check per hook. Companion settings: `service_name` (resource `service.name`), `headers` (secret, comma-separated `k=v` for hosted backends), `capture_content` (default off — put prompt / completion / tool argument and result text on spans; off keeps only model, tokens, latency, tool names). All four are global and take effect on restart. `http://` or `https://` by URL scheme (TLS via the standard `OTEL_EXPORTER_OTLP_*CERTIFICATE*` env); no gRPC exporter — point at the collector's OTLP/HTTP port (4318), not 4317.
+- Spans follow the OTel GenAI semantic conventions under scope `opentelemetry.instrumentation.halo`, so any semconv-aware backend reads them without a framework adapter: one `invoke_agent <agent>` per turn → `chat <model>` per model call (`gen_ai.usage.*`, `finish_reasons`) → `execute_tool <tool>` as its child, all stamped with `session.id`. With `capture_content`, `gen_ai.input/output.messages` (parts format), `gen_ai.system_instructions`, `gen_ai.tool.call.arguments/result` and `gen_ai.task.input/output`. Metrics: `gen_ai.client.token.usage`, `gen_ai.client.operation.duration`, `halo.tool.duration`, `halo.turn.duration{outcome}`, `halo.model.retries{kind}`. Every `logger.*` call is bridged to an OTel LogRecord with severity + `halo.module`.
+- Vendor-neutral by design: the server has no AWS or vendor code — SigV4, backend endpoints and resource enrichment live in the collector. Verified end to end against a local collector → CloudWatch (`aws/spans`, logs, EMF metrics) and Amazon Bedrock AgentCore Evaluations, both the online-config path and the on-demand `evaluate` API fed straight from the collector's file exporter (no CloudWatch in the loop). The reference collector config and the Evaluations contract for custom instrumentation are in `design/observability.md`.
+
 ## [1.2.1] - 2026-09-19
 
 ### Added
@@ -497,7 +505,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/turmind/halo-agent/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/turmind/halo-agent/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/turmind/halo-agent/compare/v1.1.9...v1.2.0
 [1.1.9]: https://github.com/turmind/halo-agent/compare/v1.1.8...v1.1.9

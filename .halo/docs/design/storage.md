@@ -387,6 +387,10 @@ A value of the form `<<ENV_NAME>>` is replaced at read time with `process.env.EN
 | `general.sandbox.hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh` | bwrap tmpfs overlay (Linux only) |
 | `general.sandbox.hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm` | bwrap /dev/null bind (Linux only) |
 | `general.logging.level` | warn | `debug` / `info` / `warn` / `error` |
+| `general.observability.endpoint` | `''` | OTLP base URL of an OpenTelemetry collector (e.g. `http://localhost:4318`); empty = off. Restart required. See [observability.md](observability.md) |
+| `general.observability.service_name` | `halo` | OTel resource `service.name`. Restart required |
+| `general.observability.headers` | `''` | **Secret.** Extra OTLP request headers, comma-separated `k=v`. Restart required |
+| `general.observability.capture_content` | `false` | Put prompt/completion/tool text on spans. Restart required |
 
 Schema source: [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`.
 

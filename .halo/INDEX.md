@@ -123,6 +123,14 @@ Key state:
 
 Driven from `packages/server/src/agents/run-ledger.ts` (sweep + skip rules) + `db/runs-db.ts` (table + singleton) + `session-manager.ts` (`ledgerWrite` hooks around `runSession`) + `index.ts` (eager boot loop). See [design/session.md](docs/design/session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb).
 
+## Observability (OpenTelemetry)
+
+A vendor-neutral observability layer on the official OpenTelemetry JS SDK. One setting, `general.observability.endpoint`, turns on OTLP http/protobuf export of traces + metrics + logs to whatever collector the operator points at — zero AWS/vendor code in the server, all backend-specific bits (SigV4, resource enrichment) live in the collector. Spans follow the OTel GenAI semantic conventions: one `invoke_agent` span per turn, `chat` per model call, `execute_tool` per tool call, wired into the turn loop via `beginTurn`/`onAgentEvent`/`recordRetry`/`endTurn`. Verified end to end against AWS CloudWatch/X-Ray and Bedrock AgentCore Evaluations.
+
+Key state: none persisted — providers are process-local (`otel.ts` module state), exported live over OTLP; nothing survives a restart by design.
+
+Driven from `packages/server/src/observability/otel.ts` (bootstrap + `enabled` gate) + `otel-sdk.ts` (the one module importing the SDK/exporters) + `genai-spans.ts` (span + metric model) + `agents/session-manager.ts` (turn hooks) + `logger.ts` (log bridge) + `index.ts` (init/shutdown). See [design/observability.md](docs/design/observability.md).
+
 ## Express Self (visual face)
 
 The agent has a second channel beyond text: a living particle face at `<workspace>/.halo/canvas/self.html` it can drive in real time. It emits a `<<<SHOW: self.say("HI") >>>` marker in a reply; the admin detects it, forwards the payload verbatim to the open `self.html` preview via `postMessage`, and strips the marker from rendered chat. The `self` API (say/play/react/pulse/flash/shake/intro/voice) is a stable engine, force-copied into every workspace on open; the agent expresses itself purely through runtime `<<<SHOW>>>` markers, never by editing the file. `self.voice(path)` plays a clip Halo synthesized and rides its live amplitude (Web Audio analyser → loudness/spectrum/syllable rings); Halo makes the sound, the face makes it visible. Taught by the built-in `self` skill. See [design/express-self.md](docs/design/express-self.md).

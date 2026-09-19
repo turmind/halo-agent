@@ -141,3 +141,12 @@ the bytes.
   egress (Bedrock included) hangs → opaque 502s.
 - Full operational detail + deploy walkthrough:
   `packages/agentcore-demo/README.md`.
+
+## Observability
+
+The runtime container can export traces/metrics/logs via `general.observability.*`
+to an in-container or sidecar OpenTelemetry collector, same as any other halo
+deployment. AgentCore Evaluations reads the resulting spans out of the
+CloudWatch `aws/spans` log group (Transaction Search) — see
+[design/observability.md](observability.md) for the collector config and the
+Evaluations input contract.

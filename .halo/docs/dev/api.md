@@ -355,6 +355,15 @@ File: `packages/server/src/routes/settings.ts`
 
 PATCH / DELETE walk the dotted key layer by layer, so a segment of `__proto__` / `constructor` / `prototype` is rejected with 400 `Invalid key` — the leaf assignment would otherwise land on `Object.prototype` and pollute every object in the process.
 
+### Observability settings
+
+- `general.observability.endpoint` — OTLP collector base URL (e.g. `http://localhost:4318`); empty = off
+- `general.observability.service_name` — OTel resource `service.name`, default `halo`
+- `general.observability.headers` — extra OTLP request headers, comma-separated `k=v` (secret)
+- `general.observability.capture_content` — put prompt/completion/tool text on spans, default `false`
+
+All four are `globalOnly`, take effect on restart. See [design/observability.md](../design/observability.md).
+
 ## Metrics
 
 File: `packages/server/src/routes/metrics.ts`.

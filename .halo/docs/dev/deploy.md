@@ -228,7 +228,27 @@ EXPOSE 9527
 CMD halo setup -y && halo server start
 ```
 
-## 9. Optional: Nginx reverse proxy
+## 9. Observability (OpenTelemetry collector)
+
+Halo exports traces, metrics and logs over OTLP http/protobuf when `general.observability.endpoint` is set — off by default, no vendor code in the server itself. Point it at any OpenTelemetry collector:
+
+```bash
+# settings.yaml (global scope) or via the admin Settings page
+general:
+  observability:
+    endpoint: http://localhost:4318       # collector's OTLP/HTTP port, NOT 4317 (gRPC, unsupported)
+    service_name: halo
+    headers: ''                            # e.g. authorization=Bearer <token> for a hosted backend
+    capture_content: false                 # true to include prompt/completion/tool text on spans
+```
+
+All four keys take effect on restart: `halo server restart`.
+
+For a hosted backend (Honeycomb, Grafana Cloud, etc.) use its `https://` OTLP endpoint and put its auth token in `headers` — TLS with CA-signed certs works out of the box. Self-signed / mTLS collectors need the standard `OTEL_EXPORTER_OTLP_CERTIFICATE` / `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` / `OTEL_EXPORTER_OTLP_CLIENT_KEY` env vars.
+
+For routing into AWS CloudWatch / X-Ray (sigv4auth collector config, AgentCore Evaluations) see [design/observability.md](../design/observability.md).
+
+## 10. Optional: Nginx reverse proxy
 
 ```nginx
 server {

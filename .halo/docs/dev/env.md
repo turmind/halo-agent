@@ -128,6 +128,10 @@ settings.yaml only (no env override):
 - `general.sandbox.writable_dirs` (default empty) — dirs bind-mounted read-write inside the bwrap sandbox, for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions, scope: global
 - `general.sandbox.hidden_files` (default `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files) — bwrap /dev/null binds, scope: global
 - `general.logging.level` (default `warn`) — log level: debug | info | warn | error
+- `general.observability.endpoint` (default `''`) — OTLP collector base URL (e.g. `http://localhost:4318`); empty = off, scope: global, restart required. See [design/observability.md](../design/observability.md)
+- `general.observability.service_name` (default `halo`) — OTel resource `service.name`, scope: global, restart required
+- `general.observability.headers` (default `''`, secret) — extra OTLP request headers, comma-separated `k=v`, scope: global, restart required
+- `general.observability.capture_content` (default `false`) — put prompt/completion/tool text on spans, scope: global, restart required
 
 `<provider-id>.secrets.*` (server-only, hard-rejected by `{{}}` substitution; declared in `models/<provider-id>.yaml` `secrets:`):
 - `aws-bedrock-claude-invoke.secrets.access_key_id` / `.secret_access_key` — AWS / Bedrock credentials
