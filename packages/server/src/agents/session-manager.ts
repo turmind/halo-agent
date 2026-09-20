@@ -1305,14 +1305,23 @@ export class SessionManager implements SessionManagerInternals {
 
       try {
         session.turnStartTime = Date.now()
-        // Mid-turn auto-compact hook. Runs at the top of every loop
-        // iteration, after previous tool_results were appended, before the
-        // next model call. Without this, a single turn that accumulates
-        // many large tool results (file_read, grep on large dirs) blows the
-        // window before runSession's finally block can compact.
+        // Mid-turn hook. Runs at the top of every loop iteration, after
+        // previous tool_results were appended, before the next model call.
+        // Auto-compact: without it, a single turn that accumulates many large
+        // tool results (file_read, grep on large dirs) blows the window before
+        // runSession's finally block can compact.
+        // Then persist rawMessages: releaseSession only saves on turn end, so a
+        // SIGTERM / crash mid-turn lost the whole turn's LLM history (user
+        // message + every tool_use/tool_result) while the UI log — debounced
+        // per event — kept it all. Saving here lands a complete state (last
+        // message is always the user tool_result); only the tool_use in
+        // flight at the moment of death is lost, and that is acceptable.
         const iter = session.agent.run(input, {
           cancelSignal: signal,
-          beforeCallModel: () => this.maybeAutoCompact(session),
+          beforeCallModel: async () => {
+            await this.maybeAutoCompact(session)
+            this.saveAgentState(session)
+          },
         })
 
         for await (const event of iter) {
