@@ -196,13 +196,16 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 1. `halo upgrade` — bumps the on-disk npm package
 2. `halo server restart` — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts. Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
 
-### Release checklist (before `npm publish`)
+### Release checklist (npm publish → GitHub release → desktop assets)
 
 1. **Bump version** in the five workspace `package.json` files (`packages/{cli,server,core,admin,desktop}/package.json`) — the root `package.json` has no version field.
 2. **Update `CHANGELOG.md`**: rename `[Unreleased]` → `[x.y.z] - YYYY-MM-DD`, add a fresh empty `[Unreleased]` section above it, and roll the link references at the bottom (add `[x.y.z]: compare/v<prev>...vx.y.z`, repoint `[Unreleased]` to `compare/vx.y.z...HEAD`).
 3. **Bump `TEMPLATE_VERSION`** in `packages/server/src/init.ts` if any file under `templates/` was touched. `build-bundle.mjs` enforces this: it diffs `packages/server/templates` against the previous release tag and exits 1 when files changed but the number didn't move (so `pnpm bundle` and every desktop `dist:*` refuse to package a silent template edit).
 4. **Build admin**: `pnpm --filter @turmind/halo-admin build` — verify `admin/out/monaco/vs/loader.js` exists.
-5. Commit, tag `vx.y.z`, push, then publish.
+5. Commit, tag `vx.y.z`, push, then `npm publish`. The registry replicates with a ~2–3 min lag: `npm view @turmind/halo version` may still show the old version right after publish — a `409 Conflict` on retry confirms the first publish landed; don't re-publish.
+6. **GitHub release**: `gh release create vx.y.z --notes-from-tag` (or paste the CHANGELOG section).
+7. **Windows exe** (the step both v1.3.0 and v1.3.1 skipped): `HALO_STAGE_FULL=1 CI=true pnpm dist:win`, then `gh release upload vx.y.z "packages/desktop/dist/Halo Setup x.y.z.exe"`. The macOS dmg is built on a Mac and uploaded the same way.
+8. **Post-check** (whoever ran the release does NOT get to skip this): `gh release view vx.y.z --json assets` must list the exe, and `npm view @turmind/halo version` must print `x.y.z`. A release without the exe attached is not done.
 
 **npm token gotcha**: `npm publish` on this package needs a granular access token created with **"Bypass 2FA"** checked — scope / permission alone yields `403 Two-factor authentication or granular access token with bypass 2fa enabled is required`. `npm whoami` and `npm token list` succeed with a non-bypass token, so neither is a valid pre-flight; check `GET https://registry.npmjs.org/-/npm/v1/tokens` (with the token as bearer) and look for `"bypass_2fa": true` on the token in use before starting a release.
 

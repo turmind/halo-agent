@@ -14,6 +14,8 @@ pnpm install --frozen-lockfile
 pnpm build          # core → server → acp-adapter → cli → admin, in that order
 ```
 
+`server` and `admin` resolve `@turmind/halo-core` through its compiled `dist/`, not its sources. After editing anything under `packages/core/src/` (notably `protocol/`, the shared WS + session-message types), run `pnpm --filter @turmind/halo-core build` before type-checking server or admin — otherwise `tsc` reports stale types or the old exports.
+
 Packages live under `packages/`:
 
 | Package | What it is |
