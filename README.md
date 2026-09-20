@@ -201,6 +201,10 @@ Halo is young — treat it as an early-stage project:
 
 If you hit something broken or surprising, please open an issue — early feedback is genuinely useful right now.
 
+## Contributing
+
+PRs and issues are welcome — [CONTRIBUTING.md](CONTRIBUTING.md) has the build / test / commit conventions and the two packaging gotchas worth knowing before you start. Everyone participating is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
 MIT

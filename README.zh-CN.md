@@ -201,6 +201,10 @@ Halo 还年轻——请把它当早期项目看待：
 
 碰到坏掉或奇怪的行为，请开 issue —— 现阶段的早期反馈真的很有用。
 
+## 参与贡献
+
+欢迎提 PR 和 issue —— [CONTRIBUTING.md](CONTRIBUTING.md) 写了构建 / 测试 / 提交规范，以及动手前值得知道的两个打包坑。所有参与者请遵守[行为准则](CODE_OF_CONDUCT.md)。
+
 ## 许可证
 
 MIT
