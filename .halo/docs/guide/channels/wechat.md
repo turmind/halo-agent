@@ -34,6 +34,8 @@ The form is **just the workspace + label + access level + language** — no bot 
 
 Click **Generate QR**. Halo hits `ilinkai.weixin.qq.com` to mint a fresh QR code and starts a poll loop waiting for the scan.
 
+> **What the access level covers.** A WeChat account is bound to exactly one WeChat user — the one who scans — so there's no whitelist to configure; the scanner *is* the whitelist. The level you choose here is what that phone gets: `full` means whoever holds the unlocked phone has shell access as the server user. The same applies to invite QRs minted with `/qr full` from inside the chat — each scan creates a separate account at the level you named, so hand those out as you would an SSH key.
+
 ## Step 3 — Scan with WeChat
 
 1. Open WeChat on your phone

@@ -42,7 +42,7 @@ export async function sendMediaFile(params: {
 
   const plaintext = await fs.readFile(filePath)
   const prep = prepareUpload(plaintext)
-  console.log(`[wechat] sendMediaFile: path=${filePath} kind=${kind} rawsize=${prep.rawsize} filesize=${prep.filesize}`)
+  console.log(`[WeChat] sendMediaFile: path=${filePath} kind=${kind} rawsize=${prep.rawsize} filesize=${prep.filesize}`)
 
   const mediaType = kind === 'image' ? UploadMediaType.IMAGE
     : kind === 'video' ? UploadMediaType.VIDEO
@@ -61,7 +61,7 @@ export async function sendMediaFile(params: {
       aeskey: prep.aeskeyHex,
     },
   })
-  console.log(`[wechat] sendMediaFile: getUploadUrl resp hasFullUrl=${Boolean(upResp.upload_full_url)} hasParam=${Boolean(upResp.upload_param)}`)
+  console.log(`[WeChat] sendMediaFile: getUploadUrl resp hasFullUrl=${Boolean(upResp.upload_full_url)} hasParam=${Boolean(upResp.upload_param)}`)
 
   if (!upResp.upload_full_url && !upResp.upload_param) {
     throw new Error(`[wechat] getUploadUrl returned no upload target (kind=${kind})`)
@@ -75,7 +75,7 @@ export async function sendMediaFile(params: {
     uploadParam: upResp.upload_param,
     label: `upload-${kind}`,
   })
-  console.log(`[wechat] sendMediaFile: uploaded, dl_param_len=${downloadEncryptedQueryParam.length}`)
+  console.log(`[WeChat] sendMediaFile: uploaded, dl_param_len=${downloadEncryptedQueryParam.length}`)
 
   // Match Tencent plugin's wire format: base64 of the hex-string ASCII bytes
   // (NOT base64 of the raw 16-byte key). WeChat clients parse both forms but
@@ -103,7 +103,7 @@ export async function sendMediaFile(params: {
     },
   }
   await sendMessage({ baseUrl, token, body })
-  console.log(`[wechat] sendMediaFile: sendMessage success clientId=${clientId}`)
+  console.log(`[WeChat] sendMediaFile: sendMessage success clientId=${clientId}`)
   return { clientId }
 }
 

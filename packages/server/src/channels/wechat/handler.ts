@@ -79,16 +79,16 @@ export function startWechatChannel(deps: {
 
   function startAccount(accountId: string): void {
     if (runners.has(accountId)) {
-      console.log(`[wechat] account ${accountId} already running`)
+      console.log(`[WeChat] account ${accountId} already running`)
       return
     }
     const account = getAccount(db, accountId)
     if (!account) {
-      console.log(`[wechat] account ${accountId} not found`)
+      console.log(`[WeChat] account ${accountId} not found`)
       return
     }
     if (!account.enabled) {
-      console.log(`[wechat] account ${accountId} disabled, skip`)
+      console.log(`[WeChat] account ${accountId} disabled, skip`)
       return
     }
     const abort = new AbortController()
@@ -105,7 +105,7 @@ export function startWechatChannel(deps: {
           const route = bridge.getRoute(sessionId)
           if (!route) return
           if (!isMediaPathAllowed(filePath, account.workspacePath)) {
-            console.log(`[wechat] sendMedia blocked: ${filePath} not under workspace`)
+            console.log(`[WeChat] sendMedia blocked: ${filePath} not under workspace`)
             return
           }
           await sendMediaFile({
@@ -123,9 +123,9 @@ export function startWechatChannel(deps: {
       })
     }
     const promise = runAccountLoop({ registry, db, account, abort: abort.signal, bridge, activeOverrides, restartSelf, startNewAccount: startAccount })
-      .catch((err) => console.log(`[wechat] account ${accountId} loop crashed: ${String(err)}`))
+      .catch((err) => console.log(`[WeChat] account ${accountId} loop crashed: ${String(err)}`))
     runners.set(accountId, { accountId, abort, promise, bridge, activeOverrides })
-    console.log(`[wechat] account ${accountId} started (workspace=${account.workspacePath})`)
+    console.log(`[WeChat] account ${accountId} started (workspace=${account.workspacePath})`)
   }
 
   async function stopAccount(accountId: string): Promise<void> {
@@ -141,10 +141,10 @@ export function startWechatChannel(deps: {
       try {
         await notifyStop({ baseUrl: account.baseUrl, token: account.botToken })
       } catch (err) {
-        console.log(`[wechat] notifyStop ${accountId}: ${String(err)}`)
+        console.log(`[WeChat] notifyStop ${accountId}: ${String(err)}`)
       }
     }
-    console.log(`[wechat] account ${accountId} stopped`)
+    console.log(`[WeChat] account ${accountId} stopped`)
   }
 
   async function stopAll(): Promise<void> {
@@ -173,7 +173,7 @@ async function runAccountLoop(args: {
   try {
     await notifyStart({ baseUrl: account.baseUrl, token: account.botToken })
   } catch (err) {
-    console.log(`[wechat] ${account.accountId} notifyStart failed (ignored): ${String(err)}`)
+    console.log(`[WeChat] ${account.accountId} notifyStart failed (ignored): ${String(err)}`)
   }
 
   let getUpdatesBuf = account.syncBuf
@@ -197,7 +197,7 @@ async function runAccountLoop(args: {
       const isErr = (resp.ret !== undefined && resp.ret !== 0) || (resp.errcode !== undefined && resp.errcode !== 0)
       if (isErr) {
         consecutiveFailures++
-        console.log(`[wechat] ${account.accountId} getUpdates err ret=${resp.ret} errcode=${resp.errcode} ${resp.errmsg ?? ''}`)
+        console.log(`[WeChat] ${account.accountId} getUpdates err ret=${resp.ret} errcode=${resp.errcode} ${resp.errmsg ?? ''}`)
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           consecutiveFailures = 0
           await sleep(BACKOFF_DELAY_MS, abort)
@@ -220,7 +220,7 @@ async function runAccountLoop(args: {
     } catch (err) {
       if (abort.aborted) return
       consecutiveFailures++
-      console.log(`[wechat] ${account.accountId} poll error (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${String(err)}`)
+      console.log(`[WeChat] ${account.accountId} poll error (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${String(err)}`)
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         consecutiveFailures = 0
         await sleep(BACKOFF_DELAY_MS, abort)
@@ -269,7 +269,7 @@ async function processItems(args: {
         images.push({ data: buf.toString('base64'), mimeType })
         textParts.push(`[图片已保存: ${savedPath}]`)
       } catch (err) {
-        console.log(`[wechat] ${account.accountId} image download failed: ${String(err)}`)
+        console.log(`[WeChat] ${account.accountId} image download failed: ${String(err)}`)
         textParts.push(`[图片下载失败: ${err instanceof Error ? err.message : String(err)}]`)
       }
       continue
@@ -291,7 +291,7 @@ async function processItems(args: {
         const playtime = voice.playtime ? `${Math.round(voice.playtime / 1000)}s` : ''
         textParts.push(`[语音消息${playtime ? ' ' + playtime : ''}已保存: ${savedPath}${extra}]`)
       } catch (err) {
-        console.log(`[wechat] ${account.accountId} voice download failed: ${String(err)}`)
+        console.log(`[WeChat] ${account.accountId} voice download failed: ${String(err)}`)
         textParts.push(`[语音下载失败: ${err instanceof Error ? err.message : String(err)}]`)
       }
       continue
@@ -311,7 +311,7 @@ async function processItems(args: {
         })
         textParts.push(`[视频已保存: ${savedPath}]`)
       } catch (err) {
-        console.log(`[wechat] ${account.accountId} video download failed: ${String(err)}`)
+        console.log(`[WeChat] ${account.accountId} video download failed: ${String(err)}`)
         textParts.push(`[视频下载失败: ${err instanceof Error ? err.message : String(err)}]`)
       }
       continue
@@ -331,7 +331,7 @@ async function processItems(args: {
         })
         textParts.push(`[文件 "${fileItem.file_name ?? ''}" 已保存: ${savedPath}]`)
       } catch (err) {
-        console.log(`[wechat] ${account.accountId} file download failed: ${String(err)}`)
+        console.log(`[WeChat] ${account.accountId} file download failed: ${String(err)}`)
         textParts.push(`[文件下载失败: ${err instanceof Error ? err.message : String(err)}]`)
       }
       continue
@@ -368,7 +368,7 @@ async function handleInbound(args: {
   // If the workspace is gone, tell the user and bail.
   const currentPath = resolveAccountWorkspace(storedAccount)
   if (!currentPath) {
-    console.log(`[wechat] ${storedAccount.accountId} workspace missing (path=${storedAccount.workspacePath})`)
+    console.log(`[WeChat] ${storedAccount.accountId} workspace missing (path=${storedAccount.workspacePath})`)
     await sendToUser({
       account: storedAccount, toUserId: fromUserId, contextToken: msg.context_token,
       text: t('handler.workspace_missing', lang, { path: storedAccount.workspacePath }),
@@ -379,19 +379,19 @@ async function handleInbound(args: {
 
   const { text, images } = await processItems({ account, items: msg.item_list ?? [] })
   if (!text && images.length === 0) {
-    console.log(`[wechat] ${account.accountId} empty message from ${fromUserId}, ignoring`)
+    console.log(`[WeChat] ${account.accountId} empty message from ${fromUserId}, ignoring`)
     return
   }
 
   // Slash commands run before the agent and reply immediately.
   const trimmedText = text.trimStart()
-  console.log(`[wechat] ${account.accountId} msg from ${fromUserId.slice(0, 20)}: "${trimmedText.slice(0, 60)}" startsWithSlash=${trimmedText.startsWith('/')}`)
+  console.log(`[WeChat] ${account.accountId} msg from ${fromUserId.slice(0, 20)}: "${trimmedText.slice(0, 60)}" startsWithSlash=${trimmedText.startsWith('/')}`)
   if (trimmedText.startsWith('/')) {
     const handled = await handleSlashCommand({
       text: text.trim(), account, db, fromUserId, contextToken: msg.context_token, restartSelf, startNewAccount,
       registry, activeOverrides, bridge, lang,
     })
-    console.log(`[wechat] ${account.accountId} slash handled=${handled}`)
+    console.log(`[WeChat] ${account.accountId} slash handled=${handled}`)
     if (handled) return
   }
 

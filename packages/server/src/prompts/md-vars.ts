@@ -127,7 +127,7 @@ function substituteEnv(value: string): string {
   return value.replace(ENV_PATTERN, (match, name: string) => {
     const envVal = process.env[name]
     if (envVal === undefined) {
-      console.log(`[md-vars] Env var "${name}" not set — keeping ${match} literal`)
+      console.log(`[MdVars] Env var "${name}" not set — keeping ${match} literal`)
       return match
     }
     return envVal
@@ -177,21 +177,21 @@ export function renderMdBody(body: string, ctx: RenderContext): string {
 
     const m = PARAM_PATH.exec(name)
     if (!m) {
-      console.log(`[md-vars] Placeholder "${name}" not on the <id>.params.<key> whitelist — leaving as-is`)
+      console.log(`[MdVars] Placeholder "${name}" not on the <id>.params.<key> whitelist — leaving as-is`)
       return match
     }
     if (ctx.allowedNamespace && m[1] !== ctx.allowedNamespace) {
-      console.log(`[md-vars] Placeholder "${name}" rejected — caller restricted to namespace "${ctx.allowedNamespace}"`)
+      console.log(`[MdVars] Placeholder "${name}" rejected — caller restricted to namespace "${ctx.allowedNamespace}"`)
       return match
     }
     const raw = resolvePath(ctx.settings, name)
     if (raw === undefined) {
-      console.log(`[md-vars] Unknown placeholder "${name}" — leaving as-is`)
+      console.log(`[MdVars] Unknown placeholder "${name}" — leaving as-is`)
       return match
     }
     const leaf = extractValue(raw)
     if (leaf == null) {
-      console.log(`[md-vars] Placeholder "${name}" resolved to null — leaving as-is`)
+      console.log(`[MdVars] Placeholder "${name}" resolved to null — leaving as-is`)
       return match
     }
     const str = typeof leaf === 'string' ? leaf : String(leaf)

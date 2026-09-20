@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Only the latest minor release is supported. Halo is pre-1.0 and moves fast; please upgrade (`halo upgrade`) before reporting.
+Only the latest minor release is supported. Halo is young and moves fast; please upgrade (`halo upgrade`) before reporting.
 
 ## Reporting a Vulnerability
 

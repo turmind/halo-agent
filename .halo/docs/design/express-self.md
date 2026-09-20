@@ -117,6 +117,17 @@ The marker is a **verbatim pipe** — Halo never parses or validates the payload
 - **Deduplication:** Each `${msgId}#${occurrenceIndex}` fires exactly once across duplicate queue-drain events
 - **Window:** Markers are dropped silently if no face preview is open; the registry is empty so `postToFace()` has no targets
 
+### Trust model — why `new Function` is acceptable here
+
+The marker payload is agent-authored JavaScript evaluated inside the face iframe, which is `allow-scripts` + `allow-same-origin`. That is a deliberate trade-off, not an oversight:
+
+- **The agent already holds more than this grants.** A `<<<SHOW>>>` runs in the admin origin of the person who is *already* driving this agent with `full`-level tools (shell, file write, git push). Code execution in their own browser tab adds no privilege the agent doesn't already have on the host.
+- **The admin is single-tenant.** There is one admin cookie per server and it equals full control of the server process (see [dev/api.md](../dev/api.md) → *Trust model*). There is no second, lower-privilege admin user whose session a marker could hijack.
+- **Untrusted text is not a vector.** Markers are extracted from the *assistant's* reply only, never from user or tool-result text, and only in the admin chat panel — IM channels, the web channel and halo-city never evaluate them.
+- **`allow-same-origin` is required** for `self.voice(path)` to fetch synthesized clips and for the preview to register with `registerFaceIframe()`; a sandboxed-opaque origin would break both.
+
+The cost we accept: a prompt-injected agent could emit a marker that reads admin `localStorage` or issues admin API calls from the operator's tab — but the same injected agent, at `full` access, already has a shell on the server host, which is strictly more. If Halo ever gains multi-user admin, this section is the first thing to revisit (move the face to an opaque origin and replace the JS payload with a declarative command list).
+
 ## Engine vs. expression separation
 
 **Engine (self.html):** Platform-owned template. Force-copied to `<workspace>/.halo/canvas/self.html` on every workspace open. Changes only when a new capability is added (e.g., voice waveform). The agent **never edits** this file.

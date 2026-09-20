@@ -486,7 +486,7 @@ export function execNote(ctx: CommandContext, arg: string): CommandResult {
     userHint: arg.trim() || null,
   })
   if (!result.ok) {
-    console.error(`[evo] /evo ${result.reason}: ${result.error}`)
+    console.error(`[Evo] /evo ${result.reason}: ${result.error}`)
     if (result.reason === 'snapshot_failed') return { text: t('evo.snapshot_failed', ctx.lang) }
     return { text: t('evo.queue_failed', ctx.lang) }
   }

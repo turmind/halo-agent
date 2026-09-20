@@ -44,7 +44,7 @@ export type WrapperMode = 'run' | 'apply'
 export type EvoSpawner = (mode: WrapperMode, taskId: string) => void
 
 let _spawner: EvoSpawner = (mode, id) => {
-  console.log(`[evo-ticker] (placeholder spawner) would spawn ${mode} wrapper for ${id}`)
+  console.log(`[EvoTicker] (placeholder spawner) would spawn ${mode} wrapper for ${id}`)
 }
 
 export function setEvoSpawner(fn: EvoSpawner): void { _spawner = fn }
@@ -63,7 +63,7 @@ export function startEvoTicker(): void {
   // leave a tick firing after stop().
   _startupTimer = setTimeout(() => { _startupTimer = null; runTick().catch(logTickError) }, 2_000)
   _interval = setInterval(() => { runTick().catch(logTickError) }, TICK_INTERVAL_MS)
-  console.log(`[evo-ticker] started (interval: ${TICK_INTERVAL_MS / 1000}s)`)
+  console.log(`[EvoTicker] started (interval: ${TICK_INTERVAL_MS / 1000}s)`)
 }
 
 export function stopEvoTicker(): void {
@@ -74,12 +74,12 @@ export function stopEvoTicker(): void {
   if (_interval) {
     clearInterval(_interval)
     _interval = null
-    console.log('[evo-ticker] stopped')
+    console.log('[EvoTicker] stopped')
   }
 }
 
 function logTickError(err: unknown): void {
-  console.error(`[evo-ticker] tick failed: ${err instanceof Error ? err.message : String(err)}`)
+  console.error(`[EvoTicker] tick failed: ${err instanceof Error ? err.message : String(err)}`)
 }
 
 /**
@@ -216,13 +216,13 @@ function markTimeouts(): void {
           .set({ status: 'timeout', failureReason: `heartbeat lost (gave up after ${r.attempts} attempts)`, completedAt: now })
           .where(and(eq(evolutionRuns.id, r.id), eq(evolutionRuns.status, 'running')))
           .run()
-        console.warn(`[evo-ticker] run ${r.id} exhausted retries (${r.attempts}); marking timeout`)
+        console.warn(`[EvoTicker] run ${r.id} exhausted retries (${r.attempts}); marking timeout`)
       } else {
         db.update(evolutionRuns)
           .set({ status: 'pending', startedAt: null, heartbeatAt: null })
           .where(and(eq(evolutionRuns.id, r.id), eq(evolutionRuns.status, 'running')))
           .run()
-        console.warn(`[evo-ticker] run ${r.id} heartbeat lost (attempt ${r.attempts}/${maxAttempts}); requeued`)
+        console.warn(`[EvoTicker] run ${r.id} heartbeat lost (attempt ${r.attempts}/${maxAttempts}); requeued`)
       }
     }
   }
@@ -260,7 +260,7 @@ function markTimeouts(): void {
           .set({ status: newStatus, failureReason: reason, completedAt: now })
           .where(and(eq(evolutionApplies.id, r.id), eq(evolutionApplies.status, r.status)))
           .run()
-        console.warn(`[evo-ticker] apply ${r.id} (${r.status}) exhausted retries (${r.attempts}); marking ${newStatus}`)
+        console.warn(`[EvoTicker] apply ${r.id} (${r.status}) exhausted retries (${r.attempts}); marking ${newStatus}`)
       } else if (r.status === 'syncing') {
         // Resume path: keep status='syncing', just clear started/heartbeat
         // so a fresh wrapper can be claimed via claimSyncingResume next
@@ -270,13 +270,13 @@ function markTimeouts(): void {
           .set({ startedAt: null, heartbeatAt: null })
           .where(and(eq(evolutionApplies.id, r.id), eq(evolutionApplies.status, 'syncing')))
           .run()
-        console.warn(`[evo-ticker] apply ${r.id} sync heartbeat lost (attempt ${r.attempts}/${maxAttempts}); ready for resume`)
+        console.warn(`[EvoTicker] apply ${r.id} sync heartbeat lost (attempt ${r.attempts}/${maxAttempts}); ready for resume`)
       } else {
         db.update(evolutionApplies)
           .set({ status: 'pending', startedAt: null, heartbeatAt: null })
           .where(and(eq(evolutionApplies.id, r.id), eq(evolutionApplies.status, 'running')))
           .run()
-        console.warn(`[evo-ticker] apply ${r.id} heartbeat lost (attempt ${r.attempts}/${maxAttempts}); requeued`)
+        console.warn(`[EvoTicker] apply ${r.id} heartbeat lost (attempt ${r.attempts}/${maxAttempts}); requeued`)
       }
     }
   }
@@ -306,7 +306,7 @@ function startPendingRuns(): void {
         // Spawn failed — release the claim so the next tick can retry.
         // (Marking failed-to-start as 'failed' instead would lose the row to
         // the user with no recovery path.)
-        console.error(`[evo-ticker] spawn run ${c.id} failed: ${err instanceof Error ? err.message : String(err)}`)
+        console.error(`[EvoTicker] spawn run ${c.id} failed: ${err instanceof Error ? err.message : String(err)}`)
         db.update(evolutionRuns)
           .set({ status: 'pending', startedAt: null, heartbeatAt: null })
           .where(and(eq(evolutionRuns.id, c.id), eq(evolutionRuns.status, 'running')))
@@ -407,7 +407,7 @@ function startPendingApplies(): void {
       try {
         _spawner('apply', c.id)
       } catch (err) {
-        console.error(`[evo-ticker] spawn apply ${c.id} failed: ${err instanceof Error ? err.message : String(err)}`)
+        console.error(`[EvoTicker] spawn apply ${c.id} failed: ${err instanceof Error ? err.message : String(err)}`)
         // Release the claim. For 'pending' we revert to 'pending' (the
         // status flip in claimApply was 'running'); for 'syncing' we
         // just clear started/heartbeat (status was already 'syncing').

@@ -269,7 +269,7 @@ export function createCronRoutes(): Hono {
     // Don't await runJob — the cli can take minutes. Fire-and-forget; the
     // runner broadcasts cron:run_changed as the run progresses.
     runJob(id, 'manual').catch((err) => {
-      console.log(`[cron] run-now ${id} crashed: ${err instanceof Error ? err.message : String(err)}`)
+      console.log(`[Cron] run-now ${id} crashed: ${err instanceof Error ? err.message : String(err)}`)
     })
     return c.json({ ok: true })
   })

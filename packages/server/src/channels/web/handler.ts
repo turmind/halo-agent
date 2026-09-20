@@ -10,6 +10,8 @@ import { saveInboundMedia, VISION_IMAGE_MIME_TYPES } from '../shared/media-store
 import { extractMediaPaths } from '../shared/media.js'
 import { resolveAccountWorkspace } from '../shared/accounts.js'
 import { findActiveSessionId, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
+import { scanAvailableAgents } from '../../agents/agent-loader.js'
+import { getDisabledSet } from '../../db/index.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { t, getLang } from '../shared/i18n.js'
 
@@ -92,6 +94,23 @@ export function createWebChannel(deps: {
     const resolved = resolveAccountWorkspace({ ...account, workspacePath: path })
     if (!resolved) return { ok: false, error: 'workspace not found' }
     return { ok: true, path: resolved }
+  }
+
+  /**
+   * Resolve the agent for a new session: caller's `agentId` override or
+   * the workspace default. An explicit id must match a scanned agent
+   * (so it's a real directory name, never a path — `loadAgentYaml` joins
+   * it into one) under the same non-internal / non-disabled filter
+   * `resolveDefaultAgentId` applies: a token can't opt into `goal` /
+   * `__evo_agent__` / a disabled agent just by naming it.
+   */
+  async function resolveAgentId(sm: ReturnType<SessionManagerRegistry['getOrCreate']>, workspace: string, override?: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+    if (!override) return { ok: true, id: await resolveDefaultAgentId(sm, workspace) }
+    const disabledSet = getDisabledSet(sm.getDb(), 'agent')
+    const all = await scanAvailableAgents(workspace, disabledSet)
+    const hit = all.find((a) => a.id === override && !a.disabled && !a.internal)
+    if (!hit) return { ok: false, error: `agent not available: ${override}` }
+    return { ok: true, id: hit.id }
   }
 
   function buildCommandContext(account: WebAccount, sm: ReturnType<SessionManagerRegistry['getOrCreate']>): CommandContext {
@@ -234,8 +253,12 @@ export function createWebChannel(deps: {
       // agentId resolved by priority (highest non-disabled, non-internal agent wins);
       // explicit opts.agentId takes precedence (ACP / admin panel).
       // agentName omitted → createSession resolves the real agent.yaml `name`.
-      const agentId = opts?.agentId || await resolveDefaultAgentId(sm, workspace)
-      await sm.createSession(agentId, null, `Web: ${account.label || account.accountId}`, undefined, sessionId, undefined, accessLevel)
+      const agent = await resolveAgentId(sm, workspace, opts?.agentId)
+      if (!agent.ok) {
+        yield sseData({ type: 'error', error: agent.error })
+        return
+      }
+      await sm.createSession(agent.id, null, `Web: ${account.label || account.accountId}`, undefined, sessionId, undefined, accessLevel)
       // Only flip the account's `active` pointer when no explicit session
       // was requested — otherwise an ACP adapter creating a side session
       // would clobber the browser tab's notion of "current session".
@@ -385,8 +408,9 @@ export function createWebChannel(deps: {
     // NOT written to activeOverrides — an API-minted session must not
     // clobber the browser tab's notion of "current session".
     const sessionId = `${prefix}${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-    const agentId = opts?.agentId || await resolveDefaultAgentId(sm, ws.path)
-    await sm.createSession(agentId, null, `Web: ${account.label || account.accountId}`, undefined, sessionId, undefined, accessLevel)
+    const agent = await resolveAgentId(sm, ws.path, opts?.agentId)
+    if (!agent.ok) return agent
+    await sm.createSession(agent.id, null, `Web: ${account.label || account.accountId}`, undefined, sessionId, undefined, accessLevel)
     return { ok: true, sessionId }
   }
 

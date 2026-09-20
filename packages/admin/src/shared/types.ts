@@ -1,80 +1,3 @@
-export type TaskPlanStatus =
-  | 'pending_approval'
-  | 'approved'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'rejected'
-
-export type TaskNodeStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'skipped'
-
-export type AgentState =
-  | 'idle'
-  | 'running'
-  | 'standby'
-  | 'shutting_down'
-
-export interface TaskPlan {
-  id: string
-  projectId: string
-  sessionId: string
-  description: string
-  tasks: TaskNode[]
-  createdAt: number
-  status: TaskPlanStatus
-}
-
-export interface TaskNode {
-  id: string
-  planId: string
-  name: string
-  description: string
-  agentId: string
-  dependencies: string[]
-  status: TaskNodeStatus
-  result?: TaskResult
-}
-
-export interface TaskResult {
-  success: boolean
-  summary: string
-  filesChanged: FileChange[]
-  error?: string
-}
-
-export interface FileChange {
-  path: string
-  changeType: 'created' | 'modified' | 'deleted'
-  diff?: string
-}
-
-export interface AgentInfo {
-  agentId: string
-  name: string
-  state: AgentState
-  taskCount: number
-  model?: string
-  skills?: string[]
-}
-
-export interface AgentConfig {
-  id: string
-  name: string
-  role: string
-  model: string
-  status: 'idle' | 'running' | 'standby'
-  tools: string[]
-  skills: string[]
-  systemPrompt?: string
-  priority?: number
-  context?: { maxTokens?: number; compressAt?: number; windowSize?: number }
-}
-
 export interface Skill {
   id: string
   name: string
@@ -134,7 +57,6 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: number
-  plan?: TaskPlan
   streaming?: boolean
   agentName?: string
   taskId?: string
@@ -190,29 +112,9 @@ export function inferMessageType(m: ChatMessage): MessageType {
 }
 
 // WebSocket message types (server -> client)
-export interface WsTaskPlanMsg {
-  type: 'task:plan'
-  plan: TaskPlan
-}
-
-export interface WsTaskStatusMsg {
-  type: 'task:status'
-  taskId: string
-  status: TaskNodeStatus
-}
-
-export interface WsPlanCompleteMsg {
-  type: 'plan:complete'
-  planId: string
-  status: string
-  summary: string
-}
-
 export interface WsSnapshotMsg {
   type: 'state:snapshot'
   snapshot: {
-    activePlan?: TaskPlan
-    agents?: AgentInfo[]
     messages?: ChatMessage[]
     sessionId?: string
     maxContextTokens?: number

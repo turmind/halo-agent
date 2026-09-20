@@ -130,7 +130,7 @@ describe('wechat cron chunking', () => {
   })
 
   it('a rejected chunk still propagates as a failed result row (dispatcher contract unchanged)', async () => {
-    sends.failAt = { at: 1, msg: '[wechat:sendmessage] gateway error ret=-2' }
+    sends.failAt = { at: 1, msg: '[WeChat:sendmessage] gateway error ret=-2' }
 
     const results = await dispatchToTargets(paragraphs(3, 3000), [WX], tmpDir)
 
@@ -166,7 +166,7 @@ describe('wechat cron chunking', () => {
   })
 
   it('a mid-report rejection stops after the delivered chunks and skips the attachments', async () => {
-    sends.failAt = { at: 2, msg: '[wechat:sendmessage] gateway error ret=-2' }
+    sends.failAt = { at: 2, msg: '[WeChat:sendmessage] gateway error ret=-2' }
     // Attachment path under the job workspace so the media sandbox lets it through.
     const text = `${paragraphs(3, 3000)}\nMEDIA:${tmpDir}/x.png`
 

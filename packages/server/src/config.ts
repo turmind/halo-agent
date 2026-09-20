@@ -38,10 +38,10 @@ function loadModelsRegistry(): { providers: Array<Record<string, unknown>> } {
         if (parsed && typeof parsed === 'object' && typeof parsed.id === 'string') {
           providers.push(parsed)
         } else {
-          console.log(`[config] Skipping ${entry.name}: missing provider id`)
+          console.log(`[Config] Skipping ${entry.name}: missing provider id`)
         }
       } catch (err) {
-        console.log(`[config] Failed to load ${entry.name}: ${err instanceof Error ? err.message : String(err)}`)
+        console.log(`[Config] Failed to load ${entry.name}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
   } catch { /* dir missing — leave providers empty */ }
@@ -162,7 +162,7 @@ function schemaDefault(settingsPath: string, callsiteFallback: string): string {
   const fromSchema = loadSchemaDefaults().get(settingsPath)
   if (fromSchema === undefined) return callsiteFallback
   if (fromSchema !== callsiteFallback) {
-    console.warn(`[config] default mismatch for "${settingsPath}": schema=${JSON.stringify(fromSchema)} callsite=${JSON.stringify(callsiteFallback)}. Using schema value.`)
+    console.warn(`[Config] default mismatch for "${settingsPath}": schema=${JSON.stringify(fromSchema)} callsite=${JSON.stringify(callsiteFallback)}. Using schema value.`)
   }
   return fromSchema
 }

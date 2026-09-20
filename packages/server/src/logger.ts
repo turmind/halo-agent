@@ -64,14 +64,21 @@ function writeToFile(line: string): void {
   }
 }
 
+/** Web-channel tokens ride in `?token=` for SSE / `<img src>` (web-token.ts),
+ *  so any URL that reaches a log line — error messages, future request logs —
+ *  would carry a live credential. Scrub the value before it hits any sink. */
+export function redactSecrets(s: string): string {
+  return s.replace(/([?&]token=)[^&\s"']+/gi, '$1<redacted>')
+}
+
 function formatArgs(args: unknown[]): string {
-  return args
+  return redactSecrets(args
     .map((a) => {
       if (typeof a === 'string') return a
       if (a instanceof Error) return a.stack ?? a.message
       try { return JSON.stringify(a) } catch { return String(a) }
     })
-    .join(' ')
+    .join(' '))
 }
 
 /** logfmt-flavored line: `time=<iso> level=<level> <message>\n`. */
@@ -118,28 +125,28 @@ export function initLogger(): void {
 
   console.debug = (...args: unknown[]) => {
     if (!shouldLog('debug')) return
-    origDebug(...args)
+    origDebug(formatArgs(args))
     writeToFile(formatLine('debug', args))
     emitOtelLog('debug', args)
   }
 
   console.log = (...args: unknown[]) => {
     if (!shouldLog('info')) return
-    origLog(...args)
+    origLog(formatArgs(args))
     writeToFile(formatLine('info', args))
     emitOtelLog('info', args)
   }
 
   console.warn = (...args: unknown[]) => {
     if (!shouldLog('warn')) return
-    origWarn(...args)
+    origWarn(formatArgs(args))
     writeToFile(formatLine('warn', args))
     emitOtelLog('warn', args)
   }
 
   console.error = (...args: unknown[]) => {
     if (!shouldLog('error')) return
-    origError(...args)
+    origError(formatArgs(args))
     writeToFile(formatLine('error', args))
     emitOtelLog('error', args)
   }

@@ -55,7 +55,7 @@ export function broadcast(event: Record<string, unknown>): void {
       ws.send(payload)
     } catch (err) {
       // Quiet — closing client is normal at any moment.
-      console.debug(`[broadcast] send failed: ${err instanceof Error ? err.message : String(err)}`)
+      console.debug(`[Broadcast] send failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 }
@@ -88,7 +88,7 @@ export function broadcastToWorkspace(workspacePath: string, event: Record<string
     try {
       ws.send(payload)
     } catch (err) {
-      console.debug(`[broadcast] send failed: ${err instanceof Error ? err.message : String(err)}`)
+      console.debug(`[Broadcast] send failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 }

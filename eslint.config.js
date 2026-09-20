@@ -18,10 +18,10 @@ const baseRules = {
   '@typescript-eslint/no-explicit-any': 'off',
   // console is the deliberate logging mechanism here (intercepted by logger.ts).
   'no-console': 'off',
-  // This codebase deliberately uses empty catch to swallow non-critical errors
-  // (file-not-found, best-effort cleanup). Allow empty catch, still flag other
-  // empty blocks (empty if/for/while are real mistakes).
-  'no-empty': ['error', { allowEmptyCatch: true }],
+  // Best-effort catches are fine, but every one must say why it swallows —
+  // `catch { /* already dead */ }` passes (a comment makes the block
+  // non-empty), a bare `catch {}` does not.
+  'no-empty': 'error',
   // eslint 10 promotes preserve-caught-error to recommended. Attaching a `cause`
   // to rethrown errors is good practice but not worth rewriting existing catch
   // blocks for — downgrade to off.

@@ -22,6 +22,7 @@ import { basename } from 'node:path'
 import { createRequire } from 'node:module'
 import type * as ptyTypes from 'node-pty'
 import { config } from '../config.js'
+import { cleanChildEnv } from '../child-env.js'
 import { sendJson } from './event-processor.js'
 import type { WebSocket } from 'ws'
 
@@ -116,7 +117,7 @@ export class TerminalManager {
         : '/bin/bash'
     )
 
-    const termEnv = { ...process.env } as Record<string, string>
+    const termEnv = cleanChildEnv() as Record<string, string>
     delete termEnv.npm_config_prefix
 
     // Start POSIX shells as a login shell (`-l`) so they source the user's

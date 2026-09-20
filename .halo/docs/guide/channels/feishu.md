@@ -92,6 +92,16 @@ Open halo admin → **Channels** → **Feishu** → **Add Account**:
 
 On submit halo calls Feishu's `tenant_access_token` + `bot/info` API to validate your credentials and auto-fill `botOpenId`. If that call fails the account isn't created and you'll see Feishu's error code inline (typical: `99991663` = wrong app secret, `99991668` = bot capability not enabled).
 
+### Who can talk to the bot — and what `full` means
+
+There is **no per-user whitelist** on Feishu accounts (unlike Telegram's `allowedUsers`): the access level applies to **every tenant member who can reach the bot** — anyone who DMs it or is in a group it's been added to. The boundary is Feishu's **app availability scope** (set when creating a version in Step 6 — 可用范围 / Availability: all members vs. selected departments / people), not halo.
+
+Pick the level with that in mind:
+
+- `readonly` — safe default for a tenant-wide bot; the agent can read and answer but not write files or run commands
+- `workspace` — the agent may write inside the bound workspace path; fine for a team that already shares that repo
+- `full` — the agent has shell access as the server user, and any reachable member can drive it. Reserve `full` for an app whose availability is narrowed to people you'd also give SSH to, or point it at a dedicated workspace / server.
+
 ## Step 8 — Test it
 
 In Feishu desktop / mobile:

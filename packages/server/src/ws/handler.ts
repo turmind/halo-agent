@@ -44,7 +44,7 @@ export interface WsHandlerDeps {
 const CLIENT_SILENCE_LIMIT_MS = 3 * 60_000
 
 interface ClientMessage {
-  type: 'chat' | 'chat:stop' | 'chat:interrupt' | 'subscribe' | 'agent:update_config' | `command:${string}` | 'session:clear' | 'session:delete' | 'exchange:delete' | 'terminal:start' | 'terminal:input' | 'terminal:resize' | 'terminal:close' | 'terminal:reattach'
+  type: 'chat' | 'chat:stop' | 'chat:interrupt' | 'subscribe' | `command:${string}` | 'session:clear' | 'session:delete' | 'exchange:delete' | 'terminal:start' | 'terminal:input' | 'terminal:resize' | 'terminal:close' | 'terminal:reattach'
   sessionId?: string
   projectId?: string
   message?: string
@@ -288,7 +288,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     if (client.sessionId && client.sessionId === targetSessionId) {
       const state = getState(client)
       const messages = state ? [...createSaveSnapshot(state)] : []
-      sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: messages, sessionId: client.sessionId } })
+      sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: client.sessionId } })
     }
   }
 
@@ -411,7 +411,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     // a session-bound snapshot (subscribe with a sessionId) arrives — so a
     // brand-new chat never showed the ring even after sending. Default to the
     // configured model capacity; a real session's snapshot overrides it later.
-    sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: [], maxContextTokens: config.model.maxContextTokens } })
+    sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: [], maxContextTokens: config.model.maxContextTokens } })
 
     // ── Message router ─────────────────────────────────────────────
     // Serialize async message handlers per-client to prevent interleaving
@@ -675,7 +675,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         // built. Empty recentMessages is safe — the frontend only replaces
         // its message list for non-empty snapshots.
         const ctxConfig = await sm.getContextConfig(client.sessionId)
-        sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: [], sessionId: client.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId } })
+        sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: [], sessionId: client.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId } })
       } else if (client.sessionId !== msg.sessionId || !client.unsubscribeEvents) {
         // `|| !client.unsubscribeEvents`: the reclaim above releases a frozen
         // tab's listener but leaves `sessionId` bound, so a chat sent after
@@ -866,7 +866,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         // snapshot, or a client that applies it renders the turn twice.
         const messages = state ? (running ? [...state.messageLog] : [...createSaveSnapshot(state)]) : []
         const detachedSession = client.sessionManager.getSessionById(client.sessionId)
-        sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: messages, sessionId: msg.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId, archiveCount: archiveCountFor(client, client.sessionId, detachedSession?.agentId) } })
+        sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: msg.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId, archiveCount: archiveCountFor(client, client.sessionId, detachedSession?.agentId) } })
         if (state && state.contextTokens > 0) {
           sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens })
         }
@@ -936,7 +936,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
       const state = getState(client)
       const messages = state ? [...createSaveSnapshot(state)] : []
-      sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: messages, sessionId: msg.sessionId, maxContextTokens, agentId, archiveCount: msg.sessionId ? archiveCountFor(client, msg.sessionId, agentId) : 0 } })
+      sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: msg.sessionId, maxContextTokens, agentId, archiveCount: msg.sessionId ? archiveCountFor(client, msg.sessionId, agentId) : 0 } })
       if (state && state.contextTokens > 0) {
         sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens })
       }

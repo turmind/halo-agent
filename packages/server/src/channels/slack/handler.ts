@@ -247,7 +247,7 @@ export function startSlackChannel(deps: {
             // a compromised agent could exfiltrate arbitrary host paths.
             const resolved = path.resolve(filePath)
             if (!isMediaPathAllowed(resolved, account.workspacePath)) {
-              console.log(`[slack] sendMedia blocked: ${filePath} not under workspace`)
+              console.log(`[Slack] sendMedia blocked: ${filePath} not under workspace`)
               return
             }
             try {
@@ -258,7 +258,7 @@ export function startSlackChannel(deps: {
                 filePath: resolved,
               })
             } catch (err) {
-              console.log(`[slack] uploadFile ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
+              console.log(`[Slack] uploadFile ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
               // Surface the failure to the user as text so they don't sit
               // wondering why no attachment showed up.
               await postMessage({
@@ -303,7 +303,7 @@ export function startSlackChannel(deps: {
     const account = getAccount(db, accountId)
     if (!account || account.enabled !== 1) return
     if (!account.appToken) {
-      console.log(`[slack] ${accountId} appToken missing — cannot open Socket Mode connection`)
+      console.log(`[Slack] ${accountId} appToken missing — cannot open Socket Mode connection`)
       return
     }
     const state = ensureState(accountId)
@@ -320,7 +320,7 @@ export function startSlackChannel(deps: {
         state.ws = ws
 
         ws.on('open', () => {
-          console.log(`[slack] ${accountId} socket connected`)
+          console.log(`[Slack] ${accountId} socket connected`)
         })
         ws.on('message', (raw) => {
           let env: SlackSocketEnvelope
@@ -337,10 +337,10 @@ export function startSlackChannel(deps: {
           state.reconnectTimer = setTimeout(() => connect(accountId), delay)
         })
         ws.on('error', (err) => {
-          console.log(`[slack] ${accountId} socket error: ${err.message}`)
+          console.log(`[Slack] ${accountId} socket error: ${err.message}`)
         })
       } catch (err) {
-        console.log(`[slack] ${accountId} apps.connections.open failed: ${err instanceof Error ? err.message : String(err)}`)
+        console.log(`[Slack] ${accountId} apps.connections.open failed: ${err instanceof Error ? err.message : String(err)}`)
         if (!state.stopped) {
           const delay = Math.min(state.reconnectDelay, 30_000)
           state.reconnectDelay = Math.min(state.reconnectDelay * 2, 30_000)
@@ -410,7 +410,7 @@ function handleSocketEnvelope(args: {
     return
   }
   if (env.type === 'disconnect') {
-    console.log(`[slack] ${accountId} disconnect: ${env.reason ?? 'unknown'}`)
+    console.log(`[Slack] ${accountId} disconnect: ${env.reason ?? 'unknown'}`)
     try { ws.close() } catch { /* ignore */ }
     return
   }
@@ -434,7 +434,7 @@ function handleSocketEnvelope(args: {
   if (!shouldRespond(event, account.botUserId)) return
 
   void handleInbound({ registry, db, account, event, state })
-    .catch((err) => console.log(`[slack] handle ${accountId}: ${err instanceof Error ? err.message : String(err)}`))
+    .catch((err) => console.log(`[Slack] handle ${accountId}: ${err instanceof Error ? err.message : String(err)}`))
 }
 
 async function handleInbound(args: {
@@ -448,7 +448,7 @@ async function handleInbound(args: {
   const userId = (event as SlackMessageEvent).user ?? 'unknown'
   const workspace = resolveAccountWorkspace(account)
   if (!workspace) {
-    console.log(`[slack] ${account.accountId} workspace missing (path=${account.workspacePath})`)
+    console.log(`[Slack] ${account.accountId} workspace missing (path=${account.workspacePath})`)
     return
   }
 

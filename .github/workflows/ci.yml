@@ -54,7 +54,7 @@ jobs:
           git config --global user.name "CI"
           git config --global user.email "ci@turmind.com"
 
-      # 四个包都有测试了(core 36 / server 239 / cli 63 / admin 7)。挂一个即红。
+      # 四个包都有测试,总数 1100+(具体数字看 vitest 输出,别在这里维护)。挂一个即红。
       - name: Test (core)
         run: pnpm --filter @turmind/halo-core test
 

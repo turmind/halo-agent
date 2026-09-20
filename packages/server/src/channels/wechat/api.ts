@@ -198,11 +198,11 @@ export async function sendMessage(params: {
       // ret=-2 has more than one cause; name both so the operator checks the
       // payload size before telling the user to DM the bot first.
       const hint = parsed.ret === -2 ? ' (gateway rejected the message — payload too large (>16KB) or outbound sent without the context_token from the recipient\'s last inbound message)' : ''
-      throw new Error(`[wechat:sendmessage] gateway error ret=${parsed.ret} errcode=${parsed.errcode} ${parsed.errmsg ?? ''}${hint}`)
+      throw new Error(`[WeChat:sendmessage] gateway error ret=${parsed.ret} errcode=${parsed.errcode} ${parsed.errmsg ?? ''}${hint}`)
     }
   } catch (err) {
-    if (err instanceof Error && err.message.startsWith('[wechat:sendmessage]')) throw err
-    console.log(`[wechat:sendmessage] non-JSON response: ${raw.slice(0, 200)}`)
+    if (err instanceof Error && err.message.startsWith('[WeChat:sendmessage]')) throw err
+    console.log(`[WeChat:sendmessage] non-JSON response: ${raw.slice(0, 200)}`)
   }
 }
 

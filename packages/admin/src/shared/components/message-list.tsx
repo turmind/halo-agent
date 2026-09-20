@@ -5,7 +5,6 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage, ToolCallInfo, ContentBlock } from '@/shared/types'
 import { inferMessageType } from '@/shared/types'
-import { TaskPlanCard } from '@/features/chat/task-plan-card'
 import { MediaAttachments, parseMediaMarkers } from '@/shared/components/media-attachments'
 import { cn, confirmAction } from '@/shared/utils'
 import { useChatStore } from '@/features/chat/chat-store'
@@ -507,8 +506,6 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
       )
     }
   }
-
-  if (message.plan) elements.push(<div key="plan" className="mt-2"><TaskPlanCard plan={message.plan} /></div>)
 
   return <div className="py-1">{elements}</div>
 }

@@ -73,11 +73,11 @@ export class TelegramResponder {
 
     if (text) {
       try { await this.deps.sendText(text) }
-      catch (err) { console.log(`[telegram] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.log(`[Telegram] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
     for (const p of mediaPaths) {
       try { await this.deps.sendMedia(p) }
-      catch (err) { console.log(`[telegram] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.log(`[Telegram] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
   }
 }

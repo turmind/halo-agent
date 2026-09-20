@@ -103,11 +103,11 @@ export class SlackResponder {
 
     if (text) {
       try { await this.deps.sendText(text) }
-      catch (err) { console.log(`[slack] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.log(`[Slack] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
     for (const p of mediaPaths) {
       try { await this.deps.sendMedia(p) }
-      catch (err) { console.log(`[slack] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.log(`[Slack] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
   }
 }

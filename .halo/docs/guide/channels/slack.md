@@ -96,6 +96,16 @@ Open halo admin → **Channels** → **Slack** → **Add Account**:
 
 On submit halo calls Slack's `auth.test` to validate the bot token and auto-fills `botUserId` and `teamId`. If that call fails the account isn't created and you'll see the Slack-returned error inline.
 
+### Who can talk to the bot — and what `full` means
+
+There is **no per-user whitelist** on Slack accounts (unlike Telegram's `allowedUsers`): the access level applies to **every member of the Slack workspace who can reach the bot** — anyone who DMs it or is in a channel it's been invited to. Membership is the boundary, and that boundary is managed on the Slack side (workspace invites, channel membership, app install scope), not in halo.
+
+Pick the level with that in mind:
+
+- `readonly` — safe default for a company-wide bot; the agent can read and answer but not write files or run commands
+- `workspace` — the agent may write inside the bound workspace path; fine for a team that already shares that repo
+- `full` — the agent has shell access as the server user, and any workspace member can drive it. Reserve `full` for a bot in a private channel with people you'd also give SSH to, or point it at a dedicated workspace / server.
+
 ## Step 8 — Test it
 
 1. In Slack, click the bot's name in the sidebar to start a DM → type `hello` → expect a streamed reply

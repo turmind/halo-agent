@@ -99,11 +99,11 @@ export class FeishuResponder {
 
     if (text) {
       try { await this.deps.sendText(text) }
-      catch (err) { console.warn(`[feishu] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.warn(`[Feishu] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
     for (const p of mediaPaths) {
       try { await this.deps.sendMedia(p) }
-      catch (err) { console.warn(`[feishu] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.warn(`[Feishu] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
   }
 }

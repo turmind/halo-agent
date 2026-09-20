@@ -21,6 +21,8 @@ halo setup                     # 交互式：密码 / 端口 / 模型 key / 可�
 halo server start              # → 打开 http://localhost:9527
 ```
 
+想用桌面版？每个 [GitHub release](https://github.com/turmind/halo-agent/releases) 都附带 **macOS（Apple Silicon）`.dmg`** 和 **Windows x64 `.exe`**，内置 server + 管理台和独立的 Node 运行时，不需要 `npm`。功能一致、`~/.halo/` 数据布局一致，以后两种方式可以互换。
+
 > [!IMPORTANT]
 > **第一条消息就报 `Could not load credentials from any providers`？** `halo setup` 里配的 API key 只是存下来了，**不会自动绑定到 Agent** —— 内置的 `default` Agent 初始指向 AWS Bedrock。去管理台 **Agents → default** 把 model provider 切成你配置的那家即可。（有可用 AWS 凭证链的 Bedrock 用户不受影响。）详见[快速开始](#快速开始)。
 
@@ -192,7 +194,9 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
 Halo 还年轻——请把它当早期项目看待：
 
 - **沙箱隔离的是文件系统，不是网络。** bubblewrap 沙箱覆盖访问级别与文件系统边界（宿主路径、`~/.aws`/`~/.ssh` 屏蔽），但**不做**网络隔离 —— 沙箱内代码仍可对外连接。威胁模型是「可信 Agent 的误操作与路径逃逸」，**不是**「恶意技能的数据外泄防护」。网络隔离在路线图上。
-- **测试覆盖停留在单测/回归层，还没有端到端测试。** core / server / cli / admin 四个包共 433 个测试，每次 push 由 CI 跑一遍，覆盖路径边界检查、会话修复、渠道消息格式化、TUI 引擎等核心逻辑，但还没有端到端或集成测试。
+- **测试覆盖停留在单测/回归层，还没有端到端测试。** core / server / cli / admin 四个包共 1100+ 个测试，每次 push 由 CI 跑一遍，覆盖路径边界检查、会话修复、渠道消息格式化、TUI 引擎等核心逻辑，但还没有端到端或集成测试。
+- **Windows 宿主机上完全没有沙箱。** `bubblewrap` 只有 Linux 有；在 Windows 服务器上，`workspace` 级会话实际等同于 `full`（不受限的 shell 与文件系统），`readonly` 会话也能读到 halo 进程可读的任何路径。macOS 与没装 bwrap 的 Linux 还保留工具过滤和应用层路径围栏，但没有 OS 级隔离。别在 Windows 宿主机上发放非 `full` 的渠道 token 并指望它有隔离效果 —— 细节见 [dev/tools.md](.halo/docs/dev/tools.md)。
+- **管理台是单租户的。** 一个密码、一个 JWT cookie，而这个 cookie *就是*整个服务进程：拿到它的人可以读写所有工作区、以服务用户身份执行 shell、管理所有渠道的凭证。管理台没有角色、没有按用户的权限。多人使用应该走渠道账号（Web / Telegram / Slack / Feishu / WeChat），用各自的访问级别，而不是共享管理台登录。请把管理台端口放在防火墙、VPN 或带认证的反向代理后面。
 - **API 和磁盘格式在版本间仍可能变化。** 还在打磨阶段，会有毛边。
 
 碰到坏掉或奇怪的行为，请开 issue —— 现阶段的早期反馈真的很有用。

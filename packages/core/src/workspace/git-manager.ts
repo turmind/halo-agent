@@ -57,7 +57,16 @@ export class GitManager {
   private git: SimpleGit;
 
   constructor(private workspace: Workspace) {
-    this.git = simpleGit(workspace.projectRoot);
+    // `-c credential.helper=store` per command, so HTTPS pushes read the
+    // `~/.git-credentials` the admin panel writes — without editing the
+    // user's global or repo git config on their behalf. simple-git blocks
+    // credential.helper in `-c` by default (it can name an arbitrary
+    // binary); the value here is the fixed literal `store`, so opting in
+    // is safe.
+    this.git = simpleGit(workspace.projectRoot, {
+      config: ['credential.helper=store'],
+      unsafe: { allowUnsafeCredentialHelper: true },
+    });
   }
 
   /** Whether the workspace root is itself a git work-tree root — not merely

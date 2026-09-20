@@ -295,13 +295,13 @@ export function startFeishuChannel(deps: {
             if (!account || !route) return
             const resolved = path.resolve(filePath)
             if (!isMediaPathAllowed(resolved, account.workspacePath)) {
-              console.log(`[feishu] sendMedia blocked: ${filePath} not under workspace`)
+              console.log(`[Feishu] sendMedia blocked: ${filePath} not under workspace`)
               return
             }
             try {
               await sendFeishuMedia({ account, ...route, filePath: resolved })
             } catch (err) {
-              console.log(`[feishu] sendMedia ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
+              console.log(`[Feishu] sendMedia ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
               await replyToInbound({
                 account, ...route,
                 text: t('handler.upload_failed', getLang(account), {
@@ -335,15 +335,15 @@ export function startFeishuChannel(deps: {
     const account = getAccount(db, accountId)
     if (!account || account.enabled !== 1) return
     if (!event.message || !event.sender) {
-      console.warn(`[feishu-trace] ${accountId} dropped: no message/sender. keys=${Object.keys(event).join(',')}`)
+      console.warn(`[FeishuTrace] ${accountId} dropped: no message/sender. keys=${Object.keys(event).join(',')}`)
       return
     }
     const accepted = shouldRespond(event, account.botOpenId)
-    console.warn(`[feishu-trace] ${accountId} sender_type=${event.sender.sender_type} chat_type=${event.message.chat_type} mt=${event.message.message_type} accepted=${accepted}`)
+    console.warn(`[FeishuTrace] ${accountId} sender_type=${event.sender.sender_type} chat_type=${event.message.chat_type} mt=${event.message.message_type} accepted=${accepted}`)
     if (!accepted) return
     const state = ensureState(accountId)
     void handleInbound({ registry, db, account, event, state })
-      .catch((err) => console.warn(`[feishu] handle ${accountId}: ${err instanceof Error ? err.message : String(err)}`))
+      .catch((err) => console.warn(`[Feishu] handle ${accountId}: ${err instanceof Error ? err.message : String(err)}`))
   }
 
   /**
@@ -368,17 +368,17 @@ export function startFeishuChannel(deps: {
     const dispatcher = new Lark.EventDispatcher({})
     dispatcher.register({
       'im.message.receive_v1': async (data: unknown) => {
-        console.warn(`[feishu-trace] ${accountId} im.message.receive_v1 fired, keys=${Object.keys((data ?? {}) as object).slice(0, 5).join(',')}`)
+        console.warn(`[FeishuTrace] ${accountId} im.message.receive_v1 fired, keys=${Object.keys((data ?? {}) as object).slice(0, 5).join(',')}`)
         dispatchEvent(accountId, data as FeishuMessageEvent)
       },
     })
 
     try {
-      console.warn(`[feishu] ${accountId} starting Lark.WSClient…`)
+      console.warn(`[Feishu] ${accountId} starting Lark.WSClient…`)
       await wsClient.start({ eventDispatcher: dispatcher })
-      console.warn(`[feishu] ${accountId} long-connect started`)
+      console.warn(`[Feishu] ${accountId} long-connect started`)
     } catch (err) {
-      console.warn(`[feishu] ${accountId} ws start failed: ${err instanceof Error ? err.message : String(err)}`)
+      console.warn(`[Feishu] ${accountId} ws start failed: ${err instanceof Error ? err.message : String(err)}`)
       state.wsClient = null
     }
   }
@@ -422,7 +422,7 @@ async function handleInbound(args: {
   const userId = event.sender.sender_id.open_id ?? event.sender.sender_id.user_id ?? 'unknown'
   const workspace = resolveAccountWorkspace(account)
   if (!workspace) {
-    console.log(`[feishu] ${account.accountId} workspace missing (path=${account.workspacePath})`)
+    console.log(`[Feishu] ${account.accountId} workspace missing (path=${account.workspacePath})`)
     return
   }
 

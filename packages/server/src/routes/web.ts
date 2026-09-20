@@ -12,6 +12,7 @@ import type { WebAccount } from '../channels/web/types.js'
 import { accessLevelError, ACCOUNT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
 import { resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
 import { isHiddenWorkspacePath } from '../tools/sandbox.js'
+import { isSafeIdSegment } from './workspace-path.js'
 
 export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
   const { db, channel } = deps
@@ -135,12 +136,19 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     return auth
   }
 
-  /** 403 when a non-full token names a session outside its own prefix via
-   *  the `sessionId` override (see canAddressSession); null = allowed. Runs
-   *  before the channel call so chat/subscribe can refuse with a status
-   *  instead of an SSE error event. */
+  /** 400 when the `sessionId` override isn't a safe id segment, 403 when a
+   *  non-full token names a session outside its own prefix (see
+   *  canAddressSession); null = allowed. Runs before the channel call so
+   *  chat/subscribe can refuse with a status instead of an SSE error event.
+   *
+   *  The shape check comes first: an unknown id is created verbatim and its
+   *  leaf segment becomes the session file name (session-store fileSegment →
+   *  path.join), so `web_<acct>_/../../x` passes the prefix gate and writes
+   *  outside the sessions dir. */
   function sessionOverrideError(c: Context, account: WebAccount, sessionId: string | undefined): Response | null {
-    if (sessionId && !canAddressSession(account, sessionId)) {
+    if (!sessionId) return null
+    if (!isSafeIdSegment(sessionId)) return c.json({ error: 'Invalid session id' }, 400)
+    if (!canAddressSession(account, sessionId)) {
       return c.json({ error: 'session not owned by this token' }, 403)
     }
     return null

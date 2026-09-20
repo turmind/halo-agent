@@ -49,7 +49,7 @@ function loadExpandedScopes(): Set<string> {
   try {
     const raw = localStorage.getItem(AGENT_EXPANDED_KEY)
     if (raw) return new Set(JSON.parse(raw))
-  } catch {}
+  } catch { /* corrupt localStorage → default */ }
   return new Set(['global', 'workspace'])
 }
 
@@ -419,7 +419,7 @@ function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { ag
       const res = await api.agentConfigs.getYaml(agent.id, { scope: agent.scope, projectId })
       const { parse, stringify } = await import('yaml')
       let parsed: unknown = {}
-      try { parsed = parse(res.yaml) } catch {}
+      try { parsed = parse(res.yaml) } catch { /* unparsable yaml → empty */ }
       const safeParsed = (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : {}
       setParsedData(safeParsed)
       // Establish a baseline so auto-save won't re-write the just-loaded content.

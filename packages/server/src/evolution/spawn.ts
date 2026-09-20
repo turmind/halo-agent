@@ -33,5 +33,5 @@ export const realEvoSpawner: EvoSpawner = (mode, id) => {
   })
   // unref so the server's event loop doesn't keep waiting on this child.
   child.unref()
-  console.log(`[evo-spawn] launched ${mode} wrapper pid=${child.pid} id=${id}`)
+  console.log(`[EvoSpawn] launched ${mode} wrapper pid=${child.pid} id=${id}`)
 }

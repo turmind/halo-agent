@@ -14,7 +14,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { spawnSync } from 'node:child_process'
 
 const GIT_CREDENTIALS_PATH = path.join(homedir(), '.git-credentials')
 
@@ -49,20 +48,11 @@ function writeGitCredentialsFile(host: string, username: string, token: string):
   try { fs.chmodSync(GIT_CREDENTIALS_PATH, 0o600) } catch { /* best-effort */ }
 }
 
-/** Ensure git's `store` credential helper is configured globally so it reads
- *  ~/.git-credentials. No-op when a helper is already set. */
-function ensureCredentialHelper(): void {
-  const current = spawnSync('git', ['config', '--global', '--get', 'credential.helper'], { encoding: 'utf-8' })
-  const helper = (current.stdout ?? '').trim()
-  if (!helper) {
-    spawnSync('git', ['config', '--global', 'credential.helper', 'store'], { encoding: 'utf-8' })
-  }
-}
-
-/** Persist a git credential to ~/.git-credentials. Throws on filesystem failure. */
+/** Persist a git credential to ~/.git-credentials. Throws on filesystem failure.
+ *  GitManager passes `-c credential.helper=store` on every command, so no
+ *  global / repo git config is touched to make git read this file. */
 export function saveGitCredentials({ host, username, token }: GitCredentialInput): void {
   writeGitCredentialsFile(host, username, token)
-  ensureCredentialHelper()
   console.log(`[GitCredentials] saved for host ${host}`)
 }
 

@@ -263,7 +263,7 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
       completedAt: now,
     }).where(eq(cronRuns.id, runId)).run()
     broadcast({ type: 'cron:run_changed', jobId, runId, status: 'failed' })
-    console.log(`[cron] orphan sweep: run ${runId} (job ${jobId}) — ${disposition}`)
+    console.log(`[Cron] orphan sweep: run ${runId} (job ${jobId}) — ${disposition}`)
 
     if (!needsKill || pid == null) {
       // (e) Nothing alive to wait for — release immediately.
@@ -279,7 +279,7 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
       // Re-verify identity before the hard kill — the pid may have been
       // recycled during the grace window.
       if (isCronCliProcess(pid, jobId)) {
-        console.log(`[cron] orphan sweep: pid ${pid} (job ${jobId}) survived SIGTERM — SIGKILL tree`)
+        console.log(`[Cron] orphan sweep: pid ${pid} (job ${jobId}) survived SIGTERM — SIGKILL tree`)
         killTreeHard(pid)
       }
       // (e) Orphan gone (SIGKILL is immediate; graceful exit already
@@ -348,7 +348,7 @@ export function reloadAll(): void {
     scheduleJob(j.id)
     _fingerprint.set(j.id, jobFingerprint(j))
   }
-  console.log(`[cron] daemon: ${jobs.length} job(s) active`)
+  console.log(`[Cron] daemon: ${jobs.length} job(s) active`)
 }
 
 /** Per-row fingerprint used by `reconcileFromDb` and `scheduleJob` to
@@ -375,7 +375,7 @@ export function scheduleJob(jobId: string): void {
   try {
     const handler = () => {
       void runJob(jobId, 'scheduled').catch((err) => {
-        console.log(`[cron] ${jobId} scheduled run crashed: ${err instanceof Error ? err.message : String(err)}`)
+        console.log(`[Cron] ${jobId} scheduled run crashed: ${err instanceof Error ? err.message : String(err)}`)
       })
     }
     if (job.runAt) {
@@ -387,7 +387,7 @@ export function scheduleJob(jobId: string): void {
       // 10s). UI shows the status; user can clone the job or run-now.
       if (job.runAt <= Date.now()) {
         const now = Date.now()
-        console.warn(`[cron] ${jobId} runAt was ${new Date(job.runAt).toISOString()} (past); marking missed`)
+        console.warn(`[Cron] ${jobId} runAt was ${new Date(job.runAt).toISOString()} (past); marking missed`)
         db.update(cronJobs)
           .set({ enabled: 0, lastRunStatus: 'missed', lastRunAt: now, updatedAt: now })
           .where(eq(cronJobs.id, jobId))
@@ -400,7 +400,7 @@ export function scheduleJob(jobId: string): void {
       cron = new Cron(job.schedule, { timezone: job.timezone ?? undefined }, handler)
     }
   } catch (err) {
-    console.log(`[cron] ${jobId} schedule invalid (${job.schedule}): ${err instanceof Error ? err.message : String(err)}`)
+    console.log(`[Cron] ${jobId} schedule invalid (${job.schedule}): ${err instanceof Error ? err.message : String(err)}`)
     return
   }
   _active.set(jobId, { jobId, cron })
@@ -409,7 +409,7 @@ export function scheduleJob(jobId: string): void {
   _fingerprint.set(jobId, jobFingerprint(job))
   const next = cron.nextRun()
   const sched = job.runAt ? `runAt=${new Date(job.runAt).toISOString()}` : job.schedule
-  console.log(`[cron] ${jobId} scheduled (${sched}) next=${next?.toISOString() ?? 'n/a'}`)
+  console.log(`[Cron] ${jobId} scheduled (${sched}) next=${next?.toISOString() ?? 'n/a'}`)
 }
 
 /** Cancel a single job's schedule. Doesn't touch the db row. */

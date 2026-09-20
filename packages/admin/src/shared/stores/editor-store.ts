@@ -215,7 +215,7 @@ export function createEditorStore() {
         if (typeof window === 'undefined') return { x: 0, y: 0, w: 480, h: 640 }
         const raw = sessionStorage.getItem('halo_bottom_float_rect')
         if (raw) {
-          try { return JSON.parse(raw) } catch {}
+          try { return JSON.parse(raw) } catch { /* corrupt sessionStorage → default */ }
         }
         const w = 480
         const h = 640

@@ -69,7 +69,7 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   }
   for (const filePath of media?.paths ?? []) {
     if (!isMediaPathAllowed(filePath, media!.workspacePath)) {
-      console.log(`[slack] cron uploadFile blocked: ${filePath} not under ${media!.workspacePath}`)
+      console.log(`[Slack] cron uploadFile blocked: ${filePath} not under ${media!.workspacePath}`)
       out.push({ channelType: 'slack', accountId, chatId: explicitChatId, ok: false, error: `media path not under job workspace: ${filePath}` })
       continue
     }
@@ -78,7 +78,7 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
       out.push({ channelType: 'slack', accountId, chatId: explicitChatId, ok: true })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.log(`[slack] cron uploadFile ${filePath} failed: ${msg}`)
+      console.log(`[Slack] cron uploadFile ${filePath} failed: ${msg}`)
       out.push({ channelType: 'slack', accountId, chatId: explicitChatId, ok: false, error: `media ${filePath}: ${msg}` })
     }
   }

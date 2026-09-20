@@ -1,6 +1,5 @@
 import type { WsClient } from '../ws-client-types'
 import { useChatStore } from '@/features/chat/chat-store'
-import { useTaskStore } from '@/shared/stores/task-store'
 import { generateId } from '@/shared/utils'
 
 export function registerAgentHandlers(wsClient: WsClient): () => void {
@@ -67,13 +66,6 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
       // (InlineToolCall previews at 120 chars; expand shows everything).
       const fullResult = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result ?? '')
       useChatStore.getState().updateLastToolCallResult(fullResult, agentName, msg.taskId, msg.toolUseId)
-    }),
-  )
-
-  unsubs.push(
-    wsClient.on('agent:configs', (data) => {
-      const msg = data as { agents: Array<{ name: string; role: string; model: string; status: string; tools: string[] }> }
-      useTaskStore.getState().setAgentConfigs(msg.agents as never)
     }),
   )
 

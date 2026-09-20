@@ -6,7 +6,6 @@ import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { registerChatHandlers } from '@/shared/ws-handlers/chat-handlers'
 import { registerAgentHandlers } from '@/shared/ws-handlers/agent-handlers'
-import { registerTaskHandlers } from '@/shared/ws-handlers/task-handlers'
 import { registerFileHandlers } from '@/shared/ws-handlers/file-handlers'
 import { registerStateHandlers } from '@/shared/ws-handlers/state-handlers'
 
@@ -83,7 +82,6 @@ export function useWebSocket() {
       }),
       registerChatHandlers(wsClient),
       registerAgentHandlers(wsClient),
-      registerTaskHandlers(wsClient),
       registerFileHandlers(wsClient),
       registerStateHandlers(wsClient),
     ]

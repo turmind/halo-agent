@@ -301,7 +301,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
             activeTab: activeGroup.activeTab,
           })
         }
-      } catch {}
+      } catch { /* stale tab state → start clean */ }
       if (!cancelled) setTabsRestored(true)
     }
 
@@ -394,7 +394,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         try {
           const stat = await api.files.stat(path, projectId)
           meta = { size: stat.size, mtime: stat.modifiedAt, createdAt: stat.createdAt }
-        } catch {}
+        } catch { /* meta is optional */ }
         useEditorStore.getState().openPreview(path, downloadUrl, viewUrl, meta)
         return
       }
@@ -419,7 +419,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
           try {
             const stat = await api.files.stat(path, projectId)
             meta = { size: stat.size, mtime: stat.modifiedAt, createdAt: stat.createdAt }
-          } catch {}
+          } catch { /* meta is optional */ }
           useEditorStore.getState().openPreview(
             path,
             api.files.downloadUrl(path, projectId),

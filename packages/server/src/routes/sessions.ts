@@ -6,6 +6,7 @@ import { agentSessions } from '../db/schema.js'
 import { findSessionFileData, findAndDeleteSessionFile, findAndUpdateSessionTitle, readSessionFileMeta, stripTurnStamp } from '../sessions/session-store.js'
 import { findLatestGoal } from '../agents/goal-mode.js'
 import { broadcast } from '../ws/broadcast.js'
+import { isSafeIdSegment } from './workspace-path.js'
 
 /** Raw content block — supports both Bedrock and Anthropic API formats */
 interface RawContentBlock {
@@ -257,6 +258,7 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
   // GET /sessions/logs/:id?projectId=xxx — get full session log by ID
   app.get('/sessions/logs/:id', (c) => {
     const id = c.req.param('id')
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid session id' }, 400)
     const projectId = c.req.query('projectId')
     const data = findSessionFileData(id, projectId ?? null)
     if (!data) return c.json({ error: 'Session not found' }, 404)
@@ -281,6 +283,7 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
   // Use session:delete WS command for archive-only (soft delete).
   app.delete('/sessions/logs/:id', async (c) => {
     const id = c.req.param('id')
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid session id' }, 400)
     const projectId = c.req.query('projectId')
     if (!projectId) return c.json({ error: 'projectId required' }, 400)
 
@@ -317,6 +320,7 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
   // new title lands there. Admin-only edit (no channel exposes this).
   app.patch('/sessions/logs/:id', async (c) => {
     const id = c.req.param('id')
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid session id' }, 400)
     const projectId = c.req.query('projectId')
     if (!projectId) return c.json({ error: 'projectId required' }, 400)
     const body = await c.req.json<{ title?: string }>().catch(() => ({} as { title?: string }))

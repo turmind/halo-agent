@@ -89,7 +89,7 @@ async function fetchAndSaveTelegramFile(args: {
     })
     return { savedPath }
   } catch (err) {
-    console.log(`[telegram] ${account.accountId} ${kind} download failed: ${err instanceof Error ? err.message : String(err)}`)
+    console.log(`[Telegram] ${account.accountId} ${kind} download failed: ${err instanceof Error ? err.message : String(err)}`)
     return null
   }
 }
@@ -119,16 +119,16 @@ export function startTelegramChannel(deps: {
 
   function startAccount(accountId: string): void {
     if (runners.has(accountId)) {
-      console.log(`[telegram] account ${accountId} already running`)
+      console.log(`[Telegram] account ${accountId} already running`)
       return
     }
     const account = getAccount(db, accountId)
     if (!account) {
-      console.log(`[telegram] account ${accountId} not found`)
+      console.log(`[Telegram] account ${accountId} not found`)
       return
     }
     if (!account.enabled) {
-      console.log(`[telegram] account ${accountId} disabled, skip`)
+      console.log(`[Telegram] account ${accountId} disabled, skip`)
       return
     }
 
@@ -153,7 +153,7 @@ export function startTelegramChannel(deps: {
           const route = bridge.getRoute(sessionId)
           if (!route) return
           if (!isMediaPathAllowed(filePath, account.workspacePath)) {
-            console.log(`[telegram] sendMedia blocked: ${filePath} not under workspace`)
+            console.log(`[Telegram] sendMedia blocked: ${filePath} not under workspace`)
             return
           }
           const kind = inferMediaKind(filePath)
@@ -168,9 +168,9 @@ export function startTelegramChannel(deps: {
       }),
     })
     const promise = runBot({ registry, db, account, bot, abort, bridge, activeOverrides, restartSelf })
-      .catch((err) => console.log(`[telegram] account ${accountId} bot crashed: ${String(err)}`))
+      .catch((err) => console.log(`[Telegram] account ${accountId} bot crashed: ${String(err)}`))
     runners.set(accountId, { accountId, bot, abort, promise, bridge, activeOverrides })
-    console.log(`[telegram] account ${accountId} started (@${account.botUsername}, workspace=${account.workspacePath})`)
+    console.log(`[Telegram] account ${accountId} started (@${account.botUsername}, workspace=${account.workspacePath})`)
   }
 
   async function stopAccount(accountId: string): Promise<void> {
@@ -181,7 +181,7 @@ export function startTelegramChannel(deps: {
     runner.bot.stop()
     runners.delete(accountId)
     await runner.promise.catch(() => {})
-    console.log(`[telegram] account ${accountId} stopped`)
+    console.log(`[Telegram] account ${accountId} stopped`)
   }
 
   async function stopAll(): Promise<void> {
@@ -206,7 +206,7 @@ async function runBot(args: {
   const { registry, db, account, bot, bridge, activeOverrides, restartSelf } = args
 
   bot.catch((err) => {
-    console.log(`[telegram] ${account.accountId} bot error: ${String(err)}`)
+    console.log(`[Telegram] ${account.accountId} bot error: ${String(err)}`)
   })
 
   const lang = getLang(account)
@@ -330,7 +330,7 @@ async function runBot(args: {
         imageNote = `[图片已保存: ${savedPath}]`
       }
     } catch (err) {
-      console.log(`[telegram] ${account.accountId} image download failed: ${err instanceof Error ? err.message : String(err)}`)
+      console.log(`[Telegram] ${account.accountId} image download failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     const text = caption ? `${caption}\n${imageNote}` : imageNote
     await handleUserMessage({ registry, db, account, ctx, userId, workspace, text, images, lang, bridge, activeOverrides })
@@ -408,10 +408,10 @@ async function runBot(args: {
   })
 
   // Start polling
-  console.log(`[telegram] ${account.accountId} starting long-poll…`)
+  console.log(`[Telegram] ${account.accountId} starting long-poll…`)
   await bot.start({
     drop_pending_updates: true,
-    onStart: () => console.log(`[telegram] ${account.accountId} polling active`),
+    onStart: () => console.log(`[Telegram] ${account.accountId} polling active`),
   })
 }
 

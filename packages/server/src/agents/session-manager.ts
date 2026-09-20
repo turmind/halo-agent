@@ -2272,12 +2272,12 @@ export class SessionManager implements SessionManagerInternals {
         trigger: 'pre-compact',
       })
       if (!result.ok) {
-        console.warn(`[evo] pre-compact enqueue failed for ${session.id}: ${result.reason} — ${result.error}`)
+        console.warn(`[Evo] pre-compact enqueue failed for ${session.id}: ${result.reason} — ${result.error}`)
       } else {
-        console.debug(`[evo] pre-compact queued ${result.runId} for ${session.id} (turn-end)`)
+        console.debug(`[Evo] pre-compact queued ${result.runId} for ${session.id} (turn-end)`)
       }
     } catch (err) {
-      console.warn(`[evo] pre-compact enqueue threw for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
+      console.warn(`[Evo] pre-compact enqueue threw for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

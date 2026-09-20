@@ -251,7 +251,7 @@ async function substituteSecrets(
   }
   const result = cmd.replace(PARAMS_PATTERN, (_match, namespace: string, dotted: string) => {
     if (allowedNamespaces && !allowedNamespaces.has(namespace)) {
-      console.log(`[workspace-tools] {{${namespace}.params.${dotted}}} rejected — namespace not in allowed list`)
+      console.log(`[WorkspaceTools] {{${namespace}.params.${dotted}}} rejected — namespace not in allowed list`)
       return _match
     }
     const parts = [namespace, 'params', ...dotted.split('.')]

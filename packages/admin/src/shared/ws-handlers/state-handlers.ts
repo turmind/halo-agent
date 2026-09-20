@@ -2,7 +2,6 @@ import type { WsClient } from '../ws-client-types'
 import { useChatStore, isStaleStreamingPlaceholder, noteSnapshot } from '@/features/chat/chat-store'
 import { noteArchiveAnchor } from '@/features/chat/archive-store'
 import { refreshGoal } from '@/features/chat/goal-store'
-import { useTaskStore } from '@/shared/stores/task-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { bumpSessionBus } from '@/shared/session-bus'
 import { onWsReconnect } from '@/shared/ws-reconnect'
@@ -65,12 +64,6 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
         }
       } else {
         console.debug('[state-handlers] skipping snapshot replace — streaming in flight')
-      }
-      if (snapshot.activePlan) {
-        useTaskStore.getState().setActivePlan(snapshot.activePlan)
-      }
-      if (snapshot.agents) {
-        useTaskStore.getState().setAgentConfigs(snapshot.agents as never)
       }
       const snap = snapshot as unknown as Record<string, unknown>
       if (typeof snap.maxContextTokens === 'number' && snap.maxContextTokens > 0) {

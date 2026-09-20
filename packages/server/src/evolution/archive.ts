@@ -101,7 +101,7 @@ async function zipDir(srcDir: string, outZip: string): Promise<boolean> {
     // the rmDir + archived_at stamp on failure, so a retry next pass
     // must start clean.
     rmFile(outZip)
-    console.log(`[evo-archive] zip of ${srcDir} failed: ${err instanceof Error ? err.message : String(err)}`)
+    console.log(`[EvoArchive] zip of ${srcDir} failed: ${err instanceof Error ? err.message : String(err)}`)
     return false
   }
 }
@@ -290,11 +290,11 @@ export function startArchiveDaemon(): void {
   const pass = (label: string): void => {
     runArchivePass().then((s) => {
       if (s.archived || s.purged || s.errors.length) {
-        console.log(`[evo-archive] ${label} pass: archived=${s.archived} purged=${s.purged} errors=${s.errors.length}`)
-        for (const err of s.errors) console.log(`[evo-archive]   ${err}`)
+        console.log(`[EvoArchive] ${label} pass: archived=${s.archived} purged=${s.purged} errors=${s.errors.length}`)
+        for (const err of s.errors) console.log(`[EvoArchive]   ${err}`)
       }
     }).catch((err) => {
-      console.log(`[evo-archive] ${label} pass crashed: ${err instanceof Error ? err.message : String(err)}`)
+      console.log(`[EvoArchive] ${label} pass crashed: ${err instanceof Error ? err.message : String(err)}`)
     })
   }
   // Run shortly after server boot so any rows already past the threshold

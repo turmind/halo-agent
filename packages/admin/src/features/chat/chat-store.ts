@@ -340,7 +340,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       role: msg.role,
       content: msg.content,
       timestamp: msg.timestamp ?? Date.now(),
-      plan: msg.plan,
       streaming: msg.streaming,
       agentName: msg.agentName,
       taskId: msg.taskId,

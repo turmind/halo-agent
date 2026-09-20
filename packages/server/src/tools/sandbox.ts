@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, realpathSync } from 'node:fs'
+import { cleanChildEnv } from '../child-env.js'
 
 const execAsync = promisify(exec)
 const execFileAsync = promisify(execFile)
@@ -93,7 +94,9 @@ function spawnGroupExec(
   opts: { cwd: string; timeout?: number; maxBuffer?: number; signal?: AbortSignal },
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, { shell: true, detached: true, cwd: opts.cwd })
+    // Full-level path (no bwrap, which --clearenv's): still drop the server's
+    // own auth secrets — a shell command never needs to mint admin cookies.
+    const child = spawn(command, { shell: true, detached: true, cwd: opts.cwd, env: cleanChildEnv() })
     let stdout = ''
     let stderr = ''
     let killReason: 'timeout' | 'abort' | null = null
@@ -237,7 +240,7 @@ async function isBwrapAvailable(): Promise<boolean> {
     if (e.code === 'ENOENT') {
       _bwrapAvailable = false
     } else if (/permission denied|capability|no permission|operation not permitted/i.test(stderr)) {
-      console.warn(`[sandbox] bwrap installed but cannot create namespaces (${stderr.trim().split('\n')[0]}) — falling back to app-level validation only`)
+      console.warn(`[Sandbox] bwrap installed but cannot create namespaces (${stderr.trim().split('\n')[0]}) — falling back to app-level validation only`)
       _bwrapAvailable = false
     }
     return false

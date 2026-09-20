@@ -34,7 +34,7 @@ function loadExpandedScopes(): Set<string> {
   try {
     const raw = localStorage.getItem(SKILL_EXPANDED_KEY)
     if (raw) return new Set(JSON.parse(raw))
-  } catch {}
+  } catch { /* corrupt localStorage → default */ }
   return new Set(['global', 'workspace'])
 }
 
