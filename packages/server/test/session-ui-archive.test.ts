@@ -424,17 +424,18 @@ describe('deletion — filesystem glob, not header state', () => {
   })
 })
 
-describe('deleteExchange refuses once history is archived', () => {
-  it('returns archived and leaves both streams untouched', async () => {
+describe('deleteExchange archive anchor', () => {
+  it('refuses when the client anchor is behind the on-disk count', async () => {
     const log = fatExchanges(4)
     seedRow('r1')
     seedFile('r1', log)
     uiStore().archiveOldMessages('r1')
     const before = readActive('r1')
 
-    // Ordinal 0 would point at a different turn on each side of the archive —
-    // refuse rather than delete the wrong one.
-    expect(await sm.deleteExchange('r1', 0)).toBe('archived')
+    // A panel opened before the compact still counts from the pre-archive top:
+    // its ordinal 0 points at a different turn here — refuse rather than delete
+    // the wrong one.
+    expect(await sm.deleteExchange('r1', 0, 0)).toBe('archived')
 
     const after = readActive('r1')
     expect(after.messages.some((m) => m.deleted)).toBe(false)
@@ -442,19 +443,30 @@ describe('deleteExchange refuses once history is archived', () => {
     expect(after.rawMessages).toEqual(before.rawMessages)
   })
 
+  it('deletes when the client anchor matches the on-disk count', async () => {
+    seedRow('r1')
+    seedFile('r1', exchanges(3), { archiveCount: 2 })
+
+    // Reopened after the compact: the client anchored at 2, so its ordinal 0
+    // is the active log's first turn on both sides.
+    expect(await sm.deleteExchange('r1', 0, 2)).toBe('deleted')
+    expect(readActive('r1').messages.filter((m) => m.deleted).map((m) => m.content)).toEqual(['u0', 'a0'])
+  })
+
   it('still deletes normally when nothing has been archived', async () => {
     seedRow('r1')
     seedFile('r1', exchanges(2))
-    expect(await sm.deleteExchange('r1', 0)).toBe('deleted')
+    expect(await sm.deleteExchange('r1', 0, 0)).toBe('deleted')
   })
 
   it('reads the marker from disk, not memory', async () => {
     // No in-memory UI state at all (fresh manager over the same workspace, so the
-    // db row persists) — the guard must still fire off the on-disk header.
+    // db row persists) — the guard must still compare against the on-disk header.
     seedRow('r1')
     seedFile('r1', exchanges(3), { archiveCount: 2 })
     sm = new SessionManager(ws)
 
-    expect(await sm.deleteExchange('r1', 0)).toBe('archived')
+    expect(await sm.deleteExchange('r1', 0, 0)).toBe('archived')
+    expect(await sm.deleteExchange('r1', 0, 2)).toBe('deleted')
   })
 })

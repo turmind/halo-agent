@@ -9,6 +9,8 @@ import { MediaAttachments, parseMediaMarkers } from '@/shared/components/media-a
 import { cn, confirmAction } from '@/shared/utils'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useSessionViewStore } from '@/features/agents/agent-sessions-sidebar'
+import { useArchiveStore } from '@/features/chat/archive-store'
+import { useSessionArchiveStore } from '@/features/agents/session-archive-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { wsClient } from '@/shared/ws-client'
 import { useT } from '@/shared/i18n'
@@ -29,16 +31,26 @@ import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2, AlertTriangle 
  * would target the wrong turn in the root. Returns null for those (and when
  * nothing resolves), which hides the Delete button.
  */
-function resolveTargetSession(messageId: string): { sessionId: string; projectId: string } | null {
+function resolveTargetSession(messageId: string): { sessionId: string; projectId: string; archiveCount: number } | null {
   const projectId = useProjectStore.getState().activeProject?.id
   if (!projectId) return null
   const chat = useChatStore.getState()
   if (chat.sessionId && chat.messages.some((m) => m.id === messageId)) {
-    return chat.sessionId.includes('>') ? null : { sessionId: chat.sessionId, projectId }
+    if (chat.sessionId.includes('>')) return null
+    return { sessionId: chat.sessionId, projectId, archiveCount: anchorFor(useArchiveStore.getState(), chat.sessionId) }
   }
   const selectedSessionId = useSessionViewStore.getState().selectedSessionId
-  if (selectedSessionId && !selectedSessionId.includes('>')) return { sessionId: selectedSessionId, projectId }
+  if (selectedSessionId && !selectedSessionId.includes('>')) {
+    return { sessionId: selectedSessionId, projectId, archiveCount: anchorFor(useSessionArchiveStore.getState(), selectedSessionId) }
+  }
   return null
+}
+
+/** The archive anchor the view was opened against — rides on `exchange:delete`
+ *  so the server can tell "this client counts ordinals from the same log start
+ *  I do" from "a compact moved the start under an open panel" (→ `archived`). */
+function anchorFor(store: { sessionId: string | null; anchor: number }, sessionId: string): number {
+  return store.sessionId === sessionId ? store.anchor : 0
 }
 
 interface MessageListProps {
@@ -47,7 +59,7 @@ interface MessageListProps {
   /** Suppress the per-exchange Delete button. Used by the archived-history
    *  block: those turns are no longer in any session's active log, so
    *  `resolveTargetSession` would mis-resolve them onto the live session and
-   *  the server refuses `exchange:delete` on archived sessions anyway. */
+   *  the server's ordinal (counted over the active log) can't address them. */
   readOnly?: boolean
   /** Number of user turns that exist ABOVE `messages[0]` in the full session
    *  log. The chat panel render-windows long sessions (slices the tail), but
@@ -187,7 +199,7 @@ function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable 
     const target = resolveTargetSession(messageId)
     if (!target) return
     if (!(await confirmAction('Delete this message and its responses from the conversation? The agent will no longer see this exchange.'))) return
-    wsClient.send({ type: 'exchange:delete', sessionId: target.sessionId, projectId: target.projectId, userOrdinal })
+    wsClient.send({ type: 'exchange:delete', sessionId: target.sessionId, projectId: target.projectId, userOrdinal, archiveCount: target.archiveCount })
   }
 
   return (

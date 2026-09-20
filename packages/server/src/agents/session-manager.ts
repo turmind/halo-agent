@@ -2777,6 +2777,7 @@ export class SessionManager implements SessionManagerInternals {
   async deleteExchange(
     sessionId: string,
     userOrdinal: number,
+    archiveCount: number,
   ): Promise<'deleted' | 'running' | 'compacting' | 'not_found' | 'no_exchange' | 'archived'> {
     const rootId = this.findRootSessionId(sessionId)
     if (this.isSessionRunning(rootId)) return 'running'
@@ -2789,13 +2790,12 @@ export class SessionManager implements SessionManagerInternals {
     // meaningful while client and server agree on where the log starts. Archiving
     // moves that start forward: a chat panel that was open across the compact
     // still counts from the pre-archive top, and an ordinal computed there maps
-    // onto a DIFFERENT turn here — a silently wrong delete. There is nothing in
-    // the current payload to disambiguate (no id, no anchor), so refuse loudly
-    // instead of guessing. Read from the file header, not memory: the commit
-    // marker on disk is the truth about what was archived.
-    // Real fix belongs with the upload-scroll round that teaches the frontend
-    // about segments — that is where the ordinal protocol gains an anchor.
-    if (readArchiveCount(this.sessionDir(info.agentId), fileSegment(rootId)) > 0) return 'archived'
+    // onto a DIFFERENT turn here — a silently wrong delete. `archiveCount` is the
+    // client's anchor — the segment count its view was opened against (from the
+    // subscribe/reattach snapshot or the REST log read) — so a match means both
+    // sides count from the same top. Compare against the file header, not
+    // memory: the commit marker on disk is the truth about what was archived.
+    if (readArchiveCount(this.sessionDir(info.agentId), fileSegment(rootId)) !== archiveCount) return 'archived'
 
     const uiState = this.getUIState(rootId)
     if (!uiState) return 'not_found'

@@ -51,6 +51,10 @@ interface ClientMessage {
   /** exchange:delete — 0-based index of the target user turn among all
    *  role==='user' messages in the session's UI log. */
   userOrdinal?: number
+  /** exchange:delete — archived-segment count the client's view was opened
+   *  against (its archive anchor); the server refuses when it differs from
+   *  the on-disk count, i.e. the ordinal was computed over a stale log start. */
+  archiveCount?: number
   images?: Array<{ data: string; mimeType: string }>
   agentName?: string
   agentId?: string
@@ -273,12 +277,12 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     const sm = projectPath ? getSessionManager(projectPath) : client.sessionManager
     if (!sm) { sendJson(ws, { type: 'error', error: 'No workspace context for exchange:delete' }); return }
 
-    const result = await sm.deleteExchange(targetSessionId, msg.userOrdinal)
+    const result = await sm.deleteExchange(targetSessionId, msg.userOrdinal, msg.archiveCount ?? 0)
     if (result === 'running') { sendJson(ws, { type: 'error', error: 'Cannot delete while the agent is running' }); return }
     if (result === 'compacting') { sendJson(ws, { type: 'error', error: 'Cannot delete while compacting' }); return }
     // `code` marks this as an expected refusal, not a failure: the admin renders
     // it as a plain notice instead of an `Error:` bubble (see chat-handlers).
-    if (result === 'archived') { sendJson(ws, { type: 'error', code: 'archived', error: 'This session has archived history — individual turns can no longer be deleted.' }); return }
+    if (result === 'archived') { sendJson(ws, { type: 'error', code: 'archived', error: 'This session archived history since it was opened — reopen it to delete individual turns.' }); return }
     if (result === 'not_found' || result === 'no_exchange') { sendJson(ws, { type: 'error', error: 'Exchange not found' }); return }
 
     // Push the refreshed log to the subscribed client (this connection) when it's

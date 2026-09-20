@@ -78,7 +78,7 @@ describe('deleteExchange — cold session (disk)', () => {
       ],
     )
 
-    const result = await sm.deleteExchange('r1', 0)  // delete "first"
+    const result = await sm.deleteExchange('r1', 0, 0)  // delete "first"
     expect(result).toBe('deleted')
 
     const data = readFile('r1')
@@ -108,7 +108,7 @@ describe('deleteExchange — cold session (disk)', () => {
       ],
     )
 
-    const result = await sm.deleteExchange('r2', 0)  // delete "do it" turn
+    const result = await sm.deleteExchange('r2', 0, 0)  // delete "do it" turn
     expect(result).toBe('deleted')
 
     const data = readFile('r2')
@@ -133,7 +133,7 @@ describe('deleteExchange — cold session (disk)', () => {
       ],
     )
 
-    await sm.deleteExchange('r3', 1)  // delete the SECOND "hi"
+    await sm.deleteExchange('r3', 1, 0)  // delete the SECOND "hi"
 
     const data = readFile('r3')
     // UI: only the second turn (index 2,3) is deleted.
@@ -156,7 +156,7 @@ describe('deleteExchange — cold session (disk)', () => {
       ],
     )
 
-    const result = await sm.deleteExchange('r4', 0)
+    const result = await sm.deleteExchange('r4', 0, 0)
     expect(result).toBe('deleted')
     const data = readFile('r4')
     expect(data.messages[0].deleted).toBe(true)
@@ -174,7 +174,7 @@ describe('deleteExchange — cold session (disk)', () => {
       ],
     )
 
-    const result = await sm.deleteExchange('r5', 0)
+    const result = await sm.deleteExchange('r5', 0, 0)
     expect(result).toBe('deleted')  // silent degrade — UI still marked
     const data = readFile('r5')
     expect(data.messages[0].deleted).toBe(true)
@@ -200,7 +200,7 @@ describe('deleteExchange — cold session (disk)', () => {
       ],
     )
 
-    const result = await sm.deleteExchange('r7', 1)  // admin ordinal 1 === "second"
+    const result = await sm.deleteExchange('r7', 1, 0)  // admin ordinal 1 === "second"
     expect(result).toBe('deleted')
 
     const data = readFile('r7')
@@ -218,10 +218,10 @@ describe('deleteExchange — cold session (disk)', () => {
   it('returns no_exchange for an out-of-range ordinal', async () => {
     seedRow('r6')
     seedFile('r6', [uiMsg('user', 'only')], [{ role: 'user', content: [{ type: 'text', text: 'only' }] }])
-    expect(await sm.deleteExchange('r6', 5)).toBe('no_exchange')
+    expect(await sm.deleteExchange('r6', 5, 0)).toBe('no_exchange')
   })
 
   it('returns not_found for an unknown session', async () => {
-    expect(await sm.deleteExchange('nope', 0)).toBe('not_found')
+    expect(await sm.deleteExchange('nope', 0, 0)).toBe('not_found')
   })
 })

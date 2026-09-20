@@ -180,7 +180,7 @@ describe('runAgentTurn stamps the arrival time on every user-role turn', () => {
     expect(ui[0].content).toBe('first')
     expect(agent.messages[0].content[0].text).toMatch(STAMP_RE)
 
-    expect(await sm.deleteExchange('t6', 0)).toBe('deleted')
+    expect(await sm.deleteExchange('t6', 0, 0)).toBe('deleted')
     // The stamped raw turn was located (stamp stripped for the match) and removed.
     expect(agent.messages).toHaveLength(0)
   })
