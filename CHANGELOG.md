@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Channels: WeCom (企业微信) 智能机器人 — the sixth IM channel, modelled on Feishu. Long-connect over wss via the official `@wecom/aibot-node-sdk`, no public webhook; replies, proactive cron pushes and media uploads all ride the same socket (WeCom has no HTTP send API). Per user in single chat, one shared session per group; slash commands in single chat only; `allowedUsers` gate on `from.userid`. Inbound text / image / mixed / voice / file / video; outbound `MEDIA:` as image (png/jpg/gif), video (mp4) or file, 20 MB cap. Admin Channels → WeCom tab (botId, write-only secret, agent, access level, allowed users), `/api/wecom/accounts` REST, cron target `wecom:<accountId>:<chatId>` (explicit chatId required, like slack / feishu). Onboarding in `guide/channels/wecom.md`. The bundled send-file / cron skills and RUNTIME.md know about it (TEMPLATE_VERSION 59).
+- Server: versioned schema migrations. Every sqlite file (workspace `halo.db`, global `cron.db` / `channels.db` / `evo.db` / `runs.db`) used to evolve by re-running additive `ALTER TABLE … ADD COLUMN` probes on each boot — fine for adding a column, impossible for anything else. `db/migrate.ts` runs an ordered per-db migration list against `PRAGMA user_version`, each slot in its own transaction, stamped after; a database already altered by the old boot path lands on the current version without re-applying anything, and a db stamped by a newer halo is left alone with a warning rather than refused.
+- Core: `@turmind/halo-core/protocol` — the session-message shape and every admin WebSocket frame (`WsClientMessage` / `WsServerMessage`, a 43-member discriminated union) as one shared type source. Server and admin each kept their own copy before, and the admin cast every inbound frame to a hand-written local type; now a field added on one side fails `tsc` on the other. No wire field renamed or added.
+- Tests: contract tests for the three least-covered spines — `AgentLoop`'s tool cycle (parallel tool_use result ordering, unknown / throwing tools, timeout vs cancel, refusal), the ACP adapter's stdio JSON-RPC framing and SSE parsing (first tests in that package, now in CI), and the evolution wrapper's fs-level phases driven in-process against a tmp workspace. Model-error classification is a pure function (`classifyModelError`) with a 28-case table.
+- Repo: `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1); private vulnerability reporting enabled on the GitHub repository.
+
+### Fixed
+
+- Web channel: `?sessionId=` / `/api/sessions/logs/:id` accepted any string; an unknown id was created verbatim and its leaf segment became the session file name, so a crafted id could escape the sessions directory. Both now reject unsafe id segments (400) before the ownership check (403).
+- Server: the full-access shell and the admin terminal PTY inherited the whole server `process.env`, including `HALO_JWT_SECRET` / `HALO_PASSWORD`; both now spawn with the same scrubbed env cron / evolution children already got.
+- Web channel: the `agentId` override bypassed the disabled / internal-agent filter; it is now matched against the same agent scan the admin uses and anything else is rejected.
+- Git panel: saving HTTPS credentials ran `git config --global credential.helper store`, rewriting the server user's global git config; the helper is now passed per command.
+- Logger: `?token=` query values are scrubbed before any sink (stdout / file / OTel) — web tokens ride in the URL for SSE and `<img src>`, so a logged URL was a live credential.
+- Agents: Anthropic `stop_reason: "refusal"` (HTTP 200, safety classifier) was handled like `end_turn` — the empty / partial assistant message was pushed into history and a partial `tool_use` was executed, after which every later turn in the session was refused too, so the user saw an endless run of instant empty replies. The loop now discards the partial output, runs no tool, and emits a system message naming the category and explanation and pointing at `/new`.
+- Agents: a real Bedrock `ThrottlingException` ("Too many requests, please wait before trying again.") carries none of the keywords the throttle branch matched on, so genuine throttling fell through to fatal and killed the turn on attempt 1 instead of backing off. Classification now checks the structured error name / HTTP 429 before the message text.
+- Sessions: the per-exchange Delete button silently did nothing on any session that had ever compacted. `exchange:delete` now carries the `archiveCount` the client's view was opened against, and the server refuses (`'archived'`) only when it differs from the on-disk count — the one case where the ordinal is actually stale. Reopening re-anchors and the delete goes through.
+- Evolution: the sandbox copy of `.halo/` used `fs.cpSync({ dereference: true })`, which Node ≥ 22.17 ignores for symlinks nested below the top level (nodejs/node#59168) — a symlinked file under `.halo/` was copied as a link back into the live workspace, so an evolution edit through it would have written straight into main. Replaced with a hand-rolled walk that copies bytes.
+
+### Changed
+
+- Dependencies: `pnpm audit --prod` 137 → 29 advisories (critical 2 → 0, high 49 → 2) via hono / @hono/node-server / ws / nanoid / next bumps and workspace overrides for transitive highs. Dead `chokidar` and `drizzle-kit` (never wired) dropped.
+- Admin: the never-emitted task-plan WS surface (`task:plan` / `task:status` / `plan:complete` / `agent:configs`, `task-store`, `TaskPlan*` types) is removed; `state:snapshot` stops sending its placeholder fields.
+- Log prefixes use one casing (`[WeChat]`, `[Telegram]`, `[EvoTicker]`, …) — the prefix is the `halo.module` attribute in OTel, so the split showed up in dashboards.
+
 ## [1.3.1] - 2026-09-19
 
 ### Changed
