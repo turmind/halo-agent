@@ -26,7 +26,7 @@ Bring any one model key — Anthropic, OpenAI (or any OpenAI-compatible endpoint
 Prefer a desktop app? Each [GitHub release](https://github.com/turmind/halo-agent/releases) ships a **macOS (Apple Silicon) `.dmg`** and a **Windows x64 `.exe`** that bundle the server + admin with their own Node runtime — no `npm` needed. Same features, same `~/.halo/` data layout, so you can switch between the two later.
 
 > [!IMPORTANT]
-> **First message fails with `Could not load credentials from any providers`?** API keys entered during `halo setup` are stored but **not auto-bound to any agent** — the built-in `default` agent initially points at AWS Bedrock. Open **Agents → default** in the admin and switch its model provider to the one you configured. (Bedrock users with a working AWS credential chain are unaffected.) Details in [Quick Start](#quick-start).
+> **First message fails with `Could not load credentials from any providers`?** The built-in `default` agent ships pointing at AWS Bedrock, and you skipped the *"Bind the default agent to a provider you just configured?"* step in `halo setup`. Either re-run `halo setup`, or open **Agents → default** in the admin and switch its model provider. (Bedrock users with a working AWS credential chain are unaffected.) Details in [Quick Start](#quick-start).
 
 ## Why Halo
 
@@ -104,9 +104,9 @@ Published on npm as [`@turmind/halo`](https://www.npmjs.com/package/@turmind/hal
 | An API key for any supported model provider | entered during `halo setup`; AWS Bedrock users can leave keys unset and use the standard credential chain (env / `~/.aws` / instance role) instead |
 | pnpm >= 9 | source builds only |
 
-- **Bind your provider to the agent**: `halo setup` stores keys; agents choose providers. The built-in `default` agent ships pointing at AWS Bedrock, so if you configured a different provider, switch it once in **Agents → default → model provider** — your first conversation will thank you.
+- **Bind your provider to the agent**: agents choose providers, and the built-in `default` agent ships pointing at AWS Bedrock. When you configure a different provider, `halo setup` ends by offering to rebind the built-in agents to it (with a single provider and no Bedrock keys, Enter accepts). Skipped it? Re-run `halo setup`, or switch once in **Agents → default → model provider**.
 - **Upgrade**: `halo upgrade && halo server restart`. The startup check refreshes bundled docs / agents / skills automatically when the on-disk template version is behind.
-- **Docker / CI**: `halo setup --non-interactive` and supply credentials via the `HALO_PASSWORD` env var.
+- **Docker / CI**: `halo setup --non-interactive` and supply credentials via the `HALO_PASSWORD` env var; `HALO_DEFAULT_PROVIDER=<provider>` binds the built-in agents without a prompt.
 - **From source**: `pnpm install && pnpm build`.
 
 ### Talk to it from curl

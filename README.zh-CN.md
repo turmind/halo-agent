@@ -26,7 +26,7 @@ halo server start              # → 打开 http://localhost:9527
 想用桌面版？每个 [GitHub release](https://github.com/turmind/halo-agent/releases) 都附带 **macOS（Apple Silicon）`.dmg`** 和 **Windows x64 `.exe`**，内置 server + 管理台和独立的 Node 运行时，不需要 `npm`。功能一致、`~/.halo/` 数据布局一致，以后两种方式可以互换。
 
 > [!IMPORTANT]
-> **第一条消息就报 `Could not load credentials from any providers`？** `halo setup` 里配的 API key 只是存下来了，**不会自动绑定到 Agent** —— 内置的 `default` Agent 初始指向 AWS Bedrock。去管理台 **Agents → default** 把 model provider 切成你配置的那家即可。（有可用 AWS 凭证链的 Bedrock 用户不受影响。）详见[快速开始](#快速开始)。
+> **第一条消息就报 `Could not load credentials from any providers`？** 内置的 `default` Agent 出厂指向 AWS Bedrock，而你在 `halo setup` 里跳过了 *"Bind the default agent to a provider you just configured?"* 这一步。重跑一次 `halo setup`，或去管理台 **Agents → default** 把 model provider 切过去即可。（有可用 AWS 凭证链的 Bedrock 用户不受影响。）详见[快速开始](#快速开始)。
 
 ## 为什么是 Halo
 
@@ -104,9 +104,9 @@ my-project/
 | 任一受支持模型 Provider 的 API key | `halo setup` 时填入；AWS Bedrock 用户可以不填 key，走标准凭证链（env / `~/.aws` / 实例角色） |
 | pnpm >= 9 | 仅源码构建需要 |
 
-- **把 Provider 绑到 Agent 上**：`halo setup` 只负责存 key，用哪家是 Agent 自己的配置。内置 `default` Agent 出厂指向 AWS Bedrock —— 如果你配的是别家，去 **Agents → default → model provider** 切换一次，第一次对话就能顺利跑通。
+- **把 Provider 绑到 Agent 上**：用哪家是 Agent 自己的配置，内置 `default` Agent 出厂指向 AWS Bedrock。你配了别家时，`halo setup` 最后会问要不要把内置 Agent 改绑过去（只配了一家且没填 Bedrock key 时，直接回车就是绑）。跳过了？重跑 `halo setup`，或去 **Agents → default → model provider** 切一次。
 - **升级**：`halo upgrade && halo server restart`。启动检查会在磁盘模板版本落后时自动刷新内置文档 / Agent / 技能。
-- **Docker / CI**：`halo setup --non-interactive`，凭证走 `HALO_PASSWORD` 环境变量。
+- **Docker / CI**：`halo setup --non-interactive`，凭证走 `HALO_PASSWORD` 环境变量；`HALO_DEFAULT_PROVIDER=<provider>` 可免提示直接绑定内置 Agent。
 - **源码构建**：`pnpm install && pnpm build`。
 
 ### 用 curl 直接对话
