@@ -74,12 +74,6 @@ CI (`.github/workflows/ci.yml`) runs lint → typecheck build → all five test 
 - When behaviour changes, update the doc in the same PR. Docs live in `.halo/docs/` (`guide/` for users, `requirements/` for what to build, `design/` for how it works, `dev/` for API / tools / deploy) and are indexed from `.halo/INDEX.md`.
 - Link the issue if there is one.
 
-## AI-assisted contributions
-
-Halo is built with Halo. The first month was written with Claude Code; since then the project has been developed by its own agents, with the maintainer reviewing every change. Agent-authored commits carry a `Co-Authored-By: halo <halo@turmind.com>` trailer.
-
-You're welcome to work the same way, with whatever tool you like. The bar is the same either way: you have read and understood the diff you submit, it is tested, and you can answer questions about it in review. Please don't submit output you haven't read.
-
 ## Security
 
 Don't open public issues for vulnerabilities — use GitHub's private vulnerability reporting as described in [SECURITY.md](SECURITY.md).
