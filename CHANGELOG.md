@@ -6,9 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-09-20
+
 ### Fixed
 
-- Agents: the LLM history (`rawMessages`) of a session is now written to disk after every tool round, not only when the turn ends. A server restart or crash in the middle of a long tool-using turn used to lose the whole turn from the model's memory — the user's message and every tool call — while the UI log (written per event) still showed it all, so the agent came back with no recollection of what it had just been asked to do. Only the single tool call in flight at the moment of death is lost.
+- Agents: the LLM history (`rawMessages`) of a session is now written to disk when each tool call is issued and again when its result lands, not only when the turn ends. A server restart or crash in the middle of a long tool-using turn used to lose the whole turn from the model's memory — the user's message and every tool call — while the UI log (written per event) still showed it all, so the agent came back with no recollection of what it had just been asked to do. Saving the call itself before it runs also matters when the tool *is* the restart (`systemctl restart` after a self-upgrade): the agent now wakes up seeing that it already issued the command instead of issuing it again in a loop. Only the result of the single tool call in flight at the moment of death is lost.
+- Agents: the `[System] The server restarted …` nudge sent to sessions interrupted by a restart now tells the agent that its history up to the last completed tool call is intact and to continue the task from there; it previously only talked about re-dispatching sub-agents, so a root killed mid tool-loop went looking for stopped children instead of resuming its own work.
 
 ## [1.3.2] - 2026-09-20
 
@@ -543,7 +546,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.3...HEAD
+[1.3.3]: https://github.com/turmind/halo-agent/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/turmind/halo-agent/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/turmind/halo-agent/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/turmind/halo-agent/compare/v1.2.1...v1.3.0
