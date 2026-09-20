@@ -262,9 +262,12 @@ function copyTree(src, dst, filter) {
   fs.cpSync(src, dst, { recursive: true, filter })
 }
 
+// Finder drops .DS_Store into any browsed dir; gitignored, so a Mac-side
+// publish would otherwise ship it (electron-builder strips it, npm doesn't).
 copyTree(
   path.join(SERVER_ROOT, 'templates'),
   path.join(PUB_DIR, 'templates'),
+  (src) => path.basename(src) !== '.DS_Store',
 )
 console.log('[build-bundle] copied templates/')
 
