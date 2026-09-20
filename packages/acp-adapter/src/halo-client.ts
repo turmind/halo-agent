@@ -148,7 +148,7 @@ async function safeText(res: Response): Promise<string> {
  * emits `data:` frames (no `event:` / `id:` discipline) and JSON payloads
  * are single-line, so a simple line-buffer is enough.
  */
-async function *parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
+export async function *parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
   const decoder = new TextDecoder()
   const reader = body.getReader()
   let buffer = ''

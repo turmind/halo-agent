@@ -40,6 +40,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { eq, and } from 'drizzle-orm'
 import YAML from 'yaml'
@@ -94,7 +95,7 @@ const PHASE_TIMEOUT_SEC = 1800
 /** Prompt-surface entries copied into the evo sandbox (read side — every
  *  LLM phase reads these via buildEvoSandbox). This is the source of truth
  *  for "what evo is allowed to change". */
-const SANDBOX_WHITELIST = ['INSTRUCTIONS.md', 'INDEX.md', 'USER.md', 'agents', 'prompts', 'skills', 'docs']
+export const SANDBOX_WHITELIST = ['INSTRUCTIONS.md', 'INDEX.md', 'USER.md', 'agents', 'prompts', 'skills', 'docs']
 
 /** Subset of SANDBOX_WHITELIST that phase 12 publishes back to the main
  *  workspace. Derived from the read whitelist (not a second hardcoded list)
@@ -107,7 +108,7 @@ const SANDBOX_WHITELIST = ['INSTRUCTIONS.md', 'INDEX.md', 'USER.md', 'agents', '
  *  score pipeline produces no behavior signal for a docs change. Publishing
  *  it would be an unvalidated write — better to drop it at the boundary than
  *  to let an un-scoreable patch reach main. */
-const PUBLISH_WHITELIST = SANDBOX_WHITELIST.filter((e) => e !== 'docs')
+export const PUBLISH_WHITELIST = SANDBOX_WHITELIST.filter((e) => e !== 'docs')
 
 function parseCli(argv: string[]): CliArgs {
   const { values } = parseArgs({
@@ -183,7 +184,7 @@ interface CliResult {
  * process group (detached) and signal the whole group, with a SIGKILL escalation
  * if it doesn't exit within the grace window.
  */
-function spawnProc(
+export function spawnProc(
   bin: string,
   args: string[],
   logFd: number,
@@ -383,7 +384,7 @@ function buildLanguageClause(langHint: string, scope: string): string[] {
 
 /** Read and YAML-parse the frontmatter of patch.md. Returns null if the
  *  file is missing or has no frontmatter block. */
-function readPatchFrontmatter(runDir: string): Record<string, unknown> | null {
+export function readPatchFrontmatter(runDir: string): Record<string, unknown> | null {
   const patchPath = path.join(runDir, 'patch.md')
   let raw: string
   try { raw = fs.readFileSync(patchPath, 'utf-8') } catch { return null }
@@ -417,7 +418,7 @@ interface TestScenario {
   originalMessage: string
 }
 
-function extractTestScenario(fm: Record<string, unknown> | null): TestScenario | null {
+export function extractTestScenario(fm: Record<string, unknown> | null): TestScenario | null {
   if (!fm) return null
   const ts = fm.testScenario
   if (!ts || typeof ts !== 'object') return null
@@ -1391,7 +1392,7 @@ function loadApplyRow(id: string): ApplyRow {
  * conversations, copying the db would re-import the very pollution
  * we're trying to escape.
  */
-function buildEvoSandbox(workspacePath: string, sandboxParent: string, logFd: number): void {
+export function buildEvoSandbox(workspacePath: string, sandboxParent: string, logFd: number): void {
   const srcWs = wsHaloDir(workspacePath)
   const dstWs = evoSandboxHaloDir(sandboxParent)
   fs.mkdirSync(dstWs, { recursive: true })
@@ -1403,12 +1404,25 @@ function buildEvoSandbox(workspacePath: string, sandboxParent: string, logFd: nu
     // Skip if already present (idempotent — phase A may have built it,
     // phase C reuses; apply has its own first-run path that builds this).
     if (fs.existsSync(dstEntry)) continue
-    // Use Node's recursive cp — synchronous variant, available since Node 16.
-    // Symlinks: dereference (we want the contents in the sandbox, not links
-    // back to the live workspace).
-    fs.cpSync(srcEntry, dstEntry, { recursive: true, dereference: true })
+    copyDereferenced(srcEntry, dstEntry)
   }
   writeLog(logFd, `[buildEvoSandbox] cp from ${srcWs} → ${dstWs} (whitelist: ${whitelist.join(', ')})\n`)
+}
+
+/** Recursive copy that resolves every symlink to its target's bytes — the
+ *  sandbox must hold contents, not links back to the live workspace (an evo
+ *  edit through a link would write straight into main). Hand-rolled instead
+ *  of `fs.cpSync({ dereference: true })` because Node ≥22.17 ignores
+ *  `dereference` for symlinks nested below the top level (nodejs/node#59168;
+ *  fix merged 2026-09-18, unreleased). `statSync` / `copyFileSync` both
+ *  follow links, so this walk never sees one. */
+function copyDereferenced(src: string, dst: string): void {
+  if (fs.statSync(src).isDirectory()) {
+    fs.mkdirSync(dst, { recursive: true })
+    for (const entry of fs.readdirSync(src)) copyDereferenced(path.join(src, entry), path.join(dst, entry))
+    return
+  }
+  fs.copyFileSync(src, dst)
 }
 
 /** Apply-mode wrapper around buildEvoSandbox — same behavior, retained
@@ -1417,7 +1431,7 @@ function buildApplySandbox(workspacePath: string, applyDir: string, logFd: numbe
   buildEvoSandbox(workspacePath, applyDir, logFd)
 }
 
-interface ApplyCtx {
+export interface ApplyCtx {
   applyId: string
   workspacePath: string
   applyDir: string
@@ -1896,13 +1910,13 @@ async function applyMode(id: string, logFd: number): Promise<void> {
  *      half-applied, but history/ has the rollback material.
  */
 
-interface PreflightResult {
+export interface PreflightResult {
   changed: Array<{ rel: string; full: string; existsInMain: boolean }>
   historyDir: string
   fileCount: number  // length of `changed`; 0 = no-op apply
 }
 
-async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
+export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
   { ok: true; result: PreflightResult }
   | { ok: false; reason: string }
 > {
@@ -1994,7 +2008,7 @@ async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
  * (sandbox is small), and avoids the resume path needing to serialize
  * the changed-list across processes.
  */
-async function phaseApplyPublish(ctx: ApplyCtx, preflight: PreflightResult): Promise<void> {
+export async function phaseApplyPublish(ctx: ApplyCtx, preflight: PreflightResult): Promise<void> {
   writeLog(ctx.logFd, `\n=== Phase 12 publish: cp sandbox → main ===\n`)
   const mainHalo = wsHaloDir(ctx.workspacePath)
   for (const { rel, full } of preflight.changed) {
@@ -2099,7 +2113,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  process.stderr.write(`[wrapper] startup error: ${err instanceof Error ? err.message : String(err)}\n`)
-  process.exit(1)
-})
+// Only run when executed directly (evolution/spawn.ts: `node evo-wrapper.js --mode …`).
+// Importing the module — tests — must not start a wrapper.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    process.stderr.write(`[wrapper] startup error: ${err instanceof Error ? err.message : String(err)}\n`)
+    process.exit(1)
+  })
+}
