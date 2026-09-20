@@ -9,6 +9,7 @@ import { wechatDescriptor } from './wechat/descriptor.js'
 import { webDescriptor } from './web/descriptor.js'
 import { slackDescriptor } from './slack/descriptor.js'
 import { feishuDescriptor } from './feishu/descriptor.js'
+import { wecomDescriptor } from './wecom/descriptor.js'
 
 export const defaultChannelDescriptors: ReadonlyArray<ServerChannelDescriptor<unknown>> = [
   wechatDescriptor,
@@ -16,4 +17,5 @@ export const defaultChannelDescriptors: ReadonlyArray<ServerChannelDescriptor<un
   webDescriptor,
   slackDescriptor,
   feishuDescriptor,
+  wecomDescriptor,
 ]

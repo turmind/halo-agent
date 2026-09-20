@@ -10,6 +10,7 @@ import { telegramAdminDescriptor } from '@/features/telegram/descriptor'
 import { webAdminDescriptor } from '@/features/web/descriptor'
 import { slackAdminDescriptor } from '@/features/slack/descriptor'
 import { feishuAdminDescriptor } from '@/features/feishu/descriptor'
+import { wecomAdminDescriptor } from '@/features/wecom/descriptor'
 
 export const defaultAdminChannelDescriptors: ReadonlyArray<AdminChannelDescriptor> = [
   wechatAdminDescriptor,
@@ -17,4 +18,5 @@ export const defaultAdminChannelDescriptors: ReadonlyArray<AdminChannelDescripto
   webAdminDescriptor,
   slackAdminDescriptor,
   feishuAdminDescriptor,
+  wecomAdminDescriptor,
 ]

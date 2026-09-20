@@ -11,13 +11,15 @@
  *   slack_<channel:thread>_<rand> — Slack (per channel+thread, since each
  *                                  thread is its own conversation)
  *   feishu_<chat:thread>_<rand>   — Feishu (same model as Slack)
+ *   wecom_<userid|chatid>_<rand>  — WeCom (per user in single chat, one
+ *                                  shared session per group; id normalized)
  *   cli_<rand>             — CLI (single-user, no prefix-id segment)
  *
  * Centralizing the format means a future "platform-wide session id
  * audit" tool only has one place to enumerate.
  */
 
-export type ChannelKind = 'tg' | 'wx' | 'web' | 'slack' | 'feishu'
+export type ChannelKind = 'tg' | 'wx' | 'web' | 'slack' | 'feishu' | 'wecom'
 
 /** Build the prefix that every session id created for `(channel, user)`
  *  begins with. Append `${Date.now().toString(36)}` (or any random

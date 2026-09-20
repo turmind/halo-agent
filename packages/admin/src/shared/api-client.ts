@@ -821,6 +821,47 @@ export const api = {
     },
   },
 
+  wecom: {
+    listAccounts() {
+      return request<{ accounts: Array<{
+        accountId: string
+        botId: string
+        workspacePath: string
+        workspaceMissing: boolean
+        label: string
+        enabled: number
+        accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
+        language: string
+        createdAt: number
+        updatedAt: number
+      }> }>('/wecom/accounts')
+    },
+    createAccount(params: {
+      botId: string; secret: string;
+      workspacePath: string; label?: string;
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string
+    }) {
+      return request<{ accountId: string; botId: string }>(
+        '/wecom/accounts',
+        { method: 'POST', body: JSON.stringify(params) },
+      )
+    },
+    updateAccount(accountId: string, patch: {
+      label?: string; workspacePath?: string; enabled?: boolean;
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string
+    }) {
+      return request<{ ok: boolean }>(`/wecom/accounts/${encodeURIComponent(accountId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      })
+    },
+    deleteAccount(accountId: string) {
+      return request<{ ok: boolean }>(`/wecom/accounts/${encodeURIComponent(accountId)}`, {
+        method: 'DELETE',
+      })
+    },
+  },
+
   settings: {
     get(projectId?: string) {
       const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''

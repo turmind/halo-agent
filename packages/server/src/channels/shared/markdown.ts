@@ -11,6 +11,7 @@
  *               markdown; bold/italic/links become plain text.
  *   - telegram: leave alone (we send `parse_mode: undefined`).
  *   - wechat  : leave alone (plain text only anyway).
+ *   - wecom   : leave alone (stream content renders CommonMark natively).
  *   - web     : leave alone (admin/web frontend renders CommonMark).
  *
  * Adding a new channel = export one more `formatForX` and call it from

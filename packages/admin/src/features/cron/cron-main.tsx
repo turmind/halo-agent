@@ -517,6 +517,9 @@ function CronForm({ initial, onClose, onSaved }: {
         if (channelType === 'feishu' && !/^oc_[a-zA-Z0-9]+(:[a-zA-Z0-9_-]+)?$/.test(chatId)) {
           return t('cron.form.err.chatId.feishu', { chatId })
         }
+        if (channelType === 'wecom' && !/^[\w@.-]+$/.test(chatId)) {
+          return t('cron.form.err.chatId.wecom', { chatId })
+        }
         if (channelType === 'telegram' && !/^-?\d+$/.test(chatId)) {
           return t('cron.form.err.chatId.telegram', { chatId })
         }
@@ -680,6 +683,7 @@ function CronForm({ initial, onClose, onSaved }: {
                 const chatIdHint = tg.channelType === 'slack' ? 'D… (DM) / C… (channel) / C…:1700.0 (thread)'
                   : tg.channelType === 'telegram' ? t('cron.form.chatIdHint.telegram')
                   : tg.channelType === 'feishu' ? t('cron.form.chatIdHint.feishu')
+                  : tg.channelType === 'wecom' ? t('cron.form.chatIdHint.wecom')
                   : ''
                 return (
                   <div key={key} className={cn('rounded px-1 py-0.5', picked && 'bg-[var(--accent)]')}>
