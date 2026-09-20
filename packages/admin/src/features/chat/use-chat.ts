@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect } from 'react'
+import type { WsClientMessage } from '@turmind/halo-core/protocol'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
@@ -296,7 +297,7 @@ export function useChat() {
       }
       const cmdName = cmd.name.slice(1)
       const agentId = useChatStore.getState().selectedAgentId
-      const payload: Record<string, unknown> = {
+      const payload: WsClientMessage = {
         type: `command:${cmdName}`,
         sessionId: currentSessionId,
         projectId: activeProject.id,

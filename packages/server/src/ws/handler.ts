@@ -8,6 +8,7 @@
  */
 import path from 'node:path'
 import type { WebSocket, WebSocketServer } from 'ws'
+import type { WsClientMessage, WsServerMessage } from '@turmind/halo-core/protocol'
 import { SessionManager } from '../agents/session-manager.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { AgentSessionEvent } from '../agents/agent-events.js'
@@ -43,41 +44,8 @@ export interface WsHandlerDeps {
  */
 const CLIENT_SILENCE_LIMIT_MS = 3 * 60_000
 
-interface ClientMessage {
-  type: 'chat' | 'chat:stop' | 'chat:interrupt' | 'subscribe' | `command:${string}` | 'session:clear' | 'session:delete' | 'exchange:delete' | 'terminal:start' | 'terminal:input' | 'terminal:resize' | 'terminal:close' | 'terminal:reattach'
-  sessionId?: string
-  projectId?: string
-  message?: string
-  /** exchange:delete — 0-based index of the target user turn among all
-   *  role==='user' messages in the session's UI log. */
-  userOrdinal?: number
-  /** exchange:delete — archived-segment count the client's view was opened
-   *  against (its archive anchor); the server refuses when it differs from
-   *  the on-disk count, i.e. the ordinal was computed over a stale log start. */
-  archiveCount?: number
-  images?: Array<{ data: string; mimeType: string }>
-  agentName?: string
-  agentId?: string
-  config?: { systemPrompt?: string; model?: string }
-  data?: string
-  cols?: number
-  rows?: number
-  cwd?: string
-  terminalId?: string
-  /** Workspace path the terminal belongs to. Used by terminal:start and
-   *  terminal:reattach so PTYs are scoped per-workspace and tabs in
-   *  different workspaces don't steal each other's terminals on reconnect. */
-  workspacePath?: string
-  /** Stable per-browser UUID (admin's localStorage). Combined with
-   *  workspacePath as the PTY ownership key — terminals from one browser
-   *  are invisible to another. */
-  browserId?: string
-  /** Client-generated id for `chat` messages. The client resends a chat over
-   *  a fresh connection when the ack doesn't arrive (zombie-socket recovery,
-   *  see admin ws-client.ts), so the server acks with this id after folding
-   *  the message into the session log, and dedupes resends by it. */
-  clientMsgId?: string
-}
+/** Wire shape lives in @turmind/halo-core/protocol (shared with the admin). */
+type ClientMessage = WsClientMessage
 
 interface ConnectedClient {
   ws: WebSocket
@@ -450,7 +418,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       // to the browser), and an unanswered probe is what lets it detect a
       // zombie-OPEN socket instead of waiting ~15min for kernel TCP retries
       // to exhaust (root cause: idle-reconnect message loss).
-      if ((msg.type as string) === '__ping__') {
+      if (msg.type === '__ping__') {
         sendJson(ws, { type: '__pong__' })
         return
       }
@@ -595,7 +563,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         console.debug(`[WS] Detaching active session: ${client.sessionId}`)
         client.unsubscribeEvents?.()
         client.unsubscribeEvents = null
-        const pendingEvents: Array<Record<string, unknown>> = []
+        const pendingEvents: WsServerMessage[] = []
         const bgHandler = (_event: AgentSessionEvent, _state: UIState, _turnId: string) => {
           bufferDetachedNotification(_event, pendingEvents)
         }
@@ -975,7 +943,7 @@ interface DetachedSession {
   sessionId: string
   projectId: string
   timer: ReturnType<typeof setTimeout>
-  pendingEvents: Array<Record<string, unknown>>
+  pendingEvents: WsServerMessage[]
   unsubscribe: () => void
 }
 

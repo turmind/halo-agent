@@ -16,8 +16,7 @@ export function registerFileHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
 
   unsubs.push(
-    wsClient.on('file:changed', (data) => {
-      const msg = data as { path: string; action: string }
+    wsClient.on('file:changed', (msg) => {
       const store = useEditorStore.getState()
       if (msg.action === 'add' || msg.action === 'addDir') {
         store.insertFileNode(msg.path, msg.action === 'addDir' ? 'directory' : 'file')

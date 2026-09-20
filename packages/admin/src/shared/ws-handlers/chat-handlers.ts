@@ -181,24 +181,20 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   unsubs.push(() => clearInterval(watchdog))
 
   unsubs.push(
-    wsClient.on('chat:thinking', (data) => {
-      const msg = data as { text: string; agentName?: string; taskId?: string; turnId?: string }
+    wsClient.on('chat:thinking', (msg) => {
       useChatStore.getState().appendThinking(msg.text, msg.agentName, msg.taskId, msg.turnId)
     }),
   )
 
   unsubs.push(
-    wsClient.on('chat:stream', (data) => {
-      const msg = data as { text: string; agentName?: string; taskId?: string; turnId?: string }
+    wsClient.on('chat:stream', (msg) => {
       useChatStore.getState().updateLastAssistant(msg.text, msg.agentName, msg.taskId, msg.turnId)
     }),
   )
 
   unsubs.push(
-    wsClient.on('chat:complete', (data) => {
-      const msg = data as { text?: string }
+    wsClient.on('chat:complete', () => {
       const store = useChatStore.getState()
-      if (msg.text) store.updateLastAssistant(msg.text)
       store.completeAgentStreaming()
       // After the reply settles, check for a capture request marker. Fire and
       // forget — never let a capture failure break the completion handler.
@@ -219,8 +215,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
     // arrive as `{type: 'error', error, agentName?, taskId?}`. Without this
     // handler the message is dropped on the floor and the UI sits in
     // "thinking…" forever — the user has to refresh to see anything.
-    wsClient.on('error', (data) => {
-      const msg = data as { error?: string; code?: string; agentName?: string; taskId?: string }
+    wsClient.on('error', (msg) => {
       const store = useChatStore.getState()
       // A `code`-carrying frame is an expected refusal the server phrased for the
       // user (e.g. `archived` from exchange:delete) — show it as-is; an `Error:`
@@ -242,8 +237,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
-    wsClient.on('chat:followup', (data) => {
-      const msg = data as { agentName?: string; replay?: boolean }
+    wsClient.on('chat:followup', (msg) => {
       const store = useChatStore.getState()
       if (msg.replay) {
         // Reattach replay (server ws/handler.ts): the server is about to
@@ -276,8 +270,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
-    wsClient.on('chat:user', (data) => {
-      const msg = data as { text: string }
+    wsClient.on('chat:user', (msg) => {
       useChatStore.getState().addMessage({
         id: generateId(),
         role: 'user',
@@ -288,11 +281,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
-    wsClient.on('chat:usage', (data) => {
-      const msg = data as {
-        contextTokens: number; outputTokens: number; turnId?: string; modelId?: string
-        usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadInputTokens: number; cacheWriteInputTokens?: number; ttftMs?: number; e2eMs?: number }
-      }
+    wsClient.on('chat:usage', (msg) => {
       const store = useChatStore.getState()
       store.setTokenUsage(msg.contextTokens, msg.outputTokens)
       if (msg.usage) {
@@ -327,8 +316,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
     // it to localStorage so a refresh lands on the same session, and clear
     // the visible messages — the same end-state the old client-only
     // /clear shortcut produced, but driven by the server.
-    wsClient.on('session:switched', (data) => {
-      const msg = data as { sessionId?: string }
+    wsClient.on('session:switched', (msg) => {
       if (!msg.sessionId) return
       const project = useProjectStore.getState().activeProject
       if (project) {
@@ -350,8 +338,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
-    wsClient.on('session:compacted', (data) => {
-      const msg = data as { message?: string; contextTokens?: number }
+    wsClient.on('session:compacted', (msg) => {
       const text = msg.message ?? 'Context compacted'
       const store = useChatStore.getState()
       store.setCompacting(false)
@@ -389,8 +376,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   }
 
   unsubs.push(
-    wsClient.on('chat:system', (data) => {
-      const msg = data as { text: string; taskId?: string; agentName?: string }
+    wsClient.on('chat:system', (msg) => {
       // Auto-compact (the path that fires when the running turn crosses
       // `compressAt`) emits its preflight notice as a `chat:system` event
       // rather than the `compact:progress` channel that manual /compact
@@ -434,8 +420,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
-    wsClient.on('chat:queued', (data) => {
-      const msg = data as { message?: string }
+    wsClient.on('chat:queued', (msg) => {
       useChatStore.getState().addMessage({
         id: generateId(),
         role: 'system',

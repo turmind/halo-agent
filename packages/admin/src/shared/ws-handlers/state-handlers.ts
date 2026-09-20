@@ -5,15 +5,12 @@ import { refreshGoal } from '@/features/chat/goal-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { bumpSessionBus } from '@/shared/session-bus'
 import { onWsReconnect } from '@/shared/ws-reconnect'
-import type { WsSnapshotMsg, ChatMessage } from '@/shared/types'
 
 export function registerStateHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
 
   unsubs.push(
-    wsClient.on('state:snapshot', (data) => {
-      const msg = data as unknown as WsSnapshotMsg & { snapshot: { recentMessages?: ChatMessage[]; agentId?: string } }
-      const { snapshot } = msg
+    wsClient.on('state:snapshot', ({ snapshot }) => {
 
       if (snapshot.sessionId) {
         useChatStore.getState().setSessionId(snapshot.sessionId)
@@ -65,9 +62,8 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
       } else {
         console.debug('[state-handlers] skipping snapshot replace — streaming in flight')
       }
-      const snap = snapshot as unknown as Record<string, unknown>
-      if (typeof snap.maxContextTokens === 'number' && snap.maxContextTokens > 0) {
-        useChatStore.getState().setMaxContextTokens(snap.maxContextTokens as number)
+      if (typeof snapshot.maxContextTokens === 'number' && snapshot.maxContextTokens > 0) {
+        useChatStore.getState().setMaxContextTokens(snapshot.maxContextTokens)
       }
     }),
   )

@@ -1,4 +1,12 @@
+import type { WsClientMessage, WsServerMessage } from '@turmind/halo-core/protocol'
+
+/** Internal dispatch shape — frames are decoded as loose objects and only
+ *  narrowed at the typed `on()` overload (server frames) or left loose (the
+ *  `_connected` / `_disconnected` / … pseudo-events emitted by this class). */
 type MessageHandler = (data: Record<string, unknown>) => void
+
+/** Handler for one server frame type, narrowed by its `type` literal. */
+type FrameHandler<T extends WsServerMessage['type']> = (data: Extract<WsServerMessage, { type: T }>) => void
 
 /** Liveness probe cadence (app-level `__ping__`, answered by the server). */
 const LIVENESS_INTERVAL_MS = 15_000
@@ -42,7 +50,7 @@ const PENDING_ACKS_LIMIT = 100
  * exactly-once end to end.
  */
 interface PendingChat {
-  message: Record<string, unknown>
+  message: WsClientMessage
   attempts: number
   ackTimer: ReturnType<typeof setTimeout> | null
   /** Final arbiter: fires PENDING_CHAT_DEADLINE_MS after the chat entered
@@ -59,7 +67,7 @@ class WsClient {
   private maxReconnectDelay = 30000
   private url: string = ''
   private intentionalClose = false
-  private pendingQueue: object[] = []
+  private pendingQueue: WsClientMessage[] = []
   private pendingAcks = new Map<string, PendingChat>()
   private lastReceiveTs = 0
   /** When the last liveness probe was written, and how many consecutive
@@ -244,12 +252,12 @@ class WsClient {
     }
   }
 
-  send(message: object): void {
+  send(message: WsClientMessage): void {
     // Chat messages ride the ack/resend path — they are the one thing that
     // must survive a zombie socket (root cause: idle-reconnect message loss).
-    const { type, clientMsgId } = message as { type?: string; clientMsgId?: string }
+    const { type, clientMsgId } = message
     if (type === 'chat' && clientMsgId) {
-      this.sendChat(clientMsgId, message as Record<string, unknown>)
+      this.sendChat(clientMsgId, message)
       return
     }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -274,7 +282,7 @@ class WsClient {
   /** Track a chat in the pending-ack table, then transmit if the socket is
    *  both OPEN and fresh. Otherwise the entry just waits — every `onopen`
    *  flushes the table, so the chat rides the next (re)connection. */
-  private sendChat(id: string, message: Record<string, unknown>): void {
+  private sendChat(id: string, message: WsClientMessage): void {
     // Capacity cap, mirroring pendingQueue's QUEUE_LIMIT: fail the oldest
     // entry so the newest chat still gets tracked during a marathon outage.
     if (this.pendingAcks.size >= PENDING_ACKS_LIMIT) {
@@ -360,7 +368,12 @@ class WsClient {
     this.pendingAcks.delete(clientMsgId)
   }
 
-  on(type: string, handler: MessageHandler): () => void {
+  /** Subscribe to a server frame by its `type` — the handler receives the
+   *  frame narrowed from `WsServerMessage`. The string overload keeps the
+   *  client-local pseudo-events (`_connected`, `_chat_send_failed`, …) loose. */
+  on<T extends WsServerMessage['type']>(type: T, handler: FrameHandler<T>): () => void
+  on(type: string, handler: MessageHandler): () => void
+  on(type: string, handler: (data: any) => void): () => void {
     if (!this.listeners.has(type)) {
       this.listeners.set(type, new Set())
     }

@@ -6,8 +6,7 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
 
   unsubs.push(
-    wsClient.on('agent:start', (data) => {
-      const msg = data as { agentName: string; task?: string; taskId?: string }
+    wsClient.on('agent:start', (msg) => {
       useChatStore.getState().addMessage({
         id: generateId(),
         role: 'assistant',
@@ -21,15 +20,13 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
-    wsClient.on('agent:done', (data) => {
-      const msg = data as { agentName: string; taskId?: string }
+    wsClient.on('agent:done', (msg) => {
       useChatStore.getState().completeAgentStreaming(msg.agentName, msg.taskId)
     }),
   )
 
   unsubs.push(
-    wsClient.on('agent:context', (data) => {
-      const msg = data as { agentName?: string; systemPrompt?: string; taskId?: string }
+    wsClient.on('agent:context', (msg) => {
       useChatStore.getState().addMessage({
         id: generateId(),
         role: 'system',
@@ -43,14 +40,13 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
-    wsClient.on('agent:tool_call', (data) => {
-      const msg = data as { tool: string; toolUseId?: string; input: unknown; agentName?: string; taskId?: string; turnId?: string }
+    wsClient.on('agent:tool_call', (msg) => {
       const agentName = msg.agentName ?? 'default'
       // Store the full input — truncation is the render layer's job
       // (InlineToolCall previews collapsed and shows everything on expand).
       const inputStr = typeof msg.input === 'string' ? msg.input : JSON.stringify(msg.input ?? {})
       useChatStore.getState().addToolCallToLastAssistant(
-        { name: msg.tool, input: inputStr, toolUseId: msg.toolUseId },
+        { name: msg.tool ?? '', input: inputStr, toolUseId: msg.toolUseId },
         agentName,
         msg.taskId,
         msg.turnId,
@@ -59,8 +55,7 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
-    wsClient.on('agent:tool_result', (data) => {
-      const msg = data as { result: unknown; toolUseId?: string; agentName?: string; taskId?: string; durationMs?: number }
+    wsClient.on('agent:tool_result', (msg) => {
       const agentName = msg.agentName ?? 'default'
       // Store the full result — truncation is the render layer's job
       // (InlineToolCall previews at 120 chars; expand shows everything).

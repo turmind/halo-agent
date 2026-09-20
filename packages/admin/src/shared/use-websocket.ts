@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
+import type { WsClientMessage } from '@turmind/halo-core/protocol'
 import { wsClient } from '@/shared/ws-client'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
@@ -143,7 +144,7 @@ export function useWebSocket() {
     }
   }, [])
 
-  const send = useCallback((message: object) => {
+  const send = useCallback((message: WsClientMessage) => {
     wsClient.send(message)
   }, [])
 

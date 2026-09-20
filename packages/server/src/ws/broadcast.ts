@@ -19,6 +19,7 @@
  */
 import path from 'node:path'
 import type { WebSocketServer, WebSocket } from 'ws'
+import type { WsServerMessage } from '@turmind/halo-core/protocol'
 
 let _wss: WebSocketServer | null = null
 
@@ -45,7 +46,7 @@ export function setClientWorkspaceResolver(fn: (ws: WebSocket) => string | null)
  * client so one slow / dying client doesn't poison the broadcast.
  * Skips clients whose readyState != OPEN.
  */
-export function broadcast(event: Record<string, unknown>): void {
+export function broadcast(event: WsServerMessage): void {
   if (!_wss) return
   const payload = JSON.stringify(event)
   for (const client of _wss.clients) {
@@ -75,7 +76,7 @@ export function broadcast(event: Record<string, unknown>): void {
  * a future embedder without the resolver keeps the old, louder behavior
  * rather than silently dropping events).
  */
-export function broadcastToWorkspace(workspacePath: string, event: Record<string, unknown>): void {
+export function broadcastToWorkspace(workspacePath: string, event: WsServerMessage): void {
   if (!_wss) return
   if (!_workspaceOfClient) return broadcast(event)
   const target = path.resolve(workspacePath)

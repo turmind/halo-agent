@@ -1,3 +1,5 @@
+import { inferMessageType, type SessionMessage } from '@turmind/halo-core/protocol'
+
 export interface Skill {
   id: string
   name: string
@@ -32,52 +34,17 @@ export interface Project {
   createdAt: number
 }
 
-export interface ToolCallInfo {
-  name: string
-  input: string
-  output?: string
-  /** Provider tool_use id — pairs a result to its call and dedups reconnect
-   *  replays. Optional: absent on old persisted sessions. */
-  toolUseId?: string
-}
+// ── Session messages — wire/persisted shape shared with the server ──
+// (`@turmind/halo-core/protocol`). Re-exported under the admin's historical
+// names; `ChatMessage` adds the client-only rendering fields on top.
+export type {
+  ToolCallEntry as ToolCallInfo,
+  ContentBlockEntry as ContentBlock,
+  MessageType,
+} from '@turmind/halo-core/protocol'
+export { inferMessageType }
 
-/** Ordered content block — preserves interleaving of text and tool calls */
-export type ContentBlock =
-  | { type: 'text'; text: string; turnId?: string }
-  | { type: 'thinking'; text: string; turnId?: string }
-  | { type: 'tool_call'; toolCall: ToolCallInfo; turnId?: string }
-
-export type MessageType =
-  | 'user' | 'assistant' | 'tool_call' | 'tool_result'
-  | 'usage' | 'context' | 'agent_start' | 'agent_done' | 'notification'
-
-export interface ChatMessage {
-  id: string
-  type?: MessageType
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  timestamp: number
-  streaming?: boolean
-  agentName?: string
-  taskId?: string
-  toolCalls?: ToolCallInfo[]
-  contentBlocks?: ContentBlock[]
-  toolName?: string
-  toolInput?: unknown
-  toolOutput?: unknown
-  durationMs?: number
-  systemPrompt?: string
-  usage?: {
-    inputTokens: number; outputTokens: number; totalTokens: number
-    cacheReadInputTokens: number; cacheWriteInputTokens?: number
-    ttftMs?: number; e2eMs?: number; thinkingEffort?: string
-  }
-  modelId?: string
-  turnId?: string
-  /** Soft-deleted exchange — the user turn + responses are kept in the log but
-   *  removed from the LLM's raw context (see server deleteExchange). Rendered
-   *  greyed out with a "deleted" badge; no Delete button. */
-  deleted?: boolean
+export type ChatMessage = SessionMessage & {
   /** Inline image data URLs shown locally on this bubble (e.g. a desktop
    *  screen-capture sent to the model). Client-only, not persisted — gives
    *  immediate visual confirmation of what was sent, before the server-saved
@@ -97,32 +64,6 @@ export interface ChatMessage {
    *  by the 30s watchdog (or by a send failure) — shown as an "interrupted"
    *  note instead of an eternal "Thinking…". Client-only, not persisted. */
   interrupted?: boolean
-}
-
-/** Infer MessageType from legacy messages that lack the type field */
-export function inferMessageType(m: ChatMessage): MessageType {
-  if (m.type) return m.type
-  if (m.role === 'user') return 'user'
-  if (m.role === 'assistant') return 'assistant'
-  if (m.toolName) return 'tool_call'
-  if (m.toolOutput !== undefined && !m.toolName) return 'tool_result'
-  if (m.usage) return 'usage'
-  if (m.systemPrompt) return 'context'
-  return 'notification'
-}
-
-// WebSocket message types (server -> client)
-export interface WsSnapshotMsg {
-  type: 'state:snapshot'
-  snapshot: {
-    messages?: ChatMessage[]
-    sessionId?: string
-    maxContextTokens?: number
-    /** Committed UI-log archive segments for this session (0 = none). Sent on
-     *  subscribe / reattach only; the cursor the chat panel counts down from
-     *  when the user scrolls to the top. */
-    archiveCount?: number
-  }
 }
 
 // ─── Message filter predicates ───

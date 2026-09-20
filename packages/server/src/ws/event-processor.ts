@@ -6,13 +6,14 @@
  * OrchestratorEvents into WS message format and sends them.
  */
 import type { WebSocket } from 'ws'
+import type { WsServerMessage } from '@turmind/halo-core/protocol'
 import type { OrchestratorEvent } from '../agents/agent-events.js'
 import type { UIState } from '../sessions/ui-log-builder.js'
 import { buildUsageData } from '../sessions/ui-log-builder.js'
 
 // ── Utility functions ────────────────────────────────────────────────
 
-export function sendJson(ws: WebSocket, data: Record<string, unknown>): void {
+export function sendJson(ws: WebSocket, data: WsServerMessage): void {
   if (ws.readyState === ws.OPEN) {
     try {
       ws.send(JSON.stringify(data))
@@ -133,7 +134,7 @@ export function sendWsNotification(
  */
 export function bufferDetachedNotification(
   event: OrchestratorEvent,
-  pendingEvents: Array<Record<string, unknown>>,
+  pendingEvents: WsServerMessage[],
 ): void {
   const agentName = event.agentName ?? 'default'
   const taskId = event.taskId
