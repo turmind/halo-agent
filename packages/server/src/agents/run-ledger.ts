@@ -85,7 +85,7 @@ export function sweepInterruptedRuns(host: RunLedgerHost): void {
     if (isInternalAgent(row.agentId, host.workspaceRoot)) continue
     // Append-then-send, same as channel inbound — sendUserMessage alone never
     // writes the nudge to the UI transcript (see sweepActiveGoals).
-    const nudge = `[System] The server restarted at ${restartedAt} while you were mid-run. Any sub-agents you had running were cut off and are now marked stopped — no further reports will arrive from them. Their partial work is on disk. Review your own transcript and decide whether to resume: re-dispatch with query_session("<id>", ...) to revive a stopped sub-agent with its context intact, or drop the task.`
+    const nudge = `[System] The server restarted at ${restartedAt} while you were mid-turn. Your conversation history up to your last completed tool call is intact; the tool call that was in flight when the process died was cut off, and its result may or may not have landed on disk — check before repeating anything with side effects. Look at what you were doing right before this message and continue the task from there; do not start over or wait for more input. If you had sub-agents running, they were cut off too (marked stopped, no further reports will arrive) — re-dispatch with query_session("<id>", ...) to revive one with its context intact.`
     host.appendUserMessage(rootId, nudge)
     host.sendUserMessage(rootId, nudge).catch((err) => {
       console.error(`[RunLedger] Restart nudge failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)

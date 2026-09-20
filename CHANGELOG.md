@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Agents: the LLM history (`rawMessages`) of a session is now written to disk after every tool round, not only when the turn ends. A server restart or crash in the middle of a long tool-using turn used to lose the whole turn from the model's memory — the user's message and every tool call — while the UI log (written per event) still showed it all, so the agent came back with no recollection of what it had just been asked to do. Only the single tool call in flight at the moment of death is lost.
+
 ## [1.3.2] - 2026-09-20
 
 ### Added
