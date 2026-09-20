@@ -164,7 +164,7 @@ def cmd_list(args):
     # in-channel "delete my cron" / "list my crons" flow, where the
     # agent only knows the current chatId and needs to find which
     # cron_jobs reference it. chatId formats don't collide across
-    # channels (telegram numeric, slack D…/C…, feishu oc_…, wechat o…)
+    # channels (telegram numeric, slack D…/C…, feishu oc_…, wecom userid/chatid, wechat o…)
     # so a single chatId match is unambiguous.
     if args.chat_id:
         jobs = [

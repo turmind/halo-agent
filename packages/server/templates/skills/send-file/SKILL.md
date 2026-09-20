@@ -1,7 +1,7 @@
 ---
 name: send-file
 requiresAccess: workspace
-description: Send images, videos, or files as attachments to the current user. Works on all channels (Web, WeChat, Telegram, Slack, Feishu). Use when the user asks to send a file, or when an attachment (screenshot, PDF, chart, generated artifact) is more useful than inline text.
+description: Send images, videos, or files as attachments to the current user. Works on all channels (Web, WeChat, Telegram, Slack, Feishu, WeCom). Use when the user asks to send a file, or when an attachment (screenshot, PDF, chart, generated artifact) is more useful than inline text.
 ---
 # Send File
 

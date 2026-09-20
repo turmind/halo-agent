@@ -1,6 +1,6 @@
 ---
 name: cron
-description: Manage scheduled cron jobs that run a halo agent on a schedule and optionally push the result to a chat channel (telegram / wechat / slack / feishu). Activate when the user asks to add / list / edit / pause / delete a recurring agent task.
+description: Manage scheduled cron jobs that run a halo agent on a schedule and optionally push the result to a chat channel (telegram / wechat / slack / feishu / wecom). Activate when the user asks to add / list / edit / pause / delete a recurring agent task.
 command: /cron
 requiresAccess: full
 verbs:
@@ -19,7 +19,7 @@ natural-language activation, infer it from the request. All verbs run through
 this body — map them onto the helper script's subcommands below.
 
 Halo runs a global cron daemon that executes user-defined agent prompts on a schedule and
-optionally pushes the resulting text to a chat (telegram / wechat / slack / feishu). Use the
+optionally pushes the resulting text to a chat (telegram / wechat / slack / feishu / wecom). Use the
 `manage-cron.py` helper script (sibling of this file) for every operation — it handles id
 generation, JSON encoding for `targets`, timestamps, and so on, so you don't end up
 handcrafting SQL.
@@ -97,11 +97,11 @@ shell_exec: python3 <skill-dir>/manage-cron.py channels
 
 Output is a JSON array `[{channelType, accountId, label, ready}, ...]`.
 
-#### Pinning the chatId — REQUIRED for telegram / slack / feishu
+#### Pinning the chatId — REQUIRED for telegram / slack / feishu / wecom
 
 The cron dispatcher used to fall back to "whoever last messaged the bot"
 when no chatId was given, but in practice that always pushed to a stranger.
-**As of the current build, telegram / slack / feishu cron pushes require
+**As of the current build, telegram / slack / feishu / wecom cron pushes require
 an explicit chatId.** WeChat is the exception — it has a QR-bound owner
 that's a stable single recipient.
 
@@ -117,6 +117,7 @@ Format per channel:
 | telegram | `telegram:<accountId>:<chatId>`                 | numeric (Telegram private-chat id)      |
 | slack    | `slack:<accountId>:<chatId>`                    | `D…` (DM), `C…` (channel top), `C…:<thread_ts>` (thread) |
 | feishu   | `feishu:<accountId>:<chatId>`                   | `oc_…` chat_id                          |
+| wecom    | `wecom:<accountId>:<chatId>`                    | `<userid>` (bot DM) or `<chatid>` (group) |
 
 Comma-separated for multiple targets:
 
@@ -125,7 +126,7 @@ Comma-separated for multiple targets:
 ```
 
 **Pinning to the current chat (the common case).** When the user inside
-telegram/slack/feishu/wechat asks "remind me at X" / "send me a daily
+telegram/slack/feishu/wecom/wechat asks "remind me at X" / "send me a daily
 digest", construct the target with `{{channel.chat_id}}`:
 
 ```
@@ -215,7 +216,7 @@ picks it up within ~10s. Example:
 
 ## Patterns that go sideways
 
-- **telegram / slack / feishu target without a chatId** — every fire errors with
+- **telegram / slack / feishu / wecom target without a chatId** — every fire errors with
   `… cron target requires an explicit chatId …`. From inside a chat, use the
   `{{channel.chat_id}}` template; from the admin UI, ask the user for the chatId
   (or accept that the cron will run silently with no push target).
