@@ -104,6 +104,7 @@ export const api = {
       projectId: string,
       targetDir?: string,
       onProgress?: (loaded: number, total: number) => void,
+      signal?: AbortSignal,
     ): Promise<{ uploaded: { name: string; path: string; size: number }[]; count: number }> {
       const formData = new FormData()
       formData.append('projectId', projectId)
@@ -134,7 +135,8 @@ export const api = {
           }
         }
         xhr.onerror = () => reject(new Error('Upload failed: network error'))
-        xhr.onabort = () => reject(new Error('Upload aborted'))
+        xhr.onabort = () => reject(new DOMException('Upload aborted', 'AbortError'))
+        signal?.addEventListener('abort', () => xhr.abort(), { once: true })
         xhr.send(formData)
       })
     },

@@ -110,6 +110,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     originalName?: string
   } | null>(null)
   const [uploadProgress, setUploadProgress] = useState<{ count: number; progress: number } | null>(null)
+  const uploadAbortRef = useRef<AbortController | null>(null)
   // Scroll container around this instance's <FileTree> — scopes the keyboard
   // handler (multiple EditorPanels can be mounted — main Explorer, Skills,
   // Agents — a global DOM marker can't tell them apart) and is the query
@@ -494,20 +495,25 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   const handleDropFiles = useCallback(
     async (files: File[], targetDir: string) => {
       if (!projectId) return
+      const controller = new AbortController()
+      uploadAbortRef.current = controller
       setUploadProgress({ count: files.length, progress: 0 })
       try {
         await api.files.upload(files, projectId, targetDir || undefined, (loaded, total) => {
           if (total > 0) {
             setUploadProgress((prev) => prev ? { ...prev, progress: (loaded / total) * 100 } : null)
           }
-        })
+        }, controller.signal)
         setUploadProgress((prev) => prev ? { ...prev, progress: 100 } : null)
         setTimeout(() => setUploadProgress(null), 400)
         loadFileTree(projectId, useEditorStore)
       } catch (err) {
         setUploadProgress(null)
+        if (err instanceof DOMException && err.name === 'AbortError') return
         console.error('[EditorPanel] Upload failed:', err)
         window.alert(err instanceof Error ? err.message : 'Upload failed')
+      } finally {
+        uploadAbortRef.current = null
       }
     },
     [projectId],
@@ -893,7 +899,17 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     <div className="shrink-0 border-b border-[var(--border)] bg-[var(--card)] px-3 py-1.5">
       <div className="flex items-center justify-between text-[10px] text-[var(--muted-foreground)]">
         <span>Uploading {uploadProgress.count} file{uploadProgress.count > 1 ? 's' : ''}...</span>
-        <span>{Math.round(uploadProgress.progress)}%</span>
+        <span className="flex items-center gap-1.5">
+          {Math.round(uploadProgress.progress)}%
+          <button
+            type="button"
+            onClick={() => uploadAbortRef.current?.abort()}
+            className="rounded p-0.5 hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+            title="Cancel upload"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </span>
       </div>
       <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--secondary)]">
         <div
