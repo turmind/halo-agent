@@ -125,6 +125,8 @@ describe('cron_jobs.timeout_sec', () => {
     try {
       const raw = rawSqlite(createCronDb(legacyDir))
       raw.exec('ALTER TABLE cron_jobs DROP COLUMN timeout_sec')
+      // A legacy db is also un-stamped — reset user_version so v1 re-runs on reopen.
+      raw.pragma('user_version = 0')
       raw.close()
 
       const reopened = rawSqlite(createCronDb(legacyDir))

@@ -24,6 +24,7 @@ import { sqliteTable, text, integer, primaryKey } from 'drizzle-orm/sqlite-core'
 import { and, eq } from 'drizzle-orm'
 import path from 'node:path'
 import fs from 'node:fs'
+import { runMigrations } from './migrate.js'
 
 export const runningSessions = sqliteTable('running_sessions', {
   /** Workspace root path (realpath'd, as the registry hands it to SessionManager). */
@@ -48,6 +49,8 @@ export function createRunsDb(globalDir: string) {
   const sqlite = new Database(dbPath)
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(CREATE_SQL)
+  // No migrations yet — append here; CREATE_SQL must always describe the full current shape.
+  runMigrations(sqlite, [])
   return drizzle(sqlite, { schema: { runningSessions } })
 }
 

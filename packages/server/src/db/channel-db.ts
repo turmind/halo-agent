@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core'
 import path from 'node:path'
 import fs from 'node:fs'
+import { runMigrations } from './migrate.js'
 
 export const channelAccounts = sqliteTable('channel_accounts', {
   accountId: text('account_id').primaryKey(),
@@ -40,6 +41,8 @@ export function createChannelDb(secretsDir: string) {
   const sqlite = new Database(dbPath)
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(CREATE_SQL)
+  // No migrations yet — append here; CREATE_SQL must always describe the full current shape.
+  runMigrations(sqlite, [])
   return drizzle(sqlite, { schema: { channelAccounts } })
 }
 

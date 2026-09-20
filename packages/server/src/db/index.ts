@@ -6,11 +6,39 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { ensureWorkspaceHalo, TEMPLATES_DIR } from '../init.js'
 import type { SessionFileMeta } from '../sessions/session-store.js'
+import { runMigrations, addColumnIfMissing, type Migration } from './migrate.js'
 
 // schema.sql lives alongside the other templates; resolve via TEMPLATES_DIR
 // so the bundled-cli layout (single dist/) and the monorepo dev layout
 // (packages/server/dist/db/) both work.
 const SCHEMA_SQL_PATH = path.join(TEMPLATES_DIR, 'schema.sql')
+
+/** Ordered halo.db migrations (see migrate.ts). schema.sql must always
+ *  describe the full current shape; append a slot here for existing dbs. */
+export const HALO_MIGRATIONS: Migration[] = [
+  // v1: everything that used to be an ad-hoc boot-time ALTER / CREATE INDEX.
+  (s) => {
+    addColumnIfMissing(s, 'agent_sessions', 'working_dir', 'TEXT')
+    addColumnIfMissing(s, 'agent_sessions', 'access_level', 'TEXT')
+    addColumnIfMissing(s, 'agent_sessions', 'goal', 'TEXT')
+    addColumnIfMissing(s, 'agent_sessions', 'goal_session_id', 'TEXT')
+    addColumnIfMissing(s, 'agent_sessions', 'reply_to', 'TEXT')
+    // List-visible session-file metadata (title / counts / tokens) mirrored into
+    // the row so listing doesn't read every session file. Nullable on purpose:
+    // NULL means "never mirrored" and the list route backfills from the file.
+    addColumnIfMissing(s, 'agent_sessions', 'title', 'TEXT')
+    addColumnIfMissing(s, 'agent_sessions', 'exchange_count', 'INTEGER')
+    addColumnIfMissing(s, 'agent_sessions', 'context_tokens', 'INTEGER')
+    addColumnIfMissing(s, 'agent_sessions', 'total_output_tokens', 'INTEGER')
+
+    // Indexes for the hot listing path (channel /list, admin sidebar, sub-agent
+    // children lookup). Without these, `listSessions` falls back to a full table
+    // scan once a workspace accumulates thousands of rows (Slack threads can
+    // produce one session per thread, so this stops being hypothetical fast).
+    s.exec(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at ON agent_sessions(updated_at DESC)`)
+    s.exec(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_parent_id ON agent_sessions(parent_id)`)
+  },
+]
 
 export function createDb(dataDir: string) {
   fs.mkdirSync(dataDir, { recursive: true })
@@ -22,37 +50,7 @@ export function createDb(dataDir: string) {
 
   const schemaSql = fs.readFileSync(SCHEMA_SQL_PATH, 'utf-8')
   sqlite.exec(schemaSql)
-
-  // Column migrations for existing DBs — ALTER TABLE is idempotent via column existence check
-  const agentSessionsCols = sqlite.prepare(`PRAGMA table_info(agent_sessions)`).all() as Array<{ name: string }>
-  const hasWorkingDir = agentSessionsCols.some((c) => c.name === 'working_dir')
-  if (!hasWorkingDir) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN working_dir TEXT`)
-  const hasAccessLevel = agentSessionsCols.some((c) => c.name === 'access_level')
-  if (!hasAccessLevel) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN access_level TEXT`)
-  const hasGoal = agentSessionsCols.some((c) => c.name === 'goal')
-  if (!hasGoal) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN goal TEXT`)
-  const hasGoalSessionId = agentSessionsCols.some((c) => c.name === 'goal_session_id')
-  if (!hasGoalSessionId) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN goal_session_id TEXT`)
-  const hasReplyTo = agentSessionsCols.some((c) => c.name === 'reply_to')
-  if (!hasReplyTo) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN reply_to TEXT`)
-  // List-visible session-file metadata (title / counts / tokens) mirrored into
-  // the row so listing doesn't read every session file. Nullable on purpose:
-  // NULL means "never mirrored" and the list route backfills from the file.
-  const hasTitle = agentSessionsCols.some((c) => c.name === 'title')
-  if (!hasTitle) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN title TEXT`)
-  const hasExchangeCount = agentSessionsCols.some((c) => c.name === 'exchange_count')
-  if (!hasExchangeCount) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN exchange_count INTEGER`)
-  const hasContextTokens = agentSessionsCols.some((c) => c.name === 'context_tokens')
-  if (!hasContextTokens) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN context_tokens INTEGER`)
-  const hasTotalOutputTokens = agentSessionsCols.some((c) => c.name === 'total_output_tokens')
-  if (!hasTotalOutputTokens) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN total_output_tokens INTEGER`)
-
-  // Indexes for the hot listing path (channel /list, admin sidebar, sub-agent
-  // children lookup). Without these, `listSessions` falls back to a full table
-  // scan once a workspace accumulates thousands of rows (Slack threads can
-  // produce one session per thread, so this stops being hypothetical fast).
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at ON agent_sessions(updated_at DESC)`)
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_parent_id ON agent_sessions(parent_id)`)
+  runMigrations(sqlite, HALO_MIGRATIONS)
 
   return db
 }

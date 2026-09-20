@@ -17,6 +17,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core'
 import path from 'node:path'
 import fs from 'node:fs'
+import { runMigrations, addColumnIfMissing, type Migration } from './migrate.js'
 
 export const cronJobs = sqliteTable('cron_jobs', {
   id: text('id').primaryKey(),
@@ -125,28 +126,25 @@ CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_cron_runs_status ON cron_runs(status);
 `
 
+/** Ordered cron.db migrations (see migrate.ts). CREATE_SQL must always
+ *  describe the full current shape; append a slot here for existing dbs. */
+export const CRON_MIGRATIONS: Migration[] = [
+  // v1: columns that pre-dated their features — `run_at` (at-mode one-shot
+  // jobs), `timeout_sec` (per-job cli timeout), `cron_runs.pid` (orphan sweep).
+  (s) => {
+    addColumnIfMissing(s, 'cron_jobs', 'run_at', 'INTEGER')
+    addColumnIfMissing(s, 'cron_jobs', 'timeout_sec', 'INTEGER')
+    addColumnIfMissing(s, 'cron_runs', 'pid', 'INTEGER')
+  },
+]
+
 export function createCronDb(globalDir: string) {
   fs.mkdirSync(globalDir, { recursive: true })
   const dbPath = path.join(globalDir, 'cron.db')
   const sqlite = new Database(dbPath)
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(CREATE_SQL)
-  // Lightweight in-place migration: add `run_at` to pre-existing dbs that
-  // were created before at-mode (one-shot jobs) shipped. Safe: nullable
-  // column, no default needed, idempotent via PRAGMA check.
-  const cols = sqlite.prepare(`PRAGMA table_info(cron_jobs)`).all() as Array<{ name: string }>
-  if (!cols.some((c) => c.name === 'run_at')) {
-    sqlite.exec(`ALTER TABLE cron_jobs ADD COLUMN run_at INTEGER`)
-  }
-  // Same pattern for `timeout_sec` (added with per-job configurable timeout).
-  if (!cols.some((c) => c.name === 'timeout_sec')) {
-    sqlite.exec(`ALTER TABLE cron_jobs ADD COLUMN timeout_sec INTEGER`)
-  }
-  // Same pattern for `pid` on cron_runs (added with the orphan sweep).
-  const runCols = sqlite.prepare(`PRAGMA table_info(cron_runs)`).all() as Array<{ name: string }>
-  if (!runCols.some((c) => c.name === 'pid')) {
-    sqlite.exec(`ALTER TABLE cron_runs ADD COLUMN pid INTEGER`)
-  }
+  runMigrations(sqlite, CRON_MIGRATIONS)
   return drizzle(sqlite, { schema: { cronJobs, cronRuns } })
 }
 
