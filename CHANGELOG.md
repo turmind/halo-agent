@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-09-20
+
 ### Added
 
 - Channels: WeCom (企业微信) 智能机器人 — the sixth IM channel, modelled on Feishu. Long-connect over wss via the official `@wecom/aibot-node-sdk`, no public webhook; replies, proactive cron pushes and media uploads all ride the same socket (WeCom has no HTTP send API). Per user in single chat, one shared session per group; slash commands in single chat only; `allowedUsers` gate on `from.userid`. Inbound text / image / mixed / voice / file / video; outbound `MEDIA:` as image (png/jpg/gif), video (mp4) or file, 20 MB cap. Admin Channels → WeCom tab (botId, write-only secret, agent, access level, allowed users), `/api/wecom/accounts` REST, cron target `wecom:<accountId>:<chatId>` (explicit chatId required, like slack / feishu). Onboarding in `guide/channels/wecom.md`. The bundled send-file / cron skills and RUNTIME.md know about it (TEMPLATE_VERSION 59).
@@ -537,7 +539,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/turmind/halo-agent/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/turmind/halo-agent/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/turmind/halo-agent/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/turmind/halo-agent/compare/v1.2.0...v1.2.1
