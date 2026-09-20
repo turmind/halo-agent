@@ -131,6 +131,8 @@ A segment is written by a compact only when the active `.json` exceeded `ARCHIVE
 
 ### SessionMessage
 
+The type definitions (`SessionMessage`, `ContentBlockEntry`, `ToolCallEntry`, `MessageType`) now live in `packages/core/src/protocol/session-message.ts` (`@turmind/halo-core/protocol`), shared by server and admin; `server/src/sessions/session-types.ts` re-exports them and keeps the server-only helpers (`messageToolCalls`, `SessionFileData`).
+
 ```typescript
 type MessageType =
   | 'user' | 'assistant'
@@ -566,12 +568,12 @@ The databases hold session metadata indexes and workspace-scoped preferences (e.
 | agent_name | TEXT | Display name |
 | description | TEXT | Task description |
 | working_dir | TEXT | Workspace-relative path; null = project root |
-| access_level | TEXT | `'readonly'`, `'workspace'`, or null (null = full access). Added via idempotent ALTER in `db/index.ts`. |
+| access_level | TEXT | `'readonly'`, `'workspace'`, or null (null = full access). Added in `HALO_MIGRATIONS` slot (`db/index.ts`). |
 | created_at / updated_at | INTEGER | Unix ms |
 | stopped_at | INTEGER | Stopped timestamp (null = active) |
 | archived_at | INTEGER | Archived timestamp (null = not archived) |
 | goal / goal_session_id | TEXT | Goal mode — binding JSON on the goal session's row, back-pointer on the worker's |
-| reply_to | TEXT | Relay — JSON `{ workspace, sessionId }` of the caller session in another workspace; set by `relay_send`, cleared on report delivery. Added via idempotent ALTER in `db/index.ts`. |
+| reply_to | TEXT | Relay — JSON `{ workspace, sessionId }` of the caller session in another workspace; set by `relay_send`, cleared on report delivery. Added in `HALO_MIGRATIONS` slot (`db/index.ts`). |
 | title | TEXT | Mirror of the session file's `title` |
 | exchange_count | INTEGER | Mirror: main user turns over the session's lifetime (kept + archived) |
 | context_tokens | INTEGER | Mirror of the file's `contextTokens` |
@@ -591,7 +593,7 @@ The last four are a **read cache for the session list** — `GET /api/sessions/l
 
 **`channel_accounts`** — unified channel account index (lives in `~/.halo/secrets/channels/channels.db`)
 
-All channel types (telegram, web, wechat, slack, feishu) share one table. Common fields are explicit columns; channel-specific fields live in the `config` JSON column.
+All channel types (telegram, web, wechat, slack, feishu, wecom) share one table. Common fields are explicit columns; channel-specific fields live in the `config` JSON column.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -617,10 +619,11 @@ All channel types (telegram, web, wechat, slack, feishu) share one table. Common
 
 ### Schema change rules
 
-- Add columns via `ALTER TABLE ... ADD COLUMN` + try/catch (skip if already present)
+- `schema.sql` / each db's `CREATE_SQL` always describes the FULL current shape, so a fresh db is complete after the CREATEs alone
+- Every change to an already-existing db gets a numbered slot in that file's ordered migration list — `HALO_MIGRATIONS` (`db/index.ts`), `CRON_MIGRATIONS` (`db/cron-db.ts`); `channel-db.ts` / `evo-db.ts` / `runs-db.ts` currently pass an empty list. `runMigrations(sqlite, list)` (`db/migrate.ts`) runs `list[user_version..]` in order, each in its own transaction, stamping `PRAGMA user_version = i + 1` after each
+- A fresh db is also at `user_version 0` and runs the whole list, so every slot must be a no-op against the current shape (`addColumnIfMissing`, `CREATE … IF NOT EXISTS`)
+- Append only — never reorder or edit a shipped slot. A db opened by a newer halo (user_version > list length) logs a warning and continues
 - Do not drop or rename existing columns
-- New tables: add to `templates/schema.sql`
-- Centralise migration logic in `db/index.ts` and `db/channel-db.ts`
 - New channel types: add rows with a new `channel_type` value + define config shape in the channel's `accounts.ts` adapter
 
 ## Changelog
@@ -635,3 +638,4 @@ All channel types (telegram, web, wechat, slack, feishu) share one table. Common
 | v1+ | 2026-05-13 | Added `packages/cli` — standalone CLI/TUI client with embedded agent loop (no server required). Imports server agent-core via subpath exports. Session prefix: `cli_`. Added `exports` + `typesVersions` to server `package.json`. |
 | v1+ | 2026-08-08 | Session file slimming (no version bump — additive + reader-compatible): assistant `toolCalls` no longer written (`contentBlocks` is the single copy, `toolCalls` stays read-only legacy); files written as compact JSON; UI-log archiving adds header fields `archiveCount` / `archivedUserCount` plus `{sessionId}.arch.{N}.json.gz` segment files; `agent_sessions` gains mirrored `title` / `exchange_count` / `context_tokens` / `total_output_tokens` columns so listing doesn't parse every file. |
 | v1+ | 2026-09-18 | Relay + liveness (additive, no version bump): `agent_sessions.reply_to` column (idempotent ALTER); session file gains `lastActivityAt` beside `output`, read back by `get_session_output` for released sessions. |
+| v1+ | 2026-09-20 | Schema migrations moved from ad-hoc boot-time ALTERs to `PRAGMA user_version` + ordered per-db migration lists (`db/migrate.ts`); existing dbs pick up at slot 0 and every slot is idempotent. Session-message + WS frame types moved to `@turmind/halo-core/protocol` (re-exported from their old server paths; no wire change). |

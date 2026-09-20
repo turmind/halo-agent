@@ -54,7 +54,7 @@ Full field list in [storage.md](storage.md).
 
 ### Exchange deletion (soft UI + hard raw)
 
-`deleteExchange(sessionId, userOrdinal)` lets the user drop a single exchange (one user turn + all its responses) from the admin chat. It treats the two streams **asymmetrically** — the point is to free LLM context while keeping a visible audit trail:
+`deleteExchange(sessionId, userOrdinal, archiveCount)` lets the user drop a single exchange (one user turn + all its responses) from the admin chat. It treats the two streams **asymmetrically** — the point is to free LLM context while keeping a visible audit trail:
 
 - **`messages` (UI log): soft delete.** The target user message and every following message up to (not including) the next user message get `deleted: true`. The array length is unchanged, so `messageCount` semantics hold and the turn stays rendered — greyed out in the admin. There is no undo; a deleted exchange hides its own Delete button.
 - **`rawMessages` (LLM-facing): physical delete of the whole turn.** Removed from the matched user-turn start through to the next user-turn start, so `tool_use` / `tool_result` pairs are never split (an orphaned `tool_result` would make every subsequent API call error out). `repairConversationMessages` then cleans the seam.
@@ -63,7 +63,7 @@ Full field list in [storage.md](storage.md).
 
 **Ordinal alignment (the sharp edge).** `userOrdinal` is the 0-based index of the target user turn, counted **excluding `taskId` (sub-agent) messages** — matching the admin's `isMainConversationMessage` filter, which is what the frontend counts on. Both the ordinal-locate loop and the duplicate-rank loop skip `taskId` messages; if they didn't, a sub-agent's injected user turn in the root log would drift the count and delete the wrong exchange.
 
-**Archived logs are refused (`'archived'`).** `userOrdinal` is positional over the log both sides can see, so it only means anything while client and server agree where the log *starts*. Archiving moves that start forward, and a chat panel open across the compact still counts from the pre-archive top — the same ordinal then maps onto a different turn on the server. The payload carries no id or anchor to disambiguate, so `deleteExchange` refuses instead of guessing: `readArchiveCount() > 0` → `'archived'`. It is read **from the file header, not memory** — the commit marker on disk is the truth about what was archived. The WS layer surfaces it as an error frame with `code: 'archived'` (see [ws.md](ws.md)); the admin renders the message verbatim, without the `Error:` prefix it adds to unexpected failures. The real fix belongs in the ordinal protocol (an anchor rather than a bare index), not here.
+**Stale anchors are refused (`'archived'`).** `userOrdinal` is positional over the log both sides can see, so it only means anything while client and server agree where the log *starts*. Archiving moves that start forward, and a chat panel open across the compact still counts from the pre-archive top — the same ordinal then maps onto a different turn on the server. The payload now carries the anchor: the client sends `archiveCount`, the archived-segment count its view was opened against. `deleteExchange` reads the on-disk header count (`readArchiveCount`, from the file header not memory — the commit marker on disk is the truth about what was archived) and refuses with `'archived'` only when the two differ; a session with archives can still be deleted from as long as the anchor matches. The WS layer surfaces the refusal as an error frame with `code: 'archived'` (see [ws.md](ws.md)); the admin renders the message verbatim, without the `Error:` prefix it adds to unexpected failures.
 
 **Memory/disk sync.** A live session mutates `agent.messages` in place then `saveAgentState`; a cold session is edited directly on the `.json` file (read-merge-write). Rejected with `running` / `compacting` while a turn is in flight (mutating raw mid-turn would corrupt the in-flight conversation). Refresh is push-based: the active session gets a `state:snapshot`, other open sessions pick it up via the existing `.halo/sessions/` file watcher — no new WS message. Entry point: WS `exchange:delete` → `handler.ts:handleExchangeDelete` (see [ws.md](ws.md)).
 
@@ -83,7 +83,7 @@ Manages every agent session's lifecycle (root + sub-agent). Each session is 1:1 
 | `interruptSession(sessionId)` | Abort the in-flight turn now (fire-and-forget); `interruptRequested` is set so the unwind repairs rather than errors, then the queued message drains. Shared by esc and the `interrupt_session` tool |
 | `stopSession(sessionId)` | Fold the whole `messageQueue` into `agent.messages` (preserve, don't drop), abort + repair, no re-run, sets `stoppedAt`. Cascades to descendants |
 | `deleteSession(sessionId)` | Cascade-delete a session and all descendants (SQLite) |
-| `deleteExchange(sessionId, userOrdinal)` | Delete one exchange — soft-mark it in the UI log, physically remove the whole turn from `rawMessages`. See [Exchange deletion](#exchange-deletion-soft-ui--hard-raw). Rejects while running/compacting |
+| `deleteExchange(sessionId, userOrdinal, archiveCount)` | Delete one exchange — soft-mark it in the UI log, physically remove the whole turn from `rawMessages`. See [Exchange deletion](#exchange-deletion-soft-ui--hard-raw). Rejects while running/compacting, or `'archived'` when the client's anchor mismatches the on-disk archive count |
 | `ensureSession(sessionId)` | Restore agent from disk if not in memory (calls `loadAgentState` internally) |
 | `registerEventListener(rootSessionId, handler)` | Event routing per session tree |
 | `unregisterEventListener(rootSessionId)` | Cancel listener |
@@ -343,12 +343,14 @@ Frontend network issues don't affect the backend:
 | User abort / graceful interrupt — **our own `signal.aborted`** or `err.name === 'AbortError'` | Repair, clean exit |
 | Context overflow (`too many input tokens`) | **Local** (non-LLM) compact + retry — the model already refused this payload, so calling an LLM risks a second stall |
 | Account-level error — **`httpStatus` 401 / 402 / 403** when a status is available; keyword match (insufficient balance / suspended / invalid key / unauthorized / authentication) only when none is | Unrecoverable — report to user, **no** retry |
-| Rate limiting / throttling | Exponential backoff (`2s * 2^attempt` + jitter, capped at 60s: 2s/4s/8s/16s…), retry |
+| Rate limiting / throttling — `err.name === 'ThrottlingException'`, `httpStatus 429`, or keyword (`throttl` / `rate limit` / `ServiceUnavailableException`) | Exponential backoff (`2s * 2^attempt` + jitter, capped at 60s: 2s/4s/8s/16s…), retry |
 | **Transient server-side error (5xx / timeout)** | Same exponential backoff as throttling — see [Transient server-error classification](#transient-server-error-classification) below |
 | Transient transport error (`fetch failed`, `ECONNRESET`, headers timeout, …) | Short backoff (`1s * 2^attempt` + jitter), retry |
 | Corrupted messages (`tool_use ids without tool_result`) | Repair + retry |
 | **4xx multimodal rejection** (`Multimodal data is corrupted` / `Could not process image`) | Replace all image blocks in history with text placeholders, persist, retry — see [Multimodal 4xx degrade](#multimodal-4xx-degrade) below |
 | Unrecoverable error | Report to user, stop |
+
+**Refusal stop.** `stop_reason: "refusal"` (Anthropic models on Bedrock invoke + generic anthropic) is an HTTP 200 with `stop_details {category, explanation}` — not an error, so it never enters the retry matrix above. `agent-loop.ts:208` handles it explicitly: no assistant message is pushed, any partial `tool_use` is **not** executed, the loop ends; `session-manager.ts:1226` emits a `system` event `⚠️ [<agent>] Model declined to respond (<category>): <explanation>` suggesting `/new`. Previously it fell through the `end_turn` path and looked like a silent stall.
 
 **Classification order: structured signal first, message text last.** The interrupt branch is decided by the attempt's own `AbortController` signal (every interrupt path we own goes through `abortReason()` on it), never by the words `cancelled` / `aborted` in the message — an upstream error body can legitimately read `"The operation was aborted due to …"` (Bedrock), and matching that swallowed a real failure as a user interrupt: silent `break`, no retry, no error event, an empty reply. Likewise the account-level branch trusts `httpStatus` when one was recovered: 401/402/403 is terminal, any *other* status is not, whatever the body says — an OpenAI-compatible 503 whose body reads `"authentication service temporarily unavailable"` used to be classified as a dead key and never retried. The keyword list is only consulted when no status could be extracted. Pinned by `turn-retry-idempotent.test.ts` (five classification cases).
 
@@ -362,6 +364,8 @@ Prevention at the entry boundary: `buildInput` whitelists inbound image media ty
 
 ### Transient server-error classification
 
+The whole decision is the pure function `classifyModelError` in `agents/model-error.ts` (returns `{kind, msg, errName, httpStatus}`; kinds `context_overflow | account | throttle | server_error | network | empty_response | corrupted | multimodal_4xx | fatal`, first match wins), table-tested in `test/model-error-classify.test.ts`; `runAgentTurn` only owns the branch actions.
+
 The transient-5xx branch is the one that all providers share, and getting the **HTTP status** out of a failure is the crux — without it, a generic Bedrock 500 would kill the turn on the first attempt.
 
 **httpStatus extraction — three-step fallback** (top of the `catch` block):
@@ -374,6 +378,8 @@ The transient-5xx branch is the one that all providers share, and getting the **
 
 - `err.name` is `InternalServerException`, `ModelTimeoutException`, or `ServiceUnavailableException`; **or**
 - the extracted `httpStatus` is one of `500` / `502` / `503` / `504` / `529` (Anthropic "Overloaded") / `408` (request/model timeout).
+
+Throttling is checked the same way one branch earlier — structured `ThrottlingException` name or status 429 first, message keywords second; the real Bedrock throttle message ("Too many requests, please wait before trying again.") carries no keyword, so the name/status check is what catches it.
 
 Backoff is identical to throttling: `2s * 2^attempt` + up to 1s jitter, capped at 60s, for up to `config.agent.maxRetries` (5) attempts.
 

@@ -55,6 +55,8 @@ Liveness probes bound how long a zombie lives, but a chat sent *into* the zombie
 
 Source: [handler.ts](../../../packages/server/src/ws/handler.ts) — top-level `switch (msg.type)` in the connection handler.
 
+Both directions are typed in `packages/core/src/protocol/ws-frames.ts` (`WsClientMessage` / `WsServerMessage`, exported from `@turmind/halo-core/protocol`) and imported by server `ws/handler.ts` and admin `ws-client.ts` — that file is the source of truth for field names; this doc explains semantics. `__ping__` is a member of `WsClientMessage.type` (previously the server compared it via a string cast).
+
 | Type | Purpose |
 |---|---|
 | `subscribe` | Subscribe to a session (load history, re-attach detached) |
@@ -64,7 +66,7 @@ Source: [handler.ts](../../../packages/server/src/ws/handler.ts) — top-level `
 | `chat:interrupt` | Interrupt the in-flight turn now (aborts a command mid-run); the server then folds any queued messages into one follow-up turn → `interruptSession`. Admin chat esc maps to this. A compacting session cancels the compact instead (same as `chat:stop`). |
 | `session:clear` | Non-destructive /session new: save the current, release its listener, create fresh (handled inline) — see [Command dispatch](#command-dispatch) |
 | `session:delete` | Delete session files + cascade-delete descendants in SQLite (handled inline) |
-| `exchange:delete` | Delete one exchange (a user turn + its responses): **soft-delete** in the UI log (`deleted: true` markers, kept visible/greyed) + **physical-delete** the whole turn from `rawMessages` (LLM context) → `deleteExchange`. Fields: `userOrdinal` (0-based index among *main-conversation* user turns, i.e. excluding `taskId` sub-agent messages — matches the admin's `isMainConversationMessage` count), optional `sessionId` / `projectId`. Rejected (→ `error`) while the session is running or compacting, and permanently once the session has archived UI-log segments — that refusal carries `code: 'archived'` (an ordinal is only meaningful while both sides agree where the log starts; archiving moves the start). See [session.md](session.md#exchange-deletion-soft-ui--hard-raw). |
+| `exchange:delete` | Delete one exchange (a user turn + its responses): **soft-delete** in the UI log (`deleted: true` markers, kept visible/greyed) + **physical-delete** the whole turn from `rawMessages` (LLM context) → `deleteExchange`. Fields: `userOrdinal` (0-based index among *main-conversation* user turns, i.e. excluding `taskId` sub-agent messages — matches the admin's `isMainConversationMessage` count), `archiveCount` (the archived-segment count the client's view was opened against — its archive anchor, from the `state:snapshot` it got on subscribe), optional `sessionId` / `projectId`. Rejected (→ `error`) while the session is running or compacting. The server also compares `archiveCount` against the on-disk header count (`readArchiveCount`); only a **mismatch** is refused, with `code: 'archived'` ("… archived history since it was opened — reopen it to delete individual turns") — a session with archives can still be deleted from as long as the anchor matches. See [session.md](session.md#exchange-deletion-soft-ui--hard-raw). |
 | `command:<name>` | Route through shared `dispatchCommand` (see [command.md](command.md)); `/session compact` handled inline for UI callbacks |
 | `terminal:start` | Spawn a new PTY |
 | `terminal:input` | Send keystrokes. `terminalId` is **required** — an id-less frame is logged and dropped (it used to fall back to the first entry of the process-global terminal map, which with several admin connections open could write into another browser's PTY) |
@@ -101,6 +103,8 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 
 `chat:thinking` / `chat:stream` / `chat:followup` / `agent:tool_call` / `agent:tool_result` additionally carry `replay: true` when synthesized by the reattach path (never on live events) — see [Reconnect flow](#reconnect-flow) step 6.
 
+`chat:system` producers (`session-manager.ts`'s `stop` event handling): a `max_tokens` stop emits `⚠️ [<agent>] Response truncated: output token limit reached.`; a `refusal` stop (Anthropic `stop_reason: "refusal"`, HTTP 200 — the model declined, not an error) emits `⚠️ [<agent>] Model declined to respond (<category>): <explanation> — …` suggesting `/new` (see [session.md](session.md#resilient-execution-loop)).
+
 Server-internal flags on `AgentSessionEvent` that are **not** carried into the WS frame: `stream.final` (marks the turn's wrap-up text vs. pre-tool filler — consumed by channel responders and the cli, see [session.md](session.md#message-queue-and-drain)) and `complete.batchBoundary`. The admin renders every streamed block, so neither is needed on the wire.
 
 ### Other Server → Client messages
@@ -127,11 +131,13 @@ Server-internal flags on `AgentSessionEvent` that are **not** carried into the W
 
 ### `error` frames: optional `code`
 
-`{ type: 'error', error }` normally means "something failed"; the admin prefixes it with `Error:` when rendering. An **expected refusal** the server already phrased for the user adds a `code` (currently only `'archived'`, from `exchange:delete`), and the admin renders such a frame verbatim without the prefix. So: add `code` when the message is a complete user-facing sentence, omit it when the client should present it as a fault.
+`{ type: 'error', error }` normally means "something failed"; the admin prefixes it with `Error:` when rendering. An **expected refusal** the server already phrased for the user adds a `code` (currently only `'archived'`, from `exchange:delete`, when the client's `archiveCount` anchor no longer matches the on-disk count), and the admin renders such a frame verbatim without the prefix. So: add `code` when the message is a complete user-facing sentence, omit it when the client should present it as a fault.
 
 ### Archive anchor in `state:snapshot`
 
 `archiveCount` rides only the snapshots sent on **subscribe** and **reattach** — one header read per session open. The per-turn snapshots and the snapshot pushed after `exchange:delete` deliberately omit it: the client's "load older" cursor is an anchor pinned at the moment the session was opened, and a segment written mid-session (a compact while the tab is open) must not move it. The client then requests segments over HTTP (`GET /api/sessions/logs/:id/archive/:n`), not WS — one whole segment per call, cached client-side because segments are immutable. See [session.md](session.md#ui-log-archiving).
+
+The same anchor is what the client sends back as `archiveCount` on `exchange:delete`, so the server can tell a stale ordinal from a live one.
 
 ## WS Handler as a thin session client
 

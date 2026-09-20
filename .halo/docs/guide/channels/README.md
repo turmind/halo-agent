@@ -10,6 +10,7 @@ This folder has one onboarding guide per channel. Pick the one you want and foll
 | [Telegram](telegram.md) | Personal use on phone, small whitelisted teams | BotFather token | Long-poll |
 | [Slack](slack.md) | Team workspaces (multi-user, channels, threads) | Slack App + Socket Mode (`xoxb-` + `xapp-` tokens) | WebSocket (Socket Mode) |
 | [Feishu / Lark](feishu.md) | Chinese enterprise teams | Feishu open-platform App (`appId` + `appSecret`) + long connection | WebSocket (long-connect) |
+| [WeCom](wecom.md) | Chinese enterprise teams on 企业微信 (single chat + groups) | 智能机器人 (Bot ID + Secret) + long connection | WebSocket (long-connect) |
 | [WeChat](wechat.md) | China-side personal use; mobile-first | iLink-style bot, login by scanning a QR | Long-poll |
 | [ACP](acp.md) | Claude Code (or other ACP clients) driving a remote halo | Web token + adapter CLI | JSON-RPC over stdio |
 
@@ -21,6 +22,7 @@ This folder has one onboarding guide per channel. Pick the one you want and foll
    halo server ─────────┤── channels/telegram/   ── grammy long-poll
    (port 9527)            ├── channels/slack/      ── Socket Mode wss
                           ├── channels/feishu/     ── long-connect wss
+                          ├── channels/wecom/      ── long-connect wss (aibot sdk)
                           └── channels/wechat/     ── ilinkai long-poll
                                   ↓
                           SessionManager (per workspace)
@@ -40,6 +42,7 @@ What the admin UI actually asks you for. Auto-filled fields (botUsername, botUse
 | Telegram | Bot token, workspace path | Label, access level, language, allowed users | BotFather `/newbot` |
 | Slack | Bot token (`xoxb-`), App token (`xapp-`), workspace path | Label, access level, language | api.slack.com → Create App → install + Socket Mode |
 | Feishu | App ID, App Secret, workspace path | Verification token, encrypt key, label, access level, language | open.feishu.cn → Create App + add bot capability |
+| WeCom | Bot ID, Secret, workspace path | Label, access level, language, allowed users | work.weixin.qq.com → 智能机器人 → create bot, copy Bot ID + Secret |
 | WeChat | Workspace path (set before scanning) | Label, access level, language | QR scan in admin UI; bot token comes back from the scan |
 
 ## Access level
@@ -57,6 +60,6 @@ When in doubt start at `readonly` and raise it later. The setting is on the **ac
 - Already know which channel you want → click the row above
 - New to halo and just want to chat in a browser → [Web](web.md)
 - Want to run halo from your IDE (Claude Code etc.) → [ACP](acp.md)
-- Setting up a team workspace → [Slack](slack.md) or [Feishu](feishu.md)
+- Setting up a team workspace → [Slack](slack.md), [Feishu](feishu.md) or [WeCom](wecom.md)
 
-For the design rationale and protocol details (not user-facing), see [docs/design/](../../design/) — `wechat.md`, `telegram.md`, `web.md`. Slack and Feishu design docs aren't written yet; the source of truth is the code under `packages/server/src/channels/{slack,feishu}/`.
+For the design rationale and protocol details (not user-facing), see [docs/design/](../../design/) — one file per channel: `web.md`, `telegram.md`, `slack.md`, `feishu.md`, `wecom.md`, `wechat.md`.

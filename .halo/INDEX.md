@@ -51,6 +51,7 @@ Halo currently supports these input channels — onboarding guides at [guide/cha
 - **Telegram**: Bot API long polling, register with token — onboarding [guide/channels/telegram.md](docs/guide/channels/telegram.md), design [design/telegram.md](docs/design/telegram.md)
 - **Slack**: Socket Mode (wss long-connect), no public webhook required — onboarding [guide/channels/slack.md](docs/guide/channels/slack.md), design [design/slack.md](docs/design/slack.md)
 - **Feishu / Lark**: long-connect with appId + appSecret — onboarding [guide/channels/feishu.md](docs/guide/channels/feishu.md), design [design/feishu.md](docs/design/feishu.md)
+- **WeCom (企业微信)**: 智能机器人 long-connect with bot id + secret, no HTTP send API (replies, cron pushes and media all ride the same wss) — onboarding [guide/channels/wecom.md](docs/guide/channels/wecom.md), design [design/wecom.md](docs/design/wecom.md)
 - **WeChat**: Scan to bind via mobile WeChat, uses default agent — onboarding [guide/channels/wechat.md](docs/guide/channels/wechat.md), design [design/wechat.md](docs/design/wechat.md)
 - **CLI/TUI**: Standalone terminal client, embedded agent loop (no server required) — see [guide/cli.md](docs/guide/cli.md)
 - **ACP adapter**: stdio JSON-RPC bridge for Claude Code etc., rides on the Web channel — onboarding [guide/channels/acp.md](docs/guide/channels/acp.md), protocol [dev/acp-adapter.md](docs/dev/acp-adapter.md)
@@ -93,7 +94,7 @@ Key state:
 - `~/.halo/global/cron.db` — global tables `cron_jobs` (with `run_at` column for at-mode) + `cron_runs`
 - `~/.halo/global/logs/cron/<runId>.log` — per-run cli stdout/stderr (30-day retention)
 
-Driven from `packages/server/src/cron/` (runner + registry) + per-channel `cron-dispatcher.ts` files (telegram / wechat / slack / feishu) + `packages/server/templates/skills/cron/` (the agent-facing skill, which receives `{{channel.type/account_id/chat_id}}` placeholders so it can default targets to the current chat when invoked from any of the four channels, and uses `list --chat-id <id>` to reverse-look-up subscriptions when the user asks "delete my cron" from inside a chat).
+Driven from `packages/server/src/cron/` (runner + registry) + per-channel `cron-dispatcher.ts` files (telegram / wechat / slack / feishu / wecom) + `packages/server/templates/skills/cron/` (the agent-facing skill, which receives `{{channel.type/account_id/chat_id}}` placeholders so it can default targets to the current chat when invoked from any of the five channels, and uses `list --chat-id <id>` to reverse-look-up subscriptions when the user asks "delete my cron" from inside a chat).
 
 ## Goal Mode
 

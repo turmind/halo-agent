@@ -100,14 +100,14 @@ The get endpoint returns the full session file. If only `rawMessages` is present
 ## Channel accounts — shared field validation
 
 `workspacePath` and `accessLevel` are validated at the REST boundary on both
-POST and PATCH across all five channels (web / wechat / telegram / slack /
-feishu) — one shared pair of checks in `channels/shared/accounts.ts`, so the
-five can't drift (they did: four PATCHes never checked `isAbsolute`, and only
+POST and PATCH across all six channels (web / wechat / telegram / slack /
+feishu / wecom) — one shared pair of checks in `channels/shared/accounts.ts`, so the
+six can't drift (they did: four PATCHes never checked `isAbsolute`, and only
 wechat's PATCH rejected an unknown `accessLevel`):
 
 | Field | Rule | 400 body |
 |---|---|---|
-| `accessLevel` | Must be one of the channel's legal levels when present; absent = leave unchanged. **web** allows `full` / `workspace` / `readonly` / `observer` (halo-city / metrics tokens are minted here); the **four chat channels** allow only `full` / `workspace` / `readonly` — `observer` is a dashboard role, not a chat identity | `{error: "accessLevel must be one of: …"}` |
+| `accessLevel` | Must be one of the channel's legal levels when present; absent = leave unchanged. **web** allows `full` / `workspace` / `readonly` / `observer` (halo-city / metrics tokens are minted here); the **five chat channels** allow only `full` / `workspace` / `readonly` — `observer` is a dashboard role, not a chat identity | `{error: "accessLevel must be one of: …"}` |
 | `workspacePath` | Absolute and existing. Empty string / relative path → 400; PATCH treats *absence* as "leave the binding alone" but validates any value supplied. On success `ensureWorkspaceHalo()` scaffolds `.halo/` | `{error: "workspacePath must be absolute"}` / `{error: "workspace path not found"}` |
 
 POST additionally rejects a missing `workspacePath` with `{error: "workspacePath required"}`. Stored levels are still normalized to `readonly` on read, but the db no longer holds a value no code path agrees with.
@@ -162,6 +162,19 @@ File: `packages/server/src/routes/feishu.ts`. Admin cookie auth. Inbound uses lo
 | PATCH | `/api/feishu/accounts/:id` | Update `label` / `workspacePath` / `enabled` / `accessLevel` / `language` / `verificationToken` / `encryptKey`. `botOpenId` is **not** patchable — re-POST to re-resolve |
 | DELETE | `/api/feishu/accounts/:id` | Stop the wss stream and delete the row |
 | GET | `/api/feishu/accounts/:id/search?q=` | Search chats the bot is a member of (used by the cron form). Returns `{hits}` (max 20) |
+
+## WeCom Channel
+
+File: `packages/server/src/routes/wecom.ts`. Admin cookie auth. Inbound uses the 智能机器人 long-connect wss (no webhook); there is **no HTTP send API**, so replies and cron pushes ride the same socket.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/wecom/accounts` | List accounts. Row: `accountId`, `botId`, `workspacePath`, `workspaceMissing`, `label`, `enabled`, `accessLevel`, `language`, timestamps. `secret` is **never** returned |
+| POST | `/api/wecom/accounts` | Create / upsert. Body: `{botId, secret, workspacePath, label?, accessLevel?, language?}`. `accountId = botId` as-is (must match `[A-Za-z0-9_-]` — it becomes a media subpath + URL segment). **No credential probe** — 智能机器人 has no HTTP endpoint to validate a pair against; bad credentials surface as `WS_AUTH_FAILURE_EXHAUSTED` in the `[WeCom]` server log. Stops any live socket, then (re)connects. Returns `{accountId, botId}` |
+| PATCH | `/api/wecom/accounts/:id` | Update `label` / `workspacePath` / `enabled` / `accessLevel` / `language`. `botId` / `secret` are **not** patchable — re-POST to rotate. Stops then reconnects if still enabled |
+| DELETE | `/api/wecom/accounts/:id` | Close the wss stream and delete the row |
+
+No `/search` endpoint: the cron form takes the WeCom `chatId` verbatim (a `userid` for a single chat, a group `chatid` for a group) — the 智能机器人 API has no contact/chat directory to query. `workspacePath` / `accessLevel` follow the [shared validation rules](#channel-accounts--shared-field-validation). See [design/wecom.md](../design/wecom.md).
 
 ## Cron
 

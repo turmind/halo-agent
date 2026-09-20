@@ -154,6 +154,7 @@ Every channel shares the same workspace and session state. Onboarding guides liv
 | **Telegram** | Bot API | Long polling |
 | **Slack** | Socket Mode | No public webhook required |
 | **Feishu / Lark** | Long-connect | `appId` + `appSecret` |
+| **WeCom** | Long-connect | `botId` + `secret` (智能机器人, no HTTP send API) |
 | **WeChat** | QR bind | Scan to bind, mobile access |
 | **ACP adapter** | stdio JSON-RPC | Bridges ACP clients (Claude Code, etc.) onto the Web channel |
 
@@ -196,7 +197,7 @@ Halo is young — treat it as an early-stage project:
 - **Sandbox isolates the filesystem, not the network.** The bubblewrap sandbox covers access levels and filesystem reach (host paths, `~/.aws`/`~/.ssh` masked), but does **not** isolate the network — code running inside it can still make outbound connections. The threat model is accidental damage and path escape by a trusted agent, **not** containment of a deliberately malicious skill exfiltrating data. Network isolation is on the roadmap.
 - **Test coverage is unit/regression-level, not end-to-end.** 1100+ tests across the four packages (core, server, cli, admin) run on every push via CI, covering core logic — path-boundary checks, session repair, channel message formatting, the TUI engine, and more. There's no end-to-end or integration suite yet.
 - **Windows hosts have no sandbox at all.** `bubblewrap` is Linux-only; on a Windows server every `workspace`-level session is effectively `full` (unrestricted shell + filesystem) and `readonly` sessions can read any path the halo process can. macOS and Linux-without-bwrap keep tool filtering and an app-level path fence, but not the OS-level isolation. Don't hand out non-`full` channel tokens on a Windows host expecting isolation — details in [dev/tools.md](.halo/docs/dev/tools.md).
-- **The admin is single-tenant.** One password, one JWT cookie, and that cookie *is* the server process: whoever holds it can read and write every workspace, run shell commands as the server user, and manage credentials for every channel. There are no roles or per-user permissions in the admin. Multi-user access is meant to go through channel accounts (Web / Telegram / Slack / Feishu / WeChat) with their own access levels, not through sharing the admin login. Keep the admin port behind your firewall, VPN, or an authenticating reverse proxy.
+- **The admin is single-tenant.** One password, one JWT cookie, and that cookie *is* the server process: whoever holds it can read and write every workspace, run shell commands as the server user, and manage credentials for every channel. There are no roles or per-user permissions in the admin. Multi-user access is meant to go through channel accounts (Web / Telegram / Slack / Feishu / WeCom / WeChat) with their own access levels, not through sharing the admin login. Keep the admin port behind your firewall, VPN, or an authenticating reverse proxy.
 - **APIs and on-disk formats may still change between versions.** Expect rough edges while things stabilize.
 
 If you hit something broken or surprising, please open an issue — early feedback is genuinely useful right now.

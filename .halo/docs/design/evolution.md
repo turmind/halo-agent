@@ -106,6 +106,8 @@ The `target` can be any file in the prompt surface — `INSTRUCTIONS.md`, the ag
 
 Sandbox is whitelist-cp from main workspace (only: `INSTRUCTIONS.md`, `INDEX.md`, `USER.md`, `agents/`, `prompts/`, `skills/`, `docs/`). Agent reads via `file_read`, writes only to `.halo/` subset.
 
+The copy is `copyDereferenced` (`evo-wrapper.ts:1419`), a hand-rolled recursive walk that resolves every symlink to its target's bytes, so the sandbox holds contents and never a link back into the live workspace (an evo edit through a link would write straight into main). It replaced `fs.cpSync({ dereference: true })` because Node ≥ 22.17 ignores `dereference` for symlinks nested below the top level (nodejs/node#59168; fix merged 2026-09-18, unreleased at the time).
+
 ### Phase B — Dry-run + Fix Loop
 
 ```

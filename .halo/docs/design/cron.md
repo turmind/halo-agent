@@ -9,7 +9,8 @@ cron_jobs (global db)                      registered at boot:
       │                                    ┌── slack/cron-dispatcher
       ▼  reloadAll / reconcileFromDb       ├── feishu/cron-dispatcher
   runner.ts ──── croner schedule ──┐       ├── telegram/cron-dispatcher
-      │                            │       └── wechat/cron-dispatcher
+      │                            │       ├── wechat/cron-dispatcher
+      │                            │       └── wecom/cron-dispatcher
       │ fire                       │              ▲
       ▼                            │              │ registerCronDispatcher
   spawn `halo cli -n -s cron-<id>` │       dispatcher.ts (registry)
@@ -27,7 +28,7 @@ Two halves, cleanly split:
 Schedules are **durable** — the source of truth is the `cron_jobs` table; in-memory croner state is rebuilt on every server boot (`startCronDaemon` → `reloadAll`). A restart never loses a schedule.
 
 - **Recurring**: standard cron expression (`job.schedule`), optional `timezone`.
-- **One-shot**: `job.runAt` (epoch ms) — croner fires once at that instant. After it completes, `finalize` sets `enabled=0` so it never re-fires. A `runAt` already in the past at schedule time is marked `lastRunStatus='missed'` and disabled (rather than firing immediately or retrying every reconcile).
+- **One-shot**: `job.runAt` (epoch ms) — croner fires once at that instant. After it completes, `finalize` sets `enabled=0` so it never re-fires. A `runAt` already in the past at schedule time is marked `lastRunStatus='missed'` and disabled (rather than firing immediately or retrying every reconcile). The `run_at` column is `CRON_MIGRATIONS` slot 0 in `db/cron-db.ts`, run through the shared `runMigrations` / `PRAGMA user_version` mechanism (see [storage.md](storage.md#schema-change-rules)).
 
 ### Trigger-mode exclusivity (the db contract)
 
@@ -90,11 +91,11 @@ interface CronChannelDispatcher {
 - `dispatchToTargets` is **never throws** — every target's outcome (ok / error) is captured into a `DispatchResult[]` persisted to `cron_runs.dispatch_results`. One channel being down doesn't block the others.
 - **`MEDIA:` attachments**: the runner passes raw stdout down untouched; `dispatchToTargets(rawText, targets, workspacePath)` extracts the agent's `MEDIA:<path>` marker lines once, then decides **per target** (one run can mix both kinds of channel):
   - `supportsMedia: true` (wechat, slack) → marker-stripped text + a `CronMedia { paths, workspacePath }`; the channel sends real file uploads, one `DispatchResult` row per attachment. Both skip the text send when a marker-only run leaves it empty.
-  - no `supportsMedia` (telegram, feishu) → the **original text with `MEDIA:` lines intact** — the attachment degrades to a visible path instead of silently vanishing.
+  - no `supportsMedia` (telegram, feishu, wecom) → the **original text with `MEDIA:` lines intact** — the attachment degrades to a visible path instead of silently vanishing.
   - `CronMedia.workspacePath` is the **job's** workspace (where the run produced its files), not the target account's — it's the sandbox root for `isMediaPathAllowed` (paths outside workspace/OS-tmp are rejected with a failed result row).
   - Wiring telegram/feishu up for real requires refactoring first, not copying: telegram's file send is an inline `sendPhoto/…/sendDocument` switch in `handler.ts`'s responder; feishu's `sendFeishuMedia` is anchored to an inbound `messageId` a cron run doesn't have. Extract the send-to-chat half in the channel module, then flip `supportsMedia: true` (details in each `cron-dispatcher.ts` header).
 - **Per-channel size limits are the dispatcher's job**, not the runner's: wechat splits the text at `WECHAT_TEXT_LIMIT` (3500 chars, shared `splitText` from `channels/shared/chunk.ts`) and sends the chunks in order — the ilink gateway rejects any single `sendmessage` over 16 KB with `ret=-2`. A failure on chunk *i* of *n* is recorded as `chunk i/n: <error>` in the target's `DispatchResult`, so the admin run row shows how much of the report already landed (a `failed` row no longer means "nothing arrived"). Telegram still sends one shot (Bot API caps at 4096) — same class of gap, unfixed.
-- **`chatId` semantics**: when a job is created from inside a chat, the target pins to that conversation (`chatId` set). When unset, the channel's own fan-out / default-recipient logic decides (e.g. Telegram fans out to its whitelist; Slack/Feishu require an explicit `chatId`).
+- **`chatId` semantics**: when a job is created from inside a chat, the target pins to that conversation (`chatId` set). When unset, the channel's own fan-out / default-recipient logic decides (e.g. Telegram fans out to its whitelist; Slack/Feishu/WeCom require an explicit `chatId`). WeCom is the one dispatcher with **no HTTP send path**: it borrows the handler's live long-connect `WSClient` (`liveClients`), so a stopped / kicked / auth-exhausted account fails the target loudly (`wecom long-connect not active`) instead of queueing.
 - `listTargets()` aggregates across all dispatchers (`listAllCronTargets`) to feed the admin create-form dropdown without the routes knowing any channel.
 
 ## Retention
