@@ -1181,6 +1181,15 @@ export class SessionManager implements SessionManagerInternals {
 
       case 'tool_call': {
         session.lastActivityAt = new Date().toISOString()
+        // Persist BEFORE the tool runs: agent-loop pushes the assistant message
+        // (with its tool_use blocks) before yielding tool_call, so the raw
+        // history already holds this call. Without this, a tool that kills the
+        // server (`systemctl restart halo`, self-upgrade) is the one call that
+        // never lands — on restart the agent sees "upgrade installed, not
+        // restarted yet", restarts again, and loops forever. With it, repair
+        // synthesizes an "[interrupted]" result for the dangling tool_use and
+        // the agent knows the command was issued.
+        this.saveAgentState(session)
         const loopStatus = this.checkLoop(session, event.toolName!, event.toolInput)
         if (loopStatus === 'warn') {
           this.emitEvent(session.id, { type: 'system', text: `⚠️ Tool "${event.toolName}" called repeatedly with identical input. Consider a different approach.` })
