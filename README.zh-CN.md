@@ -21,6 +21,8 @@ halo setup                     # 交互式：密码 / 端口 / 模型 key / 可�
 halo server start              # → 打开 http://localhost:9527
 ```
 
+任意一家模型 key 就能跑——Anthropic、OpenAI（或任何 OpenAI 兼容端点）、DeepSeek、Kimi、Qwen……`halo setup` 会问你要并绑到默认 Agent 上。**不需要** AWS 账号，Bedrock 只是其中一个 provider。
+
 想用桌面版？每个 [GitHub release](https://github.com/turmind/halo-agent/releases) 都附带 **macOS（Apple Silicon）`.dmg`** 和 **Windows x64 `.exe`**，内置 server + 管理台和独立的 Node 运行时，不需要 `npm`。功能一致、`~/.halo/` 数据布局一致，以后两种方式可以互换。
 
 > [!IMPORTANT]

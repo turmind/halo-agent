@@ -21,6 +21,8 @@ halo setup                     # interactive: password / port / model keys / opt
 halo server start              # → open http://localhost:9527
 ```
 
+Bring any one model key — Anthropic, OpenAI (or any OpenAI-compatible endpoint), DeepSeek, Kimi, Qwen… `halo setup` asks for it and binds it to the default agent. An AWS account is **not** required; Bedrock is just one of the providers.
+
 Prefer a desktop app? Each [GitHub release](https://github.com/turmind/halo-agent/releases) ships a **macOS (Apple Silicon) `.dmg`** and a **Windows x64 `.exe`** that bundle the server + admin with their own Node runtime — no `npm` needed. Same features, same `~/.halo/` data layout, so you can switch between the two later.
 
 > [!IMPORTANT]
