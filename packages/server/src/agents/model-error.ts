@@ -54,8 +54,15 @@ function classifyKind(msg: string, errName: string, httpStatus: number | undefin
     return 'account'
   }
 
-  // 3b. Throttling → exponential backoff and retry
-  if (msg.includes('throttl') || msg.includes('rate limit') || msg.includes('ThrottlingException') || msg.includes('ServiceUnavailableException') || msg.includes('API error 429')) {
+  // 3b. Throttling → exponential backoff and retry. Structured fields first:
+  // the real Bedrock ThrottlingException reads "Too many requests, please
+  // wait before trying again." — no keyword in the message, so the string
+  // checks alone let genuine throttling fall through to fatal.
+  if (
+    errName === 'ThrottlingException'
+    || httpStatus === 429
+    || msg.includes('throttl') || msg.includes('rate limit') || msg.includes('ThrottlingException') || msg.includes('ServiceUnavailableException') || msg.includes('API error 429')
+  ) {
     return 'throttle'
   }
 

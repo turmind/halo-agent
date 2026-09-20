@@ -16,9 +16,11 @@ describe('classifyModelError', () => {
     it.each<[string, unknown, ModelErrorKind]>([
       ['context overflow (Bedrock)', new Error('Input is too long: too many input tokens'), 'context_overflow'],
       ['account (401 from meta)', sdkError('UnrecognizedClientException', 'The security token is invalid', 401), 'account'],
-      // throttle is keyed on msg only — an errName of ThrottlingException with
-      // a keyword-free message is NOT throttle (matches the pre-refactor code).
-      ['throttle (Bedrock)', sdkError('ThrottlingException', 'Rate exceeded, request throttled'), 'throttle'],
+      ['throttle (Bedrock, keyword)', sdkError('ThrottlingException', 'Rate exceeded, request throttled'), 'throttle'],
+      // The real Bedrock SDK message carries no throttle keyword — must be
+      // caught by errName / status 429, not the string checks.
+      ['throttle (Bedrock, real SDK message)', sdkError('ThrottlingException', 'Too many requests, please wait before trying again.', 429), 'throttle'],
+      ['throttle (429 status, keyword-free body)', sdkError('X', 'slow down', 429), 'throttle'],
       ['server error (Bedrock 500)', sdkError('InternalServerException', 'Bedrock is unable to process your request', 500), 'server_error'],
       ['network (undici)', new Error('fetch failed'), 'network'],
       ['empty response (Mantle)', new Error('MantleEmptyResponse: status=completed with empty output[]'), 'empty_response'],
