@@ -81,6 +81,7 @@ interface MessagesResponse {
     input?: unknown
   }>
   stop_reason?: string
+  stop_details?: { type?: string; category?: string | null; explanation?: string | null } | null
   usage?: {
     input_tokens?: number
     output_tokens?: number
@@ -153,6 +154,7 @@ export class BedrockAgent extends AgentLoop {
     return {
       assistantBlocks,
       stopReason: msg.stop_reason ?? 'end_turn',
+      ...(msg.stop_details ? { stopDetails: { category: msg.stop_details.category ?? null, explanation: msg.stop_details.explanation ?? null } } : {}),
       text,
       thinking,
       toolCalls,

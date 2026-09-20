@@ -61,7 +61,10 @@ export interface AnthropicMessage {
 }
 
 /** Stop reasons from Anthropic Messages API */
-export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence'
+export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' | 'refusal'
+
+/** Anthropic's `stop_details` — only present when stop_reason is 'refusal'. */
+export interface StopDetails { category: string | null; explanation: string | null }
 
 /** Events emitted per loop iteration (non-streaming) */
 export interface AgentEvent {
@@ -80,6 +83,8 @@ export interface AgentEvent {
   toolResultFull?: string
   durationMs?: number
   stopReason?: StopReason
+  /** For 'stop' events with stopReason 'refusal': Anthropic's stop_details. */
+  stopDetails?: StopDetails
   usage?: {
     inputTokens: number
     outputTokens: number
@@ -93,6 +98,7 @@ export interface AgentEvent {
 export interface ModelCallResult {
   assistantBlocks: ContentBlock[]
   stopReason: string
+  stopDetails?: StopDetails
   text: string
   thinking: string
   toolCalls: Array<{ id: string; name: string; input: unknown }>
@@ -197,6 +203,18 @@ export abstract class AgentLoop {
         throw err
       } finally {
         clearTimeout(timer)
+      }
+
+      if (result.stopReason === 'refusal') {
+        // Anthropic's safety classifier declined the request (HTTP 200, stop_reason
+        // 'refusal'). Docs: treat any partial output as incomplete and discard it —
+        // so don't push the assistant turn (a truncated tool_use would otherwise be
+        // orphaned and get an "[interrupted]" tool_result synthesized by
+        // conversation-repair next turn) and don't announce tool_calls that will
+        // never run. Surface usage + the stop so the SessionManager can tell the user.
+        yield { type: 'usage', usage: result.usage, durationMs: result.durationMs }
+        yield { type: 'stop', stopReason: 'refusal', stopDetails: result.stopDetails }
+        return
       }
 
       if (result.assistantBlocks.length > 0) {

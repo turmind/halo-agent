@@ -186,6 +186,33 @@ describe('AgentLoop tool cycle', () => {
     expect(events.at(-1)).toEqual({ type: 'stop', stopReason: 'max_tokens' })
   })
 
+  it('refusal stop: partial assistant output discarded, no tool_call event, tool not run, user turn left for coalescing', async () => {
+    const echo = vi.fn(() => 'never')
+    const truncated: ToolCall = { id: 't1', name: 'echo', input: { command: 'cd /home/ubu' } }
+    const stopDetails = { category: 'cyber', explanation: 'declined' }
+    const loop = new ScriptedLoop([tool('echo', echo)], [{
+      assistantBlocks: [{ type: 'tool_use', ...truncated }],
+      stopReason: 'refusal',
+      stopDetails,
+      text: '',
+      thinking: '',
+      toolCalls: [truncated],
+      usage,
+    }])
+    const events = await collect(loop.run('go'))
+
+    expect(loop.calls).toBe(1)
+    expect(echo).not.toHaveBeenCalled()
+    expect(events).toEqual([
+      { type: 'usage', usage, durationMs: undefined },
+      { type: 'stop', stopReason: 'refusal', stopDetails },
+    ])
+    // Partial output discarded: no assistant message pushed, so the next run()
+    // coalesces into the dangling user turn instead of leaving an orphaned tool_use.
+    expect(loop.messages.map((m) => m.role)).toEqual(['user'])
+    expect(loop.messages.at(-1)?.role).toBe('user')
+  })
+
   it('model call exceeding config.timeout.modelRequest rejects with MODEL_TIMEOUT_ERROR', async () => {
     // `as const` is type-level only; the runtime object is mutable.
     const timeout = config.timeout as { modelRequest: number }
