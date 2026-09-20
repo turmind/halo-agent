@@ -14,6 +14,7 @@ import type { ModelRuntime } from './model-runtime.js'
 import { loadScopeInstructions } from '../prompts/md-loader.js'
 import { config, modelSupportsImage, resolveContextWindow } from '../config.js'
 import { repairConversationMessages } from './conversation-repair.js'
+import { classifyModelError } from './model-error.js'
 import { localCompactMessages } from './compact.js'
 import { microCompactMessages } from './micro-compact.js'
 import { loadAgentYaml } from './agent-loader.js'
@@ -1343,18 +1344,10 @@ export class SessionManager implements SessionManagerInternals {
         break // success
       } catch (err: unknown) {
         session.abortController = null
-        const msg = err instanceof Error ? err.message : String(err)
-        const errName = err instanceof Error ? err.name : ''
-        // Prefer the AWS SDK's structured HTTP status; fall back to parsing it
-        // out of the message for the fetch-based providers (anthropic / openai /
-        // deepseek / doubao / hunyuan / kimi / minimax / qwen / mantle), which
-        // throw plain string Errors with the status embedded — without this,
-        // the transient-5xx retry below only ever fires for Bedrock.
-        const httpStatusFromMeta = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode
-        const httpStatusFromMsg = msg.match(/API error (\d{3})/)?.[1]
-          ?? msg.match(/\]\s+(\d{3})\b/)?.[1]
-          ?? msg.match(/status=(\d{3})/)?.[1]
-        const httpStatus = httpStatusFromMeta ?? (httpStatusFromMsg ? Number(httpStatusFromMsg) : undefined)
+        // Pure classification (branch predicates + msg/errName/httpStatus
+        // derivation live in model-error.ts). The abort check below is still
+        // evaluated first — it depends on our signal, which is not part of err.
+        const { kind, msg, errName, httpStatus } = classifyModelError(err)
 
         // 1. Abort / graceful interrupt. Decided by OUR signal, not the message:
         // every interrupt path aborts `session.abortController` via abortReason(),
@@ -1373,7 +1366,7 @@ export class SessionManager implements SessionManagerInternals {
         // LLM to summarize adds risk of a second stall. Local compaction is
         // instant and deterministic; the next turn's 80% soft compact can still
         // produce a higher-quality LLM summary if the user continues talking.
-        if (msg.includes('too many input tokens') || msg.includes('prompt_too_long') || msg.includes('ContextWindowOverflow')) {
+        if (kind === 'context_overflow') {
           console.debug(`[SessionManager] Session ${session.id} context overflow (attempt ${attempt + 1}), local-compacting...`)
           this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} context overflow, compacting locally...` })
           const result = localCompactMessages(session.agent.messages)
@@ -1388,15 +1381,8 @@ export class SessionManager implements SessionManagerInternals {
         }
 
         // 3a. Account-level errors (bad key, no balance, suspended) → unrecoverable,
-        // don't retry. HTTP status is authoritative when present: 401/402/403 is
-        // account-level, anything else with a status is NOT, whatever the body
-        // says (a 503 whose body reads "authentication service temporarily
-        // unavailable" must fall through to the transient retry below). The
-        // keyword list only applies when no status could be recovered.
-        const isAccountError = httpStatus !== undefined
-          ? httpStatus === 401 || httpStatus === 402 || httpStatus === 403
-          : msg.includes('insufficient balance') || msg.includes('suspended') || msg.includes('invalid api key') || msg.includes('Invalid API Key') || msg.includes('Unauthorized') || msg.includes('authentication')
-        if (isAccountError) {
+        // don't retry.
+        if (kind === 'account') {
           console.error(`[SessionManager] Session ${session.id} account error: ${msg}`)
           this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
           session.turnError = msg
@@ -1405,7 +1391,7 @@ export class SessionManager implements SessionManagerInternals {
         }
 
         // 3b. Throttling → exponential backoff and retry
-        if (msg.includes('throttl') || msg.includes('rate limit') || msg.includes('ThrottlingException') || msg.includes('ServiceUnavailableException') || msg.includes('API error 429')) {
+        if (kind === 'throttle') {
           if (attempt + 1 < maxRetries) {
             const baseDelay = 2000 * Math.pow(2, attempt) // 2s, 4s, 8s, 16s...
             const jitter = Math.random() * 1000
@@ -1419,22 +1405,8 @@ export class SessionManager implements SessionManagerInternals {
         }
 
         // 3b-2. Transient server-side errors (500/502/503/504 server-side +
-        // 408 model timeout). Identified by the AWS SDK error's structured
-        // fields, NOT the message string — Bedrock's 500/503 messages are
-        // generic ("is unable to process your request") and match no keyword,
-        // which is exactly why they slipped past retry and killed the turn on
-        // attempt 1. Same exponential backoff as throttling.
-        if (
-          errName === 'InternalServerException'
-          || errName === 'ModelTimeoutException'
-          || errName === 'ServiceUnavailableException'
-          || httpStatus === 500
-          || httpStatus === 502
-          || httpStatus === 503
-          || httpStatus === 504
-          || httpStatus === 529  // Anthropic Overloaded — transient
-          || httpStatus === 408
-        ) {
+        // 408 model timeout). Same exponential backoff as throttling.
+        if (kind === 'server_error') {
           if (attempt + 1 < maxRetries) {
             const baseDelay = 2000 * Math.pow(2, attempt)
             const jitter = Math.random() * 1000
@@ -1448,25 +1420,9 @@ export class SessionManager implements SessionManagerInternals {
         }
 
         // 3c. Transient transport-layer errors (TCP reset, undici headers
-        // timeout, DNS hiccups) → short backoff retry. HTTP 5xx gateway errors
-        // are handled by the transient-server branch above (by status code);
-        // this branch only catches connection-level errno markers that carry
-        // no HTTP status. Without a retry, one bad packet kills the whole turn
-        // and the user has to /new — not great UX. The substring check is
-        // conservative: only obvious network-layer markers, never anything
-        // that could be a model-side semantic error.
-        if (
-          msg === 'fetch failed'
-          || msg === 'Model request timed out'  // agent-loop MODEL_TIMEOUT_ERROR — hung model call, treat as transport failure
-          || msg.includes('http2 request did not get a response')  // AWS SDK NodeHttp2Handler requestTimeout — hung Bedrock stream, same class as MODEL_TIMEOUT
-          || msg.includes('UND_ERR_HEADERS_TIMEOUT')
-          || msg.includes('HeadersTimeoutError')
-          || msg.includes('socket hang up')
-          || msg.includes('ECONNRESET')
-          || msg.includes('ECONNREFUSED')
-          || msg.includes('ETIMEDOUT')
-          || msg.includes('EAI_AGAIN')
-        ) {
+        // timeout, DNS hiccups) → short backoff retry. Without a retry, one bad
+        // packet kills the whole turn and the user has to /new — not great UX.
+        if (kind === 'network') {
           if (attempt + 1 < maxRetries) {
             const delay = 1000 * Math.pow(2, attempt) + Math.random() * 500 // 1s, 2s, 4s, 8s + jitter
             // warn, not debug: a hung Bedrock stream costs 15 min per attempt
@@ -1484,7 +1440,7 @@ export class SessionManager implements SessionManagerInternals {
         // Mantle sometimes returns status=completed with an empty output[]
         // (no message/tool at all), which would otherwise end the turn with
         // no reply. It's transient — a re-call almost always succeeds.
-        if (msg.includes('MantleEmptyResponse')) {
+        if (kind === 'empty_response') {
           if (attempt + 1 < maxRetries) {
             const delay = 1000 * Math.pow(2, attempt) + Math.random() * 500
             console.debug(`[SessionManager] Session ${session.id} Mantle empty response, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`)
@@ -1495,7 +1451,7 @@ export class SessionManager implements SessionManagerInternals {
         }
 
         // 4. Corrupted conversation → repair and retry
-        if (msg.includes("reading 'role'") || msg.includes("reading 'content'") || msg.includes('failed to add message') || msg.includes('tool_use ids were found without tool_result') || msg.includes('unexpected `tool_use_id` found in `tool_result`')) {
+        if (kind === 'corrupted') {
           console.debug(`[SessionManager] Session ${session.id} corrupted conversation (attempt ${attempt + 1}/${maxRetries})`)
           session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${session.id}]`)
           if (attempt + 1 < maxRetries) {
@@ -1510,15 +1466,10 @@ export class SessionManager implements SessionManagerInternals {
         // image block doesn't just fail this turn: history is replayed with
         // every request, so the same block re-fails ALL later requests and the
         // session is permanently bricked. Replace every image block with a
-        // text placeholder and retry. Keyword set is deliberately narrow
-        // (known provider messages only) — a miss means no degrade (current
-        // behavior), a false positive would strip images on an unrelated 400.
+        // text placeholder and retry.
         // Naturally once-only: after a degrade no image blocks remain, so a
         // repeat error finds replaced === 0 and falls through to Unrecoverable.
-        if (
-          httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500
-          && (msg.includes('Multimodal data is corrupted') || msg.includes('Could not process image'))
-        ) {
+        if (kind === 'multimodal_4xx') {
           const replaced = replaceImageBlocks(session.agent.messages, 'rejected by model provider')
           if (replaced > 0) {
             // A re-landed input (the attempt-top `input` pick) would coalesce
