@@ -10,8 +10,8 @@ endpointPresets:
 
 secrets:
   - key: api_key
-    description: Mimo Token Plan API Key. Format starts with tp- (individual) or ttp- (team).
-    description_zh: Mimo Token Plan API Key，tp-（个人）或 ttp-（团队）开头
+    description: Mimo Token Plan API Key. Format starts with tp- (individual) or ttp- (team). Subscribe at https://platform.xiaomimimo.com?ref=KBV56L (new accounts get 10% off the first order)
+    description_zh: Mimo Token Plan API Key，tp-（个人）或 ttp-（团队）开头。从 https://platform.xiaomimimo.com?ref=KBV56L 订阅（新用户首单 9 折）
     default: <<MIMO_API_KEY>>
     secret: true
 
