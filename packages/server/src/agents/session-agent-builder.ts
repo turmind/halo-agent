@@ -43,6 +43,7 @@ export interface SessionAgentBuilderHost {
   readonly workspaceRoot: string
   getDb(): HaloDb
   createSessionTools(sessionId: string): ToolDef[]
+  createContinueTaskTool(sessionId: string): ToolDef
   createGoalTools(sessionId: string): ToolDef[]
   createRelayTools(sessionId: string): ToolDef[]
 }
@@ -195,6 +196,11 @@ export class SessionAgentBuilder {
     const sessionTools = delegates
       ? this.host.createSessionTools(sessionId)
       : agentId === GOAL_AGENT_ID ? this.host.createGoalTools(sessionId) : []
+
+    // continue_task is the one truly unconditional tool (`activate_skill` is
+    // gated on `skills`, session tools on `team`): it's part of the turn loop
+    // (resume after interrupt), not a capability.
+    sessionTools.push(this.host.createContinueTaskTool(sessionId))
 
     // `draft` is an opt-in self-review tool with no workspace/session deps —
     // build it only when whitelisted, and surface its per-turn reset so the

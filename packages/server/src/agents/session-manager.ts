@@ -23,7 +23,7 @@ import { broadcast } from '../ws/broadcast.js'
 import { createDb, mirrorSessionMeta, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
-import { buildSessionTools } from './session-tools.js'
+import { buildSessionTools, buildContinueTaskTool } from './session-tools.js'
 import { deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
 import { deliverRelayReport, buildRelayTools } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
@@ -68,6 +68,9 @@ function sleep(ms: number): Promise<void> {
 function abortReason(reason: string): DOMException {
   return new DOMException(reason, 'AbortError')
 }
+
+/** Synthetic user turn pushed by drainQueue when the model called continue_task. */
+const CONTINUE_TASK_KICK = '[System] You called continue_task: the task interrupted earlier is not finished. Resume it now from where it stopped. Any tool call marked "[tool execution interrupted — no result]" did not run — re-issue it if you still need the result (this overrides the marker\'s do-not-retry note — you explicitly asked to continue).'
 
 /** Rough token estimate from message content — ~3.5 chars per token for mixed CJK/English; images count a flat 1500 each (no dimension decode). */
 function estimateMessageTokens(messages: AnthropicMessage[]): number {
@@ -202,6 +205,14 @@ interface AgentSession {
   turnStartTime: number
   /** Graceful interrupt flag */
   interruptRequested: boolean
+  /** Set by the built-in continue_task tool: after this turn ends, drainQueue
+   *  pushes a synthetic resume message and runs one more turn. One-turn lifetime
+   *  — reset at the top of every drained batch (see drainQueue). */
+  selfKick: boolean
+  /** True iff the current turn was started by drainQueue after an interrupt
+   *  (snapshot of interruptRequested before the per-batch reset). continue_task
+   *  is a no-op unless this is set — so kicks ≤ interrupts. */
+  resumedAfterInterrupt: boolean
   /** Compact lifecycle */
   isCompacting: boolean
   compactAbortController: AbortController | null
@@ -326,6 +337,8 @@ export interface SessionManagerInternals {
   runSession(sessionId: string, message: string | ContentBlock[]): Promise<string>
   querySession(targetSessionId: string, callerSessionId: string, message: string, interrupt?: boolean): Promise<string>
   interruptSession(sessionId: string): void
+  /** continue_task tool backend — see drainQueue. */
+  requestSelfKick(sessionId: string): 'set' | 'not_interrupted' | 'no_turn'
   stopSession(sessionId: string): Promise<void>
   archiveSessionTree(sessionId: string): Promise<number>
   getSessionOutput(sessionId: string): string
@@ -597,6 +610,12 @@ export class SessionManager implements SessionManagerInternals {
     return buildSessionTools(this, sessionId)
   }
 
+  /** Built-in continue_task tool (every agent, no yaml opt-in) — see
+   *  session-agent-builder / requestSelfKick / drainQueue. */
+  createContinueTaskTool(sessionId: string): ToolDef {
+    return buildContinueTaskTool(this, sessionId)
+  }
+
   /** Goal-mode tool set — injected only for the `goal` agent (see
    *  session-agent-builder / goal-mode.ts). */
   createGoalTools(sessionId: string): ToolDef[] {
@@ -653,6 +672,8 @@ export class SessionManager implements SessionManagerInternals {
       warnedToolHashes: new Set(),
       turnStartTime: 0,
       interruptRequested: false,
+      selfKick: false,
+      resumedAfterInterrupt: false,
       isCompacting: false,
       compactAbortController: null,
       compactedThisTurn: false,
@@ -1567,6 +1588,8 @@ export class SessionManager implements SessionManagerInternals {
         session.toolCallLog = []
         session.warnedToolHashes.clear()
         session.interruptRequested = false
+        session.resumedAfterInterrupt = false
+        session.selfKick = false
         result = await this.runAgentTurn(session, message)
         console.debug(`[SessionManager] runSession ${sessionId} first turn done — result: ${result.slice(0, 150)}`)
       }
@@ -1756,6 +1779,13 @@ export class SessionManager implements SessionManagerInternals {
   private async drainQueue(session: AgentSession): Promise<void> {
     while (session.messageQueue.length > 0) {
       const batch = session.messageQueue.splice(0)
+      // continue_task bookkeeping: remember whether this batch follows an interrupt
+      // (gates the tool), and reset the one-turn flag. If we're dropping a `true`,
+      // the model armed it and then got interrupted again before the kick fired —
+      // tell it so it can re-arm after answering (it can't see the flag).
+      session.resumedAfterInterrupt = session.interruptRequested
+      const kickFlagReset = session.selfKick
+      session.selfKick = false
       // Per merged batch reset (mirrors the opening turn): a prior interrupt may
       // have left the flag set; clear it so the merged turn isn't aborted by its
       // own first tool_result, and refresh the loop detector for the new turn.
@@ -1790,7 +1820,10 @@ export class SessionManager implements SessionManagerInternals {
       if (suffix && session.parentId === null) {
         this.emitEvent(session.id, { type: 'system', text: suffix.trim(), agentName: session.agentName })
       }
-      const input = this.buildInput(merged + suffix, images.length > 0 ? images : undefined, session.supportsImage)
+      const kickNote = kickFlagReset
+        ? '\n\n[System] The continue_task flag you set last turn was reset by this interrupt. If the interrupted task is still unfinished after you answer, call continue_task again.'
+        : ''
+      const input = this.buildInput(merged + suffix + kickNote, images.length > 0 ? images : undefined, session.supportsImage)
 
       try {
         await this.runAgentTurn(session, input)
@@ -1798,6 +1831,34 @@ export class SessionManager implements SessionManagerInternals {
         const errMsg = err instanceof Error ? err.message : String(err)
         console.error(`[SessionManager] Drain run error for ${session.id}: ${errMsg}`)
         throw err
+      }
+
+      // continue_task: the model asked to resume the interrupted task after
+      // answering. Only when nothing else intervened: an externally aborted turn
+      // never kicks — esc / `/interrupt` set interruptRequested without enqueuing,
+      // and esc means "stop what you're doing"; the enqueue+interrupt paths
+      // already skip via the queue check and get the reset-note next iteration
+      // (the user's newest message might be "stop", so the model decides with
+      // that in view, not us). Lives HERE (not in runSession's finally) so the
+      // kick turn completes before tryReportToParent / deliverGoalRound /
+      // deliverRelayReport fire, and so the batchBoundary complete below gives
+      // it its own bubble.
+      if (session.messageQueue.length === 0) {
+        if (session.selfKick && !session.interruptRequested) {
+          session.messageQueue.push({ text: CONTINUE_TASK_KICK })
+          // The kick is a raw user turn, so it needs a UI user row too — otherwise
+          // deleteExchange's UI span and deleteRawTurn's raw span diverge (the UI
+          // span would swallow the kick's reply, the raw one wouldn't). Traced at
+          // enqueue like every other queued message (querySession / channels);
+          // sub-agents route into their own log via taskId.
+          const taskId = session.parentId !== null ? session.id : undefined
+          this.emitEvent(session.id, { type: 'user', text: CONTINUE_TASK_KICK, agentName: 'user', report: true, taskId })
+          console.debug(`[SessionManager] continue_task kick for ${session.id}`)
+        }
+        // Consumed by the kick above, or — after an esc — dead with its turn: the
+        // loop exits on an empty queue and the flag must not dangle. (A non-empty
+        // queue carries it to the next iteration's reset + note instead.)
+        session.selfKick = false
       }
 
       // Another merged turn will follow → emit a batch-boundary `complete` (root
@@ -1892,6 +1953,19 @@ export class SessionManager implements SessionManagerInternals {
     console.debug(`[SessionManager] Interrupted session ${sessionId}`)
   }
 
+  /** continue_task tool backend. Arms the one-turn selfKick flag that drainQueue
+   *  turns into a synthetic resume turn — but only in a turn that itself started
+   *  after an interrupt (resumedAfterInterrupt), so kicks ≤ interrupts. */
+  requestSelfKick(sessionId: string): 'set' | 'not_interrupted' | 'no_turn' {
+    const session = this.sessions.get(sessionId)
+    // abortController is nulled by Stop BEFORE the abort lands, so a tool
+    // callback that completes after a Stop must not re-arm the flag.
+    if (!session || session.abortController === null) return 'no_turn'
+    if (!session.resumedAfterInterrupt) return 'not_interrupted'
+    session.selfKick = true
+    return 'set'
+  }
+
   /** Append text as a user turn to a session's agent.messages, coalescing into
    *  a trailing user message if one exists. Two invariants drive this:
    *   1. Anthropic rejects consecutive same-role messages, and the next
@@ -1946,6 +2020,8 @@ export class SessionManager implements SessionManagerInternals {
         // drain has nothing to fold — don't leave a stale interrupt flag that
         // would fire a redundant second abort on the next tool_result.
         session.interruptRequested = false
+        // Stop must never resurrect: a pending continue_task kick dies here too.
+        session.selfKick = false
         if (session.abortController) {
           session.abortController.abort(abortReason('stop'))
           session.abortController = null
@@ -2865,6 +2941,9 @@ export class SessionManager implements SessionManagerInternals {
         session.abortController.abort(abortReason('delete'))
         session.abortController = null
       }
+      // Clear BEFORE awaiting the promise: the aborted turn's drainQueue would
+      // otherwise see an armed continue_task flag and run a real kick turn.
+      session.selfKick = false
       if (session.promise) {
         try { await session.promise } catch { /* expected */ }
       }
@@ -2881,6 +2960,7 @@ export class SessionManager implements SessionManagerInternals {
           childSession.abortController.abort(abortReason('delete'))
           childSession.abortController = null
         }
+        childSession.selfKick = false
         this.sessions.delete(id)
       }
     }
@@ -2946,6 +3026,9 @@ export class SessionManager implements SessionManagerInternals {
         session.abortController.abort(abortReason('archive'))
         session.abortController = null
       }
+      // Clear BEFORE awaiting the promise: the aborted turn's drainQueue would
+      // otherwise see an armed continue_task flag and run a real kick turn.
+      session.selfKick = false
       if (session.promise) {
         try { await session.promise } catch { /* expected */ }
       }
@@ -3037,8 +3120,10 @@ export class SessionManager implements SessionManagerInternals {
    *  message), and requests a SOFT interrupt so a busy turn yields after its
    *  current tool — same effect as sendUserMessage's busy branch, minus the
    *  idle/run path (the caller already established the session is busy or
-   *  compacting). When compacting, the flag is harmless (no live turn) and
-   *  endCompact drains the queue. */
+   *  compacting). When compacting there is no live turn to interrupt, so the
+   *  flag is NOT set (mirrors sendUserMessage's compacting branch): endCompact's
+   *  drain would snapshot it into resumedAfterInterrupt and let continue_task
+   *  arm a kick in a turn that interrupted nothing. endCompact drains the queue. */
   async enqueueUserMessage(sessionId: string, text: string, images?: Array<{ data: string; mimeType: string }>): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -3050,7 +3135,7 @@ export class SessionManager implements SessionManagerInternals {
       this.emitEvent(sessionId, { type: 'system', text: `⚠ ${w}` })
     }
     session.messageQueue.push({ text: scoped.text, images })
-    session.interruptRequested = true
+    if (!session.isCompacting) session.interruptRequested = true
     console.debug(`[SessionManager] User message enqueued for ${sessionId} (${session.messageQueue.length} in queue)`)
   }
 
@@ -3072,6 +3157,8 @@ export class SessionManager implements SessionManagerInternals {
     }
     session.messageQueue = []
     session.interruptRequested = false
+    // Stop must never resurrect: a pending continue_task kick dies here too.
+    session.selfKick = false
     if (session.abortController) {
       session.abortController.abort()
       session.abortController = null

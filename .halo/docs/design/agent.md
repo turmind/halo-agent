@@ -95,6 +95,8 @@ Every hidden path — global lists and workspace-relative set alike — is enfor
 
 **`activate_skill`**: auto-injected whenever the YAML has a non-empty `skills` list (does **not** need to be declared in `tools`). It loads the full SKILL.md on demand. Disabled skills are excluded.
 
+**`continue_task`**: injected for **every** agent unconditionally — the only tool that is (`activate_skill` is gated on `skills`, session tools on `team`). It lets a turn that was started by an interruption resume the interrupted task after answering; see [session.md → continue_task](session.md#message-queue-and-drain).
+
 ## Root agent rule
 
 Root agent = `!parentId` (i.e. `parentId === null`).

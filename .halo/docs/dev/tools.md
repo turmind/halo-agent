@@ -177,7 +177,7 @@ The orchestrator truncates tool results over 8000 chars and appends a `[Content 
 
 ## Session tools
 
-Session management tools for agents. **Not enabled by name** — the whole bundle (the eight tools below) is granted automatically the moment an agent declares a **non-empty `team`** in `agent.yaml`; an absent/empty `team` means no delegation (no session tools, no roster). Listing these under `tools:` has no effect. The `team` ids also scope who's reachable via `start_session` / `query_agent`. See [agent roster](../design/prompt-system.md#agent-roster).
+Session management tools for agents. **Not enabled by name** — the whole bundle (the eight tools below) is granted automatically the moment an agent declares a **non-empty `team`** in `agent.yaml`; an absent/empty `team` means no delegation (no session tools, no roster). Listing these under `tools:` has no effect. The `team` ids also scope who's reachable via `start_session` / `query_agent`. See [agent roster](../design/prompt-system.md#agent-roster). `activate_skill` and `continue_task` at the end of this section are **not** part of the team-gated bundle — the former is gated on `skills`, the latter is unconditional.
 
 **Own-tree scoping**: the five tools that take an existing `session_id` — `query_session`, `interrupt_session`, `stop_session`, `archive_session`, `get_session_output` — only act on sessions in the **caller's own session tree** (same root id, i.e. the same left-most `>` segment). A `session_id` from an unrelated tree is refused with `{"code": 1, "error": "session <id> not found"}` (phrased as not-found so it doesn't leak whether a foreign session exists). This keeps a multi-user/multi-channel shared workspace — where one `SessionManager` holds every user's trees — from letting one agent stop / archive / read another user's sessions. In-tree parent ↔ child ↔ sibling coordination is unaffected. See [session.md → By-id tool scoping](../design/session.md#by-id-tool-scoping).
 
@@ -309,6 +309,14 @@ Show an agent's name, description, model, tool list and skill descriptions — e
 | `skill_id` | string | yes | Skill to activate |
 
 Returns: full SKILL.md content (body + resource files list). For progressive disclosure — the system prompt only contains skill metadata (name + description); the agent calls this tool on demand.
+
+### continue_task
+
+**Built-in for every agent — the one truly unconditional tool** (`activate_skill` is gated on `skills`, session tools on `team`; not declared in `agent.yaml tools`). Wired in `session-agent-builder` (`buildContinueTaskTool`, next to the session bundle). No parameters.
+
+Call it when the current turn was started by an interruption (a user / parent message landed while the agent was working) and the interrupted task is **not** finished: after the current reply ends, `drainQueue` pushes a synthetic `[System] You called continue_task: … resume it now` user turn (traced as a `user` row, `report: true`) and runs one more turn. Only effective in a turn that followed an interrupt — in a normal turn it returns `not_interrupted` and sets nothing (kicks ≤ interrupts). The flag lasts one turn: a second interrupt before the kick resets it and the model is told to call again if still needed. An esc / `/interrupt` (abort without a new message) never kicks; Stop / delete / archive clear it; a callback landing after Stop gets `code: 1` (`no_turn`).
+
+Returns: `{ code: 0, message }` on `set` / `not_interrupted`, `{ code: 1, error }` on `no_turn`. Design in [design/session.md → continue_task](../design/session.md#message-queue-and-drain).
 
 ## Goal tools
 
@@ -470,7 +478,7 @@ skills:
   - code-review    # auto-injects activate_skill
 ```
 
-Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`). The relay set is the one name-gated bundle: listing `relay_send` alone brings `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list` with it, full-access sessions only (see [Relay tools](#relay-tools)).
+Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`), and `continue_task` is auto-injected for **every** agent unconditionally (see [continue_task](#continue_task)). The relay set is the one name-gated bundle: listing `relay_send` alone brings `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list` with it, full-access sessions only (see [Relay tools](#relay-tools)).
 
 There is **no implicit default tool set**: `filterTools()` (in `agent-loader.ts`) returns only the tools whose names appear in `agent.yaml`'s `tools:` list. If the field is absent or empty, the agent has zero workspace tools. The admin UI's "Create agent" form scaffolds a fresh agent with an empty `tools: []` for the same reason — fill it in deliberately. The `default` agent's bundled `agent.yaml` lists the common set (`file_read` / `file_write` / `file_edit` / `view_image` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`) that most agents will want, plus `draft` (see Self-review tool above); copy that line if you're starting from scratch.
 

@@ -345,3 +345,21 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
     getSessionOutputTool, queryAgentTool,
   ]
 }
+
+/** Built-in for every agent — the one truly unconditional tool (`activate_skill`
+ *  is gated on `skills`, session tools on `team`); wired in session-agent-builder.
+ *  No params. See SessionManager.drainQueue for the kick. */
+export function buildContinueTaskTool(sm: Pick<SessionManagerInternals, 'requestSelfKick'>, sessionId: string): ToolDef {
+  return {
+    name: 'continue_task',
+    description: 'Call this when your turn was started by an interruption (a user or parent message arrived while you were working) and the task you were doing is NOT finished yet. After your current reply ends, the session automatically resumes the interrupted task. Do NOT call it if the task is done, if the user told you to stop, or in a normal (uninterrupted) turn — it does nothing there. The flag lasts one turn: if you get interrupted again before resuming, call it again.',
+    inputSchema: { type: 'object' as const, properties: {} },
+    callback: async () => {
+      switch (sm.requestSelfKick(sessionId)) {
+        case 'set': return JSON.stringify({ code: 0, message: 'Continue flag set. Finish your current reply — the interrupted task resumes automatically right after.' })
+        case 'not_interrupted': return JSON.stringify({ code: 0, message: 'This turn was not started by an interruption — nothing to resume. Just keep working normally; do not call this again this turn.' })
+        case 'no_turn': return JSON.stringify({ code: 1, error: 'Turn already ended (stopped) — flag not set.' })
+      }
+    },
+  }
+}
