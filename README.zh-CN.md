@@ -132,6 +132,7 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
 |---|---|
 | **AWS Bedrock Claude** | 主力 —— Bedrock Invoke API |
 | AWS Bedrock Mantle | 经 Bedrock 使用 OpenAI GPT 系模型 |
+| AWS Bedrock OpenAI 兼容接口 | 经 bedrock-runtime 的 OpenAI Responses API 使用 GPT-6 / 5.6、Grok 4.6、Kimi K3 |
 | Anthropic | 官方直连 API |
 | OpenAI | 直连 / 任意 OpenAI 兼容端点 |
 | DeepSeek | |

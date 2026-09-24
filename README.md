@@ -132,6 +132,7 @@ Configured per-agent through one provider-agnostic runtime. AWS Bedrock Claude i
 |---|---|
 | **AWS Bedrock Claude** | Primary — Bedrock Invoke API |
 | AWS Bedrock Mantle | OpenAI GPT-class models via Bedrock |
+| AWS Bedrock OpenAI-compatible | GPT-6 / 5.6, Grok 4.6, Kimi K3 via the bedrock-runtime OpenAI Responses API |
 | Anthropic | Direct API |
 | OpenAI | Direct / any OpenAI-compatible endpoint |
 | DeepSeek | |
