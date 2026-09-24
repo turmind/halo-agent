@@ -258,104 +258,128 @@ export abstract class AgentLoop {
 
       const toolResults: ContentBlock[] = []
       let shouldEndTurn = false
-      for (const tu of toolUseBlocks) {
-        if (options?.cancelSignal?.aborted) return
+      // try/finally so the results that DID land reach this.messages even when
+      // the batch is cut short — by the cancel check below (soft interrupt: the
+      // consumer aborts after a tool_result and we return on the next tool) or
+      // by the consumer breaking out of its for-await (hard interrupt), which
+      // finishes this generator at the `yield` via .return(). Before this, both
+      // exits skipped the push, so an interrupt during a parallel batch dropped
+      // every finished result and conversation-repair marked ALL of the batch
+      // "[interrupted]" — the model then re-ran work that had already happened
+      // (a real hazard for side-effecting calls: commit, append, send).
+      try {
+        for (const tu of toolUseBlocks) {
+          if (options?.cancelSignal?.aborted) return
 
-        const toolDef = this.toolMap.get(tu.name)
-        if (toolDef?.forceEndTurn) shouldEndTurn = true
-        const startTime = Date.now()
-        let resultContent: string | ToolResultBlock[]
-        let resultText: string
-        let isError = false
+          const toolDef = this.toolMap.get(tu.name)
+          if (toolDef?.forceEndTurn) shouldEndTurn = true
+          const startTime = Date.now()
+          let resultContent: string | ToolResultBlock[]
+          let resultText: string
+          let isError = false
 
-        if (!toolDef) {
-          resultContent = `${TOOL_ERROR_MARKER}\nError: unknown tool "${tu.name}"`
-          resultText = resultContent
-          isError = true
-        } else {
-          try {
-            const raw = await toolDef.callback(tu.input, options?.cancelSignal)
-            if (typeof raw === 'string') {
-              resultContent = raw
-              resultText = raw
-            } else {
-              resultContent = raw
-              resultText = raw.map((b) => b.type === 'text' ? b.text : `[image ${b.source.media_type}]`).join('\n')
-            }
-          } catch (err) {
-            resultContent = `${TOOL_ERROR_MARKER}\nError: ${err instanceof Error ? err.message : String(err)}`
+          if (!toolDef) {
+            resultContent = `${TOOL_ERROR_MARKER}\nError: unknown tool "${tu.name}"`
             resultText = resultContent
             isError = true
-          }
-        }
-
-        // Truncate the tool result before it enters this.messages (the LLM
-        // input). Without this cap, a single shell_exec / web_fetch can pull
-        // in megabytes that get re-sent on every subsequent turn, blowing
-        // up the cache-write side and pushing context past compact threshold.
-        // The same cap is applied at the ui-log level in session-manager
-        // (so the UI was already showing 8K), but the LLM-facing path was
-        // unbounded. Now both paths see the same trimmed value, and the
-        // appended marker tells the LLM the output was cut so it can grep
-        // / re-run with narrower scope when it needs more.
-        // Preserve the result for UI display before applying the (smaller)
-        // LLM cap. The UI path gets its own, far larger cap: a normal command's
-        // full output stays visible, but a multi-MB `cat` is bounded so it can't
-        // bloat the session file / WS payload / browser render.
-        const uiCap = config.limits.toolResultUiMax
-        const resultTextFull = resultText.length > uiCap
-          ? resultText.slice(0, uiCap) + `\n\n[Content truncated: ${resultText.length} chars total, showing first ${uiCap}. Use file_read for the complete content.]`
-          : resultText
-
-        // activate_skill is exempt from the LLM cap: a SKILL.md body is
-        // instructions, not data — truncating it hands the model half a manual
-        // (and the "re-run with narrower scope" hint is meaningless for it).
-        // Skill size is the skill author's responsibility, not a runtime cap's.
-        const cap = tu.name === 'activate_skill' ? Infinity : config.limits.toolResultMax
-        const truncationNote = (origLen: number) =>
-          `\n\n[Content truncated: ${origLen} chars total, showing first ${cap}. Re-run with narrower scope (e.g. grep / file_read with offset+limit) to see specific sections.]`
-        if (typeof resultContent === 'string' && resultContent.length > cap) {
-          const orig = resultContent.length
-          resultContent = resultContent.slice(0, cap) + truncationNote(orig)
-          resultText = resultContent
-        } else if (Array.isArray(resultContent)) {
-          // Multi-block result (e.g. view_image returns text + image). Cap
-          // each text block individually; image blocks pass through. The
-          // shape match keeps `resultContent` typed as ToolResultBlock[].
-          let mutated = false
-          resultContent = resultContent.map((b) => {
-            if (b.type === 'text' && b.text.length > cap) {
-              mutated = true
-              return { type: 'text' as const, text: b.text.slice(0, cap) + truncationNote(b.text.length) }
+          } else {
+            try {
+              const raw = await toolDef.callback(tu.input, options?.cancelSignal)
+              if (typeof raw === 'string') {
+                resultContent = raw
+                resultText = raw
+              } else {
+                resultContent = raw
+                resultText = raw.map((b) => b.type === 'text' ? b.text : `[image ${b.source.media_type}]`).join('\n')
+              }
+            } catch (err) {
+              resultContent = `${TOOL_ERROR_MARKER}\nError: ${err instanceof Error ? err.message : String(err)}`
+              resultText = resultContent
+              isError = true
             }
-            return b
+          }
+
+          // Cancel fired WHILE this tool ran → it is the one the abort killed (or
+          // raced). Drop its result and stop: the finally lands the earlier ones,
+          // and conversation-repair pairs this id with the "[interrupted — do not
+          // retry]" marker, same as before. Keeping a killed shell's "Command
+          // failed: aborted + partial stdout" here would read as a completed run
+          // and lose the anti-retry steering that marker exists for.
+          if (options?.cancelSignal?.aborted) return
+
+          // Truncate the tool result before it enters this.messages (the LLM
+          // input). Without this cap, a single shell_exec / web_fetch can pull
+          // in megabytes that get re-sent on every subsequent turn, blowing
+          // up the cache-write side and pushing context past compact threshold.
+          // The same cap is applied at the ui-log level in session-manager
+          // (so the UI was already showing 8K), but the LLM-facing path was
+          // unbounded. Now both paths see the same trimmed value, and the
+          // appended marker tells the LLM the output was cut so it can grep
+          // / re-run with narrower scope when it needs more.
+          // Preserve the result for UI display before applying the (smaller)
+          // LLM cap. The UI path gets its own, far larger cap: a normal command's
+          // full output stays visible, but a multi-MB `cat` is bounded so it can't
+          // bloat the session file / WS payload / browser render.
+          const uiCap = config.limits.toolResultUiMax
+          const resultTextFull = resultText.length > uiCap
+            ? resultText.slice(0, uiCap) + `\n\n[Content truncated: ${resultText.length} chars total, showing first ${uiCap}. Use file_read for the complete content.]`
+            : resultText
+
+          // activate_skill is exempt from the LLM cap: a SKILL.md body is
+          // instructions, not data — truncating it hands the model half a manual
+          // (and the "re-run with narrower scope" hint is meaningless for it).
+          // Skill size is the skill author's responsibility, not a runtime cap's.
+          const cap = tu.name === 'activate_skill' ? Infinity : config.limits.toolResultMax
+          const truncationNote = (origLen: number) =>
+            `\n\n[Content truncated: ${origLen} chars total, showing first ${cap}. Re-run with narrower scope (e.g. grep / file_read with offset+limit) to see specific sections.]`
+          if (typeof resultContent === 'string' && resultContent.length > cap) {
+            const orig = resultContent.length
+            resultContent = resultContent.slice(0, cap) + truncationNote(orig)
+            resultText = resultContent
+          } else if (Array.isArray(resultContent)) {
+            // Multi-block result (e.g. view_image returns text + image). Cap
+            // each text block individually; image blocks pass through. The
+            // shape match keeps `resultContent` typed as ToolResultBlock[].
+            let mutated = false
+            resultContent = resultContent.map((b) => {
+              if (b.type === 'text' && b.text.length > cap) {
+                mutated = true
+                return { type: 'text' as const, text: b.text.slice(0, cap) + truncationNote(b.text.length) }
+              }
+              return b
+            })
+            if (mutated) {
+              resultText = (resultContent as ToolResultBlock[])
+                .map((b) => b.type === 'text' ? b.text : `[image ${b.source.media_type}]`)
+                .join('\n')
+            }
+          }
+
+          const durationMs = Date.now() - startTime
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content: resultContent,   // truncated — LLM-facing only
+            ...(isError ? { is_error: true } : {}),
           })
-          if (mutated) {
-            resultText = (resultContent as ToolResultBlock[])
-              .map((b) => b.type === 'text' ? b.text : `[image ${b.source.media_type}]`)
-              .join('\n')
+
+          yield {
+            type: 'tool_result',
+            toolName: tu.name,
+            toolUseId: tu.id,
+            toolResult: resultText,           // truncated (LLM cap applied)
+            toolResultFull: resultTextFull,   // full — for UI display
+            durationMs,
           }
         }
-
-        const durationMs = Date.now() - startTime
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: tu.id,
-          content: resultContent,   // truncated — LLM-facing only
-          ...(isError ? { is_error: true } : {}),
-        })
-
-        yield {
-          type: 'tool_result',
-          toolName: tu.name,
-          toolUseId: tu.id,
-          toolResult: resultText,           // truncated (LLM cap applied)
-          toolResultFull: resultTextFull,   // full — for UI display
-          durationMs,
+      } finally {
+        // Land whatever finished, whether the loop ran to completion or was cut
+        // short (see the comment above the try). Empty on an abort before the
+        // first result — push nothing; repair synthesizes the whole batch then.
+        if (toolResults.length > 0) {
+          this.messages.push({ role: 'user', content: toolResults })
         }
       }
-
-      this.messages.push({ role: 'user', content: toolResults })
 
       if (shouldEndTurn) {
         yield { type: 'stop', stopReason: 'end_turn' as StopReason }

@@ -239,19 +239,58 @@ describe('AgentLoop tool cycle', () => {
     expect((err as Error).message).toBe('aborted')
   })
 
-  it('cancel between tools: remaining tools skipped, no stop event, no tool_result message pushed', async () => {
+  // Interrupt mid-batch. Two exits: the loop's own cancel check (soft
+  // interrupt — the consumer aborts after a tool_result, the next tool sees
+  // the signal) and the consumer breaking its for-await (hard interrupt —
+  // finishes the generator at the yield). Both used to skip the trailing
+  // push, so every FINISHED result in the batch was lost and repair marked
+  // the whole batch "[interrupted]" — the model re-ran work that had happened.
+  // The tool the abort landed on is dropped on purpose: its result is a
+  // killed shell's partial output, and repair's marker carries the
+  // do-not-retry steering for it.
+  it('cancel between tools: finished results land, the aborted tool and the rest are left for repair', async () => {
     const ac = new AbortController()
-    const b = vi.fn(() => 'B')
+    const c = vi.fn(() => 'C')
     const loop = new ScriptedLoop(
-      [tool('a', () => { ac.abort(); return 'A' }), tool('b', b)],
-      [toolUseTurn([call('tu_a', 'a'), call('tu_b', 'b')])],
+      [tool('a', () => 'A'), tool('b', () => { ac.abort(); return 'B' }), tool('c', c)],
+      [toolUseTurn([call('tu_a', 'a'), call('tu_b', 'b'), call('tu_c', 'c')])],
     )
     const events = await collect(loop.run('go', { cancelSignal: ac.signal }))
 
-    expect(b).not.toHaveBeenCalled()
+    expect(c).not.toHaveBeenCalled()
     expect(loop.calls).toBe(1)
     expect(events.some((e) => e.type === 'stop')).toBe(false)
     expect(events.filter((e) => e.type === 'tool_result').map((e) => e.toolUseId)).toEqual(['tu_a'])
+    expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(toolResultBlocks(loop).map((b) => [b.tool_use_id, b.content])).toEqual([['tu_a', 'A']])
+  })
+
+  it('consumer breaks out mid-batch (hard interrupt): results yielded so far still land', async () => {
+    const b = vi.fn(() => 'B')
+    const loop = new ScriptedLoop(
+      [tool('a', () => 'A'), tool('b', b)],
+      [toolUseTurn([call('tu_a', 'a'), call('tu_b', 'b')])],
+    )
+    // Mirrors runAgentTurn's `if (signal.aborted) break` — leaving the
+    // for-await calls gen.return(), which runs the generator's finally.
+    for await (const ev of loop.run('go')) {
+      if (ev.type === 'tool_result' && ev.toolUseId === 'tu_a') break
+    }
+
+    expect(b).not.toHaveBeenCalled()
+    expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(toolResultBlocks(loop).map((b) => b.tool_use_id)).toEqual(['tu_a'])
+  })
+
+  it('cancel before the first tool: nothing pushed, repair owns the whole batch', async () => {
+    const ac = new AbortController()
+    const a = vi.fn(() => 'A')
+    const loop = new ScriptedLoop([tool('a', a)], [
+      () => { ac.abort(); return Promise.resolve(toolUseTurn([call('tu_a', 'a')])) },
+    ])
+    await collect(loop.run('go', { cancelSignal: ac.signal }))
+
+    expect(a).not.toHaveBeenCalled()
     expect(loop.messages.at(-1)?.role).toBe('assistant')
   })
 
