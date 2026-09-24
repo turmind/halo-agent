@@ -1,17 +1,24 @@
 id: mimo-token-plan-china
-displayName: Mimo Token Plan (China)
-displayName_zh: Mimo Token Plan（中国）
-description: Mimo Token Plan — Xiaomi's Anthropic-compatible gateway for MiMo models in China. Supports 1M context window.
-description_zh: Mimo Token Plan — 小米中国区 Anthropic 兼容网关，支持 MiMo 模型，1M 上下文窗口。
+displayName: Xiaomi MiMo
+displayName_zh: 小米 MiMo
+description: Xiaomi MiMo via its Anthropic-compatible gateway — Token Plan (China / Singapore / Europe clusters) or pay-as-you-go. Supports 1M context window.
+description_zh: 小米 MiMo，Anthropic 兼容网关 — Token Plan（中国 / 新加坡 / 欧洲集群）或按量付费，支持 1M 上下文窗口。
 defaultEndpoint: https://token-plan-cn.xiaomimimo.com/anthropic
 defaultModelId: mimo-v2.6-pro
+# Token Plan keys (tp-/ttp-) only work on the token-plan-* clusters (cn / sgp /
+# ams); pay-as-you-go keys (sk-) only on api.xiaomimimo.com — the key type
+# decides the endpoint. Pay-as-you-go live-probed 2026-09-24 (pro/flash, tool
+# use + caching OK); sgp / ams are from the official docs only.
 endpointPresets:
   - https://token-plan-cn.xiaomimimo.com/anthropic
+  - https://token-plan-sgp.xiaomimimo.com/anthropic
+  - https://token-plan-ams.xiaomimimo.com/anthropic
+  - https://api.xiaomimimo.com/anthropic
 
 secrets:
   - key: api_key
-    description: Mimo Token Plan API Key. Format starts with tp- (individual) or ttp- (team). Subscribe at https://platform.xiaomimimo.com?ref=KBV56L (new accounts get 10% off the first order)
-    description_zh: Mimo Token Plan API Key，tp-（个人）或 ttp-（团队）开头。从 https://platform.xiaomimimo.com?ref=KBV56L 订阅（新用户首单 9 折）
+    description: Mimo API Key. Token Plan keys start with tp- (individual) or ttp- (team) and use a token-plan-* endpoint; pay-as-you-go keys start with sk- and need the https://api.xiaomimimo.com/anthropic endpoint. Subscribe at https://platform.xiaomimimo.com?ref=KBV56L (new accounts get 10% off the first order)
+    description_zh: Mimo API Key。Token Plan 的 key 以 tp-（个人）或 ttp-（团队）开头，用 token-plan-* 端点；按量付费的 key 以 sk- 开头，端点须选 https://api.xiaomimimo.com/anthropic。从 https://platform.xiaomimimo.com?ref=KBV56L 订阅（新用户首单 9 折）
     default: <<MIMO_API_KEY>>
     secret: true
 
