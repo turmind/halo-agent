@@ -18,8 +18,11 @@ pnpm --filter @turmind/halo-cli link --global
 
 The published package is `@turmind/halo` — a self-contained esbuild bundle
 (CLI + server + admin-out + templates), staged under `packages/cli/dist-pub/`
-by `scripts/build-bundle.mjs`. The workspace `@turmind/halo-cli` can't be
-published directly (it has `workspace:*` deps); the bundle flattens them.
+by `scripts/build-bundle.mjs` when run with `HALO_RELEASE=1`. Without that flag
+(desktop packaging, local bundle tests) the script writes a sha-suffixed build to
+`packages/cli/dist-dev/` instead and never touches `dist-pub/`. The workspace
+`@turmind/halo-cli` can't be published directly (it has `workspace:*` deps); the
+bundle flattens them.
 
 ```bash
 # 1. bump packages/cli/package.json "version" (e.g. 0.1.2)
@@ -30,11 +33,13 @@ cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs &&
 # 3. stage the release bundle — HALO_RELEASE=1 stamps the bare version
 #    (0.1.2), NOT the default <version>-<sha>: a `-<sha>` suffix is a semver
 #    prerelease that `npm install` skips and never tags as `latest`.
+#    It also selects dist-pub/ as the output dir (dev builds go to dist-dev/).
 HALO_RELEASE=1 node packages/cli/scripts/build-bundle.mjs
-# 4. preview + publish
+# 4. preview + publish — publish ONCE, then confirm with `npm view`
 cd packages/cli/dist-pub
 npm pack --dry-run        # inspect tarball contents
 npm publish               # @turmind/halo@<version>, tag latest, public
+npm view @turmind/halo version   # may lag 2-3 min; re-view, don't re-publish
 ```
 
 npm versions are immutable — a published version can never be overwritten,

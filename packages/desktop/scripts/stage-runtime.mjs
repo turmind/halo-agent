@@ -33,7 +33,10 @@ const NODE_BIN_DST = path.join(RES_DIR, 'node')
 const DIST_DIR = path.join(DESKTOP_ROOT, 'dist')
 
 const CLI_DIR = path.join(REPO_ROOT, 'packages', 'cli')
-const CLI_PUB = path.join(CLI_DIR, 'dist-pub')
+// build-bundle.mjs without HALO_RELEASE=1 stages into dist-dev/ (sha-suffixed
+// version) — deliberately NOT dist-pub/, so desktop packaging can never
+// overwrite the npm release bundle (see memory 2026-09-24-release-republish-footgun).
+const CLI_PUB = path.join(CLI_DIR, 'dist-dev')
 
 // Pin to the same node major the native modules (better-sqlite3, node-pty)
 // were prebuilt against — see packages/server/package.json deps and the
@@ -466,7 +469,7 @@ function fixParcelWatcherIn(parcelScope, watcherPkgDir) {
 // infra details (AWS account id, internal domains, EC2/CloudFront ids) and are
 // gitignored — but the cli bundle copies the whole bundled-docs tree, so a
 // belt-and-braces sweep here keeps them out of the shipped dmg/exe even if an
-// upstream dist-pub ever leaks one (root cause of the 0.1.2–0.1.8 npm leak).
+// upstream cli bundle ever leaks one (root cause of the 0.1.2–0.1.8 npm leak).
 function stripLocalDocs(root) {
   const docsDir = path.join(root, 'bundled-docs')
   if (!fs.existsSync(docsDir)) return
@@ -491,20 +494,20 @@ function stripLocalDocs(root) {
 // CLI-only deps (ink/react/marked/…) but keeps zero risk of perturbing the
 // server tree the Electron app boots.
 function stageCliRuntime() {
-  // 1. Build the esbuild bundle + publishable layout (dist-pub/). build-bundle
+  // 1. Build the esbuild bundle + publishable layout (dist-dev/). build-bundle
   //    needs esbuild (a cli devDep) — this is why stageCliRuntime() runs before
   //    the server's `pnpm deploy --prod` prunes workspace devDeps.
-  console.log('[stage] building cli bundle (dist-pub)')
+  console.log('[stage] building cli bundle (dist-dev)')
   run('node scripts/build-bundle.mjs', CLI_DIR)
 
-  // 2. Copy the dist-pub skeleton (bundle + templates + bundled-docs + admin-out
+  // 2. Copy the dist-dev skeleton (bundle + templates + bundled-docs + admin-out
   //    + package.json) into cli-runtime. build-bundle leaves no node_modules,
   //    so this is the lean tree; deps are installed next.
   console.log('[stage] copying cli bundle → cli-runtime')
   fs.cpSync(CLI_PUB, CLI_RT, { recursive: true })
   stripLocalDocs(CLI_RT)
 
-  // 3. Install prod deps with npm (not pnpm): dist-pub/package.json is a plain
+  // 3. Install prod deps with npm (not pnpm): dist-dev/package.json is a plain
   //    flat dependency list, and npm produces a flat real-directory
   //    node_modules with no symlinks — cross-platform safe (the same reason
   //    server-runtime uses node-linker=hoisted).

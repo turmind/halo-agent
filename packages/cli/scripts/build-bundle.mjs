@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
  * Build a single-file ESM bundle for `@turmind/halo` and stage the
- * publishable layout under packages/cli/dist-pub/.
+ * publishable layout under packages/cli/dist-pub/ (HALO_RELEASE=1) or
+ * packages/cli/dist-dev/ (default — desktop staging, local tests).
  *
  * Layout produced:
  *
- *   dist-pub/
+ *   dist-pub/  (or dist-dev/)
  *   ├── package.json     ← rewritten with publish-time fields
  *   ├── README.md
  *   ├── LICENSE
@@ -38,14 +39,21 @@ const CLI_ROOT      = path.resolve(__dirname, '..')
 const REPO_ROOT     = path.resolve(CLI_ROOT, '..', '..')
 const SERVER_ROOT   = path.resolve(REPO_ROOT, 'packages', 'server')
 const ADMIN_ROOT    = path.resolve(REPO_ROOT, 'packages', 'admin')
-const PUB_DIR       = path.resolve(CLI_ROOT, 'dist-pub')
+const IS_RELEASE    = process.env.HALO_RELEASE === '1'
+// Release bundles (`HALO_RELEASE=1`) stage into dist-pub/; everything else
+// (desktop stage-runtime, local bundle tests) into dist-dev/. Physically
+// separate so a sha-suffixed dev build can never sit in dist-pub/ and get
+// `npm publish`ed by mistake — happened three times (0.1.8, 0.2.1, 1.3.4)
+// when the Windows build re-ran this script after the npm publish.
+const OUT_NAME      = IS_RELEASE ? 'dist-pub' : 'dist-dev'
+const PUB_DIR       = path.resolve(CLI_ROOT, OUT_NAME)
 
 // ── 0. Clean ───────────────────────────────────────────────────────────────
 fs.rmSync(PUB_DIR, { recursive: true, force: true })
 fs.mkdirSync(path.join(PUB_DIR, 'dist'), { recursive: true })
 fs.mkdirSync(path.join(PUB_DIR, 'bin'),  { recursive: true })
 
-console.log('[build-bundle] cleaned dist-pub/')
+console.log(`[build-bundle] cleaned ${OUT_NAME}/`)
 
 // ── TEMPLATE_VERSION gate ──────────────────────────────────────────────────
 //
@@ -85,7 +93,7 @@ templateVersionGate()
 // `halo --version` / admin sidebar disagree with the tag (happened at 0.1.9:
 // cli + desktop bumped, server still 0.1.8, core/admin at 0.1.0).
 function lockstepVersionGate() {
-  if (process.env.HALO_RELEASE !== '1') return
+  if (!IS_RELEASE) return
   const pkgs = ['core', 'server', 'admin', 'cli', 'desktop']
   const versions = pkgs.map((p) => [p, JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages', p, 'package.json'), 'utf-8')).version])
   const distinct = new Set(versions.map(([, v]) => v))
@@ -183,8 +191,8 @@ function gitVersion() {
     return BASE_VERSION
   }
 }
-const PKG_VERSION = process.env.HALO_RELEASE === '1' ? BASE_VERSION : gitVersion()
-console.log(`[build-bundle] version: ${PKG_VERSION}${process.env.HALO_RELEASE === '1' ? ' (release)' : ''}`)
+const PKG_VERSION = IS_RELEASE ? BASE_VERSION : gitVersion()
+console.log(`[build-bundle] version: ${PKG_VERSION}${IS_RELEASE ? ' (release)' : ''}`)
 
 // Output an ESM bundle. We only bundle our own source (the workspace
 // packages); every npm dep (Hono, aws-sdk, ink, drizzle, etc.) stays external
@@ -472,14 +480,18 @@ function fmt(bytes) {
 }
 
 console.log('')
-console.log('[build-bundle] DONE — staged at packages/cli/dist-pub/')
+console.log(`[build-bundle] DONE — staged at packages/cli/${OUT_NAME}/`)
 console.log(`  total size:    ${fmt(dirSize(PUB_DIR))}`)
 console.log(`  bundle:        ${fmt(fs.statSync(path.join(PUB_DIR, 'dist', 'index.js')).size)}`)
 console.log(`  templates:     ${fmt(dirSize(path.join(PUB_DIR, 'templates')))}`)
 console.log(`  bundled-docs:  ${fmt(dirSize(path.join(PUB_DIR, 'bundled-docs')))}`)
 console.log(`  admin-out:     ${fmt(dirSize(path.join(PUB_DIR, 'admin-out')))}`)
 console.log('')
-console.log('Next:')
-console.log('  cd packages/cli/dist-pub')
-console.log('  npm pack --dry-run        # preview tarball contents')
-console.log('  npm publish               # release to registry')
+if (IS_RELEASE) {
+  console.log('Next:')
+  console.log('  cd packages/cli/dist-pub')
+  console.log('  npm pack --dry-run        # preview tarball contents')
+  console.log('  npm publish               # release to registry — ONCE; confirm with `npm view @turmind/halo version`')
+} else {
+  console.log('Dev build (sha-suffixed version) — not publishable. For an npm release run with HALO_RELEASE=1.')
+}

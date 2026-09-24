@@ -121,7 +121,7 @@ dependency work. Three levers, in order of how often they help:
 
 1. **Auto-fast (automatic).** A full `pnpm dist:arm64` now fingerprints the
    dependency inputs (`packages/server/package.json`, `core/package.json`, the
-   cli bundle's `dist-pub/package.json`, `pnpm-lock.yaml`, + target/node
+   cli bundle's `dist-dev/package.json`, `pnpm-lock.yaml`, + target/node
    version) and records it in `resources/.stage-meta`. On the next run, if a
    prior full stage exists for the same target **and the fingerprint is
    unchanged**, staging auto-takes the fast path: it re-syncs only the compiled
