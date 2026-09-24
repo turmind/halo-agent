@@ -4,7 +4,7 @@ internal: true
 priority: -1
 model:
   provider: aws-bedrock-claude-invoke
-  id: global.anthropic.claude-opus-5
+  id: global.anthropic.claude-opus-5-5
   endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
   promptCaching: 5m
   thinking:

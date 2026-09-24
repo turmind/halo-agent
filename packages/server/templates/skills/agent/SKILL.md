@@ -90,8 +90,8 @@ skills:
 **Required:** `model.provider` (must match an id in `~/.halo/global/models/<provider>.yaml`),
 `model.id`, `model.endpoint` — the server rejects sessions missing any of these.
 
-**Model choice:** Sonnet 4.6 is the default workhorse. Opus 5
-(`global.anthropic.claude-opus-5`) when the task visibly needs deeper
+**Model choice:** Sonnet 4.6 is the default workhorse. Opus 5.5
+(`global.anthropic.claude-opus-5-5`) when the task visibly needs deeper
 reasoning (costs more — not the default). Haiku 4.5 for fast, lightweight work.
 
 **Thinking:** `medium` is a good default; `high`/`xhigh` only for deep-reasoning

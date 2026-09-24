@@ -2,7 +2,7 @@ name: Deep Executor
 description: Heavy-lift worker for creation- and reasoning-intensive tasks — long coherent outputs (slide decks, long docs), open-ended design/planning, refactors that need cross-cutting judgment rather than a mechanical spec. Runs the flagship model (Opus by default) — several times the executor's cost; reserve for tasks where the extra reasoning visibly pays, not as a "better executor".
 model:
   provider: aws-bedrock-claude-invoke
-  id: global.anthropic.claude-opus-5
+  id: global.anthropic.claude-opus-5-5
   endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
   promptCaching: 1h
   thinking:
