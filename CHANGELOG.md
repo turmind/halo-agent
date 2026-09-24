@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-09-24
+
+### Added
+
+- Models: new `aws-bedrock-openai` provider — the `bedrock-runtime` host's OpenAI Responses API (`https://bedrock-runtime.<region>.amazonaws.com/openai/v1`, AWS's recommended endpoint for new apps; Mantle stays for server-side `web_search`). Reuses `MantleAgent`; cross-Region `global.*` profile ids only, no region split (all models answer from us-east-1 / us-west-2 / eu-west-1 / ap-northeast-1). Ships GPT-6 Astra / Sol / Luna, GPT-5.6 Sol / Terra / Luna, xAI Grok 4.6 (500K context, effort low/medium/high/xhigh) and Moonshot Kimi K3 (1M context).
+- Models: Claude Opus 5.5 (`global.anthropic.claude-opus-5-5`) on the Bedrock Invoke provider; GPT-6 Sol / Luna on the Mantle provider (default endpoint moves to us-east-1, default model `openai.gpt-6-sol`); MiMo 2.6 Pro / Flash (both vision, 1M context) on the MiMo provider, v2.5 kept until its 2026-10-21 deprecation.
+- Agents: `continue_task` — a built-in no-parameter tool every agent gets; calling it after an interrupt makes the session resume its own turn once the new message is answered, so "continuing…" is followed by actual continuation, and sub-agents no longer report a mid-task answer to their parent as the finished result.
+
+### Fixed
+
+- Agents: an interrupt during a parallel tool_use batch dropped every result that had already finished, so the model re-ran side-effecting work; finished results now land and only the tool the abort hit is marked do-not-retry.
+- Models: `deepseek-flash` now sees images (DeepSeekAgent used to drop image blocks entirely; `deepseek-v4-pro` stays text-only because it accepts the block but can't read it).
+
 ## [1.3.3] - 2026-09-20
 
 ### Fixed
@@ -546,7 +559,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.3...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.4...HEAD
+[1.3.4]: https://github.com/turmind/halo-agent/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/turmind/halo-agent/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/turmind/halo-agent/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/turmind/halo-agent/compare/v1.3.0...v1.3.1
