@@ -1,8 +1,12 @@
 /**
- * MantleAgent — OpenAI models (GPT-5.6) on Amazon Bedrock via the
- * `bedrock-mantle` endpoint, which speaks the **OpenAI Responses API only**.
- * This is the runtime for the `aws-bedrock-mantle` provider (selected in
- * model-runtime.ts; registry template: templates/models/aws-bedrock-mantle.yaml).
+ * MantleAgent — the **OpenAI Responses API** surface of Amazon Bedrock. Two
+ * hosts speak the identical format, so one class serves two providers
+ * (selected in model-runtime.ts):
+ *   - `aws-bedrock-mantle` → bedrock-mantle.<region>.api.aws/openai/v1
+ *     (OpenAI GPT-6 / 5.6; templates/models/aws-bedrock-mantle.yaml)
+ *   - `aws-bedrock-openai` → bedrock-runtime.<region>.amazonaws.com/openai/v1
+ *     (Grok 4.6 / Kimi K3 via `global.*` inference profiles;
+ *     templates/models/aws-bedrock-openai.yaml)
  *
  *   POST <endpoint>/responses
  *   Authorization: Bearer <AWS_BEARER_TOKEN_BEDROCK>
@@ -314,12 +318,13 @@ export class MantleAgent extends AgentLoop {
   }
 }
 
-/** Extract the AWS region from a bedrock-mantle hostname
- *  (bedrock-mantle.<region>.api.aws). Falls back to us-east-2 (the only region
- *  that serves every GPT-5.6 variant). */
+/** Extract the AWS region from either Bedrock OpenAI-surface hostname —
+ *  bedrock-mantle.<region>.api.aws or bedrock-runtime.<region>.amazonaws.com
+ *  (the `aws-bedrock-openai` provider). Falls back to us-east-1 (matches both
+ *  template defaults). */
 function extractRegionFromHost(hostname: string): string {
-  const m = hostname.match(/bedrock-mantle\.([a-z0-9-]+)\.api\.aws/)
-  return m?.[1] ?? 'us-east-2'
+  const m = hostname.match(/^bedrock-(?:mantle|runtime)\.([a-z0-9-]+)\./)
+  return m?.[1] ?? 'us-east-1'
 }
 
 /** Parse tool-call arguments, falling back to `{}` on malformed JSON. */

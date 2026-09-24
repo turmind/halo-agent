@@ -2,8 +2,9 @@
  * DeepSeekAgent — DeepSeek V4 API (OpenAI-compatible chat completions, non-streaming).
  *
  * Endpoint: https://api.deepseek.com/chat/completions
- * Supports: tool calling, thinking (reasoning_content).
- * Does NOT support: vision/image input.
+ * Supports: tool calling, thinking (reasoning_content), vision on
+ * `deepseek-flash` only (image_url data URLs — v4-pro accepts the block but
+ * can't see it; the registry gates that per model).
  * Caching is fully automatic (no explicit parameter needed).
  */
 import { resolveMaxOutputTokens } from '../config.js'
@@ -178,12 +179,24 @@ export class DeepSeekAgent extends AgentLoop {
     return results
   }
 
+  /** Block arrays become OpenAI content parts — text as-is, image blocks as
+   *  `image_url` data URLs (same shape as Kimi). Only `deepseek-flash`
+   *  actually sees images — the registry has `image: false` on v4-pro, so the
+   *  session manager strips them before they reach here for that model. */
   private convertUserContent(content: string | ContentBlock[]): unknown {
     if (typeof content === 'string') return content
-    return content
-      .filter((b) => b.type === 'text')
-      .map((b) => (b as { type: 'text'; text: string }).text)
-      .join('\n')
+    const parts: Array<Record<string, unknown>> = []
+    for (const block of content) {
+      if (block.type === 'text') {
+        parts.push({ type: 'text', text: block.text })
+      } else if (block.type === 'image') {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` },
+        })
+      }
+    }
+    return parts
   }
 
   private convertAssistantMessage(msg: AnthropicMessage): Array<Record<string, unknown>> {

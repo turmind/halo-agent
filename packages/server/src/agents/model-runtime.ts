@@ -152,10 +152,17 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
         maxTokens: cfg.maxTokens,
         thinking: cfg.thinking,
       })
+    // aws-bedrock-openai is the same OpenAI Responses wire format on the
+    // bedrock-runtime host (/openai/v1, cross-Region profile ids only) —
+    // Grok 4.6 / Kimi K3 live there and not (or not everywhere) on Mantle.
+    // See aws-bedrock-openai.yaml.
     case 'aws-bedrock-mantle':
+    case 'aws-bedrock-openai':
       return new MantleAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://bedrock-mantle.us-east-2.api.aws/openai/v1',
+        endpoint: cfg.endpoint ?? (providerId === 'aws-bedrock-openai'
+          ? 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1'
+          : 'https://bedrock-mantle.us-east-1.api.aws/openai/v1'),
         // No bearer token → MantleAgent falls back to SigV4 IAM auth using
         // these creds (or the SDK default chain when also empty).
         apiKey: cfg.apiKey ?? '',

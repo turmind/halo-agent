@@ -12,12 +12,17 @@ secrets:
     default: <<DEEPSEEK_API_KEY>>
     secret: true
 
-# Capabilities verified 2026-05-27 via live probes. DeepSeek's image_url
-# blocks are rejected at the JSON-deserialize layer ("unknown variant
-# image_url"), so image:false is correct. reasoning_effort accepts
-# { low, medium, high, max, xhigh } — bogus values 400 with the full
-# valid list in the error. Caching is automatic; cached_tokens shows up
-# from turn 2.
+# Capabilities verified via live probes (2026-05-27, re-probed 2026-09-24).
+# reasoning_effort accepts { low, medium, high, max, xhigh } — bogus values
+# 400 with the full valid list in the error. Caching is automatic;
+# cached_tokens shows up from turn 2.
+#
+# Vision is per model: `image_url` blocks are no longer rejected at the
+# deserialize layer on either id, but only `deepseek-flash` (V4.1-Flash,
+# native multimodal since 2026-09-10) actually sees the pixels — a 64×64
+# solid-blue PNG came back "Blue" with 230 prompt tokens. `deepseek-v4-pro`
+# accepts the block yet ignores it (24 prompt tokens, reasoning says
+# "unsupported image" and guesses), so image:false stays on pro.
 models:
   - id: deepseek-v4-pro
     displayName: DeepSeek V4 Pro
@@ -50,7 +55,7 @@ models:
     maxOutputTokens: 65536
     contextWindow: 1000000
     capabilities:
-      image: false
+      image: true
       video: false
       audio: false
       promptCaching:

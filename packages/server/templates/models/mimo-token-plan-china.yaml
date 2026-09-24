@@ -4,20 +4,78 @@ displayName_zh: Mimo Token Plan（中国）
 description: Mimo Token Plan — Xiaomi's Anthropic-compatible gateway for MiMo models in China. Supports 1M context window.
 description_zh: Mimo Token Plan — 小米中国区 Anthropic 兼容网关，支持 MiMo 模型，1M 上下文窗口。
 defaultEndpoint: https://token-plan-cn.xiaomimimo.com/anthropic
-defaultModelId: mimo-v2.5
+defaultModelId: mimo-v2.6-pro
 endpointPresets:
   - https://token-plan-cn.xiaomimimo.com/anthropic
 
 secrets:
   - key: api_key
-    description: Mimo Token Plan API Key. Format starts with tp-.
-    description_zh: Mimo Token Plan API Key，tp- 开头
+    description: Mimo Token Plan API Key. Format starts with tp- (individual) or ttp- (team).
+    description_zh: Mimo Token Plan API Key，tp-（个人）或 ttp-（团队）开头
     default: <<MIMO_API_KEY>>
     secret: true
 
+# MiMo V2.6 (2026-09) replaces V2.5: official model list (mimo.mi.com/llms-full.txt)
+# gives `mimo-v2.6-pro` / `mimo-v2.6-flash` 1M context, 128K (131072) max
+# output, full-modal understanding (image input on both — V2.5 only had it on
+# the non-pro tier). `mimo-v2.6-pro-ultraspeed` is "contact us" only, not
+# listed. `mimo-v2.5-pro` / `mimo-v2.5` are deprecated 2026-10-21 10:00 CST —
+# kept at the tail (tagged) so agents still on them keep their registry
+# capabilities until the cutoff; drop both after that date. Thinking shape unchanged from V2.5 — Anthropic-protocol
+# `thinking.type` enabled/disabled, on by default; the docs say effort levels
+# are not differentiated yet, so the adaptive presets below are a UI knob the
+# gateway accepts, not a real intensity dial. Not live-probed (no valid key at
+# hand on 2026-09-24) — specs are from the official docs only.
 models:
+  - id: mimo-v2.6-pro
+    displayName: MiMo v2.6 Pro
+    maxOutputTokens: 131072
+    contextWindow: 1048576
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+
+  - id: mimo-v2.6-flash
+    displayName: MiMo v2.6 Flash
+    maxOutputTokens: 131072
+    contextWindow: 1048576
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+
+  # --- deprecated 2026-10-21 10:00 CST (official notice) — remove after cutoff ---
   - id: mimo-v2.5-pro
-    displayName: MiMo v2.5 Pro
+    displayName: MiMo v2.5 Pro (deprecated 2026-10-21)
     maxOutputTokens: 131072
     contextWindow: 1048576
     capabilities:
@@ -40,7 +98,7 @@ models:
           - { value: max, label: Max }
 
   - id: mimo-v2.5
-    displayName: MiMo v2.5
+    displayName: MiMo v2.5 (deprecated 2026-10-21)
     maxOutputTokens: 131072
     contextWindow: 1048576
     capabilities:

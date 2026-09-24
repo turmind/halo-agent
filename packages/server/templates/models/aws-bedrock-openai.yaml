@@ -1,0 +1,313 @@
+id: aws-bedrock-openai
+displayName: AWS Bedrock OpenAI-compatible (GPT-6 / 5.6 · Grok 4.6 · Kimi K3)
+displayName_zh: AWS Bedrock OpenAI 兼容接口（GPT-6 / 5.6 · Grok 4.6 · Kimi K3）
+description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.6, Moonshot Kimi K3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).
+description_zh: 通过 bedrock-runtime 端点的 OpenAI Responses API（/openai/v1）调用 Bedrock 上的前沿模型——OpenAI GPT-6（Astra / Sol / Luna）与 GPT-5.6（Sol / Terra / Luna）、xAI Grok 4.6、月之暗面 Kimi K3。仅支持跨区域推理 profile（global.*）——每个区域都能调所有模型，无区域分裂。不支持服务端 web_search（那是 Mantle 独有）。
+# Why a second Bedrock/OpenAI provider next to aws-bedrock-mantle: this is the
+# bedrock-runtime host (https://bedrock-runtime.<region>.amazonaws.com/openai/v1),
+# which AWS now recommends for new applications; bedrock-mantle is the legacy
+# compatibility endpoint. Same wire format (OpenAI Responses API), same runtime
+# class (MantleAgent), different rules:
+#   - model ids MUST be cross-Region inference profiles (`global.*` / `us.*`);
+#     the bare foundation-model id 400s with "on-demand throughput isn't
+#     supported". Kimi K3 isn't on Mantle at all; Grok 4.6 is Mantle us-west-2
+#     only — here everything is reachable from any region.
+#   - live-probed 2026-09-24 with SigV4: all eight global.* ids below return
+#     200 in us-east-1 / us-west-2 / eu-west-1 / ap-northeast-1 alike, so the
+#     endpoint is purely a latency / data-residency pick — unlike Mantle's
+#     per-region GPT matrix.
+#   - requests are always synchronous and there are NO server-side tools:
+#     `tools:[{type:'web_search'}]` → 400 "web search is not supported for
+#     this request" (verified). MantleAgent never sends those, but the
+#     web-search skill's deep gear does — it stays on Mantle for that reason.
+defaultEndpoint: https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+endpointPresets:
+  - https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+  - https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1
+  - https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1
+  - https://bedrock-runtime.ap-northeast-1.amazonaws.com/openai/v1
+
+defaultModelId: global.openai.gpt-6-sol
+
+# Auth: same two modes as aws-bedrock-mantle — a Bedrock long-term API key as
+# a Bearer token, or (when empty) SigV4 with the AWS credential chain
+# (service `bedrock`, region parsed from the hostname). The default placeholder
+# reads AWS_BEARER_TOKEN_BEDROCK; leave the env unset and fill the key in
+# Settings to store it in secrets/settings.yaml instead.
+secrets:
+  - key: api_key
+    description: Bedrock long-term API key (sent as a Bearer token). Defaults to the AWS_BEARER_TOKEN_BEDROCK env var; leave empty to use the AWS credential chain (SigV4).
+    description_zh: Bedrock 长期 API Key（作为 Bearer 令牌发送）。默认读取 AWS_BEARER_TOKEN_BEDROCK 环境变量；留空则使用 AWS 凭证链（SigV4）。
+    default: <<AWS_BEARER_TOKEN_BEDROCK>>
+    secret: true
+
+# capability notes (shared with the Mantle template — same Responses surface):
+#   - image: input only, sent as input_image data URLs.
+#   - promptCaching: implicit/automatic, nothing to send. Live-probed 2026-09-24:
+#     a ~6.3K-token prefix repeated 3x → run 1 reports cache_write_tokens and
+#     runs 2-3 report input_tokens_details.cached_tokens ≈ the whole prefix on
+#     GPT, Grok and Kimi alike. TTL isn't disclosed for implicit caching (Kimi
+#     K3's model card gives "at least 30 minutes" for *explicit* checkpoints,
+#     which MantleAgent doesn't send) — the single 5m preset is a form hint only.
+#   - thinking: reasoning.effort. Turning Thinking off in the form omits the
+#     field (model default) — it does not send `none`. Good thing too: on this
+#     host GPT-6 Astra 400s on `none` while every other GPT accepts it.
+#   - Reasoning summaries are never surfaced (output[].reasoning.summary
+#     empty) — same as GPT on Mantle; reasoning_tokens > 0 proves it ran.
+models:
+  # OpenAI GPT-6 / GPT-5.6 — the same six models as aws-bedrock-mantle.yaml
+  # (see that file for the per-model background: 1,050,000 / 128,000 for GPT-6,
+  # 272,000 / 64,000 for 5.6, 2x input price past 272K). Live-probed
+  # 2026-09-24 on this host with invalid-value requests: every one lists
+  # reasoning.effort none/low/medium/high/xhigh/max in its own validation
+  # error and accepts text.verbosity low/medium/high — identical surface, so
+  # presets are copied verbatim. Pick these over the Mantle entries unless you
+  # need Mantle-only features (server-side web_search, background inference).
+  - id: global.openai.gpt-6-sol
+    displayName: GPT-6 Sol
+    maxOutputTokens: 128000
+    contextWindow: 1050000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: global.openai.gpt-6-astra
+    displayName: GPT-6 Astra
+    maxOutputTokens: 128000
+    contextWindow: 1050000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: global.openai.gpt-6-luna
+    displayName: GPT-6 Luna
+    maxOutputTokens: 128000
+    contextWindow: 1050000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: global.openai.gpt-5.6-sol
+    displayName: GPT-5.6 Sol
+    maxOutputTokens: 64000
+    contextWindow: 272000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: global.openai.gpt-5.6-terra
+    displayName: GPT-5.6 Terra
+    maxOutputTokens: 64000
+    contextWindow: 272000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: global.openai.gpt-5.6-luna
+    displayName: GPT-5.6 Luna
+    maxOutputTokens: 64000
+    contextWindow: 272000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  # Grok 4.6 (Bedrock launch 2026-08-18). 500K context per the Bedrock model
+  # card and xAI's model page (input beyond 200K bills at 2x — cap
+  # context.maxTokens in agent.yaml unless that's intended). Max output isn't
+  # disclosed by either (the endpoint accepts any max_output_tokens without
+  # validation) — 64000 is the same conservative carry-over used for GPT-5.6.
+  # Live-probed 2026-09-24: reasoning.effort accepts ONLY low/medium/high/xhigh
+  # (`none` and `max` → 400 "unsupported"), so no Max preset here; verbosity
+  # low/medium/high, image input OK ("blue"), function_call OK. Global CRIS
+  # pricing $2 / $6 per 1M (cache read $0.50).
+  - id: global.xai.grok-4.6
+    displayName: Grok 4.6
+    maxOutputTokens: 64000
+    contextWindow: 500000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  # Kimi K3 (Bedrock launch 2026-09-18, INFERENCE_PROFILE only — no in-Region
+  # id). 1M context per the Bedrock model card; 131072 max output carried over
+  # from the native kimi.yaml (Moonshot's official default cap). Live-probed
+  # 2026-09-24: reasoning.effort accepts none/low/medium/high/xhigh/max (none →
+  # reasoning_tokens 0; the others differ only within noise on short prompts,
+  # so treat the ladder as advisory), text.verbosity low/medium/high, image
+  # input OK (64×64 blue PNG → "Blue"), function_call OK. Global CRIS pricing
+  # $3 / $15 per 1M (cache read $0.30, cache write $3.75). AWS notes images
+  # answer better when placed before text in a mixed input.
+  - id: global.moonshotai.kimi-k3
+    displayName: Kimi K3
+    maxOutputTokens: 131072
+    contextWindow: 1048576
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }

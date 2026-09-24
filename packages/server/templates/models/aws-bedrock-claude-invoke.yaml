@@ -245,6 +245,35 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
 
+  - id: global.anthropic.claude-opus-5-5
+    displayName: Claude Opus 5.5
+    maxOutputTokens: 128000
+    contextWindow: 1000000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        # Opus 5.5 (Bedrock GA 2026-09-22). Live-probed 2026-09-24 on invoke:
+        # invalid-value probe lists low / medium / high / xhigh / max;
+        # max_tokens ceiling 128000; smoke call (xhigh) returned normally.
+        # Model card: 1M context, adaptive thinking always-on (can't be
+        # disabled), image input.
+        mode: adaptive
+        defaultEnabled: true
+        default: high       # flagship — high by default; xhigh/max on demand
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+
   - id: global.anthropic.claude-haiku-4-5-20251001-v1:0
     displayName: Claude Haiku 4.5
     maxOutputTokens: 64000
