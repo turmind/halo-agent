@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Default agent templates (default / goal / deep-executor / evolution internals) moved to Claude Opus 5.5 — prompt caching and thinking effort unchanged; template v61 reseeds existing installs, but an install that already set its own `model:` keeps it. The agent skill's model guidance and the new-skill model-override dropdown follow (the dropdown's old Opus entry, `claude-opus-4-6`, wasn't a registry id at all).
+- Build: `build-bundle.mjs` writes to `packages/cli/dist-pub/` only with `HALO_RELEASE=1`; every other run — including the desktop `dist:*` stage — writes a sha-suffixed bundle to `packages/cli/dist-dev/`. A desktop build used to overwrite the npm release bundle in place, and a second `npm publish` from it put the stray `1.3.4-<sha>` prerelease on npm.
+
 ## [1.3.4] - 2026-09-24
 
 ### Added
