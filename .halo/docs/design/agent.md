@@ -55,7 +55,7 @@ See [prompt-system.md](prompt-system.md).
 2. **`ensureSession`** — any session not in the Map rebuilds on next access; since every run ends in `releaseSession`, this is the normal path for an existing session's next turn
 3. **Access-level change** — `sendUserMessage` with a different `accessLevel` rebuilds in place (messages preserved)
 
-Practical consequence: a yaml edit reaches an existing session on its **next turn**, not at the next restart. The run in flight — including queued messages it drains before releasing — finishes on the old instance; a session loaded into memory by a view path (`getSessionContext`, `/context`, compact) runs one more turn on the config it was loaded with. (`resetAgent` in session-manager.ts would also rebuild, but it has no callers.) User-facing summary: [guide/delegation-and-access.md](../guide/delegation-and-access.md#2-when-a-config-edit-takes-effect).
+Practical consequence: a yaml edit reaches an existing session on its **next turn**, not at the next restart. The run in flight — including queued messages it drains before releasing — finishes on the old instance; a session loaded into memory by a view path (`getSessionContext`, `/context`, compact) runs one more turn on the config it was loaded with. User-facing summary: [guide/delegation-and-access.md](../guide/delegation-and-access.md#2-when-a-config-edit-takes-effect).
 
 ## Session tools
 

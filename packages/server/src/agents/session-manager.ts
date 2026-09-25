@@ -2771,31 +2771,6 @@ export class SessionManager implements SessionManagerInternals {
   }
 
   /**
-   * Reset agent instance (destroy + allow rebuild) without destroying sub-sessions.
-   * Used after compact to rebuild with new context.
-   */
-  async resetAgent(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
-    if (!session) return
-    if (session.abortController) {
-      session.abortController.abort()
-      session.abortController = null
-    }
-    session.toolCallLog = []
-    session.warnedToolHashes.clear()
-    session.interruptRequested = false
-    // Save current messages, then rebuild agent
-    const savedMessages = session.agent.messages
-    const { agent, modelId, systemPrompt, draftReset } = await this.buildAgentInstance(session.agentId, sessionId, session.parentId, session.workingDir ?? undefined, session.accessLevel)
-    session.agent = agent
-    session.agent.messages = savedMessages
-    session.currentModelId = modelId
-    session.systemPrompt = systemPrompt
-    // Agent rebuilt → repoint the draft reset hook at the new tool closure.
-    session.draftReset = draftReset
-  }
-
-  /**
    * Set raw agent messages directly (for compact rebuild).
    */
   setAgentMessages(sessionId: string, messages: AnthropicMessage[]): void {
