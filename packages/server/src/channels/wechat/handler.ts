@@ -105,7 +105,7 @@ export function startWechatChannel(deps: {
           const route = bridge.getRoute(sessionId)
           if (!route) return
           if (!isMediaPathAllowed(filePath, account.workspacePath)) {
-            console.log(`[WeChat] sendMedia blocked: ${filePath} not under workspace`)
+            console.warn(`[WeChat] sendMedia blocked: ${filePath} not under workspace`)
             return
           }
           await sendMediaFile({

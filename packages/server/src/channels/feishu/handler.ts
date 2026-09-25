@@ -295,7 +295,7 @@ export function startFeishuChannel(deps: {
             if (!account || !route) return
             const resolved = path.resolve(filePath)
             if (!isMediaPathAllowed(resolved, account.workspacePath)) {
-              console.log(`[Feishu] sendMedia blocked: ${filePath} not under workspace`)
+              console.warn(`[Feishu] sendMedia blocked: ${filePath} not under workspace`)
               return
             }
             try {

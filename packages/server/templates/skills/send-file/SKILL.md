@@ -13,6 +13,7 @@ Multiple `MEDIA:` lines in one reply = multiple attachments.
 
 - Marker must be alone on a line. No leading spaces, no inline text.
 - Path must be absolute and the file must exist. Verify with `file_list` if unsure.
+- The file must live under the current workspace directory or the OS temp dir (`/tmp` on Linux/macOS). Any other path — including another workspace on the same server — is silently dropped: no attachment arrives and you get no error. Copy the file into the workspace (e.g. `.halo/tmp/`) or `/tmp` first, then reference the copy.
 - Write normal text around `MEDIA:` lines for context.
 
 ## Example

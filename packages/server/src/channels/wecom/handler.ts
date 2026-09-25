@@ -298,7 +298,7 @@ export function startWecomChannel(deps: {
             if (!account || !route || !wsClient) return
             const resolved = path.resolve(filePath)
             if (!isMediaPathAllowed(resolved, account.workspacePath)) {
-              console.log(`[WeCom] sendMedia blocked: ${filePath} not under workspace`)
+              console.warn(`[WeCom] sendMedia blocked: ${filePath} not under workspace`)
               return
             }
             try {

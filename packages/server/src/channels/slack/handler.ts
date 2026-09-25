@@ -247,7 +247,7 @@ export function startSlackChannel(deps: {
             // a compromised agent could exfiltrate arbitrary host paths.
             const resolved = path.resolve(filePath)
             if (!isMediaPathAllowed(resolved, account.workspacePath)) {
-              console.log(`[Slack] sendMedia blocked: ${filePath} not under workspace`)
+              console.warn(`[Slack] sendMedia blocked: ${filePath} not under workspace`)
               return
             }
             try {

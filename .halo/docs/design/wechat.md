@@ -127,7 +127,7 @@ WeChat `sendMessage` is block-send, while LLMs stream. The current strategy is "
 - Every chunk goes through one serialized send chain per responder (`sendTail`, same as Slack / Feishu) so a long reply arrives in order; `close()` returns the drain promise and `InboundBridge` keeps the reply route alive until it settles
 - `error` → immediate flush + send a `[错误] …` message; `system` → immediate flush + send a `[系统] …` message
 - Tool calls / tool results / thinking are dropped (detail lives in the web UI)
-- Media: the agent emits `MEDIA: <path>` markers, which the responder extracts and turns into actual media uploads
+- Media: the agent emits `MEDIA: <path>` markers, which the responder extracts and turns into actual media uploads. The path must be under the account's workspace or the OS temp dir (`/tmp`) — `isMediaPathAllowed`; anything else (e.g. another workspace's files) is dropped with a `[WeChat] sendMedia blocked` warn log and nothing is sent
 
 **The responder never captures its recipient.** Both `sendText` and `sendMedia` read `bridge.getRoute(sessionId)` at send time, so a `{fromUserId, contextToken}` refreshed by a later inbound message takes effect immediately. Closing over `fromUserId` at listener-registration time was the A-M2 bug: after a full-access `/session switch` moved a session to another user, the listener kept replying to the *first* one. `contextToken` (WeChat's passive-reply-window credential) is carried over between messages **only while the user is the same** — a new user's route starts without the old token rather than replaying it against the new recipient. `/session switch` additionally calls `bridge.dropListener(oldSid)` before wiring the target so the abandoned session doesn't keep a live responder.
 

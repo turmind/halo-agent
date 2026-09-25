@@ -153,7 +153,7 @@ export function startTelegramChannel(deps: {
           const route = bridge.getRoute(sessionId)
           if (!route) return
           if (!isMediaPathAllowed(filePath, account.workspacePath)) {
-            console.log(`[Telegram] sendMedia blocked: ${filePath} not under workspace`)
+            console.warn(`[Telegram] sendMedia blocked: ${filePath} not under workspace`)
             return
           }
           const kind = inferMediaKind(filePath)
