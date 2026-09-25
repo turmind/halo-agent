@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Cron: a job can run inside an existing root session instead of its own `cron-<jobId>` — pick one in the admin Cron form (recent root sessions, or type an id), send `sessionId` on `POST`/`PUT /api/cron/jobs`, or pass `--session` to the cron skill. The session keeps its own agent and access level; a fire is skipped (recorded as `skipped`) while a turn is running in that session or another job's run is on it, and a message sent into the session while its run is in flight can lose one of the two turns (logged as a warning, not prevented). `cron.db` gains a nullable `session_id` column (migration v2); template v65.
+- Sandbox: `workspace` / `readonly` sessions now work on macOS. `shell_exec` runs under `/usr/bin/sandbox-exec` with a profile of the same shape as the Linux bwrap mounts. Before this, those levels lost `shell_exec` on a Mac. `/api/health` reports the backend as `sandbox: "bwrap" | "seatbelt" | null`.
+- Chat: an access-level selector (Full / Workspace / Readonly) sits leftmost in the message input toolbar. It applies from the next message and is locked to Full when the host has no sandbox (Windows).
+- Sandbox: `rm` / `rmdir` aimed at `/`, `$HOME`, `~/.halo`, the workspace root, one of their parents or a system directory is refused at every access level, Full included (not on Windows). It is a guard against typos, not a shell parser.
 
 ### Changed
 
@@ -19,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Sandbox: `git commit` works in a `workspace` session. Hidden files such as `~/.gitconfig` used to be covered with `/dev/null`, which reads as a permission error inside bwrap and makes git abort; they now read as empty, and the host git name/email are passed in. File tools outside bwrap follow the same rules as the OS sandbox: read anywhere except the hidden paths, write only to the workspace and `writable_dirs`. A write refused by the sandbox adds a `[Sandbox]` hint to the result, telling the agent to ask the user to switch to Full instead of retrying.
+- Channels: a `MEDIA:` attachment outside the workspace and the temp dir is now logged at warn, so the block shows up in `server.log`. It used to be dropped at info level with no visible trace. The send-file skill states the rule and says to copy the file in first; template v64.
 - Cron form: typing a workspace path no longer creates `.halo/` (plus a `halo.db`) in each real directory passed on the way, e.g. `/home/<user>`. The agent / session lists now load when the field loses focus or on Enter, not on every keystroke, and `GET /api/sessions/logs` / `GET /api/agent-configs` return an empty or global-only list for a path without `.halo/` instead of scaffolding it (or failing with a 500 on a partial path).
 
 ## [1.3.4] - 2026-09-24

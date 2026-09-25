@@ -91,7 +91,7 @@ Provided by `self.html` from line 432 onwards (`const self = {…}`). All expres
 - **Iframe registration:** `packages/admin/src/features/editor/face-bridge.ts` — module-level registry of mounted previews; `postToFace()` forwards payloads via `postMessage`.
 - **Preview component:** `packages/admin/src/features/editor/html-preview.tsx` — sandboxed iframe with `allow-scripts` + `allow-same-origin` and `allow="autoplay"` (so `self.voice` audio, triggered by postMessage rather than a click, isn't gated), calls `registerFaceIframe()` on mount.
 - **Marker stripping:** `packages/admin/src/shared/components/message-list.tsx:TextBlock()` (line 430) — strips both `<<<CAPTURE>>>` and `<<<SHOW:...>>>` before rendering.
-- **Workspace init:** `packages/server/src/init.ts:ensureWorkspaceHalo()` (lines 490–521) — force-copies engine on workspace open. `self` is in `BUILTIN_SKILL_IDS` so the skill is always available.
+- **Workspace init:** `packages/server/src/init.ts:ensureWorkspaceHalo()` — force-copies engine on workspace open. `self` is in `BUILTIN_SKILL_IDS` so the skill is always available.
 
 ## Engine architecture
 

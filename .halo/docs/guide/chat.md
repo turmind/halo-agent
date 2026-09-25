@@ -10,6 +10,16 @@ The dropdown to the left of the input lists every agent (global + workspace).
 - Once you manually pick an agent, that choice is remembered across `clear` / new sessions until you pick something else.
 - **A conversation is locked to one agent**: once you start chatting, the dropdown locks. To change agent, start a new session (`/session new`).
 
+## Access level
+
+The leftmost button of the input toolbar sets what the agent is allowed to change:
+
+- **Full** — no restrictions.
+- **Workspace** — the agent can read anywhere but write only inside this workspace. Credential files such as `~/.gitconfig` and `~/.git-credentials` are hidden from it. `git commit` still works, using your git name and email.
+- **Readonly** — the agent can't write anything.
+
+A change applies from the next message you send, and the level is saved per session. If a command fails because of the level, the agent will ask you to switch to Full instead of retrying. The button is locked to Full when the host can't enforce the other levels (Windows, or Linux without bubblewrap). On macOS the built-in `sandbox-exec` is used.
+
 ## Sending messages
 
 - Enter to send

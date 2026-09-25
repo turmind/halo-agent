@@ -49,6 +49,8 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   └── root/                          # Overrides ~/.halo/global/prompts/root/ if present
 ├── sessions/<agentId>/                # Session files (one per regular session)
 ├── memory/                             # Project memory (dated entries)
+├── canvas/self.html                   # Agent's visual face — platform-owned, force-copied on every open (design/express-self.md)
+├── goal/<goalId>/                     # Goal mode: GOAL_SPEC.md + decision-<n>.md (design/goal-mode.md)
 ├── logs/
 ├── evo/                                # Self-evolution per-workspace artifacts
 │   ├── runs/<id>/                     #   per-evaluation: source-snapshot.json, tool-flow.md,
@@ -57,12 +59,14 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── applies/<id>/                  #   per-apply: meta.json, sandbox/, regress/<runId>/, apply.log
 │   ├── history/apply-<id>/            #   pre-apply rollback snapshot (MANIFEST.json + the overwritten files)
 │   └── archive/                       #   zipped runs/applies past the retention window
-├── tmp/                                 # Agent scratch files (logs, downloads, intermediate artifacts) — convention from TOOL_GUIDELINES, not auto-created
+├── tmp/                                 # Agent scratch files (logs, downloads, intermediate artifacts) — convention from TOOL_GUIDELINES
 ├── assets/<channel>/inbound/<accountId>/<date>/  # Inbound media per channel (image/voice/video/file)
 ├── runtime.lock                       # Workspace runtime ownership marker (pid) — see below
 ├── halo.db                           # Per-workspace sqlite (sessions metadata, command registry, disabled-items)
 └── docs/                               # Project docs (requirements/design/dev/test/plans)
 ```
+
+**When `.halo/` is created.** `ensureWorkspaceHalo()` (`init.ts`) creates `sessions/ agents/ skills/ logs/ memory/ canvas/ tmp/ evo/{runs,applies,history}` and copies in `canvas/self.html`. It runs each time a directory is opened as a workspace: `POST /api/fs/workspace/resolve` (the admin folder picker), channel account binding, `/workspace switch`, and every `SessionManagerRegistry.getOrCreate()` / `getWorkspaceDb()` call. `halo.db` appears the first time the workspace db is opened. `runtime.lock` appears when the server first claims the runtime. Read-only list routes (`GET /api/sessions/logs`, `GET /api/agent-configs`) call `hasWorkspaceHalo()` first. For a directory with no `.halo/` they return an empty or global-only list, so a list request never turns a directory into a workspace. The cron form's path field used to scaffold every real directory the user typed through. Show routes use `registry.peek()` for the same reason (see [halo-city.md](halo-city.md)). Any new read-only route that takes a workspace path should do the same.
 
 Precedence: workspace > global, **at folder granularity**. For the same id, a workspace `agents/<id>/` or `skills/<id>/` folder entirely replaces the global one — every file in it, no per-file fallback to global (a workspace agent folder with only `AGENT.md` loses the global `agent.yaml`). Same whole-folder rule for `prompts/{bootstrap,all,root}/` (workspace scope directory replaces the global one). INSTRUCTIONS.md is the single-file exception: workspace root suppresses global.
 
