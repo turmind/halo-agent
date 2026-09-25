@@ -93,7 +93,7 @@ Agents can manage other sessions via tools. The whole bundle is granted automati
 | `get_session_output` | Read a session's latest turn output |
 | `query_agent` | Inspect another agent (team-gated to the roster) |
 
-See [dev/tools.md](../dev/tools.md).
+A sub-agent runs at its parent's access level. See [delegation-and-access.md](delegation-and-access.md) for team/roster rules, errors, nesting depth and access levels, and [dev/tools.md](../dev/tools.md) for tool schemas.
 
 ## Scenarios
 

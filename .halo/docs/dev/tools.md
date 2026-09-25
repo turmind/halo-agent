@@ -173,7 +173,7 @@ Sensitive directories and files are hidden from workspace/readonly sessions via 
 | `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files | bwrap `--ro-bind ~/.halo/.sandbox-empty` (reads as empty); Seatbelt `literal` deny |
 | `writable_dirs` | (empty) | bwrap `--bind` read-write / Seatbelt write allow — for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions |
 
-Changes take effect immediately — `config.ts` reads settings.yaml via an mtime-watched lazy cache, so the next `shell_exec` reads the latest values. These keys are `globalOnly` in the schema — a workspace `settings.yaml` cannot override them, since they define the security boundary agents run inside.
+Changes saved through the settings API (admin Settings page, `PUT` / `PATCH /api/settings`) take effect immediately — the save fires `onSettingsChange`, which re-reads the lists into `sandbox.ts` (`setSandboxHiddenPaths`), so the next tool call uses them. A hand edit of `settings.yaml` is not watched for these keys: it applies at the next restart or the next API save. These keys are `globalOnly` in the schema — a workspace `settings.yaml` cannot override them, since they define the security boundary agents run inside.
 
 **Workspace-relative set (hardcoded)** — the workspace's own runtime state, which holds other channels'/users' conversations on a shared workspace. Code constants in `sandbox.ts` (`WORKSPACE_HIDDEN_DIRS` / `WORKSPACE_HIDDEN_FILES`), deliberately not settings: this is a security boundary (a config edit must not be able to open it), and the entries are workspace-relative while the settings lists are absolute/`~` paths.
 
@@ -186,10 +186,7 @@ The rest of `.halo/` (INSTRUCTIONS.md, INDEX.md, docs/, memory/, skills/, agents
 
 `/tmp` is not in the hidden list — under bwrap it receives a standalone `--tmpfs` mount for process isolation (each invocation gets its own empty `/tmp`), not for hiding secrets. Seatbelt has no mount namespace, so on macOS `/tmp` is the real one and writes to it persist.
 
-Per-channel defaults:
-- **Web** — inherits account's `access_level` (default `full`)
-- **Telegram** — inherits account's `access_level` (default `readonly`)
-- **WeChat** — inherits account's `access_level` (default `readonly`)
+Per-channel defaults: every channel session (Web, Telegram, Slack, Feishu, WeCom, WeChat) inherits its account's `access_level` — `full` → full, `workspace` → workspace, `readonly` / `observer` → readonly — and new accounts default to `readonly` (DB column default, `insertAccount` fallback and the admin create forms). Level sources for every entry point (admin, cron, cli, relay, goal, sub-agents): [guide/delegation-and-access.md](../guide/delegation-and-access.md#where-a-sessions-level-comes-from).
 
 ### Binary file detection
 `grep` and `glob` read the first 512 bytes looking for a null byte and skip binaries.

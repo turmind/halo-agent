@@ -49,14 +49,13 @@ See [prompt-system.md](prompt-system.md).
 
 ### When agent.yaml changes take effect
 
-`agent.yaml` is read **only at agent-instance build time** — a running session keeps its in-memory `ModelRuntime` across turns and never re-reads the yaml per turn. Rebuild (and thus config pickup) happens at exactly four points in `SessionManager`:
+`agent.yaml` (and AGENT.md, INSTRUCTIONS, USER.md, prompts, skill metadata) is read **only at agent-instance build time** — nothing re-reads it mid-turn. But an instance doesn't outlive its run: `runSession`'s finally calls `releaseSession` on every run end, dropping the session from the in-memory Map, so the next message goes through `ensureSession` and rebuilds from the current files. Build points in `SessionManager`:
 
-1. **`createSession`** — every new session builds fresh, so yaml edits affect new sessions immediately
-2. **`ensureSession`** — a session not in the in-memory Map (server restart, eviction) rebuilds on next access
+1. **`createSession`** — every new session (sub-agents included) builds fresh
+2. **`ensureSession`** — any session not in the Map rebuilds on next access; since every run ends in `releaseSession`, this is the normal path for an existing session's next turn
 3. **Access-level change** — `sendUserMessage` with a different `accessLevel` rebuilds in place (messages preserved)
-4. **`resetAgent`** — post-compact rebuild (messages preserved)
 
-Practical consequence: you can edit `agent.yaml` (e.g. swap `model.id`), start a session, then revert the edit — the running session keeps the swapped model for its whole lifetime **unless** it hits trigger 2–4, at which point it silently picks up the reverted config. Compact (trigger 4) is the one that fires unprompted on long sessions.
+Practical consequence: a yaml edit reaches an existing session on its **next turn**, not at the next restart. The run in flight — including queued messages it drains before releasing — finishes on the old instance; a session loaded into memory by a view path (`getSessionContext`, `/context`, compact) runs one more turn on the config it was loaded with. (`resetAgent` in session-manager.ts would also rebuild, but it has no callers.) User-facing summary: [guide/delegation-and-access.md](../guide/delegation-and-access.md#2-when-a-config-edit-takes-effect).
 
 ## Session tools
 

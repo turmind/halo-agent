@@ -10,6 +10,7 @@ Aimed at Halo end-users. Pick the doc that matches your situation.
 4. [agents.md](agents.md) — creating, editing, configuring agents
 5. [skills.md](skills.md) — skill concepts, creating skills, attaching them to agents
 6. [sessions.md](sessions.md) — viewing session history, debug mode, multi-agent collaboration
+7. [delegation-and-access.md](delegation-and-access.md) — runtime rules: scope override, when edits take effect, team/roster, access levels
 
 ## Channels — talk to your agent from somewhere other than the admin UI
 

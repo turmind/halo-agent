@@ -81,6 +81,8 @@ team:                 # a non-empty team is what enables delegation
 
 Form view lets you check workspace tools on/off and pick the team; there's no separate session-tools checklist — delegation rides entirely on the team.
 
+Roster rules, `start_session` checks and errors, access-level inheritance, and when an edit takes effect: [delegation-and-access.md](delegation-and-access.md).
+
 ## Skill mounting
 
 `skills: [skill_id_1, skill_id_2]` — Halo injects skill metadata into the prompt, and the agent calls `activate_skill` to load the full SKILL.md when needed.

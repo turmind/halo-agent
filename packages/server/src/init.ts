@@ -56,7 +56,7 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 65
+export const TEMPLATE_VERSION = 66
 const VERSION_FILE = '.template-version'
 
 /** Read the seed version stamped into `~/.halo/global/.template-version`.
@@ -132,6 +132,7 @@ const BUNDLED_DOCS = [
   'guide/skills.md',
   'guide/testing-agents-and-skills.md',
   'guide/secrets-and-credentials.md',
+  'guide/delegation-and-access.md',
   'dev/tools.md',
   'dev/add-model-provider.md',
   'dev/add-channel.md',

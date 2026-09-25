@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Docs: new bundled guide `guide/delegation-and-access.md` — scope override, when config edits take effect, team / roster / `start_session` checks and errors, nesting depth, access levels and where each entry point's level comes from, relay. The halo skill points to it; template v66.
+
 ## [1.4.0] - 2026-09-25
 
 ### Added

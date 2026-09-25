@@ -69,7 +69,7 @@ Bundled docs: `~/.halo/global/docs/`. These reflect the installed Halo version; 
 
 What's bundled (and what's not):
 
-- `guide/` — end-user guides (8 files, see table below)
+- `guide/` — end-user guides (9 files, see table below)
 - `dev/` — developer-facing topics (3 files: tools, add-model-provider, add-channel)
 - `requirements/` — product requirements (2 files: settings, command)
 - `design/`, `plans/`, `test/` — **not bundled** (live in the source repo only). Cross-links from bundled docs into these paths will 404; answer from the doc body, not the link.
@@ -82,6 +82,7 @@ What's bundled (and what's not):
 | Where do I see past conversations? | `guide/sessions.md` |
 | Create / edit / delete an agent? AGENT.md vs agent.yaml? Global vs workspace? Thinking / prompt caching? | `guide/agents.md` |
 | What tools can an agent use? How do I add one? | `dev/tools.md` |
+| Workspace vs global override? When does an agent.yaml / AGENT.md edit take effect? `team` / roster / `start_session` errors? Nesting depth? Which access level does a session / sub-agent / channel / cron / relay run at? | `guide/delegation-and-access.md` |
 | What is a skill? How do I create / test one? | `guide/skills.md` + `guide/testing-agents-and-skills.md` |
 | How do I test the agent I just made? | `guide/testing-agents-and-skills.md` |
 | Slash commands (how they work, registering) | `guide/skills.md` (skill-as-command) + `requirements/command.md` |
