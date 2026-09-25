@@ -124,9 +124,9 @@ settings.yaml only (no env override):
 - `general.compact.max_message_slice` (default 800) — local compaction per-message cap
 - `general.compact.summarize_timeout_sec` (default 300) — self-compact timeout
 - `general.server.trust_proxy` (default `false`) — trust `x-forwarded-for` for client IP resolution, scope: global (enable only behind a reverse proxy you control)
-- `general.sandbox.hidden_dirs` (default `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs`) — bwrap tmpfs overlays, scope: global
-- `general.sandbox.writable_dirs` (default empty) — dirs bind-mounted read-write inside the bwrap sandbox, for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions, scope: global
-- `general.sandbox.hidden_files` (default `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files) — bwrap /dev/null binds, scope: global
+- `general.sandbox.hidden_dirs` (default `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs`) — hidden from workspace/readonly sessions (bwrap tmpfs overlays on Linux, Seatbelt deny on macOS), scope: global
+- `general.sandbox.writable_dirs` (default empty) — dirs writable inside the sandbox besides the workspace (Linux / macOS), for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions, scope: global
+- `general.sandbox.hidden_files` (default `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files) — hidden from workspace/readonly sessions, read as empty files (bwrap bind of `~/.halo/.sandbox-empty` on Linux, Seatbelt deny on macOS), scope: global
 - `general.logging.level` (default `warn`) — log level: debug | info | warn | error
 - `general.observability.endpoint` (default `''`) — OTLP collector base URL (e.g. `http://localhost:4318`); empty = off, scope: global, restart required. See [design/observability.md](../design/observability.md)
 - `general.observability.service_name` (default `halo`) — OTel resource `service.name`, scope: global, restart required
@@ -180,4 +180,4 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:9527
 - React functional components; styling via Tailwind only; UI prefers shadcn/ui
 - Log format `[Module] message`
 - Bedrock model ID: `global.anthropic.claude-sonnet-4-6`, default region `us-east-1` (configured per agent via `agent.yaml model.endpoint`)
-- File operations are sandboxed by bwrap (OS-level) + `assertPathAllowed` (app-level fallback) for non-full sessions
+- File operations are sandboxed for non-full sessions by the OS sandbox (bwrap on Linux; Seatbelt for `shell_exec` on macOS) + `assertPathAllowed` (in-process file tools); `shell_exec` also runs an rm guard at every level — see [tools.md](tools.md#access-level-per-session-dynamic)

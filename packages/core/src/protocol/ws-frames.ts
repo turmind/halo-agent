@@ -34,6 +34,10 @@ export interface WsClientMessage {
    *  the on-disk count, i.e. the ordinal was computed over a stale log start. */
   archiveCount?: number
   images?: Array<{ data: string; mimeType: string }>
+  /** chat — access level picked in the admin input box. Applied only when
+   *  the session is idle (a queued message runs at the level already set);
+   *  forced to 'full' when the host has no OS sandbox. */
+  accessLevel?: 'full' | 'workspace' | 'readonly'
   agentName?: string
   agentId?: string
   config?: { systemPrompt?: string; model?: string }
@@ -71,6 +75,9 @@ export interface WsStateSnapshot {
   /** Archived-segment count at snapshot time — only the subscribe / reattach
    *  snapshots carry it; per-turn snapshots omit it. */
   archiveCount?: number
+  /** The session's current access level (null/absent = full) — seeds the
+   *  admin's selector on subscribe / reattach / new-session. */
+  accessLevel?: 'full' | 'workspace' | 'readonly' | null
 }
 
 /** Per-call usage attached to a root-scope `chat:usage` (event-processor only;

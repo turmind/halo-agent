@@ -279,6 +279,12 @@ interface ChatStore {
    *  disabled — the composer blocks sending since nothing can answer. -1 = not
    *  yet loaded, treated as "allow" so we never block on first paint. */
   usableAgentCount: number
+  /** Access level the next message runs at (input-box selector). Seeded
+   *  from the session's snapshot; reset to full on clear (new session). */
+  accessLevel: 'full' | 'workspace' | 'readonly'
+  /** Host has an OS sandbox (/api/health `sandbox`). false → selector is
+   *  locked to full. null = not yet known. */
+  sandboxAvailable: boolean | null
   /** Bound source for the "let the AI see something" capture feature — either a
    *  shared screen/window (`kind:'screen'`, grabbed via desktopCapturer) or the
    *  webcam (`kind:'camera'`, grabbed via getUserMedia). Desktop-only, in-memory
@@ -301,6 +307,8 @@ interface ChatStore {
   setCompacting(v: boolean): void
   setSelectedAgentId(id: string): void
   setUsableAgentCount(n: number): void
+  setAccessLevel(level: 'full' | 'workspace' | 'readonly'): void
+  setSandboxAvailable(v: boolean): void
   setCaptureSource(source: { id: string; name: string; thumb: string; kind: 'screen' | 'camera' } | null): void
   addPendingMessage(text: string): void
   removePendingMessage(index: number): void
@@ -331,6 +339,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isCompacting: false,
   selectedAgentId: 'default',
   usableAgentCount: -1,
+  accessLevel: 'full',
+  sandboxAvailable: null,
   captureSource: null,
 
   addMessage(msg) {
@@ -579,6 +589,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ usableAgentCount: n })
   },
 
+  setAccessLevel(level) {
+    set({ accessLevel: level })
+  },
+
+  setSandboxAvailable(v) {
+    set({ sandboxAvailable: v })
+  },
+
   setCaptureSource(source) {
     set({ captureSource: source })
   },
@@ -653,6 +671,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // as the first usage event lands — the "ring only shows after I switch
     // sessions" bug.
     rebuildMessageIndexes([])
-    set({ messages: [], isStreaming: false, pendingMessages: [], sessionId: null, contextTokens: 0, outputTokens: 0 })
+    set({ messages: [], isStreaming: false, pendingMessages: [], sessionId: null, contextTokens: 0, outputTokens: 0, accessLevel: 'full' })
   },
 }))

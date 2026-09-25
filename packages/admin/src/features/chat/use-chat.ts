@@ -188,13 +188,14 @@ export function useChat() {
       }
 
       // Send via WebSocket with context-enriched message + images
-      const agentId = useChatStore.getState().selectedAgentId
+      const { selectedAgentId: agentId, accessLevel } = useChatStore.getState()
       wsClient.send({
         type: 'chat',
         sessionId: currentSessionId,
         projectId: activeProject.id,
         message: fullMessage,
         clientMsgId,
+        accessLevel,
         ...(agentId !== 'default' ? { agentId } : {}),
         ...(images?.length ? { images } : {}),
       })

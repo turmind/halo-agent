@@ -23,6 +23,11 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
       if (snapshot.agentId) {
         useChatStore.getState().setSelectedAgentId(snapshot.agentId)
       }
+      // Only snapshots tied to an existing session carry the field; absent
+      // (e.g. the pre-session connect snapshot) leaves the selector alone.
+      if (snapshot.accessLevel !== undefined) {
+        useChatStore.getState().setAccessLevel(snapshot.accessLevel ?? 'full')
+      }
       // Don't clobber an in-flight streaming turn with a server snapshot.
       // The server emits `state:snapshot` on every WS subscribe — including
       // the auto-reconnect that fires when the connection looks stale (see

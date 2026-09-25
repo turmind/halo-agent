@@ -11,6 +11,14 @@ The primary surface for talking to an agent.
 - **Locked during an active session** — the agent is bound to the session; to change, start a new session (/session new)
 - The Agents panel's "Test" button can also preselect an agent
 
+### Access level
+- Leftmost control of the input toolbar (just left of the attach button), fixed width so switching doesn't shift the row; colored badge per level — Full (amber) / Workspace (blue) / Readonly (emerald). The dropdown shows each level with a one-line description
+- **Full** — no restrictions; **Workspace** — writes limited to this workspace; **Readonly** — read only, no writes (OS-sandbox semantics in [dev/tools.md](../dev/tools.md#access-level-per-session-dynamic))
+- Applies to the **next message** sent while the session is idle; disabled while a response is streaming (a message queued mid-turn runs at the level already in effect)
+- Opening an existing session shows its stored level; a new session starts at Full, and a level picked before the first send sticks
+- **Locked to Full** when the host has no OS sandbox (`/api/health` `sandbox: null` — e.g. Windows, or Linux without bubblewrap); the tooltip says why
+- When a command fails because of the sandbox, the agent is told to ask the user to switch to Full here rather than retrying
+
 ### Message rendering
 - Markdown + code-block highlighting
 - Tool-call card: expandable, shows tool name / input / output

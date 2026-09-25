@@ -235,6 +235,14 @@ export const zh: Record<string, string> = {
   'chat.archive.loading': '正在加载更早的消息……',
   'chat.archive.noEarlier': '没有更早的消息',
   'chat.archive.header': '已归档 · {segments} 段 · {messages} 条消息',
+  'chat.access.full': '完全',
+  'chat.access.workspace': '工作区',
+  'chat.access.readonly': '只读',
+  'chat.access.fullDesc': '不受限制',
+  'chat.access.workspaceDesc': '只能写当前工作区',
+  'chat.access.readonlyDesc': '只读，不能写',
+  'chat.access.title': '下一条消息的访问级别',
+  'chat.access.noSandbox': '本机没有可用的系统沙箱（bubblewrap / sandbox-exec），只能用完全档',
 
   // ── Goal mode ──
   'goal.banner.intake': '🎯 目标模式 · 契约制定中——正在和你确认目标',

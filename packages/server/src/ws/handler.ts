@@ -9,7 +9,8 @@
 import path from 'node:path'
 import type { WebSocket, WebSocketServer } from 'ws'
 import type { WsClientMessage, WsServerMessage } from '@turmind/halo-core/protocol'
-import { SessionManager } from '../agents/session-manager.js'
+import { SessionManager, type SessionInfo } from '../agents/session-manager.js'
+import { getSandboxBackend } from '../tools/sandbox.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { AgentSessionEvent } from '../agents/agent-events.js'
 import type { UIState } from '../sessions/ui-log-builder.js'
@@ -758,7 +759,13 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       ackChat(msg)
       console.debug(`[WS] Chat: session=${msg.sessionId}, project=${msg.projectId}, agent=${msg.agentId ?? client.agentId}`)
 
-      sm.sendUserMessage(sid, msg.message, msg.images).catch((err) => {
+      // Access level from the input-box selector ('full' → null, the column's
+      // full value). Idle path only: a queued message runs at the level the
+      // in-flight turn was built with. No OS sandbox on this host → full.
+      const accessLevel = msg.accessLevel === undefined
+        ? undefined
+        : msg.accessLevel === 'full' || getSandboxBackend() === null ? null : msg.accessLevel
+      sm.sendUserMessage(sid, msg.message, msg.images, accessLevel).catch((err) => {
         console.debug(`[WS] Chat error: ${err instanceof Error ? err.message : String(err)}`)
         sendJson(ws, { type: 'error', error: err instanceof Error ? err.message : String(err) })
         saveSession(client)
@@ -838,7 +845,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         // snapshot, or a client that applies it renders the turn twice.
         const messages = state ? (running ? [...state.messageLog] : [...createSaveSnapshot(state)]) : []
         const detachedSession = client.sessionManager.getSessionById(client.sessionId)
-        sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: msg.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId, archiveCount: archiveCountFor(client, client.sessionId, detachedSession?.agentId) } })
+        sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: msg.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId, archiveCount: archiveCountFor(client, client.sessionId, detachedSession?.agentId), accessLevel: detachedSession?.accessLevel ?? null } })
         if (state && state.contextTokens > 0) {
           sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens })
         }
@@ -889,12 +896,16 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       }
 
       let agentId: string | undefined
+      // Stays undefined (omitted from the snapshot) for the pre-session
+      // subscribe, so a level picked before the first send isn't reset.
+      let accessLevel: SessionInfo['accessLevel'] | undefined
       if (msg.sessionId && client.sessionManager) {
         const existingSession = client.sessionManager.getSessionById(msg.sessionId)
         if (existingSession) {
           client.sessionId = msg.sessionId
           client.unsubscribeEvents = client.sessionManager.registerEventListener(msg.sessionId, createEventListener(client))
           agentId = existingSession.agentId
+          accessLevel = existingSession.accessLevel ?? null
         }
       }
 
@@ -908,7 +919,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
       const state = getState(client)
       const messages = state ? [...createSaveSnapshot(state)] : []
-      sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: msg.sessionId, maxContextTokens, agentId, archiveCount: msg.sessionId ? archiveCountFor(client, msg.sessionId, agentId) : 0 } })
+      sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: msg.sessionId, maxContextTokens, agentId, archiveCount: msg.sessionId ? archiveCountFor(client, msg.sessionId, agentId) : 0, accessLevel } })
       if (state && state.contextTokens > 0) {
         sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens })
       }

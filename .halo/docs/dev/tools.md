@@ -112,24 +112,46 @@ Timeout 10 s. Max body 50 KB (truncated if larger). Returns status + content-typ
 
 ### Access level (per-session, dynamic)
 
-Each session carries `accessLevel: 'readonly' | 'workspace' | null` (persisted in `agent_sessions.access_level`). Sub-sessions inherit their parent's access level. Access level is re-evaluated on every user message — if the channel account's access level has changed, the agent instance is rebuilt with the new tool set and sandbox config.
+Each session carries `accessLevel: 'readonly' | 'workspace' | null` (persisted in `agent_sessions.access_level`). Sub-sessions inherit their parent's access level. Access level is re-evaluated on every user message — if the channel account's access level has changed, the agent instance is rebuilt with the new tool set and sandbox config. In the admin, the level comes from the chat-input selector: the `chat` WS frame carries `accessLevel`, and `handleChat` applies it on the idle path (`'full'`, or any level on a host without an OS sandbox → `null`; a message queued behind a running turn keeps the level that turn was built with).
 
-| Level | DB value | Tools (with bwrap) | Tools (without bwrap) | Sandbox |
+| Level | DB value | Tools (with OS sandbox) | Tools (without) | Sandbox |
 |---|---|---|---|---|
-| `null` (full) | `full` | All 9 tools | All 9 tools | None |
-| `workspace` | `workspace` | All 9 tools | All 9 tools | bwrap: workspace rw, sensitive paths + workspace runtime state hidden |
-| `readonly` | `readonly` | All 9 tools | file_read, view_image, file_list, grep, glob (5 tools) | bwrap: workspace ro, sensitive paths + workspace runtime state hidden |
+| `null` (full) | `full` | All 9 tools | All 9 tools | None (rm guard still applies) |
+| `workspace` | `workspace` | All 9 tools | All 9 tools | workspace rw, sensitive paths + workspace runtime state hidden |
+| `readonly` | `readonly` | All 9 tools | file_read, view_image, file_list, grep, glob (5 tools) | workspace ro, sensitive paths + workspace runtime state hidden |
 
 `view_image` is additionally gated on `capabilities.image` (see its section above). Models without vision support get the same lists minus `view_image` — so a non-vision model on `readonly` ends up with 4 tools, not 5.
 
+OS sandbox backend per platform — `getSandboxBackend()` in `sandbox.ts` returns `'bwrap' | 'seatbelt' | null` after the boot probe (`initBwrapCheck()`), logged at startup as `[Server] OS sandbox: …` and exposed as `sandbox` on `GET /api/health`:
+
+| Platform | `shell_exec` | File tools | Dependency |
+|---|---|---|---|
+| Linux | bwrap | bwrap | `bubblewrap` (`apt install bubblewrap`); the probe runs a real sandboxed no-op, so an install that can't create namespaces (Ubuntu 24.04 AppArmor userns restriction) counts as unavailable |
+| macOS | Seatbelt (`/usr/bin/sandbox-exec -p <profile>`) | in-process, behind `assertPathAllowed` | none — ships with macOS (Apple marks it deprecated, but it's present on every release). The probe runs `sandbox-exec -p '(version 1)(allow default)' /usr/bin/true` |
+| Windows | none | none | — see below |
+
 Enforcement layers:
-1. **OS sandbox (bwrap)**: `--ro-bind / /` mounts the entire filesystem read-only, then configurable overlays hide sensitive paths (`--tmpfs` for directories, `--ro-bind /dev/null` for files). Workspace level adds `--bind` (rw) for the workspace directory. `--tmpfs /tmp` provides isolated writable temp per invocation. Tool execution uses `execFileAsync` (not shell) to prevent escape. Error messages are sanitized to strip sandbox internals — the agent never sees bwrap flags or mount details.
-2. **Tool filtering (bwrap fallback only)**: when bwrap is unavailable, `createWorkspaceTools()` returns a reduced 5-tool set for readonly (no file_write, file_edit, shell_exec, web_fetch). Workspace retains all tools.
-3. **App-level path validation (bwrap fallback only)**: `assertPathAllowed()` validates every path against workspace + `~/.halo/global/`; `shell_exec` is blocked entirely without bwrap for non-full sessions.
+1. **OS sandbox**
+   - **bwrap (Linux)**: `--ro-bind / /` mounts the entire filesystem read-only, then configurable overlays hide sensitive paths (`--tmpfs` for directories; files are covered by `--ro-bind ~/.halo/.sandbox-empty <file>`, a zero-byte file created on demand — **not** `/dev/null`, whose bind reads as EACCES inside bwrap and makes git abort on `~/.gitconfig`). Workspace level adds `--bind` (rw) for the workspace directory. `--tmpfs /tmp` provides isolated writable temp per invocation. `--clearenv` + a minimal `PATH` / `HOME` / `TERM`.
+   - **Seatbelt (macOS)**: `buildSeatbeltProfile()` emits `(allow default)` → `(deny file-write*)` → `(allow file-write*)` for the workspace + `writable_dirs` + `/private/tmp`, `/private/var/folders`, `/dev` (readonly: temp dirs and `/dev` only) → `(deny file-read* file-write*)` on every hidden path (global lists + workspace-relative set; `subpath` for dirs, `literal` for files). Later rules win in SBPL, so the final hidden deny overrides the write allow. Paths are realpath'd (Seatbelt matches `/private/tmp`, not `/tmp`). The child gets a minimal env with `GIT_CONFIG_GLOBAL=/dev/null` and `NPM_CONFIG_USERCONFIG=/dev/null` so git / npm don't trip over the denied `~/.gitconfig` / `~/.npmrc`. Unlike bwrap there's no private `/tmp` — writes there persist.
+   - Both backends pass the host git identity (`git config --global user.name/user.email`, read once at boot) as `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, so `git commit` works with `~/.gitconfig` hidden. Nothing else from the host git config crosses over.
+   - Tool execution uses `execFileAsync` / `spawn` (not shell) to prevent escape. Error messages are sanitized to strip sandbox internals — the agent never sees bwrap flags or mount details.
+   - When a non-full `shell_exec` fails with a write-denial (`Read-only file system` / `Operation not permitted` / `Permission denied` / `EROFS` / `EPERM`), the tool result gets a `[Sandbox] This session runs at "<level>" access: …` hint telling the agent to ask the user to switch to Full in the chat input box, rather than retrying variations.
+2. **Tool filtering (no OS sandbox only)**: when `getSandboxBackend()` is `null`, `createWorkspaceTools()` returns a reduced 5-tool set for readonly (no file_write, file_edit, shell_exec, web_fetch). Workspace retains all tools.
+3. **In-process path validation**: `assertPathAllowed()` gates every file-tool path whenever the file tools don't run inside bwrap (macOS always; Linux without bwrap). Same rules as the OS sandbox: **read** anywhere except the hidden sets (global + workspace-relative), **write** only to the workspace (minus the hidden set) and `writable_dirs`, readonly never writes. Paths are realpath'd first, so a symlink is judged by its target. Without any OS sandbox, `shell_exec` is blocked entirely for non-full sessions.
 
-Dependency: `bubblewrap` (`apt install bubblewrap`) on Linux. Without it, only layers 2 + 3 are active.
+On Linux without bwrap only layers 2 + 3 are active.
 
-**Windows has no sandbox.** There is no bwrap equivalent, so `sandbox.ts` (`normalizeOptsForPlatform`) promotes every non-full call to `full` before it reaches layer 1 or layer 3 — `assertPathAllowed()` returns immediately without checking the workspace boundary or the hidden-path lists. Only layer 2 (tool filtering) survives, because `isBwrapCached()` is always false there. Net effect on Windows:
+#### rm guard
+
+`assertRmSafe(command, workspaceRoot)` runs before every `shell_exec` at **every** access level (full included) on every platform except Windows — the OS sandbox limits where writes land, but not a mistyped `rm -r` inside the writable area. It refuses an `rm` / `rmdir` whose target resolves to:
+- `/`, `$HOME`, `~/.halo`, the workspace root, or any parent of those
+- a system directory or its direct child (`/etc`, `/usr`, `/var`, `/home`, `/opt`, … plus macOS `/Applications`, `/Library`, `/System`, `/Users`, `/Volumes`, `/private`)
+- `/tmp`, `/private/tmp`, `/root` themselves (their children are ordinary deletes — `/root` is `$HOME` in most containers)
+
+Parsing: the command is split into simple commands on unquoted `;` `&` `|` newline, quotes stripped, heredoc bodies skipped (they're data being written, not commands). Leading wrappers / keywords (`sudo`, `env`, `xargs`, `nohup`, `time`, `if`/`then`/`do`/`while`, `VAR=…` assignments) are skipped to find the real command; `cd` earlier in the line moves the base for relative targets (default base = workspace root). `~`, `$HOME`, `$PWD` / `$(pwd)` expand; any other variable or substitution expands to empty — its value when unset, which is how `rm -rf "$DIR/"` goes wrong. A glob meaning "everything in X" (`*`, `.*`, `**`) is judged by X; narrower globs (`*.log`) pass. A block throws `[Sandbox] rm blocked: "<word>" resolves to <path>, which is <reason>. Name the specific files or subdirectories to delete instead.` It's a heuristic against mistakes, not a parser — `eval`, `bash -c "…"`, scripts and command substitution aren't followed.
+
+**Windows has no sandbox.** There is no bwrap / Seatbelt equivalent, so `sandbox.ts` (`normalizeOptsForPlatform`) promotes every non-full call to `full` before it reaches layer 1 or layer 3 — `assertPathAllowed()` returns immediately without checking the workspace boundary or the hidden-path lists, and the rm guard is skipped (cmd syntax, no `rm`). Only layer 2 (tool filtering) survives, because `getSandboxBackend()` is always `null` there. The admin's access-level selector reads `sandbox: null` from `/api/health` and locks itself to Full. Net effect on Windows:
 
 | Level | Effective behavior on Windows |
 |---|---|
@@ -141,15 +163,15 @@ This is a known, unfixed gap (not a bug in a specific route): don't hand out `wo
 
 ### Sandbox hidden paths
 
-Sensitive directories and files are hidden from workspace/readonly sessions via bwrap overlays (and the same lists gate `assertPathAllowed` on the no-bwrap fallback). Paths that don't exist on the filesystem are silently skipped. Two categories coexist:
+Sensitive directories and files are hidden from workspace/readonly sessions via bwrap overlays / Seatbelt deny rules (and the same lists gate `assertPathAllowed` for in-process file tools). Under bwrap a hidden file reads as empty and a hidden dir as an empty directory; under Seatbelt both are denied outright. Paths that don't exist on the filesystem are silently skipped. Two categories coexist:
 
 **Global lists (configurable)** — credentials and cross-workspace state, configured in `settings.yaml` under `general.sandbox`:
 
 | Setting | Default | Method |
 |---|---|---|
-| `hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs` | `--tmpfs` overlay (empty directory) |
-| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files | `--ro-bind /dev/null` (empty file) |
-| `writable_dirs` | (empty) | `--bind` read-write — for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions |
+| `hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs` | bwrap `--tmpfs` overlay (empty directory); Seatbelt `subpath` deny |
+| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files | bwrap `--ro-bind ~/.halo/.sandbox-empty` (reads as empty); Seatbelt `literal` deny |
+| `writable_dirs` | (empty) | bwrap `--bind` read-write / Seatbelt write allow — for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions |
 
 Changes take effect immediately — `config.ts` reads settings.yaml via an mtime-watched lazy cache, so the next `shell_exec` reads the latest values. These keys are `globalOnly` in the schema — a workspace `settings.yaml` cannot override them, since they define the security boundary agents run inside.
 
@@ -157,12 +179,12 @@ Changes take effect immediately — `config.ts` reads settings.yaml via an mtime
 
 | Constant | Entries | Method |
 |---|---|---|
-| `WORKSPACE_HIDDEN_DIRS` | `.halo/sessions` (session transcripts), `.halo/logs`, `.halo/evo` (run dirs contain full source-session snapshots) | `--tmpfs` overlay |
-| `WORKSPACE_HIDDEN_FILES` | `.halo/halo.db` + `-wal`/`-shm` (sqlite `agent_sessions` rows) | `--ro-bind /dev/null` |
+| `WORKSPACE_HIDDEN_DIRS` | `.halo/sessions` (session transcripts), `.halo/logs`, `.halo/evo` (run dirs contain full source-session snapshots) | `--tmpfs` overlay / Seatbelt `subpath` deny |
+| `WORKSPACE_HIDDEN_FILES` | `.halo/halo.db` + `-wal`/`-shm` (sqlite `agent_sessions` rows) | `--ro-bind ~/.halo/.sandbox-empty` / Seatbelt `literal` deny |
 
 The rest of `.halo/` (INSTRUCTIONS.md, INDEX.md, docs/, memory/, skills/, agents/, prompts/, tmp/, canvas/, goal/, settings.yaml) stays readable — it's workspace knowledge agents need to work. `full` sessions bypass the sandbox entirely and see everything.
 
-`/tmp` is not in the hidden list — it receives a standalone `--tmpfs` mount for process isolation (each bwrap invocation gets its own empty `/tmp`), not for hiding secrets.
+`/tmp` is not in the hidden list — under bwrap it receives a standalone `--tmpfs` mount for process isolation (each invocation gets its own empty `/tmp`), not for hiding secrets. Seatbelt has no mount namespace, so on macOS `/tmp` is the real one and writes to it persist.
 
 Per-channel defaults:
 - **Web** — inherits account's `access_level` (default `full`)

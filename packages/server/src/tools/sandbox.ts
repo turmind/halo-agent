@@ -1,13 +1,15 @@
 /**
- * OS-level sandbox for tool execution.
+ * OS-level sandbox for tool execution (workspace write isolation).
  * Linux: bubblewrap (bwrap) — filesystem + env isolation.
- * Other platforms: no-op passthrough (app-level validation is the fallback).
+ * macOS: Seatbelt (`sandbox-exec -p <profile>`) for shell_exec; file tools
+ *   run in-process behind assertPathAllowed.
+ * Windows: every level is promoted to full (normalizeOptsForPlatform).
  */
 import { exec, execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { cleanChildEnv } from '../child-env.js'
 
 const execAsync = promisify(exec)
@@ -15,7 +17,6 @@ const execFileAsync = promisify(execFile)
 
 const HOME = homedir()
 const HALO_HOME = path.join(HOME, '.halo')
-const GLOBAL_DIR = path.join(HALO_HOME, 'global')
 
 /**
  * Decode Windows console output bytes. cmd built-ins (echo) honor `chcp 65001`
@@ -91,12 +92,17 @@ const KILL_GRACE_MS = 2000
 
 function spawnGroupExec(
   command: string,
-  opts: { cwd: string; timeout?: number; maxBuffer?: number; signal?: AbortSignal },
+  opts: { cwd: string; timeout?: number; maxBuffer?: number; signal?: AbortSignal; argv?: string[]; env?: NodeJS.ProcessEnv },
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    // `argv` (Seatbelt path) spawns a program directly with an explicit env;
+    // otherwise `command` runs through the shell. `command` is also the
+    // display string in the failure message either way.
     // Full-level path (no bwrap, which --clearenv's): still drop the server's
     // own auth secrets — a shell command never needs to mint admin cookies.
-    const child = spawn(command, { shell: true, detached: true, cwd: opts.cwd, env: cleanChildEnv() })
+    const child = opts.argv
+      ? spawn(opts.argv[0], opts.argv.slice(1), { detached: true, cwd: opts.cwd, env: opts.env ?? cleanChildEnv() })
+      : spawn(command, { shell: true, detached: true, cwd: opts.cwd, env: cleanChildEnv() })
     let stdout = ''
     let stderr = ''
     let killReason: 'timeout' | 'abort' | null = null
@@ -251,8 +257,80 @@ export function isBwrapCached(): boolean {
   return _bwrapAvailable === true
 }
 
+// macOS Seatbelt. `sandbox-exec` is marked deprecated by Apple but still ships
+// on every macOS release and is what other agent CLIs build on.
+const SANDBOX_EXEC = '/usr/bin/sandbox-exec'
+let _seatbeltAvailable: boolean | null = null
+
+async function isSeatbeltAvailable(): Promise<boolean> {
+  if (process.platform !== 'darwin') return false
+  if (_seatbeltAvailable !== null) return _seatbeltAvailable
+  try {
+    await execFileAsync(SANDBOX_EXEC, ['-p', '(version 1)(allow default)', '/usr/bin/true'], { timeout: 5000 })
+    _seatbeltAvailable = true
+  } catch (err) {
+    console.warn(`[Sandbox] sandbox-exec probe failed (${String((err as Error).message).split('\n')[0]}) — non-full shell_exec unavailable`)
+    _seatbeltAvailable = false
+  }
+  return _seatbeltAvailable
+}
+
+/** Which OS sandbox backs non-full shell_exec on this host, or null when none
+ *  works (then non-full sessions lose shell_exec and the server treats the
+ *  access-level selector as full-only). Valid after initBwrapCheck(). */
+export function getSandboxBackend(): 'bwrap' | 'seatbelt' | null {
+  if (_bwrapAvailable === true) return 'bwrap'
+  if (_seatbeltAvailable === true) return 'seatbelt'
+  return null
+}
+
+// Host git identity, read once at boot. The sandbox hides ~/.gitconfig, so
+// without this `git commit` inside a workspace-level session dies with
+// "Please tell me who you are". Only name/email are passed through — nothing
+// else from the host git config.
+let _gitIdentity: { name: string; email: string } = { name: '', email: '' }
+
+async function loadGitIdentity(): Promise<void> {
+  const read = async (key: string): Promise<string> => {
+    try {
+      return String((await execFileAsync('git', ['config', '--global', key], { timeout: 3000 })).stdout).trim()
+    } catch {
+      return ''
+    }
+  }
+  const [name, email] = await Promise.all([read('user.name'), read('user.email')])
+  _gitIdentity = { name, email }
+}
+
+function gitIdentityEnv(): Record<string, string> {
+  const env: Record<string, string> = {}
+  if (_gitIdentity.name) { env.GIT_AUTHOR_NAME = _gitIdentity.name; env.GIT_COMMITTER_NAME = _gitIdentity.name }
+  if (_gitIdentity.email) { env.GIT_AUTHOR_EMAIL = _gitIdentity.email; env.GIT_COMMITTER_EMAIL = _gitIdentity.email }
+  return env
+}
+
+/** Probes the platform's sandbox backend and caches the host git identity.
+ *  Name kept for existing callers (server index.ts, cli harness). */
 export async function initBwrapCheck(): Promise<boolean> {
+  await loadGitIdentity()
+  if (process.platform === 'darwin') return isSeatbeltAvailable()
   return isBwrapAvailable()
+}
+
+// Hidden files are masked with a bind of this zero-byte file rather than
+// /dev/null: reading a /dev/null bind fails with EACCES inside bwrap, and git
+// treats an unreadable ~/.gitconfig as fatal. A real empty file reads as "".
+const EMPTY_MASK_FILE = path.join(HALO_HOME, '.sandbox-empty')
+
+function ensureEmptyMaskFile(): string {
+  try {
+    const st = lstatSync(EMPTY_MASK_FILE)
+    if (st.isFile() && st.size === 0) return EMPTY_MASK_FILE
+    rmSync(EMPTY_MASK_FILE, { recursive: true, force: true })
+  } catch { /* missing — create below */ }
+  mkdirSync(HALO_HOME, { recursive: true })
+  writeFileSync(EMPTY_MASK_FILE, '')
+  return EMPTY_MASK_FILE
 }
 
 const DEFAULT_HIDDEN_DIRS = [
@@ -326,6 +404,26 @@ export function setSandboxHiddenPaths(dirs: string[], files: string[], writableD
   _hiddenDirs = dirs
   _hiddenFiles = files
   _writableDirs = writableDirs
+  _resolvedLists = null
+}
+
+// Absolute forms of the configured lists — both the ~-expanded and the
+// realpath'd spelling, so a match works whether the caller's path went through
+// realpath (assertPathAllowed) or the OS reports resolved paths (Seatbelt;
+// e.g. macOS /var → /private/var). Cached because assertPathAllowed runs per
+// file during grep; rebuilt when setSandboxHiddenPaths swaps the lists.
+let _resolvedLists: { hiddenDirs: string[]; hiddenFiles: string[]; writableDirs: string[] } | null = null
+
+function resolvedLists(): { hiddenDirs: string[]; hiddenFiles: string[]; writableDirs: string[] } {
+  if (_resolvedLists) return _resolvedLists
+  const both = (raws: string[]): string[] =>
+    [...new Set(raws.flatMap((raw) => { const p = path.resolve(expandTilde(raw)); return [p, realpathBounded(p)] }))]
+  _resolvedLists = { hiddenDirs: both(_hiddenDirs), hiddenFiles: both(_hiddenFiles), writableDirs: both(_writableDirs) }
+  return _resolvedLists
+}
+
+function isUnder(p: string, dir: string): boolean {
+  return p === dir || p.startsWith(dir.endsWith('/') ? dir : dir + '/')
 }
 
 /** Exported for tests (mount-order assertions) — like the build*ScriptArgs
@@ -344,10 +442,11 @@ export function buildBwrapArgs(opts: SandboxOptions): string[] {
     const dir = expandTilde(raw)
     if (existsSync(dir)) args.push('--tmpfs', dir)
   }
-  // Hide sensitive files by binding /dev/null over them
+  // Hide sensitive files by binding an empty file over them (see EMPTY_MASK_FILE)
+  const emptyFile = ensureEmptyMaskFile()
   for (const raw of _hiddenFiles) {
     const file = expandTilde(raw)
-    if (existsSync(file)) args.push('--ro-bind', '/dev/null', file)
+    if (existsSync(file)) args.push('--ro-bind', emptyFile, file)
   }
 
   // Workspace — workspace level gets rw override; readonly stays ro from the root bind
@@ -376,7 +475,7 @@ export function buildBwrapArgs(opts: SandboxOptions): string[] {
   }
   for (const rel of WORKSPACE_HIDDEN_FILES) {
     const file = path.join(opts.workspaceRoot, rel)
-    if (existsSync(file)) args.push('--ro-bind', '/dev/null', file)
+    if (existsSync(file)) args.push('--ro-bind', emptyFile, file)
   }
 
   // /proc and /dev need real mounts
@@ -390,6 +489,7 @@ export function buildBwrapArgs(opts: SandboxOptions): string[] {
   args.push('--setenv', 'PATH', `${HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`)
   args.push('--setenv', 'HOME', HOME)
   args.push('--setenv', 'TERM', 'xterm-256color')
+  for (const [k, v] of Object.entries(gitIdentityEnv())) args.push('--setenv', k, v)
 
   args.push('--die-with-parent')
 
@@ -426,60 +526,93 @@ function realpathBounded(filePath: string): string {
 }
 
 /**
- * Validate that `filePath` is within the allowed sandbox paths and return the
+ * Validate `filePath` for an in-process file-tool call and return the
  * symlink-resolved absolute path the caller must use for the actual fs call.
- * Resolving symlinks here is the whole point: it's the only boundary on the
- * no-bwrap fallback path. (A narrow TOCTOU window remains — a component could
- * be swapped for a symlink between this check and the caller's syscall — but
- * the common symlink-escape, a symlink present at check time, is now caught.)
+ * Used wherever file tools don't run inside bwrap (macOS, Linux without bwrap).
+ * Same rules as the OS sandbox:
+ *   - read: anywhere except the hidden lists (global + workspace-relative)
+ *   - write: workspace (minus hidden) and writable_dirs; readonly never writes
+ * Resolving symlinks is what makes the check hold: a workspace symlink into a
+ * hidden dir or out to a non-writable location is judged by its target. (A
+ * narrow TOCTOU window remains — a component could be swapped for a symlink
+ * between this check and the caller's syscall.)
  */
 export function assertPathAllowed(filePath: string, opts: SandboxOptions, write = false): string {
   opts = normalizeOptsForPlatform(opts)
-  // Windows always normalizes to 'full' (no bwrap), so it returns here and
-  // never reaches the realpath / `startsWith(wsRoot + '/')` logic below — the
-  // hardcoded POSIX '/' separator in that path is intentionally fine: it only
-  // runs on the linux/mac non-full sandbox path. Win security stays app-level.
+  // Windows always normalizes to 'full', so it returns here and never reaches
+  // the POSIX-separator logic below.
   if (opts.accessLevel === 'full') return path.resolve(filePath)
 
   const resolved = realpathBounded(filePath)
   const wsRoot = realpathBounded(opts.workspaceRoot)
+  const inWorkspace = isUnder(resolved, wsRoot)
 
-  if (resolved === wsRoot || resolved.startsWith(wsRoot + '/')) {
-    // Workspace runtime state (sessions, db, logs, evo) is hidden even
-    // inside the workspace — mirrors the bwrap masks above. Denied for
-    // read AND write.
-    if (isHiddenWorkspacePath(resolved, wsRoot)) {
-      throw new Error(`Access denied: "${filePath}" is outside the allowed sandbox paths`)
-    }
-    if (write && opts.accessLevel === 'readonly') {
-      throw new Error(`Access denied: readonly session cannot write to "${filePath}"`)
-    }
-    return resolved
+  if ((inWorkspace && isHiddenWorkspacePath(resolved, wsRoot)) || isHiddenHostPath(resolved)) {
+    throw new Error(`Access denied: "${filePath}" is outside the allowed sandbox paths`)
   }
-
-  if (!write && (resolved === GLOBAL_DIR || resolved.startsWith(GLOBAL_DIR + '/')) && !isHiddenGlobalPath(resolved)) {
-    return resolved
+  if (!write) return resolved
+  if (opts.accessLevel === 'readonly') {
+    throw new Error(`Access denied: readonly session cannot write to "${filePath}"`)
   }
-
+  if (inWorkspace || resolvedLists().writableDirs.some((d) => isUnder(resolved, d))) return resolved
   throw new Error(`Access denied: "${filePath}" is outside the allowed sandbox paths`)
 }
 
-/** True when a path inside ~/.halo/global hits a configured hidden entry.
- *  bwrap enforces the hidden lists with tmpfs//dev/null binds, but the
- *  no-bwrap fallback's only boundary is assertPathAllowed — without this
- *  check its blanket GLOBAL_DIR read allowance would leak evo.db / cron.db /
- *  internal-sessions / logs on platforms without bwrap. Entries outside
- *  GLOBAL_DIR (~/.aws & co) need no check here: they're already denied by
- *  the workspace/global boundary above. */
-function isHiddenGlobalPath(resolved: string): boolean {
-  for (const raw of _hiddenFiles) {
-    if (resolved === expandTilde(raw)) return true
+/** True when a path hits the configured (global) hidden lists — the in-process
+ *  counterpart of the bwrap tmpfs / empty-file masks. */
+function isHiddenHostPath(resolved: string): boolean {
+  const { hiddenDirs, hiddenFiles } = resolvedLists()
+  return hiddenFiles.includes(resolved) || hiddenDirs.some((d) => isUnder(resolved, d))
+}
+
+/**
+ * Seatbelt (SBPL) profile for macOS shell_exec — same shape as the bwrap
+ * mounts: everything readable, writes only to the workspace + writable_dirs
+ * (+ temp dirs and /dev), hidden lists denied for read and write. SBPL gives
+ * the later matching rule precedence, so the allow list re-opens writes the
+ * blanket deny closed, and the final hidden deny overrides both. Paths are
+ * realpath'd because Seatbelt matches resolved paths (/tmp is /private/tmp).
+ * Exported for tests — sandbox-exec can't run in CI.
+ */
+export function buildSeatbeltProfile(opts: SandboxOptions): string {
+  const q = (p: string): string => `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+  const wsRoot = realpathBounded(opts.workspaceRoot)
+  const lists = resolvedLists()
+
+  const writable = ['/private/tmp', '/private/var/folders', '/dev']
+  if (opts.accessLevel !== 'readonly') writable.unshift(wsRoot, ...lists.writableDirs)
+
+  const hiddenDirs = [...lists.hiddenDirs, ...WORKSPACE_HIDDEN_DIRS.map((rel) => path.join(wsRoot, rel))]
+  const hiddenFiles = [...lists.hiddenFiles, ...WORKSPACE_HIDDEN_FILES.map((rel) => path.join(wsRoot, rel))]
+
+  return [
+    '(version 1)',
+    '(allow default)',
+    '(deny file-write*)',
+    `(allow file-write* ${writable.map((p) => `(subpath ${q(p)})`).join(' ')})`,
+    `(deny file-read* file-write* ${[
+      ...hiddenDirs.map((p) => `(subpath ${q(p)})`),
+      ...hiddenFiles.map((p) => `(literal ${q(p)})`),
+    ].join(' ')})`,
+  ].join('\n')
+}
+
+/** Minimal env for the Seatbelt child — the macOS counterpart of bwrap's
+ *  --clearenv + --setenv. ~/.gitconfig and ~/.npmrc are denied by the
+ *  profile; pointing git/npm at /dev/null keeps them from erroring on it. */
+function seatbeltEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    PATH: `${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin`,
+    HOME,
+    TERM: 'xterm-256color',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    NPM_CONFIG_USERCONFIG: '/dev/null',
+    ...gitIdentityEnv(),
   }
-  for (const raw of _hiddenDirs) {
-    const dir = expandTilde(raw)
-    if (resolved === dir || resolved.startsWith(dir + '/')) return true
+  for (const k of ['TMPDIR', 'USER', 'LOGNAME', 'LANG', 'LC_ALL']) {
+    if (process.env[k]) env[k] = process.env[k]
   }
-  return false
+  return env
 }
 
 /** True when a workspace-internal path hits the workspace-relative hidden
@@ -534,8 +667,170 @@ export function buildReaddirScriptArgs(dirPath: string): string[] {
   return ['bash', '-c', 'ls -1ap "$1"', 'bash', dirPath]
 }
 
+// ── rm accidental-deletion guard ─────────────────────────────────────
+//
+// Rejects `rm` / `rmdir` whose target is the filesystem root, $HOME, ~/.halo,
+// the workspace root, any parent of those, or a system directory / its direct
+// children. Runs at every access level (full included): the OS sandbox only
+// limits where writes land, it doesn't stop a mistyped `rm -r` inside the
+// writable area. A heuristic for mistakes, not a parser — command
+// substitution, eval and scripts aren't followed.
+
+const RM_SYSTEM_DIRS = [
+  '/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib32', '/lib64', '/libx32', '/media', '/mnt', '/opt',
+  '/proc', '/run', '/sbin', '/snap', '/srv', '/sys', '/usr', '/var',
+  '/Applications', '/Library', '/System', '/Users', '/Volumes', '/private',
+]
+// Protected themselves, but their children are ordinary scratch. (/root is
+// here rather than above: in containers it's $HOME, whose children are
+// normal deletes; $HOME itself is covered separately.)
+const RM_EXACT_DIRS = ['/tmp', '/private/tmp', '/root']
+// Words that can precede the real command in a simple command.
+const RM_WRAPPERS = new Set(['sudo', 'command', 'env', 'xargs', 'nohup', 'time', 'exec', 'nice', 'if', 'then', 'else', 'elif', 'do', 'while', 'until'])
+
+/** Split a command into simple commands (on unquoted ; & | newline) of
+ *  quote-stripped words. Heredoc bodies are skipped — they're data (a script
+ *  being written to a file), not commands run here. */
+function shellSegments(command: string): string[][] {
+  const segments: string[][] = []
+  let words: string[] = []
+  let cur = ''
+  let inWord = false
+  let quote: string | null = null
+  const heredocs: Array<{ delim: string; dash: boolean }> = []
+  const endWord = (): void => { if (inWord) words.push(cur); cur = ''; inWord = false }
+  const endSegment = (): void => { endWord(); if (words.length) segments.push(words); words = [] }
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]
+    if (quote) {
+      if (c === quote) quote = null
+      else if (c === '\\' && quote === '"' && i + 1 < command.length) cur += command[++i]
+      else cur += c
+      continue
+    }
+    if (c === '<' && command[i + 1] === '<' && command[i + 2] !== '<') {
+      const m = /^<<(-?)\s*(['"]?)([A-Za-z0-9_.-]+)\2/.exec(command.slice(i))
+      if (m) { endWord(); heredocs.push({ delim: m[3], dash: m[1] === '-' }); i += m[0].length - 1; continue }
+    }
+    if (c === '\n' && heredocs.length) {
+      endSegment()
+      // Skip each pending body up to its delimiter line.
+      let pos = i + 1
+      for (const h of heredocs.splice(0)) {
+        while (pos < command.length) {
+          const eol = command.indexOf('\n', pos)
+          const line = command.slice(pos, eol === -1 ? command.length : eol)
+          pos = eol === -1 ? command.length : eol + 1
+          if ((h.dash ? line.replace(/^\t+/, '') : line) === h.delim) break
+        }
+      }
+      i = pos - 1
+      continue
+    }
+    if (c === '"' || c === "'") { quote = c; inWord = true }
+    else if (c === '\\' && command[i + 1] === '\n') i++
+    else if (c === '\\' && i + 1 < command.length) { cur += command[++i]; inWord = true }
+    else if (c === ';' || c === '&' || c === '|' || c === '\n') endSegment()
+    else if (c === ' ' || c === '\t' || c === '\r') endWord()
+    else { cur += c; inWord = true }
+  }
+  endSegment()
+  return segments
+}
+
+/** `~` / $HOME / $PWD expanded; any other variable or substitution becomes
+ *  empty — its value when unset, which is how `rm -rf "$DIR/"` goes wrong. */
+function expandRmWord(word: string, cwd: string): string {
+  return word
+    .replace(/^~(?=\/|$)/, HOME)
+    .replace(/\$\{HOME\}|\$HOME\b/g, HOME)
+    .replace(/\$\{PWD\}|\$PWD\b|\$\(pwd\)|`pwd`/g, cwd)
+    .replace(/\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$\d/g, '')
+}
+
+/** Drop a subshell's closing `)` glued to the last word (`(rm -rf x)`),
+ *  leaving balanced `$(...)` intact. */
+function stripSubshellClose(word: string): string {
+  let w = word
+  while (w.endsWith(')') && (w.match(/\(/g)?.length ?? 0) < (w.match(/\)/g)?.length ?? 0)) w = w.slice(0, -1)
+  return w
+}
+
+function rmProtectedReason(target: string, wsRoot: string): string | null {
+  if (target === '/') return 'the filesystem root'
+  if (isUnder(HOME, target)) return 'the home directory or a parent of it'
+  if (isUnder(HALO_HOME, target)) return '~/.halo or a parent of it'
+  if (isUnder(wsRoot, target)) return 'the workspace root or a parent of it'
+  if (RM_EXACT_DIRS.includes(target)) return 'a system directory'
+  for (const d of RM_SYSTEM_DIRS) {
+    if (target === d || path.dirname(target) === d) return 'a system directory'
+  }
+  return null
+}
+
+/** Throws when an rm/rmdir in `command` targets a protected path (see above).
+ *  Relative targets resolve against the workspace root (shell_exec's cwd),
+ *  following any `cd` earlier in the same command line. */
+export function assertRmSafe(command: string, workspaceRoot: string): void {
+  const wsRoot = path.resolve(workspaceRoot)
+  let cwd = wsRoot
+  for (const words of shellSegments(command)) {
+    let i = 0
+    let cmd = ''
+    for (; i < words.length; i++) {
+      cmd = words[i].replace(/^[({!]+/, '')
+      if (!cmd || /^[A-Za-z_][A-Za-z0-9_]*=/.test(cmd)) continue
+      if (RM_WRAPPERS.has(path.basename(cmd))) {
+        while (i + 1 < words.length && words[i + 1].startsWith('-')) i++
+        continue
+      }
+      break
+    }
+    if (i >= words.length) continue
+
+    if (cmd === 'cd') {
+      const dest = words[i + 1]
+      if (dest === undefined) cwd = HOME
+      else if (dest !== '-') cwd = path.resolve(cwd, expandRmWord(stripSubshellClose(dest), cwd) || '.')
+      continue
+    }
+    const base = path.basename(cmd)
+    if (base !== 'rm' && base !== 'rmdir') continue
+
+    let optionsDone = false
+    for (let j = i + 1; j < words.length; j++) {
+      const raw = words[j]
+      if (!optionsDone && raw === '--') { optionsDone = true; continue }
+      if (!optionsDone && raw.startsWith('-')) continue
+      // Redirections: `2>/dev/null` is one word; a bare `>` takes the next.
+      if (/^(\d*|&)?[<>]/.test(raw)) { if (/^(\d*|&)?[<>]+&?$/.test(raw)) j++; continue }
+      const word = expandRmWord(stripSubshellClose(raw), cwd)
+      if (!word) continue
+
+      const abs = path.resolve(cwd, word)
+      // A glob that means "everything in X" (`*`, `.*`, `**`) is judged by X;
+      // narrower globs (`*.log`) are left alone.
+      const parts = abs.split('/')
+      const globAt = parts.findIndex((p) => /[*?[]/.test(p))
+      let target = abs
+      if (globAt !== -1) {
+        if (!/^[.*?]+$/.test(parts[globAt])) continue
+        target = parts.slice(0, globAt).join('/') || '/'
+      }
+      const reason = rmProtectedReason(target, wsRoot)
+      if (reason) {
+        throw new Error(`[Sandbox] rm blocked: "${raw}" resolves to ${target}, which is ${reason}. Name the specific files or subdirectories to delete instead.`)
+      }
+    }
+  }
+}
+
+const NO_SANDBOX_MSG = 'Access denied: shell_exec at workspace/readonly access needs an OS sandbox (bubblewrap on Linux, sandbox-exec on macOS) and none works on this host. Switch the session to Full, or on Linux install bubblewrap (apt install bubblewrap).'
+
 export async function sandboxExec(command: string, opts: SandboxOptions): Promise<SandboxResult> {
   opts = normalizeOptsForPlatform(opts)
+  // cmd syntax differs and Windows has no rm; the guard is POSIX-only.
+  if (process.platform !== 'win32') assertRmSafe(command, opts.workspaceRoot)
   if (opts.accessLevel === 'full') {
     if (process.platform === 'win32') {
       // Switch the cmd session to UTF-8 (chcp 65001) so cmd built-ins (echo,
@@ -567,10 +862,20 @@ export async function sandboxExec(command: string, opts: SandboxOptions): Promis
     })
   }
 
-  const bwrapOk = await isBwrapAvailable()
-  if (!bwrapOk) {
-    throw new Error('Access denied: shell_exec requires bubblewrap (bwrap) for non-full access levels. Install with: apt install bubblewrap')
+  if (process.platform === 'darwin') {
+    if (!(await isSeatbeltAvailable())) throw new Error(NO_SANDBOX_MSG)
+    return spawnGroupExec(command, {
+      cwd: opts.workspaceRoot,
+      timeout: opts.timeout,
+      maxBuffer: opts.maxBuffer,
+      signal: opts.signal,
+      argv: [SANDBOX_EXEC, '-p', buildSeatbeltProfile(opts), ...buildExecScriptArgs(opts.workspaceRoot, command)],
+      env: seatbeltEnv(),
+    })
   }
+
+  const bwrapOk = await isBwrapAvailable()
+  if (!bwrapOk) throw new Error(NO_SANDBOX_MSG)
 
   const bwrapArgs = buildBwrapArgs(opts)
   return bwrapExec([...bwrapArgs, '--', ...buildExecScriptArgs(opts.workspaceRoot, command)], {

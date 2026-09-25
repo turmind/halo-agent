@@ -10,7 +10,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { config } from '../config.js'
 import { homedir } from 'node:os'
-import { sandboxExec, sandboxReadFile, sandboxReadBinaryFile, sandboxWriteFile, sandboxStat, sandboxReaddir, assertPathAllowed, isBwrapCached } from './sandbox.js'
+import { sandboxExec, sandboxReadFile, sandboxReadBinaryFile, sandboxWriteFile, sandboxStat, sandboxReaddir, assertPathAllowed, getSandboxBackend } from './sandbox.js'
 import type { AccessLevel, SandboxOptions } from './sandbox.js'
 import { loadMergedSettings } from '../prompts/md-vars.js'
 import { loadSettingsSchema } from '../settings-schema.js'
@@ -31,6 +31,9 @@ const SKIP_HALO_SUBDIRS = new Set(['sessions', 'logs', 'evo', 'tmp', 'assets', '
 // for runaway walks is lstat (see walkDir) — this just bounds the result
 // string when a pattern legitimately matches an enormous tree.
 const GLOB_MAX_RESULTS = 5000
+
+// Error text of a write the OS sandbox refused (bwrap: EROFS; Seatbelt: EPERM).
+const SANDBOX_DENIED_RE = /Read-only file system|Operation not permitted|Permission denied|EROFS|EPERM/
 
 const HOME = homedir()
 
@@ -729,7 +732,13 @@ export function createWorkspaceTools(
         return mask((stdout + (stderr ? `\nSTDERR: ${stderr}` : '')).trim() || '(no output)')
       } catch (err: unknown) {
         const error = err as { stdout?: string; stderr?: string; message: string }
-        return mask(`${TOOL_ERROR_MARKER}\nCommand failed: ${error.message}\n${error.stdout ?? ''}\n${error.stderr ?? ''}`)
+        const out = `${error.message}\n${error.stdout ?? ''}\n${error.stderr ?? ''}`
+        // Sandbox write denials look like ordinary permission errors; tell the
+        // agent the likely cause so it asks the user instead of retrying.
+        const hint = accessLevel !== 'full' && SANDBOX_DENIED_RE.test(out)
+          ? `\n[Sandbox] This session runs at "${accessLevel}" access: writes are limited to the workspace${accessLevel === 'readonly' ? ' (readonly: nowhere)' : ''} and /tmp is discarded after each command. If the command needs more, ask the user to switch the access level to Full in the chat input box.`
+          : ''
+        return mask(`${TOOL_ERROR_MARKER}\nCommand failed: ${out}${hint}`)
       }
     },
   }
@@ -911,7 +920,7 @@ export function createWorkspaceTools(
   // otherwise the provider returns a 400 the moment the agent calls it.
   const visionTools = supportsVision ? [viewImage] : []
   const allTools = [fileRead, ...visionTools, fileWrite, fileEdit, fileList, shellExec, grepTool, globTool, webFetch]
-  if (accessLevel === 'readonly' && !isBwrapCached()) {
+  if (accessLevel === 'readonly' && getSandboxBackend() === null) {
     return [fileRead, ...visionTools, fileList, grepTool, globTool]
   }
   return allTools

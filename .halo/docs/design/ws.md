@@ -78,6 +78,7 @@ Optional `chat` fields:
 - `images`: `Array<{data: base64, mimeType}>` — multimodal
 - `agentId`: specify the agent this session should use
 - `clientMsgId`: client-generated id for the ack/resend/dedup protocol (admin always sends it)
+- `accessLevel`: `'full' | 'workspace' | 'readonly'` — the level picked in the admin input-box selector. Applied only on `handleChat`'s idle path (a message queued behind a running / compacting turn runs at the level that turn was built with); `'full'`, or any value on a host with no OS sandbox (`getSandboxBackend() === null`), maps to `null`. Passed to `sendUserMessage`, which rebuilds the agent and writes `agent_sessions.access_level` when it differs from the session's current level. Omitted = leave the session's level unchanged
 
 ## Server → Client
 
@@ -111,7 +112,7 @@ Server-internal flags on `AgentSessionEvent` that are **not** carried into the W
 
 | Type | Source | Purpose |
 |---|---|---|
-| `state:snapshot` | handler.ts on connect | Initial state (agents, messages, sessionId). On **subscribe / reattach only** it also carries `archiveCount` — the number of committed UI-log archive segments, which the admin's scroll-up loader counts down from (see [Archive anchor](#archive-anchor-in-statesnapshot)) |
+| `state:snapshot` | handler.ts on connect | Initial state (agents, messages, sessionId). On **subscribe / reattach only** it also carries `archiveCount` — the number of committed UI-log archive segments, which the admin's scroll-up loader counts down from (see [Archive anchor](#archive-anchor-in-statesnapshot)) — and `accessLevel` (`'workspace' | 'readonly' | null`, null = full), which seeds the admin's access-level selector. Subscribe includes `accessLevel` only when the session already exists; for a not-yet-created session it's omitted, and the admin leaves the selector alone when the field is absent (so a level picked before the first send isn't reset) |
 | `chat:ack` | `handleChat` | Chat with `clientMsgId` is persisted in the session log — releases the client's pending-ack entry (see [Chat delivery](#chat-delivery-ack--resend--dedup)) |
 | `__pong__` | `__ping__` handler | Reply to the client's application-level liveness probe |
 | `listener:released` | `reclaimIfAbandoned` (this client only) | This connection's event listener was reclaimed (silent >3 min / CLOSED) — `{sessionId}`. Client must re-`subscribe` to reattach. See [Abandoned-listener reclaim](#abandoned-listener-reclaim-and-the-__ping__-contract). |

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
-import { Send, Paperclip, X, FileIcon, Square, MonitorUp, Camera, Sparkles } from 'lucide-react'
+import { Send, Paperclip, X, FileIcon, Square, MonitorUp, Camera, Sparkles, ChevronDown } from 'lucide-react'
 import { cn, getLanguageFromPath } from '@/shared/utils'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
@@ -278,6 +278,82 @@ function CameraPicker({ cameras, activeId, onPick, onTurnOff, onClose }: {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+type AccessLevel = 'full' | 'workspace' | 'readonly'
+const ACCESS_LEVELS: AccessLevel[] = ['full', 'workspace', 'readonly']
+// Same palette as the channel account badges (slack-settings.tsx).
+const ACCESS_BADGE: Record<AccessLevel, string> = {
+  full: 'bg-amber-500/15 text-amber-300',
+  workspace: 'bg-blue-500/15 text-blue-300',
+  readonly: 'bg-emerald-500/15 text-emerald-300',
+}
+
+/** Access level the next message runs at. Applied server-side when the
+ *  session is idle; locked while streaming and to Full when the host has no
+ *  OS sandbox (/api/health `sandbox: null`). */
+function AccessLevelSelector() {
+  const t = useT()
+  const level = useChatStore((s) => s.accessLevel)
+  const isStreaming = useChatStore((s) => s.isStreaming)
+  const sandboxAvailable = useChatStore((s) => s.sandboxAvailable)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (sandboxAvailable !== null) return
+    api.health()
+      .then((h: { sandbox?: string | null }) => useChatStore.getState().setSandboxAvailable(!!h.sandbox))
+      .catch(() => {})
+  }, [sandboxAvailable])
+
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
+
+  const noSandbox = sandboxAvailable === false
+  const shown: AccessLevel = noSandbox ? 'full' : level
+  const disabled = isStreaming || noSandbox
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => !disabled && setOpen(!open)}
+        disabled={disabled}
+        title={noSandbox ? t('chat.access.noSandbox') : t('chat.access.title')}
+        className={cn(
+          'flex w-24 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-opacity',
+          ACCESS_BADGE[shown],
+          disabled ? 'opacity-50 cursor-default' : 'hover:opacity-80',
+        )}
+      >
+        <span className="truncate">{t(`chat.access.${shown}`)}</span>
+        {!disabled && <ChevronDown className="h-2.5 w-2.5" />}
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-0 mb-1 min-w-[180px] rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg z-30">
+          {ACCESS_LEVELS.map((l) => (
+            <button
+              key={l}
+              onClick={() => { useChatStore.getState().setAccessLevel(l); setOpen(false) }}
+              className={cn(
+                'flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors',
+                l === level ? 'bg-[var(--accent)]' : 'hover:bg-[var(--secondary)]',
+              )}
+            >
+              <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', ACCESS_BADGE[l])}>{t(`chat.access.${l}`)}</span>
+              <span className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">{t(`chat.access.${l}Desc`)}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -986,6 +1062,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
 
         {/* Bottom toolbar + chips in one row */}
         <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
+          <AccessLevelSelector />
           <button onClick={() => fileInputRef.current?.click()} disabled={disabled} title="Attach images"
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]">
             <Paperclip className="h-4 w-4" />

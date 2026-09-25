@@ -48,7 +48,7 @@ import { createAuthRoutes, authMiddleware, getTokenFromCookieHeader, isAuthentic
 import { initLogger } from './logger.js'
 import { initObservability, shutdownObservability } from './observability/otel.js'
 import { config, reloadSandboxConfig } from './config.js'
-import { initBwrapCheck, isBwrapCached, setSandboxHiddenPaths } from './tools/sandbox.js'
+import { initBwrapCheck, getSandboxBackend, setSandboxHiddenPaths } from './tools/sandbox.js'
 import { ensureHaloHome, readSeedVersion, TEMPLATE_VERSION } from './init.js'
 import { ensureSshAgent } from './git-ssh.js'
 
@@ -268,7 +268,7 @@ onSettingsChange(() => {
   const { hiddenDirs, hiddenFiles, writableDirs } = reloadSandboxConfig()
   setSandboxHiddenPaths(hiddenDirs, hiddenFiles, writableDirs)
 })
-console.log(`[Server] bwrap sandbox: ${isBwrapCached() ? 'available' : 'NOT available (app-level fallback only)'}`)
+console.log(`[Server] OS sandbox: ${getSandboxBackend() ?? 'NOT available (non-full sessions: no shell_exec, file tools path-checked in-process)'}`)
 
 // Hold one ssh-agent for the process so the built-in terminal and git children
 // (both inherit process.env) share it: the user runs `ssh-add` in the terminal,
@@ -356,6 +356,9 @@ app.get('/api/health', (c) => {
     engine: 'agent',
     version: HALO_VERSION,
     gitSha: GIT_SHA,
+    // OS sandbox backing non-full access levels; null → admin locks the
+    // access-level selector to Full.
+    sandbox: getSandboxBackend(),
   })
 })
 

@@ -12,7 +12,7 @@ Compression: every response negotiates gzip/deflate via `hono/compress` (`thresh
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | Health check — returns `{status, timestamp, uptime, engine, version, gitSha}` (`gitSha`: short sha on source builds, `-dirty` suffix if tree modified, `null` on published bundles) |
+| GET | `/api/health` | Health check — returns `{status, timestamp, uptime, engine, version, gitSha, sandbox}` (`gitSha`: short sha on source builds, `-dirty` suffix if tree modified, `null` on published bundles; `sandbox`: OS sandbox backing non-full access levels — `'bwrap'` / `'seatbelt'` / `null`; the admin locks its access-level selector to Full on `null`) |
 
 ## Authentication
 

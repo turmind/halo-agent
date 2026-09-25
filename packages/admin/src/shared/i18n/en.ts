@@ -235,6 +235,14 @@ export const en: Record<string, string> = {
   'chat.archive.loading': 'Loading earlier messages…',
   'chat.archive.noEarlier': 'No earlier messages',
   'chat.archive.header': 'Archived · {segments} segment(s) · {messages} messages',
+  'chat.access.full': 'Full',
+  'chat.access.workspace': 'Workspace',
+  'chat.access.readonly': 'Readonly',
+  'chat.access.fullDesc': 'No restrictions',
+  'chat.access.workspaceDesc': 'Writes limited to this workspace',
+  'chat.access.readonlyDesc': 'Read only, no writes',
+  'chat.access.title': 'Access level for the next message',
+  'chat.access.noSandbox': 'This host has no OS sandbox (bubblewrap / sandbox-exec) — Full only',
 
   // ── Goal mode ──
   'goal.banner.intake': '🎯 Goal mode · intake — define the goal contract',

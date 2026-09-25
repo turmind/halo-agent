@@ -73,9 +73,9 @@ Agents manage other sessions with these tools. The whole 8-tool bundle is grante
 | `get_session_output` | Read the latest text output of a session |
 | `query_agent` | Get an agent's full details (AGENT.md, YAML config, skills); team-gated to the agent's roster |
 
-Plus the workspace tools for direct work. The tool set varies by access level and bwrap availability:
+Plus the workspace tools for direct work. The tool set varies by access level and OS-sandbox availability (bwrap on Linux, sandbox-exec on macOS):
 
-| Level | Tools (with bwrap) | Tools (without bwrap) |
+| Level | Tools (with OS sandbox) | Tools (without) |
 |---|---|---|
 | `full` | All 9 tools | All 9 tools |
 | `workspace` | All 9 tools | All 9 tools |
@@ -83,15 +83,21 @@ Plus the workspace tools for direct work. The tool set varies by access level an
 
 `view_image` is also vision-gated: models that don't declare `capabilities.image: true` get the same lists minus `view_image`, so the model never sees a tool that would 400 the moment it called it. See [dev/tools.md](../dev/tools.md#view_image).
 
-When `accessLevel` is not `full`, tool execution is routed through a bwrap sandbox (`packages/server/src/tools/sandbox.ts`):
+When `accessLevel` is not `full`, tool execution is routed through an OS sandbox (`packages/server/src/tools/sandbox.ts`) — bwrap on Linux, Seatbelt (`sandbox-exec`) for `shell_exec` on macOS; `getSandboxBackend()` reports which one (`'bwrap' | 'seatbelt' | null`, also exposed as `sandbox` on `/api/health`):
 - Base: `--ro-bind / /` (entire filesystem read-only) + `--tmpfs /tmp` (isolated writable temp)
-- Sensitive paths hidden via tmpfs/devnull overlays — configurable in `settings.yaml general.sandbox.hidden_dirs/hidden_files` (scope: global only, workspace cannot override)
+- Sensitive paths hidden via tmpfs / empty-file overlays — configurable in `settings.yaml general.sandbox.hidden_dirs/hidden_files` (scope: global only, workspace cannot override). Hidden files are covered with a zero-byte `~/.halo/.sandbox-empty`, not `/dev/null` (a `/dev/null` bind reads as EACCES inside bwrap, and git treats an unreadable `~/.gitconfig` as fatal) — so they read as empty
 - `workspace`: workspace directory overridden with `--bind` (rw)
-- `readonly`: workspace stays ro from the root bind; without bwrap, tool set is reduced to 5 read-only tools
+- `readonly`: workspace stays ro from the root bind; without an OS sandbox, tool set is reduced to 5 read-only tools
+- Host git identity (`user.name` / `user.email` only, read once at boot) is passed in as `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env, since `~/.gitconfig` is hidden
+- macOS: the Seatbelt profile has the same shape — `(allow default)`, deny all writes, re-allow writes to the workspace + `writable_dirs` (+ temp dirs, `/dev`; readonly gets neither workspace nor `writable_dirs`), then deny read+write on every hidden path. File tools on macOS run in-process behind `assertPathAllowed`
 - Workspace runtime state (`.halo/sessions`, `.halo/logs`, `.halo/evo`, `halo.db` + sqlite sidecars) is masked even *inside* the workspace — hardcoded constants, not settings — because it holds other channels'/users' conversations on a shared workspace. The principle: workspace knowledge (INSTRUCTIONS, docs, skills, memory, …) stays readable, runtime state is hidden. These masks must be mounted *after* the workspace `--bind` (bwrap: last mount on a path wins; ordering gotcha in [memory/2026-08-05-sandbox-workspace-hidden-and-auth-hot-reload.md](../../memory/2026-08-05-sandbox-workspace-hidden-and-auth-hot-reload.md))
 - Error sanitization: sandbox internals (bwrap flags, mount details) are stripped from error messages before reaching the agent
 
-Every hidden path — global lists and workspace-relative set alike — is enforced twice: bwrap masks when available, and `assertPathAllowed` on the no-bwrap fallback. When bwrap is not installed, that app-level validation (workspace + `~/.halo/global/` boundaries, minus the hidden sets) is the only boundary; `shell_exec` is blocked entirely without bwrap for non-full sessions.
+Every hidden path — global lists and workspace-relative set alike — is enforced twice: OS-sandbox masks when available, and `assertPathAllowed` for in-process file tools. `assertPathAllowed` mirrors the OS sandbox: **read** anywhere except the hidden sets, **write** only inside the workspace (minus the hidden set) and `writable_dirs`, never for readonly; symlinks are judged by their resolved target. Without an OS sandbox, that in-process check is the only boundary and `shell_exec` is blocked entirely for non-full sessions.
+
+`shell_exec` also runs an **rm guard** (`assertRmSafe`) at every access level, `full` included, on every platform except Windows: an `rm` / `rmdir` whose target resolves to `/`, `$HOME`, `~/.halo`, the workspace root, a parent of any of those, or a system directory / its direct child is refused before spawning. It's a heuristic against mistakes rather than a shell parser — details in [dev/tools.md](../dev/tools.md#rm-guard).
+
+The admin chat input picks the session's level per message (see [requirements/chat.md](../requirements/chat.md#access-level)); the server applies it on the idle path of `handleChat` and rebuilds the agent when it changes.
 
 **`activate_skill`**: auto-injected whenever the YAML has a non-empty `skills` list (does **not** need to be declared in `tools`). It loads the full SKILL.md on demand. Disabled skills are excluded.
 

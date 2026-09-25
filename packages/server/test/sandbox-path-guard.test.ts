@@ -2,7 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { assertPathAllowed, buildBwrapArgs, type SandboxOptions } from '../src/tools/sandbox.js'
+import { assertPathAllowed, buildBwrapArgs, buildSeatbeltProfile, setSandboxHiddenPaths, type SandboxOptions } from '../src/tools/sandbox.js'
+
+// Mirrors the module defaults (settings-schema.ts) — restored after tests
+// that swap the lists.
+const DEFAULT_DIRS = ['~/.halo/secrets', '~/.aws', '~/.ssh', '~/.gnupg', '~/.docker', '~/.config/gh', '~/.halo/global/internal-sessions', '~/.halo/global/logs']
+const DEFAULT_FILES = ['~/.npmrc', '~/.bash_history', '~/.gitconfig', '~/.git-credentials', '~/.netrc',
+  ...['evo', 'cron', 'runs'].flatMap((n) => ['', '-wal', '-shm'].map((s) => `~/.halo/global/${n}.db${s}`))]
+const EMPTY_MASK = path.join(os.homedir(), '.halo', '.sandbox-empty')
 
 /**
  * Contract: on the no-bwrap fallback, assertPathAllowed is the ONLY boundary
@@ -35,20 +42,47 @@ describe('assertPathAllowed symlink boundary', () => {
     accessLevel,
   })
 
-  it('rejects a symlink inside the workspace that points outside', () => {
-    // workspace/escape -> ../outside
+  it('reads through a symlink to an outside file resolve to the target (reads are open outside the hidden lists)', () => {
+    const link = path.join(workspace, 'link-to-secret')
+    fs.symlinkSync(path.join(outside, 'secret.txt'), link)
+    expect(assertPathAllowed(link, opts('workspace'))).toBe(fs.realpathSync(path.join(outside, 'secret.txt')))
+  })
+
+  it('rejects a write through a workspace symlink that points outside', () => {
+    // workspace/escape -> ../outside. Lexically workspace/escape/secret.txt
+    // is inside the workspace; realpath resolves it to outside/ → deny write.
     const escape = path.join(workspace, 'escape')
     fs.symlinkSync(outside, escape)
-    // Lexically, workspace/escape/secret.txt startsWith workspaceRoot — the old
-    // bug. With realpath it resolves to outside/secret.txt and must be denied.
-    expect(() => assertPathAllowed(path.join(escape, 'secret.txt'), opts('workspace')))
+    expect(() => assertPathAllowed(path.join(escape, 'secret.txt'), opts('workspace'), true))
       .toThrow(/outside the allowed sandbox/)
   })
 
-  it('rejects a direct symlink to an outside file', () => {
-    const link = path.join(workspace, 'link-to-secret')
-    fs.symlinkSync(path.join(outside, 'secret.txt'), link)
-    expect(() => assertPathAllowed(link, opts('workspace'))).toThrow(/outside the allowed sandbox/)
+  it('rejects writes outside the workspace', () => {
+    expect(() => assertPathAllowed(path.join(outside, 'new.txt'), opts('workspace'), true))
+      .toThrow(/outside the allowed sandbox/)
+  })
+
+  it('allows writes under a configured writable dir, not for readonly', () => {
+    setSandboxHiddenPaths([], [], [outside])
+    try {
+      expect(assertPathAllowed(path.join(outside, 'state.json'), opts('workspace'), true))
+        .toBe(path.join(fs.realpathSync(outside), 'state.json'))
+      expect(() => assertPathAllowed(path.join(outside, 'state.json'), opts('readonly'), true))
+        .toThrow(/readonly session cannot write/)
+    } finally {
+      setSandboxHiddenPaths(DEFAULT_DIRS, DEFAULT_FILES)
+    }
+  })
+
+  it('hidden host dirs are denied even when reached through a workspace symlink', () => {
+    setSandboxHiddenPaths([outside], [])
+    try {
+      fs.symlinkSync(outside, path.join(workspace, 'escape'))
+      expect(() => assertPathAllowed(path.join(workspace, 'escape', 'secret.txt'), opts('workspace')))
+        .toThrow(/outside the allowed sandbox/)
+    } finally {
+      setSandboxHiddenPaths(DEFAULT_DIRS, DEFAULT_FILES)
+    }
   })
 
   it('allows a real file inside the workspace and returns its resolved path', () => {
@@ -76,9 +110,8 @@ describe('assertPathAllowed symlink boundary', () => {
 
   it('denies ~/.git-credentials to non-full sessions (plaintext git tokens)', () => {
     // Halo itself writes git tokens there (git-credentials.ts) — a
-    // workspace/readonly session must never be able to read it. $HOME is
-    // outside the workspace, so the boundary check rejects it whether or not
-    // the file exists on this machine.
+    // workspace/readonly session must never be able to read it. It's in the
+    // default hidden-files list, denied whether or not it exists here.
     const cred = path.join(os.homedir(), '.git-credentials')
     expect(() => assertPathAllowed(cred, opts('workspace'))).toThrow(/outside the allowed sandbox/)
     expect(() => assertPathAllowed(cred, opts('readonly'))).toThrow(/outside the allowed sandbox/)
@@ -88,8 +121,7 @@ describe('assertPathAllowed symlink boundary', () => {
     // ~/.halo/global is readable by design (skills/agents/prompts), but the
     // hidden lists carve out cross-workspace state: evo.db / cron.db / runs.db
     // (+ WAL sidecars), internal-agent session transcripts, and server/cron logs.
-    // On the no-bwrap fallback assertPathAllowed is the only boundary, so it
-    // must reject these even though they sit inside the global read allowance.
+    // Without bwrap assertPathAllowed is the only check for file tools.
     const global = path.join(os.homedir(), '.halo', 'global')
     for (const p of [
       path.join(global, 'evo.db'),
@@ -212,7 +244,7 @@ describe('workspace-relative hidden paths (assertPathAllowed)', () => {
 
 /**
  * Contract: buildBwrapArgs masks the workspace-relative hidden set with
- * `--tmpfs` / `--ro-bind /dev/null` AFTER the workspace `--bind` — bwrap
+ * `--tmpfs` / `--ro-bind <empty file>` AFTER the workspace `--bind` — bwrap
  * applies mounts in argv order and the last mount wins, so a mask placed
  * before the rw workspace bind would be silently re-exposed. bwrap itself
  * can't run in CI (needs user namespaces), so the argv is the testable unit
@@ -250,7 +282,7 @@ describe('buildBwrapArgs workspace masking order', () => {
       const maskIdx = indexOfSeq(args, ['--tmpfs', path.join(workspace, rel)])
       expect(maskIdx, `--tmpfs ${rel}`).toBeGreaterThan(bindIdx)
     }
-    const dbIdx = indexOfSeq(args, ['--ro-bind', '/dev/null', path.join(workspace, '.halo', 'halo.db')])
+    const dbIdx = indexOfSeq(args, ['--ro-bind', EMPTY_MASK, path.join(workspace, '.halo', 'halo.db')])
     expect(dbIdx, 'halo.db mask').toBeGreaterThan(bindIdx)
   })
 
@@ -260,7 +292,7 @@ describe('buildBwrapArgs workspace masking order', () => {
     for (const rel of ['.halo/sessions', '.halo/logs', '.halo/evo']) {
       expect(indexOfSeq(args, ['--tmpfs', path.join(workspace, rel)]), `--tmpfs ${rel}`).toBeGreaterThan(-1)
     }
-    expect(indexOfSeq(args, ['--ro-bind', '/dev/null', path.join(workspace, '.halo', 'halo.db')])).toBeGreaterThan(-1)
+    expect(indexOfSeq(args, ['--ro-bind', EMPTY_MASK, path.join(workspace, '.halo', 'halo.db')])).toBeGreaterThan(-1)
   })
 
   it('non-existent hidden paths are skipped (no mask args for a bare workspace)', () => {
@@ -268,6 +300,79 @@ describe('buildBwrapArgs workspace masking order', () => {
     fs.mkdirSync(bare, { recursive: true })
     const args = buildBwrapArgs({ workspaceRoot: bare, accessLevel: 'workspace' })
     expect(indexOfSeq(args, ['--tmpfs', path.join(bare, '.halo/sessions')])).toBe(-1)
-    expect(indexOfSeq(args, ['--ro-bind', '/dev/null', path.join(bare, '.halo', 'halo.db')])).toBe(-1)
+    expect(indexOfSeq(args, ['--ro-bind', EMPTY_MASK, path.join(bare, '.halo', 'halo.db')])).toBe(-1)
+  })
+})
+
+/**
+ * Contract: hidden files are masked with a real zero-byte file, not /dev/null
+ * (a /dev/null bind reads as EACCES inside bwrap and git treats an unreadable
+ * ~/.gitconfig as fatal). The mask file is created on demand and kept empty.
+ */
+describe('buildBwrapArgs empty-file mask', () => {
+  it('uses the empty mask file and keeps it zero bytes', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-mask-'))
+    try {
+      const hidden = path.join(root, 'token.txt')
+      fs.writeFileSync(hidden, 'x')
+      setSandboxHiddenPaths([], [hidden])
+      const args = buildBwrapArgs({ workspaceRoot: root, accessLevel: 'workspace' })
+      const i = args.indexOf(hidden)
+      expect(args.slice(i - 2, i + 1)).toEqual(['--ro-bind', EMPTY_MASK, hidden])
+      expect(args).not.toContain('/dev/null')
+      expect(fs.statSync(EMPTY_MASK).size).toBe(0)
+    } finally {
+      setSandboxHiddenPaths(DEFAULT_DIRS, DEFAULT_FILES)
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+/**
+ * Contract: the macOS Seatbelt profile mirrors the bwrap mounts — blanket
+ * write deny, then workspace/writable/temp allows, then hidden deny LAST
+ * (SBPL: the later matching rule wins, so the hidden deny must follow the
+ * workspace allow or the rw grant would re-expose .halo/sessions).
+ * sandbox-exec can't run in CI, so the profile text is the testable unit.
+ */
+describe('buildSeatbeltProfile', () => {
+  let root: string
+  let workspace: string
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-sbpl-'))
+    workspace = path.join(root, 'ws "q"')
+    fs.mkdirSync(workspace)
+  })
+  afterEach(() => {
+    setSandboxHiddenPaths(DEFAULT_DIRS, DEFAULT_FILES)
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  const q = (p: string) => `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+
+  it('workspace level: rule order and realpath\'d, escaped paths', () => {
+    setSandboxHiddenPaths([path.join(root, 'hid')], [path.join(root, 'f.txt')], [path.join(root, 'rw')])
+    const p = buildSeatbeltProfile({ workspaceRoot: workspace, accessLevel: 'workspace' })
+    const ws = fs.realpathSync(workspace)
+    const lines = p.split('\n')
+    expect(lines.slice(0, 3)).toEqual(['(version 1)', '(allow default)', '(deny file-write*)'])
+    expect(lines[3]).toMatch(/^\(allow file-write\* /)
+    expect(lines[3]).toContain(`(subpath ${q(ws)})`)
+    expect(lines[3]).toContain(`(subpath ${q(path.join(fs.realpathSync(root), 'rw'))})`)
+    expect(lines[3]).toContain('(subpath "/private/tmp")')
+    expect(lines[4]).toMatch(/^\(deny file-read\* file-write\* /)
+    expect(lines[4]).toContain(`(subpath ${q(path.join(ws, '.halo/sessions'))})`)
+    expect(lines[4]).toContain(`(literal ${q(path.join(ws, '.halo/halo.db'))})`)
+    expect(lines[4]).toContain(`(subpath ${q(path.join(fs.realpathSync(root), 'hid'))})`)
+    expect(lines[4]).toContain(`(literal ${q(path.join(fs.realpathSync(root), 'f.txt'))})`)
+    expect(p).toContain('ws \\"q\\"')
+  })
+
+  it('readonly level: no workspace or writable_dirs write grant', () => {
+    setSandboxHiddenPaths([], [], [path.join(root, 'rw')])
+    const p = buildSeatbeltProfile({ workspaceRoot: workspace, accessLevel: 'readonly' })
+    expect(p).not.toContain(q(fs.realpathSync(workspace)) + ')')
+    expect(p).not.toContain(q(path.join(fs.realpathSync(root), 'rw')))
+    expect(p).toContain('(subpath "/private/tmp")')
   })
 })
