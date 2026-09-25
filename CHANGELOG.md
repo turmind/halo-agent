@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-25
+
 ### Added
 
 - Cron: a job can run inside an existing root session instead of its own `cron-<jobId>` — pick one in the admin Cron form (recent root sessions, or type an id), send `sessionId` on `POST`/`PUT /api/cron/jobs`, or pass `--session` to the cron skill. The session keeps its own agent and access level; a fire is skipped (recorded as `skipped`) while a turn is running in that session or another job's run is on it, and a message sent into the session while its run is in flight can lose one of the two turns (logged as a warning, not prevented). `cron.db` gains a nullable `session_id` column (migration v2); template v65.
@@ -579,7 +581,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.3.4...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/turmind/halo-agent/compare/v1.3.4...v1.4.0
 [1.3.4]: https://github.com/turmind/halo-agent/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/turmind/halo-agent/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/turmind/halo-agent/compare/v1.3.1...v1.3.2
