@@ -86,7 +86,7 @@ Unified session log API — list + read session files across all agents.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/sessions/logs?projectId=` | List session metadata, keyset-paginated. Default returns each top-level row + all descendants (sidebar tree); `rootOnly=1` returns roots only (chat-header dropdown) |
+| GET | `/api/sessions/logs?projectId=` | List session metadata, keyset-paginated. Default returns each top-level row + all descendants (sidebar tree); `rootOnly=1` returns roots only (chat-header dropdown). A `projectId` with no `.halo/` (plain or missing directory) returns `{sessions: [], nextCursor: null}` without scaffolding it — a list never turns a directory into a workspace |
 | GET | `/api/sessions/logs/:id?projectId=` | Full session log (scans across agent dirs) — the **active** file only; archived history is a separate call |
 | GET | `/api/sessions/logs/:id/archive/:n?projectId=` | One archived UI-log segment — see [detail](#get-apisessionslogsidarchivenprojectidabs) |
 | DELETE | `/api/sessions/logs/:id?projectId=` | Delete the session log (and all of its archive segments) |
@@ -317,7 +317,7 @@ File: `packages/server/src/routes/agent-configs.ts`
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/agent-configs?projectId=` | List agents (global + workspace merged) |
+| GET | `/api/agent-configs?projectId=` | List agents (global + workspace merged). A `projectId` with no `.halo/` yields the global agents only and is not scaffolded |
 | GET | `/api/agent-configs/tools` | Available workspace tools |
 | GET | `/api/agent-configs/models` | Available model providers and models |
 | POST | `/api/agent-configs` | Create a new agent |

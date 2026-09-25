@@ -576,6 +576,12 @@ export function ensureHaloHome(haloHome: string): void {
   } catch { /* best-effort */ }
 }
 
+/** True when `root` is already a halo workspace (has `.halo/`). Read paths use
+ *  this to avoid ensureWorkspaceHalo, which scaffolds any existing directory. */
+export function hasWorkspaceHalo(root: string): boolean {
+  return fs.existsSync(path.join(root, '.halo'))
+}
+
 /**
  * Ensure a workspace has a `.halo/` directory with required sub-dirs.
  * Throws if the workspace root itself doesn't exist — we don't resurrect

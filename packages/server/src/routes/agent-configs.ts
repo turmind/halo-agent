@@ -9,6 +9,7 @@ import { buildRelayTools, type RelayTarget } from '../agents/relay.js'
 import { resolveMdFilePath, writeMdFile } from '../prompts/md-loader.js'
 import { config, getModelsRegistry } from '../config.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
+import { hasWorkspaceHalo } from '../init.js'
 import { isSafeIdSegment } from './workspace-path.js'
 import { createMtimeCache } from './mtime-cache.js'
 
@@ -274,8 +275,9 @@ export function createAgentConfigRoutes() {
       if (wsIds.has(a.id)) a.overridden = true
     }
 
-    // Merge disabled state from workspace DB
-    const disabledSet = projectId ? getDisabledSet(getWorkspaceDb(projectId).db, 'agent') : new Set<string>()
+    // Merge disabled state from workspace DB. getWorkspaceDb scaffolds `.halo/`,
+    // so a path that isn't a workspace yet has nothing disabled — don't open it.
+    const disabledSet = projectId && hasWorkspaceHalo(projectId) ? getDisabledSet(getWorkspaceDb(projectId).db, 'agent') : new Set<string>()
     const allAgents = [...globalAgents, ...workspaceAgents]
     for (const a of allAgents) {
       a.disabled = disabledSet.has(`${a.scope}:${a.id}`)

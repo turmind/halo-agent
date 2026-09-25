@@ -7,6 +7,7 @@ import { findSessionFileData, findAndDeleteSessionFile, findAndUpdateSessionTitl
 import { findLatestGoal } from '../agents/goal-mode.js'
 import { broadcast } from '../ws/broadcast.js'
 import { isSafeIdSegment } from './workspace-path.js'
+import { hasWorkspaceHalo } from '../init.js'
 
 /** Raw content block — supports both Bedrock and Anthropic API formats */
 interface RawContentBlock {
@@ -177,6 +178,9 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
 
     if (!smRegistry) return c.json({ error: 'session manager not initialized' }, 500)
     if (!projectId) return c.json({ error: 'projectId required' }, 400)
+    // A list must not turn a directory into a workspace (getOrCreate scaffolds
+    // `.halo/` and builds a SessionManager): no `.halo/` → no sessions.
+    if (!hasWorkspaceHalo(projectId)) return c.json({ sessions: [], nextCursor: null })
 
     const sm = smRegistry.getOrCreate(projectId)
 

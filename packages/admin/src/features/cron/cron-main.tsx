@@ -324,6 +324,10 @@ function CronForm({ initial, onClose, onSaved }: {
   const activeProject = useProjectStore((s) => s.activeProject)
   const [label, setLabel] = useState(initial?.label ?? '')
   const [workspacePath, setWorkspacePath] = useState(initial?.workspacePath ?? activeProject?.path ?? '')
+  // Path the option lists are loaded for — updated on blur / Enter, not per
+  // keystroke: both list endpoints open the path as a workspace (500 on a
+  // partial path, and scaffold `.halo/` into any real intermediate directory).
+  const [committedPath, setCommittedPath] = useState(workspacePath)
   const [agentId, setAgentId] = useState(initial?.agentId ?? 'default')
   const [agentOptions, setAgentOptions] = useState<Array<{ id: string; name: string }>>([])
   // Empty string = the job's own `cron-<jobId>` session (server stores null).
@@ -408,7 +412,7 @@ function CronForm({ initial, onClose, onSaved }: {
     let alive = true
     const load = async () => {
       try {
-        const { agents } = await api.agentConfigs.list(workspacePath || undefined)
+        const { agents } = await api.agentConfigs.list(committedPath || undefined)
         if (!alive) return
         const effective = agents.filter((a) => !a.id.startsWith('__') && !a.overridden && !a.disabled)
         const opts = effective.map((a) => ({ id: a.id, name: a.name || a.id }))
@@ -420,30 +424,30 @@ function CronForm({ initial, onClose, onSaved }: {
         // value — saving persists an agent the new workspace can't
         // resolve, and the cron run later crashes with "missing model
         // config" because agent.yaml isn't there.
-        if (opts.length > 0 && !opts.some((o) => o.id === agentId)) {
-          setAgentId(opts[0].id)
-        }
+        // Functional update so the effect needn't depend on agentId (it used
+        // to, which refetched the list after every pick).
+        if (opts.length > 0) setAgentId((cur) => (opts.some((o) => o.id === cur) ? cur : opts[0].id))
       } catch (err) {
         console.error('agentConfigs.list', err)
       }
     }
-    if (workspacePath) void load()
+    if (committedPath) void load()
     return () => { alive = false }
-  }, [workspacePath, agentId])
+  }, [committedPath])
 
   // Root sessions of the picked workspace for the session combobox (newest
   // 50 — older ids can still be typed in). Presets are an aid only.
   useEffect(() => {
     let alive = true
-    if (!workspacePath) { setSessionOptions([]); return }
-    api.sessionLogs.list(workspacePath, { rootOnly: true, limit: 50 })
+    if (!committedPath) return
+    api.sessionLogs.list(committedPath, { rootOnly: true, limit: 50 })
       .then(({ sessions }) => {
         if (!alive) return
         setSessionOptions(sessions.map((s) => ({ id: s.id, label: `${s.title || s.id} · ${s.agentName || s.agentId}` })))
       })
       .catch((err) => { if (alive) setSessionOptions([]); console.error('sessionLogs.list', err) })
     return () => { alive = false }
-  }, [workspacePath])
+  }, [committedPath])
 
   // Load channel targets once.
   useEffect(() => {
@@ -606,7 +610,7 @@ function CronForm({ initial, onClose, onSaved }: {
         </Field>
 
         <Field label={t('cron.form.workspace')}>
-          <input value={workspacePath} onChange={(e) => setWorkspacePath(e.target.value)} className="input-base font-mono" placeholder={t('cron.form.workspace.placeholder')} />
+          <input value={workspacePath} onChange={(e) => setWorkspacePath(e.target.value)} onBlur={() => setCommittedPath(workspacePath)} onKeyDown={(e) => { if (e.key === 'Enter') setCommittedPath(workspacePath) }} className="input-base font-mono" placeholder={t('cron.form.workspace.placeholder')} />
         </Field>
 
         <Field label={t('cron.form.agent')}>
@@ -622,7 +626,7 @@ function CronForm({ initial, onClose, onSaved }: {
           <Combobox
             value={sessionId}
             placeholder={t('cron.form.session.placeholder')}
-            presets={sessionOptions}
+            presets={committedPath ? sessionOptions : []}
             onCommit={(next) => setSessionId(next.trim())}
             minWidth={280}
           />
