@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Cron: a job can run inside an existing root session instead of its own `cron-<jobId>` — pick one in the admin Cron form (recent root sessions, or type an id), send `sessionId` on `POST`/`PUT /api/cron/jobs`, or pass `--session` to the cron skill. The session keeps its own agent and access level; a fire is skipped (recorded as `skipped`) while a turn is running in that session or another job's run is on it, and a message sent into the session while its run is in flight can lose one of the two turns (logged as a warning, not prevented). `cron.db` gains a nullable `session_id` column (migration v2); template v65.
+
 ### Changed
 
 - Models: the MiMo provider shows as "Xiaomi MiMo" (id `mimo-token-plan-china` unchanged, existing configs keep working) and its endpoint presets now cover the Token Plan Singapore / Europe clusters plus the pay-as-you-go `https://api.xiaomimimo.com/anthropic` — `sk-` keys only work there, `tp-`/`ttp-` keys only on the `token-plan-*` hosts; template v63.
