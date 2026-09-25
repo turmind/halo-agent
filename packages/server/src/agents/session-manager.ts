@@ -1141,6 +1141,23 @@ export class SessionManager implements SessionManagerInternals {
     this.uiStore.dropUIState(sessionId)
   }
 
+  /** Another process (a cron `halo cli` child) just wrote this root session's
+   *  files. Drop the idle in-memory copies — the tree's AgentSessions (raw
+   *  history, loaded by any view via ensureSession and never evicted while
+   *  idle) and the root's UIState — WITHOUT saving, so the next view/message
+   *  re-reads disk instead of overwriting the other writer's turn with this
+   *  process's stale snapshot. Returns false (and drops nothing) while any
+   *  turn/compact in the tree is in flight: live state can't be discarded,
+   *  and the two writers race — the accepted cost of sharing a session. */
+  forgetExternalWrite(rootId: string): boolean {
+    if (this.hasActiveWorkInTree(rootId)) return false
+    for (const id of [...this.sessions.keys()]) {
+      if (id === rootId || id.startsWith(`${rootId}>`)) this.sessions.delete(id)
+    }
+    this.uiStore.dropUIState(rootId)
+    return true
+  }
+
   // ── Loop detection ──────────────────────────────────────────────────
 
   private static readonly LOOP_EXEMPT_TOOLS = new Set([

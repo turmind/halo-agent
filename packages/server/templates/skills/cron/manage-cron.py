@@ -36,6 +36,7 @@ Subcommands:
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -117,6 +118,21 @@ def parse_timeout_sec(raw: str | None) -> int | None:
         die(f'invalid --timeout-sec "{raw}": expected an integer (seconds)')
     if v < 60 or v > 21600:
         die('--timeout-sec must be between 60 and 21600')
+    return v
+
+
+SESSION_ID_RE = re.compile(r'^[A-Za-z0-9_:-]{1,200}$')
+
+
+def parse_session(raw: str | None) -> str | None:
+    """Validate --session: a root session id (same rule as the admin REST
+    routes — no `>` sub-session path). Empty = None = the job's own
+    `cron-<jobId>` session."""
+    if raw is None or not raw.strip():
+        return None
+    v = raw.strip()
+    if not SESSION_ID_RE.match(v):
+        die(f'invalid --session "{raw}": expected a root session id (letters, digits, _ : - only; no ">" sub-session path)')
     return v
 
 
@@ -205,6 +221,7 @@ def cmd_create(args):
     if run_at_ms is not None and run_at_ms <= now_ms():
         die('--run-at must be in the future')
     timeout_sec = parse_timeout_sec(args.timeout_sec)
+    session_id = parse_session(args.session)
 
     job_id = args.id or gen_job_id()
     now = now_ms()
@@ -217,8 +234,8 @@ def cmd_create(args):
 
     conn.execute(
         'INSERT INTO cron_jobs(id, label, workspace_path, agent_id, user_prompt, schedule, '
-        'run_at, timezone, timeout_sec, targets, enabled, created_at, updated_at) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'run_at, timezone, timeout_sec, session_id, targets, enabled, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (
             job_id,
             args.label,
@@ -229,6 +246,7 @@ def cmd_create(args):
             run_at_ms,
             args.timezone,
             timeout_sec,
+            session_id,
             json.dumps(targets, ensure_ascii=False),
             0 if args.disabled else 1,
             now, now,
@@ -260,10 +278,13 @@ def cmd_update(args):
         # `--timeout-sec ""` clears back to the runner default (NULL),
         # same convention as `--run-at ""`.
         sets.append(('timeout_sec', parse_timeout_sec(args.timeout_sec)))
+    if args.session is not None:
+        # `--session ""` clears back to the job's own cron-<jobId> session.
+        sets.append(('session_id', parse_session(args.session)))
     if args.targets is not None:
         sets.append(('targets', json.dumps(parse_targets(args.targets), ensure_ascii=False)))
     if not sets:
-        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--timezone/--timeout-sec/--targets')
+        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--timezone/--timeout-sec/--session/--targets')
     sets.append(('updated_at', now_ms()))
 
     placeholders = ', '.join(f'{k} = ?' for k, _ in sets)
@@ -410,6 +431,8 @@ def main():
     c.add_argument('--timezone', help='IANA tz, e.g. Asia/Shanghai')
     c.add_argument('--timeout-sec', dest='timeout_sec',
                    help='max run time in seconds, 60–21600 (default: unset = 3600)')
+    c.add_argument('--session',
+                   help="run in this existing root session id (default: the job's own cron-<jobId>)")
     c.add_argument('--targets',
                    help='comma-separated channelType:accountId[:chatId] list, or JSON array. '
                         'chatId pins delivery to a specific chat (e.g. when scheduling from inside a chat).')
@@ -427,6 +450,8 @@ def main():
     u.add_argument('--timezone')
     u.add_argument('--timeout-sec', dest='timeout_sec',
                    help='max run time in seconds, 60–21600; pass "" to clear back to default 3600')
+    u.add_argument('--session',
+                   help='root session id to run in; pass "" to clear back to cron-<jobId>')
     u.add_argument('--targets')
     u.set_defaults(func=cmd_update)
 

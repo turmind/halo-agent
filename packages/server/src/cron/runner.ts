@@ -10,9 +10,9 @@
  *   - in-memory state is rebuilt from the db on every server boot
  *     (durable schedule survives restart)
  *
- * Each job runs as a NEW session (`-n`) — daily-report style use cases
- * don't need conversation history. Sessions that need state can read
- * from `<workspace>/.halo/memory/` via `file_read` in the prompt.
+ * Each job runs in one stable session (`-s`): its own `cron-<jobId>` by
+ * default, or an existing root session picked on the job (`session_id`) —
+ * see runJob's session strategy for the shared-session guards.
  */
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -22,6 +22,8 @@ import { Cron } from 'croner'
 import { eq, lt } from 'drizzle-orm'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
 import { rawSqlite } from '../db/raw-sqlite.js'
+import { getWorkspaceDb } from '../db/index.js'
+import { agentSessions } from '../db/schema.js'
 import { dispatchToTargets, type CronTarget, type DispatchResult } from './dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
 import { cleanChildEnv } from '../child-env.js'
@@ -137,22 +139,49 @@ function killTreeHard(rootPid: number): void {
   }
 }
 
-/** POSIX: verify that `pid` is (still) the cron cli child for `jobId` by
- *  checking its command line for the stable session id `cron-<jobId>`
- *  (the cli is spawned with `-s cron-<jobId>`, see runJob). Guards the
- *  orphan sweep against pid reuse — a recorded pid may have been recycled
- *  by the OS for an unrelated process after the original cli died, and we
- *  must never signal a stranger. Returns false when the pid is dead
- *  (`ps -p` exits non-zero). Rare path (boot-time sweep only), so a sync
- *  exec is fine. */
-function isCronCliProcess(pid: number, jobId: string): boolean {
+/** POSIX: verify that `pid` is (still) a cron cli child running `sessionId`
+ *  by checking its command line for that id as a whole argv token (the cli
+ *  is spawned with `-s <sessionId>`, see runJob). Guards the orphan sweep
+ *  against pid reuse — a recorded pid may have been recycled by the OS for
+ *  an unrelated process after the original cli died, and we must never
+ *  signal a stranger. Returns false when the pid is dead (`ps -p` exits
+ *  non-zero). Rare path (boot-time sweep only), so a sync exec is fine. */
+function isCronCliProcess(pid: number, sessionId: string): boolean {
   try {
     const args = execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf-8' })
-    return args.includes(`cron-${jobId}`)
+    return args.trim().split(/\s+/).includes(sessionId)
   } catch {
     return false
   }
 }
+
+/** The session a job's cli runs in: the picked root session, else its own. */
+function effectiveSessionId(job: { id: string; sessionId: string | null }): string {
+  return job.sessionId ?? `cron-${job.id}`
+}
+
+/** `_inflightSessions` key. Realpath so two spellings of one workspace
+ *  collide; a missing workspace falls back to the resolved path (its run
+ *  fails on the existence check anyway). */
+function sessionKeyFor(workspacePath: string, sessionId: string): string {
+  let ws: string
+  try { ws = fs.realpathSync(workspacePath) } catch { ws = path.resolve(workspacePath) }
+  return `${ws}\n${sessionId}`
+}
+
+/** What the runner needs from the server's SessionManager registry to share
+ *  a session with it. Structural — the registry's `peek` (cache lookup only,
+ *  never constructs a manager) satisfies it; tests pass a stub. */
+export interface CronSessionHost {
+  hasActiveWorkInTree(rootId: string): boolean
+  forgetExternalWrite(rootId: string): boolean
+}
+export interface CronSessionRegistry { peek(workspacePath: string): CronSessionHost | undefined }
+
+let _sessionRegistry: CronSessionRegistry | null = null
+/** index.ts sets this once with the server registry. Unset (tests, CLI)
+ *  = no server-side sessions to guard. */
+export function setCronSessionRegistry(r: CronSessionRegistry | null): void { _sessionRegistry = r }
 
 interface ActiveSchedule {
   jobId: string
@@ -176,6 +205,11 @@ const _active = new Map<string, ActiveSchedule>()
  *  boot-time sweepOrphanRuns re-registers jobs whose previous-generation
  *  cli may still be alive). Exported for tests only. */
 export const _inflight = new Set<string>()
+
+/** Same guard one level up: `sessionKeyFor(workspace, sessionId)` of every
+ *  cli in flight. Two jobs may pick the same session — the later fire is
+ *  skipped exactly like a same-job overlap. Exported for tests only. */
+export const _inflightSessions = new Set<string>()
 
 /** Per-jobId fingerprint of the schedule we last instantiated croner with.
  *  Lets `reconcileFromDb` skip rows whose schedule/timezone/enabled
@@ -212,7 +246,8 @@ function newRunId(): string {
  *   a. register jobId in `_inflight` FIRST — the core invariant: while an
  *      orphan may be alive, no new cli is spawned for that job.
  *   b. POSIX + recorded pid: verify identity via the process command line
- *      (must contain `cron-<jobId>`, guarding against pid reuse), then
+ *      (must carry the job's session id as an argv token — `cron-<jobId>`
+ *      unless the job picked a session — guarding against pid reuse), then
  *      SIGTERM (cli handles it gracefully) with a SIGKILL-tree escalation
  *      after the grace window — same two-phase contract as the in-run
  *      timeout path.
@@ -237,8 +272,21 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
   const now = Date.now()
   for (const row of rows) {
     const { id: runId, jobId, pid } = row
-    // (a) Block new fires for this job while its orphan may still be alive.
+    // The session the orphan was spawned on, read from the job row (a job
+    // deleted since falls back to its default). If the job's session was
+    // re-pointed after that spawn, the fingerprint below won't match and the
+    // orphan is left alone — the safe direction.
+    const job = db.select().from(cronJobs).where(eq(cronJobs.id, jobId)).get()
+    const sessionId = effectiveSessionId(job ?? { id: jobId, sessionId: null })
+    const sessionKey = job ? sessionKeyFor(job.workspacePath, sessionId) : null
+    // (a) Block new fires for this job — and any other job on its session —
+    // while its orphan may still be alive.
     _inflight.add(jobId)
+    if (sessionKey) _inflightSessions.add(sessionKey)
+    const release = () => {
+      _inflight.delete(jobId)
+      if (sessionKey) _inflightSessions.delete(sessionKey)
+    }
 
     let needsKill = false
     let disposition: string
@@ -248,7 +296,7 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
         : `pid ${pid} not killed (Windows: cannot verify process identity)`
     } else if (pid == null) {
       disposition = 'no pid recorded'
-    } else if (!isCronCliProcess(pid, jobId)) {
+    } else if (!isCronCliProcess(pid, sessionId)) {
       disposition = `pid ${pid} already dead (or pid reused by another process); not killed`
     } else {
       needsKill = true
@@ -267,7 +315,7 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
 
     if (!needsKill || pid == null) {
       // (e) Nothing alive to wait for — release immediately.
-      _inflight.delete(jobId)
+      release()
       continue
     }
 
@@ -278,13 +326,13 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
     const timer = setTimeout(() => {
       // Re-verify identity before the hard kill — the pid may have been
       // recycled during the grace window.
-      if (isCronCliProcess(pid, jobId)) {
+      if (isCronCliProcess(pid, sessionId)) {
         console.log(`[Cron] orphan sweep: pid ${pid} (job ${jobId}) survived SIGTERM — SIGKILL tree`)
         killTreeHard(pid)
       }
       // (e) Orphan gone (SIGKILL is immediate; graceful exit already
       // happened otherwise) — let the job fire again.
-      _inflight.delete(jobId)
+      release()
     }, graceMs)
     // Best effort: don't hold the process open for a pending grace timer.
     // If the server dies inside the window the row is already marked and
@@ -529,12 +577,25 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   const logPath = logPathFor(runId)
   fs.mkdirSync(logsDir(), { recursive: true })
 
-  // Concurrency guard: same job already running in this process. Applies
-  // to both scheduled fires (cron expression too dense / previous run
-  // overran its interval) and manual run-now clicks while a run is
-  // in-flight. Record a 'skipped' audit row so the UI surfaces it, then
-  // bail without spawning anything.
-  if (_inflight.has(jobId)) {
+  const sessionId = effectiveSessionId(job)
+  const sessionKey = sessionKeyFor(job.workspacePath, sessionId)
+  // The server's live manager for this workspace, if it has one. peek only
+  // — building a manager here would run its boot reconcile as a side effect.
+  const host = _sessionRegistry?.peek(job.workspacePath)
+
+  // Concurrency guards, all recorded as a 'skipped' audit row so the UI
+  // surfaces them, then bail without spawning anything:
+  //  - same job already running in this process (cron expression too dense /
+  //    previous run overran / run-now click mid-run);
+  //  - another job's cli already on the same session;
+  //  - the server itself is mid-turn on that session tree (someone chatting
+  //    in the picked session) — a cli spawned now would be a second writer
+  //    on the same files.
+  const skipReason = _inflight.has(jobId) ? 'previous run still in progress'
+    : _inflightSessions.has(sessionKey) ? `session ${sessionId} busy: another cron run is in progress`
+    : host?.hasActiveWorkInTree(sessionId) ? `session ${sessionId} busy: a turn is running in it`
+    : null
+  if (skipReason) {
     db.insert(cronRuns).values({
       id: runId,
       jobId,
@@ -544,7 +605,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
       completedAt: startedAt,
       output: null,
       exitCode: null,
-      failureReason: 'previous run still in progress',
+      failureReason: skipReason,
       logPath: null,
       dispatchResults: null,
     }).run()
@@ -552,6 +613,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     return runId
   }
   _inflight.add(jobId)
+  _inflightSessions.add(sessionKey)
   try {
 
   // Persist a 'running' row up front so the UI sees the run mid-flight.
@@ -591,16 +653,20 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   // into the per-run log; stdout is also captured to memory because we
   // feed it into the channel dispatcher.
   //
-  // Session strategy: every job gets a stable `cron-<jobId>` session id.
-  // First fire creates the session (cli's `-s` does create-on-missing
-  // since this commit); subsequent fires resume it, so the conversation
-  // accumulates over time and the user can review the full history in
-  // the admin UI's Sessions tab.
+  // Session strategy: every job runs in one stable session — its own
+  // `cron-<jobId>` unless the job picked an existing root session. First
+  // fire creates it (cli's `-s` is create-on-missing, with the job's agent);
+  // subsequent fires resume it (with the session's own agent), so the
+  // conversation accumulates and the user can review it in the Sessions tab.
   const cli = resolveHaloCli()
-  const sessionId = `cron-${job.id}`
   // Prompt goes on stdin (not argv) so a long cron prompt can't overflow the
   // Windows command-line limit; the cli reads stdin when it's not a TTY.
   const args = ['cli', '-a', job.agentId, '-s', sessionId, '-w', job.workspacePath]
+  // Keep an existing session's access level. The cli defaults to full, and
+  // sendUserMessage persists any level that differs from the session's — so
+  // without this a cron run would silently promote a restricted session.
+  const accessLevel = readSessionAccessLevel(job.workspacePath, sessionId)
+  if (accessLevel) args.push('--access', accessLevel)
   // Windows can't spawn a `.cmd` directly (Node ≥21.7 → EINVAL). Route through
   // `cmd.exe /c`, which Node docs recommend for batch files and quotes
   // space-containing argv itself (a plain `shell:true` word-splits the path).
@@ -616,7 +682,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   // before the cli's own output starts.
   const teeStream = fs.createWriteStream(logPath, { flags: 'a' })
   teeStream.write(`=== ${new Date().toISOString()} cron run ${runId} job=${jobId} trigger=${triggerKind} ===\n`)
-  teeStream.write(`agent=${job.agentId} workspace=${job.workspacePath} schedule=${job.schedule}\n`)
+  teeStream.write(`agent=${job.agentId} session=${sessionId}${accessLevel ? ` access=${accessLevel}` : ''} workspace=${job.workspacePath} schedule=${job.schedule}\n`)
   teeStream.write(`prompt: ${job.userPrompt}\n\n`)
 
   let stdout = ''
@@ -691,6 +757,18 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     })
   })
 
+  // The cli wrote the session files behind the server's back. Drop the
+  // server's idle cached copy so the next view / message re-reads disk
+  // instead of saving its stale snapshot over the cron turn. Re-peek: the
+  // manager may have been built during the run (someone opened the session).
+  const hostAfter = _sessionRegistry?.peek(job.workspacePath)
+  if (hostAfter && !hostAfter.forgetExternalWrite(sessionId)) {
+    // A turn started in the session while the cli ran (the guard above only
+    // covers turns already running at spawn). Both processes wrote it; the
+    // last save wins — the accepted cost of sharing a session with a job.
+    console.warn(`[Cron] ${jobId}: session ${sessionId} had a server-side turn running when the cli exited; one of the two turns may be missing from its history`)
+  }
+
   // Decide success vs. failure. Empty stdout on a success exit is treated
   // as failure — most cron use cases (daily report, broadcast) rely on
   // there being something to dispatch.
@@ -745,6 +823,23 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   return runId
   } finally {
     _inflight.delete(jobId)
+    _inflightSessions.delete(sessionKey)
+  }
+}
+
+/** Access level stored on an existing session's row, for the cli's
+ *  `--access` (null column = full). Null when there's nothing to preserve:
+ *  the session doesn't exist yet (the cli creates it at its full default,
+ *  as before) or the workspace db can't be opened. */
+function readSessionAccessLevel(workspacePath: string, sessionId: string): 'full' | 'workspace' | 'readonly' | null {
+  try {
+    const row = getWorkspaceDb(workspacePath).db
+      .select({ accessLevel: agentSessions.accessLevel })
+      .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
+    if (!row) return null
+    return row.accessLevel === 'workspace' || row.accessLevel === 'readonly' ? row.accessLevel : 'full'
+  } catch {
+    return null
   }
 }
 

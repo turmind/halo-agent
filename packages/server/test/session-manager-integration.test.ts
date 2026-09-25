@@ -165,3 +165,46 @@ describe('query store wired into the real manager (second knife)', () => {
     expect(sm.findLatestByPrefix('wx_u_')?.id).toBe('wx_u_b')
   })
 })
+
+describe('forgetExternalWrite — drop stale in-memory copies after a cron cli write', () => {
+  /** Minimal in-memory session stub — hasActiveWorkInTree only reads these. */
+  function putSession(id: string, busy = false): void {
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, {
+      agentId: 'default', agentName: 'Default', promise: busy ? Promise.resolve() : null, isCompacting: false,
+    })
+  }
+
+  it('idle tree: drops root + descendants + UI state so the next read sees the external write', () => {
+    seedRow('rootE', { agentId: 'default' })
+    sm.appendUserMessage('rootE', 'before cron')
+    sm.emitEvent('rootE', { type: 'complete' })
+    putSession('rootE')
+    putSession('rootE>sub')
+    putSession('rootEx')  // prefix-alike but a different tree — must survive
+
+    // A second process (the cron `halo cli` child) appends a turn to the same file.
+    const other = new SessionManager(ws)
+    other.getUIState('rootE')
+    other.appendUserMessage('rootE', 'from cron')
+    other.emitEvent('rootE', { type: 'complete' })
+
+    expect(sm.forgetExternalWrite('rootE')).toBe(true)
+    expect(sm.sessions.has('rootE')).toBe(false)
+    expect(sm.sessions.has('rootE>sub')).toBe(false)
+    expect(sm.sessions.has('rootEx')).toBe(true)
+    expect(sm.getCachedUIState('rootE')).toBeNull()
+    expect(sm.getUIState('rootE')!.messageLog.map((m) => m.content)).toEqual(['before cron', 'from cron'])
+  })
+
+  it('busy tree: refuses and keeps everything in memory', () => {
+    seedRow('rootB', { agentId: 'default' })
+    sm.appendUserMessage('rootB', 'live')
+    putSession('rootB')
+    putSession('rootB>sub', true)
+
+    expect(sm.forgetExternalWrite('rootB')).toBe(false)
+    expect(sm.sessions.has('rootB')).toBe(true)
+    expect(sm.sessions.has('rootB>sub')).toBe(true)
+    expect(sm.getCachedUIState('rootB')).not.toBeNull()
+  })
+})

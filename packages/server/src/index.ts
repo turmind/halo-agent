@@ -36,7 +36,7 @@ import { setRelayRegistry } from './agents/relay.js'
 import { createChannelDb, setChannelDb } from './db/channel-db.js'
 import { createCronDb, setCronDb } from './db/cron-db.js'
 import { createRunsDb, setRunsDb, listRunningWorkspaces } from './db/runs-db.js'
-import { startCronDaemon, stopCronDaemon } from './cron/runner.js'
+import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
 import { createEvoDb, setEvoDb } from './db/evo-db.js'
 import { setEvoSpawner, startEvoTicker, stopEvoTicker } from './evolution/ticker.js'
@@ -424,6 +424,9 @@ if (!AGENTCORE) {
 // flag means "reconcile if the workspace claim succeeds", not "always".
 const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
 setRelayRegistry(registry)
+// Cron jobs may run in a user-picked session; the runner peeks the live
+// managers to skip busy sessions and drop stale caches after a cli run.
+setCronSessionRegistry(registry)
 
 // Run ledger eager sweep: build the SessionManager NOW for every workspace
 // that has leftover `running_sessions` rows, so its constructor chain

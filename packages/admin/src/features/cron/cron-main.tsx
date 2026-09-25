@@ -214,6 +214,7 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
           <div><span className="text-[var(--foreground)]">{t('cron.field.agent')}</span> {job.agentId}</div>
           <div><span className="text-[var(--foreground)]">{t('cron.field.timeoutSec')}</span> {job.timeoutSec != null ? `${job.timeoutSec}s` : t('cron.field.timeoutSecDefault')}</div>
           <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.workspace')}</span> {job.workspacePath}</div>
+          <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.session')}</span> <span className="font-mono">{job.sessionId ?? t('cron.field.sessionDefault', { id: `cron-${job.id}` })}</span></div>
           <div className="col-span-2"><span className="text-[var(--foreground)]">{t('cron.field.targets')}</span> {job.targets.length === 0
             ? t('cron.field.targetsLogOnly')
             : job.targets.map((tg) => `${tg.channelType}:${tg.accountId}${tg.chatId ? '/' + tg.chatId : ''}`).join(', ')}</div>
@@ -325,6 +326,9 @@ function CronForm({ initial, onClose, onSaved }: {
   const [workspacePath, setWorkspacePath] = useState(initial?.workspacePath ?? activeProject?.path ?? '')
   const [agentId, setAgentId] = useState(initial?.agentId ?? 'default')
   const [agentOptions, setAgentOptions] = useState<Array<{ id: string; name: string }>>([])
+  // Empty string = the job's own `cron-<jobId>` session (server stores null).
+  const [sessionId, setSessionId] = useState(initial?.sessionId ?? '')
+  const [sessionOptions, setSessionOptions] = useState<Array<{ id: string; label: string }>>([])
   // Trigger mode: cron expression vs. one-shot (at-mode). For an existing
   // job, infer from runAt presence; new jobs default to recurring.
   const [mode, setMode] = useState<'recurring' | 'oneShot'>(initial?.runAt ? 'oneShot' : 'recurring')
@@ -426,6 +430,20 @@ function CronForm({ initial, onClose, onSaved }: {
     if (workspacePath) void load()
     return () => { alive = false }
   }, [workspacePath, agentId])
+
+  // Root sessions of the picked workspace for the session combobox (newest
+  // 50 — older ids can still be typed in). Presets are an aid only.
+  useEffect(() => {
+    let alive = true
+    if (!workspacePath) { setSessionOptions([]); return }
+    api.sessionLogs.list(workspacePath, { rootOnly: true, limit: 50 })
+      .then(({ sessions }) => {
+        if (!alive) return
+        setSessionOptions(sessions.map((s) => ({ id: s.id, label: `${s.title || s.id} · ${s.agentName || s.agentId}` })))
+      })
+      .catch((err) => { if (alive) setSessionOptions([]); console.error('sessionLogs.list', err) })
+    return () => { alive = false }
+  }, [workspacePath])
 
   // Load channel targets once.
   useEffect(() => {
@@ -555,6 +573,8 @@ function CronForm({ initial, onClose, onSaved }: {
           runAt: mode === 'oneShot' ? runAtMs : null,
           // null explicitly clears a previously-set timeout back to default.
           timeoutSec: timeoutSec ?? null,
+          // '' = default session; null clears a previously-picked one.
+          sessionId: sessionId || null,
         })
       } else {
         await api.cron.createJob({
@@ -562,6 +582,7 @@ function CronForm({ initial, onClose, onSaved }: {
           schedule: mode === 'recurring' ? schedule : '',
           runAt: mode === 'oneShot' ? runAtMs : undefined,
           timeoutSec,
+          sessionId: sessionId || undefined,
         })
       }
       onSaved()
@@ -570,7 +591,7 @@ function CronForm({ initial, onClose, onSaved }: {
     } finally {
       setSubmitting(false)
     }
-  }, [initial, label, workspacePath, agentId, userPrompt, mode, schedule, runAtLocal, timezone, hostTz, computeRunAtMs, timeoutSecInput, pickedTargets, chatIdInputs, enabled, onSaved, t])
+  }, [initial, label, workspacePath, agentId, sessionId, userPrompt, mode, schedule, runAtLocal, timezone, hostTz, computeRunAtMs, timeoutSecInput, pickedTargets, chatIdInputs, enabled, onSaved, t])
 
   return (
     <div className="flex h-full flex-col">
@@ -595,6 +616,17 @@ function CronForm({ initial, onClose, onSaved }: {
               <option key={a.id} value={a.id}>{a.name} ({a.id})</option>
             ))}
           </select>
+        </Field>
+
+        <Field label={t('cron.form.session')}>
+          <Combobox
+            value={sessionId}
+            placeholder={t('cron.form.session.placeholder')}
+            presets={sessionOptions}
+            onCommit={(next) => setSessionId(next.trim())}
+            minWidth={280}
+          />
+          <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>
         </Field>
 
         <Field label={t('cron.form.mode')}>

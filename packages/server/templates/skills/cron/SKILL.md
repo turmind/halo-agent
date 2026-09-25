@@ -54,6 +54,7 @@ Sensible defaults if user didn't say:
 | targets    | none (log only — the run shows in admin Cron tab)             |
 | label      | summarize from prompt + schedule                              |
 | timeout    | leave unset (3600s) — see `--timeout-sec` below               |
+| session    | leave unset (the job's own `cron-<jobId>`) — see `--session` below |
 | prompt     | pass the user's task as-is — the runner prepends an "unattended run, don't ask questions" notice to every fire, so don't add one yourself |
 
 ### 2. Translate the schedule
@@ -86,6 +87,20 @@ that the server kills after `timeout_sec` seconds (integer, 60–21600). Unset
 should fail fast ("kill it after 5 minutes" → `--timeout-sec 300`), or a
 heavy analysis run that needs more than an hour (`--timeout-sec 7200`). On
 `update`, pass `--timeout-sec ""` to clear back to the default.
+
+**Run inside an existing session (`--session`, optional)** — by default every
+job accumulates its own `cron-<jobId>` session. Pass `--session <rootSessionId>`
+only when the user wants the runs to continue a specific conversation (the
+agent then sees that session's history). Rules the user should hear once:
+- the session keeps **its own agent and access level** — `--agent` only
+  applies if the session doesn't exist yet;
+- a fire is **skipped** while a turn is already running in that session;
+- if the user chats in that session while a run is in flight, one of the two
+  turns may be missing from its history afterwards.
+
+Root session ids only (no `>` sub-session paths). You don't know session ids
+yourself — ask the user (admin → Sessions) rather than guessing. On `update`,
+pass `--session ""` to go back to the job's own session.
 
 ### 3. Channels (only when delivery is wanted)
 

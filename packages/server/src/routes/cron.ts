@@ -35,6 +35,9 @@ interface CreateBody {
   /** Max seconds one cron-fired cli may run (60–21600). Unset/null = the
    *  runner's default 3600. */
   timeoutSec?: number
+  /** Root session the cli runs in. Unset/null/'' = the job's own
+   *  `cron-<jobId>` session. An existing session keeps its own agent. */
+  sessionId?: string
   /** Per-target `chatId` is optional. When set, dispatch only sends to that
    *  chat (pinning the schedule to where it was created). When unset,
    *  telegram fans out to every numeric id in `allowedUsers`. */
@@ -44,8 +47,9 @@ interface CreateBody {
 
 /** PUT body — same fields as create, all optional. `runAt: null` explicitly
  *  clears the one-shot fire time (the admin form sends it when switching a
- *  job back to recurring); `timeoutSec: null` clears back to the default. */
-type UpdateBody = Partial<Omit<CreateBody, 'runAt' | 'timeoutSec'>> & { runAt?: number | null; timeoutSec?: number | null }
+ *  job back to recurring); `timeoutSec: null` clears back to the default;
+ *  `sessionId: null` (or '') clears back to `cron-<jobId>`. */
+type UpdateBody = Partial<Omit<CreateBody, 'runAt' | 'timeoutSec' | 'sessionId'>> & { runAt?: number | null; timeoutSec?: number | null; sessionId?: string | null }
 
 function newJobId(): string {
   return `cron-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -78,6 +82,24 @@ function validateTimeoutSec(v: unknown): string | null {
     return `timeoutSec must be between ${TIMEOUT_SEC_MIN} and ${TIMEOUT_SEC_MAX}`
   }
   return null
+}
+
+/** Root session ids only — no `>` sub-session paths. The charset every
+ *  channel / cli-minted id already fits, and nothing that could escape the
+ *  sessions dir once the id becomes a file name. */
+const SESSION_ID_RE = /^[A-Za-z0-9_:-]{1,200}$/
+
+/** Normalize a `sessionId` body value: null/undefined/blank → null (= the
+ *  job's default `cron-<jobId>`), else a validated root session id. */
+function parseSessionId(v: unknown): { sessionId: string | null } | { error: string } {
+  if (v === undefined || v === null) return { sessionId: null }
+  if (typeof v !== 'string') return { error: 'sessionId must be a string or null' }
+  const s = v.trim()
+  if (s.length === 0) return { sessionId: null }
+  if (!SESSION_ID_RE.test(s)) {
+    return { error: 'sessionId must be a root session id (letters, digits, _ : - only; no ">" sub-session path)' }
+  }
+  return { sessionId: s }
 }
 
 export function createCronRoutes(): Hono {
@@ -139,6 +161,8 @@ export function createCronRoutes(): Hono {
       const err = validateTimeoutSec(body.timeoutSec)
       if (err) return c.json({ error: err }, 400)
     }
+    const session = parseSessionId(body.sessionId)
+    if ('error' in session) return c.json({ error: session.error }, 400)
 
     const id = newJobId()
     const now = Date.now()
@@ -152,6 +176,7 @@ export function createCronRoutes(): Hono {
       runAt: hasRunAt ? body.runAt! : null,
       timezone: body.timezone ?? null,
       timeoutSec: body.timeoutSec ?? null,
+      sessionId: session.sessionId,
       targets: JSON.stringify(body.targets ?? []),
       enabled: body.enabled === false ? 0 : 1,
       lastRunStatus: null,
@@ -200,6 +225,10 @@ export function createCronRoutes(): Hono {
       const err = validateTimeoutSec(body.timeoutSec)
       if (err) return c.json({ error: err }, 400)
     }
+    // sessionId: same partial-body contract — undefined = untouched,
+    // null / '' = clear back to cron-<jobId>.
+    const session = parseSessionId(body.sessionId)
+    if ('error' in session) return c.json({ error: session.error }, 400)
 
     // Recurring vs at-mode exclusivity on the MERGED row (db contract:
     // exactly one of schedule/runAt is set per job — see cron-db.ts).
@@ -234,6 +263,7 @@ export function createCronRoutes(): Hono {
     if (body.runAt !== undefined || clearRunAt) patch.runAt = nextRunAt
     if (body.timezone !== undefined) patch.timezone = body.timezone || null
     if (body.timeoutSec !== undefined) patch.timeoutSec = body.timeoutSec
+    if (body.sessionId !== undefined) patch.sessionId = session.sessionId
     if (body.targets !== undefined) patch.targets = JSON.stringify(body.targets)
     if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
 

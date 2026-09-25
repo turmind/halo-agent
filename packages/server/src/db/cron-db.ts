@@ -45,6 +45,10 @@ export const cronJobs = sqliteTable('cron_jobs', {
    *  it. NULL = default 3600 (runner.ts CLI_TIMEOUT_SEC). Range 60–21600,
    *  enforced at the write points (REST routes / skill helper). */
   timeoutSec: integer('timeout_sec'),
+  /** Root session id the cli runs in. NULL = the job's own `cron-<jobId>`
+   *  session. When it names an existing session the cli resumes it with that
+   *  session's own agent (`agentId` only applies when the session is new). */
+  sessionId: text('session_id'),
   /** JSON array of `{channelType, accountId}` records. Cron output (final
    *  assistant text) is dispatched to each one. Empty array = log only. */
   targets: text('targets').notNull().default('[]'),
@@ -97,6 +101,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   run_at          INTEGER,
   timezone        TEXT,
   timeout_sec     INTEGER,
+  session_id      TEXT,
   targets         TEXT NOT NULL DEFAULT '[]',
   enabled         INTEGER NOT NULL DEFAULT 1,
   last_run_status TEXT,
@@ -136,6 +141,8 @@ export const CRON_MIGRATIONS: Migration[] = [
     addColumnIfMissing(s, 'cron_jobs', 'timeout_sec', 'INTEGER')
     addColumnIfMissing(s, 'cron_runs', 'pid', 'INTEGER')
   },
+  // v2: `session_id` — run the job in a chosen root session instead of cron-<jobId>.
+  (s) => addColumnIfMissing(s, 'cron_jobs', 'session_id', 'TEXT'),
 ]
 
 export function createCronDb(globalDir: string) {
