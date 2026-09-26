@@ -10,11 +10,11 @@ import { join } from 'node:path'
  * so after a restart a session that resumed on its own (run-ledger restart
  * nudge, queued turn) streamed its reply into the void until the user wrote
  * again. `startAccount` now re-wires the user's latest existing session from
- * the account row (wechat: `config.contextTokens`, telegram:
+ * the account row (wechat: `config.contextTokens`, telegram / slack / feishu:
  * `config.lastActiveChatId`) via `restoreChannelRoute`.
  *
- * Driven through the REAL `startWechatChannel` / `startTelegramChannel`, a
- * real registry and channel db; only the wire (wechat fetch, grammY Bot) is
+ * Driven through the REAL `start*Channel`, a real registry and channel db;
+ * only the wire (wechat fetch, grammY Bot, slack / feishu api + Lark SDK) is
  * mocked. "Restart" = a fresh registry + channel start over the same db.
  */
 
@@ -37,10 +37,50 @@ vi.mock('grammy', () => ({
   InputFile: class {},
 }))
 
+const imState = vi.hoisted(() => ({
+  slack: [] as Array<{ channel: string; threadTs?: string; text: string }>,
+  feishu: [] as Array<{ kind: 'send' | 'reply'; to: string; text: string }>,
+}))
+
+// Slack wire: the socket never opens (connect stays pending); posts recorded.
+vi.mock('../src/channels/slack/api.js', () => ({
+  openSocketModeConnection: () => new Promise(() => {}),
+  postMessage: async (p: { channel: string; threadTs?: string; text: string }) => {
+    imState.slack.push({ channel: p.channel, threadTs: p.threadTs, text: p.text })
+    return { ok: true }
+  },
+  uploadFile: async () => {},
+  downloadFile: async () => Buffer.alloc(0),
+}))
+
+// Feishu wire: SDK long-connect is inert; DM sends vs thread replies recorded.
+vi.mock('@larksuiteoapi/node-sdk', () => ({
+  WSClient: class { async start(): Promise<void> {} close(): void {} },
+  EventDispatcher: class { register(): void {} },
+  LoggerLevel: { warn: 2 },
+}))
+vi.mock('../src/channels/feishu/api.js', () => ({
+  sendMessage: async (p: { receiveId: string; content: { text: string } }) => {
+    imState.feishu.push({ kind: 'send', to: p.receiveId, text: p.content.text })
+    return { message_id: 'm1' }
+  },
+  replyMessage: async (p: { messageId: string; content: { text: string } }) => {
+    imState.feishu.push({ kind: 'reply', to: p.messageId, text: p.content.text })
+    return { message_id: 'm2' }
+  },
+  downloadResource: async () => Buffer.alloc(0),
+  uploadImage: async () => ({ imageKey: '' }),
+  uploadFile: async () => ({ fileKey: '' }),
+}))
+
 import { startWechatChannel, type WechatChannel } from '../src/channels/wechat/handler.js'
 import { insertAccount as insertWechat } from '../src/channels/wechat/accounts.js'
 import { startTelegramChannel, type TelegramChannel } from '../src/channels/telegram/handler.js'
 import { insertAccount as insertTelegram } from '../src/channels/telegram/accounts.js'
+import { startSlackChannel, type SlackChannel } from '../src/channels/slack/handler.js'
+import { insertAccount as insertSlack } from '../src/channels/slack/accounts.js'
+import { startFeishuChannel, type FeishuChannel } from '../src/channels/feishu/handler.js'
+import { insertAccount as insertFeishu } from '../src/channels/feishu/accounts.js'
 import { patchConfig } from '../src/channels/shared/accounts.js'
 import { createChannelDb, type ChannelDb } from '../src/db/channel-db.js'
 import { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
@@ -56,6 +96,8 @@ let channelDb: ChannelDb
 let registry: SessionManagerRegistry
 let wx: WechatChannel | null
 let tg: TelegramChannel | null
+let slack: SlackChannel | null
+let feishu: FeishuChannel | null
 let wxSends: Array<{ to: string; token?: string; text: string }>
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms))
@@ -98,14 +140,20 @@ beforeEach(() => {
   registry = new SessionManagerRegistry()
   wx = null
   tg = null
+  slack = null
+  feishu = null
   wxSends = []
   tgState.sent = []
+  imState.slack = []
+  imState.feishu = []
   mockWechatFetch()
 })
 
 afterEach(async () => {
   await wx?.stopAll()
   await tg?.stopAll()
+  await slack?.stopAll()
+  await feishu?.stopAll()
   vi.unstubAllGlobals()
   rmSync(workspace, { recursive: true, force: true })
   rmSync(secretsDir, { recursive: true, force: true })
@@ -191,5 +239,63 @@ describe('telegram — reply route restored at account start', () => {
     emitReply('tg_42_s1', 'nobody listening')
     await tick()
     expect(tgState.sent).toEqual([])
+  })
+})
+
+describe('slack — reply route restored at account start', () => {
+  beforeEach(() => {
+    insertSlack(channelDb, {
+      accountId: 'sl-acc', botToken: 'xoxb', appToken: 'xapp', botUserId: 'UBOT', teamId: 'T1',
+      workspacePath: workspace, accessLevel: 'full',
+    })
+  })
+
+  it('DM: reply goes flat into the DM channel', async () => {
+    seedRow('slack_D123:dm_s1')
+    patchConfig(channelDb, 'sl-acc', { lastActiveChatId: 'D123:dm' })
+    slack = startSlackChannel({ registry, db: channelDb })
+
+    emitReply('slack_D123:dm_s1', 'resumed after restart')
+    await tick()
+    expect(imState.slack).toEqual([{ channel: 'D123', threadTs: undefined, text: 'resumed after restart' }])
+  })
+
+  it('channel thread: reply goes into the thread root', async () => {
+    seedRow('slack_C9:1700.01_s1')
+    patchConfig(channelDb, 'sl-acc', { lastActiveChatId: 'C9:1700.01' })
+    slack = startSlackChannel({ registry, db: channelDb })
+
+    emitReply('slack_C9:1700.01_s1', 'resumed after restart')
+    await tick()
+    expect(imState.slack).toEqual([{ channel: 'C9', threadTs: '1700.01', text: 'resumed after restart' }])
+  })
+})
+
+describe('feishu — reply route restored at account start', () => {
+  beforeEach(() => {
+    insertFeishu(channelDb, {
+      accountId: 'fs-acc', appId: 'cli_x', appSecret: 's', verificationToken: 'v', botOpenId: 'ou_bot',
+      workspacePath: workspace, accessLevel: 'full',
+    })
+  })
+
+  it('p2p: reply is sent to the chat by chat_id', async () => {
+    seedRow('feishu_oc_1:dm_s1')
+    patchConfig(channelDb, 'fs-acc', { lastActiveChatId: 'oc_1:dm' })
+    feishu = startFeishuChannel({ registry, db: channelDb })
+
+    emitReply('feishu_oc_1:dm_s1', 'resumed after restart')
+    await tick()
+    expect(imState.feishu).toEqual([{ kind: 'send', to: 'oc_1', text: 'resumed after restart' }])
+  })
+
+  it('group thread → not restorable (reply needs the inbound message id), skipped', async () => {
+    seedRow('feishu_oc_2:om_root_s1')
+    patchConfig(channelDb, 'fs-acc', { lastActiveChatId: 'oc_2:om_root' })
+    feishu = startFeishuChannel({ registry, db: channelDb })
+
+    emitReply('feishu_oc_2:om_root_s1', 'nobody listening')
+    await tick()
+    expect(imState.feishu).toEqual([])
   })
 })

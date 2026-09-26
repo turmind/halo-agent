@@ -29,9 +29,9 @@ import { downloadResource, sendMessage, replyMessage, uploadImage, uploadFile } 
 import { formatForFeishu } from '../shared/markdown.js'
 import { classifyMedia, isMediaPathAllowed } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
-import { resolveAccountWorkspace } from '../shared/accounts.js'
+import { resolveAccountWorkspace, getAccount as getSharedAccount } from '../shared/accounts.js'
 import { type CommandContext } from '../shared/commands.js'
-import { InboundBridge, deliverInbound, dispatchChannelCommand } from '../shared/inbound.js'
+import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute } from '../shared/inbound.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
 import { t, getLang } from '../shared/i18n.js'
 
@@ -63,6 +63,34 @@ interface AccountState {
 
 function buildSessionPrefixForThread(chatId: string, rootId: string): string {
   return buildSessionPrefix('feishu', `${chatId}:${rootId}`)
+}
+
+/**
+ * Re-wire the reply route at account start from the persisted
+ * `lastActiveChatId` (`<chatId>:<rootId>`), so a turn that resumes after a
+ * restart — before the user writes again — still reaches Feishu. P2P only:
+ * a DM reply goes out by chat_id, while a group-thread reply needs the
+ * inbound message id to reply to, which isn't persisted.
+ */
+function restoreReplyRoute(args: {
+  registry: SessionManagerRegistry
+  db: ChannelDb
+  account: FeishuAccount
+  bridge: InboundBridge<FeishuRoute>
+}): void {
+  const { registry, db, account, bridge } = args
+  const chatKey = getSharedAccount(db, account.accountId)?.config.lastActiveChatId
+  if (typeof chatKey !== 'string' || !chatKey.endsWith(':dm')) return
+  const chatId = chatKey.slice(0, -':dm'.length)
+  if (!chatId) return
+  const workspacePath = resolveAccountWorkspace(account)
+  if (!workspacePath) return
+  const sid = restoreChannelRoute({
+    registry, workspacePath, bridge,
+    sessionPrefix: buildSessionPrefixForThread(chatId, 'dm'),
+    route: { inboundMessageId: '', isP2P: true, chatId },
+  })
+  if (sid) console.log(`[Feishu] ${account.accountId} reply route restored for ${sid}`)
 }
 
 interface ConversationKey {
@@ -387,6 +415,8 @@ export function startFeishuChannel(deps: {
     const st = ensureState(accountId)
     st.stopped = false
     if (st.wsClient) return
+    const account = getAccount(db, accountId)
+    if (account && account.enabled === 1) restoreReplyRoute({ registry, db, account, bridge: st.bridge })
     void connect(accountId)
   }
 

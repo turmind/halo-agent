@@ -24,9 +24,9 @@ import { downloadFile, postMessage, openSocketModeConnection, uploadFile } from 
 import { formatForSlack } from '../shared/markdown.js'
 import { isMediaPathAllowed } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
-import { resolveAccountWorkspace } from '../shared/accounts.js'
+import { resolveAccountWorkspace, getAccount as getSharedAccount } from '../shared/accounts.js'
 import { findActiveSessionId as sharedFindActive, type CommandContext } from '../shared/commands.js'
-import { InboundBridge, deliverInbound, dispatchChannelCommand } from '../shared/inbound.js'
+import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute } from '../shared/inbound.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
 import { builtinCommandNames } from '../../commands/index.js'
 import { t, getLang } from '../shared/i18n.js'
@@ -119,6 +119,38 @@ interface AccountState {
  */
 function buildSessionPrefixForThread(channelId: string, rootTs: string): string {
   return buildSessionPrefix('slack', `${channelId}:${rootTs}`)
+}
+
+/**
+ * Re-wire the reply route at account start from the persisted
+ * `lastActiveChatId` (`<channelId>:<rootTs>`, the `chatKey` deliverInbound
+ * records), so a turn that resumes after a restart — before anyone writes
+ * again — still reaches Slack. Only that one conversation per account is
+ * known; other threads re-wire on their next inbound message.
+ */
+function restoreReplyRoute(args: {
+  registry: SessionManagerRegistry
+  db: ChannelDb
+  account: SlackAccount
+  bridge: InboundBridge<SlackRoute>
+}): void {
+  const { registry, db, account, bridge } = args
+  const chatKey = getSharedAccount(db, account.accountId)?.config.lastActiveChatId
+  if (typeof chatKey !== 'string') return
+  const sep = chatKey.indexOf(':')
+  if (sep <= 0) return
+  const channelId = chatKey.slice(0, sep)
+  const rootTs = chatKey.slice(sep + 1)
+  if (!rootTs) return
+  const workspacePath = resolveAccountWorkspace(account)
+  if (!workspacePath) return
+  const sid = restoreChannelRoute({
+    registry, workspacePath, bridge,
+    sessionPrefix: buildSessionPrefixForThread(channelId, rootTs),
+    // Same mapping as pickSessionKey: DMs reply flat, threads into the root.
+    route: { channelId, replyTs: rootTs === 'dm' ? undefined : rootTs },
+  })
+  if (sid) console.log(`[Slack] ${account.accountId} reply route restored for ${sid}`)
 }
 
 /** Inbound conversation key.
@@ -354,6 +386,8 @@ export function startSlackChannel(deps: {
     const st = ensureState(accountId)
     st.stopped = false
     if (st.ws) return  // already running
+    const account = getAccount(db, accountId)
+    if (account && account.enabled === 1) restoreReplyRoute({ registry, db, account, bridge: st.bridge })
     connect(accountId)
   }
 
