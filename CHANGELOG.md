@@ -6,9 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-26
+
 ### Added
 
 - Docs: new bundled guide `guide/delegation-and-access.md` — scope override, when config edits take effect, team / roster / `start_session` checks and errors, nesting depth, access levels and where each entry point's level comes from, relay. The halo skill points to it; template v66.
+
+### Fixed
+
+- Docs: `dev/tools.md` said the Web channel defaults to full access (every channel account defaults to readonly) and that hand-edited sandbox `hidden_*` / `writable_dirs` lists apply immediately (only a save through the settings API re-applies them; a hand edit of `settings.yaml` waits for the next restart).
 
 ## [1.4.0] - 2026-09-25
 
@@ -585,7 +591,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/turmind/halo-agent/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/turmind/halo-agent/compare/v1.3.4...v1.4.0
 [1.3.4]: https://github.com/turmind/halo-agent/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/turmind/halo-agent/compare/v1.3.2...v1.3.3
