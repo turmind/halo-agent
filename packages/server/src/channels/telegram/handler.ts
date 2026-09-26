@@ -5,9 +5,9 @@ import { listEnabledAccounts, getAccount, updateAccount } from './accounts.js'
 import type { TelegramAccount } from './types.js'
 import { TelegramResponder } from './event-adapter.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
-import { resolveAccountWorkspace } from '../shared/accounts.js'
+import { resolveAccountWorkspace, getAccount as getSharedAccount } from '../shared/accounts.js'
 import { type CommandContext } from '../shared/commands.js'
-import { InboundBridge, deliverInbound, dispatchChannelCommand } from '../shared/inbound.js'
+import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute } from '../shared/inbound.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
 import { builtinCommandNames } from '../../commands/index.js'
 
@@ -110,6 +110,33 @@ function buildTgSessionPrefix(userId: number): string {
   return buildSessionPrefix('tg', String(userId))
 }
 
+/**
+ * Re-wire the reply route at account start from the persisted
+ * `lastActiveChatId`, so a turn that resumes after a restart — before the
+ * user writes again — still reaches Telegram. Private chats only: there
+ * chat id == user id, which is what the `tg_<userId>_` session prefix needs;
+ * a group chat id (negative) doesn't say which member's session it was.
+ */
+function restoreReplyRoute(args: {
+  registry: SessionManagerRegistry
+  db: ChannelDb
+  account: TelegramAccount
+  bridge: InboundBridge<TgRoute>
+}): void {
+  const { registry, db, account, bridge } = args
+  const chatId = getSharedAccount(db, account.accountId)?.config.lastActiveChatId
+  if (typeof chatId !== 'string' || !/^\d+$/.test(chatId)) return
+  const workspacePath = resolveAccountWorkspace(account)
+  if (!workspacePath) return
+  const userId = Number(chatId)
+  const sid = restoreChannelRoute({
+    registry, workspacePath, bridge,
+    sessionPrefix: buildTgSessionPrefix(userId),
+    route: { chatId: userId },
+  })
+  if (sid) console.log(`[Telegram] account ${account.accountId} reply route restored for ${sid}`)
+}
+
 export function startTelegramChannel(deps: {
   registry: SessionManagerRegistry
   db: ChannelDb
@@ -167,6 +194,7 @@ export function startTelegramChannel(deps: {
         },
       }),
     })
+    restoreReplyRoute({ registry, db, account, bridge })
     const promise = runBot({ registry, db, account, bot, abort, bridge, activeOverrides, restartSelf })
       .catch((err) => console.log(`[Telegram] account ${accountId} bot crashed: ${String(err)}`))
     runners.set(accountId, { accountId, bot, abort, promise, bridge, activeOverrides })

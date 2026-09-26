@@ -123,11 +123,11 @@ export class WechatResponder {
 
     if (text) {
       try { await this.deps.sendText(text) }
-      catch (err) { console.log(`[WeChat] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.warn(`[WeChat] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
     for (const p of mediaPaths) {
       try { await this.deps.sendMedia(p) }
-      catch (err) { console.log(`[WeChat] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.warn(`[WeChat] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
   }
 }

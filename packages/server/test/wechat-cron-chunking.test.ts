@@ -21,7 +21,7 @@ import path from 'node:path'
 
 const sends = vi.hoisted(() => ({
   wechatText: [] as { toUserId: string; text: string; contextToken?: string }[],
-  wechatMedia: [] as string[],
+  wechatMedia: [] as { filePath: string; contextToken?: string }[],
   arrived: [] as string[],
   inFlight: 0,
   maxInFlight: 0,
@@ -46,8 +46,8 @@ vi.mock('../src/channels/wechat/handler.js', () => ({
 }))
 
 vi.mock('../src/channels/wechat/send-media.js', () => ({
-  sendMediaFile: (p: { filePath: string }) => {
-    sends.wechatMedia.push(p.filePath)
+  sendMediaFile: (p: { filePath: string; contextToken?: string }) => {
+    sends.wechatMedia.push({ filePath: p.filePath, contextToken: p.contextToken })
     return Promise.resolve({ clientId: 'c1' })
   },
 }))
@@ -157,6 +157,11 @@ describe('wechat cron chunking', () => {
     await dispatchToTargets(paragraphs(3, 3000), [WX], tmpDir)
     expect(sends.wechatText).toHaveLength(3)
     for (const s of sends.wechatText) expect(s.contextToken).toBe('ctx-abc')
+
+    // Attachments carry it as well (a media send is an outbound sendmessage).
+    sends.wechatText.length = 0
+    await dispatchToTargets(`report\nMEDIA:${tmpDir}/voice.mp3`, [WX], tmpDir)
+    expect(sends.wechatMedia).toEqual([{ filePath: `${tmpDir}/voice.mp3`, contextToken: 'ctx-abc' }])
 
     // Token keyed per user: a different recipient does not inherit it.
     sends.wechatText.length = 0

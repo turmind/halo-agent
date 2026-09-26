@@ -13,7 +13,7 @@ import type { ChannelDb } from '../../db/channel-db.js'
 import { getUpdates, sendMessage, notifyStart, notifyStop } from './api.js'
 import { MessageItemType, MessageState, MessageType, type WechatMessage, type MessageItem, type SendMessageReq } from './types.js'
 import { listEnabledAccounts, getAccount, insertAccount, saveSyncBuf, updateAccount, normalizeAccountId, type WechatAccount, type AccessLevel } from './accounts.js'
-import { resolveAccountWorkspace, rememberWechatContextToken } from '../shared/accounts.js'
+import { resolveAccountWorkspace, rememberWechatContextToken, getAccount as getSharedAccount } from '../shared/accounts.js'
 import { WechatResponder } from './event-adapter.js'
 import { downloadAndDecrypt, downloadPlain } from './cdn.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
@@ -22,7 +22,7 @@ import { sendMediaFile } from './send-media.js'
 import { startLogin, waitLogin } from './login.js'
 import QRCode from 'qrcode'
 import { findActiveSessionId as sharedFindActive, type CommandContext } from '../shared/commands.js'
-import { InboundBridge, deliverInbound, dispatchChannelCommand, type RouteInit } from '../shared/inbound.js'
+import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute, type RouteInit } from '../shared/inbound.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
 
 const MAX_CONSECUTIVE_FAILURES = 3
@@ -122,6 +122,7 @@ export function startWechatChannel(deps: {
         void stopAccount(accountId).then(() => { startAccount(accountId) })
       })
     }
+    restoreReplyRoutes({ registry, db, account, bridge })
     const promise = runAccountLoop({ registry, db, account, abort: abort.signal, bridge, activeOverrides, restartSelf, startNewAccount: startAccount })
       .catch((err) => console.log(`[WeChat] account ${accountId} loop crashed: ${String(err)}`))
     runners.set(accountId, { accountId, abort, promise, bridge, activeOverrides })
@@ -154,6 +155,34 @@ export function startWechatChannel(deps: {
   for (const acc of listEnabledAccounts(db)) startAccount(acc.accountId)
 
   return { startAccount, stopAccount, stopAll }
+}
+
+/**
+ * Re-wire reply routes at account start from what the account row persists:
+ * every user with a stored context token (`rememberWechatContextToken`) gets
+ * a listener on their latest existing session, so a turn that resumes after
+ * a restart — before that user writes again — still reaches WeChat.
+ */
+function restoreReplyRoutes(args: {
+  registry: SessionManagerRegistry
+  db: ChannelDb
+  account: WechatAccount
+  bridge: InboundBridge<WxRoute>
+}): void {
+  const { registry, db, account, bridge } = args
+  const tokens = (getSharedAccount(db, account.accountId)?.config.contextTokens ?? {}) as Record<string, string>
+  const users = Object.keys(tokens)
+  if (users.length === 0) return
+  const workspacePath = resolveAccountWorkspace(account)
+  if (!workspacePath) return
+  for (const userId of users) {
+    const sid = restoreChannelRoute({
+      registry, workspacePath, bridge,
+      sessionPrefix: buildWxSessionPrefix(userId),
+      route: wxRoute(userId, tokens[userId]),
+    })
+    if (sid) console.log(`[WeChat] ${account.accountId} reply route restored for ${sid}`)
+  }
 }
 
 // ── Main loop ────────────────────────────────────────────────────────

@@ -58,8 +58,10 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   // A failed chunk rethrows with its index so the admin run row shows how
   // much of the report already landed (chunks before it were delivered).
   const out: DispatchResult[] = []
+  // Attachments need the token too — ilink wants it echoed on every outbound
+  // sendmessage, and a media send is one (memory 2026-09-10, root cause B).
+  const contextToken = readContextToken(accountId, chatId)
   if (text) {
-    const contextToken = readContextToken(accountId, chatId)
     const chunks = splitText(text, WECHAT_TEXT_LIMIT)
     for (const [i, chunk] of chunks.entries()) {
       try {
@@ -82,7 +84,7 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
     try {
       await sendMediaFile({
         baseUrl: acct.baseUrl, token: acct.botToken,
-        toUserId: chatId, filePath,
+        toUserId: chatId, contextToken, filePath,
       })
       out.push({ channelType: 'wechat', accountId, chatId, ok: true })
     } catch (err) {

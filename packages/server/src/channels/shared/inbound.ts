@@ -36,8 +36,10 @@
  */
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
 import type { SessionManager } from '../../agents/session-manager.js'
+import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
+import { claimWorkspaceRuntime } from '../../agents/workspace-runtime-lock.js'
 import { rememberLastActiveChat, type AccountAccessLevel } from './accounts.js'
 import {
   findActiveSessionId, dispatchCommand, resolveDefaultAgentId,
@@ -245,6 +247,44 @@ export async function deliverInbound<Route>(args: {
   sm.sendUserMessage(sessionId, agentInput, images?.length ? images : undefined, accessLevel).catch((err) => {
     console.log(`[${bridge.channel}] sendUserMessage ${sessionId}: ${String(err)}`)
   })
+  return sessionId
+}
+
+/**
+ * Account-start counterpart of the route + listener wiring in `deliverInbound`.
+ *
+ * Routes and listeners live only in this process and were only ever created
+ * by an inbound message, so after a server restart a session that resumes on
+ * its own (run-ledger restart nudge, queued turn, admin-typed message) had no
+ * listener: its replies fell through to the global handler and never reached
+ * the chat until the user wrote again. Channels call this from `startAccount`
+ * with the destination persisted on the account row; it re-wires the user's
+ * latest existing root session (goal-routed, like inbound) and never creates
+ * one. Returns the wired session id, or null when there is nothing to restore.
+ */
+export function restoreChannelRoute<Route>(args: {
+  registry: SessionManagerRegistry
+  /** Already resolved via `resolveAccountWorkspace` (exists, `.halo/` in place). */
+  workspacePath: string
+  bridge: InboundBridge<Route>
+  sessionPrefix: string
+  route: RouteInit<Route>
+}): string | null {
+  const { registry, workspacePath, bridge, sessionPrefix, route } = args
+  // Boot-time first touch: same ownership gate as the run-ledger eager sweep
+  // in index.ts — building the SessionManager of a workspace another live
+  // process owns would cache a non-owner manager for this process lifetime.
+  const sm = registry.peek(workspacePath)
+    ?? (claimWorkspaceRuntime(workspacePath) ? registry.getOrCreate(workspacePath) : undefined)
+  if (!sm) {
+    console.warn(`[${bridge.channel}] reply route not restored for ${sessionPrefix}*: ${workspacePath} runtime is owned by another live process (.halo/runtime.lock)`)
+    return null
+  }
+  const latest = sm.findLatestByPrefix(sessionPrefix)
+  if (!latest) return null
+  const sessionId = resolveGoalRoute(sm.getDb(), latest.id)
+  bridge.setRoute(sessionId, route)
+  bridge.ensureListener(sm, sessionId)
   return sessionId
 }
 
