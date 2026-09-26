@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-09-26
+
 ### Fixed
 
 - Channels: after a server restart, WeChat / Telegram / Slack / Feishu replies from a session that resumed on its own (the run-ledger restart nudge, a queued turn, a message typed in the admin) were dropped until the user wrote to the bot again — the reply route only existed in memory and was only created by an inbound message. Each account now re-wires, at start, the latest existing session of every conversation it can address from the account row: WeChat users with a stored `context_token`; the `lastActiveChatId` conversation on Telegram (private chats only — a group chat id doesn't say whose session it was), Slack (DM or channel thread) and Feishu (p2p only — a group-thread reply needs the inbound message id, which isn't persisted). Other conversations re-wire on their next inbound message as before. No session is created, and a workspace whose runtime another live server owns is skipped. Failed WeChat / Telegram / Slack reply sends now log at `warn` instead of `info`, so they show up at the default log level.
