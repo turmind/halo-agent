@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-09-27
+
 ### Fixed
 
 - Agents: on the OpenAI-format runtimes, an image returned by `view_image` never reached the model — the tool result was flattened to the text `[image]`, so the model answered from the file name and whatever else was in context. Affected: GPT / Grok / Kimi K3 on Bedrock (`aws-bedrock-mantle` / `aws-bedrock-openai`, Responses API), Kimi (`kimi-k3`), DeepSeek (`deepseek-flash`) and the generic `openai` provider. The Responses API now gets `input_image` parts inside `function_call_output`; the Chat Completions runtimes, whose `tool` messages are text-only, send the images in a user message right after the tool messages. On the generic `openai` provider, images the user attached were dropped as well — user content was sent as text only; it now carries `image_url` parts. Claude, Qwen, MiniMax and MiMo already passed images through; Doubao and Hunyuan register no image-capable models, so they are not offered `view_image`.
