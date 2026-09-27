@@ -8,7 +8,7 @@
  * Caching is fully automatic (no explicit parameter needed).
  */
 import { resolveMaxOutputTokens } from '../config.js'
-import { AgentLoop } from './agent-loop.js'
+import { AgentLoop, toolResultImages } from './agent-loop.js'
 import type { AnthropicMessage, ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
 
 export interface DeepSeekAgentConfig {
@@ -147,7 +147,7 @@ export class DeepSeekAgent extends AgentLoop {
           // tool_results turn. Converting only the tool_results would silently
           // drop that text from the model's view — emit the remainder as a
           // user message right after the tool messages.
-          const rest = msg.content.filter((b) => b.type !== 'tool_result')
+          const rest = [...toolResultImages(msg.content), ...msg.content.filter((b) => b.type !== 'tool_result')]
           if (rest.length > 0) {
             msgs.push({ role: 'user', content: this.convertUserContent(rest) })
           }
@@ -168,7 +168,7 @@ export class DeepSeekAgent extends AgentLoop {
       if (block.type === 'tool_result') {
         const text = typeof block.content === 'string'
           ? block.content
-          : block.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n')
+          : block.content.map((b) => b.type === 'text' ? b.text : '[image: in the next user message]').join('\n')
         results.push({
           role: 'tool',
           tool_call_id: block.tool_use_id,

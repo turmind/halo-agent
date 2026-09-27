@@ -220,16 +220,20 @@ export class MantleAgent extends AgentLoop {
   }
 
   /** Tool results feed back as `function_call_output` items keyed by call_id.
-   *  Images in a tool result are dropped — the Responses API expects
-   *  function_call_output.output as a string. */
+   *  A block-array result (view_image: text + image) goes out as input_text /
+   *  input_image parts — `output` takes content parts, not only a string
+   *  (verified live on gpt-5.6-terra and gpt-6-astra). Flattening it to text
+   *  used to hand the model an `[image]` placeholder instead of the pixels. */
   private convertToolResults(content: ContentBlock[]): Array<Record<string, unknown>> {
     const out: Array<Record<string, unknown>> = []
     for (const block of content) {
       if (block.type === 'tool_result') {
-        const text = typeof block.content === 'string'
+        const output = typeof block.content === 'string'
           ? block.content
-          : block.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n')
-        out.push({ type: 'function_call_output', call_id: block.tool_use_id, output: text })
+          : block.content.map((b) => b.type === 'text'
+            ? { type: 'input_text', text: b.text }
+            : { type: 'input_image', image_url: `data:${b.source.media_type};base64,${b.source.data}` })
+        out.push({ type: 'function_call_output', call_id: block.tool_use_id, output })
       }
     }
     return out

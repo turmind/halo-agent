@@ -27,7 +27,7 @@
  *     OpenAI-compat naming), whichever is present.
  */
 import { resolveMaxOutputTokens } from '../config.js'
-import { AgentLoop } from './agent-loop.js'
+import { AgentLoop, toolResultImages } from './agent-loop.js'
 import type { AnthropicMessage, ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
 
 export interface OpenAIAgentConfig {
@@ -167,7 +167,7 @@ export class OpenAIAgent extends AgentLoop {
           // Mixed tool_result + user-content turn (interrupt-repair synthesis
           // coalesced with the next user message, or a stop-fold): emit the
           // non-tool_result remainder too, or that user text silently vanishes.
-          const rest = msg.content.filter((b) => b.type !== 'tool_result')
+          const rest = [...toolResultImages(msg.content), ...msg.content.filter((b) => b.type !== 'tool_result')]
           if (rest.length > 0) {
             msgs.push({ role: 'user', content: this.convertUserContent(rest) })
           }
@@ -187,7 +187,7 @@ export class OpenAIAgent extends AgentLoop {
       if (block.type === 'tool_result') {
         const text = typeof block.content === 'string'
           ? block.content
-          : block.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n')
+          : block.content.map((b) => b.type === 'text' ? b.text : '[image: in the next user message]').join('\n')
         results.push({ role: 'tool', tool_call_id: block.tool_use_id, content: text })
       }
     }
@@ -196,10 +196,21 @@ export class OpenAIAgent extends AgentLoop {
 
   private convertUserContent(content: string | ContentBlock[]): unknown {
     if (typeof content === 'string') return content
-    return content
-      .filter((b) => b.type === 'text')
-      .map((b) => (b as { type: 'text'; text: string }).text)
-      .join('\n')
+    // Text-only stays a plain string (widest OpenAI-compatible support); images
+    // need content parts — gpt-4o is registered image-capable, and before this
+    // its user and view_image images were silently dropped.
+    if (!content.some((b) => b.type === 'image')) {
+      return content
+        .filter((b) => b.type === 'text')
+        .map((b) => (b as { type: 'text'; text: string }).text)
+        .join('\n')
+    }
+    const parts: Array<Record<string, unknown>> = []
+    for (const b of content) {
+      if (b.type === 'text') parts.push({ type: 'text', text: b.text })
+      else if (b.type === 'image') parts.push({ type: 'image_url', image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } })
+    }
+    return parts
   }
 
   private convertAssistantMessage(msg: AnthropicMessage): Array<Record<string, unknown>> {

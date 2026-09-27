@@ -13,7 +13,7 @@
  *     reasoning_effort field at all.
  */
 import { resolveMaxOutputTokens } from '../config.js'
-import { AgentLoop } from './agent-loop.js'
+import { AgentLoop, toolResultImages } from './agent-loop.js'
 import type { AnthropicMessage, ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
 
 export interface KimiAgentConfig {
@@ -164,7 +164,7 @@ export class KimiAgent extends AgentLoop {
           // Mixed tool_result + user-content turn (interrupt-repair synthesis
           // coalesced with the next user message, or a stop-fold): emit the
           // non-tool_result remainder too, or that user text silently vanishes.
-          const rest = msg.content.filter((b) => b.type !== 'tool_result')
+          const rest = [...toolResultImages(msg.content), ...msg.content.filter((b) => b.type !== 'tool_result')]
           if (rest.length > 0) {
             msgs.push({ role: 'user', content: this.convertUserContent(rest) })
           }
@@ -185,7 +185,7 @@ export class KimiAgent extends AgentLoop {
       if (block.type === 'tool_result') {
         const text = typeof block.content === 'string'
           ? block.content
-          : block.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n')
+          : block.content.map((b) => b.type === 'text' ? b.text : '[image: in the next user message]').join('\n')
         results.push({
           role: 'tool',
           tool_call_id: block.tool_use_id,

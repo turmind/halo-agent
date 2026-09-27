@@ -54,6 +54,21 @@ export type ContentBlock =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string | Array<{ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>; is_error?: boolean }
 
+/**
+ * The images inside a turn's tool results (view_image), prefixed with a label
+ * — empty when there are none. Chat Completions `tool` messages are text-only,
+ * so the OpenAI-compatible runtimes send these in a user message right after
+ * the tool messages; without it the model only ever saw an `[image]` string.
+ */
+export function toolResultImages(content: ContentBlock[]): ContentBlock[] {
+  const images: ContentBlock[] = []
+  for (const block of content) {
+    if (block.type !== 'tool_result' || typeof block.content === 'string') continue
+    for (const b of block.content) if (b.type === 'image') images.push(b)
+  }
+  return images.length > 0 ? [{ type: 'text', text: '[Images from the tool results above]' }, ...images] : []
+}
+
 /** Anthropic message format */
 export interface AnthropicMessage {
   role: 'user' | 'assistant'
