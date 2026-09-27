@@ -17,6 +17,7 @@ import { repairConversationMessages } from './conversation-repair.js'
 import { classifyModelError } from './model-error.js'
 import { localCompactMessages } from './compact.js'
 import { microCompactMessages } from './micro-compact.js'
+import { replaceImageBlocks, trimHistoryImages } from './history-images.js'
 import { loadAgentYaml } from './agent-loader.js'
 import type { AgentSessionEvent } from './agent-events.js'
 import { broadcast } from '../ws/broadcast.js'
@@ -121,34 +122,6 @@ function isRawTurnStart(msg: AnthropicMessage): boolean {
  *  (see handler.ts handleChat). */
 function stripImageMarkers(s: string): string {
   return s.replace(/\[图片已保存: [^\]]*\]\n?/g, '').trim()
-}
-
-/** Replace every image block in the history with a text placeholder (top-level
- *  image blocks AND images nested in tool_result content, e.g. view_image).
- *  Used by runAgentTurn's 4xx-multimodal degrade path: once a provider rejects
- *  an image, the block re-fails EVERY subsequent request (history is replayed
- *  wholesale), so removal is the only way to unbrick the session. Mutates in
- *  place; returns the number of blocks replaced. */
-function replaceImageBlocks(messages: AnthropicMessage[], reason: string): number {
-  let replaced = 0
-  const placeholder = (): ContentBlock => ({ type: 'text', text: `[image removed: ${reason}]` })
-  for (const m of messages) {
-    if (!Array.isArray(m.content)) continue
-    m.content = m.content.map((b) => {
-      if (b.type === 'image') { replaced++; return placeholder() }
-      if (b.type === 'tool_result' && Array.isArray(b.content)) {
-        return {
-          ...b,
-          content: b.content.map((ib) => {
-            if (ib.type === 'image') { replaced++; return { type: 'text' as const, text: `[image removed: ${reason}]` } }
-            return ib
-          }),
-        }
-      }
-      return b
-    })
-  }
-  return replaced
 }
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -1366,6 +1339,7 @@ export class SessionManager implements SessionManagerInternals {
         const iter = session.agent.run(input, {
           cancelSignal: signal,
           beforeCallModel: async () => {
+            this.trimImages(session)
             await this.maybeAutoCompact(session)
             this.saveAgentState(session)
           },
@@ -2347,6 +2321,17 @@ export class SessionManager implements SessionManagerInternals {
     } catch (err) {
       console.warn(`[Evo] pre-compact enqueue threw for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  /** Byte-budget counterpart of maybeAutoCompact (which only sees tokens):
+   *  drop the oldest history images once their base64 outgrows the request
+   *  body limit. Same beforeCallModel hook, so the trimmed state is what the
+   *  hook's saveAgentState persists. */
+  private trimImages(session: AgentSession): void {
+    const replaced = trimHistoryImages(session.agent.messages)
+    if (replaced === 0) return
+    console.warn(`[SessionManager] Session ${session.id} history images over budget — replaced ${replaced} oldest with placeholders`)
+    this.emitEvent(session.id, { type: 'system', text: `Removed ${replaced} older image(s) from context to keep the request under the size limit`, taskId: session.parentId ? session.id : undefined })
   }
 
   /** Mid-turn auto-compact: invoked by agent-loop's beforeCallModel hook.

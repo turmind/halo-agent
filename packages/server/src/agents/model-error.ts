@@ -36,8 +36,11 @@ export function classifyModelError(err: unknown): ClassifiedModelError {
 }
 
 function classifyKind(msg: string, errName: string, httpStatus: number | undefined): ModelErrorKind {
-  // 2. Context overflow → local (no-LLM) compact then retry.
-  if (msg.includes('too many input tokens') || msg.includes('prompt_too_long') || msg.includes('ContextWindowOverflow')) {
+  // 2. Context overflow → local (no-LLM) compact then retry. Bedrock's bare
+  // "Input is too long." is also what it returns for a request body over its
+  // ~32 MB ceiling (token count irrelevant — e.g. 31 replayed 896px PNGs);
+  // left unmatched it fell through to fatal and killed the turn on attempt 1.
+  if (msg.includes('too many input tokens') || msg.includes('prompt_too_long') || msg.includes('ContextWindowOverflow') || msg.includes('Input is too long')) {
     return 'context_overflow'
   }
 

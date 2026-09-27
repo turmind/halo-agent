@@ -489,10 +489,17 @@ export function createWorkspaceTools(
       const dims = imageDimensions(buf, mediaType)
       const tooManyBytes = b64Len(buf.length) > B64_LIMIT
       const tooBig = dims != null && Math.max(dims.w, dims.h) > MAX_EDGE
+      // Opaque PNGs past a small size go JPEG too, like the admin upload path
+      // (fileToBase64 re-encodes every attachment). The block is replayed with
+      // every later request, and PNG renders run ~5-15× the JPEG size — 31 of
+      // them (~850 KB each) pushed a session over Bedrock's ~32 MB body cap.
+      // Transparent PNGs stay PNG (JPEG would flatten the alpha).
+      const PNG_TO_JPEG_MIN = 256 * 1024
+      const heavyPng = mediaType === 'image/png' && buf.length > PNG_TO_JPEG_MIN && img != null && !img.hasAlpha()
       let outMediaType = mediaType
       let outBuf = buf
       let note = ''
-      if (tooManyBytes || tooBig) {
+      if (tooManyBytes || tooBig || heavyPng) {
         try {
           // webp skipped decode-validation above, so decode it here.
           img ??= await Jimp.read(buf)
@@ -507,9 +514,15 @@ export function createWorkspaceTools(
             q -= 15
             jpeg = await img.getBuffer('image/jpeg', { quality: q })
           }
-          outBuf = jpeg
-          outMediaType = 'image/jpeg'
-          note = ` — resized to ${img.bitmap.width}×${img.bitmap.height}, ${(jpeg.length / 1024).toFixed(0)} KB (jpeg q${q}) to fit the model's image limits`
+          // A heavyPng-only re-encode that didn't shrink (flat-color art PNG
+          // compresses better than JPEG) keeps the original.
+          if (tooManyBytes || tooBig || jpeg.length < buf.length) {
+            outBuf = jpeg
+            outMediaType = 'image/jpeg'
+            note = tooManyBytes || tooBig
+              ? ` — resized to ${img.bitmap.width}×${img.bitmap.height}, ${(jpeg.length / 1024).toFixed(0)} KB (jpeg q${q}) to fit the model's image limits`
+              : ` — sent as jpeg q${q}, ${(jpeg.length / 1024).toFixed(0)} KB, to keep the conversation payload small`
+          }
         } catch (err) {
           return `${TOOL_WARN_MARKER}\nError: image is too large for the model and automatic compression failed (${err instanceof Error ? err.message : String(err)}). Shrink it (lower resolution / crop the relevant region) and retry.`
         }

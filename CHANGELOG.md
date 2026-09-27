@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Agents: a session that had loaded many images with `view_image` could stop working with Bedrock's `Input is too long.` while far under the token limit — every request re-sends the whole history, images included, and past ~32 MB of request body Bedrock rejects it with the same message as a token overflow (the reported session: 31 PNG renders of 896×896, ~34 MB at 113K tokens). Auto-compact only counts tokens, so it never fired, and the message wasn't recognised, so the turn ended on the first failure. Now: (1) before every model call, once the history's images exceed 20 MB of base64 or 100 images, the oldest are replaced with a placeholder (`view_image it again if still needed`) until both are under half, and a system notice says how many were removed; (2) `Input is too long` is treated as a context overflow, so the turn compacts and retries instead of failing; (3) `view_image` sends an opaque PNG over 256 KB as JPEG when that is smaller, as the admin already does for every attached image — a typical 896×896 render goes from ~850 KB to under 100 KB. Transparent PNGs, small PNGs and other formats are sent as before, and the file on disk is never changed.
+
 ## [1.4.3] - 2026-09-27
 
 ### Fixed
