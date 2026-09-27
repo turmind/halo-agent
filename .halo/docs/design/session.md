@@ -351,7 +351,7 @@ Frontend network issues don't affect the backend:
 | Error | Recovery |
 |---|---|
 | User abort / graceful interrupt — **our own `signal.aborted`** or `err.name === 'AbortError'` | Repair, clean exit |
-| Context overflow (`too many input tokens`) | **Local** (non-LLM) compact + retry — the model already refused this payload, so calling an LLM risks a second stall |
+| Context overflow (`too many input tokens` / `prompt_too_long` / `ContextWindowOverflow` / `Input is too long`) | **Local** (non-LLM) compact + retry — the model already refused this payload, so calling an LLM risks a second stall. Bedrock's bare `Input is too long.` also covers a request **body** over its ~32 MB cap, whatever the token count — see [History image budget](#history-image-budget) |
 | Account-level error — **`httpStatus` 401 / 402 / 403** when a status is available; keyword match (insufficient balance / suspended / invalid key / unauthorized / authentication) only when none is | Unrecoverable — report to user, **no** retry |
 | Rate limiting / throttling — `err.name === 'ThrottlingException'`, `httpStatus 429`, or keyword (`throttl` / `rate limit` / `ServiceUnavailableException`) | Exponential backoff (`2s * 2^attempt` + jitter, capped at 60s: 2s/4s/8s/16s…), retry |
 | **Transient server-side error (5xx / timeout)** | Same exponential backoff as throttling — see [Transient server-error classification](#transient-server-error-classification) below |
@@ -402,7 +402,7 @@ Three entry points with different quality / safety trade-offs:
 | Trigger | Path | Compaction used | Rationale |
 |---|---|---|---|
 | 80% soft threshold (mid-turn auto) | `maybeAutoCompact()` via agent-loop's `beforeCallModel` hook — runs before each model call within a turn | **Self-compact** (`selfCompactSession`) — the agent summarizes its own context, then a tail micro-compact pass clears bulk tool output | The agent already has full context cached (prompt cache hit). No extra model call, no input duplication, no risk of losing tool_result semantics. Firing mid-turn (not just at turn end) stops a single long turn that accumulates many large tool results from blowing the window. |
-| Overflow mid-loop (`too many input tokens`) | `runAgentTurn` retry catch → `localCompactMessages` → retry | **Local** — `[role]: <first N chars>` concat, no network call | The model just refused this payload; an LLM round-trip now could stall the recovery path. Local is deterministic and instant; the next end-of-turn can re-summarize via self-compact. |
+| Overflow mid-loop (`too many input tokens`, `Input is too long`, …) | `runAgentTurn` retry catch → `localCompactMessages` → retry | **Local** — `[role]: <first N chars>` concat, no network call | The model just refused this payload; an LLM round-trip now could stall the recovery path. Local is deterministic and instant; the next end-of-turn can re-summarize via self-compact. |
 | User `/session compact` (web, WeChat) | `commands/compact.ts` / `SessionManager.compactSession` | **Self-compact**, with **local fallback** on timeout/error | User explicitly requested it; self-compact reuses the cached context so it's fast. Falls back to local if anything goes wrong. |
 
 Self-compact **deep-snapshots the keep-region before running the summarize turn** (`messages.slice(cut).map(structuredClone)`), then injects a summarization instruction into the agent's own stream, captures the response, and rebuilds messages as `[summary + snapshot]`. This reuses the provider's prompt cache (no separate model needed) and preserves full semantic context including tool results.
@@ -422,6 +422,20 @@ All paths share the same split logic — the private `compactCut(messages)` on S
 Config (see `config.compact`): `keepMessages` / `maxSummaryInput` / `maxMessageSlice` / `summarizeTimeoutSec` — editable in Settings → General → compact.
 
 **Self-compact also archives the UI log.** `selfCompactSession` calls `uiStore.archiveOldMessages(session.id)` for **root sessions only** (`!session.parentId`), right before the compaction notice is emitted so the notice lands in the kept exchange rather than inside the archived segment. Compaction is the one path that already means "history shrinks here", which is why archiving hangs off it rather than off a timer or its own sweep — the size threshold below decides whether the call does anything. See [UI-log archiving](#ui-log-archiving).
+
+### History image budget
+
+Every threshold above counts **tokens**, and an image is almost free in tokens (the flat 1500 estimate; the real cost is similar) while its base64 can exceed 1 MB. History is replayed with every request, so image bytes accumulate while the token count stays low. Bedrock rejects a request body over roughly **32 MB** with `Input is too long.` — the same text as a token overflow. Production case (2026-09-27, fixed in 1.4.4): a Blender Studio session had `view_image`d 31 PNG renders at 896×896, ~1.1 MB of base64 each, so every request was 34 MB at 113K tokens. Auto-compact never fired, and the unrecognised message ended the turn on the first attempt. Probes: 26 images (28 MB) pass, 31 (34 MB) fail, 7 noise images totalling 33.6 MB fail as well — the cap is on bytes, not on image count.
+
+`trimHistoryImages` (`agents/history-images.ts`) is the byte-side gate. It runs **first** in the `beforeCallModel` hook (`SessionManager.trimImages`, before `maybeAutoCompact`), so it applies to every runtime and to both user uploads and images nested in `tool_result` (`view_image`):
+
+- Trigger: history images total more than **20 MB of base64** (leaves room under the ~32 MB cap for text and tool output), or more than **100 images** (Anthropic's per-request image limit).
+- Action: starting from the oldest, replace images with the text placeholder `[image removed: older image dropped to keep the request under the size limit — view_image it again if still needed]` until both totals are under **half** their limit. Cutting to half means a trim happens about once per 10 MB of new images, not on every call — each trim rewrites early history, so it costs one prompt-cache miss.
+- The placeholder is a text block in the same place, so `tool_use` / `tool_result` pairing is unchanged. Persisted by the hook's own `saveAgentState`. Logged at warn, and a `system` event `Removed N older image(s) from context to keep the request under the size limit` is shown in the session (sub-agents: their own log via `taskId`).
+
+This is the pre-call gate. As a fallback, `Input is too long` is now classified as `context_overflow`, so a payload that still gets rejected goes through local compact + retry instead of failing. `replaceImageBlocks` (the [multimodal 4xx degrade](#multimodal-4xx-degrade), which removes *every* image) lives in the same module and uses the same block walk.
+
+The per-image side is at the entry points: the admin upload path re-encodes every attachment to JPEG with the long edge ≤1568 px, and `view_image` sends opaque PNGs over 256 KB as JPEG (see [dev/tools.md → view_image](../dev/tools.md#view_image)). IM channel inbound images (WeChat / Feishu / Telegram / Slack / WeCom / web) are forwarded as received and are only bounded by this budget. Pinned by `history-image-budget.test.ts`.
 
 ## UI-log archiving
 

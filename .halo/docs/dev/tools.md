@@ -41,13 +41,22 @@ Replace a string in a file (exact match).
 
 ### view_image
 
-Read an image file and return it as a vision content block. Supports png/jpg/jpeg/gif/webp, max 5 MB.
+Read an image file and return it as a vision content block. Supports png/jpg/jpeg/gif/webp.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
 | path | string | yes | Image file path |
 
-Returns: image content block (base64-encoded) for multimodal processing.
+Returns: a text line (`Image loaded: <path> (<media type>, <KB>, md5: …)`) plus an image content block (base64-encoded) for multimodal processing.
+
+Processing before the bytes go out — only the payload changes, the file on disk is never touched:
+
+- **Decode check**: png/jpeg/gif are decoded with jimp first. A corrupt or truncated file returns an error and is not sent, because a bad image block in history makes every later request fail. webp has no jimp codec and skips this check.
+- **Media type from bytes**: `media_type` is taken from the file's magic bytes, not its extension, so a JPEG saved as `.png` is labeled correctly.
+- **Downscale**: when the base64 is over 5 MB (Anthropic's per-image limit) or the long edge is over 1568 px, the long edge is scaled to 1568 and the image is re-encoded as JPEG, starting at q82 and stepping down until it fits.
+- **Large PNG → JPEG** (1.4.4): an opaque PNG over 256 KB is re-encoded as JPEG q82 and sent that way if it comes out smaller. This matches the admin upload path, which sends every attachment as JPEG. The image stays in history and is re-sent with every later request, and PNG renders are often 5–15× their JPEG size. Example: 31 Blender renders at 896×896 went from 24.3 MB to 1.4 MB; the largest was 86 KB. Transparent PNGs (JPEG would lose the alpha channel), PNGs of 256 KB or less, and flat-color PNGs that don't shrink are sent as-is. The result line then reads `— sent as jpeg q82, <KB> KB, to keep the conversation payload small`.
+
+How many images history can hold in total is capped separately at the session level — see [design/session.md → History image budget](../design/session.md#history-image-budget).
 
 **Vision gating**: this tool is only injected into the agent's tool list when the underlying model declares `capabilities.image: true` in its provider manifest. For text-only models (DeepSeek and others), `view_image` is silently dropped at `createWorkspaceTools()` time so the model never sees it — calling it would otherwise produce a 400 from the provider.
 
