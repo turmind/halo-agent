@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-09-28
+
+### Fixed
+
+- Agents: a busy relay target or sub-agent that answered a follow-up in a drained turn, then called `continue_task` to resume, dropped that answer from the eventual relay/report — every turn resets its output, and the end-of-run report only reads the last turn. The follow-up answer is now snapshotted and forwarded as an interim report the moment the resume kicks off: a relay root sends a `[Relay interim report · …]` message (the final report still fires exactly once), a sub-agent tells its parent via `querySession` without marking itself done. Local chat, other-session messages, errored/empty answers and goal workers are unaffected.
+
 ## [1.4.4] - 2026-09-27
 
 ### Fixed
