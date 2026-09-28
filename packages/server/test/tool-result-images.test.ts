@@ -4,6 +4,7 @@ import { MantleAgent } from '../src/agents/mantle-agent.js'
 import { KimiAgent } from '../src/agents/kimi-agent.js'
 import { DeepSeekAgent } from '../src/agents/deepseek-agent.js'
 import { OpenAIAgent } from '../src/agents/openai-agent.js'
+import { ZhipuAgent } from '../src/agents/zhipu-agent.js'
 
 /**
  * view_image returns a [text, image] tool_result. The OpenAI-format runtimes
@@ -63,6 +64,7 @@ describe('tool_result images reach OpenAI-format runtimes', () => {
     ['Kimi', () => new KimiAgent(base)],
     ['DeepSeek', () => new DeepSeekAgent(base)],
     ['OpenAI', () => new OpenAIAgent(base)],
+    ['Zhipu', () => new ZhipuAgent(base)],
   ]
   for (const [name, make] of chatRuntimes) {
     it(`${name} (Chat Completions) follows the tool message with a user image message`, async () => {

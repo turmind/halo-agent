@@ -301,7 +301,7 @@ A `toolUseId`-based algorithm that repairs message arrays damaged by abort / int
 
 **Partial batches land, only the cut tool is synthesized** (`agent-loop.ts`, the tool loop's `try/finally`): in a parallel `tool_use` batch the loop pushes the accumulated `tool_result` user message in a `finally`, so both interrupt exits — the loop's own cancel check (soft interrupt: the consumer aborts after a `tool_result`, the next tool sees the signal) and the consumer breaking its `for await` (hard interrupt: finishes the generator at the `yield` via `.return()`) — still land the results that finished. Before this, either exit skipped the push, so every completed result was lost and repair marked the **whole** batch `[interrupted]`; the model then re-ran work that had already happened, which for side-effecting calls (commit, append, send) is a double execution — and `continue_task`'s "re-issue interrupted calls" instruction made that hazard live. The tool the abort landed on is dropped on purpose (its result is a killed shell's partial output), so repair pairs exactly that id — and any never-started ones — with the do-not-retry marker.
 
-**Provider-side consumers**: the OpenAI-style agents (DeepSeek / Kimi / Doubao / Hunyuan / Mantle / generic OpenAI) convert a user turn's `tool_result` blocks into tool-role messages — any non-`tool_result` content coalesced into the same turn (e.g. the synthesized result landing alongside real user text, or a stop-fold) is emitted as a following user message rather than silently dropped.
+**Provider-side consumers**: the OpenAI-style agents (DeepSeek / Kimi / Doubao / Hunyuan / Zhipu / Mantle / generic OpenAI) convert a user turn's `tool_result` blocks into tool-role messages — any non-`tool_result` content coalesced into the same turn (e.g. the synthesized result landing alongside real user text, or a stop-fold) is emitted as a following user message rather than silently dropped.
 
 ### UI-side interrupt marker (`markPendingToolCallsInterrupted`)
 
@@ -382,7 +382,7 @@ The transient-5xx branch is the one that all providers share, and getting the **
 **httpStatus extraction — three-step fallback** (top of the `catch` block):
 
 1. **AWS SDK structured field** — `err.$metadata.httpStatusCode`. Present on every Bedrock error.
-2. **Regex parse of the message string** — for the nine fetch-based providers (anthropic / openai / deepseek / doubao / hunyuan / kimi / minimax / qwen / mantle), which throw plain string `Error`s with the status embedded. The patterns cover `API error <NNN>`, `] <NNN>`, and `status=<NNN>`.
+2. **Regex parse of the message string** — for the ten fetch-based providers (anthropic / openai / deepseek / doubao / hunyuan / kimi / minimax / qwen / zhipu / mantle), which throw plain string `Error`s with the status embedded. The patterns cover `API error <NNN>`, `] <NNN>`, and `status=<NNN>`.
 3. **`undefined`** — neither source yielded a status; the error falls through to the keyword/name-based branches instead.
 
 **Retry decision** — a failure is treated as a transient server-side error (→ retry with backoff) when **either**:

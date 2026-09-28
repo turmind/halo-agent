@@ -1,0 +1,115 @@
+id: zhipu
+displayName: Zhipu AI (GLM)
+displayName_zh: 智谱 AI（GLM）
+description: Zhipu GLM-5.x family on open.bigmodel.cn, OpenAI-compatible chat completions
+description_zh: 智谱 GLM-5.x 系列（open.bigmodel.cn），OpenAI 兼容协议
+defaultEndpoint: https://open.bigmodel.cn/api/paas/v4
+defaultModelId: glm-5.3
+
+secrets:
+  - key: api_key
+    description: Zhipu AI API Key. Get from https://bigmodel.cn/usercenter/proj-mgmt/apikeys
+    description_zh: 智谱 API Key。从 https://bigmodel.cn/usercenter/proj-mgmt/apikeys 获取
+    default: <<ZHIPU_API_KEY>>
+    secret: true
+
+# Capabilities verified via live probes (2026-09-28):
+#   - Output cap: only `max_tokens` is honoured — `max_completion_tokens` is
+#     silently ignored (asked for 60, got 553). zhipu-agent sends max_tokens.
+#   - Vision is per model: glm-5.3-flash / glm-5.3-flashx read a text-bearing
+#     PNG / JPEG / GIF / WEBP correctly, both as image_url in a user message
+#     (the path tool-result images take) and inside a tool message.
+#     glm-5.3 / glm-5.2 are text-only and 400 on any image_url part
+#     (code 1210 "messages.content.type 参数非法，取值范围 ['text']").
+#   - Thinking: glm-5.3* always thinks — `thinking:{type:'disabled'}` and
+#     reasoning_effort outside { low, high, max } 400 ("该模型始终思考").
+#     glm-5.2 honours `disabled`. reasoning_content comes back on the
+#     message and is replayed verbatim with `clear_thinking:false`
+#     (preserved thinking, the doc's recommendation for agent loops).
+#   - Caching is automatic; hits show up in prompt_tokens_details.cached_tokens
+#     (already included in prompt_tokens) from turn 2 on the 5.3 family;
+#     glm-5.2 warms up a turn later.
+#   - Over-long input on older ids is truncated server-side instead of
+#     erroring — keep contextWindow accurate so compaction fires in time.
+models:
+  - id: glm-5.3
+    displayName: GLM-5.3
+    maxOutputTokens: 131072
+    contextWindow: 1000000
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # Always on server-side — no off switch; effort enum is low/high/max.
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+
+  - id: glm-5.3-flash
+    displayName: GLM-5.3 Flash
+    maxOutputTokens: 131072
+    contextWindow: 1000000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+
+  - id: glm-5.3-flashx
+    displayName: GLM-5.3 FlashX
+    maxOutputTokens: 131072
+    contextWindow: 1000000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+
+  - id: glm-5.2
+    displayName: GLM-5.2
+    maxOutputTokens: 131072
+    contextWindow: 1000000
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # Can be switched off (thinking:{type:'disabled'}).
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: high, label: High }
+          - { value: max, label: Max }

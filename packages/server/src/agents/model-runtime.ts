@@ -13,6 +13,7 @@ import { MiniMaxAgent } from './minimax-agent.js'
 import { QwenAgent } from './qwen-agent.js'
 import { HunyuanAgent } from './hunyuan-agent.js'
 import { DoubaoAgent } from './doubao-agent.js'
+import { ZhipuAgent } from './zhipu-agent.js'
 import { OpenAIAgent } from './openai-agent.js'
 import { MantleAgent } from './mantle-agent.js'
 import { AnthropicAgent } from './anthropic-agent.js'
@@ -136,6 +137,16 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
       return new DoubaoAgent({
         modelId: cfg.modelId,
         endpoint: cfg.endpoint ?? 'https://ark.cn-beijing.volces.com/api/v3',
+        apiKey: cfg.apiKey ?? '',
+        systemPrompt: cfg.systemPrompt,
+        tools: cfg.tools,
+        maxTokens: cfg.maxTokens,
+        thinking: cfg.thinking,
+      })
+    case 'zhipu':
+      return new ZhipuAgent({
+        modelId: cfg.modelId,
+        endpoint: cfg.endpoint ?? 'https://open.bigmodel.cn/api/paas/v4',
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,

@@ -23,7 +23,7 @@ export function classifyModelError(err: unknown): ClassifiedModelError {
   const errName = err instanceof Error ? err.name : ''
   // Prefer the AWS SDK's structured HTTP status; fall back to parsing it
   // out of the message for the fetch-based providers (anthropic / openai /
-  // deepseek / doubao / hunyuan / kimi / minimax / qwen / mantle), which
+  // deepseek / doubao / hunyuan / kimi / minimax / qwen / zhipu / mantle), which
   // throw plain string Errors with the status embedded — without this,
   // the transient-5xx retry below only ever fires for Bedrock.
   const httpStatusFromMeta = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode
@@ -128,7 +128,10 @@ function classifyKind(msg: string, errName: string, httpStatus: number | undefin
   // unrelated 400.
   if (
     httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500
-    && (msg.includes('Multimodal data is corrupted') || msg.includes('Could not process image'))
+    && (msg.includes('Multimodal data is corrupted') || msg.includes('Could not process image')
+      // Zhipu: corrupt image data / image parts sent to a text-only GLM id
+      // (history images left over after switching the agent's model).
+      || msg.includes('图片输入格式/解析错误') || msg.includes("取值范围 ['text']"))
   ) {
     return 'multimodal_4xx'
   }

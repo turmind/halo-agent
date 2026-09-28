@@ -142,6 +142,7 @@ Configured per-agent through one provider-agnostic runtime. AWS Bedrock Claude i
 | Qwen (Aliyun) | |
 | Hunyuan (Tencent) | |
 | Doubao (Volcengine) | |
+| Zhipu AI (GLM) | GLM-5.3 family; vision on the Flash models |
 
 ![Settings — all model providers, configurable per agent](assets/models.jpg)
 

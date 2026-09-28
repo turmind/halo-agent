@@ -142,6 +142,7 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
 | Qwen（阿里云） | |
 | Hunyuan（腾讯混元） | |
 | Doubao（火山引擎豆包） | |
+| 智谱 AI（GLM） | GLM-5.3 系列，Flash 型号支持图片 |
 
 ![设置页 —— 全部模型 Provider，按 Agent 配置](assets/models.jpg)
 

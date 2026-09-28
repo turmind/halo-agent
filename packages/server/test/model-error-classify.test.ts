@@ -26,6 +26,8 @@ describe('classifyModelError', () => {
       ['empty response (Mantle)', new Error('MantleEmptyResponse: status=completed with empty output[]'), 'empty_response'],
       ['corrupted (missing tool_result)', new Error('messages.3: tool_use ids were found without tool_result blocks'), 'corrupted'],
       ['multimodal 4xx', new Error('[Kimi] 400 Could not process image'), 'multimodal_4xx'],
+      ['multimodal 4xx (Zhipu)', new Error('[ZhipuAgent] API error 400: {"error":{"code":"1210","message":"图片输入格式/解析错误"}}'), 'multimodal_4xx'],
+      ['multimodal 4xx (Zhipu text-only id)', new Error('[ZhipuAgent] API error 400: {"error":{"code":"1210","message":"messages.content.type 参数非法，取值范围 [\'text\']"}}'), 'multimodal_4xx'],
       ['fatal (unknown)', new Error('something unexpected'), 'fatal'],
     ])('%s → %s', (_label, err, expected) => {
       expect(classifyModelError(err).kind).toBe(expected)
