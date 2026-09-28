@@ -26,7 +26,7 @@ import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools, buildContinueTaskTool } from './session-tools.js'
 import { deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
-import { deliverRelayReport, buildRelayTools } from './relay.js'
+import { deliverRelayReport, deliverRelayInterim, buildRelayTools, RELAY_CHANNEL_PREFIX } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
@@ -1836,6 +1836,8 @@ export class SessionManager implements SessionManagerInternals {
       // it its own bubble.
       if (session.messageQueue.length === 0) {
         if (session.selfKick && !session.interruptRequested) {
+          // Snapshot the answer BEFORE the kick turn resets output/finalOutput.
+          this.sendInterimReport(session, batch)
           session.messageQueue.push({ text: CONTINUE_TASK_KICK })
           // The kick is a raw user turn, so it needs a UI user row too — otherwise
           // deleteExchange's UI span and deleteRawTurn's raw span diverge (the UI
@@ -1864,6 +1866,37 @@ export class SessionManager implements SessionManagerInternals {
       if (session.parentId === null && session.messageQueue.length > 0) {
         this.emitEvent(session.id, { type: 'complete', batchBoundary: true })
       }
+    }
+  }
+
+  /** continue_task interim report. The answer turn that precedes a kick is
+   *  otherwise lost to whoever asked: the end-of-run reports (tryReportToParent /
+   *  deliverRelayReport) read only the LAST turn's output, and the kick turn
+   *  resets it. So when the batch just answered came from the party this session
+   *  owes a report — its parent (sub-agent) or a relay caller (root, relay-
+   *  prefixed message) — forward the answer now. Neither path touches the final
+   *  report's state: no stoppedAt / agent_done (parent's sibling-status still sees
+   *  this child running), reply_to kept. Goal workers are deliberately excluded
+   *  (G's messages carry neither mark): an interim would wake G mid-round, and a
+   *  fresh query_session from G would interrupt W again. */
+  private sendInterimReport(session: AgentSession, batch: QueuedMessage[]): void {
+    const fromParent = session.parentId !== null && batch.some((q) => q.sourceSessionId === session.parentId)
+    // includes, not startsWith: an `@scope` marker prepends INSTRUCTIONS blocks.
+    const fromRelay = session.parentId === null && batch.some((q) => q.sourceSessionId === undefined && q.text.includes(RELAY_CHANNEL_PREFIX))
+    if ((!fromParent && !fromRelay) || session.turnError) return
+    const answer = session.finalOutput || session.output
+    if (!answer) return
+    const cap = config.limits.autoReportMax
+    const body = answer.length > cap ? answer.slice(0, cap) + `\n\n[Interim report truncated: ${answer.length} chars total.]` : answer
+    if (fromParent) {
+      const text = `[Interim report: answered your message (below) and is now resuming its interrupted task — the final report follows when that is done. Not the final result.]\n\n${body}`
+      this.querySession(session.parentId!, session.id, text).catch((err) => {
+        console.error(`[SessionManager] Interim report failed: ${session.id} → ${session.parentId}: ${err instanceof Error ? err.message : String(err)}`)
+      })
+    } else {
+      deliverRelayInterim(this, session.id, body).catch((err) => {
+        console.error(`[Relay] deliverRelayInterim failed for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
+      })
     }
   }
 

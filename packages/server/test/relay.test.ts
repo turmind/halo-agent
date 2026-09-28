@@ -6,7 +6,7 @@ import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
 import { eq } from 'drizzle-orm'
 import {
-  setRelayRegistry, readReplyTo, writeReplyTo, deliverRelayReport, buildRelayTools,
+  setRelayRegistry, readReplyTo, writeReplyTo, deliverRelayReport, deliverRelayInterim, buildRelayTools,
   type RelayTarget,
 } from '../src/agents/relay.js'
 
@@ -142,6 +142,31 @@ describe('deliverRelayReport', () => {
     writeReplyTo(deptSm.getDb(), 'dept-1>child', { workspace: callerWs, sessionId: 'sec-1' })
     await deliverRelayReport(deptSm, sessionShape('dept-1>child', { parentId: 'dept-1' }))
     expect(callerStub.sent).toHaveLength(0)
+  })
+})
+
+describe('deliverRelayInterim', () => {
+  it('sends nothing without reply_to', async () => {
+    seedSession(deptSm, 'dept-1')
+    await deliverRelayInterim(deptSm, 'dept-1', 'answer')
+    expect(callerStub.sent).toHaveLength(0)
+  })
+
+  it('delivers the interim header + body and KEEPS reply_to for the final report', async () => {
+    seedSession(deptSm, 'dept-1')
+    writeReplyTo(deptSm.getDb(), 'dept-1', { workspace: callerWs, sessionId: 'sec-1' })
+    await deliverRelayInterim(deptSm, 'dept-1', 'quota is 384 vCPU')
+    expect(callerStub.appended).toHaveLength(1)
+    expect(callerStub.sent).toHaveLength(1)
+    expect(callerStub.sent[0].sid).toBe('sec-1')
+    expect(callerStub.sent[0].text).toMatch(new RegExp(`^\\[Relay interim report · workspace ${deptWs} · session dept-1\\]`))
+    expect(callerStub.sent[0].text).toContain('quota is 384 vCPU')
+    expect(readReplyTo(deptSm.getDb(), 'dept-1')).toEqual({ workspace: callerWs, sessionId: 'sec-1' })
+    // The later final report still goes out (and only then clears the pointer).
+    await deliverRelayReport(deptSm, sessionShape('dept-1', { finalOutput: 'task done' }))
+    expect(callerStub.sent).toHaveLength(2)
+    expect(callerStub.sent[1].text).toMatch(/^\[Relay report · /)
+    expect(readReplyTo(deptSm.getDb(), 'dept-1')).toBeNull()
   })
 })
 

@@ -35,6 +35,9 @@ export interface RelayTarget {
 }
 export interface RelayRegistry { getOrCreate(workspacePath: string): RelayTarget }
 export interface ReplyTo { workspace: string; sessionId: string }
+/** Prefix relay_send stamps on the model-bound text. SessionManager.drainQueue
+ *  matches it to tell a relay message (owed an interim report) from local chat. */
+export const RELAY_CHANNEL_PREFIX = '[channel: relay | from: '
 
 // ── Registry singleton ───────────────────────────────────────────────
 
@@ -128,6 +131,30 @@ export async function deliverRelayReport(
   console.debug(`[Relay] ${host.workspaceRoot}/${session.id} → ${to.workspace}/${to.sessionId}: ${body.slice(0, 120)}`)
 }
 
+/**
+ * Interim report — called from SessionManager.drainQueue when a relay-dispatched
+ * root answered the caller's mid-task message and is about to resume the
+ * interrupted task (continue_task). The resume turn resets the per-turn output,
+ * so without this the answer never reaches the caller: deliverRelayReport only
+ * reads the LAST turn. Unlike the final report: no quiet gate (the session is by
+ * definition not done) and reply_to is KEPT, so the final report still fires
+ * exactly once when the resumed task ends. `body` is the caller-built snapshot.
+ */
+export async function deliverRelayInterim(host: RelayTarget, sessionId: string, body: string): Promise<void> {
+  const to = readReplyTo(host.getDb(), sessionId)
+  if (!to) return
+  const registry = getRelayRegistry()
+  if (!registry) { console.warn(`[Relay] no registry — cannot deliver interim report for ${sessionId} to ${to.workspace}`); return }
+  let caller: RelayTarget
+  try { caller = registry.getOrCreate(to.workspace) }
+  catch (err) { console.error(`[Relay] caller workspace ${to.workspace} unreachable: ${err instanceof Error ? err.message : String(err)}`); return }
+  const header = `[Relay interim report · workspace ${host.workspaceRoot} · session ${sessionId}] The session answered your latest message (below) and is now resuming the task that message interrupted — its final [Relay report] follows when that is done.`
+  const text = `${header}\n\n${body}`
+  caller.appendUserMessage(to.sessionId, text)
+  await caller.sendUserMessage(to.sessionId, text)
+  console.debug(`[Relay] interim ${host.workspaceRoot}/${sessionId} → ${to.workspace}/${to.sessionId}: ${body.slice(0, 120)}`)
+}
+
 // ── Tools ────────────────────────────────────────────────────────────
 
 function jsonErr(error: string): string { return JSON.stringify({ code: 1, error }) }
@@ -155,7 +182,7 @@ const WORKSPACE_SESSION_PROPS = {
 export function buildRelayTools(host: RelayTarget, callerSessionId: string): ToolDef[] {
   const relaySend: ToolDef = {
     name: 'relay_send',
-    description: 'Dispatch a message to a session in ANOTHER workspace on this server. Creates the session if `session_id` does not exist there (with `agent_id`, or the workspace\'s default agent). If the session is busy the message is queued and the current step is softly interrupted (finishes its current tool, then reads your message) — use this for follow-ups and corrections too. Returns immediately; when the target\'s whole subtree finishes, its wrap-up is delivered to you as a `[Relay report · …]` message. Do not poll — the report arrives on its own. Returns JSON with code 0 on success.',
+    description: 'Dispatch a message to a session in ANOTHER workspace on this server. Creates the session if `session_id` does not exist there (with `agent_id`, or the workspace\'s default agent). If the session is busy the message is queued and the current step is softly interrupted (finishes its current tool, then reads your message) — use this for follow-ups and corrections too. Returns immediately; when the target\'s whole subtree finishes, its wrap-up is delivered to you as a `[Relay report · …]` message. If a busy target answers your message and then resumes the task it interrupted, that answer arrives first as a `[Relay interim report · …]` — the final report still follows. Do not poll — the report arrives on its own. Returns JSON with code 0 on success.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -213,7 +240,7 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
       await target.createSession(agentId, null, `Relay: ${params.message.slice(0, 60)}`, undefined, params.session_id)
     }
     writeReplyTo(target.getDb(), params.session_id, { workspace: host.workspaceRoot, sessionId: callerSessionId })
-    const prefixed = `[channel: relay | from: ${host.workspaceRoot}]\n\n${params.message}`
+    const prefixed = `${RELAY_CHANNEL_PREFIX}${host.workspaceRoot}]\n\n${params.message}`
     target.appendUserMessage(params.session_id, params.message)
     const state = await target.sendUserMessage(params.session_id, prefixed)
     // Hard interrupt: `queued` means the target was busy and the message is

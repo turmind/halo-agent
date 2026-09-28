@@ -1,6 +1,6 @@
 # Relay — cross-workspace dispatch with auto-report
 
-> Tool reference: [dev/tools.md → Relay tools](../dev/tools.md#relay-tools). Code: `packages/server/src/agents/relay.ts`, wired in `session-manager.ts` (`createRelayTools`, the `deliverRelayReport` finally hook), `session-agent-builder.ts` (opt-in gate), `index.ts` (`setRelayRegistry`).
+> Tool reference: [dev/tools.md → Relay tools](../dev/tools.md#relay-tools). Code: `packages/server/src/agents/relay.ts`, wired in `session-manager.ts` (`createRelayTools`, the `deliverRelayReport` finally hook, the `sendInterimReport` kick-point hook), `session-agent-builder.ts` (opt-in gate), `index.ts` (`setRelayRegistry`).
 
 ## Problem
 
@@ -26,7 +26,7 @@ Relay mirrors goal mode's shape exactly, because goal mode had already solved "d
 
 ## Invariants and why
 
-- **One dispatch, one report.** `reply_to` is cleared *before* the send. A delivery failure (caller workspace unreachable) can't re-fire on the next turn end, and — more importantly — a user who later chats directly in the department workspace never pings the secretary. The secretary can always re-`relay_send` if a report went missing.
+- **One dispatch, one *final* report.** `reply_to` is cleared *before* the send. A delivery failure (caller workspace unreachable) can't re-fire on the next turn end, and — more importantly — a user who later chats directly in the department workspace never pings the secretary. The secretary can always re-`relay_send` if a report went missing. The one extra message is the **interim report** (below) — it never clears `reply_to`, so it doesn't consume the final one.
 - **Nested trees report once.** The quiet gate is the same one `tryReportToParent` uses, so a target that fans out three sub-agents delivers exactly one relay report, after the last child bubbles up — not one per child turn end.
 - **Full access only.** `session-agent-builder` injects the set only when `nameSet.has('relay_send') && accessLevel === null`. A sandboxed (`workspace` / `readonly`) session can't be given a tool that opens other workspaces' sqlite and session trees; listing the name in such an agent's yaml is silently ignored.
 - **Name-gated bundle.** Only `relay_send` is recognised in `tools:`; the other four (`relay_interrupt` / `relay_stop` / `relay_read` / `relay_list`) ride along. Prevents a half-configured agent that can send but never read back / stop. The admin picker mirrors this with one chip (`GET /agent-configs/tools` builds it from `buildRelayTools` against a dummy target and rewrites the description to name the full set).
@@ -34,6 +34,20 @@ Relay mirrors goal mode's shape exactly, because goal mode had already solved "d
 - **Target-side transcript is normal.** The department workspace's session looks like any other root session in its Sessions tab (user message, agent reply); the only trace of relay is the `reply_to` row while a dispatch is pending. Nothing in the target's system prompt changes.
 - **Same workspace is allowed.** `workspace` is only checked for existence + `.halo/`; passing the caller's own path makes `getOrCreate` return the caller's own `SessionManager`, and everything else is unchanged. In effect relay is a `query_session` without the own-tree scoping — it reaches any **root** session in any workspace, including new ones. Not a hole: the tool is full-access only, and a full-access agent could already `shell_exec` its way into any session file.
 - **Reports come back from roots only.** `deliverRelayReport` fires for `parentId === null`; a sub-session's turn end goes to `tryReportToParent` instead. Dispatching to a `parent>child` id delivers the message but never a report — target roots when you want to hear back. Dispatching to yourself works and terminates (one self-report, `reply_to` cleared) but is pointless.
+
+## Interim report (continue_task)
+
+A busy target that gets a follow-up `relay_send` answers it in a drained turn and, when its original task isn't done, calls `continue_task` — `drainQueue` then runs a resume turn in the **same** `runSession`. Every turn resets `output` / `finalOutput` (`runAgentTurn`'s per-turn reset — `get_session_output`, the session file, goal no-progress hashing and the report cap all depend on it), so the final report only carries the resume turn's wrap-up and the answer to the follow-up was lost.
+
+Fix, at the kick point (not in `runSession`'s finally): right before `CONTINUE_TASK_KICK` is queued, `SessionManager.sendInterimReport` snapshots the answer turn's `finalOutput || output` and — **only if the batch just answered contains a relay message** (`text` contains `RELAY_CHANNEL_PREFIX`, no `sourceSessionId`) — calls `deliverRelayInterim(host, sessionId, body)`: read `reply_to` (no-op without one) → append + send into the caller
+
+```
+[Relay interim report · workspace <ws> · session <id>] The session answered your latest message (below) and is now resuming the task that message interrupted — its final [Relay report] follows when that is done.
+
+<answer, capped at limits.autoReportMax>
+```
+
+No quiet gate (the session is by definition not done) and **`reply_to` is kept**, so `deliverRelayReport` still fires exactly once when the resumed task ends. Skipped when: no kick (plain answer → the final report already carries it), the interrupting message was local chat (typed into the department directly — nothing owed to the secretary), the answer turn errored, or the answer is empty. The same hook covers sub-agents (interim to the parent via `querySession`, see [session.md → continue_task](session.md#message-queue-and-drain)); goal workers are excluded.
 
 ## Soft vs hard interrupt
 
@@ -49,4 +63,4 @@ Relay mirrors goal mode's shape exactly, because goal mode had already solved "d
 
 ## Test
 
-`packages/server/test/relay.test.ts` — stub `RelayTarget` + registry, 11 cases: `deliverRelayReport` no-op without `reply_to`, waits while a child is active, delivers exactly one append + one send with the header then clears, `ABORTED` prefix on `turnError`, ignores sub-sessions; `relay_send` creates + stamps `reply_to` + channel-prefixes the model text, rejects a nonexistent workspace; `relay_interrupt` busy → enqueue then abort + re-stamp, idle → no abort and never creates; `relay_list` roots only with title fallback, and defaults to the caller's own workspace.
+`packages/server/test/relay.test.ts` — stub `RelayTarget` + registry, 13 cases: `deliverRelayReport` no-op without `reply_to`, waits while a child is active, delivers exactly one append + one send with the header then clears, `ABORTED` prefix on `turnError`, ignores sub-sessions; `relay_send` creates + stamps `reply_to` + channel-prefixes the model text, rejects a nonexistent workspace; `relay_interrupt` busy → enqueue then abort + re-stamp, idle → no abort and never creates; `relay_list` roots only with title fallback, and defaults to the caller's own workspace. `deliverRelayInterim`: no-op without `reply_to`; delivers the interim header and keeps `reply_to`, the later final report still fires once. End-to-end through `drainQueue` (relay interim → final, no kick → no interim, local message → no interim) lives in `test/continue-task.test.ts`.

@@ -1,10 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
+import { eq } from 'drizzle-orm'
 import type { AgentSessionEvent } from '../src/agents/agent-events.js'
+import { setRelayRegistry, writeReplyTo, readReplyTo, type RelayTarget, type RelayRegistry } from '../src/agents/relay.js'
+import { initialGoalState, writeGoalState, readGoalState, setWorkerBackptr, goalDir, goalSpecPath } from '../src/agents/goal-mode.js'
 
 /**
  * Coverage for the built-in `continue_task` tool (resume after interrupt):
@@ -23,6 +27,9 @@ import type { AgentSessionEvent } from '../src/agents/agent-events.js'
  * 6. An externally aborted turn (esc / archive / delete) never kicks.
  * 7. A sub-agent's kick turn runs BEFORE the auto-report reads finalOutput.
  * 8. The kick is traced as a `user` row (report: true), not a system event.
+ * 9. Interim report: the answer turn before a kick reaches whoever is owed a
+ *    report (relay caller / parent) without consuming the final report —
+ *    reply_to kept, no stoppedAt, goal rounds not counted.
  *
  * Mirrors the turn-error-report harness: real SessionManager against a tmpdir
  * workspace, fake sessions seeded straight into the manager's map (no live
@@ -72,7 +79,7 @@ function stubAgent(onCall: (callNo: number) => void = () => {}) {
 function fakeSession(
   id: string,
   agent: ReturnType<typeof stubAgent>,
-  over: { parentId?: string | null; interruptRequested?: boolean; messageQueue?: Array<{ text: string }>; selfKick?: boolean } = {},
+  over: { parentId?: string | null; interruptRequested?: boolean; messageQueue?: Array<{ text: string; sourceSessionId?: string }>; selfKick?: boolean } = {},
 ) {
   const session = {
     id,
@@ -87,7 +94,7 @@ function fakeSession(
     turnError: null as string | null,
     promise: null,
     abortController: null as AbortController | null,
-    messageQueue: over.messageQueue ?? [] as Array<{ text: string }>,
+    messageQueue: over.messageQueue ?? [] as Array<{ text: string; sourceSessionId?: string }>,
     contextConfig: { maxTokens: 100000, compressAt: 0.8 },
     currentModelId: 'test-model',
     toolCallLog: [] as unknown[],
@@ -320,5 +327,154 @@ describe('continue_task kick trace', () => {
     expect(userKicks).toHaveLength(1)
     expect(userKicks[0].report).toBe(true)
     expect(events.filter((e) => e.type === 'system' && (e.text ?? '').includes('continue_task'))).toHaveLength(0)
+  })
+})
+
+// ── 9. interim report: the answer before a kick reaches the asker ──
+
+/** Secretary-side stub recording what relay delivers into it. */
+function relayCaller() {
+  const sent: string[] = []
+  const caller = {
+    workspaceRoot: '/sec',
+    getDb: () => { throw new Error('caller stub has no db') },
+    getSessionById: () => null,
+    createSession: async () => { throw new Error('not used') },
+    appendUserMessage: () => {},
+    sendUserMessage: async (_sid: string, text: string) => { sent.push(text); return 'running' as const },
+    interruptSession: () => {},
+    stopSession: async () => {},
+    getSessionOutput: () => '{}',
+    listSessions: () => ({ sessions: [] }),
+  } satisfies RelayTarget
+  setRelayRegistry({ getOrCreate: () => caller })
+  return sent
+}
+const flush = () => new Promise((r) => setTimeout(r, 0))
+const relayMsg = (text: string) => ({ interruptRequested: true, messageQueue: [{ text: `[channel: relay | from: /sec]\n\n${text}` }] })
+
+describe('continue_task interim report', () => {
+  afterEach(() => { setRelayRegistry(null as unknown as RelayRegistry) })
+
+  it('relay root: the answer goes out as an interim, reply_to survives, the final report still fires once', async () => {
+    seedRow('dept')
+    writeReplyTo(sm.getDb(), 'dept', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent((callNo) => {
+      if (callNo === 1) sm.requestSelfKick('dept')
+      // Mid-kick-turn: the interim is already out, the back-pointer is intact.
+      if (callNo === 2) {
+        expect(sent).toHaveLength(1)
+        expect(readReplyTo(sm.getDb(), 'dept')).toEqual({ workspace: '/sec', sessionId: 'sec-1' })
+      }
+    })
+    fakeSession('dept', agent, relayMsg('what is the quota?'))
+
+    await sm.runSession('dept', '')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toMatch(/^\[Relay interim report · workspace /)
+    expect(sent[0]).toContain('reply 1')
+    expect(sent[1]).toMatch(/^\[Relay report · workspace /)
+    expect(sent[1]).toContain('reply 2')
+    expect(readReplyTo(sm.getDb(), 'dept')).toBeNull()
+  })
+
+  it('no kick → no interim: one final report only', async () => {
+    seedRow('dept2')
+    writeReplyTo(sm.getDb(), 'dept2', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    fakeSession('dept2', stubAgent(), relayMsg('q'))
+
+    await sm.runSession('dept2', '')
+    await flush()
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/^\[Relay report/)
+  })
+
+  it('a local (non-relay) message interrupting a relay-dispatched root sends no interim', async () => {
+    seedRow('dept3')
+    writeReplyTo(sm.getDb(), 'dept3', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent((callNo) => { if (callNo === 1) sm.requestSelfKick('dept3') })
+    fakeSession('dept3', agent, interrupted('typed straight into the department chat'))
+
+    await sm.runSession('dept3', '')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('reply 2')
+  })
+
+  it('sub-agent: interim to the parent without stoppedAt / agent_done; final report still once', async () => {
+    seedRow('p')
+    seedRow('p>c', { parentId: 'p' })
+    const calls: Array<{ target: string; text: string; stoppedAt: number | null }> = []
+    vi.spyOn(sm, 'querySession').mockImplementation(async (target, _source, text) => {
+      const row = sm.getDb().select({ stoppedAt: agentSessions.stoppedAt }).from(agentSessions).where(eq(agentSessions.id, 'p>c')).get()
+      calls.push({ target, text, stoppedAt: row?.stoppedAt ?? null })
+      return '{}'
+    })
+    const parentEvents: AgentSessionEvent[] = []
+    sm.registerEventListener('p', (ev) => { parentEvents.push(ev) })
+    const agent = stubAgent((callNo) => {
+      if (callNo === 1) sm.requestSelfKick('p>c')
+      if (callNo === 2) expect(parentEvents.filter((e) => e.type === 'agent_done')).toHaveLength(0)
+    })
+    fakeSession('p>c', agent, { parentId: 'p', interruptRequested: true, messageQueue: [{ text: 'status?', sourceSessionId: 'p' }] })
+
+    await sm.runSession('p>c', '')
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0].target).toBe('p')
+    expect(calls[0].text).toMatch(/^\[Interim report:/)
+    expect(calls[0].text).toContain('reply 1')
+    expect(calls[0].stoppedAt).toBeNull()
+    expect(calls[1].text).toBe('reply 2')
+    expect(calls[1].stoppedAt).not.toBeNull()
+    expect(parentEvents.filter((e) => e.type === 'agent_done')).toHaveLength(1)
+  })
+
+  it('sub-agent interrupted by someone other than its parent sends no interim', async () => {
+    seedRow('p2')
+    seedRow('p2>c', { parentId: 'p2' })
+    const spy = vi.spyOn(sm, 'querySession').mockResolvedValue('{}')
+    const agent = stubAgent((callNo) => { if (callNo === 1) sm.requestSelfKick('p2>c') })
+    fakeSession('p2>c', agent, { parentId: 'p2', interruptRequested: true, messageQueue: [{ text: 'hi', sourceSessionId: 'p2>other' }] })
+
+    await sm.runSession('p2>c', '')
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][2]).toBe('reply 2')
+  })
+
+  it('goal worker: G\'s mid-round message + kick → no interim, exactly one round counted', async () => {
+    seedRow('w')
+    seedRow('g', { agentId: 'goal' })
+    const spec = '# Goal\n- do it\n'
+    mkdirSync(goalDir(ws, 'g'), { recursive: true })
+    writeFileSync(goalSpecPath(ws, 'g'), spec)
+    const st = initialGoalState('g', 'w')
+    st.status = 'running'
+    st.startedAt = Date.now()
+    st.specHash = createHash('sha256').update(Buffer.from(spec)).digest('hex')
+    writeGoalState(sm.getDb(), 'g', st)
+    setWorkerBackptr(sm.getDb(), 'w', 'g')
+    const spy = vi.spyOn(sm, 'querySession').mockResolvedValue('{}')
+    const agent = stubAgent((callNo) => { if (callNo === 1) sm.requestSelfKick('w') })
+    fakeSession('w', agent, { interruptRequested: true, messageQueue: [{ text: 'steer: prefer X', sourceSessionId: 'g' }] })
+
+    await sm.runSession('w', '')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][0]).toBe('g')
+    expect(spy.mock.calls[0][2]).toContain('reply 2')
+    expect(readGoalState(sm.getDb(), 'g')!.round).toBe(1)
   })
 })
