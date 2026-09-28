@@ -100,7 +100,7 @@ The admin chat input picks the session's level per message (see [requirements/ch
 
 **`activate_skill`**: auto-injected whenever the YAML has a non-empty `skills` list (does **not** need to be declared in `tools`). It loads the full SKILL.md on demand. Disabled skills are excluded.
 
-**`continue_task`**: injected for **every** agent unconditionally — the only tool that is (`activate_skill` is gated on `skills`, session tools on `team`). It lets a turn that was started by an interruption resume the interrupted task after answering; see [session.md → continue_task](session.md#message-queue-and-drain).
+**`continue_task`**: injected for **every** agent unconditionally — the only tool that is (`activate_skill` is gated on `skills`, session tools on `team`). It lets a turn that was started by an interruption resume the interrupted task after answering; right before the resume, the answer is forwarded as an interim report to whoever the session owes one (a sub-agent's parent via `querySession`, a relay target's caller via `deliverRelayInterim`), since the resume turn resets the output the end-of-run report reads. See [session.md → continue_task](session.md#message-queue-and-drain).
 
 ## Root agent rule
 

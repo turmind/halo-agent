@@ -22,7 +22,7 @@ For Docker / CI use `halo setup --non-interactive` and supply credentials via `H
 - **packages/server**: Hono + WebSocket (API + agent orchestration + static frontend), port 9527
 - **packages/admin**: Next.js 15 static export → `out/`, served directly by Hono
 - **packages/core**: shared building blocks — `Workspace` / `GitManager`, plus `media/mime.ts`, the one image ext↔MIME table (`IMAGE_EXTS` / `imageMimeFromExt` / `extFromImageMime`) that server routes, channels and the CLI all import instead of keeping their own copy
-- **Agent framework**: custom agent loop + per-provider runtime (AWS Bedrock Claude / Kimi / DeepSeek / MiniMax / Qwen / Hunyuan / Doubao / generic OpenAI / generic Anthropic)
+- **Agent framework**: custom agent loop + per-provider runtime (AWS Bedrock Claude / Kimi / DeepSeek / MiniMax / Qwen / Hunyuan / Doubao / Zhipu GLM / generic OpenAI / generic Anthropic)
 - **Database**: SQLite + Drizzle ORM
 - **Runtime**: Node.js 22+, ESM
 - **UI**: React + Tailwind + shadcn/ui + Monaco + xterm.js
@@ -108,12 +108,12 @@ Driven from `packages/server/src/agents/goal-mode.ts` (state, overlay, delivery 
 
 ## Relay (cross-workspace dispatch)
 
-Lets an agent in one workspace hand work to a session in **another workspace on the same server** and get the result pushed back — the in-process counterpart of ACP for the "secretary + departments" layout (one workspace that only knows who knows what). Opt-in via `tools: [relay_send]` in `agent.yaml` (one name grants the set: `relay_send` / `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list`), **full-access sessions only**. `relay_send` creates the target session if missing, stamps its row with the caller as `reply_to`, and sends with a `[channel: relay | from: <ws>]` prefix (busy target → queued + soft interrupt; `relay_interrupt` aborts the in-flight turn first). When the target root goes idle with its subtree quiet — same gate as sub-agent reports and goal rounds, so a nested tree reports once — its wrap-up lands in the caller's session as a `[Relay report · workspace … · session …]` message and `reply_to` is cleared: one dispatch, one report. Server only (CLI / TUI never set the registry). See [design/relay.md](docs/design/relay.md) and [dev/tools.md → Relay tools](docs/dev/tools.md#relay-tools).
+Lets an agent in one workspace hand work to a session in **another workspace on the same server** and get the result pushed back — the in-process counterpart of ACP for the "secretary + departments" layout (one workspace that only knows who knows what). Opt-in via `tools: [relay_send]` in `agent.yaml` (one name grants the set: `relay_send` / `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list`), **full-access sessions only**. `relay_send` creates the target session if missing, stamps its row with the caller as `reply_to`, and sends with a `[channel: relay | from: <ws>]` prefix (busy target → queued + soft interrupt; `relay_interrupt` aborts the in-flight turn first). When the target root goes idle with its subtree quiet — same gate as sub-agent reports and goal rounds, so a nested tree reports once — its wrap-up lands in the caller's session as a `[Relay report · workspace … · session …]` message and `reply_to` is cleared: one dispatch, one final report. The one extra message is an interim `[Relay interim report · …]`: when a busy target answers a follow-up `relay_send` and then resumes its interrupted task via `continue_task`, the answer is forwarded at the resume point (`reply_to` kept, so the final report still fires once). Server only (CLI / TUI never set the registry — the tools are still listed there but every call fails). See [design/relay.md](docs/design/relay.md) and [dev/tools.md → Relay tools](docs/dev/tools.md#relay-tools).
 
 Key state:
 - Target workspace sqlite `agent_sessions.reply_to` — JSON `{ workspace, sessionId }` of the caller while a dispatch is pending; null otherwise
 
-Driven from `packages/server/src/agents/relay.ts` (tools + `deliverRelayReport`) + `session-manager.ts` (fourth finally hook) + `session-agent-builder.ts` (opt-in gate) + `index.ts` (`setRelayRegistry`).
+Driven from `packages/server/src/agents/relay.ts` (tools + `deliverRelayReport`) + `session-manager.ts` (fourth finally hook + `sendInterimReport` at the `continue_task` kick point) + `session-agent-builder.ts` (opt-in gate) + `index.ts` (`setRelayRegistry`).
 
 ## Run Ledger
 
