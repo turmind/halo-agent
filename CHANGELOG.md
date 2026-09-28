@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.4.6] - 2026-09-28
+
 ### Added
 
 - Models: Zhipu AI (GLM) provider `zhipu` — OpenAI-compatible chat completions on `open.bigmodel.cn`, key from `ZHIPU_API_KEY`. Ships `glm-5.3` (default), `glm-5.3-flash`, `glm-5.3-flashx` and `glm-5.2`; all 1M context / 128K output. Image input (attachments and `view_image`) is on for the two Flash models only — `glm-5.3` and `glm-5.2` are text-only and reject image parts, which is now recognised as a multimodal rejection so a session switched onto them from a vision model drops its old images and carries on instead of failing every turn. The glm-5.3 family always thinks (effort low / high / max); glm-5.2 can switch it off. Output is capped with `max_tokens`, since Zhipu silently ignores `max_completion_tokens`.
