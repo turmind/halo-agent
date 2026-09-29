@@ -93,21 +93,26 @@ export type WsServerMessage =
   | { type: 'chat:queued'; reason: 'compact'; message: string }
   | { type: 'chat:stopped'; sessionId: string | null }
   | { type: 'chat:complete'; sessionId: string | null }
-  | { type: 'chat:followup'; agentName: string; replay?: boolean }
-  | { type: 'chat:thinking'; text: string; agentName: string; taskId?: string; turnId?: string; replay?: boolean }
-  | { type: 'chat:stream'; text: string; agentName: string; taskId?: string; turnId?: string; replay?: boolean }
-  | { type: 'chat:system'; text: string; taskId?: string; agentName?: string }
-  | { type: 'chat:user'; text: string }
-  | { type: 'chat:usage'; contextTokens: number; outputTokens: number; turnId?: string; modelId?: string; usage?: WsUsageData }
+  // Event-derived chat/agent frames carry `sessionId` (the session the
+  // listener was attached to) so a client that switched sessions mid-turn can
+  // drop frames still arriving for the old one. Absent on frames with no
+  // session context (detached-buffer replays, handler-local sends) — those
+  // pass the client filter.
+  | { type: 'chat:followup'; agentName: string; replay?: boolean; sessionId?: string | null }
+  | { type: 'chat:thinking'; text: string; agentName: string; taskId?: string; turnId?: string; replay?: boolean; sessionId?: string | null }
+  | { type: 'chat:stream'; text: string; agentName: string; taskId?: string; turnId?: string; replay?: boolean; sessionId?: string | null }
+  | { type: 'chat:system'; text: string; taskId?: string; agentName?: string; sessionId?: string | null }
+  | { type: 'chat:user'; text: string; sessionId?: string | null }
+  | { type: 'chat:usage'; contextTokens: number; outputTokens: number; turnId?: string; modelId?: string; usage?: WsUsageData; sessionId?: string | null }
   // sub-agent / tool events
-  | { type: 'agent:start'; agentName: string; task?: string; taskId?: string }
-  | { type: 'agent:done'; agentName: string; taskId?: string }
-  | { type: 'agent:context'; agentName: string; systemPrompt?: string; taskId?: string }
-  | { type: 'agent:tool_call'; tool?: string; toolUseId?: string; input?: unknown; agentName: string; taskId?: string; turnId?: string; replay?: boolean }
-  | { type: 'agent:tool_result'; result?: string; toolUseId?: string; agentName: string; taskId?: string; durationMs?: number; replay?: boolean }
+  | { type: 'agent:start'; agentName: string; task?: string; taskId?: string; sessionId?: string | null }
+  | { type: 'agent:done'; agentName: string; taskId?: string; sessionId?: string | null }
+  | { type: 'agent:context'; agentName: string; systemPrompt?: string; taskId?: string; sessionId?: string | null }
+  | { type: 'agent:tool_call'; tool?: string; toolUseId?: string; input?: unknown; agentName: string; taskId?: string; turnId?: string; replay?: boolean; sessionId?: string | null }
+  | { type: 'agent:tool_result'; result?: string; toolUseId?: string; agentName: string; taskId?: string; durationMs?: number; replay?: boolean; sessionId?: string | null }
   // errors — `code` marks an expected refusal phrased for the user (e.g.
   // `archived` from exchange:delete); `terminalId` scopes terminal failures
-  | { type: 'error'; error?: string; code?: 'archived'; agentName?: string; taskId?: string; terminalId?: string }
+  | { type: 'error'; error?: string; code?: 'archived'; agentName?: string; taskId?: string; terminalId?: string; sessionId?: string | null }
   // session state
   | { type: 'state:snapshot'; snapshot: WsStateSnapshot }
   | { type: 'session:cleared' }

@@ -45,6 +45,17 @@ function resetDedupOnSessionSwitch(sessionId: string | null): void {
   handledShowKeys.clear()
 }
 
+/** The server-side event listener stays attached to the session it was
+ *  created for, so after `loadSession` switches the store to another session
+ *  the old turn's frames keep arriving until it completes — appended blindly
+ *  they land in the new session's message list (and fabricate a streaming
+ *  slot there). Event-derived frames carry the originating `sessionId`;
+ *  drop those that don't match the loaded session. Frames without one
+ *  (detached-buffer replays, handler-local sends) pass through. */
+export function isForCurrentSession(msg: { sessionId?: string | null }): boolean {
+  return !msg.sessionId || msg.sessionId === useChatStore.getState().sessionId
+}
+
 /**
  * On turn completion, forward any `<<<SHOW: …>>>` payloads in the just-finished
  * assistant reply to the live face preview, in order. Each (message, occurrence)
@@ -182,12 +193,14 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:thinking', (msg) => {
+      if (!isForCurrentSession(msg)) return
       useChatStore.getState().appendThinking(msg.text, msg.agentName, msg.taskId, msg.turnId)
     }),
   )
 
   unsubs.push(
     wsClient.on('chat:stream', (msg) => {
+      if (!isForCurrentSession(msg)) return
       useChatStore.getState().updateLastAssistant(msg.text, msg.agentName, msg.taskId, msg.turnId)
     }),
   )
@@ -216,6 +229,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
     // handler the message is dropped on the floor and the UI sits in
     // "thinking…" forever — the user has to refresh to see anything.
     wsClient.on('error', (msg) => {
+      if (!isForCurrentSession(msg)) return
       const store = useChatStore.getState()
       // A `code`-carrying frame is an expected refusal the server phrased for the
       // user (e.g. `archived` from exchange:delete) — show it as-is; an `Error:`
@@ -238,6 +252,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:followup', (msg) => {
+      if (!isForCurrentSession(msg)) return
       const store = useChatStore.getState()
       if (msg.replay) {
         // Reattach replay (server ws/handler.ts): the server is about to
@@ -271,6 +286,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:user', (msg) => {
+      if (!isForCurrentSession(msg)) return
       useChatStore.getState().addMessage({
         id: generateId(),
         role: 'user',
@@ -282,6 +298,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:usage', (msg) => {
+      if (!isForCurrentSession(msg)) return
       const store = useChatStore.getState()
       store.setTokenUsage(msg.contextTokens, msg.outputTokens)
       if (msg.usage) {
@@ -377,6 +394,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:system', (msg) => {
+      if (!isForCurrentSession(msg)) return
       // Auto-compact (the path that fires when the running turn crosses
       // `compressAt`) emits its preflight notice as a `chat:system` event
       // rather than the `compact:progress` channel that manual /compact

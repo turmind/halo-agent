@@ -209,6 +209,8 @@ type ContentBlockEntry =
 
 `turnId` uniquely identifies each LLM API call. Content blocks and the corresponding usage message in the same turn share the same turnId.
 
+The `usage` event rotates `turnId` on both root and sub-session turn state without flushing the assistant message: the agent loop yields `tool_call`s before `usage` and runs the tools after, so at usage time every tool call of that model call is still pending — a flush there would split thinking/text from the tool_calls into two assistant messages (the pre-fix sub-session behavior). One assistant message therefore spans all model calls of a turn, each call's blocks tagged with its own turnId; it reaches disk at `complete` / `agent_done`, the next `user` or `system` event, or the interrupt flush. The root file additionally carries the in-flight turn as a temporary assistant message on every save (`createSaveSnapshot`); a sub-session file does not (`persistSubSession` id-merges settled rows only), so while a sub-agent runs its file has the tool_call / tool_result / usage rows but no assistant message yet — the live view comes from WS / `getSessionView`, not the file.
+
 ### Render rules
 
 | Mode | Visible | Hidden |

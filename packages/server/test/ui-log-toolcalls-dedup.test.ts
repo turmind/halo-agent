@@ -106,6 +106,57 @@ describe('persisted assistant messages carry no duplicate toolCalls', () => {
   })
 })
 
+describe('sub-session usage keeps each model call in one assistant message', () => {
+  // The agent loop yields tool_calls BEFORE usage and runs the tools after, so
+  // at usage time every tool_call of that model call is still pending. The old
+  // sub-session usage path flushed "completed" content at that point, which
+  // split thinking/text from the tool_calls into two assistant messages — the
+  // tool rows then rode along with the NEXT model call's text under a turnId
+  // that no usage row matched.
+  it('usage between tool_call and tool_result does not split the turn', () => {
+    const state = createEmptyUIState()
+    const taskId = 'sub-1'
+    const sub = { agentName: 'worker', taskId }
+    applyEvent(state, ev({ type: 'agent_start', text: 'do the thing', agentId: 'worker', ...sub }))
+    // model call 1: thinking + text + two tool calls, usage arrives before results
+    applyEvent(state, ev({ type: 'thinking', text: 'plan', ...sub }))
+    applyEvent(state, ev({ type: 'stream', text: 'reading', ...sub }))
+    applyEvent(state, ev({ type: 'tool_call', toolName: 'file_read', toolInput: { path: '/a' }, toolUseId: 'tu_a', ...sub }))
+    applyEvent(state, ev({ type: 'tool_call', toolName: 'file_read', toolInput: { path: '/b' }, toolUseId: 'tu_b', ...sub }))
+    applyEvent(state, ev({ type: 'usage', inputTokens: 10, outputTokens: 5, totalTokens: 15, ...sub }))
+    applyEvent(state, ev({ type: 'tool_result', toolName: 'file_read', toolResult: 'A', toolUseId: 'tu_a', ...sub }))
+    applyEvent(state, ev({ type: 'tool_result', toolName: 'file_read', toolResult: 'B', toolUseId: 'tu_b', ...sub }))
+    // model call 2: final answer
+    applyEvent(state, ev({ type: 'thinking', text: 'done', ...sub }))
+    applyEvent(state, ev({ type: 'stream', text: 'both read', ...sub }))
+    applyEvent(state, ev({ type: 'usage', inputTokens: 20, outputTokens: 3, totalTokens: 23, ...sub }))
+    applyEvent(state, ev({ type: 'agent_done', ...sub }))
+
+    const log = state.subSessionLogs.get(taskId)!.messageLog
+    const assistants = assistantMessages(log)
+    // Same shape as a root turn with two model calls: ONE assistant message
+    // (flushed at agent_done), blocks in event order, tool outputs attached.
+    expect(assistants).toHaveLength(1)
+    const blocks = assistants[0].contentBlocks!
+    expect(blocks.map((b) => b.type)).toEqual(['thinking', 'text', 'tool_call', 'tool_call', 'thinking', 'text'])
+    expect(messageToolCalls(assistants[0]).map((tc) => tc.output)).toEqual(['A', 'B'])
+
+    // Each usage row's turnId tags exactly the blocks of its own model call —
+    // that's what the admin's per-turn usage badge keys on. Before the fix the
+    // first four blocks were split across two messages (thinking/text in one,
+    // the tool_calls riding along with call 2's text in the next).
+    const usages = log.filter((m) => m.type === 'usage')
+    expect(usages).toHaveLength(2)
+    expect(usages[0].turnId).not.toBe(usages[1].turnId)
+    expect(blocks.slice(0, 4).every((b) => b.turnId === usages[0].turnId)).toBe(true)
+    expect(blocks.slice(4).every((b) => b.turnId === usages[1].turnId)).toBe(true)
+    for (const u of usages) {
+      const owners = assistants.filter((m) => m.contentBlocks!.some((b) => b.turnId === u.turnId))
+      expect(owners).toHaveLength(1)
+    }
+  })
+})
+
 describe('messageToolCalls reads both new and legacy shapes', () => {
   const base = { id: 'm1', role: 'assistant' as const, content: 'x', timestamp: 1 }
 

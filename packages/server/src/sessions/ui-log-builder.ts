@@ -402,9 +402,13 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
       if (taskId) {
         const sub = state.subSessionLogs.get(taskId)
         if (sub) {
-          const turnId = sub.currentTurnId
-          flushCompletedAssistantMessage(sub)
-          sub.messageLog.push(buildUsageMsg(event, agentName, taskId, turnId))
+          // No flush here: at usage time every tool_call of this model call is
+          // still pending (tools run after the loop yields usage), so flushing
+          // would split thinking/text from the tool_calls into two assistant
+          // messages. Mirror the root path — the turn buffer is persisted at
+          // agent_done / the next user or system event / the interrupt flush.
+          sub.messageLog.push(buildUsageMsg(event, agentName, taskId, sub.currentTurnId))
+          sub.currentTurnId = randomUUID()
           result.subSessionSave = taskId
         }
       }

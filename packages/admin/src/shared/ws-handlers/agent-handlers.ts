@@ -1,12 +1,14 @@
 import type { WsClient } from '../ws-client-types'
 import { useChatStore } from '@/features/chat/chat-store'
 import { generateId } from '@/shared/utils'
+import { isForCurrentSession } from './chat-handlers'
 
 export function registerAgentHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
 
   unsubs.push(
     wsClient.on('agent:start', (msg) => {
+      if (!isForCurrentSession(msg)) return
       useChatStore.getState().addMessage({
         id: generateId(),
         role: 'assistant',
@@ -21,12 +23,14 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('agent:done', (msg) => {
+      if (!isForCurrentSession(msg)) return
       useChatStore.getState().completeAgentStreaming(msg.agentName, msg.taskId)
     }),
   )
 
   unsubs.push(
     wsClient.on('agent:context', (msg) => {
+      if (!isForCurrentSession(msg)) return
       useChatStore.getState().addMessage({
         id: generateId(),
         role: 'system',
@@ -41,6 +45,7 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('agent:tool_call', (msg) => {
+      if (!isForCurrentSession(msg)) return
       const agentName = msg.agentName ?? 'default'
       // Store the full input — truncation is the render layer's job
       // (InlineToolCall previews collapsed and shows everything on expand).
@@ -56,6 +61,7 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('agent:tool_result', (msg) => {
+      if (!isForCurrentSession(msg)) return
       const agentName = msg.agentName ?? 'default'
       // Store the full result — truncation is the render layer's job
       // (InlineToolCall previews at 120 chars; expand shows everything).

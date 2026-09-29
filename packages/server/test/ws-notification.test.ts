@@ -37,44 +37,55 @@ function notify(event: OrchestratorEvent, sessionId: string | null = 'sess-1') {
 describe('sendWsNotification mapping', () => {
   it('thinking → chat:thinking', () => {
     expect(notify({ type: 'thinking', text: 'hmm', agentName: 'a' })).toEqual([
-      { type: 'chat:thinking', text: 'hmm', agentName: 'a', taskId: undefined, turnId: 'turn-1' },
+      { type: 'chat:thinking', text: 'hmm', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },
     ])
   })
 
   it('stream → chat:stream', () => {
     expect(notify({ type: 'stream', text: 'tok', agentName: 'a' })).toEqual([
-      { type: 'chat:stream', text: 'tok', agentName: 'a', taskId: undefined, turnId: 'turn-1' },
+      { type: 'chat:stream', text: 'tok', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },
     ])
   })
 
   it('tool_call → agent:tool_call (tool/input field names)', () => {
     expect(notify({ type: 'tool_call', toolName: 'shell', toolInput: { cmd: 'ls' }, agentName: 'a' })).toEqual([
-      { type: 'agent:tool_call', tool: 'shell', input: { cmd: 'ls' }, agentName: 'a', taskId: undefined, turnId: 'turn-1' },
+      { type: 'agent:tool_call', tool: 'shell', input: { cmd: 'ls' }, agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },
     ])
   })
 
   it('tool_result → agent:tool_result (result field name + durationMs)', () => {
     expect(notify({ type: 'tool_result', toolResult: 'done', agentName: 'a', durationMs: 12 })).toEqual([
-      { type: 'agent:tool_result', result: 'done', agentName: 'a', taskId: undefined, durationMs: 12 },
+      { type: 'agent:tool_result', result: 'done', agentName: 'a', taskId: undefined, durationMs: 12, sessionId: 'sess-1' },
     ])
   })
 
   it('agent_start / agent_done → agent:start / agent:done', () => {
     expect(notify({ type: 'agent_start', text: 'task', agentName: 'sub' })).toEqual([
-      { type: 'agent:start', agentName: 'sub', task: 'task', taskId: undefined },
+      { type: 'agent:start', agentName: 'sub', task: 'task', taskId: undefined, sessionId: 'sess-1' },
     ])
     expect(notify({ type: 'agent_done', agentName: 'sub' })).toEqual([
-      { type: 'agent:done', agentName: 'sub', taskId: undefined },
+      { type: 'agent:done', agentName: 'sub', taskId: undefined, sessionId: 'sess-1' },
     ])
   })
 
   it('followup_start and queued_message both → chat:followup', () => {
-    expect(notify({ type: 'followup_start', agentName: 'a' })).toEqual([{ type: 'chat:followup', agentName: 'a' }])
-    expect(notify({ type: 'queued_message', agentName: 'a' })).toEqual([{ type: 'chat:followup', agentName: 'a' }])
+    expect(notify({ type: 'followup_start', agentName: 'a' })).toEqual([{ type: 'chat:followup', agentName: 'a', sessionId: 'sess-1' }])
+    expect(notify({ type: 'queued_message', agentName: 'a' })).toEqual([{ type: 'chat:followup', agentName: 'a', sessionId: 'sess-1' }])
   })
 
   it('complete → chat:complete carries the sessionId from context', () => {
     expect(notify({ type: 'complete' }, 'sess-42')).toEqual([{ type: 'chat:complete', sessionId: 'sess-42' }])
+  })
+
+  // Every event-derived frame is stamped with the listener's sessionId so the
+  // admin can drop frames from a session it has switched away from (the
+  // assertions above all pin `sessionId: 'sess-1'`). A listener bound before
+  // the session id is known stamps `null`, which the client treats as "no
+  // session context" and lets through.
+  it('a null session context stamps sessionId: null (not omitted)', () => {
+    expect(notify({ type: 'stream', text: 'tok', agentName: 'a' }, null)).toEqual([
+      { type: 'chat:stream', text: 'tok', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: null },
+    ])
   })
 
   it('root usage (no taskId) → chat:usage with state token counts', () => {
@@ -87,6 +98,7 @@ describe('sendWsNotification mapping', () => {
         turnId: 'turn-1',
         modelId: 'claude',
         usage: expect.objectContaining({ outputTokens: 200 }),
+        sessionId: 'sess-1',
       },
     ])
   })
@@ -96,7 +108,7 @@ describe('sendWsNotification mapping', () => {
   })
 
   it('root user message → chat:user', () => {
-    expect(notify({ type: 'user', text: 'hi from channel' })).toEqual([{ type: 'chat:user', text: 'hi from channel' }])
+    expect(notify({ type: 'user', text: 'hi from channel' })).toEqual([{ type: 'chat:user', text: 'hi from channel', sessionId: 'sess-1' }])
   })
 
   it('local-echo user message is NOT re-pushed (no double render)', () => {
@@ -109,7 +121,7 @@ describe('sendWsNotification mapping', () => {
 
   it('error → error', () => {
     expect(notify({ type: 'error', error: 'boom', agentName: 'a' })).toEqual([
-      { type: 'error', error: 'boom', agentName: 'a', taskId: undefined },
+      { type: 'error', error: 'boom', agentName: 'a', taskId: undefined, sessionId: 'sess-1' },
     ])
   })
 
@@ -124,7 +136,7 @@ describe('sendWsNotification mapping', () => {
     const sent = notify({ type: 'system', text: 'Compacting context (32K tokens)…' })
     expect(sent).toEqual([
       { type: 'compact:started' },
-      { type: 'chat:system', text: 'Compacting context (32K tokens)…', taskId: undefined, agentName: 'default' },
+      { type: 'chat:system', text: 'Compacting context (32K tokens)…', taskId: undefined, agentName: 'default', sessionId: 'sess-1' },
     ])
   })
 })

@@ -866,17 +866,18 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
           // keeps thinking blocks, interleaving, and each block's real turnId,
           // so the rebuild is lossless and usage/turn grouping survives.
           const agentName = detachedSession?.agentName ?? (state.streamingAgent || 'default')
-          sendJson(ws, { type: 'chat:followup', agentName, replay: true })
+          const sessionId = client.sessionId
+          sendJson(ws, { type: 'chat:followup', agentName, replay: true, sessionId })
           for (const block of state.turnContentBlocks) {
             if (block.type === 'thinking') {
-              sendJson(ws, { type: 'chat:thinking', text: block.text, agentName, turnId: block.turnId, replay: true })
+              sendJson(ws, { type: 'chat:thinking', text: block.text, agentName, turnId: block.turnId, replay: true, sessionId })
             } else if (block.type === 'text') {
-              sendJson(ws, { type: 'chat:stream', text: block.text, agentName, turnId: block.turnId, replay: true })
+              sendJson(ws, { type: 'chat:stream', text: block.text, agentName, turnId: block.turnId, replay: true, sessionId })
             } else {
               const tc = block.toolCall
-              sendJson(ws, { type: 'agent:tool_call', tool: tc.name, toolUseId: tc.toolUseId, input: tc.input, agentName, turnId: block.turnId, replay: true })
+              sendJson(ws, { type: 'agent:tool_call', tool: tc.name, toolUseId: tc.toolUseId, input: tc.input, agentName, turnId: block.turnId, replay: true, sessionId })
               if (tc.output) {
-                sendJson(ws, { type: 'agent:tool_result', result: tc.output, toolUseId: tc.toolUseId, agentName, durationMs: tc.durationMs, replay: true })
+                sendJson(ws, { type: 'agent:tool_result', result: tc.output, toolUseId: tc.toolUseId, agentName, durationMs: tc.durationMs, replay: true, sessionId })
               }
             }
           }

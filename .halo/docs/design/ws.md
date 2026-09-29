@@ -82,27 +82,29 @@ Optional `chat` fields:
 
 ## Server → Client
 
-Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-processor.ts#L48) `sendWsNotification` switch.
+Source: [event-processor.ts:53-129](../../../packages/server/src/ws/event-processor.ts#L53) `sendWsNotification` switch.
 
 ### Agent event → WS message mapping
 
 | Agent event | WS type | Fields |
 |---|---|---|
-| `thinking` | `chat:thinking` | text, agentName, taskId, turnId |
-| `stream` | `chat:stream` | text, agentName, taskId, turnId |
-| `agent_start` | `agent:start` | agentName, task, taskId |
-| `agent_done` | `agent:done` | agentName, taskId |
-| `tool_call` | `agent:tool_call` | tool, toolUseId, input, agentName, taskId, turnId |
-| `tool_result` | `agent:tool_result` | result, toolUseId, agentName, taskId, durationMs |
-| `followup_start` / `queued_message` | `chat:followup` | agentName |
-| `usage` (no taskId) | `chat:usage` | contextTokens, outputTokens, turnId, modelId, usage |
+| `thinking` | `chat:thinking` | text, agentName, taskId, turnId, sessionId |
+| `stream` | `chat:stream` | text, agentName, taskId, turnId, sessionId |
+| `agent_start` | `agent:start` | agentName, task, taskId, sessionId |
+| `agent_done` | `agent:done` | agentName, taskId, sessionId |
+| `tool_call` | `agent:tool_call` | tool, toolUseId, input, agentName, taskId, turnId, sessionId |
+| `tool_result` | `agent:tool_result` | result, toolUseId, agentName, taskId, durationMs, sessionId |
+| `followup_start` / `queued_message` | `chat:followup` | agentName, sessionId |
+| `usage` (no taskId) | `chat:usage` | contextTokens, outputTokens, turnId, modelId, usage, sessionId |
 | `complete` | `chat:complete` | sessionId |
-| `context` | `agent:context` | agentName, systemPrompt, taskId |
-| `system` | `chat:system` | text |
-| `error` | `error` | error, agentName, taskId |
-| `user` (report, no taskId) | `chat:user` | text |
+| `context` | `agent:context` | agentName, systemPrompt, taskId, sessionId |
+| `system` | `chat:system` | text, taskId, agentName, sessionId |
+| `error` | `error` | error, agentName, taskId, sessionId |
+| `user` (report, no taskId) | `chat:user` | text, sessionId |
 
-`chat:thinking` / `chat:stream` / `chat:followup` / `agent:tool_call` / `agent:tool_result` additionally carry `replay: true` when synthesized by the reattach path (never on live events) — see [Reconnect flow](#reconnect-flow) step 6.
+`sessionId` is the session the emitting listener is attached to (`client.sessionId` at registration; `null` when unknown). The listener stays bound to that session until the client re-subscribes, so after a session switch the old turn's frames keep arriving until it completes — the admin (`isForCurrentSession` in `chat-handlers.ts`) drops any frame whose `sessionId` is set and differs from the loaded session. Frames without one (`compact:*`, `session:compacted`, the detached-buffer replays, handler-local sends) pass through. `chat:complete`, `state:snapshot` and `session:*` are never filtered.
+
+`chat:thinking` / `chat:stream` / `chat:followup` / `agent:tool_call` / `agent:tool_result` additionally carry `replay: true` (plus `sessionId`) when synthesized by the reattach path (never on live events) — see [Reconnect flow](#reconnect-flow) step 6.
 
 `chat:system` producers (`session-manager.ts`'s `stop` event handling): a `max_tokens` stop emits `⚠️ [<agent>] Response truncated: output token limit reached.`; a `refusal` stop (Anthropic `stop_reason: "refusal"`, HTTP 200 — the model declined, not an error) emits `⚠️ [<agent>] Model declined to respond (<category>): <explanation> — …` suggesting `/new` (see [session.md](session.md#resilient-execution-loop)).
 

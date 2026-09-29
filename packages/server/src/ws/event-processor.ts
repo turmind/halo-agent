@@ -44,43 +44,48 @@ export function sendWsNotification(
 ): void {
   const agentName = event.agentName ?? 'default'
   const taskId = event.taskId
+  // Stamped on every event-derived frame: the listener stays attached to the
+  // session it was created for, so after a client-side session switch frames
+  // for the old session keep arriving until it completes — the admin drops
+  // those by comparing `sessionId` against the currently loaded session.
+  const sessionId = ctx.sessionId
 
   switch (event.type) {
     case 'thinking':
-      sendJson(ctx.ws, { type: 'chat:thinking', text: event.text ?? '', agentName, taskId, turnId })
+      sendJson(ctx.ws, { type: 'chat:thinking', text: event.text ?? '', agentName, taskId, turnId, sessionId })
       break
     case 'stream':
-      sendJson(ctx.ws, { type: 'chat:stream', text: event.text ?? '', agentName, taskId, turnId })
+      sendJson(ctx.ws, { type: 'chat:stream', text: event.text ?? '', agentName, taskId, turnId, sessionId })
       break
     case 'agent_start':
-      sendJson(ctx.ws, { type: 'agent:start', agentName, task: event.text, taskId })
+      sendJson(ctx.ws, { type: 'agent:start', agentName, task: event.text, taskId, sessionId })
       break
     case 'agent_done':
-      sendJson(ctx.ws, { type: 'agent:done', agentName, taskId })
+      sendJson(ctx.ws, { type: 'agent:done', agentName, taskId, sessionId })
       break
     case 'tool_call':
-      sendJson(ctx.ws, { type: 'agent:tool_call', tool: event.toolName, toolUseId: event.toolUseId, input: event.toolInput, agentName, taskId, turnId })
+      sendJson(ctx.ws, { type: 'agent:tool_call', tool: event.toolName, toolUseId: event.toolUseId, input: event.toolInput, agentName, taskId, turnId, sessionId })
       break
     case 'tool_result':
-      sendJson(ctx.ws, { type: 'agent:tool_result', result: event.toolResult, toolUseId: event.toolUseId, agentName, taskId, durationMs: event.durationMs })
+      sendJson(ctx.ws, { type: 'agent:tool_result', result: event.toolResult, toolUseId: event.toolUseId, agentName, taskId, durationMs: event.durationMs, sessionId })
       break
     case 'followup_start':
     case 'queued_message':
-      sendJson(ctx.ws, { type: 'chat:followup', agentName })
+      sendJson(ctx.ws, { type: 'chat:followup', agentName, sessionId })
       break
     case 'usage':
       if (!taskId) {
         sendJson(ctx.ws, {
           type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens,
-          turnId, modelId: event.modelId, usage: buildUsageData(event),
+          turnId, modelId: event.modelId, usage: buildUsageData(event), sessionId,
         })
       }
       break
     case 'complete':
-      sendJson(ctx.ws, { type: 'chat:complete', sessionId: ctx.sessionId })
+      sendJson(ctx.ws, { type: 'chat:complete', sessionId })
       break
     case 'context':
-      sendJson(ctx.ws, { type: 'agent:context', agentName, systemPrompt: event.systemPrompt, taskId })
+      sendJson(ctx.ws, { type: 'agent:context', agentName, systemPrompt: event.systemPrompt, taskId, sessionId })
       break
     case 'system':
       // Auto-compact (mid-loop) only emits a `system` preflight — there's no
@@ -90,10 +95,10 @@ export function sendWsNotification(
       if (!taskId && /^Compacting context \(\d+K tokens\)…$/.test(event.text ?? '')) {
         sendJson(ctx.ws, { type: 'compact:started' })
       }
-      sendJson(ctx.ws, { type: 'chat:system', text: event.text ?? '', taskId, agentName })
+      sendJson(ctx.ws, { type: 'chat:system', text: event.text ?? '', taskId, agentName, sessionId })
       break
     case 'error':
-      sendJson(ctx.ws, { type: 'error', error: event.error, agentName, taskId })
+      sendJson(ctx.ws, { type: 'error', error: event.error, agentName, taskId, sessionId })
       break
     case 'user':
       // Push `user` events that belong in the MAIN chat (taskId undefined —
@@ -107,7 +112,7 @@ export function sendWsNotification(
       //    before report/localEcho were split into distinct fields)
       // Sub-agents' own inbound user turns (taskId set) stay suppressed too.
       if (!taskId && !event.localEcho) {
-        sendJson(ctx.ws, { type: 'chat:user', text: event.text ?? '' })
+        sendJson(ctx.ws, { type: 'chat:user', text: event.text ?? '', sessionId })
       }
       break
     case 'compacted':
