@@ -9,14 +9,3 @@ export function sseResponse(events: unknown[], opts: { done?: boolean; status?: 
   return new Response(body, { status: opts.status ?? 200, headers: { 'content-type': 'text/event-stream' } })
 }
 
-/** Raw string chunks enqueued one by one — for split-frame / abort tests. */
-export function sseResponseFromChunks(chunks: string[]): Response {
-  const encoder = new TextEncoder()
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const c of chunks) controller.enqueue(encoder.encode(c))
-      controller.close()
-    },
-  })
-  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-}
