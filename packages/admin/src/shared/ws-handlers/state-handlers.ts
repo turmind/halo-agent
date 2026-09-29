@@ -5,6 +5,8 @@ import { refreshGoal } from '@/features/chat/goal-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { bumpSessionBus } from '@/shared/session-bus'
 import { onWsReconnect } from '@/shared/ws-reconnect'
+import { api } from '@/shared/api-client'
+import { setExtensions } from '@/features/editor/previews/registry'
 
 export function registerStateHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
@@ -119,6 +121,15 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
       bumpSessionBus()
     }),
   )
+
+  // Canvas extension installed / removed / edited on disk — the server's dir
+  // watcher pushes the full snapshot; the preview registry re-resolves every
+  // open tab from it. A frame lost while the socket was down is reconciled
+  // by re-fetching on reconnect (initial pull lives in workspace-layout).
+  unsubs.push(
+    wsClient.on('extension:changed', ({ extensions, errors }) => setExtensions({ extensions, errors })),
+  )
+  unsubs.push(onWsReconnect(wsClient, () => { api.extensions.list().then(setExtensions).catch(() => {}) }))
 
   return () => unsubs.forEach((fn) => fn())
 }

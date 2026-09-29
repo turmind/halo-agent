@@ -306,6 +306,7 @@ export const zh: Record<string, string> = {
   // 配置页（schema 驱动）
   'settings.nav.system': '系统',
   'settings.nav.security': '安全',
+  'settings.nav.extensions': '扩展',
   'settings.nav.providers': '模型供应商',
   'settings.nav.skills': '技能',
   'settings.nav.agents': 'Agent',
@@ -335,6 +336,15 @@ export const zh: Record<string, string> = {
   'settings.empty': '未选中分类。',
   'settings.loading': '加载中…',
   'settings.globalOnlyHint': '只在全局生效；workspace 级覆盖会被忽略',
+  'settings.extensions.title': '预览扩展',
+  'settings.extensions.intro': 'Canvas 预览扩展让编辑器打开内置不支持的文件类型。安装在 ~/.halo/global/extensions/，所有 workspace 共享。需要 full 权限。',
+  'settings.extensions.upload': '从 zip 安装',
+  'settings.extensions.working': '处理中…',
+  'settings.extensions.empty': '尚未安装任何扩展。',
+  'settings.extensions.optionOnly': '仅"打开方式"',
+  'settings.extensions.canSave': '可保存',
+  'settings.extensions.remove': '卸载',
+  'settings.extensions.confirmRemove': '卸载扩展 {name}？正在使用它的标签页会回退到内置预览。',
 
   // security (change password + logout)
   'security.changePassword.title': '修改密码',

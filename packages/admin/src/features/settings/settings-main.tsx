@@ -3,11 +3,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound } from 'lucide-react'
+import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound, Puzzle } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { useI18n } from '@/shared/i18n'
 import { useTheme } from '@/shared/theme'
 import { SecurityView } from './security-view'
+import { ExtensionsView } from './extensions-view'
 
 type Schema = Awaited<ReturnType<typeof api.settings.getSchema>>
 type Section = Schema['sections'][number]
@@ -50,7 +51,7 @@ export function SettingsMain() {
       // (e.g. user uninstalled a skill), fall back to general. The synthetic
       // `__orphans` value is always allowed since it's a UI-only nav target.
       setActiveNs((prev) => {
-        if (prev === '__orphans' || prev === '__security') return prev
+        if (prev === '__orphans' || prev === '__security' || prev === '__extensions') return prev
         return res.sections.find((s) => s.namespaceId === prev) ? prev : 'general'
       })
     }).catch((err) => {
@@ -203,6 +204,8 @@ export function SettingsMain() {
           <span className="text-[11px] text-[var(--muted-foreground)]">
             {activeNs === '__security'
               ? <>~/.halo/secrets/config.yaml &rarr; <code className="text-[var(--foreground)]">server.password</code></>
+              : activeNs === '__extensions'
+              ? <>~/.halo/global/extensions/</>
               : <>
                   {scope === 'global' ? '~/.halo/secrets/settings.yaml' : `${activeProject?.path ?? '...'}/.halo/settings.yaml`}
                   {' '}&rarr; <code className="text-[var(--foreground)]">{activeNs}</code>
@@ -213,6 +216,8 @@ export function SettingsMain() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {activeNs === '__security' ? (
             <SecurityView />
+          ) : activeNs === '__extensions' ? (
+            <ExtensionsView />
           ) : activeNs === '__orphans' ? (
             <OrphansView orphans={orphans} onRemove={handleRemoveOrphan} saving={saving} />
           ) : activeSection ? (
@@ -269,6 +274,20 @@ function NavList({
       >
         <KeyRound className="h-3 w-3" />
         <span>{t('settings.nav.security')}</span>
+      </button>
+      {/* Extensions — synthetic like __security; installed canvas preview
+          extensions live in ~/.halo/global/extensions/, not settings.yaml. */}
+      <button
+        onClick={() => onPick('__extensions')}
+        className={cn(
+          'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] transition-colors',
+          active === '__extensions'
+            ? 'bg-[var(--secondary)] text-[var(--foreground)]'
+            : 'text-[var(--foreground)]/80 hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+        )}
+      >
+        <Puzzle className="h-3 w-3" />
+        <span>{t('settings.nav.extensions')}</span>
       </button>
       <NavGroup label={t('settings.nav.providers')} items={grouped.providers} active={active} onPick={onPick} />
       <NavGroup label={t('settings.nav.agents')} items={grouped.agents} active={active} onPick={onPick} />

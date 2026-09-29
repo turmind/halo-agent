@@ -4,6 +4,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react
 import { createPortal } from 'react-dom'
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle } from 'react-resizable-panels'
 import { EditorPanel } from '@/features/editor/editor-panel'
+import { setExtensions } from '@/features/editor/previews/registry'
 import { BottomPanel } from '@/features/workspace/bottom-panel'
 import { FloatingBottomPanel } from '@/features/workspace/floating-bottom-panel'
 import { QuickOpen } from '@/features/explorer/quick-open'
@@ -236,6 +237,15 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         openHome()
       }
     }
+  }, [])
+
+  // Seed the preview registry with the installed canvas extensions once per
+  // page (server-global, not per workspace); `extension:changed` frames keep
+  // it current from here on (ws-handlers/state-handlers).
+  useEffect(() => {
+    api.extensions.list().then(setExtensions).catch((err) => {
+      console.error('[Workspace] Failed to load extensions:', err)
+    })
   }, [])
 
   // Warn before closing/refreshing the page — but not for deliberate

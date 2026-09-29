@@ -306,6 +306,7 @@ export const en: Record<string, string> = {
   // settings page (schema-driven)
   'settings.nav.system': 'System',
   'settings.nav.security': 'Security',
+  'settings.nav.extensions': 'Extensions',
   'settings.nav.providers': 'Model Providers',
   'settings.nav.skills': 'Skills',
   'settings.nav.agents': 'Agents',
@@ -335,6 +336,15 @@ export const en: Record<string, string> = {
   'settings.empty': 'No section selected.',
   'settings.loading': 'Loading…',
   'settings.globalOnlyHint': 'Honored only at the global layer; workspace overrides are ignored',
+  'settings.extensions.title': 'Preview extensions',
+  'settings.extensions.intro': 'Canvas preview extensions open file types the built-in editor cannot. Installed under ~/.halo/global/extensions/ and shared by every workspace. Requires full access.',
+  'settings.extensions.upload': 'Install from zip',
+  'settings.extensions.working': 'Working…',
+  'settings.extensions.empty': 'No extensions installed.',
+  'settings.extensions.optionOnly': 'open-with only',
+  'settings.extensions.canSave': 'can save',
+  'settings.extensions.remove': 'Remove',
+  'settings.extensions.confirmRemove': 'Remove extension {name}? Open tabs using it fall back to the built-in preview.',
 
   // security (change password + logout)
   'security.changePassword.title': 'Change Password',
