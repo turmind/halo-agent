@@ -3,13 +3,15 @@ import { api } from '@/shared/api-client'
 /**
  * Scoped token for extension static assets.
  *
- * The host iframe is `sandbox="allow-scripts"` without `allow-same-origin`,
- * so every subresource it loads (`<script>`, module, img, fetch, wasm, Worker)
- * is a cross-site request from an opaque origin and carries NO cookie —
- * cookie-authed `/api/*` would 401 them all. A query-string token doesn't
- * survive relative subresource URLs either, so the server takes it as a path
- * segment: `/api/extensions/<id>/<version>/<token>/<entry>` — every relative
- * URL inside the extension then inherits it.
+ * Extension assets are served outside the admin cookie gate: the host iframe
+ * was originally `sandbox="allow-scripts"` only (an opaque origin whose
+ * subresources carry no cookie at all), so the credential had to ride in the
+ * URL — and as a path segment, because a query string doesn't survive the
+ * relative URLs inside the extension: `/api/extensions/<id>/<version>/<token>/
+ * <entry>` is inherited by every `./x.js`. The host now grants
+ * `allow-same-origin` (see extension-host.tsx) and the cookie does travel
+ * again, but the asset route keeps verifying the path token — one auth path,
+ * no cookie dependency for assets.
  *
  * One token per page, cached here; re-minted when within a minute of expiry.
  * Concurrent first callers share the in-flight request. An already-mounted

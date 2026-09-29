@@ -291,10 +291,10 @@ const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/check', '/api/auth/logout', 
 
 /** Extension asset requests: `/api/extensions/<id>/<version>/<token>/<asset…>`
  *  (≥ 4 segments after /extensions/). They come from the admin's sandboxed
- *  opaque-origin iframe, whose subresource fetches (scripts, wasm, fetch, img)
- *  carry NO cookie — so routes/extensions.ts checks the scoped token in the
- *  path instead. The shape doesn't overlap list (0 segments), install / token /
- *  `:id` (1 segment). */
+ *  extension iframe; routes/extensions.ts checks the scoped token in the path
+ *  instead of the cookie (the iframe started out as an opaque origin whose
+ *  subresource fetches carry no cookie — see that file's header). The shape
+ *  doesn't overlap list (0 segments), install / token / `:id` (1 segment). */
 const EXTENSION_ASSET_PATH = /^\/api\/extensions\/[^/]+\/[^/]+\/[^/]+\/./
 
 export function authMiddleware() {

@@ -9,18 +9,20 @@
  *
  * The first four sit behind the admin cookie (index.ts mounts this router
  * under /api, which authMiddleware guards). The static route is what the
- * admin's sandboxed iframe loads, and it can NOT be cookie-authed: with
- * `sandbox="allow-scripts"` (no allow-same-origin) the iframe is an opaque
- * origin, so while the document navigation itself still carries the cookie,
- * every subresource it loads (classic/module scripts, img, css, fetch, wasm,
- * dynamic import, Worker) is a cross-site request without one. Hence the
- * scoped token as a PATH segment (a query string would be dropped when the
- * document resolves `./viewer.js`-style relative URLs): authMiddleware lets
- * that path shape through and this route verifies the token itself. The
- * token is only ever good for these assets — validateToken refuses it as a
- * cookie. `version` in the URL must equal the installed version: a stale tab
- * holding an old URL 404s after an upgrade (the admin treats that as "reload
- * me"), and it makes the assets safely immutable-cached.
+ * admin's sandboxed iframe loads and is NOT cookie-authed: the host iframe
+ * was first shipped as `sandbox="allow-scripts"` only — an opaque origin
+ * whose subresources (classic/module scripts, img, css, fetch, wasm, dynamic
+ * import, Worker) are cross-site requests without any cookie — so the
+ * credential moved into the URL as a PATH segment (a query string would be
+ * dropped when the document resolves `./viewer.js`-style relative URLs):
+ * authMiddleware lets that path shape through and this route verifies the
+ * token itself. The host now also grants `allow-same-origin` (needed so a
+ * cookie-auth proxy in front of halo sees its own cookie on the asset
+ * requests), but this route deliberately keeps the token as its one auth
+ * path. The token is only ever good for these assets — validateToken refuses
+ * it as a cookie. `version` in the URL must equal the installed version: a
+ * stale tab holding an old URL 404s after an upgrade (the admin treats that
+ * as "reload me"), and it makes the assets safely immutable-cached.
  *
  * Install / uninstall do NOT broadcast themselves: the resulting rename / rm
  * trips extensions/watcher.ts, the single notifier for every install path.
@@ -164,8 +166,9 @@ export function createExtensionRoutes() {
         // The version segment changes on every upgrade, so the URL is a
         // content address as far as the browser is concerned.
         'Cache-Control': 'public, max-age=31536000, immutable',
-        // Module scripts / fetch / wasm / dynamic import from the opaque-origin
-        // iframe are CORS requests; classic scripts and img don't care.
+        // Module scripts / fetch / wasm / dynamic import are CORS-mode
+        // requests; the iframe is same-origin today so this is a no-op, kept
+        // so the assets keep loading if the host ever drops allow-same-origin.
         'Access-Control-Allow-Origin': '*',
         // The token is in the URL — keep it out of Referer headers.
         'Referrer-Policy': 'no-referrer',

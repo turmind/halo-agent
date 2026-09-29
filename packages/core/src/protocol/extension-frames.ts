@@ -1,13 +1,13 @@
 /**
  * Canvas preview extension protocol — the `postMessage` frames between the
  * admin's iframe host (packages/admin/src/features/editor/previews/extension-host*)
- * and an installed extension running in a `sandbox="allow-scripts"` iframe.
+ * and an installed extension running in a sandboxed iframe.
  *
  * Every frame carries `haloExt: 1` so both sides can drop unrelated messages;
- * origin can't be used for that (a sandboxed iframe without `allow-same-origin`
- * is an opaque origin, `e.origin === 'null'`), so receivers additionally check
- * `e.source` against the expected window. `ArrayBuffer` payloads are meant to
- * be transferred, not copied. Sequence and error handling: design doc §6
+ * origin can't be used for that (every extension iframe on the page shares the
+ * admin's origin), so receivers additionally check `e.source` against the
+ * expected window. `ArrayBuffer` payloads are meant to be transferred, not
+ * copied. Sequence and error handling: design doc §6
  * (.halo/tmp/canvas-extensions-design.md).
  */
 import type { ExtensionCapability } from './extension-types.js'

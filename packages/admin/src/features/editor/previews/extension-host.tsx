@@ -28,9 +28,14 @@ interface Props extends PreviewProps {
 
 /**
  * Runs one installed extension in a sandboxed iframe and speaks the
- * host↔extension postMessage protocol to it. `sandbox="allow-scripts"` only —
- * no `allow-same-origin`: the admin is same-origin with the iframe URL, and
- * that flag would hand the extension the admin cookie and `parent.document`.
+ * host↔extension postMessage protocol to it. `sandbox="allow-scripts
+ * allow-same-origin"` — same grant as html-preview.tsx, and for the same
+ * trust model (code the user chose to install, like a skill). Without
+ * `allow-same-origin` the iframe is an opaque origin and its module-script /
+ * fetch / wasm requests carry NO cookie at all, so any cookie-auth proxy in
+ * front of halo (midway / CloudFront, oauth2-proxy, Cloudflare Access) 307s
+ * them to its login page → CORS error → no `ready` → "unresponsive". Our own
+ * asset route doesn't need the cookie (path token), the proxy does.
  * The extension never fetches the file itself; the host fetches and
  * transfers the bytes (§6). Protocol decisions live in extension-host-logic.ts;
  * this component only executes the effects it returns.
@@ -163,9 +168,9 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-runs on explicit reload only; `info` is read at that moment
   }, [attempt])
 
-  // Inbound frames. `e.source` is the only reliable sender check: a sandboxed
-  // iframe is an opaque origin (`e.origin === 'null'`), identical for every
-  // extension iframe on the page.
+  // Inbound frames. `e.source` is the only reliable sender check: every
+  // extension iframe on the page shares the admin's origin, so `e.origin`
+  // can't tell two of them apart.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return
@@ -276,7 +281,7 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
                 key={attempt}
                 ref={iframeRef}
                 src={src}
-                sandbox="allow-scripts"
+                sandbox="allow-scripts allow-same-origin"
                 allow=""
                 referrerPolicy="no-referrer"
                 title={info.name}
