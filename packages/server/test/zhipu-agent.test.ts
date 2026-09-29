@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { ZhipuAgent } from '../src/agents/zhipu-agent.js'
 import type { ZhipuAgentConfig } from '../src/agents/zhipu-agent.js'
+import { sseResponse } from './helpers/sse-response.js'
 
 /**
  * Pins the Zhipu wire quirks found by live probes: only `max_tokens` caps
@@ -14,7 +15,7 @@ async function call(cfg: Partial<ZhipuAgentConfig>, usage: Record<string, unknow
   let body: Record<string, unknown> = {}
   vi.stubGlobal('fetch', vi.fn(async (_url: string, init: { body: string }) => {
     body = JSON.parse(init.body) as Record<string, unknown>
-    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage }), { status: 200 })
+    return sseResponse([{ choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }], usage }])
   }))
   const agent = new ZhipuAgent({ ...base, ...cfg })
   agent.messages = [{ role: 'user', content: 'hi' }]

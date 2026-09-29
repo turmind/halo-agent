@@ -5,6 +5,7 @@ import { KimiAgent } from '../src/agents/kimi-agent.js'
 import { DeepSeekAgent } from '../src/agents/deepseek-agent.js'
 import { OpenAIAgent } from '../src/agents/openai-agent.js'
 import { ZhipuAgent } from '../src/agents/zhipu-agent.js'
+import { sseResponse } from './helpers/sse-response.js'
 
 /**
  * view_image returns a [text, image] tool_result. The OpenAI-format runtimes
@@ -35,22 +36,25 @@ const dataUrl = `data:image/png;base64,${PNG}`
 const base = { modelId: 'm', endpoint: 'https://example.test/v1', apiKey: 'k', systemPrompt: 'sys', tools: [] }
 
 /** Run one callModel against a stubbed fetch and return the parsed request body. */
-async function captureBody(agent: AgentLoop, reply: unknown, msgs = history): Promise<Record<string, unknown>> {
+async function captureBody(agent: AgentLoop, reply: () => Response, msgs = history): Promise<Record<string, unknown>> {
   let body: Record<string, unknown> = {}
   vi.stubGlobal('fetch', vi.fn(async (_url: string, init: { body: string }) => {
     body = JSON.parse(init.body) as Record<string, unknown>
-    return new Response(JSON.stringify(reply), { status: 200 })
+    return reply()
   }))
   agent.messages = structuredClone(msgs)
   await (agent as unknown as { callModel(s: AbortSignal | undefined): Promise<unknown> }).callModel(undefined)
   return body
 }
 
+/** Minimal chat/completions SSE reply — the chat runtimes stream. */
+const chatOk = () => sseResponse([{ choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] }])
+
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('tool_result images reach OpenAI-format runtimes', () => {
   it('Mantle (Responses API) sends input_image inside function_call_output', async () => {
-    const body = await captureBody(new MantleAgent(base), { output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }] })
+    const body = await captureBody(new MantleAgent(base), () => new Response(JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }] }), { status: 200 }))
     const input = body.input as Array<Record<string, unknown>>
     const out = input.find((i) => i.type === 'function_call_output')
     expect(out?.call_id).toBe('call_1')
@@ -68,7 +72,7 @@ describe('tool_result images reach OpenAI-format runtimes', () => {
   ]
   for (const [name, make] of chatRuntimes) {
     it(`${name} (Chat Completions) follows the tool message with a user image message`, async () => {
-      const body = await captureBody(make(), { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] })
+      const body = await captureBody(make(), chatOk)
       const msgs = body.messages as Array<Record<string, unknown>>
       const toolIdx = msgs.findIndex((m) => m.role === 'tool')
       expect(msgs[toolIdx].tool_call_id).toBe('call_1')
@@ -84,7 +88,7 @@ describe('tool_result images reach OpenAI-format runtimes', () => {
   it('text-only tool results add no extra user message', async () => {
     const textOnly = structuredClone(history)
     textOnly[2] = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'done' }] }
-    const body = await captureBody(new OpenAIAgent(base), { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }, textOnly)
+    const body = await captureBody(new OpenAIAgent(base), chatOk, textOnly)
     const msgs = body.messages as Array<Record<string, unknown>>
     expect(msgs[msgs.length - 1]).toMatchObject({ role: 'tool', content: 'done' })
   })

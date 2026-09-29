@@ -1,6 +1,6 @@
 /**
  * DoubaoAgent — Volcengine Ark / Doubao via OpenAI-compatible chat
- * completions, non-streaming.
+ * completions, streaming; SSE parsed by `fetchChatCompletionStream`.
  *
  *   POST https://ark.cn-beijing.volces.com/api/v3/chat/completions
  *   Authorization: Bearer ark-…
@@ -28,7 +28,8 @@
  */
 import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop } from './agent-loop.js'
-import type { AnthropicMessage, ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
+import type { AnthropicMessage, ContentBlock, ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
+import { fetchChatCompletionStream } from './openai-chat-stream.js'
 
 export interface DoubaoAgentConfig {
   modelId: string
@@ -51,7 +52,7 @@ export class DoubaoAgent extends AgentLoop {
     this.config = config
   }
 
-  protected async callModel(signal: AbortSignal | undefined): Promise<ModelCallResult> {
+  protected async callModel(signal: AbortSignal | undefined, onDelta?: (delta: ModelDelta) => void): Promise<ModelCallResult> {
     const url = this.config.endpoint.replace(/\/+$/, '') + '/chat/completions'
     const startTime = Date.now()
 
@@ -61,7 +62,6 @@ export class DoubaoAgent extends AgentLoop {
     const body: Record<string, unknown> = {
       model: this.config.modelId,
       messages,
-      stream: false,
       max_tokens: this.config.maxTokens ?? resolveMaxOutputTokens(this.config.modelId),
       ...(tools.length > 0 ? { tools } : {}),
     }
@@ -70,26 +70,9 @@ export class DoubaoAgent extends AgentLoop {
       body.thinking = { type: this.config.thinking.enabled ? 'enabled' : 'disabled' }
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal,
+    const { message: msg, finishReason, usage, ttftMs } = await fetchChatCompletionStream({
+      url, headers: { 'Authorization': `Bearer ${this.config.apiKey}` }, body, signal, onDelta, tag: 'DoubaoAgent',
     })
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '')
-      throw new Error(`[DoubaoAgent] API error ${response.status}: ${errText}`)
-    }
-
-    const data = await response.json() as Record<string, unknown>
-    const choices = data.choices as Array<Record<string, unknown>> | undefined
-    const choice = choices?.[0]
-    const msg = choice?.message as Record<string, unknown> | undefined
-    const finishReason = choice?.finish_reason as string | undefined
 
     let text = ''
     let thinking = ''
@@ -128,7 +111,6 @@ export class DoubaoAgent extends AgentLoop {
       : finishReason === 'length' ? 'max_tokens'
       : 'end_turn'
 
-    const usage = data.usage as Record<string, unknown> | undefined
     const promptTokens = (usage?.prompt_tokens as number) ?? 0
     const completionTokens = (usage?.completion_tokens as number) ?? 0
     const promptDetails = usage?.prompt_tokens_details as Record<string, unknown> | undefined
@@ -147,6 +129,7 @@ export class DoubaoAgent extends AgentLoop {
         ...(cachedTokens ? { cacheReadInputTokens: cachedTokens } : {}),
       },
       durationMs: Date.now() - startTime,
+      ttftMs,
     }
   }
 

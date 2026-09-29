@@ -1,5 +1,6 @@
 /**
- * DeepSeekAgent — DeepSeek V4 API (OpenAI-compatible chat completions, non-streaming).
+ * DeepSeekAgent — DeepSeek V4 API (OpenAI-compatible chat completions, streaming;
+ * SSE parsed by `fetchChatCompletionStream`).
  *
  * Endpoint: https://api.deepseek.com/chat/completions
  * Supports: tool calling, thinking (reasoning_content), vision on
@@ -9,7 +10,8 @@
  */
 import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop, toolResultImages } from './agent-loop.js'
-import type { AnthropicMessage, ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
+import type { AnthropicMessage, ContentBlock, ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
+import { fetchChatCompletionStream } from './openai-chat-stream.js'
 
 export interface DeepSeekAgentConfig {
   modelId: string
@@ -31,6 +33,7 @@ export class DeepSeekAgent extends AgentLoop {
 
   protected async callModel(
     signal: AbortSignal | undefined,
+    onDelta?: (delta: ModelDelta) => void,
   ): Promise<ModelCallResult> {
     const url = this.config.endpoint.replace(/\/+$/, '') + '/chat/completions'
     const startTime = Date.now()
@@ -41,7 +44,6 @@ export class DeepSeekAgent extends AgentLoop {
     const body: Record<string, unknown> = {
       model: this.config.modelId,
       messages,
-      stream: false,
       max_completion_tokens: this.config.maxTokens ?? resolveMaxOutputTokens(this.config.modelId),
       ...(tools.length > 0 ? { tools } : {}),
     }
@@ -52,26 +54,9 @@ export class DeepSeekAgent extends AgentLoop {
       body.thinking = { type: 'enabled' }
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal,
+    const { message: msg, finishReason, usage: rawUsage, ttftMs } = await fetchChatCompletionStream({
+      url, headers: { 'Authorization': `Bearer ${this.config.apiKey}` }, body, signal, onDelta, tag: 'DeepSeekAgent',
     })
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '')
-      throw new Error(`[DeepSeekAgent] API error ${response.status}: ${errText}`)
-    }
-
-    const data = await response.json() as Record<string, unknown>
-    const choices = data.choices as Array<Record<string, unknown>> | undefined
-    const choice = choices?.[0]
-    const msg = choice?.message as Record<string, unknown> | undefined
-    const finishReason = choice?.finish_reason as string | undefined
 
     let text = ''
     let thinking = ''
@@ -112,7 +97,7 @@ export class DeepSeekAgent extends AgentLoop {
       : finishReason === 'length' ? 'max_tokens'
       : 'end_turn'
 
-    const usage = data.usage as Record<string, number> | undefined
+    const usage = rawUsage as Record<string, number> | undefined
     const inputTokens = usage?.prompt_tokens ?? 0
     const outputTokens = usage?.completion_tokens ?? 0
     const cacheHitTokens = usage?.prompt_cache_hit_tokens ?? 0
@@ -130,6 +115,7 @@ export class DeepSeekAgent extends AgentLoop {
         ...(cacheHitTokens ? { cacheReadInputTokens: cacheHitTokens } : {}),
       },
       durationMs: Date.now() - startTime,
+      ttftMs,
     }
   }
 

@@ -1,5 +1,6 @@
 /**
- * ZhipuAgent — Zhipu AI GLM API (OpenAI-compatible chat completions, non-streaming).
+ * ZhipuAgent — Zhipu AI GLM API (OpenAI-compatible chat completions, streaming;
+ * SSE parsed by `fetchChatCompletionStream`).
  *
  * Endpoint: https://open.bigmodel.cn/api/paas/v4/chat/completions
  * Supports: tool calling, vision on the multimodal ids (image_url, base64 data
@@ -19,7 +20,8 @@
  */
 import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop, toolResultImages } from './agent-loop.js'
-import type { AnthropicMessage, ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
+import type { AnthropicMessage, ContentBlock, ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
+import { fetchChatCompletionStream } from './openai-chat-stream.js'
 
 export interface ZhipuAgentConfig {
   modelId: string
@@ -46,6 +48,7 @@ export class ZhipuAgent extends AgentLoop {
 
   protected async callModel(
     signal: AbortSignal | undefined,
+    onDelta?: (delta: ModelDelta) => void,
   ): Promise<ModelCallResult> {
     const url = this.config.endpoint.replace(/\/+$/, '') + '/chat/completions'
     const startTime = Date.now()
@@ -56,7 +59,6 @@ export class ZhipuAgent extends AgentLoop {
     const body: Record<string, unknown> = {
       model: this.config.modelId,
       messages,
-      stream: false,
       max_tokens: this.config.maxTokens ?? resolveMaxOutputTokens(this.config.modelId),
       ...(tools.length > 0 ? { tools } : {}),
     }
@@ -73,26 +75,9 @@ export class ZhipuAgent extends AgentLoop {
       body.thinking = { type: 'disabled' }
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal,
+    const { message: msg, finishReason, usage, ttftMs } = await fetchChatCompletionStream({
+      url, headers: { 'Authorization': `Bearer ${this.config.apiKey}` }, body, signal, onDelta, tag: 'ZhipuAgent',
     })
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '')
-      throw new Error(`[ZhipuAgent] API error ${response.status}: ${errText}`)
-    }
-
-    const data = await response.json() as Record<string, unknown>
-    const choices = data.choices as Array<Record<string, unknown>> | undefined
-    const choice = choices?.[0]
-    const msg = choice?.message as Record<string, unknown> | undefined
-    const finishReason = choice?.finish_reason as string | undefined
 
     let text = ''
     let thinking = ''
@@ -133,7 +118,6 @@ export class ZhipuAgent extends AgentLoop {
       : finishReason === 'length' ? 'max_tokens'
       : 'end_turn'
 
-    const usage = data.usage as Record<string, unknown> | undefined
     const promptTokens = (usage?.prompt_tokens as number | undefined) ?? 0
     const outputTokens = (usage?.completion_tokens as number | undefined) ?? 0
     const details = usage?.prompt_tokens_details as Record<string, number> | undefined
@@ -153,6 +137,7 @@ export class ZhipuAgent extends AgentLoop {
         ...(cachedTokens ? { cacheReadInputTokens: cachedTokens } : {}),
       },
       durationMs: Date.now() - startTime,
+      ttftMs,
     }
   }
 

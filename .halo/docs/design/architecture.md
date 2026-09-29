@@ -74,7 +74,8 @@ createModelRuntime(providerId: string, cfg: ModelRuntimeConfig): ModelRuntime
 **Current providers**:
 - `aws-bedrock-claude-invoke` → `BedrockAgent` (uses the Bedrock InvokeModelWithResponseStream API — text / thinking chunks reach the UI as they are generated)
 - `anthropic` / `mimo-token-plan-china` → `AnthropicAgent`, `minimax` → `MiniMaxAgent`, `qwen` → `QwenAgent` (Anthropic Messages API over HTTP with `stream: true`; the SSE is folded by the same `AnthropicStreamAccumulator` as Bedrock via `fetchAnthropicStream` in `anthropic-stream.ts`, so they stream too)
-- The OpenAI-family (`openai` / `deepseek` / `kimi` / `zhipu` / `doubao` / `hunyuan`) and `aws-bedrock-mantle` are still non-streaming — streaming is per-provider and optional
+- The OpenAI-family (`openai` / `deepseek` / `kimi` / `zhipu` / `doubao` / `hunyuan`) → `chat/completions` over HTTP with `stream: true` + `stream_options.include_usage`; the `chat.completion.chunk` SSE is folded back into the non-streaming `choices[0].message` shape by `fetchChatCompletionStream` in `openai-chat-stream.ts` (a transport helper, not a base class — each agent keeps its own body / message conversion / usage math), so they stream too
+- Only Mantle (`aws-bedrock-mantle` / `aws-bedrock-openai`) is still non-streaming — streaming is per-provider and optional
 
 **Adding a new provider**:
 1. Add a manifest at `models/<providerId>.yaml` (include modality flags)
