@@ -176,6 +176,9 @@ export async function sendMessage(params: {
   baseUrl: string
   token: string
   body: SendMessageReq
+  /** Epoch ms the echoed `context_token` was received (inbound arrival);
+   *  diagnostics only — lets a ret=-2 name the token's age. */
+  contextTokenAt?: number
 }): Promise<void> {
   const raw = await apiPost({
     baseUrl: params.baseUrl,
@@ -188,16 +191,26 @@ export async function sendMessage(params: {
   // The gateway returns HTTP 200 even when delivery fails; the real status
   // is in the body's `ret`/`errcode`. Without checking, silent drops look
   // like success up to the cron dispatcher. ret=-2 ("prepare failed") is a
-  // generic rejection: observed both for oversized payloads (every body
-  // > 16 KB in the cron audit log) and for a push to a user with no recent
-  // inbound message — the ilink protocol gates outbound behind a prior
-  // inbound to prevent spam, similar to Telegram's `/start` requirement.
+  // generic rejection with three known causes: an oversized payload (every
+  // body > 16 KB in the cron audit log), an outbound sent without the
+  // recipient's `context_token`, and a context_token the gateway no longer
+  // accepts — only a new inbound message from the recipient refreshes it,
+  // and the validity window is not fixed (observed: rejected 12 min and
+  // 79 min after the last inbound, accepted at 68 min).
   try {
     const parsed = JSON.parse(raw) as { ret?: number; errcode?: number; errmsg?: string }
     if ((parsed.ret !== undefined && parsed.ret !== 0) || (parsed.errcode !== undefined && parsed.errcode !== 0)) {
-      // ret=-2 has more than one cause; name both so the operator checks the
-      // payload size before telling the user to DM the bot first.
-      const hint = parsed.ret === -2 ? ' (gateway rejected the message — payload too large (>16KB) or outbound sent without the context_token from the recipient\'s last inbound message)' : ''
+      // ret=-2 has more than one cause; name all three plus the token's age so
+      // the operator can tell "stale token" from "no token" / "too large"
+      // before telling the user to DM the bot first.
+      let hint = ''
+      if (parsed.ret === -2) {
+        const tokenAge = !params.body.msg?.context_token ? 'context_token missing'
+          : params.contextTokenAt ? `context_token age ${Math.round((Date.now() - params.contextTokenAt) / 60_000)}m`
+          : 'context_token age unknown'
+        console.warn(`[WeChat:sendmessage] ret=-2 to=${params.body.msg?.to_user_id ?? ''} ${tokenAge}`)
+        hint = ` (gateway rejected the message — payload too large (>16KB), no context_token, or context_token expired (only a new inbound message from the recipient refreshes it); ${tokenAge})`
+      }
       throw new Error(`[WeChat:sendmessage] gateway error ret=${parsed.ret} errcode=${parsed.errcode} ${parsed.errmsg ?? ''}${hint}`)
     }
   } catch (err) {

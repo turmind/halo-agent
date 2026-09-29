@@ -20,7 +20,7 @@ import path from 'node:path'
  */
 
 const sends = vi.hoisted(() => ({
-  wechatText: [] as { toUserId: string; text: string; contextToken?: string }[],
+  wechatText: [] as { toUserId: string; text: string; contextToken?: string; contextTokenAt?: number }[],
   wechatMedia: [] as { filePath: string; contextToken?: string }[],
   arrived: [] as string[],
   inFlight: 0,
@@ -31,10 +31,10 @@ const sends = vi.hoisted(() => ({
 }))
 
 vi.mock('../src/channels/wechat/handler.js', () => ({
-  sendToUser: async (p: { toUserId: string; text: string; contextToken?: string }) => {
+  sendToUser: async (p: { toUserId: string; text: string; contextToken?: string; contextTokenAt?: number }) => {
     sends.calls += 1
     if (sends.failAt && sends.calls === sends.failAt.at) throw new Error(sends.failAt.msg)
-    sends.wechatText.push({ toUserId: p.toUserId, text: p.text, contextToken: p.contextToken })
+    sends.wechatText.push({ toUserId: p.toUserId, text: p.text, contextToken: p.contextToken, contextTokenAt: p.contextTokenAt })
     sends.inFlight += 1
     sends.maxInFlight = Math.max(sends.maxInFlight, sends.inFlight)
     // Descending delay: were the sends concurrent, the first chunk would
@@ -150,13 +150,19 @@ describe('wechat cron chunking', () => {
     expect(sends.wechatText).toHaveLength(1)
     expect(sends.wechatText[0].contextToken).toBeUndefined()
 
-    // Inbound handler persisted a token for (account, user) → cron echoes it.
+    // Inbound handler persisted a token for (account, user) → cron echoes it,
+    // together with the arrival stamp written in the same patch (so a ret=-2
+    // long after the inbound can report how old the echoed token was).
+    const before = Date.now()
     rememberWechatContextToken(getChannelDb(), 'wx1', 'wx-owner', 'ctx-abc')
-    expect(getSharedAccount(getChannelDb(), 'wx1')?.config.contextTokens).toEqual({ 'wx-owner': 'ctx-abc' })
+    const cfg = getSharedAccount(getChannelDb(), 'wx1')?.config
+    expect(cfg?.contextTokens).toEqual({ 'wx-owner': 'ctx-abc' })
+    const at = (cfg?.contextTokenAts as Record<string, number>)['wx-owner']
+    expect(at).toBeGreaterThanOrEqual(before)
     sends.wechatText.length = 0
     await dispatchToTargets(paragraphs(3, 3000), [WX], tmpDir)
     expect(sends.wechatText).toHaveLength(3)
-    for (const s of sends.wechatText) expect(s.contextToken).toBe('ctx-abc')
+    for (const s of sends.wechatText) expect(s).toMatchObject({ contextToken: 'ctx-abc', contextTokenAt: at })
 
     // Attachments carry it as well (a media send is an outbound sendmessage).
     sends.wechatText.length = 0

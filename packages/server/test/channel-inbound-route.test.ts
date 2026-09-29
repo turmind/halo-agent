@@ -218,6 +218,30 @@ describe('A-M2 — responder replies to the LATEST inbound user, never the first
     expect(bridge.getRoute(SID)!.contextToken).toBe('tok-2')
   })
 
+  it('wxRoute: the token\'s arrival stamp travels with it — set on a fresh token, carried with it, dropped with it', () => {
+    const bridge = makeBridge([])
+    const SID = 'wx_userA_s3'
+    const before = Date.now()
+
+    // Fresh token without an explicit stamp → stamped now (inbound arrival).
+    bridge.setRoute(SID, wxRoute('userA', 'tok-1'))
+    const at1 = bridge.getRoute(SID)!.contextTokenAt
+    expect(at1).toBeGreaterThanOrEqual(before)
+
+    // Same user, no token → token AND its stamp carried over unchanged.
+    bridge.setRoute(SID, wxRoute('userA', undefined))
+    expect(bridge.getRoute(SID)).toMatchObject({ contextToken: 'tok-1', contextTokenAt: at1 })
+
+    // Explicit stamp (restoreReplyRoutes replays the persisted one) wins over now.
+    bridge.setRoute(SID, wxRoute('userA', 'tok-old', 1_000))
+    expect(bridge.getRoute(SID)).toMatchObject({ contextToken: 'tok-old', contextTokenAt: 1_000 })
+
+    // Different user → neither token nor stamp leaks across.
+    bridge.setRoute(SID, wxRoute('userB', undefined))
+    expect(bridge.getRoute(SID)!.contextToken).toBeUndefined()
+    expect(bridge.getRoute(SID)!.contextTokenAt).toBeUndefined()
+  })
+
   it('dropListener flushes buffered output to the current route, then frees the route entry (the sessionContextTokens leak)', async () => {
     const SID = 'wx_userA_s3'
     seedRow(SID)

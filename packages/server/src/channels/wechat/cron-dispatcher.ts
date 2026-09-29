@@ -28,12 +28,17 @@ function readLastActiveChatId(accountId: string): string | null {
 
 /** Latest inbound `context_token` for this user — ilink wants it echoed on
  *  every outbound; absent for accounts that haven't received a message since
- *  the token started being persisted (then we send without, as before). */
-function readContextToken(accountId: string, userId: string): string | undefined {
+ *  the token started being persisted (then we send without, as before).
+ *  `at` is when it arrived (`config.contextTokenAts`), so a `ret=-2` can say
+ *  how stale the echoed token was; undefined for pre-1.4.7 stamps. */
+function readContextToken(accountId: string, userId: string): { token?: string; at?: number } {
   const acct = getSharedAccount(getChannelDb(), accountId)
   const tokens = acct?.config?.contextTokens as Record<string, unknown> | undefined
   const v = tokens?.[userId]
-  return typeof v === 'string' && v.length > 0 ? v : undefined
+  if (typeof v !== 'string' || v.length === 0) return {}
+  const ats = acct?.config?.contextTokenAts as Record<string, unknown> | undefined
+  const at = ats?.[userId]
+  return { token: v, at: typeof at === 'number' ? at : undefined }
 }
 
 async function dispatch(accountId: string, text: string, explicitChatId?: string, media?: CronMedia): Promise<DispatchResult[]> {
@@ -60,12 +65,12 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   const out: DispatchResult[] = []
   // Attachments need the token too — ilink wants it echoed on every outbound
   // sendmessage, and a media send is one (memory 2026-09-10, root cause B).
-  const contextToken = readContextToken(accountId, chatId)
+  const { token: contextToken, at: contextTokenAt } = readContextToken(accountId, chatId)
   if (text) {
     const chunks = splitText(text, WECHAT_TEXT_LIMIT)
     for (const [i, chunk] of chunks.entries()) {
       try {
-        await sendWechatMessage({ account: acct, toUserId: chatId, text: chunk, contextToken })
+        await sendWechatMessage({ account: acct, toUserId: chatId, text: chunk, contextToken, contextTokenAt })
       } catch (err) {
         throw new Error(`chunk ${i + 1}/${chunks.length}: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -84,7 +89,7 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
     try {
       await sendMediaFile({
         baseUrl: acct.baseUrl, token: acct.botToken,
-        toUserId: chatId, contextToken, filePath,
+        toUserId: chatId, contextToken, contextTokenAt, filePath,
       })
       out.push({ channelType: 'wechat', accountId, chatId, ok: true })
     } catch (err) {

@@ -34,10 +34,12 @@ export async function sendMediaFile(params: {
   token: string
   toUserId: string
   contextToken?: string
+  /** When `contextToken` was received — diagnostics for a ret=-2 (see api.ts). */
+  contextTokenAt?: number
   filePath: string
   kind?: MediaKind
 }): Promise<{ clientId: string }> {
-  const { baseUrl, token, toUserId, contextToken, filePath } = params
+  const { baseUrl, token, toUserId, contextToken, contextTokenAt, filePath } = params
   const kind = params.kind ?? inferKind(filePath)
 
   const plaintext = await fs.readFile(filePath)
@@ -102,7 +104,7 @@ export async function sendMediaFile(params: {
       context_token: contextToken,
     },
   }
-  await sendMessage({ baseUrl, token, body })
+  await sendMessage({ baseUrl, token, body, contextTokenAt })
   console.log(`[WeChat] sendMediaFile: sendMessage success clientId=${clientId}`)
   return { clientId }
 }

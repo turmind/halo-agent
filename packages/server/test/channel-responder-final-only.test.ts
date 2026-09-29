@@ -94,3 +94,46 @@ describe.each([
     expect(sent.join('\n')).not.toContain('filler')
   })
 })
+
+/**
+ * A failed WeChat send used to leave only a server-log warn — the agent's
+ * reply silently never reached the user and the session log showed a normal
+ * turn. `onSendError` hands the failure back so the handler can record it in
+ * the session (`appendNotification`); the responder itself never retries.
+ */
+describe('WechatResponder send failure surfacing', () => {
+  it('sendText rejects → onSendError called once with the error message', async () => {
+    const errors: string[] = []
+    const responder = new WechatResponder({
+      sendText: async () => { throw new Error('[WeChat:sendmessage] gateway error ret=-2 (context_token age 79m)') },
+      sendMedia: async () => {},
+      onSendError: (m) => { errors.push(m) },
+    })
+
+    responder.handle(ev({ type: 'stream', text: 'reply', final: true }))
+    responder.handle(ev({ type: 'complete' }))
+    await responder.close()
+    await tick()
+
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('sendText failed')
+    expect(errors[0]).toContain('ret=-2')
+    expect(errors[0]).toContain('context_token age 79m')
+  })
+
+  it('a successful send never calls onSendError', async () => {
+    const errors: string[] = []
+    const responder = new WechatResponder({
+      sendText: async () => {},
+      sendMedia: async () => {},
+      onSendError: (m) => { errors.push(m) },
+    })
+
+    responder.handle(ev({ type: 'stream', text: 'reply', final: true }))
+    responder.handle(ev({ type: 'complete' }))
+    await responder.close()
+    await tick()
+
+    expect(errors).toHaveLength(0)
+  })
+})

@@ -200,6 +200,37 @@ describe('wechat — reply route restored at account start', () => {
     expect(wxSends).toEqual([])
   })
 
+  it('a gateway ret=-2 lands in the session log as a ⚠️ notification naming the token age, and is not re-sent', async () => {
+    seedRow(WX_SID)
+    // Token persisted 79 min ago, stamp alongside — the restored route carries both.
+    patchConfig(channelDb, 'wx-acc', { contextTokens: { [WX_USER]: 'ctx-1' }, contextTokenAts: { [WX_USER]: Date.now() - 79 * 60_000 } })
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: { signal: AbortSignal }) => {
+      if (url.includes('getupdates')) {
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+        })
+      }
+      if (url.includes('sendmessage')) {
+        wxSends.push({ to: '', text: 'attempt' })
+        return new Response('{"ret":-2,"errmsg":"prepare failed"}', { status: 200 })
+      }
+      return new Response('{"ret":0}', { status: 200 })
+    }))
+    wx = startWechatChannel({ registry, db: channelDb })
+
+    emitReply(WX_SID, 'reply that never lands')
+    await tick()
+
+    // One attempt, no retry against the gateway.
+    expect(wxSends).toHaveLength(1)
+    const view = await registry.getOrCreate(workspace).getSessionView(WX_SID)
+    const note = view!.messages.find((m) => m.type === 'notification')
+    expect(note?.content).toContain('⚠️ WeChat delivery failed')
+    expect(note?.content).toContain('ret=-2')
+    expect(note?.content).toContain('context_token expired')
+    expect(note?.content).toContain('context_token age 79m')
+  })
+
   it('workspace runtime owned by another live process → skipped, and no SessionManager gets cached', async () => {
     seedRow(WX_SID)
     // Fresh registry = a second server that has never touched the workspace;

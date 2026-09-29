@@ -40,18 +40,22 @@ const RETRY_DELAY_MS = 2_000
  * inbound message, valid for a limited window. Kept per-session and only
  * carried over between messages of the SAME user — when a different user
  * takes over the session, the old token must not be replayed against the
- * new recipient.
+ * new recipient. `contextTokenAt` (epoch ms of the inbound that carried the
+ * token) travels with it so a `ret=-2` can report the token's age — the
+ * gateway rejects stale tokens and only a new inbound refreshes them.
  */
 interface WxRoute {
   fromUserId: string
   contextToken?: string
+  contextTokenAt?: number
 }
 
-export function wxRoute(fromUserId: string, contextToken: string | undefined): RouteInit<WxRoute> {
-  return (prev) => ({
-    fromUserId,
-    contextToken: contextToken ?? (prev?.fromUserId === fromUserId ? prev.contextToken : undefined),
-  })
+export function wxRoute(fromUserId: string, contextToken: string | undefined, contextTokenAt?: number): RouteInit<WxRoute> {
+  return (prev) => {
+    if (contextToken !== undefined) return { fromUserId, contextToken, contextTokenAt: contextTokenAt ?? Date.now() }
+    const carry = prev?.fromUserId === fromUserId ? prev : undefined
+    return { fromUserId, contextToken: carry?.contextToken, contextTokenAt: carry?.contextTokenAt }
+  }
 }
 
 interface AccountRunner {
@@ -99,7 +103,7 @@ export function startWechatChannel(deps: {
         sendText: async (chunk) => {
           const route = bridge.getRoute(sessionId)
           if (!route) return
-          await sendToUser({ account, toUserId: route.fromUserId, text: chunk, contextToken: route.contextToken })
+          await sendToUser({ account, toUserId: route.fromUserId, text: chunk, contextToken: route.contextToken, contextTokenAt: route.contextTokenAt })
         },
         sendMedia: async (filePath) => {
           const route = bridge.getRoute(sessionId)
@@ -110,10 +114,15 @@ export function startWechatChannel(deps: {
           }
           await sendMediaFile({
             baseUrl: account.baseUrl, token: account.botToken,
-            toUserId: route.fromUserId, contextToken: route.contextToken,
+            toUserId: route.fromUserId, contextToken: route.contextToken, contextTokenAt: route.contextTokenAt,
             filePath,
           })
         },
+        // A dropped reply used to be visible only in the server log. Record
+        // it in the session so the user sees the turn ran but never landed.
+        // appendNotification only writes the log row — it emits no event, so
+        // nothing loops back into this responder as another send attempt.
+        onSendError: (m) => registry.getOrCreate(account.workspacePath).appendNotification(sessionId, `⚠️ WeChat delivery failed: ${m}`),
       }),
     })
     // Debounce re-entrant restarts so the in-loop /ws command can safely schedule one.
@@ -170,7 +179,10 @@ function restoreReplyRoutes(args: {
   bridge: InboundBridge<WxRoute>
 }): void {
   const { registry, db, account, bridge } = args
-  const tokens = (getSharedAccount(db, account.accountId)?.config.contextTokens ?? {}) as Record<string, string>
+  const config = getSharedAccount(db, account.accountId)?.config ?? {}
+  const tokens = (config.contextTokens ?? {}) as Record<string, string>
+  // Stamps are absent for tokens persisted before 1.4.7 → age unknown.
+  const ats = (config.contextTokenAts ?? {}) as Record<string, number>
   const users = Object.keys(tokens)
   if (users.length === 0) return
   const workspacePath = resolveAccountWorkspace(account)
@@ -179,7 +191,7 @@ function restoreReplyRoutes(args: {
     const sid = restoreChannelRoute({
       registry, workspacePath, bridge,
       sessionPrefix: buildWxSessionPrefix(userId),
-      route: wxRoute(userId, tokens[userId]),
+      route: wxRoute(userId, tokens[userId], ats[userId]),
     })
     if (sid) console.log(`[WeChat] ${account.accountId} reply route restored for ${sid}`)
   }
@@ -399,7 +411,7 @@ async function handleInbound(args: {
   if (!currentPath) {
     console.log(`[WeChat] ${storedAccount.accountId} workspace missing (path=${storedAccount.workspacePath})`)
     await sendToUser({
-      account: storedAccount, toUserId: fromUserId, contextToken: msg.context_token,
+      account: storedAccount, toUserId: fromUserId, contextToken: msg.context_token, contextTokenAt: Date.now(),
       text: t('handler.workspace_missing', lang, { path: storedAccount.workspacePath }),
     })
     return
@@ -445,7 +457,7 @@ async function handleInbound(args: {
     lang,
     // If the session is currently compacting or mid-turn, send an immediate
     // hint so the WeChat user doesn't stare at a silent chat for 30+ seconds.
-    sendHint: (hint) => sendToUser({ account, toUserId: fromUserId, contextToken: msg.context_token, text: hint }),
+    sendHint: (hint) => sendToUser({ account, toUserId: fromUserId, contextToken: msg.context_token, contextTokenAt: Date.now(), text: hint }),
     uiText: userText || '[仅图片]',
     agentText: userText,
     userTag: fromUserId,
@@ -586,6 +598,8 @@ export async function sendToUser(params: {
   toUserId: string
   text: string
   contextToken?: string
+  /** When `contextToken` was received — see `WxRoute.contextTokenAt`. */
+  contextTokenAt?: number
 }): Promise<void> {
   const clientId = `halo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const body: SendMessageReq = {
@@ -599,7 +613,7 @@ export async function sendToUser(params: {
       context_token: params.contextToken,
     },
   }
-  await sendMessage({ baseUrl: params.account.baseUrl, token: params.account.botToken, body })
+  await sendMessage({ baseUrl: params.account.baseUrl, token: params.account.botToken, body, contextTokenAt: params.contextTokenAt })
 }
 
 // ── utils ────────────────────────────────────────────────────────────

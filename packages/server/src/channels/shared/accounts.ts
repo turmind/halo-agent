@@ -203,6 +203,12 @@ export function rememberLastActiveChat(db: ChannelDb, accountId: string, chatId:
  * inbound and had nothing to send → intermittent `ret=-2 prepare failed`.
  * Same hot-path shape as `rememberLastActiveChat`: in-process dedupe, db
  * write only when the value changes.
+ *
+ * `config.contextTokenAts` is the parallel `Record<userId, epochMs>` of when
+ * each token arrived, written in the same patch. The gateway also rejects a
+ * token it considers stale (validity window not fixed; only the user's next
+ * inbound refreshes it), so a `ret=-2` reports the token's age to tell that
+ * case from "no token" — readers of `contextTokens` are untouched.
  */
 const _wechatContextTokenCache = new Map<string, string>()
 
@@ -213,7 +219,11 @@ export function rememberWechatContextToken(db: ChannelDb, accountId: string, use
   if (!existing) return
   const tokens = (existing.config.contextTokens ?? {}) as Record<string, string>
   if (tokens[userId] !== token) {
-    patchConfig(db, accountId, { contextTokens: { ...tokens, [userId]: token } })
+    const ats = (existing.config.contextTokenAts ?? {}) as Record<string, number>
+    patchConfig(db, accountId, {
+      contextTokens: { ...tokens, [userId]: token },
+      contextTokenAts: { ...ats, [userId]: Date.now() },
+    })
   }
   _wechatContextTokenCache.set(key, token)
 }

@@ -27,6 +27,10 @@ export const WECHAT_TEXT_LIMIT = 3500  // mirrored in templates/prompts/all/RUNT
 export interface WechatResponderDeps {
   sendText: (text: string) => Promise<void>
   sendMedia: (filePath: string) => Promise<void>
+  /** Called once per failed send with a one-line reason, so the failure can
+   *  be recorded where the user looks (the session log) instead of only in
+   *  the server log. Must not send to WeChat itself. */
+  onSendError?: (message: string) => void
 }
 
 export class WechatResponder {
@@ -123,11 +127,19 @@ export class WechatResponder {
 
     if (text) {
       try { await this.deps.sendText(text) }
-      catch (err) { console.warn(`[WeChat] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) {
+        const msg = `sendText failed: ${err instanceof Error ? err.message : String(err)}`
+        console.warn(`[WeChat] ${msg}`)
+        this.deps.onSendError?.(msg)
+      }
     }
     for (const p of mediaPaths) {
       try { await this.deps.sendMedia(p) }
-      catch (err) { console.warn(`[WeChat] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) {
+        const msg = `sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`
+        console.warn(`[WeChat] ${msg}`)
+        this.deps.onSendError?.(msg)
+      }
     }
   }
 }
