@@ -1,16 +1,19 @@
 /**
- * BedrockAgent — AWS Bedrock InvokeModel (non-streaming) implementation.
+ * BedrockAgent — AWS Bedrock InvokeModelWithResponseStream implementation.
  *
  * Sends raw Anthropic Messages API format (no Converse abstraction).
  * Full control over: cache_control, thinking, tool_choice, temperature, etc.
+ * The response is consumed as a stream so text / thinking reach the UI as
+ * they are generated; the loop still receives one whole ModelCallResult.
  */
 import {
   BedrockRuntimeClient,
-  InvokeModelCommand,
+  InvokeModelWithResponseStreamCommand,
 } from '@aws-sdk/client-bedrock-runtime'
 import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop } from './agent-loop.js'
-import type { ModelCallResult, ToolDef } from './agent-loop.js'
+import type { ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
+import { AnthropicStreamAccumulator } from './anthropic-stream.js'
 
 // Re-export types so existing imports from './bedrock-agent.js' still work
 export type { ToolResultBlock, ToolDef, ContentBlock, AnthropicMessage, StopReason, AgentEvent } from './agent-loop.js'
@@ -70,26 +73,6 @@ function effortToBudget(effort: string, maxTokens?: number): number {
   return requested
 }
 
-/** Anthropic Messages API response shape */
-interface MessagesResponse {
-  content: Array<{
-    type: string
-    text?: string
-    thinking?: string
-    id?: string
-    name?: string
-    input?: unknown
-  }>
-  stop_reason?: string
-  stop_details?: { type?: string; category?: string | null; explanation?: string | null } | null
-  usage?: {
-    input_tokens?: number
-    output_tokens?: number
-    cache_read_input_tokens?: number
-    cache_creation_input_tokens?: number
-  }
-}
-
 // ── BedrockAgent ─────────────────────────────────────────────────────
 
 export class BedrockAgent extends AgentLoop {
@@ -108,11 +91,12 @@ export class BedrockAgent extends AgentLoop {
 
   protected async callModel(
     signal: AbortSignal | undefined,
+    onDelta?: (delta: ModelDelta) => void,
   ): Promise<ModelCallResult> {
     const body = this.buildRequestBody()
     const startTime = Date.now()
 
-    const command = new InvokeModelCommand({
+    const command = new InvokeModelWithResponseStreamCommand({
       modelId: this.config.modelId,
       contentType: 'application/json',
       accept: 'application/json',
@@ -122,51 +106,24 @@ export class BedrockAgent extends AgentLoop {
     const response = await this.client.send(command, {
       abortSignal: signal,
     })
-    const durationMs = Date.now() - startTime
 
-    const raw = new TextDecoder().decode(response.body)
-    const msg: MessagesResponse = JSON.parse(raw)
-
-    let text = ''
-    let thinking = ''
-    const toolCalls: Array<{ id: string; name: string; input: unknown }> = []
-    const assistantBlocks: ModelCallResult['assistantBlocks'] = []
-
-    for (const block of msg.content) {
-      if (block.type === 'text' && block.text) {
-        text += block.text
-        assistantBlocks.push({ type: 'text', text: block.text })
-      } else if (block.type === 'thinking' && block.thinking) {
-        thinking += block.thinking
-        // thinking blocks excluded from assistantBlocks per Anthropic API
-      } else if (block.type === 'tool_use') {
-        toolCalls.push({ id: block.id!, name: block.name!, input: block.input ?? {} })
-        assistantBlocks.push({ type: 'tool_use', id: block.id!, name: block.name!, input: block.input ?? {} })
-      }
+    // Accepted trade-off: a mid-stream failure (throttle, 5xx, timeout) has
+    // already shown partial text in the UI; the SessionManager retry then
+    // re-streams the reply into the same turn block. `session.output` /
+    // `finalOutput` only ever see the whole `text` event, so they are unaffected.
+    const acc = new AnthropicStreamAccumulator(startTime, onDelta)
+    const decoder = new TextDecoder()
+    for await (const chunk of response.body ?? []) {
+      if (chunk.chunk?.bytes) acc.push(JSON.parse(decoder.decode(chunk.chunk.bytes)))
     }
-
-    const u = msg.usage
-    const inputTokens = u?.input_tokens ?? 0
-    const outputTokens = u?.output_tokens ?? 0
-    const cacheReadTokens = u?.cache_read_input_tokens ?? 0
-    const cacheWriteTokens = u?.cache_creation_input_tokens ?? 0
-
-    return {
-      assistantBlocks,
-      stopReason: msg.stop_reason ?? 'end_turn',
-      ...(msg.stop_details ? { stopDetails: { category: msg.stop_details.category ?? null, explanation: msg.stop_details.explanation ?? null } } : {}),
-      text,
-      thinking,
-      toolCalls,
-      usage: {
-        inputTokens,
-        outputTokens,
-        totalTokens: inputTokens + outputTokens,
-        ...(cacheReadTokens ? { cacheReadInputTokens: cacheReadTokens } : {}),
-        ...(cacheWriteTokens ? { cacheWriteInputTokens: cacheWriteTokens } : {}),
-      },
-      durationMs,
-    }
+    // Once the response headers are in, `send()` has already resolved, so an
+    // abort (user interrupt / idle timeout) only closes the http2 stream and
+    // the iterator ends cleanly instead of rejecting. Re-establish the
+    // non-streaming contract here: an aborted call throws AbortError — no
+    // partial assistant message, no text/usage events, no JSON.parse of a
+    // half-built tool input. Same AbortError the SDK throws pre-headers.
+    if (signal?.aborted) throw new DOMException('Model call aborted', 'AbortError')
+    return acc.finish()
   }
 
   /** Build Anthropic Messages API request body */

@@ -22,6 +22,9 @@ describe('classifyModelError', () => {
       ['throttle (Bedrock, real SDK message)', sdkError('ThrottlingException', 'Too many requests, please wait before trying again.', 429), 'throttle'],
       ['throttle (429 status, keyword-free body)', sdkError('X', 'slow down', 429), 'throttle'],
       ['server error (Bedrock 500)', sdkError('InternalServerException', 'Bedrock is unable to process your request', 500), 'server_error'],
+      // Mid-stream failure on InvokeModelWithResponseStream: no HTTP status
+      // (the 200 already went out), errName is the only signal.
+      ['server error (Bedrock mid-stream)', sdkError('ModelStreamErrorException', 'An error occurred while streaming the response.'), 'server_error'],
       ['network (undici)', new Error('fetch failed'), 'network'],
       ['empty response (Mantle)', new Error('MantleEmptyResponse: status=completed with empty output[]'), 'empty_response'],
       ['corrupted (missing tool_result)', new Error('messages.3: tool_use ids were found without tool_result blocks'), 'corrupted'],

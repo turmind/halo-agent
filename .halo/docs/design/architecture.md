@@ -72,17 +72,17 @@ createModelRuntime(providerId: string, cfg: ModelRuntimeConfig): ModelRuntime
 **Modality capabilities**: Each model in the manifest declares `capabilities.image` / `capabilities.video` / `capabilities.audio` (boolean). SessionManager checks `modelSupportsImage()` at session creation in two places: (1) `createWorkspaceTools()` is passed `supportsVision` so the `view_image` tool is dropped from the tool list when the model can't ingest vision blocks — no exposed tool, no errant call, no provider 400; (2) user-supplied images on inbound messages are stripped at `buildInput()` with a text notice. Query functions: `config.ts` exports `modelSupportsImage()` / `modelSupportsVideo()` / `modelSupportsAudio()`.
 
 **Current providers**:
-- `aws-bedrock-claude-invoke` → `BedrockAgent` (uses the Bedrock InvokeModel API, non-streaming)
+- `aws-bedrock-claude-invoke` → `BedrockAgent` (uses the Bedrock InvokeModelWithResponseStream API — text / thinking chunks reach the UI as they are generated; the other providers are still non-streaming, streaming is per-provider and optional)
 
 **Adding a new provider**:
 1. Add a manifest at `models/<providerId>.yaml` (include modality flags)
 2. Add a case in `model-runtime.ts` returning your runtime class
-3. Implement `callModel()` (returns `Promise<ModelCallResult>`) and maintain `messages`
+3. Implement `callModel(signal, onDelta?)` (returns `Promise<ModelCallResult>`; call `onDelta` per chunk if the API streams, otherwise ignore it) and maintain `messages`
 
 **Core loop** (`AgentLoop.run()`, shared by all providers):
 1. Append the user message to `messages`
-2. `callModel()` → invoke the provider API (non-streaming), get complete response
-3. Yield `thinking` / `text` / `usage` / `tool_call` events
+2. `callModel(signal, onDelta?)` → invoke the provider API, get the complete response; chunks a streaming provider reports through `onDelta` are yielded as `text_delta` / `thinking_delta` events during the call and each one re-arms the per-call timeout (idle timeout)
+3. Yield the whole `thinking` / `text` / `usage` / `tool_call` events (unchanged — `final` consumers never see deltas)
 4. `stop_reason=tool_use` → execute tools, yield `tool_result` events → loop
 5. Otherwise yield a `stop` event and return
 

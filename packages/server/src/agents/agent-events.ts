@@ -4,7 +4,7 @@
  */
 
 export interface AgentSessionEvent {
-  type: 'stream' | 'thinking' | 'tool_call' | 'tool_result' | 'complete' | 'error' | 'agent_start' | 'agent_done' | 'followup_start' | 'usage' | 'system' | 'context' | 'queued_message' | 'user' | 'compacted'
+  type: 'stream' | 'thinking' | 'stream_delta' | 'thinking_delta' | 'tool_call' | 'tool_result' | 'complete' | 'error' | 'agent_start' | 'agent_done' | 'followup_start' | 'usage' | 'system' | 'context' | 'queued_message' | 'user' | 'compacted'
   text?: string
   /** Full (un-truncated) task message for `agent_start` — used to seed the
    *  sub-session UI log's opening user message. `text` stays a 200-char
@@ -60,6 +60,12 @@ export interface AgentSessionEvent {
    *  slack/feishu) and the cli use it to deliver the reply only; streaming UIs
    *  (admin WS, web SSE) ignore it and show all text. */
   final?: boolean
+  /** For `stream` / `thinking` events: the text was already delivered
+   *  incrementally via `stream_delta` / `thinking_delta` during the model call
+   *  (streaming provider). UI consumers (ui-log-builder, WS notifications) skip
+   *  the append so the text isn't shown twice; channel / CLI consumers ignore
+   *  this and keep using the whole event + `final` as before. */
+  streamed?: boolean
   /** Marks a `complete` emitted BETWEEN drain batches (drainQueue runs N merged
    *  turns; each but the last is a batch boundary). Block-oriented channels
    *  (wechat/telegram/slack/feishu) flush their text buffer per `complete`, so

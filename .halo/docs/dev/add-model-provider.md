@@ -57,7 +57,7 @@ export interface ModelRuntime {
 }
 ```
 
-`AgentLoop` handles the tool execution loop (call model → execute tools → loop). You only implement `callModel()` — the provider-specific API call. **All providers use non-streaming (invoke) mode** — `callModel()` returns a `Promise<ModelCallResult>` containing the complete response. The base class `run()` method yields events per loop iteration.
+`AgentLoop` handles the tool execution loop (call model → execute tools → loop). You only implement `callModel(signal, onDelta?)` — the provider-specific API call. It always returns a `Promise<ModelCallResult>` containing the complete response; the base class `run()` method yields events per loop iteration. **Streaming is optional and per-provider**: if the upstream API streams, call `onDelta({ type: 'text_delta' | 'thinking_delta', text })` per chunk as it arrives — the loop yields those as `text_delta` / `thinking_delta` events during the call and re-arms the per-call timeout on each (so it becomes an idle timeout) — then still return the whole result. A non-streaming provider simply ignores `onDelta` (all providers except Bedrock do today). Bedrock's fold from Anthropic stream events into a `ModelCallResult` lives in `anthropic-stream.ts` and is reusable for any Anthropic-Messages-shaped stream.
 
 Two important constraints:
 
@@ -74,10 +74,11 @@ Two important constraints:
      toolCalls: Array<{ id: string; name: string; input: unknown }>
      usage: { inputTokens; outputTokens; totalTokens; cacheReadInputTokens?; cacheWriteInputTokens? }
      durationMs?: number
+     ttftMs?: number   // streaming providers only: time to first content chunk
    }
    ```
 
-   The base class `run()` translates this into `AgentEvent`s (`text`, `thinking`, `tool_call`, `tool_result`, `usage`, `stop`) that the rest of Halo consumes.
+   The base class `run()` translates this into `AgentEvent`s (`text`, `thinking`, `tool_call`, `tool_result`, `usage`, `stop`; plus `text_delta` / `thinking_delta` during the call for streaming providers) that the rest of Halo consumes.
 
 ### Usage reporting convention
 
@@ -114,12 +115,13 @@ import type { ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
 export class MyProviderAgent extends AgentLoop {
   constructor(config: MyConfig) { super(config.tools); ... }
 
-  protected async callModel(signal): Promise<ModelCallResult> {
+  protected async callModel(signal, onDelta?): Promise<ModelCallResult> {
     const startTime = Date.now()
     const messages = this.buildMessages()  // translate AnthropicMessage[] → provider format
     const tools = this.buildTools()        // translate ToolDef[] → provider format
 
-    // POST to endpoint with stream: false, parse JSON response
+    // POST to endpoint with stream: false, parse JSON response (onDelta unused), or
+    // stream: true and call onDelta({ type: 'text_delta', text }) per chunk while accumulating
     // Return ModelCallResult with assistantBlocks, stopReason, text, thinking, toolCalls, usage, durationMs
   }
 

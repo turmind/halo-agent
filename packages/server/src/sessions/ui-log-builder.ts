@@ -319,11 +319,25 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
   }
 
   switch (event.type) {
+    // Streaming chunks land in the turn blocks as they arrive; the whole
+    // `thinking` / `stream` that follows is stamped `streamed` and skipped so
+    // the text isn't appended twice. Deltas don't trigger a save — the usage /
+    // tool events that follow do.
+    case 'thinking_delta':
+      appendThinking(getTarget(state, taskId), event.text ?? '')
+      break
+
+    case 'stream_delta':
+      appendStream(getTarget(state, taskId), event.text ?? '', agentName)
+      break
+
     case 'thinking':
+      if (event.streamed) break
       appendThinking(getTarget(state, taskId), event.text ?? '')
       break
 
     case 'stream':
+      if (event.streamed) break
       appendStream(getTarget(state, taskId), event.text ?? '', agentName)
       break
 

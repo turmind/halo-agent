@@ -81,9 +81,14 @@ export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence
 /** Anthropic's `stop_details` — only present when stop_reason is 'refusal'. */
 export interface StopDetails { category: string | null; explanation: string | null }
 
-/** Events emitted per loop iteration (non-streaming) */
+/**
+ * Events emitted per loop iteration. `text_delta` / `thinking_delta` are
+ * yielded DURING a model call by streaming providers (one per chunk); the
+ * whole-text `text` / `thinking` events still follow every call exactly as
+ * before, so consumers that only care about `final` never see deltas.
+ */
 export interface AgentEvent {
-  type: 'text' | 'thinking' | 'tool_call' | 'tool_result' | 'usage' | 'stop'
+  type: 'text' | 'thinking' | 'text_delta' | 'thinking_delta' | 'tool_call' | 'tool_result' | 'usage' | 'stop'
   text?: string
   /** For 'text' events: true only on the wrap-up reply (stopReason !== 'tool_use'),
    *  i.e. the model is done and won't call another tool. Lets consumers persist
@@ -97,6 +102,8 @@ export interface AgentEvent {
   /** Full untruncated result for UI display; toolResult carries the LLM-capped copy. */
   toolResultFull?: string
   durationMs?: number
+  /** For 'usage' events: time to first streamed chunk (streaming providers only). */
+  ttftMs?: number
   stopReason?: StopReason
   /** For 'stop' events with stopReason 'refusal': Anthropic's stop_details. */
   stopDetails?: StopDetails
@@ -126,6 +133,14 @@ export interface ModelCallResult {
   }
   /** Model call duration in milliseconds (measured by provider) */
   durationMs?: number
+  /** Time to first streamed content chunk in milliseconds (streaming providers only) */
+  ttftMs?: number
+}
+
+/** Incremental chunk a streaming provider reports through `callModel`'s `onDelta`. */
+export interface ModelDelta {
+  type: 'text_delta' | 'thinking_delta'
+  text: string
 }
 
 // ── AgentLoop ────────────────────────────────────────────────────────
@@ -139,10 +154,15 @@ export abstract class AgentLoop {
   }
 
   /**
-   * Provider-specific model call. Returns the full response in one shot.
+   * Provider-specific model call. Resolves with the full response once the
+   * call completes. Streaming providers may additionally report text /
+   * thinking chunks through `onDelta` as they arrive — the loop yields them as
+   * `text_delta` / `thinking_delta` events and resets the idle timer on each.
+   * Non-streaming providers simply ignore the callback.
    */
   protected abstract callModel(
     signal: AbortSignal | undefined,
+    onDelta?: (delta: ModelDelta) => void,
   ): Promise<ModelCallResult>
 
   /**
@@ -192,12 +212,15 @@ export abstract class AgentLoop {
         if (options.cancelSignal?.aborted) return
       }
 
-      // Bound each model call with a wall-clock timeout, merged into the
-      // caller's cancel signal. A bare fetch has no default timeout, so a
-      // half-open connection (peer accepted but never sends bytes, no RST)
-      // would hang this await forever. Manual controller + clearTimeout so a
-      // fast response doesn't leave a 30-min timer dangling; unref so a pending
-      // timer never blocks process exit.
+      // Bound each model call with a timeout, merged into the caller's cancel
+      // signal. A bare fetch has no default timeout, so a half-open connection
+      // (peer accepted but never sends bytes, no RST) would hang this await
+      // forever. For non-streaming providers this is a wall-clock cap on the
+      // whole call; streaming providers re-arm it on every chunk (see onDelta
+      // below), making it an idle timeout — a slow-but-alive stream is not a
+      // hung connection. Manual controller + clearTimeout so a fast response
+      // doesn't leave a 30-min timer dangling; unref so a pending timer never
+      // blocks process exit.
       const timeoutController = new AbortController()
       const timer = setTimeout(() => timeoutController.abort(), config.timeout.modelRequest)
       timer.unref?.()
@@ -206,7 +229,29 @@ export abstract class AgentLoop {
         : timeoutController.signal
       let result: ModelCallResult
       try {
-        result = await this.callModel(callSignal)
+        // A generator can't yield from inside a callback, so onDelta queues the
+        // chunk and wakes the drain loop below, which yields everything queued
+        // and parks again until the call settles. Chunks and settlement both
+        // wake it; nothing is lost because the queue is drained before the
+        // settled check and no await sits between the two.
+        const deltas: ModelDelta[] = []
+        let wake: (() => void) | null = null
+        let settled = false
+        const notify = () => { if (wake) { wake(); wake = null } }
+        const call = this.callModel(callSignal, (d) => {
+          deltas.push(d)
+          timer.refresh()
+          notify()
+        })
+        call.then(() => { settled = true; notify() }, () => { settled = true; notify() })
+        while (!settled) {
+          if (deltas.length === 0) await new Promise<void>((r) => { wake = r })
+          while (deltas.length > 0) {
+            const d = deltas.shift()!
+            yield { type: d.type, text: d.text }
+          }
+        }
+        result = await call
       } catch (err) {
         // Distinguish the two abort sources merged into callSignal: a timeout
         // is a transport failure the SessionManager should retry, so rethrow it
@@ -227,7 +272,7 @@ export abstract class AgentLoop {
         // orphaned and get an "[interrupted]" tool_result synthesized by
         // conversation-repair next turn) and don't announce tool_calls that will
         // never run. Surface usage + the stop so the SessionManager can tell the user.
-        yield { type: 'usage', usage: result.usage, durationMs: result.durationMs }
+        yield { type: 'usage', usage: result.usage, durationMs: result.durationMs, ttftMs: result.ttftMs }
         yield { type: 'stop', stopReason: 'refusal', stopDetails: result.stopDetails }
         return
       }
@@ -259,6 +304,7 @@ export abstract class AgentLoop {
         type: 'usage',
         usage: result.usage,
         durationMs: result.durationMs,
+        ttftMs: result.ttftMs,
       }
 
       if (result.stopReason !== 'tool_use') {

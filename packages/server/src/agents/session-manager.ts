@@ -160,6 +160,11 @@ interface AgentSession {
   output: string
   /** ISO time of the latest text / tool_call / tool_result event of the current turn — "when did this session last do anything". Reset per turn alongside output; null until the turn's first event. Surfaced by get_session_output as last_activity_at. */
   lastActivityAt: string | null
+  /** True once the current model call delivered a text/thinking delta — the
+   *  whole `text` / `thinking` events that follow are stamped `streamed` so UI
+   *  consumers don't render the reply twice. Reset on `usage` (end of call)
+   *  and on a failed call (the retry re-streams). */
+  streamedThisCall: boolean
   /** Only the wrap-up reply (event.final) from the latest turn — the text the
    *  model produced when it was done and stopped calling tools. Fed to the
    *  auto-report to the parent so the parent gets the summary, not the
@@ -636,6 +641,7 @@ export class SessionManager implements SessionManagerInternals {
       id, parentId, agentId, agentName, agent, description,
       output: '',
       lastActivityAt: null,
+      streamedThisCall: false,
       finalOutput: '',
       turnError: null,
       promise: null,
@@ -1174,6 +1180,20 @@ export class SessionManager implements SessionManagerInternals {
     const taskId = session.parentId ? session.id : undefined
 
     switch (event.type) {
+      // Streaming chunks: UI-only. They never touch output / finalOutput —
+      // the whole `text` event below still carries the reply for those.
+      case 'text_delta': {
+        session.streamedThisCall = true
+        this.emitEvent(session.id, { type: 'stream_delta', text: event.text, agentName, agentId, taskId })
+        break
+      }
+
+      case 'thinking_delta': {
+        session.streamedThisCall = true
+        this.emitEvent(session.id, { type: 'thinking_delta', text: event.text, agentName, agentId, taskId })
+        break
+      }
+
       case 'text': {
         // output: all turn text (filler + wrap-up) → get_session_output + disk.
         // finalOutput: only the wrap-up reply → auto-report to the parent, so
@@ -1181,12 +1201,12 @@ export class SessionManager implements SessionManagerInternals {
         session.output += event.text ?? ''
         session.lastActivityAt = new Date().toISOString()
         if (event.final) session.finalOutput += event.text ?? ''
-        this.emitEvent(session.id, { type: 'stream', text: event.text, final: event.final, agentName, agentId, taskId })
+        this.emitEvent(session.id, { type: 'stream', text: event.text, final: event.final, streamed: session.streamedThisCall, agentName, agentId, taskId })
         break
       }
 
       case 'thinking': {
-        this.emitEvent(session.id, { type: 'thinking', text: event.text, agentName, agentId, taskId })
+        this.emitEvent(session.id, { type: 'thinking', text: event.text, streamed: session.streamedThisCall, agentName, agentId, taskId })
         break
       }
 
@@ -1233,9 +1253,12 @@ export class SessionManager implements SessionManagerInternals {
           agentId,
           taskId,
           e2eMs: event.durationMs,
+          ttftMs: event.ttftMs,
           thinkingEffort: session.thinkingEffort,
         })
         session.lastContextTokens = (u.totalTokens ?? 0) + (u.cacheReadInputTokens ?? 0) + (u.cacheWriteInputTokens ?? 0)
+        // usage closes a model call — the next call starts unstreamed.
+        session.streamedThisCall = false
         break
       }
 
@@ -1369,6 +1392,9 @@ export class SessionManager implements SessionManagerInternals {
         break // success
       } catch (err: unknown) {
         session.abortController = null
+        // A call that died mid-stream never reached its `usage` event; the
+        // retry below re-streams from scratch, so it must start unstreamed.
+        session.streamedThisCall = false
         // Pure classification (branch predicates + msg/errName/httpStatus
         // derivation live in model-error.ts). The abort check below is still
         // evaluated first — it depends on our signal, which is not part of err.

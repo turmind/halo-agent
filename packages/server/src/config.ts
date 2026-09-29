@@ -373,10 +373,12 @@ export const config = {
   timeout: {
     shellExec: systemInt('HALO_SHELL_TIMEOUT', 'timeout.shell_exec', 120_000),
     webFetch: systemInt('HALO_WEB_FETCH_TIMEOUT', 'timeout.web_fetch', 10_000),
-    // Per model-call wall-clock cap. A bare fetch has no default timeout, so a
-    // half-open connection (server accepted but never sends bytes / sends no
-    // RST) hangs the await indefinitely. Bounds each callModel; on expiry the
-    // request aborts and the agent loop's retry takes over.
+    // Per model-call cap. A bare fetch has no default timeout, so a half-open
+    // connection (server accepted but never sends bytes / sends no RST) hangs
+    // the await indefinitely. Bounds each callModel; on expiry the request
+    // aborts and the agent loop's retry takes over. Streaming providers reset
+    // the timer on every chunk, so for them it is an idle timeout — a long but
+    // live stream is never cut off.
     modelRequest: systemInt('HALO_MODEL_TIMEOUT', 'timeout.model_request', 30 * 60_000),
     sessionGrace: systemInt('HALO_SESSION_GRACE', 'timeout.session_grace', 5 * 60_000),
     terminalGrace: systemInt('HALO_TERMINAL_GRACE', 'timeout.terminal_grace', 5 * 60_000),

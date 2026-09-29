@@ -88,8 +88,10 @@ Source: [event-processor.ts:53-129](../../../packages/server/src/ws/event-proces
 
 | Agent event | WS type | Fields |
 |---|---|---|
-| `thinking` | `chat:thinking` | text, agentName, taskId, turnId, sessionId |
-| `stream` | `chat:stream` | text, agentName, taskId, turnId, sessionId |
+| `thinking_delta` | `chat:thinking` | text, agentName, taskId, turnId, sessionId |
+| `stream_delta` | `chat:stream` | text, agentName, taskId, turnId, sessionId |
+| `thinking` | `chat:thinking` | text, agentName, taskId, turnId, sessionId — **not forwarded** when `streamed: true` |
+| `stream` | `chat:stream` | text, agentName, taskId, turnId, sessionId — **not forwarded** when `streamed: true` |
 | `agent_start` | `agent:start` | agentName, task, taskId, sessionId |
 | `agent_done` | `agent:done` | agentName, taskId, sessionId |
 | `tool_call` | `agent:tool_call` | tool, toolUseId, input, agentName, taskId, turnId, sessionId |
@@ -102,13 +104,15 @@ Source: [event-processor.ts:53-129](../../../packages/server/src/ws/event-proces
 | `error` | `error` | error, agentName, taskId, sessionId |
 | `user` (report, no taskId) | `chat:user` | text, sessionId |
 
+Streaming providers (Bedrock) emit `stream_delta` / `thinking_delta` per chunk *during* the model call, and the whole `stream` / `thinking` that follows the call is stamped `streamed: true` — the wire frame is the same `chat:stream` / `chat:thinking` either way (the admin appends by `turnId`), so the whole event is dropped to avoid rendering the text twice. Non-streaming providers still send the whole event only, exactly as before.
+
 `sessionId` is the session the emitting listener is attached to (`client.sessionId` at registration; `null` when unknown). The listener stays bound to that session until the client re-subscribes, so after a session switch the old turn's frames keep arriving until it completes — the admin (`isForCurrentSession` in `chat-handlers.ts`) drops any frame whose `sessionId` is set and differs from the loaded session. Frames without one (`compact:*`, `session:compacted`, the detached-buffer replays, handler-local sends) pass through. `chat:complete`, `state:snapshot` and `session:*` are never filtered.
 
 `chat:thinking` / `chat:stream` / `chat:followup` / `agent:tool_call` / `agent:tool_result` additionally carry `replay: true` (plus `sessionId`) when synthesized by the reattach path (never on live events) — see [Reconnect flow](#reconnect-flow) step 6.
 
 `chat:system` producers (`session-manager.ts`'s `stop` event handling): a `max_tokens` stop emits `⚠️ [<agent>] Response truncated: output token limit reached.`; a `refusal` stop (Anthropic `stop_reason: "refusal"`, HTTP 200 — the model declined, not an error) emits `⚠️ [<agent>] Model declined to respond (<category>): <explanation> — …` suggesting `/new` (see [session.md](session.md#resilient-execution-loop)).
 
-Server-internal flags on `AgentSessionEvent` that are **not** carried into the WS frame: `stream.final` (marks the turn's wrap-up text vs. pre-tool filler — consumed by channel responders and the cli, see [session.md](session.md#message-queue-and-drain)) and `complete.batchBoundary`. The admin renders every streamed block, so neither is needed on the wire.
+Server-internal flags on `AgentSessionEvent` that are **not** carried into the WS frame: `stream.final` (marks the turn's wrap-up text vs. pre-tool filler — consumed by channel responders and the cli, see [session.md](session.md#message-queue-and-drain)), `stream.streamed` / `thinking.streamed` (the text already went out as deltas — decides whether the whole event is forwarded at all) and `complete.batchBoundary`. The admin renders every streamed block, so none is needed on the wire.
 
 ### Other Server → Client messages
 

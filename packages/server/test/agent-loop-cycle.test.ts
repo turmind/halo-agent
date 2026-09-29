@@ -6,6 +6,7 @@ import {
   type AgentEvent,
   type ContentBlock,
   type ModelCallResult,
+  type ModelDelta,
   type ToolDef,
 } from '../src/agents/agent-loop.js'
 import { config } from '../src/config.js'
@@ -18,13 +19,16 @@ import { config } from '../src/config.js'
  * tool_call events before usage (ui-log-builder rotates turnId on usage),
  * TOOL_ERROR_MARKER tagging, forceEndTurn / stopReason passthrough,
  * timeout-vs-cancel disambiguation, cancel between tools, user-turn
- * coalescing, multi-block results and beforeCallModel ordering.
+ * coalescing, multi-block results, beforeCallModel ordering, and streaming
+ * deltas (yielded during the call, idle-timeout reset).
  *
  * Drives a scripted AgentLoop subclass: each test declares its own
- * turn-indexed callModel results (or a function that hangs until abort).
+ * turn-indexed callModel results (or a function that hangs until abort /
+ * streams deltas through onDelta).
  */
 
-type Turn = ModelCallResult | ((signal: AbortSignal | undefined) => Promise<ModelCallResult>)
+type OnDelta = (delta: ModelDelta) => void
+type Turn = ModelCallResult | ((signal: AbortSignal | undefined, onDelta?: OnDelta) => Promise<ModelCallResult>)
 
 class ScriptedLoop extends AgentLoop {
   calls = 0
@@ -34,11 +38,11 @@ class ScriptedLoop extends AgentLoop {
     super(tools)
   }
 
-  protected async callModel(signal: AbortSignal | undefined): Promise<ModelCallResult> {
+  protected async callModel(signal: AbortSignal | undefined, onDelta?: OnDelta): Promise<ModelCallResult> {
     const turn = this.script[this.calls++]
     if (!turn) throw new Error(`script exhausted at model call ${this.calls}`)
     this.log.push('callModel')
-    return typeof turn === 'function' ? turn(signal) : turn
+    return typeof turn === 'function' ? turn(signal, onDelta) : turn
   }
 }
 
@@ -222,6 +226,73 @@ describe('AgentLoop tool cycle', () => {
       const loop = new ScriptedLoop([], [hangUntilAbort])
       await expect(collect(loop.run('go'))).rejects.toThrow(MODEL_TIMEOUT_ERROR)
       expect(loop.calls).toBe(1)
+    } finally {
+      timeout.modelRequest = orig
+    }
+  })
+
+  it('streaming: deltas are yielded during the call, whole text/thinking still follow', async () => {
+    const loop = new ScriptedLoop([tool('a', () => 'A')], [
+      async (_signal, onDelta) => {
+        onDelta?.({ type: 'thinking_delta', text: 'hmm' })
+        onDelta?.({ type: 'text_delta', text: 'let me ' })
+        onDelta?.({ type: 'text_delta', text: 'check' })
+        return { ...toolUseTurn([call('tu_a', 'a')], 'let me check'), thinking: 'hmm', ttftMs: 7 }
+      },
+      endTurn('done'),
+    ])
+    const events = await collect(loop.run('go'))
+
+    expect(events.map((e) => e.type)).toEqual([
+      'thinking_delta', 'text_delta', 'text_delta', 'thinking', 'text', 'tool_call', 'usage', 'tool_result',
+      'text', 'usage', 'stop',
+    ])
+    expect(events.slice(0, 3).map((e) => e.text)).toEqual(['hmm', 'let me ', 'check'])
+    // The whole-text events are unchanged: same text, same `final` flag, no
+    // trace of the deltas — `final` consumers never see partial text.
+    expect(events[3]).toEqual({ type: 'thinking', text: 'hmm' })
+    expect(events[4]).toEqual({ type: 'text', text: 'let me check', final: false })
+    expect(events[6]).toMatchObject({ type: 'usage', ttftMs: 7 })
+    expect(events[9]).toMatchObject({ type: 'usage', ttftMs: undefined })
+  })
+
+  it('streaming: deltas emitted while the consumer is mid-yield are not lost', async () => {
+    const loop = new ScriptedLoop([], [
+      async (_signal, onDelta) => {
+        // Burst without yielding to the event loop — all three must arrive.
+        onDelta?.({ type: 'text_delta', text: 'a' })
+        onDelta?.({ type: 'text_delta', text: 'b' })
+        onDelta?.({ type: 'text_delta', text: 'c' })
+        await tick()
+        onDelta?.({ type: 'text_delta', text: 'd' })
+        return endTurn('abcd')
+      },
+    ])
+    const events = await collect(loop.run('go'))
+
+    expect(events.filter((e) => e.type === 'text_delta').map((e) => e.text)).toEqual(['a', 'b', 'c', 'd'])
+    expect(events.filter((e) => e.type === 'text')).toEqual([{ type: 'text', text: 'abcd', final: true }])
+  })
+
+  it('streaming: each delta resets the model-call timer (idle timeout, not wall clock)', async () => {
+    const timeout = config.timeout as { modelRequest: number }
+    const orig = timeout.modelRequest
+    timeout.modelRequest = 30
+    try {
+      const loop = new ScriptedLoop([], [
+        (signal, onDelta) => new Promise<ModelCallResult>((resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+          // 80 ms total, well past the 30 ms cap, but never 30 ms idle.
+          let n = 0
+          const iv = setInterval(() => {
+            onDelta?.({ type: 'text_delta', text: `${n}` })
+            if (++n === 8) { clearInterval(iv); resolve(endTurn('01234567')) }
+          }, 10)
+        }),
+      ])
+      const events = await collect(loop.run('go'))
+      expect(events.filter((e) => e.type === 'text_delta')).toHaveLength(8)
+      expect(events.at(-1)).toEqual({ type: 'stop', stopReason: 'end_turn' })
     } finally {
       timeout.modelRequest = orig
     }

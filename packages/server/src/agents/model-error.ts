@@ -75,9 +75,12 @@ function classifyKind(msg: string, errName: string, httpStatus: number | undefin
   // generic ("is unable to process your request") and match no keyword,
   // which is exactly why they slipped past retry and killed the turn on
   // attempt 1. Same exponential backoff as throttling.
+  // ModelStreamErrorException: Bedrock's mid-stream failure on
+  // InvokeModelWithResponseStream — same transient class.
   if (
     errName === 'InternalServerException'
     || errName === 'ModelTimeoutException'
+    || errName === 'ModelStreamErrorException'
     || errName === 'ServiceUnavailableException'
     || httpStatus === 500
     || httpStatus === 502

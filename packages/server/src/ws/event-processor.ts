@@ -51,10 +51,22 @@ export function sendWsNotification(
   const sessionId = ctx.sessionId
 
   switch (event.type) {
+    // Streaming chunks ride the same frames as the whole-text events — the
+    // admin appends chat:thinking / chat:stream by turnId either way. The whole
+    // event that follows a streamed call is stamped `streamed` and dropped so
+    // the client doesn't render the text twice.
+    case 'thinking_delta':
+      sendJson(ctx.ws, { type: 'chat:thinking', text: event.text ?? '', agentName, taskId, turnId, sessionId })
+      break
+    case 'stream_delta':
+      sendJson(ctx.ws, { type: 'chat:stream', text: event.text ?? '', agentName, taskId, turnId, sessionId })
+      break
     case 'thinking':
+      if (event.streamed) break
       sendJson(ctx.ws, { type: 'chat:thinking', text: event.text ?? '', agentName, taskId, turnId, sessionId })
       break
     case 'stream':
+      if (event.streamed) break
       sendJson(ctx.ws, { type: 'chat:stream', text: event.text ?? '', agentName, taskId, turnId, sessionId })
       break
     case 'agent_start':

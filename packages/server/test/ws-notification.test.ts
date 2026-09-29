@@ -47,6 +47,23 @@ describe('sendWsNotification mapping', () => {
     ])
   })
 
+  // Streaming chunks ride the same frames as the whole-text events (the admin
+  // appends by turnId either way); the whole event that follows a streamed
+  // call is stamped `streamed` and must be dropped or the text renders twice.
+  it('stream_delta / thinking_delta → chat:stream / chat:thinking', () => {
+    expect(notify({ type: 'stream_delta', text: 'to', agentName: 'a' })).toEqual([
+      { type: 'chat:stream', text: 'to', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },
+    ])
+    expect(notify({ type: 'thinking_delta', text: 'hm', agentName: 'a' })).toEqual([
+      { type: 'chat:thinking', text: 'hm', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },
+    ])
+  })
+
+  it('stream / thinking with streamed: true are not forwarded', () => {
+    expect(notify({ type: 'stream', text: 'tok', streamed: true, agentName: 'a' })).toEqual([])
+    expect(notify({ type: 'thinking', text: 'hmm', streamed: true, agentName: 'a' })).toEqual([])
+  })
+
   it('tool_call → agent:tool_call (tool/input field names)', () => {
     expect(notify({ type: 'tool_call', toolName: 'shell', toolInput: { cmd: 'ls' }, agentName: 'a' })).toEqual([
       { type: 'agent:tool_call', tool: 'shell', input: { cmd: 'ls' }, agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },

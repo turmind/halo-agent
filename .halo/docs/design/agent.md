@@ -21,10 +21,10 @@ Each provider's SDK client and config details are encapsulated inside its runtim
 
 ### Core loop
 
-`*run(input, {cancelSignal})` — async generator (non-streaming):
+`*run(input, {cancelSignal})` — async generator:
 1. Append the user message to `messages`
-2. `callModel()` → invoke the provider API, get complete response
-3. Yield `thinking` / `text` / `usage` / `tool_call` events
+2. `callModel(signal, onDelta?)` → invoke the provider API. Streaming providers (Bedrock) report chunks through `onDelta` as they arrive; the loop yields them as `text_delta` / `thinking_delta` events *during* the call and re-arms the per-call timeout on each (idle timeout). Non-streaming providers ignore `onDelta`. Either way the call resolves with one complete `ModelCallResult`
+3. Yield the whole `thinking` / `text` (with `final`) / `tool_call` / `usage` events exactly as before — consumers that only care about `final` never see deltas
 4. If `stop_reason=tool_use` → execute tools, yield `tool_result` events → loop
 5. Otherwise yield a `stop` event and return
 
