@@ -8,7 +8,8 @@ Each session is 1:1 with a `ModelRuntime`. `ModelRuntime` is a provider-agnostic
 
 **Files**:
 - [packages/server/src/agents/model-runtime.ts](../../../packages/server/src/agents/model-runtime.ts) — the interface plus the `createModelRuntime(providerId, cfg)` dispatcher
-- [packages/server/src/agents/bedrock-agent.ts](../../../packages/server/src/agents/bedrock-agent.ts) — the `aws-bedrock-claude-invoke` implementation (uses Bedrock InvokeModel, non-streaming)
+- [packages/server/src/agents/bedrock-agent.ts](../../../packages/server/src/agents/bedrock-agent.ts) — the `aws-bedrock-claude-invoke` implementation (Bedrock InvokeModelWithResponseStream, streaming)
+- [packages/server/src/agents/anthropic-stream.ts](../../../packages/server/src/agents/anthropic-stream.ts) — `AnthropicStreamAccumulator` (stream events → `ModelCallResult`, shared by every Anthropic-Messages provider) + `fetchAnthropicStream` (the HTTP + SSE `callModel` body of anthropic / mimo / minimax / qwen); `sse.ts` is the generic SSE → JSON reader underneath
 
 ### State
 
@@ -23,7 +24,7 @@ Each provider's SDK client and config details are encapsulated inside its runtim
 
 `*run(input, {cancelSignal})` — async generator:
 1. Append the user message to `messages`
-2. `callModel(signal, onDelta?)` → invoke the provider API. Streaming providers (Bedrock) report chunks through `onDelta` as they arrive; the loop yields them as `text_delta` / `thinking_delta` events *during* the call and re-arms the per-call timeout on each (idle timeout). Non-streaming providers ignore `onDelta`. Either way the call resolves with one complete `ModelCallResult`
+2. `callModel(signal, onDelta?)` → invoke the provider API. Streaming providers (Bedrock + the Anthropic-Messages providers anthropic / mimo / minimax / qwen; the OpenAI-family — openai / deepseek / kimi / zhipu / doubao / hunyuan — and Mantle are still non-streaming) report chunks through `onDelta` as they arrive; the loop yields them as `text_delta` / `thinking_delta` events *during* the call and re-arms the per-call timeout on each (idle timeout). Non-streaming providers ignore `onDelta`. Either way the call resolves with one complete `ModelCallResult`
 3. Yield the whole `thinking` / `text` (with `final`) / `tool_call` / `usage` events exactly as before — consumers that only care about `final` never see deltas
 4. If `stop_reason=tool_use` → execute tools, yield `tool_result` events → loop
 5. Otherwise yield a `stop` event and return

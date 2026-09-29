@@ -8,8 +8,13 @@
  * SSE, …) into JSON events and feeds them one at a time via `push()`.
  * Only the fields the loop consumes are read; unknown event and block types
  * are ignored so a new server-side event can't break a turn.
+ *
+ * `fetchAnthropicStream` is the HTTP + SSE transport on top of it — the
+ * shared `callModel` body of the fetch-based Anthropic-Messages providers
+ * (anthropic / mimo / minimax / qwen).
  */
 import type { ContentBlock, ModelCallResult, ModelDelta, StopDetails } from './agent-loop.js'
+import { readSseJson } from './sse.js'
 
 /** Anthropic stream event — only the fields we consume. */
 export interface AnthropicStreamEvent {
@@ -18,6 +23,8 @@ export interface AnthropicStreamEvent {
   message?: {
     usage?: StreamUsage
   }
+  /** `event: error` frame — the stream ends after it, no HTTP status. */
+  error?: { type?: string; message?: string }
   content_block?: {
     type: string
     id?: string
@@ -117,7 +124,13 @@ export class AnthropicStreamAccumulator {
           }
         }
         // Cumulative on the wire — the last one wins.
-        if (typeof event.usage?.output_tokens === 'number') this.outputTokens = event.usage.output_tokens
+        const u = event.usage
+        if (typeof u?.output_tokens === 'number') this.outputTokens = u.output_tokens
+        // MiniMax sends zeros in message_start.usage and the real input /
+        // cache counts here; Bedrock and Anthropic direct only carry output_tokens.
+        if (typeof u?.input_tokens === 'number') this.inputTokens = u.input_tokens
+        if (typeof u?.cache_read_input_tokens === 'number') this.cacheReadTokens = u.cache_read_input_tokens
+        if (typeof u?.cache_creation_input_tokens === 'number') this.cacheWriteTokens = u.cache_creation_input_tokens
         break
       }
       case 'message_stop':
@@ -178,4 +191,74 @@ export class AnthropicStreamAccumulator {
     this.blocks.set(index, block)
     this.order.push(index)
   }
+}
+
+/**
+ * Anthropic error type → the HTTP status the same error carries on a non-2xx
+ * response. A mid-stream `event: error` frame has no status of its own (the
+ * 200 already went out), so this keeps the thrown message in the
+ * `[tag] <status> <type>: <message>` shape `classifyModelError` parses.
+ */
+const SSE_ERROR_STATUS: Record<string, number> = {
+  invalid_request_error: 400,
+  authentication_error: 401,
+  billing_error: 402,
+  permission_error: 403,
+  not_found_error: 404,
+  request_too_large: 413,
+  rate_limit_error: 429,
+  api_error: 500,
+  timeout_error: 504,
+  overloaded_error: 529,
+}
+
+export interface FetchAnthropicStreamOptions {
+  /** Full messages URL, e.g. `https://api.anthropic.com/v1/messages`. */
+  url: string
+  /** Auth / version headers; `content-type` is added here. */
+  headers: Record<string, string>
+  /** Request body without `stream` — set to `true` here. */
+  body: Record<string, unknown>
+  signal: AbortSignal | undefined
+  onDelta?: (delta: ModelDelta) => void
+  /** Provider tag for error messages, e.g. `anthropic` → `[anthropic] 429 …`. */
+  tag: string
+}
+
+/**
+ * POST an Anthropic Messages request with `stream: true` and fold the SSE
+ * reply into a `ModelCallResult`. Non-2xx responses are plain JSON error
+ * bodies (not SSE); a mid-stream failure is an `event: error` frame.
+ */
+export async function fetchAnthropicStream(opts: FetchAnthropicStreamOptions): Promise<ModelCallResult> {
+  const { tag } = opts
+  const startTime = Date.now()
+
+  const res = await fetch(opts.url, {
+    method: 'POST',
+    signal: opts.signal,
+    headers: { 'content-type': 'application/json', ...opts.headers },
+    body: JSON.stringify({ ...opts.body, stream: true }),
+  })
+
+  if (!res.ok) {
+    const raw = await res.text()
+    let err: { error?: { type?: string; message?: string } }
+    try { err = JSON.parse(raw) }
+    catch { throw new Error(`[${tag}] non-JSON response (status=${res.status}): ${raw.slice(0, 200)}`) }
+    throw new Error(`[${tag}] ${res.status} ${err.error?.type ?? '?'}: ${err.error?.message ?? raw.slice(0, 200)}`)
+  }
+  if (!res.body) throw new Error(`[${tag}] empty response body`)
+
+  const acc = new AnthropicStreamAccumulator(startTime, opts.onDelta)
+  for await (const ev of readSseJson<AnthropicStreamEvent>(res.body)) {
+    if (ev.type === 'error') {
+      throw new Error(`[${tag}] ${SSE_ERROR_STATUS[ev.error?.type ?? ''] ?? '?'} ${ev.error?.type ?? '?'}: ${ev.error?.message ?? ''}`)
+    }
+    acc.push(ev)
+  }
+  // Same guard as bedrock-agent.ts callModel: a body that ends cleanly at the
+  // abort instant must not come back as a completed call.
+  if (opts.signal?.aborted) throw new DOMException('Model call aborted', 'AbortError')
+  return acc.finish()
 }

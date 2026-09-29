@@ -25,6 +25,9 @@ describe('classifyModelError', () => {
       // Mid-stream failure on InvokeModelWithResponseStream: no HTTP status
       // (the 200 already went out), errName is the only signal.
       ['server error (Bedrock mid-stream)', sdkError('ModelStreamErrorException', 'An error occurred while streaming the response.'), 'server_error'],
+      // Anthropic SSE `event: error` frame — fetchAnthropicStream maps the
+      // error type to its status so it rides the `] <status>` regex.
+      ['server error (Anthropic SSE overloaded)', new Error('[anthropic] 529 overloaded_error: Overloaded'), 'server_error'],
       ['network (undici)', new Error('fetch failed'), 'network'],
       ['empty response (Mantle)', new Error('MantleEmptyResponse: status=completed with empty output[]'), 'empty_response'],
       ['corrupted (missing tool_result)', new Error('messages.3: tool_use ids were found without tool_result blocks'), 'corrupted'],

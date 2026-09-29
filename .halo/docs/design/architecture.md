@@ -72,7 +72,9 @@ createModelRuntime(providerId: string, cfg: ModelRuntimeConfig): ModelRuntime
 **Modality capabilities**: Each model in the manifest declares `capabilities.image` / `capabilities.video` / `capabilities.audio` (boolean). SessionManager checks `modelSupportsImage()` at session creation in two places: (1) `createWorkspaceTools()` is passed `supportsVision` so the `view_image` tool is dropped from the tool list when the model can't ingest vision blocks — no exposed tool, no errant call, no provider 400; (2) user-supplied images on inbound messages are stripped at `buildInput()` with a text notice. Query functions: `config.ts` exports `modelSupportsImage()` / `modelSupportsVideo()` / `modelSupportsAudio()`.
 
 **Current providers**:
-- `aws-bedrock-claude-invoke` → `BedrockAgent` (uses the Bedrock InvokeModelWithResponseStream API — text / thinking chunks reach the UI as they are generated; the other providers are still non-streaming, streaming is per-provider and optional)
+- `aws-bedrock-claude-invoke` → `BedrockAgent` (uses the Bedrock InvokeModelWithResponseStream API — text / thinking chunks reach the UI as they are generated)
+- `anthropic` / `mimo-token-plan-china` → `AnthropicAgent`, `minimax` → `MiniMaxAgent`, `qwen` → `QwenAgent` (Anthropic Messages API over HTTP with `stream: true`; the SSE is folded by the same `AnthropicStreamAccumulator` as Bedrock via `fetchAnthropicStream` in `anthropic-stream.ts`, so they stream too)
+- The OpenAI-family (`openai` / `deepseek` / `kimi` / `zhipu` / `doubao` / `hunyuan`) and `aws-bedrock-mantle` are still non-streaming — streaming is per-provider and optional
 
 **Adding a new provider**:
 1. Add a manifest at `models/<providerId>.yaml` (include modality flags)

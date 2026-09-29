@@ -25,10 +25,13 @@
  *     (the API silently treats image blocks as missing attachments). We
  *     don't filter inbound images here — the session manager already drops
  *     them when the model registry says `capabilities.image=false`.
+ *
+ * Streaming: `stream: true`, SSE parsed by `fetchAnthropicStream` in anthropic-stream.ts.
  */
 import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop } from './agent-loop.js'
-import type { ModelCallResult, ToolDef } from './agent-loop.js'
+import type { ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
+import { fetchAnthropicStream } from './anthropic-stream.js'
 
 export interface MiniMaxAgentConfig {
   modelId: string
@@ -47,25 +50,6 @@ export interface MiniMaxAgentConfig {
   /** Explicit budget_tokens override; when omitted we translate from
    *  `thinking.effort` via the same table BedrockAgent uses. */
   thinkingBudgetTokens?: number
-}
-
-interface MessagesResponse {
-  content: Array<{
-    type: string
-    text?: string
-    thinking?: string
-    id?: string
-    name?: string
-    input?: unknown
-  }>
-  stop_reason?: string
-  usage?: {
-    input_tokens?: number
-    output_tokens?: number
-    cache_read_input_tokens?: number
-    cache_creation_input_tokens?: number
-  }
-  error?: { type?: string; message?: string }
 }
 
 function effortToBudget(effort: string, maxTokens?: number): number {
@@ -91,70 +75,21 @@ export class MiniMaxAgent extends AgentLoop {
     this.config = config
   }
 
-  protected async callModel(signal: AbortSignal | undefined): Promise<ModelCallResult> {
-    const url = `${this.config.endpoint.replace(/\/$/, '')}/v1/messages`
-    const body = this.buildRequestBody()
-    const startTime = Date.now()
-
-    const res = await fetch(url, {
-      method: 'POST',
-      signal,
+  protected async callModel(
+    signal: AbortSignal | undefined,
+    onDelta?: (delta: ModelDelta) => void,
+  ): Promise<ModelCallResult> {
+    return fetchAnthropicStream({
+      url: `${this.config.endpoint.replace(/\/$/, '')}/v1/messages`,
       headers: {
         'x-api-key': this.config.apiKey,
         'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: this.buildRequestBody(),
+      signal,
+      onDelta,
+      tag: 'minimax',
     })
-    const durationMs = Date.now() - startTime
-    const raw = await res.text()
-
-    let msg: MessagesResponse
-    try { msg = JSON.parse(raw) }
-    catch { throw new Error(`[minimax] non-JSON response (status=${res.status}): ${raw.slice(0, 200)}`) }
-
-    if (!res.ok || msg.error) {
-      throw new Error(`[minimax] ${res.status} ${msg.error?.type ?? '?'}: ${msg.error?.message ?? raw.slice(0, 200)}`)
-    }
-
-    let text = ''
-    let thinking = ''
-    const toolCalls: Array<{ id: string; name: string; input: unknown }> = []
-    const assistantBlocks: ModelCallResult['assistantBlocks'] = []
-
-    for (const block of msg.content ?? []) {
-      if (block.type === 'text' && block.text) {
-        text += block.text
-        assistantBlocks.push({ type: 'text', text: block.text })
-      } else if (block.type === 'thinking' && block.thinking) {
-        thinking += block.thinking
-      } else if (block.type === 'tool_use') {
-        toolCalls.push({ id: block.id!, name: block.name!, input: block.input ?? {} })
-        assistantBlocks.push({ type: 'tool_use', id: block.id!, name: block.name!, input: block.input ?? {} })
-      }
-    }
-
-    const u = msg.usage
-    const inputTokens = u?.input_tokens ?? 0
-    const outputTokens = u?.output_tokens ?? 0
-    const cacheReadTokens = u?.cache_read_input_tokens ?? 0
-    const cacheWriteTokens = u?.cache_creation_input_tokens ?? 0
-
-    return {
-      assistantBlocks,
-      stopReason: msg.stop_reason ?? 'end_turn',
-      text,
-      thinking,
-      toolCalls,
-      usage: {
-        inputTokens,
-        outputTokens,
-        totalTokens: inputTokens + outputTokens,
-        ...(cacheReadTokens ? { cacheReadInputTokens: cacheReadTokens } : {}),
-        ...(cacheWriteTokens ? { cacheWriteInputTokens: cacheWriteTokens } : {}),
-      },
-      durationMs,
-    }
   }
 
   private buildRequestBody(): Record<string, unknown> {

@@ -103,7 +103,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_MAX_CONTEXT_TOKENS` | `200000` | — | Model max context |
 | `HALO_SHELL_TIMEOUT` | `120000` | `config.yaml timeout.shell_exec` | Shell command timeout (ms) |
 | `HALO_WEB_FETCH_TIMEOUT` | `10000` | `config.yaml timeout.web_fetch` | web_fetch timeout |
-| `HALO_MODEL_TIMEOUT` | `1800000` | `config.yaml timeout.model_request` | Per model-call cap (ms, 30 min); streaming providers (Bedrock) reset it on every chunk, so for them it is an idle timeout. A bare fetch has no default timeout, so a half-open connection would hang the request forever; on expiry the call aborts and the agent loop retries with backoff. |
+| `HALO_MODEL_TIMEOUT` | `1800000` | `config.yaml timeout.model_request` | Per model-call cap (ms, 30 min); streaming providers (Bedrock + the Anthropic-Messages providers anthropic / mimo / minimax / qwen) reset it on every chunk, so for them it is an idle timeout; for the still non-streaming OpenAI-family (openai / deepseek / kimi / zhipu / doubao / hunyuan) and Mantle it caps the whole call. A bare fetch has no default timeout, so a half-open connection would hang the request forever; on expiry the call aborts and the agent loop retries with backoff. |
 | `HALO_SESSION_GRACE` | `300000` | `config.yaml timeout.session_grace` | WS-disconnect session grace |
 | `HALO_TERMINAL_GRACE` | `300000` | `config.yaml timeout.terminal_grace` | Terminal disconnect grace |
 | `HALO_MAX_CACHED_SESSIONS` | `50` | — | In-memory session cache |

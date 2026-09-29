@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { AnthropicStreamAccumulator, type AnthropicStreamEvent } from '../src/agents/anthropic-stream.js'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { AnthropicStreamAccumulator, fetchAnthropicStream, type AnthropicStreamEvent } from '../src/agents/anthropic-stream.js'
 import type { ModelDelta } from '../src/agents/agent-loop.js'
 
 /**
@@ -131,5 +131,34 @@ describe('AnthropicStreamAccumulator', () => {
 
     expect(result.assistantBlocks).toEqual([{ type: 'text', text: 'ok' }])
     expect(deltas).toEqual([{ type: 'text_delta', text: 'ok' }])
+  })
+
+  it('message_delta usage with input / cache fields overrides message_start zeros (MiniMax)', () => {
+    // Live-probed MiniMax-M3 shape: message_start carries zeros, the real
+    // numbers arrive in message_delta.usage.
+    const { result } = run([
+      messageStart({ input_tokens: 0, output_tokens: 0 }),
+      blockStart(0, { type: 'text' }),
+      delta(0, { type: 'text_delta', text: 'ok' }),
+      blockStop(0),
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 294, output_tokens: 52, cache_read_input_tokens: 128 } },
+      { type: 'message_stop' },
+    ])
+
+    expect(result.usage).toEqual({ inputTokens: 294, outputTokens: 52, totalTokens: 346, cacheReadInputTokens: 128 })
+  })
+})
+
+describe('fetchAnthropicStream', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('event: error frame mid-stream → rejects with the [tag] <status> <type>: <message> shape', async () => {
+    const sse = 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n'
+      + 'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n'
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })))
+
+    await expect(fetchAnthropicStream({
+      url: 'https://api.anthropic.com/v1/messages', headers: {}, body: {}, signal: undefined, tag: 'anthropic',
+    })).rejects.toThrow(/^\[anthropic\] 529 overloaded_error: Overloaded$/)
   })
 })
