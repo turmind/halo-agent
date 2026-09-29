@@ -55,7 +55,7 @@ Fetched via `GET /api/files/download?inline=1` (supports Range, streams on the s
 Adding new file types is a plugin concern — see `dev/previews.md` for the extension guide.
 
 ### Preview extensions (installable viewers)
-File types without a built-in plugin can be handled by an **installed extension**: a static HTML bundle under `~/.halo/global/extensions/<id>/` (server-wide, not per workspace) that Canvas loads in a sandboxed iframe. Design: `design/canvas-extensions.md`.
+File types without a built-in plugin can be handled by an **installed extension**: a static HTML bundle under `~/.halo/global/extensions/<id>/` (server-wide, not per workspace) that Canvas loads in a sandboxed iframe (scripts + same-origin, like the HTML preview — an extension is trusted like a skill the user chose to install). Design: `design/canvas-extensions.md`.
 - **Resolution order** for a file extension: `default`-priority extensions (newest install wins) → built-in plugins → `option`-priority extensions. `.glb` with the `glb` extension installed opens in the viewer directly; an `option` extension only shows up in the header's **Open with** menu
 - **Open with** (header menu, shown only when there are >2 candidates counting *Open as text*): switches the current tab's viewer; the choice is per tab and not persisted
 - **Fallback**: a file with no built-in plugin and no installed extension shows a static page — "no built-in preview for this type; extensions for more file types are on halo-hub ↗" — plus Open as text / Download. No online lookup
