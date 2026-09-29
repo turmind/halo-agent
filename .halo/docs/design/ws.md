@@ -129,6 +129,7 @@ Server-internal flags on `AgentSessionEvent` that are **not** carried into the W
 | `compact:started` / `compact:summarizing` / `compact:done` | compact handler | Compaction progress |
 | `cron:job_changed` / `cron:run_changed` | `cron/runner.ts` + `routes/cron.ts` (broadcast) | Cron job/run state changed — the Cron tab re-fetches instead of polling. See [cron.md](cron.md). |
 | `evolution:run_changed` / `evolution:apply_changed` | `evolution/ticker.ts` + `routes/evolution.ts` (broadcast) | Evolution run/apply state changed — drives the Evolution tab. See [evolution.md](evolution.md). |
+| `extension:changed` | `extensions/watcher.ts` `rescanAndBroadcast` (broadcast to all clients) | `~/.halo/global/extensions/` changed (install / upgrade / uninstall, from the admin upload, the `extension` skill, or a manual `mv`/`rm`) — carries the **full** `ExtensionsSnapshot` (`{extensions, errors}`), not a diff, and only fires when the snapshot key differs from the last one. The admin replaces its extension list wholesale: the preview registry re-resolves open tabs (an upgraded extension remounts, or shows a banner if the tab is dirty; an uninstalled one falls back to the "no built-in preview" page) and the Settings → Extensions panel re-renders. Global, no workspace marker — extensions are server-wide. See [canvas-extensions.md](canvas-extensions.md). |
 
 ### `error` frames: optional `code`
 

@@ -76,6 +76,17 @@ Special-file previews:
 - PDF / DOCX / XLSX: rendered in-browser
 - Images / video / audio: native players
 
+### Preview extensions
+
+File types the editor has no built-in viewer for (e.g. `.glb` 3D models) show a "no built-in preview" page with a link to [halo-hub](https://github.com/turmind/halo-hub), where ready-made viewer extensions live. Extensions are installed **server-wide** (`~/.halo/global/extensions/<id>/`) and take effect in every open tab immediately — no restart, no page reload.
+
+Three ways to install:
+- **Settings → Extensions**: upload the extension `.zip`; the same panel lists what's installed (version, file types) and removes extensions
+- **Ask the agent**: `/extension install glb` pulls the latest `glb-v*` release from halo-hub; `/extension install /path/to/x.zip` or an `https://…zip` URL also work. `/extension list` and `/extension remove <id>` round it out (full-access sessions only)
+- **By hand**: drop an unpacked extension directory into `~/.halo/global/extensions/` — the server watches that directory
+
+Once installed, matching files open in the extension's viewer. If more than one viewer can show a file, the preview header gets an **Open with** menu (per tab, not remembered). Extensions that declare the `save` capability can edit the file: the tab shows the usual dirty dot, and the header **Save** button writes it back (Ctrl/Cmd+S doesn't apply to extension tabs). If the file changed on disk in between, you're asked before overwriting.
+
 ## Terminal
 
 Bottom-panel Terminal tab:

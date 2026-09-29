@@ -54,6 +54,15 @@ Fetched via `GET /api/files/download?inline=1` (supports Range, streams on the s
 
 Adding new file types is a plugin concern — see `dev/previews.md` for the extension guide.
 
+### Preview extensions (installable viewers)
+File types without a built-in plugin can be handled by an **installed extension**: a static HTML bundle under `~/.halo/global/extensions/<id>/` (server-wide, not per workspace) that Canvas loads in a sandboxed iframe. Design: `design/canvas-extensions.md`.
+- **Resolution order** for a file extension: `default`-priority extensions (newest install wins) → built-in plugins → `option`-priority extensions. `.glb` with the `glb` extension installed opens in the viewer directly; an `option` extension only shows up in the header's **Open with** menu
+- **Open with** (header menu, shown only when there are >2 candidates counting *Open as text*): switches the current tab's viewer; the choice is per tab and not persisted
+- **Fallback**: a file with no built-in plugin and no installed extension shows a static page — "no built-in preview for this type; extensions for more file types are on halo-hub ↗" — plus Open as text / Download. No online lookup
+- **Editable extensions** (manifest `capabilities: ["save"]`): the iframe reports dirty → tab shows the dirty dot → header **Save** button (Ctrl/Cmd+S is *not* wired for extension tabs — Monaco isn't mounted) → `PUT /api/files/raw`. If the file changed on disk since it was loaded the save gets a 409 and the user is asked "changed on disk … Overwrite?". An external change while the tab is clean reloads it; while dirty, local edits are kept silently and the conflict surfaces at the next save
+- **Live install / upgrade / uninstall** (from Settings → Extensions upload / remove, the `/extension` skill, or a manual directory change): pushed over WS, no reload. An upgraded extension remounts open tabs (or shows a "updated — reload" banner if the tab is dirty); uninstalling drops clean tabs to the fallback page and keeps dirty tabs alive with a banner
+- **Settings → Extensions**: lists installed extensions (name, version, file types, license/homepage) and manifest errors; upload `.zip` (≤ 100 MB) and remove. Any logged-in admin can do both — the admin cookie has no access level
+
 ### Renderable text formats (Markdown / HTML)
 Markdown and HTML open as text in Monaco *and* have a rendered view — Canvas defaults to the **rendered** view since the primary audience is an AI generating reports / pages for humans to read.
 - Header shows an **Edit / Preview** toggle (same `textRenderMode` state for both formats)

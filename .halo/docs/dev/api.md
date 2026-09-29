@@ -2,7 +2,7 @@
 
 All REST endpoints are served by Hono on port 9527 at `/api/`.
 
-Auth: most `/api/*` routes require a valid JWT cookie (`halo_token`). Exceptions in `PUBLIC_PATHS` (`middleware/auth.ts`) bypass the cookie: `/api/auth/login|check|logout` (but **not** `/api/auth/change-password`), the web-channel routes (`/api/web/chat|sessions|stop|history|subscribe|file`), `/api/show/state|session`, and `/api/metrics` — these are unauthenticated or use a web-channel `x-token` instead.
+Auth: most `/api/*` routes require a valid JWT cookie (`halo_token`). Exceptions in `PUBLIC_PATHS` (`middleware/auth.ts`) bypass the cookie: `/api/auth/login|check|logout` (but **not** `/api/auth/change-password`), the web-channel routes (`/api/web/chat|sessions|stop|history|subscribe|file`), `/api/show/state|session`, and `/api/metrics` — these are unauthenticated or use a web-channel `x-token` instead. One more shape bypasses the cookie: `/api/extensions/<id>/<version>/<token>/<asset>` (`EXTENSION_ASSET_PATH`), where the route verifies a scoped asset token carried in the path — see [Canvas Preview Extensions](#canvas-preview-extensions).
 
 **Trust model.** The admin cookie is a single-tenant, all-or-nothing credential: there is one password (`~/.halo/secrets/config.yaml`), one JWT secret, and no roles. A valid `halo_token` equals full control of the server process — every workspace's files (`/api/files/*` project-scoped, `/api/fs/browse` unrestricted), shell via the WS terminal, channel credentials, git credentials, cron jobs, and the ability to mint web-channel tokens at any access level. Routes under the cookie therefore don't re-check "who" beyond the cookie itself; per-user isolation is the job of channel accounts (`x-token` with `readonly` / `workspace` / `full`), not of the admin. Consequences worth knowing when adding routes: (1) never put a cookie-gated route in `PUBLIC_PATHS` to "make it easier for a client" — that's the entire boundary; (2) a route that accepts a path or id from the client still needs traversal / shape checks (`isSafeIdSegment`, `assertPathAllowed`), because the *web-channel* surface reuses the same helpers and is multi-user; (3) if multi-user admin ever lands, the first change is a role claim in the JWT plus per-route checks, and this paragraph becomes the checklist.
 
@@ -37,6 +37,7 @@ File: `packages/server/src/routes/files.ts`
 | GET | `/api/files/stat?path=&projectId=` | Lightweight mtime + size |
 | GET | `/api/files/download?path=&projectId=&inline=` | Download or inline-preview — streams the file (no full read into memory), supports `Range` (206 Partial Content) so `<video>`/`<audio>` can seek + partial-load; aborts the read if the client disconnects |
 | PUT | `/api/files` | Save file (body: `{path, content, projectId}`) |
+| PUT | `/api/files/raw?path=&projectId=[&expectMtime=]` | Replace an **existing** file's bytes with the raw request body (binary-safe; `PUT /api/files` is utf-8 text only). Used by canvas preview extensions' save path. 404 if the file doesn't exist (save never creates); 400 for a directory. `expectMtime` is the `modifiedAt` the client loaded from `/api/files/stat` (float ms — compared after `Math.round`): when the on-disk mtime differs → **409** `{error:'conflict', mtime, size}` so the client can offer overwrite (retry without / with the new `expectMtime`). Success → `{ok, path, mtime, size}` |
 | POST | `/api/files/new` | Create empty file |
 | POST | `/api/files/mkdir` | Create directory |
 | POST | `/api/files/rename` | Rename / move |
@@ -77,6 +78,24 @@ Pagination: `limit` defaults to 100, capped at 1000. Same `(path, projectId)` re
 - **parquet** — reads only the footer + the row groups covering the requested page (hyparquet), never the whole file.
 - **csv** — streaming RFC 4180 tokenizer, memory O(page). Delimiter is sniffed from the header line (`,` / `;` / tab, comma wins ties); `.tsv` forces tab. `totalRows` is a lazy lower bound while `hasMore` is true (exact once the scan reaches EOF, to avoid re-reading the whole file on every page turn). A single row over 1MB is rejected with 400 (delimiter-flood / non-CSV guard).
 - All four fold cells to JSON scalars: bigints beyond ±2^53 become exact strings, BLOB/binary becomes a `<blob N bytes>` placeholder, `Date` becomes ISO text.
+
+## Canvas Preview Extensions
+
+File: `packages/server/src/routes/extensions.ts` (+ `extensions/{registry,watcher,install}.ts`). Design: [design/canvas-extensions.md](../design/canvas-extensions.md).
+
+Installed extensions are directories under `~/.halo/global/extensions/<id>/` with a `halo-extension.json` manifest. The server is the only validator; the admin trusts the snapshot it receives (`ExtensionsSnapshot` from `packages/core/src/protocol/extension-types.ts`).
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/extensions` | cookie | Current snapshot `{ extensions: ExtensionInfo[], errors: ExtensionError[] }` — `errors` lists directories the scanner refused (bad / missing manifest) so the admin can show and uninstall them |
+| GET | `/api/extensions/token` | cookie | Mint a scoped asset token: `{ token, expiresAt }` (JWT `{scope:'ext'}`, 24 h). The admin caches one per page and embeds it in the iframe URL |
+| POST | `/api/extensions/install` | cookie | Multipart `file` = zip (≤ 100 MB, 413 above). Unpacks to a temp dir, validates the manifest (`id` must equal the directory / zip root, `entry` must exist), atomically replaces `~/.halo/global/extensions/<id>/`. Returns the resulting `ExtensionInfo`; 400 `{error}` for a bad zip / manifest |
+| DELETE | `/api/extensions/:id` | cookie | Remove the directory. 400 for an invalid id shape, 404 if not installed. Returns `{ok, id}` |
+| GET | `/api/extensions/:id/:version/:token/<asset>` | **path token, no cookie** | Static file from the extension directory. 401 unless `verifyScopedToken(token,'ext')`; 404 if `version` ≠ installed version or the asset escapes the directory. Response headers: `Access-Control-Allow-Origin: *`, `Referrer-Policy: no-referrer`, `Cache-Control: public, max-age=31536000, immutable` (the version segment is the cache key) |
+
+**Why the asset route can't be cookie-authed.** The admin hosts an extension in `<iframe sandbox="allow-scripts">` (no `allow-same-origin`) — an opaque origin. The document navigation still carries the cookie, but every subresource it loads (classic/module scripts, img, css, fetch, wasm, dynamic import, Worker) is a cross-site request with **no cookie**, and module/fetch/wasm need `Access-Control-Allow-Origin` too. A `?token=` query would be dropped when the document resolves `./viewer.js`-style relative URLs, so the token is a **path segment** that every relative URL inherits. `authMiddleware` lets exactly that path shape (`EXTENSION_ASSET_PATH = /^\/api\/extensions\/[^/]+\/[^/]+\/[^/]+\/./`) through without a cookie and the route verifies the token itself. The token is good for nothing else: `validateToken` (admin cookie / WS upgrade) refuses any JWT payload that carries a `scope`, so an asset token replayed as `halo_token` is a 401.
+
+Install / uninstall don't broadcast themselves — the resulting rename / rm trips the `fs.watch` on `~/.halo/global/extensions/` (`extensions/watcher.ts`), the single notifier; both routes also call `rescanAndBroadcast()` so their response and the next `GET` already reflect the change. Changes reach every connected admin as the WS frame `extension:changed` (full snapshot — see [design/ws.md](../design/ws.md#other-server--client-messages)). All three cookie routes are "any logged-in admin" — the cookie has no access level, so install / delete cannot be restricted to full access (the agent-side `extension` skill is `requiresAccess: full`).
 
 ## Session Logs (unified)
 
