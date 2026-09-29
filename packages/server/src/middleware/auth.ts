@@ -103,7 +103,26 @@ function constantTimeEqualString(a: string, b: string): boolean {
 
 function validateToken(token: string | undefined): Record<string, unknown> | null {
   if (!token) return null
-  return jwtVerify(token)
+  const payload = jwtVerify(token)
+  // Scoped tokens (mintScopedToken) travel in URLs and server logs; they must
+  // never pass as the admin cookie. isAuthenticated (WS upgrade) shares this.
+  if (payload?.scope) return null
+  return payload
+}
+
+/** Sign a short-lived token that is valid ONLY for `verifyScopedToken(scope)`
+ *  — never as the admin cookie (validateToken refuses any `scope` payload).
+ *  Used for extension asset URLs, which a sandboxed opaque-origin iframe
+ *  fetches without cookies. */
+export function mintScopedToken(scope: string, maxAgeSec: number): string {
+  const now = Math.floor(Date.now() / 1000)
+  return jwtSign({ scope, iat: now, exp: now + maxAgeSec })
+}
+
+export function verifyScopedToken(token: string | undefined, scope: string): boolean {
+  if (!token) return false
+  const payload = jwtVerify(token)
+  return payload !== null && payload.scope === scope
 }
 
 function shouldRefresh(payload: Record<string, unknown>): boolean {
@@ -270,11 +289,22 @@ function passwordStrengthError(pw: string): string | null {
 
 const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/check', '/api/auth/logout', '/api/health', '/api/web/chat', '/api/web/sessions', '/api/web/stop', '/api/web/history', '/api/web/subscribe', '/api/web/file', '/api/show/state', '/api/show/session', '/api/metrics']
 
+/** Extension asset requests: `/api/extensions/<id>/<version>/<token>/<asset…>`
+ *  (≥ 4 segments after /extensions/). They come from the admin's sandboxed
+ *  opaque-origin iframe, whose subresource fetches (scripts, wasm, fetch, img)
+ *  carry NO cookie — so routes/extensions.ts checks the scoped token in the
+ *  path instead. The shape doesn't overlap list (0 segments), install / token /
+ *  `:id` (1 segment). */
+const EXTENSION_ASSET_PATH = /^\/api\/extensions\/[^/]+\/[^/]+\/[^/]+\/./
+
 export function authMiddleware() {
   return async (c: { req: { path: string }; json: (data: unknown, status?: number) => Response } & Record<string, unknown>, next: () => Promise<void>) => {
     const path = (c.req as { path: string }).path
 
     if (PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + '?'))) {
+      return next()
+    }
+    if (EXTENSION_ASSET_PATH.test(path)) {
       return next()
     }
 

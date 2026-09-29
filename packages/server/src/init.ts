@@ -453,6 +453,10 @@ export function ensureHaloHome(haloHome: string): void {
   const globalDir = path.join(haloHome, 'global')
   const secretsDir = path.join(haloHome, 'secrets')
   fs.mkdirSync(globalDir, { recursive: true })
+  // extensions/ — canvas preview extensions (extensions/registry.ts). Never
+  // seeded from templates; created empty so the server's watcher and the
+  // `extension` skill have a root to work in.
+  fs.mkdirSync(path.join(globalDir, 'extensions'), { recursive: true })
   fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 })
   // `mode` only applies when the dir is freshly created — chmod tightens
   // pre-existing installs (paths.ts documents 0700 as the expected perms;

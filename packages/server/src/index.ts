@@ -38,6 +38,8 @@ import { createCronDb, setCronDb } from './db/cron-db.js'
 import { createRunsDb, setRunsDb, listRunningWorkspaces } from './db/runs-db.js'
 import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
+import { createExtensionRoutes } from './routes/extensions.js'
+import { start as startExtensionsWatcher, stop as stopExtensionsWatcher } from './extensions/watcher.js'
 import { createEvoDb, setEvoDb } from './db/evo-db.js'
 import { setEvoSpawner, startEvoTicker, stopEvoTicker } from './evolution/ticker.js'
 import { startArchiveDaemon, stopArchiveDaemon } from './evolution/archive.js'
@@ -390,6 +392,13 @@ app.route('/api', evolutionRoutes)
 const cronRoutes = createCronRoutes()
 app.route('/api', cronRoutes)
 
+// Canvas preview extensions: list / install / uninstall / static assets, plus
+// the root-dir watcher that pushes `extension:changed`. Not in AgentCore mode
+// — that surface has no admin editor.
+const extensionRoutes = createExtensionRoutes()
+app.route('/api', extensionRoutes)
+if (!AGENTCORE) startExtensionsWatcher()
+
 const channelDb = createChannelDb(path.join(HALO_HOME, 'secrets'))
 setChannelDb(channelDb)
 // Self-evolution global db. Stash the instance in a module-level singleton
@@ -582,6 +591,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   stopEvoTicker()
   stopArchiveDaemon()
+  stopExtensionsWatcher()
   // Before channels drain: the 10s reconcile poll would otherwise rebuild
   // schedules (and fire new runs) while we're mid-shutdown.
   stopCronDaemon()

@@ -234,6 +234,13 @@ export function globalUserMd(): string {
   return path.join(globalDir(), 'USER.md')
 }
 
+/** `~/.halo/global/extensions` — installed canvas preview extensions, one
+ *  directory per extension id (the directory IS the install; see
+ *  extensions/registry.ts). */
+export function globalExtensionsDir(): string {
+  return path.join(globalDir(), 'extensions')
+}
+
 /** `~/.halo/global/logs` — root for daemon logs. */
 export function globalLogsDir(): string {
   return path.join(globalDir(), 'logs')
