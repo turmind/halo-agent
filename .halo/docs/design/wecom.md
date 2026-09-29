@@ -153,7 +153,7 @@ Chunk sends are serialized per responder (`sendTail` promise chain, audit A-L3) 
 
 **Inbound:** text, voice (as transcript), images (vision + saved), mixed (text + images), files, videos — single chat only for everything but text. Saved under `<workspace>/.halo/assets/wecom/inbound/<accountId>/<date>/`.
 
-**Outbound routing** (`sendWecomMedia`, path must be under the workspace — `isMediaPathAllowed`):
+**Outbound routing** (`sendWecomMedia`; for non-`full` accounts the path must be under the workspace or the OS temp dir — `isMediaPathAllowed(path, workspace, accessLevel)`, `full` accounts may send any readable path; a blocked path surfaces as the same `t('handler.upload_failed')` reply as a failed upload):
 - `.png` / `.jpg` / `.jpeg` / `.gif` → `uploadMedia(type: 'image')` → `replyMedia('image')`
 - `.mp4` → `uploadMedia(type: 'video')` → `replyMedia('video')`
 - everything else (`.webp` / `.bmp` / `.mov` / documents / audio) → `uploadMedia(type: 'file')` → `replyMedia('file')` — WeCom's `image` accepts png/jpg/gif only and `video` mp4 only

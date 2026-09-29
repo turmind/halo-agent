@@ -203,7 +203,7 @@ Text, images (base64 attached to agent input for vision), files. All files are d
 
 The agent runtime produces `MEDIA: <path>` markers. SlackResponder:
 - Intercepts the markers and calls `uploadFile()` for each one
-- Blocks sandbox violation (files must be under workspace or /tmp)
+- Blocks sandbox violation for non-`full` accounts (files must be under workspace or /tmp — `isMediaPathAllowed(path, workspace, accessLevel)`; `full` accounts may send any readable path). A block throws inside the same try as the upload, so it surfaces as the `handler.upload_failed` text below
 - Falls back to error text if upload fails
 
 Outbound media uses Slack's v2 upload flow (getUploadURLExternal → signed PUT → completeUploadExternal).

@@ -108,9 +108,10 @@ export function startWechatChannel(deps: {
         sendMedia: async (filePath) => {
           const route = bridge.getRoute(sessionId)
           if (!route) return
-          if (!isMediaPathAllowed(filePath, account.workspacePath)) {
-            console.warn(`[WeChat] sendMedia blocked: ${filePath} not under workspace`)
-            return
+          // Throw, don't return: the responder's catch → onSendError puts the
+          // block in the session log instead of dropping the file silently.
+          if (!isMediaPathAllowed(filePath, account.workspacePath, account.accessLevel)) {
+            throw new Error(`media path not allowed: ${filePath} (must be under the workspace or the temp dir; account access level ${account.accessLevel})`)
           }
           await sendMediaFile({
             baseUrl: account.baseUrl, token: account.botToken,

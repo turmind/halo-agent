@@ -10,6 +10,7 @@
 import path from 'node:path'
 import os from 'node:os'
 import { IMAGE_EXTS } from '@turmind/halo-core'
+import type { AccountAccessLevel } from './accounts.js'
 
 /** OS temp dir, resolved (e.g. /tmp on unix, C:\Users\…\Temp on Windows).
  *  Channels treat files here as a valid media source alongside the
@@ -55,11 +56,15 @@ export function extractMediaMessage(text: string): { text: string; mediaPaths: s
   return { text: stripped.replace(/\n{3,}/g, '\n\n').trim(), mediaPaths }
 }
 
-/** Sandbox for outbound `MEDIA:` paths: only files under `workspacePath`
- *  or in the OS temp dir (agent-generated artifacts like screenshots) may
- *  be sent out. Segment-boundary match, not a raw prefix — a sibling dir
- *  like `<workspace>-other` must not pass as "inside the workspace". */
-export function isMediaPathAllowed(filePath: string, workspacePath: string): boolean {
+/** Sandbox for outbound `MEDIA:` paths. A `full` account may send any
+ *  readable path — its shell / file tools are already unrestricted, so the
+ *  whitelist would only force a copy to /tmp. Every other access level (and
+ *  callers without one, e.g. cron) is limited to files under `workspacePath`
+ *  or in the OS temp dir (agent-generated artifacts like screenshots).
+ *  Segment-boundary match, not a raw prefix — a sibling dir like
+ *  `<workspace>-other` must not pass as "inside the workspace". */
+export function isMediaPathAllowed(filePath: string, workspacePath: string, accessLevel?: AccountAccessLevel): boolean {
+  if (accessLevel === 'full') return true
   const resolved = path.resolve(filePath)
   const ws = path.resolve(workspacePath)
   return resolved === ws || resolved.startsWith(ws + path.sep) || isInTempDir(resolved)

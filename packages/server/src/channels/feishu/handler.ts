@@ -322,11 +322,12 @@ export function startFeishuChannel(deps: {
             const route = bridge.getRoute(sessionId)
             if (!account || !route) return
             const resolved = path.resolve(filePath)
-            if (!isMediaPathAllowed(resolved, account.workspacePath)) {
-              console.warn(`[Feishu] sendMedia blocked: ${filePath} not under workspace`)
-              return
-            }
+            // Thrown inside the try so a blocked path reaches the user as
+            // upload_failed instead of vanishing with only a server log line.
             try {
+              if (!isMediaPathAllowed(resolved, account.workspacePath, account.accessLevel)) {
+                throw new Error(`media path not allowed: ${filePath} (must be under the workspace or the temp dir; account access level ${account.accessLevel})`)
+              }
               await sendFeishuMedia({ account, ...route, filePath: resolved })
             } catch (err) {
               console.log(`[Feishu] sendMedia ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)

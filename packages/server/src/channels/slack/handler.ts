@@ -274,15 +274,14 @@ export function startSlackChannel(deps: {
           sendMedia: async (filePath) => {
             const route = bridge.getRoute(sessionId)
             if (!account || !route) return
-            // Sandbox: only files inside the bound workspace (or /tmp for
-            // freshly-generated artifacts) are allowed. Without this guard
-            // a compromised agent could exfiltrate arbitrary host paths.
+            // Sandbox: non-full accounts may only send files inside the bound
+            // workspace (or /tmp for freshly-generated artifacts). Thrown
+            // inside the try so a block reaches the user as upload_failed.
             const resolved = path.resolve(filePath)
-            if (!isMediaPathAllowed(resolved, account.workspacePath)) {
-              console.warn(`[Slack] sendMedia blocked: ${filePath} not under workspace`)
-              return
-            }
             try {
+              if (!isMediaPathAllowed(resolved, account.workspacePath, account.accessLevel)) {
+                throw new Error(`media path not allowed: ${filePath} (must be under the workspace or the temp dir; account access level ${account.accessLevel})`)
+              }
               await uploadFile({
                 botToken: account.botToken,
                 channel: route.channelId,

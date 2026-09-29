@@ -170,6 +170,8 @@ trailing chunks of a long reply were dropped.
 - `.mp4/.mov/.webm/.m4v/.avi` → `uploadFile(fileType: 'mp4')` → `msg_type: 'media'` (with optional cover frame)
 - everything else → `uploadFile(fileType: 'stream')` → `msg_type: 'file'`
 
+Path whitelist: a `full` account may send any readable path; other access levels are limited to the workspace or the OS temp dir (`isMediaPathAllowed(path, workspace, accessLevel)`). A blocked path throws inside the same try as the upload, so it surfaces as the `t('handler.upload_failed')` reply rather than a silent drop.
+
 Inbound images are downloaded via `/im/v1/messages/{messageId}/resources/{imageKey}?type=image`, decrypted if needed, saved under `<workspace>/.halo/assets/feishu/inbound/<accountId>/<date>/`, and fed to vision.
 
 ## Message routing (thread vs p2p)

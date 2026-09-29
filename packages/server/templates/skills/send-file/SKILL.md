@@ -13,7 +13,7 @@ Multiple `MEDIA:` lines in one reply = multiple attachments.
 
 - Marker must be alone on a line. No leading spaces, no inline text.
 - Path must be absolute and the file must exist. Verify with `file_list` if unsure.
-- The file must live under the current workspace directory or the OS temp dir (`/tmp` on Linux/macOS). Any other path — including another workspace on the same server — is silently dropped: no attachment arrives and you get no error. Copy the file into the workspace (e.g. `.halo/tmp/`) or `/tmp` first, then reference the copy.
+- Where the file may live depends on the channel account's access level. A full-access account may send any readable absolute path. A workspace / readonly account is limited to the current workspace directory or the OS temp dir (`/tmp` on Linux/macOS); any other path — including another workspace on the same server — is not sent, and the user sees a "⚠️ 文件上传失败 / delivery failed" message naming the file. If you are not full-access, copy the file into the workspace (e.g. `.halo/tmp/`) or `/tmp` first, then reference the copy.
 - Write normal text around `MEDIA:` lines for context.
 
 ## Example

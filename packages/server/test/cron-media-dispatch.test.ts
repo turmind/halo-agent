@@ -75,6 +75,7 @@ vi.mock('../src/channels/feishu/api.js', () => ({
 }))
 
 import { dispatchToTargets, type CronTarget } from '../src/cron/dispatcher.js'
+import { isMediaPathAllowed } from '../src/channels/shared/media.js'
 import { createChannelDb, setChannelDb } from '../src/db/channel-db.js'
 import { insertAccount as insertTelegramAccount } from '../src/channels/telegram/accounts.js'
 import { insertAccount as insertWechatAccount } from '../src/channels/wechat/accounts.js'
@@ -198,5 +199,30 @@ describe('cron media dispatch', () => {
       expect(r.error).toContain('media path not under job workspace')
       expect(r.error).toContain('/srv/other-place/secret.png')
     }
+  })
+})
+
+describe('isMediaPathAllowed access levels', () => {
+  const OUTSIDE = '/srv/other-place/secret.png'
+
+  it('full: any path, including outside the workspace and the OS tmp dir', () => {
+    expect(isMediaPathAllowed(OUTSIDE, JOB_WS, 'full')).toBe(true)
+    expect(isMediaPathAllowed(`${JOB_WS}/chart.png`, JOB_WS, 'full')).toBe(true)
+  })
+
+  it('workspace / readonly / observer: still blocked outside, still allowed inside the workspace or the tmp dir', () => {
+    for (const level of ['workspace', 'readonly', 'observer'] as const) {
+      expect(isMediaPathAllowed(OUTSIDE, JOB_WS, level)).toBe(false)
+      expect(isMediaPathAllowed(`${JOB_WS}/chart.png`, JOB_WS, level)).toBe(true)
+      expect(isMediaPathAllowed(path.join(os.tmpdir(), 'shot.png'), JOB_WS, level)).toBe(true)
+    }
+  })
+
+  it('no access level (cron dispatchers): the old workspace + tmp rule', () => {
+    expect(isMediaPathAllowed(OUTSIDE, JOB_WS)).toBe(false)
+    expect(isMediaPathAllowed(`${JOB_WS}/chart.png`, JOB_WS)).toBe(true)
+    expect(isMediaPathAllowed(path.join(os.tmpdir(), 'shot.png'), JOB_WS)).toBe(true)
+    // Sibling dir sharing the prefix must not pass as "inside".
+    expect(isMediaPathAllowed(`${JOB_WS}-other/x.png`, JOB_WS)).toBe(false)
   })
 })

@@ -297,11 +297,12 @@ export function startWecomChannel(deps: {
             const wsClient = states.get(accountId)?.wsClient
             if (!account || !route || !wsClient) return
             const resolved = path.resolve(filePath)
-            if (!isMediaPathAllowed(resolved, account.workspacePath)) {
-              console.warn(`[WeCom] sendMedia blocked: ${filePath} not under workspace`)
-              return
-            }
+            // Thrown inside the try so a blocked path reaches the user as
+            // upload_failed instead of vanishing with only a server log line.
             try {
+              if (!isMediaPathAllowed(resolved, account.workspacePath, account.accessLevel)) {
+                throw new Error(`media path not allowed: ${filePath} (must be under the workspace or the temp dir; account access level ${account.accessLevel})`)
+              }
               await sendWecomMedia({ wsClient, route, filePath: resolved })
             } catch (err) {
               console.log(`[WeCom] sendMedia ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
