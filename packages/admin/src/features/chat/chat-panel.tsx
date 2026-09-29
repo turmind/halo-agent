@@ -10,7 +10,7 @@ import { refreshGoal } from './goal-store'
 import { useChat } from '@/features/chat/use-chat'
 import { refreshCommands } from './slash-commands'
 import { useExplorerSessions, SessionSidebar, SessionHistoryLink } from './session-list'
-import { Plus, Loader2, MessageSquare, Bot, ChevronDown, History } from 'lucide-react'
+import { Plus, Loader2, MessageSquare, Bot, Bug, ChevronDown, History } from 'lucide-react'
 import { wsClient } from '@/shared/ws-client'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
@@ -158,6 +158,15 @@ export function ChatPanel() {
     return localStorage.getItem(SIDEBAR_OPEN_KEY) !== 'false'
   })
   const { sessions, remove: removeSession, loadMore: loadMoreSessions, hasMore: hasMoreSessions, loadingMore: loadingMoreSessions } = useExplorerSessions()
+  // Debug toggle — same as the Sessions tab's, under its own key so the two
+  // surfaces don't flip each other.
+  const [debugMode, setDebugMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return localStorage.getItem('halo_chat_debug') === '1'
+  })
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('halo_chat_debug', debugMode ? '1' : '0')
+  }, [debugMode])
 
   const setSidebar = useCallback((open: boolean) => {
     setSidebarOpen(open)
@@ -225,9 +234,12 @@ export function ChatPanel() {
   // see session-ui-store.emitEvent), which bumps the session bus and
   // refetches every list, replacing the old 500ms timer guess.
 
+  // Debug keeps every own-session message (usage / agent_start / agent_done /
+  // tool events) so MessageList can interleave UsageLines; sub-agent streams
+  // (taskId) still stay out — same split as session-chat-panel's live branch.
   const mainMessages = useMemo(() =>
-    messages.filter(isMainConversationMessage),
-    [messages],
+    debugMode ? messages.filter((m) => !m.taskId) : messages.filter(isMainConversationMessage),
+    [messages, debugMode],
   )
 
   const userScrolledUp = useRef(false)
@@ -449,7 +461,7 @@ export function ChatPanel() {
               ) : (
                 <ArchiveHistory onLoadOlder={handleLoadOlderArchive} scrollRef={scrollRef} />
               )}
-              <MessageList messages={windowMessages} userOrdinalBase={hiddenTurns} />
+              <MessageList messages={windowMessages} debugMode={debugMode} userOrdinalBase={hiddenTurns} />
             </>
           )}
         </div>
@@ -485,6 +497,19 @@ export function ChatPanel() {
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
                 >
                   <Plus className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setDebugMode(!debugMode)}
+                  className={cn(
+                    'flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] transition-colors',
+                    debugMode
+                      ? 'bg-amber-900/50 text-amber-400'
+                      : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+                  )}
+                  title="Debug mode: show all messages including tool calls and usage"
+                >
+                  <Bug className="h-3 w-3" />
+                  Debug
                 </button>
                 <AgentSelector />
               </div>

@@ -153,7 +153,7 @@ const ExchangeRow = memo(function ExchangeRow({
         ) : parseCompactSummary(user.content) ? (
           <CompactSummary content={user.content} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} />
         ) : (
-          <UserExchangeHeader content={user.content} localImages={user.localImages} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} sendFailed={user.sendFailed} />
+          <UserExchangeHeader content={user.content} localImages={user.localImages} timestamp={user.timestamp} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} sendFailed={user.sendFailed} />
         )
       ) : (
         <div className="px-3 py-2">
@@ -551,10 +551,14 @@ function ThinkingBlock({ text }: { text: string }) {
  *  The chips are rendered outside the sticky block so that the next exchange's sticky header
  *  doesn't cover them when scrolled.
  */
-function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messageId, deletable, sendFailed }: ExchangeActionProps & { content: string; localImages?: string[]; sendFailed?: boolean }) {
+function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, deleted, messageId, deletable, sendFailed }: ExchangeActionProps & { content: string; localImages?: string[]; timestamp: number; sendFailed?: boolean }) {
   const tr = useT()
   const { text, media } = useMemo(() => parseMediaMarkers(content), [content])
   const [zoom, setZoom] = useState<string | null>(null)
+  // Send time, browser-local HH:mm; full date on hover. Always visible — unlike
+  // the hover-only Copy / Delete actions beside it.
+  const sent = new Date(timestamp)
+  const pad2 = (n: number) => n.toString().padStart(2, '0')
 
   return (
     <>
@@ -562,6 +566,9 @@ function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messag
           near-identical slate fg; on other themes they follow the palette */}
       <div className={cn('group sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted || sendFailed ? 'border-l-red-500/60' : 'border-l-blue-500')}>
         <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
+          <span className="mr-1 text-[10px] font-mono text-[var(--muted-foreground)] opacity-70" title={sent.toLocaleString()}>
+            {pad2(sent.getHours())}:{pad2(sent.getMinutes())}
+          </span>
           {deleted && <span className={cn('mr-1', DELETED_BADGE_CLS)}>deleted</span>}
           {/* Ack/resend gave up — the server never confirmed this message
               (zombie-socket loss). Make the failure visible on the bubble
@@ -574,7 +581,7 @@ function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messag
           <ExchangeActions copyText={text} userOrdinal={userOrdinal} deleted={deleted} messageId={messageId} deletable={deletable} />
         </div>
         <CollapsibleContent maxLines={2} toggleClassName="top-auto bottom-0">
-          <div className={cn('text-xs leading-relaxed whitespace-pre-wrap pr-14', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
+          <div className={cn('text-xs leading-relaxed whitespace-pre-wrap pr-24', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
             {text || (media.length > 0 || localImages?.length ? '(attachment)' : '')}
           </div>
         </CollapsibleContent>

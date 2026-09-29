@@ -24,6 +24,10 @@ The primary surface for talking to an agent.
 - Tool-call card: expandable, shows tool name / input / output
 - Sub-agent messages carry the agent-name label (e.g. "Coder", "Researcher")
 - Streaming text has a cursor animation
+- The user bubble shows its send time (`HH:mm`, browser-local) top-right, always visible; hovering it gives the full date. Same bubble component as the Sessions tab, so both surfaces get it
+
+### Debug toggle
+A Bug-icon **Debug** button in the composer's left control cluster (next to the session-list / new-session buttons) switches the message list into the same debug rendering as the Sessions tab — see [requirements/session.md → Debug mode](session.md#debug-mode) for what it shows (tool calls, usage lines with token counts / latency / model, sub-agent start/done markers, thinking blocks). Persists in `localStorage` under its own key `halo_chat_debug`, independent of the Sessions tab's `halo_session_debug`. No Prompt button here — the system prompt viewer stays a Sessions-tab feature.
 
 ### User-message actions (Copy / Delete / Show)
 Hover actions on user-role turns: the blue sticky user bubble, plus the sub-agent-report (green) and compact-summary (purple) callouts — all three share the same Copy/Delete pair. On the callouts, Copy copies the body only (the `(from: session X)` / `[Conversation Summary…]` marker line is stripped); a deleted callout greys out and gains a "deleted" badge like the bubble does:
