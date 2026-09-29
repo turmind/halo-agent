@@ -56,7 +56,7 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 68
+export const TEMPLATE_VERSION = 69
 const VERSION_FILE = '.template-version'
 
 /** Read the seed version stamped into `~/.halo/global/.template-version`.
@@ -118,6 +118,11 @@ const BUILTIN_SKILL_IDS = new Set([
   // when the user asks anything about Halo itself (config dirs, MD scopes,
   // doc lookup table). user-invocable: false — no `/halo` command.
   'halo',
+  // Canvas preview extensions: `/extension install|list|remove` manages
+  // `~/.halo/global/extensions/<id>/` via templates/ext.sh (download from
+  // halo-hub, unpack, pre-check, atomic replace). The server's root-dir
+  // watcher picks the change up — no endpoint call from the skill.
+  'extension',
 ])
 
 /** Docs bundled into `~/.halo/global/docs/` so the platform-knowledge

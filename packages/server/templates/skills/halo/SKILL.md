@@ -13,6 +13,7 @@ You are running inside **Halo**, a multi-agent collaboration workspace.
 | Location | Scope | Purpose |
 |----------|-------|---------|
 | `~/.halo/global/` | Global (all projects) | User profile, global instructions, global agents & skills, system prompts, bundled docs |
+| `~/.halo/global/extensions/<id>/` | Global (all projects) | Installed admin preview extensions (static viewers for file types the editor can't open, e.g. `.glb`); managed with the `extension` skill (`/extension install|list|remove`) |
 | `<workspace>/.halo/` | Per-project | Project instructions, knowledge index, project agents & skills |
 
 `.halo/` is excluded from `grep` and `glob`. Use `file_read` with the exact path to access files inside.
@@ -97,3 +98,5 @@ Questions outside these rows aren't in the bundled docs (backend internals, REST
 ## Skills
 
 Skills are referenced by id from an agent's `agent.yaml`. The system prompt shows each skill's name + description; the full body is loaded on demand via `activate_skill`.
+
+Admin preview extensions (`.glb` and other file types the editor has no built-in viewer for) are not skills — they are static bundles under `~/.halo/global/extensions/`; the `extension` skill installs / lists / removes them.
