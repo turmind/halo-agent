@@ -67,10 +67,18 @@ const IGNORED_SEGMENT_SET = new Set(IGNORED_SEGMENTS)
  * occurrences are filtered in JS in handleEvent instead.
  * Non-win32 keeps the globs — Linux inotify relies on native ignore to avoid
  * registering watches on huge trees.
+ *
+ * ONE brace glob, not one glob per segment: isIgnored runs every ignoreGlob
+ * regex against every path during the initial fts walk (every inode, not just
+ * every directory) and again per event. 52 separate `**\/seg/**` regexes made
+ * subscribe on this repo (~26k inodes outside node_modules/.git) take ~13s;
+ * one `**\/{a,b,…}/**` regex matches the same set in ~0.8s — the same as no
+ * globs at all. Bare segments stay: they hit ignorePaths (cheap string
+ * compare, checked first) so top-level heavy dirs never reach the regex.
  */
 const NATIVE_IGNORE = IS_WIN32
   ? IGNORED_SEGMENTS
-  : IGNORED_SEGMENTS.flatMap((seg) => [seg, `**/${seg}/**`])
+  : [...IGNORED_SEGMENTS, `**/{${IGNORED_SEGMENTS.join(',')}}/**`]
 
 /**
  * Process-wide serialization of native subscribe/unsubscribe. Watchers are

@@ -129,6 +129,22 @@ describe('WatcherPool', () => {
     }
   })
 
+  it('nested ignored dirs are pruned natively (the brace glob must match at depth)', async () => {
+    const a = fakeWs()
+    attached.push(a)
+    fs.mkdirSync(path.join(root, 'pkg', 'node_modules', 'dep'), { recursive: true })
+    pool.attach(a, root)
+    await delay(ARM_WAIT)
+
+    fs.writeFileSync(path.join(root, 'pkg', 'node_modules', 'dep', 'index.js'), 'x')
+    fs.writeFileSync(path.join(root, 'pkg', 'src.ts'), 'y')
+    await delay(DEBOUNCE_WAIT)
+
+    const paths = framesFor(a).filter((f) => f.type === 'file:changed').map((f) => f.path)
+    expect(paths).toContain('pkg/src.ts')
+    expect(paths.some((p) => String(p).includes('node_modules'))).toBe(false)
+  })
+
   it('detach of an unknown socket is a no-op', () => {
     const a = fakeWs()
     attached.push(a)
