@@ -209,6 +209,16 @@ describe('relay_send', () => {
     expect(res.code).toBe(1)
     expect(res.error).toMatch(/workspace not found/)
   })
+
+  it('without a registry (CLI / TUI) every tool returns the permanent, actionable error', async () => {
+    setRelayRegistry(null as never)
+    for (const tool of buildRelayTools(callerStub, 'sec-1')) {
+      const res = JSON.parse(await tool.callback({ workspace: deptWs, session_id: 'x', message: 'hi' }) as string)
+      expect(res.code).toBe(1)
+      expect(res.error).toMatch(/not available in the CLI \/ TUI/)
+      expect(res.error).toMatch(/not a temporary outage/)
+    }
+  })
 })
 
 describe('relay_interrupt', () => {

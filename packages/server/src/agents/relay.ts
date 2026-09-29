@@ -159,6 +159,11 @@ export async function deliverRelayInterim(host: RelayTarget, sessionId: string, 
 
 function jsonErr(error: string): string { return JSON.stringify({ code: 1, error }) }
 
+/** No registry = CLI / TUI (and cron's `halo cli` child). Worded so the model
+ *  relays it as permanent + actionable — the bare "server only" string got
+ *  paraphrased to users as a transient outage. */
+const RELAY_UNAVAILABLE = 'relay is not available in the CLI / TUI — it only runs inside `halo server`. This is permanent for this runtime, not a temporary outage: do not retry. Tell the user to send this request from the admin UI or an IM / Web channel connected to the server, or to open the target workspace directly with `halo tui -w <workspace path>`.'
+
 /** Resolve + validate the `workspace` param and fetch its SessionManager.
  *  Returns a jsonErr string when the relay can't reach that workspace. */
 function resolveTarget(registry: RelayRegistry, workspace: string): { wsPath: string; target: RelayTarget } | string {
@@ -228,7 +233,7 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
    *  sendUserMessage's busy branch queues + soft-interrupts on its own. */
   async function dispatch(params: { workspace: string; session_id: string; message: string; agent_id?: string }, hard: boolean): Promise<string> {
     const registry = getRelayRegistry()
-    if (!registry) return jsonErr('relay is unavailable in this runtime (server only)')
+    if (!registry) return jsonErr(RELAY_UNAVAILABLE)
     const resolved = resolveTarget(registry, params.workspace)
     if (typeof resolved === 'string') return resolved
     const { wsPath, target } = resolved
@@ -265,7 +270,7 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
       const params = input as { workspace: string; session_id: string }
       try {
         const registry = getRelayRegistry()
-        if (!registry) return jsonErr('relay is unavailable in this runtime (server only)')
+        if (!registry) return jsonErr(RELAY_UNAVAILABLE)
         const resolved = resolveTarget(registry, params.workspace)
         if (typeof resolved === 'string') return resolved
         const { target } = resolved
@@ -290,7 +295,7 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
       const params = input as { workspace: string; session_id: string }
       try {
         const registry = getRelayRegistry()
-        if (!registry) return jsonErr('relay is unavailable in this runtime (server only)')
+        if (!registry) return jsonErr(RELAY_UNAVAILABLE)
         const resolved = resolveTarget(registry, params.workspace)
         if (typeof resolved === 'string') return resolved
         return resolved.target.getSessionOutput(params.session_id)
@@ -314,7 +319,7 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
       const params = input as { workspace?: string }
       try {
         const registry = getRelayRegistry()
-        if (!registry) return jsonErr('relay is unavailable in this runtime (server only)')
+        if (!registry) return jsonErr(RELAY_UNAVAILABLE)
         const resolved = resolveTarget(registry, params.workspace ?? host.workspaceRoot)
         if (typeof resolved === 'string') return resolved
         const { sessions } = resolved.target.listSessions({ rootOnly: true, limit: 100 })
