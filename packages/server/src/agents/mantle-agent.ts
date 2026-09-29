@@ -8,8 +8,8 @@
  *     (Grok 4.6 / Kimi K3 via `global.*` inference profiles;
  *     templates/models/aws-bedrock-openai.yaml)
  *
- *   POST <endpoint>/responses
- *   Authorization: Bearer <AWS_BEARER_TOKEN_BEDROCK>
+ *   POST <endpoint>/responses   (stream: true — Responses API SSE, folded by
+ *   Authorization: Bearer <AWS_BEARER_TOKEN_BEDROCK>   `readResponsesStream` below)
  *
  * Why a dedicated class (not the generic OpenAIAgent): Mantle rejects Chat
  * Completions / Converse / InvokeModel (404). The Responses API has a different
@@ -33,7 +33,8 @@ import { SignatureV4 } from '@smithy/signature-v4'
 import { Sha256 } from '@aws-crypto/sha256-js'
 import { defaultProvider } from '@aws-sdk/credential-provider-node'
 import { AgentLoop } from './agent-loop.js'
-import type { AnthropicMessage, ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
+import type { AnthropicMessage, ContentBlock, ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
+import { readSseJson } from './sse.js'
 
 export interface MantleAgentConfig {
   modelId: string
@@ -65,7 +66,7 @@ export class MantleAgent extends AgentLoop {
     this.config = config
   }
 
-  protected async callModel(signal: AbortSignal | undefined): Promise<ModelCallResult> {
+  protected async callModel(signal: AbortSignal | undefined, onDelta?: (delta: ModelDelta) => void): Promise<ModelCallResult> {
     const url = this.config.endpoint.replace(/\/+$/, '') + '/responses'
     const startTime = Date.now()
 
@@ -75,7 +76,7 @@ export class MantleAgent extends AgentLoop {
     const body: Record<string, unknown> = {
       model: this.config.modelId,
       input,
-      stream: false,
+      stream: true,
       max_output_tokens: this.config.maxTokens ?? resolveMaxOutputTokens(this.config.modelId),
       text: { verbosity: this.config.verbosity ?? 'low' },
       ...(tools.length > 0 ? { tools } : {}),
@@ -106,7 +107,7 @@ export class MantleAgent extends AgentLoop {
       throw new Error(`[MantleAgent] API error ${response.status}: ${errText}`)
     }
 
-    const data = await response.json() as Record<string, unknown>
+    const { data, ttftMs } = await readResponsesStream(response, onDelta, startTime, signal)
     const output = (data.output as Array<Record<string, unknown>> | undefined) ?? []
 
     let text = ''
@@ -189,6 +190,7 @@ export class MantleAgent extends AgentLoop {
         ...(cachedTokens ? { cacheReadInputTokens: cachedTokens } : {}),
       },
       durationMs: Date.now() - startTime,
+      ttftMs,
     }
   }
 
@@ -320,6 +322,77 @@ export class MantleAgent extends AgentLoop {
     })
     return fetch(url, { method: 'POST', headers: signed.headers as Record<string, string>, body: payload, signal })
   }
+}
+
+/** Responses API stream event — only the fields we consume. Every frame has `type`. */
+interface ResponsesStreamEvent {
+  type: string
+  /** `response.output_text.delta` / `response.reasoning_summary_text.delta` / `response.function_call_arguments.delta` */
+  delta?: string
+  /** `response.completed` / `response.incomplete` / `response.failed` carry the full final response object. */
+  response?: Record<string, unknown>
+  /** Bare `error` event. */
+  code?: string
+  message?: string
+}
+
+/**
+ * Fold the Responses API SSE into the final `response` object. The terminal
+ * `response.completed` / `response.incomplete` frame carries the complete
+ * response — identical in shape to the non-streaming JSON body (output[],
+ * status, incomplete_details, usage) — so callModel's existing parse code
+ * runs on it unchanged; the per-token frames are only used to report text /
+ * reasoning-summary deltas live and to stamp time-to-first-token. Both hosts
+ * speak the same event vocabulary; bedrock-runtime additionally ends with
+ * `data: [DONE]`, which `readSseJson` skips.
+ */
+async function readResponsesStream(
+  res: Response,
+  onDelta: ((delta: ModelDelta) => void) | undefined,
+  startTime: number,
+  signal: AbortSignal | undefined,
+): Promise<{ data: Record<string, unknown>; ttftMs?: number }> {
+  if (!res.body) throw new Error('[MantleAgent] empty response body')
+
+  let final: Record<string, unknown> | undefined
+  let firstDeltaAt: number | undefined
+  for await (const ev of readSseJson<ResponsesStreamEvent>(res.body)) {
+    switch (ev.type) {
+      case 'response.output_text.delta':
+        firstDeltaAt ??= Date.now()
+        if (ev.delta) onDelta?.({ type: 'text_delta', text: ev.delta })
+        break
+      case 'response.reasoning_summary_text.delta':
+        firstDeltaAt ??= Date.now()
+        if (ev.delta) onDelta?.({ type: 'thinking_delta', text: ev.delta })
+        break
+      case 'response.function_call_arguments.delta':
+        // Arguments are re-read whole from the final output[]; nothing to show live.
+        firstDeltaAt ??= Date.now()
+        break
+      case 'response.completed':
+      case 'response.incomplete':
+        final = ev.response
+        break
+      // No HTTP status exists mid-stream (the 200 already went out), so
+      // classifyModelError falls back to its keyword checks on these messages.
+      case 'response.failed': {
+        const failed = ev.response as { error?: unknown } | undefined
+        throw new Error(`[MantleAgent] API error in stream: ${JSON.stringify(failed?.error ?? ev.response).slice(0, 300)}`)
+      }
+      case 'error':
+        throw new Error(`[MantleAgent] API error in stream: ${ev.code ?? '?'}: ${ev.message ?? ''}`)
+      // created / in_progress / output_item.* / content_part.* / *.done: the
+      // final response.output[] carries everything, nothing to fold.
+    }
+  }
+  // Same guard as fetchAnthropicStream: a body that ends cleanly at the abort instant must not come back as a completed call.
+  if (signal?.aborted) throw new DOMException('Model call aborted', 'AbortError')
+  // A stream cut before its terminal frame is indistinguishable from the
+  // known empty-output[] glitch for the caller — reuse the MantleEmptyResponse
+  // marker so model-error.ts's `empty_response` retry branch handles both.
+  if (!final) throw new Error('MantleEmptyResponse: stream ended without response.completed; transient, retrying')
+  return { data: final, ttftMs: firstDeltaAt !== undefined ? firstDeltaAt - startTime : undefined }
 }
 
 /** Extract the AWS region from either Bedrock OpenAI-surface hostname —

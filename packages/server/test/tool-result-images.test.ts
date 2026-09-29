@@ -54,7 +54,7 @@ afterEach(() => { vi.unstubAllGlobals() })
 
 describe('tool_result images reach OpenAI-format runtimes', () => {
   it('Mantle (Responses API) sends input_image inside function_call_output', async () => {
-    const body = await captureBody(new MantleAgent(base), () => new Response(JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }] }), { status: 200 }))
+    const body = await captureBody(new MantleAgent(base), () => sseResponse([{ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }] } }], { done: false }))
     const input = body.input as Array<Record<string, unknown>>
     const out = input.find((i) => i.type === 'function_call_output')
     expect(out?.call_id).toBe('call_1')
