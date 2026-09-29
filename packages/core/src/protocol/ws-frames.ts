@@ -13,6 +13,7 @@
  * Doc: .halo/docs/design/ws.md
  */
 import type { SessionMessage } from './session-message.js'
+import type { ExtensionsSnapshot } from './extension-types.js'
 
 // ── Client → Server ──────────────────────────────────────────────────
 
@@ -132,6 +133,8 @@ export type WsServerMessage =
   | { type: 'cron:job_changed'; jobId: string; kind?: string; lastRunStatus?: string; lastRunAt?: number }
   | { type: 'evolution:run_changed'; id: string; status?: string; kind?: 'deleted' }
   | { type: 'evolution:apply_changed'; id: string; status?: string; kind?: 'deleted' }
+  // ~/.halo/global/extensions/ changed (install / upgrade / uninstall) — full snapshot, not a diff
+  | ({ type: 'extension:changed' } & ExtensionsSnapshot)
 
 export type WsServerMessageType = WsServerMessage['type']
 

@@ -1,8 +1,9 @@
 /**
  * `@turmind/halo-core/protocol` — the wire contract shared by server and admin:
- * the persisted session-message shape and every admin WebSocket frame.
+ * the persisted session-message shape, every admin WebSocket frame, and the
+ * canvas-extension shapes (installed-extension snapshot + host↔iframe frames).
  *
- * Pure types + one helper; deliberately free of node-only imports so the admin
+ * Pure types + one helper + one constant; deliberately free of node-only imports so the admin
  * (browser bundle) can import it without dragging in `simple-git` etc. from the
  * package root.
  */
@@ -16,3 +17,19 @@ export type {
   WsStateSnapshot,
   WsUsageData,
 } from './ws-frames.js'
+export type {
+  ExtensionCapability,
+  ExtensionPriority,
+  ExtensionInfo,
+  ExtensionError,
+  ExtensionsSnapshot,
+} from './extension-types.js'
+export type {
+  ExtensionFrameBase,
+  ExtensionTheme,
+  ExtensionHostFrame,
+  ExtensionClientFrame,
+  ExtensionHostFrameType,
+  ExtensionClientFrameType,
+} from './extension-frames.js'
+export { EXTENSION_PROTOCOL_VERSION } from './extension-frames.js'
