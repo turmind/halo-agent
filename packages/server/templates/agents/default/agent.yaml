@@ -19,7 +19,6 @@ context:
   compressAt: 0.8
 priority: 99
 tools:
-  - draft
   - file_edit
   - file_write
   - file_read

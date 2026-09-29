@@ -211,11 +211,6 @@ interface AgentSession {
   systemPrompt: string
   /** Thinking effort level (off/low/medium/high/xhigh/max) */
   thinkingEffort: string
-  /** Per-turn reset for the `draft` self-review tool's call counter. Null when
-   *  the agent doesn't declare `draft`. Called at the top of each turn-attempt
-   *  so the draft budget refreshes per user turn (the agent instance — and
-   *  thus the tool's closure counter — is reused across turns). */
-  draftReset: (() => void) | null
   meta: AgentMeta
   /** Absolute working directory at runtime (null = project root). Stored as relative path in DB. */
   workingDir: string | null
@@ -636,11 +631,9 @@ export class SessionManager implements SessionManagerInternals {
     accessLevel: 'readonly' | 'workspace' | null = null,
     meta?: AgentMeta,
     imageOverride?: boolean,
-    draftReset: (() => void) | null = null,
   ): AgentSession {
     return {
       id, parentId, agentId, agentName, agent, description,
-      draftReset,
       output: '',
       lastActivityAt: null,
       finalOutput: '',
@@ -718,7 +711,7 @@ export class SessionManager implements SessionManagerInternals {
 
       const restoredAccessLevel = meta.accessLevel === 'readonly' ? 'readonly' : meta.accessLevel === 'workspace' ? 'workspace' : null
       const restoredWorkingDir = meta.workingDir ? path.resolve(this.workspaceRoot, meta.workingDir) : undefined
-      const { agent, yamlConfig: resumedYaml, contextConfig, modelId, systemPrompt, thinkingEffort, meta: agentMeta, draftReset } = await this.buildAgentInstance(meta.agentId, sessionId, meta.parentId, restoredWorkingDir, restoredAccessLevel)
+      const { agent, yamlConfig: resumedYaml, contextConfig, modelId, systemPrompt, thinkingEffort, meta: agentMeta } = await this.buildAgentInstance(meta.agentId, sessionId, meta.parentId, restoredWorkingDir, restoredAccessLevel)
 
       const savedMessages = this.loadAgentState(sessionId, meta.agentId)
       if (savedMessages.length > 0) {
@@ -736,7 +729,6 @@ export class SessionManager implements SessionManagerInternals {
         restoredAccessLevel,
         agentMeta,
         resumedImageOverride,
-        draftReset,
       )
       this.sessions.set(sessionId, session)
 
@@ -811,7 +803,7 @@ export class SessionManager implements SessionManagerInternals {
     const sessionId = explicitId ?? (parentId ? `${parentId}>${segment}` : segment)
     const now = Date.now()
 
-    const { agent, yamlConfig: createdYaml, contextConfig, modelId, systemPrompt, thinkingEffort, meta, draftReset } = await this.buildAgentInstance(agentId, sessionId, parentId, workingDir ?? undefined, accessLevel)
+    const { agent, yamlConfig: createdYaml, contextConfig, modelId, systemPrompt, thinkingEffort, meta } = await this.buildAgentInstance(agentId, sessionId, parentId, workingDir ?? undefined, accessLevel)
 
     // Resolve the display name once: an explicit caller-provided name wins
     // (sub-agents pass the yaml name already), else the agent.yaml `name`
@@ -856,7 +848,6 @@ export class SessionManager implements SessionManagerInternals {
       accessLevel,
       meta,
       createdImageOverride,
-      draftReset,
     )
     this.sessions.set(sessionId, session)
 
@@ -1315,11 +1306,6 @@ export class SessionManager implements SessionManagerInternals {
       session.abortController = new AbortController()
       const signal = session.abortController.signal
       resultText = ''
-      // Refresh the draft self-review budget at the top of each attempt (not
-      // just per turn) — a retry after a mid-turn failure should get its full
-      // draft allowance, not the leftover from the failed attempt. No-op when
-      // the agent doesn't declare the `draft` tool.
-      session.draftReset?.()
 
       // Attempt 0 lands the input; a retry RESUMES on the history that attempt
       // already left behind (run() with empty input skips the user push and
@@ -2261,13 +2247,11 @@ export class SessionManager implements SessionManagerInternals {
     if (accessLevel !== undefined && accessLevel !== session.accessLevel) {
       session.accessLevel = accessLevel
       const savedMessages = session.agent.messages
-      const { agent, modelId, systemPrompt, draftReset } = await this.buildAgentInstance(session.agentId, sessionId, session.parentId, session.workingDir ?? undefined, accessLevel)
+      const { agent, modelId, systemPrompt } = await this.buildAgentInstance(session.agentId, sessionId, session.parentId, session.workingDir ?? undefined, accessLevel)
       session.agent = agent
       session.agent.messages = savedMessages
       session.currentModelId = modelId
       session.systemPrompt = systemPrompt
-      // Agent rebuilt → its draft tool closure is new; repoint the reset hook.
-      session.draftReset = draftReset
       this.db.update(agentSessions).set({ accessLevel }).where(eq(agentSessions.id, sessionId)).run()
     }
 

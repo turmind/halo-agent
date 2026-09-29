@@ -130,7 +130,7 @@ describe('runAgentTurn wiring', () => {
       toolCallLog: [], warnedToolHashes: new Set<string>(), turnStartTime: 0, interruptRequested: false,
       isCompacting: false, compactAbortController: null, compactedThisTurn: false, systemPrompt: '',
       thinkingEffort: 'off', workingDir: null, accessLevel: null, supportsImage: true, lastContextTokens: 0,
-      meta: { toolNames: [], skillNames: [], mdFiles: [] }, draftReset: null,
+      meta: { toolNames: [], skillNames: [], mdFiles: [] },
     })
 
     await sm.runSession('w1', 'go')

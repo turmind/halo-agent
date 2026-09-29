@@ -13,9 +13,6 @@ context:
   compressAt: 0.8
 priority: 40
 tools:
-  # `draft` matches this agent's draft-critique-revise persona (AGENT.md
-  # "What deep means here") — deliberate, unlike executor which omits it.
-  - draft
   - file_read
   - file_write
   - file_edit

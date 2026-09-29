@@ -4,7 +4,6 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { createWorkspaceTools } from '../tools/workspace-tools.js'
-import { createDraftTool } from '../tools/draft-tool.js'
 import { buildRelayTools, type RelayTarget } from '../agents/relay.js'
 import { resolveMdFilePath, writeMdFile } from '../prompts/md-loader.js'
 import { config, getModelsRegistry } from '../config.js'
@@ -18,22 +17,17 @@ let _cachedTools: Array<{ name: string; description: string }> | null = null
 function getAvailableTools(): Array<{ name: string; description: string }> {
   if (_cachedTools) return _cachedTools
   const tools = createWorkspaceTools('/tmp')
-  // `draft` is built per-session in resolveBaseToolSet (not in
-  // createWorkspaceTools), so the admin tool picker wouldn't list it. Surface
-  // its name + description here from the same factory that defines it, so the
-  // description has one source of truth. The throwaway instance's closure
-  // counter is discarded.
-  const { tool: draft } = createDraftTool()
-  // Same for relay: built per-session by the manager, switched on by the
-  // single `relay_send` name (session-agent-builder), which brings
-  // relay_interrupt / relay_stop / relay_read / relay_list along. One chip, described as
-  // the whole set. Callbacks never run; the host stub only needs to exist.
+  // Relay is built per-session by the manager (not in createWorkspaceTools),
+  // switched on by the single `relay_send` name (session-agent-builder), which
+  // brings relay_interrupt / relay_stop / relay_read / relay_list along. One
+  // chip, described as the whole set. Callbacks never run; the host stub only
+  // needs to exist.
   const relay = buildRelayTools({ workspaceRoot: '/tmp' } as RelayTarget, '')
   const relayChip = {
     name: 'relay_send',
     description: `Cross-workspace relay (one toggle, grants the whole set; full-access sessions only): ${relay.map((t) => t.name).join(', ')}.\n\n${relay[0].description}`,
   }
-  _cachedTools = [...tools, draft].map((t) => ({ name: t.name, description: t.description })).concat(relayChip)
+  _cachedTools = tools.map((t) => ({ name: t.name, description: t.description })).concat(relayChip)
   return _cachedTools
 }
 

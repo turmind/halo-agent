@@ -478,24 +478,6 @@ List a workspace's **root** sessions — most recently active first, capped at 1
 
 Returns `{ "code": 0, "workspace": "<realpath>", "sessions": [{ id, agentId, agentName, title, status, createdAt, updatedAt }], "count": N }`. `title` falls back to `description` like `session_list`; `status` follows the list semantics (`running` when the root itself or any live child is mid-turn, `stopped` when the row is stamped, else `idle`).
 
-## Self-review tool
-
-### draft
-
-**Opt-in self-review.** Declare `draft` in `agent.yaml`'s `tools:` to give an agent a way to critique its own answer before committing. Built by `createDraftTool()` (`tools/draft-tool.ts`); no global switch — agents that don't list it never see it.
-
-| Arg | Type | Required | Description |
-|---|---|---|---|
-| `content` | string | yes | The complete draft answer. Required and must be non-empty |
-
-The tool **description is deliberately plain** — "Submit a draft answer for self-review; returns a checklist that critiques the draft." It does NOT say *when* to call it (no "call this for complex questions / when unsure"). An earlier version that did embed such self-referential guidance made some models (notably GPT-5.x) thrash. Steering toward *using* draft belongs in the agent's prompt files (the bundled `default` agent's AGENT.md says "hold your answers to a high standard… don't reply off the cuff" — it lives in AGENT.md because the yaml `system_prompt` is only a fallback when the MD layer is empty), not in the tool description. Empty `content` is rejected with an error **without consuming a draft round**.
-
-**Why it exists:** the agent loop only makes another model call when the model emits a `tool_use` block. A plain-text answer (`end_turn`) is single-pass — `thinking` runs *before* the answer in the same call, so the model never gets to look at its *finished* answer and revise it. `draft` closes that gap without touching the loop: the model writes its answer into `content` (materialised into the conversation as a `tool_use` block — uncapped, never echoed back), and the tool_result hands back an adversarial review checklist (framed as a hostile reviewer: list every factual claim and tag its source, verify the unverified ones with tools *now*, check directness/tone, flag gaps). The next model call then critiques that now-concrete draft and either revises (calls `draft` again) or writes the final answer.
-
-**Bounded by a per-turn counter**, not a prompt instruction (which would just be context noise). After 3 drafts in one turn the tool soft-lands: it stops returning the checklist and tells the model to finalise. The counter lives in the tool's closure; `SessionManager.runAgentTurn` calls the tool's `reset()` at the top of every turn-attempt (so a retry gets a fresh budget). The agent instance is reused across turns, so without this reset the budget would leak across the whole session.
-
-**Scope note:** `draft` improves answers the model *knows* it should be careful about (it must choose to call the tool). It can't catch over-confident answers where the model doesn't realise it's wrong — that gap needs a post-turn judge (out of scope here).
-
 ## Tool assignment
 
 Workspace tools are enabled strictly by name in `agent.yaml`'s `tools` list:
@@ -510,7 +492,7 @@ skills:
 
 Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`), and `continue_task` is auto-injected for **every** agent unconditionally (see [continue_task](#continue_task)). The relay set is the one name-gated bundle: listing `relay_send` alone brings `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list` with it, full-access sessions only (see [Relay tools](#relay-tools)).
 
-There is **no implicit default tool set**: `filterTools()` (in `agent-loader.ts`) returns only the tools whose names appear in `agent.yaml`'s `tools:` list. If the field is absent or empty, the agent has zero workspace tools. The admin UI's "Create agent" form scaffolds a fresh agent with an empty `tools: []` for the same reason — fill it in deliberately. The `default` agent's bundled `agent.yaml` lists the common set (`file_read` / `file_write` / `file_edit` / `view_image` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`) that most agents will want, plus `draft` (see Self-review tool above); copy that line if you're starting from scratch.
+There is **no implicit default tool set**: `filterTools()` (in `agent-loader.ts`) returns only the tools whose names appear in `agent.yaml`'s `tools:` list. If the field is absent or empty, the agent has zero workspace tools. The admin UI's "Create agent" form scaffolds a fresh agent with an empty `tools: []` for the same reason — fill it in deliberately. The `default` agent's bundled `agent.yaml` lists the common set (`file_read` / `file_write` / `file_edit` / `view_image` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`) that most agents will want; copy that line if you're starting from scratch.
 
 ## Config
 

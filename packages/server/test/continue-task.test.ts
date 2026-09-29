@@ -113,7 +113,6 @@ function fakeSession(
     supportsImage: false,
     lastContextTokens: 0,
     meta: { toolNames: [], skillNames: [], mdFiles: [] },
-    draftReset: null,
   }
   ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, session)
   return session

@@ -234,12 +234,6 @@ Tail-append:
 Your available tools: <tool1>, <tool2>, .... Only use tools in this list.
 ```
 
-### Self-review (`draft`)
-
-When the YAML `tools:` lists `draft`, `resolveBaseToolSet` ([session-manager.ts](../../../packages/server/src/agents/session-manager.ts)) builds the self-review tool via `createDraftTool()` and stashes its per-turn `reset` on the session (`session.draftReset`). It carries no prompt text of its own beyond the tool description — the reflection contract lives in the tool's `tool_result` (an adversarial review checklist), not in the system prompt.
-
-It exists because a plain-text answer is single-pass: the agent loop only re-calls the model on a `tool_use` block, and `thinking` runs before the answer in the same call. `draft` lets the model materialise its answer as a tool call, get back a hostile-reviewer checklist, and critique the now-concrete draft on the next call. Opt-in per agent (no global switch); bounded to 3 rounds/turn by a closure counter reset at each turn-attempt. Full mechanics in [dev/tools.md](../dev/tools.md#self-review-tool).
-
 ## Final injection order
 
 ### Root agent

@@ -83,7 +83,7 @@ function fakeSession(id: string, agent: FakeAgent) {
     turnStartTime: 0, interruptRequested: false, isCompacting: false, compactAbortController: null,
     compactedThisTurn: false, systemPrompt: '', thinkingEffort: 'off', workingDir: null, accessLevel: null,
     supportsImage: true, lastContextTokens: 0,
-    meta: { toolNames: [], skillNames: [], mdFiles: [] }, draftReset: null,
+    meta: { toolNames: [], skillNames: [], mdFiles: [] },
   }
   ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, session)
   return session

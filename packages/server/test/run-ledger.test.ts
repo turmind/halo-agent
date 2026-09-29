@@ -195,7 +195,7 @@ function fakeSession(target: SessionManager, id: string, agent: ReturnType<typeo
     toolCallLog: [] as unknown[], warnedToolHashes: new Set<string>(), turnStartTime: 0,
     interruptRequested: false, isCompacting: false, compactAbortController: null, compactedThisTurn: false,
     systemPrompt: '', thinkingEffort: 'off', workingDir: null, accessLevel: null, supportsImage: false,
-    lastContextTokens: 0, meta: { toolNames: [], skillNames: [], mdFiles: [] }, draftReset: null,
+    lastContextTokens: 0, meta: { toolNames: [], skillNames: [], mdFiles: [] },
   }
   ;(target as unknown as { sessions: Map<string, unknown> }).sessions.set(id, session)
   return session

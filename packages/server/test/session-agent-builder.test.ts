@@ -76,14 +76,6 @@ describe('buildAgentInstance — model config + tool whitelist', () => {
     seedSession(sm, 's_broken', 'broken')
     expect(await sm.getSessionContext('s_broken')).toBeNull()
   })
-
-  it('includes the draft tool only when whitelisted', async () => {
-    writeAgent('drafter', ['name: Drafter', ...ANTHROPIC_MODEL, 'tools: [file_read, draft]'], 'x')
-    const sm = new SessionManager(ws)
-    seedSession(sm, 's_draft', 'drafter')
-    const ctx = await sm.getSessionContext('s_draft')
-    expect(ctx?.meta.toolNames).toContain('draft')
-  })
 })
 
 describe('composeSystemPrompt — root vs sub-agent vs metadata', () => {

@@ -2,7 +2,6 @@ import path from 'node:path'
 import type { ToolDef } from './bedrock-agent.js'
 import { createModelRuntime, type ModelRuntime } from './model-runtime.js'
 import { createWorkspaceTools } from '../tools/workspace-tools.js'
-import { createDraftTool } from '../tools/draft-tool.js'
 import { loadSystemPrompts } from '../prompts/system-prompts.js'
 import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } from '../prompts/md-loader.js'
 import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveContextWindow, resolveThinkingMode, resolveVerbosity } from '../config.js'
@@ -30,7 +29,6 @@ export interface BuiltAgent {
   systemPrompt: string
   thinkingEffort: string
   meta: AgentMeta
-  draftReset: (() => void) | null
 }
 
 /**
@@ -84,7 +82,7 @@ export class SessionAgentBuilder {
     // yaml `tools:` whitelist + matching session tools). Skill tools come
     // later inside `composeSystemPrompt` so the prompt and tool set both
     // pick up the same allowed skill list.
-    const { workspaceTools, sessionTools, allowedNamespaces, draftReset } = this.resolveBaseToolSet({
+    const { workspaceTools, sessionTools, allowedNamespaces } = this.resolveBaseToolSet({
       agentId, sessionId, modelId, accessLevel, yamlConfig,
     })
 
@@ -114,7 +112,7 @@ export class SessionAgentBuilder {
       agentId, isRoot, yamlConfig, mdContents, systemPrompts, allToolNames,
     })
 
-    return { agent, yamlConfig, contextConfig, modelId, systemPrompt, thinkingEffort, meta, draftReset }
+    return { agent, yamlConfig, contextConfig, modelId, systemPrompt, thinkingEffort, meta }
   }
 
   /** Throw with a clear message if agent.yaml is missing the model triple.
@@ -158,7 +156,7 @@ export class SessionAgentBuilder {
     modelId: string
     accessLevel: 'readonly' | 'workspace' | null
     yamlConfig: AgentYamlConfig | null
-  }): { workspaceTools: ToolDef[]; sessionTools: ToolDef[]; allowedNamespaces: Set<string>; draftReset: (() => void) | null } {
+  }): { workspaceTools: ToolDef[]; sessionTools: ToolDef[]; allowedNamespaces: Set<string> } {
     const { agentId, sessionId, modelId, accessLevel, yamlConfig } = args
 
     // Build the namespace whitelist for shell_exec param substitution:
@@ -202,24 +200,13 @@ export class SessionAgentBuilder {
     // (resume after interrupt), not a capability.
     sessionTools.push(this.host.createContinueTaskTool(sessionId))
 
-    // `draft` is an opt-in self-review tool with no workspace/session deps —
-    // build it only when whitelisted, and surface its per-turn reset so the
-    // turn loop can refresh the draft budget. Grouped with sessionTools since
-    // it's session-scoped (the closure counter belongs to this instance).
-    let draftReset: (() => void) | null = null
-    if (nameSet.has('draft')) {
-      const { tool, reset } = createDraftTool()
-      sessionTools.push(tool)
-      draftReset = reset
-    }
-
     // Relay tools are opt-in by name and full-access only: they reach into
     // OTHER workspaces, so a readonly/workspace-scoped token must never get them.
     if (nameSet.has('relay_send') && accessLevel === null) {
       sessionTools.push(...this.host.createRelayTools(sessionId))
     }
 
-    return { workspaceTools, sessionTools, allowedNamespaces, draftReset }
+    return { workspaceTools, sessionTools, allowedNamespaces }
   }
 
   /**
