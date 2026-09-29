@@ -284,6 +284,57 @@ export function createFileRoutes() {
     }
   })
 
+  // PUT /files/raw?path=xxx&projectId=xxx[&expectMtime=ms] - Replace an
+  // EXISTING file's bytes with the request body (binary-safe; PUT /files is
+  // utf-8 text only). Used by canvas preview extensions' save path. The
+  // file must already exist (404 otherwise — save targets an open file, it
+  // never creates). `expectMtime` is the mtime the client loaded; when the
+  // on-disk mtime differs the write is refused with 409 + the current mtime so
+  // the client can offer overwrite / discard / cancel.
+  app.put('/files/raw', async (c) => {
+    try {
+      const filePath = c.req.query('path')
+      const projectId = c.req.query('projectId')
+      const expectMtimeRaw = c.req.query('expectMtime')
+      if (!filePath || !projectId) {
+        return c.json({ error: 'path and projectId are required' }, 400)
+      }
+      const expectMtime = expectMtimeRaw === undefined ? undefined : Number(expectMtimeRaw)
+      if (expectMtime !== undefined && !Number.isFinite(expectMtime)) {
+        return c.json({ error: 'expectMtime must be a number' }, 400)
+      }
+
+      const projectPath = await resolveProjectPath(projectId)
+      if (!projectPath) {
+        return c.json({ error: 'Project not found' }, 404)
+      }
+      if (!validatePath(filePath, projectPath)) {
+        return c.json({ error: 'Path traversal not allowed' }, 403)
+      }
+
+      const absolutePath = path.resolve(projectPath, filePath)
+      let before
+      try {
+        before = await fs.stat(absolutePath)
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return c.json({ error: 'File not found' }, 404)
+        throw err
+      }
+      if (before.isDirectory()) return c.json({ error: 'Cannot write a directory' }, 400)
+      if (expectMtime !== undefined && Math.round(before.mtimeMs) !== Math.round(expectMtime)) {
+        return c.json({ error: 'conflict', mtime: before.mtimeMs, size: before.size }, 409)
+      }
+
+      await fs.writeFile(absolutePath, Buffer.from(await c.req.arrayBuffer()))
+      const stat = await fs.stat(absolutePath)
+      return c.json({ ok: true, path: filePath, mtime: stat.mtimeMs, size: stat.size })
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err)
+      console.log(`[Files] Error writing raw file: ${errorMessage}`)
+      return c.json({ error: errorMessage }, 500)
+    }
+  })
+
   // POST /files/new - Create a new empty file
   app.post('/files/new', async (c) => {
     try {
@@ -430,6 +481,7 @@ export function createFileRoutes() {
     html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
     mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/quicktime',
     mp3: 'audio/mpeg', wav: 'audio/wav', flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4',
+    wasm: 'application/wasm',
   }
 
   // GET /files/download?path=xxx&projectId=xxx&inline=1 - Download or view a file
