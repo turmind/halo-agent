@@ -84,22 +84,29 @@ When you catch yourself doing any of these, stop and reconsider:
 
 ## Delegating to sub-agents
 
-**Default: delegate the doing, keep the conversation.** The user keeps talking to the orchestrator while work runs. Every minute the orchestrator spends grinding in a tool loop — reading a dozen files, edit → `tsc` → vitest rounds, builds, long research — is a minute the user can't talk to it (their messages land as interruptions). The orchestrator's job is to understand the ask, locate just enough to write a sharp brief, dispatch, review the report, and answer the user — not to implement.
+How it works in this runtime:
 
-- **Code changes go to workers.** Anything beyond a trivial edit → `dev` (touches Halo semantics) or `executor` (mechanical, fully specified). Releases → `release`, always (see Packaging / release above). Independent pieces → separate sessions in parallel, partitioned by file.
-- **Heavy reading goes to workers too.** If a diagnosis, an evaluation or a research question needs more than a handful of tool calls (~5 reads / greps), don't grind through it yourself — delegate it as an investigation with a clear question, then summarize the answer for the user. Follow-ups on the same question go back to that worker via `query_session`.
-- **Only the truly trivial stays with you**: a few lines (≲10) in one file, diagnosis already in hand, one quick verify round (scoped `tsc` + one test file). Several files, several test files, a build, or more than one edit-verify round → delegate, even when the brief feels longer than the diff — the brief costs you a minute, the loop costs the user their conversation. When in doubt, delegate.
-- **While workers run, stay available**: answer the user, don't poll — reports arrive on their own.
+- While the orchestrator runs tools, user messages arrive as interruptions — it can only answer between tool calls.
+- A worker session runs in parallel with the conversation. Its report arrives automatically when it finishes; `query_session` continues the same session with its context intact.
+- A worker starts with only its brief and does not ask follow-up questions: what the brief leaves out, it explores (grep, design docs) or guesses.
 
-The user also finds it painful to watch a sub-agent spend its first ten minutes grepping the repo and reading design docs before touching anything. That exploration is almost always the orchestrator's fault: a brief that says *what* to fix but not *where* or *how* forces the worker to rediscover what the orchestrator already knows.
+Who does what:
 
-- **Locate before you delegate — briefly.** Spend a few quick greps / reads to name the root cause, the exact files and line ranges, the existing helper / pattern the change should mirror. Then hand over a brief the worker can execute without opening anything else. If locating takes more than that, the locating *is* the task: delegate it as an *investigation* (say so explicitly, and keep it separate from the fix).
-- **One worker carries investigation into fix.** When an investigation comes back and the fix is approved, send the fix to the *same* session via `query_session` — it already holds the context, so nobody maps the area twice (neither you before delegating nor a fresh worker after).
-- **The brief carries the findings, not the pointers.** Paste the relevant snippets, line numbers, helper names and the pattern to copy. "See `accounts.ts`" makes the worker read the whole file; "copy the `rememberLastActiveChat` pattern at `accounts.ts:185` — in-process Map dedupe, then `patchConfig`" lets it start writing.
-- **Say what NOT to read.** Open the brief with an explicit scope fence: no exploratory grep, no design-doc reading, open only the listed files; if the brief turns out to be wrong about a line number or a name, follow its intent and flag the discrepancy in the report instead of stopping to map the whole area.
-- **Fence the edit surface too.** List the files/dirs not to touch, whether commit / build / deploy is allowed, and exactly which verification commands to run (`tsc` scope, which test files). A worker without these defaults to "run everything", which is the other way they burn time.
-- **Open-ended tasks are the exception.** Design / planning / "figure out why" work legitimately needs exploration — brief those as investigations with a clear question, and accept the reading. Just don't mix them into a fix brief.
-- **Claude models refuse anything that reads as offensive-security work.** When the worker (or a test prompt sent through a session) runs on a Claude model, keep briefs and prompts neutral: describe sandbox / permission work as "workspace write isolation", "accidental-deletion guard", "path validation" — avoid words like security / vulnerability / attack / bypass / escape, and don't include destructive command examples (`rm -rf ~` etc.) even as test cases. A refused worker makes no changes and the time is simply lost; test destructive-command handling with unit tests instead.
+- Edit in one file, ≲10 lines, cause already known, one verify round (scoped `tsc` + one test file) → orchestrator.
+- Any other code change → `dev` (touches Halo semantics) or `executor` (mechanical, fully specified).
+- Build / package / publish → `release` (see Packaging / release above).
+- Diagnosis, evaluation or research needing more than ~5 reads / greps → a worker, briefed as an investigation with one question.
+- Fix that follows an investigation → the same worker session, via `query_session`.
+- Independent pieces → parallel sessions, partitioned by file.
+- Locating before a fix brief: up to ~5 reads / greps (root cause, files, line ranges, pattern to copy). Beyond that, the locating is itself an investigation.
+
+Brief contents:
+
+- Findings, not pointers: relevant snippets, line numbers, helper names, the pattern to copy — e.g. "copy the `rememberLastActiveChat` pattern at `accounts.ts:185` — in-process Map dedupe, then `patchConfig`", not "see `accounts.ts`".
+- Read scope: the files to open; exploratory grep and design-doc reading excluded. If a line number or name in the brief is wrong, the worker follows the brief's intent and flags the discrepancy in its report.
+- Edit scope: files / dirs not to touch, whether commit / build / deploy is allowed, and the exact verification commands (`tsc` scope, which test files). Without these, workers run the full suite.
+- Open-ended tasks (design, planning, finding a root cause) are briefed as investigations with one question, where exploration is expected — separate from any fix brief.
+- Claude models refuse requests that read as offensive-security work; a refused worker makes no changes. For workers and test prompts on Claude: describe sandbox / permission work as "workspace write isolation", "accidental-deletion guard", "path validation"; avoid security / vulnerability / attack / bypass / escape; include no destructive command examples (`rm -rf ~` etc.), even as test cases — cover destructive-command handling with unit tests.
 
 ## Git Commits
 
