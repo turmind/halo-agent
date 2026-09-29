@@ -463,6 +463,16 @@ export const en: Record<string, string> = {
   'editor.viewDiff': 'View unsaved diff',
   'editor.diff': 'Diff',
   'editor.splitRight': 'Split editor right',
+  'editor.openWith': 'Open with',
+  'editor.openWith.builtin': 'Built-in ({id})',
+  'editor.unsupported.title': 'This file type has no built-in preview.',
+  'editor.unsupported.hub': 'Extensions for more file types are available at',
+  'editor.extension.save': 'Save',
+  'editor.extension.retry': 'Retry',
+  'editor.extension.reload': 'Reload',
+  'editor.extension.unresponsive': 'Extension "{name}" did not respond.',
+  'editor.extension.updated': 'Extension updated to v{version} — save, then reload to use the new version.',
+  'editor.extension.uninstalled': 'This extension has been uninstalled. Save your changes, then close the tab.',
 
   // ── Cron jobs ──
   'cron.title': 'Cron Jobs',

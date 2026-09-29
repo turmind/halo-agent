@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { createContext, useContext, type ReactNode } from 'react'
 import { ArrowRightLeft, Download as DownloadIcon } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
@@ -11,6 +11,10 @@ import { useT } from '@/shared/i18n'
  * header (filename + Open-as-text + Download) and an optional `extraToolbar`
  * slot for plugin-specific buttons (e.g. docx Print, xlsx sheet tabs).
  */
+
+/** "Open with" menu, provided by FilePreview and rendered by every shell —
+ *  a context rather than a prop so plugins need no changes to show it. */
+export const OpenWithSlot = createContext<ReactNode>(null)
 export interface PreviewShellProps {
   name: string
   downloadUrl: string
@@ -26,12 +30,14 @@ export interface PreviewShellProps {
 
 export function PreviewShell({ name, downloadUrl, onOpenAsText, extraToolbar, loading, error, children }: PreviewShellProps) {
   const t = useT()
+  const openWith = useContext(OpenWithSlot)
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--card)] px-3">
         <span className="truncate text-xs text-[var(--muted-foreground)]">{name}</span>
         <div className="flex-1" />
         {extraToolbar}
+        {openWith}
         {onOpenAsText && (
           <ToolbarButton onClick={onOpenAsText} title={t('editor.openAsText')}>
             <ArrowRightLeft className="h-3 w-3" />

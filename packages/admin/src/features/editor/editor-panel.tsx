@@ -11,6 +11,7 @@ import { HtmlPreview } from './html-preview'
 import { DiffViewer } from './diff-viewer'
 import { TabBar } from './tab-bar'
 import { FilePreview, canPreview, isHeavyPreview, useRegistryVersion } from './previews/FilePreview'
+import { getExtensionHost } from './previews/extension-host-logic'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
@@ -160,7 +161,9 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         const p = activeRequired[i]
         next = [p, ...next.filter((q) => q !== p)]
       }
-      next = next.slice(0, PREVIEW_CACHE_SIZE)
+      // A modified preview is an extension tab whose unsaved edits live only
+      // inside its iframe — evicting it would drop them, so it stays pinned.
+      next = [...next.slice(0, PREVIEW_CACHE_SIZE), ...next.slice(PREVIEW_CACHE_SIZE).filter((p) => buffers[p]?.modified)]
       // Reference equality short-circuit so we don't trigger an extra render
       // when nothing actually moved.
       if (prev.length === next.length && prev.every((p, i) => p === next[i])) return prev
@@ -366,7 +369,15 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       if (!absPath.startsWith(panelPrefix)) return
       const relForTab = absPath.slice(panelPrefix.length)
       const tab = useEditorStore.getState().tabs.find((t) => t.path === relForTab)
-      if (!tab || tab.preview || tab.modified) return
+      if (!tab) return
+      if (tab.preview) {
+        // Extension previews own their content — the host decides whether to
+        // reload (it ignores its own saves and dirty state). Built-in previews
+        // have no host and keep the old "don't touch" behaviour.
+        getExtensionHost(projectId, relForTab)?.fileChanged()
+        return
+      }
+      if (tab.modified) return
       api.files.read(relForTab, projectId).then((res) => {
         useEditorStore.getState().checkAndRefresh(
           relForTab,
@@ -478,6 +489,10 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       if (!savePath || !projectId) return
       const tab = useEditorStore.getState().tabs.find((t) => t.path === savePath)
       if (!tab || !tab.modified) return
+      // Extension preview tabs keep their content inside the iframe; the host
+      // asks the extension to serialize and PUTs the bytes itself.
+      const host = getExtensionHost(projectId, savePath)
+      if (host) { host.requestSave(); return }
       try {
         const res = await api.files.save(savePath, tab.content, projectId)
         useEditorStore.getState().markSaved(savePath, res.modifiedAt)

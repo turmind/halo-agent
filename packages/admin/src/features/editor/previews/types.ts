@@ -12,6 +12,13 @@
  */
 
 import type React from 'react'
+import type { ExtensionInfo } from '@turmind/halo-core/protocol'
+
+/** One way to open a file — what `registry.resolve(ext)` returns, best first. */
+export type Resolved =
+  | { kind: 'extension'; info: ExtensionInfo }
+  | { kind: 'builtin'; plugin: PreviewPlugin }
+  | { kind: 'text' }
 
 export interface PreviewProps {
   /** Full filename including extension */

@@ -1,4 +1,5 @@
 import type { ChatMessage } from '@/shared/types'
+import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 
 const API_BASE = '/api'
 
@@ -146,6 +147,32 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ path, content, projectId }),
       })
+    },
+
+    /** Binary-safe overwrite of an existing file (canvas extensions' save
+     *  path). Resolves instead of throwing on failure: a 409 carries the
+     *  on-disk mtime the caller needs to offer overwrite / discard. */
+    async saveRaw(path: string, buffer: ArrayBuffer, projectId: string, expectMtime?: number): Promise<
+      | { ok: true; mtime: number; size: number }
+      | { ok: false; status: 409; mtime: number }
+      | { ok: false; status: number; message: string }
+    > {
+      const params = new URLSearchParams({ path, projectId })
+      if (expectMtime != null) params.set('expectMtime', String(expectMtime))
+      let res: Response
+      try {
+        res = await fetch(`${API_BASE}/files/raw?${params}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: buffer,
+        })
+      } catch (err) {
+        return { ok: false, status: 0, message: err instanceof Error ? err.message : String(err) }
+      }
+      const body = await res.json().catch(() => ({})) as { mtime?: number; size?: number; error?: string }
+      if (res.ok) return { ok: true, mtime: body.mtime ?? 0, size: body.size ?? buffer.byteLength }
+      if (res.status === 409 && typeof body.mtime === 'number') return { ok: false, status: 409, mtime: body.mtime }
+      return { ok: false, status: res.status, message: body.error ?? res.statusText }
     },
 
     create(path: string, projectId: string) {
@@ -609,6 +636,30 @@ export const api = {
       if (opts?.projectId) params.set('projectId', opts.projectId)
       const qs = params.toString() ? `?${params}` : ''
       return request<{ ok: boolean; disabled: boolean }>(`/skills/${id}/toggle${qs}`, { method: 'PATCH' })
+    },
+  },
+
+  // Canvas preview extensions (~/.halo/global/extensions/). Install / remove
+  // don't return the new list — the server's dir watcher pushes
+  // `extension:changed` and the registry updates from that.
+  extensions: {
+    list() {
+      return request<ExtensionsSnapshot>('/extensions')
+    },
+    /** Scoped token embedded in extension asset URLs — see previews/extension-token.ts. */
+    token() {
+      return request<{ token: string; expiresAt: number }>('/extensions/token')
+    },
+    async install(file: File): Promise<ExtensionInfo> {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(`${API_BASE}/extensions/install`, { method: 'POST', body: form })
+      const body = await res.json().catch(() => ({})) as ExtensionInfo & { error?: string }
+      if (!res.ok) throw new Error(body.error ?? `API error ${res.status}: ${res.statusText}`)
+      return body
+    },
+    remove(id: string) {
+      return request<{ ok: boolean; id: string }>(`/extensions/${encodeURIComponent(id)}`, { method: 'DELETE' })
     },
   },
 

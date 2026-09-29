@@ -463,6 +463,16 @@ export const zh: Record<string, string> = {
   'editor.viewDiff': '查看未保存的差异',
   'editor.diff': '差异',
   'editor.splitRight': '向右拆分编辑器',
+  'editor.openWith': '打开方式',
+  'editor.openWith.builtin': '内置（{id}）',
+  'editor.unsupported.title': '此文件类型没有内置预览。',
+  'editor.unsupported.hub': '更多文件类型的扩展见',
+  'editor.extension.save': '保存',
+  'editor.extension.retry': '重试',
+  'editor.extension.reload': '重新加载',
+  'editor.extension.unresponsive': '扩展「{name}」未响应。',
+  'editor.extension.updated': '扩展已更新到 v{version}，保存后重新加载以使用新版本。',
+  'editor.extension.uninstalled': '此扩展已卸载。保存修改后请关闭此标签页。',
 
   // ── Cron jobs ──
   'cron.title': '定时任务',

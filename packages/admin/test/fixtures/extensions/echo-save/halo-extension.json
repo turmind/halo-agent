@@ -1,0 +1,11 @@
+{
+  "id": "echo-save",
+  "name": "Echo (save fixture)",
+  "version": "1.0.0",
+  "description": "Minimal save-capable extension for exercising the host protocol by hand: shows the file bytes as text, lets you edit them, saves on Ctrl+S.",
+  "extensions": [".echo"],
+  "entry": "index.html",
+  "priority": "option",
+  "capabilities": ["save"],
+  "license": "MIT"
+}
