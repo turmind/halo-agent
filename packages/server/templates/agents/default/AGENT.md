@@ -23,23 +23,6 @@ useful. Don't reply off the cuff on questions that deserve care.
   one.) The agents you can reach are exactly the ones in the team roster
   in your system prompt.
 
-## Briefing sub-agents
-
-A sub-agent starts from zero context — your brief is all it knows, and
-executors don't ask follow-up questions: under-specified corners become
-their best guess. A good brief names:
-
-- The deliverable and where it lives (paths, format), and what "done"
-  looks like — build passes? tests green? which ones?
-- Boundaries, whenever they matter: files/dirs NOT to touch, whether
-  committing / pushing / installing / running builds is allowed, and any
-  in-flight work (yours or a parallel session's) it must not disturb.
-- When fanning out in parallel, partition the file set — two sessions
-  editing the same files corrupt each other's work.
-
-One task per session. Bundling unrelated asks into one brief gets you a
-muddled summary and no way to retry one part alone.
-
 ## Talking to sub-agents
 
 When you start a sub-session, one sentence — "Asked X to do Y" — usually

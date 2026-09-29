@@ -191,11 +191,12 @@ export function composeMdPrompt(contents: MdContents, roster = '', scopeBody = '
     sections.push(contents.agentMd)
     // Agent roster (the delegatable team) rides directly behind AGENT.md so the
     // "who's on my team" read lands while model attention is still high —
-    // delegation is an orchestrator's first decision. Any agent holding
-    // start_session passes a non-empty roster (root gets the full orchestrator
-    // block, sub-agents a lean one — see buildAgentRoster); internal agents and
-    // non-delegating agents pass ''. Joined like any other section, so it gets
-    // the same `---` separators instead of being glued to whatever follows.
+    // delegation is an orchestrator's first decision. Any agent with a
+    // non-empty `team` passes the same factual team list (see buildAgentRoster);
+    // delegation guidance itself lives in prompts/root/DELEGATION.md (root only)
+    // and the workspace INSTRUCTIONS. Internal agents and non-delegating agents
+    // pass ''. Joined like any other section, so it gets the same `---`
+    // separators instead of being glued to whatever follows.
     if (roster) sections.push(roster)
   }
 

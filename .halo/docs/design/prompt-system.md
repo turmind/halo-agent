@@ -106,7 +106,7 @@ interface MdContents {
 [system-prompts.ts](../../../packages/server/src/prompts/system-prompts.ts) keeps the hard-coded defaults for seeding and fallback.
 
 ### Seed (init.ts startup hook)
-Startup seeds `templates/prompts/{bootstrap,all,root}/` into `~/.halo/global/prompts/` (currently `BOOTSTRAP.md`; `TOOL_GUIDELINES.md`, `TOOL_SHELL[.windows].md`, `WORKSPACE_CONVENTIONS.md`, `RUNTIME.md`; `WORKSPACE_MEMORY.md`). These are **platform-owned, force-overwritten** on template refresh (`TEMPLATE_VERSION` gate) — user customization belongs in the workspace `prompts/` override, not in the global copies.
+Startup seeds `templates/prompts/{bootstrap,all,root}/` into `~/.halo/global/prompts/` (currently `BOOTSTRAP.md`; `TOOL_GUIDELINES.md`, `TOOL_SHELL[.windows].md`, `WORKSPACE_CONVENTIONS.md`, `RUNTIME.md`; `DELEGATION.md`, `WORKSPACE_MEMORY.md`). These are **platform-owned, force-overwritten** on template refresh (`TEMPLATE_VERSION` gate) — user customization belongs in the workspace `prompts/` override, not in the global copies.
 
 ### Live load (every `buildAgentInstance`)
 `loadSystemPrompts(workspaceRoot?)` resolves each scope directory with workspace > global precedence:
@@ -204,7 +204,7 @@ If `mdPrompt` is empty:
 
 **Root and sub-agents both get a roster** — there's no `isRoot` gate on *whether* a roster appears (any agent with a non-empty `team` gets one). Runaway re-subcontracting used to be stopped by a blanket "root only" ban; it's now bounded by the per-agent `team` whitelist (which is also the delegation switch) plus `maxNestingDepth` (default 16). This lets a sub-agent legitimately delegate further (grandchild sessions) when its `agent.yaml` declares a team, while the depth cap and whitelist keep cascades finite.
 
-**Facts, not policy.** The block states who is reachable and how (`start_session` / `query_agent`) and explicitly defers *when and how much to delegate* to the workspace INSTRUCTIONS. Root and sub-agents get the identical block — an earlier version gave roots an orchestrator pep-talk ("prefer delegation", "fan out", "don't poll", a self-spawn cost warning) that could contradict whatever stance a workspace's INSTRUCTIONS.md took; delegation policy now lives in exactly one place.
+**Facts, not policy.** The block states who is reachable and how (`start_session` / `query_agent`) and explicitly defers *when and how much to delegate* to the workspace INSTRUCTIONS. Root and sub-agents get the identical block — an earlier version gave roots an orchestrator pep-talk ("prefer delegation", "fan out", "don't poll", a self-spawn cost warning) that could contradict whatever stance a workspace's INSTRUCTIONS.md took; delegation policy now lives in exactly one place. (The workspace-neutral part — what fits a sub-session, the three checks, the brief checklist — is root-scope `prompts/root/DELEGATION.md`, see [Final injection order](#final-injection-order); it states criteria, not a stance.)
 
 **Team whitelist = the delegation switch.** `agent.yaml` carries an optional `team: [id, …]`. A **non-empty** list is what *enables* delegation — it grants the whole session-tool bundle plus the roster (see `canDelegate`) AND restricts reach to exactly those ids. **Unset or empty `[]` means the agent cannot delegate at all** (no session tools, no roster) — this is a breaking change from the earlier "unset = every agent reachable" default; agents authored before this change that relied on the implicit-all behavior must now list their team explicitly. The `isTeamMember(team, targetId)` predicate still gates the three reach surfaces consistently — the roster (what the agent sees), `start_session`, and `query_agent` (server-side enforcement, so a hand-crafted call to a non-team agent is rejected). Self gets no special-casing: include the agent's own id to allow parallel self-spawn (the seed `default` agent lists `default`), omit it to block self-spawn — exactly like any other agent.
 
@@ -248,13 +248,15 @@ AGENT.md                                         ← workspace > global
 ## Project Knowledge                             ← <ws>/.halo/INDEX.md (or nudge)
 "The project workspace is at: ..."
 "Working directory: ..."                         ← if workingDir is set
-rootPrompt                                       ← prompts/root/*.md (ws > global)
+rootPrompt                                       ← prompts/root/*.md (ws > global): DELEGATION.md, WORKSPACE_MEMORY.md
 allPrompt                                        ← prompts/all/*.md (ws > global)
 <available_skills>                               ← if yaml.skills non-empty
 Your available tools: ...
 ```
 
 root-scope leads all-scope: root-only orchestrator guidance lands while attention is high, the generic tool layer trails (same rationale as the roster riding behind AGENT.md).
+
+`DELEGATION.md` (root-only) carries the delegation criteria — what fits a sub-session vs. doing it yourself, three checks before `start_session` — and the brief checklist (goal + done criteria, decisions made in the conversation, known facts, boundaries, verification). It is **not gated on `canDelegate`**: every root reads it, including roots with no `team`; the file's opening sentence ("This applies when your tools include `start_session`") scopes it. Workspace-specific routing (which agent for what, size thresholds) stays in the workspace INSTRUCTIONS, and the `## Your Team` roster stays a plain factual list.
 
 (A sub-agent's `working_dir` directory-chain INSTRUCTIONS.md sit in the `## User Instructions` region — plain markdown, right after the global/ws-root layer — see Sub-agent below. A user's `@scope` injects per-turn into the message, not here — below.)
 
