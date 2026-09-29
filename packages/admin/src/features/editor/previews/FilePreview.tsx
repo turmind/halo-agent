@@ -87,4 +87,4 @@ function UnsupportedPreview({ name, downloadUrl, onOpenAsText }: PreviewProps) {
 }
 
 // Re-export helpers editor-panel uses
-export { canPreview, isHeavyPreview, registeredExtensions } from './registry'
+export { canPreview, isHeavyPreview, useRegistryVersion } from './registry'

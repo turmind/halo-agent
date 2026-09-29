@@ -10,7 +10,7 @@ import { MarkdownPreview } from './markdown-preview'
 import { HtmlPreview } from './html-preview'
 import { DiffViewer } from './diff-viewer'
 import { TabBar } from './tab-bar'
-import { FilePreview, isHeavyPreview, registeredExtensions } from './previews/FilePreview'
+import { FilePreview, canPreview, isHeavyPreview, useRegistryVersion } from './previews/FilePreview'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
@@ -55,7 +55,7 @@ function formatDate(ms: number): string {
  *   - Other non-text binaries with no preview (archives, fonts, compiled bin).
  *     These fall through to the "unsupported" preview view with Download/Open-as-text.
  */
-const NON_TEXT_FALLBACKS = [
+const NON_TEXT_FALLBACKS = new Set<string>([
   // Images without preview (rare — most handled by media plugin)
   'tiff', 'tif',
   // Archives
@@ -64,8 +64,13 @@ const NON_TEXT_FALLBACKS = [
   'woff', 'woff2', 'ttf', 'otf', 'eot',
   // Compiled/Binary
   'exe', 'dll', 'so', 'dylib', 'o', 'a', 'class', 'pyc', 'wasm',
-]
-const BINARY_EXTENSIONS = new Set<string>([...registeredExtensions(), ...NON_TEXT_FALLBACKS])
+])
+/** Live read of the registry (not a module-level snapshot) so plugins that
+ *  register after this module loaded still route to preview. Only called from
+ *  event handlers / effects, so no render-time subscription is needed here. */
+function isBinaryExtension(ext: string): boolean {
+  return NON_TEXT_FALLBACKS.has(ext) || canPreview(ext)
+}
 
 interface EditorPanelProps {
   projectId: string | null
@@ -124,6 +129,9 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   // MRU cache of mounted preview tabs. Plugins flagged `heavy` (e.g. pptx) skip the
   // cache — they parse/render on the main thread and only the active one mounts.
   const PREVIEW_CACHE_SIZE = 5
+  // `isHeavyPath` reads the live registry; `registryVersion` is the signal
+  // that its answer may have changed, so the MRU effect re-runs on it.
+  const registryVersion = useRegistryVersion()
   const isHeavyPath = useCallback((path: string) => {
     const ext = path.split('.').pop()?.toLowerCase() ?? ''
     return isHeavyPreview(ext)
@@ -158,7 +166,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       if (prev.length === next.length && prev.every((p, i) => p === next[i])) return prev
       return next
     })
-  }, [groups, buffers, isHeavyPath])
+  }, [groups, buffers, isHeavyPath, registryVersion])
 
   // Drop entries when no pane references the path anymore. Use ALL panes
   // (not the active one) so a preview kept open in the right pane while the
@@ -238,7 +246,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         const fetched = await Promise.all(
           allPaths.map(async (path) => {
             const ext = path.split('.').pop()?.toLowerCase() ?? ''
-            const isPreview = BINARY_EXTENSIONS.has(ext)
+            const isPreview = isBinaryExtension(ext)
             if (isPreview) {
               try {
                 const stat = await api.files.stat(path, projectId!)
@@ -387,7 +395,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       if (!projectId) return
 
       const ext = path.split('.').pop()?.toLowerCase() ?? ''
-      if (BINARY_EXTENSIONS.has(ext)) {
+      if (isBinaryExtension(ext)) {
         // Known binary/media file → open as preview tab
         const downloadUrl = api.files.downloadUrl(path, projectId)
         const viewUrl = api.files.viewUrl(path, projectId)
@@ -592,7 +600,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         if (action.isDir) return
         try {
           const ext = action.path.split('.').pop()?.toLowerCase() ?? ''
-          const isPreview = BINARY_EXTENSIONS.has(ext)
+          const isPreview = isBinaryExtension(ext)
           const state = useEditorStore.getState()
           const onlyOnePane = state.groups.length === 1
           if (onlyOnePane) state.splitToRight(state.groups[0].activeTab ?? action.path)
