@@ -62,6 +62,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/** Compact age for the UI copy of the sibling-status line: `42s` / `17m` / `1h05m`. */
+export function formatAge(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`
+}
+
 /** Wrap an interrupt/stop reason in a real AbortError. Node 22 gotcha: fetch
  *  rejects with the abort reason AS-IS, so `abort('interrupt')` surfaced the
  *  bare STRING 'interrupt' (not an Error, errName '') in runAgentTurn's catch,
@@ -1728,10 +1737,16 @@ export class SessionManager implements SessionManagerInternals {
    *  wrap-up (a fresh task) rather than being a leftover from the original batch.
    *
    *  Mid-tier parents are intentionally excluded (parentId !== null): their
-   *  tryReportToParent bubble-up already gates them on a fully-drained subtree. */
-  private siblingStatusSuffix(session: AgentSession): string {
-    if (session.parentId !== null) return ''
-    const nowIso = new Date().toISOString()
+   *  tryReportToParent bubble-up already gates them on a fully-drained subtree.
+   *
+   *  Returns two renderings of the same rows: `llm` (appended to the model
+   *  input, ISO stamps for a clock-less model) and `ui` (the `system` event the
+   *  admin shows — the message carries its own `timestamp`, so the header has no
+   *  clock and per-child times are relative ages, not raw UTC ISO). */
+  private siblingStatusSuffix(session: AgentSession): { llm: string; ui: string } {
+    if (session.parentId !== null) return { llm: '', ui: '' }
+    const now = Date.now()
+    const nowIso = new Date(now).toISOString()
     const stillRunning = this.db.select({
         agentName: agentSessions.agentName,
         description: agentSessions.description,
@@ -1745,12 +1760,17 @@ export class SessionManager implements SessionManagerInternals {
         isNull(agentSessions.archivedAt),
       )).all()
     if (stillRunning.length === 0 && session.messageQueue.length === 0) {
-      return `\n\n[System @ ${nowIso}] All sub-agents you dispatched have completed. This is the final report — you may now consolidate and wrap up.`
+      const done = 'All sub-agents you dispatched have completed. This is the final report — you may now consolidate and wrap up.'
+      return { llm: `\n\n[System @ ${nowIso}] ${done}`, ui: `[System] ${done}` }
     }
-    const list = stillRunning
+    const head = `Do NOT wrap up yet — ${stillRunning.length} sub-agent(s) still running, ${session.messageQueue.length} report(s) still queued.\nStill running:\n`
+    const llmList = stillRunning
       .map((c) => `  - ${c.agentName} (created ${new Date(c.createdAt).toISOString()}, last active ${new Date(c.updatedAt).toISOString()}): ${c.description.slice(0, 80)}`)
       .join('\n')
-    return `\n\n[System @ ${nowIso}] Do NOT wrap up yet — ${stillRunning.length} sub-agent(s) still running, ${session.messageQueue.length} report(s) still queued.\nStill running:\n${list}`
+    const uiList = stillRunning
+      .map((c) => `  - ${c.agentName} (started ${formatAge(now - c.createdAt)} ago, last active ${formatAge(now - c.updatedAt)} ago): ${c.description.slice(0, 80)}`)
+      .join('\n')
+    return { llm: `\n\n[System @ ${nowIso}] ${head}${llmList}`, ui: `[System] ${head}${uiList}` }
   }
 
   /** Drain queued messages (user→agent AND agent→agent share this one queue)
@@ -1802,19 +1822,20 @@ export class SessionManager implements SessionManagerInternals {
       const images = batch.flatMap((q) => q.images ?? [])
       // Sibling-status only when the batch carries an agent report; a pure-user
       // batch must not trigger "all sub-agents completed" noise.
-      const suffix = batch.some((q) => q.sourceSessionId !== undefined) ? this.siblingStatusSuffix(session) : ''
+      const suffix = batch.some((q) => q.sourceSessionId !== undefined) ? this.siblingStatusSuffix(session) : { llm: '', ui: '' }
       // Surface the sibling-status line on the UI too (root only). It's injected
       // into the LLM input but was previously invisible, so a reviewer couldn't
       // see WHICH siblings root was told were still running / done — exactly the
       // context needed to debug a premature wrap-up. Reuses the `system` event
-      // (no new type); the leading blank lines are trimmed for display.
-      if (suffix && session.parentId === null) {
-        this.emitEvent(session.id, { type: 'system', text: suffix.trim(), agentName: session.agentName })
+      // (no new type); the `ui` rendering has relative ages instead of the ISO
+      // stamps the model gets.
+      if (suffix.ui && session.parentId === null) {
+        this.emitEvent(session.id, { type: 'system', text: suffix.ui, agentName: session.agentName })
       }
       const kickNote = kickFlagReset
         ? '\n\n[System] The continue_task flag you set last turn was reset by this interrupt. If the interrupted task is still unfinished after you answer, call continue_task again.'
         : ''
-      const input = this.buildInput(merged + suffix + kickNote, images.length > 0 ? images : undefined, session.supportsImage)
+      const input = this.buildInput(merged + suffix.llm + kickNote, images.length > 0 ? images : undefined, session.supportsImage)
 
       try {
         await this.runAgentTurn(session, input)
