@@ -66,6 +66,13 @@ function instruments() {
   return {
     tokenUsage: meter.createHistogram('gen_ai.client.token.usage', { unit: '{token}', description: 'Tokens per model call, split by gen_ai.token.type' }),
     operationDuration: meter.createHistogram('gen_ai.client.operation.duration', { unit: 's', description: 'Model call latency' }),
+    // semconv's only TTFT metric (named `server.` though it's measured client-side
+    // here: first streamed delta, see ModelCallResult.ttftMs). Buckets are the
+    // spec's recommended set — the SDK default is ms-scale, useless for seconds.
+    timeToFirstToken: meter.createHistogram('gen_ai.server.time_to_first_token', {
+      unit: 's', description: 'Time to first streamed token per model call',
+      advice: { explicitBucketBoundaries: [0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10] },
+    }),
     toolDuration: meter.createHistogram('halo.tool.duration', { unit: 's', description: 'Tool execution latency' }),
     turnDuration: meter.createHistogram('halo.turn.duration', { unit: 's', description: 'Agent turn latency (invoke_agent)' }),
     modelRetries: meter.createCounter('halo.model.retries', { description: 'Model-call retries by kind' }),
@@ -210,6 +217,7 @@ function recordModelCall(session: SpanSessionContext, turn: TurnState, event: Ag
       'gen_ai.usage.output_tokens': event.usage?.outputTokens ?? 0,
       'gen_ai.response.finish_reasons': [turn.cycleToolCalls.length > 0 ? 'tool_use' : 'end_turn'],
       'session.id': session.id,
+      ...(event.ttftMs != null ? { 'halo.ttft_ms': event.ttftMs } : {}),
     },
   }, turn.ctx)
   if (captureContent()) {
@@ -238,6 +246,7 @@ function recordModelCall(session: SpanSessionContext, turn: TurnState, event: Ag
   m.tokenUsage.record(event.usage?.inputTokens ?? 0, { ...modelAttr, 'gen_ai.token.type': 'input' })
   m.tokenUsage.record(event.usage?.outputTokens ?? 0, { ...modelAttr, 'gen_ai.token.type': 'output' })
   m.operationDuration.record(durationMs / 1000, { ...modelAttr, 'gen_ai.operation.name': 'chat' })
+  if (event.ttftMs != null) m.timeToFirstToken.record(event.ttftMs / 1000, modelAttr)
 }
 
 function recordToolCall(session: SpanSessionContext, turn: TurnState, event: AgentEvent): void {

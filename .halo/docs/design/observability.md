@@ -83,6 +83,7 @@ Child of `invoke_agent`, one per model call — created retroactively on the `us
 | `gen_ai.usage.input_tokens` | ✓ | |
 | `gen_ai.usage.output_tokens` | ✓ | |
 | `gen_ai.response.finish_reasons` | `["tool_use"]` or `["end_turn"]` | |
+| `halo.ttft_ms` | streamed calls only — ms from request start to the first delta (text / thinking / tool-args), same number as the admin `ttft` badge | |
 | `gen_ai.input.messages` | | semconv JSON (see below) — **delta only**: messages appended since this turn's previous `chat` span (first call → the user message; later calls → that cycle's `tool_result`s) |
 | `gen_ai.output.messages` | | semconv JSON, only the trailing assistant message |
 
@@ -116,6 +117,7 @@ Exported every 15s via `PeriodicExportingMetricReader`. Same scope as the spans.
 |---|---|---|---|
 | `gen_ai.client.token.usage` | histogram | `{token}` | `gen_ai.request.model`, `gen_ai.token.type=input\|output` |
 | `gen_ai.client.operation.duration` | histogram | s | `gen_ai.request.model`, `gen_ai.operation.name=chat` |
+| `gen_ai.server.time_to_first_token` | histogram | s | `gen_ai.request.model` — streamed calls only; semconv's recommended buckets (1ms … 10s) instead of the SDK's ms-scale defaults |
 | `halo.tool.duration` | histogram | s | `gen_ai.tool.name` |
 | `halo.turn.duration` | histogram | s | `outcome=ok\|error` |
 | `halo.model.retries` | counter | — | `kind=<retry kind>` |

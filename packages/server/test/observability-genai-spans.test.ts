@@ -67,7 +67,7 @@ function runOneToolTurn(session: SpanSessionContext, toolResult = 'file-a\nfile-
   ] })
   onAgentEvent(session, { type: 'text', text: 'Let me look.', final: false })
   onAgentEvent(session, { type: 'tool_call', toolName: 'shell_exec', toolUseId: 'tu_1', toolInput: { command: 'ls' } })
-  onAgentEvent(session, { type: 'usage', usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 }, durationMs: 800 })
+  onAgentEvent(session, { type: 'usage', usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 }, durationMs: 800, ttftMs: 250 })
   // tool runs
   onAgentEvent(session, { type: 'tool_result', toolName: 'shell_exec', toolUseId: 'tu_1', toolResult, durationMs: 50 })
   session.agent.messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: toolResult }] })
@@ -108,6 +108,9 @@ describe('genai-spans: span tree', () => {
     expect(chats[0].attributes['gen_ai.response.finish_reasons']).toEqual(['tool_use'])
     expect(chats[0].attributes['gen_ai.usage.input_tokens']).toBe(100)
     expect(chats[0].attributes['gen_ai.usage.output_tokens']).toBe(20)
+    // ttft rides the chat span only when the call streamed (second call had none)
+    expect(chats[0].attributes['halo.ttft_ms']).toBe(250)
+    expect(chats[1].attributes['halo.ttft_ms']).toBeUndefined()
     expect(chats[1].attributes['gen_ai.response.finish_reasons']).toEqual(['end_turn'])
 
     expect(tool.name).toBe('execute_tool shell_exec')
@@ -264,6 +267,15 @@ describe('genai-spans: span tree', () => {
     expect((inputPoint?.value as { count: number }).count).toBeGreaterThan(0)
 
     expect(find('gen_ai.client.operation.duration')?.descriptor.unit).toBe('s')
+    // ttft: one point per streamed call (the non-streamed second call records nothing),
+    // seconds, on the semconv bucket set
+    const ttft = find('gen_ai.server.time_to_first_token')!
+    expect(ttft.descriptor.unit).toBe('s')
+    const ttftPoint = ttft.dataPoints.find((d) => d.attributes['gen_ai.request.model'] === 'test-model')!
+    const ttftValue = ttftPoint.value as { count: number; sum: number; buckets: { boundaries: number[] } }
+    expect(ttftValue.count).toBeGreaterThan(0)
+    expect(ttftValue.sum / ttftValue.count).toBeCloseTo(0.25, 5)
+    expect(ttftValue.buckets.boundaries).toContain(0.25)
     expect(find('halo.tool.duration')?.dataPoints[0].attributes['gen_ai.tool.name']).toBe('shell_exec')
     const turn = find('halo.turn.duration')!
     expect(turn.dataPoints.some((d) => d.attributes.outcome === 'ok' && d.attributes['gen_ai.agent.name'] === 'Producer')).toBe(true)
