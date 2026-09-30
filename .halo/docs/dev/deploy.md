@@ -1,5 +1,34 @@
 # Deployment
 
+## Local maintenance — default short path
+
+For this personal-use workspace: **version/tag → required build → install → restart → basic version/health/startup-log checks**. For an already published version, just **install → restart → checks**; don't rebuild or republish it. Reuse applicable passed tests rather than rerunning a full suite.
+
+No default backups, rollback preparation/scripts/instructions, or extra per-release plans/checklists/report files. A short CHANGELOG summary and a brief result are enough. Explicit authorization for the named service is sufficient; don't ask for another GO. Diagnose/fix failures within the authorized scope instead of automatic rollback.
+
+Confirm the service/user/HOME/port in `dev-environment.local.md`. If the agent is inside the service being restarted, carry the install/restart/basic checks in one independent systemd task; from outside it (e.g. dev → prod), operate directly. No deployment framework is needed.
+
+For this host's `/usr` installation and `ubuntu` service user, after authorization:
+
+```bash
+(
+set -e
+version='x.y.z'  # exact requested version
+sudo sh -c 'umask 022; npm install -g --prefix /usr --no-audit --no-fund "@turmind/halo@$1"' sh "$version"
+installed=$(sudo -u ubuntu env HOME=/home/ubuntu /usr/bin/halo --version 2>&1)
+test "$installed" = "halo $version"  # CLI writes to stderr; mismatch or launch failure stops before restart
+sudo systemctl restart halo.service
+curl --fail --retry 10 --retry-connrefused --retry-delay 1 --max-time 3 http://127.0.0.1:9527/api/health  # status ok, requested version
+sudo journalctl -u halo.service --since '2 minutes ago' -n 40 --no-pager
+)
+```
+
+**Permission gate:** root npm installs must use `umask 022`, then pass `halo --version` as the actual service user. Secrets/logs can use 077, but it must not leak into public package installation: the 1.5.0-alpha install inherited 077, made root-only package directories and left the ubuntu service failing with 203/EXEC.
+
+**Public release is a separate requested target:** synchronize the five package versions/tag, build and publish npm once, create the GitHub release and attach the Windows exe; verify the exact npm version/dist-tag and GitHub asset. macOS dmg remains the user's step unless requested. See the [publication command reference](#public-release-command-reference) only for the needed commands.
+
+The setup, architecture and troubleshooting material below is retained as on-demand reference, not a mandatory routine-deployment checklist.
+
 ## Architecture overview
 
 Halo only needs **one Node process** (Hono on port 9527 by default). API, WebSocket, and static frontend live in the same process.
@@ -196,16 +225,17 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 1. `halo upgrade` — bumps the on-disk npm package
 2. `halo server restart` — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts. Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
 
-### Release checklist (npm publish → GitHub release → desktop assets)
+### Public release command reference
 
-1. **Bump version** in the five workspace `package.json` files (`packages/{cli,server,core,admin,desktop}/package.json`) — the root `package.json` has no version field.
-2. **Update `CHANGELOG.md`**: rename `[Unreleased]` → `[x.y.z] - YYYY-MM-DD`, add a fresh empty `[Unreleased]` section above it, and roll the link references at the bottom (add `[x.y.z]: compare/v<prev>...vx.y.z`, repoint `[Unreleased]` to `compare/vx.y.z...HEAD`).
-3. **Bump `TEMPLATE_VERSION`** in `packages/server/src/init.ts` if any file under `templates/` was touched. `build-bundle.mjs` enforces this: it diffs `packages/server/templates` against the previous release tag and exits 1 when files changed but the number didn't move (so `pnpm bundle` and every desktop `dist:*` refuse to package a silent template edit).
-4. **Build admin**: `pnpm --filter @turmind/halo-admin build` — verify `admin/out/monaco/vs/loader.js` exists.
-5. Commit, tag `vx.y.z`, push, then `HALO_RELEASE=1 pnpm --filter @turmind/halo-cli bundle` and `npm publish` from `packages/cli/dist-pub/` — **exactly once**. Confirm with `npm view @turmind/halo version` (the registry replicates with a ~2–3 min lag, so wait and re-`view`; never "retry" the publish to see what happens). `dist-pub/` is only written in release mode; desktop `dist:*` builds stage into `dist-dev/` instead, so a stale or sha-suffixed bundle can't end up there — but `npm publish` is still not idempotent (v1.3.4 shipped a `1.3.4-<sha>` prerelease to npm from a second publish and it became `latest` for ~90s).
-6. **GitHub release**: `gh release create vx.y.z --notes-from-tag` (or paste the CHANGELOG section).
-7. **Windows exe** (the step both v1.3.0 and v1.3.1 skipped): `HALO_STAGE_FULL=1 CI=true pnpm dist:win`, then `gh release upload vx.y.z "packages/desktop/dist/Halo Setup x.y.z.exe"`. The macOS dmg is built on a Mac and uploaded the same way.
-8. **Post-check** (whoever ran the release does NOT get to skip this): `gh release view vx.y.z --json assets` must list the exe, and `npm view @turmind/halo version` must print `x.y.z`. A release without the exe attached is not done.
+Use only for a new public release; the retained details here are not extra preparation for installing an existing version.
+
+1. **Versions**: align the five workspace `package.json` files (`packages/{cli,server,core,admin,desktop}/package.json`) with the tag — the root `package.json` has no version field.
+2. **CHANGELOG**: a short version/date summary is enough; keep the existing `[Unreleased]` and compare-link convention without writing a separate release report.
+3. **Templates**: bump `TEMPLATE_VERSION` in `packages/server/src/init.ts` when `templates/` changed. `build-bundle.mjs` enforces this against the previous release tag; an unchanged number stops bundling.
+4. Commit/tag `vx.y.z`/push within authorization, then build the required artifacts: admin via `pnpm --filter @turmind/halo-admin build` (verify `packages/admin/out/monaco/vs/loader.js`), CLI via `HALO_RELEASE=1 pnpm --filter @turmind/halo-cli bundle`.
+5. **npm**: publish from `packages/cli/dist-pub/` **once**, using the intended dist-tag (`--tag alpha` for an alpha, not `latest`). Confirm `npm view @turmind/halo@x.y.z version` and the intended tag via `npm view @turmind/halo dist-tags.alpha` (or `dist-tags.latest` for stable); both must equal the requested version. Registry replication can lag ~2–3 minutes: wait/recheck, never republish. `dist-pub/` is release-only; desktop staging uses `dist-dev/`. Historical reason: a second v1.3.4 publish put `1.3.4-<sha>` on `latest` for ~90s.
+6. **GitHub**: `gh release create vx.y.z --notes-from-tag` (or the short CHANGELOG summary); use `--prerelease` for an alpha.
+7. **Windows exe**: `(cd packages/desktop && HALO_STAGE_FULL=1 CI=true pnpm dist:win)`, then `gh release upload vx.y.z "packages/desktop/dist/Halo Setup x.y.z.exe"`. Verify it appears in `gh release view vx.y.z --json assets`; v1.3.0 and v1.3.1 missed this asset. macOS dmg is the user's step unless requested.
 
 **npm token gotcha**: `npm publish` on this package needs a granular access token created with **"Bypass 2FA"** checked — scope / permission alone yields `403 Two-factor authentication or granular access token with bypass 2fa enabled is required`. `npm whoami` and `npm token list` succeed with a non-bypass token, so neither is a valid pre-flight; check `GET https://registry.npmjs.org/-/npm/v1/tokens` (with the token as bearer) and look for `"bypass_2fa": true` on the token in use before starting a release.
 

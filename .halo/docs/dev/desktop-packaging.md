@@ -1,6 +1,17 @@
 # Desktop Packaging (Electron / DMG)
 
-How to build the desktop app. We ship two artifacts: **Windows x64**
+## Short path
+
+Read this block and the command for the requested target; the historical Gotchas and detailed steps below are on-demand reference, not required cover-to-cover reading.
+
+1. Keep core/server/admin/cli/desktop versions aligned with the tag; template changes need a `TEMPLATE_VERSION` bump in `packages/server/src/init.ts`. A short CHANGELOG summary is enough.
+2. Build the target's required upstream artifacts (core → server → admin), reusing valid results for unchanged inputs. Admin uses `pnpm --filter @turmind/halo-admin build`, never bare `next build`; check `packages/admin/out/monaco/vs/loader.js` before bundling. Don't repeat passed applicable tests.
+3. Windows on Linux: `(cd packages/desktop && HALO_STAGE_FULL=1 CI=true pnpm dist:win)`. macOS dmg is the user's step unless requested; use the Mac command below when needed.
+4. For a public release, npm publication and the GitHub release must also be done, with the Windows exe uploaded and visible in `gh release view v<ver> --json assets`. For packaging-only work, report the artifact path; don't silently expand into publication or deployment.
+
+No default backups, rollback preparation/scripts/instructions, or extra release plans/checklists/report files. Server installation/restart uses the [short maintenance path](deploy.md#local-maintenance--default-short-path), including root npm `umask 022` and a service-user `halo --version` check.
+
+How to build the desktop app. Two artifact formats are supported: **Windows x64**
 (`Halo Setup <ver>.exe`, built on a Linux host) and **macOS arm64**
 (`Halo-<ver>-arm64.dmg`, built on Apple Silicon) — see the target matrix
 below. The desktop build is a thin Electron shell (`packages/desktop`) that
@@ -11,11 +22,10 @@ static export, then spawns the server as a child process and points a
 See [design](../design/) for the server itself; this doc is only about the
 packaging pipeline.
 
-> **Before packaging, check for `desktop-packaging.local.md` in this directory**
-> (gitignored, per-host). If present it carries operator/machine-specific setup
-> not captured here — e.g. building on a Linux host (wine/32-bit, workspace
-> build order, `corepack enable`) and artifact-distribution gotchas. Read it
-> first; absence just means none were recorded on this machine.
+> `desktop-packaging.local.md` (gitignored, per-host), if present, carries
+> machine-specific setup such as Linux wine/32-bit dependencies and artifact
+> distribution. Consult the relevant target notes when needed; absence means
+> none were recorded on this machine.
 
 ## Architecture
 
@@ -74,7 +84,7 @@ Output: `packages/desktop/dist/Halo-0.1.5-arm64.dmg` (~143 MB).
 
 ## Release target matrix (current policy)
 
-Two shipped artifacts per release, each built on its native-ish host:
+Two supported targets: the release agent ships Windows by default; the user builds/uploads macOS separately unless explicitly delegated. Each uses its native-ish host:
 
 | Target | Host we build on | Command | Notes |
 |--------|------------------|---------|-------|
@@ -112,7 +122,7 @@ Verified on the v0.1.9 build (Linux x86_64 host → win-x64):
   skipped` (no Windows code-sign cert). Neither fails the build.
 
 > A `desktop-packaging.local.md` (gitignored, per-host) may carry extra
-> machine-specific setup — read it first if present.
+> machine-specific setup — consult the relevant target section when needed.
 
 ## Faster rebuilds
 

@@ -5,46 +5,51 @@ verified source into running services and shippable artifacts. You are not a
 code editor — a build failure caused by source bugs goes back in the report,
 not into a source patch (config/build-script fixes are yours; `src/` is not).
 
-## Read the docs FIRST — non-negotiable
+## Default: the shortest path
 
-Before ANY build/package/publish/deploy, read the matching doc. Never package
-from memory; every gotcha below shipped a real regression once:
+Read the short runbook for the actual target: `.halo/docs/dev/deploy.md` for
+server maintenance, `.halo/docs/dev/desktop-packaging.md` for exe/dmg. Consult
+Gotchas and host-specific packaging notes only when relevant, not cover to cover.
 
-- Deploy / dev server: `.halo/docs/dev/deploy.md`
-- Desktop exe/dmg: `.halo/docs/dev/desktop-packaging.md` (Gotchas section),
-  plus `desktop-packaging.local.md` if present (per-host notes)
-- Environment / ports: `.halo/docs/dev/env.md`
+- New version: version/tag → required build → install → restart → basic
+  version/health/startup-log checks. An already published version needs only
+  install → restart → basic checks; don't repeat tagging, building or publishing.
+- Public “发版 / 打包发布” still includes npm publish (once), tag/push, GitHub
+  release and the Windows exe asset; confirm the uploaded asset exists. The
+  macOS dmg is the user's step unless requested.
+- This is personal-use maintenance: no default backups, rollback preparation,
+  scripts or instructions, extra plans/checklists/report files, or full-suite
+  reruns. Reuse relevant passed checks for unchanged code. A short CHANGELOG
+  summary and a brief result suffice; diagnose failures rather than auto-rollback.
 
-## Checklist (verify, don't assume)
+## Essential gates
 
-- **Admin**: build with `pnpm --filter @turmind/halo-admin build`, NEVER bare
-  `next build` (skips copy-monaco → editor 404s on `loader.js`). After build,
-  assert `packages/admin/out/monaco/vs/loader.js` exists before bundling or
-  restarting.
-- **Templates**: if the diff touches `packages/server/templates/`, assert
-  `TEMPLATE_VERSION` in `packages/server/src/init.ts` was bumped. Not bumped →
-  stop and report; don't bump it yourself unless the brief says so.
-- **Server**: `pnpm --filter @turmind/halo-server build` (tsc). Run
-  `npx vitest run` in `packages/server` before deploying unless the brief says
-  tests were just run.
-- **Scoped builds only** — build the packages the change touches, not the
-  whole repo, unless packaging desktop (which needs the full chain).
+- **Versions**: core/server/admin/cli/desktop must match the requested version
+  and tag. Commit/tag/push/publish only within the authorized scope.
+- **Admin**: `pnpm --filter @turmind/halo-admin build`, never bare `next build`;
+  verify `packages/admin/out/monaco/vs/loader.js` before bundling.
+- **Templates**: changes under `packages/server/templates/` require a
+  `TEMPLATE_VERSION` bump in `packages/server/src/init.ts`. Report a missing
+  bump; don't edit it unless authorized.
+- **Scope**: build/test only what the target needs, including required build
+  dependencies. Do not rerun an already-passed applicable test suite.
+- **Install permissions**: root npm installs use `umask 022`; afterwards run
+  `halo --version` as the actual service user before restarting. Secrets/logs
+  may use 077, but never pass that umask to public package installation: it can
+  create root-only directories and cause the non-root service to fail with 203/EXEC.
 
 ## Environments
 
-Machine-specific layout (services, ports, HOMEs, deploy runbook) lives in
-`.halo/docs/dev/dev-environment.local.md` — local-only, gitignored. Read it
-before touching any local service; if it doesn't exist on this machine, ask
-the user how the environments are laid out instead of guessing.
+Read `.halo/docs/dev/dev-environment.local.md` for the target service/user/HOME/
+port; establish missing layout facts rather than guessing. Explicit authorization
+for the named service is enough — don't request another GO ceremony.
 
-- **Never restart the prod service unless the brief explicitly names it** —
-  prod restart kills live sessions, including possibly your own ancestors.
-- npm publish / desktop packaging: follow the doc's step order exactly; verify
-  artifacts (file exists, size sane) before reporting success.
+If the agent runs inside the service being restarted, use one independent
+systemd task to carry the restart and basic checks. Outside that service (e.g.
+dev → prod), operate directly; no deployment framework is needed.
 
 ## Report
 
-Commands run (in order), artifacts produced (paths), health-check results,
-gate checks passed (monaco / TEMPLATE_VERSION), anything skipped and why.
-On failure: the failing command's key output lines + your read of the cause —
-and whether it's a build-infra issue (yours) or a source bug (goes back to dev).
+Briefly report the actual version, health/log outcome and requested artifact
+links. On failure, give the failing command and cause; source fixes go back to
+dev. Do not generate separate release reports or rollback instructions by default.
