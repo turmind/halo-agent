@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.0-alpha.2] - 2026-09-30
+
 ### Changed
 
 - Goal mode: its entry points — the `/goal` command, the admin goal banner / 🎯 badge / composer lock, and creation of new goal sessions — are now hidden and disabled by default behind an internal, global-only setting (`general.goal_mode_enabled`, off unless set in `~/.halo/secrets/settings.yaml`; takes effect after a server restart). The runtime mechanism and all existing goal history and data are left untouched, and the current docs no longer describe it.
@@ -653,7 +655,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha.2...HEAD
+[1.5.0-alpha.2]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha.1...v1.5.0-alpha.2
 [1.5.0-alpha.1]: https://github.com/turmind/halo-agent/compare/v1.4.6...v1.5.0-alpha.1
 [1.4.1]: https://github.com/turmind/halo-agent/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/turmind/halo-agent/compare/v1.3.4...v1.4.0
