@@ -1,4 +1,5 @@
 import { api } from '@/shared/api-client'
+import { useGoalStore } from './goal-store'
 
 export interface SlashCommand {
   name: string
@@ -38,7 +39,8 @@ export async function refreshCommands(projectId?: string, sessionId?: string, ag
 }
 
 export function getCommands(): SlashCommand[] {
-  return serverCommands.length > 0 ? serverCommands : CLIENT_FALLBACK
+  const commands = serverCommands.length > 0 ? serverCommands : CLIENT_FALLBACK
+  return useGoalStore.getState().enabled ? commands : commands.filter((cmd) => cmd.name !== '/goal')
 }
 
 export function matchCommands(input: string): SlashCommand[] {

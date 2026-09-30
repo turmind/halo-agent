@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -13,6 +13,12 @@ import {
   type GoalHost, type GoalState,
 } from '../src/agents/goal-mode.js'
 import { dispatchCommand, type CommandContext } from '../src/channels/shared/commands.js'
+
+// Keep the full enabled-mode contract; default-off entry coverage lives separately.
+vi.mock('../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config.js')>()
+  return { ...actual, config: { ...actual.config, goalModeEnabled: true } }
+})
 
 /**
  * Goal mode v3 (docs/plans/loop-mode.md) — deterministic core:

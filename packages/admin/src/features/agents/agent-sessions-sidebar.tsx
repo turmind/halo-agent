@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { create } from 'zustand'
 import { useChatStore } from '@/features/chat/chat-store'
+import { useGoalStore } from '@/features/chat/goal-store'
 import { anchorSessionArchive } from './session-archive-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionBus, bumpSessionBus } from '@/shared/session-bus'
@@ -130,6 +131,7 @@ function SessionTree({
   onCancelRename: () => void
 }) {
   const t = useT()
+  const goalModeEnabled = useGoalStore((s) => s.enabled)
   const pl = 12 + depth * 16
   return (
     <>
@@ -183,7 +185,7 @@ function SessionTree({
                     />
                   ) : (
                     <p className="truncate text-[10px] text-[var(--foreground)]">
-                      {sub.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
+                      {goalModeEnabled && sub.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
                       {sub.title || 'Untitled'}
                     </p>
                   )}

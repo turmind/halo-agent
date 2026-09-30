@@ -115,7 +115,7 @@ The SDK wraps protobuf marshalling; we just register an `EventDispatcher` callba
 7. Strip mention markup from text (Feishu inserts `<at user_id="ou_xxx">@bot</at>` or `@_user_123` tokens)
 8. Slash command dispatch (p2p only — group threads don't benefit from `/session new`, `/session list`, etc. since each thread is already its own session)
 9. Hand off to `deliverInbound` ([shared skeleton](telegram.md#shared-inbound-skeleton)), which does the rest:
-   - Create or retrieve the active session for this thread (with inherited access level) + apply the goal-mode route overlay
+   - Create or retrieve the active session for this thread (with inherited access level)
    - If the session is compacting → reply "⏳ 正在整理上下文，请稍后再发消息（通常 30 秒内完成）"; if busy → "已收到，会在当前轮结束后处理。" — hint only, the message is delivered either way
    - Refresh the reply route (`{inboundMessageId, isP2P, chatId}`) and attach the `FeishuResponder` listener once (it reads the route lazily at send time)
    - `sm.sendUserMessage(sessionId, agentInput, images?)` with `[channel: feishu | user: <id> | thread: <rootId>]` context

@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { buildRelayTools, type RelayTarget } from '../agents/relay.js'
+import { GOAL_AGENT_ID } from '../agents/goal-mode.js'
 import { resolveMdFilePath, writeMdFile } from '../prompts/md-loader.js'
 import { config, getModelsRegistry } from '../config.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
@@ -302,6 +303,7 @@ export function createAgentConfigRoutes() {
       .replace(/^-|-$/g, '')
 
     if (!id) return c.json({ error: 'Invalid agent name' }, 400)
+    if (id === GOAL_AGENT_ID && !config.goalModeEnabled) return c.json({ error: 'Goal mode is disabled.' }, 403)
 
     const scope = body.scope ?? 'global'
     let baseDir: string
@@ -626,6 +628,12 @@ export function createAgentConfigRoutes() {
     if (!isSafeIdSegment(sessionId)) return c.json({ error: 'Invalid session id' }, 400)
 
     const dir = getSessionsDir(agentId, source, projectId || undefined)
+    // This legacy save API can create files without SessionManager. Only new
+    // goal transcripts are blocked; existing history remains readable/updatable.
+    if (agentId === GOAL_AGENT_ID && !config.goalModeEnabled) {
+      try { await fs.access(path.join(dir, `${sessionId}.json`)) }
+      catch { return c.json({ error: 'Goal mode is disabled.' }, 403) }
+    }
     await ensureDir(dir)
     const now = new Date().toISOString()
     const messages = (body.messages as unknown[]) ?? []

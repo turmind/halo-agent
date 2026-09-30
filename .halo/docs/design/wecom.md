@@ -133,7 +133,7 @@ All frames are JSON `{ cmd, headers: { req_id }, body }`; responses echo `header
 5. Group text: strip leading `@token` mentions (`/^(@\S+\s*)+/`). WeCom only delivers group messages that `@` the bot, so there is no `shouldRespond` check. A multi-word bot name leaves its tail as residue — preferable to guessing the name and eating the user's first word
 6. Slash command dispatch — **single chat only** (a group's shared session belongs to everyone). `/workspace switch` persists the new path on the account row; the reply goes out via `replyStream`
 7. Skip if neither text/notes nor images remain
-8. Hand off to `deliverInbound` ([shared skeleton](telegram.md#shared-inbound-skeleton)): create or retrieve the session (with inherited access level) + goal-mode overlay; busy / compacting hint via `replyStream`; refresh the route and attach the `WecomResponder` listener once; `sm.sendUserMessage(sessionId, agentInput, images?)` with `[channel: wecom | user: <userid>]` (+ ` | thread: <chatid>` in groups)
+8. Hand off to `deliverInbound` ([shared skeleton](telegram.md#shared-inbound-skeleton)): create or retrieve the session (with inherited access level); busy / compacting hint via `replyStream`; refresh the route and attach the `WecomResponder` listener once; `sm.sendUserMessage(sessionId, agentInput, images?)` with `[channel: wecom | user: <userid>]` (+ ` | thread: <chatid>` in groups)
 
 ## Event coalescing (WecomResponder)
 

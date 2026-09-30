@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useGoalStore, refreshGoal, type GoalInfo } from '../src/features/chat/goal-store'
 import { useProjectStore } from '../src/shared/stores/project-store'
 import { api } from '../src/shared/api-client'
+import { registerStateHandlers } from '../src/shared/ws-handlers/state-handlers'
+import type { WsClient } from '../src/shared/ws-client-types'
 
 /**
  * Contract: dismissing a terminal goal banner survives a page refresh —
@@ -18,8 +20,9 @@ function goalInfo(id: string, status: GoalInfo['status'] = 'done'): GoalInfo {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   localStorage.clear()
-  useGoalStore.setState({ goal: null, dismissedGoalId: null })
+  useGoalStore.setState({ enabled: true, goal: null, dismissedGoalId: null })
   useProjectStore.getState().openFolder(PROJECT)
 })
 
@@ -65,5 +68,40 @@ describe('goal banner dismiss persistence', () => {
     expect(useGoalStore.getState().dismissedGoalId).toBeNull()
     // Original project's dismissal is still on disk.
     expect(localStorage.getItem(`halo_goal_dismissed_${PROJECT}`)).toBe('goal_1')
+  })
+})
+
+describe('goal entry switch', () => {
+  it('defaults off, skips mount/project refreshes and preserves historical state', async () => {
+    expect(useGoalStore.getInitialState().enabled).toBe(false)
+    const old = goalInfo('old')
+    useGoalStore.setState({ enabled: false, goal: old, dismissedGoalId: 'old' })
+    localStorage.setItem(`halo_goal_dismissed_${PROJECT}`, 'old')
+    const fetch = vi.spyOn(api.sessionLogs, 'goal').mockResolvedValue({ goal: null })
+    await refreshGoal(PROJECT)
+    await refreshGoal(OTHER_PROJECT)
+    expect(fetch).not.toHaveBeenCalled()
+    expect(useGoalStore.getState().goal).toEqual(old)
+    expect(localStorage.getItem(`halo_goal_dismissed_${PROJECT}`)).toBe('old')
+  })
+
+  it('WS goal pokes do not fetch while off and resume through the same handler when enabled', async () => {
+    const handlers = new Map<string, () => void>()
+    const client = {
+      on(type: string, handler: () => void) {
+        handlers.set(type, handler)
+        return () => { handlers.delete(type) }
+      },
+    } as unknown as WsClient
+    const unregister = registerStateHandlers(client)
+    const fetch = vi.spyOn(api.sessionLogs, 'goal').mockResolvedValue({ goal: goalInfo('new', 'running') })
+    useGoalStore.getState().setEnabled(false)
+    handlers.get('goal:changed')!()
+    expect(fetch).not.toHaveBeenCalled()
+    useGoalStore.getState().setEnabled(true)
+    handlers.get('goal:changed')!()
+    await vi.waitFor(() => expect(useGoalStore.getState().goal?.goalSessionId).toBe('new'))
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(PROJECT)
+    unregister()
   })
 })

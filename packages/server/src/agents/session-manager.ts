@@ -25,7 +25,7 @@ import { createDb, mirrorSessionMeta, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools, buildContinueTaskTool } from './session-tools.js'
-import { deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
+import { GOAL_AGENT_ID, deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
 import { deliverRelayReport, deliverRelayInterim, readReplyTo, buildRelayTools, RELAY_CHANNEL_PREFIX } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
@@ -805,6 +805,9 @@ export class SessionManager implements SessionManagerInternals {
     accessLevel: 'readonly' | 'workspace' | null = null,
     title?: string,
   ): Promise<string> {
+    // Gate only new sessions; restoring existing goals must keep working.
+    if (agentId === GOAL_AGENT_ID && !config.goalModeEnabled) throw new Error('Goal mode is disabled.')
+
     const segment = generateSessionId()
     const sessionId = explicitId ?? (parentId ? `${parentId}>${segment}` : segment)
     const now = Date.now()

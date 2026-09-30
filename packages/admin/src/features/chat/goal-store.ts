@@ -23,6 +23,8 @@ function dismissKey(projectId: string): string {
 }
 
 interface GoalStore {
+  enabled: boolean
+  setEnabled(enabled: boolean): void
   goal: GoalInfo | null
   /** Terminal-state (done/halted) banner dismissed for this goal id.
    *  Persisted per project in localStorage — the seed endpoint keeps
@@ -36,6 +38,9 @@ interface GoalStore {
 }
 
 export const useGoalStore = create<GoalStore>((set) => ({
+  // Set by the existing auth bootstrap; a restart + page reload picks up config edits.
+  enabled: false,
+  setEnabled: (enabled) => set({ enabled }),
   goal: null,
   dismissedGoalId: null,
   setGoal: (goal) => set({ goal }),
@@ -55,6 +60,7 @@ export const useGoalStore = create<GoalStore>((set) => ({
  *  events: a goal event from another workspace resolves to this workspace's
  *  own (unchanged) state. */
 export async function refreshGoal(projectId: string): Promise<void> {
+  if (!useGoalStore.getState().enabled) return
   // Re-seed the per-project dismiss state alongside the goal itself so a
   // page refresh / project switch restores both consistently.
   const dismissed = typeof window !== 'undefined'

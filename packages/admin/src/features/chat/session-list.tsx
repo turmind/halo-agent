@@ -10,6 +10,7 @@ import { api } from '@/shared/api-client'
 import { bumpSessionBus } from '@/shared/session-bus'
 import { cn, formatRelativeTime } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
+import { useGoalStore } from './goal-store'
 
 /**
  * Hook: manages explorer session list for the main chat.
@@ -50,6 +51,7 @@ export function SessionSidebar({
   loadingMore,
 }: SessionSidebarProps) {
   const t = useT()
+  const goalModeEnabled = useGoalStore((s) => s.enabled)
   const activeProject = useProjectStore((s) => s.activeProject)
 
   // Inline title rename. `editingId` is the session whose title is being
@@ -145,7 +147,7 @@ export function SessionSidebar({
                   />
                 ) : (
                   <p className="text-[11px] text-[var(--foreground)] truncate">
-                    {s.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
+                    {goalModeEnabled && s.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
                     {s.title}
                   </p>
                 )}

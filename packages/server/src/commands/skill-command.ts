@@ -98,8 +98,9 @@ export async function scanSkillDescriptors(workspaceRoot?: string): Promise<Comm
   // the single source feeding both dispatch (via scanSkillEntries) and the popup
   // (via the returned descriptors), so a command can never show up in the popup
   // that dispatch is unable to route to ("visible but unreachable").
+  // Hidden builtins still own their names; skills must not re-expose /goal.
   const builtinSlashes = new Set(
-    commandRegistry.listDescriptors()
+    commandRegistry.listDescriptors({ includeHidden: true })
       .filter((d) => d.source === 'builtin')
       .map((d) => d.slashName),
   )

@@ -7,10 +7,9 @@ import type { TelegramAccount } from './types.js'
 import { TelegramResponder } from './event-adapter.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, getAccount as getSharedAccount } from '../shared/accounts.js'
-import { type CommandContext } from '../shared/commands.js'
+import { DISPATCH_COMMANDS, type CommandContext } from '../shared/commands.js'
 import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute } from '../shared/inbound.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
-import { builtinCommandNames } from '../../commands/index.js'
 
 /** Reply destination for a session, refreshed on every inbound message so a
  *  session driven from a new chat (or switched to another user by a
@@ -285,9 +284,10 @@ async function runBot(args: {
     await ctx.reply(t('handler.start_greeting', lang))
   })
 
-  // Derived from the builtin registry (not a hardcoded list) so a newly
-  // added command is registered as a Telegram bot command automatically.
-  for (const cmd of builtinCommandNames()) {
+  // Hidden commands still need handlers so /goal@botname reaches the shared
+  // disabled response instead of falling through to chat. This is not a menu.
+  for (const command of DISPATCH_COMMANDS) {
+    const cmd = command.slice(1)
     bot.command(cmd, async (ctx) => {
       const cmdCtx = buildCmdCtx(ctx.from?.id ?? 0, ctx.chat?.id)
       if (!cmdCtx) { await ctx.reply(t('handler.workspace_gone', lang)); return }

@@ -691,9 +691,10 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   // overlay would deliver it to the goal session anyway, so typing here is
   // misleading. Paused lifts the lock (manual takeover). Slash commands stay
   // usable (/goal pause·status·clear are exactly what you'd run from here).
+  const goalModeEnabled = useGoalStore((s) => s.enabled)
   const goal = useGoalStore((s) => s.goal)
   const chatSessionId = useChatStore((s) => s.sessionId)
-  const goalLocked = !!goal
+  const goalLocked = goalModeEnabled && !!goal
     && (goal.status === 'intake' || goal.status === 'running')
     && chatSessionId === goal.workerSessionId
   // The lock only blocks plain chat — a typed slash command still dispatches.

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Goal mode: its entry points — the `/goal` command, the admin goal banner / 🎯 badge / composer lock, and creation of new goal sessions — are now hidden and disabled by default behind an internal, global-only setting (`general.goal_mode_enabled`, off unless set in `~/.halo/secrets/settings.yaml`; takes effect after a server restart). The runtime mechanism and all existing goal history and data are left untouched, and the current docs no longer describe it.
+
 ## [1.5.0-alpha.1] - 2026-09-30
 
 ### Added

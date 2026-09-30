@@ -8,15 +8,15 @@ Halo runs many workspaces on one server — one per team / project / credential 
 
 ## Mechanism
 
-Relay mirrors goal mode's shape exactly, because goal mode had already solved "deliver a session's wrap-up to some *other* session when it's genuinely done":
+Relay rides the same "deliver a session's wrap-up to some *other* session when it's genuinely done" seam that sub-agent auto-reports use — `runSession`'s finally:
 
-| | Goal mode | Relay |
-|---|---|---|
-| Back-pointer column | `agent_sessions.goal_session_id` on W | `agent_sessions.reply_to` on the target (JSON `{ workspace, sessionId }`) |
-| Delivery hook | `deliverGoalRound` in `runSession`'s finally | `deliverRelayReport`, same finally, right after it |
-| Quiet gate | root + no active children + empty queue | identical |
-| Tool set | `buildGoalTools` (G only) | `buildRelayTools` (opt-in, full access): send / interrupt / stop / read / list |
-| Reach | same workspace | any workspace via `SessionManagerRegistry` |
+| | Relay |
+|---|---|
+| Back-pointer column | `agent_sessions.reply_to` on the target (JSON `{ workspace, sessionId }`) |
+| Delivery hook | `deliverRelayReport`, in `runSession`'s finally right after `tryReportToParent` |
+| Quiet gate | root + no active children + empty queue (identical to `tryReportToParent`) |
+| Tool set | `buildRelayTools` (opt-in, full access): send / interrupt / stop / read / list |
+| Reach | any workspace via `SessionManagerRegistry` |
 
 **Dispatch** (`relay_send` / `relay_interrupt` share one `dispatch(params, hard)`): resolve the target workspace (`realpathSync`, must contain `.halo/`) → `registry.getOrCreate(wsPath)` gives the foreign `SessionManager` → create the session if missing (`relay_interrupt` refuses instead: nothing to interrupt) → `writeReplyTo(target db, session_id, { workspace: caller ws, sessionId: caller session })` → `appendUserMessage` (UI transcript, raw text) + `sendUserMessage` (model-facing, prefixed `[channel: relay | from: <caller ws>]`). The prefix reuses the channel-tag convention the system prompt already teaches ("don't echo the tag"), so the target agent knows the message is agent-sourced without a new prompt rule.
 
@@ -37,7 +37,7 @@ Relay mirrors goal mode's shape exactly, because goal mode had already solved "d
 
 ## Interim report (continue_task)
 
-A busy target that gets a follow-up `relay_send` answers it in a drained turn and, when its original task isn't done, calls `continue_task` — `drainQueue` then runs a resume turn in the **same** `runSession`. Every turn resets `output` / `finalOutput` (`runAgentTurn`'s per-turn reset — `get_session_output`, the session file, goal no-progress hashing and the report cap all depend on it), so the final report only carries the LAST turn's wrap-up and any earlier answer is lost. The same loss happens without a kick: two follow-ups in quick succession (the first answered with a plain `end_turn` while the second already sits in the queue), or a follow-up that lands while the **opening** turn is still running.
+A busy target that gets a follow-up `relay_send` answers it in a drained turn and, when its original task isn't done, calls `continue_task` — `drainQueue` then runs a resume turn in the **same** `runSession`. Every turn resets `output` / `finalOutput` (`runAgentTurn`'s per-turn reset — `get_session_output`, the session file and the report cap all depend on it), so the final report only carries the LAST turn's wrap-up and any earlier answer is lost. The same loss happens without a kick: two follow-ups in quick succession (the first answered with a plain `end_turn` while the second already sits in the queue), or a follow-up that lands while the **opening** turn is still running.
 
 Fix, at **turn end** in `drainQueue` (after `runAgentTurn` returns, before the kick block — not in `runSession`'s finally): when *another turn follows* (`selfKick && !interruptRequested`, or `messageQueue` non-empty) *and the turn was an answer* (`selfKick` set, or `finalOutput !== ''` — a natural `end_turn`), `SessionManager.sendInterimReport` checks who the batch came from and — **only if the batch just answered contains a relay message** (`text` contains `RELAY_CHANNEL_PREFIX`, no `sourceSessionId`) — calls `deliverRelayInterim(host, sessionId, body)`: read `reply_to` (no-op without one) → append + send into the caller
 
@@ -49,9 +49,9 @@ Fix, at **turn end** in `drainQueue` (after `runAgentTurn` returns, before the k
 
 The body is the turn's **whole** text (`session.output`, not `finalOutput`): the response that carries the `continue_task` tool_use has `stopReason === 'tool_use'`, so agent-loop marks its text `final: false` and it never reaches `finalOutput` — reading `finalOutput` would ship only whatever trailing line came after the tool call (or nothing). The tool description asks the model to write its reply *before* calling `continue_task`, but correctness doesn't depend on it.
 
-**Opening turn** (`runSession`'s `hasFirst` turn, `sendOpeningInterim`): same condition (`messageQueue` non-empty at turn end, `finalOutput` set, no `turnError`), but there is no batch to read the door from — the opening message *is* the dispatch — so the owed party is whoever the session reports to at the end: a root with a `reply_to` row → `deliverRelayInterim`; a sub-agent → its parent. Goal workers have neither and get nothing.
+**Opening turn** (`runSession`'s `hasFirst` turn, `sendOpeningInterim`): same condition (`messageQueue` non-empty at turn end, `finalOutput` set, no `turnError`), but there is no batch to read the door from — the opening message *is* the dispatch — so the owed party is whoever the session reports to at the end: a root with a `reply_to` row → `deliverRelayInterim`; a sub-agent → its parent.
 
-No quiet gate (the session is by definition not done) and **`reply_to` is kept**, so `deliverRelayReport` still fires exactly once when the task ends. Skipped when: no next turn (plain answer with an empty queue → the final report already carries it; esc after `continue_task` → no kick, the run ends, same), the interrupting message was local chat (typed into the department directly — nothing owed to the secretary), the turn errored, or the text is empty. An aborted turn that leaves the queue non-empty produces no interim either (`turnError`); the next turn's end decides. The same hook covers sub-agents (interim to the parent via `querySession`, see [session.md → continue_task](session.md#message-queue-and-drain)); goal workers are excluded.
+No quiet gate (the session is by definition not done) and **`reply_to` is kept**, so `deliverRelayReport` still fires exactly once when the task ends. Skipped when: no next turn (plain answer with an empty queue → the final report already carries it; esc after `continue_task` → no kick, the run ends, same), the interrupting message was local chat (typed into the department directly — nothing owed to the secretary), the turn errored, or the text is empty. An aborted turn that leaves the queue non-empty produces no interim either (`turnError`); the next turn's end decides. The same hook covers sub-agents (interim to the parent via `querySession`, see [session.md → continue_task](session.md#message-queue-and-drain)).
 
 ## Soft vs hard interrupt
 

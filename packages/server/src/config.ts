@@ -281,6 +281,10 @@ export function getServerSecret(namespaceId: string, key: string, workspaceRoot?
 
 
 export const config = {
+  // Goal entry points are retired, not the runtime. Internal/global-only, no UI:
+  // set general.goal_mode_enabled in ~/.halo/secrets/settings.yaml, then restart.
+  goalModeEnabled: settingsBool('general.goal_mode_enabled', false),
+
   server: {
     port: systemInt('HALO_PORT', 'server.port', 9527),
     /** scrypt hash stored in `secrets/config.yaml`, set by `halo setup`.

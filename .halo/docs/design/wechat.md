@@ -13,7 +13,7 @@ Halo server (9527) ──┤── channels/telegram/             ├── Sess
                            ilinkai.weixin.qq.com
 ```
 
-All channels are peers — each one is a subscriber + caller against SessionManager. Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/workspace`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter that builds a `CommandContext` and formats the result for its transport. The inbound tail (session resolve → goal route → busy hint → responder wiring → deliver) is likewise shared — see [Shared inbound skeleton](telegram.md#shared-inbound-skeleton).
+All channels are peers — each one is a subscriber + caller against SessionManager. Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/workspace`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter that builds a `CommandContext` and formats the result for its transport. The inbound tail (session resolve → busy hint → responder wiring → deliver) is likewise shared — see [Shared inbound skeleton](telegram.md#shared-inbound-skeleton).
 
 ## Data model
 
@@ -102,7 +102,7 @@ loop {
 1. Extract `from_user_id` / text + media items / `context_token`
 2. Process inbound media: images → base64 attached to the agent message; voice / video / files → saved under the workspace with a `[voice saved: ...]` etc. marker appended to the text
 3. If the text begins with `/`, dispatch a slash command (see below) — if it returns `handled`, stop here
-4. Hand off to `deliverInbound` ([shared skeleton](telegram.md#shared-inbound-skeleton)), which caches `lastActiveChatId`, resolves-or-creates the session, applies the goal-mode route overlay, sends a busy/compacting hint when needed, refreshes the reply route (`wxRoute(fromUserId, context_token)`), attaches the `WechatResponder` listener once, and delivers: clean text to the UI log, `[channel: wechat | user: <id>]\n<text>` to the agent (so it knows how to address the media-send skill)
+4. Hand off to `deliverInbound` ([shared skeleton](telegram.md#shared-inbound-skeleton)), which caches `lastActiveChatId`, resolves-or-creates the session, sends a busy/compacting hint when needed, refreshes the reply route (`wxRoute(fromUserId, context_token)`), attaches the `WechatResponder` listener once, and delivers: clean text to the UI log, `[channel: wechat | user: <id>]\n<text>` to the agent (so it knows how to address the media-send skill)
 
 ## Slash commands
 

@@ -101,6 +101,15 @@ Declared in [packages/server/src/settings-schema.ts](../../../packages/server/sr
 
 `evolution.*` controls the self-evolution subsystem (see [plans/self-evolution.md](../plans/self-evolution.md)). All `evolution.*` keys are `globalOnly` — they live in `~/.halo/secrets/settings.yaml` only, not workspace settings. Notable knobs: `evolution.level` (`L0` = off, `L1` = human + LLM assist), `evolution.max_concurrent_run` / `max_concurrent_apply` (wrapper concurrency caps), `evolution.run_timeout_minutes` / `apply_timeout_minutes` (heartbeat timeouts), `evolution.max_attempts` (per-row retry cap), `evolution.triggers.pre_compact` (snapshot session before compaction).
 
+Goal mode's entry points are offline (the `/goal` command, admin banner and creation of new goal sessions are hidden). To reopen them, set `general.goal_mode_enabled` — a global-only boolean, default `false`, read from `~/.halo/secrets/settings.yaml` only (a workspace `settings.yaml` has no effect) and not shown in the Settings UI — then restart the Halo server and refresh the browser (existing goal bindings and history are not touched either way):
+
+```yaml
+general:
+  goal_mode_enabled: true
+```
+
+The value is read once at process start, so unlike other settings it is **not** picked up by the mtime-watching reload.
+
 `agent.default_provider` is rendered as an `enum` whose options are the provider ids found under `~/.halo/global/models/*.yaml`. It controls **which provider a freshly scaffolded agent.yaml uses** — the model id, endpoint, prompt-caching TTL and thinking defaults are then derived from that provider's YAML (`defaultModelId`, `defaultEndpoint`, per-model `capabilities.promptCaching.default`, `capabilities.thinking.defaultEnabled / default / defaultBudgetTokens`). Existing agents are not retroactively touched. Implementation: [packages/server/src/routes/agent-configs.ts](../../../packages/server/src/routes/agent-configs.ts) `buildScaffoldModelBlock()`.
 
 ### Field attributes

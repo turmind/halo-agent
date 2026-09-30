@@ -64,7 +64,7 @@ describe('GET /auth/check — HALO_BADGE passthrough', () => {
     const cookie = login.headers.get('set-cookie')!.split(';')[0]
     const { status, json } = await check(cookie)
     expect(status).toBe(200)
-    expect(json).toEqual({ authenticated: true, badge: 'DEV' })
+    expect(json).toEqual({ authenticated: true, badge: 'DEV', goalModeEnabled: false })
   })
 
   it('unset or blank env → badge null (admin keeps stock branding)', async () => {

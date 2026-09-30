@@ -49,7 +49,7 @@ Long sessions get their older exchanges moved out of the active log on compact, 
 ### Session sidebar (right side)
 A fixed, collapsible list of the workspace's root sessions on the right edge of the chat panel (terminal-list style, ~200px). Replaces the old popup dropdown — the History button (with count badge) left of the composer and the "N previous sessions" link in the empty state both just toggle it now. Open/collapsed state persists globally in `localStorage` (`halo_session_sidebar_open`), default open.
 
-- Each row: 🎯 goal badge, title, `N msgs · time-ago`, model tail; hover reveals **rename** (pencil) and **delete** buttons; infinite scroll pages older sessions; "+ New Session" footer. `N` counts the session's user turns **over its whole lifetime** — compacting or archiving history never makes it go backwards
+- Each row: title, `N msgs · time-ago`, model tail; hover reveals **rename** (pencil) and **delete** buttons; infinite scroll pages older sessions; "+ New Session" footer. `N` counts the session's user turns **over its whole lifetime** — compacting or archiving history never makes it go backwards
 - **Inline rename**: pencil → input in place, Enter/blur commits (`PATCH /sessions/logs/:id`), Esc cancels; empty or unchanged title is a no-op. Other session-list consumers refresh via the `session:changed` WS push
 - **Switch loading**: clicking a row shows a spinner on that row + a "Loading session…" state in the message area, cleared only when the server's `state:snapshot` for that exact sessionId arrives (empty sessions included). Past 30s it degrades to "Slow network — still loading…" plus a Retry button (re-subscribes) — slow ≠ failed, nothing aborts on its own
 
@@ -66,9 +66,6 @@ The full command list is fetched from `GET /api/commands` per session and includ
 | `/session compact` | server | LLM-summary compact of the conversation |
 
 See [requirements/command.md](command.md) for the full command surface.
-
-### Goal-mode banner
-When a goal is bound to the current session (see [command.md → `/goal`](command.md) / [design/goal-mode.md](../design/goal-mode.md)), a strip above the composer shows status (intake / running round N/max / paused / halted / done); a label click jumps to the goal session, a `Worker →` button jumps back to the worker. Terminal states (done/halted) are dismissible — dismissal persists per-project in `localStorage` so it survives a page refresh; a new goal gets a different id and un-suppresses automatically. Active states (intake/running/paused) are not dismissible while the lock they explain is still in force.
 
 ### Graceful interrupt
 Sending a new message while the agent is generating **does not** abort — the message goes to the server queue, the agent finishes the current turn at the next safe checkpoint (after a tool call), and then runs the queued message. Queueing multiple messages is supported; they run in order.

@@ -231,33 +231,7 @@ if (!AGENTCORE) acquireSingleInstanceLock(path.join(HALO_HOME, 'global', 'server
 //
 // Catches forgotten descriptors / dispatch entries during dev. Cheap, prevents
 // the silent "command shows in palette but does nothing" failure mode.
-{
-  const declared = new Set(
-    commandRegistry.listDescriptors()
-      .filter((d) => d.source === 'builtin')
-      .map((d) => d.slashName),
-  )
-  const dispatched = new Set<string>(DISPATCH_COMMANDS)
-  const declaredServer = new Set(
-    commandRegistry.listDescriptors()
-      .filter((d) => d.type === 'server' && d.source === 'builtin')
-      .map((d) => d.slashName),
-  )
-  const missingDispatch = [...declaredServer].filter((n) => !dispatched.has(n))
-  const orphanDispatch = [...dispatched].filter((n) => !declared.has(n))
-  if (missingDispatch.length > 0) {
-    throw new Error(
-      `[Server] Command descriptors without a dispatch case: ${missingDispatch.join(', ')}. ` +
-      `Either add a case in channels/shared/commands.ts dispatchCommand or change the descriptor type to 'client'.`,
-    )
-  }
-  if (orphanDispatch.length > 0) {
-    throw new Error(
-      `[Server] Dispatch cases without a descriptor: ${orphanDispatch.join(', ')}. ` +
-      `Add a registerDescriptor entry in commands/index.ts or remove the dispatch case.`,
-    )
-  }
-}
+commandRegistry.assertDispatchCommands(DISPATCH_COMMANDS)
 
 // OTel providers first (the logger interceptors forward to the OTel logger
 // when export is enabled), then the file logger before any console.log calls.

@@ -1,4 +1,6 @@
-# Goal Mode — Design
+# Goal Mode — Design (archived)
+
+> **Archived — not a current feature.** Goal mode's entry points (the `/goal` command, the admin banner and badge) are hidden and disabled by default behind an internal setting; the runtime mechanism and stored data are kept intact. This is the original design document, preserved for history only; usage sections extracted from the live docs are in [goal-reference.md](goal-reference.md). Relative links below into `../docs/` point at the current docs, which no longer describe goal mode.
 
 In a long agent collaboration the user plays two roles without noticing: the **pusher** (the agent stops after each turn, the user types "continue") and the **evaluator** (the agent says "done", the user checks whether it actually is). Goal mode codifies both so the user can hand them off, keeping only the two things that must not be delegated: **decision authority** (a genuine fork reaches the user and the loop waits) and **final acceptance** (a pass ends the loop with a report the human signs off on).
 
@@ -31,7 +33,7 @@ Both G and W are **root sessions** (`parentId: null`), each visible in the Sessi
 
 Template `packages/server/templates/agents/goal/` (agent id `goal`, `GOAL_AGENT_ID`). `internal: true` in its yaml hides it from rosters and blocks delegation *to* it, but the id deliberately has **no `__` wrapping** — `isInternalAgent` keys off the underscore pattern, so G's session files stay **workspace-local** (visible in the workspace Sessions tree) instead of landing in `~/.halo/global/internal-sessions/`. Only `/goal create` mints a G session (id `goal_<ts36>`, title `🎯 Goal`). One G per goal; G is single-use — a terminal state seals it (state rule, not deletion: the transcript stays readable) and the next `/goal create` mints a fresh one.
 
-G declares no `team`, so it never gets the standard session-tool bundle; `session-agent-builder` injects the G-only tool set instead (`createGoalTools`, keyed off `GOAL_AGENT_ID` — see [dev/tools.md → Goal tools](../dev/tools.md#goal-tools)).
+G declares no `team`, so it never gets the standard session-tool bundle; `session-agent-builder` injects the G-only tool set instead (`createGoalTools`, keyed off `GOAL_AGENT_ID` — see [dev/tools.md → Goal tools](goal-reference.md#goal-tools-was-devtoolsmd)).
 
 ### W — the worker
 
@@ -59,7 +61,7 @@ Given the session a chat surface resolved, return where the inbound user message
 - Terminal states cleared the back-pointer, so they never reach the status check.
 - Everything else → unchanged.
 
-Called at every channel's inbound seam: WS `handleChat`, web (SSE), wechat, telegram, slack, feishu. On the admin WS path a divert additionally rebinds the client's event listener to G and emits `session:switched` (same mechanics as a command `switchTo` — see [ws.md](ws.md#switchto-rebind--sessionswitched)).
+Called at every channel's inbound seam: WS `handleChat`, web (SSE), wechat, telegram, slack, feishu. On the admin WS path a divert additionally rebinds the client's event listener to G and emits `session:switched` (same mechanics as a command `switchTo` — see [ws.md](../docs/design/ws.md#switchto-rebind--sessionswitched)).
 
 ## The delivery point (`deliverGoalRound`)
 
@@ -69,7 +71,7 @@ Gates, in order:
 
 1. Root only (`parentId === null`), row carries `goalSessionId`, goal status is `running`.
 2. **Subtree-quiet gate** (inherited from `tryReportToParent`): no active children in the db **and** an empty message queue. A W that dispatched executors and idled while they run does NOT end the round — their reports wake W first.
-   - **Aborted-round marker**: the report body is `finalOutput || output || '(no output)'`; when W's turn was killed by an unrecoverable error (`turnError` set — retry budget exhausted / account error), it is prefixed with `[WORKER ABORTED: … Error: <text> … judge this as an interrupted round, do not score it as a completed result …]`. Without it G scored mid-turn fragments (or a literal "(no output)") as real rounds — same defect as the sub-agent auto-report, same prescription (see [session.md](session.md#session-lifecycle)): prefix, don't suppress (skipping delivery would stall the loop), prepended *before* the truncation cap so it always survives. The marker rides every downstream delivery path (question-stop / halt headers describe the stop, the marker describes the round's shape — both true), and an aborted round still counts toward round accounting and the no-progress hash: three identical aborts trip the breaker, which is the right read for a worker dying the same way thrice.
+   - **Aborted-round marker**: the report body is `finalOutput || output || '(no output)'`; when W's turn was killed by an unrecoverable error (`turnError` set — retry budget exhausted / account error), it is prefixed with `[WORKER ABORTED: … Error: <text> … judge this as an interrupted round, do not score it as a completed result …]`. Without it G scored mid-turn fragments (or a literal "(no output)") as real rounds — same defect as the sub-agent auto-report, same prescription (see [session.md](../docs/design/session.md#session-lifecycle)): prefix, don't suppress (skipping delivery would stall the loop), prepended *before* the truncation cap so it always survives. The marker rides every downstream delivery path (question-stop / halt headers describe the stop, the marker describes the round's shape — both true), and an aborted round still counts toward round accounting and the no-progress hash: three identical aborts trip the breaker, which is the right read for a worker dying the same way thrice.
 3. **Spec tamper gate**: sha256 of `GOAL_SPEC.md` must equal the `specHash` stamped at attach. Changed or missing → halt (`spec-tampered`), back-pointer cleared, G instructed to write a halt diagnosis. Never silently restore.
 4. **Question-stop**: a report containing `<NEED_INPUT>` is delivered with a question-stop header and consumes **neither** the round counter nor the no-progress budget — the worker is waiting, not failing. G triages: answerable from spec + scene → `goal_decide` + relay; genuine user-sovereignty fork → park to the user.
 5. **Round accounting**: `round++`; `noProgress` increments when the report hash is unchanged from last round, else resets (a deterministic proxy for hard-stuck — semantic no-progress is G's judging duty).
@@ -90,7 +92,7 @@ A fifth cap is enforced inside the tools rather than the delivery point: **deleg
 
 ## G-only tools
 
-Injected only for the `goal` agent; schemas in [dev/tools.md → Goal tools](../dev/tools.md#goal-tools). Every callback **re-reads goal state from the db** — never a cached copy — so a halt / pause / clear that landed while G was mid-turn is enforced on its very next tool call.
+Injected only for the `goal` agent; schemas in [dev/tools.md → Goal tools](goal-reference.md#goal-tools-was-devtoolsmd). Every callback **re-reads goal state from the db** — never a cached copy — so a halt / pause / clear that landed while G was mid-turn is enforced on its very next tool call.
 
 - `goal_context` — read the binding + counters. During `intake` it also embeds `workerRecent`: the worker's last 20 non-empty user/assistant messages (transcript `role=system` noise skipped), each truncated to 400 chars, 8K chars total budget applied newest-first, plus `workerMessageCount`. This is how G seeds the intake conversation without the user re-explaining — and without parsing a 150 KB session JSON (the dogfood failure that motivated embedding it). Running goals don't embed it; G works off delivered round reports.
 - `goal_attach` — the hinge from intake conversation to running loop, callable from any channel (no button). Preconditions: status `intake` + `GOAL_SPEC.md` written. Stamps the spec hash, records W's token baseline (from W's `agent_sessions.total_output_tokens`, the same mirrored column the guardrail reads — so baseline and meter can't drift apart), applies cap overrides pinned during intake, flips to `running`, and dispatches the round-1 kickoff to W.
@@ -101,7 +103,7 @@ Injected only for the `goal` agent; schemas in [dev/tools.md → Goal tools](../
 
 ## `/goal` verbs
 
-All five verbs are builtin deterministic code (`SUBCOMMAND_ROUTES`, no backing skill) and **all gated `requiresAccess: full`, including `status`** — user ruling: goal mode drives an autonomous multi-round loop (dispatches work that writes files, runs shell checks, burns model budget), so no verb belongs to workspace-level callers. See [requirements/command.md](../requirements/command.md).
+All five verbs are builtin deterministic code (`SUBCOMMAND_ROUTES`, no backing skill) and **all gated `requiresAccess: full`, including `status`** — user ruling: goal mode drives an autonomous multi-round loop (dispatches work that writes files, runs shell checks, burns model budget), so no verb belongs to workspace-level callers. See [requirements/command.md](goal-reference.md).
 
 - `create [description]` — refuses while a goal is active (prints its status); the current session must be a root and not itself a G. Mints G, writes both halves of the binding, creates the goal dir, and kicks G's intake. The kick (and the user's inline description) is **persisted to G's UI transcript before dispatch** (`appendUserMessage` then `sendUserMessage`, mirroring the channel inbound path) — `sendUserMessage` alone feeds only the LLM context, which left G's transcript opening with tool noise after a reload. Returns `switchTo: G` so the surface lands in the intake conversation.
 - `status` — prints the latest goal (any state) from the db: status, round/cap, elapsed, no-progress, delegated count, both session ids, halt reason if any.
@@ -121,16 +123,16 @@ All five verbs are builtin deterministic code (`SUBCOMMAND_ROUTES`, no backing s
 
 Continuation over death-handling: in-flight promises die with the process, goal state survives in the db. The SessionManager constructor (gated on `reconcileOrphansOnBoot` **and** the `.halo/runtime.lock` workspace claim — same ownership gate as the orphan reconcile) sweeps every goal at status `running` and delivers a deterministic nudge to G: *"server restarted, the in-flight round was lost; call goal_context, re-read GOAL_SPEC.md and your own transcript, re-dispatch."* Counters and caps were already in the db, so nothing is forgotten. `intake` needs no nudge (the user drives it); `paused` / `halted` / terminal goals stay put — a user-initiated pause still requires an explicit `/goal resume`.
 
-Plain root sessions get the equivalent treatment from the run-ledger sweep (`sweepInterruptedRuns`, right after `sweepActiveGoals` in the same constructor chain — see [session.md](session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb)). A goal-bound W is excluded from that sweep **only** while its goal is `running` — that's the one state where this sweep above re-dispatches it, so a direct nudge would land a bogus round report on G. In `intake` or `paused`, G isn't re-dispatching anything, so W is nudged like any plain root.
+Plain root sessions get the equivalent treatment from the run-ledger sweep (`sweepInterruptedRuns`, right after `sweepActiveGoals` in the same constructor chain — see [session.md](../docs/design/session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb)). A goal-bound W is excluded from that sweep **only** while its goal is `running` — that's the one state where this sweep above re-dispatches it, so a direct nudge would land a bogus round report on G. In `intake` or `paused`, G isn't re-dispatching anything, so W is nudged like any plain root.
 
 ## Admin surface & WS
 
-- **`goal:changed`** is broadcast on every `writeGoalState` (and on the G-delete dissolve path) with `{goalSessionId, workerSessionId, status, round, maxRounds}`. The broadcast is **server-global with no workspace marker**; the admin re-fetches through the seed endpoint under its active project, which naturally filters cross-workspace events. See [ws.md](ws.md).
-- **Seed endpoint** `GET /api/sessions/goal?projectId=` restores banner/lock state after a page reload (`cleared` returns `null` — a dismissed record, not a displayable state). See [dev/api.md](../dev/api.md#get-apisessionsgoalprojectidabs).
+- **`goal:changed`** is broadcast on every `writeGoalState` (and on the G-delete dissolve path) with `{goalSessionId, workerSessionId, status, round, maxRounds}`. The broadcast is **server-global with no workspace marker**; the admin re-fetches through the seed endpoint under its active project, which naturally filters cross-workspace events. See [ws.md](../docs/design/ws.md).
+- **Seed endpoint** `GET /api/sessions/goal?projectId=` restores banner/lock state after a page reload (`cleared` returns `null` — a dismissed record, not a displayable state). See [dev/api.md](goal-reference.md#get-apisessionsgoalprojectidabs).
 - **Banner** (`goal-banner.tsx`): workspace-level strip above the composer — intake / running (`round N/max`) / paused / halted / done states. Label click jumps to G, a `Worker →` button jumps to W (client-side navigation only); terminal states are dismissible, active ones are not (the lock they explain is still in force). Dismissal persists per-project in `localStorage` (`halo_goal_dismissed_<projectId>`) so it survives a page refresh; a new goal has a different `goalSessionId`, so the id-equality check naturally un-suppresses the banner for it.
 - **Input lock** (`message-input.tsx`): while the open session is the bound worker of an `intake`/`running` goal, plain chat is blocked (the overlay would divert it anyway — typing there is misleading); slash commands still dispatch (`/goal pause · status · clear` are exactly what you'd run from there). Paused lifts the lock.
 - **🎯 badge**: session lists render it off the `goalSessionId` field in `GET /api/sessions/logs` rows.
-- **`switchTo` rebind**: `/goal create` / `resume` return `switchTo: G`; the WS handler rebinds the client's event listener and emits `session:switched`; the frontend then re-subscribes to get a disk-seeded snapshot so G's existing transcript renders. Details in [ws.md](ws.md#switchto-rebind--sessionswitched).
+- **`switchTo` rebind**: `/goal create` / `resume` return `switchTo: G`; the WS handler rebinds the client's event listener and emits `session:switched`; the frontend then re-subscribes to get a disk-seeded snapshot so G's existing transcript renders. Details in [ws.md](../docs/design/ws.md#switchto-rebind--sessionswitched).
 
 ## Storage
 
@@ -141,4 +143,4 @@ No new database, no new files beyond the goal dir:
 
 ## Design evolution
 
-This document describes the shipped terminal state only. The full design rationale — the v1 (detached wrapper / goal.db) and v2 (in-session stop-gate) post-mortems, the "why an LLM loop-driver is acceptable" argument, judging-discipline details, and the user rulings from review — is archived in `docs/plans/loop-mode.md` (local-only, maintainer checkouts).
+This document describes the shipped terminal state only. The full design rationale — the v1 (detached wrapper / goal.db) and v2 (in-session stop-gate) post-mortems, the "why an LLM loop-driver is acceptable" argument, judging-discipline details, and the user rulings from review — is archived in `.halo/docs/plans/loop-mode.md` (local-only, maintainer checkouts).

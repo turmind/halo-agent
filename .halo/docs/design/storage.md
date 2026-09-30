@@ -50,7 +50,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 ├── sessions/<agentId>/                # Session files (one per regular session)
 ├── memory/                             # Project memory (dated entries)
 ├── canvas/self.html                   # Agent's visual face — platform-owned, force-copied on every open (design/express-self.md)
-├── goal/<goalId>/                     # Goal mode: GOAL_SPEC.md + decision-<n>.md (design/goal-mode.md)
+├── goal/<goalId>/                     # Retained legacy goal-mode artifacts (GOAL_SPEC.md + decision-<n>.md); existing goals unchanged
 ├── logs/
 ├── evo/                                # Self-evolution per-workspace artifacts
 │   ├── runs/<id>/                     #   per-evaluation: source-snapshot.json, tool-flow.md,
@@ -578,7 +578,7 @@ The databases hold session metadata indexes and workspace-scoped preferences (e.
 | created_at / updated_at | INTEGER | Unix ms |
 | stopped_at | INTEGER | Stopped timestamp (null = active) |
 | archived_at | INTEGER | Archived timestamp (null = not archived) |
-| goal / goal_session_id | TEXT | Goal mode — binding JSON on the goal session's row, back-pointer on the worker's |
+| goal / goal_session_id | TEXT | Retained legacy columns (goal mode binding JSON / back-pointer); existing bindings are unchanged and still honored |
 | reply_to | TEXT | Relay — JSON `{ workspace, sessionId }` of the caller session in another workspace; set by `relay_send`, cleared on report delivery. Added in `HALO_MIGRATIONS` slot (`db/index.ts`). |
 | title | TEXT | Mirror of the session file's `title` |
 | exchange_count | INTEGER | Mirror: main user turns over the session's lifetime (kept + archived) |

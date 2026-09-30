@@ -18,7 +18,7 @@ Field-by-field `agent.yaml` reference: [agents.md](agents.md). Per-tool schemas 
 Gotchas:
 - An empty or half-copied `<ws>/.halo/agents/<id>/` folder **shadows** the global agent completely. With no `agent.yaml` inside, the agent can't be used: `start_session` returns "not found" and opening a session fails with "agent.yaml missing or unreadable" — yet rosters and pickers may still show the global copy. When customizing, copy both files; an `agent.yaml` without `model.provider` / `model.id` / `model.endpoint` fails with "missing model config".
 - Same id in both scopes: everything (roster, chat selector, delegation) sees only the workspace version.
-- Built-in agents (`default`, `executor`, `deep-executor`, `goal`, and the internal `__evo_agent__` / `__score__` / `__apply_agent__`) and built-in skills are platform-owned: a template reseed after an upgrade overwrites them (an agent's `model:` / `context:` blocks are kept). Customize through a workspace copy, not by editing the global files.
+- Built-in agents (`default`, `executor`, `deep-executor`, and the internal `__evo_agent__` / `__score__` / `__apply_agent__`) and built-in skills are platform-owned: a template reseed after an upgrade overwrites them (an agent's `model:` / `context:` blocks are kept). Customize through a workspace copy, not by editing the global files.
 
 ## 2. When a config edit takes effect
 
@@ -117,7 +117,6 @@ Extra rules:
 | Cron job | Full (the `halo cli` default) | Keeps its stored level (passed through as `--access`) |
 | `halo cli` / TUI | `--access`, default `full` | `--access` value (a different level is persisted) |
 | `relay_send` into another workspace | Full | Keeps its stored level |
-| `/goal create` | The goal session is full (`/goal` verbs need full access) | — |
 | AgentCore runtime | Full | — |
 
 Consequences:

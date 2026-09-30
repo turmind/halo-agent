@@ -86,7 +86,6 @@ And when you'd rather have ambience than logs: [Halo City](#halo-city) renders t
 
 ## Recent highlights
 
-- 🎯 **Goal Mode** — `/goal create` hands the two roles you unconsciously play in long collaborations — the pusher ("continue") and the evaluator ("is it actually done?") — to a dedicated judge agent: it pins the goal contract with you, then dispatches work orders round by round and judges the results until acceptance, with guardrails enforced in code (round / wall-clock / no-progress caps).
 - ☁️ **AgentCore runtime mode** — run the same server as an Amazon Bedrock AgentCore Runtime container (`HALO_RUNTIME_MODE=agentcore`), with per-user EFS-backed workspaces.
 - 🎨 **Four UI themes** — dark, light, midnight, warm; synced server-side so every browser gets your pick.
 - ⌨️ **TUI overhaul** — reworked input, verbose mode, and persistent history in the standalone terminal client.

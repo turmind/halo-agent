@@ -186,7 +186,7 @@ Not injected: USER.md / `prompts/root/` / `prompts/bootstrap/`.
 
 The self-evolution agents (`__evo_agent__`, `__score__`, `__apply_agent__`) are platform tooling, not workspace-resident assistants. They get **none** of the workspace context: USER.md, INSTRUCTIONS.md (global + workspace-root), INDEX.md, and all three prompt scopes (`prompts/all` / `root` / `bootstrap`) are cleared in `composeSystemPrompt`. Only their own AGENT.md (which carries the full procedure) plus the tool list remains — this keeps their token budget clean.
 
-> Caveat: `prompts/all` is where `TOOL_SHELL.md` (platform shell guidance) lives, so a `shell_exec`-capable internal agent (`__apply_agent__`) doesn't inherit it. Both `__apply_agent__`'s and `goal`'s (the goal-mode judge, also an internal agent) AGENT.md carry their own "Shell usage & platform" section to cover this — keep that in mind if adding shell to another internal agent.
+> Caveat: `prompts/all` is where `TOOL_SHELL.md` (platform shell guidance) lives, so a `shell_exec`-capable internal agent (`__apply_agent__`) doesn't inherit it. `__apply_agent__`'s AGENT.md carries its own "Shell usage & platform" section to cover this — keep that in mind if adding shell to another internal agent.
 
 ### Fallback
 

@@ -22,7 +22,7 @@ File: `packages/server/src/middleware/auth.ts`
 |---|---|---|
 | POST | `/api/auth/login` | Password login, returns a JWT cookie |
 | POST | `/api/auth/logout` | Clears the auth cookie (Set-Cookie `Max-Age=0`). In `PUBLIC_PATHS`. No server-side token blacklist — a copied JWT stays valid until natural expiry |
-| GET | `/api/auth/check` | Validates the current token; refreshes stale tokens. Also returns `badge` (the `HALO_BADGE` env, `null` when unset) on both the 200 and the 401 so the login page can brand its favicon/title too |
+| GET | `/api/auth/check` | Validates the current token; refreshes stale tokens. Also returns `badge` (the `HALO_BADGE` env, `null` when unset) on both the 200 and the 401 so the login page can brand its favicon/title too; the 200 additionally carries a boolean `goalModeEnabled` |
 | POST | `/api/auth/change-password` | Change the admin password. **Not** in `PUBLIC_PATHS` — requires a valid JWT cookie. Persists the new scrypt hash to `~/.halo/secrets/config.yaml`; takes effect immediately (no restart), does **not** rotate `jwt_secret` so existing sessions stay signed in |
 
 ## Files
@@ -110,9 +110,8 @@ Unified session log API — list + read session files across all agents.
 | GET | `/api/sessions/logs/:id/archive/:n?projectId=` | One archived UI-log segment — see [detail](#get-apisessionslogsidarchivenprojectidabs) |
 | DELETE | `/api/sessions/logs/:id?projectId=` | Delete the session log (and all of its archive segments) |
 | PATCH | `/api/sessions/logs/:id?projectId=` | Rename a session (admin-only) — updates the log file's title and the mirrored `agent_sessions.title`. Accepts any session id (root or sub-agent); the sidebar exposes the rename affordance on every row |
-| GET | `/api/sessions/goal?projectId=` | Latest goal binding for the workspace (goal-mode banner / input-lock seed) — see [detail](#get-apisessionsgoalprojectidabs) |
 
-The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / exchangeCount / parentSessionId / stoppedAt / contextTokens / totalOutputTokens / goalSessionId), served from the mirrored `agent_sessions` columns rather than by parsing each session file (rows predating the columns are backfilled from the file on first read). The frontend builds the tree from `parentSessionId`; `goalSessionId` (non-null on a goal-bound worker row) drives the 🎯 badge.
+The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / exchangeCount / parentSessionId / stoppedAt / contextTokens / totalOutputTokens / goalSessionId — the last is a retained legacy field, non-null only on a goal-bound worker row; existing bindings are unchanged), served from the mirrored `agent_sessions` columns rather than by parsing each session file (rows predating the columns are backfilled from the file on first read). The frontend builds the tree from `parentSessionId`.
 
 The get endpoint returns the full session file. If only `rawMessages` is present (no event-log `messages`), `convertRawMessages()` transforms it into display format on the fly.
 
@@ -452,7 +451,7 @@ Source: [packages/server/src/middleware/auth.ts:123-134](../../../packages/serve
 
 ```json
 // 200 authenticated
-{ "authenticated": true, "badge": "DEV" }
+{ "authenticated": true, "badge": "DEV", "goalModeEnabled": false }
 
 // 401 not authenticated
 { "authenticated": false, "badge": "DEV" }
@@ -463,6 +462,8 @@ branches — this is the admin's first request, login page included, so the tab
 can brand its favicon + title from the very first paint without a second
 endpoint or a poll. Corollary: the value is readable **without authenticating**,
 so it must stay a label, not a secret. See [env.md](./env.md).
+
+`goalModeEnabled` (boolean) is present on the **200 only** — the 401 body has no such field. It is a snapshot of `config.goalModeEnabled` taken at server start (`general.goal_mode_enabled`, default `false`), so it changes only after a restart; the admin reads it on load. See [requirements/settings.md](../requirements/settings.md).
 
 ### POST `/api/auth/change-password`
 
@@ -684,25 +685,6 @@ Failure modes, in the order checked:
 | 404 | `Segment not found` | `n > archiveCount` (uncommitted / nonexistent), or the segment file can't be read |
 
 The `n > archiveCount` check is the point, not a formality: `archiveCount` in the active file is the archive write's commit marker, so a segment file beyond it exists only because a crash interrupted the two-step write and must never be served. See [design/session.md](../design/session.md#ui-log-archiving).
-
-### GET `/api/sessions/goal?projectId=<abs>`
-
-Source: `packages/server/src/routes/sessions.ts` (`findLatestGoal` in `agents/goal-mode.ts`)
-
-Latest goal binding for the workspace — goals are serialized per workspace, so "the" goal is unambiguous. Refresh seed for the admin's goal banner / worker input lock: `goal:changed` WS pushes keep a live tab current, this endpoint restores state after a page reload. Returns `{ "goal": null }` when there is no goal or the latest one is `cleared` (a dismissed record, not a displayable state). See [design/goal-mode.md](../design/goal-mode.md).
-
-```json
-// 200
-{
-  "goal": {
-    "goalSessionId": "goal_mabc123",
-    "workerSessionId": "sid_abc",
-    "status": "running",        // intake | running | paused | halted | done
-    "round": 3,
-    "maxRounds": 50
-  }
-}
-```
 
 ### GET `/api/settings/schema?projectId=<abs>`
 

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { History, Trash2, Loader2 } from 'lucide-react'
 import { cn, formatRelativeTime } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
+import { useGoalStore } from '@/features/chat/goal-store'
 
 /** Compat alias — the implementation moved to shared/utils
  *  (formatRelativeTime). Kept so existing `timeAgo` imports
@@ -56,6 +57,7 @@ export function SessionListDropdown({
   direction?: 'up' | 'down'
 }) {
   const t = useT()
+  const goalModeEnabled = useGoalStore((s) => s.enabled)
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const onToggle = controlledToggle ?? (() => setInternalOpen((v) => !v))
@@ -126,7 +128,7 @@ export function SessionListDropdown({
                 >
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] text-[var(--foreground)] truncate">
-                      {s.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
+                      {goalModeEnabled && s.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
                       {s.title}
                     </p>
                     <p className="text-[9px] text-[var(--muted-foreground)]">

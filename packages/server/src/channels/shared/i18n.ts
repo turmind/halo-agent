@@ -147,6 +147,7 @@ const messages: Record<string, Record<Lang, string>> = {
   'agent.delete_done': { zh: '🗑 已删除 agent "{name}"（{scope}）', en: '🗑 Deleted agent "{name}" ({scope})' },
 
   // ── /goal verbs (goal mode) ──
+  'goal.disabled': { zh: 'Goal 模式已下线。', en: 'Goal mode is disabled.' },
   'verb.goal.create': { zh: '在当前会话上启动 goal 意图对话', en: 'Start goal intake on the current session' },
   'verb.goal.status': { zh: '查看当前 goal 的轮次 / 上限 / 状态', en: "Show the current goal's round / caps / state" },
   'verb.goal.pause':  { zh: '暂停 goal（停止 worker 和 goal 会话）', en: 'Pause the goal (stops worker + goal session)' },

@@ -6,6 +6,7 @@ import { useWebSocket } from '@/shared/use-websocket'
 import { wsClient } from '@/shared/ws-client'
 import { LoginPage } from '@/features/auth/login-page'
 import { applyEnvBadge } from '@/shared/env-badge'
+import { useGoalStore } from '@/features/chat/goal-store'
 
 export default function HomePage() {
   const { linkState } = useWebSocket()
@@ -16,8 +17,9 @@ export default function HomePage() {
       .then(async (res) => {
         // Both the 200 and 401 bodies carry `badge` (HALO_BADGE env) — brand
         // the tab before login too, so dev/prod tabs never look identical.
-        const body = await res.json().catch(() => null) as { badge?: string | null } | null
+        const body = await res.json().catch(() => null) as { badge?: string | null; goalModeEnabled?: boolean } | null
         applyEnvBadge(body?.badge)
+        useGoalStore.getState().setEnabled(res.ok && body?.goalModeEnabled === true)
         setAuthState(res.ok ? 'authenticated' : 'login')
       })
       .catch(() => {

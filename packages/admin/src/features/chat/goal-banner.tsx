@@ -26,12 +26,13 @@ export function GoalBanner({ currentSessionId, onJump }: {
   currentSessionId: string | null
   onJump: (sessionId: string) => void
 }) {
+  const enabled = useGoalStore((s) => s.enabled)
   const goal = useGoalStore((s) => s.goal)
   const dismissedGoalId = useGoalStore((s) => s.dismissedGoalId)
   const dismiss = useGoalStore((s) => s.dismiss)
   const t = useT()
 
-  if (!goal) return null
+  if (!enabled || !goal) return null
   const terminal = goal.status === 'done' || goal.status === 'halted'
   if (terminal && dismissedGoalId === goal.goalSessionId) return null
 

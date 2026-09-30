@@ -103,7 +103,7 @@ Unlike Telegram (grammy polling) or WeChat (HTTP long-poll), Socket Mode elimina
 7. Strip the `<@botUserId>` mention prefix from the text
 8. (DMs only) Check if text is a slash command (starts with `/` or `!`); if so, dispatch via `channels/shared/commands.ts` and return early
 9. Download and ingest any attached files (save images + files to workspace media store; images base64'd for vision)
-10. Hand off to `deliverInbound` ([shared skeleton](telegram.md#shared-inbound-skeleton)): resolve or create the session for this {channel, thread}, apply the goal-mode route overlay, send a busy hint if needed, refresh the reply route `{channelId, replyTs}`, attach the `SlackResponder` listener once (torn down on `stopAccount` via `bridge.closeAll()`), then queue the user message with SessionManager
+10. Hand off to `deliverInbound` ([shared skeleton](telegram.md#shared-inbound-skeleton)): resolve or create the session for this {channel, thread}, send a busy hint if needed, refresh the reply route `{channelId, replyTs}`, attach the `SlackResponder` listener once (torn down on `stopAccount` via `bridge.closeAll()`), then queue the user message with SessionManager
 
 ### Outbound (SlackResponder)
 

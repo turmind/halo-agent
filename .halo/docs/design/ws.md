@@ -127,7 +127,7 @@ Server-internal flags on `AgentSessionEvent` that are **not** carried into the W
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |
 | `session:changed` | `SessionManager` (broadcast to all clients) | Root session list changed — re-fetch. Fires on root-session create *and* on each root turn `complete` (so channel-driven messages refresh the count/title/ordering, not just admin's own turns). |
 | `session:switched` | handler.ts (this client only) | The server rebound this connection to a different session — see [switchTo rebind](#switchto-rebind--sessionswitched) |
-| `goal:changed` | `writeGoalState` (`agents/goal-mode.ts`, broadcast to all clients) | Goal-mode state transition: `{goalSessionId, workerSessionId, status, round, maxRounds}`. Emitted on every goal state write (every transition routes through `writeGoalState`, so the push can never be forgotten) plus the goal-session-delete dissolve path. **No workspace marker** — the admin re-fetches through `GET /api/sessions/goal` under its active project, which naturally filters cross-workspace events. Drives the goal banner, worker input lock, and 🎯 badge refresh. See [goal-mode.md](goal-mode.md#admin-surface--ws). |
+| `goal:changed` | `writeGoalState` (`agents/goal-mode.ts`, broadcast to all clients) | Retained legacy event: `{goalSessionId, workerSessionId, status, round, maxRounds}`, no workspace marker. Emitted on goal state writes for existing goal bindings, unchanged. |
 | `session:cleared` | session:clear handler (this client only) | /session new complete — sent **after** `saveSession`, so the admin bumps its session-list bus on this event instead of guessing with a `setTimeout` |
 | `session:deleted` | session:delete handler (this client only) | Session delete complete — `{sessionId}` |
 | `chat:stopped` | `chat:stop` / `chat:interrupt` handlers (this client only) | Stop/interrupt acknowledged — `{sessionId}` |
@@ -189,9 +189,9 @@ reattach lifecycle is unchanged — this only affects command routing.
 
 ### switchTo rebind & `session:switched`
 
-When a command result carries `switchTo` (e.g. `/new`, `/goal create`, `/goal resume`), the WS handler doesn't just report the new id — it **rebinds this client's event stream**: unsubscribe the old listener, set `client.sessionId`, `registerEventListener` on the target, then send `session:switched {sessionId}`. Without the rebind, streaming events from the switched-to session (e.g. the goal agent's intake greeting right after `/goal create`) would never reach the connection — the listener would still point at the old id.
+When a command result carries `switchTo` (e.g. `/new`), the WS handler doesn't just report the new id — it **rebinds this client's event stream**: unsubscribe the old listener, set `client.sessionId`, `registerEventListener` on the target, then send `session:switched {sessionId}`. Without the rebind, streaming events from the switched-to session would never reach the connection — the listener would still point at the old id.
 
-The same mechanics run on the **goal-routing overlay** in `handleChat`: a chat aimed at a goal-bound worker is diverted to its goal session (`resolveGoalRoute`), the listener is rebound, and `session:switched` is sent. On receipt the admin clears its chat store, sets the new session id, and **re-subscribes** to pull the disk-seeded snapshot so the target session's existing transcript renders (`chat-handlers.ts`).
+The same mechanics run when `handleChat` diverts a chat to a different session than the one the client is bound to (the retained legacy goal routing overlay, which still applies to any existing goal binding): the listener is rebound and `session:switched` is sent. On receipt the admin clears its chat store, sets the new session id, and **re-subscribes** to pull the disk-seeded snapshot so the target session's existing transcript renders (`chat-handlers.ts`).
 
 ### Message flow
 

@@ -86,7 +86,6 @@ my-project/
 
 ## 近期亮点
 
-- 🎯 **Goal Mode（目标模式）** —— `/goal create` 把长协作里你不自觉扮演的两个角色 —— 催进度的（「继续」）和验收的（「真的做完了吗？」）—— 交给一个专职评审 Agent：先和你确认目标契约，然后逐轮下发工单、评判结果，直到验收通过；轮数 / 时长 / 无进展上限全部由代码强制。
 - ☁️ **AgentCore 运行时模式** —— 同一套 server 可作为 Amazon Bedrock AgentCore Runtime 容器运行（`HALO_RUNTIME_MODE=agentcore`），按用户隔离的 EFS 工作区。
 - 🎨 **四套 UI 主题** —— dark / light / midnight / warm，服务端同步，换个浏览器也是你选的那套。
 - ⌨️ **TUI 大改** —— 独立终端客户端重做了输入体验，新增 verbose 模式和历史持久化。

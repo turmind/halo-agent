@@ -9,6 +9,7 @@ import { getDisabledSet, toggleDisabled } from '../../db/index.js'
 import { t, type Lang } from './i18n.js'
 import { execSkillCommand, getCommandSkillInfo } from '../../commands/skill-command.js'
 import { commandRegistry } from '../../commands/index.js'
+import { config } from '../../config.js'
 import { enqueueEvoRun } from '../../evolution/enqueue.js'
 import {
   GOAL_AGENT_ID, initialGoalState, writeGoalState, setWorkerBackptr, clearWorkerBackptr,
@@ -646,7 +647,9 @@ export async function dispatchCommand(
     case '/skill': return routeObjectOrSkill(ctx, command, arg)
     // Goal mode (docs/plans/loop-mode.md): all verbs are builtin (no backing
     // skill) — create/status/pause/resume/clear in SUBCOMMAND_ROUTES.
-    case '/goal': return routeObjectOrSkill(ctx, command, arg)
+    case '/goal': return config.goalModeEnabled
+      ? routeObjectOrSkill(ctx, command, arg)
+      : { text: t('goal.disabled', ctx.lang) }
     default:
       // Skill-defined slash commands — same routing, but
       // reached only when the command isn't a builtin above.

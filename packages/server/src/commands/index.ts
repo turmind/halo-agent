@@ -1,4 +1,5 @@
 import { CommandRegistry } from './registry.js'
+import { config } from '../config.js'
 
 export const commandRegistry = new CommandRegistry()
 
@@ -54,7 +55,7 @@ commandRegistry.registerDescriptor({ name: 'agent',   slashName: '/agent',   des
 ] })
 // Goal mode (docs/plans/loop-mode.md): all verbs builtin — deterministic code
 // driving the goal binding; the `goal` agent itself is internal (not a skill).
-commandRegistry.registerDescriptor({ name: 'goal',    slashName: '/goal',    description: 'Run a goal loop (judge + dispatch until done)', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
+commandRegistry.registerDescriptor({ name: 'goal',    slashName: '/goal',    description: 'Run a goal loop (judge + dispatch until done)', type: 'server', argHint: '<verb>', source: 'builtin', hidden: !config.goalModeEnabled, verbs: [
   { name: 'create', builtin: true, desc: 'Start goal intake on the current session' },
   { name: 'status', builtin: true, desc: "Show the current goal's round / caps / state" },
   { name: 'pause', builtin: true, desc: 'Pause the goal (stops worker + goal session)' },
@@ -71,10 +72,8 @@ commandRegistry.registerDescriptor({ name: 'skill',   slashName: '/skill',   des
   { name: 'update', desc: 'Modify an existing skill' },
 ] })
 
-/** Names (no leading slash) of every registered builtin command. Single source
- *  of truth for channels that need to enumerate commands — e.g. Telegram's
- *  `bot.command()` registration and Slack's `/`→`!` rewrite — so adding a
- *  command here can't silently drift out of a hardcoded per-channel list. */
+/** Visible builtin names (no leading slash) for channel presentation, e.g.
+ *  Slack's `/`→`!` rewrite. Hidden commands still dispatch but aren't listed. */
 export function builtinCommandNames(): string[] {
   return commandRegistry.listDescriptors()
     .filter((d) => d.source === 'builtin')

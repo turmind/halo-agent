@@ -223,7 +223,7 @@ export function createAuthRoutes() {
         const newToken = createToken()
         setTokenCookie(c, newToken)
       }
-      return c.json({ authenticated: true, badge: config.server.badge })
+      return c.json({ authenticated: true, badge: config.server.badge, goalModeEnabled: config.goalModeEnabled })
     }
     return c.json({ authenticated: false, badge: config.server.badge }, 401)
   })

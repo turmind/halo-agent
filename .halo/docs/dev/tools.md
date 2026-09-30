@@ -191,7 +191,7 @@ Changes saved through the settings API (admin Settings page, `PUT` / `PATCH /api
 | `WORKSPACE_HIDDEN_DIRS` | `.halo/sessions` (session transcripts), `.halo/logs`, `.halo/evo` (run dirs contain full source-session snapshots) | `--tmpfs` overlay / Seatbelt `subpath` deny |
 | `WORKSPACE_HIDDEN_FILES` | `.halo/halo.db` + `-wal`/`-shm` (sqlite `agent_sessions` rows) | `--ro-bind ~/.halo/.sandbox-empty` / Seatbelt `literal` deny |
 
-The rest of `.halo/` (INSTRUCTIONS.md, INDEX.md, docs/, memory/, skills/, agents/, prompts/, tmp/, canvas/, goal/, settings.yaml) stays readable — it's workspace knowledge agents need to work. `full` sessions bypass the sandbox entirely and see everything.
+The rest of `.halo/` (INSTRUCTIONS.md, INDEX.md, docs/, memory/, skills/, agents/, prompts/, tmp/, canvas/, settings.yaml) stays readable — it's workspace knowledge agents need to work. `full` sessions bypass the sandbox entirely and see everything.
 
 `/tmp` is not in the hidden list — under bwrap it receives a standalone `--tmpfs` mount for process isolation (each invocation gets its own empty `/tmp`), not for hiding secrets. Seatbelt has no mount namespace, so on macOS `/tmp` is the real one and writes to it persist.
 
@@ -346,61 +346,6 @@ Call it when the current turn was started by an interruption (a user / parent me
 
 Returns: `{ code: 0, message }` on `set` / `not_interrupted`, `{ code: 1, error }` on `no_turn`. Design in [design/session.md → continue_task](../design/session.md#message-queue-and-drain).
 
-## Goal tools
-
-Injected **only** for the built-in `goal` agent (G) — `session-agent-builder` swaps in this set (`buildGoalTools`, `agents/goal-mode.ts`) instead of the standard session bundle when the session's agent is `GOAL_AGENT_ID`. Every callback re-reads goal state from the workspace db (never a cached copy), so a halt / pause / clear that landed while G was mid-turn is enforced on its next tool call. See [design/goal-mode.md](../design/goal-mode.md).
-
-### goal_context
-
-Load the goal binding: worker session id, goal dir, `GOAL_SPEC.md` path, caps, status, round, counters (`delegatedCount`/cap, `noProgress`, `startedAt`/`elapsed`). No arguments. Call first in every conversation and after any restart nudge.
-
-During `intake` the result also embeds `workerRecent` — the worker's last 20 non-empty user/assistant messages (transcript `role=system` noise skipped, 400 chars each, 8K total budget applied newest-first) plus `workerMessageCount` — so G seeds the intake conversation without parsing transcript files. Running goals don't embed it (G works off delivered round reports; embedding on every call would burn tokens).
-
-### goal_attach
-
-The hinge from intake conversation to running loop. Preconditions: status `intake` and `GOAL_SPEC.md` written to the goal dir (missing → error naming the expected path). Stamps the spec sha256, records the worker's output-token baseline, applies cap overrides, flips to `running`, and dispatches the kickoff to the worker under a `[Goal work order · round 1/N]` header. Call exactly once, only after the user confirms the contract.
-
-| Arg | Type | Required | Description |
-|---|---|---|---|
-| `kickoff` | string | yes | Round-1 work order, sent verbatim (header prepended by the platform) |
-| `caps` | object | no | Overrides pinned during intake: `max_rounds` / `max_hours` / `max_tokens`; omitted fields keep defaults (10 rounds / 4h / no token budget) |
-| `decision_policy` | string | no | One-line record of what kinds of forks the user delegated |
-
-### goal_decide
-
-Record a delegated decision — a fork G answered on the user's behalf because spec + scene made the answer clear. Writes `decision-<n>.md` to the goal dir **before** the answer is relayed; counts against a cap of 5 per goal (cap reached → error telling G to park the question to the user). Only while `running`.
-
-| Arg | Type | Required | Description |
-|---|---|---|---|
-| `question` | string | yes | The fork the worker raised |
-| `decision` | string | yes | What G decided |
-| `rationale` | string | no | Why the contract/scene supports it |
-
-### goal_finish
-
-Final acceptance: `running → done`, dissolves the binding (clears the worker's back-pointer; the chat surface returns to the worker). G then writes the final report as its reply — it flows to the user and must list every delegated decision.
-
-| Arg | Type | Required | Description |
-|---|---|---|---|
-| `summary` | string | yes | One-line result recorded in the goal state |
-
-### query_session (goal-scoped)
-
-G's **lateral edge**: same name as the standard session tool, different implementation — only the bound worker is reachable, only while `running` (any other status → `lateral edge revoked`), and a `[Goal work order · round N/cap]` header is prepended in code. Halting a goal revokes this edge, which is what makes runaway impossible.
-
-| Arg | Type | Required | Description |
-|---|---|---|---|
-| `session_id` | string | yes | Must be the bound worker session id |
-| `message` | string | yes | The work order / relayed answer / steering update |
-
-### get_session_output (goal-scoped)
-
-Read the full latest-turn output of the worker or any session in the worker's subtree (evidence gathering — round reports are truncated at `limits.autoReportMax`). Scoped to the worker's tree; works regardless of goal status. Same `{ code, status, output, last_activity_at }` shape and tail-keeping truncation as the standard [get_session_output](#get_session_output) — the goal wrapper only adds the tree check and passes `host.getSessionOutput` through.
-
-| Arg | Type | Required | Description |
-|---|---|---|---|
-| `session_id` | string | yes | Worker session id or a descendant (`worker>child`) id |
-
 ## Relay tools
 
 File: `packages/server/src/agents/relay.ts` (`buildRelayTools`). Design notes in [design/relay.md](../design/relay.md).
@@ -426,7 +371,7 @@ Dispatch a message to a session in another workspace. Creates the session if `se
 
 Returns `{ "code": 0, "workspace": "<realpath>", "session_id": "…", "state": "running" | "queued" }`.
 
-**Report delivery**: when the target root's turn ends **and its subtree is quiet** (no active children in the db, empty message queue — the same gate `tryReportToParent` and `deliverGoalRound` use, so a nested dispatch tree reports exactly once, at the end), `deliverRelayReport` (fourth hook in `runSession`'s finally) appends + sends into the caller session:
+**Report delivery**: when the target root's turn ends **and its subtree is quiet** (no active children in the db, empty message queue — the same gate `tryReportToParent` uses, so a nested dispatch tree reports exactly once, at the end), `deliverRelayReport` (fourth hook in `runSession`'s finally) appends + sends into the caller session:
 
 ```
 [Relay report · workspace <target ws> · session <id> · status: completed]
