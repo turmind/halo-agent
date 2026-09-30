@@ -6,13 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [1.5.0-alpha.2] - 2026-09-30
-
-### Changed
-
-- Goal mode: its entry points — the `/goal` command, the admin goal banner / 🎯 badge / composer lock, and creation of new goal sessions — are now hidden and disabled by default behind an internal, global-only setting (`general.goal_mode_enabled`, off unless set in `~/.halo/secrets/settings.yaml`; takes effect after a server restart). The runtime mechanism and all existing goal history and data are left untouched, and the current docs no longer describe it.
-
-## [1.5.0-alpha.1] - 2026-09-30
+## [1.5.0-alpha] - 2026-09-30
 
 ### Added
 
@@ -29,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Agents: relay and sub-agent interim reports are now sent at the end of the turn that answered the follow-up, not at the moment `continue_task` is called. The old trigger lost the answer in three cases: a second message was already queued when the turn ended, the model wrote its answer and then called `continue_task` in the same response (only the trailing line was forwarded), and a follow-up that arrived during the opening turn. The forwarded text is now the turn's complete answer, and the `continue_task` tool description asks the model to write its reply before calling it. Relay report headers gained a status field — `· status: completed` or `· status: aborted` on the final report, `· status: still running` on interim ones — and an interim report no longer claims the task was "interrupted"; the `[Relay report` / `[Relay interim report` prefixes are unchanged. Pressing Esc after `continue_task` still sends no interim; the final report covers that turn.
 - Agents: the opt-in `draft` self-review tool is removed. Every use cost an extra model round (draft → checklist → revise) and the revised answer was rarely better than the first pass plus thinking. Existing `agent.yaml` files that list `- draft` keep working — the unknown name is ignored — but the admin agent form shows the chip as missing; the bundled default and deep-executor agents no longer list it; template v70.
 - Channels: an account with full access can send `MEDIA:` attachments from any path — its shell and file tools are already unrestricted, so the workspace-plus-temp-dir rule protected nothing and only forced the agent to copy the file into `/tmp` first. Other access levels (and cron pushes) keep the rule. A blocked path is no longer dropped silently: WeChat shows a `⚠️ WeChat delivery failed` notice in the session, and Slack / Feishu / WeCom / Telegram reply with the usual upload-failed message (Telegram had no failure path at all before). The `send-file` skill describes the per-level rule; template v72.
+- Goal mode: its entry points — the `/goal` command, the admin goal banner / 🎯 badge / composer lock, and creation of new goal sessions — are now hidden and disabled by default behind an internal, global-only setting (`general.goal_mode_enabled`, off unless set in `~/.halo/secrets/settings.yaml`; takes effect after a server restart). The runtime mechanism and all existing goal history and data are left untouched, and the current docs no longer describe it.
 
 ### Fixed
 
@@ -655,9 +650,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha.2...HEAD
-[1.5.0-alpha.2]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha.1...v1.5.0-alpha.2
-[1.5.0-alpha.1]: https://github.com/turmind/halo-agent/compare/v1.4.6...v1.5.0-alpha.1
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha...HEAD
+[1.5.0-alpha]: https://github.com/turmind/halo-agent/compare/v1.4.6...v1.5.0-alpha
 [1.4.1]: https://github.com/turmind/halo-agent/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/turmind/halo-agent/compare/v1.3.4...v1.4.0
 [1.3.4]: https://github.com/turmind/halo-agent/compare/v1.3.3...v1.3.4

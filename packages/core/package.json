@@ -1,6 +1,6 @@
 {
   "name": "@turmind/halo-core",
-  "version": "1.5.0-alpha.2",
+  "version": "1.5.0-alpha",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
