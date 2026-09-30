@@ -115,7 +115,7 @@ export async function deliverRelayReport(
   const body = report.length > cap
     ? report.slice(0, cap) + `\n\n[Report truncated: ${report.length} chars total. Use relay_read("${host.workspaceRoot}", "${session.id}") for the full text.]`
     : report
-  const header = `[Relay report · workspace ${host.workspaceRoot} · session ${session.id}]`
+  const header = `[Relay report · workspace ${host.workspaceRoot} · session ${session.id} · status: ${session.turnError ? 'aborted' : 'completed'}]`
   const text = `${header}\n\n${body}`
 
   // Clear BEFORE sending so a failure can't double-deliver on the next turn end;
@@ -132,13 +132,14 @@ export async function deliverRelayReport(
 }
 
 /**
- * Interim report — called from SessionManager.drainQueue when a relay-dispatched
- * root answered the caller's mid-task message and is about to resume the
- * interrupted task (continue_task). The resume turn resets the per-turn output,
- * so without this the answer never reaches the caller: deliverRelayReport only
- * reads the LAST turn. Unlike the final report: no quiet gate (the session is by
- * definition not done) and reply_to is KEPT, so the final report still fires
- * exactly once when the resumed task ends. `body` is the caller-built snapshot.
+ * Interim report — called from SessionManager (deliverInterim) when a relay-
+ * dispatched root finished a turn that answered the caller and ANOTHER turn
+ * follows (continue_task kick, or a message already queued). The next turn
+ * resets the per-turn output, so without this the answer never reaches the
+ * caller: deliverRelayReport only reads the LAST turn. Unlike the final report:
+ * no quiet gate (the session is by definition not done) and reply_to is KEPT,
+ * so the final report still fires exactly once when the task ends. `body` is
+ * the caller-built snapshot.
  */
 export async function deliverRelayInterim(host: RelayTarget, sessionId: string, body: string): Promise<void> {
   const to = readReplyTo(host.getDb(), sessionId)
@@ -148,7 +149,7 @@ export async function deliverRelayInterim(host: RelayTarget, sessionId: string, 
   let caller: RelayTarget
   try { caller = registry.getOrCreate(to.workspace) }
   catch (err) { console.error(`[Relay] caller workspace ${to.workspace} unreachable: ${err instanceof Error ? err.message : String(err)}`); return }
-  const header = `[Relay interim report · workspace ${host.workspaceRoot} · session ${sessionId}] The session answered your latest message (below) and is now resuming the task that message interrupted — its final [Relay report] follows when that is done.`
+  const header = `[Relay interim report · workspace ${host.workspaceRoot} · session ${sessionId} · status: still running] This is an interim reply — the session is still working; its final [Relay report] follows when done. Do not treat this as the result.`
   const text = `${header}\n\n${body}`
   caller.appendUserMessage(to.sessionId, text)
   await caller.sendUserMessage(to.sessionId, text)

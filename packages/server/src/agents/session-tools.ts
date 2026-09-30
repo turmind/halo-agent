@@ -352,7 +352,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
 export function buildContinueTaskTool(sm: Pick<SessionManagerInternals, 'requestSelfKick'>, sessionId: string): ToolDef {
   return {
     name: 'continue_task',
-    description: 'Call this when your turn was started by an interruption (a user or parent message arrived while you were working) and the task you were doing is NOT finished yet. After your current reply ends, the session automatically resumes the interrupted task. Do NOT call it if the task is done, if the user told you to stop, or in a normal (uninterrupted) turn — it does nothing there. The flag lasts one turn: if you get interrupted again before resuming, call it again.',
+    description: 'Call this when your turn was started by an interruption (a user or parent message arrived while you were working) and the task you were doing is NOT finished yet. After your current reply ends, the session automatically resumes the interrupted task. Do NOT call it if the task is done, if the user told you to stop, or in a normal (uninterrupted) turn — it does nothing there. The flag lasts one turn: if you get interrupted again before resuming, call it again. Write your reply to the interrupting message FIRST, then call this.',
     inputSchema: { type: 'object' as const, properties: {} },
     callback: async () => {
       switch (sm.requestSelfKick(sessionId)) {

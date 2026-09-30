@@ -122,16 +122,17 @@ describe('deliverRelayReport', () => {
     expect(callerStub.sent[0].sid).toBe('sec-1')
     // UI transcript and model-bound text are the same string.
     expect(callerStub.sent[0].text).toBe(callerStub.appended[0].text)
-    expect(callerStub.sent[0].text.startsWith(`[Relay report · workspace ${deptWs} · session dept-1]`)).toBe(true)
+    expect(callerStub.sent[0].text.startsWith(`[Relay report · workspace ${deptWs} · session dept-1 · status: completed]`)).toBe(true)
     expect(callerStub.sent[0].text).toContain('all three reports filed')
     expect(readReplyTo(deptSm.getDb(), 'dept-1')).toBeNull()
   })
 
-  it('prefixes the abort marker when the turn died on an error', async () => {
+  it('prefixes the abort marker and stamps status: aborted when the turn died on an error', async () => {
     seedSession(deptSm, 'dept-1')
     writeReplyTo(deptSm.getDb(), 'dept-1', { workspace: callerWs, sessionId: 'sec-1' })
     await deliverRelayReport(deptSm, sessionShape('dept-1', { turnError: 'retry budget exhausted' }))
     expect(callerStub.sent).toHaveLength(1)
+    expect(callerStub.sent[0].text.startsWith(`[Relay report · workspace ${deptWs} · session dept-1 · status: aborted]`)).toBe(true)
     expect(callerStub.sent[0].text).toContain('[RELAY TARGET ABORTED')
     expect(callerStub.sent[0].text).toContain('retry budget exhausted')
   })
@@ -159,13 +160,14 @@ describe('deliverRelayInterim', () => {
     expect(callerStub.appended).toHaveLength(1)
     expect(callerStub.sent).toHaveLength(1)
     expect(callerStub.sent[0].sid).toBe('sec-1')
-    expect(callerStub.sent[0].text).toMatch(new RegExp(`^\\[Relay interim report · workspace ${deptWs} · session dept-1\\]`))
+    expect(callerStub.sent[0].text.startsWith(`[Relay interim report · workspace ${deptWs} · session dept-1 · status: still running]`)).toBe(true)
     expect(callerStub.sent[0].text).toContain('quota is 384 vCPU')
     expect(readReplyTo(deptSm.getDb(), 'dept-1')).toEqual({ workspace: callerWs, sessionId: 'sec-1' })
     // The later final report still goes out (and only then clears the pointer).
     await deliverRelayReport(deptSm, sessionShape('dept-1', { finalOutput: 'task done' }))
     expect(callerStub.sent).toHaveLength(2)
     expect(callerStub.sent[1].text).toMatch(/^\[Relay report · /)
+    expect(callerStub.sent[1].text).toContain('· status: completed]')
     expect(readReplyTo(deptSm.getDb(), 'dept-1')).toBeNull()
   })
 })

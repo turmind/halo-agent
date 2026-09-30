@@ -26,7 +26,7 @@ import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools, buildContinueTaskTool } from './session-tools.js'
 import { deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
-import { deliverRelayReport, deliverRelayInterim, buildRelayTools, RELAY_CHANNEL_PREFIX } from './relay.js'
+import { deliverRelayReport, deliverRelayInterim, readReplyTo, buildRelayTools, RELAY_CHANNEL_PREFIX } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
@@ -1604,6 +1604,12 @@ export class SessionManager implements SessionManagerInternals {
         session.selfKick = false
         result = await this.runAgentTurn(session, message)
         console.debug(`[SessionManager] runSession ${sessionId} first turn done — result: ${result.slice(0, 150)}`)
+        // A follow-up already queued: the drain's next turn resets output, so
+        // this turn's wrap-up (a natural end_turn → finalOutput set) would
+        // never reach the end-of-run report. Forward it as an interim now.
+        if (session.messageQueue.length > 0 && session.finalOutput !== '' && !session.turnError) {
+          this.sendOpeningInterim(session)
+        }
       }
       // Fold every queued message (user or agent) into merged follow-up turns
       // until the queue is empty. drainQueue re-checks after each merged turn,
@@ -1857,6 +1863,17 @@ export class SessionManager implements SessionManagerInternals {
         throw err
       }
 
+      // Interim report: whenever ANOTHER turn follows this one (the kick below,
+      // or a message already queued), the next runAgentTurn resets output /
+      // finalOutput and this turn's text never reaches the end-of-run reports.
+      // Forward it now if it was an answer — the model called continue_task
+      // (its text is `final: false`, the response carried the tool_use), or it
+      // end_turn'ed naturally (finalOutput set). An esc after continue_task
+      // means no kick → the run ends → the final report carries this turn.
+      const nextTurnFollows = (session.selfKick && !session.interruptRequested) || session.messageQueue.length > 0
+      const isAnswer = session.selfKick || session.finalOutput !== ''
+      if (nextTurnFollows && isAnswer) this.sendInterimReport(session, batch)
+
       // continue_task: the model asked to resume the interrupted task after
       // answering. Only when nothing else intervened: an externally aborted turn
       // never kicks — esc / `/interrupt` set interruptRequested without enqueuing,
@@ -1869,8 +1886,6 @@ export class SessionManager implements SessionManagerInternals {
       // it its own bubble.
       if (session.messageQueue.length === 0) {
         if (session.selfKick && !session.interruptRequested) {
-          // Snapshot the answer BEFORE the kick turn resets output/finalOutput.
-          this.sendInterimReport(session, batch)
           session.messageQueue.push({ text: CONTINUE_TASK_KICK })
           // The kick is a raw user turn, so it needs a UI user row too — otherwise
           // deleteExchange's UI span and deleteRawTurn's raw span diverge (the UI
@@ -1902,27 +1917,47 @@ export class SessionManager implements SessionManagerInternals {
     }
   }
 
-  /** continue_task interim report. The answer turn that precedes a kick is
-   *  otherwise lost to whoever asked: the end-of-run reports (tryReportToParent /
-   *  deliverRelayReport) read only the LAST turn's output, and the kick turn
-   *  resets it. So when the batch just answered came from the party this session
-   *  owes a report — its parent (sub-agent) or a relay caller (root, relay-
-   *  prefixed message) — forward the answer now. Neither path touches the final
-   *  report's state: no stoppedAt / agent_done (parent's sibling-status still sees
-   *  this child running), reply_to kept. Goal workers are deliberately excluded
-   *  (G's messages carry neither mark): an interim would wake G mid-round, and a
-   *  fresh query_session from G would interrupt W again. */
+  /** Interim report for a drained turn. A turn followed by another turn (kick /
+   *  queued message) is otherwise lost to whoever asked: the end-of-run reports
+   *  (tryReportToParent / deliverRelayReport) read only the LAST turn's output,
+   *  and the next runAgentTurn resets it. So when the batch just answered came
+   *  from the party this session owes a report — its parent (sub-agent) or a
+   *  relay caller (root, relay-prefixed message) — forward the answer now.
+   *  Neither path touches the final report's state: no stoppedAt / agent_done
+   *  (parent's sibling-status still sees this child running), reply_to kept.
+   *  Goal workers are deliberately excluded (G's messages carry neither mark):
+   *  an interim would wake G mid-round, and a fresh query_session from G would
+   *  interrupt W again. */
   private sendInterimReport(session: AgentSession, batch: QueuedMessage[]): void {
     const fromParent = session.parentId !== null && batch.some((q) => q.sourceSessionId === session.parentId)
     // includes, not startsWith: an `@scope` marker prepends INSTRUCTIONS blocks.
     const fromRelay = session.parentId === null && batch.some((q) => q.sourceSessionId === undefined && q.text.includes(RELAY_CHANNEL_PREFIX))
-    if ((!fromParent && !fromRelay) || session.turnError) return
-    const answer = session.finalOutput || session.output
+    if (fromParent) this.deliverInterim(session, 'parent')
+    else if (fromRelay) this.deliverInterim(session, 'relay')
+  }
+
+  /** Interim report for the OPENING turn (runSession's `hasFirst` turn): when it
+   *  ends naturally while the queue already holds a follow-up, the drain resets
+   *  output and the wrap-up is lost the same way. No batch to read the door from
+   *  here — the opening message is the dispatch itself — so the owed party is
+   *  whoever this session reports to at the end: its parent, or a relay caller
+   *  (reply_to row). Goal workers have neither, so they get nothing. */
+  private sendOpeningInterim(session: AgentSession): void {
+    if (session.parentId !== null) this.deliverInterim(session, 'parent')
+    else if (readReplyTo(this.db, session.id) !== null) this.deliverInterim(session, 'relay')
+  }
+
+  /** Body = the WHOLE turn's text (`output`, not `finalOutput`): in a turn that
+   *  answered and then called continue_task the answer rides the tool_use
+   *  response, whose text is `final: false` and never reaches finalOutput. */
+  private deliverInterim(session: AgentSession, to: 'parent' | 'relay'): void {
+    if (session.turnError) return
+    const answer = session.output
     if (!answer) return
     const cap = config.limits.autoReportMax
     const body = answer.length > cap ? answer.slice(0, cap) + `\n\n[Interim report truncated: ${answer.length} chars total.]` : answer
-    if (fromParent) {
-      const text = `[Interim report: answered your message (below) and is now resuming its interrupted task — the final report follows when that is done. Not the final result.]\n\n${body}`
+    if (to === 'parent') {
+      const text = `[Interim report · status: still running] Answered your message (below); the session is still working — its final report follows when done. Not the final result.\n\n${body}`
       this.querySession(session.parentId!, session.id, text).catch((err) => {
         console.error(`[SessionManager] Interim report failed: ${session.id} → ${session.parentId}: ${err instanceof Error ? err.message : String(err)}`)
       })

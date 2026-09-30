@@ -342,7 +342,7 @@ Returns: full SKILL.md content (body + resource files list). For progressive dis
 
 **Built-in for every agent — the one truly unconditional tool** (`activate_skill` is gated on `skills`, session tools on `team`; not declared in `agent.yaml tools`). Wired in `session-agent-builder` (`buildContinueTaskTool`, next to the session bundle). No parameters.
 
-Call it when the current turn was started by an interruption (a user / parent message landed while the agent was working) and the interrupted task is **not** finished: after the current reply ends, `drainQueue` pushes a synthetic `[System] You called continue_task: … resume it now` user turn (traced as a `user` row, `report: true`) and runs one more turn. Only effective in a turn that followed an interrupt — in a normal turn it returns `not_interrupted` and sets nothing (kicks ≤ interrupts). The flag lasts one turn: a second interrupt before the kick resets it and the model is told to call again if still needed. An esc / `/interrupt` (abort without a new message) never kicks; Stop / delete / archive clear it; a callback landing after Stop gets `code: 1` (`no_turn`). Before the kick, the answer is forwarded as an **interim report** when the interrupting message came from the parent (sub-agent → `[Interim report: …]` via `query_session`, no `stoppedAt`) or from a relay caller (root → `[Relay interim report · …]`) — the final auto-report / relay report still follows once.
+Call it when the current turn was started by an interruption (a user / parent message landed while the agent was working) and the interrupted task is **not** finished: after the current reply ends, `drainQueue` pushes a synthetic `[System] You called continue_task: … resume it now` user turn (traced as a `user` row, `report: true`) and runs one more turn. Only effective in a turn that followed an interrupt — in a normal turn it returns `not_interrupted` and sets nothing (kicks ≤ interrupts). The flag lasts one turn: a second interrupt before the kick resets it and the model is told to call again if still needed. An esc / `/interrupt` (abort without a new message) never kicks; Stop / delete / archive clear it; a callback landing after Stop gets `code: 1` (`no_turn`). The description asks the model to write its reply to the interrupting message **first**, then call the tool. At turn end, whenever another turn follows (the kick, or a message already queued) and the turn was an answer (`continue_task` called, or a natural end_turn), the turn's whole text is forwarded as an **interim report** when the interrupting message came from the parent (sub-agent → `[Interim report · status: still running] …` via `query_session`, no `stoppedAt`) or from a relay caller (root → `[Relay interim report · … · status: still running]`) — the final auto-report / relay report still follows once. The same applies to the opening turn when a follow-up is already queued by the time it ends.
 
 Returns: `{ code: 0, message }` on `set` / `not_interrupted`, `{ code: 1, error }` on `no_turn`. Design in [design/session.md → continue_task](../design/session.md#message-queue-and-drain).
 
@@ -429,14 +429,22 @@ Returns `{ "code": 0, "workspace": "<realpath>", "session_id": "…", "state": "
 **Report delivery**: when the target root's turn ends **and its subtree is quiet** (no active children in the db, empty message queue — the same gate `tryReportToParent` and `deliverGoalRound` use, so a nested dispatch tree reports exactly once, at the end), `deliverRelayReport` (fourth hook in `runSession`'s finally) appends + sends into the caller session:
 
 ```
-[Relay report · workspace <target ws> · session <id>]
+[Relay report · workspace <target ws> · session <id> · status: completed]
 
 <target's finalOutput || output>
 ```
 
-Body capped at `limits.autoReportMax` (head-kept) with a `[Report truncated: N chars total. Use relay_read("<ws>", "<id>") for the full text.]` marker. A turn killed by an unrecoverable error is prefixed `[RELAY TARGET ABORTED: … Error: <text> … Re-send with relay_send to let it resume.]` **before** the cap so it can't be sliced off. `reply_to` is cleared **before** sending: one dispatch → one report, a failed delivery can't double-fire on the next turn end, and a user chatting directly in the department workspace afterwards never pings the secretary.
+Body capped at `limits.autoReportMax` (head-kept) with a `[Report truncated: N chars total. Use relay_read("<ws>", "<id>") for the full text.]` marker. A turn killed by an unrecoverable error carries `· status: aborted]` in the header and is prefixed `[RELAY TARGET ABORTED: … Error: <text> … Re-send with relay_send to let it resume.]` **before** the cap so it can't be sliced off. `reply_to` is cleared **before** sending: one dispatch → one report, a failed delivery can't double-fire on the next turn end, and a user chatting directly in the department workspace afterwards never pings the secretary.
 
-**Interim report**: if a busy target answers a follow-up `relay_send` and then calls `continue_task` to resume what it was doing, the answer is delivered right away as `[Relay interim report · workspace <ws> · session <id>] … its final [Relay report] follows …` (capped at `limits.autoReportMax`), **without** clearing `reply_to` — so the final report still arrives once. Only relay-prefixed messages trigger it; a user chatting directly in the department workspace never does. Details in [design/relay.md → Interim report](../design/relay.md#interim-report-continue_task).
+**Interim report**: if a busy target answers a follow-up `relay_send` in a turn that another turn follows — it called `continue_task` to resume what it was doing, or a further relay message was already queued when the answer ended (also on the opening turn) — the answer is delivered right away as
+
+```
+[Relay interim report · workspace <ws> · session <id> · status: still running] This is an interim reply — the session is still working; its final [Relay report] follows when done. Do not treat this as the result.
+
+<the turn's whole text, capped at limits.autoReportMax>
+```
+
+**without** clearing `reply_to` — so the final report still arrives once. Match on the `[Relay report` / `[Relay interim report` prefixes or the `status:` field, never on the trailing sentence. Only relay-prefixed messages trigger it; a user chatting directly in the department workspace never does. Details in [design/relay.md → Interim report](../design/relay.md#interim-report-continue_task).
 
 ### relay_interrupt
 

@@ -27,9 +27,12 @@ import { initialGoalState, writeGoalState, readGoalState, setWorkerBackptr, goal
  * 6. An externally aborted turn (esc / archive / delete) never kicks.
  * 7. A sub-agent's kick turn runs BEFORE the auto-report reads finalOutput.
  * 8. The kick is traced as a `user` row (report: true), not a system event.
- * 9. Interim report: the answer turn before a kick reaches whoever is owed a
- *    report (relay caller / parent) without consuming the final report —
- *    reply_to kept, no stoppedAt, goal rounds not counted.
+ * 9. Interim report: an answer turn that another turn follows (kick, or a
+ *    message already queued — incl. the opening turn) reaches whoever is owed
+ *    a report (relay caller / parent) without consuming the final report —
+ *    reply_to kept, no stoppedAt, goal rounds not counted. Body is the whole
+ *    turn's text (`output`), so an answer written before the continue_task call
+ *    is not lost. Nothing goes out for a root nobody is waiting on.
  *
  * Mirrors the turn-error-report harness: real SessionManager against a tmpdir
  * workspace, fake sessions seeded straight into the manager's map (no live
@@ -59,18 +62,21 @@ type StubEvent = { type: string; text?: string; final?: boolean }
 
 /** Minimal agent stub: records the input text of every run() call and lets
  *  the test act from INSIDE the turn (where abortController is non-null) via
- *  `onCall(callNo)` — that is where the real tool callback would run. */
-function stubAgent(onCall: (callNo: number) => void = () => {}) {
+ *  `onCall(callNo)` — that is where the real tool callback would run. Each call
+ *  yields one final `reply N` text unless `events(callNo)` overrides it. */
+function stubAgent(
+  onCall: (callNo: number) => void = () => {},
+  events: (callNo: number) => StubEvent[] = (n) => [{ type: 'text', text: `reply ${n}`, final: true }],
+) {
   const state = { calls: 0, inputs: [] as string[] }
   return {
     state,
     messages: [] as unknown[],
-    // eslint-disable-next-line require-yield
     async *run(input: string | Array<{ type: string; text?: string }>): AsyncGenerator<StubEvent> {
       state.calls++
       state.inputs.push(typeof input === 'string' ? input : input.map((b) => b.text ?? '').join('\n'))
       onCall(state.calls)
-      yield { type: 'text', text: `reply ${state.calls}`, final: true }
+      yield* events(state.calls)
     },
   }
 }
@@ -241,21 +247,30 @@ describe('stop clears a pending continue_task flag', () => {
 // ── 6. externally aborted turns never kick ──
 
 describe('an externally aborted turn never kicks', () => {
-  it('esc (interruptSession) mid-turn with an empty queue: no kick turn', async () => {
+  afterEach(() => { setRelayRegistry(null as unknown as RelayRegistry) })
+
+  it('esc (interruptSession) mid-turn with an empty queue: no kick turn, no interim — the final report carries the turn', async () => {
     seedRow('e1')
+    writeReplyTo(sm.getDb(), 'e1', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
     const agent = stubAgent((callNo) => {
       if (callNo !== 1) return
       expect(sm.requestSelfKick('e1')).toBe('set')
       // esc / `/interrupt`: sets interruptRequested + aborts WITHOUT enqueuing.
       sm.interruptSession('e1')
     })
-    const session = fakeSession('e1', agent, interrupted())
+    const session = fakeSession('e1', agent, relayMsg('q'))
 
     await sm.runSession('e1', '')
+    await flush()
 
     expect(agent.state.calls).toBe(1)
     expect(session.selfKick).toBe(false)
     expect(session.messageQueue).toHaveLength(0)
+    // No kick → the run ends here → this turn IS the final report; an interim
+    // on top would deliver the same text twice.
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/^\[Relay report · /)
   })
 
   it('archiveSession mid-turn: the awaited drain runs no kick turn', async () => {
@@ -430,7 +445,7 @@ describe('continue_task interim report', () => {
 
     expect(calls).toHaveLength(2)
     expect(calls[0].target).toBe('p')
-    expect(calls[0].text).toMatch(/^\[Interim report:/)
+    expect(calls[0].text).toMatch(/^\[Interim report · status: still running\]/)
     expect(calls[0].text).toContain('reply 1')
     expect(calls[0].stoppedAt).toBeNull()
     expect(calls[1].text).toBe('reply 2')
@@ -475,5 +490,216 @@ describe('continue_task interim report', () => {
     expect(spy.mock.calls[0][0]).toBe('g')
     expect(spy.mock.calls[0][2]).toContain('reply 2')
     expect(readGoalState(sm.getDb(), 'g')!.round).toBe(1)
+  })
+})
+
+// ── 9b. a root nobody waits on never emits an interim (the door stays shut) ──
+
+describe('interim report: root with no parent and no reply_to', () => {
+  afterEach(() => { setRelayRegistry(null as unknown as RelayRegistry) })
+
+  it('local interrupt + continue_task: the kick runs, nothing is delivered anywhere', async () => {
+    seedRow('solo1')
+    const sent = relayCaller()
+    const spy = vi.spyOn(sm, 'querySession').mockResolvedValue('{}')
+    const agent = stubAgent((callNo) => { if (callNo === 1) sm.requestSelfKick('solo1') })
+    fakeSession('solo1', agent, interrupted())
+
+    await sm.runSession('solo1', '')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent).toHaveLength(0)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('a turn ending naturally with a second local message queued: both turns run, nothing is delivered', async () => {
+    seedRow('solo2')
+    const sent = relayCaller()
+    const spy = vi.spyOn(sm, 'querySession').mockResolvedValue('{}')
+    const agent = stubAgent((callNo) => { if (callNo === 1) session.messageQueue.push({ text: 'Q2' }) })
+    const session = fakeSession('solo2', agent, interrupted('Q1'))
+
+    await sm.runSession('solo2', '')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(agent.state.inputs[1]).toContain('Q2')
+    expect(sent).toHaveLength(0)
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+// ── 9c. the interim fires at turn end whenever another turn follows ──
+
+describe('interim report: every "another turn follows" shape', () => {
+  afterEach(() => { setRelayRegistry(null as unknown as RelayRegistry) })
+
+  it('relay: continue_task with a second relay message already queued → interim still goes out, final once', async () => {
+    seedRow('dq1')
+    writeReplyTo(sm.getDb(), 'dq1', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent((callNo) => {
+      if (callNo !== 1) return
+      sm.requestSelfKick('dq1')
+      // The caller's follow-up lands mid-turn: queue non-empty at turn end, so
+      // the kick is skipped — the interim must not be skipped with it.
+      session.messageQueue.push({ text: `[channel: relay | from: /sec]\n\nand also?` })
+    })
+    const session = fakeSession('dq1', agent, relayMsg('what is the quota?'))
+
+    await sm.runSession('dq1', '')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toMatch(/^\[Relay interim report · /)
+    expect(sent[0]).toContain('reply 1')
+    expect(sent[1]).toMatch(/^\[Relay report · /)
+    expect(sent[1]).toContain('reply 2')
+    expect(readReplyTo(sm.getDb(), 'dq1')).toBeNull()
+  })
+
+  it('relay: two questions, the first answered with a natural end_turn (no continue_task) → its answer is the interim', async () => {
+    seedRow('dq2')
+    writeReplyTo(sm.getDb(), 'dq2', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent((callNo) => {
+      if (callNo === 1) session.messageQueue.push({ text: `[channel: relay | from: /sec]\n\nQ2` })
+    })
+    const session = fakeSession('dq2', agent, relayMsg('Q1'))
+
+    await sm.runSession('dq2', '')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toMatch(/^\[Relay interim report · /)
+    expect(sent[0]).toContain('reply 1')
+    expect(sent[1]).toMatch(/^\[Relay report · /)
+    expect(sent[1]).toContain('reply 2')
+  })
+
+  it('relay: the answer written BEFORE the continue_task call (final: false text) is in the interim, not just the trailing text', async () => {
+    seedRow('dq3')
+    writeReplyTo(sm.getDb(), 'dq3', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent(
+      (callNo) => { if (callNo === 1) sm.requestSelfKick('dq3') },
+      // Call 1 mirrors a turn whose first response carries the answer + the
+      // continue_task tool_use — agent-loop stamps that text `final: false`
+      // (stopReason === 'tool_use'), so it never reaches finalOutput — and whose
+      // second response end_turns with a trailing line (`final: true`). Reading
+      // finalOutput here would ship only "resuming now." and lose the answer.
+      (callNo) => callNo === 1
+        ? [{ type: 'text', text: 'the quota is 384 vCPU', final: false }, { type: 'text', text: 'resuming now.', final: true }]
+        : [{ type: 'text', text: `reply ${callNo}`, final: true }],
+    )
+    fakeSession('dq3', agent, relayMsg('Q'))
+
+    await sm.runSession('dq3', '')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toMatch(/^\[Relay interim report · /)
+    expect(sent[0]).toContain('the quota is 384 vCPU')
+    expect(sent[0]).toContain('resuming now.')
+    expect(sent[1]).toMatch(/^\[Relay report · /)
+    expect(sent[1]).toContain('reply 2')
+  })
+
+  it('headers carry a status field: interim "still running", final "completed"', async () => {
+    seedRow('dq4')
+    writeReplyTo(sm.getDb(), 'dq4', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent((callNo) => { if (callNo === 1) sm.requestSelfKick('dq4') })
+    fakeSession('dq4', agent, relayMsg('Q'))
+
+    await sm.runSession('dq4', '')
+    await flush()
+
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toMatch(/^\[Relay interim report · workspace .* · session dq4 · status: still running\]/)
+    expect(sent[1]).toMatch(/^\[Relay report · workspace .* · session dq4 · status: completed\]/)
+  })
+
+  it('sub-agent: the parent\'s second message already queued at turn end → interim to the parent, then the final', async () => {
+    seedRow('p3')
+    seedRow('p3>c', { parentId: 'p3' })
+    const spy = vi.spyOn(sm, 'querySession').mockResolvedValue('{}')
+    const agent = stubAgent((callNo) => {
+      if (callNo === 1) session.messageQueue.push({ text: 'and this?', sourceSessionId: 'p3' })
+    })
+    const session = fakeSession('p3>c', agent, { parentId: 'p3', interruptRequested: true, messageQueue: [{ text: 'status?', sourceSessionId: 'p3' }] })
+
+    await sm.runSession('p3>c', '')
+
+    expect(agent.state.calls).toBe(2)
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(spy.mock.calls[0][0]).toBe('p3')
+    expect(spy.mock.calls[0][2]).toMatch(/^\[Interim report · status: still running\]/)
+    expect(spy.mock.calls[0][2]).toContain('reply 1')
+    expect(spy.mock.calls[1][2]).toBe('reply 2')
+  })
+})
+
+// ── 9d. opening turn: a follow-up queued before the first wrap-up lands ──
+
+describe('interim report on the opening turn', () => {
+  afterEach(() => { setRelayRegistry(null as unknown as RelayRegistry) })
+
+  it('sub-agent: parent message queued during the opening turn → interim with the opening wrap-up, then the final', async () => {
+    seedRow('p4')
+    seedRow('p4>c', { parentId: 'p4' })
+    const spy = vi.spyOn(sm, 'querySession').mockResolvedValue('{}')
+    const agent = stubAgent((callNo) => {
+      if (callNo === 1) session.messageQueue.push({ text: 'also do Y', sourceSessionId: 'p4' })
+    })
+    const session = fakeSession('p4>c', agent, { parentId: 'p4' })
+
+    await sm.runSession('p4>c', 'do the task')
+
+    expect(agent.state.calls).toBe(2)
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(spy.mock.calls[0][2]).toMatch(/^\[Interim report · status: still running\]/)
+    expect(spy.mock.calls[0][2]).toContain('reply 1')
+    expect(spy.mock.calls[1][2]).toBe('reply 2')
+  })
+
+  it('relay root: follow-up queued during the opening turn → interim first, final second, reply_to cleared once', async () => {
+    seedRow('dq5')
+    writeReplyTo(sm.getDb(), 'dq5', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent((callNo) => {
+      if (callNo === 1) session.messageQueue.push({ text: `[channel: relay | from: /sec]\n\nalso?` })
+    })
+    const session = fakeSession('dq5', agent)
+
+    await sm.runSession('dq5', '[channel: relay | from: /sec]\n\nfile the report')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toMatch(/^\[Relay interim report · /)
+    expect(sent[0]).toContain('reply 1')
+    expect(sent[1]).toMatch(/^\[Relay report · /)
+    expect(sent[1]).toContain('reply 2')
+    expect(readReplyTo(sm.getDb(), 'dq5')).toBeNull()
+  })
+
+  it('root with nobody waiting: opening turn + queued message → nothing delivered', async () => {
+    seedRow('solo3')
+    const sent = relayCaller()
+    const spy = vi.spyOn(sm, 'querySession').mockResolvedValue('{}')
+    const agent = stubAgent((callNo) => { if (callNo === 1) session.messageQueue.push({ text: 'Q2' }) })
+    const session = fakeSession('solo3', agent)
+
+    await sm.runSession('solo3', 'Q1')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent).toHaveLength(0)
+    expect(spy).not.toHaveBeenCalled()
   })
 })
