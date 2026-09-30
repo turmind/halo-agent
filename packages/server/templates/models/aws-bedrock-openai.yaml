@@ -1,8 +1,8 @@
 id: aws-bedrock-openai
-displayName: AWS Bedrock OpenAI-compatible (GPT-6 / 5.6 · Grok 4.6 · Kimi K3)
-displayName_zh: AWS Bedrock OpenAI 兼容接口（GPT-6 / 5.6 · Grok 4.6 · Kimi K3）
-description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.6, Moonshot Kimi K3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).
-description_zh: 通过 bedrock-runtime 端点的 OpenAI Responses API（/openai/v1）调用 Bedrock 上的前沿模型——OpenAI GPT-6（Astra / Sol / Luna）与 GPT-5.6（Sol / Terra / Luna）、xAI Grok 4.6、月之暗面 Kimi K3。仅支持跨区域推理 profile（global.*）——每个区域都能调所有模型，无区域分裂。不支持服务端 web_search（那是 Mantle 独有）。
+displayName: AWS Bedrock OpenAI-compatible (GPT-6.1 / 6 / 5.6 · Grok 4.6 · Kimi K3)
+displayName_zh: AWS Bedrock OpenAI 兼容接口（GPT-6.1 / 6 / 5.6 · Grok 4.6 · Kimi K3）
+description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6.1 Sol, GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.6, Moonshot Kimi K3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).
+description_zh: 通过 bedrock-runtime 端点的 OpenAI Responses API（/openai/v1）调用 Bedrock 上的前沿模型——OpenAI GPT-6.1 Sol、GPT-6（Astra / Sol / Luna）与 GPT-5.6（Sol / Terra / Luna）、xAI Grok 4.6、月之暗面 Kimi K3。仅支持跨区域推理 profile（global.*）——每个区域都能调所有模型，无区域分裂。不支持服务端 web_search（那是 Mantle 独有）。
 # Why a second Bedrock/OpenAI provider next to aws-bedrock-mantle: this is the
 # bedrock-runtime host (https://bedrock-runtime.<region>.amazonaws.com/openai/v1),
 # which AWS now recommends for new applications; bedrock-mantle is the legacy
@@ -12,10 +12,10 @@ description_zh: 通过 bedrock-runtime 端点的 OpenAI Responses API（/openai/
 #     the bare foundation-model id 400s with "on-demand throughput isn't
 #     supported". Kimi K3 isn't on Mantle at all; Grok 4.6 is Mantle us-west-2
 #     only — here everything is reachable from any region.
-#   - live-probed 2026-09-24 with SigV4: all eight global.* ids below return
-#     200 in us-east-1 / us-west-2 / eu-west-1 / ap-northeast-1 alike, so the
-#     endpoint is purely a latency / data-residency pick — unlike Mantle's
-#     per-region GPT matrix.
+#   - live-probed 2026-09-24 with SigV4: all nine global.* ids below return
+#     200 (gpt-6.1-sol probed 2026-09-30) in us-east-1 / us-west-2 /
+#     eu-west-1 / ap-northeast-1 alike, so the endpoint is purely a latency /
+#     data-residency pick — unlike Mantle's per-region GPT matrix.
 #   - requests are always synchronous and there are NO server-side tools:
 #     `tools:[{type:'web_search'}]` → 400 "web search is not supported for
 #     this request" (verified). MantleAgent never sends those, but the
@@ -51,20 +51,56 @@ secrets:
 #     which MantleAgent doesn't send) — the single 5m preset is a form hint only.
 #   - thinking: reasoning.effort. Turning Thinking off in the form omits the
 #     field (model default) — it does not send `none`. Good thing too: on this
-#     host GPT-6 Astra 400s on `none` while every other GPT accepts it.
+#     host GPT-6 Astra and GPT-6.1 Sol 400 on `none` while every other GPT
+#     accepts it.
 #   - Reasoning summaries are never surfaced (output[].reasoning.summary
 #     empty) — same as GPT on Mantle; reasoning_tokens > 0 proves it ran.
 models:
-  # OpenAI GPT-6 / GPT-5.6 — the same six models as aws-bedrock-mantle.yaml
-  # (see that file for the per-model background: 1,050,000 / 128,000 for GPT-6,
-  # 272,000 / 64,000 for 5.6, 2x input price past 272K). Live-probed
-  # 2026-09-24 on this host with invalid-value requests: every one lists
-  # reasoning.effort none/low/medium/high/xhigh/max in its own validation
-  # error and accepts text.verbosity low/medium/high — identical surface, so
-  # presets are copied verbatim. Pick these over the Mantle entries unless you
-  # need Mantle-only features (server-side web_search, background inference).
+  # OpenAI GPT-6.1 / GPT-6 / GPT-5.6 — the same seven models as
+  # aws-bedrock-mantle.yaml (see that file for the per-model background:
+  # 1,050,000 / 128,000 for GPT-6, 272,000 / 64,000 for 5.6, 2x input price
+  # past 272K). Live-probed 2026-09-24 on this host with invalid-value
+  # requests: every one (except GPT-6.1 Sol, below) lists reasoning.effort
+  # none/low/medium/high/xhigh/max in its own validation error and accepts
+  # text.verbosity low/medium/high — identical surface, so presets are copied
+  # verbatim. Pick these over the Mantle entries unless you need Mantle-only
+  # features (server-side web_search, background inference).
   - id: global.openai.gpt-6-sol
     displayName: GPT-6 Sol
+    maxOutputTokens: 128000
+    contextWindow: 1050000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      verbosity:
+        default: low
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  # GPT-6.1 Sol (Bedrock GA 2026-09-29). Live-probed 2026-09-30 on this host
+  # with SigV4: 200 from all four endpoint presets like the other global.* ids.
+  # reasoning.effort accepts low/medium/high/xhigh/max — `none` 400s, unlike
+  # GPT-6 Sol, so no "none" preset; text.verbosity low/medium/high; image input
+  # OK; 1,050,000 / 128,000 per the OpenAI model page.
+  - id: global.openai.gpt-6.1-sol
+    displayName: GPT-6.1 Sol
     maxOutputTokens: 128000
     contextWindow: 1050000
     capabilities:
