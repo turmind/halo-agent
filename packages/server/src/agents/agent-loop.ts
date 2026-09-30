@@ -29,6 +29,13 @@ export const TOOL_WARN_MARKER = '__TOOL_WARN__'
  *  transport failure, not a model-semantic error). */
 export const MODEL_TIMEOUT_ERROR = 'Model request timed out'
 
+/** Appended to the text a streaming reply had already produced when the caller
+ *  aborted the model call mid-stream; the two are pushed together as the
+ *  assistant turn (see `run()`'s model-call `finally`). Without it the partial
+ *  existed only as `text_delta` events: the UI showed and persisted it while the
+ *  model's history had no assistant turn at all. */
+export const INTERRUPTED_REPLY_MARKER = '\n\n[reply interrupted by the user here — the text above is what was shown before the cut]'
+
 // ── Types ────────────────────────────────────────────────────────────
 
 /** A single block in a tool result. Mirrors Anthropic's tool_result content shape. */
@@ -190,8 +197,10 @@ export abstract class AgentLoop {
       : input
     // Coalesce into a trailing user message rather than pushing a second one:
     // Anthropic rejects consecutive same-role messages. A dangling user turn
-    // can be left by an aborted turn (assistant stripped on abort) or parked by
-    // stopSession's queue-preservation fold — the next run must merge into it.
+    // can be left by an aborted turn (the model call died before it produced
+    // any text — an abort mid-stream lands the partial as an assistant turn,
+    // see the model-call `finally` below) or parked by stopSession's
+    // queue-preservation fold — the next run must merge into it.
     const last = this.messages[this.messages.length - 1]
     if (userContent.length === 0) {
       // Resume: the caller already landed this turn's input on an earlier
@@ -227,7 +236,13 @@ export abstract class AgentLoop {
       const callSignal = options?.cancelSignal
         ? AbortSignal.any([options.cancelSignal, timeoutController.signal])
         : timeoutController.signal
-      let result: ModelCallResult
+      // `undefined` until the call resolves — the finally below reads it to tell
+      // an interrupted call from a completed one.
+      let result: ModelCallResult | undefined
+      // Text the provider streamed so far this call. Streaming providers throw
+      // AbortError after a cancel and return no partial result, so this is the
+      // only copy of what the user already saw.
+      let streamedText = ''
       try {
         // A generator can't yield from inside a callback, so onDelta queues the
         // chunk and wakes the drain loop below, which yields everything queued
@@ -248,6 +263,7 @@ export abstract class AgentLoop {
           if (deltas.length === 0) await new Promise<void>((r) => { wake = r })
           while (deltas.length > 0) {
             const d = deltas.shift()!
+            if (d.type === 'text_delta') streamedText += d.text
             yield { type: d.type, text: d.text }
           }
         }
@@ -263,6 +279,21 @@ export abstract class AgentLoop {
         throw err
       } finally {
         clearTimeout(timer)
+        // Caller cancel mid-stream: land what was already streamed as the
+        // assistant turn, marked, so the model's history matches what the UI
+        // showed (and persisted via the deltas) — before this the partial was
+        // dropped and the model had no record of a reply it visibly gave. Runs
+        // on both cancel exits: the provider's AbortError rethrown above, and
+        // the consumer breaking its for-await at a delta `yield` (gen.return()).
+        // Text only: a partial thinking block has no signature and would be
+        // rejected in history, and a partial tool_use never reaches here (the
+        // providers throw instead of returning a half-built input). Gated on
+        // the caller's signal, not the timeout: an idle timeout is retried by
+        // SessionManager and the retry re-streams from scratch — pushing here
+        // would duplicate the text.
+        if (result === undefined && options?.cancelSignal?.aborted && streamedText.length > 0) {
+          this.messages.push({ role: 'assistant', content: [{ type: 'text', text: streamedText + INTERRUPTED_REPLY_MARKER }] })
+        }
       }
 
       if (result.stopReason === 'refusal') {

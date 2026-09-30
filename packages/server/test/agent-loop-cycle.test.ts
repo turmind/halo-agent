@@ -3,6 +3,7 @@ import {
   AgentLoop,
   TOOL_ERROR_MARKER,
   MODEL_TIMEOUT_ERROR,
+  INTERRUPTED_REPLY_MARKER,
   type AgentEvent,
   type ContentBlock,
   type ModelCallResult,
@@ -19,8 +20,10 @@ import { config } from '../src/config.js'
  * tool_call events before usage (ui-log-builder rotates turnId on usage),
  * TOOL_ERROR_MARKER tagging, forceEndTurn / stopReason passthrough,
  * timeout-vs-cancel disambiguation, cancel between tools, user-turn
- * coalescing, multi-block results, beforeCallModel ordering, and streaming
- * deltas (yielded during the call, idle-timeout reset).
+ * coalescing, multi-block results, beforeCallModel ordering, streaming
+ * deltas (yielded during the call, idle-timeout reset), and the
+ * interrupted-stream landing (text streamed before a caller cancel is pushed
+ * as a marked assistant turn; thinking-only / timeout / completion are not).
  *
  * Drives a scripted AgentLoop subclass: each test declares its own
  * turn-indexed callModel results (or a function that hangs until abort /
@@ -254,6 +257,10 @@ describe('AgentLoop tool cycle', () => {
     expect(events[4]).toEqual({ type: 'text', text: 'let me check', final: false })
     expect(events[6]).toMatchObject({ type: 'usage', ttftMs: 7 })
     expect(events[9]).toMatchObject({ type: 'usage', ttftMs: undefined })
+    // A completed call lands exactly its result — the streamed-text landing
+    // (interrupted-stream tests below) must never add a second assistant turn.
+    expect(loop.messages.filter((m) => m.role === 'assistant')).toHaveLength(2)
+    expect(loop.messages[1]).toEqual({ role: 'assistant', content: toolUseTurn([call('tu_a', 'a')], 'let me check').assistantBlocks })
   })
 
   it('streaming: deltas emitted while the consumer is mid-yield are not lost', async () => {
@@ -272,6 +279,7 @@ describe('AgentLoop tool cycle', () => {
 
     expect(events.filter((e) => e.type === 'text_delta').map((e) => e.text)).toEqual(['a', 'b', 'c', 'd'])
     expect(events.filter((e) => e.type === 'text')).toEqual([{ type: 'text', text: 'abcd', final: true }])
+    expect(loop.messages.filter((m) => m.role === 'assistant')).toHaveLength(1)
   })
 
   it('streaming: each delta resets the model-call timer (idle timeout, not wall clock)', async () => {
@@ -308,6 +316,92 @@ describe('AgentLoop tool cycle', () => {
     const err = await pending.then(() => null, (e: unknown) => e)
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).message).toBe('aborted')
+  })
+
+  // Interrupt mid-stream. Streaming providers throw AbortError after a cancel
+  // and return no partial result, so the text the user already saw (yielded as
+  // text_delta, persisted by the UI log) never reached `messages` — the model
+  // had no record of a reply it visibly gave, and the next user message
+  // coalesced into the dangling user turn. The loop now lands the streamed
+  // text as a marked assistant turn on both cancel exits. Only text: partial
+  // thinking has no signature and is rejected in history; a timeout is retried
+  // and re-streams from scratch, so landing there would duplicate the text.
+  describe('interrupted stream', () => {
+    /** callModel that streams `deltas`, then hangs until its signal aborts (the provider's AbortError contract). */
+    const streamThenHang = (deltas: ModelDelta[]) => (signal: AbortSignal | undefined, onDelta?: OnDelta) =>
+      new Promise<ModelCallResult>((_, reject) => {
+        for (const d of deltas) onDelta?.(d)
+        signal?.addEventListener('abort', () => reject(new DOMException('Model call aborted', 'AbortError')), { once: true })
+      })
+
+    it('caller cancel mid-stream: the streamed text lands as a marked assistant turn, the error still propagates', async () => {
+      const ac = new AbortController()
+      const loop = new ScriptedLoop([], [streamThenHang([
+        { type: 'text_delta', text: 'Once upon ' },
+        { type: 'text_delta', text: 'a time' },
+      ])])
+      const pending = collect(loop.run('go', { cancelSignal: ac.signal }))
+      await tick()
+      ac.abort()
+
+      const err = await pending.then(() => null, (e: unknown) => e)
+      expect((err as Error).name).toBe('AbortError')
+      expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+      expect(loop.messages[1].content).toEqual([{ type: 'text', text: 'Once upon a time' + INTERRUPTED_REPLY_MARKER }])
+    })
+
+    it('thinking-only stream: nothing pushed (an unsigned partial thinking block is rejected in history)', async () => {
+      const ac = new AbortController()
+      const loop = new ScriptedLoop([], [streamThenHang([
+        { type: 'thinking_delta', text: 'hmm' },
+        { type: 'thinking_delta', text: 'let me think' },
+      ])])
+      const pending = collect(loop.run('go', { cancelSignal: ac.signal }))
+      await tick()
+      ac.abort()
+
+      await expect(pending).rejects.toThrow()
+      expect(loop.messages.map((m) => m.role)).toEqual(['user'])
+    })
+
+    it('consumer breaks at a delta (hard interrupt): the finally runs via gen.return() and lands the partial', async () => {
+      const ac = new AbortController()
+      const loop = new ScriptedLoop([], [streamThenHang([{ type: 'text_delta', text: 'a' }])])
+      // Mirrors runAgentTurn's `if (signal.aborted) break` — abort, then leave
+      // the for-await at the delta yield instead of waiting for the rejection.
+      for await (const ev of loop.run('go', { cancelSignal: ac.signal })) {
+        if (ev.type === 'text_delta') { ac.abort(); break }
+      }
+
+      expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+      expect(loop.messages[1].content).toEqual([{ type: 'text', text: 'a' + INTERRUPTED_REPLY_MARKER }])
+    })
+
+    it('idle timeout mid-stream: MODEL_TIMEOUT_ERROR, no partial pushed (the retry re-streams from scratch)', async () => {
+      const timeout = config.timeout as { modelRequest: number }
+      const orig = timeout.modelRequest
+      timeout.modelRequest = 20
+      try {
+        const loop = new ScriptedLoop([], [streamThenHang([{ type: 'text_delta', text: 'Once upon ' }])])
+        await expect(collect(loop.run('go'))).rejects.toThrow(MODEL_TIMEOUT_ERROR)
+        expect(loop.messages.map((m) => m.role)).toEqual(['user'])
+      } finally {
+        timeout.modelRequest = orig
+      }
+    })
+
+    it('the next run() pushes a fresh user turn after the landed partial (no coalescing into it)', async () => {
+      const ac = new AbortController()
+      const loop = new ScriptedLoop([], [streamThenHang([{ type: 'text_delta', text: 'partial' }]), endTurn('recap')])
+      const pending = collect(loop.run('go', { cancelSignal: ac.signal }))
+      await tick()
+      ac.abort()
+      await pending.catch(() => {})
+
+      await collect(loop.run('what did you just write?'))
+      expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
+      expect(loop.messages[2]).toEqual({ role: 'user', content: [{ type: 'text', text: 'what did you just write?' }] })
+    })
   })
 
   // Interrupt mid-batch. Two exits: the loop's own cancel check (soft
