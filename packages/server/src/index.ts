@@ -31,7 +31,7 @@ import { DISPATCH_COMMANDS } from './channels/shared/commands.js'
 import { setupWebSocketHandler } from './ws/handler.js'
 import { setBroadcastWss } from './ws/broadcast.js'
 import { SessionManagerRegistry } from './agents/session-manager-registry.js'
-import { claimWorkspaceRuntime } from './agents/workspace-runtime-lock.js'
+import { claimWorkspaceRuntime, releaseWorkspaceRuntime } from './agents/workspace-runtime-lock.js'
 import { setRelayRegistry } from './agents/relay.js'
 import { createChannelDb, setChannelDb } from './db/channel-db.js'
 import { createCronDb, setCronDb } from './db/cron-db.js'
@@ -581,6 +581,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   if (server && typeof (server as import('node:http').Server).close === 'function') {
     (server as import('node:http').Server).close()
+  }
+
+  // Land unpersisted UI logs first (pending 500ms debounces would die with
+  // the process), then drop our workspace runtime claims so a later boot
+  // never mistakes a recycled pid for a live holder (only our own pid goes).
+  for (const { workspacePath, sm } of registry.list()) {
+    try { sm.flushAll() } catch (err) { console.error(`[Server] flushAll failed for ${workspacePath}: ${err instanceof Error ? err.message : String(err)}`) }
+    releaseWorkspaceRuntime(workspacePath)
   }
 
   console.log('[Server] Shutdown complete')

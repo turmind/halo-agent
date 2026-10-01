@@ -73,6 +73,11 @@ export interface AgentSessionEvent {
    *  Stream-terminating consumers (web-channel SSE, ACP) must NOT end on it —
    *  the root session is still running and more output follows. */
   batchBoundary?: boolean
+  /** For `system` events: the notice closes an auto-compact whose LLM summary
+   *  failed and fell back to the local compact. The success path ends with a
+   *  `compacted` event; this is the WS layer's cue to emit the matching
+   *  `compact:done` for the fallback, so the admin leaves its compacting state. */
+  compactEnd?: boolean
 }
 
 /** @deprecated Use AgentSessionEvent — kept as alias during migration */

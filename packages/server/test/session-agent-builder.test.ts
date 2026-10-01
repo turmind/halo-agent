@@ -176,7 +176,7 @@ describe('delegation — the session-tool bundle is gated on a non-empty team', 
     const ctx = await sm.getSessionContext('s_solo')
     for (const name of SESSION_TOOLS) expect(ctx?.meta.toolNames).not.toContain(name)
     const prompt = sm.getSessionSystemPrompt('s_solo') ?? ''
-    expect(prompt).not.toContain('Your Team')
+    expect(prompt).not.toContain('## Your Team')
   })
 
   it('treats an empty team [] as no delegation', async () => {

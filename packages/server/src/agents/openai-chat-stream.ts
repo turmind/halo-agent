@@ -19,6 +19,7 @@
  * delta — deepseek / zhipu) or as `choices: []` (kimi / doubao / hunyuan).
  */
 import type { ModelDelta } from './agent-loop.js'
+import { ACTIVITY_DELTA } from './agent-loop.js'
 import { readSseJson } from './sse.js'
 
 /** One `chat.completion.chunk` frame — only the fields we fold. */
@@ -159,7 +160,9 @@ export async function fetchChatCompletionStream(opts: FetchChatCompletionStreamO
   if (!res.body) throw new Error(`[${tag}] empty response body`)
 
   const acc = new ChatCompletionAccumulator(startTime, opts.onDelta)
-  for await (const chunk of readSseJson<ChatCompletionChunk>(res.body)) {
+  // Every read is liveness for the idle timer — tool-call fragments, empty
+  // reasoning chunks and comment frames included, which the accumulator reports nothing for.
+  for await (const chunk of readSseJson<ChatCompletionChunk>(res.body, () => opts.onDelta?.(ACTIVITY_DELTA))) {
     if (chunk.error) {
       // No HTTP status exists mid-stream (the 200 already went out), so
       // classifyModelError falls back to its keyword checks on this message.

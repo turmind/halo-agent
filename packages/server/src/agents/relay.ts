@@ -16,6 +16,7 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { agentSessions } from '../db/schema.js'
 import type { HaloDb } from '../db/index.js'
 import type { ToolDef } from './bedrock-agent.js'
+import type { ModelErrorKind } from './model-error.js'
 import { config } from '../config.js'
 import { resolveDefaultAgentId } from '../channels/shared/commands.js'
 
@@ -72,6 +73,27 @@ export function clearReplyTo(db: HaloDb, sessionId: string): void {
     .run()
 }
 
+/** A session's still-running (non-stopped, non-archived) children, from the db
+ *  — the one "subtree not quiet" query shared by the end-of-run gates
+ *  (deliverRelayReport, SessionManager's tryReportToParent / siblingStatusSuffix
+ *  / sendDeferredInterim) and runSession's turn-start waiting check. Here rather
+ *  than in session-manager so relay can use it without an import cycle. */
+export function listActiveChildren(db: HaloDb, sessionId: string): Array<{ agentName: string; description: string; createdAt: number; updatedAt: number }> {
+  return db.select({
+      agentName: agentSessions.agentName,
+      description: agentSessions.description,
+      createdAt: agentSessions.createdAt,
+      updatedAt: agentSessions.updatedAt,
+    })
+    .from(agentSessions)
+    .where(and(
+      eq(agentSessions.parentId, sessionId),
+      isNull(agentSessions.stoppedAt),
+      isNull(agentSessions.archivedAt),
+    ))
+    .all()
+}
+
 // ── Delivery point ───────────────────────────────────────────────────
 
 /**
@@ -82,7 +104,7 @@ export function clearReplyTo(db: HaloDb, sessionId: string): void {
  */
 export async function deliverRelayReport(
   host: RelayTarget,
-  session: { id: string; parentId: string | null; messageQueue: { length: number }; finalOutput: string; output: string; turnError: string | null },
+  session: { id: string; parentId: string | null; messageQueue: { length: number }; finalOutput: string; output: string; turnError: string | null; turnErrorKind: ModelErrorKind | null },
 ): Promise<void> {
   if (session.parentId !== null) return
   const db = host.getDb()
@@ -91,15 +113,7 @@ export async function deliverRelayReport(
   if (!to) return
   // Subtree-quiet gate (same as tryReportToParent / deliverGoalRound): active
   // children or a queued message mean another turn follows — not the end.
-  const activeChildren = db.select({ id: agentSessions.id })
-    .from(agentSessions)
-    .where(and(
-      eq(agentSessions.parentId, session.id),
-      isNull(agentSessions.stoppedAt),
-      isNull(agentSessions.archivedAt),
-    ))
-    .all()
-  if (activeChildren.length > 0 || session.messageQueue.length > 0) return
+  if (listActiveChildren(db, session.id).length > 0 || session.messageQueue.length > 0) return
 
   const registry = getRelayRegistry()
   if (!registry) { console.warn(`[Relay] no registry — cannot deliver report for ${session.id} to ${to.workspace}`); return }
@@ -109,7 +123,12 @@ export async function deliverRelayReport(
   // partial trace, not a wrap-up. Prefix, don't suppress (mirrors
   // deliverGoalRound) — and BEFORE the truncation cap so the marker survives.
   if (session.turnError) {
-    report = `[RELAY TARGET ABORTED: the last turn was terminated by an unrecoverable error, NOT completed. Error: ${session.turnError}. The text below is a partial trace — do not treat it as a finished result. Re-send with relay_send to let it resume.]\n\n${report}`
+    // An account error fails identically on every attempt — steer the caller
+    // to the target's model config, not a re-send (mirrors tryReportToParent).
+    const next = session.turnErrorKind === 'account'
+      ? 'This is a model account / credential / balance / permission problem in the target workspace: retrying or re-sending will fail the same way. Fix its model configuration first (or tell the user to fix it), and do not resume it with relay_send until then.'
+      : 'Re-send with relay_send to let it resume.'
+    report = `[RELAY TARGET ABORTED: the last turn was terminated by an unrecoverable error, NOT completed. Error: ${session.turnError}. The text below is a partial trace — do not treat it as a finished result. ${next}]\n\n${report}`
   }
   const cap = config.limits.autoReportMax
   const body = report.length > cap
@@ -134,9 +153,10 @@ export async function deliverRelayReport(
 /**
  * Interim report — called from SessionManager (deliverInterim) when a relay-
  * dispatched root finished a turn that answered the caller and ANOTHER turn
- * follows (continue_task kick, or a message already queued). The next turn
- * resets the per-turn output, so without this the answer never reaches the
- * caller: deliverRelayReport only reads the LAST turn. Unlike the final report:
+ * follows (continue_task kick, or a message already queued), or the run ended
+ * on it while a child still holds back the final report (sendDeferredInterim).
+ * The next turn resets the per-turn output, so without this the answer never
+ * reaches the caller: deliverRelayReport only reads the LAST turn. Unlike the final report:
  * no quiet gate (the session is by definition not done) and reply_to is KEPT,
  * so the final report still fires exactly once when the task ends. `body` is
  * the caller-built snapshot.

@@ -108,6 +108,12 @@ export function sendWsNotification(
         sendJson(ctx.ws, { type: 'compact:started' })
       }
       sendJson(ctx.ws, { type: 'chat:system', text: event.text ?? '', taskId, agentName, sessionId })
+      // The matching close for that `compact:started` when the auto-compact's
+      // LLM summary failed (local fallback) — success closes via `compacted` below.
+      // Without it the ring stayed blue and chat:send kept being queued.
+      if (event.compactEnd && !taskId) {
+        sendJson(ctx.ws, { type: 'compact:done' })
+      }
       break
     case 'error':
       sendJson(ctx.ws, { type: 'error', error: event.error, agentName, taskId, sessionId })

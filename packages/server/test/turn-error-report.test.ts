@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
+import type { ModelErrorKind } from '../src/agents/model-error.js'
 import { agentSessions } from '../src/db/schema.js'
 import { eq } from 'drizzle-orm'
 
@@ -74,6 +75,7 @@ function fakeSession(id: string, agent: ReturnType<typeof stubAgent>, over: { pa
     output: '',
     finalOutput: '',
     turnError: null as string | null,
+    turnErrorKind: null as ModelErrorKind | null,
     promise: null,
     abortController: null,
     messageQueue: [] as unknown[],
@@ -136,6 +138,35 @@ describe('unrecoverable error stamps session.turnError', () => {
     expect(agent.state.calls).toBe(1)               // no retry branch matched
     expect(result).toBe('Error: Error: boom strange failure')
     expect(session.turnError).toBe('Error: boom strange failure')
+    expect(session.turnErrorKind).toBe('fatal')
+  })
+
+  it('an account error (401) stamps turnErrorKind "account" alongside turnError, no retry', async () => {
+    seedRow('r3')
+    const agent = stubAgent(Infinity, () => new Error('[kimi] API error 401: Unauthorized'))
+    const session = fakeSession('r3', agent)
+
+    await sm.runSession('r3', 'go')
+
+    expect(agent.state.calls).toBe(1)
+    expect(session.turnError).toBe('[kimi] API error 401: Unauthorized')
+    expect(session.turnErrorKind).toBe('account')
+  })
+
+  it('the next turn resets turnErrorKind together with turnError', async () => {
+    seedRow('r4')
+    const agent = stubAgent(1, () => new Error('[kimi] API error 401: Unauthorized'))
+    const session = fakeSession('r4', agent)
+
+    await sm.runSession('r4', 'go')
+    expect(session.turnErrorKind).toBe('account')
+    // runSession's finally releases the session from the map; put the same
+    // object back so the second turn runs on it (the reset is per turn).
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('r4', session)
+    await sm.runSession('r4', 'go again')
+
+    expect(session.turnError).toBeNull()
+    expect(session.turnErrorKind).toBeNull()
   })
 })
 
@@ -164,7 +195,7 @@ describe('auto-report marks abnormal termination', () => {
     expect(report).toMatch(/^\[SUB-AGENT ABORTED/)
     expect(report).toContain('TimeoutError: Unexpected error: http2 request did not get a response')
     expect(report).toContain('Now let me check persistSessionFile…')  // partial trace still delivered
-    expect(report).toContain('query_session')                          // resume hint
+    expect(report).toContain('Re-dispatch with query_session("p1>c1", ...) to let it resume.')  // resume hint
     // stoppedAt still stamped — abort must not leave the child "running" forever
     const row = sm.getDb().select().from(agentSessions).where(eq(agentSessions.id, 'p1>c1')).get()
     expect(row?.stoppedAt).not.toBeNull()
@@ -193,5 +224,42 @@ describe('auto-report marks abnormal termination', () => {
 
     expect(report).toBe('All done, 3 files changed.')
     expect(report).not.toContain('ABORTED')
+  })
+
+  it('account error: keeps the ABORTED marker + error text, swaps the re-dispatch hint for "fix the model config"', async () => {
+    seedRow('p4')
+    seedRow('p4>c1', { parentId: 'p4' })
+    const child = fakeSession('p4>c1', stubAgent(0, () => new Error('unused')), { parentId: 'p4' })
+    child.output = 'Let me read the config…'
+    child.turnError = '[kimi] API error 402: insufficient balance'
+    child.turnErrorKind = 'account'
+
+    const report = await reportOf(child)
+
+    expect(report).toMatch(/^\[SUB-AGENT ABORTED/)
+    expect(report).toContain('Error: [kimi] API error 402: insufficient balance.')
+    expect(report).toContain('model account / credential / balance / permission problem')
+    expect(report).toContain('Fix the model configuration first (or tell the user to fix it)')
+    expect(report).toContain('do not resume it with query_session("p4>c1", ...) until then')
+    expect(report).not.toContain('to let it resume')
+    expect(report).toContain('Let me read the config…')   // partial trace still delivered
+  })
+
+  it('end to end: a 401 in the child turn reaches the parent with the account wording', async () => {
+    seedRow('p5')
+    seedRow('p5>c1', { parentId: 'p5' })
+    fakeSession('p5>c1', stubAgent(Infinity, () => new Error('[kimi] API error 401: Unauthorized')), { parentId: 'p5' })
+    const reported = new Promise<string>((resolve) => {
+      ;(sm as unknown as { querySession: unknown }).querySession =
+        async (_t: string, _s: string, message: string) => { resolve(message); return '{"code":0}' }
+    })
+
+    await sm.runSession('p5>c1', 'go')
+    const report = await reported
+
+    expect(report).toMatch(/^\[SUB-AGENT ABORTED/)
+    expect(report).toContain('[kimi] API error 401: Unauthorized')
+    expect(report).toContain('do not resume it with query_session("p5>c1", ...) until then')
+    expect(report).not.toContain('to let it resume')
   })
 })

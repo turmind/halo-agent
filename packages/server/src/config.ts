@@ -381,9 +381,10 @@ export const config = {
     // connection (server accepted but never sends bytes / sends no RST) hangs
     // the await indefinitely. Bounds each callModel; on expiry the request
     // aborts and the agent loop's retry takes over. Streaming providers reset
-    // the timer on every chunk, so for them it is an idle timeout — a long but
-    // live stream is never cut off.
-    modelRequest: systemInt('HALO_MODEL_TIMEOUT', 'timeout.model_request', 30 * 60_000),
+    // the timer on any data the stream delivers (pings, tool-argument
+    // fragments, SSE comments included), so for them it is an idle timeout — a
+    // long but live stream is never cut off.
+    modelRequest: systemInt('HALO_MODEL_TIMEOUT', 'timeout.model_request', 10 * 60_000),
     sessionGrace: systemInt('HALO_SESSION_GRACE', 'timeout.session_grace', 5 * 60_000),
     terminalGrace: systemInt('HALO_TERMINAL_GRACE', 'timeout.terminal_grace', 5 * 60_000),
   },
@@ -407,7 +408,6 @@ export const config = {
     keep_messages: settingsInt('general.compact.keep_messages', 5),
     max_summary_input: settingsInt('general.compact.max_summary_input', 15_000),
     max_message_slice: settingsInt('general.compact.max_message_slice', 800),
-    summarize_timeout_sec: settingsInt('general.compact.summarize_timeout_sec', 300),
   },
 
   auth: {

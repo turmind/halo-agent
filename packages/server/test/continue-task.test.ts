@@ -7,8 +7,15 @@ import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
 import { eq } from 'drizzle-orm'
 import type { AgentSessionEvent } from '../src/agents/agent-events.js'
-import { setRelayRegistry, writeReplyTo, readReplyTo, type RelayTarget, type RelayRegistry } from '../src/agents/relay.js'
+import { setRelayRegistry, writeReplyTo, readReplyTo, listActiveChildren, type RelayTarget, type RelayRegistry } from '../src/agents/relay.js'
 import { initialGoalState, writeGoalState, readGoalState, setWorkerBackptr, goalDir, goalSpecPath } from '../src/agents/goal-mode.js'
+
+// Transparent wrap (unchanged behavior) so a test can count SessionManager's
+// child lookups; relay.ts's own calls use its local binding and aren't counted.
+vi.mock('../src/agents/relay.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/agents/relay.js')>()
+  return { ...actual, listActiveChildren: vi.fn(actual.listActiveChildren) }
+})
 
 /**
  * Coverage for the built-in `continue_task` tool (resume after interrupt):
@@ -688,6 +695,20 @@ describe('interim report on the opening turn', () => {
     expect(readReplyTo(sm.getDb(), 'dq5')).toBeNull()
   })
 
+  it('relay root, LOCAL opening message + queued follow-up → no interim to the relay caller', async () => {
+    seedRow('dq5b')
+    writeReplyTo(sm.getDb(), 'dq5b', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent((callNo) => { if (callNo === 1) session.messageQueue.push({ text: 'local follow-up' }) })
+    const session = fakeSession('dq5b', agent)
+
+    await sm.runSession('dq5b', 'local question')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent.filter((t) => t.startsWith('[Relay interim report'))).toHaveLength(0)
+  })
+
   it('root with nobody waiting: opening turn + queued message → nothing delivered', async () => {
     seedRow('solo3')
     const sent = relayCaller()
@@ -701,5 +722,220 @@ describe('interim report on the opening turn', () => {
     expect(agent.state.calls).toBe(2)
     expect(sent).toHaveLength(0)
     expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+// ── 9e. the run's last turn, with the end-of-run report held back by children ──
+
+const stopRow = (id: string) => sm.getDb().update(agentSessions).set({ stoppedAt: Date.now() }).where(eq(agentSessions.id, id)).run()
+
+/** The child finishing: its row stops and its auto-report wakes the session again
+ *  (querySession's idle path — a queued message, then runSession('')). */
+async function childReportArrives(id: string, childId: string, parentId: string | null = null): Promise<void> {
+  stopRow(childId)
+  const agent = stubAgent(() => {}, () => [{ type: 'text', text: 'wrap-up: counted to 10', final: true }])
+  fakeSession(id, agent, { parentId, messageQueue: [{ text: '1 2 3 4 5 6 7 8 9 10', sourceSessionId: childId }] })
+  await sm.runSession(id, '')
+  await flush()
+}
+
+describe('interim report: end-of-run report deferred by a still-running sub-agent', () => {
+  afterEach(() => { setRelayRegistry(null as unknown as RelayRegistry) })
+
+  it('relay root idle-waiting on a child, asked via relay (opening turn): interim with the answer, reply_to kept; final once after the child', async () => {
+    seedRow('w1')
+    seedRow('w1>c', { parentId: 'w1' })
+    writeReplyTo(sm.getDb(), 'w1', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    fakeSession('w1', stubAgent(() => {}, () => [{ type: 'text', text: 'C is at 4', final: true }]))
+
+    await sm.runSession('w1', '[channel: relay | from: /sec]\n\nhow far has C counted?')
+    await flush()
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/^\[Relay interim report · workspace .* · session w1 · status: still running\]/)
+    expect(sent[0]).toContain('C is at 4')
+    expect(readReplyTo(sm.getDb(), 'w1')).toEqual({ workspace: '/sec', sessionId: 'sec-1' })
+
+    await childReportArrives('w1', 'w1>c')
+
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toMatch(/^\[Relay report · workspace .* · session w1 · status: completed\]/)
+    expect(sent[1]).toContain('wrap-up: counted to 10')
+    expect(readReplyTo(sm.getDb(), 'w1')).toBeNull()
+  })
+
+  it('drain path: asked while busy right after starting the child, answered, run ends with the child running → interim; final once', async () => {
+    seedRow('w2')
+    writeReplyTo(sm.getDb(), 'w2', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent(
+      (callNo) => {
+        if (callNo !== 1) return
+        // The dispatch turn: start_session lands the child row, then the caller's
+        // follow-up arrives while the turn is still busy (sendUserMessage's busy branch).
+        seedRow('w2>c', { parentId: 'w2' })
+        session.messageQueue.push({ text: '[channel: relay | from: /sec]\n\nhow far has C counted?' })
+        session.interruptRequested = true
+      },
+      // Call 1 is cut by the soft interrupt before any wrap-up (no final text).
+      (callNo) => callNo === 1 ? [{ type: 'text', text: 'starting C…', final: false }] : [{ type: 'text', text: `reply ${callNo}`, final: true }],
+    )
+    const session = fakeSession('w2', agent)
+
+    await sm.runSession('w2', '[channel: relay | from: /sec]\n\ncount to 10 via a sub-agent')
+    await flush()
+
+    expect(agent.state.calls).toBe(2)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/^\[Relay interim report · /)
+    expect(sent[0]).toContain('reply 2')
+    expect(readReplyTo(sm.getDb(), 'w2')).toEqual({ workspace: '/sec', sessionId: 'sec-1' })
+
+    await childReportArrives('w2', 'w2>c')
+
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toMatch(/^\[Relay report · /)
+    expect(sent[1]).toContain('wrap-up: counted to 10')
+  })
+
+  it('the first dispatch itself (child started in this turn) sends no interim — only the final, once', async () => {
+    seedRow('w3')
+    writeReplyTo(sm.getDb(), 'w3', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    const agent = stubAgent(
+      (callNo) => { if (callNo === 1) seedRow('w3>c', { parentId: 'w3' }) },
+      () => [{ type: 'text', text: 'started C, will report', final: true }],
+    )
+    fakeSession('w3', agent)
+
+    await sm.runSession('w3', '[channel: relay | from: /sec]\n\ncount to 10 via a sub-agent')
+    await flush()
+
+    expect(sent).toHaveLength(0)
+    expect(readReplyTo(sm.getDb(), 'w3')).toEqual({ workspace: '/sec', sessionId: 'sec-1' })
+
+    await childReportArrives('w3', 'w3>c')
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/^\[Relay report · /)
+    expect(sent[0]).toContain('wrap-up: counted to 10')
+  })
+
+  it('sub-agent waiting on a grandchild, queried by its parent: interim to the parent without stoppedAt / agent_done; final once after the grandchild', async () => {
+    seedRow('p5')
+    seedRow('p5>s', { parentId: 'p5' })
+    seedRow('p5>s>g', { parentId: 'p5>s' })
+    const calls: Array<{ target: string; text: string; stoppedAt: number | null }> = []
+    vi.spyOn(sm, 'querySession').mockImplementation(async (target, _source, text) => {
+      const row = sm.getDb().select({ stoppedAt: agentSessions.stoppedAt }).from(agentSessions).where(eq(agentSessions.id, 'p5>s')).get()
+      calls.push({ target, text, stoppedAt: row?.stoppedAt ?? null })
+      return '{}'
+    })
+    const parentEvents: AgentSessionEvent[] = []
+    sm.registerEventListener('p5', (ev) => { parentEvents.push(ev) })
+    // querySession's idle path: the parent's message is queued, runSession('') drains it.
+    fakeSession('p5>s', stubAgent(), { parentId: 'p5', messageQueue: [{ text: 'how far is G?', sourceSessionId: 'p5' }] })
+
+    await sm.runSession('p5>s', '')
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].target).toBe('p5')
+    expect(calls[0].text).toMatch(/^\[Interim report · status: still running\]/)
+    expect(calls[0].text).toContain('reply 1')
+    expect(calls[0].stoppedAt).toBeNull()
+    expect(parentEvents.filter((e) => e.type === 'agent_done')).toHaveLength(0)
+
+    await childReportArrives('p5>s', 'p5>s>g', 'p5')
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1].text).toBe('wrap-up: counted to 10')
+    expect(calls[1].stoppedAt).not.toBeNull()
+    expect(parentEvents.filter((e) => e.type === 'agent_done')).toHaveLength(1)
+  })
+
+  it('local (non-relay) messages to the waiting root send no interim — idle (opening) or busy (drain); the final still fires once', async () => {
+    seedRow('w4')
+    seedRow('w4>c', { parentId: 'w4' })
+    writeReplyTo(sm.getDb(), 'w4', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+
+    fakeSession('w4', stubAgent())
+    await sm.runSession('w4', 'typed straight into the department chat: how is C doing?')
+    await flush()
+    fakeSession('w4', stubAgent(), interrupted('and another local question'))
+    await sm.runSession('w4', '')
+    await flush()
+
+    expect(sent).toHaveLength(0)
+    expect(readReplyTo(sm.getDb(), 'w4')).toEqual({ workspace: '/sec', sessionId: 'sec-1' })
+
+    await childReportArrives('w4', 'w4>c')
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/^\[Relay report · /)
+    expect(sent[0]).toContain('wrap-up: counted to 10')
+    expect(readReplyTo(sm.getDb(), 'w4')).toBeNull()
+  })
+
+  it('an answer turn that errored or produced no text sends no interim', async () => {
+    const sent = relayCaller()
+    for (const id of ['w6', 'w7']) {
+      seedRow(id)
+      seedRow(`${id}>c`, { parentId: id })
+      writeReplyTo(sm.getDb(), id, { workspace: '/sec', sessionId: 'sec-1' })
+    }
+    // w6: a final text, then an unclassified error — fatal, no retry → turnError set.
+    const erroring = stubAgent()
+    erroring.run = async function* () { yield { type: 'text', text: 'C is at', final: true }; throw new Error('model blew up') }
+    fakeSession('w6', erroring)
+    // w7: the turn yields nothing.
+    fakeSession('w7', stubAgent(() => {}, () => []))
+
+    await sm.runSession('w6', '[channel: relay | from: /sec]\n\nhow far has C counted?')
+    await sm.runSession('w7', '[channel: relay | from: /sec]\n\nhow far has C counted?')
+    await flush()
+
+    expect(sent).toHaveLength(0)
+    expect(readReplyTo(sm.getDb(), 'w6')).toEqual({ workspace: '/sec', sessionId: 'sec-1' })
+    expect(readReplyTo(sm.getDb(), 'w7')).toEqual({ workspace: '/sec', sessionId: 'sec-1' })
+  })
+
+  it('the turn-start child lookup runs only past the door: local turns skip it, a relay turn pays it', async () => {
+    const lookups = vi.mocked(listActiveChildren)
+    seedRow('w8')
+    seedRow('w8>c', { parentId: 'w8' })
+    const agent = stubAgent((callNo) => { if (callNo === 1) session.messageQueue.push({ text: 'and another local question' }) })
+    const session = fakeSession('w8', agent)
+    lookups.mockClear()
+
+    // A plain root with a child running: local opening turn, then a local drained turn.
+    await sm.runSession('w8', 'typed straight into the chat: how is C doing?')
+
+    expect(agent.state.calls).toBe(2)
+    expect(lookups).not.toHaveBeenCalled()
+
+    // Control: the same waiting root asked over relay — the door opens, the lookup runs.
+    fakeSession('w8', stubAgent())
+    await sm.runSession('w8', '[channel: relay | from: /sec]\n\nhow far has C counted?')
+
+    expect(lookups).toHaveBeenCalled()
+  })
+
+  it('the subtree goes quiet during the answer turn: no interim — the final report carries the answer', async () => {
+    seedRow('w5')
+    seedRow('w5>c', { parentId: 'w5' })
+    writeReplyTo(sm.getDb(), 'w5', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent = relayCaller()
+    // Waiting at turn start, quiet at turn end (e.g. the root stopped the child mid-turn).
+    fakeSession('w5', stubAgent((callNo) => { if (callNo === 1) stopRow('w5>c') }))
+
+    await sm.runSession('w5', '[channel: relay | from: /sec]\n\nstop C and tell me where it got to')
+    await flush()
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/^\[Relay report · /)
+    expect(sent[0]).toContain('reply 1')
+    expect(readReplyTo(sm.getDb(), 'w5')).toBeNull()
   })
 })

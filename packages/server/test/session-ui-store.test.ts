@@ -130,7 +130,7 @@ describe('SessionUIStore persistence + tombstone', () => {
   it('complete event flushes the root UI log to disk synchronously', () => {
     const { host, persisted } = makeHost()
     const store = new SessionUIStore(host)
-    // Seed a message so the snapshot is non-empty (persistUIState skips empties).
+    // Seed a message so the snapshot is non-empty (persistLog skips empties).
     store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
     store.emitEvent('s1', { type: 'complete' } as AgentSessionEvent)
     expect(persisted.some((p) => p.sessionId === 's1')).toBe(true)

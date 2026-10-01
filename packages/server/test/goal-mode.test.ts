@@ -13,6 +13,7 @@ import {
   type GoalHost, type GoalState,
 } from '../src/agents/goal-mode.js'
 import { dispatchCommand, type CommandContext } from '../src/channels/shared/commands.js'
+import type { ModelErrorKind } from '../src/agents/model-error.js'
 
 // Keep the full enabled-mode contract; default-off entry coverage lives separately.
 vi.mock('../src/config.js', async (importOriginal) => {
@@ -68,7 +69,7 @@ function stubHost(): GoalHost & { deliveries: Array<{ target: string; from: stri
   }
 }
 
-function workerShape(id: string, over?: Partial<{ parentId: string | null; queueLen: number; finalOutput: string; output: string; turnError: string | null }>) {
+function workerShape(id: string, over?: Partial<{ parentId: string | null; queueLen: number; finalOutput: string; output: string; turnError: string | null; turnErrorKind: ModelErrorKind | null }>) {
   return {
     id,
     parentId: over?.parentId ?? null,
@@ -76,6 +77,7 @@ function workerShape(id: string, over?: Partial<{ parentId: string | null; queue
     finalOutput: over?.finalOutput ?? 'round report',
     output: over?.output ?? '',
     turnError: over?.turnError ?? null,
+    turnErrorKind: over?.turnErrorKind ?? null,
   }
 }
 
@@ -298,6 +300,31 @@ describe('deliverGoalRound', () => {
     expect(text).toContain('TimeoutError: Unexpected error: http2 request did not get a response')
     expect(text).toContain('Now let me check persistSessionFile…') // partial trace still delivered
     expect(readGoalState(sm.getDb(), 'goal_a')!.round).toBe(1)     // aborted round still counts
+    expect(text).toContain('do not score it as a completed result. Re-dispatch with query_session to let the worker resume.]')
+  })
+
+  it('account error: same marker + error text, but "fix the model config" instead of the re-dispatch hint', async () => {
+    seedGoal('goal_a', 'w1', (s) => { s.status = 'running'; s.startedAt = Date.now() })
+    const s0 = readGoalState(sm.getDb(), 'goal_a')!
+    s0.specHash = writeSpec('goal_a')
+    writeGoalState(sm.getDb(), 'goal_a', s0)
+
+    const host = stubHost()
+    await deliverGoalRound(host, workerShape('w1', {
+      finalOutput: '',
+      output: 'Checking the logs…',
+      turnError: '[kimi] API error 403: Forbidden',
+      turnErrorKind: 'account',
+    }))
+    expect(host.deliveries).toHaveLength(1)
+    const text = host.deliveries[0].text
+    expect(text).toMatch(/^\[Goal round 1\/10/)
+    expect(text).toContain('[WORKER ABORTED: this round was terminated by an unrecoverable error, NOT a normal wrap-up.')
+    expect(text).toContain('Error: [kimi] API error 403: Forbidden.')
+    expect(text).toContain('model account / credential / balance / permission problem')
+    expect(text).toContain('do not resume the worker with query_session until then.]')
+    expect(text).not.toContain('Re-dispatch with query_session to let the worker resume.')
+    expect(text).toContain('Checking the logs…')   // partial trace still delivered
   })
 
   it('marks the empty-output shape too (the literal "(no output)" sample)', async () => {

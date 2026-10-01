@@ -52,8 +52,8 @@ describe('ui-log-builder streaming deltas', () => {
 
   it('deltas do not request a save', () => {
     const state = createEmptyUIState()
-    expect(applyEvent(state, ev({ type: 'stream_delta', text: 'a', agentName: 'default' })).shouldSave).toBe(false)
-    expect(applyEvent(state, ev({ type: 'thinking_delta', text: 'b', agentName: 'default' })).shouldSave).toBe(false)
+    expect(applyEvent(state, ev({ type: 'stream_delta', text: 'a', agentName: 'default' })).persist).toBeUndefined()
+    expect(applyEvent(state, ev({ type: 'thinking_delta', text: 'b', agentName: 'default' })).persist).toBeUndefined()
   })
 
   it('sub-session deltas route to the sub-session log, not the root', () => {

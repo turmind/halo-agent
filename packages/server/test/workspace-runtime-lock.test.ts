@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { claimWorkspaceRuntime, RUNTIME_LOCK_FILE } from '../src/agents/workspace-runtime-lock.js'
+import { claimWorkspaceRuntime, releaseWorkspaceRuntime, RUNTIME_LOCK_FILE } from '../src/agents/workspace-runtime-lock.js'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
 import { createRunsDb, setRunsDb } from '../src/db/runs-db.js'
@@ -82,6 +82,24 @@ describe('claimWorkspaceRuntime', () => {
   it('claim is idempotent across repeated calls in one process', () => {
     expect(claimWorkspaceRuntime(ws)).toBe(true)
     expect(claimWorkspaceRuntime(ws)).toBe(true)
+  })
+})
+
+describe('releaseWorkspaceRuntime', () => {
+  it('own claim: removes the file', () => {
+    claimWorkspaceRuntime(ws)
+    releaseWorkspaceRuntime(ws)
+    expect(existsSync(lockPath())).toBe(false)
+  })
+
+  it('held by another live process: leaves the file untouched', () => {
+    writeFileSync(lockPath(), String(foreignLivePid()))
+    releaseWorkspaceRuntime(ws)
+    expect(readFileSync(lockPath(), 'utf-8').trim()).toBe(String(foreignLivePid()))
+  })
+
+  it('no file: no-op', () => {
+    expect(() => releaseWorkspaceRuntime(ws)).not.toThrow()
   })
 })
 

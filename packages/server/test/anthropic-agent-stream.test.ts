@@ -3,6 +3,7 @@ import { AnthropicAgent } from '../src/agents/anthropic-agent.js'
 import { MiniMaxAgent } from '../src/agents/minimax-agent.js'
 import { QwenAgent } from '../src/agents/qwen-agent.js'
 import type { ModelCallResult, ModelDelta } from '../src/agents/agent-loop.js'
+import { shownDeltas } from './helpers/model-deltas.js'
 
 /**
  * The fetch-based Anthropic-Messages agents over a stubbed `fetch` returning
@@ -117,7 +118,7 @@ describe('AnthropicAgent streaming callModel', () => {
     expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 42, totalTokens: 54 })
     expect(typeof result.durationMs).toBe('number')
     expect(typeof result.ttftMs).toBe('number')
-    expect(deltas).toEqual([{ type: 'text_delta', text: 'Let me ' }, { type: 'text_delta', text: 'look.' }])
+    expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: 'Let me ' }, { type: 'text_delta', text: 'look.' }])
   })
 
   it('non-2xx JSON error body → "[anthropic] <status> <type>: <message>"', async () => {
@@ -138,7 +139,7 @@ describe('AnthropicAgent streaming callModel', () => {
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).name).toBe('AbortError')
     // Only what streamed before the abort reached the UI; nothing after.
-    expect(deltas).toEqual([{ type: 'text_delta', text: 'Let me ' }])
+    expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: 'Let me ' }])
   })
 })
 

@@ -14,8 +14,12 @@
  * trailing frame without the final blank line is still parsed. Malformed
  * JSON throws — a gateway emitting garbage is a real error, and silently
  * dropping e.g. a `message_delta` would lose the stop_reason.
+ *
+ * `onChunk` fires on every chunk read from the body — comment / ping /
+ * partial frames included — so callers can count any received data as
+ * liveness (the model-call idle timer), not only the frames yielded here.
  */
-export async function* readSseJson<T = unknown>(body: ReadableStream<Uint8Array>): AsyncGenerator<T> {
+export async function* readSseJson<T = unknown>(body: ReadableStream<Uint8Array>, onChunk?: () => void): AsyncGenerator<T> {
   const reader = body.getReader()
   // `stream: true` below — multibyte text (Chinese replies) splits across TCP chunks.
   const decoder = new TextDecoder()
@@ -24,6 +28,7 @@ export async function* readSseJson<T = unknown>(body: ReadableStream<Uint8Array>
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
+      onChunk?.()
       buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n')
       let sep: number
       while ((sep = buffer.indexOf('\n\n')) !== -1) {

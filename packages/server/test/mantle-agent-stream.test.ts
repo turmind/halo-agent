@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { MantleAgent } from '../src/agents/mantle-agent.js'
 import type { ModelCallResult, ModelDelta } from '../src/agents/agent-loop.js'
 import { sseResponse } from './helpers/sse-response.js'
+import { shownDeltas } from './helpers/model-deltas.js'
 
 /**
  * MantleAgent.callModel over a stubbed Responses API SSE body. Fixtures mirror
@@ -107,9 +108,9 @@ describe('MantleAgent streaming callModel', () => {
 
   it('tool round: function_call read whole from the final output[], usage nets out cached tokens, ttft from the arguments delta', async () => {
     stubFetch(() => mantle(toolStream))
-    const onDelta = vi.fn()
+    const deltas: ModelDelta[] = []
 
-    const r = await probe().call(undefined, onDelta)
+    const r = await probe().call(undefined, (d) => deltas.push(d))
 
     expect(r.toolCalls).toEqual([{ id: 'call_1', name: 'f', input: { a: 1 } }])
     expect(r.stopReason).toBe('tool_use')
@@ -117,7 +118,7 @@ describe('MantleAgent streaming callModel', () => {
     expect(r.assistantBlocks).toEqual([{ type: 'tool_use', id: 'call_1', name: 'f', input: { a: 1 } }])
     expect(r.usage).toEqual({ inputTokens: 60, outputTokens: 7, totalTokens: 67, cacheReadInputTokens: 40 })
     expect(typeof r.ttftMs).toBe('number')
-    expect(onDelta).not.toHaveBeenCalled()
+    expect(shownDeltas(deltas)).toEqual([])
   })
 
   it('text round: text_delta per output_text.delta in order, reasoning item with empty summary → thinking ""', async () => {
@@ -131,7 +132,7 @@ describe('MantleAgent streaming callModel', () => {
     expect(r.stopReason).toBe('end_turn')
     expect(r.toolCalls).toEqual([])
     expect(r.assistantBlocks).toEqual([{ type: 'text', text: '你好, world' }])
-    expect(deltas).toEqual(textParts.map((text) => ({ type: 'text_delta', text })))
+    expect(shownDeltas(deltas)).toEqual(textParts.map((text) => ({ type: 'text_delta', text })))
     expect(typeof r.ttftMs).toBe('number')
   })
 
@@ -199,7 +200,7 @@ describe('MantleAgent streaming callModel', () => {
 
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).name).toBe('AbortError')
-    expect(deltas).toEqual([{ type: 'text_delta', text: '你好' }])
+    expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: '你好' }])
   })
 
   it('non-2xx → "[MantleAgent] API error <status>: <body>"', async () => {

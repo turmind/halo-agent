@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { BedrockAgent } from '../src/agents/bedrock-agent.js'
 import type { ModelCallResult, ModelDelta } from '../src/agents/agent-loop.js'
+import { shownDeltas } from './helpers/model-deltas.js'
 
 /**
  * BedrockAgent.callModel over a fake InvokeModelWithResponseStream body.
@@ -73,7 +74,7 @@ describe('BedrockAgent streaming callModel', () => {
     expect(result.stopReason).toBe('end_turn')
     expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 3, totalTokens: 15 })
     expect(typeof result.ttftMs).toBe('number')
-    expect(deltas).toEqual([{ type: 'text_delta', text: 'Hi ' }, { type: 'text_delta', text: 'there' }])
+    expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: 'Hi ' }, { type: 'text_delta', text: 'there' }])
     // The loop's merged cancel+timeout signal must reach the SDK.
     expect(send.mock.calls[0][1]).toEqual({ abortSignal: signal })
   })
@@ -89,7 +90,7 @@ describe('BedrockAgent streaming callModel', () => {
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).name).toBe('AbortError')
     // Only what streamed before the abort reached the UI; nothing after.
-    expect(deltas).toEqual([{ type: 'text_delta', text: 'Hi ' }])
+    expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: 'Hi ' }])
   })
 
   it('abort with a half-built tool input → AbortError, never JSON.parse of the fragment', async () => {

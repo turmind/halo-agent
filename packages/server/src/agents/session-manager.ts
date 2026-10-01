@@ -14,8 +14,8 @@ import type { ModelRuntime } from './model-runtime.js'
 import { loadScopeInstructions } from '../prompts/md-loader.js'
 import { config, modelSupportsImage, resolveContextWindow } from '../config.js'
 import { repairConversationMessages } from './conversation-repair.js'
-import { classifyModelError } from './model-error.js'
-import { localCompactMessages } from './compact.js'
+import { classifyModelError, type ModelErrorKind } from './model-error.js'
+import { compactCut, localCompactMessages } from './compact.js'
 import { microCompactMessages } from './micro-compact.js'
 import { replaceImageBlocks, trimHistoryImages } from './history-images.js'
 import { loadAgentYaml } from './agent-loader.js'
@@ -26,7 +26,7 @@ import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools, buildContinueTaskTool } from './session-tools.js'
 import { GOAL_AGENT_ID, deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
-import { deliverRelayReport, deliverRelayInterim, readReplyTo, buildRelayTools, RELAY_CHANNEL_PREFIX } from './relay.js'
+import { deliverRelayReport, deliverRelayInterim, readReplyTo, listActiveChildren, buildRelayTools, RELAY_CHANNEL_PREFIX } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
@@ -145,6 +145,20 @@ interface QueuedMessage {
   images?: Array<{ data: string; mimeType: string }>
 }
 
+/** The latest turn of one runSession run, refreshed before every turn (opening +
+ *  each drained batch) — read by sendDeferredInterim in runSession's finally. */
+interface RunLastTurn {
+  /** What the turn answered (the opening message is wrapped as a source-less entry). */
+  batch: QueuedMessage[]
+  /** The turn answered a party this session owes a report (interimDoor) while a
+   *  child was ALREADY running at turn start — asked while waiting on its
+   *  subtree. Turn start, not end: the dispatch turn starts its child mid-turn
+   *  and owes the final report, not an interim. The child lookup runs only past
+   *  the door, so local chat, child reports, goal rounds and continue_task kicks
+   *  — nearly every turn — never touch the db for it. */
+  waitingOnChildren: boolean
+}
+
 interface AgentSession {
   id: string
   parentId: string | null
@@ -176,6 +190,11 @@ interface AgentSession {
    *  auto-report as an abnormal termination, so the parent LLM can tell
    *  partial/empty output from a completed wrap-up. */
   turnError: string | null
+  /** classifyModelError kind of `turnError`, set / reset alongside it (null
+   *  exactly when turnError is). `'account'` (401/402/403, bad key, no
+   *  balance) swaps the parent / relay report's "resume it" hint for "fix the
+   *  model config first" — a re-dispatch would fail the same way. */
+  turnErrorKind: ModelErrorKind | null
   promise: Promise<string> | null
   abortController: AbortController | null
   messageQueue: QueuedMessage[]
@@ -212,6 +231,10 @@ interface AgentSession {
    *  once. Manual `/compact` enqueues directly (no surrounding turn).
    *  THIS FLAG IS PER-SESSION — never share / hoist to module scope. */
   compactedThisTurn: boolean
+  /** Queue text a Stop folded while a compact was in flight. selfCompactSession
+   *  resets agent.messages (rollback / rebuild) when it unwinds, which would
+   *  erase a fold landed mid-run — it lands this one right after instead. */
+  foldAfterCompact: string | null
   /** Full system prompt (for context event) */
   systemPrompt: string
   /** Thinking effort level (off/low/medium/high/xhigh/max) */
@@ -331,6 +354,18 @@ function generateSessionId(): string {
   const ts = Date.now().toString(36)
   const rand = Math.random().toString(36).slice(2, 8)
   return `sid_${ts}_${rand}`
+}
+
+/** Who a turn that answered `batch` owes an interim report: a sub-agent its
+ *  parent (the parent's query_session), a root its relay caller (a relay-prefixed
+ *  channel message). null otherwise — local chat, a child's report, a goal round
+ *  (G's messages carry neither mark), the continue_task kick. Pure: the recipient
+ *  pick for sendInterimReport, and the gate in front of the turn-start child
+ *  lookup (RunLastTurn.waitingOnChildren). */
+function interimDoor(parentId: string | null, batch: QueuedMessage[]): 'parent' | 'relay' | null {
+  if (parentId !== null) return batch.some((q) => q.sourceSessionId === parentId) ? 'parent' : null
+  // includes, not startsWith: an `@scope` marker prepends INSTRUCTIONS blocks.
+  return batch.some((q) => q.sourceSessionId === undefined && q.text.includes(RELAY_CHANNEL_PREFIX)) ? 'relay' : null
 }
 
 // ── SessionManager ──────────────────────────────────────────────────
@@ -644,6 +679,7 @@ export class SessionManager implements SessionManagerInternals {
       streamedThisCall: false,
       finalOutput: '',
       turnError: null,
+      turnErrorKind: null,
       promise: null,
       abortController: null,
       messageQueue: [],
@@ -658,6 +694,7 @@ export class SessionManager implements SessionManagerInternals {
       isCompacting: false,
       compactAbortController: null,
       compactedThisTurn: false,
+      foldAfterCompact: null,
       systemPrompt,
       thinkingEffort,
       workingDir,
@@ -1107,6 +1144,11 @@ export class SessionManager implements SessionManagerInternals {
     return this.uiStore.getUIState(rootSessionId)
   }
 
+  /** Server shutdown: land every loaded tree's unpersisted UI logs. */
+  flushAll(): void {
+    this.uiStore.flushAll()
+  }
+
   appendUserMessage(sessionId: string, text: string, opts?: { local?: boolean }): void {
     this.uiStore.appendUserMessage(sessionId, text, opts)
   }
@@ -1301,6 +1343,7 @@ export class SessionManager implements SessionManagerInternals {
     session.lastActivityAt = null
     session.finalOutput = ''
     session.turnError = null
+    session.turnErrorKind = null
 
     // Arrival-time stamp. The model has no clock — the only time signal it ever
     // saw was the `[System @ <iso>]` sibling-status suffix — so it couldn't tell
@@ -1440,6 +1483,7 @@ export class SessionManager implements SessionManagerInternals {
           console.error(`[SessionManager] Session ${session.id} account error: ${msg}`)
           this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
           session.turnError = msg
+          session.turnErrorKind = kind
           resultText = `Error: ${msg}`
           break
         }
@@ -1549,6 +1593,7 @@ export class SessionManager implements SessionManagerInternals {
         console.error(`[SessionManager] Session ${session.id} error (attempt ${attempt + 1}/${maxRetries})${errDetail ? ` [${errDetail}]` : ''}: ${msg}`)
         this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
         session.turnError = errName ? `${errName}: ${msg}` : msg
+        session.turnErrorKind = kind
         resultText = `Error: ${errName ? `${errName}: ` : ''}${msg}`
         break
       }
@@ -1595,6 +1640,7 @@ export class SessionManager implements SessionManagerInternals {
     const hasFirst = typeof message === 'string' ? message !== '' : message.length > 0
     console.debug(`[SessionManager] runSession ${sessionId} (agent: ${session.agentId}, parent: ${session.parentId ?? 'none'}) — hasFirst: ${hasFirst}`)
 
+    const lastTurn: RunLastTurn = { batch: [], waitingOnChildren: false }
     const runFn = async (): Promise<string> => {
       let result = ''
       if (hasFirst) {
@@ -1605,20 +1651,24 @@ export class SessionManager implements SessionManagerInternals {
         session.interruptRequested = false
         session.resumedAfterInterrupt = false
         session.selfKick = false
+        // The opening message as a source-less entry — the shape a channel /
+        // relay send has when it is queued instead (sendUserMessage's busy branch).
+        lastTurn.batch = [{ text: rawMessageText({ role: 'user', content: message }) }]
+        lastTurn.waitingOnChildren = interimDoor(session.parentId, lastTurn.batch) !== null && listActiveChildren(this.db, session.id).length > 0
         result = await this.runAgentTurn(session, message)
         console.debug(`[SessionManager] runSession ${sessionId} first turn done — result: ${result.slice(0, 150)}`)
         // A follow-up already queued: the drain's next turn resets output, so
         // this turn's wrap-up (a natural end_turn → finalOutput set) would
         // never reach the end-of-run report. Forward it as an interim now.
         if (session.messageQueue.length > 0 && session.finalOutput !== '' && !session.turnError) {
-          this.sendOpeningInterim(session)
+          this.sendOpeningInterim(session, lastTurn.batch)
         }
       }
       // Fold every queued message (user or agent) into merged follow-up turns
       // until the queue is empty. drainQueue re-checks after each merged turn,
       // so messages arriving mid-drain are picked up too.
       if (session.messageQueue.length > 0) {
-        await this.drainQueue(session)
+        await this.drainQueue(session, lastTurn)
         result = session.output || result
       }
       return result
@@ -1640,6 +1690,7 @@ export class SessionManager implements SessionManagerInternals {
       if (session.parentId === null) {
         this.emitEvent(session.id, { type: 'complete' })
       }
+      this.sendDeferredInterim(session, lastTurn)
       this.tryReportToParent(session)
       // Goal mode: a goal-bound root worker's turn end is a round end — route
       // the wrap-up to its goal session (fire-and-forget, like tryReportToParent's
@@ -1679,18 +1730,7 @@ export class SessionManager implements SessionManagerInternals {
   private tryReportToParent(session: AgentSession): void {
     if (!session.parentId) return
 
-    const activeChildren = this.db
-      .select({ id: agentSessions.id })
-      .from(agentSessions)
-      .where(
-        and(
-          eq(agentSessions.parentId, session.id),
-          isNull(agentSessions.stoppedAt),
-          isNull(agentSessions.archivedAt),
-        )
-      )
-      .all()
-
+    const activeChildren = listActiveChildren(this.db, session.id)
     if (activeChildren.length > 0) {
       console.debug(`[SessionManager] tryReportToParent: ${session.id} has ${activeChildren.length} active children, skipping`)
       return
@@ -1714,9 +1754,15 @@ export class SessionManager implements SessionManagerInternals {
     // the report entirely would leave the parent waiting forever, and the
     // partial trace still has diagnostic value.
     if (session.turnError) {
+      // An account error (401/402/403, bad key, no balance) fails identically
+      // on every attempt — steer the parent to the model config, not a re-dispatch.
+      const next = session.turnErrorKind === 'account'
+        ? `This is a model account / credential / balance / permission problem: retrying or re-dispatching will fail the same way. `
+          + `Fix the model configuration first (or tell the user to fix it), and do not resume it with query_session("${session.id}", ...) until then.`
+        : `Re-dispatch with query_session("${session.id}", ...) to let it resume.`
       result = `[SUB-AGENT ABORTED: the last turn was terminated by an unrecoverable error, NOT completed. `
         + `Error: ${session.turnError}. The text below is a partial trace of the aborted turn — do not treat it as a finished result. `
-        + `Re-dispatch with query_session("${session.id}", ...) to let it resume.]\n\n${result}`
+        + `${next}]\n\n${result}`
     }
     console.debug(`[SessionManager] Auto-report: ${session.id} → parent ${session.parentId} — result: ${result.slice(0, 150)}`)
 
@@ -1768,18 +1814,7 @@ export class SessionManager implements SessionManagerInternals {
     if (session.parentId !== null) return { llm: '', ui: '' }
     const now = Date.now()
     const nowIso = new Date(now).toISOString()
-    const stillRunning = this.db.select({
-        agentName: agentSessions.agentName,
-        description: agentSessions.description,
-        createdAt: agentSessions.createdAt,
-        updatedAt: agentSessions.updatedAt,
-      })
-      .from(agentSessions)
-      .where(and(
-        eq(agentSessions.parentId, session.id),
-        isNull(agentSessions.stoppedAt),
-        isNull(agentSessions.archivedAt),
-      )).all()
+    const stillRunning = listActiveChildren(this.db, session.id)
     if (stillRunning.length === 0 && session.messageQueue.length === 0) {
       const done = 'All sub-agents you dispatched have completed. This is the final report — you may now consolidate and wrap up.'
       return { llm: `\n\n[System @ ${nowIso}] ${done}`, ui: `[System] ${done}` }
@@ -1808,7 +1843,7 @@ export class SessionManager implements SessionManagerInternals {
    *  entries were traced by the channel before sendUserMessage — so drain does
    *  NOT re-emit a `user` event. It DOES emit one `queued_message` per merged
    *  batch (root only) to split the assistant bubble for the new turn. */
-  private async drainQueue(session: AgentSession): Promise<void> {
+  private async drainQueue(session: AgentSession, lastTurn: RunLastTurn): Promise<void> {
     while (session.messageQueue.length > 0) {
       const batch = session.messageQueue.splice(0)
       // continue_task bookkeeping: remember whether this batch follows an interrupt
@@ -1858,6 +1893,8 @@ export class SessionManager implements SessionManagerInternals {
         : ''
       const input = this.buildInput(merged + suffix.llm + kickNote, images.length > 0 ? images : undefined, session.supportsImage)
 
+      lastTurn.batch = batch
+      lastTurn.waitingOnChildren = interimDoor(session.parentId, batch) !== null && listActiveChildren(this.db, session.id).length > 0
       try {
         await this.runAgentTurn(session, input)
       } catch (err) {
@@ -1920,7 +1957,8 @@ export class SessionManager implements SessionManagerInternals {
     }
   }
 
-  /** Interim report for a drained turn. A turn followed by another turn (kick /
+  /** Interim report for a drained turn (sendDeferredInterim sends through here
+   *  too). A turn followed by another turn (kick /
    *  queued message) is otherwise lost to whoever asked: the end-of-run reports
    *  (tryReportToParent / deliverRelayReport) read only the LAST turn's output,
    *  and the next runAgentTurn resets it. So when the batch just answered came
@@ -1932,22 +1970,40 @@ export class SessionManager implements SessionManagerInternals {
    *  an interim would wake G mid-round, and a fresh query_session from G would
    *  interrupt W again. */
   private sendInterimReport(session: AgentSession, batch: QueuedMessage[]): void {
-    const fromParent = session.parentId !== null && batch.some((q) => q.sourceSessionId === session.parentId)
-    // includes, not startsWith: an `@scope` marker prepends INSTRUCTIONS blocks.
-    const fromRelay = session.parentId === null && batch.some((q) => q.sourceSessionId === undefined && q.text.includes(RELAY_CHANNEL_PREFIX))
-    if (fromParent) this.deliverInterim(session, 'parent')
-    else if (fromRelay) this.deliverInterim(session, 'relay')
+    const to = interimDoor(session.parentId, batch)
+    if (to) this.deliverInterim(session, to)
   }
 
   /** Interim report for the OPENING turn (runSession's `hasFirst` turn): when it
    *  ends naturally while the queue already holds a follow-up, the drain resets
-   *  output and the wrap-up is lost the same way. No batch to read the door from
-   *  here — the opening message is the dispatch itself — so the owed party is
-   *  whoever this session reports to at the end: its parent, or a relay caller
-   *  (reply_to row). Goal workers have neither, so they get nothing. */
-  private sendOpeningInterim(session: AgentSession): void {
+   *  output and the wrap-up is lost the same way. A sub-agent's opening message
+   *  is its parent's dispatch, so it always owes the parent. A root owes its
+   *  relay caller only when the opening message itself is relay-prefixed (same
+   *  door as the drain path): a pending reply_to alone is not enough — a local
+   *  user chatting into a root that still owes a relay report would otherwise
+   *  have their answer forwarded to the caller. Goal workers have neither. */
+  private sendOpeningInterim(session: AgentSession, batch: QueuedMessage[]): void {
     if (session.parentId !== null) this.deliverInterim(session, 'parent')
-    else if (readReplyTo(this.db, session.id) !== null) this.deliverInterim(session, 'relay')
+    else if (interimDoor(null, batch) === 'relay' && readReplyTo(this.db, session.id) !== null) this.deliverInterim(session, 'relay')
+  }
+
+  /** Interim report for the run's LAST turn while a still-running child holds
+   *  the end-of-run report back. The loss it fixes: tryReportToParent /
+   *  deliverRelayReport fire only once the subtree is quiet, and read only the
+   *  last turn. A session waiting on a sub-agent is asked by its caller
+   *  (relay_send / the parent's query_session) and answers; the run ends with the
+   *  child still running, so both skip, and the child's report later wakes a new
+   *  run whose first turn resets output — the answer reached no one. Sends only
+   *  when that turn answered the owed party while already waiting
+   *  (waitingOnChildren — door first, db lookup only past it) and the subtree is
+   *  STILL busy. Runs in runSession's finally right before those two, which read
+   *  the same db gate synchronously: children running → they skip and this sends;
+   *  none → they report this turn as the final and this doesn't. Never overlaps
+   *  sendInterimReport's drain call: a turn another turn follows is never the last. */
+  private sendDeferredInterim(session: AgentSession, lastTurn: RunLastTurn): void {
+    if (!lastTurn.waitingOnChildren || session.finalOutput === '' || session.turnError) return
+    if (listActiveChildren(this.db, session.id).length === 0) return
+    this.sendInterimReport(session, lastTurn.batch)
   }
 
   /** Body = the WHOLE turn's text (`output`, not `finalOutput`): in a turn that
@@ -2034,6 +2090,8 @@ export class SessionManager implements SessionManagerInternals {
    * deadlock against that re-run.
    */
   interruptSession(sessionId: string): void {
+    // An auto-compact in flight is NOT cancelled: it runs on its own (no)
+    // signal, and the abort below lands when beforeCallModel returns.
     const session = this.sessions.get(sessionId)
     if (!session?.abortController) return
     // Mark as interrupt so runAgentTurn preserves + repairs messages rather
@@ -2072,6 +2130,12 @@ export class SessionManager implements SessionManagerInternals {
    *      isn't a non-empty array, so a string-content turn would be silently
    *      deleted by the repair that runs right after this. */
   private foldIntoAgentMessages(session: AgentSession, text: string): void {
+    // A compact in flight resets agent.messages when it unwinds (rollback or
+    // rebuild), erasing a fold landed now — park it for clearCompacting.
+    if (session.isCompacting) {
+      session.foldAfterCompact = session.foldAfterCompact ? `${session.foldAfterCompact}\n\n${text}` : text
+      return
+    }
     const msgs = session.agent.messages
     const last = msgs[msgs.length - 1]
     if (last?.role === 'user' && Array.isArray(last.content)) {
@@ -2125,11 +2189,19 @@ export class SessionManager implements SessionManagerInternals {
           // this scans. Cascades naturally — the loop visits every descendant.
           this.markPendingToolCallsInterrupted(id)
         }
+        // An auto-compact in flight is not cancelled — it runs inside the turn,
+        // so this await waits for it to finish, then for the turn to exit.
         if (session.promise) {
           try { await session.promise } catch { /* expected */ }
         }
-        session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${id}]`)
-        this.releaseSession(id)
+        // A manual /compact (no turn to await) is still running: releasing now
+        // would persist the in-flight summarize instruction and drop the fold
+        // parked above (endCompact lands it). The session stays in memory, as
+        // after any manual compact.
+        if (!session.isCompacting) {
+          session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${id}]`)
+          this.releaseSession(id)
+        }
       }
 
       this.db.update(agentSessions)
@@ -2287,7 +2359,8 @@ export class SessionManager implements SessionManagerInternals {
    * Send a user message to a session (WS handler → agent).
    * If idle: runs the message directly.
    * If busy: enqueues and requests graceful interrupt.
-   * If compacting: enqueues for post-compact processing.
+   * If compacting: enqueues for post-compact processing (plus a graceful
+   * interrupt when the compact runs inside a live turn).
    * Returns 'running' | 'queued' to inform the caller.
    */
   async sendUserMessage(
@@ -2327,9 +2400,14 @@ export class SessionManager implements SessionManagerInternals {
     }
 
     if (session.isCompacting) {
-      // No live turn to interrupt — just queue. endCompact drains the queue
-      // when the compact finishes (no interruptRequested: nothing is running).
+      // Manual /compact or the turn-end auto-compact: no live model loop to
+      // interrupt — just queue (endCompact / runSession's runFn drains it).
+      // Mid-turn auto-compact (beforeCallModel — abortController still set):
+      // the turn resumes after the compact, so request the same soft interrupt
+      // as the busy branch below, or the queued message waits for the turn's
+      // natural end.
       session.messageQueue.push({ text: message, images })
+      if (session.abortController !== null) session.interruptRequested = true
       console.debug(`[SessionManager] sendUserMessage: ${sessionId} compacting — message queued`)
       return 'queued'
     }
@@ -2466,7 +2544,8 @@ export class SessionManager implements SessionManagerInternals {
     // orphan notification with no matching "Auto-compacted" in the chat log.
     // Reads the exact state (session.agent.messages) selfCompactSession
     // re-checks in the same synchronous slice — gate and compact can't drift.
-    if (this.compactCut(session.agent.messages) === 0) return
+    const cut = compactCut(session.agent.messages)
+    if (cut === 0) return
 
     // For sub-agents, route notifications + summary into THEIR sub-session
     // log (not the root). ui-log-builder uses `taskId` to pick the target
@@ -2482,6 +2561,10 @@ export class SessionManager implements SessionManagerInternals {
       // persists into messageLog via ui-log-builder.
       const preflightText = `Compacting context (${Math.round(session.lastContextTokens / 1000)}K tokens)…`
       this.emitEvent(session.id, { type: 'system', text: preflightText, taskId })
+      // No signal: an auto-compact is not cancellable. Stop / Esc abort the
+      // turn's own controller, which the loop checks once beforeCallModel
+      // returns — so they take effect when the compact is done. The only bound
+      // is the model call's idle timeout (agent-loop, re-armed on every delta).
       const result = await this.selfCompactSession(session.id)
       if (result) {
         session.lastContextTokens = result.estimatedTokens
@@ -2494,19 +2577,46 @@ export class SessionManager implements SessionManagerInternals {
         console.debug(`[SessionManager] Auto-compact ${session.id}: ${result.olderCount} messages compacted`)
       } else {
         // The one bail the gate above can't predict: the summarize LLM call
-        // returned no text (selfCompactSession → null). Close out the
-        // preflight instead of leaving it dangling; the next beforeCallModel
-        // check retries automatically.
-        this.emitEvent(session.id, { type: 'system', text: 'Compaction skipped — no summary produced', taskId })
+        // returned no text (selfCompactSession → null).
+        this.localCompactFallback(session, cut, 'no summary produced', taskId)
       }
     } catch (err) {
-      console.debug(`[SessionManager] Auto-compact ${session.id} failed: ${err instanceof Error ? err.message : String(err)}`)
-      // A THROWN summarize call (model error) leaves the same orphan as the
-      // null path — close it out too.
-      this.emitEvent(session.id, { type: 'system', text: 'Compaction failed — context unchanged', taskId })
+      const msg = err instanceof Error ? err.message : String(err)
+      console.debug(`[SessionManager] Auto-compact ${session.id} failed: ${msg}`)
+      this.localCompactFallback(session, cut, msg, taskId)
     } finally {
-      session.isCompacting = false
+      this.clearCompacting(session)
     }
+  }
+
+  /** Auto-compact fallback when the LLM summary failed (threw / idle-timed out
+   *  / came back empty). selfCompactSession has already rolled the history
+   *  back; leaving it as-is kept the session over threshold, so every later
+   *  model call re-ran the same failing summarize. Do the no-LLM compact
+   *  instead, with the LLM path's tail micro-compact + token estimate. */
+  private localCompactFallback(session: AgentSession, cut: number, reason: string, taskId: string | undefined): void {
+    const local = localCompactMessages(session.agent.messages)
+    if (local.compacted) {
+      const [summaryMsg, ...tail] = local.messages
+      const tailMicro = microCompactMessages(tail, 1)
+      session.agent.messages = [summaryMsg, ...(tailMicro.compacted ? tailMicro.messages : tail)]
+    }
+    session.lastContextTokens = estimateMessageTokens(session.agent.messages) + estimateMessageTokens([{ role: 'user', content: session.systemPrompt }])
+    const why = reason.length > 80 ? `${reason.slice(0, 80)}…` : reason
+    // compactEnd: the WS layer closes the admin's compacting state on it.
+    this.emitEvent(session.id, { type: 'system', text: `Auto-compacted ${cut} older messages (local fallback — LLM summary failed: ${why})`, taskId, compactEnd: true })
+  }
+
+  /** Leave the compact-in-flight state (auto: maybeAutoCompact's finally;
+   *  manual: endCompact), then land a queue fold a Stop parked meanwhile
+   *  (see foldIntoAgentMessages) on the post-compact history. */
+  private clearCompacting(session: AgentSession): void {
+    session.isCompacting = false
+    session.compactAbortController = null
+    const parked = session.foldAfterCompact
+    if (!parked) return
+    session.foldAfterCompact = null
+    this.foldIntoAgentMessages(session, parked)
   }
 
   /** Check if a session is compacting */
@@ -2588,8 +2698,7 @@ export class SessionManager implements SessionManagerInternals {
   endCompact(sessionId: string): void {
     const session = this.sessions.get(sessionId)
     if (!session) return
-    session.isCompacting = false
-    session.compactAbortController = null
+    this.clearCompacting(session)
     if (session.messageQueue.length > 0 && session.promise === null) {
       console.debug(`[SessionManager] Compact ${sessionId} ended — draining ${session.messageQueue.length} queued message(s)`)
       this.runSession(sessionId, '').catch((err) => {
@@ -2609,35 +2718,6 @@ export class SessionManager implements SessionManagerInternals {
   }
 
   /**
-   * Compute the compaction cut point: messages[0..cut) get summarized,
-   * messages[cut..] are kept. Returns 0 when there is nothing to compact
-   * (too few messages) — the "compaction is feasible" predicate.
-   *
-   * Single source of truth shared by selfCompactSession AND the
-   * pre-preflight feasibility gates in maybeAutoCompact / compactSession:
-   * gate and actual compact must run the same computation on the same
-   * `session.agent.messages` reference or they drift ("gate said yes,
-   * compact said no" re-creates the orphan-preflight bug).
-   *
-   * Note the tail loop only ever moves `cut` UP (a tail of user tool_result
-   * messages extends the summarized region — they're protocol continuations
-   * of an assistant turn, not standalone turns), so cut === 0 is exactly
-   * the `messages.length <= keepCount` case.
-   */
-  private compactCut(messages: AnthropicMessage[]): number {
-    const keepCount = config.compact.keep_messages
-    if (messages.length <= keepCount) return 0
-    let cut = Math.max(0, messages.length - keepCount)
-    while (cut < messages.length) {
-      const m = messages[cut]
-      const firstBlock = Array.isArray(m.content) ? (m.content[0] as { type?: string } | undefined) : undefined
-      if (m.role === 'user' && firstBlock?.type === 'tool_result') { cut++; continue }
-      break
-    }
-    return cut
-  }
-
-  /**
    * Self-compact: let the current agent summarize its own conversation.
    * The agent already has full context cached, so this is fast and lossless.
    * Returns the summary text, or null if compaction was not needed/failed.
@@ -2648,7 +2728,7 @@ export class SessionManager implements SessionManagerInternals {
 
     const messages = session.agent.messages
     // Split messages: keep recent, summarize older (0 = nothing to compact).
-    const cut = this.compactCut(messages)
+    const cut = compactCut(messages)
     if (cut === 0) return null
 
     // Mark the session so an enqueueing wrapper (turn-end auto-compact, or
@@ -2673,9 +2753,9 @@ export class SessionManager implements SessionManagerInternals {
       'Output ONLY the summary, no preamble.',
     ].join('\n')
 
-    const timeoutMs = config.compact.summarize_timeout_sec * 1000
-    const timeoutCtrl = new AbortController()
-    const timer = setTimeout(() => timeoutCtrl.abort(abortReason('compact-timeout')), timeoutMs)
+    // No wall-clock cap: a long but still-streaming summary is fine. A hung
+    // call is bounded by agent-loop's model idle timeout (re-armed on every
+    // delta), which throws MODEL_TIMEOUT_ERROR out of run().
 
     // Snapshot the keep-region BEFORE running the compact turn. The run below
     // feeds the agent a throwaway "summarize yourself" instruction and mutates
@@ -2699,18 +2779,26 @@ export class SessionManager implements SessionManagerInternals {
 
     try {
       let summaryText = ''
-      if (signal) signal.addEventListener('abort', () => timeoutCtrl.abort(abortReason('compact-cancelled')), { once: true })
-      const iter = session.agent.run(compactInstruction, {
-        cancelSignal: timeoutCtrl.signal,
-      })
+      const iter = session.agent.run(compactInstruction, { cancelSignal: signal })
       for await (const event of iter) {
-        if (signal?.aborted || timeoutCtrl.signal.aborted) break
+        if (signal?.aborted) break
+        // A summarize call must not run tools — the loop would really execute
+        // one, invisibly (none of these events reach the UI). Stop at the
+        // announcement, before execution (break → iter.return() ends the
+        // generator at this yield). No summary: the text of a tool_use
+        // response is pre-tool filler ("let me check…"), and using it would
+        // replace the older history with that. `finally` rolls back the
+        // tool_use turn run() already appended.
+        if (event.type === 'tool_call') {
+          summaryText = ''
+          break
+        }
         if (event.type === 'text') {
           summaryText += event.text ?? ''
         }
       }
 
-      if (timeoutCtrl.signal.aborted) throw new Error(`Self-compact timed out after ${timeoutMs / 1000}s`)
+      // Only manual /compact passes a signal (auto-compact is not cancellable).
       if (signal?.aborted) throw new Error('Self-compact cancelled')
       if (!summaryText.trim()) return null
 
@@ -2745,7 +2833,6 @@ export class SessionManager implements SessionManagerInternals {
       const estimatedTokens = estimateMessageTokens(session.agent.messages) + estimateMessageTokens([{ role: 'user', content: session.systemPrompt }])
       return { summary: summaryText, olderCount, estimatedTokens }
     } finally {
-      clearTimeout(timer)
       if (!rebuilt) {
         // Roll back the compact turn: drop whatever run() appended (instruction
         // and any partial assistant reply) and put back the pre-run trailing
@@ -2780,7 +2867,7 @@ export class SessionManager implements SessionManagerInternals {
   async compactSession(
     sessionId: string,
     opts?: { onProgress?: (status: 'started' | 'summarizing' | 'done') => void },
-  ): Promise<'nothing' | 'compacted' | 'running' | 'already' | 'no_session'> {
+  ): Promise<'nothing' | 'compacted' | 'cancelled' | 'running' | 'already' | 'no_session'> {
     let session = this.sessions.get(sessionId)
     if (!session) {
       try { session = await this.ensureSession(sessionId) } catch { return 'no_session' }
@@ -2794,7 +2881,7 @@ export class SessionManager implements SessionManagerInternals {
     // only reachable null from selfCompactSession is the empty-summary /
     // session-evicted case, which gets an explicit close-out notice below.
     const rawCount = session.agent.messages.length
-    if (this.compactCut(session.agent.messages) === 0) return 'nothing'
+    if (compactCut(session.agent.messages) === 0) return 'nothing'
 
     const ac = await this.beginCompact(sessionId)
     if (!ac) return 'no_session'
@@ -2840,12 +2927,15 @@ export class SessionManager implements SessionManagerInternals {
       return 'compacted'
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      // Only the cancel selfCompactSession throws itself is a cancel; its
-      // timeout ("Self-compact timed out after …") is a failure and takes the
-      // rethrow path below like any other error.
-      if (msg === 'Self-compact cancelled') {
+      // A cancel is read off our own signal, not the error text: a real
+      // provider rejects the aborted fetch with an AbortError that leaves run()
+      // before selfCompactSession's own 'Self-compact cancelled' throw. A model
+      // error / idle timeout is a failure and takes the rethrow path below.
+      // Not 'nothing': the notice is the whole reply, and callers answer
+      // 'nothing' with "Nothing to compact".
+      if (ac.signal.aborted) {
         this.emitEvent(sessionId, { type: 'system', text: 'Compact cancelled' })
-        return 'nothing'
+        return 'cancelled'
       }
       // Rethrow path: callers only log / toast the error — nothing lands in
       // the persistent chat log, so close out the preflight here first.
@@ -3199,10 +3289,14 @@ export class SessionManager implements SessionManagerInternals {
    *  message), and requests a SOFT interrupt so a busy turn yields after its
    *  current tool — same effect as sendUserMessage's busy branch, minus the
    *  idle/run path (the caller already established the session is busy or
-   *  compacting). When compacting there is no live turn to interrupt, so the
-   *  flag is NOT set (mirrors sendUserMessage's compacting branch): endCompact's
-   *  drain would snapshot it into resumedAfterInterrupt and let continue_task
-   *  arm a kick in a turn that interrupted nothing. endCompact drains the queue. */
+   *  compacting). A compact outside a live model loop (manual /compact, or the
+   *  turn-end auto-compact — abortController already null) has nothing to
+   *  interrupt, so the flag is NOT set there (mirrors sendUserMessage's
+   *  compacting branch): the drain would snapshot it into resumedAfterInterrupt
+   *  and let continue_task arm a kick in a turn that interrupted nothing. A
+   *  mid-turn auto-compact (beforeCallModel) does interrupt a live turn — the
+   *  flag is set, so the turn yields after its next tool instead of running on
+   *  to its natural end with the message still queued. */
   async enqueueUserMessage(sessionId: string, text: string, images?: Array<{ data: string; mimeType: string }>): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -3214,7 +3308,7 @@ export class SessionManager implements SessionManagerInternals {
       this.emitEvent(sessionId, { type: 'system', text: `⚠ ${w}` })
     }
     session.messageQueue.push({ text: scoped.text, images })
-    if (!session.isCompacting) session.interruptRequested = true
+    if (!session.isCompacting || session.abortController !== null) session.interruptRequested = true
     console.debug(`[SessionManager] User message enqueued for ${sessionId} (${session.messageQueue.length} in queue)`)
   }
 
@@ -3246,6 +3340,11 @@ export class SessionManager implements SessionManagerInternals {
       this.markPendingToolCallsInterrupted(sessionId)
     }
     this.cancelCompact(sessionId)
-    session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${sessionId}]`)
+    // An auto-compact in flight (not cancellable) still owns agent.messages —
+    // its finally rolls the summarize turn back by length, which a repaired
+    // (re-built) array here would break. The turn repairs on exit anyway.
+    if (!session.isCompacting) {
+      session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${sessionId}]`)
+    }
   }
 }

@@ -14,6 +14,7 @@
  * (anthropic / mimo / minimax / qwen).
  */
 import type { ContentBlock, ModelCallResult, ModelDelta, StopDetails } from './agent-loop.js'
+import { ACTIVITY_DELTA } from './agent-loop.js'
 import { readSseJson } from './sse.js'
 
 /** Anthropic stream event — only the fields we consume. */
@@ -251,7 +252,9 @@ export async function fetchAnthropicStream(opts: FetchAnthropicStreamOptions): P
   if (!res.body) throw new Error(`[${tag}] empty response body`)
 
   const acc = new AnthropicStreamAccumulator(startTime, opts.onDelta)
-  for await (const ev of readSseJson<AnthropicStreamEvent>(res.body)) {
+  // Every read is liveness for the idle timer — pings, tool-argument
+  // fragments and comment frames included, which the accumulator reports nothing for.
+  for await (const ev of readSseJson<AnthropicStreamEvent>(res.body, () => opts.onDelta?.(ACTIVITY_DELTA))) {
     if (ev.type === 'error') {
       throw new Error(`[${tag}] ${SSE_ERROR_STATUS[ev.error?.type ?? ''] ?? '?'} ${ev.error?.type ?? '?'}: ${ev.error?.message ?? ''}`)
     }

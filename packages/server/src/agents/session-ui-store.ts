@@ -75,14 +75,16 @@ export class SessionUIStore {
   private uiStates: Map<string, UIState> = new Map()
   /** Project path for each root session, needed for disk persistence */
   private uiStateProjectPaths: Map<string, string | null> = new Map()
-  /** Debounced persist timers — prevents flooding disk with writes during rapid tool loops */
+  /** Debounced persist timers — prevents flooding disk with writes during rapid
+   *  tool loops. Keyed by root id for a root's log, by taskId (`root>…`) for a
+   *  sub-session's own file. */
   private persistTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
   /** Last activity (event reduced / view built) per uiStates key — the idle
    *  sweep's eviction clock. Invariant: every uiStates key has an entry. */
   private uiStateTouched: Map<string, number> = new Map()
   /** Roots whose in-memory UIState holds local mutations (event reduced in,
    *  notification appended, log replaced) **not yet persisted** — marked on
-   *  every mutation, cleared once persistUIState lands the snapshot. A state
+   *  every mutation, cleared once persistLog lands the snapshot. A state
    *  not in this set adds nothing to what's on disk: either it's a pure disk
    *  seed (built to *view* a session another process may be driving — a cron
    *  `halo cli` child shares the workspace's session files and keeps appending
@@ -209,56 +211,64 @@ export class SessionUIStore {
   }
 
   /**
-   * Fold an event into the root session's UIState and persist to disk if the
-   * reducer signals `shouldSave`. Builds the state lazily from disk if
-   * needed.
+   * Fold an event into the root session's UIState and persist the log it
+   * changed — the root's or a sub-session's, same rule (see applyEvent).
+   * Builds the state lazily from disk if needed.
    */
   private reduceIntoUIState(rootId: string, event: AgentSessionEvent): void {
     try {
       const state = this.ensureUIState(rootId)
-      // Events are process-local, so reducing one in means THIS process is
-      // driving (part of) the session — from here on its snapshot is at least
-      // as fresh as anything it could overwrite. That's the exact predicate
-      // the WS detach saves need (see isUIStateDirty).
-      this.uiStateDirty.add(rootId)
-      const result = applyEvent(state, event)
-      if (result.subSessionSave) {
-        this.persistSubSession(state, rootId, result.subSessionSave)
-      }
-      if (result.subSessionDone) {
-        this.persistSubSession(state, rootId, result.subSessionDone)
-        state.subSessionLogs.delete(result.subSessionDone)
-      }
-      if (result.shouldSave) {
-        if (result.isComplete) {
-          this.flushPersist(rootId, state)
-        } else {
-          this.debouncedPersist(rootId, state)
-        }
-      }
+      const { taskId, persist } = applyEvent(state, event, this.loadSubHistory)
+      // Events are process-local, so reducing one into the root's log means
+      // THIS process is driving the session — from here on its snapshot is at
+      // least as fresh as anything it could overwrite. That's the exact
+      // predicate the WS detach saves need (see isUIStateDirty). A sub-session
+      // event changes only the sub's log, which goes to the sub's own file.
+      if (!taskId) this.uiStateDirty.add(rootId)
+      const id = taskId ?? rootId
+      if (persist === 'flush') this.flushPersist(id, state)
+      else if (persist === 'debounce') this.debouncedPersist(id, state)
+      // The sub's turn ended and its log just landed whole; the next
+      // query_session rebuilds the log from that file (loadSubHistory).
+      if (taskId && event.type === 'agent_done') state.subSessionLogs.delete(taskId)
     } catch (err) {
       console.error(`[SessionUIStore] reduceIntoUIState failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
-  /** Debounced persist — coalesces rapid tool_call/tool_result saves into one write */
-  private debouncedPersist(rootId: string, state: UIState): void {
-    const existing = this.persistTimers.get(rootId)
+  /** A new sub-session log starts from the sub's own file, the way
+   *  ensureUIState seeds a root — so persistLog can overwrite it whole. */
+  private loadSubHistory = (taskId: string): SessionMessage[] => {
+    const projectPath = this.uiStateProjectPaths.get(this.findRootSessionId(taskId)) ?? this.host.workspaceRoot
+    return loadSessionMessages(taskId, projectPath, this.resolveAgentId(taskId))
+  }
+
+  /** Debounced persist — coalesces rapid tool_call/tool_result saves into one
+   *  write. `id` is the log's own session id (root, or a sub's `root>…`
+   *  taskId), which keys the timer and names the file. */
+  private debouncedPersist(id: string, state: UIState): void {
+    const existing = this.persistTimers.get(id)
     if (existing) clearTimeout(existing)
-    this.persistTimers.set(rootId, setTimeout(() => {
-      this.persistTimers.delete(rootId)
-      this.persistUIState(rootId, state)
+    this.persistTimers.set(id, setTimeout(() => {
+      this.persistTimers.delete(id)
+      this.persistLog(id, state)
     }, 500))
   }
 
-  /** Flush pending persist immediately (on complete/disconnect) */
-  private flushPersist(rootId: string, state: UIState): void {
-    const existing = this.persistTimers.get(rootId)
+  /** Flush pending persist immediately (turn end, interrupt, release, drop). */
+  private flushPersist(id: string, state: UIState): void {
+    const existing = this.persistTimers.get(id)
     if (existing) {
       clearTimeout(existing)
-      this.persistTimers.delete(rootId)
+      this.persistTimers.delete(id)
     }
-    this.persistUIState(rootId, state)
+    this.persistLog(id, state)
+  }
+
+  /** Sub-sessions of `rootId` with a debounced write still pending. */
+  private pendingSubPersists(rootId: string): string[] {
+    const prefix = `${rootId}>`
+    return [...this.persistTimers.keys()].filter((key) => key.startsWith(prefix))
   }
 
   /**
@@ -297,16 +307,37 @@ export class SessionUIStore {
     return state
   }
 
-  /** Persist UI state (root messages + token counts) to disk.
-   *  `archive` is passed ONLY by archiveOldMessages (the commit step of an
-   *  archive write): `count` is the new segment count and `userDelta` the main
-   *  user turns leaving the active file. Every other call leaves both on-disk
-   *  values alone. */
-  private persistUIState(rootId: string, state: UIState, archive?: { count: number; userDelta: number }): void {
+  /** Persist one UI log to its own file, overwriting it whole: the root's
+   *  (`id` = root id: messages + token counts) or a sub-session's (`id` =
+   *  taskId: `state.subSessionLogs[id]`, which holds the sub's full history —
+   *  see loadSubHistory — plus the in-flight turn as a temp assistant, the
+   *  same snapshot the root writes). `archive` is passed ONLY by
+   *  archiveOldMessages (the commit step of an archive write): `count` is the
+   *  new segment count and `userDelta` the main user turns leaving the active
+   *  file. Every other call leaves both on-disk values alone. */
+  private persistLog(id: string, state: UIState, archive?: { count: number; userDelta: number }): void {
+    const rootId = this.findRootSessionId(id)
+    const sub = id === rootId ? undefined : state.subSessionLogs.get(id)
+    if (id !== rootId && (!sub || this.host.isSessionDeleted(rootId))) return  // root tombstoned → don't write its descendants
     try {
       const projectPath = this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot
-      const snapshot = createSaveSnapshot(state)
+      const snapshot = createSaveSnapshot(sub ?? state)
       if (snapshot.length === 0) return
+      if (sub) {
+        // Directory id MUST be the authoritative slot agentId, never the
+        // event-reconstructed `sub.agentId` (which can degrade to the display
+        // name when a bare event arrived before agent_start). Resolve from the
+        // in-memory session / db row by taskId — the same source the root uses
+        // below — so the on-disk layout never depends on rebuilt memory state.
+        const parts = id.split('>')
+        this.host.persistSessionFile({
+          sessionId: id, projectPath, messages: snapshot,
+          contextTokens: 0, outputTokens: 0,
+          agentId: this.resolveAgentId(id), agentName: sub.agentName,
+          source: 'delegated', description: sub.description, parentSessionId: parts.slice(0, -1).join('>'),
+        })
+        return
+      }
       // Source of truth for agentId: prefer the in-memory session (always
       // accurate, including for internal sessions that don't have a db
       // row), fall back to the workspace db row, and only as a last
@@ -336,7 +367,7 @@ export class SessionUIStore {
       // detach-save still retries it.
       this.uiStateDirty.delete(rootId)
     } catch (err) {
-      console.error(`[SessionUIStore] persistUIState failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
+      console.error(`[SessionUIStore] persistLog failed for ${id}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -394,8 +425,8 @@ export class SessionUIStore {
       state.messageLog = kept
       // The archived slice's main user turns leave the active file — carry them
       // in the header so exchangeCount stays the session's lifetime count.
-      this.persistUIState(rootId, state, { count: n, userDelta: countMainUserMessages(older) })
-      // persistUIState swallows its own IO errors (every session write does), so
+      this.persistLog(rootId, state, { count: n, userDelta: countMainUserMessages(older) })
+      // persistLog swallows its own IO errors (every session write does), so
       // confirm the commit landed. An active file still at `< n` next to a
       // truncated in-memory log would let the NEXT ordinary persist write the
       // short log under the old count — that, not the crash case, is how
@@ -411,37 +442,6 @@ export class SessionUIStore {
     } catch (err) {
       console.error(`[SessionUIStore] archiveOldMessages failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
       return 0
-    }
-  }
-
-  /** Persist a sub-session's UI log to its own disk file */
-  private persistSubSession(state: UIState, rootId: string, taskId: string): void {
-    if (this.host.isSessionDeleted(rootId)) return  // root tombstoned → don't write its descendants
-    const sub = state.subSessionLogs.get(taskId)
-    if (!sub || sub.messageLog.length === 0) return
-    try {
-      const projectPath = this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot
-      // Directory id MUST be the authoritative slot agentId, never the
-      // event-reconstructed `sub.agentId` (which can degrade to the display
-      // name when a bare event arrived before agent_start). Resolve from the
-      // in-memory session / db row by taskId — the same source `persistUIState`
-      // uses — so the on-disk layout never depends on rebuilt memory state.
-      const agentId = this.resolveAgentId(taskId)
-      // Merge with existing on-disk messages — sub-session logs are re-initialized
-      // each query_session/start_session, so only the current turn is in memory
-      const existing = loadSessionMessages(taskId, projectPath, agentId)
-      const seen = new Set(existing.map((m) => m.id).filter(Boolean))
-      const merged = [...existing, ...sub.messageLog.filter((m) => !m.id || !seen.has(m.id))]
-      const parts = taskId.split('>')
-      const directParentId = parts.length > 1 ? parts.slice(0, -1).join('>') : rootId
-      this.host.persistSessionFile({
-        sessionId: taskId, projectPath, messages: merged,
-        contextTokens: 0, outputTokens: 0,
-        agentId, agentName: sub.agentName,
-        source: 'delegated', description: sub.description, parentSessionId: directParentId,
-      })
-    } catch (err) {
-      console.error(`[SessionUIStore] persistSubSession failed for ${taskId}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -515,7 +515,7 @@ export class SessionUIStore {
     // Mark before the persist (which clears on success) so a swallowed write
     // error leaves the state dirty and a later detach-save retries it.
     this.uiStateDirty.add(rootId)
-    this.persistUIState(rootId, state)
+    this.persistLog(rootId, state)
   }
 
   /**
@@ -531,7 +531,7 @@ export class SessionUIStore {
     state.turnContentBlocks = []
     // Same mark-before-persist as appendNotification.
     this.uiStateDirty.add(rootId)
-    this.persistUIState(rootId, state)
+    this.persistLog(rootId, state)
   }
 
   /**
@@ -548,7 +548,17 @@ export class SessionUIStore {
    */
   dropUIState(sessionId: string): void {
     const state = this.uiStates.get(sessionId)
-    if (state && this.persistTimers.has(sessionId)) this.flushPersist(sessionId, state)
+    // Root keys only. A sub-id key is a never-event-fed disk seed
+    // (prepareForView(subId)) and owns no timer: `persistTimers[subId]` and
+    // `subId>…` are that subtree's own pending writes against the ROOT's
+    // state — flushing them with the seed (no sub logs) would cancel the
+    // batch without writing it.
+    if (state && sessionId === this.findRootSessionId(sessionId)) {
+      if (this.persistTimers.has(sessionId)) this.flushPersist(sessionId, state)
+      // Same for the tree's pending sub-session writes: their logs live in this
+      // state and die with it.
+      for (const taskId of this.pendingSubPersists(sessionId)) this.flushPersist(taskId, state)
+    }
     this.uiStates.delete(sessionId)
     this.uiStateProjectPaths.delete(sessionId)
     this.uiStateTouched.delete(sessionId)
@@ -585,24 +595,40 @@ export class SessionUIStore {
   // ── Operations the manager's session-lifecycle methods delegate here ──
   // These exist so the manager never reaches into the maps above directly.
 
-  /** Flush any pending debounced persist for a session's root before release,
-   *  so an interrupted run's last UI batch lands on disk. No-op if not loaded. */
+  /** Flush the tree's unpersisted UI logs before release, so an interrupted
+   *  run's last UI batch lands on disk. No-op if not loaded. The root's file
+   *  is rewritten only when its log holds changes (dirty): a root turn end
+   *  already flushed at `complete`, and a sub's release must not rewrite the
+   *  root's (large) file for nothing. */
   flushSession(sessionId: string): void {
     const rootId = this.findRootSessionId(sessionId)
     const state = this.uiStates.get(rootId)
-    if (state) this.flushPersist(rootId, state)
+    if (!state) return
+    if (this.uiStateDirty.has(rootId)) this.flushPersist(rootId, state)
+    for (const taskId of this.pendingSubPersists(rootId)) this.flushPersist(taskId, state)
   }
 
-  /** Flush a sub-session's UI log to its own file. Needed after synthetic
-   *  interrupted tool_results on interrupt/stop: applyEvent's tool_result case
-   *  never sets `subSessionSave`, and a stopped sub gets no later event
-   *  (usage/agent_done) to trigger the usual persist — without this the marker
-   *  would live only in memory and vanish on restart. No-op if the root state
-   *  isn't loaded. */
+  /** Server shutdown: land every loaded tree's unpersisted UI logs — a dirty
+   *  root plus every live sub log (pending timers would never fire, and a
+   *  sub's streamed text since its last write rides no timer at all). Same
+   *  writes flushSession makes, minus the "pending timer" filter on subs. */
+  flushAll(): void {
+    for (const [rootId, state] of this.uiStates) {
+      if (rootId !== this.findRootSessionId(rootId)) continue  // sub-id key = disk seed (prepareForView), nothing to land
+      if (this.uiStateDirty.has(rootId)) this.flushPersist(rootId, state)
+      for (const taskId of state.subSessionLogs.keys()) this.flushPersist(taskId, state)
+    }
+  }
+
+  /** Flush a sub-session's UI log to its own file now. Called after the
+   *  synthetic interrupted tool_results on interrupt/stop: those only arm the
+   *  500ms debounce, and the interrupt is a turn boundary — the marker should
+   *  land immediately rather than ride a timer. No-op if the root state isn't
+   *  loaded. */
   flushSubSession(taskId: string): void {
     const rootId = this.findRootSessionId(taskId)
     const state = this.uiStates.get(rootId)
-    if (state) this.persistSubSession(state, rootId, taskId)
+    if (state) this.flushPersist(taskId, state)
   }
 
   /**
@@ -612,13 +638,28 @@ export class SessionUIStore {
    * session evolving elsewhere would freeze on the first snapshot.
    */
   prepareForView(sessionId: string, selfDriven: boolean): UIState {
-    if (!selfDriven) {
-      this.uiStates.delete(sessionId)
-      // The re-seed below starts as a pure disk copy; a dirty flag left over
-      // from an earlier epoch (this process drove the session, then released
-      // it) must not survive onto the fresh seed or a detach-save would write
-      // the seed back over another process's newer messages.
-      this.uiStateDirty.delete(sessionId)
+    // A root whose own turn released while fire-and-forget subs still run is
+    // "not self-driven" to the caller, yet its state is live: it holds those
+    // subs' unflushed stream/tool buffers and turnIds. Evicting it made the
+    // next sub event rebuild an empty sub log — the in-flight turn vanished
+    // and its usages lost their assistant. Only the root key is guarded: a
+    // sub-id key is never event-fed (events reduce into the root), so it is
+    // always a pure disk seed and is re-read on every view — self-driven or
+    // not — since the sub's own file is where its turns land.
+    const isRoot = sessionId === this.findRootSessionId(sessionId)
+    const liveTree = isRoot && this.host.hasActiveWorkInTree(sessionId)
+    if (!isRoot || (!selfDriven && !liveTree)) {
+      // dropUIState, not a bare delete: it lands the evicted state's pending
+      // debounced writes BEFORE the re-seed below reads disk. A bare delete
+      // left those timers holding the old object — the seed missed the batch,
+      // and the batch was then lost to a same-key debounce from the new state
+      // or written back stale over it. Same write the orphaned timer would
+      // have made ≤500ms later, just ordered before the seed; no turn is in
+      // flight here (liveTree gate). It also clears the dirty flag: one left
+      // over from an earlier epoch (this process drove the session, then
+      // released it) must not survive onto the fresh seed or a detach-save
+      // would write the seed back over another process's newer messages.
+      this.dropUIState(sessionId)
     }
     this.uiStateProjectPaths.set(sessionId, this.host.workspaceRoot)
     return this.ensureUIState(sessionId)
@@ -631,10 +672,12 @@ export class SessionUIStore {
     this.uiStateProjectPaths.delete(id)
     this.uiStateTouched.delete(id)
     this.uiStateDirty.delete(id)
-    const timer = this.persistTimers.get(id)
-    if (timer) {
-      clearTimeout(timer)
-      this.persistTimers.delete(id)
+    for (const key of [id, ...this.pendingSubPersists(id)]) {
+      const timer = this.persistTimers.get(key)
+      if (timer) {
+        clearTimeout(timer)
+        this.persistTimers.delete(key)
+      }
     }
     this.eventListeners.delete(id)
     // The cache is keyed by session id (roots and sub-sessions alike) and the

@@ -8,6 +8,7 @@ import { ZhipuAgent } from '../src/agents/zhipu-agent.js'
 import { DoubaoAgent } from '../src/agents/doubao-agent.js'
 import { HunyuanAgent } from '../src/agents/hunyuan-agent.js'
 import { sseResponse } from './helpers/sse-response.js'
+import { shownDeltas } from './helpers/model-deltas.js'
 
 /**
  * The OpenAI-family `chat/completions` SSE transport shared by openai /
@@ -115,7 +116,7 @@ describe('fetchChatCompletionStream', () => {
     ])
     expect(r.finishReason).toBe('tool_calls')
     expect(r.usage).toEqual(deepseekUsage)
-    expect(deltas).toEqual([
+    expect(shownDeltas(deltas)).toEqual([
       { type: 'thinking_delta', text: 'The user wants ' },
       { type: 'thinking_delta', text: 'the probe value.' },
     ])
@@ -153,7 +154,7 @@ describe('fetchChatCompletionStream', () => {
     expect(r.message.reasoning_content).toBeUndefined()
     expect(r.message.tool_calls).toBeUndefined()
     expect(r.finishReason).toBe('stop')
-    expect(deltas).toEqual([
+    expect(shownDeltas(deltas)).toEqual([
       { type: 'text_delta', text: 'The value is ' },
       { type: 'text_delta', text: '灯塔' },
       { type: 'text_delta', text: '.' },
@@ -172,7 +173,7 @@ describe('fetchChatCompletionStream', () => {
 
     expect(r.message.reasoning_content).toBe('hmm ok')
     expect(r.message.content).toBe('yes')
-    expect(deltas.map((d) => d.type)).toEqual(['thinking_delta', 'thinking_delta', 'text_delta'])
+    expect(shownDeltas(deltas).map((d) => d.type)).toEqual(['thinking_delta', 'thinking_delta', 'text_delta'])
   })
 
   it('two parallel tool calls interleaved by index keep their arguments apart', async () => {
@@ -222,7 +223,7 @@ describe('fetchChatCompletionStream', () => {
 
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).name).toBe('AbortError')
-    expect(deltas).toEqual([{ type: 'text_delta', text: 'one ' }])
+    expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: 'one ' }])
   })
 })
 
@@ -257,7 +258,7 @@ describe('OpenAI-family agents over the stream transport', () => {
       expect(result.assistantBlocks).toEqual([{ type: 'text', text: 'ok' }])
       expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 1, totalTokens: 11 })
       expect(typeof result.ttftMs).toBe('number')
-      expect(deltas).toEqual([{ type: 'text_delta', text: 'ok' }])
+      expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: 'ok' }])
       const body = JSON.parse(captured.init!.body) as Record<string, unknown>
       expect(body.stream).toBe(true)
       expect(body.stream_options).toEqual({ include_usage: true })

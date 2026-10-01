@@ -242,6 +242,13 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
 export function execStop(ctx: CommandContext): CommandResult {
   const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
   if (!active) return { text: t('stop.no_session', ctx.lang) }
+  // Manual /compact has no turn in flight — cancelling it is the whole stop
+  // (mirrors WS handleChatStop). An auto-compact runs inside a turn and is not
+  // cancellable: stopSession below lands once it finishes.
+  if (ctx.sm.isSessionCompacting(active) && !ctx.sm.isSessionRunning(active)) {
+    ctx.sm.cancelCompact(active)
+    return { text: t('stop.done', ctx.lang) }
+  }
   if (!ctx.sm.isSessionRunning(active)) return { text: t('stop.already_idle', ctx.lang) }
   ctx.sm.stopSession(active).catch(() => {})
   return { text: t('stop.done', ctx.lang) }
@@ -250,6 +257,12 @@ export function execStop(ctx: CommandContext): CommandResult {
 export function execInterrupt(ctx: CommandContext): CommandResult {
   const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
   if (!active) return { text: t('interrupt.no_session', ctx.lang) }
+  // Manual /compact: cancelling it is the whole interrupt (mirrors WS
+  // handleChatInterrupt; the post-compact drain runs any queued messages).
+  if (ctx.sm.isSessionCompacting(active) && !ctx.sm.isSessionRunning(active)) {
+    ctx.sm.cancelCompact(active)
+    return { text: t('interrupt.done', ctx.lang) }
+  }
   if (!ctx.sm.isSessionRunning(active)) return { text: t('interrupt.already_idle', ctx.lang) }
   // Abort the in-flight turn now (including a command mid-run); the server
   // then folds any messages queued while busy into one follow-up turn. Unlike

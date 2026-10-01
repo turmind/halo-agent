@@ -354,6 +354,13 @@ export function createWebChannel(deps: {
     const sessionId = opts?.sessionId ?? getActiveSessionId(sm, account.accountId)
     if (!sessionId) return false
 
+    // Manual /compact has no turn in flight — cancelling it is the whole stop
+    // (mirrors WS handleChatStop). An auto-compact runs inside a turn and is
+    // not cancellable: stopSession below lands once it finishes.
+    if (sm.isSessionCompacting(sessionId) && !sm.isSessionRunning(sessionId)) {
+      sm.cancelCompact(sessionId)
+      return true
+    }
     if (!sm.isSessionRunning(sessionId)) return false
     await sm.stopSession(sessionId)
     return true

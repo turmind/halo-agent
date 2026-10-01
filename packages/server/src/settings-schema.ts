@@ -145,7 +145,6 @@ function generalSection(): SchemaSection {
       { key: 'compact.keep_messages', type: 'int', globalOnly: true, description: 'Recent messages kept intact during compaction', description_zh: '压缩时保留最后多少条消息不动', default: '5' },
       { key: 'compact.max_summary_input', type: 'int', globalOnly: true, description: 'Max chars fed into local truncation fallback', description_zh: '本地截断兜底时的总输入字符上限', default: '15000' },
       { key: 'compact.max_message_slice', type: 'int', globalOnly: true, description: 'Max chars kept per old message during local truncation', description_zh: '本地截断兜底时每条旧消息保留的最大字符数', default: '800' },
-      { key: 'compact.summarize_timeout_sec', type: 'int', globalOnly: true, description: 'LLM summarization timeout (seconds)', description_zh: 'LLM 摘要超时时间（秒）', default: '300' },
       // sandbox (Linux bwrap / macOS sandbox-exec) — global-only: these define the security
       // boundary agents run inside; a workspace overriding them could lift
       // its own sandbox constraints.

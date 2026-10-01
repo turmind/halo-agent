@@ -498,6 +498,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
                     sendJson(ws, { type: 'session:compacted', message: 'Nothing to compact', contextTokens: state?.contextTokens ?? 0 })
                   }
                   // 'compacted' result: event-processor sends session:compacted via emitted event
+                  // 'cancelled': its emitted "Compact cancelled" notice is the whole reply
                 }).catch((err) => {
                   sendJson(ws, { type: 'error', error: `Compact failed: ${err instanceof Error ? err.message : String(err)}` })
                 })
@@ -741,7 +742,12 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         rememberChat(msg)
         await sm.enqueueUserMessage(sid, msg.message, msg.images)
         ackChat(msg)
-        sendJson(ws, { type: 'chat:queued', reason: 'compact', message: 'Context compacting, message queued — will process after compact completes.' })
+        // An auto-compact runs inside a turn — the message waits for the turn
+        // to yield after the compact, not for the compact alone (manual /compact).
+        const queuedText = sm.isSessionRunning(sid)
+          ? 'Context compacting, message queued — will process after the compact and the current step finish.'
+          : 'Context compacting, message queued — will process after compact completes.'
+        sendJson(ws, { type: 'chat:queued', reason: 'compact', message: queuedText })
         return
       }
 
@@ -778,7 +784,11 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       const sid = client.sessionId
       if (!sm || !sid) return
 
-      if (sm.isSessionCompacting(sid)) {
+      // Manual /compact has no turn in flight — cancelling the compact is the
+      // whole stop. An auto-compact runs inside a turn (beforeCallModel or the
+      // turn-end check) and is not cancellable: stopUserSession aborts the
+      // turn, which exits once the compact finishes.
+      if (sm.isSessionCompacting(sid) && !sm.isSessionRunning(sid)) {
         sm.cancelCompact(sid)
         sendJson(ws, { type: 'chat:stopped', sessionId: client.sessionId })
         return
@@ -796,9 +806,10 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       // esc semantic: abort the in-flight turn now (including a command
       // mid-run); the server then folds any queued messages into one follow-up
       // turn. Distinct from chat:stop, which ends the turn without re-running.
-      // A compacting session has no live turn to interrupt — cancel the compact
-      // instead, matching chat:stop's compacting branch.
-      if (sm.isSessionCompacting(sid)) {
+      // Manual /compact has no live turn — cancelling the compact is the whole
+      // interrupt, matching chat:stop's branch. An auto-compact runs inside a
+      // turn and is not cancellable — the interrupt lands once it finishes.
+      if (sm.isSessionCompacting(sid) && !sm.isSessionRunning(sid)) {
         sm.cancelCompact(sid)
         sendJson(ws, { type: 'chat:stopped', sessionId: client.sessionId })
         return

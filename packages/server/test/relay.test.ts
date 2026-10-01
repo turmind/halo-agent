@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
+import type { ModelErrorKind } from '../src/agents/model-error.js'
 import { agentSessions } from '../src/db/schema.js'
 import { eq } from 'drizzle-orm'
 import {
@@ -36,7 +37,7 @@ function seedSession(sm: SessionManager, id: string, agentId = 'default', parent
   }).run()
 }
 
-function sessionShape(id: string, over?: Partial<{ parentId: string | null; queueLen: number; finalOutput: string; output: string; turnError: string | null }>) {
+function sessionShape(id: string, over?: Partial<{ parentId: string | null; queueLen: number; finalOutput: string; output: string; turnError: string | null; turnErrorKind: ModelErrorKind | null }>) {
   return {
     id,
     parentId: over?.parentId ?? null,
@@ -44,6 +45,7 @@ function sessionShape(id: string, over?: Partial<{ parentId: string | null; queu
     finalOutput: over?.finalOutput ?? 'dept wrap-up',
     output: over?.output ?? '',
     turnError: over?.turnError ?? null,
+    turnErrorKind: over?.turnErrorKind ?? null,
   }
 }
 
@@ -135,6 +137,24 @@ describe('deliverRelayReport', () => {
     expect(callerStub.sent[0].text.startsWith(`[Relay report · workspace ${deptWs} · session dept-1 · status: aborted]`)).toBe(true)
     expect(callerStub.sent[0].text).toContain('[RELAY TARGET ABORTED')
     expect(callerStub.sent[0].text).toContain('retry budget exhausted')
+    expect(callerStub.sent[0].text).toContain('Re-send with relay_send to let it resume.')
+  })
+
+  it('account error: same marker + error text, but "fix the model config" instead of the re-send hint', async () => {
+    seedSession(deptSm, 'dept-1')
+    writeReplyTo(deptSm.getDb(), 'dept-1', { workspace: callerWs, sessionId: 'sec-1' })
+    await deliverRelayReport(deptSm, sessionShape('dept-1', {
+      output: 'Checking the logs…', finalOutput: '', turnError: '[kimi] API error 401: Unauthorized', turnErrorKind: 'account',
+    }))
+    expect(callerStub.sent).toHaveLength(1)
+    const text = callerStub.sent[0].text
+    expect(text.startsWith(`[Relay report · workspace ${deptWs} · session dept-1 · status: aborted]`)).toBe(true)
+    expect(text).toContain('[RELAY TARGET ABORTED')
+    expect(text).toContain('Error: [kimi] API error 401: Unauthorized.')
+    expect(text).toContain('model account / credential / balance / permission problem')
+    expect(text).toContain('do not resume it with relay_send until then')
+    expect(text).not.toContain('Re-send with relay_send to let it resume.')
+    expect(text).toContain('Checking the logs…')   // partial trace still delivered
   })
 
   it('ignores sub-sessions (parentId !== null)', async () => {

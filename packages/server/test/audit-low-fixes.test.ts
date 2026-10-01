@@ -75,7 +75,7 @@ describe('SessionUIStore.purge evicts the agentId cache (A-L1)', () => {
     const store = new SessionUIStore({
       workspaceRoot: os.tmpdir(),
       getDb: () => ({ select: () => ({ from: () => ({ where: () => ({ get: () => null }) }) }) }) as never,
-      // Resolvable in memory, so persistSubSession populates the cache without disk/db.
+      // Resolvable in memory, so the sub-session persist populates the cache without disk/db.
       getSession: (id: string) => ({ agentId: `agent-of-${id}`, agentName: 'sub' }),
       getSessionById: () => null,
       isSessionDeleted: () => false,

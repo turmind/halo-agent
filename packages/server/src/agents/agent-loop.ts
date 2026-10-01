@@ -144,11 +144,17 @@ export interface ModelCallResult {
   ttftMs?: number
 }
 
-/** Incremental chunk a streaming provider reports through `callModel`'s `onDelta`. */
+/** Incremental chunk a streaming provider reports through `callModel`'s `onDelta`.
+ *  `activity` is a liveness signal for data with nothing to show (ping, tool
+ *  argument fragment, empty reasoning chunk, SSE comment frame): it only
+ *  re-arms the idle timer, never reaches the event stream; `text` is ''. */
 export interface ModelDelta {
-  type: 'text_delta' | 'thinking_delta'
+  type: 'text_delta' | 'thinking_delta' | 'activity'
   text: string
 }
+
+/** The `activity` delta — one shared value, it carries nothing. */
+export const ACTIVITY_DELTA: ModelDelta = { type: 'activity', text: '' }
 
 // ── AgentLoop ────────────────────────────────────────────────────────
 
@@ -164,7 +170,8 @@ export abstract class AgentLoop {
    * Provider-specific model call. Resolves with the full response once the
    * call completes. Streaming providers may additionally report text /
    * thinking chunks through `onDelta` as they arrive — the loop yields them as
-   * `text_delta` / `thinking_delta` events and resets the idle timer on each.
+   * `text_delta` / `thinking_delta` events — plus an `activity` delta for any
+   * other data received. The loop resets the idle timer on every delta.
    * Non-streaming providers simply ignore the callback.
    */
   protected abstract callModel(
@@ -225,11 +232,11 @@ export abstract class AgentLoop {
       // signal. A bare fetch has no default timeout, so a half-open connection
       // (peer accepted but never sends bytes, no RST) would hang this await
       // forever. For non-streaming providers this is a wall-clock cap on the
-      // whole call; streaming providers re-arm it on every chunk (see onDelta
-      // below), making it an idle timeout — a slow-but-alive stream is not a
-      // hung connection. Manual controller + clearTimeout so a fast response
-      // doesn't leave a 30-min timer dangling; unref so a pending timer never
-      // blocks process exit.
+      // whole call; streaming providers re-arm it on any data the stream
+      // delivers (see onDelta below), making it an idle timeout — a
+      // slow-but-alive stream is not a hung connection. Manual controller +
+      // clearTimeout so a fast response doesn't leave a 10-min timer dangling;
+      // unref so a pending timer never blocks process exit.
       const timeoutController = new AbortController()
       const timer = setTimeout(() => timeoutController.abort(), config.timeout.modelRequest)
       timer.unref?.()
@@ -249,13 +256,15 @@ export abstract class AgentLoop {
         // and parks again until the call settles. Chunks and settlement both
         // wake it; nothing is lost because the queue is drained before the
         // settled check and no await sits between the two.
-        const deltas: ModelDelta[] = []
+        const deltas: Array<{ type: 'text_delta' | 'thinking_delta'; text: string }> = []
         let wake: (() => void) | null = null
         let settled = false
         const notify = () => { if (wake) { wake(); wake = null } }
         const call = this.callModel(callSignal, (d) => {
-          deltas.push(d)
           timer.refresh()
+          // Liveness only — nothing to yield, so it never enters the queue.
+          if (d.type === 'activity') return
+          deltas.push({ type: d.type, text: d.text })
           notify()
         })
         call.then(() => { settled = true; notify() }, () => { settled = true; notify() })

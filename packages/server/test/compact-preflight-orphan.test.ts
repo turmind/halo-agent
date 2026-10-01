@@ -19,6 +19,7 @@ import { config } from '../src/config.js'
  *  2. compactable         → preflight and "Auto-compacted N" arrive as a PAIR
  *  3. empty LLM summary   → preflight followed by an explicit close-out notice
  *  4. summarize throws    → preflight followed by an explicit close-out notice
+ *     (auto path: the local-fallback notice — the history is compacted locally)
  * and the same 1/3/4 for the manual /compact path (compactSession).
  *
  * Events are captured through the real pipeline (registerEventListener on the
@@ -165,7 +166,16 @@ describe('auto-compact (maybeAutoCompact) — preflight only when compaction wil
     expect(events.filter(isAutoCompacted)).toHaveLength(1)
   })
 
-  it('closes out the preflight when the LLM returns an empty summary', async () => {
+  /** The local fallback both failure modes land on: no-LLM summary + the
+   *  untouched recent tail, and no leftover "Summarize the conversation…". */
+  function expectLocalFallback(agent: FakeAgent, before: Msg[]): void {
+    const first = agent.messages[0].content as Array<{ text?: string }>
+    expect(first[0].text).toMatch(/^\[Conversation Summary — 5 messages compacted \(local fallback\)\]/)
+    expect(agent.messages.slice(1)).toEqual(before.slice(5))
+    expect(JSON.stringify(agent.messages)).not.toContain('Summarize the conversation so far')
+  }
+
+  it('falls back to a local compact when the LLM returns an empty summary', async () => {
     const { session, agent } = seedSession('s4', textMessages(keep + 5), 'empty')
     const events = captureEvents('s4')
     const before = structuredClone(agent.messages)
@@ -175,13 +185,13 @@ describe('auto-compact (maybeAutoCompact) — preflight only when compaction wil
     expect(events.filter(isPreflight)).toHaveLength(1)
     expect(events.filter(isAutoCompacted)).toHaveLength(0)
     // The orphan fix: a close-out notice must follow the preflight
-    const closeIdx = events.findIndex((e) => e.type === 'system' && e.text === 'Compaction skipped — no summary produced')
+    const closeIdx = events.findIndex((e) => e.type === 'system' && e.text === 'Auto-compacted 5 older messages (local fallback — LLM summary failed: no summary produced)')
     expect(closeIdx).toBeGreaterThan(events.findIndex(isPreflight))
-    // Rollback: the "Summarize the conversation…" instruction must not be left behind
-    expect(agent.messages).toEqual(before)
+    expectLocalFallback(agent, before)
+    expect((session as { lastContextTokens: number }).lastContextTokens).toBeLessThan(10_000)
   })
 
-  it('closes out the preflight when the summarize call throws', async () => {
+  it('falls back to a local compact when the summarize call throws', async () => {
     const { session, agent } = seedSession('s5', textMessages(keep + 5), 'throw')
     const events = captureEvents('s5')
     const before = structuredClone(agent.messages)
@@ -189,10 +199,10 @@ describe('auto-compact (maybeAutoCompact) — preflight only when compaction wil
     await runAutoCompact(session) // must not reject — catch swallows
 
     expect(events.filter(isPreflight)).toHaveLength(1)
-    const closeIdx = events.findIndex((e) => e.type === 'system' && e.text === 'Compaction failed — context unchanged')
+    const closeIdx = events.findIndex((e) => e.type === 'system' && e.text === 'Auto-compacted 5 older messages (local fallback — LLM summary failed: model exploded)')
     expect(closeIdx).toBeGreaterThan(events.findIndex(isPreflight))
     expect((session as { isCompacting: boolean }).isCompacting).toBe(false)
-    expect(agent.messages).toEqual(before)
+    expectLocalFallback(agent, before)
   })
 })
 

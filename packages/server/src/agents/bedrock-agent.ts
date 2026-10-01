@@ -11,7 +11,7 @@ import {
   InvokeModelWithResponseStreamCommand,
 } from '@aws-sdk/client-bedrock-runtime'
 import { resolveMaxOutputTokens } from '../config.js'
-import { AgentLoop } from './agent-loop.js'
+import { AgentLoop, ACTIVITY_DELTA } from './agent-loop.js'
 import type { ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
 import { AnthropicStreamAccumulator } from './anthropic-stream.js'
 
@@ -114,6 +114,9 @@ export class BedrockAgent extends AgentLoop {
     const acc = new AnthropicStreamAccumulator(startTime, onDelta)
     const decoder = new TextDecoder()
     for await (const chunk of response.body ?? []) {
+      // Every event is liveness for the idle timer — pings and tool-argument
+      // fragments included, which the accumulator reports nothing for.
+      onDelta?.(ACTIVITY_DELTA)
       if (chunk.chunk?.bytes) acc.push(JSON.parse(decoder.decode(chunk.chunk.bytes)))
     }
     // Once the response headers are in, `send()` has already resolved, so an

@@ -84,7 +84,7 @@ If you're chatting from WeChat, the same shared commands are available (routed t
 | `/qr [level]` | Generate an invite QR for a new bot account (full 权限 bot 专用) |
 | `/help` | Show help |
 
-If the session is currently compacting or busy when your message arrives, you'll see a hint — ("⏳ integrating context…" / "🔄 queued…") — and the message is queued either way, processed as soon as the compact / current turn finishes.
+If the session is currently compacting or busy when your message arrives, you'll see a hint — ("⏳ integrating context…" / "🔄 queued…") — and the message is queued either way, processed as soon as the compact / current turn finishes. This includes messages sent while an auto-compact is running mid-turn — they run right after it ends.
 
 ## Interrupt vs Stop
 
@@ -94,6 +94,8 @@ Two ways to interrupt the agent:
 
 **Hard stop**: click the red ⏹ button. Immediate abort, queue cleared, no checkpoint waiting.
 
+**Exception — compaction.** An auto-compact (triggered mid-turn when context reaches `compressAt`) can't be interrupted: ⏹ or Esc during it only takes effect once the compact finishes, and the turn doesn't continue afterwards. A manual `/session compact` can be cancelled with ⏹ — history is rolled back and you'll see `Compact cancelled`.
+
 ## Token ring
 
 The ring in the bottom-right of the input shows context window usage:
@@ -102,7 +104,7 @@ The ring in the bottom-right of the input shows context window usage:
 - Orange: 70–90%
 - Red: > 90%
 
-Reaching `compressAt` (default 70%) auto-triggers compact. While the agent is running you can't click the TokenRing (guarded by `isStreaming`).
+Reaching `compressAt` (default 70%) auto-triggers compact. If the LLM summary fails or times out, Halo falls back to a local compact (notice: `Auto-compacted N older messages (local fallback — LLM summary failed: <reason>)`) rather than retrying. An auto-compact has no overall time limit — it only times out after 10 minutes with no data from the model. While the agent is running you can't click the TokenRing (guarded by `isStreaming`).
 
 ## Session history
 

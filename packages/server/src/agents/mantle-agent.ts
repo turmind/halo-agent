@@ -32,7 +32,7 @@ import { resolveMaxOutputTokens } from '../config.js'
 import { SignatureV4 } from '@smithy/signature-v4'
 import { Sha256 } from '@aws-crypto/sha256-js'
 import { defaultProvider } from '@aws-sdk/credential-provider-node'
-import { AgentLoop } from './agent-loop.js'
+import { AgentLoop, ACTIVITY_DELTA } from './agent-loop.js'
 import type { AnthropicMessage, ContentBlock, ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
 import { readSseJson } from './sse.js'
 
@@ -356,7 +356,9 @@ async function readResponsesStream(
 
   let final: Record<string, unknown> | undefined
   let firstDeltaAt: number | undefined
-  for await (const ev of readSseJson<ResponsesStreamEvent>(res.body)) {
+  // Every read is liveness for the idle timer — argument deltas, empty
+  // summary deltas and comment frames included, which report nothing below.
+  for await (const ev of readSseJson<ResponsesStreamEvent>(res.body, () => onDelta?.(ACTIVITY_DELTA))) {
     switch (ev.type) {
       case 'response.output_text.delta':
         firstDeltaAt ??= Date.now()

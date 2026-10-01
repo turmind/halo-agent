@@ -63,7 +63,7 @@ describe('emitEvent → real disk persistence (UIStore wired into the real manag
   })
 
   it('ensureUIState seeds agentId from the real db row when persisting', () => {
-    // No in-memory session (we never called createSession), so persistUIState's
+    // No in-memory session (we never called createSession), so persistLog's
     // db fallback for agentId is the ONLY source — the path a fake host stubs out.
     seedRow('root2', { agentId: 'researcher', agentName: 'Researcher' })
     sm.appendNotification('root2', 'system note')

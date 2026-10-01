@@ -6,26 +6,31 @@ import type { AnthropicMessage } from './bedrock-agent.js'
 import { config } from '../config.js'
 
 /**
- * Split a message array for compaction: keep the last N messages intact, and
- * advance the cut point past any user message whose first block is a tool_result
- * (orphan tool_results trigger `unexpected tool_use_id` errors from the API).
+ * Compaction cut point: messages[0..cut) get compacted, messages[cut..] are
+ * kept. Returns 0 when there is nothing to compact (length <= keep_messages) —
+ * the "compaction is feasible" predicate.
+ *
+ * Single source of truth for the LLM self-compact, its feasibility gates and
+ * the local fallback below: gate and compact must run the same computation on
+ * the same array or they drift ("gate said yes, compact said no" re-creates
+ * the orphan-preflight bug).
+ *
+ * The tail loop only moves `cut` UP: a user message whose first block is a
+ * tool_result is a protocol continuation of the assistant turn before it, so
+ * it joins the compacted region (an orphan tool_result triggers `unexpected
+ * tool_use_id` from the API). Hence cut === 0 is exactly length <= keep.
  */
-function splitForCompact(messages: AnthropicMessage[]): {
-  recentMsgs: AnthropicMessage[]
-  olderMsgs: AnthropicMessage[]
-} {
+export function compactCut(messages: AnthropicMessage[]): number {
   const keepCount = config.compact.keep_messages
+  if (messages.length <= keepCount) return 0
   let cut = Math.max(0, messages.length - keepCount)
   while (cut < messages.length) {
     const m = messages[cut]
     const firstBlock = Array.isArray(m.content) ? (m.content[0] as { type?: string } | undefined) : undefined
-    if (m.role === 'user' && firstBlock?.type === 'tool_result') {
-      cut++
-      continue
-    }
+    if (m.role === 'user' && firstBlock?.type === 'tool_result') { cut++; continue }
     break
   }
-  return { recentMsgs: messages.slice(cut), olderMsgs: messages.slice(0, cut) }
+  return cut
 }
 
 /** Flatten a message's text content (ignores tool_use / tool_result blocks). */
@@ -44,11 +49,10 @@ function messageText(m: AnthropicMessage): string {
 export function localCompactMessages(
   messages: AnthropicMessage[],
 ): { compacted: boolean; messages: AnthropicMessage[] } {
-  if (!messages || messages.length <= config.compact.keep_messages) {
-    return { compacted: false, messages }
-  }
-  const { recentMsgs, olderMsgs } = splitForCompact(messages)
-  if (olderMsgs.length === 0) return { compacted: false, messages }
+  const cut = messages ? compactCut(messages) : 0
+  if (cut === 0) return { compacted: false, messages }
+  const recentMsgs = messages.slice(cut)
+  const olderMsgs = messages.slice(0, cut)
 
   const maxSlice = config.compact.max_message_slice
   const lines: string[] = []

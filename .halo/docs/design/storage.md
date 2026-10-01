@@ -92,7 +92,7 @@ Protocol (single-machine scope; NFS / cross-host explicitly out):
 - **Claim** = `O_EXCL` create with own pid; first claimer owns the runtime.
 - **EEXIST** → read the holder pid and probe with `kill(pid, 0)`. Holder alive (`EPERM` counts as alive — false-dead is the dangerous direction) → return false, caller skips reconcile. Holder is own pid → already owned.
 - **Dead / unreadable holder** → stale takeover via write-tmp + atomic rename (keeps the path existent at all times, so a third comer always sees *some* holder).
-- **No explicit release**: pid liveness *is* the release — graceful exit and SIGKILL converge on the same "pid dead → next boot takes over" path, so there is no exit hook to forget or crash past.
+- **Release on graceful exit**: `gracefulShutdown` calls `releaseWorkspaceRuntime` per workspace, which unlinks the file only when it holds *our own* pid (a file another live process owns or took over is left alone). A crash / SIGKILL leaves the file and converges on the "pid dead → next boot takes over" path, so correctness never depends on the exit hook having run — the release only keeps a reboot-recycled pid from reading as a live holder.
 
 Bias is deliberate: pid reuse can read a stale pid as "alive," which only costs one missed cleanup round; a false-dead could stop another process's live sessions. Full race analysis in the file's header comment.
 
@@ -209,7 +209,7 @@ type ContentBlockEntry =
 
 `turnId` uniquely identifies each LLM API call. Content blocks and the corresponding usage message in the same turn share the same turnId.
 
-The `usage` event rotates `turnId` on both root and sub-session turn state without flushing the assistant message: the agent loop yields `tool_call`s before `usage` and runs the tools after, so at usage time every tool call of that model call is still pending — a flush there would split thinking/text from the tool_calls into two assistant messages (the pre-fix sub-session behavior). One assistant message therefore spans all model calls of a turn, each call's blocks tagged with its own turnId; it reaches disk at `complete` / `agent_done`, the next `user` or `system` event, or the interrupt flush. The root file additionally carries the in-flight turn as a temporary assistant message on every save (`createSaveSnapshot`); a sub-session file does not (`persistSubSession` id-merges settled rows only), so while a sub-agent runs its file has the tool_call / tool_result / usage rows but no assistant message yet — the live view comes from WS / `getSessionView`, not the file.
+The `usage` event rotates `turnId` on both root and sub-session turn state without flushing the assistant message: the agent loop yields `tool_call`s before `usage` and runs the tools after, so at usage time every tool call of that model call is still pending — a flush there would split thinking/text from the tool_calls into two assistant messages (the pre-fix sub-session behavior). One assistant message therefore spans all model calls of a turn, each call's blocks tagged with its own turnId; it reaches disk at `complete` / `agent_done`, the next `user` or `system` event, or the interrupt flush. Root and sub-session logs persist by one rule: `persistLog` overwrites the session's own file whole from its UI log, and every save carries the in-flight turn as a temporary assistant message (`createSaveSnapshot`). A sub-session log starts from its own file (`loadSubHistory`), so it always holds the full history; writes are debounced 500ms per session id (tool_call / tool_result / usage / context / user / system / error) and flushed at turn end (root `complete`, sub `agent_done`) and on interrupt.
 
 ### Render rules
 
@@ -334,7 +334,6 @@ general:                                  # built-in declarer (the server itself
     keep_messages: 5
     max_summary_input: 15000
     max_message_slice: 800
-    summarize_timeout_sec: 300
   sandbox:
     hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh"
     hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm"
@@ -384,7 +383,6 @@ A value of the form `<<ENV_NAME>>` is replaced at read time with `process.env.EN
 | `general.compact.keep_messages` | 5 | Recent messages kept intact during compaction |
 | `general.compact.max_summary_input` | 15000 | Local truncation fallback total char cap |
 | `general.compact.max_message_slice` | 800 | Local truncation per-message char cap |
-| `general.compact.summarize_timeout_sec` | 300 | LLM summary timeout |
 | `general.limits.shell_output_bytes` | 5242880 | Max bytes captured from one `shell_exec` (stdout+stderr); excess truncated with a `[truncated]` marker |
 | `general.limits.web_fetch_bytes` | 51200 | Max bytes downloaded by one `web_fetch` |
 | `general.limits.grep_default_matches` | 50 | Default `grep` match cap when no explicit `max` is passed |

@@ -23,9 +23,10 @@
  *     take over via write-tmp + atomic rename, return true — the crash-orphan
  *     cleanup that reconcile exists for is preserved across restarts.
  *   - holder == own pid → already owned (registry rebuilt in-process), true.
- *   - no explicit release: pid liveness IS the release. Graceful exit and
- *     SIGKILL converge on the same "pid dead → next boot takes over" path,
- *     so there is no exit hook to forget or crash past.
+ *   - graceful exit releases (releaseWorkspaceRuntime unlinks a file holding
+ *     our own pid); a crash / SIGKILL leaves the file and converges on the
+ *     "pid dead → next boot takes over" path. The release only narrows race 4
+ *     below — correctness never depends on the exit hook having run.
  *
  * Race windows (analysed, accepted):
  *   1. Two servers, disjoint in time (the prod/dev incident): the owner's pid
@@ -46,7 +47,9 @@
  *      "alive" → reconcile skipped until the next restart after that process
  *      exits. Deliberate bias: false-alive costs one missed cleanup round,
  *      false-dead could stop live sessions. (Same residual accepted by
- *      index.ts's server.lock pid-probe fallback.)
+ *      index.ts's server.lock pid-probe fallback.) Only a crash leaves a stale
+ *      pid behind — a graceful exit removes the file (desktop: a reboot
+ *      recycling the old pid would otherwise skip reconcile silently).
  *
  * Known residual (documented, out of scope): when two servers BOTH actively
  * use one workspace long-term, the non-owner never reconciles — its own crash
@@ -115,4 +118,13 @@ export function claimWorkspaceRuntime(workspaceRoot: string): boolean {
     console.warn(`[WorkspaceRuntimeLock] stale takeover failed for ${lockPath}: ${renameErr instanceof Error ? renameErr.message : String(renameErr)}`)
     return false
   }
+}
+
+/** Graceful-shutdown release: unlink the marker only when it holds OUR pid —
+ *  a file another live process owns (or took over) is left alone. */
+export function releaseWorkspaceRuntime(workspaceRoot: string): void {
+  const lockPath = path.join(workspaceRoot, '.halo', RUNTIME_LOCK_FILE)
+  try {
+    if (parseInt(fs.readFileSync(lockPath, 'utf-8').trim(), 10) === process.pid) fs.unlinkSync(lockPath)
+  } catch { /* missing / unreadable → nothing of ours to release */ }
 }

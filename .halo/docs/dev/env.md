@@ -103,7 +103,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_MAX_CONTEXT_TOKENS` | `200000` | — | Model max context |
 | `HALO_SHELL_TIMEOUT` | `120000` | `config.yaml timeout.shell_exec` | Shell command timeout (ms) |
 | `HALO_WEB_FETCH_TIMEOUT` | `10000` | `config.yaml timeout.web_fetch` | web_fetch timeout |
-| `HALO_MODEL_TIMEOUT` | `1800000` | `config.yaml timeout.model_request` | Per model-call idle timeout (ms, 30 min): every provider streams (Bedrock, the Anthropic-Messages providers anthropic / mimo / minimax / qwen, the OpenAI-family openai / deepseek / kimi / zhipu / doubao / hunyuan, and Mantle aws-bedrock-mantle / aws-bedrock-openai) and resets it on every chunk, so it fires only when the model goes silent for this long, not on a long but live answer. A bare fetch has no default timeout, so a half-open connection would hang the request forever; on expiry the call aborts and the agent loop retries with backoff. |
+| `HALO_MODEL_TIMEOUT` | `600000` | `config.yaml timeout.model_request` | Per model-call idle timeout (ms, 10 min): every provider streams (Bedrock, the Anthropic-Messages providers anthropic / mimo / minimax / qwen, the OpenAI-family openai / deepseek / kimi / zhipu / doubao / hunyuan, and Mantle aws-bedrock-mantle / aws-bedrock-openai) and re-arms it on any data the stream delivers — text / thinking deltas, pings, tool-argument fragments, empty reasoning chunks, SSE comment frames — so it fires only when the model goes silent for this long, not on a long but live answer. It is also the only bound on a compact's LLM summary (no separate compact timeout). A bare fetch has no default timeout, so a half-open connection would hang the request forever; on expiry the call aborts and the agent loop retries with backoff. |
 | `HALO_SESSION_GRACE` | `300000` | `config.yaml timeout.session_grace` | WS-disconnect session grace |
 | `HALO_TERMINAL_GRACE` | `300000` | `config.yaml timeout.terminal_grace` | Terminal disconnect grace |
 | `HALO_MAX_CACHED_SESSIONS` | `50` | — | In-memory session cache |
@@ -122,7 +122,6 @@ settings.yaml only (no env override):
 - `general.compact.keep_messages` (default 5) — recent messages to keep uncompacted
 - `general.compact.max_summary_input` (default 15000) — local compaction fallback input cap
 - `general.compact.max_message_slice` (default 800) — local compaction per-message cap
-- `general.compact.summarize_timeout_sec` (default 300) — self-compact timeout
 - `general.server.trust_proxy` (default `false`) — trust `x-forwarded-for` for client IP resolution, scope: global (enable only behind a reverse proxy you control)
 - `general.sandbox.hidden_dirs` (default `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs`) — hidden from workspace/readonly sessions (bwrap tmpfs overlays on Linux, Seatbelt deny on macOS), scope: global
 - `general.sandbox.writable_dirs` (default empty) — dirs writable inside the sandbox besides the workspace (Linux / macOS), for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions, scope: global

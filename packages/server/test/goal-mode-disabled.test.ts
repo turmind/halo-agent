@@ -216,7 +216,7 @@ describe('disabled entry points do not disable stored goal mechanisms', () => {
     expect(JSON.parse(await attach.callback({ kickoff: 'run tests' }) as string).code).toBe(0)
     expect(goals.resolveGoalRoute(sm.getDb(), 'worker')).toBe('goal_old')
     await goals.deliverGoalRound(host, {
-      id: 'worker', parentId: null, messageQueue: [], finalOutput: 'tests passed', output: '', turnError: null,
+      id: 'worker', parentId: null, messageQueue: [], finalOutput: 'tests passed', output: '', turnError: null, turnErrorKind: null,
     })
     expect(goals.readGoalState(sm.getDb(), 'goal_old')?.round).toBe(1)
     expect(host.querySession).toHaveBeenLastCalledWith('goal_old', 'worker', expect.stringContaining('tests passed'))

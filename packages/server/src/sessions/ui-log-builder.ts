@@ -6,7 +6,8 @@
  * but they never reconstruct log state themselves.
  *
  * Design notes:
- * - No WS, no disk I/O. Push those decisions to the caller.
+ * - No WS, no disk I/O. Push those decisions to the caller (a new sub-session
+ *   log's on-disk history arrives through applyEvent's `loadHistory`).
  * - State is mutated in place for throughput; callers that need isolation
  *   should `structuredClone` the returned snapshot.
  * - Sub-session logs are tracked in `subSessionLogs`; same shape as main.
@@ -231,8 +232,12 @@ export function createSaveSnapshot(state: TurnState): SessionMessage[] {
 
 // ── Sub-session lifecycle ───────────────────────────────────────────
 
+/** Start or resume a sub-session's log. A new log starts from `loadHistory`
+ *  (the caller's read of the sub's own file), so it holds the whole history
+ *  and is persisted like the root's: a whole-file overwrite. */
 export function initSubSessionLog(
   state: UIState, taskId: string, agentId: string, agentName: string, text: string,
+  loadHistory?: (taskId: string) => SessionMessage[],
 ): void {
   const existing = state.subSessionLogs.get(taskId)
   if (existing) {
@@ -245,9 +250,11 @@ export function initSubSessionLog(
     }
     return
   }
+  const messageLog = loadHistory?.(taskId) ?? []
+  if (text) messageLog.push({ id: genId(), type: 'user' as const, role: 'user' as const, content: text, timestamp: Date.now(), agentName })
   state.subSessionLogs.set(taskId, {
     agentId, agentName, description: text, streamingAgent: agentName,
-    messageLog: text ? [{ id: genId(), type: 'user' as const, role: 'user' as const, content: text, timestamp: Date.now(), agentName }] : [],
+    messageLog,
     streamBuffer: '', turnToolCalls: [], turnContentBlocks: [], currentTurnId: randomUUID(),
   })
 }
@@ -281,24 +288,36 @@ export function buildUsageMsg(
 // ── Reducer result ──────────────────────────────────────────────────
 
 /**
- * Result of applying an event. `shouldSave` means the caller should persist;
- * `subSessionDone` carries the taskId of a sub-session whose log is finalized
- * and should be saved + cleared.
+ * The log an event changed and when to rewrite its file — one rule for the
+ * root's log and a sub-session's (its own file), see applyEvent.
  */
 export interface ApplyResult {
-  shouldSave: boolean
-  isComplete: boolean
-  subSessionDone?: string
-  subSessionSave?: string
+  /** The sub-session whose log changed; absent = the root's log. */
+  taskId?: string
+  /** 'flush' = write now (turn end), 'debounce' = coalesce within 500ms,
+   *  absent = no write (the next one carries the change). */
+  persist?: 'flush' | 'debounce'
 }
 
 /**
  * Apply an event to the UI state. Mutates `state` in place.
+ *
+ * Persist rule, identical for root and sub-session logs:
+ *  - tool_call, tool_result, usage, context, user, system, error → debounce;
+ *  - turn end (root `complete`, sub `agent_done`) → flush;
+ *  - everything else (deltas, thinking, stream, agent_start, followup_start,
+ *    queued_message, compacted) → no write; the next write carries it.
+ * Interrupts flush through the store (flushSession / flushSubSession).
+ *
+ * `loadHistory` returns a sub-session's on-disk UI log; every new sub-log
+ * starts from it.
  */
-export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResult {
+export function applyEvent(
+  state: UIState, event: OrchestratorEvent, loadHistory?: (taskId: string) => SessionMessage[],
+): ApplyResult {
   const agentName = event.agentName ?? 'default'
   const taskId = event.taskId
-  const result: ApplyResult = { shouldSave: false, isComplete: false }
+  const result: ApplyResult = { taskId }
 
   // Lazy sub-session entry: a sub-session can keep producing events while the
   // root's `subSessionLogs` map is empty (e.g. server restart re-built root
@@ -313,9 +332,9 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
       && !state.subSessionLogs.has(taskId)) {
     // agentId is identity; never fall back to the display name (`agentName`)
     // — that's what split the on-disk dir into `Developer/` vs `developer/`.
-    // An empty id here is harmless: persistSubSession resolves the real id
-    // from the session/db by taskId, not from this field.
-    initSubSessionLog(state, taskId, event.agentId ?? '', agentName, '')
+    // An empty id here is harmless: the store resolves the real id from the
+    // session/db by taskId, not from this field.
+    initSubSessionLog(state, taskId, event.agentId ?? '', agentName, '', loadHistory)
   }
 
   switch (event.type) {
@@ -349,7 +368,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
           timestamp: Date.now(), agentName, taskId,
         })
       }
-      if (taskId) initSubSessionLog(state, taskId, event.agentId ?? '', agentName, event.fullText ?? event.text ?? '')
+      if (taskId) initSubSessionLog(state, taskId, event.agentId ?? '', agentName, event.fullText ?? event.text ?? '', loadHistory)
       break
 
     case 'agent_done':
@@ -364,7 +383,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
       if (taskId) {
         const sub = state.subSessionLogs.get(taskId)
         if (sub) flushAssistantMessage(sub)
-        result.subSessionDone = taskId
+        result.persist = 'flush'
       }
       break
 
@@ -378,7 +397,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
         toolName: event.toolName, toolInput: event.toolInput,
       }
       addToolCall(getTarget(state, taskId), entry, msg)
-      result.shouldSave = true  // B3 fix: persist on every tool call
+      result.persist = 'debounce'  // B3 fix: persist on every tool call
       break
     }
 
@@ -396,7 +415,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
         timestamp: Date.now(), agentName, taskId,
         toolOutput: event.toolResult, durationMs: event.durationMs,
       })
-      result.shouldSave = true  // B3 fix: persist on every tool result
+      result.persist = 'debounce'  // B3 fix: persist on every tool result
       break
     }
 
@@ -423,10 +442,9 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
           // agent_done / the next user or system event / the interrupt flush.
           sub.messageLog.push(buildUsageMsg(event, agentName, taskId, sub.currentTurnId))
           sub.currentTurnId = randomUUID()
-          result.subSessionSave = taskId
         }
       }
-      result.shouldSave = true
+      result.persist = 'debounce'
       break
     }
 
@@ -435,8 +453,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
       state.turnToolCalls = []
       state.turnContentBlocks = []
       state.currentTurnId = randomUUID()
-      result.shouldSave = true
-      result.isComplete = true
+      result.persist = 'flush'
       break
 
     case 'context': {
@@ -451,15 +468,14 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
       } else {
         if (!state.subSessionLogs.has(taskId)) {
           // agentId is identity; never fall back to the display name. The real
-          // dir id is resolved by taskId in persistSubSession, so an empty id
+          // dir id is resolved by taskId when the store persists, so an empty id
           // here is harmless. (Earlier `?? agentName` caused split dirs like
           // `Developer/` vs `developer/`.)
-          initSubSessionLog(state, taskId, event.agentId ?? '', agentName, '')
+          initSubSessionLog(state, taskId, event.agentId ?? '', agentName, '', loadHistory)
         }
         state.subSessionLogs.get(taskId)!.messageLog.push(ctxMsg)
-        result.subSessionSave = taskId
       }
-      result.shouldSave = true
+      result.persist = 'debounce'
       break
     }
 
@@ -478,7 +494,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
         id: genId(), type: 'notification', role: 'system',
         content: event.text ?? '', timestamp: Date.now(), agentName: 'System',
       })
-      if (taskId) result.subSessionSave = taskId
+      result.persist = 'debounce'
       break
     }
 
@@ -487,6 +503,10 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
         id: genId(), type: 'notification', role: 'system',
         content: `Error: ${event.error}`, timestamp: Date.now(), agentName, taskId,
       })
+      // Lands in the root log even for a sub-session (existing routing), so
+      // it's the root's file that changes.
+      result.taskId = undefined
+      result.persist = 'debounce'
       break
 
     case 'compacted':
@@ -502,8 +522,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
         id: genId(), type: 'user', role: 'user',
         content: event.text ?? '', timestamp: Date.now(),
       })
-      if (taskId) result.subSessionSave = taskId
-      result.shouldSave = true
+      result.persist = 'debounce'
       break
     }
   }

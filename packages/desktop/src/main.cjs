@@ -321,8 +321,10 @@ function killServer() {
   // deadlock — see ws/file-watcher.ts), SIGTERM never delivers because
   // its main thread is stuck in a syscall. Force-kill after 1.5s so we
   // never leave a zombie holding port 9527 / server.lock.
+  // exitCode/signalCode, not proc.killed: Node sets `killed` as soon as the
+  // SIGTERM is SENT, so a `!proc.killed` guard made this fallback dead code.
   setTimeout(() => {
-    try { if (!proc.killed) proc.kill('SIGKILL') } catch {}
+    try { if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL') } catch {}
   }, 1500).unref?.()
 }
 
@@ -842,8 +844,18 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (e) => {
   app.isQuitting = true
+  // POSIX: hold the quit until the server has actually exited. Electron exits
+  // right after before-quit, which dropped killServer's (unref'd) SIGKILL
+  // fallback and orphaned a wedged server still holding port + server.lock.
+  // The server's exit re-enters here with serverProcess null → quit proceeds.
+  const proc = serverProcess
+  if (proc && process.platform !== 'win32' && proc.exitCode === null && proc.signalCode === null) {
+    e.preventDefault()
+    proc.once('exit', () => app.quit())
+    setTimeout(() => app.exit(0), 3000) // SIGKILL itself failed — never hang the quit
+  }
   killServer()
 })
 

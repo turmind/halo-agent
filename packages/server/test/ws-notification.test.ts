@@ -156,4 +156,21 @@ describe('sendWsNotification mapping', () => {
       { type: 'chat:system', text: 'Compacting context (32K tokens)…', taskId: undefined, agentName: 'default', sessionId: 'sess-1' },
     ])
   })
+
+  it('auto-compact local-fallback notice (compactEnd) closes the compacting state with compact:done', () => {
+    // Without the close, the admin ring stayed blue and every chat:send was
+    // queued as "compacting" after an auto-compact whose LLM summary failed.
+    const sent = notify({ type: 'system', text: 'Auto-compacted 12 older messages (local fallback — LLM summary failed: model exploded)', compactEnd: true })
+    expect(sent).toEqual([
+      { type: 'chat:system', text: 'Auto-compacted 12 older messages (local fallback — LLM summary failed: model exploded)', taskId: undefined, agentName: 'default', sessionId: 'sess-1' },
+      { type: 'compact:done' },
+    ])
+  })
+
+  it('a sub-agent compactEnd notice does not touch the root compacting state', () => {
+    const sent = notify({ type: 'system', text: 'Auto-compacted 12 older messages (local fallback — LLM summary failed: no summary produced)', compactEnd: true, taskId: 'root>c1' })
+    expect(sent).toEqual([
+      { type: 'chat:system', text: 'Auto-compacted 12 older messages (local fallback — LLM summary failed: no summary produced)', taskId: 'root>c1', agentName: 'default', sessionId: 'sess-1' },
+    ])
+  })
 })

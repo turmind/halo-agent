@@ -28,6 +28,7 @@ import { broadcast } from '../ws/broadcast.js'
 import { config } from '../config.js'
 import type { HaloDb } from '../db/index.js'
 import type { ToolDef } from './bedrock-agent.js'
+import type { ModelErrorKind } from './model-error.js'
 
 /** The goal agent's id. No `__` wrapping on purpose: `isInternalAgent` keys
  *  off the underscore pattern, so G's session files stay workspace-local
@@ -325,7 +326,7 @@ export const NEED_INPUT_MARKER = '<NEED_INPUT>'
  */
 export async function deliverGoalRound(
   host: GoalHost,
-  worker: { id: string; parentId: string | null; messageQueue: { length: number }; finalOutput: string; output: string; turnError: string | null },
+  worker: { id: string; parentId: string | null; messageQueue: { length: number }; finalOutput: string; output: string; turnError: string | null; turnErrorKind: ModelErrorKind | null },
 ): Promise<void> {
   if (worker.parentId !== null) return
   const db = host.getDb()
@@ -361,9 +362,15 @@ export async function deliverGoalRound(
   // loop, and the trace has diagnostic value. Prepended BEFORE deliver()'s
   // truncation cap so the marker always survives.
   if (worker.turnError) {
+    // An account error fails identically on every attempt — steer G to the
+    // model config, not a re-dispatch (mirrors tryReportToParent).
+    const next = worker.turnErrorKind === 'account'
+      ? `This is a model account / credential / balance / permission problem: retrying or re-dispatching will fail the same way. `
+        + `Fix the model configuration first (or tell the user to fix it), and do not resume the worker with query_session until then.`
+      : `Re-dispatch with query_session to let the worker resume.`
     report = `[WORKER ABORTED: this round was terminated by an unrecoverable error, NOT a normal wrap-up. `
       + `Error: ${worker.turnError}. The text below is a partial trace of the aborted turn — judge this as an `
-      + `interrupted round, do not score it as a completed result. Re-dispatch with query_session to let the worker resume.]\n\n${report}`
+      + `interrupted round, do not score it as a completed result. ${next}]\n\n${report}`
   }
   const caps = state.caps
 
