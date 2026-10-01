@@ -56,7 +56,7 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 76 // DELEGATION.md: do it yourself when the fix is settled; settle open questions before briefing.
+export const TEMPLATE_VERSION = 77 // DELEGATION.md: do-it-yourself only for light work, technical unknowns go to the worker, reuse a worker's gathered context; bundled docs sync.
 const VERSION_FILE = '.template-version'
 
 /** Read the seed version stamped into `~/.halo/global/.template-version`.

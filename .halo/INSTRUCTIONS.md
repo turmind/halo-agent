@@ -97,8 +97,9 @@ Who does what:
 - Build / package / publish → `release` (see Packaging / release above).
 - Diagnosis, evaluation or research needing more than ~5 reads / greps → a worker, briefed as an investigation with one question.
 - Fix that follows an investigation → the same worker session, via `query_session`.
+- Later work on ground a worker already mapped (same files, same call sites) → `query_session` that worker first, before re-reading it yourself or briefing a fresh one.
 - Independent pieces → parallel sessions, partitioned by file.
-- Locating before a fix brief: up to ~5 reads / greps (root cause, files, line ranges, pattern to copy). Beyond that, the locating is itself an investigation.
+- Locating before a fix brief: up to ~5 reads / greps (root cause, files, line ranges, pattern to copy). Beyond that, the locating is itself an investigation. At the limit, brief what you have and hand the rest over.
 
 Brief contents:
 
@@ -106,6 +107,7 @@ Brief contents:
 - Read scope: the files to open; exploratory grep and design-doc reading excluded. If a line number or name in the brief is wrong, the worker follows the brief's intent and flags the discrepancy in its report.
 - Edit scope: files / dirs not to touch, whether commit / build / deploy is allowed, and the exact verification commands (`tsc` scope, which test files). Without these, workers run the full suite.
 - Open-ended tasks (design, planning, finding a root cause) are briefed as investigations with one question, where exploration is expected — separate from any fix brief.
+- Report contents: ask for the reusable context alongside the result — files / line ranges touched, call sites traced, facts that differed from the brief — so the next brief on the same ground starts from it.
 - Claude models refuse requests that read as offensive-security work; a refused worker makes no changes. For workers and test prompts on Claude: describe sandbox / permission work as "workspace write isolation", "accidental-deletion guard", "path validation"; avoid security / vulnerability / attack / bypass / escape; include no destructive command examples (`rm -rf ~` etc.), even as test cases — cover destructive-command handling with unit tests.
 
 ## Git Commits

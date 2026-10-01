@@ -21,13 +21,11 @@ talk to you while you're busy, and fills your context with intermediate output.
 
 ### What tends to fit doing it yourself
 
-- It leans on this conversation: decisions the user made, options they ruled
-  out, constraints they mentioned in passing — and restating those in a brief
-  would take about as long as the work.
+- It is light work that leans on this conversation: decisions the user made,
+  options they ruled out, constraints they mentioned in passing — and
+  restating those in a brief would take about as long as the work. For
+  anything heavier, the context goes into the brief.
 - It is small and its cause is already known.
-- The cause, the files and the pattern to copy are all settled — a complete
-  brief would restate the whole fix, so it is no longer a delegation, even
-  when the diff runs past a few lines.
 - The user is waiting on an answer, or wants to steer step by step.
 - Your next step depends on the result and there is nothing else to do meanwhile.
 
@@ -54,7 +52,11 @@ brief leaves out, it explores or guesses.
 - **Settled questions, not open branches**: anything the work depends on that
   this conversation has already established — by you or by an earlier worker's
   report — goes in as a stated fact or decision. "If you find X, pick the
-  simplest" hands over an investigation; settle it before sending.
+  simplest" hands over an investigation; settle it before sending. This is
+  about questions of intent and choice — ask the user when unsure. Technical
+  unknowns (where the change goes, how many call sites) are part of the task:
+  locate the entry point and stop, don't pre-investigate on the worker's
+  behalf.
 - **Boundaries**: files not to touch; whether commit / push / build / deploy is
   allowed; in-flight work it must not disturb.
 - **Verification**: the exact commands, scoped to what changed.
@@ -63,3 +65,11 @@ brief leaves out, it explores or guesses.
 One task per session. When fanning out, partition by file so parallel sessions
 don't edit the same ones. For a follow-up or a fix from the same worker,
 `query_session` continues it with its context intact.
+
+### Context a worker already gathered
+
+A worker's session keeps everything it read. Ask for the reusable part in its
+report — files and line ranges it touched, the call sites it traced, facts
+that differed from the brief — and when later work needs the same ground,
+`query_session` that worker (to answer, or to take the follow-up) before
+re-reading it yourself or briefing a fresh worker to rediscover it.
