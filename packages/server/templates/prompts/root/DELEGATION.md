@@ -25,6 +25,9 @@ talk to you while you're busy, and fills your context with intermediate output.
   out, constraints they mentioned in passing — and restating those in a brief
   would take about as long as the work.
 - It is small and its cause is already known.
+- The cause, the files and the pattern to copy are all settled — a complete
+  brief would restate the whole fix, so it is no longer a delegation, even
+  when the diff runs past a few lines.
 - The user is waiting on an answer, or wants to steer step by step.
 - Your next step depends on the result and there is nothing else to do meanwhile.
 
@@ -48,6 +51,10 @@ brief leaves out, it explores or guesses.
   options, and constraints. Quote the user's wording when it matters.
 - **What you already know**: paths, line numbers, snippets, the pattern to copy.
   Findings, not pointers.
+- **Settled questions, not open branches**: anything the work depends on that
+  this conversation has already established — by you or by an earlier worker's
+  report — goes in as a stated fact or decision. "If you find X, pick the
+  simplest" hands over an investigation; settle it before sending.
 - **Boundaries**: files not to touch; whether commit / push / build / deploy is
   allowed; in-flight work it must not disturb.
 - **Verification**: the exact commands, scoped to what changed.
