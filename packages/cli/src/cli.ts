@@ -42,6 +42,10 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
   let turnAll = ''
   const toolCalls: Array<{ name: string; durationMs?: number }> = []
   let errorText = ''
+  // Root `system` notices (retries, compaction, truncation, refusals) — the
+  // IM channels show these inline; here they ride along with the answer.
+  // Not reset on queued_message: a warning from an earlier turn still applies.
+  const notices: string[] = []
   let usage: AgentSessionEvent | null = null
   let lastToolName = ''
 
@@ -157,6 +161,18 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
         process.stderr.write(`${tag}\x1b[31m[error] ${errorText}\x1b[0m\n`)
         hadMeta = true
         break
+      case 'system':
+        if (!event.text) break
+        if (opts.verbose) {
+          stopSpinner()
+          process.stderr.write(`${tag}\x1b[2m[system] ${event.text}\x1b[0m\n`)
+          hadMeta = true
+        }
+        // Skip the drain-time sibling-status line (the only system event that
+        // carries agentName): root bookkeeping, one per sub-agent report —
+        // a cron push from a fan-out director would fill up with them.
+        if (!event.taskId && !event.agentName) notices.push(event.text)
+        break
       case 'complete':
         stopSpinner()
         break
@@ -169,6 +185,9 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
   // right after a tool call) so a consumer still gets something.
   const answer = turnFinal || turnAll
   if (opts.format === 'text') {
+    if (notices.length > 0) {
+      process.stdout.write(notices.map(n => `ℹ️ ${n}`).join('\n') + (answer ? '\n\n' : '\n'))
+    }
     if (answer) {
       // Styled markdown only for a human at a terminal. Piped stdout (cron
       // dispatch, scripts) gets the raw markdown — marked-terminal's 80-col
@@ -179,6 +198,7 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
   } else {
     const result = {
       text: answer,
+      notices,
       sessionId: harness.sessionId,
       toolCalls,
       usage: usage ? {

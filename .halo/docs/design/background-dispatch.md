@@ -17,9 +17,12 @@ SessionManager emits events through a per-tree event listener system (`eventList
 
 ```
 SessionManager.emitEvent(sessionId, event)
-  ├─ appendEventLog(sessionId, event)         ← JSONL audit trail
-  ├─ reduceIntoUIState(rootId, event)         ← updates UIState (messageLog, tokens, etc.)
-  └─ eventListeners.get(rootId) → forEach(listener(event, state, turnId))
+  └─ SessionUIStore.emitEvent(sessionId, event)
+       ├─ reduceIntoUIState(rootId, event)    ← applyEvent folds it into the root's UIState
+       │                                         (root messageLog, or subSessionLogs[taskId]) + persists that log
+       ├─ complete → broadcast session:changed
+       └─ eventListeners.get(rootId) → forEach(listener(event, state, turnId))
+            (no listener → the store's fallback eventHandler)
 ```
 
 **Key detail**: `emitEvent` first mutates the UIState via `reduceIntoUIState`, then calls listeners with the *pre-mutation* `turnId`. Listeners receive already-applied state — they do NOT mutate state themselves.
@@ -60,15 +63,20 @@ session:clear handler
 
 ### Where the old session's state keeps coming from
 
-Nothing is lost without a listener: `SessionUIStore.emitEvent` folds every event into the root's `UIState` (`reduceIntoUIState → applyEvent`) and persists it — debounced 500 ms for tool traffic, flushed synchronously on `complete` — **before** it looks up listeners. Listeners are a pure fan-out for live UI; the persistence path is independent of them.
+Nothing is lost without a listener: `SessionUIStore.emitEvent` folds every event into the root's `UIState` (`reduceIntoUIState → applyEvent`) and persists the log it changed **before** it looks up listeners. Listeners are a pure fan-out for live UI; the persistence path is independent of them.
+
+- **Which file**: `applyEvent` returns the log it touched. A root event writes the root's session file; a sub-agent event (`taskId` set) writes only that sub-session's **own** file from `subSessionLogs[taskId]` — the root's file isn't rewritten for sub-agent traffic. The sub log is dropped from memory at its `agent_done` (its file is complete by then).
+- **When**: `applyEvent`'s `persist` hint — `'flush'` writes now (root `complete`, a sub's `agent_done`), `'debounce'` coalesces within 500 ms (tool calls / results, usage, …), absent = no write (the next write carries the change). Timers are keyed by the log's own id, so root and sub writes don't cancel each other.
+- **Dirty tracking**: a root event marks the root `uiStateDirty` until `persistLog` lands it. `isUIStateDirty(rootId)` is what the WS saves below gate on — a state only seeded from disk (viewing a session another process, e.g. a cron `halo cli` child, is driving) is clean and is never written back, so it can't overwrite that process's newer file.
 
 ### When save fires
 
-Background state persists in three scenarios:
+Background state persists in four scenarios:
 
-1. **`backgroundSaves.get(sessionId)?.()` in subscribe** — user switches back to the old session; called before re-attaching the listener
-2. **`backgroundSaves` flush on disconnect** — WS closes (or errors), flush every pending bg
-3. **SessionUIStore's own persist** — `complete` flushes immediately, other structural events go through the 500 ms debounce
+1. **SessionUIStore's own persist** — the per-event rule above; this is what keeps a background session's files current
+2. **`backgroundSaves.get(sessionId)?.()` in subscribe** — user switches back to the old session; called before re-attaching the listener. `saveSession` returns early unless `isUIStateDirty`
+3. **`backgroundSaves` flush on disconnect** — WS closes (or errors), flush every pending bg (same dirty gate)
+4. **Server shutdown** — `flushAll()` (SessionManager → SessionUIStore) lands every loaded tree: a dirty root plus every live sub log, since pending debounce timers would never fire
 
 ## Subscribe (switching back) flow
 
@@ -115,7 +123,7 @@ cleanupConnection
 |---|---|
 | `packages/server/src/ws/handler.ts` | `handleSessionClear()` — listener release + `backgroundSaves` registration; `cleanupConnection()` — the shared close/error teardown |
 | `packages/server/src/ws/event-processor.ts` | `sendWsNotification()`, `bufferDetachedNotification()` |
-| `packages/server/src/agents/session-ui-store.ts` | `emitEvent()`, `reduceIntoUIState()`, `flushPersist()` / `debouncedPersist()`, `registerEventListener()` |
+| `packages/server/src/agents/session-ui-store.ts` | `emitEvent()`, `reduceIntoUIState()`, `persistLog()`, `flushPersist()` / `debouncedPersist()`, `isUIStateDirty()`, `flushSession()` / `flushAll()`, `registerEventListener()` |
 | `packages/server/src/sessions/ui-log-builder.ts` | `applyEvent()`, `createSaveSnapshot()`, UIState type |
 | `packages/server/src/sessions/session-store.ts` | `saveSessionToFile()`, `loadSessionMessages()` |
 

@@ -145,6 +145,12 @@ interface Binding {
   unsubPersistent: () => void
 }
 
+async function agentSupportsImage(sm: SessionManager, workspace: string, agentId: string): Promise<boolean> {
+  const agents = await scanAvailableAgents(workspace, getDisabledSet(sm.getDb(), 'agent'))
+  const entry = agents.find(a => a.id === agentId)
+  return entry ? modelSupportsImage(entry.model) : false
+}
+
 export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const initialPath = path.resolve(opts.workspace)
   if (!fs.existsSync(initialPath)) {
@@ -191,11 +197,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     }
     activeOverrides.set(USER_ID, sessionId)
     const sessionAgentId = sm.getSessionById(sessionId)?.agentId ?? agentId
-
-    const disabledSet = getDisabledSet(sm.getDb(), 'agent')
-    const agents = await scanAvailableAgents(workspace, disabledSet)
-    const agentEntry = agents.find(a => a.id === agentId)
-    const supportsImage = agentEntry ? modelSupportsImage(agentEntry.model) : false
+    const supportsImage = await agentSupportsImage(sm, workspace, sessionAgentId)
 
     const unsubPersistent = sm.registerEventListener(sessionId, (event: AgentSessionEvent) => {
       for (const h of eventHandlers) h(event)
@@ -271,10 +273,12 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       activeOverrides.set(USER_ID, result.switchTo)
       // Migrate the persistent listener to the new session in the same sm.
       state.unsubPersistent()
+      const switchedAgentId = state.sm.getSessionById(result.switchTo)?.agentId ?? agentId
       state = {
         ...state,
         sessionId: result.switchTo,
-        agentId: state.sm.getSessionById(result.switchTo)?.agentId ?? agentId,
+        agentId: switchedAgentId,
+        supportsImage: await agentSupportsImage(state.sm, state.workspace, switchedAgentId),
         unsubPersistent: state.sm.registerEventListener(result.switchTo, (event: AgentSessionEvent) => {
           for (const h of eventHandlers) h(event)
         }),

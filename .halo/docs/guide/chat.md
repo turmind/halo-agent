@@ -88,13 +88,15 @@ If the session is currently compacting or busy when your message arrives, you'll
 
 ## Interrupt vs Stop
 
-Two ways to interrupt the agent:
+Three ways to cut in while the agent is running:
 
-**Graceful interrupt**: send another message during streaming. The message is queued on the server; at the next tool-call checkpoint, the agent wraps up the current turn and then runs the queued message. Multiple messages can queue in order.
+**Send another message (soft)**: the message is queued on the server; the agent finishes the tool it's on, wraps up the turn, then runs the queued message. Multiple messages can queue in order. A running command is not killed.
 
-**Hard stop**: click the red ⏹ button. Immediate abort, queue cleared, no checkpoint waiting.
+**Esc — interrupt** (with the input box empty): aborts the turn immediately, including a tool or command mid-run, then any messages queued while it ran fold into one follow-up turn — the agent keeps going with what you said. Same as `/session interrupt`.
 
-**Exception — compaction.** An auto-compact (triggered mid-turn when context reaches `compressAt`) can't be interrupted: ⏹ or Esc during it only takes effect once the compact finishes, and the turn doesn't continue afterwards. A manual `/session compact` can be cancelled with ⏹ — history is rolled back and you'll see `Compact cancelled`.
+**⏹ — stop**: aborts the turn immediately and nothing runs afterwards. Messages queued while it ran aren't lost — they're kept in the conversation history and the agent sees them the next time you send something. Same as `/session stop`.
+
+**Exception — compaction.** During a manual `/session compact`, Esc and ⏹ both cancel it — history is rolled back and you'll see `Compact cancelled`. An auto-compact (triggered mid-turn when context reaches `compressAt`) can't be cancelled: Esc or ⏹ during it only takes effect once the compact finishes, and then works as above.
 
 ## Token ring
 
@@ -104,7 +106,7 @@ The ring in the bottom-right of the input shows context window usage:
 - Orange: 70–90%
 - Red: > 90%
 
-Reaching `compressAt` (default 70%) auto-triggers compact. If the LLM summary fails or times out, Halo falls back to a local compact (notice: `Auto-compacted N older messages (local fallback — LLM summary failed: <reason>)`) rather than retrying. An auto-compact has no overall time limit — it only times out after 10 minutes with no data from the model. While the agent is running you can't click the TokenRing (guarded by `isStreaming`).
+Reaching `compressAt` (default 80%, setting `general.compact.compress_at`) auto-triggers compact. If the LLM summary fails or times out, Halo falls back to a local compact (notice: `Auto-compacted N older messages (local fallback — LLM summary failed: <reason>)`) rather than retrying. An auto-compact has no overall time limit — it only times out after 10 minutes with no data from the model. While the agent is running you can't click the TokenRing (guarded by `isStreaming`).
 
 ## Session history
 

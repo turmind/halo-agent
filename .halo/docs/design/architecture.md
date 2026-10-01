@@ -85,7 +85,7 @@ createModelRuntime(providerId: string, cfg: ModelRuntimeConfig): ModelRuntime
 
 **Core loop** (`AgentLoop.run()`, shared by all providers):
 1. Append the user message to `messages`
-2. `callModel(signal, onDelta?)` → invoke the provider API, get the complete response; chunks a streaming provider reports through `onDelta` are yielded as `text_delta` / `thinking_delta` events during the call and each one re-arms the per-call timeout (idle timeout)
+2. `callModel(signal, onDelta?)` → invoke the provider API, get the complete response; chunks a streaming provider reports through `onDelta` are yielded as `text_delta` / `thinking_delta` events during the call and each one re-arms the per-call timeout (idle timeout). A provider also reports an `activity` delta (`ACTIVITY_DELTA`, empty text) for data with nothing to show — pings, tool-argument fragments, empty reasoning chunks, SSE comment frames — which only proves the connection is alive and re-arms the idle timer; it is never yielded into the event stream
 3. Yield the whole `thinking` / `text` / `usage` / `tool_call` events (unchanged — `final` consumers never see deltas)
 4. `stop_reason=tool_use` → execute tools, yield `tool_result` events → loop
 5. Otherwise yield a `stop` event and return

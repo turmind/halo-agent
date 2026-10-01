@@ -76,16 +76,19 @@ To list agents or sessions without running a prompt, use the dedicated subcomman
 
 - **text format**: stdout carries the agent's **final answer** — the closing text of the last turn, not the live stream. Text the agent emits before a tool call ("let me check…") and the wrap-ups of earlier turns in the same run (e.g. a director absorbing several sub-agent reports) are omitted; if the last turn had no closing text, its full text is printed instead. When stdout is a terminal the answer is rendered as styled markdown (headings, bold, code blocks, tables); when piped or redirected it is written as raw markdown so downstream tools get the text unchanged. Tool calls, thinking, usage — and, with `-v`, the agent's text as it streams — go to stderr.
 
+  System notices from the root session (retries, compaction, truncated output, a model refusal, `@scope` warnings) are printed on stdout before the answer, one `ℹ️ ` line each and a blank line between them and the answer. Notices from sub-agents and the sibling-status line added when sub-agent reports arrive are left out. Notices from earlier turns in the same run are kept, so a scheduled run that hit a local-fallback compact still says so in what gets pushed to chat.
+
   Usage line mirrors the admin chat-panel badge format (timestamp / in / out / ctx / read / write / cache% / ttft / e2e / think / model). `ctx` is the rolled-up context size — `inputTokens + cacheRead + cacheWrite + outputTokens` — so it doesn't look misleading next to a large cache hit:
 
   ```
   [ 17:23:02  in 0.0K  out 0.1K  ctx 5.8K  read 5.3K  write 0.3K  cache 94%  e2e 3.3s  think medium  claude-sonnet-4-6 ]
   ```
-- **json format**: Single JSON object on stdout after completion (`text` has the same final-answer semantics as text format):
+- **json format**: Single JSON object on stdout after completion (`text` has the same final-answer semantics as text format; `notices` holds the same root system notices as an array of strings, without the `ℹ️ ` prefix):
 
 ```json
 {
   "text": "...",
+  "notices": [],
   "sessionId": "cli_abc123",
   "toolCalls": [{ "name": "file_list", "durationMs": 1 }],
   "usage": { "inputTokens": 6, "outputTokens": 42, "cacheReadInputTokens": 10000, "modelId": "..." },
@@ -154,6 +157,13 @@ TUI-only client commands (handled locally, also visible in the completion popup)
 | `/exit` | Alias for `/quit` |
 
 Bare `/<obj>` (or `/<obj> help`) lists the verbs you may run. Verbs gated above your access level are hidden.
+
+### Status bar
+
+The line under the input box:
+
+- **Left**: the agent id of the current session (`/agent switch` and `/session switch` update it) · `◯ N%` context fill (shown only after the first model response reports usage; green ≤ 50%, yellow ≤ 80%, red above) · a `v` badge while verbose is on.
+- **Right**: the workspace path (`~` for your home directory) · the last 8 characters of the session id.
 
 ### Keybindings
 

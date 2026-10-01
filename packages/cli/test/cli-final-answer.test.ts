@@ -189,4 +189,38 @@ describe('runCli final answer', () => {
     ])
     expect(stderr).toBe('')
   })
+
+  it('root system notices precede the answer; sub-agent and sibling-status ones are dropped; queued_message keeps them', async () => {
+    await run([
+      { type: 'system', text: 'Network hiccup, retrying in 2s...' },
+      { type: 'system', text: 'sub compacting', taskId: 'sub_1' },
+      { type: 'stream', text: 'turn 1', final: true },
+      { type: 'complete' },
+      { type: 'queued_message' },
+      { type: 'system', text: '[System] All sub-agents completed.', agentName: 'Default' },
+      { type: 'system', text: 'Auto-compacted 12 older messages' },
+      { type: 'stream', text: 'turn 2', final: true },
+      { type: 'complete' },
+    ])
+    expect(stdout).toBe('ℹ️ Network hiccup, retrying in 2s...\nℹ️ Auto-compacted 12 older messages\n\nturn 2\n')
+  })
+
+  it('notices still reach stdout when the turn produced no text', async () => {
+    await run([
+      { type: 'system', text: 'Compact cancelled' },
+      { type: 'complete' },
+    ])
+    expect(stdout).toBe('ℹ️ Compact cancelled\n')
+  })
+
+  it('json format carries root notices in `notices`', async () => {
+    await run([
+      { type: 'system', text: 'Network hiccup, retrying in 2s...' },
+      { type: 'stream', text: 'answer', final: true },
+      { type: 'complete' },
+    ], { format: 'json' })
+    const parsed = JSON.parse(stdout)
+    expect(parsed.text).toBe('answer')
+    expect(parsed.notices).toEqual(['Network hiccup, retrying in 2s...'])
+  })
 })
