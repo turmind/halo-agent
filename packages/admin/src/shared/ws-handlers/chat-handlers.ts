@@ -1,4 +1,5 @@
 import type { WsClient } from '../ws-client-types'
+import type { ChatMessage } from '@/shared/types'
 import { useChatStore, noteLinkDrop, takeReplaySnapshot } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { bumpSessionBus } from '@/shared/session-bus'
@@ -21,30 +22,6 @@ const CAPTURE_MARKER = /<<<CAPTURE>>>/
  *  newlines (e.g. `self.play([{...}])`). Global: a reply may carry several. */
 const SHOW_MARKER = /<<<SHOW:([\s\S]*?)>>>/g
 
-/** Ids of assistant messages we've already acted on, so the duplicate
- *  `chat:complete` events emitted when a message queue drains (server sends
- *  one per drained turn) don't fire the screenshot twice for one reply. */
-const handledCaptureMsgIds = new Set<string>()
-
-/** Keys (`${msgId}#${occurrenceIndex}`) of SHOW markers already forwarded.
- *  Unlike capture (once per turn), a single reply may carry multiple SHOW
- *  markers — each must fire exactly once, in order, and survive the duplicate
- *  `chat:complete` events from queue drain. */
-const handledShowKeys = new Set<string>()
-
-/** Both dedup sets above only ever guard the CURRENT session's replies —
- *  message ids from other sessions are never looked up again. Clearing on
- *  session switch keeps them bounded instead of growing for the tab's
- *  lifetime. Within one session they stay put: duplicate `chat:complete`s
- *  from queue drain are exactly what they exist to absorb. */
-let dedupSessionId: string | null = null
-function resetDedupOnSessionSwitch(sessionId: string | null): void {
-  if (sessionId === dedupSessionId) return
-  dedupSessionId = sessionId
-  handledCaptureMsgIds.clear()
-  handledShowKeys.clear()
-}
-
 /** The server-side event listener stays attached to the session it was
  *  created for, so after `loadSession` switches the store to another session
  *  the old turn's frames keep arriving until it completes — appended blindly
@@ -57,34 +34,30 @@ export function isForCurrentSession(msg: { sessionId?: string | null }): boolean
 }
 
 /**
- * On turn completion, forward any `<<<SHOW: …>>>` payloads in the just-finished
- * assistant reply to the live face preview, in order. Each (message, occurrence)
- * fires exactly once. Sends nothing back over WS, so it can never cause a loop.
- * If no face preview is open the post is a harmless no-op (empty registry).
+ * On turn completion, forward the `<<<SHOW: …>>>` payloads of the round's
+ * replies to the live face preview, in log order. takeRoundReplies hands each
+ * bubble out once, so every marker fires exactly once — the duplicate
+ * `chat:complete`s of a queue drain find nothing new. Sends nothing back over
+ * WS, so it can never cause a loop. If no face preview is open the post is a
+ * harmless no-op (empty registry).
  */
-function maybeHandleShow(): void {
-  const store = useChatStore.getState()
-  resetDedupOnSessionSwitch(store.sessionId)
-  const last = [...store.messages].reverse().find((m) => m.role === 'assistant' && !m.taskId)
-  if (!last) return
-  let i = 0
-  for (const m of last.content.matchAll(SHOW_MARKER)) {
-    const key = `${last.id}#${i++}`
-    if (handledShowKeys.has(key)) continue
-    handledShowKeys.add(key)
-    const payload = m[1].trim()
-    if (payload) postToFace(payload)
+function maybeHandleShow(replies: ChatMessage[]): void {
+  for (const reply of replies) {
+    for (const m of reply.content.matchAll(SHOW_MARKER)) {
+      const payload = m[1].trim()
+      if (payload) postToFace(payload)
+    }
   }
 }
 
 /**
- * On turn completion, if the just-finished assistant reply contains the
- * capture marker and a source is bound (desktop shell only), grab a frame of
- * that source and send it back as a new image message so the LLM can see it.
- * Best-effort: any failure (no bridge, window closed, grab error) sends a
- * short text note instead of an image, never throws.
+ * On turn completion, if any of the round's replies contains the capture
+ * marker and a source is bound (desktop shell only), grab a frame of that
+ * source and send it back as a new image message so the LLM can see it —
+ * once per round. Best-effort: any failure (no bridge, window closed, grab
+ * error) sends a short text note instead of an image, never throws.
  */
-async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
+async function maybeHandleCapture(wsClient: WsClient, replies: ChatMessage[]): Promise<void> {
   const store = useChatStore.getState()
   const w = window as unknown as {
     haloCapture?: { grab: (id: string) => Promise<string | null> }
@@ -95,13 +68,7 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
   const isCamera = source.kind === 'camera'
   const bridge = isCamera ? w.haloCamera : w.haloCapture
   if (!bridge) return
-
-  resetDedupOnSessionSwitch(store.sessionId)
-  // Find the most recent assistant bubble (just completed) and check its text.
-  const last = [...store.messages].reverse().find((m) => m.role === 'assistant' && !m.taskId)
-  if (!last || handledCaptureMsgIds.has(last.id)) return
-  if (!CAPTURE_MARKER.test(last.content)) return
-  handledCaptureMsgIds.add(last.id)
+  if (!replies.some((m) => CAPTURE_MARKER.test(m.content))) return
 
   const project = useProjectStore.getState().activeProject
   const sessionId = store.sessionId
@@ -209,11 +176,15 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
     wsClient.on('chat:complete', () => {
       const store = useChatStore.getState()
       store.completeAgentStreaming()
+      // Every main bubble this round produced, now settled — not just the
+      // last: an interjection split, a turnId split or a queued follow-up
+      // each leave earlier bubbles whose markers must fire too.
+      const replies = store.takeRoundReplies()
       // After the reply settles, check for a capture request marker. Fire and
       // forget — never let a capture failure break the completion handler.
-      void maybeHandleCapture(wsClient)
+      void maybeHandleCapture(wsClient, replies)
       // Also forward any face-drive markers (<<<SHOW: …>>>) to the live preview.
-      maybeHandleShow()
+      maybeHandleShow(replies)
     }),
   )
 

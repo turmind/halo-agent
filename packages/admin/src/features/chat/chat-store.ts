@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, ToolCallInfo } from '@/shared/types'
+import type { ChatMessage, ContentBlock, ToolCallInfo } from '@/shared/types'
 import { generateId } from '@/shared/utils'
 import { isMainConversationMessage, inferMessageType } from '@/shared/types'
 
@@ -124,11 +124,22 @@ function hasAdjacentDuplicateNotification(messages: ChatMessage[], key: string):
  * than a scan. The three log reset points all funnel through two actions:
  * setMessages (snapshot full replace AND reattach-replay rebuild, which is
  * `setMessages(takeReplaySnapshot(...))` in chat-handlers) rebuilds, and
- * clear() (session switch) empties. Positions never shift otherwise:
- * messages are only appended or element-replaced in place, never spliced.
+ * clear() (session switch) empties. Positions never shift otherwise —
+ * messages are appended or element-replaced in place — with one exception:
+ * placeAroundStreaming, the only reorder / split path (it mirrors the server's
+ * flushCompletedAssistantMessage), which also rebuilds.
  */
 const streamingIdx = new Map<string, number>()
 const toolUseIdIdx = new Map<string, number>()
+
+/** Log index where the live round — everything since the last
+ *  `chat:complete` — starts (see takeRoundReplies). Everything below it was
+ *  loaded wholesale or already handed out, and never moves: the one reorder
+ *  path, placeAroundStreaming, works from the root streaming bubble on, and
+ *  that bubble always postdates the cursor (complete settles every root
+ *  bubble before taking; loaded logs carry none). Reset by the same two
+ *  actions as the indexes above. */
+let roundStart = 0
 
 function taskKey(taskId?: string): string {
   return taskId ?? ''
@@ -260,6 +271,61 @@ function ensureStreamingSlot(
   return { messages: next, slotIdx: next.length - 1, copied: true }
 }
 
+/** content / toolCalls / contentBlocks of a message holding exactly `blocks` —
+ *  the three views the streaming actions keep in lockstep. */
+function fieldsFromBlocks(blocks: ContentBlock[]): Pick<ChatMessage, 'content' | 'toolCalls' | 'contentBlocks'> {
+  let content = ''
+  const toolCalls: ToolCallInfo[] = []
+  for (const b of blocks) {
+    if (b.type === 'text') content += b.text
+    else if (b.type === 'tool_call') toolCalls.push(b.toolCall)
+  }
+  return { content, toolCalls, contentBlocks: blocks }
+}
+
+/**
+ * Lay out a main user / notification row that arrives while the main bubble S
+ * streams, the way the server persists it: before logging such a row,
+ * ui-log-builder runs flushCompletedAssistantMessage — S's content up to its
+ * first pending tool_call is flushed ABOVE the row, the rest stays in the turn
+ * buffer and lands BELOW it. Returns the log the row is appended to (`prefix`)
+ * and the live bubble that follows the row (`slot`); null = plain append.
+ */
+function placeAroundStreaming(
+  messages: ChatMessage[],
+  message: ChatMessage,
+): { prefix: ChatMessage[]; slot: ChatMessage } | null {
+  if (message.role === 'assistant' || !isMainConversationMessage(message)) return null
+  const i = findStreamingIdx(messages)
+  if (i === -1) return null
+  const s = messages[i]
+  const blocks = s.contentBlocks ?? []
+  const firstPending = blocks.findIndex((b) => b.type === 'tool_call' && !b.toolCall.output)
+  const nothingCompleted = firstPending === -1 ? !blocks.some((b) => b.type === 'tool_call') : firstPending === 0
+  // Server flush is a no-op here (its streamBuffer.trim() gate) — S persists
+  // whole below the row, so carry it there.
+  if (!s.content.trim() && nothingCompleted) {
+    return { prefix: [...messages.slice(0, i), ...messages.slice(i + 1)], slot: s }
+  }
+  // Split: the completed head settles in place; the pending tail (or a fresh
+  // empty slot) keeps streaming below the row.
+  const prefix = [...messages]
+  prefix[i] = firstPending === -1
+    ? { ...s, streaming: false }
+    : { ...s, ...fieldsFromBlocks(blocks.slice(0, firstPending)), streaming: false }
+  return {
+    prefix,
+    slot: {
+      id: generateId(),
+      role: 'assistant',
+      timestamp: Date.now(),
+      streaming: true,
+      agentName: s.agentName,
+      ...fieldsFromBlocks(firstPending === -1 ? [] : blocks.slice(firstPending)),
+    },
+  }
+}
+
 interface ChatStore {
   messages: ChatMessage[]
   isStreaming: boolean
@@ -300,6 +366,12 @@ interface ChatStore {
   updateLastToolCallResult(result: string, agentName?: string, taskId?: string, toolUseId?: string): void
   completeStreaming(): void
   completeAgentStreaming(agentName?: string, taskId?: string): void
+  /** The live round's main assistant bubbles in log order, each returned
+   *  once — chat-handlers acts on their SHOW / CAPTURE markers at
+   *  `chat:complete`. A round spans several bubbles (the head an interjection
+   *  split off, a turnId split, the follow-up answering a queued message), so
+   *  scanning only the last one missed the rest. */
+  takeRoundReplies(): ChatMessage[]
   setSessionId(id: string): void
   setMessages(messages: ChatMessage[]): void
   setTokenUsage(context: number, output: number): void
@@ -366,18 +438,28 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       clientMsgId: msg.clientMsgId,
     }
     set((state) => {
+      const placed = placeAroundStreaming(state.messages, message)
       // Redelivery guard for server-pushed notifications — the only message
       // class that used to append unconditionally (see notificationKey).
+      // Scanned against the log the row actually follows, so a streaming
+      // bubble carried below it can't shield a redelivery.
       const key = notificationKey(message)
-      if (key !== null && hasAdjacentDuplicateNotification(state.messages, key)) {
+      if (key !== null && hasAdjacentDuplicateNotification(placed?.prefix ?? state.messages, key)) {
         return state
       }
       // Filter inlined into the call so prod builds (compiler.removeConsole)
       // drop the whole O(n) evaluation along with the console.debug.
       console.debug(`[ChatStore:addMessage] role=${message.role} type=${message.type ?? '-'} streaming=${!!message.streaming} taskId=${message.taskId ?? '-'} main=${state.messages.filter(isMainConversationMessage).length}+${isMainConversationMessage(message) ? 1 : 0}`)
-      indexMessage(message, state.messages.length)
+      let messages: ChatMessage[]
+      if (placed) {
+        messages = [...placed.prefix, message, placed.slot]
+        rebuildMessageIndexes(messages)
+      } else {
+        indexMessage(message, state.messages.length)
+        messages = [...state.messages, message]
+      }
       return {
-        messages: [...state.messages, message],
+        messages,
         isStreaming: (msg.streaming && !msg.taskId) ? true : state.isStreaming,
       }
     })
@@ -557,6 +639,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
   },
 
+  takeRoundReplies() {
+    const { messages } = get()
+    const replies = messages.slice(roundStart).filter((m) => m.role === 'assistant' && !m.taskId)
+    roundStart = messages.length
+    return replies
+  },
+
   setSessionId(id: string) {
     set({ sessionId: id })
   },
@@ -566,6 +655,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // indexes must be rebuilt in lockstep (snapshot restore, reattach-replay
     // rebuild, and the []-reset on session switch all land here).
     rebuildMessageIndexes(messages)
+    // A loaded log is history — its markers must never fire.
+    roundStart = messages.length
     set({ messages })
   },
 
@@ -671,6 +762,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // as the first usage event lands — the "ring only shows after I switch
     // sessions" bug.
     rebuildMessageIndexes([])
+    roundStart = 0
     set({ messages: [], isStreaming: false, pendingMessages: [], sessionId: null, contextTokens: 0, outputTokens: 0, accessLevel: 'full' })
   },
 }))

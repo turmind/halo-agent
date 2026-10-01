@@ -148,4 +148,19 @@ describe('assistant tool-call rendering across persisted formats', () => {
     ]
     expect(toolNames(render(conversation))).toEqual(['file_read', 'shell_exec', 'file_read', 'shell_exec'])
   })
+
+  it('an empty settled assistant row renders no node (no py-1 gap)', () => {
+    // Live shape after a mid-stream interjection: chat-store splits the bubble
+    // and chat:followup settles the fresh empty slot before the next turn's.
+    const empty: ChatMessage = { ...base, id: 'm3', content: '', contentBlocks: [], toolCalls: [] }
+    const container = render([
+      { id: 'u1', role: 'user', content: 'q', timestamp: 1 },
+      newFormat,
+      empty,
+      { ...base, id: 'm4', content: '', streaming: true },
+    ])
+    const rows = [...container.querySelectorAll('.px-3.py-2 > *')]
+    expect(rows).toHaveLength(2)
+    expect(rows[1].textContent).toContain('Thinking...')
+  })
 })

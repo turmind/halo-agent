@@ -27,11 +27,13 @@ The marker is **stripped from rendered chat** so the user sees only the face mov
 
 **Seeding:** `init.ts` calls `ensureWorkspaceHalo()` on workspace open, force-copying the canonical engine from `packages/server/templates/canvas/self.html` to `<workspace>/.halo/canvas/self.html`.
 
-**Runtime expression:** Agent emits `<<<SHOW: payload >>>` in a reply. On turn completion:
-1. `chat-handlers.ts:maybeHandleShow()` detects all `<<<SHOW:[\s\S]*?>>>` markers (non-greedy, global)
-2. For each match, extracts the payload (trimmed)
-3. Calls `postToFace(payload)` to forward it
-4. Deduplicates by `${msgId}#${occurrenceIndex}` so queue drains don't fire twice
+**Runtime expression:** Agent emits `<<<SHOW: payload >>>` in a reply. On `chat:complete`:
+1. `chat-handlers.ts` takes the round's replies with `takeRoundReplies()` (`chat-store.ts`) — every main assistant bubble since the previous `chat:complete`, in log order, each handed out once. A round can span several bubbles (the head an interjection split off, a turnId split, the follow-up answering a queued message), so scanning only the last bubble would miss earlier markers
+2. `maybeHandleShow(replies)` detects all `<<<SHOW:[\s\S]*?>>>` markers (non-greedy, global) in those bubbles; `maybeHandleCapture(wsClient, replies)` looks for `<<<CAPTURE>>>` in the same set
+3. For each match, extracts the payload (trimmed)
+4. Calls `postToFace(payload)` to forward it
+
+**No dedup set.** `takeRoundReplies()` advances a cursor (`roundStart`) past what it returned, so the duplicate `chat:complete`s a queue drain emits find no new bubbles and fire nothing. `setMessages` (history load, snapshot restore, reattach) and `clear()` reset the cursor to the end of the loaded log, so markers in already-loaded history never fire.
 
 **Forwarding:** `face-bridge.ts:postToFace()` posts to every registered iframe:
 ```javascript
@@ -87,7 +89,7 @@ Provided by `self.html` from line 432 onwards (`const self = {…}`). All expres
 
 - **Engine template:** `packages/server/templates/canvas/self.html` — particle field, mode switching, API surface, voice audio graph. ~630 lines. Canonical source; force-copied to every workspace on open.
 - **Skill instruction:** `packages/server/templates/skills/self/SKILL.md` — teaches the agent when/how to use the face.
-- **Marker detection:** `packages/admin/src/shared/ws-handlers/chat-handlers.ts:maybeHandleShow()` (lines 38–50) — regex match `<<<SHOW:([\s\S]*?)>>>` on turn completion, deduplicate by message ID + occurrence index.
+- **Marker detection:** `packages/admin/src/shared/ws-handlers/chat-handlers.ts:maybeHandleShow()` — regex match `<<<SHOW:([\s\S]*?)>>>` on the round's replies at `chat:complete`; the replies come from `takeRoundReplies()` in `chat-store.ts`, which hands each bubble out once.
 - **Iframe registration:** `packages/admin/src/features/editor/face-bridge.ts` — module-level registry of mounted previews; `postToFace()` forwards payloads via `postMessage`.
 - **Preview component:** `packages/admin/src/features/editor/html-preview.tsx` — sandboxed iframe with `allow-scripts` + `allow-same-origin` and `allow="autoplay"` (so `self.voice` audio, triggered by postMessage rather than a click, isn't gated), calls `registerFaceIframe()` on mount.
 - **Marker stripping:** `packages/admin/src/shared/components/message-list.tsx:TextBlock()` (line 430) — strips both `<<<CAPTURE>>>` and `<<<SHOW:...>>>` before rendering.
@@ -114,7 +116,7 @@ The marker is a **verbatim pipe** — Halo never parses or validates the payload
 - **Scope:** The code runs in a function closure with `self` as the API surface: `(new Function('self', code))(self)`
 - **Errors:** Non-greedy pattern `[\s\S]*?` handles newlines and nested `>` characters. Malformed lines silently no-op (caught in try/catch).
 - **Order:** Multiple markers in one reply are extracted in sequence and forwarded in order; scene beats queue and play sequentially
-- **Deduplication:** Each `${msgId}#${occurrenceIndex}` fires exactly once across duplicate queue-drain events
+- **Once-only:** Each marker fires exactly once — `takeRoundReplies()` hands every bubble out a single time, so duplicate queue-drain `chat:complete` events find nothing new, and markers in loaded history never fire
 - **Window:** Markers are dropped silently if no face preview is open; the registry is empty so `postToFace()` has no targets
 
 ### Trust model — why `new Function` is acceptable here

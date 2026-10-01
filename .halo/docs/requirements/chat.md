@@ -24,15 +24,15 @@ The primary surface for talking to an agent.
 - Tool-call card: expandable, shows tool name / input / output
 - Sub-agent messages carry the agent-name label (e.g. "Coder", "Researcher")
 - Streaming text has a cursor animation
-- The user bubble shows its send time (`HH:mm`, browser-local) top-right, always visible; hovering it gives the full date. Same bubble component as the Sessions tab, so both surfaces get it
+- The user bubble shows its send time (`HH:mm`, browser-local) at the bubble's bottom-right, right edge aligned with the Delete icon above it; hovering it gives the full date. Same bubble component as the Sessions tab, so both surfaces get it
 
 ### Debug toggle
 A Bug-icon **Debug** button in the composer's left control cluster (next to the session-list / new-session buttons) switches the message list into the same debug rendering as the Sessions tab — see [requirements/session.md → Debug mode](session.md#debug-mode) for what it shows (tool calls, usage lines with token counts / latency / model, sub-agent start/done markers, thinking blocks). Persists in `localStorage` under its own key `halo_chat_debug`, independent of the Sessions tab's `halo_session_debug`. No Prompt button here — the system prompt viewer stays a Sessions-tab feature.
 
-### User-message actions (Copy / Delete / Show)
-Hover actions on user-role turns: the blue sticky user bubble, plus the sub-agent-report (green) and compact-summary (purple) callouts — all three share the same Copy/Delete pair. On the callouts, Copy copies the body only (the `(from: session X)` / `[Conversation Summary…]` marker line is stripped); a deleted callout greys out and gains a "deleted" badge like the bubble does:
+### User-message actions (Expand / Copy / Delete)
+Actions on user-role turns: the blue sticky user bubble, plus the sub-agent-report (green) and compact-summary (purple) callouts — all three share the same Copy/Delete pair. The icons are **always visible** (not hover-only). On the callouts, Copy copies the body only (the `(from: session X)` / `[Conversation Summary…]` marker line is stripped); a deleted callout greys out and gains a "deleted" badge like the bubble does:
+- **Expand / Collapse** — an arrow icon (chevron-down to expand, chevron-up to collapse) to the left of Copy, on the user bubble and the report callout; it appears only when the body is actually clamped, so short bodies have no arrow. (The compact-summary callout is collapsed by default and toggles from its own header instead)
 - **Copy** — copies the prompt text to the clipboard
-- **Show more/less** — the existing clamp toggle, shown when the text overflows
 - **Delete** (confirm dialog) — removes the whole exchange (the user turn + all responses up to the next user turn) with **two-layer semantics**: the LLM context (`rawMessages`) drops the turn physically — the model never sees it again, freeing context; the UI keeps the messages, rendered greyed-out with a "deleted" tag, as an audit trail. No undo; a deleted exchange loses its Delete button. Rejected with an error toast while the agent is running or compacting. Root sessions only (sub-session logs don't offer Delete). If the turn was already compacted out of raw context, only the UI marking happens (silent degrade). Once a session has **archived history** the action is refused for the whole session with a plain explanatory notice (not an `Error:` bubble) — per-turn positions can no longer be mapped once older turns left the active file. Design details in [design/session.md](../design/session.md#exchange-deletion-soft-ui--hard-raw), protocol in [design/ws.md](../design/ws.md).
 
 ### Archived history (scroll up to load)
@@ -70,6 +70,8 @@ See [requirements/command.md](command.md) for the full command surface.
 ### Graceful interrupt
 Sending a new message while the agent is generating **does not** abort — the message goes to the server queue, the agent finishes the current turn at the next safe checkpoint (after a tool call), and then runs the queued message. Queueing multiple messages is supported; they run in order.
 
+**Live placement.** When a main user message or notification lands while the main bubble is still streaming, the live view lays it out the way the server persists it, so it matches what a reload shows. Before logging such a row the server runs `flushCompletedAssistantMessage`: the streaming content up to its first pending tool call settles **above** the row, and the rest (or a fresh empty streaming slot) continues streaming **below** it (`placeAroundStreaming` in `chat-store.ts`).
+
 ### Stop
 The Stop button hard-aborts — the server receives `chat:stop`, AbortController fires, queue clears, buffers flush.
 
@@ -95,7 +97,7 @@ Two source kinds in the chat-input toolbar, **mutually exclusive** (only one bou
 - **Screen / window share** (MonitorUp button) — opens a picker grid of screens + app windows. A bound window can be grabbed even while it sits in the background.
 - **Camera** (Camera button) — toggles the webcam on. Hidden entirely on a machine with no camera.
 
-Once bound, a frame is **not** attached to every message. Instead a one-line instruction is injected into the next send ("the user is sharing the «X» window" / "the user has turned the camera on") telling the model to output a line containing exactly `<<<CAPTURE>>>` when it needs to see the current view. On turn completion the frontend detects the marker, grabs one frame, and sends it back as a **visible image message** — the model sees it on its following turn. So it's a cross-turn round-trip: model asks → frame is sent back → model answers next turn. The returned frame is also shown inline on the user bubble so you can see exactly what was sent.
+Once bound, a frame is **not** attached to every message. Instead a one-line instruction is injected into the next send ("the user is sharing the «X» window" / "the user has turned the camera on") telling the model to output a line containing exactly `<<<CAPTURE>>>` when it needs to see the current view. On turn completion the frontend detects the marker in any of the turn's replies, grabs one frame, and sends it back as a **visible image message** — the model sees it on its following turn. So it's a cross-turn round-trip: model asks → frame is sent back → model answers next turn. The returned frame is also shown inline on the user bubble so you can see exactly what was sent.
 
 Constraints:
 - Shown only when the selected agent's model accepts image input (capture is pointless on a text-only model); switching to a text-only model auto-unbinds.

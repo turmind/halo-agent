@@ -14,7 +14,7 @@ import { useSessionArchiveStore } from '@/features/agents/session-archive-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { wsClient } from '@/shared/ws-client'
 import { useT } from '@/shared/i18n'
-import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2, AlertTriangle } from 'lucide-react'
+import { Loader2, Copy, Check, ChevronDown, ChevronUp, ChevronRight, Trash2, AlertTriangle } from 'lucide-react'
 
 /**
  * Resolve which (sessionId, projectId) a rendered message belongs to. MessageList
@@ -180,14 +180,16 @@ const ExchangeRow = memo(function ExchangeRow({
 interface ExchangeActionProps { userOrdinal: number; deleted: boolean; messageId: string; deletable: boolean }
 
 /**
- * Copy + Delete button pair, shared by the user bubble and the report/summary
- * callouts. `copyText` is the semantic body (marker / `(from: session X)`
- * prefix already stripped for the callouts). Delete sends the same
+ * Expand/Collapse (optional) + Copy + Delete button group, shared by the user
+ * bubble and the report/summary callouts. `collapse` is passed only when the
+ * body is actually clamped (see `useCollapsible`). `copyText` is the semantic
+ * body (marker / `(from: session X)` prefix already stripped for the
+ * callouts). Delete sends the same
  * `exchange:delete` ordinal protocol for all three — report/summary are
  * user-role turns without taskId, so they're counted by both the UI ordinal
  * and the server's deleteExchange loop on the same subset.
  */
-function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable }: ExchangeActionProps & { copyText: string }) {
+function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable, collapse }: ExchangeActionProps & { copyText: string; collapse?: { expanded: boolean; onToggle: () => void } }) {
   const [copied, setCopied] = useState(false)
   const canDelete = deletable && !deleted && userOrdinal >= 0
 
@@ -204,11 +206,16 @@ function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable 
 
   return (
     <>
-      <button onClick={handleCopy} title="Copy message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-[var(--background)]/40 transition-opacity">
+      {collapse && (
+        <button onClick={collapse.onToggle} title={collapse.expanded ? 'Collapse' : 'Expand'} className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--background)]/40">
+          {collapse.expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        </button>
+      )}
+      <button onClick={handleCopy} title="Copy message" className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--background)]/40">
         {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
       </button>
       {canDelete && (
-        <button onClick={handleDelete} title="Delete message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-400 transition-opacity">
+        <button onClick={handleDelete} title="Delete message" className="rounded p-1 text-[var(--muted-foreground)] hover:bg-red-900/30 hover:text-red-400">
           <Trash2 className="h-3 w-3" />
         </button>
       )}
@@ -234,21 +241,22 @@ function parseSubAgentReport(content: string): { sessionId: string; body: string
 function SubAgentReport({ content, ...actionProps }: ExchangeActionProps & { content: string }) {
   const parsed = parseSubAgentReport(content)!
   const shortId = parsed.sessionId.split('>').pop() ?? parsed.sessionId
+  const { contentRef, clamped, expanded, toggle, contentStyle } = useCollapsible(4)
   return (
-    <div className="group sticky top-0 z-10 px-3 py-2 border-b border-[var(--border)] border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
+    <div className="sticky top-0 z-10 px-3 py-2 border-b border-[var(--border)] border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
       <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
-        <ExchangeActions copyText={parsed.body} {...actionProps} />
+        <ExchangeActions copyText={parsed.body} collapse={clamped ? { expanded, onToggle: toggle } : undefined} {...actionProps} />
       </div>
-      <div className="mb-1 flex items-center gap-2 pr-14 text-[10px] font-medium text-emerald-400">
+      <div className="mb-1 flex items-center gap-2 pr-16 text-[10px] font-medium text-emerald-400">
         <span>Report from sub-session</span>
         <span className="rounded bg-emerald-900/40 px-1 py-0.5 font-mono text-emerald-300/80">{shortId}</span>
         {actionProps.deleted && <span className={DELETED_BADGE_CLS}>deleted</span>}
       </div>
-      <CollapsibleContent maxLines={4}>
+      <div ref={contentRef} style={contentStyle}>
         <div className="text-xs text-[var(--foreground)] whitespace-pre-wrap leading-relaxed">
           {parsed.body}
         </div>
-      </CollapsibleContent>
+      </div>
     </div>
   )
 }
@@ -280,7 +288,7 @@ function CompactSummary({ content, ...actionProps }: ExchangeActionProps & { con
   // invalid HTML) — sibling overlay also means their clicks never reach the
   // expand/collapse handler.
   return (
-    <div className="group sticky top-0 z-10 border-l-2 border-l-purple-500/70 bg-purple-950/40 backdrop-blur-sm shadow-sm">
+    <div className="sticky top-0 z-10 border-l-2 border-l-purple-500/70 bg-purple-950/40 backdrop-blur-sm shadow-sm">
       <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
         <ExchangeActions copyText={parsed.body} {...actionProps} />
       </div>
@@ -519,6 +527,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
     }
   }
 
+  if (elements.length === 0) return null
   return <div className="py-1">{elements}</div>
 }
 
@@ -555,8 +564,9 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
   const tr = useT()
   const { text, media } = useMemo(() => parseMediaMarkers(content), [content])
   const [zoom, setZoom] = useState<string | null>(null)
-  // Send time, browser-local HH:mm; full date on hover. Always visible — unlike
-  // the hover-only Copy / Delete actions beside it.
+  const { contentRef, clamped, expanded, toggle, contentStyle } = useCollapsible(2)
+  // Send time, browser-local HH:mm; full date on hover. Sits bottom-right of
+  // the bubble, right edge aligned with the Delete icon above it.
   const sent = new Date(timestamp)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
 
@@ -564,11 +574,8 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
     <>
       {/* accent bg/fg: on dark these resolve to the old slate-800 bg and a
           near-identical slate fg; on other themes they follow the palette */}
-      <div className={cn('group sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted || sendFailed ? 'border-l-red-500/60' : 'border-l-blue-500')}>
+      <div className={cn('sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted || sendFailed ? 'border-l-red-500/60' : 'border-l-blue-500')}>
         <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
-          <span className="mr-1 text-[10px] font-mono text-[var(--muted-foreground)] opacity-70" title={sent.toLocaleString()}>
-            {pad2(sent.getHours())}:{pad2(sent.getMinutes())}
-          </span>
           {deleted && <span className={cn('mr-1', DELETED_BADGE_CLS)}>deleted</span>}
           {/* Ack/resend gave up — the server never confirmed this message
               (zombie-socket loss). Make the failure visible on the bubble
@@ -578,13 +585,18 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
               <AlertTriangle className="h-2.5 w-2.5" />{tr('chat.sendFailedBadge')}
             </span>
           )}
-          <ExchangeActions copyText={text} userOrdinal={userOrdinal} deleted={deleted} messageId={messageId} deletable={deletable} />
+          <ExchangeActions copyText={text} userOrdinal={userOrdinal} deleted={deleted} messageId={messageId} deletable={deletable} collapse={clamped ? { expanded, onToggle: toggle } : undefined} />
         </div>
-        <CollapsibleContent maxLines={2} toggleClassName="top-auto bottom-0">
-          <div className={cn('text-xs leading-relaxed whitespace-pre-wrap pr-24', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
+        <div ref={contentRef} style={contentStyle}>
+          <div className={cn('text-xs leading-relaxed whitespace-pre-wrap', deleted || sendFailed ? 'pr-32' : 'pr-14', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
             {text || (media.length > 0 || localImages?.length ? '(attachment)' : '')}
           </div>
-        </CollapsibleContent>
+        </div>
+        {/* -mr-1.5: bubble padding is px-4 (16px) but the Delete icon's right
+            edge sits 10px in (right-1.5 + p-1) */}
+        <div className="-mr-1.5 mt-0.5 text-right text-[10px] font-mono leading-none text-[var(--muted-foreground)] opacity-70" title={sent.toLocaleString()}>
+          {pad2(sent.getHours())}:{pad2(sent.getMinutes())}
+        </div>
       </div>
       {/* Client-only inline previews (e.g. desktop screen captures) — render
           straight from the data URL, click to zoom. */}
@@ -881,7 +893,12 @@ function InlineToolCall({ call, isStreaming, isLast }: { call: ToolCallInfo; isS
 
 // ─── Utility components ───
 
-function CollapsibleContent({ children, maxLines = 2, className, toggleClassName }: { children: React.ReactNode; maxLines?: number; className?: string; toggleClassName?: string }) {
+/**
+ * Clamp-to-N-lines behaviour for a long body. The caller attaches `contentRef` /
+ * `contentStyle` to the body wrapper and renders the toggle itself (the arrow in
+ * `ExchangeActions`), only when `clamped` — short bodies get no toggle.
+ */
+function useCollapsible(maxLines: number) {
   const contentRef = useRef<HTMLDivElement>(null)
   const [clamped, setClamped] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -893,7 +910,7 @@ function CollapsibleContent({ children, maxLines = 2, className, toggleClassName
   // another tab, so the panel is hidden at mount. A `display:none` element
   // reports `scrollHeight === 0`, so a one-shot measure read 0, decided "not
   // overflowing", and — because ExchangeRow is memoized and the report
-  // content never changes again — never re-measured: the Show more button
+  // content never changes again — never re-measured: the expand arrow
   // never appeared and long reports rendered fully expanded. A
   // ResizeObserver re-fires when the panel becomes visible (0 → real
   // height), so the measure self-corrects.
@@ -916,18 +933,13 @@ function CollapsibleContent({ children, maxLines = 2, className, toggleClassName
     return () => ro.disconnect()
   }, [maxLines])
 
-  return (
-    <div className={cn('relative', className)}>
-      {clamped && (
-        <button onClick={() => setExpanded(!expanded)} className={cn('absolute top-0 right-0 text-[11px] text-[var(--primary)] hover:underline z-10', toggleClassName)}>
-          {expanded ? 'Show less' : 'Show more'}
-        </button>
-      )}
-      <div ref={contentRef} style={!expanded && clamped ? { maxHeight: `${maxLines * 20}px`, overflow: 'hidden' } : undefined}>
-        {children}
-      </div>
-    </div>
-  )
+  return {
+    contentRef,
+    clamped,
+    expanded,
+    toggle: () => setExpanded((v) => !v),
+    contentStyle: !expanded && clamped ? { maxHeight: `${maxLines * 20}px`, overflow: 'hidden' } as const : undefined,
+  }
 }
 
 function ChatCodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
