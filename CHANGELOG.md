@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.1-alpha] - 2026-10-01
+
+### Changed
+
+- Agents: the per-model-call timeout is now a 10-minute idle timeout (was 30 minutes), and every streaming provider re-arms it on any data the stream delivers — pings, tool-argument fragments, empty reasoning chunks, SSE comment frames — so a long but live stream is never cut off while a dead connection fails three times sooner.
+- Agents: auto-compact has no overall time limit any more (the `general.compact.summarize_timeout_sec` setting is removed; only the model idle timeout bounds it) and can't be interrupted — Stop / Esc during it take effect once it finishes. When the LLM summary fails, Halo compacts locally right away instead of retrying and says so (`Auto-compacted N older messages (local fallback — LLM summary failed: …)`).
+- Admin: on the user bubble and the sub-agent report callout, Show more / less is an expand / collapse arrow left of Copy (only when the body is clipped), the Copy / Delete icons are always visible, and the send time sits at the bubble's bottom-right.
+- CLI: the TUI status bar shows the session's agent id instead of the model name; its first slot used to read a fixed `agent`. The model still shows in verbose mode's per-turn usage line, the Ctrl+O log viewer and `/session context`.
+
+### Fixed
+
+- Agents: a session whose auto-compact kept failing retried it on every model call, minutes each, and looked frozen with Stop and new messages ignored — the local fallback above ends that.
+- Agents: stopping a manual `/compact` reported `Compaction failed` instead of `Compact cancelled`, and `POST /api/web/stop` / the channel `/stop` and `/interrupt` couldn't cancel a manual compact at all (they answered "not running").
+- Agents: relay interim reports — a local user's reply in a root that still owed a relay report could be forwarded to the caller, and a target waiting on its own sub-agents lost the answer to a follow-up `relay_send`.
+- Agents: an account error (401 / 402 / 403, bad key, no balance) in a relay / sub-agent / goal report now says to fix the model configuration instead of suggesting a re-dispatch that fails the same way.
+- Admin: a message or notice that arrived while a reply was streaming was laid out differently live than after a reload; the live view now matches the saved log, and `<<<SHOW>>>` / `<<<CAPTURE>>>` markers fire for every reply of the round, not only the last.
+- Admin: after an auto-compact fell back to the local compact, the compacting ring stayed on and new messages kept queueing.
+- Admin: a sub-session's in-progress content is saved to its own log on the same rules as a root's, so its detail view no longer loses it on reload, and pending UI logs are flushed on shutdown.
+- Editor: after a reload, a restored tab for a file only an extension previews (`.glb`) opened as text.
+- Server / Desktop: a graceful shutdown releases the workspace `.halo/runtime.lock`; the desktop app's quit waits for the server process to exit (3 s cap), so a stuck server is killed instead of left holding the port.
+
 ## [1.5.0-alpha] - 2026-09-30
 
 ### Added
@@ -650,7 +671,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.1-alpha...HEAD
+[1.5.1-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha...v1.5.1-alpha
 [1.5.0-alpha]: https://github.com/turmind/halo-agent/compare/v1.4.6...v1.5.0-alpha
 [1.4.1]: https://github.com/turmind/halo-agent/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/turmind/halo-agent/compare/v1.3.4...v1.4.0
