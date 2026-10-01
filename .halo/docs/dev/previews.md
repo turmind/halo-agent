@@ -11,7 +11,7 @@ previews/
 ├── FilePreview.tsx           Public entry. Looks up plugin by extension,
 │                             renders <Suspense><Component/></Suspense>.
 ├── types.ts                  PreviewPlugin, PreviewProps
-├── registry.ts               register() / getPlugin() / registeredExtensions() / isHeavyPreview()
+├── registry.ts               register() / getPlugin() / registeredExtensions() / isHeavyPreview() / loadExtensions()
 ├── ui/
 │   ├── preview-shell.tsx     Standard header (filename + Open-as-Text + Download + extraToolbar)
 │   ├── use-preview-fetch.ts  Hook: fetch + AbortController + parse, returns {data, error, loading}
@@ -122,6 +122,14 @@ register(fooPlugin)
 Done. The Canvas panel will:
 - Treat `.foo` / `.foobar` as non-text (routes to preview instead of Monaco)
 - Mount `FooPreview` inside an MRU cache (up to 5 concurrent plugins cached)
+
+### Routing API: `canPreview()` vs `loadExtensions()`
+
+`canPreview(ext)` is a live read of the registry (built-ins + installed extensions), so it is only as good as the extension list loaded so far. `loadExtensions()` (re-exported from `FilePreview.tsx`) is the page's single shared initial `GET /extensions` — `workspace-layout.tsx` starts it in parallel with the workspace resolve.
+
+- **One-shot routing decisions** (`isBinaryExtension` in `editor-panel.tsx`: click-open, tab restore after reload, open-to-side) must `await loadExtensions()` before concluding "text", because an extension may claim an extension-only type (`.glb`) or a text suffix (`.json`). A preview verdict needs no wait — extensions only add viewers ahead of text, and `FilePreview` re-picks the viewer on a registry version bump.
+- The wait is capped at `INITIAL_LOAD_WAIT_MS` (3 s, `registry.ts`), counted from the first call; on timeout callers proceed as if nothing were installed. The request isn't cancelled — a late result still lands via `setExtensions`.
+- It never rejects and is never re-issued: a failed fetch leaves the extension layer empty without delaying later opens. The WS-reconnect re-fetch and `extension:changed` frames fill it in.
 
 ## PreviewShell — the standard header
 

@@ -1,12 +1,14 @@
 import { useSyncExternalStore } from 'react'
 import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import { api } from '@/shared/api-client'
 import type { PreviewPlugin, Resolved } from './types'
 
 /**
  * Two layers behind one lookup:
  *   - built-in plugins, registered at module load by `plugins/index.ts`
- *   - runtime extensions, the server's `ExtensionsSnapshot` (initial GET +
- *     every `extension:changed` WS frame — see ws-handlers/state-handlers)
+ *   - runtime extensions, the server's `ExtensionsSnapshot` (initial GET via
+ *     `loadExtensions()` + every `extension:changed` WS frame — see
+ *     ws-handlers/state-handlers)
  * `resolve(ext)` merges them into the ordered candidate list the editor picks
  * from; the version counter lets render-time consumers re-run when either
  * layer changes.
@@ -43,6 +45,40 @@ export function register(plugin: PreviewPlugin): void {
 export function setExtensions(next: ExtensionsSnapshot): void {
   snapshot = next
   bump()
+}
+
+/** Longest a caller waits for the initial list before routing without it. */
+const INITIAL_LOAD_WAIT_MS = 3_000
+let initialLoad: Promise<void> | null = null
+
+/**
+ * The page's initial `GET /extensions`, one request shared by every caller.
+ * Until it lands the extension layer is indistinguishable from "nothing
+ * installed", so a one-shot routing decision (tab restore after a reload)
+ * must await this or a type only an extension handles (`.glb`) resolves to
+ * text. Never rejects and is never re-issued: a failed fetch leaves the layer
+ * empty (pre-extension routing) so callers proceed without re-delaying later
+ * opens; the WS reconnect re-fetch and `extension:changed` frames fill it.
+ * The wait is capped at INITIAL_LOAD_WAIT_MS, counted from the first call —
+ * a request hung on a dead connection (sleep / wake) would otherwise block
+ * every open. Past the cap callers proceed as if nothing were installed, so
+ * an extension-only type (`.glb`) opens as text; the request is not
+ * cancelled, and a late list still lands via `setExtensions` (bump).
+ */
+export function loadExtensions(): Promise<void> {
+  if (!initialLoad) {
+    const listed = api.extensions.list().then(setExtensions).catch((err) => {
+      console.error('[PreviewRegistry] Failed to load extensions:', err)
+    })
+    initialLoad = Promise.race([listed, new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        console.warn(`[PreviewRegistry] Extension list not back after ${INITIAL_LOAD_WAIT_MS}ms, opening files without it`)
+        resolve()
+      }, INITIAL_LOAD_WAIT_MS)
+      void listed.finally(() => clearTimeout(timer))
+    })])
+  }
+  return initialLoad
 }
 
 export function getExtensionsSnapshot(): ExtensionsSnapshot {

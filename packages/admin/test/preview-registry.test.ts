@@ -1,9 +1,22 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import type { ExtensionInfo } from '@turmind/halo-core/protocol'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createElement, act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import {
   register, setExtensions, resolve, resolvedKey, canPreview, isHeavyPreview, getVersion, subscribe,
 } from '../src/features/editor/previews/registry'
 import type { PreviewPlugin } from '../src/features/editor/previews/types'
+
+// EditorPanel (bottom describe) subscribes to the wsClient singleton; an inert
+// fake keeps the mount off the network. Registry cases never touch it.
+vi.mock('@/shared/ws-client', () => ({ wsClient: { connected: false, on: () => () => {} } }))
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+// jsdom has no ResizeObserver; the editor-only mount's TabBar observes its strip.
+;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
 
 /**
  * Contract: `resolve(ext)` orders candidates default-extensions (newest
@@ -24,6 +37,14 @@ function ext(id: string, over: Partial<ExtensionInfo> = {}): ExtensionInfo {
 }
 
 const keys = (e: string) => resolve(e).map(resolvedKey)
+
+/** Registry state (`initialLoad`, snapshot) is module-level: fresh copies per case. */
+async function freshModules() {
+  vi.resetModules()
+  const { api } = await import('../src/shared/api-client')
+  const registry = await import('../src/features/editor/previews/registry')
+  return { api, registry }
+}
 
 beforeEach(() => {
   setExtensions({ extensions: [], errors: [] })
@@ -110,5 +131,209 @@ describe('version signal', () => {
     unsub()
     setExtensions({ extensions: [], errors: [] })
     expect(calls).toBe(1)
+  })
+})
+
+/**
+ * Contract: `loadExtensions()` is the page's one initial GET — concurrent
+ * callers share it, and it settles only once the snapshot is in the registry,
+ * so a caller that awaits it (the editor's tab restore after a reload) sees
+ * an extension-only type as previewable. A failed GET still resolves and is
+ * not re-issued. The wait is capped at 3s: a hung GET releases callers
+ * without the list, and a late answer still lands. Module-level state, so
+ * each case gets a fresh module.
+ */
+describe('loadExtensions', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('shares one request and settles only after the snapshot is applied', async () => {
+    const { api, registry } = await freshModules()
+    let respond!: (s: ExtensionsSnapshot) => void
+    const spy = vi.spyOn(api.extensions, 'list').mockReturnValue(new Promise((r) => { respond = r }))
+
+    let settled = false
+    const first = registry.loadExtensions().then(() => { settled = true })
+    const second = registry.loadExtensions()
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(registry.canPreview('glb')).toBe(false) // list in flight ≡ "nothing installed"
+
+    respond({ extensions: [ext('glb', { priority: 'default' })], errors: [] })
+    await Promise.all([first, second])
+    expect(registry.canPreview('glb')).toBe(true)
+    expect(spy).toHaveBeenCalledTimes(1)
+    await registry.loadExtensions()
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed list still resolves, leaves the layer empty, and is not re-issued', async () => {
+    const { api, registry } = await freshModules()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const spy = vi.spyOn(api.extensions, 'list').mockRejectedValue(new Error('API error 502'))
+
+    await expect(registry.loadExtensions()).resolves.toBeUndefined()
+    expect(registry.canPreview('glb')).toBe(false)
+    await registry.loadExtensions()
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a list that never returns releases callers after 3s; a late list still lands', async () => {
+    const { api, registry } = await freshModules()
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let respond!: (s: ExtensionsSnapshot) => void
+    const spy = vi.spyOn(api.extensions, 'list').mockReturnValue(new Promise((r) => { respond = r }))
+
+    let settled = false
+    const load = registry.loadExtensions().then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(2_999)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    await load
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[PreviewRegistry]'))
+    expect(registry.canPreview('glb')).toBe(false) // callers route without the list
+    await registry.loadExtensions() // no second wait, no second request
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    const before = registry.getVersion()
+    respond({ extensions: [ext('glb', { priority: 'default' })], errors: [] })
+    await vi.waitFor(() => expect(registry.canPreview('glb')).toBe(true))
+    expect(registry.getVersion()).toBe(before + 1)
+  })
+
+  it('a list back within 3s settles with it and clears the cap timer', async () => {
+    const { api, registry } = await freshModules()
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let respond!: (s: ExtensionsSnapshot) => void
+    vi.spyOn(api.extensions, 'list').mockReturnValue(new Promise((r) => { respond = r }))
+
+    const load = registry.loadExtensions()
+    await vi.advanceTimersByTimeAsync(1_000)
+    respond({ extensions: [ext('glb', { priority: 'default' })], errors: [] })
+    await load
+    expect(registry.canPreview('glb')).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Contract: the editor's one-shot preview-vs-text routing (tab restore after
+ * a reload, tree open) waits for the extension list only when nothing claims
+ * the type yet — a built-in type (`.png`) opens as a preview while
+ * `GET /extensions` is still in flight, and an extension-only type (`.glb`)
+ * waits for the list instead of being read as text. The list stays pending
+ * well under the 3s cap here. When a list that lands later hands an open,
+ * cached built-in preview to a read-only default extension (the tab turns
+ * heavy), the file still mounts once.
+ */
+describe('EditorPanel routing while the extension list is in flight', () => {
+  const PROJECT = '/ws/preview-routing'
+  const glbExt = ext('glb', { priority: 'default' })
+  let container: HTMLDivElement
+  let root: Root | undefined
+
+  afterEach(() => {
+    act(() => root?.unmount())
+    container?.remove()
+    localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  async function mountPanel(mode: 'tree-only' | 'editor-only' = 'tree-only') {
+    const { api, registry } = await freshModules()
+    let respond!: (s: ExtensionsSnapshot) => void
+    vi.spyOn(api.extensions, 'list').mockReturnValue(new Promise((r) => { respond = r }))
+    vi.spyOn(api.extensions, 'token').mockResolvedValue({ token: 'tok', expiresAt: Date.now() + 3_600_000 })
+    vi.spyOn(api.files, 'tree').mockResolvedValue({
+      projectId: PROJECT, root: 'preview-routing', path: '',
+      tree: [{ name: 'a.png', path: 'a.png', type: 'file' }, { name: 'b.glb', path: 'b.glb', type: 'file' }],
+    })
+    const stat = vi.spyOn(api.files, 'stat').mockResolvedValue({ path: '', modifiedAt: 1, createdAt: 1, size: 1 })
+    const read = vi.spyOn(api.files, 'read').mockResolvedValue({ content: 'binary as text', path: '', size: 14, modifiedAt: 1, createdAt: 1 })
+    const { EditorPanel } = await import('../src/features/editor/editor-panel')
+    const { useEditorStore } = await import('../src/shared/stores/editor-store')
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    const mounted = createRoot(container)
+    root = mounted
+    // Sync act commits the mount (async act only flushes on exit); the tree
+    // load then settles inside act, so its state updates don't warn.
+    act(() => mounted.render(createElement(EditorPanel, { projectId: PROJECT, mode })))
+    await act(async () => {
+      await vi.waitFor(() => expect(useEditorStore.getState().fileTree).toBeTruthy())
+    })
+    return { respond, stat, read, registry, useEditorStore, buffers: () => useEditorStore.getState().buffers }
+  }
+
+  it('tab restore: .png is fetched as a preview at once, .glb waits for the list', async () => {
+    localStorage.setItem(`halo_tabs:${PROJECT}`, JSON.stringify({
+      groups: [{ tabs: [{ path: 'a.png', isPreview: true }, { path: 'b.glb', isPreview: true }], activeTab: 'b.glb' }],
+      activeGroupIdx: 0,
+    }))
+    const { respond, stat, read, buffers } = await mountPanel()
+
+    await act(async () => {
+      await vi.waitFor(() => expect(stat).toHaveBeenCalledWith('a.png', PROJECT))
+    })
+    expect(stat).not.toHaveBeenCalledWith('b.glb', PROJECT)
+    expect(read).not.toHaveBeenCalled()
+
+    await act(async () => {
+      respond({ extensions: [glbExt], errors: [] })
+      await vi.waitFor(() => expect(buffers()['b.glb']?.preview).toBeTruthy())
+    })
+    expect(buffers()['a.png']?.preview).toBeTruthy()
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('tree open: .png opens as a preview at once, .glb waits for the list', async () => {
+    const { respond, read, buffers } = await mountPanel()
+    expect(container.querySelector('[data-path="b.glb"]')).toBeTruthy()
+
+    const open = (path: string) => container.querySelector(`[data-path="${path}"]`)!
+      .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    await act(async () => {
+      open('b.glb')
+      open('a.png')
+      await vi.waitFor(() => expect(buffers()['a.png']?.preview).toBeTruthy())
+    })
+    expect(buffers()['b.glb']).toBeUndefined()
+    expect(read).not.toHaveBeenCalled()
+
+    await act(async () => {
+      respond({ extensions: [glbExt], errors: [] })
+      await vi.waitFor(() => expect(buffers()['b.glb']?.preview).toBeTruthy())
+    })
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('a cached built-in preview taken over by a read-only default extension mounts once', async () => {
+    const { registry, useEditorStore } = await mountPanel('editor-only')
+
+    // Active built-in media preview → the MRU cache holds a.png. The second
+    // act stays open until the lazy media view has loaded, so it renders in act.
+    act(() => useEditorStore.getState().openPreview('a.png', '/dl', '/view'))
+    await act(async () => {
+      await import('../src/features/editor/previews/plugins/media-view')
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(container.querySelector('img[alt="a.png"]')).toBeTruthy()
+
+    // The list lands with a read-only default viewer for .png: the open tab
+    // turns heavy while its path is still in the MRU cache.
+    await act(async () => {
+      registry.setExtensions({ extensions: [ext('png-viewer', { priority: 'default', extensions: ['.png'] })], errors: [] })
+    })
+    const frames = container.querySelectorAll('iframe')
+    expect(frames).toHaveLength(1)
+    expect(frames[0].closest('.hidden')).toBeNull()
+    expect(container.querySelector('img[alt="a.png"]')).toBeNull()
   })
 })

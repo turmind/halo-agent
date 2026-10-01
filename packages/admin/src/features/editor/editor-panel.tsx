@@ -10,7 +10,7 @@ import { MarkdownPreview } from './markdown-preview'
 import { HtmlPreview } from './html-preview'
 import { DiffViewer } from './diff-viewer'
 import { TabBar } from './tab-bar'
-import { FilePreview, canPreview, isHeavyPreview, useRegistryVersion } from './previews/FilePreview'
+import { FilePreview, canPreview, isHeavyPreview, loadExtensions, useRegistryVersion } from './previews/FilePreview'
 import { getExtensionHost } from './previews/extension-host-logic'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
@@ -67,10 +67,18 @@ const NON_TEXT_FALLBACKS = new Set<string>([
   'exe', 'dll', 'so', 'dylib', 'o', 'a', 'class', 'pyc', 'wasm',
 ])
 /** Live read of the registry (not a module-level snapshot) so plugins that
- *  register after this module loaded still route to preview. Only called from
- *  event handlers / effects, so no render-time subscription is needed here. */
-function isBinaryExtension(ext: string): boolean {
-  return NON_TEXT_FALLBACKS.has(ext) || canPreview(ext)
+ *  register after this module loaded still route to preview. A one-shot
+ *  decision (click / tab restore / open-to-side). A preview verdict needs no
+ *  extension list: extensions only add viewers ahead of text (`resolve()`
+ *  keeps text last), and FilePreview re-picks the viewer when the list lands.
+ *  A text verdict waits for the initial list (capped — see loadExtensions):
+ *  an extension may claim an extension-only type (`.glb`) or a text suffix
+ *  (`.json`), and a wrong text verdict opens — and, on restore, persists —
+ *  the file as text. */
+async function isBinaryExtension(ext: string): Promise<boolean> {
+  if (NON_TEXT_FALLBACKS.has(ext) || canPreview(ext)) return true
+  await loadExtensions()
+  return canPreview(ext)
 }
 
 interface EditorPanelProps {
@@ -249,7 +257,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         const fetched = await Promise.all(
           allPaths.map(async (path) => {
             const ext = path.split('.').pop()?.toLowerCase() ?? ''
-            const isPreview = isBinaryExtension(ext)
+            const isPreview = await isBinaryExtension(ext)
             if (isPreview) {
               try {
                 const stat = await api.files.stat(path, projectId!)
@@ -406,7 +414,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       if (!projectId) return
 
       const ext = path.split('.').pop()?.toLowerCase() ?? ''
-      if (isBinaryExtension(ext)) {
+      if (await isBinaryExtension(ext)) {
         // Known binary/media file → open as preview tab
         const downloadUrl = api.files.downloadUrl(path, projectId)
         const viewUrl = api.files.viewUrl(path, projectId)
@@ -615,7 +623,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         if (action.isDir) return
         try {
           const ext = action.path.split('.').pop()?.toLowerCase() ?? ''
-          const isPreview = isBinaryExtension(ext)
+          const isPreview = await isBinaryExtension(ext)
           const state = useEditorStore.getState()
           const onlyOnePane = state.groups.length === 1
           if (onlyOnePane) state.splitToRight(state.groups[0].activeTab ?? action.path)
@@ -1121,7 +1129,11 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                             />
                           </div>
                         ))}
-                      {paneFile?.preview && isHeavyPath(paneFile.path) && (
+                      {/* A path already in the MRU cache keeps that one mount even if it
+                          turned heavy under the open tab (registry changed): mounting it here
+                          too would double it, and moving it would drop a dirty extension
+                          that FilePreview keeps alive after uninstall. It ages out of the cache. */}
+                      {paneFile?.preview && isHeavyPath(paneFile.path) && !mountedPreviews.includes(paneFile.path) && (
                         <div className="h-full">
                           <FilePreview
                             path={paneFile.path}
