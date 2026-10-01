@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.2-alpha] - 2026-10-01
+
+### Changed
+
+- Prompts: the root `DELEGATION.md` adds two rules. If the cause, the files and the pattern to copy are already settled, do the fix yourself instead of delegating, because a complete brief would restate the whole fix. And state what the conversation has already established as facts in the brief instead of leaving open branches ("if you find X, pick the simplest"), which hand the worker an investigation. 1.5.1-alpha carries the rest of this round's changes; this release also ships the Windows installer, which 1.5.1-alpha does not have.
+
 ## [1.5.1-alpha] - 2026-10-01
 
 ### Changed
@@ -671,7 +677,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.1-alpha...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.2-alpha...HEAD
+[1.5.2-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.1-alpha...v1.5.2-alpha
 [1.5.1-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha...v1.5.1-alpha
 [1.5.0-alpha]: https://github.com/turmind/halo-agent/compare/v1.4.6...v1.5.0-alpha
 [1.4.1]: https://github.com/turmind/halo-agent/compare/v1.4.0...v1.4.1
