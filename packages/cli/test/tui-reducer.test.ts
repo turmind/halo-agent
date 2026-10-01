@@ -33,7 +33,6 @@ describe('plain actions', () => {
       expect(next.running).toBe(base.running)
       expect(next.spinnerLabel).toBe(base.spinnerLabel)
       expect(next.verbose).toBe(base.verbose)
-      expect(next.modelId).toBe(base.modelId)
       expect(next.contextTokens).toBe(base.contextTokens)
     }
   })
@@ -73,10 +72,8 @@ describe('plain actions', () => {
       liveThinking: 'still thinking',
       spinnerLabel: 'thinking',
       running: true,
-      modelId: 'claude-x',
       contextTokens: 1234,
       agentNameByTaskId: new Map([['t1', 'Executor']]),
-      rootAgentName: 'Orchestrator',
       subAgents: new Map([['t1', { taskId: 't1', agentName: 'Executor', toolCount: 1, startedAt: 100, currentTool: 'grep' }]]),
       verbose: false,
       pendingToolInput: '{"a":1}',
@@ -92,7 +89,6 @@ describe('plain actions', () => {
     expect(next.liveThinking).toBeNull()
     expect(next.spinnerLabel).toBeNull()
     expect(next.running).toBe(false)
-    expect(next.modelId).toBeNull()
     expect(next.contextTokens).toBeNull()
     expect(next.agentNameByTaskId.size).toBe(0)
     expect(next.subAgents.size).toBe(0)
@@ -117,13 +113,6 @@ describe('root events (no taskId)', () => {
   it('thinking events are ignored — same state object', () => {
     const state = initialState(false)
     expect(reducer(state, ev({ type: 'thinking', text: 'reasoning...' }))).toBe(state)
-  })
-
-  it('agent_start with agentName and no taskId updates rootAgentName without appending a block', () => {
-    const state = initialState(false)
-    const next = reducer(state, ev({ type: 'agent_start', agentName: 'Orchestrator' }))
-    expect(next.rootAgentName).toBe('Orchestrator')
-    expect(next.blocks).toHaveLength(0)
   })
 
   it('tool_call (non-verbose, file_read) sets spinnerLabel/pendingToolArg/pendingToolName but not pendingToolInput', () => {
@@ -203,7 +192,7 @@ describe('root events (no taskId)', () => {
     expect(capped20.blocks[0].toolResult).toContain('… (+5 lines)')
   })
 
-  it('usage root commits liveText to an assistant block, updates modelId/contextTokens, and gates the usage block on verbose', () => {
+  it('usage root commits liveText to an assistant block, updates contextTokens, and gates the usage block on verbose', () => {
     let state = initialState(false)
     state = reducer(state, ev({ type: 'stream', text: 'hello **world**' }))
     const usageEvent: AgentSessionEvent = {
@@ -217,7 +206,6 @@ describe('root events (no taskId)', () => {
     expect(plain).toContain('hello')
     expect(plain).toContain('world')
     expect(nonVerbose.liveText).toBe('')
-    expect(nonVerbose.modelId).toBe('claude-x')
     expect(nonVerbose.contextTokens).toBe(100 + 50 + 10 + 5)
     expect(nonVerbose.blocks.some((b) => b.kind === 'usage')).toBe(false)
 

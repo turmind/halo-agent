@@ -45,6 +45,7 @@ function stubHarness(): Stub {
   const harness = {
     sessionId: 'cli_root',
     workspace: os.tmpdir(),
+    agentId: 'dev',
     lang: 'en',
     supportsImage: false,
     run: async function* () { /* unused */ },

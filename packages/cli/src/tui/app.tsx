@@ -42,14 +42,10 @@ export interface State {
   spinnerLabel: string | null
   /** Whether a turn is currently running — disables input. */
   running: boolean
-  /** Last observed model id (for status bar). */
-  modelId: string | null
   /** Last observed context-token snapshot. */
   contextTokens: number | null
   /** taskId → agent display name, learned from agent_start events. */
   agentNameByTaskId: Map<string, string>
-  /** Latest top-level agent name for status bar. */
-  rootAgentName: string
   /** Active sub-agents keyed by taskId — tracks tool count + current tool for live display. */
   subAgents: Map<string, SubAgentStats>
   /** Verbose mode. Seeded from `halo tui -v`, toggled at runtime with
@@ -90,10 +86,8 @@ export function initialState(verbose: boolean): State {
     liveThinking: null,
     spinnerLabel: null,
     running: false,
-    modelId: null,
     contextTokens: null,
     agentNameByTaskId: new Map(),
-    rootAgentName: 'agent',
     subAgents: new Map(),
     verbose,
     pendingToolInput: null,
@@ -363,7 +357,7 @@ export function reducer(state: State, action: Action): State {
       // already-committed blocks in <Static> (it's append-only — clearing
       // would leave the rendered terminal scrollback orphaned anyway).
       // We do reset live state + per-turn snapshots so the new workspace
-      // doesn't inherit stale model/context info in the status bar.
+      // doesn't inherit stale context info in the status bar.
       return {
         ...state,
         blocks: [...state.blocks, { id: nextId(), kind: 'system', text: `── ${action.text} ──` }],
@@ -371,10 +365,8 @@ export function reducer(state: State, action: Action): State {
         liveThinking: null,
         spinnerLabel: null,
         running: false,
-        modelId: null,
         contextTokens: null,
         agentNameByTaskId: new Map(),
-        rootAgentName: 'agent',
         subAgents: new Map(),
         pendingToolInput: null,
         pendingToolArg: null,
@@ -413,9 +405,6 @@ export function reducer(state: State, action: Action): State {
                 subAgentName: e.agentName,
               }],
             }
-          }
-          if (!e.taskId && e.agentName) {
-            next = { ...next, rootAgentName: e.agentName }
           }
           return next
         }
@@ -529,7 +518,7 @@ export function reducer(state: State, action: Action): State {
             })
           }
           // Usage badge is verbose-only — but always update status-bar fields
-          // (modelId, ctx%) so the user can see context fill regardless.
+          // (ctx%) so the user can see context fill regardless.
           if (state.verbose) {
             blocks.push({
               id: nextId(),
@@ -546,7 +535,6 @@ export function reducer(state: State, action: Action): State {
             blocks,
             liveText: '',
             liveThinking: null,
-            modelId: e.modelId ?? state.modelId,
             contextTokens: ctx > 0 ? ctx : state.contextTokens,
           }
         }
@@ -936,8 +924,7 @@ export function App({ harness, verbose }: AppProps): ReactElement {
       ) : (
         <Box flexDirection="column" marginTop={1}>
           <StatusBar
-            agentName={state.rootAgentName}
-            modelId={state.modelId}
+            agentId={harness.agentId}
             contextPercent={ctxPercent}
             workspace={harness.workspace}
             sessionId={harness.sessionId}

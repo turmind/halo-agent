@@ -2,19 +2,11 @@ import React from 'react'
 import { Box, Text } from 'ink'
 
 interface Props {
-  agentName: string
-  modelId: string | null
+  agentId: string
   contextPercent: number | null
   workspace: string
   sessionId: string
   verbose: boolean
-}
-
-function shortModel(modelId: string): string {
-  return modelId
-    .replace(/^global\.anthropic\./, '')
-    .replace(/^anthropic\./, '')
-    .replace(/-\d{8}$/, '')
 }
 
 function shortPath(p: string): string {
@@ -23,17 +15,11 @@ function shortPath(p: string): string {
   return p
 }
 
-export function StatusBar({ agentName, modelId, contextPercent, workspace, sessionId, verbose }: Props): React.ReactElement {
+export function StatusBar({ agentId, contextPercent, workspace, sessionId, verbose }: Props): React.ReactElement {
   return (
     <Box flexDirection="row" justifyContent="space-between" paddingX={1}>
       <Box flexDirection="row" gap={1}>
-        <Text color="green">{agentName}</Text>
-        {modelId ? (
-          <>
-            <Text color="gray" dimColor>·</Text>
-            <Text color="cyan">{shortModel(modelId)}</Text>
-          </>
-        ) : null}
+        <Text color="green">{agentId}</Text>
         {contextPercent != null ? (
           <>
             <Text color="gray" dimColor>·</Text>

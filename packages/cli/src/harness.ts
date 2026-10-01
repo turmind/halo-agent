@@ -32,6 +32,8 @@ export interface Harness {
   readonly sessionId: string
   /** Current workspace absolute path (changes on /ws). */
   readonly workspace: string
+  /** Current session's agent id, read off its DB row (changes on /switch / /new / /agent / /ws). */
+  readonly agentId: string
   readonly lang: Lang
   /** Whether the *current* workspace's agent supports image input. */
   readonly supportsImage: boolean
@@ -63,7 +65,7 @@ export interface Harness {
    * running), this harness just rebinds to the new workspace's SM.
    *
    * Listeners are migrated to the new session. `sessionId` / `workspace` /
-   * `supportsImage` all update.
+   * `agentId` / `supportsImage` all update.
    */
   switchWorkspace(newPath: string): Promise<void>
 
@@ -135,6 +137,8 @@ interface Binding {
   sm: SessionManager
   workspace: string
   sessionId: string
+  /** The session row's agent — a resumed or switched-to session needn't run opts.agentId. */
+  agentId: string
   accessLevel: 'readonly' | 'workspace' | null
   supportsImage: boolean
   /** Activates the persistent fan-out from sm → eventHandlers; called once per binding. */
@@ -186,6 +190,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       }
     }
     activeOverrides.set(USER_ID, sessionId)
+    const sessionAgentId = sm.getSessionById(sessionId)?.agentId ?? agentId
 
     const disabledSet = getDisabledSet(sm.getDb(), 'agent')
     const agents = await scanAvailableAgents(workspace, disabledSet)
@@ -196,7 +201,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       for (const h of eventHandlers) h(event)
     })
 
-    return { sm, workspace, sessionId, accessLevel, supportsImage, unsubPersistent }
+    return { sm, workspace, sessionId, agentId: sessionAgentId, accessLevel, supportsImage, unsubPersistent }
   }
 
   // Initial bind
@@ -269,6 +274,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       state = {
         ...state,
         sessionId: result.switchTo,
+        agentId: state.sm.getSessionById(result.switchTo)?.agentId ?? agentId,
         unsubPersistent: state.sm.registerEventListener(result.switchTo, (event: AgentSessionEvent) => {
           for (const h of eventHandlers) h(event)
         }),
@@ -372,6 +378,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   return {
     get sessionId() { return state.sessionId },
     get workspace() { return state.workspace },
+    get agentId() { return state.agentId },
     get supportsImage() { return state.supportsImage },
     lang,
     run,
