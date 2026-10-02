@@ -70,7 +70,14 @@ export class SessionStateStore {
       existing.agentId = session.agentId
       if (!existing.agentName) existing.agentName = session.agentName
       if (session.parentId) existing.parentSessionId = session.parentId
-      if (!existing.title) existing.title = session.description?.slice(0, 60) || `${session.agentId} session`
+      // Sub-sessions only: their description IS the brief (saveSessionToFile
+      // titles 'delegated' logs from it too). A root's description is a
+      // creation label ('Explorer chat', 'Telegram: …'), and this write usually
+      // beats the first debounced UI-log persist to disk — stamping the label
+      // here made it the sticky title of every new root. A root's title comes
+      // from saveSessionToFile (first user message) or createSession's
+      // explicit `title` pre-seed instead.
+      if (!existing.title && session.parentId) existing.title = session.description?.slice(0, 60) || `${session.agentId} session`
       if (!existing.createdAt) existing.createdAt = now
       existing.updatedAt = now
       // messageCount is NOT written here: it counts the UI message log and is

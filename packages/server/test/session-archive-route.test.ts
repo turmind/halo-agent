@@ -69,22 +69,23 @@ function sessionDir(agentId = 'default'): string {
   return path.join(ws, '.halo', 'sessions', agentId)
 }
 
-function seedRow(id: string): void {
+function seedRow(id: string, parentId: string | null = null): void {
   sm.getDb().insert(schema.agentSessions).values({
-    id, parentId: null, agentId: 'default', agentName: 'Default',
+    id, parentId, agentId: 'default', agentName: 'Default',
     description: '', workingDir: null, accessLevel: null,
     createdAt: 1000, updatedAt: 1000, stoppedAt: null, archivedAt: null,
   }).run()
 }
 
-/** Seed a cold session .json in the shape saveSessionToFile writes. */
-function seedFile(id: string, messages: SessionMessage[]): void {
+/** Seed a cold session .json in the shape saveSessionToFile writes. The file is
+ *  named by the id's leaf segment, as on disk (`r1>c1` → `c1.json`). */
+function seedFile(id: string, messages: SessionMessage[], extra: Record<string, unknown> = {}): void {
   fs.mkdirSync(sessionDir(), { recursive: true })
-  fs.writeFileSync(path.join(sessionDir(), `${id}.json`), JSON.stringify({
+  fs.writeFileSync(path.join(sessionDir(), `${id.split('>').pop()}.json`), JSON.stringify({
     version: 1, id, agentId: 'default', agentName: 'Default', title: 'seeded', source: 'explorer',
     createdAt: new Date(1000).toISOString(), updatedAt: new Date(1000).toISOString(),
     messageCount: messages.length, contextTokens: 111, totalOutputTokens: 222,
-    messages, rawMessages: [{ role: 'user', content: 'raw' }],
+    messages, rawMessages: [{ role: 'user', content: 'raw' }], ...extra,
   }, null, 2))
 }
 
@@ -192,6 +193,27 @@ describe('GET /sessions/logs/:id/archive/:n — committed segments', () => {
   it('404s when the session has no archive at all', async () => {
     seedRow('r1')
     seedFile('r1', exchanges(3))
+    expect((await get('r1', 1)).status).toBe(404)
+  })
+
+  it('serves a sub-session\'s segment by its full (encoded) id', async () => {
+    const log = fatExchanges(4)
+    seedRow('r1')
+    seedRow('r1>c1', 'r1')
+    seedFile('r1', exchanges(2))
+    seedFile('r1>c1', log, { parentSessionId: 'r1', source: 'delegated' })
+    // A sub log enters memory through an event carrying its taskId (the compact
+    // paths' preflight notice does this in prod).
+    sm.emitEvent('r1>c1', { type: 'agent_start', agentName: 'Default', agentId: 'default', text: '', taskId: 'r1>c1', sessionId: 'r1>c1' })
+    expect(archiveOldMessages('r1>c1')).toBe(6)
+
+    const res = await get(encodeURIComponent('r1>c1'), 1)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { messages: SessionMessage[] }
+    expect(body.messages).toEqual(segmentOnDisk('c1', 1))
+    expect([...body.messages, ...activeMessages('c1')].map((m) => m.content)).toEqual(log.map((m) => m.content))
+    expect((await get(encodeURIComponent('r1>c1'), 2)).status).toBe(404)
+    // The parent has no archive of its own.
     expect((await get('r1', 1)).status).toBe(404)
   })
 })

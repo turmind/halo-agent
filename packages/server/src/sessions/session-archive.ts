@@ -62,6 +62,10 @@ function segmentPath(dir: string, seg: string, n: number): string {
  * half. Keeping the last `keepExchanges` of them also keeps the in-flight turn
  * out of the archive by construction: its user message is the newest one, so a
  * mid-turn compact can never archive the turn it is running inside.
+ *
+ * A sub-session's own log splits by the same rule: every user row in it (the
+ * brief, a query_session follow-up, a child's auto-report) is written without
+ * `taskId`, so each one opens an exchange there just as in a root log.
  */
 export function archiveSplitIndex(
   messages: SessionMessage[],

@@ -312,9 +312,10 @@ export class SessionUIStore {
    *  taskId: `state.subSessionLogs[id]`, which holds the sub's full history —
    *  see loadSubHistory — plus the in-flight turn as a temp assistant, the
    *  same snapshot the root writes). `archive` is passed ONLY by
-   *  archiveOldMessages (the commit step of an archive write): `count` is the
-   *  new segment count and `userDelta` the main user turns leaving the active
-   *  file. Every other call leaves both on-disk values alone. */
+   *  archiveOldMessages (the commit step of an archive write, root or sub
+   *  alike): `count` is the new segment count and `userDelta` the main user
+   *  turns leaving the active file. Every other call leaves both on-disk
+   *  values alone. */
   private persistLog(id: string, state: UIState, archive?: { count: number; userDelta: number }): void {
     const rootId = this.findRootSessionId(id)
     const sub = id === rootId ? undefined : state.subSessionLogs.get(id)
@@ -335,6 +336,8 @@ export class SessionUIStore {
           contextTokens: 0, outputTokens: 0,
           agentId: this.resolveAgentId(id), agentName: sub.agentName,
           source: 'delegated', description: sub.description, parentSessionId: parts.slice(0, -1).join('>'),
+          archiveCount: archive?.count,
+          archivedUserDelta: archive?.userDelta,
         })
         return
       }
@@ -372,9 +375,13 @@ export class SessionUIStore {
   }
 
   /**
-   * Move a root session's UI log out into a gzipped archive segment, keeping
-   * only the newest main exchange in the active file. Called from the compact
+   * Move a session's UI log out into a gzipped archive segment, keeping only
+   * the newest main exchange in the active file. Called from the compact
    * path — the only place that already accepts "history shrinks here".
+   *
+   * Root and sub-session alike: a sub's log lives in its root's UIState
+   * (`subSessionLogs`, keyed by the full `root>…` id) but is written to the
+   * sub's own file, so archiving it never touches the parent's log or file.
    *
    * Gated on the active file's SIZE (`ARCHIVE_SIZE_THRESHOLD`), not its exchange
    * count: bytes are what make a log slow to load, and per-exchange size varies
@@ -396,36 +403,44 @@ export class SessionUIStore {
    */
   archiveOldMessages(sessionId: string): number {
     const rootId = this.findRootSessionId(sessionId)
-    if (this.host.isSessionDeleted(rootId)) return 0
-    // ensureUIState, not a cache peek: a compact on a session restored from
-    // disk (cold `/compact`) must archive too. Returns the live state when one
-    // is already loaded, which is the normal mid-turn case.
-    const state = this.ensureUIState(rootId)
+    const isRoot = sessionId === rootId
+    if (this.host.isSessionDeleted(rootId) || this.host.isSessionDeleted(sessionId)) return 0
+    // Root: ensureUIState, not a cache peek — a compact on a session restored
+    // from disk (cold `/compact`) must archive too. Returns the live state when
+    // one is already loaded, which is the normal mid-turn case.
+    // Sub: peek only. Both compact paths emit their "Compacting context…"
+    // notice (carrying the sub's taskId) before getting here, and that event
+    // lazily builds the sub log from the sub's own file — so a missing log
+    // means there is nothing live to archive, not a cold load worth paying the
+    // root's file read for. The NEXT compact retries.
+    const state = isRoot ? this.ensureUIState(rootId) : this.uiStates.get(rootId)
+    // Always the live Map entry, never a copy read from disk: a pending
+    // debounced persist resolves the same object when it fires, so it writes
+    // the kept tail (under the archiveCount saveSessionToFile carries over)
+    // instead of resurrecting the archived head.
+    const log = isRoot ? state : state?.subSessionLogs.get(sessionId)
+    if (!state || !log) return 0
     try {
-      const inMem = this.host.getSession(rootId)
-      const row = inMem ? null : this.db.select().from(agentSessions)
-        .where(eq(agentSessions.id, rootId)).get()
-      const agentId = inMem?.agentId ?? row?.agentId ?? 'default'
-      const dir = getSessionDir(agentId, this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot)
-      const seg = fileSegment(rootId)
+      const dir = getSessionDir(this.resolveAgentId(sessionId), this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot)
+      const seg = fileSegment(sessionId)
 
       // Size gate first — below the threshold this is a pure stat() and out.
       if (activeFileSize(dir, seg) <= ARCHIVE_SIZE_THRESHOLD) return 0
       // Over the threshold: keep only the newest exchange, archive the rest. A
       // log with a single exchange yields cut 0 and is left alone (there is
       // nothing to move without splitting the turn the user is looking at).
-      const cut = archiveSplitIndex(state.messageLog, 1)
+      const cut = archiveSplitIndex(log.messageLog, 1)
       if (cut === 0) return 0
 
-      const older = state.messageLog.slice(0, cut)
-      const kept = state.messageLog.slice(cut)
+      const older = log.messageLog.slice(0, cut)
+      const kept = log.messageLog.slice(cut)
       const n = readArchiveCount(dir, seg) + 1
       writeArchiveSegment(dir, seg, n, older)
 
-      state.messageLog = kept
+      log.messageLog = kept
       // The archived slice's main user turns leave the active file — carry them
       // in the header so exchangeCount stays the session's lifetime count.
-      this.persistLog(rootId, state, { count: n, userDelta: countMainUserMessages(older) })
+      this.persistLog(sessionId, state, { count: n, userDelta: countMainUserMessages(older) })
       // persistLog swallows its own IO errors (every session write does), so
       // confirm the commit landed. An active file still at `< n` next to a
       // truncated in-memory log would let the NEXT ordinary persist write the
@@ -433,14 +448,14 @@ export class SessionUIStore {
       // messages would actually go missing. Roll memory back instead: the
       // segment stays uncommitted and the next compact redoes the same N.
       if (readArchiveCount(dir, seg) < n) {
-        state.messageLog = [...older, ...kept]
-        console.warn(`[SessionUIStore] archive commit for ${rootId} segment ${n} did not land — rolled back`)
+        log.messageLog = [...older, ...kept]
+        console.warn(`[SessionUIStore] archive commit for ${sessionId} segment ${n} did not land — rolled back`)
         return 0
       }
-      console.debug(`[SessionUIStore] archived ${older.length} UI messages of ${rootId} into segment ${n}`)
+      console.debug(`[SessionUIStore] archived ${older.length} UI messages of ${sessionId} into segment ${n}`)
       return older.length
     } catch (err) {
-      console.error(`[SessionUIStore] archiveOldMessages failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
+      console.error(`[SessionUIStore] archiveOldMessages failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
       return 0
     }
   }

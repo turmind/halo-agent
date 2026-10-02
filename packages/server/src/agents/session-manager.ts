@@ -2823,12 +2823,12 @@ export class SessionManager implements SessionManagerInternals {
       // it into a gzipped archive segment here — the one moment where "history
       // moves out of the active file" is already the semantics of the
       // operation. No-op unless the file is over the size threshold, so most
-      // compacts pay one stat(). Root sessions only: a sub-agent's compact
-      // must not truncate its parent's log (findRootSessionId would resolve a
-      // sub id to the root's UI state), and sub logs are the next round's job.
+      // compacts pay one stat(). Sub-agents too: a sub's log is addressed by
+      // its full `root>…` id inside the root's UIState and written to the
+      // sub's own file, so its compact never truncates the parent's log.
       // Runs BEFORE the callers emit their compaction notices, so the summary
       // notice lands in the kept exchange rather than the archived segment.
-      if (!session.parentId) this.uiStore.archiveOldMessages(session.id)
+      this.uiStore.archiveOldMessages(session.id)
 
       const estimatedTokens = estimateMessageTokens(session.agent.messages) + estimateMessageTokens([{ role: 'user', content: session.systemPrompt }])
       return { summary: summaryText, olderCount, estimatedTokens }

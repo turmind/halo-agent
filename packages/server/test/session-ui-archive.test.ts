@@ -388,6 +388,148 @@ describe('archiveCount as commit marker — crash safety', () => {
   })
 })
 
+describe('sub-session logs — archived into the sub\'s own file', () => {
+  // A sub's UI log lives in its root's UIState (`subSessionLogs['r1>c1']`) but
+  // is written to `sessions/<agent>/c1.json`. Archiving it must slim THAT file
+  // and leave the parent's log and file alone. Fake timers: these tests leave
+  // debounced sub persists armed, which must neither fire after the tmpdir is
+  // gone nor leak into the next test.
+  const SUB = 'r1>c1'
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** Root + sub rows, a small root file, a sub file holding `subLog`. Returns
+   *  the root file's bytes so a test can prove the parent was never rewritten. */
+  function seedTree(subLog: SessionMessage[]): string {
+    seedRow('r1')
+    seedRow(SUB, { parentId: 'r1', agentId: 'dev' })
+    const rootBytes = readFileSync(seedFile('r1', exchanges(2)), 'utf-8')
+    seedFile('c1', subLog, { id: SUB, parentSessionId: 'r1', source: 'delegated' }, 'dev')
+    return rootBytes
+  }
+
+  /** Build the live sub log the way the runtime does: agent_start (empty text
+   *  → no row added, no write) loads the sub's history from its own file. */
+  function startSub(fullText = ''): void {
+    sm.emitEvent(SUB, { type: 'agent_start', agentName: 'Dev', agentId: 'dev', text: '', fullText, taskId: SUB, sessionId: SUB })
+  }
+
+  it('moves all but the newest exchange into the sub\'s own segment', () => {
+    const log = fatExchanges(4)
+    const rootBytes = seedTree(log)
+    startSub()
+
+    expect(uiStore().archiveOldMessages(SUB)).toBe(6)
+
+    expect(segmentNames('dev')).toEqual(['c1.arch.1.json.gz'])
+    expect(readSegment('c1', 1, 'dev').map((m) => m.content)).toEqual(log.slice(0, 6).map((m) => m.content))
+    const active = readActive('c1', 'dev')
+    expect(active.messages.map((m) => m.content)).toEqual(['u3', 'a3'])
+    expect(active.archiveCount).toBe(1)
+    expect(active.archivedUserCount).toBe(3)
+    expect(active.id).toBe(SUB)
+    expect(active.parentSessionId).toBe('r1')
+    expect(active.rawMessages).toEqual([{ role: 'user', content: 'raw' }])
+    // The parent: same bytes, no segment.
+    expect(readFileSync(join(sessionDir(), 'r1.json'), 'utf-8')).toBe(rootBytes)
+    expect(segmentNames()).toEqual([])
+  })
+
+  it('no-ops under the size threshold', () => {
+    seedTree(exchanges(50))
+    startSub()
+    const before = readFileSync(join(sessionDir('dev'), 'c1.json'), 'utf-8')
+
+    expect(uiStore().archiveOldMessages(SUB)).toBe(0)
+    expect(segmentNames('dev')).toEqual([])
+    expect(readFileSync(join(sessionDir('dev'), 'c1.json'), 'utf-8')).toBe(before)
+  })
+
+  it('keeps the in-flight turn (brief + live tool call) in the active file', () => {
+    const log = fatExchanges(4)
+    seedTree(log)
+    startSub('follow-up brief')
+    sm.emitEvent(SUB, { type: 'tool_call', agentName: 'Dev', agentId: 'dev', toolName: 'shell_exec', toolUseId: 'tu_live', toolInput: { command: 'ls' }, taskId: SUB })
+
+    // All four seeded exchanges leave; the turn being run stays whole.
+    expect(uiStore().archiveOldMessages(SUB)).toBe(8)
+
+    expect(readSegment('c1', 1, 'dev').map((m) => m.content)).toEqual(log.map((m) => m.content))
+    const kept = readActive('c1', 'dev').messages
+    expect(kept[0].content).toBe('follow-up brief')
+    expect(kept.some((m) => m.type === 'tool_call' && m.toolName === 'shell_exec')).toBe(true)
+    // The live turn's buffers ride along as the temp assistant message.
+    expect(kept[kept.length - 1].role).toBe('assistant')
+  })
+
+  it('a debounced sub persist armed before the archive writes the kept tail, not the old log', () => {
+    seedTree(fatExchanges(4))
+    startSub()
+    // Arms the sub's 500ms debounce timer — it fires AFTER the archive.
+    sm.emitEvent(SUB, { type: 'tool_result', agentName: 'Dev', toolResult: 'ok', durationMs: 1, taskId: SUB })
+    expect(uiStore().archiveOldMessages(SUB)).toBe(6)
+    const persist = vi.spyOn(sm, 'persistSessionFile')
+
+    vi.advanceTimersByTime(600)
+
+    expect(persist.mock.calls.some(([opts]) => opts.sessionId === SUB)).toBe(true)  // the timer really wrote
+    const active = readActive('c1', 'dev')
+    expect(active.messages.map((m) => m.content).slice(0, 2)).toEqual(['u3', 'a3'])
+    expect(active.messages.some((m) => m.content === 'u0')).toBe(false)
+    expect(active.archiveCount).toBe(1)
+  })
+
+  it('returns 0 without touching anything when the sub log is not in memory', () => {
+    seedTree(fatExchanges(4))
+    const before = readFileSync(join(sessionDir('dev'), 'c1.json'), 'utf-8')
+
+    expect(uiStore().archiveOldMessages(SUB)).toBe(0)
+    expect(segmentNames('dev')).toEqual([])
+    expect(readFileSync(join(sessionDir('dev'), 'c1.json'), 'utf-8')).toBe(before)
+  })
+
+  it('an ordinary sub persist after the archive carries archiveCount forward', () => {
+    seedTree(fatExchanges(4))
+    startSub()
+    uiStore().archiveOldMessages(SUB)
+
+    sm.emitEvent(SUB, { type: 'agent_done', agentName: 'Dev', taskId: SUB })   // flush write
+
+    expect(readActive('c1', 'dev').archiveCount).toBe(1)
+    expect(readActive('c1', 'dev').archivedUserCount).toBe(3)
+  })
+
+  it('selfCompactSession on a sub archives the sub log (compact-path wiring)', async () => {
+    seedTree(fatExchanges(4))
+    const raw: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
+    for (let i = 0; i < 6; i++) {
+      raw.push({ role: 'user', content: [{ type: 'text', text: `q${i}` }] })
+      raw.push({ role: 'assistant', content: [{ type: 'text', text: `r${i}` }] })
+    }
+    const agent = {
+      messages: raw,
+      async *run() {
+        agent.messages.push({ role: 'user', content: [{ type: 'text', text: 'summarize' }] })
+        agent.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'SUMMARY' }] })
+        yield { type: 'text', text: 'SUMMARY' }
+      },
+    }
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(SUB, {
+      id: SUB, parentId: 'r1', agentId: 'dev', agent, compactedThisTurn: false, systemPrompt: '',
+    })
+    // The compact callers' preflight notice — it is what builds the sub log.
+    sm.emitEvent(SUB, { type: 'system', text: 'Compacting context…', taskId: SUB })
+
+    expect(await sm.selfCompactSession(SUB)).not.toBeNull()
+
+    expect(segmentNames('dev')).toEqual(['c1.arch.1.json.gz'])
+    expect(readActive('c1', 'dev').archiveCount).toBe(1)
+    expect(readActive('c1', 'dev').messages.map((m) => m.content)).toEqual(['u3', 'a3', 'Compacting context…'])
+    expect(segmentNames()).toEqual([])
+  })
+})
+
 describe('deletion — filesystem glob, not header state', () => {
   it('deleteArchiveSegments removes committed AND uncommitted segments', async () => {
     mkdirSync(sessionDir(), { recursive: true })

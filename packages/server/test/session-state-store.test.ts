@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionStateStore, type SessionStateStoreHost, type SavableSession } from '../src/agents/session-state-store.js'
+import { saveSessionToFile, readSessionFileMeta } from '../src/sessions/session-store.js'
+import type { SessionMessage } from '../src/sessions/session-types.js'
 
 /**
  * Unit tests for SessionStateStore (fifth knife) — rawMessages disk
@@ -58,13 +60,13 @@ describe('saveAgentState / loadAgentState roundtrip', () => {
 
   it('writes the expected metadata fields to the file', () => {
     const store = makeStore()
-    store.saveAgentState(session({ id: 's2', agentId: 'default', description: 'do the thing', output: 'result text', lastActivityAt: '2026-09-18T14:00:00.000Z', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
+    store.saveAgentState(session({ id: 'p>s2', parentId: 'p', agentId: 'default', description: 'do the thing', output: 'result text', lastActivityAt: '2026-09-18T14:00:00.000Z', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
 
     const file = join(store.sessionDir('default'), 's2.json')
     const data = JSON.parse(readFileSync(file, 'utf-8'))
-    expect(data.id).toBe('s2')
+    expect(data.id).toBe('p>s2')
     expect(data.agentId).toBe('default')
-    expect(data.title).toBe('do the thing')   // derived from description
+    expect(data.title).toBe('do the thing')   // sub-session: derived from description (the brief)
     // messageCount is deliberately absent — it counts the UI log and is owned
     // by saveSessionToFile; this path only sees the raw LLM history.
     expect(data.messageCount).toBeUndefined()
@@ -94,6 +96,36 @@ describe('read-merge-write — preserves pre-existing fields', () => {
     const data = JSON.parse(readFileSync(join(dir, 's3.json'), 'utf-8'))
     expect(data.title).toBe('Custom Title')                 // NOT overwritten by description
     expect(data.createdAt).toBe('2020-01-01T00:00:00.000Z')  // preserved
+  })
+})
+
+describe('title ownership — raw-state save racing the first UI-log save', () => {
+  // The first model call's saveAgentState usually lands before the debounced
+  // UI-log persist; whatever title it stamps is sticky from then on.
+  const userMsg = (content: string): SessionMessage => ({ id: 'u1', role: 'user', content, timestamp: 1_700_000_000_000 })
+
+  it('a root session takes its title from the first user message, not its creation label', () => {
+    const store = makeStore()
+    store.saveAgentState(session({ id: 'r1', description: 'Explorer chat', agent: { messages: [{ role: 'user', content: 'hello world' }] as never } }))
+    expect(JSON.parse(readFileSync(join(store.sessionDir('default'), 'r1.json'), 'utf-8')).title).toBeUndefined()
+
+    const meta = saveSessionToFile({
+      sessionId: 'r1', projectPath: ws, messages: [userMsg('hello world')],
+      contextTokens: 0, outputTokens: 0, agentId: 'default',
+    })
+    expect(meta?.title).toBe('hello world')
+    expect(readSessionFileMeta('r1', 'default', ws)?.title).toBe('hello world')
+  })
+
+  it('a sub-session keeps its description (the brief) as title over its first message', () => {
+    const store = makeStore()
+    store.saveAgentState(session({ id: 'r1>c1', parentId: 'r1', description: 'the brief', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
+
+    saveSessionToFile({
+      sessionId: 'r1>c1', projectPath: ws, messages: [userMsg('first message')],
+      contextTokens: 0, outputTokens: 0, agentId: 'default', source: 'delegated', description: 'the brief',
+    })
+    expect(readSessionFileMeta('r1>c1', 'default', ws)?.title).toBe('the brief')
   })
 })
 
