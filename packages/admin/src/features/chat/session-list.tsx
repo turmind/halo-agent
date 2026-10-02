@@ -9,7 +9,7 @@ import { ResizableSidebar } from '@/shared/components/resizable-sidebar'
 import { VerticalTabAdd, VerticalTabRow, VerticalTabSquare } from '@/shared/components/vertical-tab-list'
 import { api } from '@/shared/api-client'
 import { bumpSessionBus } from '@/shared/session-bus'
-import { formatRelativeTime } from '@/shared/utils'
+import { cn, formatRelativeTime } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import { useGoalStore } from './goal-store'
 import { useChatTabs } from './chat-tabs'
@@ -27,14 +27,21 @@ interface SessionSidebarProps {
   sessions: SessionMeta[]
   /** null = a draft tab is on screen → "New session" row on top. */
   currentSessionId: string | null
-  /** Session whose subscribe is in flight (snapshot not back yet) → tail spinner. */
-  loadingSessionId?: string | null
   onSelect: (id: string) => void
   onDelete: (id: string, e: React.MouseEvent) => void
   onNew?: () => void
   onLoadMore?: () => void
   hasMore?: boolean
   loadingMore?: boolean
+}
+
+/** Titles of the sessions the list holds right now — the finish
+ *  notification (workspace-layout) names the session from here instead of
+ *  keeping a list of its own. Mirrored by SessionSidebar. */
+const listedTitles = new Map<string, string>()
+
+export function listedSessionTitle(sessionId: string): string | undefined {
+  return listedTitles.get(sessionId)
 }
 
 /** Collapsed flag + width of the list — global preferences, not per project. */
@@ -53,7 +60,6 @@ const SIDEBAR_WIDTH_KEY = 'halo_session_sidebar_width'
 export function SessionSidebar({
   sessions,
   currentSessionId,
-  loadingSessionId = null,
   onSelect,
   onDelete,
   onNew,
@@ -111,6 +117,11 @@ export function SessionSidebar({
     bumpSessionBus()
   }
 
+  useEffect(() => {
+    listedTitles.clear()
+    for (const s of sessions) if (s.title) listedTitles.set(s.id, s.title)
+  }, [sessions])
+
   // Infinite scroll: observe a sentinel at the list's bottom; when it enters
   // the scroll viewport, pull the next page. Dep on sessions.length re-attaches
   // the observer to the fresh sentinel position after each appended page.
@@ -129,34 +140,12 @@ export function SessionSidebar({
   const tabs = useChatTabs((st) => st.tabs)
   const tabBySession = useMemo(() => new Map(tabs.flatMap((tab) => (tab.sessionId ? [[tab.sessionId, tab] as const] : []))), [tabs])
 
-  // Unread for a session no tab has loaded: the list saw it go running → idle
-  // while it wasn't on screen. Derived during render from the previous list
-  // (state, not a ref + effect: no extra render pass, no stale read).
-  const [statusSeen, setStatusSeen] = useState<{ sessions: SessionMeta[]; finished: ReadonlySet<string> }>(() => ({ sessions, finished: new Set() }))
-  if (statusSeen.sessions !== sessions) {
-    const before = new Map(statusSeen.sessions.map((s) => [s.id, s.status]))
-    const finished = new Set(statusSeen.finished)
-    for (const s of sessions) {
-      if (before.get(s.id) === 'running' && s.status === 'idle' && s.id !== currentSessionId) finished.add(s.id)
-    }
-    setStatusSeen({ sessions, finished })
-  }
-
-  const select = (id: string) => {
-    if (statusSeen.finished.has(id)) {
-      setStatusSeen((prev) => {
-        const finished = new Set(prev.finished)
-        finished.delete(id)
-        return { ...prev, finished }
-      })
-    }
-    onSelect(id)
-  }
-
   const isDraft = currentSessionId === null
+  // Only a loaded tab knows it has unseen frames; a session no tab has
+  // loaded (or one a reconnect released) shows plain idle.
   const unreadOf = (s: SessionMeta) => {
     const tab = tabBySession.get(s.id)
-    return s.id !== currentSessionId && (tab?.store ? !!tab.unread : statusSeen.finished.has(s.id))
+    return s.id !== currentSessionId && !!tab?.store && !!tab.unread
   }
   const titleOf = (s: SessionMeta) => s.title || t('chat.tabs.untitled')
 
@@ -180,10 +169,8 @@ export function SessionSidebar({
               tooltip={titleOf(s)}
               active={currentSessionId === s.id}
               store={tab?.store}
-              listRunning={s.status === 'running'}
-              loading={loadingSessionId === s.id}
               unread={unreadOf(s)}
-              onActivate={() => select(s.id)}
+              onActivate={() => onSelect(s.id)}
             />
           )
         })}
@@ -217,15 +204,14 @@ export function SessionSidebar({
           sessions.map((s) => {
             const tab = tabBySession.get(s.id)
             const editing = editingId === s.id
-            const loading = loadingSessionId === s.id
             const model = typeof s.agentSnapshot?.model === 'string' ? ` · ${s.agentSnapshot.model.split('.').pop()}` : ''
             return (
               <VerticalTabRow
                 key={s.id}
-                icon={<SessionIcon store={tab?.store} listRunning={s.status === 'running'} />}
+                icon={<SessionStatusDot store={tab?.store} unread={unreadOf(s)} />}
                 tooltip={`${titleOf(s)}\n${s.exchangeCount} msgs · ${formatRelativeTime(s.updatedAt, t)}${model}`}
                 active={currentSessionId === s.id}
-                onActivate={() => select(s.id)}
+                onActivate={() => onSelect(s.id)}
                 label={editing ? (
                   <input
                     autoFocus
@@ -245,12 +231,7 @@ export function SessionSidebar({
                     {titleOf(s)}
                   </>
                 )}
-                badge={loading ? (
-                  <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--muted-foreground)]" />
-                ) : unreadOf(s) ? (
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--primary)]" title={t('chat.tabs.unread')} />
-                ) : undefined}
-                actions={editing || loading ? undefined : (
+                actions={editing ? undefined : (
                   <button
                     onClick={(e) => startRename(e, s)}
                     title={t('chat.sessions.rename')}
@@ -260,7 +241,7 @@ export function SessionSidebar({
                     <Pencil className="h-3 w-3" />
                   </button>
                 )}
-                onClose={editing || loading ? undefined : (e) => onDelete(s.id, e)}
+                onClose={editing ? undefined : (e) => onDelete(s.id, e)}
                 closeLabel={t('chat.sessions.delete')}
               />
             )
@@ -281,35 +262,41 @@ export function SessionSidebar({
   )
 }
 
-/** Running = a loaded tab's own store streams; a session no tab has loaded
- *  yet goes by the list endpoint's status. */
-function useSessionRunning(store: ChatStoreApi | undefined, listRunning: boolean): boolean {
+/** Busy = a loaded tab's own store streams. A session no tab has loaded
+ *  has no live state here, so it reads idle. */
+function useSessionBusy(store: ChatStoreApi | undefined): boolean {
   const subscribe = useCallback((cb: () => void) => (store ? store.subscribe(cb) : () => {}), [store])
   const getStreaming = () => store?.getState().isStreaming ?? false
-  const streaming = useSyncExternalStore(subscribe, getStreaming, getStreaming)
-  return store ? streaming : listRunning
+  return useSyncExternalStore(subscribe, getStreaming, getStreaming)
 }
 
-function SessionIcon({ store, listRunning }: { store?: ChatStoreApi; listRunning: boolean }) {
+/** One fixed-size dot per tab — busy (amber, pulsing) / unread (blue) /
+ *  idle (green), same look as the Explorer header's busy dot. Fixed size so
+ *  a state change never reflows a narrow column (a spinner did). */
+function SessionStatusDot({ store, unread, className }: { store?: ChatStoreApi; unread: boolean; className?: string }) {
   const t = useT()
-  return useSessionRunning(store, listRunning)
-    ? <Loader2 className="h-3 w-3 animate-spin" aria-label={t('chat.tabs.running')} />
-    : <MessageSquare className="h-3 w-3" />
+  const busy = useSessionBusy(store)
+  return (
+    <span
+      title={busy ? t('status.busy') : unread ? t('chat.tabs.unread') : t('status.idle')}
+      className={cn(
+        'inline-block h-2 w-2 shrink-0 rounded-full',
+        busy ? 'bg-amber-400 animate-pulse' : unread ? 'bg-blue-500' : 'bg-emerald-500',
+        className,
+      )}
+    />
+  )
 }
 
-/** Collapsed tab: the title's first letter, with running / unread marks. */
-function SessionSquare({ title, tooltip, active, store, listRunning, loading, unread, onActivate }: {
+/** Collapsed tab: the title's first letter, with the status dot in a corner. */
+function SessionSquare({ title, tooltip, active, store, unread, onActivate }: {
   title: string
   tooltip: string
   active: boolean
   store?: ChatStoreApi
-  listRunning: boolean
-  loading: boolean
   unread: boolean
   onActivate: () => void
 }) {
-  const t = useT()
-  const running = useSessionRunning(store, listRunning) || loading
   const initial = Array.from(title.trim())[0]
   return (
     <VerticalTabSquare
@@ -317,16 +304,7 @@ function SessionSquare({ title, tooltip, active, store, listRunning, loading, un
       tooltip={tooltip}
       active={active}
       onActivate={onActivate}
-      badge={
-        <>
-          {running && (
-            <Loader2 className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 animate-spin rounded-full bg-[var(--card)]" aria-label={t('chat.tabs.running')} />
-          )}
-          {unread && (
-            <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--primary)]" title={t('chat.tabs.unread')} />
-          )}
-        </>
-      }
+      badge={<SessionStatusDot store={store} unread={unread} className="absolute right-0.5 top-0.5" />}
     />
   )
 }

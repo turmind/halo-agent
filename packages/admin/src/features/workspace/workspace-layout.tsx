@@ -15,7 +15,8 @@ import { SkillsSidebar } from '@/features/skills/skills-sidebar'
 import { SkillsMain } from '@/features/skills/skills-main'
 import { SessionChatPanel } from '@/features/agents/session-chat-panel'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { useChatStore } from '@/features/chat/chat-store'
+import { useChatStore, onTurnSettled } from '@/features/chat/chat-store'
+import { listedSessionTitle } from '@/features/chat/session-list'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { addRecentWorkspace } from '@/features/explorer/use-recent-workspaces'
@@ -78,11 +79,8 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   const t = useT()
   const activeProject = useProjectStore((s) => s.activeProject)
   const openFolder = useProjectStore((s) => s.openFolder)
-  // Agent busy/idle + subscribed session for the dynamic window title +
-  // finished-notification below. sessionId gates the notification so a
-  // session switch can't be mistaken for the current agent finishing.
+  // Busy/idle of the chat tab on screen, for the dynamic window title below.
   const isStreaming = useChatStore((s) => s.isStreaming)
-  const sessionId = useChatStore((s) => s.sessionId)
   const [activeTab, setActiveTab] = useState<SidebarTab>(() => {
     if (typeof window === 'undefined') return 'explorer'
     return (localStorage.getItem('halo_sidebar_tab') as SidebarTab) || 'explorer'
@@ -142,12 +140,9 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     })
   }, [notifyOnFinish])
 
-  // Dynamic window title + finished-notification, driven by agent busy state.
+  // Dynamic window title, driven by the busy state of the chat tab on screen.
   // Runs in every environment — document.title is harmless in a plain browser
-  // (the tab label just tracks agent state too), and the notification fires
-  // through the desktop bridge or the Web Notification API, whichever exists.
-  const prevStreamingRef = useRef(isStreaming)
-  const prevSessionIdRef = useRef(sessionId)
+  // (the tab label just tracks agent state too).
   useEffect(() => {
     const name = activeProject?.name
     // No workspace open → bare "Halo"; otherwise prefix a solid dot while busy.
@@ -155,46 +150,41 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     // prefix ("[DEV] ") must be re-stamped here — this rewrite would
     // otherwise clobber what applyEnvBadge put on the initial title.
     document.title = envBadgeTitlePrefix() + (name ? `${isStreaming ? '● ' : ''}Halo — ${name}` : 'Halo')
+  }, [isStreaming, activeProject?.name])
 
-    // Busy→idle falling edge → notify the user their agent finished, but only
-    // when this window is unfocused (focused → they can see it) AND the session
-    // didn't change on this tick. isStreaming tracks the *currently subscribed*
-    // session; switching sessions (loadSession sets sessionId but leaves
-    // isStreaming until the new session's events recalibrate it) can drop it
-    // true→false even though the old session is still running — that's a false
-    // "finished", so a session change on the edge tick is not a real completion.
-    const wasStreaming = prevStreamingRef.current
-    const prevSessionId = prevSessionIdRef.current
-    prevStreamingRef.current = isStreaming
-    prevSessionIdRef.current = sessionId
-    // Real busy→idle completion of the *still-subscribed* session.
-    const finished = notifyOnFinish
-      && wasStreaming && !isStreaming
-      && prevSessionId === sessionId && sessionId != null
-    if (finished) {
+  // Finished-notification: any loaded chat tab's root turn settling — on
+  // screen or in the background. onTurnSettled only reports a completion
+  // action's busy→idle edge on a live store, so tab switches, snapshot
+  // replays and released / disposed tabs never ring. The notification fires
+  // through the desktop bridge or the Web Notification API, whichever exists.
+  useEffect(() => {
+    if (!notifyOnFinish) return
+    return onTurnSettled((store) => {
       // Sound plays regardless of focus — the whole point is an audible cue even
       // when you're looking at the tab (a native banner would be noise there, so
       // that still waits for blur below). Self-synthesized so there's no audio
       // asset to bundle; browsers/Electron gate WebAudio behind a prior user
       // gesture, which the bell toggle click already satisfied.
       playChime()
-      if (!document.hasFocus()) {
-        const title = name ? `Halo — ${name}` : 'Halo'
-        const body = t('status.notifyBody')
-        const notify = (window as unknown as {
-          haloNotify?: { notify: (p: { title: string; body: string }) => void }
-        }).haloNotify
-        if (notify) {
-          // Desktop: native banner + Dock/taskbar attention via the main process.
-          notify.notify({ title, body })
-        } else if ('Notification' in window && Notification.permission === 'granted') {
-          // Browser: raise a Web Notification; clicking it refocuses this tab.
-          const n = new Notification(title, { body })
-          n.onclick = () => { window.focus(); n.close() }
-        }
+      if (document.hasFocus()) return
+      const name = activeProject?.name
+      const title = name ? `Halo — ${name}` : 'Halo'
+      const sid = store.getState().sessionId
+      const sessionTitle = sid ? listedSessionTitle(sid) : undefined
+      const body = sessionTitle ? t('status.notifyBodySession', { title: sessionTitle }) : t('status.notifyBody')
+      const notify = (window as unknown as {
+        haloNotify?: { notify: (p: { title: string; body: string }) => void }
+      }).haloNotify
+      if (notify) {
+        // Desktop: native banner + Dock/taskbar attention via the main process.
+        notify.notify({ title, body })
+      } else if ('Notification' in window && Notification.permission === 'granted') {
+        // Browser: raise a Web Notification; clicking it refocuses this tab.
+        const n = new Notification(title, { body })
+        n.onclick = () => { window.focus(); n.close() }
       }
-    }
-  }, [isStreaming, sessionId, activeProject?.name, t, notifyOnFinish])
+    })
+  }, [notifyOnFinish, activeProject?.name, t])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)

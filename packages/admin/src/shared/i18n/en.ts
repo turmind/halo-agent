@@ -245,7 +245,6 @@ export const en: Record<string, string> = {
   'chat.access.noSandbox': 'This host has no OS sandbox (bubblewrap / sandbox-exec) — Full only',
   'chat.tabs.newSession': 'New session',
   'chat.tabs.untitled': 'Untitled session',
-  'chat.tabs.running': 'Running',
   'chat.tabs.unread': 'New messages',
   'chat.sessions.title': 'Sessions',
   'chat.sessions.new': 'New session',
@@ -390,6 +389,7 @@ export const en: Record<string, string> = {
   'status.busy': 'Working…',
   'status.idle': 'Idle',
   'status.notifyBody': 'Agent finished responding.',
+  'status.notifyBodySession': '“{title}” finished responding.',
 
   // ── Source Control ──
   'sc.refresh': 'Refresh',

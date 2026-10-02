@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { registerChatHandlers } from '../src/shared/ws-handlers/chat-handlers'
-import { useChatStore, getActiveChatStore } from '../src/features/chat/chat-store'
+import { registerStateHandlers } from '../src/shared/ws-handlers/state-handlers'
+import { useChatStore, getActiveChatStore, onTurnSettled, type ChatStoreApi } from '../src/features/chat/chat-store'
 import {
   useChatTabs,
   restoreTabs,
@@ -287,5 +288,93 @@ describe('chat tabs — reconnect releases background tabs', () => {
     newTab()
     expect(releaseBackgroundTabs()).toBe('')
     expect(getLoadedStore('sess_a')).toBeNull()
+  })
+})
+
+describe('chat tabs — turn settled (finish chime)', () => {
+  let settled: ChatStoreApi[]
+  let off: () => void
+  let offState: () => void
+  beforeEach(() => {
+    settled = []
+    off = onTurnSettled((store) => settled.push(store))
+    // Snapshot / reattach paths need the state handlers on the same fake.
+    const fake = makeFakeWsClient()
+    const prevEmit = emit
+    offState = registerStateHandlers(fake.client)
+    emit = (type, data) => { prevEmit(type, data); fake.emit(type, data) }
+  })
+  afterEach(() => { off(); offState() })
+  const flush = () => Promise.resolve()
+
+  it('fires for a background tab and for the tab on screen, once each', async () => {
+    openTab('sess_a')
+    openTab('sess_b')
+    startTurn('sess_a')
+    startTurn('sess_b')
+
+    emit('chat:complete', { sessionId: 'sess_a' })
+    await flush()
+    expect(settled).toEqual([getLoadedStore('sess_a')])
+
+    emit('chat:stopped', { sessionId: 'sess_b' })
+    emit('chat:complete', { sessionId: 'sess_b' }) // already idle — no second edge
+    await flush()
+    expect(settled).toEqual([getLoadedStore('sess_a'), getLoadedStore('sess_b')])
+  })
+
+  it('a followup that re-opens the stream in the same frame is not a finish', async () => {
+    openTab('sess_a')
+    startTurn('sess_a')
+    emit('chat:followup', { sessionId: 'sess_a', agentName: 'default' })
+    await flush()
+    expect(settled).toEqual([])
+    expect(getLoadedStore('sess_a')!.getState().isStreaming).toBe(true)
+  })
+
+  it('a sub-task finishing leaves the root busy — no chime', async () => {
+    openTab('sess_a')
+    startTurn('sess_a')
+    getLoadedStore('sess_a')!.getState().addMessage({ role: 'assistant', content: '', streaming: true, taskId: 't1' })
+    getLoadedStore('sess_a')!.getState().completeAgentStreaming('worker', 't1')
+    await flush()
+    expect(settled).toEqual([])
+  })
+
+  it('switching tabs, snapshot replays and reattach rebuilds never fire', async () => {
+    openTab('sess_a')
+    startTurn('sess_a')
+    openTab('sess_b')
+    openTab('sess_a')
+    // A snapshot replace while streaming is skipped; one for an idle log
+    // replaces it — neither is a completion.
+    emit('state:snapshot', { snapshot: { sessionId: 'sess_a', recentMessages: [{ id: 'u', role: 'user', content: 'hi', timestamp: 1 }] } })
+    // Reattach: the replay resets to the settled stash (isStreaming true → false
+    // inside setMessages) and re-opens the turn.
+    emit('chat:followup', { sessionId: 'sess_a', agentName: 'default', replay: true })
+    emit('chat:stream', { sessionId: 'sess_a', text: 'replayed', replay: true })
+    await flush()
+    expect(settled).toEqual([])
+  })
+
+  it('a released or deleted tab never fires, even if its edge is pending', async () => {
+    openTab('sess_a')
+    openTab('sess_b')
+    startTurn('sess_a')
+    const storeA = getLoadedStore('sess_a')!
+    storeA.getState().completeAgentStreaming()
+    releaseBackgroundTabs() // disposed before the microtask runs
+    await flush()
+    expect(settled).toEqual([])
+
+    startTurn('sess_b')
+    getLoadedStore('sess_b')!.getState().completeAgentStreaming()
+    dropSessionTab('sess_b')
+    await flush()
+    expect(settled).toEqual([])
+    // And frames for a released session never reach a store.
+    emit('chat:complete', { sessionId: 'sess_a' })
+    await flush()
+    expect(settled).toEqual([])
   })
 })

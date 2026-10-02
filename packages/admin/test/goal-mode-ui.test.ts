@@ -72,7 +72,7 @@ describe('goal presentation is hidden without deleting history', () => {
     render(surface === 'dropdown'
       ? createElement(SessionListDropdown, { ...common, open: true })
       : createElement(SessionSidebar, {
-        ...common, loadingSessionId: null, onNew: vi.fn(), onLoadMore: vi.fn(), hasMore: false, loadingMore: false,
+        ...common, onNew: vi.fn(), onLoadMore: vi.fn(), hasMore: false, loadingMore: false,
       }))
     expect(container.querySelector('[title="Goal-bound worker session"]')).toBeNull()
     expect(container.textContent).toContain('🎯 Goal history')

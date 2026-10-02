@@ -342,7 +342,7 @@ export function noteTabSnapshot(store: ChatStoreApi, archiveCount: number): void
 
 /** Unload a background tab: drop its store (and the unread dot that lived
  *  on it) and keep the header — the next show re-creates the store and
- *  subscribes. Its unread falls back to the list's status (session-list). */
+ *  subscribes. Until then its list dot reads idle (session-list). */
 function releaseTab(tab: ChatTab): void {
   if (!tab.store) return
   disposeChatStore(tab.store)

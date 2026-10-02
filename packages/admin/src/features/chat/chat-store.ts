@@ -412,7 +412,9 @@ function setShared(patch: Partial<SharedFields>): void {
   for (const s of liveStores) s.setState(patch)
 }
 
-const chatStoreState = (ix: StoreLocals): StateCreator<ChatStore> => (set, get) => ({
+/** `settled` = completeAgentStreaming just took a root turn busy → idle
+ *  (see onTurnSettled). */
+const chatStoreState = (ix: StoreLocals, settled: () => void): StateCreator<ChatStore> => (set, get) => ({
   messages: [],
   isStreaming: false,
   sessionId: null,
@@ -636,6 +638,7 @@ const chatStoreState = (ix: StoreLocals): StateCreator<ChatStore> => (set, get) 
   },
 
   completeAgentStreaming(agentName?: string, taskId?: string) {
+    const wasStreaming = get().isStreaming
     set((state) => {
       const before = state.messages.filter(isMainConversationMessage).length
       const messages = state.messages.map((msg) => {
@@ -652,6 +655,7 @@ const chatStoreState = (ix: StoreLocals): StateCreator<ChatStore> => (set, get) 
       pruneStreamingIdx(ix, messages)
       return { messages, isStreaming: stillStreaming }
     })
+    if (wasStreaming && !get().isStreaming) settled()
   },
 
   takeRoundReplies() {
@@ -805,10 +809,27 @@ const chatStoreState = (ix: StoreLocals): StateCreator<ChatStore> => (set, get) 
   },
 })
 
+const turnSettledListeners = new Set<(store: ChatStoreApi) => void>()
+
+/** A live store's root turn finished: a completion action (chat:complete /
+ *  chat:stopped / error / followup → completeAgentStreaming) took
+ *  isStreaming true → false, and it is still false once the frame's handler
+ *  returns — a followup re-opens the stream in the same handler, hence the
+ *  microtask. Log replaces (snapshot, reattach replay), send failures, the
+ *  stale-placeholder sweep and a disposed / released store never fire.
+ *  Feeds the finish chime (workspace-layout). */
+export function onTurnSettled(listener: (store: ChatStoreApi) => void): () => void {
+  turnSettledListeners.add(listener)
+  return () => { turnSettledListeners.delete(listener) }
+}
+
 /** A fresh per-tab store (see chat-tabs). Live until disposeChatStore. */
 export function createChatStore(): ChatStoreApi {
   const ix: StoreLocals = { streamingIdx: new Map(), toolUseIdIdx: new Map(), roundStart: 0, lastSnapshot: null }
-  const store = createStore<ChatStore>()(chatStoreState(ix))
+  const store: ChatStoreApi = createStore<ChatStore>()(chatStoreState(ix, () => queueMicrotask(() => {
+    if (!liveStores.has(store) || store.getState().isStreaming) return
+    for (const l of turnSettledListeners) l(store)
+  })))
   liveStores.add(store)
   return store
 }

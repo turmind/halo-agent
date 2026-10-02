@@ -235,7 +235,6 @@ export function ChatPanel() {
       <SessionSidebar
         sessions={sessions}
         currentSessionId={sessionId}
-        loadingSessionId={activeTab?.loading ? activeTab.sessionId : null}
         onSelect={openTab}
         onDelete={handleDeleteSession}
         onNew={() => newTab()}

@@ -245,7 +245,6 @@ export const zh: Record<string, string> = {
   'chat.access.noSandbox': '本机没有可用的系统沙箱（bubblewrap / sandbox-exec），只能用完全档',
   'chat.tabs.newSession': '新会话',
   'chat.tabs.untitled': '未命名会话',
-  'chat.tabs.running': '运行中',
   'chat.tabs.unread': '有新消息',
   'chat.sessions.title': '会话',
   'chat.sessions.new': '新建会话',
@@ -390,6 +389,7 @@ export const zh: Record<string, string> = {
   'status.busy': '运行中…',
   'status.idle': '空闲',
   'status.notifyBody': 'Agent 已完成回复。',
+  'status.notifyBodySession': '「{title}」已完成回复。',
 
   // ── Source Control ──
   'sc.refresh': '刷新',
