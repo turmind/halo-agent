@@ -24,7 +24,7 @@ The rest are noun-verb **object commands**: `/<obj> <verb> [args]`. Some verbs a
 | `/cron` | create / list / update / enable / disable / delete — all skill verbs, full |
 | `/acp` | kiro / claude (ask a local agent directly; question = rest of line) · add / list / remove (manage generated ask-* bindings) — all full |
 
-Session lifecycle actions (`session:clear`, `session:delete`) are handled inline by the WS handler, not as slash commands.
+Session lifecycle actions (`subscribe` / `unsubscribe`, `session:delete`) are handled inline by the WS handler, not as slash commands. In the admin, a bare `/session new` (and `/clear`) is handled client-side: it opens a new draft chat tab and sends nothing; `/session new <args>` still goes to the server. The WS `session:clear` frame was removed in 1.5.3-alpha.
 
 ### `/session info`
 

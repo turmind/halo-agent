@@ -106,7 +106,7 @@ Path: `.halo/sessions/{agentId}/{sessionId}.json`
   "id": "oogezptkmoaeflb5",
   "agentId": "default",
   "agentName": "Default",
-  "title": "First user message...",  // auto-generated, max 60 chars
+  "title": "First user message...",  // max 60 chars, sticky once set. Root: first user message, or createSession's explicit title. Sub-session: its description (the brief). See session.md#session-file-format
   "source": "explorer",              // "explorer" (root) | "delegated" (sub-session)
   "createdAt": "ISO8601",
   "updatedAt": "ISO8601",

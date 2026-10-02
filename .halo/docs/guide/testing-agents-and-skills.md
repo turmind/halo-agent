@@ -12,11 +12,10 @@ Activity Bar → `👥 Agents` → click the agent you want to test.
 
 Top-right `Test` button. What it does, concretely:
 
-1. Detaches any active chat session from the Explorer panel
-2. Clears the selected agent override and sets it to this agent (`selectedAgentId`)
-3. Dispatches a `halo:navigate` event that switches to the Explorer tab
+1. Opens a new draft chat tab in the Explorer panel with this agent selected (`newTab(agentId)` — an untouched draft tab is reused). Any session you already had open keeps its own tab, and keeps running if it was busy
+2. Dispatches a `halo:navigate` event that switches to the Explorer tab
 
-Source: [packages/admin/src/features/agents/agent-management-main.tsx:278-290](../../../packages/admin/src/features/agents/agent-management-main.tsx#L278-L290).
+Source: `testAgent` in [packages/admin/src/features/agents/agent-management-main.tsx](../../../packages/admin/src/features/agents/agent-management-main.tsx).
 
 ### 3. Start chatting
 
@@ -123,13 +122,13 @@ Sessions → select → context menu → Delete. Or programmatically: `DELETE /a
 
 ### "Test button does something weird" — the session is orphaned
 
-If clicking Test sometimes shows a stale conversation instead of a new one, you might be seeing a previously-detached session that hasn't been cleared. The Test handler explicitly clears `localStorage.halo_session_<projectId>` and the in-memory `sessionId` — but an in-flight WS message can race. Refresh the page; it should settle.
+Since 1.5.3-alpha, Test no longer clears any stored session: it only opens a new draft tab (the old `localStorage.halo_session_<projectId>` key is gone). The new session is created by the first message you send from that tab. If you see an old conversation instead of an empty one, the draft tab isn't the one on screen. Click **+** at the bottom of the session tabs to bring it back (an unused draft is reused).
 
 ---
 
 ## References
 
-- Test button implementation: [packages/admin/src/features/agents/agent-management-main.tsx:278-290](../../../packages/admin/src/features/agents/agent-management-main.tsx#L278-L290)
+- Test button implementation: `testAgent` in [packages/admin/src/features/agents/agent-management-main.tsx](../../../packages/admin/src/features/agents/agent-management-main.tsx)
 - `activate_skill` runtime: [packages/server/src/agents/agent-loader.ts:111-159](../../../packages/server/src/agents/agent-loader.ts#L111-L159) (function `createSkillTool`)
 - Skill metadata → system prompt: [packages/server/src/agents/agent-loader.ts:97-102](../../../packages/server/src/agents/agent-loader.ts#L97-L102) (function `buildSkillPrompt`)
 - Chat session creation on first message: [packages/server/src/ws/handler.ts:263-344](../../../packages/server/src/ws/handler.ts#L263-L344) (function `handleChat`)

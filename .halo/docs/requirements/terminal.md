@@ -9,6 +9,8 @@ xterm.js terminal with a node-pty backend, multi-tab, reconnect-resilient.
 - Every terminal has a unique `terminalId` for routing
 - Tabs close independently
 - All tabs on a client share one WebSocket connection (multiplexed by `terminalId`)
+- The tab list is a column of Chrome-style **vertical tabs** on the right of the terminal (same `VerticalTabList` + `ResizableSidebar` components as the chat session tabs). Each row has a terminal icon and its name, and a ✕ to close it, shown while more than one terminal is open. A "+" at the bottom opens a new terminal
+- The list can be **resized** by dragging its left edge (120–480px, default 160px), and **collapsed** to a `w-10` rail of square icons with a "+" at the bottom. Both settings persist globally in `localStorage` (`halo_terminal_sidebar_open`, `halo_terminal_sidebar_width`)
 
 ### Working directory
 

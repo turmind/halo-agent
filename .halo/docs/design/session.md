@@ -43,6 +43,11 @@ These sessions also do **not** get an `agent_sessions` row in the workspace's `h
 - **output**: accumulated assistant text of the latest turn
 - **lastActivityAt**: ISO time of the latest turn's last text / tool event (null if none) — written alongside `output` by `saveAgentState` so a released session's `get_session_output` can still report liveness
 - **archiveCount / archivedUserCount**: UI-log archiving bookkeeping — absent until the first archive. See [UI-log archiving](#ui-log-archiving)
+- **title**: set once, then sticky (a later write keeps an existing title other than `New session`; a rename via `PATCH /sessions/logs/:id` overwrites it). Where it comes from depends on the session kind:
+  - **Root**: the first user message (editor-context prefixes stripped, 60 chars) via `saveSessionToFile`, or the explicit `title` passed to `createSession`, which pre-seeds the file before the first run.
+  - **Sub-session**: its `description` — the brief — truncated to 60 chars (`saveSessionToFile` for `delegated` logs, and `saveAgentState`).
+
+  Before 1.5.3-alpha `saveAgentState` stamped `description` on **any** untitled session. For a root that is a creation label (`Explorer chat`, `Telegram: …`), and that write usually beat the first debounced UI-log persist, so the label became every new root's permanent title.
 
 `saveSessionToFile()` uses read-merge-write so both halves survive. When loading, the event log `messages` takes priority; only when `messages` is empty (e.g. a sub-session tracked only by SessionManager) does `rawMessages` get converted to display format.
 
@@ -334,24 +339,25 @@ Content blocks can be either SDK class instances or plain data objects:
 
 ## Non-destructive /session new
 
-`/session new` (session:clear) does not destroy the old session:
-1. Save the current session to disk
-2. Detach the event listener from the old session tree
-3. Register a background handler for that old session's events
-4. Reset client state (sessionId, messageLog, etc.)
-5. The old session's sub-agents keep running independently
-6. Switching back re-attaches the event listener and loads from the file
+In the admin, `/session new` (also `/clear`, "+ New Session") does not touch the old session at all:
+1. A new **draft tab** opens client-side (`newTab` in `chat-tabs.ts`); no WS frame is sent
+2. The old session keeps its tab, and its subscription stays in the connection's set, so in-flight events keep streaming into that tab in the background
+3. The old session's sub-agents keep running independently
+4. The draft gets its session id on the first send or command; `bindOrCreateSession` creates the session and subscribes it
+5. Switching back shows the old tab's store as it is. A tab released by a reconnect subscribes again and loads from the UIState / file
+
+Before 1.5.3-alpha this was the WS `session:clear` frame (save, release the listener, unbind the connection); it was removed when one connection started carrying every open tab. Other channels' `/session new` still creates the session server-side and returns `switchTo`.
 
 See [background-dispatch.md](background-dispatch.md).
 
 ## WS disconnect resilience
 
 Frontend network issues don't affect the backend:
-1. **Detach condition**: SessionManager has an active session anywhere in the tree
+1. **Detach condition**: checked per subscribed session — `hasActiveWorkInTree(sid)`, i.e. something in that session's own tree is running or compacting. Sessions without active work are saved and released. A session another connection already parked keeps that entry (never overwritten)
 2. **Grace period**: fixed `config.timeout.sessionGrace` (5 min default) — a single `setTimeout`, no auto-extension
 3. **Event buffering**: the detached handler uses `bufferDetachedNotification` to buffer structural events in `pendingEvents[]`. All state (messageLog / tokens / etc.) lives in SessionManager's UIState, not duplicated in the handler.
-4. **Reconnect**: a `subscribe` with the same sessionId loads UIState from SessionManager, replays `pendingEvents`, and — if still running — resumes live streaming
-5. **Detach-save dirty gate**: every WS write-back path (disconnect cleanup, grace expiry, session switch/clear, backgroundSaves) funnels through `saveSession()`, which skips any UIState that isn't **dirty** — i.e. this process never reduced an event / appended a notification / replaced the log since the last successful persist (`SessionUIStore.isUIStateDirty`). A clean state is either a pure disk seed (built by `prepareForView` to *view* a session another process is driving — e.g. a cron `halo cli` child appending to the same file) or already flushed; writing it back would clobber the fresher file with a frozen snapshot. This was the cron-session UI-log truncation incident: admin viewed a cron session, closed the tab, and the grace-expiry save erased the cli child's final minutes of messages (`rawMessages`/`output` survived only via `saveSessionToFile`'s read-merge). A sub-session event changes only that sub's own file, so it does not mark the root dirty; `flushSession` likewise rewrites the root's file only when it is dirty. The flag is cleared on successful root `persistLog` (kept on failure so a later save retries) and on `dropUIState`/purge/`prepareForView` re-seed so a stale flag never leaks onto a fresh disk copy.
+4. **Reconnect**: the admin resubscribes only the chat tab on screen; background tabs drop their stores and subscribe when next shown. A `subscribe` with a detached sessionId loads UIState from SessionManager, replays `pendingEvents`, and — if still running — resumes live streaming
+5. **Detach-save dirty gate**: every WS write-back path (disconnect cleanup, grace expiry, `unsubscribe` / workspace switch, stop, chat error) funnels through `saveSession()`, which skips any UIState that isn't **dirty** — i.e. this process never reduced an event / appended a notification / replaced the log since the last successful persist (`SessionUIStore.isUIStateDirty`). A clean state is either a pure disk seed (built by `prepareForView` to *view* a session another process is driving — e.g. a cron `halo cli` child appending to the same file) or already flushed; writing it back would clobber the fresher file with a frozen snapshot. This was the cron-session UI-log truncation incident: admin viewed a cron session, closed the tab, and the grace-expiry save erased the cli child's final minutes of messages (`rawMessages`/`output` survived only via `saveSessionToFile`'s read-merge). A sub-session event changes only that sub's own file, so it does not mark the root dirty; `flushSession` likewise rewrites the root's file only when it is dirty. The flag is cleared on successful root `persistLog` (kept on failure so a later save retries) and on `dropUIState`/purge/`prepareForView` re-seed so a stale flag never leaks onto a fresh disk copy.
 
 ## Resilient execution loop
 
@@ -434,7 +440,7 @@ All paths share the same split logic — `compactCut(messages)`, exported from `
 
 Config (see `config.compact`): `keepMessages` / `maxSummaryInput` / `maxMessageSlice` — editable in Settings → General → compact.
 
-**Self-compact also archives the UI log.** `selfCompactSession` calls `uiStore.archiveOldMessages(session.id)` for **root sessions only** (`!session.parentId`), right before the compaction notice is emitted so the notice lands in the kept exchange rather than inside the archived segment. Compaction is the one path that already means "history shrinks here", which is why archiving hangs off it rather than off a timer or its own sweep — the size threshold below decides whether the call does anything. See [UI-log archiving](#ui-log-archiving).
+**Self-compact also archives the UI log.** `selfCompactSession` calls `uiStore.archiveOldMessages(session.id)` for **root and sub-sessions alike** (root-only until 1.5.3-alpha; a long-running sub-agent's UI log then grew without bound — 4.77 MB in testing), right before the compaction notice is emitted so the notice lands in the kept exchange rather than inside the archived segment. Compaction is the one path that already means "history shrinks here", which is why archiving hangs off it rather than off a timer or its own sweep — the size threshold below decides whether the call does anything. See [UI-log archiving](#ui-log-archiving).
 
 ### History image budget
 
@@ -464,6 +470,8 @@ Bytes, not an exchange count, because bytes are the actual problem — file size
 
 Accepted edge, documented so it isn't "fixed": `rawMessages` shares the active file, so if raw alone approaches 3 MB (rare — compaction is what bounds it) the file can still exceed the threshold right after the UI log is archived, and the next compact writes another very small segment. Harmless churn; guarding it would mean second-guessing which half owns the bytes.
 
+**Sub-sessions archive their own log.** A sub-session's UI log lives in its root's `UIState` (`subSessionLogs`, keyed by the full `root>…` id), but it is written to the sub's **own** file and segments (`fileSegment(sessionId)` — the id's leaf segment), never the parent's. Archiving a sub therefore never truncates the parent's log or touches the parent's file. The split rule is the same: every user row in a sub log (the brief, a `query_session` follow-up, a child's auto-report) is written without `taskId`, so each one opens an exchange there just as in a root log. `persistLog` carries `archiveCount` / `archivedUserDelta` for a sub the same way it does for a root. Load differs on purpose: a root uses `ensureUIState` (a cold `/compact` on a disk-restored root must archive too), while a sub only **peeks** the in-memory log. Both compact paths emit their "Compacting context…" notice (carrying the sub's `taskId`) before archiving, and that event lazily builds the sub log from its own file. So a missing sub log means there is nothing live to archive; the call is a no-op and the next compact retries. Segments of a sub are served by the same route under the sub's full, URL-encoded id.
+
 **The in-flight turn can't be archived** — by construction, not by a guard: the running turn's user message is the newest main user message, so keeping the newest exchange always keeps it.
 
 **Crash consistency — three parts:**
@@ -474,7 +482,7 @@ Accepted edge, documented so it isn't "fixed": `rawMessages` shares the active f
 
 Segments are immutable and append-only (`N` from 1, monotonically). Deletion is filesystem-driven: `deleteArchiveSegments()` globs `<seg>.arch.*.json.gz` in the directory rather than trusting `archiveCount` or any in-memory map, so crash-orphaned segments go too. Both session-file delete paths (`deleteSessionFile`, `findAndDeleteSessionFile`) call it.
 
-**Read side (scroll-up loading).** The admin still loads a session the way it always did — the whole active file — and fetches segments only when the user scrolls to the top: `GET /api/sessions/logs/:id/archive/:n?projectId=` returns `{ messages }` for one whole segment, gunzipped server-side. The anchor is `archiveCount`, delivered on the `state:snapshot` of **subscribe / reattach only** (one header read per session open); per-turn snapshots and the post-`exchange:delete` snapshot deliberately omit it. The client walks `archiveCount` → 1 and stops at "no earlier messages"; pulled segments are cached (immutable, so never re-requested) and a failed fetch keeps the cursor so the same segment can be retried.
+**Read side (scroll-up loading).** The admin still loads a session the way it always did — the whole active file — and fetches segments only when the user scrolls to the top: `GET /api/sessions/logs/:id/archive/:n?projectId=` returns `{ messages }` for one whole segment, gunzipped server-side (`:id` is the encoded full id, so a sub-session's segments are reachable too). The anchor is `archiveCount`, delivered on the `state:snapshot` of **subscribe / reattach only** (one header read per session open); per-turn snapshots and the post-`exchange:delete` snapshot deliberately omit it. The client walks `archiveCount` → 1 and stops at "no earlier messages"; pulled segments are cached (immutable, so never re-requested) and a failed fetch keeps the cursor so the same segment can be retried.
 
 **The anchor moves up, never down.** `noteArchiveAnchor` no-ops for an equal or lower count (keeping per-turn snapshots — which omit the field, read as 0 — and ordinary re-subscribes idempotent), but a **higher** count re-anchors. Needed because a compact that fires while the session is open archives a new segment, and the next subscribe/reattach snapshot both carries the higher count *and* replaces the view with the shrunken active log: with a permanently pinned anchor those just-archived turns were in neither place — gone from the view and below a cursor counting down from the old anchor — showing a hole until the user reopened the session. Re-anchoring restarts the walk instead of extending it (prepends are oldest-first, so a newer segment can't splice onto an already-pulled tail); the re-pull costs no requests because `segmentCache` still holds them. Archived history renders collapsed and **read-only** — no Delete button, which matches `deleteExchange` refusing archived logs.
 

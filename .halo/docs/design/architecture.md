@@ -96,10 +96,10 @@ State: `messages: AnthropicMessage[]` (the full conversation history; external c
 
 File: `ws/handler.ts`. See [design/ws.md](ws.md).
 
-One `ConnectedClient` per WS connection, holding: `sessionManager` / `agentSessionId` / `terminalManager` / `backgroundSaves`. UI state (messageLog / streamBuffer / tokens) belongs to SessionManager's `UIState`, not the client. File watchers live in a per-workspace `WatcherPool` (`ws/watcher-pool.ts`) shared by every connection on that workspace.
+One `ConnectedClient` per WS connection, holding: `sessionManager` / `subscriptions` (root session id → its event listener's unsubscribe — one connection carries every open admin chat tab) / `projectId` / `terminalManager`. UI state (messageLog / streamBuffer / tokens) belongs to SessionManager's `UIState`, not the client. File watchers live in a per-workspace `WatcherPool` (`ws/watcher-pool.ts`) shared by every connection on that workspace.
 
 Message dispatch:
-- `chat` / `chat:stop` / `subscribe` / `session:clear` / `session:delete` → handled directly in `ws/handler.ts`
+- `chat` / `chat:stop` / `chat:interrupt` / `subscribe` / `unsubscribe` / `session:delete` / `exchange:delete` → handled directly in `ws/handler.ts` (`session:clear` was removed in 1.5.3-alpha; a new session is a client-side draft tab)
 - `command:*` → `dispatchCommand` (`channels/shared/commands.ts`) — same dispatcher every channel uses
 - `terminal:*` → TerminalManager
 

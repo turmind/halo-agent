@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.3-alpha] - 2026-10-02
+
+### Added
+
+- Admin: chat sessions are tabs. Switching sessions no longer wipes the one you were in: each session you open keeps its own content, scroll position and in-progress output, and background sessions keep streaming and show running / new-message badges. After a reload only the active session loads, and the others load when opened. "+ New Session" and `/session new` open a new draft tab.
+- Admin: the session list and the terminal list are Chrome-style vertical tabs. The session list is the tab list. Both lists stay on screen, can be dragged wider, and collapse to a narrow rail. The History / New session buttons next to the input are gone. ✕ on a session deletes it, with its sub-sessions, after a confirm in the UI language. The session list has no 300-session cap any more.
+- Admin: the Sessions page keeps the last 20 sessions you viewed in memory and shows them instantly when you switch back, then refreshes them in the background.
+
+### Changed
+
+- WS protocol: one connection now carries a set of subscriptions. `subscribe` adds a session to the set, and the new `unsubscribe` releases its listener while the agent keeps running. `session:clear` / `session:cleared` are removed. `session:switched` means "added to your set" and carries `fromSessionId`. `listener:released` is sent once per released session, and its `sessionId` is no longer nullable. Session-scoped frames carry `sessionId`. Session list REST responses include `status`. On reconnect the admin re-subscribes only the active tab.
+- Admin: long user messages collapse to a header row (chevron, send time, first 20 characters), and clicking the row toggles the message. The sub-agent report toggles from its title row the same way. Expanded bodies are capped at 40% of the window height and scroll inside the bubble.
+- Sessions: a root session's title comes from its first message. It used to be a creation label such as "Explorer chat". Sub-sessions are still titled from their brief.
+- Agents: the default context window is 272K and auto-compact fires at 90% (was 80%). Bundled models with a larger native window are pinned to 272K.
+- Prompts: the root `DELEGATION.md` keeps "do it yourself" for light work only. Technical unknowns stay with the worker, and a worker's report should carry the context it gathered so the next brief can reuse it.
+
+### Fixed
+
+- Agents: a long-running sub-agent's log grew without limit because only root sessions moved old messages into archive segments on compact. Sub-sessions now archive into their own file too, and the parent's log is untouched.
+- Admin: deleting a session tree left sub-session files on disk.
+- Admin: in debug mode, a blank strip appeared above the first message.
+- CLI: after `/session switch`, image paste followed the old session's model. Non-interactive `halo cli` output now keeps system notices such as compaction, so cron receives them too.
+
 ## [1.5.2-alpha] - 2026-10-01
 
 ### Changed
@@ -677,7 +700,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.2-alpha...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.3-alpha...HEAD
+[1.5.3-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.2-alpha...v1.5.3-alpha
 [1.5.2-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.1-alpha...v1.5.2-alpha
 [1.5.1-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha...v1.5.1-alpha
 [1.5.0-alpha]: https://github.com/turmind/halo-agent/compare/v1.4.6...v1.5.0-alpha

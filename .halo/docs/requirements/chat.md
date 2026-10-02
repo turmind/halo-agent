@@ -24,14 +24,20 @@ The primary surface for talking to an agent.
 - Tool-call card: expandable, shows tool name / input / output
 - Sub-agent messages carry the agent-name label (e.g. "Coder", "Researcher")
 - Streaming text has a cursor animation
-- The user bubble shows its send time (`HH:mm`, browser-local) at the bubble's bottom-right, right edge aligned with the Delete icon above it; hovering it gives the full date. Same bubble component as the Sessions tab, so both surfaces get it
+- The user bubble shows its send time (`HH:mm`, browser-local) at the left of its header row, after the expand chevron (see [User-message actions](#user-message-actions-expand--copy--delete)); hovering it gives the full date. Same bubble component as the Sessions tab, so both surfaces get it
+- In Debug mode the system-prompt `context` row stays in the list but doesn't open an exchange of its own, so there is no blank strip above the first bubble
 
 ### Debug toggle
-A Bug-icon **Debug** button in the composer's left control cluster (next to the session-list / new-session buttons) switches the message list into the same debug rendering as the Sessions tab — see [requirements/session.md → Debug mode](session.md#debug-mode) for what it shows (tool calls, usage lines with token counts / latency / model, sub-agent start/done markers, thinking blocks). Persists in `localStorage` under its own key `halo_chat_debug`, independent of the Sessions tab's `halo_session_debug`. No Prompt button here — the system prompt viewer stays a Sessions-tab feature.
+A Bug-icon **Debug** button in the composer's left control cluster (next to the agent selector) switches the message list into the same debug rendering as the Sessions tab — see [requirements/session.md → Debug mode](session.md#debug-mode) for what it shows (tool calls, usage lines with token counts / latency / model, sub-agent start/done markers, thinking blocks). Persists in `localStorage` under its own key `halo_chat_debug`, independent of the Sessions tab's `halo_session_debug`. No Prompt button here — the system prompt viewer stays a Sessions-tab feature.
 
 ### User-message actions (Expand / Copy / Delete)
 Actions on user-role turns: the blue sticky user bubble, plus the sub-agent-report (green) and compact-summary (purple) callouts — all three share the same Copy/Delete pair. The icons are **always visible** (not hover-only). On the callouts, Copy copies the body only (the `(from: session X)` / `[Conversation Summary…]` marker line is stripped); a deleted callout greys out and gains a "deleted" badge like the bubble does:
-- **Expand / Collapse** — an arrow icon (chevron-down to expand, chevron-up to collapse) to the left of Copy, on the user bubble and the report callout; it appears only when the body is actually clamped, so short bodies have no arrow. (The compact-summary callout is collapsed by default and toggles from its own header instead)
+- **Expand / Collapse** — from a **header row**, not an icon in the action group (the top-right expand arrow was removed in 1.5.3-alpha):
+  - **User bubble**: the header row holds a chevron, the send time and, while collapsed, a preview (the first 20 characters, then `…`). A long message is **collapsed by default**: the body height is 0, so only the header row shows. Clicking anywhere on the row toggles it.
+  - **Report callout**: its "Report from sub-session" title row toggles the same way.
+  - The chevron only appears when the body is actually clamped; a short body has no chevron and its row does nothing on click.
+  - An expanded body is capped at 40vh and scrolls inside the bubble, because the bubbles are sticky.
+  - The compact-summary callout is collapsed by default and toggles from its own header, as before.
 - **Copy** — copies the prompt text to the clipboard
 - **Delete** (confirm dialog) — removes the whole exchange (the user turn + all responses up to the next user turn) with **two-layer semantics**: the LLM context (`rawMessages`) drops the turn physically — the model never sees it again, freeing context; the UI keeps the messages, rendered greyed-out with a "deleted" tag, as an audit trail. No undo; a deleted exchange loses its Delete button. Rejected with an error toast while the agent is running or compacting. Root sessions only (sub-session logs don't offer Delete). If the turn was already compacted out of raw context, only the UI marking happens (silent degrade). Once a session has **archived history** the action is refused for the whole session with a plain explanatory notice (not an `Error:` bubble) — per-turn positions can no longer be mapped once older turns left the active file. Design details in [design/session.md](../design/session.md#exchange-deletion-soft-ui--hard-raw), protocol in [design/ws.md](../design/ws.md).
 
@@ -46,12 +52,20 @@ Long sessions get their older exchanges moved out of the active log on compact, 
 - Archived exchanges are **read-only**: Copy still works, Delete is absent (the server refuses it for archived sessions)
 - Segments already loaded aren't re-fetched; a failed load can simply be retried with the same row
 
-### Session sidebar (right side)
-A fixed, collapsible list of the workspace's root sessions on the right edge of the chat panel (terminal-list style, ~200px). Replaces the old popup dropdown — the History button (with count badge) left of the composer and the "N previous sessions" link in the empty state both just toggle it now. Open/collapsed state persists globally in `localStorage` (`halo_session_sidebar_open`), default open.
+### Session tabs (right side)
+The workspace's root sessions as **Chrome-style vertical tabs** on the right edge of the chat panel (`VerticalTabList` rows inside a `ResizableSidebar`, default 200px). The list **is** the tab list: every session is "open", clicking a row shows it, and there is no close — deleting the session is the only way a tab goes away. Since 1.5.3-alpha this replaces the top tab strip, the History and New-session buttons beside the composer, and the "N previous sessions" link in the empty state.
 
-- Each row: title, `N msgs · time-ago`, model tail; hover reveals **rename** (pencil) and **delete** buttons; infinite scroll pages older sessions; "+ New Session" footer. `N` counts the session's user turns **over its whole lifetime** — compacting or archiving history never makes it go backwards
+- **Resize / collapse**: drag the left edge to resize (120–480px). Collapse from the header; the collapsed list is a `w-10` rail of square tabs, each showing the title's first letter plus running / unread marks, with a "+" at the bottom. Both settings are global preferences in `localStorage` (`halo_session_sidebar_open`, `halo_session_sidebar_width`); the list is open by default.
+- **Rows**: one line per row, 🎯 + title. Message count, time-ago and model are in the tooltip. `N msgs` counts the session's user turns **over its whole lifetime**, so compacting or archiving history never makes it go backwards.
+  - A spinner icon shows while the session is running. For a tab that hasn't loaded yet, this comes from the list endpoint's `status`.
+  - An unread dot appears when output lands while the tab isn't on screen.
+  - Infinite scroll pages older sessions. A "+" footer starts a new session.
+- **New session**: "+", `/session new` and `/clear` open a **draft tab**. A "New session" row sits on top while it is on screen, and an untouched draft is reused rather than duplicated. The session is created by the draft's first message or command. The previous session keeps streaming in its own tab.
+- **Background tabs**: one WS connection carries every loaded tab, so a session that isn't on screen keeps receiving its turn. After a reconnect only the tab on screen is reattached; the others reload when clicked. Live capture and face (`<<<SHOW>>>`) markers only act for the tab on screen.
+- **Delete (✕)**: deletes the session after a confirm dialog in the UI language ("Delete this session? Its history cannot be recovered." / its Chinese counterpart). Deletion is the REST delete first, then the WS one, so sub-session files go too. The ✕ is always visible on the active tab and appears on hover for the others; hover also reveals a **rename** pencil.
 - **Inline rename**: pencil → input in place, Enter/blur commits (`PATCH /sessions/logs/:id`), Esc cancels; empty or unchanged title is a no-op. Other session-list consumers refresh via the `session:changed` WS push
-- **Switch loading**: clicking a row shows a spinner on that row + a "Loading session…" state in the message area, cleared only when the server's `state:snapshot` for that exact sessionId arrives (empty sessions included). Past 30s it degrades to "Slow network — still loading…" plus a Retry button (re-subscribes) — slow ≠ failed, nothing aborts on its own
+- **Persistence**: only the session on screen is remembered, per workspace, as `{active}` under `halo_chat_tabs_<projectId>`. A refresh restores and loads only that tab. The pre-tabs keys `halo_session_<projectId>` / `halo_session_id` are read once to seed it and then removed.
+- **Switch loading**: clicking a row that hasn't loaded yet shows a spinner on that row + a "Loading session…" state in the message area, cleared only when the server's `state:snapshot` for that exact sessionId arrives (empty sessions included). Past 30s it degrades to "Slow network — still loading…" plus a Retry button (re-subscribes) — slow ≠ failed, nothing aborts on its own. Switching to an already-loaded tab is instant, and its scroll position is restored
 
 ### Slash commands
 

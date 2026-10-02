@@ -105,7 +105,7 @@ Unified session log API — list + read session files across all agents.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/sessions/logs?projectId=` | List session metadata, keyset-paginated. Default returns each top-level row + all descendants (sidebar tree); `rootOnly=1` returns roots only (chat-header dropdown). A `projectId` with no `.halo/` (plain or missing directory) returns `{sessions: [], nextCursor: null}` without scaffolding it — a list never turns a directory into a workspace |
+| GET | `/api/sessions/logs?projectId=` | List session metadata, keyset-paginated. Default returns each top-level row + all descendants (sidebar tree); `rootOnly=1` returns roots only (chat-panel session tabs). Each row carries `status` (`running` also while a sub-session runs). A `projectId` with no `.halo/` (plain or missing directory) returns `{sessions: [], nextCursor: null}` without scaffolding it — a list never turns a directory into a workspace |
 | GET | `/api/sessions/logs/:id?projectId=` | Full session log (scans across agent dirs) — the **active** file only; archived history is a separate call |
 | GET | `/api/sessions/logs/:id/archive/:n?projectId=` | One archived UI-log segment — see [detail](#get-apisessionslogsidarchivenprojectidabs) |
 | DELETE | `/api/sessions/logs/:id?projectId=` | Delete the session log (and all of its archive segments) |
@@ -594,7 +594,7 @@ Source: [packages/server/src/routes/skills.ts](../../../packages/server/src/rout
 
 Source: [packages/server/src/routes/sessions.ts:189-258](../../../packages/server/src/routes/sessions.ts#L189-L258)
 
-Keyset-paginated over `updatedAt` (descending). `limit` defaults to 50; the
+Keyset-paginated over `updatedAt` (descending). `limit` defaults to 50 (max 500); the
 response's `nextCursor` (epoch ms of the last row's `updatedAt`, or `null` on
 the last page) is passed back as `cursor` to fetch the next page.
 
@@ -605,8 +605,8 @@ Two shapes, selected by `rootOnly`:
   sidebar** consumes this and rebuilds the tree from `parentSessionId` in one
   shot, no per-expand round-trips. `limit` bounds the top-level rows; their
   descendants are appended on top.
-- **`rootOnly=1`** — returns root sessions only, no descendants. The
-  **chat-header dropdown** uses this for a flat "recent sessions" list. `limit`
+- **`rootOnly=1`** — returns root sessions only, no descendants. The chat
+  panel's **vertical session tabs** use this for a flat "recent sessions" list. `limit`
   bounds the roots directly, so the page count is exact.
 
 ```json
@@ -626,7 +626,8 @@ Two shapes, selected by `rootOnly`:
       "contextTokens": 5975,
       "totalOutputTokens": 6058,
       "stoppedAt": null,
-      "archivedAt": null
+      "archivedAt": null,
+      "status": "idle"
     }
   ],
   "nextCursor": 1779890684254
@@ -634,6 +635,8 @@ Two shapes, selected by `rootOnly`:
 ```
 
 Archived sessions are excluded by default; pass `?includeArchived=1` to include them.
+
+`status` is `'running' | 'idle' | 'stopped'`. A root counts as `running` while any of its sub-sessions runs. The admin's chat tab list uses it to show a running mark on a tab that hasn't loaded yet; a loaded tab follows its own stream.
 
 Rows are served from the mirrored `agent_sessions` metadata columns (`title` / `exchange_count` / `context_tokens` / `total_output_tokens`) — no session file is opened. A row whose `exchangeCount` is `null` predates those columns: the route reads that one file once, mirrors the values back, and never pays the cost again. `exchangeCount` counts **main user turns over the session's lifetime** (kept + archived), so unlike the file's `messageCount` it doesn't shrink when a compact archives history.
 
@@ -666,7 +669,7 @@ Returns the full session file — the **active** log only. Older exchanges that 
 
 Source: `packages/server/src/routes/session-archive.ts`
 
-One archived UI-log segment, gunzipped server-side. `n` counts up from 1; the client gets its anchor from `archiveCount` on the `state:snapshot` of subscribe/reattach ([ws.md](../design/ws.md)) and walks **down** from it. Segments are immutable once committed, so a client caches what it pulled and never re-requests. Admin-cookie gated (not in `PUBLIC_PATHS`).
+One archived UI-log segment, gunzipped server-side. Works for root and sub-sessions alike: a sub-session's segment is addressed by its full id, URL-encoded (`r1>c1` → `r1%3Ec1`). `n` counts up from 1; the client gets its anchor from `archiveCount` on the `state:snapshot` of subscribe/reattach ([ws.md](../design/ws.md)) and walks **down** from it. Segments are immutable once committed, so a client caches what it pulled and never re-requests. Admin-cookie gated (not in `PUBLIC_PATHS`).
 
 ```json
 // 200
@@ -808,7 +811,7 @@ Server behaviour ([handler.ts `handleChat`](../../../packages/server/src/ws/hand
 
 ### `subscribe` (C→S)
 
-Attach this connection to a session's event stream. Sent on initial connect and whenever the active session changes.
+Add a session to this connection's subscription set. One connection carries every open admin chat tab, so subscribing a session leaves the others subscribed. The admin sends it when a tab is first shown, on reconnect (the tab on screen only) and on workspace switch.
 
 ```json
 {
@@ -818,35 +821,51 @@ Attach this connection to a session's event stream. Sent on initial connect and 
 }
 ```
 
-Idempotent per connection: re-subscribing to the same session releases this connection's previous listener and registers exactly one new one — safe to repeat. The client must also re-send it on receiving `listener:released` (see below).
+Idempotent per connection: re-subscribing an id already in the set registers nothing and only re-sends its `state:snapshot` — safe to repeat. Without `sessionId` it only pins the workspace (file watcher) and returns a seed snapshot. A `projectId` different from the connection's current workspace drops every existing subscription first. The client must also re-send it on receiving `listener:released` (see below).
+
+### `unsubscribe` (C→S)
+
+Remove a session from this connection's set: its UI state is flushed and its listener released. A running agent keeps running. No reply frame.
+
+```json
+{ "type": "unsubscribe", "sessionId": "sid_abc" }
+```
+
+The admin doesn't send it today (a chat tab only goes away when its session is deleted); it exists for other WS clients.
 
 ### `listener:released` (S→C)
 
-The server reclaimed this connection's event listener — sent when the connection was silent for >3 min (no inbound frames; e.g. a frozen tab whose network stack still answers protocol pings) or found CLOSED with a listener attached. The socket stays open; only the event stream is detached.
+The server reclaimed this connection's event listeners — sent when the connection was silent for >3 min (no inbound frames; e.g. a frozen tab whose network stack still answers protocol pings) or found CLOSED with a listener attached. The socket stays open; only the event streams are detached. One frame per released session.
 
 ```json
 { "type": "listener:released", "sessionId": "sid_abc" }
 ```
 
-On receipt the client re-sends `subscribe` to reattach — this frame is the only recovery signal a frozen-and-resumed tab gets, because the server's `__pong__` replies keep the client's own staleness detection from ever firing. Any WS consumer must send `__ping__` periodically (any inbound frame counts) or it will be reclaimed. See [design/ws.md](../design/ws.md#abandoned-listener-reclaim-and-the-__ping__-contract).
+On receipt the client re-sends `subscribe` for each session it still wants to receive. This frame is the only recovery signal a frozen-and-resumed tab gets, because the server's `__pong__` replies keep the client's own staleness detection from ever firing. The admin resubscribes only the chat tab on screen; a background tab just drops its store and loads again when opened. Any WS consumer must send `__ping__` periodically (any inbound frame counts) or it will be reclaimed. See [design/ws.md](../design/ws.md#abandoned-listener-reclaim-and-the-__ping__-contract).
 
-### `session:clear` (C→S)
+`session:clear` (C→S) and its `session:cleared` reply were removed in 1.5.3-alpha. The admin starts a new session by opening a draft tab client-side; the session is created by the draft's first `chat` / `command:*`.
 
-Detach from the current session (for `/session new`). Server unsubscribes the event listener without deleting the session.
+### Addressing a session
+
+`chat`, `chat:stop`, `chat:interrupt`, `command:*`, `session:delete` and `exchange:delete` name their target with `sessionId`. When the field is absent on `chat:stop` / `chat:interrupt` / `command:*` / `session:delete`, the server uses the connection's only subscription. If the connection has several subscriptions, such a frame has no target and is not acted on. `sessionId: null` (a draft tab's stop) is never acted on.
+
+### `session:switched` (S→C)
 
 ```json
-{ "type": "session:clear", "sessionId": "sid_abc" }
+{ "type": "session:switched", "sessionId": "sid_goal", "fromSessionId": "sid_abc", "clientMsgId": "abc123" }
 ```
+
+A command result with `switchTo`, or a goal-mode divert of a `chat`, moved the conversation to `sessionId`. The server has already added it to this connection's set. `fromSessionId` is the session the request came from; its tab stays open. `clientMsgId` is set only on a divert: the chat landed in the target session, so the source tab drops its optimistic copy.
 
 ### `session:delete` (C→S)
 
-Archive (soft-delete) a session.
+Delete a session through `SessionManager.deleteSession` (stops in-flight runs, deletes the SQLite rows of the whole tree, drops in-memory state), then release this connection's subscription for it. Replies `session:deleted {sessionId}`.
 
 ```json
 { "type": "session:delete", "sessionId": "sid_abc", "projectId": "/abs/ws" }
 ```
 
-Hard delete (JSON + SQLite rows, cascades to descendants) goes through the REST route `DELETE /api/sessions/logs/:id`, not this WS message.
+It does not remove session files. The full delete (rows + JSON + archive segments, cascading to descendants) is the REST route `DELETE /api/sessions/logs/:id`. Since 1.5.3-alpha the admin calls that route **first** and sends this WS message afterwards. In the old order the WS delete removed the descendant rows first, so the REST pass found no sub-sessions and left their files on disk.
 
 ### Server-sent events (S→C, selected)
 
@@ -857,8 +876,8 @@ Hard delete (JSON + SQLite rows, cascades to descendants) goes through the REST 
 | `tool_result` | `toolName`, `toolOutput`, `durationMs`, `taskId?` | Tool result |
 | `usage` | `usage`, `modelId`, `turnId`, `taskId?` | Token accounting per turn |
 | `complete` | `stopReason`, `taskId?` | Turn finished |
-| `error` | `error` | Error message |
-| `chat:queued` | `reason`, `message` | Message queued (compact/busy) |
+| `error` | `error`, `sessionId?` | Error message |
+| `chat:queued` | `reason`, `message`, `sessionId` | Message queued (compact/busy) |
 | `listener:released` | `sessionId` | Event listener reclaimed — re-send `subscribe` (see above) |
 
-Events with `taskId` set belong to sub-agent turns (nested sessions); events without are the root agent's. Full list in [design/ws.md](../design/ws.md).
+Events with `taskId` set belong to sub-agent turns (nested sessions); events without are the root agent's. Session-scoped frames carry `sessionId` (the root session they belong to); the admin routes each one to the tab holding that session, and a frame without one goes to the tab on screen. Full list in [design/ws.md](../design/ws.md).

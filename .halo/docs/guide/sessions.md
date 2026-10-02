@@ -54,13 +54,12 @@ Use it to see exactly what context the agent was given for a given turn.
 
 ## Non-destructive /session new
 
-Typing `/session new` in the chat:
-1. Saves the current session to disk
-2. Creates a background handler to keep the old session's in-flight events flowing
-3. UI resets to an empty session
-4. **The old session's sub-agents keep running** (not killed)
+Typing `/session new` in the chat (or clicking **+** in the session tabs):
+1. Opens a new, empty tab — the session itself is created when you send its first message
+2. The old session keeps its own tab and keeps streaming into it in the background
+3. **The old session's sub-agents keep running** (not killed)
 
-When you switch back, the background-finished events are already in the file and render normally.
+When you switch back, everything the old session did meanwhile is already there.
 
 ## Refresh / reconnect
 
@@ -68,10 +67,11 @@ Refreshing the browser or a network blip:
 - SessionManager keeps the session alive for the grace period (5 minutes)
 - On reconnect, messageLog + in-flight streaming state are restored from disk
 - If the agent is still running, live streaming resumes; if it finished, the full history loads
+- Only the chat tab on screen reconnects right away; your other session tabs reload when you click them
 
 ## Deleting a session
 
-Right-click a session → Delete:
+Click a session's trash icon (Sessions page) or ✕ on its chat tab, then confirm:
 - Cascade delete in SQLite (parent + all descendants)
 - `.halo/sessions/{agentId}/{sid}.json` removed
 - Sidebar entry removed

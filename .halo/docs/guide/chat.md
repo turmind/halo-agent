@@ -110,12 +110,17 @@ Reaching `compressAt` (default 90%, setting `general.compact.compress_at`) auto-
 
 ## Session history
 
-Next to the header is the session-list dropdown:
-- Lists every session in the current workspace
-- Click to switch (the current one auto-saves + detaches)
-- Sub-agent sessions show as indented entries
+Your sessions are listed as vertical tabs on the right edge of the chat panel:
+- Lists the workspace's main sessions, newest first; scroll down to load older ones
+- Click a tab to show that session. The one you left keeps running and streaming in its own tab: a spinner shows while it works, and a dot means new output arrived
+- **+** (or `/session new`) opens a fresh tab; the session is created when you send its first message
+- Hover a tab to rename it (pencil); ✕ deletes it after a confirmation — deletion can't be undone
+- Drag the list's left edge to make it wider or narrower, or collapse it to a thin strip of initials
+- After a refresh, the session you were on reopens
 
 For full inspection, use the Activity Bar's "Sessions" tab — Debug mode lets you inspect tool calls, system prompts, usage, etc.
+
+Long messages you sent are collapsed to a one-line header: a chevron, the send time and the first few words. Click the header to expand or collapse it. A long expanded message scrolls inside its bubble. Sub-agent reports open and close from their title line the same way.
 
 ## Common situations
 

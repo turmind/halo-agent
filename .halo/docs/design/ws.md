@@ -25,7 +25,7 @@ Two OS/browser signals supplement the timer:
 
 **Auth expiry**: when the WS handshake itself is rejected (close before `onopen` — `verifyClient` returns 401 on an expired JWT cookie, but the browser WS API hides the HTTP status), the client probes `/api/auth/check`. On 401 it stops reconnecting and emits `_auth_expired`; the admin page listens and swaps to the login screen. Any other probe outcome (server restarting, network blip) falls through to normal backoff.
 
-After a successful `_connected` event, session-resume messages are re-issued: `subscribe` (chat / agent state — sent by **use-websocket.ts only**; use-chat subscribes on project/session changes but deliberately not on reconnect, since a second subscribe would consume the detached-session reattach and then re-run the normal path over it) and `terminal:reattach` (PTY pool, terminal-panel.tsx).
+After a successful `_connected` event, session-resume messages are re-issued: `subscribe` (chat / agent state — sent by **use-websocket.ts only**, and only for the **chat tab on screen**: `releaseBackgroundTabs()` in `chat-tabs.ts` drops every background tab's store, keeping only its header, and returns the active tab's session, `''` for a draft; a released tab subscribes again when it is next shown. The `_connected` subscribe is skipped while `useChatTabs.projectId` is not yet the active project — `restoreTabs` subscribes once it runs, and it is also the only subscriber on a workspace switch. A second subscribe on reconnect would consume the detached-session reattach and then re-run the normal path over it) and `terminal:reattach` (PTY pool, terminal-panel.tsx).
 
 ### Abandoned-listener reclaim and the `__ping__` contract
 
@@ -36,11 +36,11 @@ So the server treats **inbound application traffic** as the liveness signal — 
 - `readyState === CLOSED` with a listener still attached → reclaim immediately (unambiguous, no threshold).
 - Socket OPEN but **no inbound frame for `CLIENT_SILENCE_LIMIT_MS` = 3 min** → release the listener, keep the socket open. 3 min rather than the ~40 s two missed client probes would suggest: background-tab throttling stretches the 15 s probe to ~1/min, and anything under ~2 min kills the listener of a user who merely switched tabs. Only the listener is released — closing the socket would detach per-connection terminals (5-min PTY kill timers) and file watchers as collateral; a real close still takes the normal path.
 
-Reclaim alone would leave a *resumed* tab permanently deaf with a green light: the server still answers its probes with `__pong__`, so the client's staleness clock stays fresh and neither its zombie detection nor the visibility probe ever fires. Hence the release also sends **`listener:released` `{sessionId}`** on the reclaimed connection — `sendJson`'s OPEN guard makes it a no-op for truly dead sockets, while a frozen tab reads it from the kernel buffer on resume. The admin re-subscribes on receipt (`state-handlers.ts`, same store-bound session/project as the `_connected` resubscribe); subscribe is idempotent per connection, and the re-subscribe itself refreshes the silence clock (worst case one frame per 3 min, no storm). Belt-and-braces: `bindOrCreateSession` also re-registers a reclaimed listener when a `chat` arrives (`|| !client.unsubscribeEvents`), so typing into a resumed tab self-heals even if the frame was missed — without it the agent ran the turn while this connection received nothing.
+Reclaim alone would leave a *resumed* tab permanently deaf with a green light: the server still answers its probes with `__pong__`, so the client's staleness clock stays fresh and neither its zombie detection nor the visibility probe ever fires. Hence the release also sends **`listener:released` `{sessionId}`** on the reclaimed connection — **one frame per released session** (a reclaim releases every listener in the connection's subscription set). `sendJson`'s OPEN guard makes it a no-op for truly dead sockets, while a frozen tab reads it from the kernel buffer on resume. The admin (`state-handlers.ts`) re-subscribes only when the frame is for the **chat tab on screen**. For a background tab it only releases the store (`releaseSessionTab`, same rule as a reconnect), and the tab loads again on its next show. Subscribe is idempotent per connection, and the re-subscribe itself refreshes the silence clock (worst case one frame per 3 min, no storm). Belt-and-braces: `bindOrCreateSession` also re-registers a reclaimed listener when a `chat` arrives (`subscribeSession` adds the id back to the set when it is missing), so typing into a resumed tab self-heals even if the frame was missed — without it the agent ran the turn while this connection received nothing.
 
 **Implicit contract for any WS consumer** (the admin's `ws-client.ts` satisfies both):
 1. Send `__ping__` periodically — any inbound frame counts as the aliveness signal (terminal input, subscribes, chats all refresh it), but a consumer that stays silent for >3 min loses its event listener.
-2. Handle `listener:released` by re-sending `subscribe` — it is the only recovery signal a frozen-and-resumed tab ever gets.
+2. Handle `listener:released` by re-sending `subscribe` for each session it still wants to receive — it is the only recovery signal a frozen-and-resumed tab ever gets.
 
 ### Chat delivery: ack / resend / dedup
 
@@ -59,13 +59,13 @@ Both directions are typed in `packages/core/src/protocol/ws-frames.ts` (`WsClien
 
 | Type | Purpose |
 |---|---|
-| `subscribe` | Subscribe to a session (load history, re-attach detached) |
+| `subscribe` | **Add** a session to this connection's subscription set (load history, re-attach detached). The other subscriptions stay. Re-subscribing an id already in the set registers nothing and only re-sends its snapshot. A subscribe without `sessionId` just pins the workspace (file watcher) and gets a seed snapshot. A `projectId` different from the connection's current one first drops every subscription (they belong to the previous workspace's manager) |
+| `unsubscribe` | Remove a session from the set: flush its UI state, release its listener. No reply frame; a running agent keeps running. The admin doesn't send it today (it never closes a tab — deleting the session is the only removal); kept for other WS clients |
 | `chat` | Send a user message (queued when the agent is busy); acked per `clientMsgId` — see [Chat delivery](#chat-delivery-ack--resend--dedup) |
 | `__ping__` | Application-level liveness probe; server replies `__pong__` |
 | `chat:stop` | Hard-abort the current generation (ends the turn, no re-run) → `stopUserSession`. During a manual `/compact` (compacting, no turn running) it cancels the compact instead (`cancelCompact`, history rolls back). During an auto-compact — which runs inside a turn and is not cancellable — the abort takes effect once the compact finishes. |
 | `chat:interrupt` | Interrupt the in-flight turn now (aborts a command mid-run); the server then folds any queued messages into one follow-up turn → `interruptSession`. Admin chat esc maps to this. Same compact semantics as `chat:stop`: a manual `/compact` with no turn running is cancelled; an auto-compact finishes first, then the interrupt lands. |
-| `session:clear` | Non-destructive /session new: save the current, release its listener, create fresh (handled inline) — see [Command dispatch](#command-dispatch) |
-| `session:delete` | Delete session files + cascade-delete descendants in SQLite (handled inline) |
+| `session:delete` | Delete session files + cascade-delete descendants in SQLite (handled inline), then release this connection's listener for it (no save — the session is gone) |
 | `exchange:delete` | Delete one exchange (a user turn + its responses): **soft-delete** in the UI log (`deleted: true` markers, kept visible/greyed) + **physical-delete** the whole turn from `rawMessages` (LLM context) → `deleteExchange`. Fields: `userOrdinal` (0-based index among *main-conversation* user turns, i.e. excluding `taskId` sub-agent messages — matches the admin's `isMainConversationMessage` count), `archiveCount` (the archived-segment count the client's view was opened against — its archive anchor, from the `state:snapshot` it got on subscribe), optional `sessionId` / `projectId`. Rejected (→ `error`) while the session is running or compacting. The server also compares `archiveCount` against the on-disk header count (`readArchiveCount`); only a **mismatch** is refused, with `code: 'archived'` ("… archived history since it was opened — reopen it to delete individual turns") — a session with archives can still be deleted from as long as the anchor matches. See [session.md](session.md#exchange-deletion-soft-ui--hard-raw). |
 | `command:<name>` | Route through shared `dispatchCommand` (see [command.md](command.md)); `/session compact` handled inline for UI callbacks |
 | `terminal:start` | Spawn a new PTY |
@@ -73,6 +73,10 @@ Both directions are typed in `packages/core/src/protocol/ws-frames.ts` (`WsClien
 | `terminal:resize` | Resize terminal. `terminalId` required, same rejection as `terminal:input` |
 | `terminal:close` | Kill the PTY |
 | `terminal:reattach` | Re-attach every detached terminal after reconnect |
+
+`session:clear` (and its `session:cleared` reply) was removed in 1.5.3-alpha. "Start fresh" (`/session new`, `/clear`, "+ New Session", the Agents tab's Test button) now opens a **draft tab** on the client (`newTab` in `chat-tabs.ts`) and sends nothing. The previous session stays subscribed in its own tab. A draft gets its session id on its first `chat` or `command:*`, which the server's `bindOrCreateSession` creates and subscribes.
+
+**Which session a frame acts on.** One connection carries every open chat tab, so the admin always names the session (`sessionId`) on `chat`, `chat:stop`, `chat:interrupt`, `command:*`, `session:delete` and `exchange:delete`. `null` (what the admin sends on stop / interrupt from a draft tab) means there is nothing to act on. When the field is **absent** on `chat:stop` / `chat:interrupt` / `command:*` / `session:delete`, the server's `frameSessionId` resolves it to the connection's **sole** subscription — the one-session-per-connection form older WS clients use. With several subscriptions an id-less frame has no target and is ignored (`session:delete` replies with an `error`; `command:*` with `No active session`).
 
 Optional `chat` fields:
 - `images`: `Array<{data: base64, mimeType}>` — multimodal
@@ -106,7 +110,9 @@ Source: [event-processor.ts:53-129](../../../packages/server/src/ws/event-proces
 
 Every provider streams (Bedrock, the Anthropic-Messages providers anthropic / mimo / minimax / qwen, the OpenAI-family openai / deepseek / kimi / zhipu / doubao / hunyuan, and Mantle aws-bedrock-mantle / aws-bedrock-openai): they emit `stream_delta` / `thinking_delta` per chunk *during* the model call, and the whole `stream` / `thinking` that follows the call is stamped `streamed: true` — the wire frame is the same `chat:stream` / `chat:thinking` either way (the admin appends by `turnId`), so the whole event is dropped to avoid rendering the text twice. A provider that never calls `onDelta` would still send the whole event only, exactly as before streaming existed.
 
-`sessionId` is the session the emitting listener is attached to (`client.sessionId` at registration; `null` when unknown). The listener stays bound to that session until the client re-subscribes, so after a session switch the old turn's frames keep arriving until it completes — the admin (`isForCurrentSession` in `chat-handlers.ts`) drops any frame whose `sessionId` is set and differs from the loaded session. Frames without one (`compact:*`, `session:compacted`, the detached-buffer replays, handler-local sends) pass through. `chat:complete`, `state:snapshot` and `session:*` are never filtered.
+`sessionId` is the session the emitting listener belongs to. A connection holds one listener per subscribed session (`createEventListener(client, sessionId)`), and each listener is bound to its id when it is created. Since 1.5.3-alpha the session-scoped frames sent outside the event mapping carry it too: `compact:started` / `compact:summarizing` / `compact:done`, `session:compacted`, `chat:queued`, `chat:system` / `error` replies to a command or chat, the detached-buffer replays (`agent:start` / `agent:done` / `error` / `chat:followup` from `bufferDetachedNotification`), and `chat:usage` on subscribe.
+
+**Admin routing** (`storeForFrame` in `chat-tabs.ts`, used by `chat-handlers.ts` / `agent-handlers.ts` / `state-handlers.ts`): a frame with a `sessionId` goes to the store of the loaded tab holding that session, background tabs included. A frame landing in a background tab lights its unread dot; state flips (snapshot, compact progress) don't. A frame for a session no tab has loaded (never opened, or released by a reconnect) is dropped. A frame without a `sessionId` (connection-level replies) goes to the tab on screen. `<<<CAPTURE>>>` / `<<<SHOW>>>` markers fire on `chat:complete` only for the tab on screen — a background session must not grab a screen frame or drive the face the user is looking at.
 
 `chat:thinking` / `chat:stream` / `chat:followup` / `agent:tool_call` / `agent:tool_result` additionally carry `replay: true` (plus `sessionId`) when synthesized by the reattach path (never on live events) — see [Reconnect flow](#reconnect-flow) step 6.
 
@@ -121,18 +127,17 @@ Server-internal flags on `AgentSessionEvent` that are **not** carried into the W
 | `state:snapshot` | handler.ts on connect | Initial state (agents, messages, sessionId). On **subscribe / reattach only** it also carries `archiveCount` — the number of committed UI-log archive segments, which the admin's scroll-up loader counts down from (see [Archive anchor](#archive-anchor-in-statesnapshot)) — and `accessLevel` (`'workspace' | 'readonly' | null`, null = full), which seeds the admin's access-level selector. Subscribe includes `accessLevel` only when the session already exists; for a not-yet-created session it's omitted, and the admin leaves the selector alone when the field is absent (so a level picked before the first send isn't reset) |
 | `chat:ack` | `handleChat` | Chat with `clientMsgId` is persisted in the session log — releases the client's pending-ack entry (see [Chat delivery](#chat-delivery-ack--resend--dedup)) |
 | `__pong__` | `__ping__` handler | Reply to the client's application-level liveness probe |
-| `listener:released` | `reclaimIfAbandoned` (this client only) | This connection's event listener was reclaimed (silent >3 min / CLOSED) — `{sessionId}`. Client must re-`subscribe` to reattach. See [Abandoned-listener reclaim](#abandoned-listener-reclaim-and-the-__ping__-contract). |
-| `chat:queued` | `sendUserMessage` returning queued | User-message-queued notification |
+| `listener:released` | `reclaimIfAbandoned` (this client only) | One of this connection's event listeners was reclaimed (silent >3 min / CLOSED) — `{sessionId}` (never null), one frame per released session. Client must re-`subscribe` to reattach; the admin does so only for the tab on screen. See [Abandoned-listener reclaim](#abandoned-listener-reclaim-and-the-__ping__-contract). |
+| `chat:queued` | `handleChat` while the session is compacting | User-message-queued notification — `{reason, message, sessionId}` |
 | `file:changed` | WorkspaceWatcher · GitDirWatcher · `routes/git.ts` | File change notification (path + action). Three sources: (1) **WorkspaceWatcher** — recursive workspace watch, deliberately excludes `.git`, one per workspace root shared across connections (`ws/watcher-pool.ts`); (2) **`routes/git.ts`** — every git mutation route re-broadcasts `path:'.git'` itself (the recursive watcher ignores `.git`), via `broadcastToWorkspace` so only clients bound to that workspace are woken (a git write in A used to make every tab showing B refetch status + ignored + log); (3) **GitDirWatcher** — a non-recursive `.git`-dir watch for command-line git ops, *plus* a degraded "watch the workspace root for `.git` appearing" phase that fires `path:'.git'` on a terminal `git init`/`clone` so the Source Control entry auto-surfaces. See [source-control.md](../requirements/source-control.md#auto-refresh-no-polling). |
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |
 | `session:changed` | `SessionManager` (broadcast to all clients) | Root session list changed — re-fetch. Fires on root-session create *and* on each root turn `complete` (so channel-driven messages refresh the count/title/ordering, not just admin's own turns). |
-| `session:switched` | handler.ts (this client only) | The server rebound this connection to a different session — see [switchTo rebind](#switchto-rebind--sessionswitched) |
+| `session:switched` | handler.ts (this client only) | The server added a session to this connection's subscription set after a command `switchTo` or a goal-mode divert — `{sessionId, fromSessionId?, clientMsgId?}`. See [switchTo & `session:switched`](#switchto--sessionswitched) |
 | `goal:changed` | `writeGoalState` (`agents/goal-mode.ts`, broadcast to all clients) | Retained legacy event: `{goalSessionId, workerSessionId, status, round, maxRounds}`, no workspace marker. Emitted on goal state writes for existing goal bindings, unchanged. |
-| `session:cleared` | session:clear handler (this client only) | /session new complete — sent **after** `saveSession`, so the admin bumps its session-list bus on this event instead of guessing with a `setTimeout` |
 | `session:deleted` | session:delete handler (this client only) | Session delete complete — `{sessionId}` |
 | `chat:stopped` | `chat:stop` / `chat:interrupt` handlers (this client only) | Stop/interrupt acknowledged — `{sessionId}` |
-| `session:compacted` | compact handler | Compaction complete |
-| `compact:started` / `compact:summarizing` / `compact:done` | compact handler; `ws/event-processor.ts` | Compaction progress. An auto-compact whose LLM summary failed falls back to a local compact and closes with a `system` event carrying `compactEnd`, which also emits `compact:done` (the success path closes via `compacted`). |
+| `session:compacted` | compact handler | Compaction complete — `{message?, contextTokens, sessionId}` |
+| `compact:started` / `compact:summarizing` / `compact:done` | compact handler; `ws/event-processor.ts` | Compaction progress, `{sessionId}`. An auto-compact whose LLM summary failed falls back to a local compact and closes with a `system` event carrying `compactEnd`, which also emits `compact:done` (the success path closes via `compacted`). |
 | `cron:job_changed` / `cron:run_changed` | `cron/runner.ts` + `routes/cron.ts` (broadcast) | Cron job/run state changed — the Cron tab re-fetches instead of polling. See [cron.md](cron.md). |
 | `evolution:run_changed` / `evolution:apply_changed` | `evolution/ticker.ts` + `routes/evolution.ts` (broadcast) | Evolution run/apply state changed — drives the Evolution tab. See [evolution.md](evolution.md). |
 | `extension:changed` | `extensions/watcher.ts` `rescanAndBroadcast` (broadcast to all clients) | `~/.halo/global/extensions/` changed (install / upgrade / uninstall, from the admin upload, the `extension` skill, or a manual `mv`/`rm`) — carries the **full** `ExtensionsSnapshot` (`{extensions, errors}`), not a diff, and only fires when the snapshot key differs from the last one. The admin replaces its extension list wholesale: the preview registry re-resolves open tabs (an upgraded extension remounts, or shows a banner if the tab is dirty; an uninstalled one falls back to the "no built-in preview" page) and the Settings → Extensions panel re-renders. Global, no workspace marker — extensions are server-wide. See [canvas-extensions.md](canvas-extensions.md). |
@@ -156,17 +161,17 @@ The same anchor is what the client sends back as `archiveCount` on `exchange:del
 ```typescript
 interface ConnectedClient {
   ws: WebSocket
-  sessionId: string | null                 // root session this client is subscribed to
+  subscriptions: Map<string, () => void>   // root session id → its event listener's unsubscribe; one per loaded admin chat tab
   projectId: string | null
   sessionManager: SessionManager | null    // shared per workspace
   agentId: string
-  backgroundSaves: Map<string, () => void>
-  unsubscribeEvents: (() => void) | null
   terminalManager: TerminalManager
   lastClientPingAt: number                 // wall-clock ms of last INBOUND frame — the reclaim's liveness stamp
   commandUserId: string                    // `ws-<n>`, this connection's key into the command layer's active-session map
 }
 ```
+
+Until 1.5.3-alpha a connection was bound to a single session (`sessionId` + `unsubscribeEvents`, plus a `backgroundSaves` map for sessions left by `session:clear`). It now holds a set: `subscribeSession` adds an id (idempotent — an id already in the set keeps its one listener), `unsubscribeSession` saves and releases one, and `setClientProject` drops all of them when the connection moves to another workspace. Only root ids are ever subscribed; sub-agent sessions (`parent>child`) reach the client through their root's listener.
 
 File watchers are **not** per connection: `ws/watcher-pool.ts` keeps one `WorkspaceWatcher` + `GitDirWatcher` per workspace root and fans each event out to every socket attached to that root (`attach` on subscribe / chat-bind, `detach` on close; the watchers stop when the last socket leaves). N tabs on one workspace = one native recursive subscription, not N.
 
@@ -174,7 +179,7 @@ UI state (messageLog / streamBuffer / turnToolCalls / tokens) belongs to Session
 
 ### Command dispatch
 
-- `session:clear` / `session:delete` — handled inline (save/detach/delete logic specific to WS client lifecycle). `session:clear` saves, then **releases the event listener and registers nothing in its place**: a cleared session is deliberately abandoned (the admin wipes its chat store on `session:cleared`), and SessionUIStore keeps folding + persisting a still-running session's events with zero listeners, so a later re-open subscribes fresh and gets the full snapshot. The buffering `bgHandler` this used to register — whose `unsubscribe` was discarded and whose `pendingEvents` were never drained — leaked one listener per "New session" click.
+- `subscribe` / `unsubscribe` / `session:delete` — handled inline (subscription-set and delete logic specific to the WS client lifecycle). `session:delete` deletes through `SessionManager.deleteSession`, then drops the id from `subscriptions` without the save `unsubscribeSession` does, because the session is gone.
 - `command:session` with `compact` verb — calls `sm.compactSession(sid, { onProgress })` directly for real-time progress feedback
 - All other `command:*` — builds a shared `CommandContext` and routes through `dispatchCommand()` (see [command.md](command.md))
 
@@ -187,11 +192,11 @@ slash commands landed in the wrong conversation. The entry is deleted on close,
 so the map stays the size of the open connection set. Subscribe / detach /
 reattach lifecycle is unchanged — this only affects command routing.
 
-### switchTo rebind & `session:switched`
+### switchTo & `session:switched`
 
-When a command result carries `switchTo` (e.g. `/new`), the WS handler doesn't just report the new id — it **rebinds this client's event stream**: unsubscribe the old listener, set `client.sessionId`, `registerEventListener` on the target, then send `session:switched {sessionId}`. Without the rebind, streaming events from the switched-to session would never reach the connection — the listener would still point at the old id.
+When a command result carries `switchTo` (e.g. `/session new <args>`, `/session switch <n>`, `/goal create`), the WS handler doesn't just report the new id — it **adds the target to this connection's subscription set** (`subscribeSession`), then sends `session:switched {sessionId, fromSessionId}`, where `fromSessionId` is the session the command was sent from. The source session stays subscribed: its tab stays open. Without the subscribe, streaming events from the switched-to session (e.g. G's intake greeting after `/goal create`) would never reach the connection.
 
-The same mechanics run when `handleChat` diverts a chat to a different session than the one the client is bound to (the retained legacy goal routing overlay, which still applies to any existing goal binding): the listener is rebound and `session:switched` is sent. On receipt the admin clears its chat store, sets the new session id, and **re-subscribes** to pull the disk-seeded snapshot so the target session's existing transcript renders (`chat-handlers.ts`).
+The same mechanics run when `handleChat` diverts a chat to a different session than the one it was addressed to (the retained legacy goal routing overlay, which still applies to any existing goal binding): the goal session is added to the set and `session:switched` is sent with `fromSessionId` **and the chat's `clientMsgId`**. The message landed in the goal session's log, not the source's, so on receipt the admin drops the optimistic copy from the source tab (`dropOptimisticSend`) — otherwise its bubble would spin forever. The admin then opens the target in its own tab, or focuses the tab already showing it (`focusSessionTab`). A newly loaded tab still **subscribes**, to pull the disk-seeded snapshot so the target session's existing transcript renders (`chat-handlers.ts`).
 
 ### Message flow
 
@@ -201,13 +206,13 @@ The same mechanics run when `handleChat` diverts a chat to a different session t
 
 ## Session detachment & reattach
 
-When the client drops while an agent is still working:
-1. The session enters the **detached pool** — trigger: SessionManager has any active session in the tree
+When the client drops while an agent is still working, each subscribed session detaches on its own:
+1. A session enters the **detached pool** when `hasActiveWorkInTree(sid)` is true — something in **that session's own tree** (the root or a `root>…` descendant) is running or compacting. The others are flushed (`saveSession`) and released. Before 1.5.3-alpha the gate was the workspace-wide `hasRunningSessions()`; with N subscriptions it would have parked N buffers and timers whenever anything anywhere ran. A session already parked by another connection keeps its entry: overwriting it would orphan that entry's listener until its timer fired
 2. Agents keep running (owned by SessionManager)
 3. **Grace period**: fixed `config.timeout.sessionGrace` (5 min default) — single `setTimeout`, no auto-extension
-4. **DetachedSession** holds: `sessionManager`, `agentSessionId`, `projectId`, `timer`, `pendingEvents`, `unsubscribe`
+4. **DetachedSession** holds: `sessionManager`, `sessionId`, `projectId`, `timer`, `pendingEvents`, `unsubscribe`
 5. State (messageLog / streamBuffer / tokens) lives in SessionManager's `UIState` — not duplicated in the detached session
-6. Event handler: `bufferDetachedNotification(event, pendingEvents)` — buffers structural events only (agent_start / agent_done / error / system / followup / complete)
+6. Event handler: `bufferDetachedNotification(event, pendingEvents, sessionId)` — buffers structural events only (agent_start / agent_done / error / system / followup / complete), each stamped with `sessionId` so the replay lands in that session's tab
 7. On grace expiry: session is saved and torn down
 
 Teardown lives in one function (`cleanupConnection`) shared by the socket's `close` **and** `error` events: ws normally emits `close` right after `error`, but nothing guarantees it, and the old error path only stopped the watchers — leaking the keepalive interval, the event listener, unflushed background saves and attached PTYs. `clients.delete(client)` is the idempotency gate, so the usual error→close double-fire runs the body exactly once (a second detach pass would overwrite the `detachedSessions` entry and double-register its buffering handler).
@@ -236,4 +241,4 @@ The chat stream reconciles itself (above), but several admin panels keep state i
 
 ## Background session dispatch
 
-When the user hits `/session new` while a sub-agent is still running: see [background-dispatch.md](background-dispatch.md).
+When the user starts a new session (or switches tabs) while a sub-agent is still running: see [background-dispatch.md](background-dispatch.md).
