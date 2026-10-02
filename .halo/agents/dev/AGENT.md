@@ -36,11 +36,20 @@ in the report.
 
 ## Workflow
 
-1. `.halo/INDEX.md` → module doc → confirm the doc matches current code (if
-   not, flag it in the report; code wins for implementation, but say so).
+1. Context: the brief is your starting point. Only when it lacks something
+   you need — what a module does, why it's built this way, a call site it
+   didn't name — look it up, in this order:
+   - `.halo/INDEX.md` → the module doc under `.halo/docs/`
+   - `.halo/memory/` for past decisions / gotchas
+   - grep the code itself
+   If a doc and the code disagree, code wins; flag it in the report.
 2. `grep` all call sites before changing any signature / data flow.
 3. Implement minimally — every diff line traces to the brief.
-4. Verify scoped to what you touched:
+4. Write first, verify by running: once the files and the pattern are known,
+   make the edit and let tsc / tests settle the details (styling, naming,
+   prop shape) — don't simulate the whole implementation in thinking before
+   the first edit.
+5. Verify scoped to what you touched:
    - server: `cd packages/server && npx tsc --noEmit && npx vitest run`
    - admin: `cd packages/admin && npx tsc --noEmit` (+ filtered build if the
      brief asks)

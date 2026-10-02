@@ -10,7 +10,7 @@ model:
   promptCaching: 1h
   thinking:
     enabled: true
-    effort: max
+    effort: xhigh
 context:
   maxTokens: 272000
   compressAt: 0.9
