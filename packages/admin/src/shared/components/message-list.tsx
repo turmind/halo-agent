@@ -14,7 +14,7 @@ import { useSessionArchiveStore } from '@/features/agents/session-archive-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { wsClient } from '@/shared/ws-client'
 import { useT } from '@/shared/i18n'
-import { Loader2, Copy, Check, ChevronDown, ChevronUp, ChevronRight, Trash2, AlertTriangle } from 'lucide-react'
+import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2, AlertTriangle } from 'lucide-react'
 
 /**
  * Resolve which (sessionId, projectId) a rendered message belongs to. MessageList
@@ -90,6 +90,10 @@ function buildExchanges(messages: ChatMessage[]): Exchange[] {
   let current: Exchange | null = null
 
   for (const msg of messages) {
+    // The system-prompt `context` row never renders inline (Prompt button) —
+    // as a leading message it would open an empty exchange: a blank padded
+    // strip above the first bubble (debug mode keeps it in the list).
+    if (inferMessageType(msg) === 'context') continue
     if (msg.role === 'user') {
       if (current) exchanges.push(current)
       current = { user: msg, responses: [] }
@@ -180,16 +184,16 @@ const ExchangeRow = memo(function ExchangeRow({
 interface ExchangeActionProps { userOrdinal: number; deleted: boolean; messageId: string; deletable: boolean }
 
 /**
- * Expand/Collapse (optional) + Copy + Delete button group, shared by the user
- * bubble and the report/summary callouts. `collapse` is passed only when the
- * body is actually clamped (see `useCollapsible`). `copyText` is the semantic
+ * Copy + Delete button group, shared by the user bubble and the report/summary
+ * callouts. `copyText` is the semantic
  * body (marker / `(from: session X)` prefix already stripped for the
  * callouts). Delete sends the same
  * `exchange:delete` ordinal protocol for all three — report/summary are
  * user-role turns without taskId, so they're counted by both the UI ordinal
  * and the server's deleteExchange loop on the same subset.
  */
-function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable, collapse }: ExchangeActionProps & { copyText: string; collapse?: { expanded: boolean; onToggle: () => void } }) {
+function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable }: ExchangeActionProps & { copyText: string }) {
+  const t = useT()
   const [copied, setCopied] = useState(false)
   const canDelete = deletable && !deleted && userOrdinal >= 0
 
@@ -200,17 +204,12 @@ function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable,
   const handleDelete = async () => {
     const target = resolveTargetSession(messageId)
     if (!target) return
-    if (!(await confirmAction('Delete this message and its responses from the conversation? The agent will no longer see this exchange.'))) return
+    if (!(await confirmAction(t('chat.exchange.deleteConfirm')))) return
     wsClient.send({ type: 'exchange:delete', sessionId: target.sessionId, projectId: target.projectId, userOrdinal, archiveCount: target.archiveCount })
   }
 
   return (
     <>
-      {collapse && (
-        <button onClick={collapse.onToggle} title={collapse.expanded ? 'Collapse' : 'Expand'} className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--background)]/40">
-          {collapse.expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-        </button>
-      )}
       <button onClick={handleCopy} title="Copy message" className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--background)]/40">
         {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
       </button>
@@ -245,13 +244,20 @@ function SubAgentReport({ content, ...actionProps }: ExchangeActionProps & { con
   return (
     <div className="sticky top-0 z-10 px-3 py-2 border-b border-[var(--border)] border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
       <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
-        <ExchangeActions copyText={parsed.body} collapse={clamped ? { expanded, onToggle: toggle } : undefined} {...actionProps} />
+        <ExchangeActions copyText={parsed.body} {...actionProps} />
       </div>
-      <div className="mb-1 flex items-center gap-2 pr-16 text-[10px] font-medium text-emerald-400">
+      {/* Header row doubles as the expand toggle when the body is clamped —
+          same chevron-header pattern as CompactSummary. */}
+      <button
+        onClick={toggle}
+        disabled={!clamped}
+        className="mb-1 flex w-full items-center gap-2 pr-16 text-left text-[10px] font-medium text-emerald-400 enabled:hover:text-emerald-300"
+      >
+        {clamped && (expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />)}
         <span>Report from sub-session</span>
         <span className="rounded bg-emerald-900/40 px-1 py-0.5 font-mono text-emerald-300/80">{shortId}</span>
         {actionProps.deleted && <span className={DELETED_BADGE_CLS}>deleted</span>}
-      </div>
+      </button>
       <div ref={contentRef} style={contentStyle}>
         <div className="text-xs text-[var(--foreground)] whitespace-pre-wrap leading-relaxed">
           {parsed.body}
@@ -564,11 +570,16 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
   const tr = useT()
   const { text, media } = useMemo(() => parseMediaMarkers(content), [content])
   const [zoom, setZoom] = useState<string | null>(null)
-  const { contentRef, clamped, expanded, toggle, contentStyle } = useCollapsible(2)
-  // Send time, browser-local HH:mm; full date on hover. Sits bottom-right of
-  // the bubble, right edge aligned with the Delete icon above it.
+  // Collapsed long messages hide the body entirely (height 0, not
+  // display:none — useCollapsible must still measure scrollHeight); the
+  // header's preview stands in for it, CompactSummary style.
+  const { contentRef, clamped, expanded, toggle, contentStyle } = useCollapsible(2, 0)
+  // Send time, browser-local HH:mm; full date on hover.
   const sent = new Date(timestamp)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
+  const flat = text.replace(/\s+/g, ' ').trim()
+  const chars = Array.from(flat)
+  const preview = chars.length > 20 ? `${chars.slice(0, 20).join('')}…` : flat
 
   return (
     <>
@@ -585,17 +596,29 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
               <AlertTriangle className="h-2.5 w-2.5" />{tr('chat.sendFailedBadge')}
             </span>
           )}
-          <ExchangeActions copyText={text} userOrdinal={userOrdinal} deleted={deleted} messageId={messageId} deletable={deletable} collapse={clamped ? { expanded, onToggle: toggle } : undefined} />
+          <ExchangeActions copyText={text} userOrdinal={userOrdinal} deleted={deleted} messageId={messageId} deletable={deletable} />
         </div>
-        <div ref={contentRef} style={contentStyle}>
-          <div className={cn('text-xs leading-relaxed whitespace-pre-wrap', deleted || sendFailed ? 'pr-32' : 'pr-14', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
+        {/* Header row: whole row toggles when the body is clamped. Actions
+            overlay it as absolute siblings (button-in-button is invalid). */}
+        <button
+          onClick={toggle}
+          disabled={!clamped}
+          className={cn('flex w-full min-w-0 items-center gap-1.5 text-left', deleted || sendFailed ? 'pr-32' : 'pr-14')}
+        >
+          {clamped && (expanded
+            ? <ChevronDown className="h-3 w-3 shrink-0 text-[var(--muted-foreground)]" />
+            : <ChevronRight className="h-3 w-3 shrink-0 text-[var(--muted-foreground)]" />)}
+          <span className="shrink-0 text-[10px] font-mono text-[var(--muted-foreground)] opacity-70" title={sent.toLocaleString()}>
+            {pad2(sent.getHours())}:{pad2(sent.getMinutes())}
+          </span>
+          {clamped && !expanded && (
+            <span className={cn('truncate text-xs', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>{preview}</span>
+          )}
+        </button>
+        <div ref={contentRef} style={contentStyle} className={cn(clamped && !expanded ? '' : 'mt-1')}>
+          <div className={cn('text-xs leading-relaxed whitespace-pre-wrap', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
             {text || (media.length > 0 || localImages?.length ? '(attachment)' : '')}
           </div>
-        </div>
-        {/* -mr-1.5: bubble padding is px-4 (16px) but the Delete icon's right
-            edge sits 10px in (right-1.5 + p-1) */}
-        <div className="-mr-1.5 mt-0.5 text-right text-[10px] font-mono leading-none text-[var(--muted-foreground)] opacity-70" title={sent.toLocaleString()}>
-          {pad2(sent.getHours())}:{pad2(sent.getMinutes())}
         </div>
       </div>
       {/* Client-only inline previews (e.g. desktop screen captures) — render
@@ -895,10 +918,12 @@ function InlineToolCall({ call, isStreaming, isLast }: { call: ToolCallInfo; isS
 
 /**
  * Clamp-to-N-lines behaviour for a long body. The caller attaches `contentRef` /
- * `contentStyle` to the body wrapper and renders the toggle itself (the arrow in
- * `ExchangeActions`), only when `clamped` — short bodies get no toggle.
+ * `contentStyle` to the body wrapper and renders the toggle itself (a left
+ * chevron, CompactSummary style), only when `clamped` — short bodies get no
+ * toggle. Expanded bodies cap at 40vh and scroll in place (same as the summary
+ * body): the bubbles are sticky, so an unbounded one could outgrow the viewport.
  */
-function useCollapsible(maxLines: number) {
+function useCollapsible(maxLines: number, collapsedHeight = maxLines * 20) {
   const contentRef = useRef<HTMLDivElement>(null)
   const [clamped, setClamped] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -938,7 +963,9 @@ function useCollapsible(maxLines: number) {
     clamped,
     expanded,
     toggle: () => setExpanded((v) => !v),
-    contentStyle: !expanded && clamped ? { maxHeight: `${maxLines * 20}px`, overflow: 'hidden' } as const : undefined,
+    contentStyle: !clamped ? undefined : expanded
+      ? { maxHeight: '40vh', overflowY: 'auto' } as const
+      : { maxHeight: `${collapsedHeight}px`, overflow: 'hidden' } as const,
   }
 }
 
