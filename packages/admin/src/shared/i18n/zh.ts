@@ -243,6 +243,17 @@ export const zh: Record<string, string> = {
   'chat.access.readonlyDesc': '只读，不能写',
   'chat.access.title': '下一条消息的访问级别',
   'chat.access.noSandbox': '本机没有可用的系统沙箱（bubblewrap / sandbox-exec），只能用完全档',
+  'chat.tabs.newSession': '新会话',
+  'chat.tabs.untitled': '未命名会话',
+  'chat.tabs.running': '运行中',
+  'chat.tabs.unread': '有新消息',
+  'chat.sessions.title': '会话',
+  'chat.sessions.new': '新建会话',
+  'chat.sessions.rename': '重命名',
+  'chat.sessions.delete': '删除会话',
+  'chat.sessions.deleteConfirm': '删除这个会话？删除后历史记录无法恢复。',
+  'chat.sessions.deleteTreeConfirm': '删除这个会话及其全部子会话？删除后历史记录无法恢复。',
+  'chat.exchange.deleteConfirm': '从对话中删除这条消息及其回复？删除后 agent 将不再看到这轮对话。',
 
   // ── Goal mode ──
   'goal.banner.intake': '🎯 目标模式 · 契约制定中——正在和你确认目标',
@@ -449,6 +460,14 @@ export const zh: Record<string, string> = {
   'common.language': '语言',
   'common.global': '全局',
   'common.workspace': '工作区',
+  'sidebar.collapse': '收起',
+  'sidebar.expand': '展开',
+  'sidebar.resize': '拖动调整宽度',
+
+  // ── Terminal ──
+  'terminal.list.title': '终端',
+  'terminal.list.new': '新建终端',
+  'terminal.list.close': '关闭终端',
 
   // ── Data previews (parquet / sqlite) ──
   'dataPreview.range': '第 {from}–{to} 行 / 共 {total} 行',

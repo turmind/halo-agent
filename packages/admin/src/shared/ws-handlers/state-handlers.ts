@@ -1,5 +1,6 @@
 import type { WsClient } from '../ws-client-types'
-import { useChatStore, isStaleStreamingPlaceholder, noteSnapshot } from '@/features/chat/chat-store'
+import { getActiveChatStore, isStaleStreamingPlaceholder } from '@/features/chat/chat-store'
+import { getLoadedStore, noteTabSnapshot, releaseSessionTab, storeForFrame } from '@/features/chat/chat-tabs'
 import { noteArchiveAnchor } from '@/features/chat/archive-store'
 import { refreshGoal } from '@/features/chat/goal-store'
 import { useProjectStore } from '@/shared/stores/project-store'
@@ -13,22 +14,32 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('state:snapshot', ({ snapshot }) => {
+      // A session's snapshot goes to the tab holding that session (dropped if
+      // none does — the tab was released meanwhile); a session-less one (the
+      // connect seed, a pre-session subscribe) to the tab on screen. Loading
+      // a tab isn't news, so no unread dot.
+      const store = storeForFrame(snapshot.sessionId, false)
+      if (!store) return
+      const chat = store.getState()
 
       if (snapshot.sessionId) {
-        useChatStore.getState().setSessionId(snapshot.sessionId)
         // Anchor the scroll-up history walk. Only subscribe/reattach snapshots
         // carry `archiveCount`; the per-turn ones omit it, which is read as
         // "no archive" — safe because noteArchiveAnchor only ever re-anchors on
-        // a HIGHER count, and 0 never beats a bound anchor.
-        noteArchiveAnchor(snapshot.sessionId, snapshot.archiveCount ?? 0)
+        // a HIGHER count, and 0 never beats a bound anchor. The archive store
+        // follows the tab on screen; a background tab's count is kept for
+        // when it is shown (chat-tabs showTab).
+        const archiveCount = snapshot.archiveCount ?? 0
+        noteTabSnapshot(store, archiveCount)
+        if (store === getActiveChatStore()) noteArchiveAnchor(snapshot.sessionId, archiveCount)
       }
       if (snapshot.agentId) {
-        useChatStore.getState().setSelectedAgentId(snapshot.agentId)
+        chat.setSelectedAgentId(snapshot.agentId)
       }
       // Only snapshots tied to an existing session carry the field; absent
       // (e.g. the pre-session connect snapshot) leaves the selector alone.
       if (snapshot.accessLevel !== undefined) {
-        useChatStore.getState().setAccessLevel(snapshot.accessLevel ?? 'full')
+        chat.setAccessLevel(snapshot.accessLevel ?? 'full')
       }
       // Don't clobber an in-flight streaming turn with a server snapshot.
       // The server emits `state:snapshot` on every WS subscribe — including
@@ -50,7 +61,7 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
       // ever converge it — treating it as in-flight made every post-reconnect
       // snapshot get skipped, so the UI stayed on "Thinking…" even after the
       // link recovered (R4 in .halo/tmp/idle-reconnect-msg-loss.md).
-      const inFlight = useChatStore.getState().messages.some(
+      const inFlight = store.getState().messages.some(
         (m) => m.streaming && !isStaleStreamingPlaceholder(m),
       )
       // Stash the snapshot even when the replace below is skipped (and even
@@ -60,17 +71,17 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
       // and chat-handlers resets to this stash + rebuilds from the replay.
       const snapshotMessages = snapshot.recentMessages ?? snapshot.messages
       if (snapshotMessages && snapshot.sessionId) {
-        noteSnapshot(snapshot.sessionId, snapshotMessages)
+        chat.noteSnapshot(snapshot.sessionId, snapshotMessages)
       }
       if (!inFlight) {
         if (snapshotMessages && snapshotMessages.length > 0) {
-          useChatStore.getState().setMessages(snapshotMessages)
+          chat.setMessages(snapshotMessages)
         }
       } else {
         console.debug('[state-handlers] skipping snapshot replace — streaming in flight')
       }
       if (typeof snapshot.maxContextTokens === 'number' && snapshot.maxContextTokens > 0) {
-        useChatStore.getState().setMaxContextTokens(snapshot.maxContextTokens)
+        chat.setMaxContextTokens(snapshot.maxContextTokens)
       }
     }),
   )
@@ -82,14 +93,22 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
   // neither the zombie detection nor the visibility probe ever fires. Reading
   // this frame (from the kernel buffer, on resume) IS the recovery signal:
   // re-subscribe to reattach. Idempotent server-side, and the snapshot that
-  // comes back restores whatever streamed while the listener was down. Same
-  // sessionId/projectId source as the `_connected` resubscribe in
-  // use-websocket.ts — the store, not the frame, is what the UI wants bound.
+  // comes back restores whatever streamed while the listener was down. The
+  // server sends one frame per released session; only the session on screen
+  // is re-subscribed (a tab not loaded has nothing to reattach, and the file
+  // watcher is per-connection — the reclaim leaves it).
   unsubs.push(
-    wsClient.on('listener:released', () => {
+    wsClient.on('listener:released', ({ sessionId }) => {
       const activeProject = useProjectStore.getState().activeProject
-      if (!activeProject?.id) return
-      const sessionId = useChatStore.getState().sessionId ?? ''
+      if (!activeProject?.id || !sessionId) return
+      const store = getLoadedStore(sessionId)
+      if (!store) return
+      // A background tab isn't reattached (same rule as a reconnect): drop
+      // its store; its next show loads it again.
+      if (store !== getActiveChatStore()) {
+        releaseSessionTab(sessionId)
+        return
+      }
       wsClient.send({ type: 'subscribe', sessionId, projectId: activeProject.id })
     }),
   )

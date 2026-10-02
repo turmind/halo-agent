@@ -243,6 +243,17 @@ export const en: Record<string, string> = {
   'chat.access.readonlyDesc': 'Read only, no writes',
   'chat.access.title': 'Access level for the next message',
   'chat.access.noSandbox': 'This host has no OS sandbox (bubblewrap / sandbox-exec) — Full only',
+  'chat.tabs.newSession': 'New session',
+  'chat.tabs.untitled': 'Untitled session',
+  'chat.tabs.running': 'Running',
+  'chat.tabs.unread': 'New messages',
+  'chat.sessions.title': 'Sessions',
+  'chat.sessions.new': 'New session',
+  'chat.sessions.rename': 'Rename',
+  'chat.sessions.delete': 'Delete session',
+  'chat.sessions.deleteConfirm': 'Delete this session? Its history cannot be recovered.',
+  'chat.sessions.deleteTreeConfirm': 'Delete this session and all its sub-sessions? History cannot be recovered.',
+  'chat.exchange.deleteConfirm': 'Delete this message and its responses from the conversation? The agent will no longer see this exchange.',
 
   // ── Goal mode ──
   'goal.banner.intake': '🎯 Goal mode · intake — define the goal contract',
@@ -449,6 +460,14 @@ export const en: Record<string, string> = {
   'common.language': 'Language',
   'common.global': 'Global',
   'common.workspace': 'Workspace',
+  'sidebar.collapse': 'Collapse',
+  'sidebar.expand': 'Expand',
+  'sidebar.resize': 'Drag to resize',
+
+  // ── Terminal ──
+  'terminal.list.title': 'Terminals',
+  'terminal.list.new': 'New terminal',
+  'terminal.list.close': 'Close terminal',
 
   // ── Data previews (parquet / sqlite) ──
   'dataPreview.range': '{from}–{to} of {total} rows',

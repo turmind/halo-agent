@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { api } from '@/shared/api-client'
 import { useSessionBus, bumpSessionBus } from '@/shared/session-bus'
+import { removeCachedView } from '@/features/agents/session-view-cache'
 import type { SessionMeta } from '@/shared/components/session-list-dropdown'
 
 /** First page size; subsequent pages use the same. Matches the Sessions
@@ -62,6 +63,7 @@ export function useSessionList(projectId?: string) {
     try {
       await api.sessionLogs.delete(sessionId, projectId)
       setSessions((prev) => prev.filter((s) => s.id !== sessionId))
+      removeCachedView(sessionId)
       bumpSessionBus()
     } catch (err) {
       console.error('[SessionList] Delete failed:', err)

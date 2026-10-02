@@ -1,4 +1,5 @@
-import { create } from 'zustand'
+import { useSyncExternalStore } from 'react'
+import { createStore, useStore, type StateCreator, type StoreApi } from 'zustand'
 import type { ChatMessage, ContentBlock, ToolCallInfo } from '@/shared/types'
 import { generateId } from '@/shared/utils'
 import { isMainConversationMessage, inferMessageType } from '@/shared/types'
@@ -30,27 +31,6 @@ export function isStaleStreamingPlaceholder(m: ChatMessage, now: number = Date.n
 let lastLinkDropAt = 0
 export function noteLinkDrop(): void {
   lastLinkDropAt = Date.now()
-}
-
-/** Most recent `state:snapshot` payload, stashed by state-handlers on EVERY
- *  snapshot — including the ones whose replace was skipped because a stream
- *  was in flight. A reattach replay (`chat:followup` with `replay: true`, see
- *  server ws/handler.ts) declares the server authoritative for the in-flight
- *  turn: the client resets to this settled log and rebuilds the turn from the
- *  replayed events, instead of appending onto its locally-held partial copy
- *  (which duplicated the pre-drop streamed text). Module-level like
- *  lastLinkDropAt — nothing renders from it. */
-let lastSnapshot: { sessionId: string; messages: ChatMessage[] } | null = null
-export function noteSnapshot(sessionId: string, messages: ChatMessage[]): void {
-  lastSnapshot = { sessionId, messages }
-}
-/** Settled log for a replay rebuild — only if the stash belongs to the
- *  session the store is currently on (guards a late replay racing a session
- *  switch). */
-export function takeReplaySnapshot(sessionId: string | null): ChatMessage[] | null {
-  return lastSnapshot && sessionId && lastSnapshot.sessionId === sessionId
-    ? lastSnapshot.messages
-    : null
 }
 
 /**
@@ -119,64 +99,73 @@ function hasAdjacentDuplicateNotification(messages: ChatMessage[], key: string):
  *    call. Exact by construction — updated on every append, rebuilt on every
  *    wholesale replace — because replay dedup drops events on a bare hit.
  *
- * Module-level like lastLinkDropAt (nothing renders from them). They MUST be
- * reset in lockstep with the array they describe — a stale index is worse
- * than a scan. The three log reset points all funnel through two actions:
- * setMessages (snapshot full replace AND reattach-replay rebuild, which is
- * `setMessages(takeReplaySnapshot(...))` in chat-handlers) rebuilds, and
- * clear() (session switch) empties. Positions never shift otherwise —
- * messages are appended or element-replaced in place — with one exception:
- * placeAroundStreaming, the only reorder / split path (it mirrors the server's
- * flushCompletedAssistantMessage), which also rebuilds.
+ * Per store (one per chat tab), held outside the reactive state since nothing
+ * renders from them. They MUST be reset in lockstep with the array they
+ * describe — a stale index is worse than a scan. The three log reset points
+ * all funnel through two actions: setMessages (snapshot full replace AND
+ * reattach-replay rebuild, which is `setMessages(takeReplaySnapshot())` in
+ * chat-handlers) rebuilds, and clear() empties. Positions never shift
+ * otherwise — messages are appended or element-replaced in place — with one
+ * exception: placeAroundStreaming, the only reorder / split path (it mirrors
+ * the server's flushCompletedAssistantMessage), which also rebuilds.
  */
-const streamingIdx = new Map<string, number>()
-const toolUseIdIdx = new Map<string, number>()
-
-/** Log index where the live round — everything since the last
- *  `chat:complete` — starts (see takeRoundReplies). Everything below it was
- *  loaded wholesale or already handed out, and never moves: the one reorder
- *  path, placeAroundStreaming, works from the root streaming bubble on, and
- *  that bubble always postdates the cursor (complete settles every root
- *  bubble before taking; loaded logs carry none). Reset by the same two
- *  actions as the indexes above. */
-let roundStart = 0
+interface StoreLocals {
+  streamingIdx: Map<string, number>
+  toolUseIdIdx: Map<string, number>
+  /** Log index where the live round — everything since the last
+   *  `chat:complete` — starts (see takeRoundReplies). Everything below it was
+   *  loaded wholesale or already handed out, and never moves: the one reorder
+   *  path, placeAroundStreaming, works from the root streaming bubble on, and
+   *  that bubble always postdates the cursor (complete settles every root
+   *  bubble before taking; loaded logs carry none). Reset by the same two
+   *  actions as the indexes above. */
+  roundStart: number
+  /** Most recent `state:snapshot` payload, stashed by state-handlers on EVERY
+   *  snapshot — including the ones whose replace was skipped because a stream
+   *  was in flight. A reattach replay (`chat:followup` with `replay: true`,
+   *  see server ws/handler.ts) declares the server authoritative for the
+   *  in-flight turn: the client resets to this settled log and rebuilds the
+   *  turn from the replayed events, instead of appending onto its locally-held
+   *  partial copy (which duplicated the pre-drop streamed text). */
+  lastSnapshot: { sessionId: string; messages: ChatMessage[] } | null
+}
 
 function taskKey(taskId?: string): string {
   return taskId ?? ''
 }
 
 /** Record one message's index entries (append + rebuild paths). */
-function indexMessage(m: ChatMessage, i: number): void {
-  if (m.role === 'assistant' && m.streaming) streamingIdx.set(taskKey(m.taskId), i)
+function indexMessage(ix: StoreLocals, m: ChatMessage, i: number): void {
+  if (m.role === 'assistant' && m.streaming) ix.streamingIdx.set(taskKey(m.taskId), i)
   if (m.toolCalls) {
     for (const tc of m.toolCalls) {
-      if (tc.toolUseId) toolUseIdIdx.set(tc.toolUseId, i)
+      if (tc.toolUseId) ix.toolUseIdIdx.set(tc.toolUseId, i)
     }
   }
   if (m.contentBlocks) {
     for (const b of m.contentBlocks) {
-      if (b.type === 'tool_call' && b.toolCall.toolUseId) toolUseIdIdx.set(b.toolCall.toolUseId, i)
+      if (b.type === 'tool_call' && b.toolCall.toolUseId) ix.toolUseIdIdx.set(b.toolCall.toolUseId, i)
     }
   }
 }
 
 /** Rebuild both indexes from a full log — the wholesale-replace reset path. */
-function rebuildMessageIndexes(messages: ChatMessage[]): void {
-  streamingIdx.clear()
-  toolUseIdIdx.clear()
+function rebuildMessageIndexes(ix: StoreLocals, messages: ChatMessage[]): void {
+  ix.streamingIdx.clear()
+  ix.toolUseIdIdx.clear()
   for (let i = 0; i < messages.length; i++) {
-    indexMessage(messages[i], i)
+    indexMessage(ix, messages[i], i)
   }
 }
 
 /** Drop streaming-index entries whose message no longer streams — hygiene
  *  after the flag sweeps (complete / converge / send-failed) so the next
  *  event's fast path doesn't start from a dead hint. O(#live scopes). */
-function pruneStreamingIdx(messages: ChatMessage[]): void {
-  for (const [key, i] of streamingIdx) {
+function pruneStreamingIdx(ix: StoreLocals, messages: ChatMessage[]): void {
+  for (const [key, i] of ix.streamingIdx) {
     const m = messages[i]
     if (!m || m.role !== 'assistant' || !m.streaming || taskKey(m.taskId) !== key) {
-      streamingIdx.delete(key)
+      ix.streamingIdx.delete(key)
     }
   }
 }
@@ -186,9 +175,9 @@ function pruneStreamingIdx(messages: ChatMessage[]): void {
  * every streaming event mutates. O(1) on a valid hint; original backwards
  * scan (repairing the hint) when the hint is missing or stale.
  */
-function findStreamingIdx(messages: ChatMessage[], taskId?: string): number {
+function findStreamingIdx(ix: StoreLocals, messages: ChatMessage[], taskId?: string): number {
   const key = taskKey(taskId)
-  const hint = streamingIdx.get(key)
+  const hint = ix.streamingIdx.get(key)
   if (hint !== undefined) {
     const m = messages[hint]
     if (m && m.role === 'assistant' && m.streaming && m.taskId === taskId) return hint
@@ -196,11 +185,11 @@ function findStreamingIdx(messages: ChatMessage[], taskId?: string): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m.role === 'assistant' && m.streaming && m.taskId === taskId) {
-      streamingIdx.set(key, i)
+      ix.streamingIdx.set(key, i)
       return i
     }
   }
-  streamingIdx.delete(key)
+  ix.streamingIdx.delete(key)
   return -1
 }
 
@@ -218,12 +207,13 @@ function findStreamingIdx(messages: ChatMessage[], taskId?: string): number {
  * is already a fresh array (split/append happened) or still the caller's.
  */
 function ensureStreamingSlot(
+  ix: StoreLocals,
   messages: ChatMessage[],
   agentName?: string,
   taskId?: string,
   turnId?: string,
 ): { messages: ChatMessage[]; slotIdx: number; copied: boolean } {
-  if (!turnId) return { messages, slotIdx: findStreamingIdx(messages, taskId), copied: false }
+  if (!turnId) return { messages, slotIdx: findStreamingIdx(ix, messages, taskId), copied: false }
 
   // Match by taskId scope so root and sub-agents are split independently:
   // root events (taskId=undefined) don't fall into sub-agent bubbles, and
@@ -231,7 +221,7 @@ function ensureStreamingSlot(
   // function early-returned when `taskId` was truthy, which made every
   // sub-agent turn glomp into one giant bubble (no splits ever happened
   // for sub-agents).
-  const i = findStreamingIdx(messages, taskId)
+  const i = findStreamingIdx(ix, messages, taskId)
   const msg = i === -1 ? undefined : messages[i]
   // agentName compatibility check from the original scan. The original
   // `continue`d past an incompatible slot looking for an older one, but a
@@ -254,7 +244,7 @@ function ensureStreamingSlot(
       agentName,
       taskId,
     })
-    streamingIdx.set(taskKey(taskId), next.length - 1)
+    ix.streamingIdx.set(taskKey(taskId), next.length - 1)
     return { messages: next, slotIdx: next.length - 1, copied: true }
   }
   // No streaming slot found — create one (e.g. message from another channel)
@@ -267,7 +257,7 @@ function ensureStreamingSlot(
     agentName,
     taskId,
   }]
-  streamingIdx.set(taskKey(taskId), next.length - 1)
+  ix.streamingIdx.set(taskKey(taskId), next.length - 1)
   return { messages: next, slotIdx: next.length - 1, copied: true }
 }
 
@@ -292,11 +282,12 @@ function fieldsFromBlocks(blocks: ContentBlock[]): Pick<ChatMessage, 'content' |
  * and the live bubble that follows the row (`slot`); null = plain append.
  */
 function placeAroundStreaming(
+  ix: StoreLocals,
   messages: ChatMessage[],
   message: ChatMessage,
 ): { prefix: ChatMessage[]; slot: ChatMessage } | null {
   if (message.role === 'assistant' || !isMainConversationMessage(message)) return null
-  const i = findStreamingIdx(messages)
+  const i = findStreamingIdx(ix, messages)
   if (i === -1) return null
   const s = messages[i]
   const blocks = s.contentBlocks ?? []
@@ -326,7 +317,7 @@ function placeAroundStreaming(
   }
 }
 
-interface ChatStore {
+export interface ChatStore {
   messages: ChatMessage[]
   isStreaming: boolean
   sessionId: string | null
@@ -372,6 +363,16 @@ interface ChatStore {
    *  split off, a turnId split, the follow-up answering a queued message), so
    *  scanning only the last one missed the rest. */
   takeRoundReplies(): ChatMessage[]
+  /** Stash the latest `state:snapshot` log (see StoreLocals.lastSnapshot). */
+  noteSnapshot(sessionId: string, messages: ChatMessage[]): void
+  /** Settled log for a replay rebuild — only if the stash belongs to the
+   *  session this store is on (guards a late replay racing a session change). */
+  takeReplaySnapshot(): ChatMessage[] | null
+  /** The server re-routed this send to another session (`session:switched`
+   *  with clientMsgId) — drop the optimistic user bubble and the empty
+   *  placeholder right after it, so this tab doesn't spin over a message
+   *  that landed elsewhere. */
+  dropOptimisticSend(clientMsgId: string): void
   setSessionId(id: string): void
   setMessages(messages: ChatMessage[]): void
   setTokenUsage(context: number, output: number): void
@@ -395,7 +396,23 @@ interface ChatStore {
   clear(): void
 }
 
-export const useChatStore = create<ChatStore>((set, get) => ({
+export type ChatStoreApi = StoreApi<ChatStore>
+
+/** App-wide values every tab's store mirrors — not per session: the agent
+ *  picker's usable count, host sandbox capability, the bound capture source.
+ *  Setters fan out to every live store; new stores start from here. */
+type SharedFields = Pick<ChatStore, 'usableAgentCount' | 'sandboxAvailable' | 'captureSource'>
+const shared: SharedFields = { usableAgentCount: -1, sandboxAvailable: null, captureSource: null }
+
+/** Every store not yet disposed — one per loaded chat tab. */
+const liveStores = new Set<ChatStoreApi>()
+
+function setShared(patch: Partial<SharedFields>): void {
+  Object.assign(shared, patch)
+  for (const s of liveStores) s.setState(patch)
+}
+
+const chatStoreState = (ix: StoreLocals): StateCreator<ChatStore> => (set, get) => ({
   messages: [],
   isStreaming: false,
   sessionId: null,
@@ -410,10 +427,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   maxContextTokens: 0,
   isCompacting: false,
   selectedAgentId: 'default',
-  usableAgentCount: -1,
   accessLevel: 'full',
-  sandboxAvailable: null,
-  captureSource: null,
+  ...shared,
 
   addMessage(msg) {
     const message: ChatMessage = {
@@ -438,7 +453,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       clientMsgId: msg.clientMsgId,
     }
     set((state) => {
-      const placed = placeAroundStreaming(state.messages, message)
+      const placed = placeAroundStreaming(ix, state.messages, message)
       // Redelivery guard for server-pushed notifications — the only message
       // class that used to append unconditionally (see notificationKey).
       // Scanned against the log the row actually follows, so a streaming
@@ -453,9 +468,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       let messages: ChatMessage[]
       if (placed) {
         messages = [...placed.prefix, message, placed.slot]
-        rebuildMessageIndexes(messages)
+        rebuildMessageIndexes(ix, messages)
       } else {
-        indexMessage(message, state.messages.length)
+        indexMessage(ix, message, state.messages.length)
         messages = [...state.messages, message]
       }
       return {
@@ -467,7 +482,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   appendThinking(text: string, agentName?: string, taskId?: string, turnId?: string) {
     set((state) => {
-      const slot = ensureStreamingSlot(state.messages, agentName, taskId, turnId)
+      const slot = ensureStreamingSlot(ix, state.messages, agentName, taskId, turnId)
       if (slot.slotIdx === -1) return state
       // Only the slot element is replaced — prefix references are reused, so
       // memoized rows upstream keep reference equality.
@@ -487,7 +502,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   updateLastAssistant(text: string, agentName?: string, taskId?: string, turnId?: string) {
     set((state) => {
-      const slot = ensureStreamingSlot(state.messages, agentName, taskId, turnId)
+      const slot = ensureStreamingSlot(ix, state.messages, agentName, taskId, turnId)
       if (slot.slotIdx === -1) return state
       const messages = slot.copied ? slot.messages : [...slot.messages]
       const msg = messages[slot.slotIdx]
@@ -518,10 +533,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // snapshot or the pre-drop stream — drop the duplicate. O(1) via the
       // toolUseId index (rebuilt on every wholesale replace, so a hit is
       // always a live row, never a ghost of a dropped log).
-      if (toolCall.toolUseId && toolUseIdIdx.has(toolCall.toolUseId)) {
+      if (toolCall.toolUseId && ix.toolUseIdIdx.has(toolCall.toolUseId)) {
         return state
       }
-      const slot = ensureStreamingSlot(state.messages, agentName, taskId, turnId)
+      const slot = ensureStreamingSlot(ix, state.messages, agentName, taskId, turnId)
       if (slot.slotIdx === -1) return state
       const messages = slot.copied ? slot.messages : [...slot.messages]
       const msg = messages[slot.slotIdx]
@@ -534,7 +549,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         toolCalls: [...(msg.toolCalls ?? []), toolCall],
         contentBlocks: blocks,
       }
-      if (toolCall.toolUseId) toolUseIdIdx.set(toolCall.toolUseId, slot.slotIdx)
+      if (toolCall.toolUseId) ix.toolUseIdIdx.set(toolCall.toolUseId, slot.slotIdx)
       return { messages }
     })
   },
@@ -546,7 +561,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // after a reattach that may be a non-streaming snapshot message. Never
       // overwrite a completed entry: replayed results stay idempotent.
       if (toolUseId) {
-        const i = toolUseIdIdx.get(toolUseId) ?? -1
+        const i = ix.toolUseIdIdx.get(toolUseId) ?? -1
         const msg = i === -1 ? undefined : state.messages[i]
         const callIdx = msg?.toolCalls?.findIndex((tc) => tc.toolUseId === toolUseId) ?? -1
         const blockIdx = msg?.contentBlocks?.findIndex((b) => b.type === 'tool_call' && b.toolCall.toolUseId === toolUseId) ?? -1
@@ -579,7 +594,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // overwrite cross-matched outputs on parallel-tool-call turns (same bug
       // the server fixed in ui-log-builder setToolResult). Never overwrite a
       // completed entry.
-      const i = findStreamingIdx(state.messages, taskId)
+      const i = findStreamingIdx(ix, state.messages, taskId)
       const msg = i === -1 ? undefined : state.messages[i]
       if (!msg || !msg.toolCalls?.length) return state
 
@@ -615,7 +630,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const messages = state.messages.map((msg) =>
         msg.streaming ? { ...msg, streaming: false } : msg,
       )
-      pruneStreamingIdx(messages)
+      pruneStreamingIdx(ix, messages)
       return { messages, isStreaming: false }
     })
   },
@@ -634,16 +649,38 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (before !== after) {
         console.warn(`[ChatStore:completeAgentStreaming] main msgs changed ${before} -> ${after}, agentName=${agentName}, taskId=${taskId}`)
       }
-      pruneStreamingIdx(messages)
+      pruneStreamingIdx(ix, messages)
       return { messages, isStreaming: stillStreaming }
     })
   },
 
   takeRoundReplies() {
     const { messages } = get()
-    const replies = messages.slice(roundStart).filter((m) => m.role === 'assistant' && !m.taskId)
-    roundStart = messages.length
+    const replies = messages.slice(ix.roundStart).filter((m) => m.role === 'assistant' && !m.taskId)
+    ix.roundStart = messages.length
     return replies
+  },
+
+  noteSnapshot(sessionId: string, messages: ChatMessage[]) {
+    ix.lastSnapshot = { sessionId, messages }
+  },
+
+  takeReplaySnapshot() {
+    const sessionId = get().sessionId
+    return ix.lastSnapshot && sessionId && ix.lastSnapshot.sessionId === sessionId
+      ? ix.lastSnapshot.messages
+      : null
+  },
+
+  dropOptimisticSend(clientMsgId: string) {
+    const { messages } = get()
+    const idx = messages.findIndex((m) => m.clientMsgId === clientMsgId)
+    if (idx === -1) return
+    const next = messages.filter((m, i) => i !== idx
+      && !(i > idx && m.streaming && !m.taskId && !m.content && !m.toolCalls?.length && !m.contentBlocks?.length))
+    rebuildMessageIndexes(ix, next)
+    ix.roundStart = Math.min(ix.roundStart, next.length)
+    set({ messages: next, isStreaming: next.some((m) => m.streaming && !m.taskId) })
   },
 
   setSessionId(id: string) {
@@ -652,11 +689,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   setMessages(messages: ChatMessage[]) {
     // Wholesale replace — every position may have changed, so the hot-path
-    // indexes must be rebuilt in lockstep (snapshot restore, reattach-replay
-    // rebuild, and the []-reset on session switch all land here).
-    rebuildMessageIndexes(messages)
+    // indexes must be rebuilt in lockstep (snapshot restore and the
+    // reattach-replay rebuild both land here).
+    rebuildMessageIndexes(ix, messages)
     // A loaded log is history — its markers must never fire.
-    roundStart = messages.length
+    ix.roundStart = messages.length
     set({ messages })
   },
 
@@ -677,7 +714,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   setUsableAgentCount(n: number) {
-    set({ usableAgentCount: n })
+    setShared({ usableAgentCount: n })
   },
 
   setAccessLevel(level) {
@@ -685,11 +722,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   setSandboxAvailable(v) {
-    set({ sandboxAvailable: v })
+    setShared({ sandboxAvailable: v })
   },
 
   setCaptureSource(source) {
-    set({ captureSource: source })
+    setShared({ captureSource: source })
   },
 
   addPendingMessage(text: string) {
@@ -722,7 +759,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
         return m
       })
-      pruneStreamingIdx(messages)
+      pruneStreamingIdx(ix, messages)
       return { messages, isStreaming: messages.some((m) => m.streaming && !m.taskId) }
     })
   },
@@ -743,7 +780,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const messages = state.messages.map((m) =>
         lost(m) ? { ...m, streaming: false, interrupted: true } : m,
       )
-      pruneStreamingIdx(messages)
+      pruneStreamingIdx(ix, messages)
       return { messages, isStreaming: messages.some((m) => m.streaming && !m.taskId) }
     })
   },
@@ -761,8 +798,60 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // refilled it. Keeping the last-known limit lets the ring light up as soon
     // as the first usage event lands — the "ring only shows after I switch
     // sessions" bug.
-    rebuildMessageIndexes([])
-    roundStart = 0
+    rebuildMessageIndexes(ix, [])
+    ix.roundStart = 0
+    ix.lastSnapshot = null
     set({ messages: [], isStreaming: false, pendingMessages: [], sessionId: null, contextTokens: 0, outputTokens: 0, accessLevel: 'full' })
   },
-}))
+})
+
+/** A fresh per-tab store (see chat-tabs). Live until disposeChatStore. */
+export function createChatStore(): ChatStoreApi {
+  const ix: StoreLocals = { streamingIdx: new Map(), toolUseIdIdx: new Map(), roundStart: 0, lastSnapshot: null }
+  const store = createStore<ChatStore>()(chatStoreState(ix))
+  liveStores.add(store)
+  return store
+}
+
+/** Drop a closed tab's store from the shared-field fan-out and sweeps. */
+export function disposeChatStore(store: ChatStoreApi): void {
+  liveStores.delete(store)
+}
+
+/** Every live store — for connection-level sweeps (watchdog, send-failed). */
+export function forEachChatStore(fn: (store: ChatStoreApi) => void): void {
+  for (const s of liveStores) fn(s)
+}
+
+/** The store of the chat tab on screen. Starts as a standalone store so the
+ *  module works before (and without) chat-tabs adopting it as its first tab. */
+let activeStore = createChatStore()
+const activeListeners = new Set<() => void>()
+
+export function getActiveChatStore(): ChatStoreApi {
+  return activeStore
+}
+
+export function setActiveChatStore(store: ChatStoreApi): void {
+  if (store === activeStore) return
+  activeStore = store
+  for (const l of activeListeners) l()
+}
+
+function subscribeActiveChatStore(listener: () => void): () => void {
+  activeListeners.add(listener)
+  return () => { activeListeners.delete(listener) }
+}
+
+function useChatStoreHook<U>(selector: (state: ChatStore) => U): U {
+  const store = useSyncExternalStore(subscribeActiveChatStore, getActiveChatStore, getActiveChatStore)
+  return useStore(store, selector)
+}
+
+/** The active tab's store, in the shape of a bound zustand hook: selectors
+ *  re-subscribe when the active tab changes; getState / setState act on
+ *  whichever tab is active at call time. */
+export const useChatStore = Object.assign(useChatStoreHook, {
+  getState: (): ChatStore => activeStore.getState(),
+  setState: ((...args: Parameters<ChatStoreApi['setState']>) => activeStore.setState(...args)) as ChatStoreApi['setState'],
+})

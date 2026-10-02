@@ -16,9 +16,8 @@ import { useEvolutionStore } from './evolution-store'
 type RunListItem = Awaited<ReturnType<typeof api.evolution.listRuns>>['runs'][number]
 
 const PAGE_SIZE = 20
-// Match the admin session-list ceiling (300). Past this, older runs aren't
-// worth keeping in the DOM — the archive view + status filters cover deep
-// history. Mirrors MAX_TOP_LEVEL in agent-sessions-sidebar.
+// Past this, older runs aren't worth keeping in the DOM — the archive view +
+// status filters cover deep history.
 const MAX_RUNS = 300
 
 // `archived` is a special pseudo-status: it isn't a value in the row's

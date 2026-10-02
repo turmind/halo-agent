@@ -1,10 +1,13 @@
 'use client'
 
-import { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback } from 'react'
-import { useChatStore } from '@/features/chat/chat-store'
+import { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback, useSyncExternalStore } from 'react'
+import { useChatTabs } from '@/features/chat/chat-tabs'
 import { useSessionViewStore } from './agent-sessions-sidebar'
 import { useSessionArchiveStore, anchorSessionArchive, loadOlderSessionArchive } from './session-archive-store'
-import { useArchiveStore } from '@/features/chat/archive-store'
+import {
+  findLiveTab, getCachedView, noteSessionFileChanged, noteSessionViewReconnect, putCachedView,
+  saveCachedScroll, setCachedViewStale, setDisplayedSession, setSessionViewVisible,
+} from './session-view-cache'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
@@ -77,16 +80,28 @@ function reconcileMessages(prev: ChatMessage[] | null, next: ChatMessage[]): Cha
   return reusedAll ? prev : out
 }
 
-export function SessionChatPanel() {
+const NO_MESSAGES: ChatMessage[] = []
+const noSubscribe = () => () => {}
+
+/** `visible`: the Sessions tab is on screen. The panel stays mounted once
+ *  opened (workspace-layout); while hidden it only marks copies stale. */
+export function SessionChatPanel({ visible }: { visible: boolean }) {
   const t = useT()
-  const currentMessages = useChatStore((s) => s.messages)
-  const currentSessionId = useChatStore((s) => s.sessionId)
-  const isStreaming = useChatStore((s) => s.isStreaming)
   const selectedSessionId = useSessionViewStore((s) => s.selectedSessionId)
   const selectedSession = useSessionViewStore((s) => s.selectedSession)
   const loadedMessages = useSessionViewStore((s) => s.loadedMessages)
   const loading = useSessionViewStore((s) => s.loading)
-  const activeProject = useProjectStore((s) => s.activeProject)
+  // A loaded Explorer chat tab on the selection — any tab, not only the one
+  // on screen — drives the view from its live store. Watched only while the
+  // Sessions tab is up: a hidden panel needn't re-render per streamed delta.
+  const liveTab = useChatTabs((s) => findLiveTab(s.tabs, selectedSessionId))
+  const liveStore = liveTab?.store
+  const isLive = liveStore !== undefined
+  const watchLive = liveStore && visible ? liveStore.subscribe : noSubscribe
+  const liveMessagesSnapshot = () => liveStore?.getState().messages ?? NO_MESSAGES
+  const liveMessages = useSyncExternalStore(watchLive, liveMessagesSnapshot, liveMessagesSnapshot)
+  const isStreamingSnapshot = () => liveStore?.getState().isStreaming ?? false
+  const isStreaming = useSyncExternalStore(watchLive, isStreamingSnapshot, isStreamingSnapshot)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [copied, setCopied] = useState(false)
   const [debugMode, setDebugMode] = useState<boolean>(() => {
@@ -113,58 +128,107 @@ export function SessionChatPanel() {
     if (typeof window !== 'undefined') localStorage.setItem('halo_session_prompt', showPrompt ? '1' : '0')
   }, [showPrompt])
 
-  // For sub / historical sessions, re-fetch when the underlying session.json
-  // changes on disk (agent appends a message). Current live session is driven
-  // by WS stream and skipped here to avoid double-updates.
+  // The cache's notion of what is on screen (staleness routing, LRU pin).
+  useEffect(() => { setDisplayedSession(selectedSessionId) }, [selectedSessionId])
+  useEffect(() => { setSessionViewVisible(visible) }, [visible])
+
+  // Background refetch of a cached (fetched, not live) session: GET, then
+  // reconcile against the kept copy so unchanged rows keep identity. Never
+  // against loadedMessages without one: after a live view that holds the live
+  // store's messages, a different shape the id-prefix reuse must not mix in.
+  //
+  // Single-flight per session plus one trailing re-pull. A session's log can
+  // still grow past the 3MB archive threshold between two compacts, and old
+  // sessions were already that large before archiving shipped, so one GET of
+  // it (server parse + gzip, transfer, browser parse) can outlast the ~1/s
+  // file:changed a busy agent emits — unmerged, GETs piled up behind the
+  // browser's per-host connection cap and the view fell ever further behind.
+  // A trigger that finds a GET on the wire only queues; when that GET
+  // settles, one re-pull picks up what it missed: at most one request out
+  // and one queued per session, answers in order.
   const setLoadedMessages = useSessionViewStore((s) => s.setLoadedMessages)
-  useEffect(() => {
-    if (!selectedSessionId || !activeProject?.path) return
-    if (selectedSessionId === currentSessionId) return // live session — WS handles updates
-    const refetch = () => {
-      api.sessionLogs.get(selectedSessionId, activeProject.path)
+  /** sid → a re-pull is queued behind its GET on the wire. */
+  const inFlight = useRef(new Map<string, boolean>())
+  const refetch = useCallback((sid: string) => {
+    const flights = inFlight.current
+    if (flights.has(sid)) { flights.set(sid, true); return }
+    const run = (): void => {
+      const path = useProjectStore.getState().activeProject?.path
+      if (!path) return
+      flights.set(sid, false)
+      setCachedViewStale(sid, false)
+      api.sessionLogs.get(sid, path)
         .then((res) => {
+          const archiveCount = typeof res.archiveCount === 'number' ? res.archiveCount : 0
+          const fresh = (res.messages as unknown as ChatMessage[]) ?? []
+          const view = useSessionViewStore.getState()
+          const selected = view.selectedSessionId === sid
+          const prev = getCachedView(sid)?.messages ?? null
+          const next = reconcileMessages(prev, fresh)
+          putCachedView(sid, next, archiveCount)
+          if (!selected) return
           // A compact that fires while the session is on screen rewrites the
           // active file with a higher archiveCount — re-anchor so the
           // just-archived turns become reachable (no-op unless it grew).
-          anchorSessionArchive(selectedSessionId, typeof res.archiveCount === 'number' ? res.archiveCount : 0)
-          const fresh = (res.messages as unknown as ChatMessage[]) ?? []
-          const prev = useSessionViewStore.getState().loadedMessages
-          const next = reconcileMessages(prev, fresh)
-          if (next !== prev) setLoadedMessages(next)
+          anchorSessionArchive(sid, archiveCount)
+          if (next !== view.loadedMessages) setLoadedMessages(next)
         })
-        .catch(() => {})
+        .catch(() => setCachedViewStale(sid, true))
+        .finally(() => {
+          const queued = flights.get(sid)
+          flights.delete(sid)
+          if (!queued) return
+          // The copy is behind the queued writes. Re-pull only while it is
+          // still the selection: a switch away, its delete or a workspace
+          // change (both clear the selection) drop the re-pull, and the stale
+          // mark refetches it on its next view.
+          setCachedViewStale(sid, true)
+          if (useSessionViewStore.getState().selectedSessionId === sid) run()
+        })
     }
-    // Session files are named by the last segment of the id (e.g. full id
-    // "root>sid_abc" → file "sid_abc.json"), so match on basename not full id.
-    const fileBase = selectedSessionId.split('>').pop() ?? selectedSessionId
-    const unsub = wsClient.on('file:changed', (data) => {
-      const msg = data as { path: string; action: string }
-      // Session files are written atomically (tmp + rename-over-existing), which
-      // the native watcher reports as `create` → action 'add', not 'change'.
-      if (msg.action !== 'change' && msg.action !== 'add') return
-      if (!msg.path.startsWith('.halo/sessions/')) return
-      if (!msg.path.endsWith(`/${fileBase}.json`)) return
-      refetch()
-    })
-    // Reconnect reconciliation — a session write while the socket was down
-    // emits no delta, leaving the transcript stale. See shared/ws-reconnect.
-    const unsubReconnect = onWsReconnect(wsClient, refetch)
+    run()
+  }, [setLoadedMessages])
+
+  // A write to a session log (agent appends a message) or a reconnect
+  // (deltas lost while down) marks cached copies stale; the one on screen
+  // is refetched now. A live selection is driven by its tab's WS stream.
+  useEffect(() => {
+    const refetchShown = (sid: string | null) => {
+      if (sid && !findLiveTab(useChatTabs.getState().tabs, sid)) refetch(sid)
+    }
+    const unsub = wsClient.on('file:changed', (msg) => refetchShown(noteSessionFileChanged(msg.path, msg.action)))
+    // See shared/ws-reconnect.
+    const unsubReconnect = onWsReconnect(wsClient, () => refetchShown(noteSessionViewReconnect()))
     return () => { unsub(); unsubReconnect() }
-  }, [selectedSessionId, currentSessionId, activeProject?.path, setLoadedMessages])
+  }, [refetch])
+
+  // On show, selection switch, or the selection's Explorer tab closing (live
+  // → fetched copy): refetch a stale copy — or a missing one (live sessions
+  // aren't cached; a failed load left none); a current one is shown as is
+  // (a live view left the live store's messages behind). Not while the
+  // sidebar's first load of the selection is in flight.
+  useEffect(() => {
+    if (!visible || !selectedSessionId || isLive) return
+    const view = useSessionViewStore.getState()
+    if (view.loading) return
+    const entry = getCachedView(selectedSessionId)
+    if (!entry || entry.stale) refetch(selectedSessionId)
+    else if (view.loadedMessages !== entry.messages) setLoadedMessages(entry.messages)
+  }, [visible, selectedSessionId, isLive, refetch, setLoadedMessages])
 
   // Determine which messages to show
   const messages = useMemo(() => {
     if (!selectedSessionId) return []
 
-    // If viewing the current live session, use real-time in-memory messages.
-    // currentMessages holds the entire root-tree stream (root + sub-agents),
+    // If viewing a live session, use real-time in-memory messages.
+    // liveMessages holds the entire root-tree stream (root + sub-agents),
     // so we must drop any message tagged with a taskId — those belong to a
     // sub-session and have their own row in the tree. Without this, debug
     // mode on the live root would show every descendant's stream/tool_call
     // events inline, then "snap back" to the correct view after a refresh
     // (the on-disk root file only carries its own messages).
-    if (selectedSessionId === currentSessionId) {
-      const ownMessages = currentMessages.filter((m) => !m.taskId)
+    if (isLive) {
+      const ownMessages = liveMessages.filter((m) => !m.taskId)
       if (debugMode) return ownMessages
       return ownMessages.filter(isMainConversationMessage)
     }
@@ -173,22 +237,22 @@ export function SessionChatPanel() {
     const loaded = loadedMessages ?? []
     if (debugMode) return loaded
     return loaded.filter((m) => !isDebugMessage(m))
-  }, [selectedSessionId, currentSessionId, currentMessages, loadedMessages, debugMode])
+  }, [selectedSessionId, isLive, liveMessages, loadedMessages, debugMode])
 
   // Extract system prompt from messages
   const systemPrompt = useMemo(() => {
-    const allMsgs = selectedSessionId === currentSessionId ? currentMessages : (loadedMessages ?? [])
+    const allMsgs = isLive ? liveMessages : (loadedMessages ?? [])
     for (const m of allMsgs) {
       if (inferMessageType(m) === 'context' && m.systemPrompt) return m.systemPrompt
     }
     return null
-  }, [selectedSessionId, currentSessionId, currentMessages, loadedMessages])
+  }, [isLive, liveMessages, loadedMessages])
 
   // ── Archived history (scroll-to-top segment walk) ──────────────────────
   // Anchored by the sidebar's session-log GET (non-live selections) or
-  // mirrored from the chat archive store below (live selection — its anchor
-  // arrived on the subscribe snapshot; the segment files on disk don't care
-  // whether the session is live).
+  // mirrored from the live tab below (its count arrived on the subscribe
+  // snapshot; the segment files on disk don't care whether the session is
+  // live).
   const archSessionId = useSessionArchiveStore((s) => s.sessionId)
   const archAnchor = useSessionArchiveStore((s) => s.anchor)
   const archCursor = useSessionArchiveStore((s) => s.cursor)
@@ -198,13 +262,11 @@ export function SessionChatPanel() {
   // the previous selection, until its anchor call lands) must not render.
   const archBound = archSessionId !== null && archSessionId === selectedSessionId
 
-  const chatArchSessionId = useArchiveStore((s) => s.sessionId)
-  const chatArchAnchor = useArchiveStore((s) => s.anchor)
+  const liveArchiveCount = liveTab?.archiveCount ?? 0
   useEffect(() => {
-    if (!selectedSessionId || selectedSessionId !== currentSessionId) return
-    if (chatArchSessionId !== selectedSessionId) return
-    anchorSessionArchive(selectedSessionId, chatArchAnchor)
-  }, [selectedSessionId, currentSessionId, chatArchSessionId, chatArchAnchor])
+    if (!selectedSessionId || !isLive) return
+    anchorSessionArchive(selectedSessionId, liveArchiveCount)
+  }, [selectedSessionId, isLive, liveArchiveCount])
 
   // Same debug filter the loadedMessages path uses above — archived segments
   // carry the full raw log (tool calls, usage rows), so non-debug view hides
@@ -224,6 +286,21 @@ export function SessionChatPanel() {
   // One segment per scroll-to-top GESTURE — re-armed only after the user
   // scrolls back down (>200), so one flick can't cascade through the archive.
   const topTriggerArmed = useRef(true)
+  // What the DOM shows, for the scroll handler: mirrored at commit (layout
+  // effects) so a scroll event never pairs one session's id with another's
+  // layout. `cachedSid` = the selection when it's a cached (non-live) view.
+  const visibleRef = useRef(visible)
+  const cachedSidRef = useRef<string | null>(null)
+  // Top of the active log (below the archive block) — reading positions are
+  // kept relative to it, see SessionViewEntry.scrollOffset.
+  const activeTopRef = useRef<HTMLDivElement>(null)
+  // Set on selection switch and on show; consumed once the transcript is on
+  // screen (the first load of a selection renders a spinner first).
+  const pendingRestore = useRef(true)
+  // Reading position of the view on screen — what a re-show restores for a
+  // live view, which has no cache entry. Not left to the browser: a scroll
+  // box under display:none may come back at the top.
+  const lastOffset = useRef(0)
 
   const handleLoadOlder = useCallback(() => {
     // Guard before capturing the anchor: an exhausted / in-flight walk must
@@ -236,18 +313,53 @@ export function SessionChatPanel() {
   }, [selectedSessionId])
 
   // Selection switch: the store rebinds via anchorSessionArchive (sidebar /
-  // live mirror); the per-panel gesture state resets here.
-  useEffect(() => {
+  // live mirror); the per-panel gesture state resets here, and the new view
+  // is due a position restore. Layout effect: it must precede the restore.
+  useLayoutEffect(() => {
     topTriggerArmed.current = true
     archScrollAnchor.current = null
+    pendingRestore.current = true
+    wasAtBottom.current = true // no saved position → follow the tail
+    lastOffset.current = 0
   }, [selectedSessionId])
+  useLayoutEffect(() => {
+    visibleRef.current = visible
+    pendingRestore.current = true
+  }, [visible])
+  useLayoutEffect(() => {
+    cachedSidRef.current = isLive ? null : selectedSessionId
+  }, [isLive, selectedSessionId])
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!pendingRestore.current || !visible || !el || loading || messages.length === 0) return
+    pendingRestore.current = false
+    const entry = selectedSessionId && !isLive ? getCachedView(selectedSessionId) : undefined
+    if (entry) {
+      wasAtBottom.current = entry.atBottom
+      lastOffset.current = entry.scrollOffset
+    }
+    if (wasAtBottom.current) {
+      el.scrollTop = el.scrollHeight
+    } else {
+      el.scrollTop = (activeTopRef.current?.offsetTop ?? 0) + lastOffset.current
+      // A restore isn't a scroll-to-top gesture — landing in the trigger
+      // zone must not pull a segment (scroll on, or click Load older).
+      if (el.scrollTop < 80) topTriggerArmed.current = false
+    }
+  }, [selectedSessionId, visible, loading, messages, isLive])
 
   // Track scroll position
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     const onScroll = () => {
+      // Hidden (display:none) reports a zero box — nothing real to read.
+      if (!visibleRef.current) return
       wasAtBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+      lastOffset.current = el.scrollTop - (activeTopRef.current?.offsetTop ?? 0)
+      const sid = cachedSidRef.current
+      if (sid) saveCachedScroll(sid, lastOffset.current, wasAtBottom.current)
       if (el.scrollTop > 200) topTriggerArmed.current = true
       else if (el.scrollTop < 80 && topTriggerArmed.current) {
         topTriggerArmed.current = false
@@ -294,7 +406,7 @@ export function SessionChatPanel() {
               {selectedSession?.title || 'Untitled'}
             </span>
             <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">({messages.length})</span>
-            {selectedSessionId === currentSessionId && (
+            {isLive && (
               <span className="shrink-0 rounded bg-blue-900/50 px-1.5 py-0.5 text-[8px] text-blue-400">live</span>
             )}
             {selectedSession?.parentSessionId && (
@@ -366,7 +478,7 @@ export function SessionChatPanel() {
             </button>
           </div>
         )}
-        {isStreaming && selectedSessionId === currentSessionId && (
+        {isStreaming && (
           <span className="rounded bg-blue-900/50 px-1.5 py-0.5 text-[9px] text-blue-400 animate-pulse">streaming</span>
         )}
       </div>
@@ -433,6 +545,7 @@ export function SessionChatPanel() {
                 )}
               </div>
             )}
+            <div ref={activeTopRef} />
             <MessageList messages={messages} debugMode={debugMode} />
           </>
         )}

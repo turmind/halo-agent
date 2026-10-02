@@ -17,7 +17,7 @@ export interface GoalInfo {
 }
 
 /** localStorage key for the dismissed goal id, scoped per project (same
- *  pattern as use-chat's `halo_session_${projectId}`). */
+ *  pattern as chat-tabs' `halo_chat_tabs_${projectId}`). */
 function dismissKey(projectId: string): string {
   return `halo_goal_dismissed_${projectId}`
 }

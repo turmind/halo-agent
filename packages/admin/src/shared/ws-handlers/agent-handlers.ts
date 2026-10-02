@@ -1,15 +1,15 @@
 import type { WsClient } from '../ws-client-types'
-import { useChatStore } from '@/features/chat/chat-store'
+import { storeForFrame } from '@/features/chat/chat-tabs'
 import { generateId } from '@/shared/utils'
-import { isForCurrentSession } from './chat-handlers'
 
 export function registerAgentHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
 
   unsubs.push(
     wsClient.on('agent:start', (msg) => {
-      if (!isForCurrentSession(msg)) return
-      useChatStore.getState().addMessage({
+      const store = storeForFrame(msg.sessionId)?.getState()
+      if (!store) return
+      store.addMessage({
         id: generateId(),
         role: 'assistant',
         content: '',
@@ -23,15 +23,17 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('agent:done', (msg) => {
-      if (!isForCurrentSession(msg)) return
-      useChatStore.getState().completeAgentStreaming(msg.agentName, msg.taskId)
+      const store = storeForFrame(msg.sessionId)?.getState()
+      if (!store) return
+      store.completeAgentStreaming(msg.agentName, msg.taskId)
     }),
   )
 
   unsubs.push(
     wsClient.on('agent:context', (msg) => {
-      if (!isForCurrentSession(msg)) return
-      useChatStore.getState().addMessage({
+      const store = storeForFrame(msg.sessionId)?.getState()
+      if (!store) return
+      store.addMessage({
         id: generateId(),
         role: 'system',
         content: `[System Prompt: ${msg.agentName ?? 'Agent'}]`,
@@ -45,12 +47,13 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('agent:tool_call', (msg) => {
-      if (!isForCurrentSession(msg)) return
+      const store = storeForFrame(msg.sessionId)?.getState()
+      if (!store) return
       const agentName = msg.agentName ?? 'default'
       // Store the full input — truncation is the render layer's job
       // (InlineToolCall previews collapsed and shows everything on expand).
       const inputStr = typeof msg.input === 'string' ? msg.input : JSON.stringify(msg.input ?? {})
-      useChatStore.getState().addToolCallToLastAssistant(
+      store.addToolCallToLastAssistant(
         { name: msg.tool ?? '', input: inputStr, toolUseId: msg.toolUseId },
         agentName,
         msg.taskId,
@@ -61,12 +64,13 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('agent:tool_result', (msg) => {
-      if (!isForCurrentSession(msg)) return
+      const store = storeForFrame(msg.sessionId)?.getState()
+      if (!store) return
       const agentName = msg.agentName ?? 'default'
       // Store the full result — truncation is the render layer's job
       // (InlineToolCall previews at 120 chars; expand shows everything).
       const fullResult = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result ?? '')
-      useChatStore.getState().updateLastToolCallResult(fullResult, agentName, msg.taskId, msg.toolUseId)
+      store.updateLastToolCallResult(fullResult, agentName, msg.taskId, msg.toolUseId)
     }),
   )
 

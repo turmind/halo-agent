@@ -3,47 +3,14 @@
 import { useCallback, useEffect } from 'react'
 import type { WsClientMessage } from '@turmind/halo-core/protocol'
 import { useChatStore } from '@/features/chat/chat-store'
+import { bindActiveTabSession, dropSessionTab, newTab, restoreTabs } from '@/features/chat/chat-tabs'
+import { removeCachedView } from '@/features/agents/session-view-cache'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { useT } from '@/shared/i18n'
 import { wsClient } from '@/shared/ws-client'
 import { generateId } from '@/shared/utils'
 import type { SlashCommand } from './slash-commands'
-
-/** Build a localStorage key scoped to a project path */
-function sessionKey(projectId: string): string {
-  return `halo_session_${projectId}`
-}
-
-/** Legacy key — for migration only */
-const LEGACY_KEY = 'halo_session_id'
-
-function getStoredSessionId(projectId: string): string | null {
-  if (typeof window === 'undefined') return null
-  // Try project-scoped key first
-  const scoped = localStorage.getItem(sessionKey(projectId))
-  if (scoped) return scoped
-  // Fallback: migrate legacy key (one-time)
-  const legacy = localStorage.getItem(LEGACY_KEY)
-  if (legacy) {
-    localStorage.setItem(sessionKey(projectId), legacy)
-    localStorage.removeItem(LEGACY_KEY)
-    return legacy
-  }
-  return null
-}
-
-function storeSessionId(projectId: string, id: string): void {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(sessionKey(projectId), id)
-  }
-}
-
-function removeStoredSessionId(projectId: string): void {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem(sessionKey(projectId))
-  }
-}
 
 export function useChat() {
   const t = useT()
@@ -53,30 +20,14 @@ export function useChat() {
   const pendingMessages = useChatStore((s) => s.pendingMessages)
   const activeProject = useProjectStore((s) => s.activeProject)
 
-  // When project changes, load the project-scoped session and subscribe if
-  // the WS is already up. Reconnects (and late initial connects) are owned
-  // exclusively by use-websocket's `_connected` handler — a second subscriber
-  // here double-subscribed on every reconnect: the first consumed the
-  // detached-session entry (reattach + replay), the second re-ran the normal
-  // path (second snapshot + listener re-registration).
+  // When project changes, restore its tab headers and load the active tab —
+  // chat-tabs subscribes it if the WS is already up. Reconnects (and late
+  // initial connects) are owned exclusively by use-websocket's `_connected`
+  // handler — a second subscriber here double-subscribed on every reconnect:
+  // the first consumed the detached-session entry (reattach + replay), the
+  // second re-ran the normal path (second snapshot + listener re-registration).
   useEffect(() => {
-    if (!activeProject) return
-
-    const projectId = activeProject.id
-    const stored = getStoredSessionId(projectId)
-    const currentSessionId = useChatStore.getState().sessionId
-
-    if (stored && stored !== currentSessionId) {
-      useChatStore.getState().setSessionId(stored)
-      useChatStore.getState().setMessages([])
-    } else if (!stored && currentSessionId) {
-      useChatStore.getState().clear()
-    }
-
-    const sid = useChatStore.getState().sessionId
-    if (sid && wsClient.connected) {
-      wsClient.send({ type: 'subscribe', sessionId: sid, projectId })
-    }
+    if (activeProject) restoreTabs(activeProject.id)
   }, [activeProject?.id])
 
   /** Build editor context prefix from current selection and active file */
@@ -103,11 +54,9 @@ export function useChat() {
     (text: string, images?: Array<{ data: string; mimeType: string }>, mentionedFiles?: string[]) => {
       if (!activeProject) return
 
-      const currentSessionId = sessionId ?? getStoredSessionId(activeProject.id) ?? generateId()
-      if (!sessionId || sessionId !== currentSessionId) {
-        useChatStore.getState().setSessionId(currentSessionId)
-        storeSessionId(activeProject.id, currentSessionId)
-      }
+      // A draft tab mints its session id on the first send.
+      const currentSessionId = sessionId ?? generateId()
+      if (!sessionId) bindActiveTabSession(currentSessionId)
 
       // Build context-enriched message
       const editorContext = getEditorContext()
@@ -244,58 +193,39 @@ export function useChat() {
     }
   }, [isStreaming, dispatchMessage])
 
-  /** Start a new session — resets agent but keeps old session in DB for history */
-  const clearSession = useCallback(() => {
-    if (!activeProject) return
-
-    const currentSessionId = sessionId ?? getStoredSessionId(activeProject.id)
-
-    // Tell server to reset session (session stays in DB)
-    if (currentSessionId) {
-      wsClient.send({ type: 'session:clear', sessionId: currentSessionId })
-    }
-
-    // Remove stored session for this project
-    removeStoredSessionId(activeProject.id)
-
-    // Clear chat store (messages + sessionId)
-    useChatStore.getState().clear()
-  }, [activeProject, sessionId])
-
   /** Delete a session from DB permanently */
   const deleteSession = useCallback((targetSessionId: string) => {
     if (!activeProject) return
 
     wsClient.send({ type: 'session:delete', sessionId: targetSessionId, projectId: activeProject.path })
 
-    // If deleting the current session, also clear UI
-    const currentSessionId = sessionId ?? getStoredSessionId(activeProject.id)
-    if (targetSessionId === currentSessionId) {
-      removeStoredSessionId(activeProject.id)
-      useChatStore.getState().clear()
-    }
-  }, [activeProject, sessionId])
+    // Its tab (if open) goes with it — no unsubscribe: the delete already
+    // released the listener server-side. So does the Sessions-tab copy.
+    dropSessionTab(targetSessionId)
+    removeCachedView(targetSessionId)
+  }, [activeProject])
 
   const handleCommand = useCallback(
     (cmd: SlashCommand, args: string) => {
-      // All slash commands route through the server via WS now. The server
-      // owns the canonical implementation (execNew / execHelp / execList /
-      // skill activation / etc.) so wechat / telegram / web / web-demo /
-      // admin all see identical behaviour. Pure client-only shortcuts (eg
-      // the old `/clear` that just wiped the local chat store) have been
-      // removed from the registry entirely — server-side `/new` already
-      // covers the "start fresh" intent and the WS reply pushes a
-      // `session:switched` event which admin handles below to clear local
-      // state.
+      // Slash commands route through the server via WS. The server owns the
+      // canonical implementation (execNew / execHelp / execList / skill
+      // activation / etc.) so wechat / telegram / web / web-demo / admin all
+      // see identical behaviour; a command that moves to another session
+      // replies `session:switched`, which opens that session in its own tab
+      // (chat-handlers).
       if (!activeProject) return
-      // Bootstrap a session id the same way `dispatchMessage` does so a
-      // slash command issued in a fresh chat box still has something for
-      // the server's `bindOrCreateSession` to bind to.
-      const currentSessionId = sessionId ?? getStoredSessionId(activeProject.id) ?? generateId()
-      if (!sessionId || sessionId !== currentSessionId) {
-        useChatStore.getState().setSessionId(currentSessionId)
-        storeSessionId(activeProject.id, currentSessionId)
+      // "Start fresh" stays client-side: a new tab is all it takes, and a
+      // draft tab sending `/session new` would first create an empty session
+      // for itself server-side. `/session new <args>` still goes to the server.
+      if (cmd.name === '/clear' || (cmd.name === '/session' && args.trim() === 'new')) {
+        newTab()
+        return
       }
+      // Bootstrap a session id the same way `dispatchMessage` does so a
+      // slash command issued in a draft tab still has something for the
+      // server's `bindOrCreateSession` to bind to.
+      const currentSessionId = sessionId ?? generateId()
+      if (!sessionId) bindActiveTabSession(currentSessionId)
       const cmdName = cmd.name.slice(1)
       const agentId = useChatStore.getState().selectedAgentId
       const payload: WsClientMessage = {
@@ -321,5 +251,5 @@ export function useChat() {
     [activeProject, sessionId],
   )
 
-  return { messages, sendMessage, isStreaming, sessionId, clearSession, deleteSession, stopGeneration, interruptGeneration, pendingMessages, removePendingMessage, handleCommand }
+  return { messages, sendMessage, isStreaming, sessionId, deleteSession, stopGeneration, interruptGeneration, pendingMessages, removePendingMessage, handleCommand }
 }

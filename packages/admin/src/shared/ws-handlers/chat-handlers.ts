@@ -1,8 +1,8 @@
 import type { WsClient } from '../ws-client-types'
 import type { ChatMessage } from '@/shared/types'
-import { useChatStore, noteLinkDrop, takeReplaySnapshot } from '@/features/chat/chat-store'
+import { noteLinkDrop, forEachChatStore, getActiveChatStore, type ChatStoreApi } from '@/features/chat/chat-store'
+import { focusSessionTab, getLoadedStore, storeForFrame } from '@/features/chat/chat-tabs'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { bumpSessionBus } from '@/shared/session-bus'
 import { generateId } from '@/shared/utils'
 import { postToFace } from '@/features/editor/face-bridge'
 import { en } from '@/shared/i18n/en'
@@ -21,17 +21,6 @@ const CAPTURE_MARKER = /<<<CAPTURE>>>/
  *  Non-greedy dot-all because payloads legitimately contain `>`, `(`, and
  *  newlines (e.g. `self.play([{...}])`). Global: a reply may carry several. */
 const SHOW_MARKER = /<<<SHOW:([\s\S]*?)>>>/g
-
-/** The server-side event listener stays attached to the session it was
- *  created for, so after `loadSession` switches the store to another session
- *  the old turn's frames keep arriving until it completes — appended blindly
- *  they land in the new session's message list (and fabricate a streaming
- *  slot there). Event-derived frames carry the originating `sessionId`;
- *  drop those that don't match the loaded session. Frames without one
- *  (detached-buffer replays, handler-local sends) pass through. */
-export function isForCurrentSession(msg: { sessionId?: string | null }): boolean {
-  return !msg.sessionId || msg.sessionId === useChatStore.getState().sessionId
-}
 
 /**
  * On turn completion, forward the `<<<SHOW: …>>>` payloads of the round's
@@ -57,8 +46,8 @@ function maybeHandleShow(replies: ChatMessage[]): void {
  * once per round. Best-effort: any failure (no bridge, window closed, grab
  * error) sends a short text note instead of an image, never throws.
  */
-async function maybeHandleCapture(wsClient: WsClient, replies: ChatMessage[]): Promise<void> {
-  const store = useChatStore.getState()
+async function maybeHandleCapture(wsClient: WsClient, tabStore: ChatStoreApi, replies: ChatMessage[]): Promise<void> {
+  const store = tabStore.getState()
   const w = window as unknown as {
     haloCapture?: { grab: (id: string) => Promise<string | null> }
     haloCamera?: { snap: (deviceId?: string) => Promise<string | null> }
@@ -136,10 +125,16 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   // ws-client gave up on a chat (no server ack after all retries): mark the
   // user bubble red + converge its placeholder so the loss is visible.
+  // Every handler below routes by the frame's `sessionId` (chat-tabs
+  // storeForFrame): into the tab holding that session, background ones
+  // included, or — for a frame without one — the tab on screen.
+
   unsubs.push(
     wsClient.on('_chat_send_failed', (data) => {
       const msg = data as { clientMsgId?: string }
-      if (msg.clientMsgId) useChatStore.getState().markChatSendFailed(msg.clientMsgId)
+      // The send could have come from any tab; ids are unique, so only the
+      // one holding the bubble changes.
+      if (msg.clientMsgId) forEachChatStore((s) => s.getState().markChatSendFailed(msg.clientMsgId!))
     }),
   )
 
@@ -154,43 +149,47 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   // the sweep exits on a cheap `some()` when nothing qualifies.
   unsubs.push(wsClient.on('_disconnected', () => noteLinkDrop()))
   const watchdog = setInterval(() => {
-    useChatStore.getState().convergeStaleStreaming()
+    forEachChatStore((s) => s.getState().convergeStaleStreaming())
   }, 5_000)
   unsubs.push(() => clearInterval(watchdog))
 
   unsubs.push(
     wsClient.on('chat:thinking', (msg) => {
-      if (!isForCurrentSession(msg)) return
-      useChatStore.getState().appendThinking(msg.text, msg.agentName, msg.taskId, msg.turnId)
+      storeForFrame(msg.sessionId)?.getState().appendThinking(msg.text, msg.agentName, msg.taskId, msg.turnId)
     }),
   )
 
   unsubs.push(
     wsClient.on('chat:stream', (msg) => {
-      if (!isForCurrentSession(msg)) return
-      useChatStore.getState().updateLastAssistant(msg.text, msg.agentName, msg.taskId, msg.turnId)
+      storeForFrame(msg.sessionId)?.getState().updateLastAssistant(msg.text, msg.agentName, msg.taskId, msg.turnId)
     }),
   )
 
   unsubs.push(
-    wsClient.on('chat:complete', () => {
-      const store = useChatStore.getState()
+    wsClient.on('chat:complete', (msg) => {
+      const tabStore = storeForFrame(msg.sessionId)
+      if (!tabStore) return
+      const store = tabStore.getState()
       store.completeAgentStreaming()
       // Every main bubble this round produced, now settled — not just the
       // last: an interjection split, a turnId split or a queued follow-up
       // each leave earlier bubbles whose markers must fire too.
+      // Taken on every tab (it resets the round); the markers only act for
+      // the tab on screen — a background session must not grab a screen
+      // frame or drive the face the user is looking at.
       const replies = store.takeRoundReplies()
+      if (tabStore !== getActiveChatStore()) return
       // After the reply settles, check for a capture request marker. Fire and
       // forget — never let a capture failure break the completion handler.
-      void maybeHandleCapture(wsClient, replies)
+      void maybeHandleCapture(wsClient, tabStore, replies)
       // Also forward any face-drive markers (<<<SHOW: …>>>) to the live preview.
       maybeHandleShow(replies)
     }),
   )
 
   unsubs.push(
-    wsClient.on('chat:stopped', () => {
-      useChatStore.getState().completeAgentStreaming()
+    wsClient.on('chat:stopped', (msg) => {
+      storeForFrame(msg.sessionId)?.getState().completeAgentStreaming()
     }),
   )
 
@@ -200,8 +199,8 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
     // handler the message is dropped on the floor and the UI sits in
     // "thinking…" forever — the user has to refresh to see anything.
     wsClient.on('error', (msg) => {
-      if (!isForCurrentSession(msg)) return
-      const store = useChatStore.getState()
+      const store = storeForFrame(msg.sessionId)?.getState()
+      if (!store) return
       // A `code`-carrying frame is an expected refusal the server phrased for the
       // user (e.g. `archived` from exchange:delete) — show it as-is; an `Error:`
       // prefix would make a normal limit look like a crash.
@@ -223,8 +222,8 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:followup', (msg) => {
-      if (!isForCurrentSession(msg)) return
-      const store = useChatStore.getState()
+      const store = storeForFrame(msg.sessionId)?.getState()
+      if (!store) return
       if (msg.replay) {
         // Reattach replay (server ws/handler.ts): the server is about to
         // re-send the ENTIRE in-flight turn as replay-flagged events. Our
@@ -232,7 +231,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
         // snapshot-replace was skipped while streaming) — would duplicate the
         // streamed text if the replay appended onto it. Reset to the settled
         // log stashed from the reattach snapshot and rebuild from the replay.
-        const settled = takeReplaySnapshot(store.sessionId)
+        const settled = store.takeReplaySnapshot()
         if (settled) {
           store.setMessages(settled)
         } else {
@@ -257,8 +256,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:user', (msg) => {
-      if (!isForCurrentSession(msg)) return
-      useChatStore.getState().addMessage({
+      storeForFrame(msg.sessionId)?.getState().addMessage({
         id: generateId(),
         role: 'user',
         content: msg.text,
@@ -269,8 +267,9 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:usage', (msg) => {
-      if (!isForCurrentSession(msg)) return
-      const store = useChatStore.getState()
+      // Token accounting, not news — no unread dot.
+      const store = storeForFrame(msg.sessionId, false)?.getState()
+      if (!store) return
       store.setTokenUsage(msg.contextTokens, msg.outputTokens)
       if (msg.usage) {
         store.addMessage({
@@ -286,51 +285,36 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
-    wsClient.on('session:cleared', () => {
-      const store = useChatStore.getState()
-      if (store.messages.length > 0 || store.sessionId) {
-        store.clear()
-      }
-      // The server sends this reply AFTER persisting the cleared session's
-      // file, so it's the earliest correct moment for session lists to
-      // refetch — replaces chat-panel's old setTimeout(300) guess.
-      bumpSessionBus()
-    }),
-  )
-
-  unsubs.push(
-    // /new (and any future command that creates a session) emits this
-    // after `execNew` succeeds. We swap the chat-store session id, persist
-    // it to localStorage so a refresh lands on the same session, and clear
-    // the visible messages — the same end-state the old client-only
-    // /clear shortcut produced, but driven by the server.
+    // A command that moved to another session (`/goal create`, `/session
+    // new <args>` — the server's switchTo) or a chat the goal overlay
+    // re-routed. The server has already added the target to this
+    // connection's subscriptions; open it in its own tab (or focus the one
+    // showing it) — the source tab stays as it was. A newly loaded tab still
+    // subscribes, for the disk-seeded snapshot: a session with a transcript
+    // (G after /goal create or resume) renders its history, not a blank tab.
     wsClient.on('session:switched', (msg) => {
       if (!msg.sessionId) return
-      const project = useProjectStore.getState().activeProject
-      if (project) {
-        try { localStorage.setItem(`halo_session_${project.id}`, msg.sessionId) } catch { /* ignore */ }
+      // A re-routed chat: its optimistic bubble in the source tab would spin
+      // forever — the message landed in the target's log instead.
+      if (msg.clientMsgId && msg.fromSessionId) {
+        getLoadedStore(msg.fromSessionId)?.getState().dropOptimisticSend(msg.clientMsgId)
       }
-      const store = useChatStore.getState()
-      store.clear()
-      store.setSessionId(msg.sessionId)
-      // Subscribe to the switched-to session — the same path clicking a
-      // session in the list takes. The server replies with a state:snapshot
-      // (disk-seeded via getSessionView) so a session that already has a
-      // transcript (e.g. G after /goal create or resume) renders its history
-      // instead of a blank panel; for a fresh /new session the snapshot is
-      // empty and this is a no-op.
-      if (project) {
-        wsClient.send({ type: 'subscribe', sessionId: msg.sessionId, projectId: project.id })
+      const toSubscribe = focusSessionTab(msg.sessionId)
+      const project = useProjectStore.getState().activeProject
+      if (toSubscribe && project) {
+        wsClient.send({ type: 'subscribe', sessionId: toSubscribe, projectId: project.id })
       }
     }),
   )
 
   unsubs.push(
     wsClient.on('session:compacted', (msg) => {
+      const tabStore = storeForFrame(msg.sessionId)
+      if (!tabStore) return
       const text = msg.message ?? 'Context compacted'
-      const store = useChatStore.getState()
+      const store = tabStore.getState()
       store.setCompacting(false)
-      clearCompactingFallback()
+      clearCompactingFallback(tabStore)
       store.setTokenUsage(msg.contextTokens ?? 0, store.outputTokens)
       store.addMessage({
         id: generateId(),
@@ -347,25 +331,32 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   // reconnect or an event-processor edge case can drop the close
   // signal and leave the token ring spinning forever. 60s is well
   // above a normal compact LLM call (5-15s); if a real compact takes
-  // longer the visual just goes back early — harmless.
-  let compactingFallbackTimer: ReturnType<typeof setTimeout> | null = null
-  function scheduleCompactingFallback() {
-    if (compactingFallbackTimer) clearTimeout(compactingFallbackTimer)
-    compactingFallbackTimer = setTimeout(() => {
-      useChatStore.getState().setCompacting(false)
-      compactingFallbackTimer = null
-    }, 60_000)
+  // longer the visual just goes back early — harmless. One timer per
+  // tab: several tabs can compact at once.
+  const compactingFallbackTimers = new Map<ChatStoreApi, ReturnType<typeof setTimeout>>()
+  function scheduleCompactingFallback(store: ChatStoreApi) {
+    clearCompactingFallback(store)
+    compactingFallbackTimers.set(store, setTimeout(() => {
+      compactingFallbackTimers.delete(store)
+      store.getState().setCompacting(false)
+    }, 60_000))
   }
-  function clearCompactingFallback() {
-    if (compactingFallbackTimer) {
-      clearTimeout(compactingFallbackTimer)
-      compactingFallbackTimer = null
-    }
+  function clearCompactingFallback(store: ChatStoreApi) {
+    const timer = compactingFallbackTimers.get(store)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    compactingFallbackTimers.delete(store)
   }
+  unsubs.push(() => {
+    for (const timer of compactingFallbackTimers.values()) clearTimeout(timer)
+    compactingFallbackTimers.clear()
+  })
 
   unsubs.push(
     wsClient.on('chat:system', (msg) => {
-      if (!isForCurrentSession(msg)) return
+      const tabStore = storeForFrame(msg.sessionId)
+      if (!tabStore) return
+      const store = tabStore.getState()
       // Auto-compact (the path that fires when the running turn crosses
       // `compressAt`) emits its preflight notice as a `chat:system` event
       // rather than the `compact:progress` channel that manual /compact
@@ -384,17 +375,17 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
       if (!msg.taskId) {
         const m = text.match(/^Compacting context \((\d+)K tokens\)…$/)
         if (m) {
-          useChatStore.getState().setCompacting(true)
-          scheduleCompactingFallback()
+          store.setCompacting(true)
+          scheduleCompactingFallback(tabStore)
           if (m[1] === '0') {
-            const ctxTokens = useChatStore.getState().contextTokens
+            const ctxTokens = tabStore.getState().contextTokens
             if (ctxTokens > 0) {
               text = `Compacting context (~${Math.round(ctxTokens / 1000)}K tokens)…`
             }
           }
         }
       }
-      useChatStore.getState().addMessage({
+      store.addMessage({
         id: generateId(),
         role: 'system',
         content: text,
@@ -410,7 +401,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:queued', (msg) => {
-      useChatStore.getState().addMessage({
+      storeForFrame(msg.sessionId)?.getState().addMessage({
         id: generateId(),
         role: 'system',
         content: msg.message ?? 'Message queued.',
@@ -425,19 +416,25 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   // them the ring relied solely on the regex match below, which races with
   // the LLM call and felt like "/compact 没效果" when the compact finished
   // in <1s.
+  // State flips, not news — no unread dot. (`compact:progress` isn't in the
+  // typed frame union, hence the loose `on(type: string)` overload.)
   for (const evt of ['compact:progress', 'compact:started', 'compact:summarizing']) {
     unsubs.push(
-      wsClient.on(evt, () => {
-        useChatStore.getState().setCompacting(true)
-        scheduleCompactingFallback()
+      wsClient.on(evt, (data) => {
+        const tabStore = storeForFrame((data as { sessionId?: string | null }).sessionId, false)
+        if (!tabStore) return
+        tabStore.getState().setCompacting(true)
+        scheduleCompactingFallback(tabStore)
       }),
     )
   }
 
   unsubs.push(
-    wsClient.on('compact:done', () => {
-      useChatStore.getState().setCompacting(false)
-      clearCompactingFallback()
+    wsClient.on('compact:done', (msg) => {
+      const tabStore = storeForFrame(msg.sessionId, false)
+      if (!tabStore) return
+      tabStore.getState().setCompacting(false)
+      clearCompactingFallback(tabStore)
     }),
   )
 

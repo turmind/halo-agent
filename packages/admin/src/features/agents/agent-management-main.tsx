@@ -13,7 +13,7 @@ import { AgentForm } from './agent-form'
 import { MarkdownPreview } from '@/features/editor/markdown-preview'
 import { EditorPanel } from '@/features/editor/editor-panel'
 import { EditorStoreProvider } from '@/shared/stores/editor-store'
-import { useChatStore } from '@/features/chat/chat-store'
+import { newTab } from '@/features/chat/chat-tabs'
 import { wsClient } from '@/shared/ws-client'
 import { onWsReconnect } from '@/shared/ws-reconnect'
 import { useAgentBus, bumpAgentBus } from '@/shared/agent-bus'
@@ -362,18 +362,9 @@ export function AgentManagementMain() {
 /** Models registry type */
 type ModelsRegistry = Awaited<ReturnType<typeof api.agentConfigs.models>> | null
 
-/** Navigate to explorer chat with a fresh session using the specified agent */
-function testAgent(agentId: string, projectId?: string) {
-  // Detach any active session before clearing (mirrors clearSession in use-chat.ts)
-  const currentSessionId = useChatStore.getState().sessionId
-  if (currentSessionId) {
-    wsClient.send({ type: 'session:clear', sessionId: currentSessionId })
-  }
-  if (projectId && typeof window !== 'undefined') {
-    localStorage.removeItem(`halo_session_${projectId}`)
-  }
-  useChatStore.getState().clear()
-  useChatStore.getState().setSelectedAgentId(agentId)
+/** Navigate to explorer chat with a fresh session tab using the specified agent */
+function testAgent(agentId: string) {
+  newTab(agentId)
   window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer' } }))
 }
 
@@ -524,7 +515,7 @@ function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { ag
               they're delegated to by other agents, not chatted with. */}
           {!agent.internal && (
             <button
-              onClick={() => testAgent(agent.id, activeProject?.id)}
+              onClick={() => testAgent(agent.id)}
               className="flex items-center gap-1.5 rounded bg-[var(--secondary)] px-2.5 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--secondary)]/80"
             >
               <Play className="h-3 w-3" />

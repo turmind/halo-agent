@@ -276,46 +276,112 @@ describe('reclaiming abandoned connections', () => {
   })
 })
 
-describe('session:clear listener lifecycle (audit A-H1)', () => {
-  /** One clear round trip: send session:clear, resolve on session:cleared. */
-  function clearSession(ws: WebSocket, sessionId: string): Promise<void> {
-    return new Promise((resolve) => {
-      const onMsg = (raw: Buffer) => {
-        if ((JSON.parse(raw.toString('utf-8')) as { type?: string }).type === 'session:cleared') {
-          ws.off('message', onMsg)
-          resolve()
-        }
-      }
-      ws.on('message', onMsg)
-      ws.send(JSON.stringify({ type: 'session:clear', sessionId }))
-    })
+describe('one connection, several subscribed sessions (admin chat tabs)', () => {
+  const SID_B = 'sess-reclaim-b'
+
+  /** Send `unsubscribe` (no reply frame) and wait until the server has
+   *  processed it: frames are handled in order per connection, so a
+   *  re-subscribe of `fence` answering means the unsubscribe ran first. */
+  async function unsubscribe(ws: WebSocket, sessionId: string, fence: string): Promise<void> {
+    ws.send(JSON.stringify({ type: 'unsubscribe', sessionId }))
+    await subscribe(ws, fence)
   }
 
-  it('clear releases the listener — repeated New-session clicks must not accumulate', async () => {
-    // The old handler re-registered a background bgHandler on every clear and
-    // threw away its unsubscribe (and nothing ever drained its pendingEvents),
-    // so each admin "New session" click leaked one listener on the old session
-    // — the accumulation confirmed by production probes (3 listeners on one
-    // session). A cleared session needs NO listener: the admin wipes its chat
-    // store on session:cleared, SessionUIStore folds + persists a running
-    // session's events with zero listeners, and a later re-open subscribes
-    // fresh from the snapshot.
+  /** Emit one root stream event for `sessionId`, as a running turn would. */
+  function emitStream(sessionId: string, text: string): void {
+    const sm = registry.getOrCreate(workspace)
+    ;(sm as unknown as { uiStore: { emitEvent: (s: string, e: unknown) => void } })
+      .uiStore.emitEvent(sessionId, { type: 'stream', text, agentName: 'default' })
+  }
+
+  /** Collect every frame of `type` arriving on `ws` from now on. */
+  function record(ws: WebSocket, type: string): Array<Record<string, unknown>> {
+    const frames: Array<Record<string, unknown>> = []
+    ws.on('message', (raw: Buffer) => {
+      const f = JSON.parse(raw.toString('utf-8')) as Record<string, unknown>
+      if (f.type === type) frames.push(f)
+    })
+    return frames
+  }
+
+  beforeEach(() => { seedSession(SID_B) })
+
+  it('each subscribed session streams into the connection stamped with its own sessionId', async () => {
     const ws = await connect()
     await subscribe(ws, SID)
+    await subscribe(ws, SID_B)
+    // Re-subscribing an id already in the set only re-sends its snapshot.
+    await subscribe(ws, SID)
     expect(listenerCount(SID)).toBe(1)
+    expect(listenerCount(SID_B)).toBe(1)
 
-    await clearSession(ws, SID)
+    const streams = record(ws, 'chat:stream')
+    emitStream(SID, 'from A')
+    emitStream(SID_B, 'from B')
+    await vi.waitFor(() => expect(streams).toHaveLength(2))
+    expect(streams.map((f) => [f.sessionId, f.text])).toEqual([[SID, 'from A'], [SID_B, 'from B']])
+  })
+
+  it('unsubscribe releases only that session — the other keeps streaming', async () => {
+    const ws = await connect()
+    await subscribe(ws, SID)
+    await subscribe(ws, SID_B)
+
+    await unsubscribe(ws, SID, SID_B)
     expect(listenerCount(SID)).toBe(0)
+    expect(listenerCount(SID_B)).toBe(1)
 
-    // Subscribe→clear ×3 (the production accumulation signature): count must
-    // return to zero every time, not grow by one per cycle.
+    const streams = record(ws, 'chat:stream')
+    emitStream(SID, 'closed tab')
+    emitStream(SID_B, 'open tab')
+    await vi.waitFor(() => expect(streams).toHaveLength(1))
+    expect(streams[0]!.sessionId).toBe(SID_B)
+  })
+
+  it('repeated open→close cycles never accumulate listeners (audit A-H1)', async () => {
+    // Closing a tab used to be `session:clear`, whose old handler re-registered
+    // a bgHandler and threw away its unsubscribe — each "New session" click
+    // leaked one listener (3 on one session in production probes). A closed
+    // tab's session needs NO listener: SessionUIStore folds + persists a
+    // running session's events with zero listeners, and a re-open subscribes
+    // fresh from the snapshot.
+    const ws = await connect()
+    await subscribe(ws, SID_B)
     for (let i = 0; i < 3; i++) {
       await subscribe(ws, SID)
       expect(listenerCount(SID)).toBe(1)
-      await clearSession(ws, SID)
+      await unsubscribe(ws, SID, SID_B)
+      expect(listenerCount(SID)).toBe(0)
     }
-    expect(listenerCount(SID)).toBe(0)
+    expect(listenerCount(SID_B)).toBe(1)
   })
+
+  it('a stop with no sessionId acts on the sole subscription — with two it has no target', async () => {
+    const ws = await connect()
+    await subscribe(ws, SID)
+    const stopped = record(ws, 'chat:stopped')
+    ws.send(JSON.stringify({ type: 'chat:stop' }))
+    await vi.waitFor(() => expect(stopped).toHaveLength(1))
+    expect(stopped[0]!.sessionId).toBe(SID)
+
+    await subscribe(ws, SID_B)
+    ws.send(JSON.stringify({ type: 'chat:stop' }))
+    await subscribe(ws, SID) // fence: frames are handled in order
+    expect(stopped).toHaveLength(1)
+  })
+
+  it('a reclaim releases every subscription and sends one listener:released per session', async () => {
+    const ws = await connect()
+    await subscribe(ws, SID)
+    await subscribe(ws, SID_B)
+    const released = record(ws, 'listener:released')
+
+    await advanceServerClock(4 * 60_000)
+    expect(listenerCount(SID)).toBe(0)
+    expect(listenerCount(SID_B)).toBe(0)
+    await vi.waitFor(() => expect(released).toHaveLength(2))
+    expect(released.map((f) => f.sessionId).sort()).toEqual([SID, SID_B].sort())
+  }, 20_000)
 })
 
 describe('error-path cleanup (audit A-M1)', () => {
@@ -443,10 +509,10 @@ describe('self-heal after reclaim', () => {
     })
     const frame = (type: string) => new Promise<void>((r) => arrived.set(type, r))
 
-    // Resume: the user types into the tab. The connection is still bound to
-    // the SAME sessionId (reclaim keeps the binding), so before the
-    // `|| !client.unsubscribeEvents` hardening this matched neither bind
-    // branch — the agent ran while this connection received nothing.
+    // Resume: the user types into the tab before its re-subscribe. The reclaim
+    // emptied the connection's subscription set, so the chat's bind must
+    // re-register — once it didn't, and the agent ran while this connection
+    // received nothing.
     const queued = frame('chat:queued')
     ws.send(JSON.stringify({ type: 'chat', sessionId: SID, projectId: workspace, message: 'still there?' }))
     await queued

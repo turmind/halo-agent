@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import type { WsClientMessage } from '@turmind/halo-core/protocol'
 import { wsClient } from '@/shared/ws-client'
-import { useChatStore } from '@/features/chat/chat-store'
+import { releaseBackgroundTabs, useChatTabs } from '@/features/chat/chat-tabs'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { registerChatHandlers } from '@/shared/ws-handlers/chat-handlers'
 import { registerAgentHandlers } from '@/shared/ws-handlers/agent-handlers'
@@ -36,22 +36,6 @@ export function useWebSocket() {
   const [connected, setConnected] = useState(false)
   const [linkState, setLinkState] = useState<LinkState>('down')
   const mountedRef = useRef(false)
-  const activeProjectId = useProjectStore((s) => s.activeProject?.id)
-
-  // Re-subscribe when the active project changes (user switched workspace).
-  // Skip if not connected or if it's the initial connect (handled by _connected callback).
-  const prevProjectRef = useRef<string | undefined>(undefined)
-  useEffect(() => {
-    if (!connected || !activeProjectId) return
-    if (prevProjectRef.current === undefined) {
-      prevProjectRef.current = activeProjectId
-      return
-    }
-    if (prevProjectRef.current === activeProjectId) return
-    prevProjectRef.current = activeProjectId
-    const sessionId = useChatStore.getState().sessionId ?? ''
-    wsClient.send({ type: 'subscribe', sessionId, projectId: activeProjectId })
-  }, [connected, activeProjectId])
 
   useEffect(() => {
     if (mountedRef.current) return
@@ -65,7 +49,6 @@ export function useWebSocket() {
         // Edge-triggered so the light doesn't lag the reconnect by up to a
         // poll tick; the interval below handles the fresh↔stale drift.
         setLinkState('fresh')
-        const sessionId = useChatStore.getState().sessionId
         const activeProject = useProjectStore.getState().activeProject
         // Always subscribe on connect — even without a sessionId the server
         // needs the projectId to start its file watcher for Explorer sync.
@@ -73,8 +56,15 @@ export function useWebSocket() {
         // the same `_connected` (use-chat used to send one too) consumes the
         // server's detached-session entry with the first and re-runs the
         // normal path with the second — double snapshot + re-registration.
-        if (activeProject?.id) {
-          wsClient.send({ type: 'subscribe', sessionId: sessionId ?? '', projectId: activeProject.id })
+        // Only the chat tab on screen resubscribes ('' for a draft): a
+        // session that isn't in front isn't reattached — background tabs are
+        // released and load again on their next click. chat-tabs sends
+        // nothing while offline. Tabs not restored for this workspace yet
+        // (connect raced ahead of use-chat's restoreTabs): skip — restoreTabs
+        // subscribes once it runs, now that the socket is up. It is also the
+        // sole subscriber of a workspace switch.
+        if (activeProject?.id && useChatTabs.getState().projectId === activeProject.id) {
+          wsClient.send({ type: 'subscribe', sessionId: releaseBackgroundTabs(), projectId: activeProject.id })
         }
       }),
       wsClient.on('_disconnected', () => {

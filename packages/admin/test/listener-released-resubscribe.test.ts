@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { registerStateHandlers } from '../src/shared/ws-handlers/state-handlers'
 import { useChatStore } from '../src/features/chat/chat-store'
+import { useChatTabs, restoreTabs, openTab, getLoadedStore } from '../src/features/chat/chat-tabs'
 import { useProjectStore } from '../src/shared/stores/project-store'
 import type { WsClient } from '../src/shared/ws-client-types'
 
@@ -10,6 +11,9 @@ import type { WsClient } from '../src/shared/ws-client-types'
  * re-subscribes — that frame is the ONLY recovery signal such a tab ever gets:
  * the server keeps answering `__pong__`, so the staleness clock stays fresh
  * and neither the zombie detection nor the visibility probe fires.
+ *
+ * Only the session on screen is re-subscribed; a background tab's store is
+ * released instead (same rule as a reconnect) and loads on its next click.
  *
  * The fake below stands in for wsClient (state-handlers receives the client
  * as a parameter; `WsClient` is a structural type) so the test drives the real
@@ -64,7 +68,27 @@ describe('listener:released → resubscribe', () => {
     unregister()
   })
 
-  it('subscribes even without a bound session (project-level rebind, same as the _connected path)', () => {
+  it('releases a background tab instead of re-subscribing it', () => {
+    const { client, emit, sent } = makeFakeWsClient()
+    const unregister = registerStateHandlers(client)
+
+    useProjectStore.getState().openFolder(PROJECT)
+    restoreTabs(`${PROJECT}-bg`)
+    openTab('sess_bg')
+    openTab('sess_front')
+    expect(getLoadedStore('sess_bg')).not.toBeNull()
+
+    emit('listener:released', { sessionId: 'sess_bg' })
+
+    expect(sent).toHaveLength(0)
+    expect(getLoadedStore('sess_bg')).toBeNull()
+    const tab = useChatTabs.getState().tabs.find((t) => t.sessionId === 'sess_bg')
+    expect(tab?.store).toBeUndefined()
+    expect(getLoadedStore('sess_front')).not.toBeNull()
+    unregister()
+  })
+
+  it('ignores a released session no loaded tab holds (the reclaim keeps the project binding)', () => {
     const { client, emit, sent } = makeFakeWsClient()
     const unregister = registerStateHandlers(client)
 
@@ -72,7 +96,7 @@ describe('listener:released → resubscribe', () => {
 
     emit('listener:released', { sessionId: 'sess_gone' })
 
-    expect(sent).toContainEqual({ type: 'subscribe', sessionId: '', projectId: PROJECT })
+    expect(sent).toHaveLength(0)
     unregister()
   })
 

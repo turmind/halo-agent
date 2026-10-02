@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { registerChatHandlers } from '../src/shared/ws-handlers/chat-handlers'
 import { useChatStore } from '../src/features/chat/chat-store'
+import { restoreTabs, openTab, getLoadedStore } from '../src/features/chat/chat-tabs'
+import { wsClient } from '../src/shared/ws-client'
 import { useProjectStore } from '../src/shared/stores/project-store'
 import { registerFaceIframe } from '../src/features/editor/face-bridge'
 import type { WsClient } from '../src/shared/ws-client-types'
@@ -13,6 +15,8 @@ import type { WsClient } from '../src/shared/ws-client-types'
  * mirroring the server's flushCompletedAssistantMessage) and the queued
  * message is answered in a follow-up bubble before the one complete. Each
  * marker fires once, in order; history loaded via setMessages never fires.
+ * Only the tab on screen acts: a background tab's round is still taken
+ * (reset), but grabs no screen frame and drives no face.
  *
  * Drives the real registered handlers through a fake WsClient (same shape as
  * listener-released-resubscribe.test.ts); SHOW is observed at the face
@@ -142,5 +146,31 @@ describe('chat:complete markers cover the whole round', () => {
     await flush()
     expect(grab).toHaveBeenCalledTimes(1)
     expect(sent).toHaveLength(1)
+  })
+})
+
+describe('chat:complete markers act only for the tab on screen', () => {
+  it('a background tab takes its round but neither drives the face nor captures', async () => {
+    vi.spyOn(wsClient, 'send').mockImplementation(() => {}) // chat-tabs' subscribes
+    const grab = vi.fn(async () => 'B64')
+    ;(window as unknown as { haloCapture?: unknown }).haloCapture = { grab }
+    useProjectStore.getState().openFolder('/ws/markers-bg')
+    restoreTabs('/ws/markers-bg')
+    openTab('sess_bg')
+    useChatStore.getState().setCaptureSource({ id: 'win1', name: 'Editor', thumb: '', kind: 'screen' })
+    getLoadedStore('sess_bg')!.getState().addMessage({ id: 'B', role: 'assistant', content: '', streaming: true })
+    openTab('sess_front')
+
+    emit('chat:stream', { sessionId: 'sess_bg', text: 'bg <<<SHOW: self.say("BG") >>> <<<CAPTURE>>>', turnId: 't1' })
+    emit('chat:complete', { sessionId: 'sess_bg' })
+    await flush()
+
+    expect(faceCalls()).toEqual([])
+    expect(grab).not.toHaveBeenCalled()
+    expect(sent).toEqual([])
+    // The round was taken: showing the tab later replays nothing.
+    openTab('sess_bg')
+    emit('chat:complete', { sessionId: 'sess_bg' })
+    expect(faceCalls()).toEqual([])
   })
 })

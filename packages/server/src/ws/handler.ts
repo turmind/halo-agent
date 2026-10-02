@@ -50,16 +50,15 @@ type ClientMessage = WsClientMessage
 
 interface ConnectedClient {
   ws: WebSocket
-  /** The (root) session this client is currently subscribed to. Sub-agent
+  /** The (root) sessions this client is subscribed to — one per loaded admin
+   *  chat tab — each mapped to its event listener's unsubscribe. Sub-agent
    *  delegation creates child sessions inside SessionManager (`parent>child`
    *  hierarchical ids), but those never surface to the client — the client
-   *  is always pinned to a single root id. */
-  sessionId: string | null
+   *  only ever subscribes root ids. */
+  subscriptions: Map<string, () => void>
   projectId: string | null
   sessionManager: SessionManager | null
   agentId: string
-  backgroundSaves: Map<string, () => void>
-  unsubscribeEvents: (() => void) | null
   terminalManager: TerminalManager
   /** Wall-clock ms of the last INBOUND frame from this peer. Proves the peer's
    *  JS is still running — see the abandoned-socket reclaim in the keepalive
@@ -119,12 +118,12 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     return registry.getOrCreate(workspacePath)
   }
 
-  /** Get the cached UIState for this client's session, or null when nothing is in memory.
+  /** Get the cached UIState for one of this client's sessions, or null when nothing is in memory.
    *  Callers (`saveSession`, detach handlers) only care about already-loaded state — they
    *  don't want to trigger a disk restore as a side effect of looking up. */
-  function getState(client: ConnectedClient): UIState | null {
-    if (!client.sessionManager || !client.sessionId) return null
-    return client.sessionManager.getCachedUIState(client.sessionId)
+  function getState(client: ConnectedClient, sessionId: string): UIState | null {
+    if (!client.sessionManager) return null
+    return client.sessionManager.getCachedUIState(sessionId)
   }
 
   /**
@@ -144,9 +143,9 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     return readArchiveCount(getSessionDir(agentId, projectPath), fileSegment(sessionId))
   }
 
-  function saveSession(client: ConnectedClient): void {
-    if (!client.sessionId || !client.projectId || !client.sessionManager) return
-    const state = getState(client)
+  function saveSession(client: ConnectedClient, sessionId: string): void {
+    if (!client.projectId || !client.sessionManager) return
+    const state = getState(client, sessionId)
     if (!state) return
     // Only write back a state THIS process has mutated and not yet flushed.
     // A clean state is either a pure disk seed — the subscribe built it to
@@ -156,15 +155,15 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     // a frozen snapshot (the cron-session UI-log truncation incident: the
     // detach/grace save landed minutes after the cli exited and erased its
     // final messages).
-    if (!client.sessionManager.isUIStateDirty(client.sessionId)) return
+    if (!client.sessionManager.isUIStateDirty(sessionId)) return
     const projectPath = resolveProjectPath(client.projectId)
     const snapshot = createSaveSnapshot(state)
     if (snapshot.length === 0) return
-    const sessionInfo = client.sessionManager.getSessionById(client.sessionId)
+    const sessionInfo = client.sessionManager.getSessionById(sessionId)
     // Route through SessionManager so its tombstone check fires — a freshly
     // deleted session must not be resurrected by an in-flight WS save closure.
     client.sessionManager.persistSessionFile({
-      sessionId: client.sessionId,
+      sessionId,
       projectPath,
       messages: snapshot,
       contextTokens: state.contextTokens,
@@ -183,9 +182,8 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
   const wsActiveOverrides = new Map<string, string>()
   let nextCommandUserId = 1
 
-  function buildSharedCommandContext(client: ConnectedClient): SharedCommandContext {
-    const sid = client.sessionId ?? ''
-    if (sid) wsActiveOverrides.set(client.commandUserId, sid)
+  function buildSharedCommandContext(client: ConnectedClient, sessionId: string): SharedCommandContext {
+    wsActiveOverrides.set(client.commandUserId, sessionId)
     return {
       sm: client.sessionManager!,
       userId: client.commandUserId,
@@ -198,40 +196,18 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     }
   }
 
-  async function handleSessionClear(client: ConnectedClient, ws: WebSocket, msg: ClientMessage): Promise<void> {
-    const prevSessionId = msg.sessionId ?? client.sessionId
-    saveSession(client)
-    if (prevSessionId && client.sessionId && client.sessionManager) {
-      // Release the listener and register NOTHING in its place. A cleared
-      // session is deliberately abandoned — the admin wipes its chat store on
-      // `session:cleared` — so no one on this connection consumes buffered
-      // notifications for it. Unlike the close-detach path (which buffers for
-      // a reconnect within the grace window), there is no reattach expecting
-      // stream continuity: SessionUIStore keeps folding + persisting a
-      // still-running session's events with zero listeners, and a later
-      // re-open subscribes fresh and gets the full snapshot. The bgHandler
-      // this used to register (unsubscribe discarded, pendingEvents never
-      // drained) leaked one listener per "New session" click — audit A-H1.
-      client.unsubscribeEvents?.()
-      client.unsubscribeEvents = null
-      client.backgroundSaves.set(prevSessionId, () => saveSession(client))
-    }
-    client.sessionId = null
-    sendJson(ws, { type: 'session:cleared' })
-  }
-
   async function handleSessionDelete(client: ConnectedClient, ws: WebSocket, msg: ClientMessage): Promise<void> {
-    const delSessionId = msg.sessionId ?? client.sessionId
+    const delSessionId = frameSessionId(client, msg)
     if (!delSessionId) { sendJson(ws, { type: 'error', error: 'session:delete requires sessionId' }); return }
     const requestedProjectId = msg.projectId ?? client.projectId
     const projectPath = requestedProjectId ? resolveProjectPath(requestedProjectId) : null
     const sm = projectPath ? getSessionManager(projectPath) : client.sessionManager
-    if (!sm) { sendJson(ws, { type: 'error', error: 'No workspace context for delete' }); return }
+    if (!sm) { sendJson(ws, { type: 'error', error: 'No workspace context for delete', sessionId: delSessionId }); return }
     await sm.deleteSession(delSessionId)
-    if (delSessionId === client.sessionId) {
-      client.sessionId = null
-    }
-    client.backgroundSaves.delete(delSessionId)
+    // Release this connection's listener without the save `unsubscribeSession`
+    // does — the session is gone.
+    client.subscriptions.get(delSessionId)?.()
+    client.subscriptions.delete(delSessionId)
     sendJson(ws, { type: 'session:deleted', sessionId: delSessionId })
   }
 
@@ -244,34 +220,72 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     const requestedProjectId = msg.projectId ?? client.projectId
     const projectPath = requestedProjectId ? resolveProjectPath(requestedProjectId) : null
     const sm = projectPath ? getSessionManager(projectPath) : client.sessionManager
-    if (!sm) { sendJson(ws, { type: 'error', error: 'No workspace context for exchange:delete' }); return }
+    if (!sm) { sendJson(ws, { type: 'error', error: 'No workspace context for exchange:delete', sessionId: targetSessionId }); return }
 
     const result = await sm.deleteExchange(targetSessionId, msg.userOrdinal, msg.archiveCount ?? 0)
-    if (result === 'running') { sendJson(ws, { type: 'error', error: 'Cannot delete while the agent is running' }); return }
-    if (result === 'compacting') { sendJson(ws, { type: 'error', error: 'Cannot delete while compacting' }); return }
+    if (result === 'running') { sendJson(ws, { type: 'error', error: 'Cannot delete while the agent is running', sessionId: targetSessionId }); return }
+    if (result === 'compacting') { sendJson(ws, { type: 'error', error: 'Cannot delete while compacting', sessionId: targetSessionId }); return }
     // `code` marks this as an expected refusal, not a failure: the admin renders
     // it as a plain notice instead of an `Error:` bubble (see chat-handlers).
-    if (result === 'archived') { sendJson(ws, { type: 'error', code: 'archived', error: 'This session archived history since it was opened — reopen it to delete individual turns.' }); return }
-    if (result === 'not_found' || result === 'no_exchange') { sendJson(ws, { type: 'error', error: 'Exchange not found' }); return }
+    if (result === 'archived') { sendJson(ws, { type: 'error', code: 'archived', error: 'This session archived history since it was opened — reopen it to delete individual turns.', sessionId: targetSessionId }); return }
+    if (result === 'not_found' || result === 'no_exchange') { sendJson(ws, { type: 'error', error: 'Exchange not found', sessionId: targetSessionId }); return }
 
-    // Push the refreshed log to the subscribed client (this connection) when it's
-    // viewing the very session that changed (the live Chat session). A different
+    // Push the refreshed log to the subscribed client (this connection) when one
+    // of its chat tabs holds the very session that changed. A different
     // session open in the Sessions tab picks the change up via the existing
     // `.halo/sessions/` file watcher instead — no extra message needed.
-    if (client.sessionId && client.sessionId === targetSessionId) {
-      const state = getState(client)
+    if (client.subscriptions.has(targetSessionId)) {
+      const state = getState(client, targetSessionId)
       const messages = state ? [...createSaveSnapshot(state)] : []
-      sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: client.sessionId } })
+      sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: targetSessionId } })
     }
   }
 
-  function createEventListener(client: ConnectedClient): (event: AgentSessionEvent, state: UIState, turnId: string) => void {
+  /** The listener is bound to `sessionId` at creation — a connection holds one
+   *  per subscribed session, so it must never read a "current" session. */
+  function createEventListener(client: ConnectedClient, sessionId: string): (event: AgentSessionEvent, state: UIState, turnId: string) => void {
     return (event: AgentSessionEvent, state: UIState, turnId: string) => {
-      sendWsNotification(event, state, turnId, {
-        ws: client.ws,
-        sessionId: client.sessionId,
-      })
+      sendWsNotification(event, state, turnId, { ws: client.ws, sessionId })
     }
+  }
+
+  /** Add a session to the client's set. Idempotent: an id already in the set
+   *  keeps its one listener. */
+  function subscribeSession(client: ConnectedClient, sm: SessionManager, sessionId: string): void {
+    if (client.subscriptions.has(sessionId)) return
+    client.subscriptions.set(sessionId, sm.registerEventListener(sessionId, createEventListener(client, sessionId)))
+  }
+
+  /** The session a stop / interrupt / command / delete frame acts on. The
+   *  admin always names it (`null` = a draft tab: nothing to act on). A frame
+   *  with the field ABSENT is the one-session-per-connection form, where it
+   *  meant the connection's bound session — so it maps to the sole
+   *  subscription. Without this, multi-subscription silently dropped such
+   *  frames (a manual /compact became uncancellable). Several subscriptions:
+   *  no single target, the frame stays unaddressed. */
+  function frameSessionId(client: ConnectedClient, msg: ClientMessage): string | null {
+    if (msg.sessionId !== undefined) return msg.sessionId
+    return client.subscriptions.size === 1 ? (client.subscriptions.keys().next().value ?? null) : null
+  }
+
+  /** Drop a session from the client's set: flush its UI state, release the
+   *  listener. The agent itself keeps running. */
+  function unsubscribeSession(client: ConnectedClient, sessionId: string): void {
+    const unsubscribe = client.subscriptions.get(sessionId)
+    if (!unsubscribe) return
+    saveSession(client, sessionId)
+    unsubscribe()
+    client.subscriptions.delete(sessionId)
+  }
+
+  /** Point the connection at a workspace. Switching workspace drops every
+   *  subscription first — they belong to the previous workspace's manager,
+   *  and the admin re-subscribes the new workspace's tabs. The caller binds
+   *  `sessionManager` afterwards. */
+  function setClientProject(client: ConnectedClient, projectId: string): void {
+    if (client.projectId === projectId) return
+    for (const sid of [...client.subscriptions.keys()]) unsubscribeSession(client, sid)
+    client.projectId = projectId
   }
 
   /**
@@ -279,8 +293,8 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
    * zombie detection (ws-client.ts: 2 unanswered `__ping__` round-trips →
    * `close()` + reconnect) abandons a socket whose *TCP is still healthy* — it
    * just stops reading it. No close frame arrives, so `ws.on('close')` never
-   * runs and this ConnectedClient keeps its `unsubscribeEvents` registered
-   * forever. Every event on that session then also gets serialized into a
+   * runs and this ConnectedClient keeps its `subscriptions` registered
+   * forever. Every event on those sessions then also gets serialized into a
    * socket nobody reads, growing its kernel/ws send buffer without bound
    * (measured: 5000×4KB events → 18.4MB `bufferedAmount`, +77MB RSS), and the
    * client reconnects and registers a second listener next to the dead one.
@@ -313,25 +327,26 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
    * arrives eventually and takes the normal path.
    */
   function reclaimIfAbandoned(client: ConnectedClient): void {
-    if (!client.unsubscribeEvents) return
+    if (client.subscriptions.size === 0) return
     // CLOSED with a listener still attached is unambiguous — no threshold
     // needed. Seen on the live process too (sockets with `destroyed=true`
     // holding listeners), and no heartbeat window would catch it as fast.
     const closed = client.ws.readyState === client.ws.CLOSED
     if (!closed && Date.now() - client.lastClientPingAt <= CLIENT_SILENCE_LIMIT_MS) return
-    client.unsubscribeEvents()
-    client.unsubscribeEvents = null
-    console.debug(`[WS] Released listener for ${closed ? 'closed' : 'abandoned'} connection session=${client.sessionId}`)
+    const released = [...client.subscriptions.keys()]
+    for (const unsubscribe of client.subscriptions.values()) unsubscribe()
+    client.subscriptions.clear()
+    console.debug(`[WS] Released listeners for ${closed ? 'closed' : 'abandoned'} connection sessions=${released.join(',')}`)
     // Self-heal signal for a reclaim that hit a frozen-but-alive tab (renderer
     // suspended >3min while the browser's network process kept answering
     // pings). Such a peer can never notice on its own: our `__pong__` replies
     // keep refreshing its staleness clock, so its zombie detection and
     // visibility probe never fire and the event stream stays silent until F5.
     // sendJson's OPEN guard makes this a no-op for truly dead sockets; a
-    // frozen tab reads the frame from the kernel buffer on resume and
-    // re-subscribes (idempotent server-side, and the resubscribe itself
-    // refreshes lastClientPingAt).
-    sendJson(client.ws, { type: 'listener:released', sessionId: client.sessionId })
+    // frozen tab reads the frames from the kernel buffer on resume and
+    // re-subscribes each session (idempotent server-side, and the resubscribe
+    // itself refreshes lastClientPingAt).
+    for (const sessionId of released) sendJson(client.ws, { type: 'listener:released', sessionId })
   }
 
   // ── Connection handler ─────────────────────────────────────────────
@@ -341,13 +356,11 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
     const client: ConnectedClient = {
       ws,
-      sessionId: null,
+      subscriptions: new Map(),
       projectId: null,
       sessionManager: null,
       agentId: 'default',
       terminalManager,
-      backgroundSaves: new Map(),
-      unsubscribeEvents: null,
       lastClientPingAt: Date.now(),
       commandUserId: `ws-${nextCommandUserId++}`,
     }
@@ -431,13 +444,20 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
               await handleChat(client, msg)
               break
             case 'chat:stop':
-              handleChatStop(client)
+              handleChatStop(client, msg)
               break
             case 'chat:interrupt':
-              handleChatInterrupt(client)
+              handleChatInterrupt(client, msg)
               break
             case 'subscribe':
               await handleSubscribe(client, msg)
+              break
+            case 'unsubscribe':
+              // Release one subscription's listener only — no reply frame, and
+              // a running agent keeps running. The admin never closes a tab
+              // (deleting the session is the only removal), so it doesn't send
+              // this today; kept for other WS clients.
+              if (msg.sessionId) unsubscribeSession(client, msg.sessionId)
               break
             case 'terminal:start':
               handleTerminalStart(client, msg)
@@ -450,9 +470,6 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
               break
             case 'terminal:reattach':
               terminalManager.reattachAll(msg.browserId ?? '', msg.workspacePath ?? '')
-              break
-            case 'session:clear':
-              await handleSessionClear(client, ws, msg)
               break
             case 'session:delete':
               await handleSessionDelete(client, ws, msg)
@@ -475,10 +492,11 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
               //
               // If `bindOrCreateSession` returns null we still fall through
               // to the legacy "No active session" — that means the message
-              // is missing projectId/sessionId, which is a real error.
-              await bindOrCreateSession(client, msg)
+              // is missing projectId/sessionId, which is a real error. A frame
+              // with no sessionId field at all addresses the connection's sole
+              // subscription instead (see frameSessionId).
+              const sid = msg.sessionId === undefined ? frameSessionId(client, msg) : await bindOrCreateSession(client, msg)
               const sm = client.sessionManager
-              const sid = client.sessionId
               if (!sm || !sid) {
                 sendJson(ws, { type: 'error', error: 'No active session' })
                 break
@@ -488,53 +506,51 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
               // callback — the only verb needing UI progress events.
               if (cmdName === 'session' && (msg.message ?? '').trim().split(/\s+/)[0] === 'compact') {
                 sm.compactSession(sid, {
-                  onProgress: (status) => sendJson(ws, { type: `compact:${status}` }),
+                  onProgress: (status) => sendJson(ws, { type: `compact:${status}`, sessionId: sid }),
                 }).then((result) => {
-                  if (result === 'no_session') sendJson(ws, { type: 'error', error: 'No active session to compact' })
-                  else if (result === 'running') sendJson(ws, { type: 'error', error: 'Cannot compact while agent is running' })
-                  else if (result === 'already') sendJson(ws, { type: 'error', error: 'Compact already in progress' })
+                  if (result === 'no_session') sendJson(ws, { type: 'error', error: 'No active session to compact', sessionId: sid })
+                  else if (result === 'running') sendJson(ws, { type: 'error', error: 'Cannot compact while agent is running', sessionId: sid })
+                  else if (result === 'already') sendJson(ws, { type: 'error', error: 'Compact already in progress', sessionId: sid })
                   else if (result === 'nothing') {
                     const state = sm.getCachedUIState(sid)
-                    sendJson(ws, { type: 'session:compacted', message: 'Nothing to compact', contextTokens: state?.contextTokens ?? 0 })
+                    sendJson(ws, { type: 'session:compacted', message: 'Nothing to compact', contextTokens: state?.contextTokens ?? 0, sessionId: sid })
                   }
                   // 'compacted' result: event-processor sends session:compacted via emitted event
                   // 'cancelled': its emitted "Compact cancelled" notice is the whole reply
                 }).catch((err) => {
-                  sendJson(ws, { type: 'error', error: `Compact failed: ${err instanceof Error ? err.message : String(err)}` })
+                  sendJson(ws, { type: 'error', error: `Compact failed: ${err instanceof Error ? err.message : String(err)}`, sessionId: sid })
                 })
                 break
               }
 
               // All other commands: route through shared dispatchCommand
-              const sharedCtx = buildSharedCommandContext(client)
+              const sharedCtx = buildSharedCommandContext(client, sid)
               const result = await sharedDispatchCommand(sharedCtx, `/${cmdName}`, (msg.message ?? '').trim(), { channelName: 'ws' })
               if (result) {
-                sendJson(ws, { type: 'chat:system', text: result.text })
+                sendJson(ws, { type: 'chat:system', text: result.text, sessionId: sid })
                 // Surface session switch (e.g. /new creates a new session
-                // and returns switchTo) so the admin UI can clear its
-                // chat store and bind to the new id. Without this, /new
-                // text would land in the system tray but the chat panel
-                // would still be wired to the old session.
+                // and returns switchTo) so the admin UI opens a tab bound to
+                // the new id. Without this, /new text would land in the
+                // system tray but no tab would show the new session.
                 if (result.switchTo) {
-                  // Rebind this client's event stream to the new session (same
-                  // mechanics as the goal-divert path in handleChat). Without
-                  // the rebind, streaming events from the switched-to session
+                  // Add the new session to this client's set (same mechanics
+                  // as the goal-divert path in handleChat); the source session
+                  // stays subscribed — its tab stays open. Without the
+                  // subscribe, streaming events from the switched-to session
                   // (e.g. G's intake greeting after /goal create) never reach
-                  // this connection — the listener still points at the old id.
-                  client.unsubscribeEvents?.()
-                  client.sessionId = result.switchTo
-                  client.unsubscribeEvents = sm.registerEventListener(result.switchTo, createEventListener(client))
-                  sendJson(ws, { type: 'session:switched', sessionId: result.switchTo })
+                  // this connection.
+                  subscribeSession(client, sm, result.switchTo)
+                  sendJson(ws, { type: 'session:switched', sessionId: result.switchTo, fromSessionId: sid })
                 }
               } else {
-                sendJson(ws, { type: 'error', error: `Unknown command: ${cmdName}` })
+                sendJson(ws, { type: 'error', error: `Unknown command: ${cmdName}`, sessionId: sid })
               }
             }
           }
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err)
           console.debug(`[WS] Error handling message: ${errorMessage}`)
-          sendJson(ws, { type: 'error', error: errorMessage })
+          sendJson(ws, { type: 'error', error: errorMessage, ...(msg.sessionId ? { sessionId: msg.sessionId } : {}) })
         }
       })
     })
@@ -545,8 +561,8 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
      * Complete teardown, shared by 'close' and 'error'. ws normally emits
      * 'close' right after 'error', but nothing guarantees it (audit A-M1) —
      * the old error handler only stopped the watchers, so an error that never
-     * produced a close leaked the keepalive interval, the event listener,
-     * unflushed background saves and any attached PTYs. `clients.delete` is
+     * produced a close leaked the keepalive interval, the event listeners,
+     * unflushed session saves and any attached PTYs. `clients.delete` is
      * the idempotency gate: the usual error→close double-fire runs the body
      * exactly once (a second detach pass would overwrite the detachedSessions
      * entry and double-register its bgHandler).
@@ -557,25 +573,31 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       terminalManager.detachAll()
       wsActiveOverrides.delete(client.commandUserId)
 
+      // Each subscribed session detaches on its own: one with active work in
+      // its own tree buffers for a reconnect within the grace window, the rest
+      // just flush. Per-tree, not the old workspace-wide hasRunningSessions():
+      // with N subscriptions that gate would park N buffers + timers whenever
+      // anything anywhere ran. An entry already parked by another connection
+      // is kept — overwriting it would orphan its listener until the timer.
       const sm = client.sessionManager
-      const sid = client.sessionId
-      const hasActiveWork = sid && sm && (sm.isSessionRunning(sid) || sm.hasRunningSessions())
-
-      if (client.sessionId && hasActiveWork && sm && sid) {
-        console.debug(`[WS] Detaching active session: ${client.sessionId}`)
-        client.unsubscribeEvents?.()
-        client.unsubscribeEvents = null
+      for (const [sid, unsubscribeLive] of client.subscriptions) {
+        unsubscribeLive()
+        if (!sm || !sm.hasActiveWorkInTree(sid) || detachedSessions.has(sid)) {
+          saveSession(client, sid)
+          continue
+        }
+        console.debug(`[WS] Detaching active session: ${sid}`)
         const pendingEvents: WsServerMessage[] = []
         const bgHandler = (_event: AgentSessionEvent, _state: UIState, _turnId: string) => {
-          bufferDetachedNotification(_event, pendingEvents)
+          bufferDetachedNotification(_event, pendingEvents, sid)
         }
         const unsubscribe = sm.registerEventListener(sid, bgHandler)
         const graceTimer = setTimeout(() => {
-          detachedSessions.delete(client.sessionId!)
-          saveSession(client)
+          detachedSessions.delete(sid)
+          saveSession(client, sid)
           unsubscribe()
         }, config.timeout.sessionGrace)
-        detachedSessions.set(client.sessionId, {
+        detachedSessions.set(sid, {
           sessionManager: sm,
           sessionId: sid,
           projectId: client.projectId ?? '',
@@ -583,16 +605,8 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
           pendingEvents,
           unsubscribe,
         })
-      } else {
-        client.unsubscribeEvents?.()
-        client.unsubscribeEvents = null
-        saveSession(client)
       }
-
-      for (const [sid, saveFn] of client.backgroundSaves) {
-        saveFn()
-        client.backgroundSaves.delete(sid)
-      }
+      client.subscriptions.clear()
 
       watchers.detach(ws)
       console.debug(`[WS] Client disconnected (total: ${clients.size})`)
@@ -608,14 +622,14 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     // ── Message handlers ─────────────────────────────────────────────
 
     /**
-     * Bind a client to a session, creating the DB row on demand. `subscribe`
-     * sets `client.sessionId = msg.sessionId` unconditionally without touching
-     * the DB, so we can't use that field as a "session exists" signal. Always
+     * Bind a client to a session, creating the DB row on demand. A draft tab's
+     * id is client-generated and only `subscribe`d once it exists, so the
+     * subscription set can't serve as a "session exists" signal. Always
      * query the DB directly.
      *
      * Used by both `chat` and `command:*` messages — anything that needs the
-     * session to be live and tracked. Returns the (now bound) session id, or
-     * null if prerequisites are missing.
+     * session to be live and tracked. Returns the (now subscribed) session id,
+     * or null if prerequisites are missing.
      */
     async function bindOrCreateSession(client: ConnectedClient, msg: ClientMessage): Promise<string | null> {
       // Fall back to connection-level projectId so callers that omit it (e.g.
@@ -624,7 +638,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       // workspace. Same fallback pattern `subscribe` uses.
       const projectId = msg.projectId ?? client.projectId
       if (!msg.sessionId || !projectId) return null
-      client.projectId = projectId
+      setClientProject(client, projectId)
       const agentId = msg.agentId ?? client.agentId
       const projectPath = resolveProjectPath(projectId)
       if (projectPath) {
@@ -637,29 +651,26 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       }
       if (!client.sessionManager) return null
       const sm = client.sessionManager
-      const existing = sm.getSessionById(msg.sessionId)
+      const sid = msg.sessionId
+      const existing = sm.getSessionById(sid)
       if (!existing) {
-        client.unsubscribeEvents?.()
-        client.sessionId = await sm.createSession(agentId, null, 'Explorer chat', undefined, msg.sessionId)
-        client.unsubscribeEvents = sm.registerEventListener(client.sessionId, createEventListener(client))
+        await sm.createSession(agentId, null, 'Explorer chat', undefined, sid)
+        subscribeSession(client, sm, sid)
         // The client's TokenRing denominator is still the connect-time global
         // default: the subscribe that preceded this chat ran before the
         // session row existed (getSessionView → null), so the agent's real
         // context.maxTokens was never sent. Push it now that the session is
         // built. Empty recentMessages is safe — the frontend only replaces
         // its message list for non-empty snapshots.
-        const ctxConfig = await sm.getContextConfig(client.sessionId)
-        sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: [], sessionId: client.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId } })
-      } else if (client.sessionId !== msg.sessionId || !client.unsubscribeEvents) {
-        // `|| !client.unsubscribeEvents`: the reclaim above releases a frozen
-        // tab's listener but leaves `sessionId` bound, so a chat sent after
-        // resume matched neither branch — the agent ran with zero events
-        // reaching this connection (blind run; only F5 showed the answer).
-        client.unsubscribeEvents?.()
-        client.sessionId = msg.sessionId
-        client.unsubscribeEvents = sm.registerEventListener(client.sessionId, createEventListener(client))
+        const ctxConfig = await sm.getContextConfig(sid)
+        sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: [], sessionId: sid, maxContextTokens: ctxConfig.maxTokens, agentId } })
+      } else {
+        // Also re-registers after a reclaim: it released a frozen tab's
+        // listeners, and a chat sent after resume must not run blind (zero
+        // events reaching this connection; only F5 showed the answer).
+        subscribeSession(client, sm, sid)
       }
-      return client.sessionId
+      return sid
     }
 
     /** Record the chat id in the dedup table. MUST run synchronously after
@@ -694,22 +705,23 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       const projectPath = resolveProjectPath(msg.projectId)
       let sid = await bindOrCreateSession(client, msg)
       if (!sid || !client.sessionManager) {
-        sendJson(ws, { type: 'error', error: 'Cannot resolve project path' })
+        sendJson(ws, { type: 'error', error: 'Cannot resolve project path', sessionId: msg.sessionId })
         return
       }
       const sm = client.sessionManager
 
       // Goal-mode routing overlay (docs/plans/loop-mode.md): chat aimed at a
       // goal-bound worker diverts to its goal session — stray chat can never
-      // contaminate a round. Rebind this client's event stream to the goal
-      // session and tell the frontend (same mechanics as a command switchTo).
+      // contaminate a round. Add the goal session to this client's set and
+      // tell the frontend (same mechanics as a command switchTo); the
+      // `clientMsgId` lets the worker's tab drop its optimistic copy, since
+      // the message lands in the goal session's log instead.
       const goalRouted = resolveGoalRoute(sm.getDb(), sid)
       if (goalRouted !== sid) {
+        const fromSessionId = sid
         sid = goalRouted
-        client.unsubscribeEvents?.()
-        client.sessionId = sid
-        client.unsubscribeEvents = sm.registerEventListener(sid, createEventListener(client))
-        sendJson(ws, { type: 'session:switched', sessionId: sid })
+        subscribeSession(client, sm, sid)
+        sendJson(ws, { type: 'session:switched', sessionId: sid, fromSessionId, clientMsgId: msg.clientMsgId })
       }
 
       // Persist pasted/uploaded images to disk so a [图片已保存: /path] marker
@@ -747,7 +759,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         const queuedText = sm.isSessionRunning(sid)
           ? 'Context compacting, message queued — will process after the compact and the current step finish.'
           : 'Context compacting, message queued — will process after compact completes.'
-        sendJson(ws, { type: 'chat:queued', reason: 'compact', message: queuedText })
+        sendJson(ws, { type: 'chat:queued', reason: 'compact', message: queuedText, sessionId: sid })
         return
       }
 
@@ -773,15 +785,15 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         : msg.accessLevel === 'full' || getSandboxBackend() === null ? null : msg.accessLevel
       sm.sendUserMessage(sid, msg.message, msg.images, accessLevel).catch((err) => {
         console.debug(`[WS] Chat error: ${err instanceof Error ? err.message : String(err)}`)
-        sendJson(ws, { type: 'error', error: err instanceof Error ? err.message : String(err) })
-        saveSession(client)
+        sendJson(ws, { type: 'error', error: err instanceof Error ? err.message : String(err), sessionId: sid })
+        saveSession(client, sid)
       })
     }
 
-    function handleChatStop(client: ConnectedClient): void {
-      console.debug(`[WS] Stop requested for session=${client.sessionId}`)
+    function handleChatStop(client: ConnectedClient, msg: ClientMessage): void {
+      const sid = frameSessionId(client, msg)
+      console.debug(`[WS] Stop requested for session=${sid}`)
       const sm = client.sessionManager
-      const sid = client.sessionId
       if (!sm || !sid) return
 
       // Manual /compact has no turn in flight — cancelling the compact is the
@@ -790,18 +802,18 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       // turn, which exits once the compact finishes.
       if (sm.isSessionCompacting(sid) && !sm.isSessionRunning(sid)) {
         sm.cancelCompact(sid)
-        sendJson(ws, { type: 'chat:stopped', sessionId: client.sessionId })
+        sendJson(ws, { type: 'chat:stopped', sessionId: sid })
         return
       }
       sm.stopUserSession(sid)
-      sendJson(ws, { type: 'chat:stopped', sessionId: client.sessionId })
-      saveSession(client)
+      sendJson(ws, { type: 'chat:stopped', sessionId: sid })
+      saveSession(client, sid)
     }
 
-    function handleChatInterrupt(client: ConnectedClient): void {
-      console.debug(`[WS] Interrupt requested for session=${client.sessionId}`)
+    function handleChatInterrupt(client: ConnectedClient, msg: ClientMessage): void {
+      const sid = frameSessionId(client, msg)
+      console.debug(`[WS] Interrupt requested for session=${sid}`)
       const sm = client.sessionManager
-      const sid = client.sessionId
       if (!sm || !sid) return
       // esc semantic: abort the in-flight turn now (including a command
       // mid-run); the server then folds any queued messages into one follow-up
@@ -811,61 +823,51 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       // turn and is not cancellable — the interrupt lands once it finishes.
       if (sm.isSessionCompacting(sid) && !sm.isSessionRunning(sid)) {
         sm.cancelCompact(sid)
-        sendJson(ws, { type: 'chat:stopped', sessionId: client.sessionId })
+        sendJson(ws, { type: 'chat:stopped', sessionId: sid })
         return
       }
       sm.interruptSession(sid)
     }
 
+    /**
+     * Subscribe ADDS `msg.sessionId` to the connection's set — the sessions of
+     * the other open tabs stay subscribed. Re-subscribing an id already in the
+     * set registers nothing and only re-sends its snapshot. A subscribe without
+     * an id just pins the workspace (file watcher) and gets a seed snapshot.
+     */
     async function handleSubscribe(client: ConnectedClient, msg: ClientMessage): Promise<void> {
-      if (client.sessionId && client.sessionId !== msg.sessionId) {
-        saveSession(client)
-      }
-
-      // Release THIS connection's previous listener. Guard on sessionId only:
-      // requiring `sessionManager` too meant a client whose manager was never
-      // bound (subscribe with a not-yet-existing session, then a rebind) kept
-      // its old listener while the code below registered another. The
-      // unsubscribe closure carries its own session identity, so no manager
-      // reference is needed to call it.
-      if (client.sessionId) {
-        client.unsubscribeEvents?.()
-        client.unsubscribeEvents = null
-        client.sessionId = null
-      }
-
-      if (msg.sessionId) client.sessionId = msg.sessionId
-      if (msg.projectId) client.projectId = msg.projectId
+      if (msg.projectId) setClientProject(client, msg.projectId)
+      const sid = msg.sessionId || null
 
       // Check for detached session
-      const detached = msg.sessionId ? detachedSessions.get(msg.sessionId) : undefined
-      if (detached && msg.sessionId) {
+      const detached = sid ? detachedSessions.get(sid) : undefined
+      if (detached && sid) {
         clearTimeout(detached.timer)
-        detachedSessions.delete(msg.sessionId)
-        console.debug(`[WS] Reattaching detached session: ${msg.sessionId}`)
+        detachedSessions.delete(sid)
+        console.debug(`[WS] Reattaching detached session: ${sid}`)
 
+        if (detached.projectId) setClientProject(client, detached.projectId)
         client.sessionManager = detached.sessionManager
-        client.sessionId = detached.sessionId
-        client.projectId = detached.projectId
+        const sm = detached.sessionManager
 
-        const state = getState(client)
-        const ctxConfig = await client.sessionManager.getContextConfig(client.sessionId)
-        const running = client.sessionManager.isSessionRunning(client.sessionId)
+        const state = getState(client, sid)
+        const ctxConfig = await sm.getContextConfig(sid)
+        const running = sm.isSessionRunning(sid)
         // While running, the in-flight turn rides the `replay: true` synthesis
         // below — keep createSaveSnapshot's temp in-flight message OUT of the
         // snapshot, or a client that applies it renders the turn twice.
         const messages = state ? (running ? [...state.messageLog] : [...createSaveSnapshot(state)]) : []
-        const detachedSession = client.sessionManager.getSessionById(client.sessionId)
-        sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: msg.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId, archiveCount: archiveCountFor(client, client.sessionId, detachedSession?.agentId), accessLevel: detachedSession?.accessLevel ?? null } })
+        const detachedSession = sm.getSessionById(sid)
+        sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: sid, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId, archiveCount: archiveCountFor(client, sid, detachedSession?.agentId), accessLevel: detachedSession?.accessLevel ?? null } })
         if (state && state.contextTokens > 0) {
-          sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens })
+          sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens, sessionId: sid })
         }
         while (detached.pendingEvents.length > 0) {
           const batch = detached.pendingEvents.splice(0, detached.pendingEvents.length)
           for (const evt of batch) sendJson(ws, evt)
         }
         detached.unsubscribe()
-        client.unsubscribeEvents = client.sessionManager.registerEventListener(client.sessionId, createEventListener(client))
+        subscribeSession(client, sm, sid)
 
         if (state && running) {
           console.debug(`[WS] Session still running — synthesizing in-progress state`)
@@ -877,7 +879,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
           // keeps thinking blocks, interleaving, and each block's real turnId,
           // so the rebuild is lossless and usage/turn grouping survives.
           const agentName = detachedSession?.agentName ?? (state.streamingAgent || 'default')
-          const sessionId = client.sessionId
+          const sessionId = sid
           sendJson(ws, { type: 'chat:followup', agentName, replay: true, sessionId })
           for (const block of state.turnContentBlocks) {
             if (block.type === 'thinking') {
@@ -902,38 +904,32 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         watchers.attach(ws, subProjectPath)
       }
 
-      if (msg.sessionId) {
-        const pendingSave = client.backgroundSaves.get(msg.sessionId)
-        if (pendingSave) { pendingSave(); client.backgroundSaves.delete(msg.sessionId) }
-      }
-
       let agentId: string | undefined
       // Stays undefined (omitted from the snapshot) for the pre-session
       // subscribe, so a level picked before the first send isn't reset.
       let accessLevel: SessionInfo['accessLevel'] | undefined
-      if (msg.sessionId && client.sessionManager) {
-        const existingSession = client.sessionManager.getSessionById(msg.sessionId)
+      if (sid && client.sessionManager) {
+        const existingSession = client.sessionManager.getSessionById(sid)
         if (existingSession) {
-          client.sessionId = msg.sessionId
-          client.unsubscribeEvents = client.sessionManager.registerEventListener(msg.sessionId, createEventListener(client))
+          subscribeSession(client, client.sessionManager, sid)
           agentId = existingSession.agentId
           accessLevel = existingSession.accessLevel ?? null
         }
       }
 
       let maxContextTokens = config.model.maxContextTokens
-      if (msg.sessionId && client.sessionManager) {
-        const view = await client.sessionManager.getSessionView(msg.sessionId)
+      if (sid && client.sessionManager) {
+        const view = await client.sessionManager.getSessionView(sid)
         if (view) {
           maxContextTokens = view.maxContextTokens
         }
       }
 
-      const state = getState(client)
+      const state = sid ? getState(client, sid) : null
       const messages = state ? [...createSaveSnapshot(state)] : []
-      sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: msg.sessionId, maxContextTokens, agentId, archiveCount: msg.sessionId ? archiveCountFor(client, msg.sessionId, agentId) : 0, accessLevel } })
+      sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: sid, maxContextTokens, agentId, archiveCount: sid ? archiveCountFor(client, sid, agentId) : 0, accessLevel } })
       if (state && state.contextTokens > 0) {
-        sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens })
+        sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens, sessionId: sid })
       }
     }
 

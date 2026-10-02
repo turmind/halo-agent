@@ -20,10 +20,18 @@ import type { ExtensionsSnapshot } from './extension-types.js'
 export interface WsClientMessage {
   /** `__ping__` is the app-level liveness probe (answered with `__pong__`);
    *  the rest are routed by handler.ts's top-level `switch (msg.type)`. */
-  type: '__ping__' | 'chat' | 'chat:stop' | 'chat:interrupt' | 'subscribe' | `command:${string}` | 'session:clear' | 'session:delete' | 'exchange:delete' | 'terminal:start' | 'terminal:input' | 'terminal:resize' | 'terminal:close' | 'terminal:reattach'
-  /** `null` is what the admin sends on chat:stop / chat:interrupt before any
-   *  session is bound (its store's id is nullable); the server treats it
-   *  like absent. */
+  type: '__ping__' | 'chat' | 'chat:stop' | 'chat:interrupt' | 'subscribe' | 'unsubscribe' | `command:${string}` | 'session:delete' | 'exchange:delete' | 'terminal:start' | 'terminal:input' | 'terminal:resize' | 'terminal:close' | 'terminal:reattach'
+  /** The session the frame acts on — chat:stop / chat:interrupt / command:*
+   *  included, so every open chat tab addresses its own session. `subscribe`
+   *  ADDS that session to the connection's set (one connection carries every
+   *  open tab; re-subscribing an already-subscribed id only re-sends its
+   *  snapshot) and `unsubscribe` removes it — releasing the listener only,
+   *  the agent keeps running. `null` is what the admin sends on chat:stop /
+   *  chat:interrupt before any session is bound (its store's id is
+   *  nullable) — nothing to act on. A chat:stop / chat:interrupt /
+   *  command:* / session:delete with the field ABSENT acts on the
+   *  connection's sole subscription (the one-session-per-connection form);
+   *  with several subscriptions it has no target. */
   sessionId?: string | null
   projectId?: string
   message?: string
@@ -90,14 +98,13 @@ export type WsServerMessage =
   | { type: '__pong__' }
   // chat lifecycle
   | { type: 'chat:ack'; clientMsgId: string }
-  | { type: 'chat:queued'; reason: 'compact'; message: string }
+  | { type: 'chat:queued'; reason: 'compact'; message: string; sessionId?: string | null }
   | { type: 'chat:stopped'; sessionId: string | null }
   | { type: 'chat:complete'; sessionId: string | null }
-  // Event-derived chat/agent frames carry `sessionId` (the session the
-  // listener was attached to) so a client that switched sessions mid-turn can
-  // drop frames still arriving for the old one. Absent on frames with no
-  // session context (detached-buffer replays, handler-local sends) — those
-  // pass the client filter.
+  // Session-scoped frames carry `sessionId` (the session the listener or
+  // request belongs to): one connection carries every open chat tab, and the
+  // admin routes each frame to that session's tab by this id. A frame without
+  // one (connection-level sends) goes to the active tab.
   | { type: 'chat:followup'; agentName: string; replay?: boolean; sessionId?: string | null }
   | { type: 'chat:thinking'; text: string; agentName: string; taskId?: string; turnId?: string; replay?: boolean; sessionId?: string | null }
   | { type: 'chat:stream'; text: string; agentName: string; taskId?: string; turnId?: string; replay?: boolean; sessionId?: string | null }
@@ -115,16 +122,22 @@ export type WsServerMessage =
   | { type: 'error'; error?: string; code?: 'archived'; agentName?: string; taskId?: string; terminalId?: string; sessionId?: string | null }
   // session state
   | { type: 'state:snapshot'; snapshot: WsStateSnapshot }
-  | { type: 'session:cleared' }
   | { type: 'session:deleted'; sessionId: string }
-  | { type: 'session:switched'; sessionId: string }
-  | { type: 'session:compacted'; message?: string; contextTokens: number }
+  // A command (`switchTo`) or a goal-mode divert moved the conversation to
+  // `sessionId`; the server has already added it to the connection's set.
+  // `fromSessionId` is the session the request was sent from (its tab stays
+  // open); `clientMsgId` is set on a divert — that chat landed in the target
+  // session, so the source tab drops its optimistic copy.
+  | { type: 'session:switched'; sessionId: string; fromSessionId?: string; clientMsgId?: string }
+  | { type: 'session:compacted'; message?: string; contextTokens: number; sessionId?: string | null }
   | { type: 'session:changed' }
-  | { type: 'listener:released'; sessionId: string | null }
+  // One frame per released session — a reclaim releases every listener the
+  // connection held.
+  | { type: 'listener:released'; sessionId: string }
   // compaction progress (manual /compact onProgress + auto-compact co-emit)
-  | { type: 'compact:started' }
-  | { type: 'compact:summarizing' }
-  | { type: 'compact:done' }
+  | { type: 'compact:started'; sessionId?: string | null }
+  | { type: 'compact:summarizing'; sessionId?: string | null }
+  | { type: 'compact:done'; sessionId?: string | null }
   // terminal
   | { type: 'terminal:ready'; terminalId: string }
   | { type: 'terminal:output'; data: string; terminalId: string }

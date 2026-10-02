@@ -27,6 +27,10 @@ export interface SessionMeta {
   /** Goal-mode back-pointer: non-null while this session is the bound worker
    *  of an active goal → 🎯 badge. */
   goalSessionId?: string | null
+  /** Run state from the list endpoint (`running` also while a sub-agent of
+   *  this root still runs) — the chat tab header's running mark for a tab
+   *  that isn't loaded yet. */
+  status?: 'running' | 'idle' | 'stopped'
 }
 
 /** Dropdown showing recent sessions for an agent.
@@ -160,19 +164,5 @@ export function SessionListDropdown({
         </>
       )}
     </>
-  )
-}
-
-/** Inline link shown in empty chat state */
-export function SessionHistoryLink({ count, onClick }: { count: number; onClick: () => void }) {
-  if (count === 0) return null
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-1 text-[10px] text-[var(--primary)] hover:underline"
-    >
-      <History className="h-3 w-3" />
-      {count} previous session{count > 1 ? 's' : ''}
-    </button>
   )
 }

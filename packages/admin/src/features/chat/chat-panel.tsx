@@ -9,13 +9,13 @@ import { useArchiveStore, loadOlderArchive } from './archive-store'
 import { refreshGoal } from './goal-store'
 import { useChat } from '@/features/chat/use-chat'
 import { refreshCommands } from './slash-commands'
-import { useExplorerSessions, SessionSidebar, SessionHistoryLink } from './session-list'
-import { Plus, Loader2, MessageSquare, Bot, Bug, ChevronDown, History } from 'lucide-react'
-import { wsClient } from '@/shared/ws-client'
+import { useExplorerSessions, SessionSidebar } from './session-list'
+import { useChatTabs, newTab, openTab, retryTabLoad, getTabView, saveTabView, type ChatTab } from './chat-tabs'
+import { Loader2, MessageSquare, Bot, Bug, ChevronDown } from 'lucide-react'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useAgentBus } from '@/shared/agent-bus'
-import { isMainConversationMessage } from '@/shared/types'
+import { isMainConversationMessage, type ChatMessage } from '@/shared/types'
 import { api } from '@/shared/api-client'
 import { cn, confirmAction } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
@@ -127,10 +127,6 @@ function AgentSelector() {
   )
 }
 
-/** Session sidebar open/closed — a global preference (unlike the per-project
- *  `halo_session_${projectId}` current-session keys). */
-const SIDEBAR_OPEN_KEY = 'halo_session_sidebar_open'
-
 /** Render window over the in-memory log, counted in exchanges (user turns).
  *  Opening a long session used to mount every exchange at once (one
  *  ReactMarkdown tree each — the "slower the longer you chat" DOM half of the
@@ -142,21 +138,8 @@ const WINDOW_STEP_TURNS = 30
 
 export function ChatPanel() {
   const t = useT()
-  const { messages, sendMessage, isStreaming, clearSession, deleteSession, stopGeneration, interruptGeneration, pendingMessages, removePendingMessage, handleCommand, sessionId } = useChat()
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const activeProject = useProjectStore((s) => s.activeProject)
-  // Session whose WS subscribe is in flight — cleared when the matching
-  // `state:snapshot` arrives (see effect below). Doubles as the loading flag.
-  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null)
-  // Bumped on every loadSession call (including a Retry of the same sid) so
-  // the snapshot-wait effect re-arms its 30s slow-network timer.
-  const [loadAttempt, setLoadAttempt] = useState(0)
-  const [slowLoading, setSlowLoading] = useState(false)
-  // Session list sidebar visibility — global preference, not per-project.
-  const [sidebarOpen, setSidebarOpen] = useState(() => {
-    if (typeof window === 'undefined') return true
-    return localStorage.getItem(SIDEBAR_OPEN_KEY) !== 'false'
-  })
+  const { messages, sendMessage, isStreaming, deleteSession, stopGeneration, interruptGeneration, pendingMessages, removePendingMessage, handleCommand, sessionId } = useChat()
+  const activeTab = useChatTabs((s) => s.tabs.find((tab) => tab.tabId === s.activeTabId))
   const { sessions, remove: removeSession, loadMore: loadMoreSessions, hasMore: hasMoreSessions, loadingMore: loadingMoreSessions } = useExplorerSessions()
   // Debug toggle — same as the Sessions tab's, under its own key so the two
   // surfaces don't flip each other.
@@ -168,66 +151,23 @@ export function ChatPanel() {
     if (typeof window !== 'undefined') localStorage.setItem('halo_chat_debug', debugMode ? '1' : '0')
   }, [debugMode])
 
-  const setSidebar = useCallback((open: boolean) => {
-    setSidebarOpen(open)
-    if (typeof window !== 'undefined') localStorage.setItem(SIDEBAR_OPEN_KEY, String(open))
-  }, [])
-
-  const loadSession = useCallback((sid: string) => {
-    if (!activeProject) return
-    setLoadingSessionId(sid)
-    setSlowLoading(false)
-    setLoadAttempt((n) => n + 1)
-    useChatStore.getState().setSessionId(sid)
-    useChatStore.getState().setMessages([])
-    wsClient.send({ type: 'subscribe', sessionId: sid, projectId: activeProject.id })
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(`halo_session_${activeProject.id}`, sid)
-    }
-  }, [activeProject])
-
-  // Real load completion: the server answers every subscribe with a
-  // `state:snapshot` (even for empty sessions — recentMessages: []), which is
-  // why we key off the snapshot instead of "messages arrived". Only a snapshot
-  // for the sid we're loading clears the state, so a late snapshot from a
-  // previous switch can't wipe a newer load. Past 30s we surface a slow-network
-  // hint + Retry, but keep waiting — the snapshot still clears everything.
-  useEffect(() => {
-    if (!loadingSessionId) return
-    const off = wsClient.on('state:snapshot', (data) => {
-      const snap = (data as { snapshot?: { sessionId?: string } }).snapshot
-      if (snap?.sessionId === loadingSessionId) {
-        setLoadingSessionId(null)
-        setSlowLoading(false)
-      }
-    })
-    const timer = setTimeout(() => setSlowLoading(true), 30_000)
-    return () => { off(); clearTimeout(timer) }
-  }, [loadingSessionId, loadAttempt])
-
   // Seed the goal banner / input lock on mount + project switch — live
   // updates ride the `goal:changed` WS push (state-handlers re-fetches).
+  const activeProjectId = useProjectStore((s) => s.activeProject?.id)
   useEffect(() => {
-    if (activeProject?.id) void refreshGoal(activeProject.id)
-  }, [activeProject?.id])
-
-  const handleNew = useCallback(() => {
-    // Drop any in-flight load — its snapshot (matched by sid) can't collide
-    // with the fresh session, but the spinner must not linger over it.
-    setLoadingSessionId(null)
-    setSlowLoading(false)
-    clearSession()
-    // Session lists refresh on the server's `session:cleared` reply (bus bump
-    // in chat-handlers) — it lands after the cleared session is persisted, so
-    // no timer guess is needed here.
-  }, [clearSession])
+    if (activeProjectId) void refreshGoal(activeProjectId)
+  }, [activeProjectId])
 
   const handleDeleteSession = useCallback(async (sid: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!(await confirmAction('Delete this session? Its history cannot be recovered.'))) return
-    deleteSession(sid)
+    if (!(await confirmAction(t('chat.sessions.deleteConfirm')))) return
+    // REST first: it removes the rows AND every file of the tree. The WS
+    // delete that used to go first dropped the descendant rows, so the REST
+    // pass found no sub-sessions and left their files orphaned on disk. The
+    // WS delete after it only releases this connection's subscription.
     await removeSession(sid)
-  }, [deleteSession, removeSession])
+    deleteSession(sid)
+  }, [deleteSession, removeSession, t])
 
   // No streaming-completion refresh here: the server broadcasts
   // `session:changed` when a root turn settles (after its final persist —
@@ -242,16 +182,103 @@ export function ChatPanel() {
     [messages, debugMode],
   )
 
-  const userScrolledUp = useRef(false)
+  return (
+    <div className="flex h-full min-h-0 bg-[var(--background)]">
+      {/* Chat column — messages + composer */}
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        {/* Keyed by tab: only the tab on screen renders, and its scroll /
+            render-window state starts from what it saved on its last show. */}
+        {activeTab && (
+          <ChatTabView
+            key={activeTab.tabId}
+            tab={activeTab}
+            sessionId={sessionId}
+            mainMessages={mainMessages}
+            debugMode={debugMode}
+          />
+        )}
 
-  // A fresh session always opens pinned to its newest messages — drop the
-  // previous session's scrolled-up latch. Without this, a user parked at the
-  // very top (scrollTop 0, so emptying the log fires no scroll event) carries
-  // `true` into the next session: the snapshot render would then skip the
-  // window clamp below and mount every exchange at once.
+        <div className="shrink-0">
+          <GoalBanner currentSessionId={sessionId} onJump={openTab} />
+          <MessageInput
+            onSend={sendMessage}
+            isStreaming={isStreaming}
+            onStop={stopGeneration}
+            onInterrupt={interruptGeneration}
+            pendingMessages={pendingMessages}
+            onRemovePending={removePendingMessage}
+            onCommand={handleCommand}
+            onCompact={() => handleCommand({ name: '/session', description: '', type: 'server' }, 'compact')}
+            renderLeftControls={() => (
+              <div className="relative flex items-center gap-0.5">
+                <button
+                  onClick={() => setDebugMode(!debugMode)}
+                  className={cn(
+                    'flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] transition-colors',
+                    debugMode
+                      ? 'bg-amber-900/50 text-amber-400'
+                      : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+                  )}
+                  title="Debug mode: show all messages including tool calls and usage"
+                >
+                  <Bug className="h-3 w-3" />
+                  Debug
+                </button>
+                <AgentSelector />
+              </div>
+            )}
+          />
+        </div>
+      </div>
+
+      {/* Right sidebar — session list (always mounted; collapsible) */}
+      <SessionSidebar
+        sessions={sessions}
+        currentSessionId={sessionId}
+        loadingSessionId={activeTab?.loading ? activeTab.sessionId : null}
+        onSelect={openTab}
+        onDelete={handleDeleteSession}
+        onNew={() => newTab()}
+        onLoadMore={loadMoreSessions}
+        hasMore={hasMoreSessions}
+        loadingMore={loadingMoreSessions}
+      />
+    </div>
+  )
+}
+
+/**
+ * The scrolling message area of the tab on screen. Mounted per tab (keyed by
+ * tabId), so every scroll / window / resize hook below binds to this tab's
+ * container; the reading position is saved to chat-tabs as it changes and
+ * restored on the next mount.
+ */
+function ChatTabView({ tab, sessionId, mainMessages, debugMode }: {
+  tab: ChatTab
+  sessionId: string | null
+  mainMessages: ChatMessage[]
+  debugMode: boolean
+}) {
+  const t = useT()
+  const tabId = tab.tabId
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // Saved on this tab's last show (render-phase read of a module map, not a
+  // ref). Captured once: the mount restores from it.
+  const [restored] = useState(() => getTabView(tabId))
+
+  // Past 30s of an unanswered subscribe, surface a slow-network hint + Retry
+  // — but keep waiting: the snapshot still clears the loading state.
+  const [slowAttempt, setSlowAttempt] = useState<number | null>(null)
+  const loading = !!tab.loading
+  const attempt = tab.attempt ?? 0
   useEffect(() => {
-    userScrolledUp.current = false
-  }, [sessionId])
+    if (!loading) return
+    const timer = setTimeout(() => setSlowAttempt(attempt), 30_000)
+    return () => clearTimeout(timer)
+  }, [loading, attempt])
+  const slowLoading = loading && slowAttempt === attempt
+
+  const userScrolledUp = useRef(restored?.userScrolledUp ?? false)
 
   // ── Render window over the in-memory log ─────────────────────────────
   // Only the last `totalUserTurns - hiddenTurns` user turns (plus their
@@ -270,16 +297,21 @@ export function ChatPanel() {
   // effect can shrink the window — exactly the freeze this window exists to
   // prevent. (Render-phase code must not read refs, so anything needing the
   // scroll position lives in the layout effect below instead.)
-  //  - session switched → reset to the last WINDOW_INITIAL_TURNS
+  //  - draft tab got its session → reset to the last WINDOW_INITIAL_TURNS
   //  - log shrank under the window (mid-session compact / clear replaced the
   //    active log) → clamp, or the slice walk would run past the end and
   //    render an empty window
   //  - first fill after a reset (`seenTurns === 0` = no turns seen yet, i.e.
   //    the subscribe snapshot landing on an empty panel) → clamp to the tail
-  const [windowState, setWindowState] = useState<{ sessionId: string | null; hiddenTurns: number; seenTurns: number }>({ sessionId: null, hiddenTurns: 0, seenTurns: 0 })
+  // A remount (tab shown again) starts from the window it was left with.
   const clampTarget = Math.max(0, totalUserTurns - WINDOW_INITIAL_TURNS)
-  if (windowState.sessionId !== (sessionId ?? null)) {
-    setWindowState({ sessionId: sessionId ?? null, hiddenTurns: clampTarget, seenTurns: totalUserTurns })
+  const [windowState, setWindowState] = useState<{ sessionId: string | null; hiddenTurns: number; seenTurns: number }>(() => ({
+    sessionId,
+    hiddenTurns: restored ? Math.min(restored.hiddenTurns, clampTarget) : clampTarget,
+    seenTurns: totalUserTurns,
+  }))
+  if (windowState.sessionId !== sessionId) {
+    setWindowState({ sessionId, hiddenTurns: clampTarget, seenTurns: totalUserTurns })
   } else if (windowState.hiddenTurns > clampTarget || (windowState.seenTurns === 0 && totalUserTurns > 0)) {
     setWindowState({ sessionId: windowState.sessionId, hiddenTurns: clampTarget, seenTurns: totalUserTurns })
   }
@@ -302,6 +334,11 @@ export function ChatPanel() {
       seenTurns: totalUserTurns,
     }))
   })
+
+  // Keep the window size for the next show of this tab.
+  useEffect(() => {
+    saveTabView(tabId, { hiddenTurns })
+  }, [tabId, hiddenTurns])
 
   // The slice starts AT the (hiddenTurns+1)-th user message — an exchange
   // boundary, so buildExchanges never sees orphaned responses. Leading
@@ -333,6 +370,14 @@ export function ChatPanel() {
     windowScrollAnchor.current = null
   }, [hiddenTurns])
 
+  // Back on a tab: return to where the reader left it (a tab left pinned to
+  // the bottom re-pins instead — new messages may have landed meanwhile).
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = restored?.userScrolledUp ? restored.scrollTop : el.scrollHeight
+  }, [restored])
+
   // Distance from the bottom captured just before an archive segment is
   // prepended. Prepending grows the content ABOVE the viewport while the
   // browser keeps `scrollTop`, which yanks the reader downward; restoring this
@@ -359,6 +404,7 @@ export function ChatPanel() {
     const handleScroll = () => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
       userScrolledUp.current = !atBottom
+      saveTabView(tabId, { scrollTop: el.scrollTop, userScrolledUp: !atBottom })
       if (el.scrollTop > 200) topTriggerArmed.current = true
       else if (el.scrollTop < 80 && topTriggerArmed.current) {
         topTriggerArmed.current = false
@@ -371,7 +417,7 @@ export function ChatPanel() {
     }
     el.addEventListener('scroll', handleScroll)
     return () => el.removeEventListener('scroll', handleScroll)
-  }, [handleLoadOlderArchive, expandWindow, hasHiddenTurns])
+  }, [tabId, handleLoadOlderArchive, expandWindow, hasHiddenTurns])
 
   // Restore the reading position after a prepend. Keyed on the archive store's
   // message array so it runs exactly when new history lands (the bottom-anchor
@@ -408,129 +454,57 @@ export function ChatPanel() {
   }, [])
 
   return (
-    <div className="flex h-full min-h-0 bg-[var(--background)]">
-      {/* Chat column — messages + composer */}
-      <div className="flex h-full min-w-0 flex-1 flex-col">
-        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-          {loadingSessionId ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-8 text-xs text-[var(--muted-foreground)]">
-              <div className="flex items-center">
-                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Loading session...
-              </div>
-              {slowLoading && (
-                <div className="flex items-center gap-2">
-                  <span>Slow network — still loading…</span>
-                  <button
-                    onClick={() => loadSession(loadingSessionId)}
-                    className="text-[var(--primary)] hover:underline"
-                  >
-                    Retry
-                  </button>
-                </div>
-              )}
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+      {loading && tab.sessionId ? (
+        <div className="flex flex-col items-center justify-center gap-2 py-8 text-xs text-[var(--muted-foreground)]">
+          <div className="flex items-center">
+            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Loading session...
+          </div>
+          {slowLoading && (
+            <div className="flex items-center gap-2">
+              <span>Slow network — still loading…</span>
+              <button
+                onClick={() => retryTabLoad(tabId)}
+                className="text-[var(--primary)] hover:underline"
+              >
+                Retry
+              </button>
             </div>
-          ) : mainMessages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-              <div className="rounded-full bg-[var(--secondary)] p-3">
-                <MessageSquare className="h-6 w-6 text-[var(--muted-foreground)]" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-[var(--foreground)]">
-                  Start a conversation
-                </p>
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                  Describe what you want to build, and agents will work together to deliver it.
-                </p>
-              </div>
-              <SessionHistoryLink count={sessions.length} onClick={() => setSidebar(true)} />
-            </div>
-          ) : (
-            <>
-              {/* Two-level history: while local turns are still sliced off,
-                  the top row expands the render window (no I/O). Only at
-                  hiddenTurns === 0 does the archive block (and its
-                  network-backed "load earlier") take the slot — so a gesture
-                  can never fetch segments while unrendered local turns remain. */}
-              {hiddenTurns > 0 ? (
-                <button
-                  onClick={expandWindow}
-                  className="flex w-full items-center justify-center gap-1.5 border-b border-[var(--border)]/50 px-3 py-2 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
-                >
-                  {t('chat.window.showEarlier', { count: hiddenTurns })}
-                </button>
-              ) : (
-                <ArchiveHistory onLoadOlder={handleLoadOlderArchive} scrollRef={scrollRef} />
-              )}
-              <MessageList messages={windowMessages} debugMode={debugMode} userOrdinalBase={hiddenTurns} />
-            </>
           )}
         </div>
-
-        <div className="shrink-0">
-          <GoalBanner currentSessionId={sessionId} onJump={loadSession} />
-          <MessageInput
-            onSend={sendMessage}
-            isStreaming={isStreaming}
-            onStop={stopGeneration}
-            onInterrupt={interruptGeneration}
-            pendingMessages={pendingMessages}
-            onRemovePending={removePendingMessage}
-            onCommand={handleCommand}
-            onCompact={() => handleCommand({ name: '/session', description: '', type: 'server' }, 'compact')}
-            renderLeftControls={() => (
-              <div className="relative flex items-center gap-0.5">
-                {/* Always rendered: this toggle is the only way to reopen the
-                    sidebar, and its open/closed state persists in localStorage.
-                    Gating it on a non-empty list locked users out when the
-                    sidebar was closed and the workspace had no sessions yet. */}
-                <button
-                  onClick={() => setSidebar(!sidebarOpen)}
-                  title={sidebarOpen ? 'Hide session list' : 'Show session list'}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] relative"
-                >
-                  <History className="h-4 w-4" />
-                  <span className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-[var(--muted-foreground)] px-0.5 text-[8px] font-medium text-[var(--background)]">{sessions.length}</span>
-                </button>
-                <button
-                  onClick={handleNew}
-                  title="New session"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
-                >
-                  <Plus className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => setDebugMode(!debugMode)}
-                  className={cn(
-                    'flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] transition-colors',
-                    debugMode
-                      ? 'bg-amber-900/50 text-amber-400'
-                      : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
-                  )}
-                  title="Debug mode: show all messages including tool calls and usage"
-                >
-                  <Bug className="h-3 w-3" />
-                  Debug
-                </button>
-                <AgentSelector />
-              </div>
-            )}
-          />
+      ) : mainMessages.length === 0 ? (
+        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="rounded-full bg-[var(--secondary)] p-3">
+            <MessageSquare className="h-6 w-6 text-[var(--muted-foreground)]" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-[var(--foreground)]">
+              Start a conversation
+            </p>
+            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+              Describe what you want to build, and agents will work together to deliver it.
+            </p>
+          </div>
         </div>
-      </div>
-
-      {/* Right sidebar — session list */}
-      {sidebarOpen && (
-        <SessionSidebar
-          sessions={sessions}
-          currentSessionId={sessionId}
-          loadingSessionId={loadingSessionId}
-          onSelect={loadSession}
-          onDelete={handleDeleteSession}
-          onNew={handleNew}
-          onLoadMore={loadMoreSessions}
-          hasMore={hasMoreSessions}
-          loadingMore={loadingMoreSessions}
-        />
+      ) : (
+        <>
+          {/* Two-level history: while local turns are still sliced off,
+              the top row expands the render window (no I/O). Only at
+              hiddenTurns === 0 does the archive block (and its
+              network-backed "load earlier") take the slot — so a gesture
+              can never fetch segments while unrendered local turns remain. */}
+          {hiddenTurns > 0 ? (
+            <button
+              onClick={expandWindow}
+              className="flex w-full items-center justify-center gap-1.5 border-b border-[var(--border)]/50 px-3 py-2 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+            >
+              {t('chat.window.showEarlier', { count: hiddenTurns })}
+            </button>
+          ) : (
+            <ArchiveHistory onLoadOlder={handleLoadOlderArchive} scrollRef={scrollRef} />
+          )}
+          <MessageList messages={windowMessages} debugMode={debugMode} userOrdinalBase={hiddenTurns} />
+        </>
       )}
     </div>
   )

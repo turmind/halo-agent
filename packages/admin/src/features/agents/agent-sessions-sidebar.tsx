@@ -3,8 +3,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { create } from 'zustand'
 import { useChatStore } from '@/features/chat/chat-store'
+import { openTab, dropSessionTab, useChatTabs } from '@/features/chat/chat-tabs'
 import { useGoalStore } from '@/features/chat/goal-store'
 import { anchorSessionArchive } from './session-archive-store'
+import { clearSessionViewCache, findLiveTab, getCachedView, putCachedView, removeCachedView } from './session-view-cache'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionBus, bumpSessionBus } from '@/shared/session-bus'
 import { api } from '@/shared/api-client'
@@ -12,7 +14,6 @@ import { cn, confirmAction, formatRelativeTime } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import { Bot, Trash2, ChevronRight, MessageSquare, Loader2, StopCircle, Archive, RefreshCw, Pencil } from 'lucide-react'
 import type { ChatMessage } from '@/shared/types'
-import { wsClient } from '@/shared/ws-client'
 
 export interface SessionItem {
   id: string
@@ -36,11 +37,9 @@ export interface SessionItem {
  *  the only knob for "how many session groups visible per page". */
 const TOP_LEVEL_PAGE_SIZE = 30
 
-/** Hard cap on top-level sessions kept in the list. Past this, "load more"
- *  stops and a silent reload won't pull beyond it — older sessions aren't
- *  worth scrolling to (channels like Slack burn through sessions fast, so
- *  the tail is mostly noise). */
-const MAX_TOP_LEVEL = 300
+/** Largest `limit` the list endpoint honours (server clamps to 500). A
+ *  reload deeper than this pages through with the cursor. */
+const MAX_PAGE_LIMIT = 500
 
 /** Store for selected session in the Sessions tab */
 interface SessionViewStore {
@@ -286,6 +285,7 @@ export function AgentSessionsSidebar() {
     if (!activeProject?.id) return
     if (restoredProjectRef.current && restoredProjectRef.current !== activeProject.id) {
       clearSelection()
+      clearSessionViewCache()
       restoredProjectRef.current = null
     }
   }, [activeProject?.id, clearSelection])
@@ -314,24 +314,34 @@ export function AgentSessionsSidebar() {
     pendingReloadRef.current = false
     if (showSpinner) setLoadingGroups(true)
 
-    // Reload the same depth the user already scrolled to (capped), not just
-    // the first page — otherwise a silent bus/streaming refresh would snap a
-    // 120-row list back to 30 and lose their scroll position. keyset cursor is
-    // a timestamp, so one limit=N fetch returns the same rows as N/PAGE_SIZE
-    // paged fetches with the cursor landing in the same place.
-    const want = Math.min(MAX_TOP_LEVEL, Math.max(TOP_LEVEL_PAGE_SIZE, topLevelCountRef.current))
+    // Reload the same depth the user already scrolled to, not just the first
+    // page — otherwise a silent bus/streaming refresh would snap a 120-row
+    // list back to 30 and lose their scroll position. keyset cursor is a
+    // timestamp, so one limit=N fetch returns the same rows as N/PAGE_SIZE
+    // paged fetches with the cursor landing in the same place. Past the
+    // server's 500 clamp, page through in 500s and render once at the end.
+    const want = Math.max(TOP_LEVEL_PAGE_SIZE, topLevelCountRef.current)
 
     const startedAt = Date.now()
     try {
-      const res = await api.sessionLogs.list(activeProject.path, {
-        includeArchived: true,
-        limit: want,
-      })
-      const flat = res.sessions as SessionItem[]
+      const flat: SessionItem[] = []
+      let topLevel = 0
+      let cursor: number | undefined
+      let nextCursorAfter: number | null = null
+      do {
+        const res = await api.sessionLogs.list(activeProject.path, {
+          includeArchived: true,
+          limit: Math.min(MAX_PAGE_LIMIT, want - topLevel),
+          ...(cursor !== undefined ? { cursor } : {}),
+        })
+        const rows = res.sessions as SessionItem[]
+        flat.push(...rows)
+        topLevel += rows.filter((s) => !s.parentSessionId).length
+        nextCursorAfter = res.nextCursor
+        cursor = res.nextCursor ?? undefined
+      } while (nextCursorAfter !== null && topLevel < want)
       setTree(buildTree(flat))
-      // Cap enforcement lives in one place (the effect below) so we don't have
-      // to repeat the `>= MAX_TOP_LEVEL` check at every setNextCursor site.
-      setNextCursor(res.nextCursor)
+      setNextCursor(nextCursorAfter)
     } catch (err) {
       console.error('[Sessions] Failed to fetch:', err)
       setTree([])
@@ -367,8 +377,6 @@ export function AgentSessionsSidebar() {
         const merged = [...flatPrev, ...fresh.filter((s) => !seen.has(s.id))]
         return buildTree(merged)
       })
-      // Cap enforcement lives in the effect below (keyed off tree.length), so
-      // we never read post-setState values at the call site.
       setNextCursor(res.nextCursor)
     } catch (err) {
       console.error('[Sessions] loadMore failed:', err)
@@ -377,14 +385,9 @@ export function AgentSessionsSidebar() {
     }
   }, [activeProject?.path, nextCursor, loadingMore])
 
-  // Keep the ref in sync so the next reload knows how deep to fetch, and stop
-  // paging once we've hit the cap — older sessions aren't worth loading (a
-  // channel like Slack burns through them, so the tail is noise). Declarative
-  // off tree.length so neither reloadFirstPage nor loadMore has to special-case
-  // the cap inline (and read a flaky post-setState value).
+  // Keep the ref in sync so the next reload knows how deep to fetch.
   useEffect(() => {
     topLevelCountRef.current = tree.length
-    if (tree.length >= MAX_TOP_LEVEL) setNextCursor(null)
   }, [tree.length])
 
   const busVersion = useSessionBus((s) => s.version)
@@ -440,23 +443,43 @@ export function AgentSessionsSidebar() {
     if (activeProject?.id && typeof window !== 'undefined') {
       localStorage.setItem(SELECTED_SESSION_KEY(activeProject.id), session.id)
     }
-    if (session.id === currentSessionId) {
-      setLoadedMessages(useChatStore.getState().messages)
+    // Open in an Explorer chat tab → that tab's live store drives the panel;
+    // the walk anchors from the count its subscribe snapshot reported.
+    const tab = findLiveTab(useChatTabs.getState().tabs, session.id)
+    if (tab?.store) {
+      anchorSessionArchive(session.id, tab.archiveCount ?? 0)
+      setLoadedMessages(tab.store.getState().messages)
       return
     }
+    // Viewed before → show the kept copy now, no request; a stale one is
+    // refetched in the background by session-chat-panel.
+    const cached = getCachedView(session.id)
+    if (cached) {
+      anchorSessionArchive(session.id, cached.archiveCount)
+      setLoadedMessages(cached.messages)
+      return
+    }
+    // The selection may move on while the GET is in flight — its result is
+    // still cached, but only rendered if this session is still selected.
+    const stillSelected = () => useSessionViewStore.getState().selectedSessionId === session.id
     try {
       const res = await api.sessionLogs.get(session.id, activeProject?.path)
       // Bind the detail panel's archive walk from the log-file header — the
       // committed segment count lives only there, not in the db row (the
       // list's `archivedAt` is session soft-delete, a different concept).
-      anchorSessionArchive(session.id, typeof res.archiveCount === 'number' ? res.archiveCount : 0)
-      setLoadedMessages((res.messages as unknown as ChatMessage[]) ?? [])
+      const archiveCount = typeof res.archiveCount === 'number' ? res.archiveCount : 0
+      const messages = (res.messages as unknown as ChatMessage[]) ?? []
+      putCachedView(session.id, messages, archiveCount)
+      if (!stillSelected()) return
+      anchorSessionArchive(session.id, archiveCount)
+      setLoadedMessages(messages)
     } catch (err) {
       console.error('[Sessions] Load failed:', err)
+      if (!stillSelected()) return
       anchorSessionArchive(session.id, 0)
       setLoadedMessages([])
     }
-  }, [currentSessionId, activeProject?.id, activeProject?.path, setSelectedSession, setLoadedMessages, setLoading])
+  }, [activeProject?.id, activeProject?.path, setSelectedSession, setLoadedMessages, setLoading])
 
   // Restore previously-selected session on first load per project.
   //
@@ -496,16 +519,10 @@ export function AgentSessionsSidebar() {
     handleSelectSession(found)
   }, [activeProject?.id, loadingGroups, tree, handleSelectSession])
 
-  // Double-click main session → load into chat
+  // Double-click main session → open it in an Explorer chat tab
   const handleLoadSession = useCallback((session: SessionItem) => {
-    if (!activeProject) return
-    useChatStore.getState().setSessionId(session.id)
-    useChatStore.getState().setMessages([])
-    wsClient.send({ type: 'subscribe', sessionId: session.id, projectId: activeProject.id })
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(`halo_session_${activeProject.id}`, session.id)
-    }
-  }, [activeProject])
+    openTab(session.id)
+  }, [])
 
   // Delete a session (hard delete — log file + SQLite row, cascades to descendants).
   // Uses the REST endpoint (synchronous) so we can `await` the server before
@@ -515,16 +532,16 @@ export function AgentSessionsSidebar() {
   const handleDeleteMain = useCallback(async (e: React.MouseEvent, sid: string) => {
     e.stopPropagation()
     if (!activeProject?.path) return
-    if (!(await confirmAction('Delete this session and all its sub-sessions? History cannot be recovered.'))) return
+    if (!(await confirmAction(t('chat.sessions.deleteTreeConfirm')))) return
     try {
       // Optimistic local removal so the row + its descendants visibly
       // disappear immediately. Server delete cascades in db; bus refresh
       // afterward syncs the truth in case anything was missed.
       setTree((prev) => prev.filter((n) => n.id !== sid))
-      if (sid === currentSessionId) {
-        if (activeProject?.id) localStorage.removeItem(`halo_session_${activeProject.id}`)
-        useChatStore.getState().clear()
-      }
+      // An Explorer chat tab holding it goes too. No unsubscribe: the delete
+      // purges the session's server-side listeners.
+      dropSessionTab(sid)
+      removeCachedView(sid)
       if (selectedSessionId === sid) {
         clearSelection()
         if (activeProject?.id && typeof window !== 'undefined') {
@@ -540,7 +557,7 @@ export function AgentSessionsSidebar() {
       // Re-fetch to recover the truth on failure.
       bumpSessionBus()
     }
-  }, [currentSessionId, activeProject?.path, activeProject?.id, selectedSessionId, clearSelection])
+  }, [activeProject?.path, activeProject?.id, selectedSessionId, clearSelection, t])
 
   // Enter inline rename mode for a session, seeding the input with its title.
   const startRename = useCallback((e: React.MouseEvent, s: SessionItem) => {

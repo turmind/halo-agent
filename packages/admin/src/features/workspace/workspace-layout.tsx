@@ -91,6 +91,10 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     if (typeof window === 'undefined') return true
     return localStorage.getItem('halo_sidebar_open') !== 'false'
   })
+  // Sessions mounts on first open, then stays (CSS-hidden like Explorer) so
+  // its viewed-session cache and reading positions survive tab switches.
+  const [sessionsMounted, setSessionsMounted] = useState(activeTab === 'sessions')
+  if (activeTab === 'sessions' && !sessionsMounted) setSessionsMounted(true)
   const [pathInput, setPathInput] = useState('')
   const [showQuickOpen, setShowQuickOpen] = useState(false)
 
@@ -624,14 +628,28 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         />
       </div>
 
+      {/* Sessions — kept mounted after first open, same CSS-hide scheme as Explorer.
+          Own autoSaveId: the library keys the saved layout by id + panel
+          constraints, which match Explorer's, so the two mounted groups would
+          overwrite each other's sidebar width. */}
+      {sessionsMounted && (
+        <div className={cn('flex min-w-0 flex-1', (activeTab !== 'sessions' || maximized) && 'hidden')}>
+          <ExplorerRootPanelGroup
+            autoSaveId="halo-h-sessions"
+            showSidebar={sidebarOpen}
+            sidebar={<AgentSessionsSidebar />}
+            main={<SessionChatPanel visible={activeTab === 'sessions' && !maximized} />}
+          />
+        </div>
+      )}
+
       {/* Other tabs — keep the original conditional-render behavior (they get destroyed/rebuilt on switch) */}
-      {!isExplorer && !maximized && (
+      {!isExplorer && activeTab !== 'sessions' && !maximized && (
         nonExplorerHasSidebar ? (
           <PanelGroup direction="horizontal" autoSaveId="halo-h-sidebar" className="flex-1">
             <Panel defaultSize={22} minSize={15} maxSize={40}>
               <div className="h-full overflow-hidden">
                 {activeTab === 'source-control' && <SourceControlSidebar />}
-                {activeTab === 'sessions' && <AgentSessionsSidebar />}
                 {activeTab === 'skills' && <SkillsSidebar />}
                 {activeTab === 'channels' && <ChannelsSidebar />}
                 {activeTab === 'evolution' && <EvolutionSidebar />}
@@ -682,7 +700,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
 
 /** Horizontal PanelGroup that always renders — sidebar Panel collapses to 0 when hidden.
  *  Keeps the main area (and its CanvasPanel) stable across sidebar toggles / maximize. */
-function ExplorerRootPanelGroup({ showSidebar, sidebar, main }: { showSidebar: boolean; sidebar: React.ReactNode; main: React.ReactNode }) {
+function ExplorerRootPanelGroup({ showSidebar, sidebar, main, autoSaveId = 'halo-h-sidebar' }: { showSidebar: boolean; sidebar: React.ReactNode; main: React.ReactNode; autoSaveId?: string }) {
   const groupRef = useRef<ImperativePanelGroupHandle | null>(null)
   const lastSplitRef = useRef<[number, number]>([22, 78])
 
@@ -699,7 +717,7 @@ function ExplorerRootPanelGroup({ showSidebar, sidebar, main }: { showSidebar: b
   }, [showSidebar])
 
   return (
-    <PanelGroup ref={groupRef} direction="horizontal" autoSaveId="halo-h-sidebar" className="flex-1">
+    <PanelGroup ref={groupRef} direction="horizontal" autoSaveId={autoSaveId} className="flex-1">
       <Panel defaultSize={22} minSize={0} maxSize={40} collapsible>
         <div className={cn('h-full overflow-hidden', !showSidebar && 'hidden')}>{sidebar}</div>
       </Panel>
@@ -754,7 +772,6 @@ function ExplorerMainArea({ projectId, showBottom, bottomSlotRef }: { projectId:
 /** Non-explorer tabs keep their original conditional-render behavior — destroyed/rebuilt each switch. */
 function NonExplorerMainArea({ activeTab }: { activeTab: SidebarTab }) {
   if (activeTab === 'source-control') return <SourceControlMain />
-  if (activeTab === 'sessions') return <SessionChatPanel />
   if (activeTab === 'management') return <AgentManagementMain />
   if (activeTab === 'skills') return <SkillsMain />
   if (activeTab === 'channels') return <ChannelsMain />

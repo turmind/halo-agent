@@ -8,8 +8,10 @@ import { getBrowserId } from '@/shared/browser-id'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { useTheme, type Theme } from '@/shared/theme'
-import { Plus, X, Terminal as TerminalIcon } from 'lucide-react'
-import { cn } from '@/shared/utils'
+import { Terminal as TerminalIcon } from 'lucide-react'
+import { useT } from '@/shared/i18n'
+import { ResizableSidebar } from '@/shared/components/resizable-sidebar'
+import { VerticalTabAdd, VerticalTabRow, VerticalTabSquare } from '@/shared/components/vertical-tab-list'
 import '@xterm/xterm/css/xterm.css'
 
 interface TermInstance {
@@ -142,6 +144,7 @@ interface TerminalPanelProps {
 }
 
 export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps = {}) {
+  const t = useT()
   const hostRef = useRef<HTMLDivElement>(null)
   const instancesRef = useRef<Map<string, TermInstance>>(new Map())
   const [tabs, setTabs] = useState<{ id: string; name: string }[]>([])
@@ -452,42 +455,45 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
       {/* Terminal host — main area */}
       <div ref={hostRef} className="relative min-h-0 flex-1 overflow-hidden" />
 
-      {/* Right sidebar — terminal list */}
-      <div className="flex w-[160px] shrink-0 flex-col border-l border-[var(--border)] bg-[var(--card)]">
-        <div className="flex-1 overflow-y-auto">
-          {tabs.map((tab) => (
-            <div
-              key={tab.id}
-              onClick={() => switchTo(tab.id)}
-              className={cn(
-                'group flex items-center gap-1.5 px-2 py-1.5 text-[11px] cursor-pointer select-none',
-                tab.id === activeId
-                  ? 'bg-[var(--secondary)] text-[var(--foreground)]'
-                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]/50',
-              )}
-            >
-              <TerminalIcon className="h-3 w-3 shrink-0" />
-              <span className="flex-1 truncate">{tab.name}</span>
-              {tabs.length > 1 && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); closeTerminal(tab.id) }}
-                  className="rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-[var(--accent)]"
-                >
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              )}
+      {/* Right sidebar — terminal list (collapsible, drag to resize) */}
+      <ResizableSidebar
+        openKey="halo_terminal_sidebar_open"
+        widthKey="halo_terminal_sidebar_width"
+        defaultWidth={160}
+        title={t('terminal.list.title')}
+        collapsedContent={
+          <>
+            <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-0.5 overflow-y-auto py-1">
+              {tabs.map((tab) => (
+                <VerticalTabSquare
+                  key={tab.id}
+                  icon={<TerminalIcon className="h-3.5 w-3.5" />}
+                  tooltip={tab.name}
+                  active={tab.id === activeId}
+                  onActivate={() => switchTo(tab.id)}
+                />
+              ))}
             </div>
+            <VerticalTabAdd collapsed onClick={() => createTerminal()} label={t('terminal.list.new')} />
+          </>
+        }
+      >
+        <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto py-1">
+          {tabs.map((tab) => (
+            <VerticalTabRow
+              key={tab.id}
+              icon={<TerminalIcon className="h-3 w-3" />}
+              label={tab.name}
+              tooltip={tab.name}
+              active={tab.id === activeId}
+              onActivate={() => switchTo(tab.id)}
+              onClose={tabs.length > 1 ? () => closeTerminal(tab.id) : undefined}
+              closeLabel={t('terminal.list.close')}
+            />
           ))}
         </div>
-        <button
-          onClick={() => createTerminal()}
-          className="flex items-center gap-1.5 border-t border-[var(--border)] px-2 py-1.5 text-[11px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]/50"
-          title="New Terminal"
-        >
-          <Plus className="h-3 w-3" />
-          <span>New Terminal</span>
-        </button>
-      </div>
+        <VerticalTabAdd onClick={() => createTerminal()} label={t('terminal.list.new')} />
+      </ResizableSidebar>
     </div>
   )
 }

@@ -80,7 +80,9 @@ describe('goal presentation is hidden without deleting history', () => {
     expect(container.querySelectorAll('[title="Goal-bound worker session"]')).toHaveLength(1)
     enable(false)
     expect(container.querySelector('[title="Goal-bound worker session"]')).toBeNull()
-    act(() => container.querySelector('p')!.click())
+    // Dropdown rows hold the title in a <p>; sidebar rows are vertical tabs
+    // (with no current session, the selected one on top is the draft row).
+    act(() => container.querySelector<HTMLElement>(surface === 'dropdown' ? 'p' : '[aria-selected="false"]')!.click())
     expect(select).toHaveBeenCalledWith('worker')
   })
 

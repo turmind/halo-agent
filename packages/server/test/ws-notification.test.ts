@@ -95,10 +95,10 @@ describe('sendWsNotification mapping', () => {
   })
 
   // Every event-derived frame is stamped with the listener's sessionId so the
-  // admin can drop frames from a session it has switched away from (the
-  // assertions above all pin `sessionId: 'sess-1'`). A listener bound before
-  // the session id is known stamps `null`, which the client treats as "no
-  // session context" and lets through.
+  // admin can route it to the tab holding that session (the assertions above
+  // all pin `sessionId: 'sess-1'`). A listener bound before the session id is
+  // known stamps `null`, which the client treats as "no session context" and
+  // hands to the active tab.
   it('a null session context stamps sessionId: null (not omitted)', () => {
     expect(notify({ type: 'stream', text: 'tok', agentName: 'a' }, null)).toEqual([
       { type: 'chat:stream', text: 'tok', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: null },
@@ -144,15 +144,15 @@ describe('sendWsNotification mapping', () => {
 
   it('root compacted → compact:done + session:compacted', () => {
     expect(notify({ type: 'compacted', totalTokens: 777 })).toEqual([
-      { type: 'compact:done' },
-      { type: 'session:compacted', contextTokens: 777 },
+      { type: 'compact:done', sessionId: 'sess-1' },
+      { type: 'session:compacted', contextTokens: 777, sessionId: 'sess-1' },
     ])
   })
 
   it('auto-compact system preflight co-emits compact:started before chat:system', () => {
     const sent = notify({ type: 'system', text: 'Compacting context (32K tokens)…' })
     expect(sent).toEqual([
-      { type: 'compact:started' },
+      { type: 'compact:started', sessionId: 'sess-1' },
       { type: 'chat:system', text: 'Compacting context (32K tokens)…', taskId: undefined, agentName: 'default', sessionId: 'sess-1' },
     ])
   })
@@ -163,7 +163,7 @@ describe('sendWsNotification mapping', () => {
     const sent = notify({ type: 'system', text: 'Auto-compacted 12 older messages (local fallback — LLM summary failed: model exploded)', compactEnd: true })
     expect(sent).toEqual([
       { type: 'chat:system', text: 'Auto-compacted 12 older messages (local fallback — LLM summary failed: model exploded)', taskId: undefined, agentName: 'default', sessionId: 'sess-1' },
-      { type: 'compact:done' },
+      { type: 'compact:done', sessionId: 'sess-1' },
     ])
   })
 

@@ -44,10 +44,9 @@ export function sendWsNotification(
 ): void {
   const agentName = event.agentName ?? 'default'
   const taskId = event.taskId
-  // Stamped on every event-derived frame: the listener stays attached to the
-  // session it was created for, so after a client-side session switch frames
-  // for the old session keep arriving until it completes — the admin drops
-  // those by comparing `sessionId` against the currently loaded session.
+  // Stamped on every event-derived frame: one connection holds a listener per
+  // open chat tab, and the admin routes each frame to the tab showing
+  // `sessionId` (frames for a session no tab holds are dropped).
   const sessionId = ctx.sessionId
 
   switch (event.type) {
@@ -105,14 +104,14 @@ export function sendWsNotification(
       // so the admin token-ring flips blue immediately, same path the manual
       // /compact path takes via handler.ts.
       if (!taskId && /^Compacting context \(\d+K tokens\)…$/.test(event.text ?? '')) {
-        sendJson(ctx.ws, { type: 'compact:started' })
+        sendJson(ctx.ws, { type: 'compact:started', sessionId })
       }
       sendJson(ctx.ws, { type: 'chat:system', text: event.text ?? '', taskId, agentName, sessionId })
       // The matching close for that `compact:started` when the auto-compact's
       // LLM summary failed (local fallback) — success closes via `compacted` below.
       // Without it the ring stayed blue and chat:send kept being queued.
       if (event.compactEnd && !taskId) {
-        sendJson(ctx.ws, { type: 'compact:done' })
+        sendJson(ctx.ws, { type: 'compact:done', sessionId })
       }
       break
     case 'error':
@@ -140,8 +139,8 @@ export function sendWsNotification(
       // taskId; emitting another root-bound notification here would leak
       // the sub-agent's success message into the root conversation.
       if (!taskId) {
-        sendJson(ctx.ws, { type: 'compact:done' })
-        sendJson(ctx.ws, { type: 'session:compacted', contextTokens: event.totalTokens ?? state.contextTokens })
+        sendJson(ctx.ws, { type: 'compact:done', sessionId })
+        sendJson(ctx.ws, { type: 'session:compacted', contextTokens: event.totalTokens ?? state.contextTokens, sessionId })
       }
       break
   }
@@ -153,28 +152,30 @@ export function sendWsNotification(
  * Buffer a WS notification for later replay (detached sessions).
  * Only buffers structural events that the frontend needs on reconnect.
  * Stream, thinking, tool states are captured in UIState by applyEvent
- * and replayed from there.
+ * and replayed from there. `sessionId` is stamped like the live frames so a
+ * reconnect replay lands in that session's tab.
  */
 export function bufferDetachedNotification(
   event: OrchestratorEvent,
   pendingEvents: WsServerMessage[],
+  sessionId: string,
 ): void {
   const agentName = event.agentName ?? 'default'
   const taskId = event.taskId
 
   switch (event.type) {
     case 'agent_start':
-      pendingEvents.push({ type: 'agent:start', agentName, task: event.text, taskId })
+      pendingEvents.push({ type: 'agent:start', agentName, task: event.text, taskId, sessionId })
       break
     case 'agent_done':
-      pendingEvents.push({ type: 'agent:done', agentName, taskId })
+      pendingEvents.push({ type: 'agent:done', agentName, taskId, sessionId })
       break
     case 'error':
-      pendingEvents.push({ type: 'error', error: event.error, agentName, taskId })
+      pendingEvents.push({ type: 'error', error: event.error, agentName, taskId, sessionId })
       break
     case 'followup_start':
     case 'queued_message':
-      pendingEvents.push({ type: 'chat:followup', agentName })
+      pendingEvents.push({ type: 'chat:followup', agentName, sessionId })
       break
     case 'complete':
       pendingEvents.length = 0
