@@ -338,14 +338,14 @@ export const config = {
   // value is a fraction of `maxContextTokens`; auto-compact triggers when
   // the running context exceeds `maxContextTokens * compressAt`.
   model: {
-    maxContextTokens: envInt('HALO_MAX_CONTEXT_TOKENS', 200_000),
+    maxContextTokens: envInt('HALO_MAX_CONTEXT_TOKENS', 272_000),
     get compressAt(): number {
       const raw = settingsValue('general.compact.compress_at')
       if (raw !== undefined) {
         const n = parseFloat(raw)
         if (Number.isFinite(n) && n > 0 && n <= 1) return n
       }
-      return 0.8
+      return 0.9
     },
   },
 

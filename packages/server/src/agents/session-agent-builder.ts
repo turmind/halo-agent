@@ -432,7 +432,7 @@ ${roster}`
     const { yamlConfig, modelId, endpoint, providerId, sessionId, systemPrompt, tools } = args
 
     const contextConfig = {
-      // Priority: explicit agent.yaml config > model registry contextWindow > global default (200K).
+      // Priority: explicit agent.yaml config > model registry contextWindow > global default (272K).
       maxTokens: yamlConfig?.context?.maxTokens ?? resolveContextWindow(modelId) ?? config.model.maxContextTokens,
       compressAt: yamlConfig?.context?.compressAt ?? (config.model.compressAt as number),
     }

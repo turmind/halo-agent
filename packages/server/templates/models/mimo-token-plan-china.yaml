@@ -37,7 +37,7 @@ models:
   - id: mimo-v2.6-pro
     displayName: MiMo v2.6 Pro
     maxOutputTokens: 131072
-    contextWindow: 1048576
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -60,7 +60,7 @@ models:
   - id: mimo-v2.6-flash
     displayName: MiMo v2.6 Flash
     maxOutputTokens: 131072
-    contextWindow: 1048576
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -84,7 +84,7 @@ models:
   - id: mimo-v2.5-pro
     displayName: MiMo v2.5 Pro (deprecated 2026-10-21)
     maxOutputTokens: 131072
-    contextWindow: 1048576
+    contextWindow: 272000
     capabilities:
       image: false
       video: false
@@ -107,7 +107,7 @@ models:
   - id: mimo-v2.5
     displayName: MiMo v2.5 (deprecated 2026-10-21)
     maxOutputTokens: 131072
-    contextWindow: 1048576
+    contextWindow: 272000
     capabilities:
       image: true
       video: false

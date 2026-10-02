@@ -141,7 +141,7 @@ function generalSection(): SchemaSection {
       { key: 'session.max_queue_size', type: 'int', globalOnly: true, description: 'Maximum queued messages per session', description_zh: '每个会话最大排队消息数', default: '256' },
       { key: 'session.max_nesting_depth', type: 'int', globalOnly: true, description: 'Maximum session nesting depth for agent delegation', description_zh: 'Agent 委派的最大会话嵌套深度', default: '16' },
       // compact
-      { key: 'compact.compress_at', type: 'float', globalOnly: true, description: 'Auto-compact threshold as a fraction of max context (e.g. 0.8 = compact when 80% full)', description_zh: '自动压缩阈值，最大上下文的比例（如 0.8 表示用满 80% 时压缩）', default: '0.8' },
+      { key: 'compact.compress_at', type: 'float', globalOnly: true, description: 'Auto-compact threshold as a fraction of max context (e.g. 0.9 = compact when 90% full)', description_zh: '自动压缩阈值，最大上下文的比例（如 0.9 表示用满 90% 时压缩）', default: '0.9' },
       { key: 'compact.keep_messages', type: 'int', globalOnly: true, description: 'Recent messages kept intact during compaction', description_zh: '压缩时保留最后多少条消息不动', default: '5' },
       { key: 'compact.max_summary_input', type: 'int', globalOnly: true, description: 'Max chars fed into local truncation fallback', description_zh: '本地截断兜底时的总输入字符上限', default: '15000' },
       { key: 'compact.max_message_slice', type: 'int', globalOnly: true, description: 'Max chars kept per old message during local truncation', description_zh: '本地截断兜底时每条旧消息保留的最大字符数', default: '800' },

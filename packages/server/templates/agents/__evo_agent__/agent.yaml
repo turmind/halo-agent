@@ -19,8 +19,8 @@ system_prompt: >
   not by you. See AGENT.md for the full procedure. You are invoked by an evo
   wrapper process — never by a user directly.
 context:
-  maxTokens: 200000
-  compressAt: 0.8
+  maxTokens: 272000
+  compressAt: 0.9
 tools:
   - file_read
   - view_image

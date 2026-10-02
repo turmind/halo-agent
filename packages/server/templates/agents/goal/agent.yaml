@@ -19,8 +19,8 @@ system_prompt: >
   delivery point — your job is verdict quality. See AGENT.md for the full
   discipline.
 context:
-  maxTokens: 200000
-  compressAt: 0.8
+  maxTokens: 272000
+  compressAt: 0.9
 tools:
   - file_read
   - view_image

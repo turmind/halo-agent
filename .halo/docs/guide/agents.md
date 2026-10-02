@@ -166,8 +166,8 @@ system_prompt: |
 
 # Context window
 context:
-  maxTokens: 200000                  # max context (default 200000)
-  compressAt: 0.8                    # auto-compact trigger (0.8 = compact when 80% full)
+  maxTokens: 272000                  # max context (default 272000)
+  compressAt: 0.9                    # auto-compact trigger (0.9 = compact when 90% full)
 
 # Tool allowlist (strict by name; unlisted tools are not injected).
 # Session/delegation tools are NOT listed here — see `team` below.

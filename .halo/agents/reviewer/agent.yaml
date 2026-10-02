@@ -4,15 +4,15 @@ description: Read-only code & design reviewer for the Halo repo — audits diffs
   files. Use before committing multi-module changes or when a change feels risky.
 model:
   provider: aws-bedrock-claude-invoke
-  id: global.anthropic.claude-fable-5-1
+  id: global.anthropic.claude-opus-5-5
   endpoint: https://bedrock-runtime.us-east-1.amazonaws.com
   promptCaching: 1h
   thinking:
     enabled: true
     effort: xhigh
 context:
-  maxTokens: 200000
-  compressAt: 0.8
+  maxTokens: 272000
+  compressAt: 0.9
 priority: 55
 tools:
   - file_read

@@ -38,7 +38,7 @@ models:
   - id: qwen3.7-max
     displayName: Qwen3.7 Max
     maxOutputTokens: 16384
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: false
       video: false
@@ -61,7 +61,7 @@ models:
   - id: qwen3.6-plus
     displayName: Qwen3.6 Plus
     maxOutputTokens: 16384
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false

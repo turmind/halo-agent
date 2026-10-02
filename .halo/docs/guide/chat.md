@@ -106,7 +106,7 @@ The ring in the bottom-right of the input shows context window usage:
 - Orange: 70–90%
 - Red: > 90%
 
-Reaching `compressAt` (default 80%, setting `general.compact.compress_at`) auto-triggers compact. If the LLM summary fails or times out, Halo falls back to a local compact (notice: `Auto-compacted N older messages (local fallback — LLM summary failed: <reason>)`) rather than retrying. An auto-compact has no overall time limit — it only times out after 10 minutes with no data from the model. While the agent is running you can't click the TokenRing (guarded by `isStreaming`).
+Reaching `compressAt` (default 90%, setting `general.compact.compress_at`) auto-triggers compact. If the LLM summary fails or times out, Halo falls back to a local compact (notice: `Auto-compacted N older messages (local fallback — LLM summary failed: <reason>)`) rather than retrying. An auto-compact has no overall time limit — it only times out after 10 minutes with no data from the model. While the agent is running you can't click the TokenRing (guarded by `isStreaming`).
 
 ## Session history
 

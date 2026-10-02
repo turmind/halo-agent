@@ -100,7 +100,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_PASSWORD` | (none) | `config.yaml server.password` (scrypt hash) | Plaintext login password. When set, takes precedence over the stored hash and bypasses scrypt entirely — intended for Docker / systemd / CI. It also satisfies the **startup gate**: the server refuses to boot with no password configured, and env plaintext counts as a first-class credential there, so an env-only deployment (`halo setup -y && HALO_PASSWORD=... halo server start`, no stored hash) boots fine. The hash is set by `halo setup` for interactive installs. |
 | `HALO_CORS_ORIGINS` | empty (reflect any origin) | `config.yaml server.cors_origins` | CORS allowlist (comma-separated). Empty = reflect any incoming Origin so credentials work cross-origin. Set explicit list to enforce strict CORS. |
 | `HALO_FRONTEND_DIR` | `packages/admin/out` | — | Static frontend dir (resolved as absolute path from project root) |
-| `HALO_MAX_CONTEXT_TOKENS` | `200000` | — | Model max context |
+| `HALO_MAX_CONTEXT_TOKENS` | `272000` | — | Model max context |
 | `HALO_SHELL_TIMEOUT` | `120000` | `config.yaml timeout.shell_exec` | Shell command timeout (ms) |
 | `HALO_WEB_FETCH_TIMEOUT` | `10000` | `config.yaml timeout.web_fetch` | web_fetch timeout |
 | `HALO_MODEL_TIMEOUT` | `600000` | `config.yaml timeout.model_request` | Per model-call idle timeout (ms, 10 min): every provider streams (Bedrock, the Anthropic-Messages providers anthropic / mimo / minimax / qwen, the OpenAI-family openai / deepseek / kimi / zhipu / doubao / hunyuan, and Mantle aws-bedrock-mantle / aws-bedrock-openai) and re-arms it on any data the stream delivers — text / thinking deltas, pings, tool-argument fragments, empty reasoning chunks, SSE comment frames — so it fires only when the model goes silent for this long, not on a long but live answer. It is also the only bound on a compact's LLM summary (no separate compact timeout). A bare fetch has no default timeout, so a half-open connection would hang the request forever; on expiry the call aborts and the agent loop retries with backoff. |
@@ -145,7 +145,7 @@ When a provider manifest declares a `default: <<NAME>>` for a secret, `halo setu
 Hardcoded (config.ts, no override):
 - `auth.tokenMaxAge` — 14 days
 - `auth.refreshAfter` — 24 hours
-- `model.compressAt` — default 0.8 (auto-compact threshold; configurable via `general.compact.compress_at` in settings.yaml)
+- `model.compressAt` — default 0.9 (auto-compact threshold; configurable via `general.compact.compress_at` in settings.yaml)
 
 settings.yaml-driven `general.limits.*` (no env override):
 - `general.limits.shell_output_bytes` (default 5 MiB)

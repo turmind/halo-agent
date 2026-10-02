@@ -27,7 +27,7 @@ models:
     displayName: Kimi K3
     # Official default output cap; the model can go up to 1M but we don't max out.
     maxOutputTokens: 131072
-    contextWindow: 1048576
+    contextWindow: 272000
     capabilities:
       # K3 itself also supports video input, but Halo has no video upload
       # path yet — keep video:false until one exists. Image input is

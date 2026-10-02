@@ -66,8 +66,8 @@ model:
 system_prompt: >
   <Brief one-paragraph role statement. Keep behavioral detail in AGENT.md.>
 context:
-  maxTokens: 200000
-  compressAt: 0.8       # auto-compact at 80%
+  maxTokens: 272000
+  compressAt: 0.9       # auto-compact at 90%
 tools:
   - file_read
   - file_write

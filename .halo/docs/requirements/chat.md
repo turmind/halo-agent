@@ -116,4 +116,4 @@ A second channel beyond text: a visual space the agent drives in real time to ex
 - **Identity.** Deliberately nameless ("HELLO / A MIND / IS HERE / BEYOND WORDS") — the conversational identity is user-configurable and the model may not be Claude, so the face never hard-codes a name.
 
 ### Token usage
-`TokenRing` shows live context window usage. Crossing `model.compressAt` (default 80%) auto-triggers compact.
+`TokenRing` shows live context window usage. Crossing `model.compressAt` (default 90%) auto-triggers compact.

@@ -9,8 +9,8 @@ model:
     enabled: true
     effort: max
 context:
-  maxTokens: 200000
-  compressAt: 0.8
+  maxTokens: 272000
+  compressAt: 0.9
 priority: 40
 tools:
   - file_read

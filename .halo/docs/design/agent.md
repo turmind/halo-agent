@@ -151,8 +151,8 @@ Source: `packages/server/src/config.ts`
 
 | Config | Default | Description |
 |---|---|---|
-| `model.maxContextTokens` | 200,000 | Global-default context window (env: `HALO_MAX_CONTEXT_TOKENS`) — the last tier of the resolution chain below |
-| `model.compressAt` | 0.8 | Auto-compact threshold (80%) |
+| `model.maxContextTokens` | 272,000 | Global-default context window (env: `HALO_MAX_CONTEXT_TOKENS`) — the last tier of the resolution chain below |
+| `model.compressAt` | 0.9 | Auto-compact threshold (90%) |
 | `agent.maxRetries` | 5 | Max retry count (settings: `general.agent.max_retries`) |
 | `session.maxCachedSessions` | 50 | In-memory session cache (env: `HALO_MAX_CACHED_SESSIONS`) |
 | `session.maxQueueSize` | 256 | inter-session message queue cap (settings: `general.session.max_queue_size`) |
@@ -166,7 +166,7 @@ A session's context budget (`contextConfig.maxTokens`, drives compaction thresho
 
 1. agent.yaml `context.maxTokens` — explicit per-agent override
 2. model registry `contextWindow` — the model entry's official window in `models/<provider>.yaml`, via `resolveContextWindow(modelId)` (config.ts)
-3. `config.model.maxContextTokens` — global default 200K
+3. `config.model.maxContextTokens` — global default 272K
 
 Two consumers apply the same chain: `buildModelRuntime` (session-agent-builder.ts) when a session is built, and the cold-session `getContextConfig()` path (session-manager.ts) for sessions not in memory — so what the UI displays for a cold session matches what actually takes effect on resume.
 

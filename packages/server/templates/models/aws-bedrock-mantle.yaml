@@ -75,7 +75,7 @@ models:
   - id: openai.gpt-6-astra
     displayName: GPT-6 Astra
     maxOutputTokens: 128000
-    contextWindow: 1050000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -113,7 +113,7 @@ models:
   - id: openai.gpt-6-sol
     displayName: GPT-6 Sol
     maxOutputTokens: 128000
-    contextWindow: 1050000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -147,7 +147,7 @@ models:
   - id: openai.gpt-6.1-sol
     displayName: GPT-6.1 Sol
     maxOutputTokens: 128000
-    contextWindow: 1050000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -176,7 +176,7 @@ models:
   - id: openai.gpt-6-luna
     displayName: GPT-6 Luna
     maxOutputTokens: 128000
-    contextWindow: 1050000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false

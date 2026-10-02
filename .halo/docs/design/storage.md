@@ -263,8 +263,8 @@ model:
 system_prompt: >                       # AGENT.md wins if present
   You are...
 context:
-  maxTokens: 200000                    # context window cap
-  compressAt: 0.8                      # auto-compact threshold (default; settings: general.compact.compress_at)
+  maxTokens: 272000                    # context window cap
+  compressAt: 0.9                      # auto-compact threshold (default; settings: general.compact.compress_at)
 tools:
   - file_read
   - file_write

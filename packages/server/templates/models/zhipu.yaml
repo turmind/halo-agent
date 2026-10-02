@@ -35,7 +35,7 @@ models:
   - id: glm-5.3
     displayName: GLM-5.3
     maxOutputTokens: 131072
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: false
       video: false
@@ -56,7 +56,7 @@ models:
   - id: glm-5.3-flash
     displayName: GLM-5.3 Flash
     maxOutputTokens: 131072
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -76,7 +76,7 @@ models:
   - id: glm-5.3-flashx
     displayName: GLM-5.3 FlashX
     maxOutputTokens: 131072
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -96,7 +96,7 @@ models:
   - id: glm-5.2
     displayName: GLM-5.2
     maxOutputTokens: 131072
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: false
       video: false

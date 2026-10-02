@@ -38,7 +38,7 @@ models:
   - id: global.anthropic.claude-fable-5-1
     displayName: Claude Fable 5.1
     maxOutputTokens: 128000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -66,7 +66,7 @@ models:
   - id: global.anthropic.claude-fable-5
     displayName: Claude Fable 5
     maxOutputTokens: 128000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -94,7 +94,7 @@ models:
   - id: global.anthropic.claude-sonnet-4-6
     displayName: Claude Sonnet 4.6
     maxOutputTokens: 64000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -121,7 +121,7 @@ models:
   - id: global.anthropic.claude-sonnet-5
     displayName: Claude Sonnet 5
     maxOutputTokens: 64000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -148,7 +148,7 @@ models:
   - id: global.anthropic.claude-sonnet-5-5
     displayName: Claude Sonnet 5.5
     maxOutputTokens: 64000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -179,7 +179,7 @@ models:
   - id: global.anthropic.claude-opus-4-6-v1
     displayName: Claude Opus 4.6
     maxOutputTokens: 128000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -202,7 +202,7 @@ models:
   - id: global.anthropic.claude-opus-4-7
     displayName: Claude Opus 4.7
     maxOutputTokens: 128000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -226,7 +226,7 @@ models:
   - id: global.anthropic.claude-opus-4-8
     displayName: Claude Opus 4.8
     maxOutputTokens: 128000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -252,7 +252,7 @@ models:
   - id: global.anthropic.claude-opus-5
     displayName: Claude Opus 5
     maxOutputTokens: 128000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false
@@ -279,7 +279,7 @@ models:
   - id: global.anthropic.claude-opus-5-5
     displayName: Claude Opus 5.5
     maxOutputTokens: 128000
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       image: true
       video: false

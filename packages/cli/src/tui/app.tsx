@@ -17,7 +17,7 @@ import { LogViewer, type LogLine } from './components/log-viewer.js'
 import type { SlashItem } from './components/slash-suggest.js'
 import type { SessionTreeNode } from '../harness.js'
 
-const MAX_CONTEXT_TOKENS_FALLBACK = 200_000
+const MAX_CONTEXT_TOKENS_FALLBACK = 272_000
 
 interface AppProps {
   harness: Harness

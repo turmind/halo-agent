@@ -40,7 +40,7 @@ models:
     displayName: MiniMax M3
     # Official recommended value; hard cap is 524288 but we don't max out.
     maxOutputTokens: 131072
-    contextWindow: 1000000
+    contextWindow: 272000
     capabilities:
       # M3 also supports video input, but Halo has no video upload path yet —
       # keep video:false until one exists. Image rides the Anthropic-compatible
