@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-10-02
+
+First stable release since 1.4.6. It includes everything in 1.5.0-alpha through 1.5.3-alpha, plus the changes below.
+
+### Changed
+
+- Admin: each session tab leads with one fixed-size status dot instead of a spinner and an unread dot. Pulsing amber means the tab's turn is running, blue means new output arrived while the tab was in the background, and green means idle. A session no tab has loaded yet, or one a reconnect released, shows green. A state change no longer shifts the row's width.
+- Admin: the finish bell now rings when any loaded tab finishes a turn, not only the session on screen. The notification raised while the window is unfocused names the session that finished.
+
 ## [1.5.3-alpha] - 2026-10-02
 
 ### Added
@@ -700,7 +709,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.3-alpha...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.4...HEAD
+[1.5.4]: https://github.com/turmind/halo-agent/compare/v1.5.3-alpha...v1.5.4
 [1.5.3-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.2-alpha...v1.5.3-alpha
 [1.5.2-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.1-alpha...v1.5.2-alpha
 [1.5.1-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.0-alpha...v1.5.1-alpha
