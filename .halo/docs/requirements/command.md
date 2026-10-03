@@ -10,8 +10,8 @@ Top-level built-in slash commands: `/help` `/evo` `/session` `/agent` `/skill` `
 
 | Name | Slash | Type | Purpose |
 |---|---|---|---|
-| `help` | `/help` | client | List commands — object commands show only the verbs the user can run; a command is hidden entirely if no verb is runnable |
-| `evo` | `/evo [text]` | server | Flat command (no verbs), **full-only**. Trigger self-evolution on the current root session: snapshot the conversation + queue an evo run. Optional text becomes a hint for what to focus on. Available only when `general.evolution.level=L1`. See [plans/self-evolution.md](../plans/self-evolution.md). |
+| `help` | `/help` | server | List commands — object commands show only the verbs the user can run; a command is hidden entirely if no verb is runnable |
+| `evo` | `/evo [text]` | server | Flat command (no verbs), **full-only**. Trigger self-evolution on the current root session: snapshot the conversation + queue an evo run. Optional text becomes a hint for what to focus on. Works at every `general.evolution.level` (L0 = manual only; L1 also drafts automatically on pre-compact). Hidden from `/help` for non-full users. See [design/evolution.md](../design/evolution.md). |
 
 The rest are noun-verb **object commands**: `/<obj> <verb> [args]`. Some verbs are built-in deterministic code (`SUBCOMMAND_ROUTES`); the others fall through to the same-name skill (LLM, dispatched via `$1`). Bare `/<obj>` or `/<obj> help` lists the verbs available to the user (filtered by access level).
 
@@ -38,7 +38,7 @@ Resolution starts from the caller's active session, walks up to its root (`id.sp
 
 ## Command aliases
 
-`dispatchCommand` expands shorthand aliases before routing, so every channel (WS, WeChat, Telegram, Web, CLI/TUI) gets the same shortcuts uniformly. Aliases are read from a single seed file:
+`dispatchCommand` expands shorthand aliases before routing, so every channel (WS, Web, the IM channels, CLI/TUI) gets the same shortcuts uniformly. Aliases are read from a single seed file:
 
 - **`~/.halo/global/aliases.yaml`** — seeded once on first run (`init.ts`, via `writeIfMissing`), **never overwritten**, so the user can freely edit it. Deleting the file disables all aliases. Changes take effect immediately: the loader caches the parsed YAML keyed by file **mtime**, re-reading only when the file changes (no restart, no per-command disk parse on the hot path).
 
@@ -58,7 +58,7 @@ The canonical command is `/workspace`; `/w` is its bare alias. `/ws` and `/wi` a
 
 ## Cross-channel commands
 
-All channels (WS, WeChat, Telegram, Web, CLI/TUI) share `dispatchCommand` for common commands. Channel-specific commands (e.g. WeChat `/name`) are handled in the channel handler before reaching the shared dispatch.
+All channels (WS, Web, Telegram, Slack, Feishu, WeCom, WeChat, CLI/TUI) share `dispatchCommand` for common commands. Channel-specific commands (e.g. WeChat `/qr`) are handled in the channel handler.
 
 ## Skill-as-command
 
@@ -88,30 +88,30 @@ When triggered, the skill body is read from disk and sent to the agent session a
 
 User args are filled via `$ARGUMENTS` / `$1`–`$9` placeholders (args are no longer appended verbatim to the body end); a verb reaches the body as `$1` for dispatch.
 
-Every `GET /api/commands?projectId=xxx` rescans skill directories.
+Every `GET /api/commands` call that carries `sessionId` / `agentId` rescans skill directories.
 
 ### Conflict detection
 
 A skill's `command` must not collide with a built-in slash command or with another skill's. Collisions are resolved at scan time in `scanSkillDescriptors`, the single source feeding both dispatch and the discovery API:
 
-- **Built-ins always win** — a skill command colliding with a built-in is not registered as a command. This is by design for object commands: their same-name skill (e.g. `agent`, `skill`, `workspace`) is shadowed as a command, but its body still serves the skill verbs (create / update etc.) via the verb fallback.
+- **Built-ins always win** (hidden ones too) — a skill command colliding with a built-in is not registered as a command. This is by design for object commands: their same-name skill (e.g. `agent`, `skill`, `workspace`) is shadowed as a command, but its body still serves the skill verbs (create / update etc.) via the verb fallback.
 - **Among skills, first-come wins** (workspace scope is merged over global before this check); the later one is dropped with a warning.
-- Colliding entries are **dropped** from the command list and a warning is logged (`[CommandRegistry] skill "<id>" command "/x" shadowed by …`). Dropping at the shared source guarantees a command can never appear in the palette that dispatch is unable to route ("visible but unreachable").
+- Colliding entries are **dropped** from the command list; a skill-vs-skill clash also logs a warning (`[CommandRegistry] skill "<id>" command "/x" shadowed by …`), a built-in owning the name doesn't. Dropping at the shared source guarantees a command can never appear in the palette that dispatch is unable to route ("visible but unreachable").
 
 Note: a skill's `command` collision only removes the *slash command*; the skill itself remains usable via the agent's normal skill activation.
 
 ## Command discovery API
 
 ```
-GET /api/commands?projectId=xxx
+GET /api/commands?projectId=xxx[&sessionId=][&agentId=]
 → { commands: CommandDescriptor[] }
 ```
 
-Returns every non-hidden command (built-in + skill). The frontend calls this on project switch to populate the command palette.
+Returns every non-hidden built-in command, plus the skill commands the session's / agent's skill whitelist and access level allow when `sessionId` or `agentId` is given (with neither, built-ins only). The frontend calls this on project switch to populate the command palette.
 
 ## Adding a new command
 
-A server-handled command lives in **three** places that must stay in sync —
+A server-handled command lives in **four** places that must stay in sync —
 miss any one and the server either throws at startup or silently no-ops:
 
 1. Add a `exec<Name>` function in `channels/shared/commands.ts`

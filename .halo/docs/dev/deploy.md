@@ -47,7 +47,7 @@ Nginx is **not required**. Use it only for domain routing, SSL termination, or w
 ## Prerequisites
 
 - Node.js ≥ 22
-- pnpm ≥ 9
+- pnpm 11 (pinned by the root `packageManager`; `corepack enable` picks it up)
 - AWS credentials configured (`~/.aws/credentials` or env vars) with Bedrock access
 
 ## 1. Install dependencies and build
@@ -63,7 +63,7 @@ pnpm --filter @turmind/halo-admin build   # next build + copy-monaco; never a ba
 
 ## 2. Runtime data locations
 
-No directory needs to be created by hand. SQLite databases are created automatically on first use: per-workspace state at `<workspace>/.halo/halo.db`, plus global queues at `~/.halo/global/evo.db`, `~/.halo/global/cron.db` and `~/.halo/global/runs.db`.
+No directory needs to be created by hand. SQLite databases are created automatically on first use: per-workspace state at `<workspace>/.halo/halo.db`, plus global queues at `~/.halo/global/evo.db`, `~/.halo/global/cron.db` and `~/.halo/global/runs.db`, and channel accounts at `~/.halo/secrets/channels/channels.db`.
 
 ## 3. Run `halo setup`
 
@@ -90,7 +90,7 @@ When `HALO_PASSWORD` is set, the password chosen via `halo setup` is ignored at 
 
 ## 5. Start the server
 
-> **单实例锁**：server 启动时会写 `~/.halo/global/server.lock`（Linux 用 flock，macOS/Windows 回退到 pid 探测），退出时自动清理。如果 lock 里记录的进程还活着，新 server 会拒绝启动并打印 `kill <pid>` 提示。原因是 WeChat 长轮询循环跟 HTTP server 解耦，多个进程并存会导致同一条微信消息被 fan out 到多个 session。陈旧 lock（进程已不在）会被自动识别并清除。要手动重启先 kill 旧的：`kill $(cat ~/.halo/global/server.lock)`。
+> **单实例锁**：server 启动时会写 `~/.halo/global/server.lock`（有 `flock` 命令时用 flock，没有就回退到 pid 探测），退出时自动清理。如果 lock 里记录的进程还活着，新 server 会拒绝启动并打印 `kill <pid>` 提示。原因是 WeChat 长轮询循环跟 HTTP server 解耦，多个进程并存会导致同一条微信消息被 fan out 到多个 session。陈旧 lock（进程已不在）会被自动识别并清除。要手动重启先 kill 旧的：`kill $(cat ~/.halo/global/server.lock)`。
 
 ### Option A: quick start
 
@@ -155,8 +155,8 @@ server as its child (`packages/cli/src/server-supervisor.ts`). Policy:
   up (exit 1) with a log line telling you to fix the cause and re-run `halo
   server start -d`.
 - **2s pause between attempts**, so an instant-crash loop can't spin the CPU.
-- Every decision lands in the daemon log as `[respawn] …`, on the same fds the
-  server writes to (`~/.halo/global/logs/server.log`).
+- Every decision lands in the daemon log as `[respawn] …` — the stdout/stderr
+  capture `~/.halo/logs/server.log`, which `halo server logs` tails.
 
 `halo server stop` (and `--force`) is not mistaken for a crash: it stamps the
 server pid into a marker file `~/.halo/global/server.stop` *before* signalling,
@@ -219,6 +219,7 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 | `halo tui` | Interactive TUI client |
 | `halo cli "<prompt>"` | One-shot prompt → reply, exit |
 | `halo agents` / `halo sessions` | List agents / sessions |
+| `halo acp` | Stdio bridge that lets an ACP client (e.g. Claude Code) drive a halo server — see [acp-adapter.md](acp-adapter.md) |
 
 ### Upgrade flow
 
@@ -239,7 +240,7 @@ Use only for a new public release; the retained details here are not extra prepa
 
 **npm token gotcha**: `npm publish` on this package needs a granular access token created with **"Bypass 2FA"** checked — scope / permission alone yields `403 Two-factor authentication or granular access token with bypass 2fa enabled is required`. `npm whoami` and `npm token list` succeed with a non-bypass token, so neither is a valid pre-flight; check `GET https://registry.npmjs.org/-/npm/v1/tokens` (with the token as bearer) and look for `"bypass_2fa": true` on the token in use before starting a release.
 
-The published package contains a single bundled JS entry (~620 KB), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint ≈ 120 MB after npm dedupes shared deps.
+The published package contains a single bundled JS entry (~1.4 MB), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint ≈ 120 MB after npm dedupes shared deps.
 
 ### Non-interactive (Docker / CI) details
 
@@ -247,6 +248,7 @@ The published package contains a single bundled JS entry (~620 KB), all built-in
 
 - Seeds / refreshes `~/.halo/global/` from the bundled templates (per the per-category overwrite policy in `init.ts`)
 - Generates `server.jwt_secret` if missing
+- Binds the built-in agents to the provider named by `HALO_DEFAULT_PROVIDER`, when set (an unknown id only warns)
 - **Does not** set a password — supply one via `HALO_PASSWORD` env
 
 Minimal Dockerfile:

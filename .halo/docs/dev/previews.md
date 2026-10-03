@@ -8,12 +8,18 @@ Location: [`packages/admin/src/features/editor/previews/`](../../../packages/adm
 
 ```
 previews/
-├── FilePreview.tsx           Public entry. Looks up plugin by extension,
-│                             renders <Suspense><Component/></Suspense>.
-├── types.ts                  PreviewPlugin, PreviewProps
-├── registry.ts               register() / getPlugin() / registeredExtensions() / isHeavyPreview() / loadExtensions()
+├── FilePreview.tsx           Public entry. Asks the registry for the candidates for the
+│                             extension, renders the chosen one (<Suspense><Component/></Suspense>
+│                             for a built-in, the iframe host for an extension); too-large and
+│                             no-viewer placeholders.
+├── types.ts                  PreviewPlugin, PreviewProps, Resolved
+├── registry.ts               register() / setExtensions() / loadExtensions() / resolve() / canPreview() / isHeavyPreview()
+│                             + subscribe() / useRegistryVersion() so open tabs re-resolve on change
+├── extension-host.tsx        Iframe host for installed preview extensions (+ extension-host-logic.ts,
+│                             extension-token.ts) — see design/canvas-extensions.md
 ├── ui/
-│   ├── preview-shell.tsx     Standard header (filename + Open-as-Text + Download + extraToolbar)
+│   ├── preview-shell.tsx     Standard header (filename + extraToolbar + Open with + Open-as-Text + Download)
+│   ├── open-with-menu.tsx    "Open with" picker, shown only when a file has more than one viewer
 │   ├── use-preview-fetch.ts  Hook: fetch + AbortController + parse, returns {data, error, loading}
 │   ├── use-data-fetch.ts     JSON-endpoint sibling: abortable fetcher → {data, error, loading},
 │   │                         for previews that parse server-side instead of raw bytes
@@ -60,6 +66,8 @@ interface PreviewProps {
   viewUrl: string      // for inline viewing, supports HTTP Range
   downloadUrl: string  // for forced download (used by the shell's Download button)
   onOpenAsText?: () => void  // set when the file can also be force-opened as text
+  tooLarge?: boolean   // file over the editor's 10MB read cap; FilePreview shows a placeholder instead of the plugin
+  size?: number        // on-disk size in bytes, shown by that placeholder
 }
 ```
 
@@ -121,7 +129,7 @@ register(fooPlugin)
 
 Done. The Canvas panel will:
 - Treat `.foo` / `.foobar` as non-text (routes to preview instead of Monaco)
-- Mount `FooPreview` inside an MRU cache (up to 5 concurrent plugins cached)
+- Mount `FooPreview` inside an MRU cache (up to 5 concurrent previews cached)
 
 ### Routing API: `canPreview()` vs `loadExtensions()`
 
@@ -129,6 +137,7 @@ Done. The Canvas panel will:
 
 - **One-shot routing decisions** (`isBinaryExtension` in `editor-panel.tsx`: click-open, tab restore after reload, open-to-side) must `await loadExtensions()` before concluding "text", because an extension may claim an extension-only type (`.glb`) or a text suffix (`.json`). A preview verdict needs no wait — extensions only add viewers ahead of text, and `FilePreview` re-picks the viewer on a registry version bump.
 - The wait is capped at `INITIAL_LOAD_WAIT_MS` (3 s, `registry.ts`), counted from the first call; on timeout callers proceed as if nothing were installed. The request isn't cancelled — a late result still lands via `setExtensions`.
+- Candidates come from `resolve(ext)`, best first: `default` extensions → the built-in plugin → `option` extensions → Open as Text (always last). More than one candidate puts an **Open with** menu in the header.
 - It never rejects and is never re-issued: a failed fetch leaves the extension layer empty without delaying later opens. The WS-reconnect re-fetch and `extension:changed` frames fill it in.
 
 ## PreviewShell — the standard header
@@ -211,21 +220,21 @@ const { data } = usePreviewFetch(viewUrl, (buf, signal) =>
 
 ## `heavy: true` — when to use it
 
-Set `heavy: true` when the preview:
+Set `heavy: true` on a built-in when the preview:
 - Needs DOM access (can't run in a Worker — e.g. `pptx-preview` draws to canvas)
 - Is the dominant memory cost of the page (large canvas, many cached elements)
 
 Effect: the MRU cache skips this plugin. Only the **active** instance mounts; switching away unmounts the component (releases memory and stops any in-flight work). Switching back re-fetches/re-renders.
 
-Only pptx currently uses this. Don't set it by default — the MRU cache gives much faster switches.
+Only pptx currently uses this among built-ins (read-only preview extensions are also treated as heavy, judged by `isHeavyPreview()`). Don't set it by default — the MRU cache gives much faster switches.
 
 ## `onOpenAsText`
 
-When the user right-clicks a previewable file in Explorer and picks "Open as Text", Canvas closes the preview tab and opens the raw file in Monaco. The preview plugin receives this as `props.onOpenAsText` — pass it straight through to `PreviewShell` and the button appears automatically.
+The editor panel passes `props.onOpenAsText` to every preview tab. Calling it closes the preview tab and opens the raw file in Monaco. Pass it straight through to `PreviewShell` and the button appears automatically (the **Open with** menu also lists Open as text).
 
 ## Two plugin patterns: raw-bytes vs. server-parsed
 
-Most built-in plugins (pdf, docx, xlsx, pptx, media) are **raw-bytes**: `usePreviewFetch` downloads the whole file as an ArrayBuffer via `GET /api/files/download?inline=1`, then parsing happens client-side (a Worker for the heavy formats). This is the pattern documented above.
+Most built-in plugins (pdf, docx, xlsx, pptx, media) are **raw-bytes**: they load the file from `viewUrl` (`GET /api/files/download?inline=1`). docx and xlsx use `usePreviewFetch` to download it as an ArrayBuffer and parse client-side in a Worker; pptx fetches it itself and renders on the main thread; pdf and media just hand `viewUrl` to the browser (`<iframe>` / `<img>` / `<video>` / `<audio>`). This is the pattern documented above.
 
 Parquet, SQLite and CSV/TSV are **server-parsed** instead: the server does the parsing and hands back one page of JSON rows at a time via `GET /api/data-preview/*` (route details in [`dev/api.md`](api.md#data-preview)), so a multi-GB file never has to reach the browser.
 
@@ -288,4 +297,4 @@ See [`dev/api.md`](api.md) for the route details.
    - Open-as-Text button works (closes preview, opens in Monaco)
    - Closing the preview tab cleanly aborts any in-flight fetch/parse
    - Opening a second file of the same type reuses the worker (no second worker instance — check DevTools → Application → Service Workers / the process graph)
-   - Switching between up to 5 preview tabs is instant (MRU cache); the 6th oldest unmounts
+   - Switching between up to 5 preview tabs is instant (MRU cache); the 6th oldest unmounts (a dirty extension tab is never evicted)

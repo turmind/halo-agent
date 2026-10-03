@@ -34,7 +34,7 @@ Claude Code on a developer's laptop wants to talk to a halo agent running in an 
      --port 9527 \
      --token <web-token-from-step-1> \
      --workspace /abs/path/on/server \
-     --agent-id default        # optional; falls back to 'default'
+     --agent-id default        # optional; omitted = the workspace's entry agent
    ```
 
 3. The adapter writes JSON-RPC frames to stdout (1 message per line) and reads stdin the same way. Stderr is reserved for human-readable diagnostics — do not parse.
@@ -80,7 +80,7 @@ To remove a binding: `/acp remove` (deletes the skill directory and points out t
 | `--scheme`       | no       | URL scheme — `http` or `https` (default `http`). Use `https` when the server sits behind a TLS reverse proxy. Invalid values are rejected at the adapter boundary. |
 | `--token`        | yes      | Web-channel token from admin UI. `full` access required for multi-workspace use.         |
 | `--workspace`    | yes      | Absolute server-side path for the workspace this adapter drives.                         |
-| `--agent-id`     | no       | Halo agent profile to use when ACP `session/new` creates a new halo session. Default: `default`. Alias: `--agent` (matches the main CLI's `--agent`). |
+| `--agent-id`     | no       | Halo agent profile to use when ACP `session/new` creates a new halo session. Must be a non-internal, non-disabled agent (else `session/new` fails with `agent not available`). Default: the workspace's entry agent — the highest-`priority` non-disabled, non-internal agent, i.e. `default` out of the box. Alias: `--agent` (matches the main CLI's `--agent`). |
 | `--header`       | no       | Extra HTTP header on every upstream request, `"Name: value"` (like `curl -H`). Repeatable. For auth that sits **in front of** the halo server — see "Upstream auth" below. |
 
 One adapter process binds to one workspace. To drive multiple workspaces concurrently from the same token, run multiple adapter processes — see "Multi-workspace" below.
@@ -89,7 +89,7 @@ One adapter process binds to one workspace. To drive multiple workspaces concurr
 
 `--token` authenticates the adapter to *halo itself* (it becomes the `x-token` header on every web-channel call). It does **not** cover a proxy sitting in front of the server — an SSO/session-cookie gateway, Cloudflare Access, ALB OIDC, nginx basic-auth. Those reject the request before halo ever sees the token.
 
-`--header` is the generic escape hatch: it forwards arbitrary headers on every request the adapter makes (`/api/web/chat`, `/history`, `/stop`), exactly like `curl -H`. The adapter deliberately knows nothing about any specific gateway — you supply whatever that layer wants:
+`--header` is the generic escape hatch: it forwards arbitrary headers on every request the adapter makes (`/api/web/sessions`, `/chat`, `/history`, `/stop`), exactly like `curl -H`. The adapter deliberately knows nothing about any specific gateway — you supply whatever that layer wants:
 
 ```sh
 # session-cookie gateway
@@ -137,8 +137,8 @@ This keeps the adapter stateless on disk — losing the in-memory map on restart
 | `session`      | (latched internally)             | First-frame echo of the resolved sessionId. Adapter records it; not surfaced. |
 | `stream` (assistant text) | `agent_message_chunk`        | Forwarded as `content: { type: 'text', text }`. |
 | `thinking`     | `agent_thought_chunk`            | Same shape as message chunk.               |
-| `tool_call`    | `tool_call` (status: in_progress) | Adapter mints a stable `toolCallId`. `kind: 'other'` because halo doesn't categorize tools. |
-| `tool_result`  | `tool_call_update` (status: completed) | Pairs by *order* with the most recent `tool_call` — halo's `tool_result` event doesn't carry the tool name, but it's emitted in lockstep with its call. |
+| `tool_call`    | `tool_call` (status: in_progress) | Adapter mints a stable `toolCallId`; the halo `toolInput` goes out as `rawInput`. `kind: 'other'` because halo doesn't categorize tools. |
+| `tool_result`  | `tool_call_update` (status: completed) | Pairs by *order* with the most recent `tool_call` (the frame's `toolName`, when present, must match it). A result with no matching call is sent as a self-contained `tool_call` + `tool_call_update`. The web channel truncates `result` to 500 chars. |
 | `file`         | `agent_message_chunk: [file: …]` | The file lives on the server; without reverse fs we can only point at it textually. |
 | `error`        | `agent_message_chunk: [error] …` then end | Ends the prompt response with `stopReason: 'end_turn'` (we treat agent errors as a normal end-of-turn for protocol purposes). |
 | `queued`       | `agent_message_chunk: [queued — session busy]` | Halo queues messages when the session is busy. Adapter ends the response. |
@@ -150,7 +150,7 @@ This keeps the adapter stateless on disk — losing the in-memory map on restart
 
 A single web-channel token in halo is bound to one workspace at the database level. The adapter works around this by using the per-request `workspace` + `sessionId` overrides on `/api/web/*`:
 
-- `/api/web/chat`, `/api/web/stop`, `/api/web/history`, `/api/web/subscribe` accept `workspace=<path>` and `sessionId=<id>` (query params, headers `x-workspace` / `x-session-id`, or POST body fields).
+- `/api/web/chat`, `/api/web/stop`, `/api/web/history`, `/api/web/subscribe` accept `workspace=<path>` and `sessionId=<id>` (query params, headers `x-workspace` / `x-session-id`, or POST body fields); `/api/web/sessions` accepts `workspace` and `agentId` the same way.
 - Server gates the workspace override on `accessLevel === 'full'` — readonly / workspace tokens cannot escape their account-bound workspace.
 - The adapter sends both fields on every request, so concurrent adapters on the same token but different `--workspace` flags don't step on each other.
 
@@ -172,7 +172,7 @@ For now: if the user wants the agent to see a Mac-side file, they paste it into 
 Code is in `packages/acp-adapter/`:
 
 - `src/jsonrpc.ts` — minimal newline-delimited JSON-RPC 2.0 peer over stdio. No LSP-style Content-Length framing — ACP uses one JSON object per line.
-- `src/halo-client.ts` — wraps `POST /api/web/chat` (SSE), `POST /api/web/stop`. Parses `data: <json>\n\n` frames into JS objects.
+- `src/halo-client.ts` — wraps `POST /api/web/sessions`, `POST /api/web/chat` (SSE), `POST /api/web/stop` and `GET /api/web/history`. Parses `data: <json>\n\n` frames into JS objects.
 - `src/adapter.ts` — registers the ACP method handlers, owns the per-session state (`Map<sessionId, { workspace, lastToolCall, promptAbort }>` — `sessionId` is shared with halo), translates SSE events to `session/update` notifications.
 - `src/index.ts` — CLI argv parsing, wires stdin/stdout to a `JsonRpcConnection`, instantiates the adapter.
 
@@ -180,7 +180,7 @@ CLI integration is in `@turmind/halo-cli`'s `index.ts` `cmd === 'acp'` branch �
 
 ## Testing
 
-No automated suite yet — verification is by manual smoke. The cases below cover the protocol surface and the realistic end-to-end shape (Claude Code → ACP adapter → halo server → remote agent). When you change adapter / web-channel / settings code, walk this list.
+`packages/acp-adapter/test/` holds vitest unit tests for the JSON-RPC framing and SSE parsing (`pnpm --filter @turmind/halo-acp-adapter test`); the adapter ↔ server flow has no automated suite and is verified by manual smoke. The cases below cover the protocol surface and the realistic end-to-end shape (Claude Code → ACP adapter → halo server → remote agent). When you change adapter / web-channel / settings code, walk this list.
 
 ### Setup
 

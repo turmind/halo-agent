@@ -31,13 +31,14 @@ Write a file (creates parent dirs on demand).
 
 ### file_edit
 
-Replace a string in a file (exact match).
+Replace a string in a file (exact match). Fails when `old_string` is empty, identical to `new_string`, not found, or (without `replace_all`) found more than once.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
 | path | string | yes | File path |
 | old_string | string | yes | The exact text to find |
 | new_string | string | yes | The replacement |
+| replace_all | boolean | no | Replace every occurrence (default: false) |
 
 ### view_image
 
@@ -58,7 +59,7 @@ Processing before the bytes go out — only the payload changes, the file on dis
 
 How many images history can hold in total is capped separately at the session level — see [design/session.md → History image budget](../design/session.md#history-image-budget).
 
-**Vision gating**: this tool is only injected into the agent's tool list when the underlying model declares `capabilities.image: true` in its provider manifest. For text-only models (DeepSeek and others), `view_image` is silently dropped at `createWorkspaceTools()` time so the model never sees it — calling it would otherwise produce a 400 from the provider.
+**Vision gating**: this tool is only injected into the agent's tool list when the underlying model declares `capabilities.image: true` in its provider manifest (or the agent's `model.image` in `agent.yaml` overrides it). For text-only models (DeepSeek and others), `view_image` is silently dropped at `createWorkspaceTools()` time so the model never sees it — calling it would otherwise produce a 400 from the provider.
 
 ### file_list
 
@@ -103,7 +104,7 @@ Find files by glob.
 | pattern | string | yes | Glob, e.g. `**/*.ts`, `src/**/*.tsx` |
 | path | string | no | Starting dir (default: workspace root) |
 
-Returns paths relative to workspace root, alphabetically. Same skip list as grep.
+Returns paths relative to workspace root, alphabetically; stops collecting at 5,000 matches. Same skip list as grep.
 
 ### web_fetch
 
@@ -125,7 +126,7 @@ Each session carries `accessLevel: 'readonly' | 'workspace' | null` (persisted i
 
 | Level | DB value | Tools (with OS sandbox) | Tools (without) | Sandbox |
 |---|---|---|---|---|
-| `null` (full) | `full` | All 9 tools | All 9 tools | None (rm guard still applies) |
+| `null` (full) | `NULL` | All 9 tools | All 9 tools | None (rm guard still applies) |
 | `workspace` | `workspace` | All 9 tools | All 9 tools | workspace rw, sensitive paths + workspace runtime state hidden |
 | `readonly` | `readonly` | All 9 tools | file_read, view_image, file_list, grep, glob (5 tools) | workspace ro, sensitive paths + workspace runtime state hidden |
 
@@ -198,7 +199,7 @@ The rest of `.halo/` (INSTRUCTIONS.md, INDEX.md, docs/, memory/, skills/, agents
 Per-channel defaults: every channel session (Web, Telegram, Slack, Feishu, WeCom, WeChat) inherits its account's `access_level` — `full` → full, `workspace` → workspace, `readonly` / `observer` → readonly — and new accounts default to `readonly` (DB column default, `insertAccount` fallback and the admin create forms). Level sources for every entry point (admin, cron, cli, relay, goal, sub-agents): [guide/delegation-and-access.md](../guide/delegation-and-access.md#where-a-sessions-level-comes-from).
 
 ### Binary file detection
-`grep` and `glob` read the first 512 bytes looking for a null byte and skip binaries.
+`grep` reads the first 512 bytes of each file looking for a null byte and skips binaries (`glob` matches paths only and never opens files).
 
 ### Tool result budget
 The orchestrator truncates tool results over 8000 chars and appends a `[Content truncated]` hint telling the agent to use `grep` for a targeted search. `activate_skill` results are exempt — a SKILL.md body is instructions, not data, and the built-in acp / cron / self skills exceed 8K.
@@ -227,6 +228,7 @@ Start a sub-agent session asynchronously. When the sub-agent finishes, its **wra
 
 - Success: `{"code": 0, "session_id": "<childSessionId>"}`
 - Unknown agent: `{"code": 1, "error": "agent \"<id>\" not found..."}`
+- Agent outside the caller's `team`: `{"code": 1, "error": "agent \"<id>\" is not in your team..."}`
 - Depth exceeded: `{"code": 1, "error": "Maximum nesting depth (N) reached..."}`
 - Working dir invalid: `{"code": 1, "error": "working_dir \"...\" is outside the workspace"}` (or does-not-exist / not-a-directory)
 
@@ -244,12 +246,21 @@ No arguments. Returns JSON:
   "sessions": [
     {
       "id": "root>sid_xxx",
+      "parentId": "root",
       "agentId": "coder",
       "agentName": "Coder",
-      "title": "Implement login page",
       "description": "Implement login page",
       "status": "running",
-      "createdAt": 1714000000000
+      "accessLevel": null,
+      "goalSessionId": null,
+      "createdAt": 1714000000000,
+      "updatedAt": 1714000005000,
+      "stoppedAt": null,
+      "archivedAt": null,
+      "title": "Implement login page",
+      "exchangeCount": 1,
+      "contextTokens": 12345,
+      "totalOutputTokens": 678
     }
   ],
   "count": 1
@@ -258,10 +269,11 @@ No arguments. Returns JSON:
 
 `status`: `running` / `idle` / `stopped`. Archived sessions are excluded.
 
-`title` is the human-assigned label (set by renaming the session in the admin
-sidebar), read from the per-session jsonl log so it matches what the UI shows.
-It falls back to `description` (the `start_session` task summary) when no title
-was set, so the field is never empty — lets a caller dispatch work by title.
+Each entry is the session's `SessionInfo` row. `title` is the human-assigned
+label (set by renaming the session in the admin sidebar) mirrored onto the row
+from the session file, so it matches what the UI shows. It falls back to
+`description` (the `start_session` task summary) when no title was set, so the
+field is never empty — lets a caller dispatch work by title.
 
 ### query_session
 

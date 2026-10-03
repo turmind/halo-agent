@@ -51,9 +51,9 @@ nohup node dist/index.js >> /dev/null 2>&1 &   # HALO_PASSWORD read from env/con
 ## Prerequisites
 
 - Node.js ≥ 22 (better-sqlite3 native binding is bound to v22)
-- pnpm ≥ 9
+- pnpm 11 (pinned by the root `packageManager`; `corepack enable` picks it up)
 - AWS credentials configured (`~/.aws/credentials` or env vars) with Bedrock access
-- bubblewrap (`sudo apt install bubblewrap`) — OS-level sandbox for non-full access levels. Without it, only app-level path validation is active and `shell_exec` is blocked for non-full sessions
+- bubblewrap (`sudo apt install bubblewrap`) — OS-level sandbox for non-full access levels on Linux (macOS uses the built-in Seatbelt). Without one, only app-level path validation is active and `shell_exec` is blocked for non-full sessions
 
 ### nvm PATH
 
@@ -67,7 +67,7 @@ Your deployment scripts should also prepend this line.
 
 ## Runtime directories
 
-- SQLite: `<workspace>/.halo/halo.db` (per-workspace, auto-created on first use) + global queues `~/.halo/global/evo.db`, `~/.halo/global/cron.db` and `~/.halo/global/runs.db`
+- SQLite: `<workspace>/.halo/halo.db` (per-workspace, auto-created on first use) + global queues `~/.halo/global/evo.db`, `~/.halo/global/cron.db` and `~/.halo/global/runs.db` + channel accounts `~/.halo/secrets/channels/channels.db`
 - Session files: `.halo/sessions/{agentId}/{sessionId}.json`
 - Global config: `~/.halo/global/`
 - Per-project config: `<workspace>/.halo/`
@@ -78,14 +78,14 @@ Three config file types, precedence **env vars > config.yaml / settings.yaml > c
 
 | File | Scope | Contents |
 |---|---|---|
-| `~/.halo/secrets/config.yaml` | System | Port, password, CORS, timeouts, limits, logging — "infrastructure" settings |
-| `~/.halo/secrets/settings.yaml` | User | Model, region, session behaviour — "preferences" |
-| `<project>/.halo/settings.yaml` | Project | Overrides of global settings |
+| `~/.halo/secrets/config.yaml` | System | Port, password, JWT secret, CORS, timeouts, log rotation — "infrastructure" settings |
+| `~/.halo/secrets/settings.yaml` | User | Provider secrets, skill params, `general.*` server knobs (session, compaction, limits, sandbox, logging) — "preferences" |
+| `<project>/.halo/settings.yaml` | Project | Overrides of provider / skill `params` and `secrets`; every `general.*` key is global-only (a workspace value is rejected by the API and ignored at runtime) |
 
 `init.ts` seeds these on first run with a per-category policy. Refresh trigger: `halo setup` always re-runs the seed, and the server's startup check re-runs it automatically when `~/.halo/global/.template-version` is behind the bundled `TEMPLATE_VERSION` (see `init.ts:TEMPLATE_VERSION` + `index.ts` startup block).
 
-- **Always overwritten** (platform-owned, refreshed when the template version moves): `~/.halo/global/{prompts,models,docs}/`, `INSTRUCTIONS.md`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), built-in skill ids (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`, `halo`).
-- **Built-in agents** keep the user's `model:` block on overwrite — the admin UI lets users change which model an agent uses, and that choice survives upgrades.
+- **Always overwritten** (platform-owned, refreshed when the template version moves): `~/.halo/global/{prompts,models,docs}/`, `INSTRUCTIONS.md`, the built-in agent ids (`default`, `executor`, `deep-executor`, `goal`, `__evo_agent__`, `__score__`, `__apply_agent__`), built-in skill ids (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `aws-knowledge`, `web-search`, `self`, `halo`, `extension`).
+- **Built-in agents** keep the user's `model:` and `context:` blocks on overwrite — the admin UI lets users change which model an agent uses and its context limits, and that choice survives upgrades.
 - **Optional skills** (`tavily-web-search`) install only when picked via `halo setup`; the opt-in list is `~/.halo/global/.installed-optional-skills`. Picked skills are force-overwritten alongside the always-overwritten set.
 - **`secrets/config.yaml`** is leaf-merged: existing leaf `value`s preserved, new leaves added when a server upgrade introduces them.
 - **`secrets/settings.yaml`** is created empty if missing and never touched again. Defaults live in `settings-schema.ts`.
@@ -99,7 +99,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_PORT` | `9527` | `config.yaml server.port` | Hono listen port |
 | `HALO_PASSWORD` | (none) | `config.yaml server.password` (scrypt hash) | Plaintext login password. When set, takes precedence over the stored hash and bypasses scrypt entirely — intended for Docker / systemd / CI. It also satisfies the **startup gate**: the server refuses to boot with no password configured, and env plaintext counts as a first-class credential there, so an env-only deployment (`halo setup -y && HALO_PASSWORD=... halo server start`, no stored hash) boots fine. The hash is set by `halo setup` for interactive installs. |
 | `HALO_CORS_ORIGINS` | empty (reflect any origin) | `config.yaml server.cors_origins` | CORS allowlist (comma-separated). Empty = reflect any incoming Origin so credentials work cross-origin. Set explicit list to enforce strict CORS. |
-| `HALO_FRONTEND_DIR` | `packages/admin/out` | — | Static frontend dir (resolved as absolute path from project root) |
+| `HALO_FRONTEND_DIR` | auto (bundled `admin-out`, else `packages/admin/out`) | — | Static frontend dir; resolved against the current working directory |
 | `HALO_MAX_CONTEXT_TOKENS` | `272000` | — | Model max context |
 | `HALO_SHELL_TIMEOUT` | `120000` | `config.yaml timeout.shell_exec` | Shell command timeout (ms) |
 | `HALO_WEB_FETCH_TIMEOUT` | `10000` | `config.yaml timeout.web_fetch` | web_fetch timeout |
@@ -114,6 +114,10 @@ Source: `packages/server/src/config.ts`
 | `HALO_BADGE` | (none) | — | Environment badge (e.g. `DEV`) returned by `GET /api/auth/check` on **both** the 200 and 401 branches, so the admin can brand the login screen too. The admin repaints the favicon with a badge band and prefixes the tab title, making parallel dev/prod tabs tellable apart. dev and prod serve the same static build, so this has to be a runtime signal. Unset / whitespace-only → `null` → stock branding. Because the 401 branch carries it, the value is **public to unauthenticated clients** — keep it a label (`DEV`, `staging`), never anything sensitive. |
 | `HALO_RUNTIME_MODE` | (none) | — | `agentcore` runs the server as an Amazon Bedrock AgentCore Runtime container (see [design/agentcore.md](../design/agentcore.md)) |
 | `HALO_WORKSPACE` | `process.cwd()` | — | Workspace root in agentcore mode |
+| `HALO_DEFAULT_PROVIDER` | (none) | — | Read by `halo setup --non-interactive`: binds the built-in agents to this provider id (and its default model). An unknown id only prints a warning |
+| `HALO_CLI` | `halo` (`halo.cmd` on Windows) | — | `halo` cli executable that cron runs and the evolution wrapper spawn — a dev override |
+| `HALO_VERSION` | `dev` | — | Version string reported by `GET /api/health` and the cli; stamped by the bundle / desktop launcher, so normally not set by hand |
+| `HALO_PROMPT` | (none) | — | `plain` makes `halo setup` use numbered-menu prompts instead of the raw-mode TUI |
 
 settings.yaml only (no env override):
 - `general.session.max_queue_size` (default 256)
@@ -140,7 +144,7 @@ settings.yaml only (no env override):
 When a provider manifest declares a `default: <<NAME>>` for a secret, `halo setup` offers a "Use env $NAME" action. Picking it **writes the literal `<<NAME>>` placeholder into settings.yaml**, which the standard env-var interpolation ([storage.md](../design/storage.md#env-var-interpolation-env_name)) expands against `process.env` at read time. There is no separate runtime env fallback — the placeholder in the file is the only mechanism (an unset env var leaves the literal `<<NAME>>` visible in the request, failing loudly).
 
 `<skill-id>.params.*` (referenceable from skills via `{{<skill-id>.params.<key>}}`, or short form `{{params.<key>}}` inside SKILL.md; declared in `skills/<id>/config.yaml`):
-- `tavily-search.params.api_key` — example only; declared by whichever skill needs it
+- `tavily-web-search.params.api_key` — example only; declared by whichever skill needs it
 
 Hardcoded (config.ts, no override):
 - `auth.tokenMaxAge` — 14 days
@@ -152,6 +156,8 @@ settings.yaml-driven `general.limits.*` (no env override):
 - `general.limits.web_fetch_bytes` (default 50 KiB)
 - `general.limits.grep_default_matches` (default 50)
 - `general.limits.tool_result_render_chars` (default 8000)
+- `general.limits.tool_result_ui_chars` (default 64 KiB)
+- `general.limits.auto_report_chars` (default 8192)
 - `general.limits.ws_event_buffer` (default 5000)
 - `general.limits.terminal_scrollback_bytes` (default 50000)
 

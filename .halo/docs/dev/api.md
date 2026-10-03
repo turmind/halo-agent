@@ -105,13 +105,14 @@ Unified session log API — list + read session files across all agents.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/sessions/logs?projectId=` | List session metadata, keyset-paginated. Default returns each top-level row + all descendants (sidebar tree); `rootOnly=1` returns roots only (chat-panel session tabs). Each row carries `status` (`running` also while a sub-session runs). A `projectId` with no `.halo/` (plain or missing directory) returns `{sessions: [], nextCursor: null}` without scaffolding it — a list never turns a directory into a workspace |
+| GET | `/api/sessions/logs?projectId=` | List session metadata, keyset-paginated. Default returns each top-level row + all descendants (sidebar tree); `rootOnly=1` returns roots only (chat-panel session tabs). A `projectId` with no `.halo/` (plain or missing directory) returns `{sessions: [], nextCursor: null}` without scaffolding it — a list never turns a directory into a workspace |
 | GET | `/api/sessions/logs/:id?projectId=` | Full session log (scans across agent dirs) — the **active** file only; archived history is a separate call |
 | GET | `/api/sessions/logs/:id/archive/:n?projectId=` | One archived UI-log segment — see [detail](#get-apisessionslogsidarchivenprojectidabs) |
-| DELETE | `/api/sessions/logs/:id?projectId=` | Delete the session log (and all of its archive segments) |
-| PATCH | `/api/sessions/logs/:id?projectId=` | Rename a session (admin-only) — updates the log file's title and the mirrored `agent_sessions.title`. Accepts any session id (root or sub-agent); the sidebar exposes the rename affordance on every row |
+| DELETE | `/api/sessions/logs/:id?projectId=` | Permanently delete the session and all its descendants — log files (with archive segments) and `agent_sessions` rows. Returns `{ok, deleted}` |
+| PATCH | `/api/sessions/logs/:id?projectId=` | Rename a session (admin-only; body `{title}`) — updates the log file's title and the mirrored `agent_sessions.title`. Accepts any session id (root or sub-agent); the sidebar exposes the rename affordance on every row |
+| GET | `/api/sessions/goal?projectId=` | Legacy goal binding of the workspace (`{goal: {goalSessionId, workerSessionId, status, round, maxRounds} \| null}`); refresh seed for the goal banner, which only shows when `general.goal_mode_enabled` is on |
 
-The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / exchangeCount / parentSessionId / stoppedAt / contextTokens / totalOutputTokens / goalSessionId — the last is a retained legacy field, non-null only on a goal-bound worker row; existing bindings are unchanged), served from the mirrored `agent_sessions` columns rather than by parsing each session file (rows predating the columns are backfilled from the file on first read). The frontend builds the tree from `parentSessionId`.
+The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / exchangeCount / parentSessionId / stoppedAt / archivedAt / contextTokens / totalOutputTokens / status / goalSessionId — the last is a retained legacy field, non-null only on a goal-bound worker row; existing bindings are unchanged), served from the mirrored `agent_sessions` columns rather than by parsing each session file (rows predating the columns are backfilled from the file on first read). The frontend builds the tree from `parentSessionId`.
 
 The get endpoint returns the full session file. If only `rawMessages` is present (no event-log `messages`), `convertRawMessages()` transforms it into display format on the fly.
 
@@ -261,8 +262,8 @@ Every write except `/api/git/init` is gated on the project being a git work-tree
 | GET | `/api/git/credentials` | List stored HTTPS credentials — `{credentials: [{host, username}]}`. **Never returns the token.** Source of truth is `~/.git-credentials` (one line per host) |
 | POST | `/api/git/credentials` | Body `{host, username, token}`. Upserts the `https://user:token@host` line in `~/.git-credentials` (0600). 400 if any field missing |
 | DELETE | `/api/git/credentials/:host` | Remove the credential line(s) for one host (idempotent). `:host` is sent `encodeURIComponent`'d; Hono decodes it |
-| GET | `/api/git/ssh/keys` | Private keys found in `~/.ssh` + an `encrypted` flag each. Never returns key contents. Returns `{keys: [...]}` |
-| GET | `/api/git/ssh/agent` | ssh-agent reachability + loaded key count |
+| GET | `/api/git/ssh/keys` | Private keys found in `~/.ssh` + an `encrypted` flag each. Never returns key contents. Returns `{keys: [{name, path, encrypted}]}` |
+| GET | `/api/git/ssh/agent` | ssh-agent reachability + loaded keys. Returns `{agentRunning, loadedKeys: string[]}` (`ssh-add -l` lines) |
 | POST | `/api/git/ssh/unlock` | Body `{keyPath, passphrase}`. Loads a passphrase-protected key into the shared ssh-agent. `keyPath` must resolve to a file **directly inside `~/.ssh`** (rejects traversal / arbitrary paths, 400). Passphrase is fed to `ssh-add` via a throwaway `SSH_ASKPASS` helper (never argv / disk / log); the helper is answer-once so a wrong passphrase returns immediately. Returns `{ok}` on success, `{ok:false, error}` (normalized — never ssh-add's raw stderr) on failure |
 | GET | `/api/git/remote/protocol?projectId=` | Current `origin` url + detected protocol. Returns `{url, protocol}` |
 | POST | `/api/git/remote/protocol` | Body `{projectId, to: 'https'\|'ssh'}`. Rewrites `origin` between HTTPS and scp-style SSH. Returns `{ok, url}` |
@@ -301,10 +302,10 @@ gets JSON, and additionally gates on `accessLevel`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?, workspace?, sessionId?, agentId?}` (overrides also accepted as `?workspace=`/`?sessionId=` query or `x-workspace`/`x-session-id` headers; `workspace` only honored when token has `accessLevel: full`). `sessionId` must be owned by the token unless `accessLevel: full` → otherwise 403. |
+| POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?, workspace?, sessionId?, agentId?}` (overrides also accepted as `?workspace=`/`?sessionId=` query or `x-workspace`/`x-session-id` headers; `workspace` only honored when token has `accessLevel: full`). `sessionId` must be a safe id segment (else 400) and owned by the token unless `accessLevel: full` → otherwise 403. |
 | POST | `/api/web/sessions` | Mint a root session in the token's own `web_<accountId>_` namespace → `{sessionId}`. Body / query / header: `workspace?` (full tokens only), `agentId?`. Used by the ACP adapter's `session/new`. |
 | POST | `/api/web/stop` | Stop running task → `{stopped: boolean}` |
-| GET | `/api/web/history` | Active session history → `{sessionId, messages[], running}` |
+| GET | `/api/web/history` | Active session history → `{sessionId, messages[], running}`. With an explicit `sessionId` that doesn't exist in the workspace → 404 `{error: "session not found"}` |
 | GET | `/api/web/subscribe` | Reconnect SSE to running session |
 | GET | `/api/web/file?path=` | Inline-serve a workspace-relative file (image / video / pdf etc.). Path-traversal-checked against the token's bound workspace: the lexical check is re-verified against the realpath'd root, so a symlink inside the workspace pointing outside it returns 403; a dangling symlink (target doesn't exist) returns 404. Workspace runtime state (`.halo/sessions`, `.halo/logs`, `.halo/evo`, `halo.db*`) is hidden for every access level → 403 `{error: "path is not accessible"}`, checked on the realpath so symlinks into those dirs are caught too. |
 
@@ -321,7 +322,7 @@ runtime so the frontend can render rooms (workspaces) + characters (sessions).
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/show/state` | `full` or `observer` token → every known workspace; otherwise the account's own. Returns `{ serverTime, uptime, accessLevel, skills[], workspaces[] }` |
-| GET | `/api/show/session?ws=&id=` | Inspector-panel detail for a single session. Trimmed message log (last 40, content/tool I/O capped) plus `contextTokens` / `outputTokens` / `maxContextTokens` / `isRunning`. Non-`full`/`observer` tokens may only read their own workspace, and within it only sessions their own account minted (`web_<accountId>_*`); anything else is 403. |
+| GET | `/api/show/session?ws=&id=` | Inspector-panel detail for a single session. Trimmed message log (last 40, content/tool I/O capped) plus `totalMessages` / `contextTokens` / `outputTokens` / `maxContextTokens` / `isRunning`. Non-`full`/`observer` tokens may only read their own workspace, and within it only sessions their own account minted (`web_<accountId>_*`); anything else is 403. |
 
 `observer` is more than an aggregate-counts role: past `/show/state`, it can also call `/show/session` to read **any workspace's** session transcript (last 40 messages, content truncated to 600 chars, tool input to 200 chars). Mint it knowing it grants cross-workspace transcript read access, not just dashboard counters.
 
@@ -352,7 +353,7 @@ File: `packages/server/src/routes/agent-configs.ts`
 | DELETE | `/api/agent-configs/:id/sessions/:sessionId` | Delete a session |
 | DELETE | `/api/agent-configs/:id/sessions?all=1` | Delete every session for the agent |
 
-Every `:id` / `:sessionId` route param that becomes a path segment (here and in `DELETE /api/skills/:id`) is validated with `isSafeIdSegment()` (`routes/workspace-path.ts`) before it reaches `path.join` — `.` / `..` rejected outright, everything else must match `/^[\w.:>\u4e00-\u9fff-]+$/` (the union of the real id charsets: slug + CJK agent names, `__internal__`, and session ids embedding `_ - : . >`). Hono decodes `%2F` / `%2e` into params, so a raw `..%2F..%2Fetc` would otherwise arrive as a traversal. A rejected param is **400** (`Invalid agent id` / `Invalid skill id` / `Invalid session id`), distinct from the **404** a well-formed-but-missing session file gets.
+Every `:id` / `:sessionId` route param that becomes a path segment (here and in `DELETE /api/skills/:id`) is validated with `isSafeIdSegment()` (`routes/workspace-path.ts`) before it reaches `path.join` — `.` / `..` rejected outright, everything else must match `/^[\w.:>\u4e00-\u9fff-]+$/` (the union of the real id charsets: slug + CJK agent names, `__internal__`, and session ids embedding `_ - : . >`). Hono decodes `%2F` / `%2e` into params, so a raw `..%2F..%2Fetc` would otherwise arrive as a traversal. A rejected param is **400** (`Invalid agent id` / `Invalid skill id` / `Invalid session id`, or `Invalid id` on the session read / delete routes), distinct from the **404** a well-formed-but-missing session file gets.
 
 ## Skills
 
@@ -409,18 +410,18 @@ In `PUBLIC_PATHS` (no admin cookie). Auth is a web-channel `x-token` (header or 
 
 ## Self-Evolution
 
-File: `packages/server/src/routes/evolution.ts`. Surfaces the global `evolution_runs` / `evolution_applies` queues to the admin UI's Evolution tab; see [plans/self-evolution.md](../plans/self-evolution.md) for the full design.
+File: `packages/server/src/routes/evolution.ts`. Surfaces the global `evolution_runs` / `evolution_applies` queues to the admin UI's Evolution tab; see [design/evolution.md](../design/evolution.md) for the full design. Unknown run id → 404 `{error: "not found"}`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/evolution/runs` | List all evolution runs across workspaces. Carries the latest `apply_id`/`apply_status` per run. (Score isn't surfaced in the list — it's read from `score.json` on the detail fetch only.) |
+| GET | `/api/evolution/runs?archived=0\|1&limit=20&before=<createdAt>` | List evolution runs across workspaces, newest first, cursor-paginated (`limit` 1–300, `before` = previous page's `nextCursor`; `archived=1` lists archived runs instead). Returns `{runs, hasMore, nextCursor}`; each row carries the latest `applyId`/`applyStatus`. (Score isn't surfaced in the list — it's read from `score.json` on the detail fetch only.) |
 | GET | `/api/evolution/runs/:id` | Detail: db row + `patch.md` + `score.json` + `.skip.md` (when `status='skipped'`) + wrapper/sub-cli logs + a snapshot summary (first user message + first assistant reply + message count). Row carries `failureReason` (and `applyFailureReason` from the latest apply) — apply-side values include `phase A': apply cli exited <code>`, `phase A': apply agent aborted: <first line of ABORT.md>`, and `phase A': apply agent didn't produce apply.log`. |
-| POST | `/api/evolution/runs/:id/approve` `{reviewerHint?}` | Move run from `awaiting_review` → `approved`, insert a pending `evolution_applies` row that the ticker will pick up. |
-| POST | `/api/evolution/runs/:id/reject` | Move run from `awaiting_review` → `rejected`. |
-| POST | `/api/evolution/runs/:id/retry` `{hint}` | Reset a finished run back to `pending` with the supplied (required) hint so the wrapper picks it up again. Rejected with 409 when the run is already `running` / `pending`. |
-| POST | `/api/evolution/runs/:id/hint` `{hint}` | Append text to `user_hint` — memo only, doesn't change status. |
-| DELETE | `/api/evolution/runs/:id` | Delete a finished run: its on-disk artifacts (run dir + archive zip) **and** the DB row. Rejected with 409 for in-flight states (`pending` / `running` / `approved`) so a live wrapper / queued apply isn't pulled out from under. Broadcasts `evolution:run_changed` with `kind:'deleted'`. |
-| GET | `/api/evolution/applies` | List apply rows (used for status badges). |
+| POST | `/api/evolution/runs/:id/approve` `{reviewerHint?}` | Move run from `awaiting_review` → `approved`, insert a pending `evolution_applies` row that the ticker will pick up. Returns `{ok, applyId}`; 409 when the run isn't `awaiting_review`. |
+| POST | `/api/evolution/runs/:id/reject` | Move run from `awaiting_review` → `rejected`; 409 otherwise. |
+| POST | `/api/evolution/runs/:id/retry` `{hint}` | Reset a finished run back to `pending` (attempts cleared) with the supplied hint (required, else 400) so the wrapper picks it up again. Rejected with 409 when the run is already `running` / `pending`. |
+| POST | `/api/evolution/runs/:id/hint` `{hint}` | Append text to `user_hint` (hint required, else 400) — memo only, doesn't change status. Returns `{ok, userHint}`. |
+| DELETE | `/api/evolution/runs/:id` | Delete a finished run: its on-disk artifacts (run dir + archive zip + wrapper log) **and** the DB row, plus every apply that references it (artifacts + row, `evolution:apply_changed` `kind:'deleted'`). Rejected with 409 for in-flight states (`pending` / `running` / `approved`) so a live wrapper / queued apply isn't pulled out from under. Broadcasts `evolution:run_changed` with `kind:'deleted'`. |
+| GET | `/api/evolution/applies` | List in-flight apply rows (`pending` / `running` / `syncing`, newest 200; used for status badges). Returns `{applies}`. |
 
 ## AgentCore adapter (runtime-mode only)
 
@@ -434,7 +435,7 @@ Bodies and response shapes for the endpoints agents most commonly help users cal
 
 ### POST `/api/auth/login`
 
-Source: [packages/server/src/middleware/auth.ts:123-134](../../../packages/server/src/middleware/auth.ts#L123-L134)
+Source: [packages/server/src/middleware/auth.ts](../../../packages/server/src/middleware/auth.ts)
 
 ```json
 // Request
@@ -492,6 +493,9 @@ Source: [packages/server/src/routes/files.ts](../../../packages/server/src/route
 ```json
 // 200
 {
+  "projectId": "<absPath>",
+  "root": "<project dir name>",
+  "path": "<relPath>",
   "tree": [
     { "name": "packages", "path": "packages", "type": "directory", "hasChildren": true },
     { "name": "README.md", "path": "README.md", "type": "file" }
@@ -499,7 +503,7 @@ Source: [packages/server/src/routes/files.ts](../../../packages/server/src/route
 }
 ```
 
-Skipped entries: dotfiles (except `.halo`), `node_modules`, `__pycache__`.
+Skipped entries: `.git`, `.DS_Store`, `node_modules`, `__pycache__` (other dotfiles — `.halo`, `.gitignore`, `.env` — are listed).
 
 ### GET `/api/files?path=<rel>&projectId=<abs>`
 
@@ -507,7 +511,10 @@ Reads file content. Max 10 MB.
 
 ```json
 // 200
-{ "content": "..." }
+{ "path": "...", "content": "...", "size": 123, "modifiedAt": 1714000000000, "createdAt": 1714000000000 }
+
+// 413 over 10 MB
+{ "error": "File too large (max 10MB)" }
 
 // 404 if path doesn't exist
 { "error": "File not found" }
@@ -515,7 +522,7 @@ Reads file content. Max 10 MB.
 
 ### POST `/api/agent-configs`
 
-Source: [packages/server/src/routes/agent-configs.ts:199-255](../../../packages/server/src/routes/agent-configs.ts#L199-L255)
+Source: [packages/server/src/routes/agent-configs.ts](../../../packages/server/src/routes/agent-configs.ts)
 
 ```json
 // Request
@@ -540,12 +547,18 @@ Source: [packages/server/src/routes/agent-configs.ts:199-255](../../../packages/
   "conflictScope": null            // or "global" / "workspace" to warn of override
 }
 
+// 400 empty id after slugging ("Invalid agent name") or workspace scope without projectId
+{ "error": "Invalid agent name" }
+
+// 403 id `goal` while general.goal_mode_enabled is off
+{ "error": "Goal mode is disabled." }
+
 // 409 already exists
 { "error": "Agent already exists" }
 ```
 
 Files created:
-- `<agentDir>/agent.yaml` — scaffold with `SCAFFOLD_MODEL`, empty tools/skills
+- `<agentDir>/agent.yaml` — scaffold whose `model` block comes from the provider named by `general.agent.default_provider` (else `aws-bedrock-claude-invoke`, else the first installed provider), empty tools/skills
 - `<agentDir>/AGENT.md` — `# <name>\n\n<description>\n`
 
 ### PUT `/api/agent-configs/:id/yaml?scope=&projectId=`
@@ -574,8 +587,7 @@ Source: [packages/server/src/routes/skills.ts](../../../packages/server/src/rout
   "name": "Code Review",
   "description": "Review code for correctness and style",
   "scope": "workspace",
-  "projectId": "/abs/ws",
-  "command": "/review"            // optional — registers as slash command
+  "projectId": "/abs/ws"
 }
 
 // 201
@@ -588,11 +600,16 @@ Source: [packages/server/src/routes/skills.ts](../../../packages/server/src/rout
     "scope": "workspace"
   }
 }
+
+// 409 already exists
+{ "error": "Skill already exists" }
 ```
+
+Also adds the skill's entry to the scope's `settings.yaml`.
 
 ### GET `/api/sessions/logs?projectId=<abs>&rootOnly=0|1&includeArchived=0|1&cursor=<ms>&limit=<n>`
 
-Source: [packages/server/src/routes/sessions.ts:189-258](../../../packages/server/src/routes/sessions.ts#L189-L258)
+Source: [packages/server/src/routes/sessions.ts](../../../packages/server/src/routes/sessions.ts)
 
 Keyset-paginated over `updatedAt` (descending). `limit` defaults to 50 (max 500); the
 response's `nextCursor` (epoch ms of the last row's `updatedAt`, or `null` on
@@ -618,15 +635,14 @@ Two shapes, selected by `rootOnly`:
       "agentId": "default",
       "agentName": "Default",
       "title": "First user message...",
-      "source": "explorer",
-      "createdAt": "2026-04-30T08:00:00Z",
-      "updatedAt": "2026-04-30T08:05:00Z",
+      "createdAt": 1777536000000,
+      "updatedAt": 1777536300000,
       "exchangeCount": 12,
-      "parentSessionId": null,
       "contextTokens": 5975,
       "totalOutputTokens": 6058,
       "stoppedAt": null,
       "archivedAt": null,
+      "goalSessionId": null,
       "status": "idle"
     }
   ],
@@ -636,7 +652,7 @@ Two shapes, selected by `rootOnly`:
 
 Archived sessions are excluded by default; pass `?includeArchived=1` to include them.
 
-`status` is `'running' | 'idle' | 'stopped'`. A root counts as `running` while any of its sub-sessions runs. The admin's chat tab list uses it to show a running mark on a tab that hasn't loaded yet; a loaded tab follows its own stream.
+`status` is `'running' | 'idle' | 'stopped'`. A root counts as `running` while any of its sub-sessions runs. Returned since 1.5.3-alpha; the current admin no longer reads it. `parentSessionId` is present only on sub-sessions (omitted for roots). Timestamps are epoch ms.
 
 Rows are served from the mirrored `agent_sessions` metadata columns (`title` / `exchange_count` / `context_tokens` / `total_output_tokens`) — no session file is opened. A row whose `exchangeCount` is `null` predates those columns: the route reads that one file once, mirrors the values back, and never pays the cost again. `exchangeCount` counts **main user turns over the session's lifetime** (kept + archived), so unlike the file's `messageCount` it doesn't shrink when a compact archives history.
 
@@ -691,7 +707,7 @@ The `n > archiveCount` check is the point, not a formality: `archiveCount` in th
 
 ### GET `/api/settings/schema?projectId=<abs>`
 
-Resolves declared schema (from `models/<id>.yaml` `secrets:` and `skills/<id>/config.yaml`) against current settings, returning per-field source/state and a list of orphan keys. Drives the Settings page.
+Resolves declared schema (from `models/<id>.yaml` `secrets:`, `skills/<id>/config.yaml`, and global `agents/<id>/agent-config.yaml`) against current settings, returning per-field source/state and a list of orphan keys. Drives the Settings page.
 
 ```json
 // 200
@@ -699,8 +715,8 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:` and `skills/<id>/co
   "scope": "global",                              // or "workspace" when projectId set
   "sections": [
     {
-      "namespaceId": "aws-bedrock-claude-invoke", // 'general' | provider id | skill id
-      "source": "provider",                        // 'general' | 'provider' | 'skill'
+      "namespaceId": "aws-bedrock-claude-invoke", // 'general' | provider id | skill id | agent id
+      "source": "provider",                        // 'general' | 'provider' | 'skill' | 'agent'
       "displayName": "AWS Bedrock Claude (Invoke API)",
       "displayName_zh": "AWS Bedrock Claude（Invoke API）",
       "description": "...",
@@ -711,7 +727,7 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:` and `skills/<id>/co
           "kind": "secret",                        // 'param' | 'secret'
           "description": "...",
           "description_zh": "...",
-          "default": null,                         // schema-default placeholder
+          "default": "...",                        // schema-default placeholder; omitted when the schema declares none
           "secret": true,                          // UI masks input + value
           "value": "AK****ST",                     // already masked when secret:true; null = unset
           "hasValue": true,                        // any layer has a non-empty value
@@ -744,18 +760,18 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:` and `skills/<id>/co
 { "ok": true }
 ```
 
-PUT replaces the full scope; DELETE takes `{scope, projectId, key}` and removes the key. The Settings page uses DELETE for both Reset (current scope removed → falls back to lower scope / unset) and orphan Remove.
+PUT replaces the full scope; PUT / PATCH with `scope: "workspace"` reject a `globalOnly` key with 400 (`<key> is global-only and cannot be set per workspace`) and an unresolvable `projectId` with 404 `Project not found`. DELETE takes `{scope, projectId, key}` and removes the key. The Settings page uses DELETE for both Reset (current scope removed → falls back to lower scope / unset) and orphan Remove.
 
 ### POST `/api/wechat/login/start`
 
-Source: [packages/server/src/routes/wechat.ts:39-43](../../../packages/server/src/routes/wechat.ts#L39-L43)
+Source: [packages/server/src/routes/wechat.ts](../../../packages/server/src/routes/wechat.ts)
 
 ```json
 // Request
 { "sessionKey": "optional-resume-key", "force": false }
 
 // 200
-{ "qrcodeUrl": "https://...", "sessionKey": "abc123" }
+{ "qrcodeUrl": "https://...", "message": "...", "sessionKey": "abc123" }
 ```
 
 ### POST `/api/wechat/login/wait`
@@ -766,7 +782,7 @@ Source: [packages/server/src/routes/wechat.ts:39-43](../../../packages/server/sr
   "sessionKey": "abc123",
   "workspacePath": "/abs/path",     // required, must be absolute
   "label": "My Bot",                // optional
-  "accessLevel": "readonly",        // "full" | "readonly", default readonly
+  "accessLevel": "readonly",        // "full" | "workspace" | "readonly", default readonly
   "language": "en",                 // "en" | "zh", default "en" — controls system message language
   "timeoutMs": 120000               // optional, how long to wait for scan
 }
@@ -774,10 +790,11 @@ Source: [packages/server/src/routes/wechat.ts:39-43](../../../packages/server/sr
 // 200 waiting for scan (retry polling)
 { "connected": false, "message": "..." }
 
-// 200 connected — account inserted + long-poll started
-{ "connected": true, "accountId": "abc-im-bot" }
+// 200 connected — account inserted (or updated if it already exists) + long-poll started
+{ "connected": true, "accountId": "abc-im-bot", "message": "..." }
 
-// 400 bad input
+// 400 bad input (sessionKey / workspacePath missing, relative path, bad accessLevel;
+// after a successful scan also "workspace path not found")
 { "error": "workspacePath required" }
 ```
 
@@ -797,17 +814,18 @@ Full WS protocol in [design/ws.md](../design/ws.md). The four high-traffic clien
   "message": "hello",
   "agentId": "default",                                    // optional override
   "clientMsgId": "abc123",                                 // optional — ack/resend dedup id
+  "accessLevel": "workspace",                              // optional — "full" | "workspace" | "readonly", idle session only
   "images": [ { "data": "<base64>", "mimeType": "image/png" } ]  // optional
 }
 ```
 
-Server behaviour ([handler.ts `handleChat`](../../../packages/server/src/ws/handler.ts#L263-L344)):
+Server behaviour (`handleChat` in `ws/handler.ts`; `sessionId`, `projectId` and `message` are all required, else an `error` frame):
 - Creates / reuses a session with the specified agent
-- Persists pasted images to `<ws>/.halo/web/inbound/<date>/`
+- Persists pasted images to `<ws>/.halo/assets/web/inbound/web/<date>/`
 - If the model does not support image input (`capabilities.image: false`), images are filtered out and a text notice is appended instead of sending to the API
-- Queues if busy/compacting; otherwise runs the agent turn
+- Queues if busy/compacting (a `chat:queued` frame is sent only for the compacting case); otherwise runs the agent turn. `accessLevel` applies only on the idle path and is forced to `full` when the host has no OS sandbox
 - When `clientMsgId` is present, replies `{ "type": "chat:ack", "clientMsgId" }` once the message is appended to the session log; resends with an already-acked id are re-acked without re-appending (dedup — see [design/ws.md](../design/ws.md#chat-delivery-ack--resend--dedup))
-- Streams events back via `message`, `tool_call`, `usage`, etc.
+- Streams events back via `chat:stream`, `agent:tool_call`, `chat:usage`, etc. (table below)
 
 ### `subscribe` (C→S)
 
@@ -871,13 +889,15 @@ It does not remove session files. The full delete (rows + JSON + archive segment
 
 | Type | Fields | Purpose |
 |---|---|---|
-| `message` | `content`, `role`, `taskId?` | Text chunk from the agent |
-| `tool_call` | `toolName`, `toolInput`, `taskId?` | Tool invocation card |
-| `tool_result` | `toolName`, `toolOutput`, `durationMs`, `taskId?` | Tool result |
-| `usage` | `usage`, `modelId`, `turnId`, `taskId?` | Token accounting per turn |
-| `complete` | `stopReason`, `taskId?` | Turn finished |
+| `chat:stream` | `text`, `agentName`, `turnId`, `taskId?` | Text chunk from the agent |
+| `chat:thinking` | `text`, `agentName`, `turnId`, `taskId?` | Thinking chunk |
+| `agent:tool_call` | `tool`, `toolUseId`, `input`, `agentName`, `turnId`, `taskId?` | Tool invocation card |
+| `agent:tool_result` | `result`, `toolUseId`, `agentName`, `durationMs`, `taskId?` | Tool result |
+| `chat:usage` | `contextTokens`, `outputTokens`, `usage`, `modelId`, `turnId` | Token accounting per model call (root only) |
+| `chat:complete` | `batchBoundary?` | Turn finished |
 | `error` | `error`, `sessionId?` | Error message |
-| `chat:queued` | `reason`, `message`, `sessionId` | Message queued (compact/busy) |
+| `chat:queued` | `reason: 'compact'`, `message`, `sessionId` | Message queued behind a compact |
+| `chat:ack` | `clientMsgId` | Chat appended to the session log (or re-acked on resend) |
 | `listener:released` | `sessionId` | Event listener reclaimed — re-send `subscribe` (see above) |
 
 Events with `taskId` set belong to sub-agent turns (nested sessions); events without are the root agent's. Session-scoped frames carry `sessionId` (the root session they belong to); the admin routes each one to the tab holding that session, and a frame without one goes to the tab on screen. Full list in [design/ws.md](../design/ws.md).
