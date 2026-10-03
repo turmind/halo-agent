@@ -114,7 +114,7 @@ Your sessions are listed as vertical tabs on the right edge of the chat panel:
 - Lists the workspace's main sessions, newest first; scroll down to load older ones
 - Click a tab to show that session. The one you left keeps running and streaming in its own tab. Each tab's dot shows its state: pulsing amber while it works, blue when new output arrived in the background, green otherwise (including sessions not opened since the page loaded)
 - **+** (or `/session new`) opens a fresh tab; the session is created when you send its first message
-- Hover a tab to rename it (pencil); ✕ deletes it after a confirmation — deletion can't be undone
+- Hover a tab to rename it (pencil) or delete it (trash icon, after a confirmation) — deletion can't be undone
 - Drag the list's left edge to make it wider or narrower, or collapse it to a thin strip of initials
 - After a refresh, the session you were on reopens
 

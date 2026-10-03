@@ -102,7 +102,7 @@ Source: [event-processor.ts:53-129](../../../packages/server/src/ws/event-proces
 | `tool_result` | `agent:tool_result` | result, toolUseId, agentName, taskId, durationMs, sessionId |
 | `followup_start` / `queued_message` | `chat:followup` | agentName, sessionId |
 | `usage` (no taskId) | `chat:usage` | contextTokens, outputTokens, turnId, modelId, usage, sessionId |
-| `complete` | `chat:complete` | sessionId |
+| `complete` | `chat:complete` | sessionId, batchBoundary (only between drained queued turns; the admin closes bubbles but doesn't ring the finish bell) |
 | `context` | `agent:context` | agentName, systemPrompt, taskId, sessionId |
 | `system` | `chat:system` | text, taskId, agentName, sessionId |
 | `error` | `error` | error, agentName, taskId, sessionId |
