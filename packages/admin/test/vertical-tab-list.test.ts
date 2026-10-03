@@ -7,7 +7,7 @@ import { ResizableSidebar } from '../src/shared/components/resizable-sidebar'
 /**
  * Contract: the shared vertical-tab pieces behind the chat session list and
  * the terminal list — a row activates on click, its ✕ fires the close
- * callback without activating, the active row always shows ✕, and the
+ * callback without activating, ✕ shows on hover only (active row too), and the
  * collapsed sidebar renders the caller's squares under the expand button.
  */
 
@@ -48,7 +48,7 @@ describe('VerticalTabRow', () => {
     expect(activate).not.toHaveBeenCalled()
   })
 
-  it('shows ✕ always on the active row, on hover elsewhere, and not at all without onClose', () => {
+  it('shows ✕ on hover only (active row included), and not at all without onClose', () => {
     render(createElement('div', null,
       createElement(VerticalTabRow, { key: 'a', icon: 'I', label: 'active', active: true, onActivate: () => {}, onClose: () => {}, closeLabel: 'Close' }),
       createElement(VerticalTabRow, { key: 'b', icon: 'I', label: 'other', active: false, onActivate: () => {}, onClose: () => {}, closeLabel: 'Close' }),
@@ -56,8 +56,23 @@ describe('VerticalTabRow', () => {
     ))
     const closes = [...container.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]')]
     expect(closes).toHaveLength(2)
-    expect(closes[0].className).toContain('opacity-100')
-    expect(closes[1].className).toContain('opacity-0')
+    for (const btn of closes) {
+      expect(btn.classList.contains('opacity-0')).toBe(true)
+      expect(btn.classList.contains('group-hover:opacity-100')).toBe(true)
+      expect(btn.classList.contains('opacity-100')).toBe(false)
+    }
+  })
+
+  it('renders closeIcon in the close button when given, ✕ otherwise', () => {
+    render(createElement('div', null,
+      createElement(VerticalTabRow, { key: 'a', icon: 'I', label: 'sess', active: false, onActivate: () => {}, onClose: () => {}, closeLabel: 'Delete', closeIcon: createElement('span', { 'data-testid': 'trash' }) }),
+      createElement(VerticalTabRow, { key: 'b', icon: 'I', label: 'term', active: false, onActivate: () => {}, onClose: () => {}, closeLabel: 'Close' }),
+    ))
+    const del = container.querySelector<HTMLButtonElement>('button[aria-label="Delete"]')!
+    expect(del.querySelector('[data-testid="trash"]')).not.toBeNull()
+    expect(del.querySelector('svg')).toBeNull()
+    const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!
+    expect(close.querySelector('svg')).not.toBeNull()
   })
 })
 

@@ -28,12 +28,14 @@ interface VerticalTabRowProps {
   badge?: ReactNode
   /** Hover-only buttons before ✕ (they stop their own click propagation). */
   actions?: ReactNode
-  /** ✕ — always shown on the active row, on hover elsewhere. Omit for none. */
+  /** ✕ — shown on hover only, active row included. Omit for none. */
   onClose?: (e: React.MouseEvent) => void
   closeLabel?: string
+  /** Glyph of the close button; defaults to ✕. */
+  closeIcon?: ReactNode
 }
 
-export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge, actions, onClose, closeLabel }: VerticalTabRowProps) {
+export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge, actions, onClose, closeLabel, closeIcon }: VerticalTabRowProps) {
   return (
     <div
       onClick={onActivate}
@@ -53,12 +55,9 @@ export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge
           onClick={(e) => { e.stopPropagation(); onClose(e) }}
           title={closeLabel}
           aria-label={closeLabel}
-          className={cn(
-            'shrink-0 rounded p-0.5 hover:bg-[var(--accent)]',
-            active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
-          )}
+          className="shrink-0 rounded p-0.5 opacity-0 hover:bg-[var(--accent)] group-hover:opacity-100"
         >
-          <X className="h-3 w-3" />
+          {closeIcon ?? <X className="h-3 w-3" />}
         </button>
       )}
     </div>

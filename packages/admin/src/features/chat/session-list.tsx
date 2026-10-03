@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } from 'react'
-import { Pencil, Loader2, MessageSquare } from 'lucide-react'
+import { Pencil, Loader2, MessageSquare, Trash2 } from 'lucide-react'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionList } from '@/shared/use-session-list'
 import type { SessionMeta } from '@/shared/components/session-list-dropdown'
@@ -243,6 +243,7 @@ export function SessionSidebar({
                 )}
                 onClose={editing ? undefined : (e) => onDelete(s.id, e)}
                 closeLabel={t('chat.sessions.delete')}
+                closeIcon={<Trash2 className="h-3 w-3" />}
               />
             )
           })
