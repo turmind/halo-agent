@@ -13,7 +13,9 @@
  * *finished* stream message (`replyStream(frame, newStreamId, text,
  * true)`), keyed to the inbound frame's `req_id`. Stream replies to one
  * req_id must start within 10 minutes of the callback (protocol cap),
- * which is plenty for a wrap-up.
+ * which is plenty for a wrap-up. A route restored at account start has no
+ * req_id (its frame died with the old process) — those sends go out as
+ * proactive pushes (`aibot_send_msg`) to the chat id instead.
  *
  * Only ONE connection per bot is allowed server-side: a newer subscriber
  * kicks the older one with `disconnected_event`, after which the SDK
@@ -37,9 +39,9 @@ import type { WecomAccount } from './types.js'
 import { WecomResponder } from './event-adapter.js'
 import { classifyMedia, sendMediaOrReport } from '../shared/media.js'
 import { saveInboundMedia } from '../shared/media-store.js'
-import { resolveAccountWorkspace } from '../shared/accounts.js'
+import { resolveAccountWorkspace, getAccount as getSharedAccount } from '../shared/accounts.js'
 import { type CommandContext } from '../shared/commands.js'
-import { InboundBridge, deliverInbound, dispatchChannelCommand } from '../shared/inbound.js'
+import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute } from '../shared/inbound.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
 import { getLang } from '../shared/i18n.js'
 
@@ -53,8 +55,9 @@ export interface WecomChannel {
  *  replies ride the LATEST message's `req_id` (stream replies are keyed to
  *  the callback frame they answer). */
 export interface WecomRoute {
+  /** Inbound frame to answer; `''` on a route restored at account start →
+   *  proactive push to `chatId`. */
   reqId: string
-  chatType: 'single' | 'group'
   /** `from.userid` in single chat, `body.chatid` in a group. */
   chatId: string
 }
@@ -246,9 +249,11 @@ async function ingestFile(args: {
   }
 }
 
-/** One finished stream message = one chat bubble. */
+/** One finished stream message = one chat bubble. No req_id → markdown
+ *  push (`sendMessage` compat mode resolves single vs group from the id). */
 async function replyText(wsClient: WSClient, route: WecomRoute, text: string): Promise<void> {
-  await wsClient.replyStream({ headers: { req_id: route.reqId } }, generateReqId('stream'), text, true)
+  if (route.reqId) await wsClient.replyStream({ headers: { req_id: route.reqId } }, generateReqId('stream'), text, true)
+  else await wsClient.sendMessage(route.chatId, { msgtype: 'markdown', markdown: { content: text } })
 }
 
 /**
@@ -267,7 +272,34 @@ async function sendWecomMedia(args: { wsClient: WSClient; route: WecomRoute; fil
   const buf = await fs.readFile(filePath)
   if (buf.length > MAX_WECOM_DOWNLOAD_BYTES) throw new Error('file exceeds 20MB')
   const { media_id: mediaId } = await wsClient.uploadMedia(buf, { type, filename: path.basename(filePath) })
-  await wsClient.replyMedia({ headers: { req_id: route.reqId } }, type, mediaId)
+  if (route.reqId) await wsClient.replyMedia({ headers: { req_id: route.reqId } }, type, mediaId)
+  else await wsClient.sendMediaMessage(route.chatId, type, mediaId)
+}
+
+/**
+ * Re-wire the reply route at account start from the persisted
+ * `lastActiveChatId`, so a turn that resumes after a restart — before the
+ * user writes again — still reaches WeCom. The cached id is the raw
+ * `chatKey` (userid or group chatid) and the session key is its normalized
+ * form, so single chats and groups both restore. No req_id → sends push.
+ */
+function restoreReplyRoute(args: {
+  registry: SessionManagerRegistry
+  db: ChannelDb
+  account: WecomAccount
+  bridge: InboundBridge<WecomRoute>
+}): void {
+  const { registry, db, account, bridge } = args
+  const chatId = getSharedAccount(db, account.accountId)?.config.lastActiveChatId
+  if (typeof chatId !== 'string' || !chatId) return
+  const workspacePath = resolveAccountWorkspace(account)
+  if (!workspacePath) return
+  const sid = restoreChannelRoute({
+    registry, workspacePath, bridge,
+    sessionPrefix: buildSessionPrefix('wecom', normalizeWecomId(chatId)),
+    route: { reqId: '', chatId },
+  })
+  if (sid) console.log(`[WeCom] ${account.accountId} reply route restored for ${sid}`)
 }
 
 export function startWecomChannel(deps: {
@@ -402,6 +434,8 @@ export function startWecomChannel(deps: {
     const st = ensureState(accountId)
     st.stopped = false
     if (st.wsClient) return
+    const account = getAccount(db, accountId)
+    if (account && account.enabled === 1) restoreReplyRoute({ registry, db, account, bridge: st.bridge })
     connect(accountId)
   }
 
@@ -444,7 +478,7 @@ async function handleInbound(args: {
   }
 
   const conv = pickConversation(body)
-  const route: WecomRoute = { reqId: frame.headers.req_id, chatType: conv.chatType, chatId: conv.chatId }
+  const route: WecomRoute = { reqId: frame.headers.req_id, chatId: conv.chatId }
   const content = await ingestContent({ wsClient, account, workspace, body })
 
   // Slash commands — only in single (1-on-1) chats. In a group the shared

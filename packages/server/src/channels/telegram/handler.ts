@@ -283,7 +283,14 @@ async function runBot(args: {
   for (const command of DISPATCH_COMMANDS) {
     const cmd = command.slice(1)
     bot.command(cmd, async (ctx) => {
-      const cmdCtx = buildCmdCtx(ctx.from?.id ?? 0, ctx.chat?.id)
+      // Same whitelist as plain messages — without it anyone (any member,
+      // in a group) could run /workspace switch etc. on the account's level.
+      if (!ctx.from) return
+      if (!isUserAllowed(account, ctx.from.id, ctx.from.username)) {
+        await ctx.reply(t('handler.not_allowed', lang))
+        return
+      }
+      const cmdCtx = buildCmdCtx(ctx.from.id, ctx.chat?.id)
       if (!cmdCtx) { await ctx.reply(t('handler.workspace_gone', lang)); return }
       const result = await runCommand(cmdCtx, `/${cmd}`, ctx.match?.trim() ?? '', ctx.chat?.id)
       if (!result) return
@@ -320,7 +327,14 @@ async function runBot(args: {
       const cmdCtx = buildCmdCtx(userId, ctx.chat?.id)
       if (cmdCtx) {
         const space = text.indexOf(' ')
-        const command = space === -1 ? text : text.slice(0, space)
+        const head = space === -1 ? text : text.slice(0, space)
+        // In groups clients send `/cmd@thisbot` (privacy mode only delivers
+        // commands addressed to the bot). bot.command strips the suffix for
+        // builtins; strip it here too so skill commands still match.
+        const at = head.indexOf('@')
+        const command = at !== -1 && head.slice(at + 1).toLowerCase() === ctx.me.username.toLowerCase()
+          ? head.slice(0, at)
+          : head
         const arg = space === -1 ? '' : text.slice(space + 1).trim()
         const result = await runCommand(cmdCtx, command, arg, ctx.chat?.id)
         if (result) {

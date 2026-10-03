@@ -21,7 +21,7 @@ All four IM channels (telegram / wechat / slack / feishu) route inbound messages
 
 Three pieces:
 
-- **`InboundBridge<Route>`** — per-account bookkeeping for session listeners + their reply routes (`setRoute` / `getRoute` / `ensureListener` / `dropListener` / `closeAll`). The **reply route** — where to send, plus any per-message credential like wechat's context token — is a per-session value refreshed on **every** inbound message, and responders read it lazily at send time via `bridge.getRoute(sessionId)`. A listener registered once therefore can't lock onto a stale destination. Route entries are dropped together with their listener, so the map can't outgrow the listener set (the old per-channel context-token map never got cleaned up) — but **only once the responder has drained**: `close()` may return a promise (slack / feishu / wechat serialize their per-chunk sends and hand one back; telegram still fires each chunk and returns `void`), and the bridge defers the route deletion until it settles. Dropping the route synchronously stranded the tail of a split reply with nowhere to send (audit A-L3). `ensureListener` is idempotent per session; the account runner owns the bridge so `stopAccount` tears everything down with `closeAll()`, which walks the same per-listener teardown — deliberately no blanket `routes.clear()`, since that would delete the routes in-flight sends are about to read.
+- **`InboundBridge<Route>`** — per-account bookkeeping for session listeners + their reply routes (`setRoute` / `getRoute` / `ensureListener` / `dropListener` / `closeAll`). The **reply route** — where to send, plus any per-message credential like wechat's context token — is a per-session value refreshed on **every** inbound message, and responders read it lazily at send time via `bridge.getRoute(sessionId)`. A listener registered once therefore can't lock onto a stale destination. Route entries are dropped together with their listener, so the map can't outgrow the listener set (the old per-channel context-token map never got cleaned up) — but **only once the responder has drained**: `close()` returns a promise (every responder extends the shared `ChunkedResponder`, which serializes its per-chunk sends and hands the chain's tail back), and the bridge defers the route deletion until it settles. Dropping the route synchronously stranded the tail of a split reply with nowhere to send (audit A-L3). `ensureListener` is idempotent per session; the account runner owns the bridge so `stopAccount` tears everything down with `closeAll()`, which walks the same per-listener teardown — deliberately no blanket `routes.clear()`, since that would delete the routes in-flight sends are about to read.
 - **`deliverInbound`** — the tail itself: `rememberLastActiveChat` → access-level projection → resolve-or-create the channel session → busy/compacting hint (hint only; delivery continues regardless) → `setRoute` → `ensureListener` → `appendUserMessage(uiText)` + `sendUserMessage("[channel: X | user: Y | thread: Z]\n" + agentText)`. Returns the session id.
 - **`dispatchChannelCommand`** — wraps the shared `dispatchCommand` and, when the result says `startedTurn`, wires route + listener exactly like the plain-message path, so no channel can forget it again. A call site that can't build a route logs instead of attaching a responder that could never send.
 
@@ -37,6 +37,7 @@ One bot (= one BotFather token) is bound to one workspace. A workspace can bind 
 
 - **One Telegram user → many sessions (one active at a time)**
 - Session ID format: `tg_<userId>_<createdAtBase36>` (e.g. `tg_123456789_m1abc`)
+- Keyed by the **sender** (`from.id`), not the chat: a user's DM and every group they talk to the bot in share the same sessions (see [Group chats](#group-chats))
 - Sessions live under the bot's bound workspace and use the highest-priority agent (falls back to `default` only when none exists)
 - The web side sees these sessions in the session list (labelled `Telegram: <userId>`)
 - Access level inherited from the bot account
@@ -61,7 +62,7 @@ Telegram-specific config JSON fields: `botToken`, `botUsername`, `allowedUsers`,
 
 Halo can send to a Telegram chat without that user having messaged the bot first — Telegram's Bot API allows `sendMessage(chatId, text)` for any known chat id. Halo only requires that the chat id come from a *trusted source*.
 
-The telegram cron-dispatcher (`channels/telegram/cron-dispatcher.ts`) registers itself with `cron/dispatcher.ts`'s registry at boot and **requires an explicit `chatId`** (numeric — Telegram private-chat ids equal user ids):
+The telegram cron-dispatcher (`channels/telegram/cron-dispatcher.ts`) registers itself with `cron/dispatcher.ts`'s registry at boot and **requires an explicit `chatId`** (numeric — Telegram private-chat ids equal user ids, group ids are negative):
 
 - Cron jobs created from inside a telegram chat via the `cron` skill auto-pin the current chat id (target `telegram:<account>:<chatId>`).
 - Admin-UI cron jobs that don't specify a target run silently — the result shows in the cron log, nothing is pushed.
@@ -102,6 +103,20 @@ Routes: `packages/server/src/routes/telegram.ts`
 
 Photos / documents / voice / video notes trigger the same flow with the saved-file note in the text.
 
+Builtin commands (`bot.command`) run the same `allowedUsers` check first and reply `handler.not_allowed` on a miss — before, only plain messages were gated, so any member of a group the bot sat in could run `/session` / `/workspace switch` at the account's access level.
+
+### Group chats
+
+Supported, with Telegram's own visibility rules deciding what arrives:
+
+- **What the bot receives** — Telegram, not halo, filters. Bots default to *privacy mode* in groups: only `/cmd@thisbot`, replies to the bot's messages, and a few edge cases are delivered; disable privacy mode in BotFather (`/setprivacy`) or make the bot a group admin to receive every message. Halo has no @-mention gate of its own.
+- **Session isolation: per user.** The session prefix is `tg_<from.id>_` and the `activeOverrides` key is the user id, so each member gets their own session, and it is the *same* session they use in DM.
+- **Reply destination: the chat the message came from.** The route is `{ chatId: ctx.chat.id }`, so a group message is answered in the group. The route is refreshed per message — a reply follows the user's latest chat (DM or group).
+- **Permission check: the sender id.** `allowedUsers` matches `from.id` / `from.username`, never the chat id, for messages and commands alike.
+- **Commands** — `bot.command` matches `/cmd@thisbot` for builtins; the skill-command path strips an `@<this bot>` suffix the same way (a suffix naming another bot is left alone and falls through to chat).
+- **Restart restore** — `lastActiveChatId` stores the chat id; a group id is negative and doesn't name the member whose session it was, so `restoreReplyRoute` only restores private chats (`^\d+$`).
+- **Cron** — the dispatcher accepts any numeric chat id, negative group ids included; a cron created from inside a group auto-pins the group.
+
 ## Slash commands (native Telegram /commands)
 
 | Command | Purpose |
@@ -117,10 +132,11 @@ Photos / documents / voice / video notes trigger the same flow with the saved-fi
 
 ## Event coalescing (TelegramResponder)
 
-Same strategy as WeChat:
+Same strategy as WeChat — `TelegramResponder` is the shared `ChunkedResponder` (`channels/shared/responder.ts`) with `{ limit: 4000, logTag: 'Telegram', splitMidStream: true }`:
 - Buffer only `stream` events flagged `final` (the turn's wrap-up text; the filler the model emits before a tool call is dropped) until `complete`, then flush as one message
 - Flush happens on **any** `complete` — the responder doesn't read its `batchBoundary` flag, so a multi-round queue drain ships each merged turn as its own message instead of one blob (see [session.md](session.md#message-queue-and-drain))
-- If buffer exceeds 4000 chars (Telegram limit), split at paragraph boundary via the shared `splitText` (`channels/shared/chunk.ts`, used by all four responders)
+- If buffer exceeds 4000 chars (Telegram limit), split at paragraph boundary via the shared `splitText` (`channels/shared/chunk.ts`), mid-stream and again on flush
+- Every chunk goes through one serialized send chain, so a long reply arrives in order; `close()` returns the drain promise. Before this the telegram responder fired each chunk with `void dispatchChunk`, so the `sendMessage` calls raced and a >4000-char reply could land shuffled (the A-L3 fix had covered slack / feishu / wecom / wechat only)
 - `MEDIA:<path>` markers are intercepted and sent as native Telegram media
 - Errors flush immediately
 - Sub-agent events are dropped (visible in web UI only)
@@ -170,6 +186,6 @@ curl -X POST http://localhost:9527/api/telegram/accounts \
 
 ## Scope and out-of-scope
 
-Supported: private chat text, photos, documents; slash commands; per-session access level; user whitelist; media sending.
+Supported: private and group chat text, photos, documents; slash commands; per-session access level; user whitelist; media sending.
 
-Not supported: group chats, inline queries, callback buttons, webhook mode (polling only).
+Not supported: inline queries, callback buttons, webhook mode (polling only).

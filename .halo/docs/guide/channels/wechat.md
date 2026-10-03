@@ -63,7 +63,7 @@ If nothing happens, check halo server logs for `[WeChat]` lines.
 - **Images** — passed to the LLM as multimodal content
 - **Voice** — decrypted, saved under `<workspace>/.halo/assets/weixin/inbound/<accountId>/<date>/` (the `weixin` directory name is kept for backward compatibility with existing workspaces), path included in the agent's input
 - **Video / files** — same as voice
-- **Group chats** — not supported in v1 (group messages are dropped)
+- **Group chats** — not supported: the WeChat (iLink) bot is a one-to-one contact and the platform doesn't deliver group messages to it, so there is nothing for halo to handle
 - **Self-loop** — bot-authored messages are filtered out
 
 ## Slash commands
@@ -98,7 +98,7 @@ Fan-out across multiple WeChat users is not supported — one bot, one owner.
 | "登录超时：二维码多次过期" / QR expired | Click **Start over** in the dialog and scan the new QR |
 | Bot stops responding after a few hours | Long-poll likely lost its `syncBuf`. Restart the server; reconnect is automatic |
 | Two halo processes both poll the same bot | Each process gets a copy of every message, replied twice. Make sure only one server runs — see `~/.halo/global/server.lock` |
-| Group chat doesn't trigger the bot | Expected — groups aren't supported in v1 |
+| Group chat doesn't trigger the bot | Expected — WeChat (iLink) doesn't support group chats for bots; talk to it one-to-one |
 | Cron push or a delayed reply fails with `ret=-2 prepare failed` while fresh chat replies work | Three causes: the report exceeds 16 KB (halo chunks at 3500 chars, so this is rare now); the account has no stored `context_token` for the recipient yet — the gateway wants outbound to echo the user's latest inbound token, which halo persists on every inbound message since 1.1.8; or that token has **expired** — the gateway stops accepting it some time after the user's last message (the window isn't fixed; failures were seen 12 min and 79 min after the last inbound), and only a new inbound message from that user refreshes it. In all cases: send the bot any message once and the next push carries a fresh token. The error names which case it is (`context_token missing` / `context_token age 79m`), and a dropped chat reply now shows up as a `⚠️ WeChat delivery failed` notification in the session log (admin Sessions tab) instead of vanishing silently |
 
 ## Multi-workspace / multi-bot

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { SlackResponder } from '../src/channels/slack/event-adapter.js'
 import { FeishuResponder } from '../src/channels/feishu/event-adapter.js'
 import { WechatResponder, WECHAT_TEXT_LIMIT } from '../src/channels/wechat/event-adapter.js'
+import { TelegramResponder } from '../src/channels/telegram/event-adapter.js'
 import { InboundBridge } from '../src/channels/shared/inbound.js'
 import type { AgentSessionEvent } from '../src/agents/agent-events.js'
 
@@ -84,6 +85,8 @@ describe.each([
   // WeChat splits mid-stream in `append` too (not only on flush) — the same
   // chain must cover both paths, or a long wrap-up can still land shuffled.
   { name: 'WechatResponder', hardChars: WECHAT_TEXT_LIMIT, make: (deps: { sendText: (t: string) => Promise<void>; sendMedia: (p: string) => Promise<void> }) => new WechatResponder(deps) },
+  // Telegram also splits mid-stream; it used to fire each chunk concurrently.
+  { name: 'TelegramResponder', hardChars: 4000, make: (deps: { sendText: (t: string) => Promise<void>; sendMedia: (p: string) => Promise<void> }) => new TelegramResponder(deps) },
 ])('$name chunk ordering', ({ hardChars, make }) => {
   it('sends split chunks in buffer order despite descending send latencies', async () => {
     const sent: string[] = []

@@ -73,6 +73,26 @@ vi.mock('../src/channels/feishu/api.js', () => ({
   uploadFile: async () => ({ fileKey: '' }),
 }))
 
+// WeCom wire: the SDK client never connects; passive replies (keyed to an
+// inbound req_id) vs proactive pushes (to a chat id) recorded.
+const wcState = vi.hoisted(() => ({ sent: [] as Array<{ kind: 'reply' | 'push'; to: string; text: string }> }))
+vi.mock('@wecom/aibot-node-sdk', () => ({
+  WSClient: class {
+    on(): void {}
+    connect(): void {}
+    disconnect(): void {}
+    async replyStream(frame: { headers: { req_id: string } }, _streamId: string, text: string) {
+      wcState.sent.push({ kind: 'reply', to: frame.headers.req_id, text })
+      return {}
+    }
+    async sendMessage(chatid: string, body: { markdown: { content: string } }) {
+      wcState.sent.push({ kind: 'push', to: chatid, text: body.markdown.content })
+      return {}
+    }
+  },
+  generateReqId: (prefix: string) => `${prefix}_1`,
+}))
+
 import { startWechatChannel, type WechatChannel } from '../src/channels/wechat/handler.js'
 import { insertAccount as insertWechat } from '../src/channels/wechat/accounts.js'
 import { startTelegramChannel, type TelegramChannel } from '../src/channels/telegram/handler.js'
@@ -81,6 +101,8 @@ import { startSlackChannel, type SlackChannel } from '../src/channels/slack/hand
 import { insertAccount as insertSlack } from '../src/channels/slack/accounts.js'
 import { startFeishuChannel, type FeishuChannel } from '../src/channels/feishu/handler.js'
 import { insertAccount as insertFeishu } from '../src/channels/feishu/accounts.js'
+import { startWecomChannel, type WecomChannel } from '../src/channels/wecom/handler.js'
+import { insertAccount as insertWecom } from '../src/channels/wecom/accounts.js'
 import { patchConfig } from '../src/channels/shared/accounts.js'
 import { createChannelDb, type ChannelDb } from '../src/db/channel-db.js'
 import { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
@@ -98,6 +120,7 @@ let wx: WechatChannel | null
 let tg: TelegramChannel | null
 let slack: SlackChannel | null
 let feishu: FeishuChannel | null
+let wecom: WecomChannel | null
 let wxSends: Array<{ to: string; token?: string; text: string }>
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms))
@@ -142,6 +165,8 @@ beforeEach(() => {
   tg = null
   slack = null
   feishu = null
+  wecom = null
+  wcState.sent = []
   wxSends = []
   tgState.sent = []
   imState.slack = []
@@ -154,6 +179,7 @@ afterEach(async () => {
   await tg?.stopAll()
   await slack?.stopAll()
   await feishu?.stopAll()
+  await wecom?.stopAll()
   vi.unstubAllGlobals()
   rmSync(workspace, { recursive: true, force: true })
   rmSync(secretsDir, { recursive: true, force: true })
@@ -328,5 +354,44 @@ describe('feishu — reply route restored at account start', () => {
     emitReply('feishu_oc_2:om_root_s1', 'nobody listening')
     await tick()
     expect(imState.feishu).toEqual([])
+  })
+})
+
+describe('wecom — reply route restored at account start', () => {
+  beforeEach(() => {
+    insertWecom(channelDb, {
+      accountId: 'wc-acc', botId: 'bot1', secret: 's', workspacePath: workspace, accessLevel: 'full',
+    })
+  })
+
+  // The inbound frame's req_id died with the old process, so a restored route
+  // can't passive-reply — it pushes (aibot_send_msg) to the cached chat id.
+  it('single chat: reply is pushed to the userid', async () => {
+    seedRow('wecom_alice_s1')
+    patchConfig(channelDb, 'wc-acc', { lastActiveChatId: 'alice' })
+    wecom = startWecomChannel({ registry, db: channelDb })
+
+    emitReply('wecom_alice_s1', 'resumed after restart')
+    await tick()
+    expect(wcState.sent).toEqual([{ kind: 'push', to: 'alice', text: 'resumed after restart' }])
+  })
+
+  it('group: session key is the normalized chatid, the push goes to the raw one', async () => {
+    seedRow('wecom_wr-AB_s1')
+    patchConfig(channelDb, 'wc-acc', { lastActiveChatId: 'wr.AB' })
+    wecom = startWecomChannel({ registry, db: channelDb })
+
+    emitReply('wecom_wr-AB_s1', 'resumed after restart')
+    await tick()
+    expect(wcState.sent).toEqual([{ kind: 'push', to: 'wr.AB', text: 'resumed after restart' }])
+  })
+
+  it('no cached chat → nothing restored', async () => {
+    seedRow('wecom_alice_s1')
+    wecom = startWecomChannel({ registry, db: channelDb })
+
+    emitReply('wecom_alice_s1', 'nobody listening')
+    await tick()
+    expect(wcState.sent).toEqual([])
   })
 })

@@ -52,7 +52,7 @@ Every channel account carries an `accessLevel`:
 - `readonly` (default) — sandboxed, workspace mounted read-only, secrets dir not mounted. With an OS sandbox the agent gets all its tools (writes fail); without one only the read-only tools (`file_read`, `view_image`, `file_list`, `grep`, `glob`)
 - `workspace` — sandboxed, workspace mounted read-write, secrets dir not mounted
 - `full` — no sandbox, all tools, can `/workspace switch <path>` to another workspace
-- `observer` — Web accounts only: global read-only, meant for dashboards / metrics (Halo City, `/api/metrics`); chat runs at `readonly`
+- `observer` — Web accounts only: global read-only, meant for dashboards / metrics (Halo City, `/api/metrics`); chat runs at `readonly`. A chat-channel account that still holds `observer` from older data shows an Observer badge, and its edit form keeps that level unless you pick another one
 
 When in doubt start at `readonly` and raise it later. The setting is on the **account row**, so a single Slack workspace can have one `readonly` bot account in #general and a separate `full` account in #ops.
 

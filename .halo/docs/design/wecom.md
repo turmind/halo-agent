@@ -46,7 +46,7 @@ WeCom bot accounts are stored in the unified channel DB: `~/.halo/secrets/channe
 
 WeCom-specific config JSON fields: `botId`, `secret`, `lastActiveChatId`.
 
-- `lastActiveChatId` is the raw `userid` (single) or `chatid` (group) of the most recent inbound message, written by `rememberLastActiveChat()` in `channels/shared/accounts.ts` (idempotent). Not consumed by cron dispatch (the dispatcher requires an explicit `chatId`).
+- `lastActiveChatId` is the raw `userid` (single) or `chatid` (group) of the most recent inbound message, written by `rememberLastActiveChat()` in `channels/shared/accounts.ts` (idempotent). Not consumed by cron dispatch (the dispatcher requires an explicit `chatId`); read once at `startAccount` to restore the reply route (see [Reply route after a restart](#reply-route-after-a-restart)).
 - `secret` is never returned by `GET /api/wecom/accounts` and is not patchable — a fresh POST with the same `botId` rotates it.
 
 Inbound media lands under `<workspace>/.halo/assets/wecom/inbound/<accountId>/<date>/`.
@@ -67,7 +67,7 @@ The wecom cron-dispatcher (`channels/wecom/cron-dispatcher.ts`) requires an expl
 
 Because the push rides the handler's socket, the dispatcher borrows it through the exported `liveClients: Map<accountId, WSClient>` (set on `authenticated`, cleared on stop / kick / auth exhaustion). No live client → `{ ok: false, error: 'wecom long-connect not active' }` rather than queueing. WeCom additionally refuses pushes to a user / group that has never messaged the bot, and rate-limits each conversation to 30 msgs/min · 1000/hour (replies and pushes combined).
 
-**`MEDIA:` is not implemented for cron** — the dispatcher declares no `supportsMedia`, so `dispatchToTargets` hands it the original text with `MEDIA:` lines intact (the path degrades to visible text, same caveat as telegram / feishu in [cron.md](cron.md#dispatch-model)). The realtime uploader (`sendWecomMedia` in `handler.ts`) is anchored to an inbound `req_id`; wiring cron up means switching it to `sendMediaMessage(chatid, …)` and flipping `supportsMedia: true`.
+**`MEDIA:` is not implemented for cron** — the dispatcher declares no `supportsMedia`, so `dispatchToTargets` hands it the original text with `MEDIA:` lines intact (the path degrades to visible text, same caveat as telegram / feishu in [cron.md](cron.md#dispatch-model)). The realtime uploader (`sendWecomMedia` in `handler.ts`) already falls back to `sendMediaMessage(chatid, …)` for a route without a `req_id` (restored at startup); wiring cron up means calling it with `{ reqId: '', chatId }` and flipping `supportsMedia: true`.
 
 ## Modules
 
@@ -97,6 +97,7 @@ Session-prefix kind `'wecom'` is registered in `channels/shared/session-prefix.t
 2. Server stores the account, calls `stopAccount` (idempotent) then `startAccount` — the stop must fully `disconnect()` before the new socket subscribes, or the new connection would kick its own predecessor
 3. `startAccount` builds `new WSClient({ botId, secret, maxReconnectAttempts: -1, maxAuthFailureAttempts: 3, logger })` and calls `connect()` (synchronous; auth happens on `authenticated`). The SDK handles heartbeat (30 s ping), reconnect with exponential back-off (infinite on network drops), and the auth retry budget
 4. `authenticated` → `liveClients.set(accountId, client)`; `event.disconnected_event` (kicked) or `error` with `WS_AUTH_FAILURE_EXHAUSTED` → client dropped, `liveClients.delete`
+   Before `connect()`, `startAccount` restores the reply route from `lastActiveChatId` (see [Reply route after a restart](#reply-route-after-a-restart))
 5. `stopAccount` = `bridge.closeAll()` (drains queued chunks, then releases reply routes) → `wsClient.disconnect()` → `liveClients.delete` → state removed
 6. On graceful shutdown the descriptor's `shutdown` calls `stopAll()`
 
@@ -111,10 +112,22 @@ All frames are JSON `{ cmd, headers: { req_id }, body }`; responses echo `header
 | `aibot_msg_callback` | server → client | inbound message → `'message'` event |
 | `aibot_event_callback` | server → client | events; only `disconnected_event` is handled (kicked). `enter_chat` / `template_card_event` / `feedback_event` are ignored |
 | `aibot_respond_msg` | client → server | `replyStream(frame, streamId, content, finish)` — every reply |
-| `aibot_send_msg` | client → server | `sendMessage(chatid, { msgtype: 'markdown' })` — cron only |
+| `aibot_send_msg` | client → server | `sendMessage(chatid, { msgtype: 'markdown' })` / `sendMediaMessage(chatid, …)` — cron, and replies on a route restored at startup |
 | `aibot_upload_media_init` / `_chunk` / `_finish` | client → server | `uploadMedia(buffer, { type, filename })` — chunked (≤ 512 KB × ≤ 100), returns `media_id` (valid 3 days) |
 
-**Reply model.** A stream reply is keyed to the callback's `req_id` and carries its own `stream.id`; the same `stream.id` can be re-sent to update the bubble until `finish: true`. Halo does **not** stream: every flushed chunk / hint / command reply is sent as a *new* `stream.id` with `finish: true` in one go — one finished bubble each. This keeps the responder identical to the other channels and sidesteps the 10-minute cap on an open stream (measured from its first frame). Replies must reference the inbound `req_id`, so the reply route stored per session is `{ reqId, chatType, chatId }`, refreshed on every inbound message (the route is read lazily at send time, as in slack / feishu).
+**Reply model.** A stream reply is keyed to the callback's `req_id` and carries its own `stream.id`; the same `stream.id` can be re-sent to update the bubble until `finish: true`. Halo does **not** stream: every flushed chunk / hint / command reply is sent as a *new* `stream.id` with `finish: true` in one go — one finished bubble each. This keeps the responder identical to the other channels and sidesteps the 10-minute cap on an open stream (measured from its first frame). Replies must reference the inbound `req_id`, so the reply route stored per session is `{ reqId, chatId }`, refreshed on every inbound message (the route is read lazily at send time, as in slack / feishu). An empty `reqId` (restored route, below) switches `replyText` / `sendWecomMedia` to the proactive push.
+
+### Reply route after a restart
+
+Like the other channels, `startAccount` calls `restoreReplyRoute` → `restoreChannelRoute` (`channels/shared/inbound.ts`) before connecting, so a session that resumes on its own after a restart (run-ledger nudge, queued turn, admin-typed message) still reaches WeCom before the user writes again. It reads `lastActiveChatId`, takes the latest existing root session under `wecom_<normalizeWecomId(chatId)>_` (goal-routed, never creates one) and wires route `{ reqId: '', chatId }` + listener. Both single chats and groups restore: the cached raw id maps 1:1 onto the session key, unlike telegram (a group id doesn't name the member) or feishu (a group thread reply needs the inbound message id).
+
+What is **not** restored, and why:
+
+- **Passive replies.** The inbound `req_id` lived only in the old process's memory (and is only valid ~10 minutes anyway), so the restored route has none. Text goes out as `aibot_send_msg` markdown, media as `uploadMedia` + `sendMediaMessage`. That is a push, not a stream reply: the bubble isn't attached to the user's message, and the push channel's own rules apply — it is refused for a user / group that has never messaged the bot, and counts against the 30 msgs/min · 1000/hour per-conversation limit.
+- **Only the last active chat.** One `lastActiveChatId` per account → at most one session restored; other users' sessions wait for their next message (same as telegram / slack / feishu).
+- **A connected socket.** The route is wired before `connect()`. A send that fires before the socket is open is rejected by the SDK (`WebSocket not connected`) and logged as `[WeCom] sendText failed`; after a kick / auth exhaustion there is no `wsClient` and the send is skipped — same as for any route. In practice the resumed turn's model call outlasts the ~1 s auth handshake.
+
+The next inbound message from that chat replaces the restored route with a fresh `req_id`, and replies go back to passive streaming.
 
 ## Message handling flow
 

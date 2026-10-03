@@ -1,13 +1,13 @@
 /**
- * Shared core of the block-oriented channel responders (slack / feishu /
- * wecom / wechat): buffer the root agent's wrap-up text, flush it as
+ * Shared core of the block-oriented channel responders (telegram / slack /
+ * feishu / wecom / wechat): buffer the root agent's wrap-up text, flush it as
  * chunked messages on `complete`, and flush early ahead of a `system` /
  * `error` notice so the notice lands after the text it follows. No
  * streaming UI — one message per chunk.
  *
  * What stays in each channel's `event-adapter.ts`: the per-message char
- * limit, the markdown flavour (`format`), the log tag, and any extra
- * behaviour (wechat splits mid-stream and surfaces send failures).
+ * limit, the markdown flavour (`format`), the log tag, whether to split
+ * mid-stream, and any extra behaviour (wechat surfaces send failures).
  */
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
 import { splitText } from './chunk.js'
@@ -25,10 +25,13 @@ export interface ChunkedResponderOpts {
   logTag: string
   /** Channel markdown conversion, applied after `MEDIA:` lines are pulled out. */
   format?: (text: string) => string
+  /** Send full chunks as soon as the buffer passes `limit` instead of holding
+   *  the whole reply until `complete` (telegram / wechat). */
+  splitMidStream?: boolean
 }
 
 export class ChunkedResponder {
-  protected buffer = ''
+  private buffer = ''
   private deps: ResponderDeps
   private opts: ChunkedResponderOpts
   private closed = false
@@ -80,9 +83,15 @@ export class ChunkedResponder {
     return this.sendTail
   }
 
-  /** Default: keep buffering until the next flush. */
-  protected append(text: string): void {
+  private append(text: string): void {
     this.buffer += text
+    // Without splitMidStream (or under the limit) keep buffering —
+    // 'complete' flushes the whole response as one message.
+    if (!this.opts.splitMidStream || this.buffer.length <= this.opts.limit) return
+    const chunks = splitText(this.buffer, this.opts.limit)
+    // The last piece is the under-limit remainder — keep buffering it.
+    this.buffer = chunks.pop() ?? ''
+    for (const chunk of chunks) this.enqueueChunk(chunk)
   }
 
   private flushBuffer(): void {
@@ -100,7 +109,7 @@ export class ChunkedResponder {
    * a rejected link from poisoning the chain — dispatchChunk already logs
    * per-send failures, so this only absorbs the unexpected.
    */
-  protected enqueueChunk(chunk: string): void {
+  private enqueueChunk(chunk: string): void {
     this.sendTail = this.sendTail
       .then(() => this.dispatchChunk(chunk))
       .catch(() => { /* already logged in dispatchChunk */ })

@@ -351,13 +351,8 @@ export function startFeishuChannel(deps: {
   function dispatchEvent(accountId: string, event: FeishuMessageEvent): void {
     const account = getAccount(db, accountId)
     if (!account || account.enabled !== 1) return
-    if (!event.message || !event.sender) {
-      console.warn(`[FeishuTrace] ${accountId} dropped: no message/sender. keys=${Object.keys(event).join(',')}`)
-      return
-    }
-    const accepted = shouldRespond(event, account.botOpenId)
-    console.warn(`[FeishuTrace] ${accountId} sender_type=${event.sender.sender_type} chat_type=${event.message.chat_type} mt=${event.message.message_type} accepted=${accepted}`)
-    if (!accepted) return
+    if (!event.message || !event.sender) return
+    if (!shouldRespond(event, account.botOpenId)) return
     const state = ensureState(accountId)
     void handleInbound({ registry, db, account, event, state })
       .catch((err) => console.warn(`[Feishu] handle ${accountId}: ${err instanceof Error ? err.message : String(err)}`))
@@ -385,7 +380,6 @@ export function startFeishuChannel(deps: {
     const dispatcher = new Lark.EventDispatcher({})
     dispatcher.register({
       'im.message.receive_v1': async (data: unknown) => {
-        console.warn(`[FeishuTrace] ${accountId} im.message.receive_v1 fired, keys=${Object.keys((data ?? {}) as object).slice(0, 5).join(',')}`)
         dispatchEvent(accountId, data as FeishuMessageEvent)
       },
     })

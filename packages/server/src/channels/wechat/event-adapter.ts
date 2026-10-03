@@ -6,12 +6,11 @@
  * model emits before tool calls, and all tool activity, stays in the web UI.
  * The buffer is flushed on `complete`, and ahead of an `error` / `system`
  * notice so the notice lands after the text it follows. Anything over
- * WECHAT_TEXT_LIMIT is cut with the shared `splitText` (mid-stream in
- * `append`, and again on flush), and every chunk goes through one serialized
- * send chain so a long reply arrives in order — the shared `ChunkedResponder`
- * owns that; this file adds the mid-stream split and `onSendError`.
+ * WECHAT_TEXT_LIMIT is cut with the shared `splitText` (mid-stream, and
+ * again on flush), and every chunk goes through one serialized send chain so
+ * a long reply arrives in order — the shared `ChunkedResponder` owns all of
+ * that; this file adds `onSendError`.
  */
-import { splitText } from '../shared/chunk.js'
 import { ChunkedResponder, type ResponderDeps } from '../shared/responder.js'
 
 /**
@@ -35,19 +34,8 @@ export class WechatResponder extends ChunkedResponder {
   private onSendError?: (message: string) => void
 
   constructor(deps: WechatResponderDeps) {
-    super(deps, { limit: WECHAT_TEXT_LIMIT, logTag: 'WeChat' })
+    super(deps, { limit: WECHAT_TEXT_LIMIT, logTag: 'WeChat', splitMidStream: true })
     this.onSendError = deps.onSendError
-  }
-
-  protected append(text: string): void {
-    this.buffer += text
-    // Only split when we hit WeChat's hard length ceiling. Otherwise keep
-    // buffering — 'complete' will flush the whole response as one message.
-    if (this.buffer.length <= WECHAT_TEXT_LIMIT) return
-    const chunks = splitText(this.buffer, WECHAT_TEXT_LIMIT)
-    // The last piece is the under-limit remainder — keep buffering it.
-    this.buffer = chunks.pop() ?? ''
-    for (const chunk of chunks) this.enqueueChunk(chunk)
   }
 
   protected onSendFailed(message: string): void {

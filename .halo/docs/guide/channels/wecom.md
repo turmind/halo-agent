@@ -91,6 +91,10 @@ When the agent emits a `MEDIA:<path>` line (a file under the workspace), halo up
 
 Replies render **Markdown natively** — headings, bold, lists, quotes, links, code blocks and tables all display as formatted text.
 
+### After a server restart
+
+If the agent was mid-task when halo restarted, its reply still reaches the **most recent** chat the bot talked in (one per bot). Because the original message can no longer be answered directly, that reply arrives as a regular pushed message rather than as a reply to your message; once you write again, replies go back to normal.
+
 ## Slash commands
 
 Same set as the other channels — type as plain text in a **single chat** (commands are ignored in groups, where the shared session belongs to everyone):

@@ -63,7 +63,7 @@ If nothing happens, check halo server logs for `[Telegram]` lines.
 ## How halo handles inbound
 
 - **Private chats** — every message routes to the bot
-- **Group chats** — not supported in v1 (group messages are dropped)
+- **Group chats** — supported. Each member talks to their **own** session (the same one they use in DM with the bot), and the bot replies in the group. `allowedUsers` is checked against the sender, so non-whitelisted members are refused there too. By default Telegram's *privacy mode* only delivers `/command@yourbot` and replies to the bot's messages; to have the bot see every group message, send `/setprivacy` → **Disable** to BotFather (then re-add the bot to the group) or make it a group admin
 - **Photos** — downloaded, sent to the model as vision input and saved under `<workspace>/.halo/assets/telegram/inbound/<accountId>/<date>/`; the saved path is appended to the message text
 - **Documents / voice / round video** — downloaded (20 MB cap) to the same folder; the agent gets the saved path in the message text, not the content
 - **Slash commands** — handled by halo, not by Telegram. The BotFather menu in Step 2 is just a UI hint
@@ -82,7 +82,7 @@ If nothing happens, check halo server logs for `[Telegram]` lines.
 
 ## Cron jobs targeting Telegram
 
-When a cron job is created from inside a Telegram chat, the dispatcher targets that chat. From the admin UI you can also enter chat IDs directly (comma-separated for fan-out). A Telegram target **must** carry an explicit numeric chat ID (for a private chat it equals the user ID) — there is no fallback to the whitelist or to the last inbound chat, and the dispatch fails without one. Per-recipient ✓/✗ is recorded in the cron run history.
+When a cron job is created from inside a Telegram chat, the dispatcher targets that chat. From the admin UI you can also enter chat IDs directly (comma-separated for fan-out). A Telegram target **must** carry an explicit numeric chat ID (for a private chat it equals the user ID; a group's is negative) — there is no fallback to the whitelist or to the last inbound chat, and the dispatch fails without one. Per-recipient ✓/✗ is recorded in the cron run history.
 
 ## Common problems
 
@@ -91,7 +91,7 @@ When a cron job is created from inside a Telegram chat, the dispatcher targets t
 | "Unauthorized" / `getMe` fails on Add Bot | Bot token has a typo, or the bot was deleted in BotFather |
 | Bot exists but doesn't reply | Check `allowedUsers` — if non-empty, your user must be in it |
 | Bot used to work, now silent | Maybe two halo processes are running and stealing each other's `getUpdates` long-poll. Check `~/.halo/global/server.lock` |
-| Group messages don't trigger the bot | Expected — groups aren't supported in v1 |
+| Group messages don't trigger the bot | Privacy mode is on (the default): only `/command@yourbot` and replies to the bot get through. Disable it with BotFather `/setprivacy` and re-add the bot, or make it a group admin |
 
 ## Multi-bot setup
 

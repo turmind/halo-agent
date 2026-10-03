@@ -141,7 +141,7 @@ Plain text + images (base64 attached to the agent message), voice, video, files.
 
 Supported: text, images, voice, video, files; slash commands listed above; per-session access level.
 
-Not supported: group chats, typing indicators.
+Not supported: group chats — a platform limit, not a halo filter: the iLink bot is a one-to-one contact and `getupdates` never carries group messages, so the handler has no group path at all; typing indicators.
 
 ## References
 

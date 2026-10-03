@@ -31,7 +31,7 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   if (acct.enabled !== 1) throw new Error(`telegram account ${accountId} disabled`)
 
   if (!explicitChatId) {
-    throw new Error('telegram cron target requires an explicit chatId (numeric — Telegram private-chat ids equal user ids). Create the cron from inside a chat to auto-pin, or pass --targets telegram:<accountId>:<chatId>.')
+    throw new Error('telegram cron target requires an explicit chatId (numeric — Telegram private-chat ids equal user ids, group ids are negative). Create the cron from inside a chat to auto-pin, or pass --targets telegram:<accountId>:<chatId>.')
   }
   const chatIdNum = Number(explicitChatId)
   if (!Number.isFinite(chatIdNum)) {
