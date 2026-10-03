@@ -37,10 +37,6 @@ export interface SessionItem {
  *  the only knob for "how many session groups visible per page". */
 const TOP_LEVEL_PAGE_SIZE = 30
 
-/** Largest `limit` the list endpoint honours (server clamps to 500). A
- *  reload deeper than this pages through with the cursor. */
-const MAX_PAGE_LIMIT = 500
-
 /** Store for selected session in the Sessions tab */
 interface SessionViewStore {
   selectedAgent: string | null
@@ -263,6 +259,9 @@ export function AgentSessionsSidebar() {
   // it without listing `tree` as a dependency (that would rebuild the callback
   // on every load and re-fire the mount effect → reload loop).
   const topLevelCountRef = useRef(0)
+  // Project the current tree was loaded for — a reload for another project
+  // replaces the tree instead of merging into the old one's tail.
+  const loadedPathRef = useRef<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [loadingGroups, setLoadingGroups] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -291,9 +290,11 @@ export function AgentSessionsSidebar() {
   }, [activeProject?.id, clearSelection])
 
   /**
-   * Reload from scratch. Called on mount, project switch, and bus bumps
-   * (delete/create/archive elsewhere). Server returns top-level rows
-   * with all descendants in one response, so we just rebuild the tree.
+   * Refresh from the first page. Called on mount, project switch, and bus
+   * bumps (delete/create/archive elsewhere). Server returns top-level rows
+   * with all descendants in one response. Mount / project switch / a list
+   * of at most one page replace the tree; a deeper list merges the fresh
+   * first page over the already-loaded tail instead of re-fetching it.
    */
   const reloadFirstPage = useCallback(async ({ showSpinner }: { showSpinner: boolean } = { showSpinner: true }) => {
     if (!activeProject?.path) {
@@ -314,34 +315,30 @@ export function AgentSessionsSidebar() {
     pendingReloadRef.current = false
     if (showSpinner) setLoadingGroups(true)
 
-    // Reload the same depth the user already scrolled to, not just the first
-    // page — otherwise a silent bus/streaming refresh would snap a 120-row
-    // list back to 30 and lose their scroll position. keyset cursor is a
-    // timestamp, so one limit=N fetch returns the same rows as N/PAGE_SIZE
-    // paged fetches with the cursor landing in the same place. Past the
-    // server's 500 clamp, page through in 500s and render once at the end.
-    const want = Math.max(TOP_LEVEL_PAGE_SIZE, topLevelCountRef.current)
-
+    const path = activeProject.path
     const startedAt = Date.now()
     try {
-      const flat: SessionItem[] = []
-      let topLevel = 0
-      let cursor: number | undefined
-      let nextCursorAfter: number | null = null
-      do {
-        const res = await api.sessionLogs.list(activeProject.path, {
-          includeArchived: true,
-          limit: Math.min(MAX_PAGE_LIMIT, want - topLevel),
-          ...(cursor !== undefined ? { cursor } : {}),
+      const res = await api.sessionLogs.list(path, { includeArchived: true, limit: TOP_LEVEL_PAGE_SIZE })
+      const page = res.sessions as SessionItem[]
+      const boundary = res.nextCursor
+      if (loadedPathRef.current !== path || topLevelCountRef.current <= TOP_LEVEL_PAGE_SIZE || boundary === null) {
+        setTree(buildTree(page))
+        setNextCursor(boundary)
+      } else {
+        // Scrolled past the first page: re-fetch only that page and keep the
+        // loaded tail + nextCursor, so a silent refresh neither snaps the list
+        // back to 30 rows nor re-pulls every scrolled-to subtree. nextCursor is
+        // the page's last root's updatedAt: old roots at/above it that the page
+        // lacks were deleted; roots the page carries come from the page (a row
+        // bumped to the top shows once), each with its whole subtree.
+        // Tail rows aren't re-validated — a deep row deleted elsewhere (no session:changed push today) lingers until the next full replace.
+        const pageIds = new Set(page.map((s) => s.id))
+        setTree((prev) => {
+          const tail = prev.filter((n) => n.updatedAt < boundary && !pageIds.has(n.id))
+          return buildTree([...page, ...(flattenTree(tail) as SessionItem[])])
         })
-        const rows = res.sessions as SessionItem[]
-        flat.push(...rows)
-        topLevel += rows.filter((s) => !s.parentSessionId).length
-        nextCursorAfter = res.nextCursor
-        cursor = res.nextCursor ?? undefined
-      } while (nextCursorAfter !== null && topLevel < want)
-      setTree(buildTree(flat))
-      setNextCursor(nextCursorAfter)
+      }
+      loadedPathRef.current = path
     } catch (err) {
       console.error('[Sessions] Failed to fetch:', err)
       setTree([])
@@ -385,7 +382,7 @@ export function AgentSessionsSidebar() {
     }
   }, [activeProject?.path, nextCursor, loadingMore])
 
-  // Keep the ref in sync so the next reload knows how deep to fetch.
+  // Keep the ref in sync so the next reload knows whether to merge or replace.
   useEffect(() => {
     topLevelCountRef.current = tree.length
   }, [tree.length])
