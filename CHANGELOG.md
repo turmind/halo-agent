@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-10-03
+
 ### Added
 
 - Admin: the pin, finish-bell and connection-light buttons at the bottom of the activity bar are merged into one quick-toggles gear. A thin bar under the gear shows each item's state: network, finish notification, and in the desktop app also pin and keep-awake. The gear turns red when the connection is down. Click it to open a panel where you switch the items; the panel stays open while you switch.
@@ -736,7 +738,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.4...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.5...HEAD
+[1.5.5]: https://github.com/turmind/halo-agent/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/turmind/halo-agent/compare/v1.5.3-alpha...v1.5.4
 [1.5.3-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.2-alpha...v1.5.3-alpha
 [1.5.2-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.1-alpha...v1.5.2-alpha
