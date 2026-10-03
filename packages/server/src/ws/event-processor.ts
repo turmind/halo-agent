@@ -93,7 +93,8 @@ export function sendWsNotification(
       }
       break
     case 'complete':
-      sendJson(ctx.ws, { type: 'chat:complete', sessionId })
+      // Between drained turns (root only): the admin closes bubbles but skips the finish chime.
+      sendJson(ctx.ws, event.batchBoundary ? { type: 'chat:complete', sessionId, batchBoundary: true } : { type: 'chat:complete', sessionId })
       break
     case 'context':
       sendJson(ctx.ws, { type: 'agent:context', agentName, systemPrompt: event.systemPrompt, taskId, sessionId })

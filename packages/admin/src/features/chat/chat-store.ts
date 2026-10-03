@@ -356,7 +356,9 @@ export interface ChatStore {
   addToolCallToLastAssistant(toolCall: ToolCallInfo, agentName?: string, taskId?: string, turnId?: string): void
   updateLastToolCallResult(result: string, agentName?: string, taskId?: string, toolUseId?: string): void
   completeStreaming(): void
-  completeAgentStreaming(agentName?: string, taskId?: string): void
+  /** `batchBoundary`: a queued turn follows on the server — close the bubbles
+   *  but don't report a settled turn (no finish chime between drained turns). */
+  completeAgentStreaming(agentName?: string, taskId?: string, batchBoundary?: boolean): void
   /** The live round's main assistant bubbles in log order, each returned
    *  once — chat-handlers acts on their SHOW / CAPTURE markers at
    *  `chat:complete`. A round spans several bubbles (the head an interjection
@@ -637,7 +639,7 @@ const chatStoreState = (ix: StoreLocals, settled: () => void): StateCreator<Chat
     })
   },
 
-  completeAgentStreaming(agentName?: string, taskId?: string) {
+  completeAgentStreaming(agentName?: string, taskId?: string, batchBoundary?: boolean) {
     const wasStreaming = get().isStreaming
     set((state) => {
       const before = state.messages.filter(isMainConversationMessage).length
@@ -655,7 +657,7 @@ const chatStoreState = (ix: StoreLocals, settled: () => void): StateCreator<Chat
       pruneStreamingIdx(ix, messages)
       return { messages, isStreaming: stillStreaming }
     })
-    if (wasStreaming && !get().isStreaming) settled()
+    if (wasStreaming && !get().isStreaming && !batchBoundary) settled()
   },
 
   takeRoundReplies() {
@@ -816,7 +818,8 @@ const turnSettledListeners = new Set<(store: ChatStoreApi) => void>()
  *  isStreaming true → false, and it is still false once the frame's handler
  *  returns — a followup re-opens the stream in the same handler, hence the
  *  microtask. Log replaces (snapshot, reattach replay), send failures, the
- *  stale-placeholder sweep and a disposed / released store never fire.
+ *  stale-placeholder sweep, a batch-boundary complete (more queued turns
+ *  follow) and a disposed / released store never fire.
  *  Feeds the finish chime (workspace-layout). */
 export function onTurnSettled(listener: (store: ChatStoreApi) => void): () => void {
   turnSettledListeners.add(listener)

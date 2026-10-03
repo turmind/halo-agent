@@ -332,6 +332,24 @@ describe('chat tabs — turn settled (finish chime)', () => {
     expect(getLoadedStore('sess_a')!.getState().isStreaming).toBe(true)
   })
 
+  it('a batch-boundary complete between queued turns is not a finish; the last complete is', async () => {
+    openTab('sess_a')
+    startTurn('sess_a')
+    const store = getLoadedStore('sess_a')!
+    emit('chat:complete', { sessionId: 'sess_a', batchBoundary: true })
+    await flush()
+    expect(settled).toEqual([])
+    expect(store.getState().isStreaming).toBe(false)
+    // Next drained turn opens its own bubble, then the run's terminal complete.
+    emit('chat:followup', { sessionId: 'sess_a', agentName: 'default' })
+    emit('chat:stream', { sessionId: 'sess_a', text: 'second turn' })
+    await flush()
+    expect(settled).toEqual([])
+    emit('chat:complete', { sessionId: 'sess_a' })
+    await flush()
+    expect(settled).toEqual([store])
+  })
+
   it('a sub-task finishing leaves the root busy — no chime', async () => {
     openTab('sess_a')
     startTurn('sess_a')

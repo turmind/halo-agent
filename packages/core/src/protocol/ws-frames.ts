@@ -100,7 +100,7 @@ export type WsServerMessage =
   | { type: 'chat:ack'; clientMsgId: string }
   | { type: 'chat:queued'; reason: 'compact'; message: string; sessionId?: string | null }
   | { type: 'chat:stopped'; sessionId: string | null }
-  | { type: 'chat:complete'; sessionId: string | null }
+  | { type: 'chat:complete'; sessionId: string | null; batchBoundary?: boolean }
   // Session-scoped frames carry `sessionId` (the session the listener or
   // request belongs to): one connection carries every open chat tab, and the
   // admin routes each frame to that session's tab by this id. A frame without

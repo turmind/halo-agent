@@ -170,7 +170,7 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
       const tabStore = storeForFrame(msg.sessionId)
       if (!tabStore) return
       const store = tabStore.getState()
-      store.completeAgentStreaming()
+      store.completeAgentStreaming(undefined, undefined, msg.batchBoundary)
       // Every main bubble this round produced, now settled — not just the
       // last: an interjection split, a turnId split or a queued follow-up
       // each leave earlier bubbles whose markers must fire too.

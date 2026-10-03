@@ -94,6 +94,10 @@ describe('sendWsNotification mapping', () => {
     expect(notify({ type: 'complete' }, 'sess-42')).toEqual([{ type: 'chat:complete', sessionId: 'sess-42' }])
   })
 
+  it('batch-boundary complete → chat:complete keeps batchBoundary', () => {
+    expect(notify({ type: 'complete', batchBoundary: true })).toEqual([{ type: 'chat:complete', sessionId: 'sess-1', batchBoundary: true }])
+  })
+
   // Every event-derived frame is stamped with the listener's sessionId so the
   // admin can route it to the tab holding that session (the assertions above
   // all pin `sessionId: 'sess-1'`). A listener bound before the session id is
