@@ -15,6 +15,7 @@ interface WechatAccount {
   baseUrl: string
   userId: string
   workspacePath: string
+  workspaceMissing: boolean
   label: string
   enabled: boolean
   accessLevel: AccessLevel
@@ -54,6 +55,7 @@ export function WechatSettings() {
           deleteName={a.label}
           titleExtra={<span className="font-mono text-[10px] text-[var(--muted-foreground)]">{a.accountId}</span>}
           detail={a.workspacePath}
+          workspaceMissing={a.workspaceMissing}
           accessHint={t('wx.readonlyHint')}
           actions={(busy) => (
             <RowAction

@@ -66,10 +66,10 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
       create={(f) => api.slack.createAccount({ botToken, appToken, ...f })}
     >
       <Field label={t('slack.botTokenLabel')} hint={t('slack.botTokenHint')}>
-        <TextInput mono value={botToken} onChange={setBotToken} placeholder="xoxb-..." />
+        <TextInput mono type="password" value={botToken} onChange={setBotToken} placeholder="xoxb-..." />
       </Field>
       <Field label={t('slack.appTokenLabel')} hint={t('slack.appTokenHint')}>
-        <TextInput mono value={appToken} onChange={setAppToken} placeholder="xapp-..." />
+        <TextInput mono type="password" value={appToken} onChange={setAppToken} placeholder="xapp-..." />
       </Field>
     </ChannelAddDialog>
   )

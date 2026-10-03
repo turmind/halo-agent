@@ -195,6 +195,7 @@ export const zh: Record<string, string> = {
   'wx.readonlyHint': 'Readonly：微信用户只能让 agent 查文件/搜索，无法写入、跑命令或联网。子 agent 自动继承同档位',
   'wx.save': '保存',
   'wx.cancel': '取消',
+  'wx.pathMissing': '(路径不存在)',
   'wx.disable': '停用',
   'wx.enable': '启用',
   'wx.rescan': '重新扫码（刷新 token）',

@@ -195,6 +195,7 @@ export const en: Record<string, string> = {
   'wx.readonlyHint': 'Readonly: WeChat users can only let agent read files/search, cannot write, run commands or access network. Sub-agents inherit the same level.',
   'wx.save': 'Save',
   'wx.cancel': 'Cancel',
+  'wx.pathMissing': '(path does not exist)',
   'wx.disable': 'Disable',
   'wx.enable': 'Enable',
   'wx.rescan': 'Re-scan (refresh token)',

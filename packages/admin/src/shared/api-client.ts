@@ -676,6 +676,7 @@ export const api = {
         language: 'en' | 'zh'
         createdAt: number
         updatedAt: number
+        workspaceMissing: boolean
       }> }>('/wechat/accounts')
     },
     startLogin(sessionKey?: string) {

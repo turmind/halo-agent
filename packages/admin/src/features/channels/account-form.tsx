@@ -66,7 +66,8 @@ export function TextInput(props: {
 }
 
 /** `observer` is a web-only level (dashboard / metrics tokens); the chat
- *  channels' routes reject it, so their forms offer three levels. */
+ *  channels' routes reject it, so their forms offer three levels — plus a
+ *  disabled Observer entry when an older account already holds it. */
 export function AccessLevelSelect(props: {
   ns: string
   value: AccessLevel
@@ -83,7 +84,9 @@ export function AccessLevelSelect(props: {
       className={controlClass(props.compact)}
     >
       <option value="readonly">{t(`${ns}.readonly`)}</option>
-      {props.observer && <option value="observer">{t(`${ns}.observer`)}</option>}
+      {props.observer
+        ? <option value="observer">{t(`${ns}.observer`)}</option>
+        : props.value === 'observer' && <option value="observer" disabled>Observer</option>}
       <option value="workspace">{t(`${ns}.wsWrite`)}</option>
       <option value="full">{t(`${ns}.full`)}</option>
     </select>

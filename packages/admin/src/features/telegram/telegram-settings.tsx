@@ -83,7 +83,7 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
       )}
     >
       <Field label={t('tg.tokenLabel')}>
-        <TextInput mono value={botToken} onChange={setBotToken} placeholder="123456:ABC-DEF..." />
+        <TextInput mono type="password" value={botToken} onChange={setBotToken} placeholder="123456:ABC-DEF..." />
       </Field>
     </ChannelAddDialog>
   )

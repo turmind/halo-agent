@@ -164,7 +164,7 @@ type RowProps<X> = AccountRowState & {
   footer?: ReactNode
   /** Extra action buttons, between enable/disable and edit. */
   actions?: (busy: boolean) => ReactNode
-  /** Offers / badges the web-only `observer` level. */
+  /** Offers the web-only `observer` level. */
   observer?: boolean
   /** Edit form: hint under the access level select. */
   accessHint?: string
@@ -172,7 +172,8 @@ type RowProps<X> = AccountRowState & {
   extraDraft?: X
   /** Edit form: the channel's own fields, after the language select. */
   editExtra?: (draft: X, set: (patch: Partial<X>) => void) => ReactNode
-  save: (draft: AccountDraft & X) => Promise<unknown>
+  /** `accessLevel` is left out when an untouched `observer` can't be stored. */
+  save: (draft: Omit<AccountDraft & X, 'accessLevel'> & { accessLevel?: AccessLevel }) => Promise<unknown>
   setEnabled: (enabled: boolean) => Promise<unknown>
   remove: () => Promise<unknown>
 }
@@ -204,9 +205,7 @@ export function ChannelAccountRow<X extends object = Record<never, never>>(props
     await run(props.remove, 'deleteFailed')
   }
 
-  // Chat channels' routes never store `observer`; their badge has always
-  // fallen through to "Full" for it — kept as-is (only web offers observer).
-  const badge = ACCESS_BADGE[account.accessLevel === 'observer' && !props.observer ? 'full' : account.accessLevel]
+  const badge = ACCESS_BADGE[account.accessLevel]
   return (
     <li className="flex items-center gap-3 px-4 py-3">
       <div className={cn('h-2 w-2 rounded-full', account.enabled ? 'bg-emerald-500' : 'bg-[var(--muted-foreground)]')} />
@@ -265,8 +264,11 @@ function AccountEditForm<X extends object>(props: RowProps<X>) {
 
   async function save() {
     setBusy(true)
+    // Chat channels' routes reject `observer`, but an older row can still hold
+    // it: left unchanged, it stays out of the patch and the row keeps it.
+    const { accessLevel, ...rest } = draft
     try {
-      await props.save(draft)
+      await props.save(accessLevel === 'observer' && !props.observer ? rest : draft)
       props.onSaved()
     } catch (err) {
       alert(t(`${ns}.saveFailed`, { error: errorText(err) }))

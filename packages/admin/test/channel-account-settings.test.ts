@@ -6,6 +6,8 @@ import { useProjectStore } from '../src/shared/stores/project-store'
 import { WecomSettings } from '../src/features/wecom/wecom-settings'
 import { TelegramSettings } from '../src/features/telegram/telegram-settings'
 import { WebSettings } from '../src/features/web/web-settings'
+import { WechatSettings } from '../src/features/wechat/wechat-settings'
+import { SlackSettings } from '../src/features/slack/slack-settings'
 
 /**
  * Contract: the channel settings pages share one list shell
@@ -199,5 +201,82 @@ describe('channel settings: per-channel extras', () => {
     expect(create).toHaveBeenCalledWith({ workspacePath: PROJECT, label: undefined, accessLevel: 'readonly', language: 'en' })
     expect(container.textContent).toContain('web.createSuccess')
     expect(container.textContent).toContain('tok_abcdef')
+  })
+})
+
+describe('channel settings: observer on a chat channel', () => {
+  const observerAccount = { ...wecomAccount, accessLevel: 'observer' as const }
+
+  it('badges an observer account as Observer, not Full', async () => {
+    vi.spyOn(api.wecom, 'listAccounts').mockResolvedValue({ accounts: [observerAccount] })
+    await mount(WecomSettings)
+    const badge = [...container.querySelectorAll('li span')].find((el) => el.textContent === 'Observer')
+    expect(badge).toBeDefined()
+    expect(badge!.className).toContain('bg-teal-500/15')
+    expect(container.querySelector('li')!.textContent).not.toContain('Full')
+  })
+
+  it('edit form shows observer as a disabled entry and leaves it out of the patch unless changed', async () => {
+    vi.spyOn(api.wecom, 'listAccounts').mockResolvedValue({ accounts: [observerAccount] })
+    const update = vi.spyOn(api.wecom, 'updateAccount').mockResolvedValue({ ok: true })
+    await mount(WecomSettings)
+
+    act(() => button('wecom.edit').click())
+    const select = control<HTMLSelectElement>('wecom.accessLevel')
+    expect(select.value).toBe('observer')
+    const observer = [...select.options].find((o) => o.value === 'observer')!
+    expect(observer.disabled).toBe(true)
+
+    // Untouched observer → patch without accessLevel (the row keeps it).
+    await act(async () => buttonByText('wecom.save').click())
+    expect(update).toHaveBeenLastCalledWith('acc1', { label: 'Ops Bot', workspacePath: '/ws/a', language: 'zh' })
+
+    // Picking a real level sends it.
+    act(() => button('wecom.edit').click())
+    act(() => {
+      const sel = control<HTMLSelectElement>('wecom.accessLevel')
+      sel.value = 'workspace'
+      sel.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => buttonByText('wecom.save').click())
+    expect(update).toHaveBeenLastCalledWith('acc1', { label: 'Ops Bot', workspacePath: '/ws/a', accessLevel: 'workspace', language: 'zh' })
+  })
+
+  it('a non-observer chat account gets no observer option', async () => {
+    vi.spyOn(api.wecom, 'listAccounts').mockResolvedValue({ accounts: [wecomAccount] })
+    await mount(WecomSettings)
+    act(() => button('wecom.edit').click())
+    expect([...control<HTMLSelectElement>('wecom.accessLevel').options].map((o) => o.value)).toEqual(['readonly', 'workspace', 'full'])
+  })
+})
+
+describe('channel settings: wechat + token inputs', () => {
+  const wx = {
+    accountId: 'w1', baseUrl: 'u', userId: 'x', workspacePath: '/ws/gone', label: 'WX',
+    enabled: true, accessLevel: 'readonly' as const, language: 'en' as const, createdAt: 0, updatedAt: 0,
+  }
+
+  it('wechat flags a missing workspace path', async () => {
+    vi.spyOn(api.wechat, 'listAccounts').mockResolvedValue({
+      accounts: [{ ...wx, workspaceMissing: true }, { ...wx, accountId: 'w2', workspacePath: '/ws/ok', workspaceMissing: false }],
+    } as never)
+    await mount(WechatSettings)
+    const rows = container.querySelectorAll('li')
+    expect(rows[0].textContent).toContain('/ws/gone')
+    expect(rows[0].querySelector('span.text-red-400')?.textContent).toBe('wx.pathMissing')
+    expect(rows[1].textContent).not.toContain('wx.pathMissing')
+  })
+
+  it('slack and telegram token inputs are password fields', async () => {
+    vi.spyOn(api.slack, 'listAccounts').mockResolvedValue({ accounts: [] })
+    await mount(SlackSettings)
+    act(() => buttonByText('slack.add').click())
+    expect(control<HTMLInputElement>('slack.botTokenLabel').type).toBe('password')
+    expect(control<HTMLInputElement>('slack.appTokenLabel').type).toBe('password')
+
+    vi.spyOn(api.telegram, 'listAccounts').mockResolvedValue({ accounts: [] })
+    await mount(TelegramSettings)
+    act(() => buttonByText('tg.add').click())
+    expect(control<HTMLInputElement>('tg.tokenLabel').type).toBe('password')
   })
 })
