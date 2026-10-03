@@ -7,6 +7,7 @@
 #   server.cors_origins       → HALO_CORS_ORIGINS  (comma-separated)
 #   timeout.shell_exec        → HALO_SHELL_TIMEOUT
 #   timeout.web_fetch         → HALO_WEB_FETCH_TIMEOUT
+#   timeout.model_request     → HALO_MODEL_TIMEOUT
 #   timeout.session_grace     → HALO_SESSION_GRACE
 #   timeout.terminal_grace    → HALO_TERMINAL_GRACE
 #   logging.max_file_size     → HALO_LOG_MAX_SIZE
@@ -45,6 +46,11 @@ timeout:
     default: 10000
     description: "web_fetch tool timeout (ms)."
     description_zh: "web_fetch 工具的超时（毫秒)。"
+  model_request:
+    value: 600000
+    default: 600000
+    description: "Per model-call timeout (ms). Streaming providers reset it on any received data, so it acts as an idle timeout; on expiry the call aborts and the agent loop retries."
+    description_zh: "单次模型调用的超时（毫秒）。流式 provider 每收到数据就重新计时，相当于空闲超时；超时后中止本次调用，由 agent 循环重试。"
   session_grace:
     value: 300000
     default: 300000

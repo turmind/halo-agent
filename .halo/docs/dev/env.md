@@ -158,7 +158,6 @@ settings.yaml-driven `general.limits.*` (no env override):
 - `general.limits.tool_result_render_chars` (default 8000)
 - `general.limits.tool_result_ui_chars` (default 64 KiB)
 - `general.limits.auto_report_chars` (default 8192)
-- `general.limits.ws_event_buffer` (default 5000)
 - `general.limits.terminal_scrollback_bytes` (default 50000)
 
 Two ways to authenticate:

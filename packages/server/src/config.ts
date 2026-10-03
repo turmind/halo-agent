@@ -400,7 +400,6 @@ export const config = {
     get toolResultMax(): number { return settingsInt('general.limits.tool_result_render_chars', 8000) },
     get toolResultUiMax(): number { return settingsInt('general.limits.tool_result_ui_chars', 64 * 1024) },
     get autoReportMax(): number { return settingsInt('general.limits.auto_report_chars', 8192) },
-    get wsEventBuffer(): number { return settingsInt('general.limits.ws_event_buffer', 5000) },
     get terminalOutputBuffer(): number { return settingsInt('general.limits.terminal_scrollback_bytes', 50_000) },
   },
 
