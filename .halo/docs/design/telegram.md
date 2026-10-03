@@ -17,7 +17,7 @@ All channels are peers — each one is a subscriber + caller against SessionMana
 
 ## Shared inbound skeleton
 
-All four IM channels (telegram / wechat / slack / feishu) route inbound messages through `channels/shared/inbound.ts` rather than each keeping its own copy of the same ~200-line tail. The copies had drifted independently, which is how two audited bugs happened (audit A, 2026-08-06): the wechat responder captured its recipient at listener-registration time (A-M2), and all four command-dispatch sites ignored `CommandResult.startedTurn`, so a skill command on a fresh session kicked the agent with no listener attached and the reply vanished (A-M5).
+All five IM channels (telegram / wechat / slack / feishu / wecom) route inbound messages through `channels/shared/inbound.ts` rather than each keeping its own copy of the same ~200-line tail. The copies had drifted independently, which is how two audited bugs happened (audit A, 2026-08-06): the wechat responder captured its recipient at listener-registration time (A-M2), and all the command-dispatch sites ignored `CommandResult.startedTurn`, so a skill command on a fresh session kicked the agent with no listener attached and the reply vanished (A-M5).
 
 Three pieces:
 

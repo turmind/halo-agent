@@ -64,6 +64,7 @@ If nothing happens, check halo server logs for `[WeChat]` lines.
 - **Voice** — decrypted, saved under `<workspace>/.halo/assets/weixin/inbound/<accountId>/<date>/` (the `weixin` directory name is kept for backward compatibility with existing workspaces), path included in the agent's input
 - **Video / files** — same as voice
 - **Group chats** — not supported: the WeChat (iLink) bot is a one-to-one contact and the platform doesn't deliver group messages to it, so there is nothing for halo to handle
+- **After a server restart** — if the agent was mid-task when halo restarted, its reply still reaches each user who has chatted with the bot (as long as the stored `context_token` is still accepted; otherwise it fails with `ret=-2` until they write again)
 - **Self-loop** — bot-authored messages are filtered out
 
 ## Slash commands

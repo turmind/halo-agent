@@ -45,6 +45,8 @@ What the admin UI actually asks you for. Auto-filled fields (botUsername, botUse
 | WeCom | Bot ID, Secret, workspace path | Label, access level, language | work.weixin.qq.com → 智能机器人 → create bot, copy Bot ID + Secret |
 | WeChat | Workspace path (set before scanning) | Label, access level, language | QR scan in admin UI; bot token comes back from the scan |
 
+In the admin account list every row shows an access-level badge next to its name, and a red **(path does not exist)** after the workspace path when the bound folder is missing on disk (the account is skipped at startup until you re-bind it). Secret fields in the Add forms (Telegram bot token, Slack bot / app tokens, Feishu App Secret and Encrypt Key, WeCom Secret) are password inputs — pasted values are masked.
+
 ## Access level
 
 Every channel account carries an `accessLevel`:

@@ -14,7 +14,7 @@ Halo server (9527) ──┤├── channels/wechat/              ├── Se
                            https://open.feishu.cn
 ```
 
-Feishu uses the official SDK's `Lark.WSClient` to maintain a persistent WebSocket connection for event delivery. Unlike Slack/Telegram (which use webhooks + polling respectively), Feishu's long-connect receives `im.message.receive_v1` events pushed by the server over wss.
+Feishu uses the official SDK's `Lark.WSClient` to maintain a persistent WebSocket connection for event delivery. Unlike Telegram (long-polling), Feishu's long-connect receives `im.message.receive_v1` events pushed by the server over wss.
 
 ## Data model
 
@@ -70,7 +70,7 @@ Files: `packages/server/src/channels/feishu/`
 - `accounts.ts` — DAL (listAccounts / getAccount / insertAccount / updateAccount / deleteAccount / findAccountByAppId)
 - `handler.ts` — Lark.WSClient setup, event dispatch, message handling, mention detection, media ingestion; session routing + listener/route bookkeeping come from `channels/shared/inbound.ts` (`InboundBridge` / `deliverInbound` / `dispatchChannelCommand`)
 - `event-adapter.ts` — AgentSessionEvent stream → coalesced Feishu message replies (buffer + flush at paragraph boundaries)
-- `api.ts` — HTTP client (tenant token caching / getBotInfo / sendMessage / replyMessage / uploadImage / uploadFile / downloadResource / decryptWebhookBody / searchFeishuTargets / openLongConnection)
+- `api.ts` — HTTP client (tenant token caching / getBotInfo / sendMessage / replyMessage / uploadImage / uploadFile / downloadResource / decryptWebhookBody / searchFeishuTargets / openLongConnection); authenticated calls go through `fetchWithTenantToken` (401 → drop the cached token, retry once) and replies are parsed by `readFeishuJson`
 - `cron-dispatcher.ts` — registers the cron dispatcher, requires explicit chatId targets
 - `descriptor.ts` — ServerChannelDescriptor entry point
 
@@ -122,7 +122,7 @@ The SDK wraps protobuf marshalling; we just register an `EventDispatcher` callba
 
 ## Slash commands (native Feishu /commands)
 
-Implemented via `channels/shared/commands.ts` (shared across Telegram, WeChat, Slack, Feishu):
+Implemented via `channels/shared/commands.ts` (shared across Telegram, WeChat, Slack, Feishu, WeCom):
 
 | Command | Purpose |
 |---|---|
@@ -182,17 +182,19 @@ Inbound images are downloaded via `/im/v1/messages/{messageId}/resources/{imageK
 
 **Group (chat):** Replies sent via `replyMessage` with `reply_in_thread: true` and the inbound message id. This auto-creates a thread rooted at the inbound message if it doesn't exist, or appends to the existing thread.
 
+**After a restart**, `startAccount` calls `restoreReplyRoute()` to re-wire the reply route from `lastActiveChatId` (`restoreChannelRoute` in `channels/shared/inbound.ts`, no session created). p2p only: a group-thread reply needs the inbound message id, which isn't persisted, so group threads re-wire on their next inbound message.
+
 ## Similarities vs Slack and Telegram
 
 | Aspect | Feishu | Slack | Telegram |
 |--------|--------|-------|----------|
-| **Inbound delivery** | Long-connect (wss) | Webhook + slash commands | Long-polling |
+| **Inbound delivery** | Long-connect (wss) | Socket Mode (wss) | Long-polling |
 | **Session model** | Per-thread in groups, p2p anchored | Per-thread + channels | Per-user (one active) |
 | **Mention required** | Yes in groups, no in p2p | Yes in channels, no in DMs | No (all messages routed to agent) |
 | **Cron target** | Explicit chatId only | Explicit chatId only (DM / channel / thread) | Explicit numeric chatId only |
 | **Media upload** | Separate image + file endpoints | Unified File upload API | Bot API sendPhoto / sendVideo / sendDocument |
-| **Text limit** | ~5000 chars | ~4000 chars | ~4000 chars |
-| **Thread support** | Native (root_id in messages) | Native (thread_ts replies) | N/A (group chats not supported) |
+| **Text limit** | 4500 chars per message | 35000 chars per message | 4000 chars per message |
+| **Thread support** | Native (root_id in messages) | Native (thread_ts replies) | N/A (group chats supported, no threads; sessions keyed by sender) |
 
 ## Configuration
 
@@ -232,10 +234,10 @@ Not supported: group chat without mention (we require explicit @mention for grou
 
 ## Key file references
 
-- Long-connect: `packages/server/src/channels/feishu/handler.ts:connect()` (line 241)
-- Token caching: `packages/server/src/channels/feishu/api.ts:getTenantAccessToken()` (line 39)
-- Message parsing: `packages/server/src/channels/feishu/handler.ts:parseContent()` (line 135)
-- Event dispatch: `packages/server/src/channels/feishu/handler.ts:handleInbound()` (line 301)
-- Cron dispatch: `packages/server/src/channels/feishu/cron-dispatcher.ts:dispatch()` (line 27)
-- Event coalescing: `packages/server/src/channels/feishu/event-adapter.ts:FeishuResponder` (line 18), extending `channels/shared/responder.ts:ChunkedResponder`
+- Long-connect: `packages/server/src/channels/feishu/handler.ts` `connect()`
+- Token caching: `packages/server/src/channels/feishu/api.ts` `getTenantAccessToken()`
+- Message parsing: `packages/server/src/channels/feishu/handler.ts` `parseContent()`
+- Event dispatch: `packages/server/src/channels/feishu/handler.ts` `handleInbound()`
+- Cron dispatch: `packages/server/src/channels/feishu/cron-dispatcher.ts` `dispatch()`
+- Event coalescing: `packages/server/src/channels/feishu/event-adapter.ts` `FeishuResponder`, extending `channels/shared/responder.ts` `ChunkedResponder`
 - REST routes: `packages/server/src/routes/feishu.ts` (all account CRUD + search)

@@ -1,6 +1,6 @@
 /**
- * Shared inbound skeleton for the four IM channels (telegram / wechat /
- * slack / feishu).
+ * Shared inbound skeleton for the five IM channels (telegram / wechat /
+ * slack / feishu / wecom).
  *
  * Before this module each channel handler carried its own copy of the same
  * ~200-line tail: get-or-create session → goal-route overlay → busy hint →

@@ -61,7 +61,7 @@ Files: `packages/server/src/channels/slack/`
 - `types.ts` — SlackAccount, SlackSocketEnvelope, SlackMessageEvent interfaces
 - `accounts.ts` — DAL (thin wrapper over `channels/shared/accounts.ts` for Slack-specific mappings)
 - `handler.ts` — Socket Mode connection + event routing, mention filtering; session resolution + per-thread listener/route bookkeeping come from `channels/shared/inbound.ts` (`InboundBridge` / `deliverInbound` / `dispatchChannelCommand`)
-- `event-adapter.ts` — AgentSessionEvent → Slack messages (buffer + flush; split at 35k chars)
+- `event-adapter.ts` — AgentSessionEvent → Slack messages (buffer + flush on `complete`; split at 35k chars)
 - `api.ts` — HTTP client (auth.test / openSocketModeConnection / chat.postMessage / files.upload / files.download / searchSlackTargets)
 - `cron-dispatcher.ts` — CronDispatcher registration; requires an explicit Slack chatId per dispatch
 
@@ -109,13 +109,13 @@ Unlike Telegram (grammy polling) or WeChat (HTTP long-poll), Socket Mode elimina
 
 1. SessionManager emits AgentSessionEvent stream chunks
 2. SlackResponder buffers only chunks flagged `final` (the turn's wrap-up text; pre-tool-call filler is dropped) until `complete` event
-3. On `complete` or when buffer hits 35k chars:
-   - Split at paragraph boundary if needed via the shared `splitText` (`channels/shared/chunk.ts`; Slack hard-caps messages at ~40k)
+3. On `complete` (Slack doesn't set `splitMidStream`, so the buffer is never flushed early at the limit):
+   - Split at the 35k-char limit, at a paragraph boundary if possible, via the shared `splitText` (`channels/shared/chunk.ts`; Slack hard-caps messages at ~40k)
    - Extract `MEDIA: <path>` markers (sent as native file uploads)
    - Convert CommonMark → Slack's mrkdwn format
    - Post as a single message (or series of messages if split)
    - This fires on **any** `complete`; the responder ignores its `batchBoundary` flag, so a multi-round queue drain posts each merged turn as its own message rather than one blob (see [session.md](session.md#message-queue-and-drain))
-4. Errors and system notices flush immediately (don't wait for complete)
+4. Errors (`❌ …`) and system notices (`ℹ️ …`) flush immediately (don't wait for complete)
 5. Sub-agent events (taskId set) are dropped (visible in web UI only)
 
 **Chunk sends are serialized per responder.** One `flushBuffer` can produce
@@ -140,20 +140,20 @@ dropped.
 
 ### DM sessions
 
-DM channels have a stable channel_id (`D…`). A message in a DM stays in the same session regardless of turn count. Session key: `slack:${channelId}:dm`.
+DM channels have a stable channel_id (`D…`). A message in a DM stays in the same session regardless of turn count. Session prefix: `slack_${channelId}:dm_`.
 
 ### Channel / group / thread sessions
 
-A mention on a top-level message starts a thread and creates a session keyed by that message's `ts`. Replies inside that thread reuse the same `thread_ts`, so they map to the same session and preserve context. Session key: `slack:${channelId}:${rootTs}`.
+A mention on a top-level message starts a thread and creates a session keyed by that message's `ts`. Replies inside that thread reuse the same `thread_ts`, so they map to the same session and preserve context. Session prefix: `slack_${channelId}:${rootTs}_`.
 
 ### Session resolution
 
-The `getOrCreateSessionForThread()` helper:
-1. Build session prefix: `slack:${channelId}:${rootTs}:`
-2. Check per-user activeOverrides (set by `/session switch` command in DMs)
-3. Look for an existing session matching the prefix + userId
-4. If none found, create a new session with ID `${prefix}${Date.now().toString(36)}`
-5. Store in activeOverrides for future messages from this user
+`handleInbound()` hands the message to `deliverInbound` (`channels/shared/inbound.ts`), which calls `getOrCreateChannelSession`:
+1. Build the session prefix with `buildSessionPrefixForThread(channelId, rootTs)` (see above; `rootTs` is `dm` for DMs); the override key is `${userId}@${channelId}:${rootTs}`
+2. `findActiveSessionId` (`channels/shared/commands.ts`): honour the per-user activeOverrides entry (set by `!session switch` in DMs), else the latest session under the prefix
+3. If none found, create one with ID `${prefix}${Date.now().toString(36)}` on the workspace's default agent and store it in activeOverrides (`setOverrideOnCreate`)
+
+**Reply route after a restart.** Routes and listeners are in-memory, so `startAccount` calls `restoreReplyRoute()`: it reads `lastActiveChatId` (`<channelId>:<rootTs>`) and re-wires the latest existing session under that prefix via `restoreChannelRoute` (no session is created), so a turn that resumes on its own after a restart still reaches Slack. Only that one conversation per account is restored; other threads re-wire on their next inbound message.
 
 ## Cron-dispatcher role
 
@@ -220,9 +220,9 @@ Not supported: interactive messages (blocks/buttons/callbacks), slash commands i
 
 Slack-specific paths:
 
-- `packages/server/src/channels/slack/handler.ts:252` — `connect()` Socket Mode setup
-- `packages/server/src/channels/slack/handler.ts:391` — `handleInbound()` event dispatch
-- `packages/server/src/channels/slack/handler.ts:552` — `getOrCreateSessionForThread()` session keying
-- `packages/server/src/channels/slack/api.ts:265` — `openSocketModeConnection()` fetch wss:// URL
-- `packages/server/src/channels/slack/cron-dispatcher.ts:46` — `dispatch()` cron push logic
+- `packages/server/src/channels/slack/handler.ts` `connect()` (inside `startSlackChannel()`) — Socket Mode setup
+- `packages/server/src/channels/slack/handler.ts` `handleInbound()` — event dispatch
+- `packages/server/src/channels/slack/handler.ts` `buildSessionPrefixForThread()` + `packages/server/src/channels/shared/inbound.ts` `deliverInbound()` / `getOrCreateChannelSession()` — session keying + resolution
+- `packages/server/src/channels/slack/api.ts` `openSocketModeConnection()` — fetch wss:// URL
+- `packages/server/src/channels/slack/cron-dispatcher.ts` `dispatch()` — cron push logic
 - `packages/server/src/channels/shared/responder.ts` — `ChunkedResponder.dispatchChunk()` buffer flush + media extraction (`slack/event-adapter.ts` supplies the 35k limit + `formatForSlack`)

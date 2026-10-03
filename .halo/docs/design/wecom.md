@@ -33,7 +33,7 @@ One 智能机器人 (= one botId + secret pair) is bound to one workspace. A wor
 
 ### Access level
 
-Each account carries `accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'` (default `readonly`):
+Each account carries `accessLevel: 'full' | 'workspace' | 'readonly'` (default `readonly`; the route validates against `CHAT_ACCESS_LEVELS`, so `observer` — web-only — is rejected):
 - `full` — no restrictions (no sandbox)
 - `workspace` — tool execution runs inside a bwrap sandbox with the workspace mounted read-write
 - `readonly` — tool execution runs inside a bwrap sandbox with the workspace mounted read-only; readonly sessions only receive read-only tools

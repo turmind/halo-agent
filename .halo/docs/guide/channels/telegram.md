@@ -66,6 +66,7 @@ If nothing happens, check halo server logs for `[Telegram]` lines.
 - **Group chats** — supported. Each member talks to their **own** session (the same one they use in DM with the bot), and the bot replies in the group. `allowedUsers` is checked against the sender, so non-whitelisted members are refused there too. By default Telegram's *privacy mode* only delivers `/command@yourbot` and replies to the bot's messages; to have the bot see every group message, send `/setprivacy` → **Disable** to BotFather (then re-add the bot to the group) or make it a group admin
 - **Photos** — downloaded, sent to the model as vision input and saved under `<workspace>/.halo/assets/telegram/inbound/<accountId>/<date>/`; the saved path is appended to the message text
 - **Documents / voice / round video** — downloaded (20 MB cap) to the same folder; the agent gets the saved path in the message text, not the content
+- **After a server restart** — if the agent was mid-task when halo restarted, its reply still reaches the most recent private chat the user talked in; a group conversation reconnects on the user's next message there
 - **Slash commands** — handled by halo, not by Telegram. The BotFather menu in Step 2 is just a UI hint
 
 ## Slash commands

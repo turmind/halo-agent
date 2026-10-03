@@ -68,7 +68,7 @@ All six accept the same auth header.
 By default each token is locked to the workspace and active session set by the admin. External integrations (notably the [ACP adapter](acp.md)) need finer control:
 
 - `workspace` — server-side absolute path, **gated on `accessLevel === 'full'`** (readonly / workspace tokens can't escape their bound workspace; the override is rejected)
-- `sessionId` — explicit halo session id; lets clients pre-mint stable ids and address them across reconnects
+- `sessionId` — explicit halo session id; lets clients address a session across reconnects. **Gated on ownership**: `full` tokens may name any id; `readonly` / `workspace` tokens only ids under their own account (`web_<accountId>_*`, e.g. minted by `POST /api/web/sessions`) — anything else is `403`
 - `agentId` — only used when the request creates a new session
 
 These can be passed as POST body fields, headers (`x-workspace`, `x-session-id`, `x-agent-id`), or query params (`?workspace=…&sessionId=…&agentId=…`). POST body wins on conflict.
@@ -113,7 +113,7 @@ Send a slash command exactly like a normal message — the server detects the le
 |---|---|
 | `401` on every call | Missing `x-token` header, or token is for a deleted account |
 | `429` | 5 bad tokens from one IP within 15 minutes locks that IP out for 15 minutes (in-memory, cleared on restart) |
-| `403` when passing `workspace=…` | Token is `readonly` / `workspace` access — only `full` can override |
+| `403` when passing `workspace=…` or a foreign `sessionId` | Token is `readonly` / `workspace` access — only `full` can override the workspace or address sessions it didn't mint |
 | SSE stream hangs forever | Reverse proxy buffering. Disable buffering for `text/event-stream` (nginx: `proxy_buffering off`, Cloudflare: enable streaming) |
 | Token leaked accidentally | Delete the account in admin, create a new one. The old token is invalidated immediately |
 | Want to share one token across multiple users | Don't — every request would land on the same active session. Create one account per user / app |

@@ -119,6 +119,7 @@ If nothing happens, check the halo server logs (`~/.halo/global/logs/server.log`
 - **Channels / groups** — only `@`-mentions wake the bot up, plain messages are ignored
 - **Threads** — the bot replies in-thread; one halo session per thread, so a long thread stays in one conversation
 - **Files** — images go to the LLM as multimodal content; other files are saved under `<workspace>/.halo/assets/slack/inbound/<accountId>/<date>/`
+- **After a server restart** — if the agent was mid-task when halo restarted, its reply still reaches the most recent conversation (DM or thread) the bot talked in (one per bot); other threads reconnect on their next message
 - **`bot_id` self-loop** — messages posted by any bot (including this one) are dropped, so the agent can't reply to itself
 
 ## Slash commands

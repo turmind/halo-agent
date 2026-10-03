@@ -117,6 +117,7 @@ If nothing happens, check halo server logs (`~/.halo/global/logs/server.log`) fo
 - **Groups** — only `@`-mentions wake the bot up
 - **Threads** — Feishu's `root_id` is used as the session boundary; replies stay in-thread
 - **Files** — images go to the LLM as multimodal content; other files are saved under `<workspace>/.halo/assets/feishu/inbound/<accountId>/<date>/`
+- **After a server restart** — if the agent was mid-task when halo restarted, its reply still reaches the most recent 1:1 DM the bot talked in; group threads reconnect on their next `@`-mention
 - **Self-loop** — bot-authored events are dropped to prevent the bot replying to itself
 
 ## Slash commands

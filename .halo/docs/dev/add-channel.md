@@ -28,7 +28,7 @@ What you write yourself:
 
 ## Reference implementation
 
-Whole directory: [packages/server/src/channels/wechat/](../../../packages/server/src/channels/wechat/) (~1900 lines across 9 files).
+Whole directory: [packages/server/src/channels/wechat/](../../../packages/server/src/channels/wechat/) (~1800 lines across 10 files).
 
 The pattern that works:
 
@@ -102,11 +102,11 @@ Inbound: Slack pushes events via **HTTPS webhooks** (Events API) or **WebSocket*
 
 ### 4. Write the main handler
 
-`handler.ts`: exports `startSlackChannel(deps: { registry, db })` returning `{ startAccount, stopAccount, stopAll }`. WeChat shape at [packages/server/src/channels/wechat/handler.ts:77-165](../../../packages/server/src/channels/wechat/handler.ts#L77-L165).
+`handler.ts`: exports `startSlackChannel(deps: { registry, db })` returning `{ startAccount, stopAccount, stopAll }`. WeChat shape: `startWechatChannel` in [packages/server/src/channels/wechat/handler.ts](../../../packages/server/src/channels/wechat/handler.ts).
 
 For webhook-style channels (Slack Events API), you don't need a `runAccountLoop` — instead expose an HTTP route that validates the signature, deserializes the event, and calls `handleInbound`. For Socket Mode, you **do** have a loop (the WebSocket reconnect loop).
 
-Inside `handleInbound`, **don't hand-roll the session/listener plumbing** — the get-or-create, access folding, busy hint, responder registration and agent-input assembly all live in [channels/shared/inbound.ts](../../../packages/server/src/channels/shared/inbound.ts) (`InboundBridge` + `deliverInbound` + `dispatchChannelCommand`). All four channels go through it; the four hand-written copies it replaced are how audit findings A-M2 (responder locked onto the first user in a chat) and A-M5 (skill-command turns ran with no listener attached) happened. Your handler parses the platform message and supplies a **reply route**:
+Inside `handleInbound`, **don't hand-roll the session/listener plumbing** — the get-or-create, access folding, busy hint, responder registration and agent-input assembly all live in [channels/shared/inbound.ts](../../../packages/server/src/channels/shared/inbound.ts) (`InboundBridge` + `deliverInbound` + `dispatchChannelCommand`). All five IM channels go through it; the hand-written copies it replaced are how audit findings A-M2 (responder locked onto the first user in a chat) and A-M5 (skill-command turns ran with no listener attached) happened. Your handler parses the platform message and supplies a **reply route**:
 
 ```ts
 // One bridge per running account, owned by the account state so
@@ -154,7 +154,7 @@ Its send primitives take **no destination argument** — they read `bridge.getRo
 **What to forward, what to drop**:
 - Drop `tool_call` / `tool_result` / `thinking` events — they're chatter the user doesn't want in IM
 - Drop events where `event.taskId` is set (those are sub-agent events; the root agent's text is enough)
-- Forward `stream` text **only when `event.final` is set** — that's the turn's closing reply; the filler the model emits before a tool call ("let me check…") is chatter in IM too. `error` goes out immediately with a `[error]` prefix; `complete` flushes the remaining buffer
+- Forward `stream` text **only when `event.final` is set** — that's the turn's closing reply; the filler the model emits before a tool call ("let me check…") is chatter in IM too. `error` goes out immediately with a `❌ ` prefix (`system` with `ℹ️ `); `complete` flushes the remaining buffer
 - Forward `system` if the platform can render it (e.g. Slack ephemeral messages)
 
 ### 6. Surface channel context to skills
@@ -346,7 +346,7 @@ Channel-specific commands (e.g. WeChat's `/qr`) go in a fallback switch after `d
 
 ### Compact / busy states
 
-Handled for you inside `deliverInbound`: it calls `busyHint(sm, sessionId, lang)` ([channels/shared/busy-hint.ts](../../../packages/server/src/channels/shared/busy-hint.ts)) and sends the result through your `sendHint` callback. The hint is a **hint only** — the message is always delivered, because `sendUserMessage` queues compacting/busy sessions itself. (The four inlined copies once carried an extra `return` in the compacting branch, so messages sent mid-compact were answered with a hint and then silently dropped.)
+Handled for you inside `deliverInbound`: it calls `busyHint(sm, sessionId, lang)` ([channels/shared/busy-hint.ts](../../../packages/server/src/channels/shared/busy-hint.ts)) and sends the result through your `sendHint` callback. The hint is a **hint only** — the message is always delivered, because `sendUserMessage` queues compacting/busy sessions itself. (The inlined per-channel copies once carried an extra `return` in the compacting branch, so messages sent mid-compact were answered with a hint and then silently dropped.)
 
 ### Single-instance lock
 
@@ -362,13 +362,15 @@ At handler startup, `resolveAccountWorkspace(account)` checks the path exists on
 
 Use the shared helper `saveInboundMedia({ workspacePath, accountId, channel: 'slack', buffer, kind: 'image', mimeType })` — [packages/server/src/channels/shared/media-store.ts](../../../packages/server/src/channels/shared/media-store.ts). It saves under `<ws>/.halo/assets/slack/inbound/<accountId>/<date>/` and returns the path. Append `[图片已保存: /abs/path]` to the agent's input text and the existing UI code will render a thumbnail.
 
+Outbound `MEDIA: <path>` markers go through `sendMediaOrReport({ filePath, account, logTag, send, reply })` ([channels/shared/media.ts](../../../packages/server/src/channels/shared/media.ts)): it runs the access-level path check (`assertMediaPathAllowed`), then your `send()` upload, and reports a block or failed upload back to the chat. A responder that already has its own failure channel can call `assertMediaPathAllowed` directly and let the throw ride `onSendError` (WeChat does this).
+
 For images going to the LLM, also pass them as base64 in the `images` arg — `sm.sendUserMessage(sid, text, images)`.
 
 ---
 
 ## Testing
 
-No automated test framework for channels — manual for now:
+Shared channel plumbing has automated coverage under `packages/server/test/` (`channel-*.test.ts` for the inbound bridge, responder ordering / `final`-only forwarding, media whitelist, route restore, access-level and workspace validation; plus per-channel files such as `telegram-group-chat.test.ts`, `wecom-inbound.test.ts`, `wecom-responder.test.ts`). The platform round-trip itself is still manual:
 
 1. Create a test bot on the platform (development workspace / test server)
 2. Bind it to a throwaway Halo workspace: `POST /api/slack/accounts`
