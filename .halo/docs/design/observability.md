@@ -34,14 +34,14 @@ No `OTEL_EXPORTER_OTLP_ENDPOINT` after the mapping → `enabled=false`, `initObs
 
 | module | role |
 |---|---|
-| `packages/server/src/observability/otel.ts` (91 lines) | Bootstrap. `initObservability()` / `shutdownObservability()`, the `enabled` gate, `tracer` / `getMeter()` / `otelLogger` / `captureContent()` exports. |
-| `packages/server/src/observability/otel-sdk.ts` (47 lines) | The ONE module that imports the SDK packages and OTLP exporters. |
-| `packages/server/src/observability/genai-spans.ts` (296 lines) | The span model: `beginTurn` / `onAgentEvent` / `recordRetry` / `endTurn`. |
+| `packages/server/src/observability/otel.ts` | Bootstrap. `initObservability()` / `shutdownObservability()`, the `enabled` gate, `tracer` / `getMeter()` / `otelLogger` / `captureContent()` exports. |
+| `packages/server/src/observability/otel-sdk.ts` | The ONE module that imports the SDK packages and OTLP exporters. |
+| `packages/server/src/observability/genai-spans.ts` | The span model: `beginTurn` / `onAgentEvent` / `recordRetry` / `endTurn`. |
 | `packages/server/src/agents/session-manager.ts` | Calls the four hooks above from the turn loop (see below). |
 | `packages/server/src/logger.ts` | Bridges every `logger.*` call into an OTel LogRecord when `enabled`. |
-| `packages/server/src/index.ts` | `await initObservability()` (L262, before `initLogger()`) and `await shutdownObservability()` (L599, in `gracefulShutdown`). |
+| `packages/server/src/index.ts` | `await initObservability()` (before `initLogger()`) and `await shutdownObservability()` (in `gracefulShutdown`). |
 
-**Hook call sites in `session-manager.ts`**: `beginTurn(session, message)` at L1276 (start of `runAgentTurn`), `onAgentEvent(session, event)` at L1316 (inside the agent event loop, one call per `AgentEvent`), `recordRetry(kind)` at the 7 retry catch sites, `endTurn(session, {error?})` at L1547 (the turn's single exit point, success or failure).
+**Hook call sites in `session-manager.ts`** (all in `runAgentTurn`): `beginTurn(session, message)` at the start, `onAgentEvent(session, event)` inside the agent event loop (one call per `AgentEvent`), `recordRetry(kind)` at the 7 retry catch sites, `endTurn(session, {error?})` once after the retry loop (the turn's single exit point, success or failure).
 
 **The `enabled` gate.** `otel.ts` exports a single `enabled: boolean`, set once by `initObservability()`. Every hook in `genai-spans.ts` and the `logger.ts` bridge checks it first — an unconfigured server pays nothing beyond one boolean read per hook call.
 
@@ -49,9 +49,9 @@ No `OTEL_EXPORTER_OTLP_ENDPOINT` after the mapping → `enabled=false`, `initObs
 
 **Why the meter is lazy.** The `@opentelemetry/api` tracer and logger are proxies — they stay no-op until a real provider is registered, then transparently start forwarding, so `tracer` / `otelLogger` can be module-level consts. The metrics API has **no proxy**: a `Meter` fetched via `metrics.getMeter()` before `setGlobalMeterProvider()` runs is a permanent no-op forever after, even once a provider registers later. `getMeter()` in `otel.ts` is therefore a function, not a const, and `genai-spans.ts` calls it lazily on first metric emission (`instruments()`, cached after).
 
-**Dependencies** (`packages/server/package.json`): `@opentelemetry/api` 1.9.1, `api-logs` 0.222.0, `sdk-trace-node` / `sdk-trace-base` / `sdk-metrics` / `sdk-logs` / `resources` 2.11.0, `exporter-trace-otlp-proto` / `exporter-metrics-otlp-proto` / `exporter-logs-otlp-proto` 0.222.0, `semantic-conventions` 1.43.0. No gRPC exporter (see [Rejected alternatives](#rejected-alternatives)).
+**Dependencies** (`packages/server/package.json`): `@opentelemetry/api` 1.9.1, `api-logs` 0.222.0, `sdk-trace-node` / `sdk-trace-base` / `sdk-metrics` / `resources` 2.11.0, `sdk-logs` / `exporter-trace-otlp-proto` / `exporter-metrics-otlp-proto` / `exporter-logs-otlp-proto` 0.222.0, `semantic-conventions` 1.43.0. No gRPC exporter (see [Rejected alternatives](#rejected-alternatives)).
 
-**Test coverage**: `packages/server/test/observability-genai-spans.test.ts` (7 cases) drives `beginTurn` / `onAgentEvent` / `endTurn` against an in-memory tracer + `InMemorySpanExporter`, asserting the three-level span tree, parent ids, semconv attribute names, and the `capture_content` on/off split.
+**Test coverage**: `packages/server/test/observability-genai-spans.test.ts` (8 cases) drives `beginTurn` / `onAgentEvent` / `endTurn` against an in-memory tracer + `InMemorySpanExporter`, asserting the three-level span tree, parent ids, semconv attribute names, and the `capture_content` on/off split.
 
 ## Span model
 
@@ -87,7 +87,7 @@ Child of `invoke_agent`, one per model call — created retroactively on the `us
 | `gen_ai.input.messages` | | semconv JSON (see below) — **delta only**: messages appended since this turn's previous `chat` span (first call → the user message; later calls → that cycle's `tool_result`s) |
 | `gen_ai.output.messages` | | semconv JSON, only the trailing assistant message |
 
-Semconv message JSON: `[{role, parts:[{type:"text",content}|{type:"tool_call",id,name,arguments}|{type:"tool_call_response",id,result}]}]`.
+Semconv message JSON: `[{role, parts:[{type:"text",content}|{type:"tool_call",id,name,arguments}|{type:"tool_call_response",id,response}]}]`.
 
 `gen_ai.input.messages` is incremental on purpose (since 1.3.1): replaying the full history on every model call made a turn's exported bytes O(n²) and the system prompt alone was ~60% of the volume — a 4-turn / 9-call session dropped from 129 KB to 44 KB of content attributes. Nothing is lost: the full conversation for a trace is the concatenation of its `chat` spans' input + output deltas in order (a `TurnState.messageCursor` tracks the boundary; a mid-turn compact that shrinks the history yields an empty delta and re-syncs the cursor). Verified that AgentCore Evaluations scores are unchanged — its evaluators read `invoke_agent`'s `task.*` and `execute_tool`'s `arguments/result`, not the chat messages.
 
@@ -105,7 +105,7 @@ Child of the `chat` span that requested it, one per tool call — created on the
 | `gen_ai.tool.call.arguments` | | JSON |
 | `gen_ai.tool.call.result` | | text, empty → `[no output]` |
 
-Tool calls still pending when `endTurn` fires (turn interrupted/aborted mid-cycle) are closed as orphans with status `ERROR` and `halo.tool.orphaned=true`, so no trace is left with a dangling tool-call id.
+Tool calls still pending when `endTurn` fires (turn interrupted/aborted mid-cycle) are closed as orphans (no status set) with `halo.tool.orphaned=true`, so no trace is left with a dangling tool-call id.
 
 All content attributes are capped (32 KB general cap, 2 KB per message part, 8 KB for system instructions); over-cap content is truncated with a `…[truncated N chars]` marker, and an over-cap message list drops the oldest messages first with an omission marker.
 

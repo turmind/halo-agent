@@ -37,7 +37,7 @@ Let agents draft and validate improvements to their own prompt surface by learni
               next user message uses patched rules
 ```
 
-All coordination via global db (`~/.halo/global/evo.db`). Wrapper heartbeats every 60s; ticker marks `running` → `timeout` if stale. Detached process model: server restart doesn't kill in-flight wrappers.
+All coordination via global db (`~/.halo/global/evo.db`). Wrapper heartbeats every 60s; ticker requeues a stale `running` row (→ `timeout` once `max_attempts` is spent). Detached process model: server restart doesn't kill in-flight wrappers.
 
 ## Trigger and Enqueue Flow
 
@@ -52,12 +52,12 @@ User in chat:
 Server flow (synchronous, ~10ms):
 
 1. Refuse if user is not `full` access (not gated on `evolution.level`).
-2. Resolve root session id (must be `parentId === null`).
+2. Resolve the active session id; a sub-session id (contains `>`) is rejected.
 3. Call `enqueueEvoRun()` from `/packages/server/src/evolution/enqueue.ts`:
    - mkdir `<ws>/.halo/evo/runs/<id>/`
    - Write `source-snapshot.json` (frozen `session.agent.messages`)
    - Write `tool-flow.md` (tool_result-stripped Markdown view for skimming)
-   - Write `meta.json` (metadata: runId, triggerKind, sourceSession, userHint, createdAt)
+   - Write `meta.json` (metadata: id, triggerKind, sourceSession, userHint, workspacePath, createdAt)
    - Write `evo-context.json` (snapshot of prompt surface at trigger time: assembled system prompt, all prompt files, agent/skill listings)
 4. INSERT `evolution_runs` row with `status='pending'`, `trigger_kind='note'` (internal trigger id keeps the old name; only the user-visible command was renamed to `/evo`).
 5. Reply via `chat:system`: "📝 Queued for evaluation".
@@ -66,24 +66,22 @@ Server flow (synchronous, ~10ms):
 
 ### Pre-compact hook
 
-Inside `SessionManager.compactSession()`, **before** the compression LLM rewrites `session.agent.messages`:
+Compaction only sets a per-session `compactedThisTurn` flag; `SessionManager.enqueueEvoForCompactedTurn()` consumes it once the compact is done — at the end of `runSession` for auto-compact (mid-turn or turn-end), right after the summary lands for manual `/compact`. A turn that compacts several times therefore enqueues one run.
 
-1. Same checks (level=L1, root session, non-readonly user).
-2. Snapshot the current messages → `enqueueEvoRun()` with `trigger='pre-compact'`.
+1. Checks: `evolution.level` = L1, `evolution.triggers.pre_compact` on, root session (`parentId` null).
+2. `enqueueEvoRun()` with `trigger='pre-compact'` snapshots the session's current `rawMessages`. Because the enqueue is deferred, that is the already-compacted history (summary + kept tail), not the pre-compact one.
 3. INSERT `evolution_runs` row.
-4. Continue with normal compact.
-
-Order matters: snapshot first, compact second. Otherwise evo sees the already-compacted (summarized) message log, losing detail it should learn from.
 
 ## Ticker — Stateless Scheduler (every 30s)
 
 Located: `/packages/server/src/evolution/ticker.ts`
 
-Three jobs per pass:
+Four jobs per pass:
 
-1. **Mark timeouts**: `running` rows with heartbeat older than `runTimeoutMinutes` → `timeout`. Retry rows with `attempts < maxAttempts` back to `pending`; exhausted rows → terminal `timeout`.
+1. **Mark timeouts**: `running` rows (applies: also `syncing`) with heartbeat older than `runTimeoutMinutes` (`applyTimeoutMinutes` for applies) → back to `pending` while `attempts < maxAttempts`; exhausted rows → terminal `timeout` (a `syncing` apply → `failed`).
 2. **Start runs**: count current `running`, claim `pending` runs (oldest first, up to slot budget), spawn `evo-wrapper.js --mode=run --id=<X>`.
 3. **Start applies**: same shape, but with per-workspace mutex (only one apply per workspace at a time, since apply reads **current** main to build sandbox).
+4. **Broadcast**: diff in-flight run/apply statuses against the previous tick and push `evolution:run_changed` / `evolution:apply_changed` — wrappers are detached processes and can't reach the server's WS.
 
 Restart-safe: no in-memory state. On server reboot, ticker re-evaluates db on first tick — stale `running` rows timeout, pending rows continue to be picked up. Applies can resume mid-publish if they were in `syncing` state (heartbeat timeout was mid-phase-12).
 
@@ -95,7 +93,7 @@ The wrapper is the orchestrator; individual agents do focused work only. Every p
 
 ### Phase A — Draft
 
-`spawn('halo', ['cli', '-a', '__evo_agent__', '-n', '-w', '<runDir>/sandbox', '<draft-brief>'])`
+`spawn('halo', ['cli', '-a', '__evo_agent__', '-n', '-w', '<runDir>/sandbox'])` — the brief goes in on stdin (multi-KB; argv would hit Windows limits), capped at `PHASE_TIMEOUT_SEC` (30 min).
 
 Agent writes:
 - `patch.md` — Markdown with YAML frontmatter + body. Frontmatter includes `testScenario: { agentId, testMessage, originalMessage }` and `target: .halo/<path>`.
@@ -106,20 +104,20 @@ The `target` can be any file in the prompt surface — `INSTRUCTIONS.md`, the ag
 
 Sandbox is whitelist-cp from main workspace (only: `INSTRUCTIONS.md`, `INDEX.md`, `USER.md`, `agents/`, `prompts/`, `skills/`, `docs/`). Agent reads via `file_read`, writes only to `.halo/` subset.
 
-The copy is `copyDereferenced` (`evo-wrapper.ts:1419`), a hand-rolled recursive walk that resolves every symlink to its target's bytes, so the sandbox holds contents and never a link back into the live workspace (an evo edit through a link would write straight into main). It replaced `fs.cpSync({ dereference: true })` because Node ≥ 22.17 ignores `dereference` for symlinks nested below the top level (nodejs/node#59168; fix merged 2026-09-18, unreleased at the time).
+The copy is `copyDereferenced` in `evo-wrapper.ts`, a hand-rolled recursive walk that resolves every symlink to its target's bytes, so the sandbox holds contents and never a link back into the live workspace (an evo edit through a link would write straight into main). It replaced `fs.cpSync({ dereference: true })` because Node ≥ 22.17 ignores `dereference` for symlinks nested below the top level (nodejs/node#59168; fix merged 2026-09-18, unreleased at the time).
 
 ### Phase B — Dry-run + Fix Loop
 
 ```
-timeout 1800 halo cli -a <patch.testScenario.agentId> -n -w <runDir>/sandbox \
-  --access workspace <patch.testScenario.testMessage>
+halo cli -a <patch.testScenario.agentId> -n -w <runDir>/sandbox --access workspace
+  # testMessage on stdin; Node-side 1800s timer → exit 124
 ```
 
 `--access workspace` masks `~/.aws`, `~/.ssh`, etc. (safety: test probe's behavior, not side effects).
 
 Outcome:
 - **Success** (exit 0 + non-empty stdout): save to `dry-run-output.txt`, proceed to phase C.
-- **Failure**: save log, re-spawn `__evo_agent__` in fix mode with failure log inline. One corrective pass only (`FIX_BUDGET = 1`). If fix also fails, mark `failed` with reason "dry-run never succeeded".
+- **Failure**: save log, re-spawn `__evo_agent__` in fix mode with failure log inline. One corrective pass only (`FIX_BUDGET = 1`). If fix also fails, mark `failed` with reason "phase B: dry-run failed (fix budget exhausted)".
 
 Fix budget design:
 - Two-pass (original + one fix) covers common failure modes (bad YAML, scope-too-aggressive test scenario).
@@ -127,7 +125,7 @@ Fix budget design:
 
 ### Phase C — Score
 
-`spawn('halo', ['cli', '-a', '__score__', '-n', '-w', '<runDir>/sandbox', '<score-brief>'])`
+`spawn('halo', ['cli', '-a', '__score__', '-n', '-w', '<runDir>/sandbox'])` (brief on stdin)
 
 The score brief packs patch.md + dry-run-output.txt + meta.json + evo-context.json inline; the baseline conversation stays on disk (`tool-flow.md` / `source-snapshot.json`) and the brief directs the scorer to `file_read` it so behavior is graded against the actual baseline. Writes `score.json`:
 
@@ -160,7 +158,7 @@ After user approves N runs in the admin UI, `evolution_applies` row created with
 
 Wrapper builds **fresh sandbox** (whitelist-cp from **current main** workspace), then:
 
-`spawn('halo', ['cli', '-a', '__apply_agent__', '-n', '-w', '<applyDir>/sandbox', '<merge-brief>'])`
+`spawn('halo', ['cli', '-a', '__apply_agent__', '-n', '-w', '<applyDir>/sandbox'])` (brief on stdin)
 
 Agent reads each source run's `patch.md` (latest version!), merges changes into sandbox. Respects platform override matrix (workspace replaces global wholesale for agents/, skills/, prompts/). Agent writes `apply.log` (audit trail), edits only under `sandbox/.halo/`.
 
@@ -176,13 +174,13 @@ The wrapper clears any stale ABORT.md (from a crashed previous attempt) at the s
 For each source_run_id:
 
 1. Read `testScenario` from source run's `patch.md`.
-2. Run `timeout 1800 halo cli -a <agentId> -n -w <applyDir>/sandbox <testMessage>` against merged sandbox.
+2. Run `halo cli -a <agentId> -n -w <applyDir>/sandbox --access workspace` (testMessage on stdin, same 1800s timer) against merged sandbox.
 3. Spawn `__score__` with regress-mode brief, write `regress/<runId>/score.json`.
-4. Any score with `lint < 50` or `behavior < 50` → regression, abort with `failed`.
+4. Any score with `lint < 50` or `behavior < 50` (or a missing / malformed `score.json`) → regression, abort with `failed`.
 
 ### Phase 12 — Final Sync (checkpointed)
 
-Three substeps, two of them checkpointed:
+Four steps, with a checkpoint before the dangerous one:
 
 1. **Preflight** (idempotent): walk sandbox, diff against main, snapshot pre-apply files to `history/apply-<id>/` with `MANIFEST.json`.
 2. **Checkpoint**: set `evolution_applies.status='syncing'`. From here on, if wrapper crashes, ticker recovery resumes at step 3 (skip A'/B'/preflight to avoid re-running LLM phases).
@@ -216,6 +214,7 @@ Per-workspace mutex in ticker prevents two applies from racing on the same works
                               # diagnosis; first line becomes failureReason)
     regress/<runId>/          # one per source run
       dry-run-output.txt
+      dry-run-fail.log        # only when the regress dry-run failed
       score.json
   history/apply-<id>/         # rollback snapshot (NOT archived)
     MANIFEST.json             # which paths were overwritten
@@ -270,7 +269,7 @@ Active rows (pending/running/awaiting_review/approved/syncing) never archived. `
 
 Archive daemon runs at server boot (1 min delay) + daily. Idempotent.
 
-Zipping is **pure JS** (`jszip`, already a repo dependency via admin). It used to `spawnSync('zip', …)`, which depends on a system binary Windows installs don't have — so every archive pass failed there forever and artifacts grew unbounded. `zipDir()` walks the tree manually rather than using a recursive readdir, because the layout has to match what `zip -rq <out> .` produced and two cases need explicit handling: empty dirs get explicit folder entries, and **directory symlinks are not recursed** (an agent runs inside the sandbox during evaluation and could leave a cycle). File symlinks store the target's contents (what system `zip` without `-y` did); broken links are skipped instead of failing the pass. Contents are buffered per file (`createReadStream` for every entry would open all fds up front — EMFILE risk) and the zip is streamed to disk. On failure the partial zip is deleted, and `archiveRun`/`archiveApply` skip both the `rmDir` and the `archived_at` stamp, so the next pass retries from a clean state.
+Zipping is **pure JS** (`jszip`, a server dependency). It used to `spawnSync('zip', …)`, which depends on a system binary Windows installs don't have — so every archive pass failed there forever and artifacts grew unbounded. `zipDir()` walks the tree manually rather than using a recursive readdir, because the layout has to match what `zip -rq <out> .` produced and two cases need explicit handling: empty dirs get explicit folder entries, and **directory symlinks are not recursed** (an agent runs inside the sandbox during evaluation and could leave a cycle). File symlinks store the target's contents (what system `zip` without `-y` did); broken links are skipped instead of failing the pass. Contents are buffered per file (`createReadStream` for every entry would open all fds up front — EMFILE risk) and the zip is streamed to disk. On failure the partial zip is deleted, and `archiveRun`/`archiveApply` skip both the `rmDir` and the `archived_at` stamp, so the next pass retries from a clean state.
 
 ## Integration with SessionManager
 
@@ -280,13 +279,13 @@ After apply publishes to main, **no explicit session-release step needed**. Sess
 
 ## Key Files and Their Roles
 
-| File | Lines | Purpose |
-|---|---|---|
-| `/packages/server/src/evolution/enqueue.ts` | 403 | Snapshot session + prompt surface at trigger time. Write runDir/, INSERT evolution_runs. Both `/evo` and pre-compact hook call this. |
-| `/packages/server/src/evolution/ticker.ts` | 496 | Stateless 30s scheduler. Mark timeouts, claim pending, spawn wrappers. Per-workspace apply mutex. Broadcast status changes to admin UI. |
-| `/packages/server/src/evolution/spawn.ts` | 36 | Real spawner: detached Node child running evo-wrapper.js. Override-able for testing. |
-| `/packages/server/src/evolution/evo-wrapper.ts` | 2000+ | Wrapper orchestrator. 3-phase run mode (draft/dry-run/score). Apply mode (merge/regress/publish). Heartbeat every 60s. Handles Windows command-line limits via stdin briefs. |
-| `/packages/server/src/evolution/archive.ts` | 313 | Archive job: 14d → zip (pure-JS jszip) + delete, 30d → purge. Runs daily + at boot. Idempotent. |
+| File | Purpose |
+|---|---|
+| `/packages/server/src/evolution/enqueue.ts` | Snapshot session + prompt surface at trigger time. Write runDir/, INSERT evolution_runs. Both `/evo` and pre-compact hook call this. |
+| `/packages/server/src/evolution/ticker.ts` | Stateless 30s scheduler. Mark timeouts, claim pending, spawn wrappers. Per-workspace apply mutex. Broadcast status changes to admin UI. |
+| `/packages/server/src/evolution/spawn.ts` | Real spawner: detached Node child running evo-wrapper.js. Override-able for testing. |
+| `/packages/server/src/evolution/evo-wrapper.ts` | Wrapper orchestrator. 3-phase run mode (draft/dry-run/score). Apply mode (merge/regress/publish). Heartbeat every 60s. Handles Windows command-line limits via stdin briefs. |
+| `/packages/server/src/evolution/archive.ts` | Archive job: 14d → zip (pure-JS jszip) + delete, 30d → purge. Runs daily + at boot. Idempotent. |
 
 ## Sandbox Model
 
@@ -322,14 +321,14 @@ L0 = manual drafting only (`/evo`); L1 also enables pre-compact triggering. Defa
 
 Top-level "Evolution" tab shows:
 
-- **List**: evolution_runs + latest apply per run. Sortable by created_at / status / score.avg. Filterable by status. Joins runs+applies to show consolidated view.
-- **Detail**: patch.md, score.json, test scenario, assembled brief context, diff against current target.
-- **Approve**: Opens dialog, optional reviewer_hint. Flips the run to `approved` **and** inserts the pending `evolution_applies` row **inside one `db.transaction`** — it's a single reviewer decision, and half of it (run flipped, apply missing) strands the run in a status the ticker never advances.
+- **List**: evolution_runs + latest apply per run, newest first (cursor-paginated by `created_at`, up to 300 loaded). Filterable by status, plus an `archived` view. Joins runs+applies to show consolidated view.
+- **Detail**: patch.md (raw), score.json, the `.skip.md` reason, a snapshot summary (message count, first user / assistant message), wrapper log + sub-cli log.
+- **Approve**: Opens an inline panel, optional reviewer_hint. Flips the run to `approved` **and** inserts the pending `evolution_applies` row **inside one `db.transaction`** — it's a single reviewer decision, and half of it (run flipped, apply missing) strands the run in a status the ticker never advances.
 - **Reject**: Sets status='rejected'.
-- **Retry**: Resets row to pending, requires new hint. Allowed from any terminal status except `applied`.
-- **Manual Delete**: Removes artifacts (live dir + archive zip, whichever exists) + DB row immediately. Blocked on active rows (pending/running/approved/syncing).
+- **Retry**: Resets row to pending, requires new hint. The route allows any status except `pending` / `running`; the UI offers it on `awaiting_review`, `failed` / `timeout` / `skipped` / `rejected`, and on an `approved` run whose apply failed.
+- **Manual Delete**: Removes artifacts (live dir + archive zip, whichever exists) + DB row immediately. Blocked on `pending` / `running` / `approved` runs; also deletes the applies the run produced.
 
-Realtime updates via WebSocket (`evolution:run_changed`, `evolution:apply_changed` events). REST mutations broadcast directly; wrapper state changes broadcast at each ticker tick (15-30s latency).
+Realtime updates via WebSocket (`evolution:run_changed`, `evolution:apply_changed` events). REST mutations broadcast directly; wrapper state changes broadcast at each ticker tick (up to 30s latency).
 
 ## Crash Recovery and Restarts
 

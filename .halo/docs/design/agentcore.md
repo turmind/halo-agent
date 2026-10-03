@@ -25,12 +25,14 @@ halo server :8080  (HALO_RUNTIME_MODE=agentcore)
 
 `config.server.runtimeMode === 'agentcore'` (env `HALO_RUNTIME_MODE`) skips:
 
-- **Password/JWT gate** — AgentCore terminates auth upstream (SigV4 presign /
-  OAuth); the container is only reachable through the runtime.
+- **Password/JWT gate** — no admin password needed at startup, `/ws` skips the
+  cookie check. AgentCore terminates auth upstream (SigV4 presign / OAuth);
+  the container is only reachable through the runtime.
 - **Single-instance lock** — one microVM per session; many server processes
   coexist by design.
-- **Channels, cron, evolution, archive daemon** — meaningless in an ephemeral
-  per-session microVM; sessions are driven only through the AgentCore surface.
+- **Channels, cron, evolution, archive daemon, extensions watcher** —
+  meaningless in an ephemeral per-session microVM; sessions are driven only
+  through the AgentCore surface.
 
 Everything else (agent loop, tools, skills, sqlite persistence) is the normal
 server. The adapter itself is `packages/server/src/routes/agentcore.ts`,
@@ -48,8 +50,9 @@ sessionId → presign Lambda signs it into
 
 So **1 user = 1 runtime session id = 1 workspace**: users never see each
 other's history; reconnecting with the same id resumes the same conversation.
-`HALO_WORKSPACE` points at an EFS mount (`/mnt/efs`) — microVMs are ephemeral,
-EFS makes the workspaces survive session termination and image rollouts.
+`HALO_WORKSPACE` points at an EFS mount (`/mnt/workspace` in the CDK stack,
+`/mnt/efs` by the Dockerfile default) — microVMs are ephemeral, EFS makes
+the workspaces survive session termination and image rollouts.
 `~/.halo/global/runs.db` (the [run ledger](session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb)) lives under the container's `HALO_HOME`, which is **not** on EFS — it dies with the microVM, so the restart nudge doesn't apply in agentcore mode (the writes themselves are harmless, just moot).
 
 ## WS protocol quirks (why /init exists)
@@ -61,9 +64,9 @@ and cannot push server frames on connect. Hence:
   it (also accepts `{"type":"init"}`) and replies with a `history` frame —
   a full snapshot, which the frontend renders by rebuild-from-scratch (not
   append), keyed by a signature so identical snapshots skip re-rendering.
-- Frames without `inputText` are silently ignored server-side — the frontend
-  uses `{type:'ping'}` every 30s purely to keep the proxy from cutting the
-  socket.
+- Frames with no `inputText` text and no `imageRefs` are silently ignored
+  server-side — the frontend uses `{type:'ping'}` every 30s purely to keep
+  the proxy from cutting the socket.
 - `/session switch` sends a `{type:'switch'}` frame → frontend clears, then
   the follow-up history frame rebuilds.
 
@@ -121,7 +124,7 @@ the bytes.
   as idle while a socket is open. The 30s frontend keepalive therefore keeps
   the whole session warm; effective idle timeout ≈ "after the tab closes".
 - `/ping` returns `HealthyBusy` whenever any agent session is running
-  (`registry.list().some(sm => sm.hasRunningSessions())`) — the official
+  (`registry.list().some(({ sm }) => sm.hasRunningSessions())`) — the official
   keep-alive for long tool chains with no open connection.
 - Termination is cheap: data is on EFS, next connect cold-starts (~3s) and
   history reloads. `stop-runtime-session` kills one session on demand; there
