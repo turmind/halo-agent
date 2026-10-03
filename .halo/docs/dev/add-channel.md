@@ -88,6 +88,7 @@ All channel accounts live in a single unified table: `~/.halo/secrets/channels/c
 2. Create `accounts.ts` as a thin adapter over `channels/shared/accounts.ts`:
    - Map `ChannelAccount.config` JSON → your typed interface
    - Pass `channelType = 'slack'` to all shared DAL calls
+   - Write through `insertChannelAccount(db, 'slack', data, config)` / `updateChannelAccount(db, id, patch, configKeys)` — the shared helpers own the row columns + config-JSON merge; your file only lists its config keys
 
 Reference adapters: [channels/telegram/accounts.ts](../../../packages/server/src/channels/telegram/accounts.ts), [channels/web/accounts.ts](../../../packages/server/src/channels/web/accounts.ts).
 
@@ -101,7 +102,7 @@ Inbound: Slack pushes events via **HTTPS webhooks** (Events API) or **WebSocket*
 
 ### 4. Write the main handler
 
-`handler.ts`: exports `startSlackChannel(deps: { registry, db })` returning `{ startAccount, stopAccount, stopAll }`. WeChat shape at [packages/server/src/channels/wechat/handler.ts:73-157](../../../packages/server/src/channels/wechat/handler.ts#L73-L157).
+`handler.ts`: exports `startSlackChannel(deps: { registry, db })` returning `{ startAccount, stopAccount, stopAll }`. WeChat shape at [packages/server/src/channels/wechat/handler.ts:77-165](../../../packages/server/src/channels/wechat/handler.ts#L77-L165).
 
 For webhook-style channels (Slack Events API), you don't need a `runAccountLoop` — instead expose an HTTP route that validates the signature, deserializes the event, and calls `handleInbound`. For Socket Mode, you **do** have a loop (the WebSocket reconnect loop).
 
@@ -146,7 +147,7 @@ async function handleInbound({ registry, db, account, event, bridge, activeOverr
 
 ### 5. Write the event adapter
 
-`event-adapter.ts`: buffers streamed text and sends whole messages. WeChat's flushes on either a 3500-char hard ceiling (`WECHAT_TEXT_LIMIT`, the ilink gateway rejects >16 KB) or a `complete` event; see [packages/server/src/channels/wechat/event-adapter.ts](../../../packages/server/src/channels/wechat/event-adapter.ts). Use the shared `splitText(text, limit)` from `channels/shared/chunk.ts` for the cut (paragraph boundary, then hard-cut) — all four existing responders do; don't write a private splitter. Slack has a 40k char limit but users dislike huge messages, so it splits at 35k. Serialize your sends through one promise chain per responder (see wechat's `sendTail`) and return it from `close()` so the bridge keeps the route alive until the tail has gone out.
+`event-adapter.ts`: buffers streamed text and sends whole messages. WeChat's flushes on either a 3500-char hard ceiling (`WECHAT_TEXT_LIMIT`, the ilink gateway rejects >16 KB) or a `complete` event; see [packages/server/src/channels/wechat/event-adapter.ts](../../../packages/server/src/channels/wechat/event-adapter.ts). Use the shared `splitText(text, limit)` from `channels/shared/chunk.ts` for the cut (paragraph boundary, then hard-cut) — all four existing responders do; don't write a private splitter. Slack has a 40k char limit but users dislike huge messages, so it splits at 35k. Block-oriented channels extend `ChunkedResponder` from `channels/shared/responder.ts` (slack / feishu / wecom / wechat do), passing `{ limit, logTag, format? }`: it buffers `final` text, splits with `splitText`, serializes sends through one `sendTail` promise chain and returns it from `close()` so the bridge keeps the route alive until the tail has gone out. Override `append` / `onSendFailed` only for real channel quirks (wechat's mid-stream split + `onSendError`).
 
 Its send primitives take **no destination argument** — they read `bridge.getRoute(sessionId)` on each send (see step 4). A responder that captured a chat/user id at construction time is the A-M2 bug.
 
@@ -235,7 +236,7 @@ export function createSlackRoutes(deps: { db, channel }) {
 }
 ```
 
-Pattern: [packages/server/src/routes/wechat.ts](../../../packages/server/src/routes/wechat.ts).
+Pattern: [packages/server/src/routes/wechat.ts](../../../packages/server/src/routes/wechat.ts). Shared CRUD pieces live in [packages/server/src/routes/channel-accounts.ts](../../../packages/server/src/routes/channel-accounts.ts): `accountListFields` (common GET row, no credentials), `accountBodyError` (accessLevel + workspacePath checks) and `accountPatchFromBody` (row part of a PATCH); credentials, required fields, id derivation and restart policy stay in your route file.
 
 ### 8. Write the server descriptor + register
 

@@ -48,20 +48,17 @@ export async function getTenantAccessToken(args: {
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify({ app_id: args.appId, app_secret: args.appSecret }),
   })
-  const text = await res.text()
-  let parsed: { code?: number; msg?: string; tenant_access_token?: string; expire?: number }
-  try { parsed = JSON.parse(text) }
-  catch { throw new Error(`[feishu:tenant_access_token] non-JSON: ${text.slice(0, 200)}`) }
-  if (parsed.code !== 0 || !parsed.tenant_access_token) {
-    throw new Error(`[feishu:tenant_access_token] code=${parsed.code} msg=${parsed.msg ?? '?'}`)
-  }
+  const parsed = await readFeishuJson<{ code?: number; msg?: string; tenant_access_token?: string; expire?: number }>(
+    res, 'tenant_access_token', (p) => p.code === 0 && !!p.tenant_access_token,
+  )
+  const token = parsed.tenant_access_token!
   // `expire` is seconds-from-now (typically 7200).
   const expireSec = parsed.expire ?? 7200
   tokenCache.set(args.appId, {
-    token: parsed.tenant_access_token,
+    token,
     expiresAt: Date.now() + expireSec * 1000,
   })
-  return parsed.tenant_access_token
+  return token
 }
 
 /** Forget a cached token — call after a 401 from a downstream API to
@@ -69,6 +66,36 @@ export async function getTenantAccessToken(args: {
  *  token over and over until natural expiry. */
 export function invalidateTenantAccessToken(appId: string): void {
   tokenCache.delete(appId)
+}
+
+/** Call an authenticated endpoint with the cached tenant token; on a 401,
+ *  drop the cached token and retry once with a fresh one. */
+async function fetchWithTenantToken(
+  creds: { appId: string; appSecret: string },
+  send: (token: string) => Promise<Response>,
+): Promise<Response> {
+  let res = await send(await getTenantAccessToken(creds))
+  if (res.status === 401) {
+    invalidateTenantAccessToken(creds.appId)
+    res = await send(await getTenantAccessToken(creds))
+  }
+  return res
+}
+
+/** Parse a Feishu JSON reply. Throws `[feishu:<label>] non-JSON: …` for a
+ *  non-JSON body and `[feishu:<label>] code=… msg=…` when `ok` rejects it
+ *  (default: `code === 0`). */
+async function readFeishuJson<T extends { code?: number; msg?: string }>(
+  res: Response,
+  label: string,
+  ok: (parsed: T) => boolean = (parsed) => parsed.code === 0,
+): Promise<T> {
+  const text = await res.text()
+  let parsed: T
+  try { parsed = JSON.parse(text) }
+  catch { throw new Error(`[feishu:${label}] non-JSON: ${text.slice(0, 200)}`) }
+  if (!ok(parsed)) throw new Error(`[feishu:${label}] code=${parsed.code} msg=${parsed.msg ?? '?'}`)
+  return parsed
 }
 
 /**
@@ -86,24 +113,14 @@ export async function getBotInfo(args: {
   const send = async (token: string): Promise<Response> => fetch(`${FEISHU_BASE}/open-apis/bot/v3/info`, {
     headers: { Authorization: `Bearer ${token}` },
   })
-  let token = await getTenantAccessToken(args)
-  let res = await send(token)
-  if (res.status === 401) {
-    invalidateTenantAccessToken(args.appId)
-    token = await getTenantAccessToken(args)
-    res = await send(token)
-  }
-  const text = await res.text()
-  let parsed: { code?: number; msg?: string; bot?: { open_id?: string; app_name?: string; avatar_url?: string } }
-  try { parsed = JSON.parse(text) }
-  catch { throw new Error(`[feishu:bot/v3/info] non-JSON: ${text.slice(0, 200)}`) }
-  if (parsed.code !== 0 || !parsed.bot?.open_id) {
-    throw new Error(`[feishu:bot/v3/info] code=${parsed.code} msg=${parsed.msg ?? '?'}`)
-  }
+  const res = await fetchWithTenantToken(args, send)
+  const parsed = await readFeishuJson<{ code?: number; msg?: string; bot?: { open_id?: string; app_name?: string; avatar_url?: string } }>(
+    res, 'bot/v3/info', (p) => p.code === 0 && !!p.bot?.open_id,
+  )
   return {
-    openId: parsed.bot.open_id,
-    appName: parsed.bot.app_name,
-    avatarUrl: parsed.bot.avatar_url,
+    openId: parsed.bot!.open_id!,
+    appName: parsed.bot!.app_name,
+    avatarUrl: parsed.bot!.avatar_url,
   }
 }
 
@@ -143,20 +160,8 @@ export async function sendMessage(opts: SendMessageOpts): Promise<{ message_id: 
     body: JSON.stringify(body),
   })
 
-  let token = await getTenantAccessToken(opts)
-  let res = await send(token)
-  if (res.status === 401) {
-    invalidateTenantAccessToken(opts.appId)
-    token = await getTenantAccessToken(opts)
-    res = await send(token)
-  }
-  const text = await res.text()
-  let parsed: { code?: number; msg?: string; data?: { message_id?: string } }
-  try { parsed = JSON.parse(text) }
-  catch { throw new Error(`[feishu:sendMessage] non-JSON: ${text.slice(0, 200)}`) }
-  if (parsed.code !== 0) {
-    throw new Error(`[feishu:sendMessage] code=${parsed.code} msg=${parsed.msg ?? '?'}`)
-  }
+  const res = await fetchWithTenantToken(opts, send)
+  const parsed = await readFeishuJson<{ code?: number; msg?: string; data?: { message_id?: string } }>(res, 'sendMessage')
   return { message_id: parsed.data?.message_id ?? '' }
 }
 
@@ -189,20 +194,8 @@ export async function replyMessage(args: {
     body: JSON.stringify(body),
   })
 
-  let token = await getTenantAccessToken(args)
-  let res = await send(token)
-  if (res.status === 401) {
-    invalidateTenantAccessToken(args.appId)
-    token = await getTenantAccessToken(args)
-    res = await send(token)
-  }
-  const text = await res.text()
-  let parsed: { code?: number; msg?: string; data?: { message_id?: string } }
-  try { parsed = JSON.parse(text) }
-  catch { throw new Error(`[feishu:replyMessage] non-JSON: ${text.slice(0, 200)}`) }
-  if (parsed.code !== 0) {
-    throw new Error(`[feishu:replyMessage] code=${parsed.code} msg=${parsed.msg ?? '?'}`)
-  }
+  const res = await fetchWithTenantToken(args, send)
+  const parsed = await readFeishuJson<{ code?: number; msg?: string; data?: { message_id?: string } }>(res, 'replyMessage')
   return { message_id: parsed.data?.message_id ?? '' }
 }
 
@@ -234,21 +227,11 @@ export async function uploadImage(args: {
     })
   }
 
-  let token = await getTenantAccessToken(args)
-  let res = await send(token)
-  if (res.status === 401) {
-    invalidateTenantAccessToken(args.appId)
-    token = await getTenantAccessToken(args)
-    res = await send(token)
-  }
-  const text = await res.text()
-  let parsed: { code?: number; msg?: string; data?: { image_key?: string } }
-  try { parsed = JSON.parse(text) }
-  catch { throw new Error(`[feishu:uploadImage] non-JSON: ${text.slice(0, 200)}`) }
-  if (parsed.code !== 0 || !parsed.data?.image_key) {
-    throw new Error(`[feishu:uploadImage] code=${parsed.code} msg=${parsed.msg ?? '?'}`)
-  }
-  return { imageKey: parsed.data.image_key }
+  const res = await fetchWithTenantToken(args, send)
+  const parsed = await readFeishuJson<{ code?: number; msg?: string; data?: { image_key?: string } }>(
+    res, 'uploadImage', (p) => p.code === 0 && !!p.data?.image_key,
+  )
+  return { imageKey: parsed.data!.image_key! }
 }
 
 /**
@@ -289,21 +272,11 @@ export async function uploadFile(args: {
     })
   }
 
-  let token = await getTenantAccessToken(args)
-  let res = await send(token)
-  if (res.status === 401) {
-    invalidateTenantAccessToken(args.appId)
-    token = await getTenantAccessToken(args)
-    res = await send(token)
-  }
-  const text = await res.text()
-  let parsed: { code?: number; msg?: string; data?: { file_key?: string } }
-  try { parsed = JSON.parse(text) }
-  catch { throw new Error(`[feishu:uploadFile] non-JSON: ${text.slice(0, 200)}`) }
-  if (parsed.code !== 0 || !parsed.data?.file_key) {
-    throw new Error(`[feishu:uploadFile] code=${parsed.code} msg=${parsed.msg ?? '?'}`)
-  }
-  return { fileKey: parsed.data.file_key }
+  const res = await fetchWithTenantToken(args, send)
+  const parsed = await readFeishuJson<{ code?: number; msg?: string; data?: { file_key?: string } }>(
+    res, 'uploadFile', (p) => p.code === 0 && !!p.data?.file_key,
+  )
+  return { fileKey: parsed.data!.file_key! }
 }
 
 /** Download an inbound resource (image, file, etc.) by message_id +
@@ -316,16 +289,9 @@ export async function downloadResource(args: {
   type: 'image' | 'file'
 }): Promise<Buffer> {
   const url = `${FEISHU_BASE}/open-apis/im/v1/messages/${encodeURIComponent(args.messageId)}/resources/${encodeURIComponent(args.fileKey)}?type=${args.type}`
-  const fetchOnce = async (token: string): Promise<Response> => fetch(url, {
+  const res = await fetchWithTenantToken(args, async (token) => fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
-  })
-  let token = await getTenantAccessToken(args)
-  let res = await fetchOnce(token)
-  if (res.status === 401) {
-    invalidateTenantAccessToken(args.appId)
-    token = await getTenantAccessToken(args)
-    res = await fetchOnce(token)
-  }
+  }))
   if (!res.ok) throw new Error(`[feishu:downloadResource] ${res.status} ${res.statusText}`)
   return Buffer.from(await res.arrayBuffer())
 }
@@ -388,31 +354,15 @@ export async function searchFeishuTargets(args: {
   const q = args.q.trim().toLowerCase()
   if (!q) return []
 
-  const send = async (token: string, url: string): Promise<Response> => fetch(url, {
+  const res = await fetchWithTenantToken(args, async (token) => fetch(`${FEISHU_BASE}/open-apis/im/v1/chats?page_size=100&user_id_type=open_id`, {
     headers: { Authorization: `Bearer ${token}` },
-  })
-  let token = await getTenantAccessToken(args)
-  let res = await send(token, `${FEISHU_BASE}/open-apis/im/v1/chats?page_size=100&user_id_type=open_id`)
-  if (res.status === 401) {
-    invalidateTenantAccessToken(args.appId)
-    token = await getTenantAccessToken(args)
-    res = await send(token, `${FEISHU_BASE}/open-apis/im/v1/chats?page_size=100&user_id_type=open_id`)
-  }
+  }))
   let chats: Array<{ chat_id?: string; name?: string; chat_type?: string; is_external?: boolean }> = []
-  const text = await res.text()
-  try {
-    const parsed = JSON.parse(text) as { code?: number; msg?: string; data?: { items?: typeof chats } }
-    if (parsed.code !== 0) {
-      // Surface gateway errors instead of silently returning [] so the
-      // admin sees "code=99991401 token invalid" or "no permission"
-      // instead of "no results" when the real cause is a missing scope.
-      throw new Error(`[feishu:searchFeishuTargets] code=${parsed.code} msg=${parsed.msg ?? '?'}`)
-    }
-    if (Array.isArray(parsed.data?.items)) chats = parsed.data!.items!
-  } catch (err) {
-    if (err instanceof Error && err.message.startsWith('[feishu:')) throw err
-    throw new Error(`[feishu:searchFeishuTargets] non-JSON: ${text.slice(0, 200)}`)
-  }
+  // A non-zero code throws instead of silently returning [] so the admin
+  // sees "code=99991401 token invalid" or "no permission" instead of
+  // "no results" when the real cause is a missing scope.
+  const parsed = await readFeishuJson<{ code?: number; msg?: string; data?: { items?: typeof chats } }>(res, 'searchFeishuTargets')
+  if (Array.isArray(parsed.data?.items)) chats = parsed.data!.items!
 
   const hits: FeishuSearchHit[] = []
   for (const c of chats) {

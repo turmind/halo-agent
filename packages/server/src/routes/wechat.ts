@@ -19,6 +19,7 @@ import {
   deleteAccount, getAccount, insertAccount, listAccounts, normalizeAccountId, updateAccount,
 } from '../channels/wechat/accounts.js'
 import { accessLevelError, CHAT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
+import { accountBodyError } from './channel-accounts.js'
 import fs from 'node:fs'
 
 export function createWechatRoutes(deps: { db: ChannelDb; channel: WechatChannel }) {
@@ -113,16 +114,10 @@ export function createWechatRoutes(deps: { db: ChannelDb; channel: WechatChannel
       accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
       language?: string
     }
-    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
+    const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
 
-    const patch: Parameters<typeof updateAccount>[2] = { ...body }
-    if (body.workspacePath !== undefined) {
-      const wsError = validateWorkspaceBody(body.workspacePath)
-      if (wsError) return c.json({ error: wsError }, 400)
-      patch.workspacePath = body.workspacePath
-    }
-    updateAccount(db, id, patch)
+    updateAccount(db, id, body)
     const newlyEnabled = body.enabled === true && !existing.enabled
     const newlyDisabled = body.enabled === false && existing.enabled
     if (newlyEnabled) channel.startAccount(id)

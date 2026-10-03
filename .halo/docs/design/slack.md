@@ -125,7 +125,9 @@ previous one, so Slack could accept them out of order and a long reply arrived
 scrambled (audit A-L3). Each responder now keeps a `sendTail` promise chain and
 appends every chunk to it, so chunk *n+1* only goes out after *n* settles; a
 rejected link is absorbed (`dispatchChunk` logs its own send failures) so one
-bad send can't stall the rest of the reply.
+bad send can't stall the rest of the reply. The buffer + chain live in the
+shared `ChunkedResponder` (`channels/shared/responder.ts`), which slack / feishu
+/ wecom / wechat extend with their own limit and formatter.
 
 `close()` therefore returns that drain promise, and `InboundBridge` keeps the
 session's reply route registered until it settles before deleting it — including
@@ -203,7 +205,7 @@ Text, images (base64 attached to agent input for vision), files. All files are d
 
 The agent runtime produces `MEDIA: <path>` markers. SlackResponder:
 - Intercepts the markers and calls `uploadFile()` for each one
-- Blocks sandbox violation for non-`full` accounts (files must be under workspace or /tmp — `isMediaPathAllowed(path, workspace, accessLevel)`; `full` accounts may send any readable path). A block throws inside the same try as the upload, so it surfaces as the `handler.upload_failed` text below
+- Blocks sandbox violation for non-`full` accounts (files must be under workspace or /tmp — `isMediaPathAllowed(path, workspace, accessLevel)`; `full` accounts may send any readable path). A block throws inside the same try as the upload (`sendMediaOrReport` in `channels/shared/media.ts`), so it surfaces as the `handler.upload_failed` text below
 - Falls back to error text if upload fails
 
 Outbound media uses Slack's v2 upload flow (getUploadURLExternal → signed PUT → completeUploadExternal).
@@ -223,4 +225,4 @@ Slack-specific paths:
 - `packages/server/src/channels/slack/handler.ts:552` — `getOrCreateSessionForThread()` session keying
 - `packages/server/src/channels/slack/api.ts:265` — `openSocketModeConnection()` fetch wss:// URL
 - `packages/server/src/channels/slack/cron-dispatcher.ts:46` — `dispatch()` cron push logic
-- `packages/server/src/channels/slack/event-adapter.ts:90` — `dispatchChunk()` buffer flush + media extraction
+- `packages/server/src/channels/shared/responder.ts` — `ChunkedResponder.dispatchChunk()` buffer flush + media extraction (`slack/event-adapter.ts` supplies the 35k limit + `formatForSlack`)

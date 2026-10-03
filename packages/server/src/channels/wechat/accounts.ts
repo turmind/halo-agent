@@ -3,8 +3,8 @@ import {
   listAccounts as sharedList,
   listEnabledAccounts as sharedListEnabled,
   getAccount as sharedGet,
-  insertAccount as sharedInsert,
-  updateAccount as sharedUpdate,
+  insertChannelAccount,
+  updateChannelAccount,
   patchConfig as sharedPatchConfig,
   deleteAccount as sharedDelete,
   type ChannelAccount,
@@ -74,19 +74,11 @@ export function insertAccount(db: ChannelDb, params: {
   accessLevel?: AccessLevel
   language?: string
 }): void {
-  sharedInsert(db, {
-    accountId: params.accountId,
-    channelType: CH,
-    workspacePath: params.workspacePath,
-    label: params.label,
-    accessLevel: params.accessLevel,
-    language: params.language,
-    config: {
-      botToken: params.botToken,
-      baseUrl: params.baseUrl,
-      userId: params.userId,
-      syncBuf: '',
-    },
+  insertChannelAccount(db, CH, params, {
+    botToken: params.botToken,
+    baseUrl: params.baseUrl,
+    userId: params.userId,
+    syncBuf: '',
   })
 }
 
@@ -100,26 +92,9 @@ export function updateAccount(db: ChannelDb, accountId: string, patch: Partial<{
   accessLevel: AccessLevel
   language: string
 }>): void {
-  const basePatch: Record<string, unknown> = {}
-  if (patch.workspacePath !== undefined) basePatch.workspacePath = patch.workspacePath
-  if (patch.label !== undefined) basePatch.label = patch.label
-  if (patch.enabled !== undefined) basePatch.enabled = patch.enabled ? 1 : 0
-  if (patch.accessLevel !== undefined) basePatch.accessLevel = patch.accessLevel
-  if (patch.language !== undefined) basePatch.language = patch.language
-
-  const configKeys = ['botToken', 'baseUrl', 'userId'] as const
-  const hasConfigChange = configKeys.some((k) => patch[k] !== undefined)
-  if (hasConfigChange) {
-    const existing = sharedGet(db, accountId)
-    if (!existing) return
-    const cfg = { ...existing.config }
-    for (const k of configKeys) {
-      if (patch[k] !== undefined) cfg[k] = patch[k]
-    }
-    basePatch.config = cfg
-  }
-
-  sharedUpdate(db, accountId, basePatch as Parameters<typeof sharedUpdate>[2])
+  // WechatAccount exposes `enabled` as a boolean; the row stores 0/1.
+  const enabled = patch.enabled === undefined ? undefined : patch.enabled ? 1 : 0
+  updateChannelAccount(db, accountId, { ...patch, enabled }, ['botToken', 'baseUrl', 'userId'])
 }
 
 export function deleteAccount(db: ChannelDb, accountId: string): void {

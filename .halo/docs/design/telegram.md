@@ -138,7 +138,7 @@ Outbound: the `send-file` skill produces `MEDIA:<path>` markers. The responder s
 - `.ogg/.oga` → `sendVoice`
 - anything else → `sendDocument`
 
-Path whitelist: a `full` account may send any readable path; other access levels are limited to the workspace or the OS temp dir (`isMediaPathAllowed(path, workspace, accessLevel)`). A blocked path — or any failed send — is reported to the chat as `t('handler.upload_failed')` (`⚠️ 文件上传失败：name — error`), same as slack / feishu / wecom; before this it was only a server log line.
+Path whitelist: a `full` account may send any readable path; other access levels are limited to the workspace or the OS temp dir (`isMediaPathAllowed(path, workspace, accessLevel)`). A blocked path — or any failed send — is reported to the chat as `t('handler.upload_failed')` (`sendMediaOrReport` in `channels/shared/media.ts`) (`⚠️ 文件上传失败：name — error`), same as slack / feishu / wecom; before this it was only a server log line.
 
 ## Configuration
 

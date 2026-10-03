@@ -8,11 +8,11 @@
  * notice so the notice lands after the text it follows. Anything over
  * WECHAT_TEXT_LIMIT is cut with the shared `splitText` (mid-stream in
  * `append`, and again on flush), and every chunk goes through one serialized
- * send chain (`sendTail`) so a long reply arrives in order.
+ * send chain so a long reply arrives in order — the shared `ChunkedResponder`
+ * owns that; this file adds the mid-stream split and `onSendError`.
  */
-import type { AgentSessionEvent } from '../../agents/agent-events.js'
 import { splitText } from '../shared/chunk.js'
-import { extractMediaMessage } from '../shared/media.js'
+import { ChunkedResponder, type ResponderDeps } from '../shared/responder.js'
 
 /**
  * Per-message ceiling in JS string chars (UTF-16 units), not bytes. The
@@ -24,68 +24,22 @@ import { extractMediaMessage } from '../shared/media.js'
  */
 export const WECHAT_TEXT_LIMIT = 3500  // mirrored in templates/prompts/all/RUNTIME.md
 
-export interface WechatResponderDeps {
-  sendText: (text: string) => Promise<void>
-  sendMedia: (filePath: string) => Promise<void>
+export interface WechatResponderDeps extends ResponderDeps {
   /** Called once per failed send with a one-line reason, so the failure can
    *  be recorded where the user looks (the session log) instead of only in
    *  the server log. Must not send to WeChat itself. */
   onSendError?: (message: string) => void
 }
 
-export class WechatResponder {
-  private buffer = ''
-  private deps: WechatResponderDeps
-  private closed = false
-  /** Tail of the per-responder send chain — see `enqueueChunk`. */
-  private sendTail: Promise<void> = Promise.resolve()
+export class WechatResponder extends ChunkedResponder {
+  private onSendError?: (message: string) => void
 
   constructor(deps: WechatResponderDeps) {
-    this.deps = deps
+    super(deps, { limit: WECHAT_TEXT_LIMIT, logTag: 'WeChat' })
+    this.onSendError = deps.onSendError
   }
 
-  handle(event: AgentSessionEvent): void {
-    if (this.closed) return
-
-    // Drop all sub-agent events — only the root agent's output goes to WeChat.
-    // (Sub-agent activity is visible in the web UI's session tree.)
-    if (event.taskId) return
-
-    switch (event.type) {
-      case 'stream':
-        // Only the wrap-up reply (`final`) reaches the chat. The filler the
-        // model emits before a tool call stays in the web UI, not here.
-        if (event.final && event.text) this.append(event.text)
-        break
-      case 'error':
-        if (event.error) {
-          this.flushAll()
-          this.enqueueChunk(`❌ ${event.error}`)
-        }
-        break
-      case 'system':
-        if (event.text) {
-          this.flushAll()
-          this.enqueueChunk(`ℹ️ ${event.text}`)
-        }
-        break
-      case 'complete':
-        this.flushAll()
-        break
-      // tool_call / tool_result / thinking intentionally dropped.
-    }
-  }
-
-  /** Returns the drain promise so the bridge keeps the reply route alive
-   *  until the last queued chunk has actually been sent. */
-  close(): Promise<void> {
-    if (this.closed) return this.sendTail
-    this.flushAll()
-    this.closed = true
-    return this.sendTail
-  }
-
-  private append(text: string): void {
+  protected append(text: string): void {
     this.buffer += text
     // Only split when we hit WeChat's hard length ceiling. Otherwise keep
     // buffering — 'complete' will flush the whole response as one message.
@@ -96,50 +50,8 @@ export class WechatResponder {
     for (const chunk of chunks) this.enqueueChunk(chunk)
   }
 
-  private flushAll(): void {
-    if (!this.buffer) return
-    // Even on flush, respect the hard limit in case of a single huge response.
-    const chunks = splitText(this.buffer, WECHAT_TEXT_LIMIT)
-    this.buffer = ''
-    for (const chunk of chunks) this.enqueueChunk(chunk)
-  }
-
-  /**
-   * Serialize sends per responder — same rationale as the Slack adapter
-   * (audit A-L3): a flush emits several chunks in one synchronous loop, and
-   * firing their HTTP sends concurrently gave arrival order no guarantee.
-   * Each chunk waits for the previous send to settle; the `catch` keeps a
-   * rejected link from poisoning the chain (dispatchChunk already logs
-   * per-send failures).
-   */
-  private enqueueChunk(chunk: string): void {
-    this.sendTail = this.sendTail
-      .then(() => this.dispatchChunk(chunk))
-      .catch(() => { /* already logged in dispatchChunk */ })
-  }
-
-  /**
-   * Extract MEDIA: lines, dispatching them as media sends. Remaining text
-   * goes out as a WeChat message (if non-empty after trim).
-   */
-  private async dispatchChunk(chunk: string): Promise<void> {
-    const { text, mediaPaths } = extractMediaMessage(chunk)
-
-    if (text) {
-      try { await this.deps.sendText(text) }
-      catch (err) {
-        const msg = `sendText failed: ${err instanceof Error ? err.message : String(err)}`
-        console.warn(`[WeChat] ${msg}`)
-        this.deps.onSendError?.(msg)
-      }
-    }
-    for (const p of mediaPaths) {
-      try { await this.deps.sendMedia(p) }
-      catch (err) {
-        const msg = `sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`
-        console.warn(`[WeChat] ${msg}`)
-        this.deps.onSendError?.(msg)
-      }
-    }
+  protected onSendFailed(message: string): void {
+    super.onSendFailed(message)
+    this.onSendError?.(message)
   }
 }

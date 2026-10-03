@@ -8,7 +8,7 @@ import { getAccountByToken } from './accounts.js'
 import { updateAccount } from './accounts.js'
 import { saveInboundMedia, VISION_IMAGE_MIME_TYPES } from '../shared/media-store.js'
 import { extractMediaPaths } from '../shared/media.js'
-import { resolveAccountWorkspace } from '../shared/accounts.js'
+import { resolveAccountWorkspace, sessionAccess } from '../shared/accounts.js'
 import { findActiveSessionId, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { scanAvailableAgents } from '../../agents/agent-loader.js'
 import { getDisabledSet } from '../../db/index.js'
@@ -96,6 +96,16 @@ export function createWebChannel(deps: {
     return { ok: true, path: resolved }
   }
 
+  /** Token → enabled account → workspace (`resolveWorkspace`). Every public
+   *  entry point starts here; each renders the error in its own shape. */
+  function resolveRequest(token: string, workspaceOverride?: string): { ok: true; account: WebAccount; workspace: string } | { ok: false; error: string } {
+    const account = getAccountByToken(db, token)
+    if (!account || !account.enabled) return { ok: false, error: 'Invalid or disabled token' }
+    const ws = resolveWorkspace(account, workspaceOverride)
+    if (!ws.ok) return ws
+    return { ok: true, account, workspace: ws.path }
+  }
+
   /**
    * Resolve the agent for a new session: caller's `agentId` override or
    * the workspace default. An explicit id must match a scanned agent
@@ -111,6 +121,51 @@ export function createWebChannel(deps: {
     const hit = all.find((a) => a.id === override && !a.disabled && !a.internal)
     if (!hit) return { ok: false, error: `agent not available: ${override}` }
     return { ok: true, id: hit.id }
+  }
+
+  /**
+   * Register a root-session listener now — `handleMessage` must be listening
+   * before `sendUserMessage` starts the turn — and expose its events as SSE
+   * chunks. `events()` ends on the terminal `complete` / `error` (or when
+   * `signal` aborts) and then drops the listener; `close()` drops it for a
+   * caller that never streams (a queued message).
+   */
+  function listenSession(sm: ReturnType<SessionManagerRegistry['getOrCreate']>, sessionId: string) {
+    const queue: AgentSessionEvent[] = []
+    let resolve: (() => void) | null = null
+    let done = false
+    const processEvent = createMediaBuffer()
+    const unsubscribe = sm.registerEventListener(sessionId, (event: AgentSessionEvent) => {
+      if (event.taskId) return
+      queue.push(event)
+      if (resolve) { resolve(); resolve = null }
+    })
+
+    async function* events(signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+      const onAbort = () => { done = true; if (resolve) { resolve(); resolve = null } }
+      signal?.addEventListener('abort', onAbort)
+      try {
+        while (!done) {
+          if (queue.length === 0) {
+            await new Promise<void>((r) => { resolve = r })
+          }
+          while (queue.length > 0) {
+            const event = queue.shift()!
+            const sse = processEvent(event)
+            if (sse) yield sse
+            // A batch-boundary complete is a per-turn flush, not the end of the
+            // response — keep the stream open (more drain turns follow).
+            if (event.type === 'complete' && !event.batchBoundary) { done = true; break }
+            if (event.type === 'error') { done = true; break }
+          }
+        }
+      } finally {
+        signal?.removeEventListener('abort', onAbort)
+        unsubscribe()
+      }
+    }
+
+    return { events, close: unsubscribe }
   }
 
   function buildCommandContext(account: WebAccount, sm: ReturnType<SessionManagerRegistry['getOrCreate']>): CommandContext {
@@ -151,47 +206,10 @@ export function createWebChannel(deps: {
     // response never reaches the user, and the next message they type
     // arrives at a busy session and gets queued silently.
     if (result.startedTurn && result.sessionId) {
-      yield* streamSessionEvents(sm, result.sessionId)
+      yield* listenSession(sm, result.sessionId).events()
       return
     }
     yield sseData({ type: 'complete' })
-  }
-
-  /** Subscribe to a session's agent events and yield SSE chunks until
-   *  `complete` / `error`. Pulled out of `handleMessage` so command
-   *  dispatch (which also kicks the agent for skill activation) can
-   *  reuse the same stream-then-close logic. */
-  async function* streamSessionEvents(
-    sm: ReturnType<SessionManagerRegistry['getOrCreate']>,
-    sessionId: string,
-  ): AsyncGenerator<string, void, unknown> {
-    const queue: AgentSessionEvent[] = []
-    let resolve: (() => void) | null = null
-    let done = false
-    const processEvent = createMediaBuffer()
-    const unsubscribe = sm.registerEventListener(sessionId, (event: AgentSessionEvent) => {
-      if (event.taskId) return
-      queue.push(event)
-      if (resolve) { resolve(); resolve = null }
-    })
-    try {
-      while (!done) {
-        if (queue.length === 0) {
-          await new Promise<void>((r) => { resolve = r })
-        }
-        while (queue.length > 0) {
-          const event = queue.shift()!
-          const sse = processEvent(event)
-          if (sse) yield sse
-          // A batch-boundary complete is a per-turn flush, not the end of the
-          // response — keep the stream open (more drain turns follow).
-          if (event.type === 'complete' && !event.batchBoundary) { done = true; break }
-          if (event.type === 'error') { done = true; break }
-        }
-      }
-    } finally {
-      unsubscribe()
-    }
   }
 
   async function* handleMessage(
@@ -200,22 +218,16 @@ export function createWebChannel(deps: {
     images?: Array<{ data: string; mimeType: string }>,
     opts?: WebRequestOverrides,
   ): AsyncGenerator<string, void, unknown> {
-    const account = getAccountByToken(db, token)
-    if (!account || !account.enabled) {
-      yield sseData({ type: 'error', error: 'Invalid or disabled token' })
+    const req = resolveRequest(token, opts?.workspace)
+    if (!req.ok) {
+      yield sseData({ type: 'error', error: req.error })
       return
     }
-
-    const ws = resolveWorkspace(account, opts?.workspace)
-    if (!ws.ok) {
-      yield sseData({ type: 'error', error: ws.error })
-      return
-    }
-    const workspace = ws.path
+    const { account, workspace } = req
 
     const sm = registry.getOrCreate(workspace)
     const prefix = buildWebSessionPrefix(account.accountId)
-    const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
+    const accessLevel = sessionAccess(account.accessLevel)
 
     // Handle slash commands. Slash commands always operate on the active
     // session (`getActiveSessionId`); they're an interactive concept and
@@ -273,16 +285,7 @@ export function createWebChannel(deps: {
 
     yield sseData({ type: 'session', sessionId })
 
-    const queue: AgentSessionEvent[] = []
-    let resolve: (() => void) | null = null
-    let done = false
-    const processEvent = createMediaBuffer()
-
-    const unsubscribe = sm.registerEventListener(sessionId, (event: AgentSessionEvent) => {
-      if (event.taskId) return
-      queue.push(event)
-      if (resolve) { resolve(); resolve = null }
-    })
+    const listener = listenSession(sm, sessionId)
 
     // Separate real images from other media (audio, etc.)
     const imageTypes = VISION_IMAGE_MIME_TYPES
@@ -318,40 +321,20 @@ export function createWebChannel(deps: {
     const result = await sm.sendUserMessage(sessionId, channelPrefix + fullMessage, realImages.length > 0 ? realImages : undefined, accessLevel)
 
     if (result === 'queued') {
-      unsubscribe()
+      listener.close()
       yield sseData({ type: 'queued' })
       return
     }
 
-    try {
-      while (!done) {
-        if (queue.length === 0) {
-          await new Promise<void>((r) => { resolve = r })
-        }
-        while (queue.length > 0) {
-          const event = queue.shift()!
-          const sse = processEvent(event)
-          if (sse) yield sse
-          // A batch-boundary complete is a per-turn flush, not the end of the
-          // response — keep the stream open (more drain turns follow).
-          if (event.type === 'complete' && !event.batchBoundary) { done = true; break }
-          if (event.type === 'error') { done = true; break }
-        }
-      }
-    } finally {
-      unsubscribe()
-    }
+    yield* listener.events()
   }
 
   async function handleStop(token: string, opts?: WebRequestOverrides): Promise<boolean> {
-    const account = getAccountByToken(db, token)
-    if (!account || !account.enabled) return false
+    const req = resolveRequest(token, opts?.workspace)
+    if (!req.ok) return false
 
-    const ws = resolveWorkspace(account, opts?.workspace)
-    if (!ws.ok) return false
-
-    const sm = registry.getOrCreate(ws.path)
-    const sessionId = opts?.sessionId ?? getActiveSessionId(sm, account.accountId)
+    const sm = registry.getOrCreate(req.workspace)
+    const sessionId = opts?.sessionId ?? getActiveSessionId(sm, req.account.accountId)
     if (!sessionId) return false
 
     // Manual /compact has no turn in flight — cancelling it is the whole stop
@@ -367,14 +350,11 @@ export function createWebChannel(deps: {
   }
 
   function getHistory(token: string, opts?: WebRequestOverrides): { sessionId: string; messages: SessionMessage[]; running: boolean } | null {
-    const account = getAccountByToken(db, token)
-    if (!account || !account.enabled) return null
+    const req = resolveRequest(token, opts?.workspace)
+    if (!req.ok) return null
 
-    const ws = resolveWorkspace(account, opts?.workspace)
-    if (!ws.ok) return null
-
-    const sm = registry.getOrCreate(ws.path)
-    const sessionId = opts?.sessionId ?? getActiveSessionId(sm, account.accountId)
+    const sm = registry.getOrCreate(req.workspace)
+    const sessionId = opts?.sessionId ?? getActiveSessionId(sm, req.account.accountId)
     if (!sessionId) return null
 
     // When the caller addressed a specific sessionId, verify it actually
@@ -401,41 +381,33 @@ export function createWebChannel(deps: {
    * which readonly / workspace tokens could never address.
    */
   async function createSession(token: string, opts?: Pick<WebRequestOverrides, 'workspace' | 'agentId'>): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }> {
-    const account = getAccountByToken(db, token)
-    if (!account || !account.enabled) return { ok: false, error: 'Invalid or disabled token' }
+    const req = resolveRequest(token, opts?.workspace)
+    if (!req.ok) return req
+    const { account, workspace } = req
 
-    const ws = resolveWorkspace(account, opts?.workspace)
-    if (!ws.ok) return { ok: false, error: ws.error }
-
-    const sm = registry.getOrCreate(ws.path)
+    const sm = registry.getOrCreate(workspace)
     const prefix = buildWebSessionPrefix(account.accountId)
-    const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
+    const accessLevel = sessionAccess(account.accessLevel)
 
     // Random tail so two mints in the same ms don't collide. Deliberately
     // NOT written to activeOverrides — an API-minted session must not
     // clobber the browser tab's notion of "current session".
     const sessionId = `${prefix}${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-    const agent = await resolveAgentId(sm, ws.path, opts?.agentId)
+    const agent = await resolveAgentId(sm, workspace, opts?.agentId)
     if (!agent.ok) return agent
     await sm.createSession(agent.id, null, `Web: ${account.label || account.accountId}`, undefined, sessionId, undefined, accessLevel)
     return { ok: true, sessionId }
   }
 
   async function* subscribe(token: string, signal: AbortSignal, opts?: WebRequestOverrides): AsyncGenerator<string, void, unknown> {
-    const account = getAccountByToken(db, token)
-    if (!account || !account.enabled) {
-      yield sseData({ type: 'error', error: 'Invalid or disabled token' })
+    const req = resolveRequest(token, opts?.workspace)
+    if (!req.ok) {
+      yield sseData({ type: 'error', error: req.error })
       return
     }
 
-    const ws = resolveWorkspace(account, opts?.workspace)
-    if (!ws.ok) {
-      yield sseData({ type: 'error', error: ws.error })
-      return
-    }
-
-    const sm = registry.getOrCreate(ws.path)
-    const sessionId = opts?.sessionId ?? getActiveSessionId(sm, account.accountId)
+    const sm = registry.getOrCreate(req.workspace)
+    const sessionId = opts?.sessionId ?? getActiveSessionId(sm, req.account.accountId)
     if (!sessionId) {
       yield sseData({ type: 'error', error: 'No active session' })
       return
@@ -443,39 +415,7 @@ export function createWebChannel(deps: {
 
     yield sseData({ type: 'session', sessionId })
 
-    const queue: AgentSessionEvent[] = []
-    let resolve: (() => void) | null = null
-    let done = false
-    const processEvent = createMediaBuffer()
-
-    const unsubscribe = sm.registerEventListener(sessionId, (event: AgentSessionEvent) => {
-      if (event.taskId) return
-      queue.push(event)
-      if (resolve) { resolve(); resolve = null }
-    })
-
-    const onAbort = () => { done = true; if (resolve) { resolve(); resolve = null } }
-    signal.addEventListener('abort', onAbort)
-
-    try {
-      while (!done) {
-        if (queue.length === 0) {
-          await new Promise<void>((r) => { resolve = r })
-        }
-        while (queue.length > 0) {
-          const event = queue.shift()!
-          const sse = processEvent(event)
-          if (sse) yield sse
-          // A batch-boundary complete is a per-turn flush, not the end of the
-          // response — keep the stream open (more drain turns follow).
-          if (event.type === 'complete' && !event.batchBoundary) { done = true; break }
-          if (event.type === 'error') { done = true; break }
-        }
-      }
-    } finally {
-      signal.removeEventListener('abort', onAbort)
-      unsubscribe()
-    }
+    yield* listenSession(sm, sessionId).events(signal)
   }
 
   return { handleMessage, handleStop, getHistory, subscribe, createSession }

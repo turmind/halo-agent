@@ -8,13 +8,13 @@
  *   DELETE /api/feishu/accounts/:id
  */
 import { Hono } from 'hono'
-import fs from 'node:fs'
 import type { ChannelDb } from '../db/channel-db.js'
 import type { FeishuChannel } from '../channels/feishu/handler.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/feishu/accounts.js'
-import { accessLevelError, CHAT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
+import { CHAT_ACCESS_LEVELS } from '../channels/shared/accounts.js'
+import { accountBodyError, accountListFields, accountPatchFromBody, type AccountPatchBody } from './channel-accounts.js'
 import { searchFeishuTargets, getBotInfo } from '../channels/feishu/api.js'
 
 export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel }) {
@@ -40,18 +40,10 @@ export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel
 
   app.get('/feishu/accounts', (c) => {
     const accounts = listAccounts(db).map((a) => ({
-      accountId: a.accountId,
+      ...accountListFields(a),
       appId: a.appId,
       botOpenId: a.botOpenId,
       hasEncryptKey: !!a.encryptKey,
-      workspacePath: a.workspacePath,
-      workspaceMissing: !fs.existsSync(a.workspacePath),
-      label: a.label,
-      enabled: a.enabled,
-      accessLevel: a.accessLevel,
-      language: a.language,
-      createdAt: a.createdAt,
-      updatedAt: a.updatedAt,
     }))
     return c.json({ accounts })
   })
@@ -70,10 +62,8 @@ export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel
     if (!body.appId) return c.json({ error: 'appId required' }, 400)
     if (!body.appSecret) return c.json({ error: 'appSecret required' }, 400)
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
-    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const wsError = validateWorkspaceBody(body.workspacePath)
-    if (wsError) return c.json({ error: wsError }, 400)
+    const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
 
     // Resolve botOpenId from credentials. /bot/v3/info doesn't require
     // any scope (the only failure mode in practice is bad app_secret —
@@ -130,29 +120,15 @@ export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel
     // botOpenId is intentionally NOT patchable — it's derived from
     // appId/appSecret in POST. If credentials change the right path is
     // a fresh POST (which re-resolves), not a PATCH.
-    const body = await c.req.json().catch(() => ({})) as Partial<{
-      label: string
-      workspacePath: string
-      enabled: boolean
-      accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
-      language: string
-      verificationToken: string
-      encryptKey: string
-    }>
-    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const patch: Record<string, unknown> = {}
-    if (body.label !== undefined) patch.label = body.label
-    if (body.accessLevel !== undefined) patch.accessLevel = body.accessLevel
-    if (body.language !== undefined) patch.language = body.language
+    const body = await c.req.json().catch(() => ({})) as AccountPatchBody & {
+      verificationToken?: string
+      encryptKey?: string
+    }
+    const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
+    const patch = accountPatchFromBody(body)
     if (body.verificationToken !== undefined) patch.verificationToken = body.verificationToken
     if (body.encryptKey !== undefined) patch.encryptKey = body.encryptKey
-    if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
-    if (body.workspacePath !== undefined) {
-      const wsError = validateWorkspaceBody(body.workspacePath)
-      if (wsError) return c.json({ error: wsError }, 400)
-      patch.workspacePath = body.workspacePath
-    }
     updateAccount(db, id, patch)
     await channel.stopAccount(id).catch(() => {})
     const updated = getAccount(db, id)!

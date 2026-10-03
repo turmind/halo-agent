@@ -1,4 +1,3 @@
-import path from 'node:path'
 import { Bot, InputFile } from 'grammy'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
@@ -33,7 +32,7 @@ export interface TelegramChannel {
   stopAll(): Promise<void>
 }
 
-import { classifyMedia, isMediaPathAllowed } from '../shared/media.js'
+import { classifyMedia, sendMediaOrReport } from '../shared/media.js'
 
 function inferMediaKind(filePath: string): 'photo' | 'video' | 'voice' | 'document' {
   const cls = classifyMedia(filePath)
@@ -181,26 +180,21 @@ export function startTelegramChannel(deps: {
           if (!route) return
           // A blocked path or a failed upload is reported to the chat as
           // upload_failed (like slack / feishu / wecom) instead of only a
-          // server log line; the block throws inside the try for that.
-          try {
-            if (!isMediaPathAllowed(filePath, account.workspacePath, account.accessLevel)) {
-              throw new Error(`media path not allowed: ${filePath} (must be under the workspace or the temp dir; account access level ${account.accessLevel})`)
-            }
-            const kind = inferMediaKind(filePath)
-            const file = new InputFile(filePath)
-            switch (kind) {
-              case 'photo': await bot.api.sendPhoto(route.chatId, file); break
-              case 'video': await bot.api.sendVideo(route.chatId, file); break
-              case 'voice': await bot.api.sendVoice(route.chatId, file); break
-              case 'document': await bot.api.sendDocument(route.chatId, file); break
-            }
-          } catch (err) {
-            console.log(`[Telegram] sendMedia ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
-            await bot.api.sendMessage(route.chatId, t('handler.upload_failed', getLang(account), {
-              name: path.basename(filePath),
-              error: err instanceof Error ? err.message : String(err),
-            })).catch(() => { /* ignore */ })
-          }
+          // server log line.
+          await sendMediaOrReport({
+            filePath, account, logTag: 'Telegram',
+            send: async () => {
+              const kind = inferMediaKind(filePath)
+              const file = new InputFile(filePath)
+              switch (kind) {
+                case 'photo': await bot.api.sendPhoto(route.chatId, file); break
+                case 'video': await bot.api.sendVideo(route.chatId, file); break
+                case 'voice': await bot.api.sendVoice(route.chatId, file); break
+                case 'document': await bot.api.sendDocument(route.chatId, file); break
+              }
+            },
+            reply: (text) => bot.api.sendMessage(route.chatId, text),
+          })
         },
       }),
     })

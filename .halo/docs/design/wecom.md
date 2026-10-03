@@ -147,13 +147,13 @@ Stream `content` is capped at 20480 **bytes**. The responder splits at 5000 **ch
 - `MEDIA:<path>` markers intercepted and sent via native media upload
 - Sub-agent events dropped (visible in web UI only)
 
-Chunk sends are serialized per responder (`sendTail` promise chain, audit A-L3) and `close()` returns the drain promise so `InboundBridge` keeps the reply route alive until the last chunk is out — identical to the feishu adapter, see [feishu.md](feishu.md#event-coalescing-feishuresponder) for the history.
+Chunk sends are serialized per responder (`sendTail` promise chain, audit A-L3) and `close()` returns the drain promise so `InboundBridge` keeps the reply route alive until the last chunk is out — both come from the shared `ChunkedResponder` (`channels/shared/responder.ts`) that the feishu adapter also extends, see [feishu.md](feishu.md#event-coalescing-feishuresponder) for the history.
 
 ## Media support
 
 **Inbound:** text, voice (as transcript), images (vision + saved), mixed (text + images), files, videos — single chat only for everything but text. Saved under `<workspace>/.halo/assets/wecom/inbound/<accountId>/<date>/`.
 
-**Outbound routing** (`sendWecomMedia`; for non-`full` accounts the path must be under the workspace or the OS temp dir — `isMediaPathAllowed(path, workspace, accessLevel)`, `full` accounts may send any readable path; a blocked path surfaces as the same `t('handler.upload_failed')` reply as a failed upload):
+**Outbound routing** (`sendWecomMedia`; for non-`full` accounts the path must be under the workspace or the OS temp dir — `isMediaPathAllowed(path, workspace, accessLevel)`, `full` accounts may send any readable path; a blocked path surfaces as the same `t('handler.upload_failed')` reply as a failed upload — `sendMediaOrReport` in `channels/shared/media.ts`):
 - `.png` / `.jpg` / `.jpeg` / `.gif` → `uploadMedia(type: 'image')` → `replyMedia('image')`
 - `.mp4` → `uploadMedia(type: 'video')` → `replyMedia('video')`
 - everything else (`.webp` / `.bmp` / `.mov` / documents / audio) → `uploadMedia(type: 'file')` → `replyMedia('file')` — WeCom's `image` accepts png/jpg/gif only and `video` mp4 only
@@ -212,6 +212,6 @@ Not supported: streaming partial replies into WeCom (each reply is one finished 
 - Event dispatch: `packages/server/src/channels/wecom/handler.ts:handleInbound()`
 - Media upload: `packages/server/src/channels/wecom/handler.ts:sendWecomMedia()`
 - Cron dispatch: `packages/server/src/channels/wecom/cron-dispatcher.ts:dispatch()`
-- Event coalescing: `packages/server/src/channels/wecom/event-adapter.ts:WecomResponder`
+- Event coalescing: `packages/server/src/channels/wecom/event-adapter.ts:WecomResponder` (extends `channels/shared/responder.ts:ChunkedResponder`)
 - REST routes: `packages/server/src/routes/wecom.ts`
 - Tests: `packages/server/test/wecom-inbound.test.ts` (pure helpers), `wecom-responder.test.ts` (chunking / ordering / markdown pass-through)

@@ -3,8 +3,8 @@ import {
   listAccounts as sharedList,
   listEnabledAccounts as sharedListEnabled,
   getAccount as sharedGet,
-  insertAccount as sharedInsert,
-  updateAccount as sharedUpdate,
+  insertChannelAccount,
+  updateChannelAccount,
   deleteAccount as sharedDelete,
   type ChannelAccount,
 } from '../shared/accounts.js'
@@ -66,20 +66,12 @@ export function insertAccount(db: ChannelDb, data: {
   accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
   language?: string
 }): void {
-  sharedInsert(db, {
-    accountId: data.accountId,
-    channelType: CH,
-    workspacePath: data.workspacePath,
-    label: data.label,
-    accessLevel: data.accessLevel,
-    language: data.language,
-    config: {
-      appId: data.appId,
-      appSecret: data.appSecret,
-      verificationToken: data.verificationToken,
-      encryptKey: data.encryptKey ?? '',
-      botOpenId: data.botOpenId,
-    },
+  insertChannelAccount(db, CH, data, {
+    appId: data.appId,
+    appSecret: data.appSecret,
+    verificationToken: data.verificationToken,
+    encryptKey: data.encryptKey ?? '',
+    botOpenId: data.botOpenId,
   })
 }
 
@@ -95,26 +87,7 @@ export function updateAccount(db: ChannelDb, accountId: string, patch: Partial<{
   accessLevel: string
   language: string
 }>): void {
-  const basePatch: Record<string, unknown> = {}
-  if (patch.workspacePath !== undefined) basePatch.workspacePath = patch.workspacePath
-  if (patch.label !== undefined) basePatch.label = patch.label
-  if (patch.enabled !== undefined) basePatch.enabled = patch.enabled
-  if (patch.accessLevel !== undefined) basePatch.accessLevel = patch.accessLevel
-  if (patch.language !== undefined) basePatch.language = patch.language
-
-  const configKeys = ['appId', 'appSecret', 'verificationToken', 'encryptKey', 'botOpenId'] as const
-  const hasConfigChange = configKeys.some((k) => patch[k] !== undefined)
-  if (hasConfigChange) {
-    const existing = sharedGet(db, accountId)
-    if (!existing) return
-    const cfg = { ...existing.config }
-    for (const k of configKeys) {
-      if (patch[k] !== undefined) cfg[k] = patch[k]
-    }
-    basePatch.config = cfg
-  }
-
-  sharedUpdate(db, accountId, basePatch as Parameters<typeof sharedUpdate>[2])
+  updateChannelAccount(db, accountId, patch, ['appId', 'appSecret', 'verificationToken', 'encryptKey', 'botOpenId'])
 }
 
 export function deleteAccount(db: ChannelDb, accountId: string): void {

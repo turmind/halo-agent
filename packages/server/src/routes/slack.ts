@@ -8,13 +8,13 @@
  *   DELETE /api/slack/accounts/:id     — remove
  */
 import { Hono } from 'hono'
-import fs from 'node:fs'
 import type { ChannelDb } from '../db/channel-db.js'
 import type { SlackChannel } from '../channels/slack/handler.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/slack/accounts.js'
-import { accessLevelError, CHAT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
+import { CHAT_ACCESS_LEVELS } from '../channels/shared/accounts.js'
+import { accountBodyError, accountListFields, accountPatchFromBody, type AccountPatchBody } from './channel-accounts.js'
 import { authTest, searchSlackTargets } from '../channels/slack/api.js'
 
 export function createSlackRoutes(deps: { db: ChannelDb; channel: SlackChannel }) {
@@ -42,17 +42,9 @@ export function createSlackRoutes(deps: { db: ChannelDb; channel: SlackChannel }
 
   app.get('/slack/accounts', (c) => {
     const accounts = listAccounts(db).map((a) => ({
-      accountId: a.accountId,
+      ...accountListFields(a),
       botUserId: a.botUserId,
       teamId: a.teamId,
-      workspacePath: a.workspacePath,
-      workspaceMissing: !fs.existsSync(a.workspacePath),
-      label: a.label,
-      enabled: a.enabled,
-      accessLevel: a.accessLevel,
-      language: a.language,
-      createdAt: a.createdAt,
-      updatedAt: a.updatedAt,
     }))
     return c.json({ accounts })
   })
@@ -70,10 +62,8 @@ export function createSlackRoutes(deps: { db: ChannelDb; channel: SlackChannel }
     if (!body.appToken) return c.json({ error: 'appToken required (xapp-... — needed for Socket Mode)' }, 400)
     if (!body.appToken.startsWith('xapp-')) return c.json({ error: 'appToken must start with xapp-' }, 400)
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
-    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const wsError = validateWorkspaceBody(body.workspacePath)
-    if (wsError) return c.json({ error: wsError }, 400)
+    const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
 
     // Resolve botUserId + teamId via auth.test — also doubles as a
     // token-validity check. A bad token will throw with `invalid_auth`
@@ -125,27 +115,11 @@ export function createSlackRoutes(deps: { db: ChannelDb; channel: SlackChannel }
     const id = c.req.param('id')
     const existing = getAccount(db, id)
     if (!existing) return c.json({ error: 'not found' }, 404)
-    const body = await c.req.json().catch(() => ({})) as Partial<{
-      label: string
-      workspacePath: string
-      enabled: boolean
-      accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
-      language: string
-      appToken: string
-    }>
-    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const patch: Record<string, unknown> = {}
-    if (body.label !== undefined) patch.label = body.label
-    if (body.accessLevel !== undefined) patch.accessLevel = body.accessLevel
-    if (body.language !== undefined) patch.language = body.language
+    const body = await c.req.json().catch(() => ({})) as AccountPatchBody & { appToken?: string }
+    const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
+    const patch = accountPatchFromBody(body)
     if (body.appToken !== undefined) patch.appToken = body.appToken
-    if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
-    if (body.workspacePath !== undefined) {
-      const wsError = validateWorkspaceBody(body.workspacePath)
-      if (wsError) return c.json({ error: wsError }, 400)
-      patch.workspacePath = body.workspacePath
-    }
     updateAccount(db, id, patch)
     await channel.stopAccount(id).catch(() => {})
     const updated = getAccount(db, id)!

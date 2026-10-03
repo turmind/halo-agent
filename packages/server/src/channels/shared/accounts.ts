@@ -36,6 +36,12 @@ export const ACCOUNT_ACCESS_LEVELS: readonly string[] = ['full', 'workspace', 'r
  *  routing treats observer as readonly anyway. */
 export const CHAT_ACCESS_LEVELS: readonly string[] = ['full', 'workspace', 'readonly']
 
+/** Session-level access derived from the account level: full → null
+ *  (unrestricted), observer collapses to readonly. */
+export function sessionAccess(accountAccessLevel: AccountAccessLevel): 'readonly' | 'workspace' | null {
+  return accountAccessLevel === 'full' ? null : accountAccessLevel === 'workspace' ? 'workspace' : 'readonly'
+}
+
 /**
  * REST-boundary check for an inbound `accessLevel` field. Returns an error
  * message when the field is present but outside `allowed`, else `null`
@@ -165,6 +171,54 @@ export function updateAccount(db: ChannelDb, accountId: string, patch: Partial<{
   db.update(channelAccounts).set(update)
     .where(eq(channelAccounts.accountId, accountId))
     .run()
+}
+
+/** Per-channel `insertAccount` body: the shared row columns plus the
+ *  channel's own `config` JSON (which keys it holds stays in the channel). */
+export function insertChannelAccount(db: ChannelDb, channelType: string, data: {
+  accountId: string
+  workspacePath: string
+  label?: string
+  accessLevel?: AccountAccessLevel
+  language?: string
+}, config: Record<string, unknown>): void {
+  insertAccount(db, {
+    accountId: data.accountId,
+    channelType,
+    workspacePath: data.workspacePath,
+    label: data.label,
+    accessLevel: data.accessLevel,
+    language: data.language,
+    config,
+  })
+}
+
+/**
+ * Per-channel `updateAccount` body: row columns are written as given, the
+ * channel's `configKeys` are merged into the stored `config` JSON (keys not
+ * in the patch keep their value). A config change on a missing account is a
+ * no-op, since the merge needs the row.
+ */
+export function updateChannelAccount(db: ChannelDb, accountId: string, patch: Record<string, unknown>, configKeys: readonly string[]): void {
+  const basePatch: Record<string, unknown> = {}
+  if (patch.workspacePath !== undefined) basePatch.workspacePath = patch.workspacePath
+  if (patch.label !== undefined) basePatch.label = patch.label
+  if (patch.enabled !== undefined) basePatch.enabled = patch.enabled
+  if (patch.accessLevel !== undefined) basePatch.accessLevel = patch.accessLevel
+  if (patch.language !== undefined) basePatch.language = patch.language
+
+  const hasConfigChange = configKeys.some((k) => patch[k] !== undefined)
+  if (hasConfigChange) {
+    const existing = getAccount(db, accountId)
+    if (!existing) return
+    const cfg = { ...existing.config }
+    for (const k of configKeys) {
+      if (patch[k] !== undefined) cfg[k] = patch[k]
+    }
+    basePatch.config = cfg
+  }
+
+  updateAccount(db, accountId, basePatch as Parameters<typeof updateAccount>[2])
 }
 
 /**

@@ -17,7 +17,7 @@ import { resolveAccountWorkspace, rememberWechatContextToken, getAccount as getS
 import { WechatResponder } from './event-adapter.js'
 import { downloadAndDecrypt, downloadPlain } from './cdn.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
-import { isMediaPathAllowed, tempDir } from '../shared/media.js'
+import { assertMediaPathAllowed, tempDir } from '../shared/media.js'
 import { sendMediaFile } from './send-media.js'
 import { startLogin, waitLogin } from './login.js'
 import QRCode from 'qrcode'
@@ -110,9 +110,7 @@ export function startWechatChannel(deps: {
           if (!route) return
           // Throw, don't return: the responder's catch → onSendError puts the
           // block in the session log instead of dropping the file silently.
-          if (!isMediaPathAllowed(filePath, account.workspacePath, account.accessLevel)) {
-            throw new Error(`media path not allowed: ${filePath} (must be under the workspace or the temp dir; account access level ${account.accessLevel})`)
-          }
+          assertMediaPathAllowed(filePath, account)
           await sendMediaFile({
             baseUrl: account.baseUrl, token: account.botToken,
             toUserId: route.fromUserId, contextToken: route.contextToken, contextTokenAt: route.contextTokenAt,

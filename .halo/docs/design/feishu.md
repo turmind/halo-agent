@@ -152,7 +152,9 @@ splitting produces several chunks in one synchronous loop and each is its own
 send API call, so firing them concurrently gave arrival order no guarantee. Each
 responder appends every chunk to a `sendTail` promise chain — chunk *n+1* waits
 for *n* to settle — and a rejected link is absorbed so one failed send doesn't
-stall the remainder (`dispatchChunk` logs it).
+stall the remainder (`dispatchChunk` logs it). Both live in the shared
+`ChunkedResponder` (`channels/shared/responder.ts`); `FeishuResponder` only
+supplies the 4500 limit and `formatForFeishu`.
 
 `close()` returns that drain promise and `InboundBridge` holds the session's
 reply route until it settles, then deletes it; the `stopAccount` / `closeAll()`
@@ -170,7 +172,7 @@ trailing chunks of a long reply were dropped.
 - `.mp4/.mov/.webm/.m4v/.avi` → `uploadFile(fileType: 'mp4')` → `msg_type: 'media'` (with optional cover frame)
 - everything else → `uploadFile(fileType: 'stream')` → `msg_type: 'file'`
 
-Path whitelist: a `full` account may send any readable path; other access levels are limited to the workspace or the OS temp dir (`isMediaPathAllowed(path, workspace, accessLevel)`). A blocked path throws inside the same try as the upload, so it surfaces as the `t('handler.upload_failed')` reply rather than a silent drop.
+Path whitelist: a `full` account may send any readable path; other access levels are limited to the workspace or the OS temp dir (`isMediaPathAllowed(path, workspace, accessLevel)`). A blocked path throws inside the same try as the upload (`sendMediaOrReport` in `channels/shared/media.ts`), so it surfaces as the `t('handler.upload_failed')` reply rather than a silent drop.
 
 Inbound images are downloaded via `/im/v1/messages/{messageId}/resources/{imageKey}?type=image`, decrypted if needed, saved under `<workspace>/.halo/assets/feishu/inbound/<accountId>/<date>/`, and fed to vision.
 
@@ -235,5 +237,5 @@ Not supported: group chat without mention (we require explicit @mention for grou
 - Message parsing: `packages/server/src/channels/feishu/handler.ts:parseContent()` (line 135)
 - Event dispatch: `packages/server/src/channels/feishu/handler.ts:handleInbound()` (line 301)
 - Cron dispatch: `packages/server/src/channels/feishu/cron-dispatcher.ts:dispatch()` (line 27)
-- Event coalescing: `packages/server/src/channels/feishu/event-adapter.ts:FeishuResponder` (line 24)
+- Event coalescing: `packages/server/src/channels/feishu/event-adapter.ts:FeishuResponder` (line 18), extending `channels/shared/responder.ts:ChunkedResponder`
 - REST routes: `packages/server/src/routes/feishu.ts` (all account CRUD + search)

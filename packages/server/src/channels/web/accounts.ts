@@ -3,8 +3,8 @@ import {
   listAccounts as sharedList,
   listEnabledAccounts as sharedListEnabled,
   getAccount as sharedGet,
-  insertAccount as sharedInsert,
-  updateAccount as sharedUpdate,
+  insertChannelAccount,
+  updateChannelAccount,
   deleteAccount as sharedDelete,
   type ChannelAccount,
 } from '../shared/accounts.js'
@@ -54,32 +54,11 @@ export function insertAccount(db: ChannelDb, data: {
   accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
   language?: string
 }): void {
-  sharedInsert(db, {
-    accountId: data.accountId,
-    channelType: CH,
-    workspacePath: data.workspacePath,
-    label: data.label,
-    accessLevel: data.accessLevel,
-    language: data.language,
-    config: { token: data.token },
-  })
+  insertChannelAccount(db, CH, data, { token: data.token })
 }
 
 export function updateAccount(db: ChannelDb, accountId: string, patch: Record<string, unknown>): void {
-  const basePatch: Record<string, unknown> = {}
-  if (patch.workspacePath !== undefined) basePatch.workspacePath = patch.workspacePath
-  if (patch.label !== undefined) basePatch.label = patch.label
-  if (patch.enabled !== undefined) basePatch.enabled = patch.enabled
-  if (patch.accessLevel !== undefined) basePatch.accessLevel = patch.accessLevel
-  if (patch.language !== undefined) basePatch.language = patch.language
-
-  if (patch.token !== undefined) {
-    const existing = sharedGet(db, accountId)
-    if (!existing) return
-    basePatch.config = { ...existing.config, token: patch.token }
-  }
-
-  sharedUpdate(db, accountId, basePatch as Parameters<typeof sharedUpdate>[2])
+  updateChannelAccount(db, accountId, patch, ['token'])
 }
 
 export function deleteAccount(db: ChannelDb, accountId: string): void {

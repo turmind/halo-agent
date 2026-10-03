@@ -7,6 +7,7 @@ import { scanAvailableAgents, GLOBAL_AGENTS_DIR, GLOBAL_SKILLS_DIR, loadAgentYam
 import { ensureWorkspaceHalo } from '../../init.js'
 import { getDisabledSet, toggleDisabled } from '../../db/index.js'
 import { t, type Lang } from './i18n.js'
+import { sessionAccess } from './accounts.js'
 import { execSkillCommand, getCommandSkillInfo } from '../../commands/skill-command.js'
 import { commandRegistry } from '../../commands/index.js'
 import { config } from '../../config.js'
@@ -300,7 +301,7 @@ export async function execNew(ctx: CommandContext): Promise<CommandResult> {
   // agentName omitted → createSession resolves the real agent.yaml `name`.
   const agentId = await resolveDefaultAgentId(ctx.sm, ctx.workspacePath)
   const newId = `${ctx.sessionPrefix}${Date.now().toString(36)}`
-  const accessLevel = ctx.accessLevel === 'full' ? null : ctx.accessLevel === 'workspace' ? 'workspace' : 'readonly'
+  const accessLevel = sessionAccess(ctx.accessLevel)
   try {
     await ctx.sm.createSession(agentId, null, ctx.channelLabel, undefined, newId, undefined, accessLevel)
     ctx.activeOverrides.set(ctx.userId, newId)
@@ -895,7 +896,7 @@ export async function execAgentSwitch(ctx: CommandContext, arg: string): Promise
   const agent = resolveAgent(agents, arg)
   if (!agent) return { text: t('agent.not_found', ctx.lang, { name: arg }) }
   const newId = `${ctx.sessionPrefix}${Date.now().toString(36)}`
-  const accessLevel = ctx.accessLevel === 'full' ? null : ctx.accessLevel === 'workspace' ? 'workspace' : 'readonly'
+  const accessLevel = sessionAccess(ctx.accessLevel)
   try {
     await ctx.sm.createSession(agent.id, null, ctx.channelLabel, agent.name, newId, undefined, accessLevel)
     ctx.activeOverrides.set(ctx.userId, newId)

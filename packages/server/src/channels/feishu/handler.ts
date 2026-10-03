@@ -27,13 +27,13 @@ import type { FeishuAccount, FeishuMessageEvent, FeishuTextContent } from './typ
 import { FeishuResponder } from './event-adapter.js'
 import { downloadResource, sendMessage, replyMessage, uploadImage, uploadFile } from './api.js'
 import { formatForFeishu } from '../shared/markdown.js'
-import { classifyMedia, isMediaPathAllowed } from '../shared/media.js'
+import { classifyMedia, sendMediaOrReport } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, getAccount as getSharedAccount } from '../shared/accounts.js'
 import { type CommandContext } from '../shared/commands.js'
 import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute } from '../shared/inbound.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
-import { t, getLang } from '../shared/i18n.js'
+import { getLang } from '../shared/i18n.js'
 
 export interface FeishuChannel {
   startAccount(accountId: string): void
@@ -322,23 +322,11 @@ export function startFeishuChannel(deps: {
             const route = bridge.getRoute(sessionId)
             if (!account || !route) return
             const resolved = path.resolve(filePath)
-            // Thrown inside the try so a blocked path reaches the user as
-            // upload_failed instead of vanishing with only a server log line.
-            try {
-              if (!isMediaPathAllowed(resolved, account.workspacePath, account.accessLevel)) {
-                throw new Error(`media path not allowed: ${filePath} (must be under the workspace or the temp dir; account access level ${account.accessLevel})`)
-              }
-              await sendFeishuMedia({ account, ...route, filePath: resolved })
-            } catch (err) {
-              console.log(`[Feishu] sendMedia ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
-              await replyToInbound({
-                account, ...route,
-                text: t('handler.upload_failed', getLang(account), {
-                  name: path.basename(filePath),
-                  error: err instanceof Error ? err.message : String(err),
-                }),
-              }).catch(() => { /* ignore */ })
-            }
+            await sendMediaOrReport({
+              filePath, account, logTag: 'Feishu',
+              send: () => sendFeishuMedia({ account, ...route, filePath: resolved }),
+              reply: (text) => replyToInbound({ account, ...route, text }),
+            })
           },
         })
       },

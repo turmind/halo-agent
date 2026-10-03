@@ -40,7 +40,7 @@ import type { SessionManagerRegistry } from '../../agents/session-manager-regist
 import type { ChannelDb } from '../../db/channel-db.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { claimWorkspaceRuntime } from '../../agents/workspace-runtime-lock.js'
-import { rememberLastActiveChat, type AccountAccessLevel } from './accounts.js'
+import { rememberLastActiveChat, sessionAccess, type AccountAccessLevel } from './accounts.js'
 import {
   findActiveSessionId, dispatchCommand, resolveDefaultAgentId,
   type CommandContext, type CommandResult,
@@ -139,12 +139,6 @@ export class InboundBridge<Route> {
     this.unsubscribers.clear()
     for (const fn of fns) fn()
   }
-}
-
-/** Session-level access derived from the account level: full → null
- *  (unrestricted), observer collapses to readonly. */
-function sessionAccess(accountAccessLevel: AccountAccessLevel): 'readonly' | 'workspace' | null {
-  return accountAccessLevel === 'full' ? null : accountAccessLevel === 'workspace' ? 'workspace' : 'readonly'
 }
 
 /** Find the user's active session under this channel's prefix, or create one

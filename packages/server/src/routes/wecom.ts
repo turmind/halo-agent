@@ -12,13 +12,13 @@
  * `WS_AUTH_FAILURE_EXHAUSTED` in the `[WeCom]` server logs.
  */
 import { Hono } from 'hono'
-import fs from 'node:fs'
 import type { ChannelDb } from '../db/channel-db.js'
 import type { WecomChannel } from '../channels/wecom/handler.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/wecom/accounts.js'
-import { accessLevelError, CHAT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
+import { CHAT_ACCESS_LEVELS } from '../channels/shared/accounts.js'
+import { accountBodyError, accountListFields, accountPatchFromBody, type AccountPatchBody } from './channel-accounts.js'
 
 export function createWecomRoutes(deps: { db: ChannelDb; channel: WecomChannel }) {
   const { db, channel } = deps
@@ -29,16 +29,8 @@ export function createWecomRoutes(deps: { db: ChannelDb; channel: WecomChannel }
   app.get('/wecom/accounts', (c) => {
     // `secret` is never returned — re-POST to rotate it.
     const accounts = listAccounts(db).map((a) => ({
-      accountId: a.accountId,
+      ...accountListFields(a),
       botId: a.botId,
-      workspacePath: a.workspacePath,
-      workspaceMissing: !fs.existsSync(a.workspacePath),
-      label: a.label,
-      enabled: a.enabled,
-      accessLevel: a.accessLevel,
-      language: a.language,
-      createdAt: a.createdAt,
-      updatedAt: a.updatedAt,
     }))
     return c.json({ accounts })
   })
@@ -57,10 +49,8 @@ export function createWecomRoutes(deps: { db: ChannelDb; channel: WecomChannel }
     if (!/^[\w-]+$/.test(body.botId)) return c.json({ error: 'botId must match [A-Za-z0-9_-]' }, 400)
     if (!body.secret) return c.json({ error: 'secret required' }, 400)
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
-    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const wsError = validateWorkspaceBody(body.workspacePath)
-    if (wsError) return c.json({ error: wsError }, 400)
+    const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
 
     // Account id = botId as-is (charset `[\w-]`). One bot = one account.
     const accountId = body.botId
@@ -100,26 +90,10 @@ export function createWecomRoutes(deps: { db: ChannelDb; channel: WecomChannel }
     if (!existing) return c.json({ error: 'not found' }, 404)
     // botId / secret are intentionally NOT patchable — if credentials
     // change the right path is a fresh POST (same rule as feishu).
-    const body = await c.req.json().catch(() => ({})) as Partial<{
-      label: string
-      workspacePath: string
-      enabled: boolean
-      accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
-      language: string
-    }>
-    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const patch: Record<string, unknown> = {}
-    if (body.label !== undefined) patch.label = body.label
-    if (body.accessLevel !== undefined) patch.accessLevel = body.accessLevel
-    if (body.language !== undefined) patch.language = body.language
-    if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
-    if (body.workspacePath !== undefined) {
-      const wsError = validateWorkspaceBody(body.workspacePath)
-      if (wsError) return c.json({ error: wsError }, 400)
-      patch.workspacePath = body.workspacePath
-    }
-    updateAccount(db, id, patch)
+    const body = await c.req.json().catch(() => ({})) as AccountPatchBody
+    const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
+    updateAccount(db, id, accountPatchFromBody(body))
     await channel.stopAccount(id).catch(() => {})
     const updated = getAccount(db, id)!
     if (updated.enabled) channel.startAccount(id)

@@ -22,14 +22,14 @@ import type { SlackAccount, SlackMessageEvent, SlackAppMentionEvent, SlackFile, 
 import { SlackResponder } from './event-adapter.js'
 import { downloadFile, postMessage, openSocketModeConnection, uploadFile } from './api.js'
 import { formatForSlack } from '../shared/markdown.js'
-import { isMediaPathAllowed } from '../shared/media.js'
+import { sendMediaOrReport } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, getAccount as getSharedAccount } from '../shared/accounts.js'
 import { findActiveSessionId as sharedFindActive, type CommandContext } from '../shared/commands.js'
 import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute } from '../shared/inbound.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
 import { builtinCommandNames } from '../../commands/index.js'
-import { t, getLang } from '../shared/i18n.js'
+import { getLang } from '../shared/i18n.js'
 
 /** Sandbox guard for outbound file references — only paths under the
  *  account's own workspace are allowed (or the temp dir, for assistant-
@@ -275,31 +275,18 @@ export function startSlackChannel(deps: {
             const route = bridge.getRoute(sessionId)
             if (!account || !route) return
             // Sandbox: non-full accounts may only send files inside the bound
-            // workspace (or /tmp for freshly-generated artifacts). Thrown
-            // inside the try so a block reaches the user as upload_failed.
+            // workspace (or /tmp for freshly-generated artifacts).
             const resolved = path.resolve(filePath)
-            try {
-              if (!isMediaPathAllowed(resolved, account.workspacePath, account.accessLevel)) {
-                throw new Error(`media path not allowed: ${filePath} (must be under the workspace or the temp dir; account access level ${account.accessLevel})`)
-              }
-              await uploadFile({
+            await sendMediaOrReport({
+              filePath, account, logTag: 'Slack',
+              send: () => uploadFile({
                 botToken: account.botToken,
                 channel: route.channelId,
                 threadTs: route.replyTs,
                 filePath: resolved,
-              })
-            } catch (err) {
-              console.log(`[Slack] uploadFile ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
-              // Surface the failure to the user as text so they don't sit
-              // wondering why no attachment showed up.
-              await postMessage({
-                botToken: account.botToken, channel: route.channelId, threadTs: route.replyTs,
-                text: t('handler.upload_failed', getLang(account), {
-                  name: path.basename(filePath),
-                  error: err instanceof Error ? err.message : String(err),
-                }),
-              }).catch(() => { /* ignore */ })
-            }
+              }),
+              reply: (text) => postMessage({ botToken: account.botToken, channel: route.channelId, threadTs: route.replyTs, text }),
+            })
           },
         })
       },

@@ -5,29 +5,19 @@ import type { TelegramChannel } from '../channels/telegram/handler.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/telegram/accounts.js'
-import { accessLevelError, CHAT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
-import fs from 'node:fs'
+import { CHAT_ACCESS_LEVELS } from '../channels/shared/accounts.js'
+import { accountBodyError, accountListFields, accountPatchFromBody, type AccountPatchBody } from './channel-accounts.js'
 
 export function createTelegramRoutes(deps: { db: ChannelDb; channel: TelegramChannel }) {
   const { db, channel } = deps
   const app = new Hono()
 
   app.get('/telegram/accounts', (c) => {
-    const accounts = listAccounts(db).map((acc) => {
-      return {
-        accountId: acc.accountId,
-        botUsername: acc.botUsername,
-        workspacePath: acc.workspacePath,
-        workspaceMissing: !fs.existsSync(acc.workspacePath),
-        label: acc.label,
-        enabled: acc.enabled,
-        accessLevel: acc.accessLevel,
-        allowedUsers: acc.allowedUsers,
-        language: acc.language,
-        createdAt: acc.createdAt,
-        updatedAt: acc.updatedAt,
-      }
-    })
+    const accounts = listAccounts(db).map((acc) => ({
+      ...accountListFields(acc),
+      botUsername: acc.botUsername,
+      allowedUsers: acc.allowedUsers,
+    }))
     return c.json({ accounts })
   })
 
@@ -42,10 +32,8 @@ export function createTelegramRoutes(deps: { db: ChannelDb; channel: TelegramCha
     }
     if (!body.botToken) return c.json({ error: 'botToken required' }, 400)
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
-    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const wsError = validateWorkspaceBody(body.workspacePath)
-    if (wsError) return c.json({ error: wsError }, 400)
+    const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
 
     // Validate token by calling getMe
     let botUsername: string
@@ -93,27 +81,11 @@ export function createTelegramRoutes(deps: { db: ChannelDb; channel: TelegramCha
     const id = c.req.param('id')
     const existing = getAccount(db, id)
     if (!existing) return c.json({ error: 'not found' }, 404)
-    const body = await c.req.json().catch(() => ({})) as Partial<{
-      label: string
-      workspacePath: string
-      enabled: boolean
-      accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
-      allowedUsers: string
-      language: string
-    }>
-    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const patch: Record<string, unknown> = {}
-    if (body.label !== undefined) patch.label = body.label
-    if (body.accessLevel !== undefined) patch.accessLevel = body.accessLevel
+    const body = await c.req.json().catch(() => ({})) as AccountPatchBody & { allowedUsers?: string }
+    const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
+    const patch = accountPatchFromBody(body)
     if (body.allowedUsers !== undefined) patch.allowedUsers = body.allowedUsers
-    if (body.language !== undefined) patch.language = body.language
-    if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
-    if (body.workspacePath !== undefined) {
-      const wsError = validateWorkspaceBody(body.workspacePath)
-      if (wsError) return c.json({ error: wsError }, 400)
-      patch.workspacePath = body.workspacePath
-    }
     updateAccount(db, id, patch)
     // Restart if enabled state or workspace changed
     await channel.stopAccount(id).catch(() => {})

@@ -9,7 +9,8 @@ import {
   deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/web/accounts.js'
 import type { WebAccount } from '../channels/web/types.js'
-import { accessLevelError, ACCOUNT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
+import { ACCOUNT_ACCESS_LEVELS } from '../channels/shared/accounts.js'
+import { accountBodyError, accountListFields, accountPatchFromBody, type AccountPatchBody } from './channel-accounts.js'
 import { resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
 import { isHiddenWorkspacePath } from '../tools/sandbox.js'
 import { isSafeIdSegment } from './workspace-path.js'
@@ -21,20 +22,10 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
   // ── Admin CRUD (protected by auth middleware on /api/*) ──
 
   app.get('/web/accounts', (c) => {
-    const accounts = listAccounts(db).map((acc) => {
-      return {
-        accountId: acc.accountId,
-        token: acc.token,
-        workspacePath: acc.workspacePath,
-        workspaceMissing: !fs.existsSync(acc.workspacePath),
-        label: acc.label,
-        enabled: acc.enabled,
-        accessLevel: acc.accessLevel,
-        language: acc.language,
-        createdAt: acc.createdAt,
-        updatedAt: acc.updatedAt,
-      }
-    })
+    const accounts = listAccounts(db).map((acc) => ({
+      ...accountListFields(acc),
+      token: acc.token,
+    }))
     return c.json({ accounts })
   })
 
@@ -48,10 +39,8 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
     // Web is the one channel where `observer` is legal — halo-city / metrics
     // tokens are minted here.
-    const levelError = accessLevelError(body.accessLevel, ACCOUNT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const wsError = validateWorkspaceBody(body.workspacePath)
-    if (wsError) return c.json({ error: wsError }, 400)
+    const bodyError = accountBodyError(body, ACCOUNT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
 
     const accountId = crypto.randomUUID().slice(0, 8)
     const token = crypto.randomBytes(24).toString('base64url')
@@ -72,26 +61,10 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     const id = c.req.param('id')
     const existing = getAccount(db, id)
     if (!existing) return c.json({ error: 'not found' }, 404)
-    const body = await c.req.json().catch(() => ({})) as Partial<{
-      label: string
-      workspacePath: string
-      enabled: boolean
-      accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
-      language: string
-    }>
-    const levelError = accessLevelError(body.accessLevel, ACCOUNT_ACCESS_LEVELS)
-    if (levelError) return c.json({ error: levelError }, 400)
-    const patch: Record<string, unknown> = {}
-    if (body.label !== undefined) patch.label = body.label
-    if (body.accessLevel !== undefined) patch.accessLevel = body.accessLevel
-    if (body.language !== undefined) patch.language = body.language
-    if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
-    if (body.workspacePath !== undefined) {
-      const wsError = validateWorkspaceBody(body.workspacePath)
-      if (wsError) return c.json({ error: wsError }, 400)
-      patch.workspacePath = body.workspacePath
-    }
-    updateAccount(db, id, patch)
+    const body = await c.req.json().catch(() => ({})) as AccountPatchBody
+    const bodyError = accountBodyError(body, ACCOUNT_ACCESS_LEVELS)
+    if (bodyError) return c.json({ error: bodyError }, 400)
+    updateAccount(db, id, accountPatchFromBody(body))
     return c.json({ ok: true })
   })
 

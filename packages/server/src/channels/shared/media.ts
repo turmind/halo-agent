@@ -11,6 +11,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { IMAGE_EXTS } from '@turmind/halo-core'
 import type { AccountAccessLevel } from './accounts.js'
+import { t, getLang } from './i18n.js'
 
 /** OS temp dir, resolved (e.g. /tmp on unix, C:\Users\…\Temp on Windows).
  *  Channels treat files here as a valid media source alongside the
@@ -68,6 +69,40 @@ export function isMediaPathAllowed(filePath: string, workspacePath: string, acce
   const resolved = path.resolve(filePath)
   const ws = path.resolve(workspacePath)
   return resolved === ws || resolved.startsWith(ws + path.sep) || isInTempDir(resolved)
+}
+
+/** Throw when `filePath` fails `isMediaPathAllowed` for this account. Thrown
+ *  (not returned) so the caller's send-failure path reports the block to the
+ *  user like any other failed upload. */
+export function assertMediaPathAllowed(filePath: string, account: { workspacePath: string; accessLevel: AccountAccessLevel }): void {
+  if (!isMediaPathAllowed(filePath, account.workspacePath, account.accessLevel)) {
+    throw new Error(`media path not allowed: ${filePath} (must be under the workspace or the temp dir; account access level ${account.accessLevel})`)
+  }
+}
+
+/**
+ * Outbound `MEDIA:` send for a chat reply: sandbox check, then `send()`; a
+ * block or a failed upload is logged and reported to the chat as
+ * `handler.upload_failed` through `reply` (whose own failure is ignored), so
+ * the user doesn't sit wondering why no attachment showed up.
+ */
+export async function sendMediaOrReport(opts: {
+  filePath: string
+  account: { workspacePath: string; accessLevel: AccountAccessLevel; language?: string | null }
+  logTag: string
+  send: () => Promise<void>
+  reply: (text: string) => Promise<unknown>
+}): Promise<void> {
+  const { filePath, account } = opts
+  try {
+    assertMediaPathAllowed(filePath, account)
+    await opts.send()
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    console.log(`[${opts.logTag}] sendMedia ${filePath} failed: ${error}`)
+    await opts.reply(t('handler.upload_failed', getLang(account), { name: path.basename(filePath), error }))
+      .catch(() => { /* ignore */ })
+  }
 }
 
 export const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.avi'])
