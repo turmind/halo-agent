@@ -175,10 +175,9 @@ function mountXterm(host: HTMLDivElement, id: string, theme: Theme): Pick<TermIn
 
 interface TerminalPanelProps {
   headerless?: boolean
-  cwd?: string
 }
 
-export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps = {}) {
+export function TerminalPanel({ headerless }: TerminalPanelProps = {}) {
   const t = useT()
   const hostRef = useRef<HTMLDivElement>(null)
   const instancesRef = useRef<Map<string, TermInstance>>(new Map())
@@ -217,10 +216,9 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
     instancesRef.current.set(id, inst)
 
     // Start on server — prefer explicit cwd (right-click "Open in Terminal"),
-    // then panel-level customCwd (e.g. skill dir), then project path, then
-    // URL folder param, then home dir.
+    // then project path, then URL folder param, then home dir.
     const folderParam = new URLSearchParams(window.location.search).get('folder')
-    const cwd = explicitCwd ?? customCwd ?? activeProject?.path ?? folderParam ?? '~'
+    const cwd = explicitCwd ?? activeProject?.path ?? folderParam ?? '~'
     wsClient.send({
       type: 'terminal:start',
       terminalId: id,
@@ -235,7 +233,7 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
     setActiveId(id)
 
     return id
-  }, [activeProject, tabs.length, customCwd])
+  }, [activeProject, tabs.length])
 
   // Close a terminal
   const closeTerminal = useCallback((id: string) => {

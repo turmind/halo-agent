@@ -10,14 +10,13 @@ import { Maximize2, Minimize2, PictureInPicture2, X } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
 interface BottomPanelProps {
-  cwd?: string
   /** When set, clicking the top-right icon calls this (used for Dock back when floating) */
   floating?: boolean
   /** Ref for the drag handle area (float mode only). Mouse events on the tab bar trigger drag. */
   dragHandleRef?: React.RefObject<HTMLDivElement | null>
 }
 
-export function BottomPanel({ cwd, floating = false, dragHandleRef }: BottomPanelProps = {}) {
+export function BottomPanel({ floating = false, dragHandleRef }: BottomPanelProps = {}) {
   const t = useT()
   const activeTab = useEditorStore((s) => s.bottomTab)
   const setActiveTab = useEditorStore((s) => s.setBottomTab)
@@ -82,7 +81,7 @@ export function BottomPanel({ cwd, floating = false, dragHandleRef }: BottomPane
           <ChatPanel />
         </div>
         <div className={activeTab === 'terminal' ? 'h-full' : 'hidden'}>
-          {terminalEverOpened && <TerminalPanel key={terminalKey} headerless cwd={cwd} />}
+          {terminalEverOpened && <TerminalPanel key={terminalKey} headerless />}
         </div>
       </div>
     </div>
