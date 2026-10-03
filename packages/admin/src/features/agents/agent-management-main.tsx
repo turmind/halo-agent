@@ -332,7 +332,7 @@ export function AgentManagementMain() {
           <div className="flex-1 overflow-y-auto py-1">
             {renderSection('global', Globe, t('common.global'), globalAgents)}
             {projectId && renderSection('workspace', FolderOpen, t('common.workspace'), workspaceAgents)}
-            {internalAgents.length > 0 && renderSection('internal', Cog, 'Internal', internalAgents, { allowCreate: false })}
+            {internalAgents.length > 0 && renderSection('internal', Cog, t('common.internal'), internalAgents, { allowCreate: false })}
           </div>
         </div>
       </Panel>

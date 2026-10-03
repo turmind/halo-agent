@@ -460,6 +460,7 @@ export const en: Record<string, string> = {
   'common.language': 'Language',
   'common.global': 'Global',
   'common.workspace': 'Workspace',
+  'common.internal': 'Internal',
   'sidebar.collapse': 'Collapse',
   'sidebar.expand': 'Expand',
   'sidebar.resize': 'Drag to resize',

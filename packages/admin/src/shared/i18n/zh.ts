@@ -460,6 +460,7 @@ export const zh: Record<string, string> = {
   'common.language': '语言',
   'common.global': '全局',
   'common.workspace': '工作区',
+  'common.internal': '内部',
   'sidebar.collapse': '收起',
   'sidebar.expand': '展开',
   'sidebar.resize': '拖动调整宽度',
