@@ -10,6 +10,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Admin: the pin, finish-bell and connection-light buttons at the bottom of the activity bar are merged into one quick-toggles gear. A thin bar under the gear shows each item's state: network, finish notification, and in the desktop app also pin and keep-awake. The gear turns red when the connection is down. Click it to open a panel where you switch the items; the panel stays open while you switch.
 - Desktop: a "Keep screen awake" toggle, per window. While it's on and the window isn't minimized or hidden, the screen won't sleep or lock. It starts off after a restart and in new windows.
+- Skills: workspace share bundles the workspace's own `.halo/settings.yaml`, with secret values blanked.
+
+### Changed
+
+- Admin: a session tab's delete button is a trash icon shown on hover, on every row (was ✕, always visible on the active row).
+- Settings: the unused `general.limits.ws_event_buffer` key is removed.
+
+### Fixed
+
+- Agents: a tool call with malformed or truncated JSON arguments gets an error result the model can retry on. Before, it failed the whole model call (Anthropic family) or ran the tool on `{}` (OpenAI family). A reply cut off at the output token limit gets an error for each of its tool calls before the turn stops.
+- Agents: OpenAI-compatible and Kimi providers read cached prompt tokens from every key the API reports them under, so cache hits show up in usage.
+- Telegram: a long reply split into several messages arrives in order. A cron report over 4000 characters is sent as several messages instead of failing. In groups, builtin commands check the sender against the whitelist, and `/cmd@thisbot` skill commands match.
+- WeCom: after a restart the account re-attaches to the last active chat; replies go out as active pushes until the user's next message.
+- WeChat: PATCHing an account changes only label / workspace / enabled / access level / language; other keys in the body no longer overwrite its config.
+- Web channel: a failed media save or send no longer leaks the session listener, and a client that disconnects ends its stream at once (the turn keeps running).
+- Admin: the agent form no longer saves an empty config over `agent.yaml` when the file fails to load or parse; it shows an error with a Retry button.
+- Admin: the finish bell rings once after a run of queued turns, not after each one.
+- Admin: channel pages show the Observer badge for observer accounts and WeChat's "path does not exist"; Slack and Telegram tokens are masked inputs. Missing translations on the agent page and the channel forms are filled in.
+- Admin: Explorer sends one file stat per window focus (was two), and the Sessions page's background refresh fetches only the first page.
+- Server: agent operations at workspace scope without a `projectId`, or with an unknown scope, are rejected with 400 instead of acting on the global agent — a DELETE could remove the last global agent. Workspace AGENT.md / INSTRUCTIONS.md routes without a `projectId` are rejected too.
+- Settings: resetting a key (e.g. a sandbox setting) takes effect without a restart, and deleting a global-only key at workspace scope is rejected like setting it.
+- Server: a failed bundled-doc copy at startup is logged instead of silently skipped.
 
 ## [1.5.4] - 2026-10-02
 
