@@ -56,7 +56,7 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 78 // bundled docs sync: guide/chat.md describes the per-tab status dot (busy / unread / idle).
+export const TEMPLATE_VERSION = 79 // workspace skill: share bundles the workspace's own .halo/settings.yaml (secret values blanked); guide/chat.md: tab delete is a hover-only trash icon.
 const VERSION_FILE = '.template-version'
 
 /** Read the seed version stamped into `~/.halo/global/.template-version`.

@@ -62,6 +62,7 @@ Prompts: all=global-fallback, root=global-fallback
 
 Redactions:
   • 1 secret field auto-replaced with {{...params.api_key}} placeholder
+  • settings.yaml: 2 secret values cleared
   • 0 unambiguous leaks redacted in markdown
   • 2 suspicious strings flagged for review (see below)
 
@@ -69,7 +70,7 @@ Excluded:
   • USER.md (3 files — personal profile)
   • memory/ (12 files)
   • assets/ (84 files)
-  • sessions/, logs/, tmp/, *.db, settings.yaml — always
+  • sessions/, logs/, tmp/, *.db, ~/.halo/secrets/settings.yaml — always
 ```
 
 Lead with the most important callouts: anything in the **redactions** section, anything in
@@ -148,13 +149,17 @@ To share: send the zip. Receiver unzips into their project root, then fills in a
 - Skills that are **referenced by an included agent's `skills:` list**. Workspace skill wins;
   otherwise global skill (if not disabled).
 - `prompts/{bootstrap,all,root}/` — workspace dir if it exists, else global fallback.
+- `<ws>/.halo/settings.yaml` (if present) — values under any `secrets` map or a secret-named
+  key (`api_key`, `token`, …) are cleared to `""`; `<<ENV>>` placeholders stay. The receiver
+  fills them in. Unparseable files are skipped (`excluded.settings_skipped`).
 
 **Excluded (always):**
 - Every `USER.md` (workspace, agent dirs, anywhere) — personal profile, never share.
 - `memory/`, `assets/` — workspace-specific knowledge / data.
 - `sessions/`, `logs/`, `tmp/`, `*.db`, `*.db-shm`, `*.db-wal` — runtime state.
-- `~/.halo/secrets/settings.yaml` — secrets are redacted into agent.yaml/SKILL.md as
-  `{{<id>.params.<key>}}` placeholders; the receiver fills them in their own `settings.yaml`.
+- `~/.halo/secrets/settings.yaml` — global settings, never bundled. Secrets in agent.yaml /
+  SKILL.md are redacted to `{{<id>.params.<key>}}` placeholders; the receiver fills them in
+  their own `settings.yaml`.
 - Agents with `internal: true` in their `agent.yaml` (`__evo_agent__`, `__score__`,
   `__apply_agent__`, etc.) — these are platform-internal, force-overwritten by the
   receiver's own server on startup, so bundling them is redundant and can leak
@@ -166,6 +171,9 @@ To share: send the zip. Receiver unzips into their project root, then fills in a
   `api_key`, `secret`, `token`, `password`, `access_key`, `aws_secret_access_key`, `bot_token`,
   `client_secret` (case-insensitive) get their values replaced with `{{<id>.params.<field>}}`
   if the value is a literal (not already a `{{...}}` or `<<ENV>>` placeholder).
+- **Workspace settings.yaml (auto):** secret values cleared to `""` (see Included); other
+  strings get the markdown leak scan below. Each cleared value is listed in
+  `redactions.settings`.
 - **Markdown auto-redact:** AWS access key formats (`AKIA…`, `ASIA…`) are replaced with
   `[REDACTED:<type>]`.
 - **Markdown flag-only:** Emails, bearer-style headers, and long base64-ish tokens are

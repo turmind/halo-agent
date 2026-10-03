@@ -60,7 +60,7 @@ LEAK_PATTERNS = [
     ), "flag"),
 ]
 
-ALWAYS_EXCLUDED = ["sessions/", "logs/", "tmp/", "*.db", "*.db-shm", "*.db-wal", "settings.yaml", "USER.md"]
+ALWAYS_EXCLUDED = ["sessions/", "logs/", "tmp/", "*.db", "*.db-shm", "*.db-wal", "USER.md"]
 
 # Platform built-ins. The receiver's own server force-seeds these on every
 # startup (see packages/server/src/init.ts BUILTIN_AGENT_IDS / BUILTIN_SKILL_IDS),
@@ -139,6 +139,47 @@ def sanitize_yaml(data, namespace: str, file_label: str, findings: list) -> bool
     return modified[0]
 
 
+def sanitize_settings(data: dict, file_label: str, manifest: dict) -> bool:
+    """Clear secret leaf values in a workspace settings.yaml, in place.
+
+    A leaf is cleared to "" when it sits under any `secrets` mapping or under a
+    SECRET_FIELD-named key; the receiver loads "" as unset and falls back to
+    their own global settings. `<<ENV>>` placeholders and empty values are kept.
+    Other strings get the LEAK_PATTERNS scan, same actions as markdown."""
+    modified = [False]
+
+    def scrub(v, chain, secret):
+        if isinstance(v, dict):
+            for k in v:
+                key = str(k)
+                v[k] = scrub(v[k], chain + [key],
+                             secret or key.lower() == "secrets" or bool(SECRET_FIELD.match(key)))
+            return v
+        if isinstance(v, list):
+            return [scrub(x, chain + [str(i)], secret) for i, x in enumerate(v)]
+        if v is None or (isinstance(v, str) and (not v.strip() or PLACEHOLDER.match(v))):
+            return v
+        field = ".".join(chain)
+        if secret:
+            modified[0] = True
+            manifest["redactions"]["settings"].append({"file": file_label, "field": field, "action": "cleared"})
+            return ""
+        if isinstance(v, str):
+            text, auto, sus = sanitize_markdown(v, file_label)
+            for entry in auto + sus:
+                del entry["line"]
+                entry["field"] = field
+            manifest["redactions"]["markdown_auto"].extend(auto)
+            manifest["redactions"]["markdown_suspicious"].extend(sus)
+            if auto:
+                modified[0] = True
+            return text
+        return v
+
+    scrub(data, [], False)
+    return modified[0]
+
+
 def sanitize_markdown(text: str, file_label: str):
     """Auto-redact high-confidence leaks; collect lower-confidence ones for review."""
     auto, suspicious = [], []
@@ -165,6 +206,27 @@ def sanitize_md_file(src: Path, dst: Path, label: str, manifest: dict):
     dst.write_text(text, encoding="utf-8")
     manifest["redactions"]["markdown_auto"].extend(auto)
     manifest["redactions"]["markdown_suspicious"].extend(sus)
+
+
+def stage_settings(src: Path, dst: Path, label: str, manifest: dict):
+    """Copy the workspace's own settings.yaml with secret values cleared.
+    Unparseable files are not copied; the reason goes to the manifest
+    (exception type only — YAML errors quote the offending line, which may be a secret)."""
+    reason = None
+    try:
+        data = yaml.safe_load(src.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict):
+            reason = "not a YAML mapping"
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as e:
+        reason = f"unparseable ({type(e).__name__})"
+    if reason:
+        manifest["excluded"]["settings_skipped"] = reason
+        return
+    if sanitize_settings(data, label, manifest):
+        dst.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    else:
+        shutil.copy2(src, dst)
+    manifest["included"]["settings"] = label
 
 
 def index_doc_links(index_path: Path) -> list:
@@ -209,15 +271,17 @@ def main():
             "agents": [],
             "skills": [],
             "prompts": {"all": None, "root": None},
+            "settings": None,
         },
         "excluded": {
             "user_md": [],
             "memory_count": 0,
             "assets_count": 0,
             "missing_skills": [],
+            "settings_skipped": None,
             "always_excluded": ALWAYS_EXCLUDED,
         },
-        "redactions": {"yaml_params": [], "markdown_auto": [], "markdown_suspicious": []},
+        "redactions": {"yaml_params": [], "settings": [], "markdown_auto": [], "markdown_suspicious": []},
     }
 
     disabled_agents, disabled_skills, ws_disabled_agents, ws_disabled_skills = load_disabled(ws_halo / "halo.db")
@@ -416,6 +480,11 @@ def main():
             shutil.copytree(global_scope, stage_halo / "prompts" / scope, dirs_exist_ok=True)
             manifest["included"]["prompts"][scope] = "global-fallback"
 
+    # --- workspace settings.yaml (its own, never ~/.halo/secrets/settings.yaml), secrets cleared
+    ws_settings = ws_halo / "settings.yaml"
+    if ws_settings.is_file():
+        stage_settings(ws_settings, stage_halo / "settings.yaml", ".halo/settings.yaml", manifest)
+
     # --- excluded counts
     if (ws_halo / "memory").is_dir():
         manifest["excluded"]["memory_count"] = sum(1 for _ in (ws_halo / "memory").rglob("*") if _.is_file())
@@ -433,6 +502,10 @@ def main():
     # Secret-redacted fields appear inline in agent.yaml / SKILL.md as
     # `{{<id>.params.<key>}}`. The receiver greps for those after unpacking;
     # no separate declaration file needed.
+    settings_line = (
+        f"- `.halo/settings.yaml` ({len(manifest['redactions']['settings'])} secret value(s) cleared)\n"
+        if manifest["included"]["settings"] else ""
+    )
     readme = (
         "# Shared Halo Workspace\n\n"
         "This bundle contains a Halo workspace's `.halo/` configuration: agents, skills,\n"
@@ -442,16 +515,20 @@ def main():
         "2. If any agent.yaml or SKILL.md contains `{{<id>.params.<key>}}` placeholders,\n"
         "   add the matching values to `~/.halo/secrets/settings.yaml`. Search the bundle\n"
         "   with `grep -rn '{{' .halo/` to find every placeholder.\n"
-        "3. Open the workspace in Halo — agents and skills will be ready.\n\n"
+        "3. If the bundle has `.halo/settings.yaml`, its secret values are cleared. Fill them in\n"
+        "   from Settings, or edit that file directly.\n"
+        "4. Open the workspace in Halo — agents and skills will be ready.\n\n"
         "## Inside\n\n"
         f"- {len(manifest['included']['agents'])} agent(s)\n"
         f"- {len(manifest['included']['skills'])} skill(s)\n"
         f"- Prompts: {', '.join(f'{k}={v}' for k, v in manifest['included']['prompts'].items() if v) or '(none)'}\n"
-        f"- {len(manifest['included']['docs'])} doc(s) referenced from INDEX.md\n\n"
+        f"- {len(manifest['included']['docs'])} doc(s) referenced from INDEX.md\n"
+        f"{settings_line}\n"
         "## Excluded (privacy / portability)\n\n"
         "- `USER.md` (personal profile, all scopes)\n"
         "- `memory/`, `assets/` (workspace-specific)\n"
-        "- `sessions/`, `logs/`, `tmp/`, `*.db*`, `settings.yaml`\n\n"
+        "- `sessions/`, `logs/`, `tmp/`, `*.db*`\n"
+        "- `~/.halo/secrets/settings.yaml` (global settings, never included)\n\n"
         "## Auto-redactions\n\n"
         f"Markdown files were scanned. {len(manifest['redactions']['markdown_auto'])} unambiguous "
         f"leak(s) were auto-redacted to `[REDACTED:<type>]`. "
@@ -473,6 +550,9 @@ def main():
             "docs_count": len(manifest["included"]["docs"]),
             "prompts": manifest["included"]["prompts"],
             "yaml_redactions": len(manifest["redactions"]["yaml_params"]),
+            "settings_included": manifest["included"]["settings"] is not None,
+            "settings_cleared": len(manifest["redactions"]["settings"]),
+            "settings_skipped": manifest["excluded"]["settings_skipped"],
             "markdown_auto_redactions": len(manifest["redactions"]["markdown_auto"]),
             "markdown_suspicious": len(manifest["redactions"]["markdown_suspicious"]),
             "excluded_user_md": len(manifest["excluded"]["user_md"]),
