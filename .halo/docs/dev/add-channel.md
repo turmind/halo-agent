@@ -275,7 +275,7 @@ That's all the server wiring. `index.ts` calls `bootChannels(app, defaultChannel
 
 To let users manage Slack accounts from the web UI:
 
-1. Build the React component (mirror [packages/admin/src/features/wechat/wechat-settings.tsx](../../../packages/admin/src/features/wechat/wechat-settings.tsx)). Place it at `packages/admin/src/features/slack/slack-settings.tsx`.
+1. Build the settings page at `packages/admin/src/features/slack/slack-settings.tsx` on the shared pieces in `packages/admin/src/features/channels/`: `useChannelAccounts` + `ChannelAccountsPage` + `ChannelAccountRow` ([account-list.tsx](../../../packages/admin/src/features/channels/account-list.tsx)) for the list, header and inline edit, and `ChannelAddDialog` ([account-form.tsx](../../../packages/admin/src/features/channels/account-form.tsx)) for the add dialog. The page keeps only what's channel-specific: the account type, the row's name / detail line, the credential inputs, and the `api.slack.*` calls. Mirror [packages/admin/src/features/wecom/wecom-settings.tsx](../../../packages/admin/src/features/wecom/wecom-settings.tsx). The shared parts read i18n keys from the channel's own namespace (`slack.title`, `slack.add`, `slack.addTitle`, `slack.addBtn`, `slack.confirmDelete`, …). The full key list is in the header comments of the two files.
 2. Create `packages/admin/src/features/slack/descriptor.ts`:
    ```ts
    import { Hash } from 'lucide-react'    // or whatever icon fits

@@ -142,7 +142,7 @@ export const en: Record<string, string> = {
   // ── Web settings ──
   'web.title': 'Web Access',
   'web.desc': 'Create tokens for web frontend access. Each token binds to one workspace.',
-  'web.create': 'Create Access',
+  'web.add': 'Create Access',
   'web.loading': 'Loading...',
   'web.empty': 'No web access yet. Click Create above to generate a token.',
   'web.saveFailed': 'Save failed: {error}',
@@ -169,11 +169,11 @@ export const en: Record<string, string> = {
   'web.createSuccess': 'Created successfully',
   'web.tokenNotice': 'Save this token (shown only once):',
   'web.done': 'Done',
-  'web.createTitle': 'Create Web Access',
+  'web.addTitle': 'Create Web Access',
   'web.bindWorkspace': 'Bind to workspace',
   'web.nameOptional': 'Name (optional)',
   'web.namePlaceholder': 'e.g. SA Demo',
-  'web.createBtn': 'Create',
+  'web.addBtn': 'Create',
 
   // ── WeChat settings ──
   'wx.title': 'WeChat Bot',

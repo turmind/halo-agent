@@ -142,7 +142,7 @@ export const zh: Record<string, string> = {
   // ── Web settings ──
   'web.title': 'Web 接入',
   'web.desc': '创建 Token 给 Web 前端接入，每个 Token 绑定一个 workspace',
-  'web.create': '创建接入',
+  'web.add': '创建接入',
   'web.loading': '加载中...',
   'web.empty': '还没有 Web 接入。点右上角创建一个 Token。',
   'web.saveFailed': '保存失败: {error}',
@@ -169,11 +169,11 @@ export const zh: Record<string, string> = {
   'web.createSuccess': '创建成功',
   'web.tokenNotice': '请保存以下 Token（只显示一次）：',
   'web.done': '完成',
-  'web.createTitle': '创建 Web 接入',
+  'web.addTitle': '创建 Web 接入',
   'web.bindWorkspace': '绑定到 workspace',
   'web.nameOptional': '名称（可选）',
   'web.namePlaceholder': '比如：SA Demo',
-  'web.createBtn': '创建',
+  'web.addBtn': '创建',
 
   // ── WeChat settings ──
   'wx.title': '微信机器人',
