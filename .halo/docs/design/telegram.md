@@ -103,7 +103,7 @@ Routes: `packages/server/src/routes/telegram.ts`
 
 Photos / documents / voice / video notes trigger the same flow with the saved-file note in the text.
 
-Builtin commands (`bot.command`) run the same `allowedUsers` check first and reply `handler.not_allowed` on a miss — before, only plain messages were gated, so any member of a group the bot sat in could run `/session` / `/workspace switch` at the account's access level.
+Builtin commands (`bot.command`) run the same `allowedUsers` check first and reply `handler.not_allowed` on a miss — before, only plain messages were gated, so any member of a group the bot sat in could run `/session` / `/workspace switch` at the account's access level. A command with no sender (`channel_post` in a channel the bot administers) is ignored.
 
 ### Group chats
 

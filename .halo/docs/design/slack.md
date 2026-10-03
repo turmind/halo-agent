@@ -127,7 +127,7 @@ appends every chunk to it, so chunk *n+1* only goes out after *n* settles; a
 rejected link is absorbed (`dispatchChunk` logs its own send failures) so one
 bad send can't stall the rest of the reply. The buffer + chain live in the
 shared `ChunkedResponder` (`channels/shared/responder.ts`), which slack / feishu
-/ wecom / wechat extend with their own limit and formatter.
+/ wecom / wechat / telegram extend with their own limit and formatter.
 
 `close()` therefore returns that drain promise, and `InboundBridge` keeps the
 session's reply route registered until it settles before deleting it — including

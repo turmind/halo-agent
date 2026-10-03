@@ -111,7 +111,7 @@ All frames are JSON `{ cmd, headers: { req_id }, body }`; responses echo `header
 | `ping` / pong | client → server | SDK heartbeat |
 | `aibot_msg_callback` | server → client | inbound message → `'message'` event |
 | `aibot_event_callback` | server → client | events; only `disconnected_event` is handled (kicked). `enter_chat` / `template_card_event` / `feedback_event` are ignored |
-| `aibot_respond_msg` | client → server | `replyStream(frame, streamId, content, finish)` — every reply |
+| `aibot_respond_msg` | client → server | `replyStream(frame, streamId, content, finish)` — replies with a live `req_id` |
 | `aibot_send_msg` | client → server | `sendMessage(chatid, { msgtype: 'markdown' })` / `sendMediaMessage(chatid, …)` — cron, and replies on a route restored at startup |
 | `aibot_upload_media_init` / `_chunk` / `_finish` | client → server | `uploadMedia(buffer, { type, filename })` — chunked (≤ 512 KB × ≤ 100), returns `media_id` (valid 3 days) |
 
@@ -172,6 +172,7 @@ Chunk sends are serialized per responder (`sendTail` promise chain, audit A-L3) 
 - everything else (`.webp` / `.bmp` / `.mov` / documents / audio) → `uploadMedia(type: 'file')` → `replyMedia('file')` — WeCom's `image` accepts png/jpg/gif only and `video` mp4 only
 - > 20 MB → refused; the user sees `t('handler.upload_failed')` (`⚠️ 文件上传失败：name — error`)
 - Voice is never sent: WeCom expects AMR, which the agent doesn't produce
+- On a route restored at startup (no `req_id` yet) every `replyMedia(...)` above becomes `sendMediaMessage(chatId, type, mediaId)` — the proactive push
 
 ## Similarities vs Feishu and Telegram
 
