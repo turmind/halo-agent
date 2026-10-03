@@ -9,20 +9,26 @@
  *   - E: Session operations (delete_session, delete_log)
  *   - I: Commands (/new, /compact)
  *
+ * WS protocol (1.5.3-alpha+): one connection holds a set of subscriptions.
+ * `subscribe` adds a session (reply: state:snapshot), `unsubscribe` releases its
+ * listener (no reply frame; a running agent keeps running). `session:clear` /
+ * `session:cleared` no longer exist. Session-scoped frames carry `sessionId`.
+ *
  * Run:
  *   cd packages/server && node tests/test-session-system.mjs
  *
- * Requires: server running on localhost:9527. Set env vars before running:
+ * Requires: a running server (default http://localhost:9527). Set env vars before running:
  *   HALO_TEST_PASSWORD=<login password>
  *   HALO_TEST_PROJECT=<absolute workspace path>
+ *   HALO_TEST_BASE=<server base URL>   (optional, default http://localhost:9527)
  */
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import WebSocket from 'ws'
 
-const BASE_URL = 'http://localhost:9527'
-const WS_URL = 'ws://localhost:9527/ws'
+const BASE_URL = process.env.HALO_TEST_BASE ?? 'http://localhost:9527'
+const WS_URL = `${BASE_URL.replace(/^http/, 'ws')}/ws`
 const PASSWORD = process.env.HALO_TEST_PASSWORD
 const PROJECT_ID = process.env.HALO_TEST_PROJECT
 if (!PASSWORD || !PROJECT_ID) {
@@ -85,7 +91,7 @@ async function apiFetch(path, cookie, opts = {}) {
 }
 
 // ── WebSocket helpers ────────────────────────────────────────────
-/** Connect WS and wait for the initial state:snapshot */
+/** Connect WS and wait for the initial state:snapshot (the server seeds one on connect) */
 function connectWS(cookie) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(WS_URL, { headers: { Cookie: cookie } })
@@ -177,6 +183,15 @@ function drain(ws, ms = 500) {
   })
 }
 
+/** Delete a session the way the admin does: REST first (removes the whole tree's rows AND
+ *  files), then WS `session:delete` (releases this connection's subscription). WS alone only
+ *  drops the DB rows and leaves the files on disk. */
+async function removeSession(ws, cookie, sessionId) {
+  await apiFetch(`/api/sessions/logs/${sessionId}?projectId=${encodeURIComponent(PROJECT_ID)}`, cookie, { method: 'DELETE' })
+  send(ws, { type: 'session:delete', sessionId, projectId: PROJECT_ID })
+  return waitForType(ws, 'session:deleted', 10000).catch(() => null)
+}
+
 // ── Test runner ──────────────────────────────────────────────────
 async function main() {
   let cookie
@@ -208,9 +223,14 @@ async function main() {
     const agents = body.agents ?? []
     const sleeper = agents.find(a => a.id === 'sleeper')
     const testAgent = agents.find(a => a.id === 'test-agent')
-    assert(!!sleeper, 'A2: Sleeper agent visible in workspace')
-    assert(!!testAgent, 'A2: Test-agent visible in workspace')
-    assert(sleeper?.scope === 'workspace', 'A2: Sleeper scope=workspace')
+    if (!sleeper && !testAgent) {
+      // Fixture agents are a documented precondition (docs/test/session.md), not created by this script
+      skip('A2: sleeper / test-agent fixtures not present in this workspace')
+    } else {
+      assert(!!sleeper, 'A2: Sleeper agent visible in workspace')
+      assert(!!testAgent, 'A2: Test-agent visible in workspace')
+      assert(sleeper?.scope === 'workspace', 'A2: Sleeper scope=workspace')
+    }
   }
 
   // A3: Agent YAML creation (workspace scope to allow deletion)
@@ -282,8 +302,7 @@ async function main() {
 
   // C1: Tool calling
   {
-    send(ws, { type: 'session:clear', sessionId: sessionId1 })
-    await waitForType(ws, 'session:cleared')
+    send(ws, { type: 'unsubscribe', sessionId: sessionId1 })
 
     send(ws, { type: 'subscribe', sessionId: sessionIdC, projectId: PROJECT_ID })
     await waitForType(ws, 'state:snapshot')
@@ -314,8 +333,7 @@ async function main() {
 
   // C4: Prompt caching (check usage events for cache tokens)
   {
-    send(ws, { type: 'session:clear', sessionId: sessionIdC })
-    await waitForType(ws, 'session:cleared')
+    send(ws, { type: 'unsubscribe', sessionId: sessionIdC })
 
     const sessionIdCache = `test_cache_${Date.now()}`
     send(ws, { type: 'subscribe', sessionId: sessionIdCache, projectId: PROJECT_ID })
@@ -344,8 +362,7 @@ async function main() {
     }
 
     // Cleanup
-    send(ws, { type: 'session:delete', sessionId: sessionIdCache })
-    await waitForType(ws, 'session:deleted', 5000).catch(() => {})
+    await removeSession(ws, cookie, sessionIdCache)
   }
 
   // ================================================================
@@ -359,9 +376,6 @@ async function main() {
   // in the seed `default`'s team — query_agent is team-gated, so an off-team
   // target (e.g. sleeper) would be reported not-found.
   {
-    send(ws, { type: 'session:clear', sessionId: sessionIdC })
-    await waitForType(ws, 'session:cleared')
-
     send(ws, { type: 'subscribe', sessionId: sessionIdD, projectId: PROJECT_ID })
     await waitForType(ws, 'state:snapshot')
 
@@ -373,8 +387,7 @@ async function main() {
 
   // D1: Basic delegation (start_session)
   {
-    send(ws, { type: 'session:clear', sessionId: sessionIdD })
-    await waitForType(ws, 'session:cleared')
+    send(ws, { type: 'unsubscribe', sessionId: sessionIdD })
 
     const sessionIdDel = `test_delegate_${Date.now()}`
     send(ws, { type: 'subscribe', sessionId: sessionIdDel, projectId: PROJECT_ID })
@@ -406,12 +419,12 @@ async function main() {
     assert(!!listSessionCall, 'D7: session_list tool was called')
 
     // E6-E7: Delete session + log
-    send(ws, { type: 'session:delete', sessionId: sessionIdDel })
-    const deleted = await waitForType(ws, 'session:deleted', 10000)
-    assert(deleted.sessionId === sessionIdDel, 'E6: Session deleted notification received')
+    const sessionFilePath = path.join(PROJECT_ID, '.halo/sessions/default', `${sessionIdDel}.json`)
+    assert(fs.existsSync(sessionFilePath), 'E6: Session file exists before delete')
+    const deleted = await removeSession(ws, cookie, sessionIdDel)
+    assert(deleted?.sessionId === sessionIdDel, 'E6: Session deleted notification received')
 
     // Verify file is gone
-    const sessionFilePath = path.join(PROJECT_ID, '.halo/sessions/explorer/default', `${sessionIdDel}.json`)
     assert(!fs.existsSync(sessionFilePath), 'E7: Session file deleted from disk')
   }
 
@@ -420,7 +433,8 @@ async function main() {
   // ================================================================
   section('I. Commands')
 
-  // I1: /new command (session:clear)
+  // I1: /new — no server-side clear any more; the admin opens a draft tab. Protocol
+  // equivalent: unsubscribe the old session, subscribe a new one, subscribe back.
   {
     const sessionIdNew1 = `test_new_cmd_${Date.now()}`
     send(ws, { type: 'subscribe', sessionId: sessionIdNew1, projectId: PROJECT_ID })
@@ -430,28 +444,29 @@ async function main() {
     send(ws, { type: 'chat', sessionId: sessionIdNew1, projectId: PROJECT_ID, message: 'Say "test message for new command" and nothing else.' })
     await collectUntil(ws, 'chat:complete', 60000)
 
-    // Clear session (/new)
-    send(ws, { type: 'session:clear', sessionId: sessionIdNew1 })
-    const cleared = await waitForType(ws, 'session:cleared')
-    assert(cleared.type === 'session:cleared', 'I1: session:cleared received')
+    // Leave the old session (/new): unsubscribe has no reply frame
+    send(ws, { type: 'unsubscribe', sessionId: sessionIdNew1 })
+    // (file:changed is the file watcher reporting the save, not a reply)
+    const afterUnsub = (await drain(ws, 500)).filter(m => m.type !== 'file:changed')
+    assert(afterUnsub.length === 0, 'I1: unsubscribe sends no reply frame')
 
     // Subscribe to new session — should be empty
     const sessionIdNew2 = `test_new_cmd_2_${Date.now()}`
     send(ws, { type: 'subscribe', sessionId: sessionIdNew2, projectId: PROJECT_ID })
     const newSnapshot = await waitForType(ws, 'state:snapshot')
+    assert(newSnapshot.snapshot?.sessionId === sessionIdNew2, 'I1: Snapshot is for the new session')
     const hasNoMessages = !newSnapshot.snapshot?.recentMessages?.length
     assert(hasNoMessages, 'I1: New session has no messages')
 
     // Subscribe back to old session — should have messages
     send(ws, { type: 'subscribe', sessionId: sessionIdNew1, projectId: PROJECT_ID })
     const oldSnapshot = await waitForType(ws, 'state:snapshot')
+    assert(oldSnapshot.snapshot?.sessionId === sessionIdNew1, 'I1: Snapshot is for the old session')
     assert(oldSnapshot.snapshot?.recentMessages?.length > 0, 'I1: Old session preserved with messages')
 
     // Cleanup
-    send(ws, { type: 'session:delete', sessionId: sessionIdNew1 })
-    await waitForType(ws, 'session:deleted', 5000).catch(() => {})
-    send(ws, { type: 'session:delete', sessionId: sessionIdNew2 })
-    await waitForType(ws, 'session:deleted', 5000).catch(() => {})
+    await removeSession(ws, cookie, sessionIdNew1)
+    await removeSession(ws, cookie, sessionIdNew2)
   }
 
   // I3: /compact command
@@ -480,10 +495,11 @@ async function main() {
     await drain(ws, 1000)
 
     // Send compact command
-    send(ws, { type: 'command:compact' })
+    // Compact is `/session compact` — no standalone `command:compact` any more
+    send(ws, { type: 'command:session', sessionId: sessionIdCompact, projectId: PROJECT_ID, message: 'compact' })
     const compactEvents = await collectUntil(ws, 'compact:done', 60000)
     const hasCompacted = compactEvents.some(e => e.type === 'session:compacted')
-    const hasProgress = compactEvents.some(e => e.type === 'compact:progress')
+    const hasProgress = compactEvents.some(e => e.type === 'compact:started' || e.type === 'compact:summarizing')
     const hasDone = compactEvents.some(e => e.type === 'compact:done')
     const errors = compactEvents.filter(e => e.type === 'error')
     if (errors.length) console.log(`  [debug] Compact errors: ${errors.map(e => e.error).join(', ')}`)
@@ -491,23 +507,23 @@ async function main() {
       const types = compactEvents.map(e => e.type).join(', ')
       console.log(`  [debug] Compact events received: ${types}`)
     }
-    assert(hasProgress || hasCompacted, 'I3: compact:progress or session:compacted event received')
+    assert(hasProgress || hasCompacted, 'I3: compact:started/summarizing or session:compacted event received')
     assert(hasDone, 'I3: compact:done event received')
 
     // Cleanup
-    send(ws, { type: 'session:delete', sessionId: sessionIdCompact })
-    await waitForType(ws, 'session:deleted', 5000).catch(() => {})
+    await removeSession(ws, cookie, sessionIdCompact)
   }
 
   // ================================================================
   // Cleanup B1 session
   // ================================================================
-  send(ws, { type: 'session:delete', sessionId: sessionId1 })
-  await waitForType(ws, 'session:deleted', 5000).catch(() => {})
+  await removeSession(ws, cookie, sessionId1)
 
   // Cleanup C sessions
-  send(ws, { type: 'session:delete', sessionId: sessionIdC })
-  await waitForType(ws, 'session:deleted', 5000).catch(() => {})
+  await removeSession(ws, cookie, sessionIdC)
+
+  // Cleanup D session (A6 query_agent)
+  await removeSession(ws, cookie, sessionIdD)
 
   // Clean up test file
   fs.unlinkSync('/tmp/halo-test-read.txt')
