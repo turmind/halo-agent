@@ -32,7 +32,8 @@ import { CronMain } from '@/features/cron/cron-main'
 import { CronSidebar } from '@/features/cron/cron-sidebar'
 import { SourceControlSidebar } from '@/features/source-control/source-control-sidebar'
 import { SourceControlMain } from '@/features/source-control/source-control-main'
-import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, Wifi, WifiOff, Pin, PinOff, Bell, BellOff } from 'lucide-react'
+import { QuickToggles, useQuickToggleItems } from '@/features/workspace/quick-toggles'
+import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 import { envBadgeTitlePrefix } from '@/shared/env-badge'
 import type { LinkState } from '@/shared/use-websocket'
@@ -51,7 +52,7 @@ function playChime() {
     if (!Ctor) return
     if (!chimeCtx) chimeCtx = new Ctor()
     const ctx = chimeCtx
-    // Autoplay policy can leave the context suspended until a gesture; the bell
+    // Autoplay policy can leave the context suspended until a gesture; the notify
     // toggle click already unlocked it, but resume() is harmless if already running.
     void ctx.resume()
     const now = ctx.currentTime
@@ -96,49 +97,9 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   const [pathInput, setPathInput] = useState('')
   const [showQuickOpen, setShowQuickOpen] = useState(false)
 
-  // Always-on-top toggle — only present in the desktop shell (preload injects
-  // window.haloPin). null = not desktop → button hidden. See preload.cjs.
-  const [pinned, setPinned] = useState<boolean | null>(null)
-  useEffect(() => {
-    const pin = (window as unknown as { haloPin?: { get: () => Promise<boolean> } }).haloPin
-    if (pin) void pin.get().then(setPinned)
-  }, [])
-  const togglePin = useCallback(() => {
-    const pin = (window as unknown as { haloPin?: { toggle: () => Promise<boolean> } }).haloPin
-    if (pin) void pin.toggle().then(setPinned)
-  }, [])
-
-  // Notify-on-finish toggle. Available when we can actually raise a
-  // notification: the desktop shell (window.haloNotify, injected by preload) or
-  // a plain browser that supports the Web Notification API. Off by default;
-  // persisted per-machine in localStorage. false = neither → button hidden,
-  // mirroring the pin toggle above. Lazy-initialized from localStorage like the
-  // sidebar prefs, so no mount effect / setState.
-  const notifyAvailable = typeof window !== 'undefined'
-    && (!!(window as unknown as { haloNotify?: unknown }).haloNotify || 'Notification' in window)
-  const [notifyOnFinish, setNotifyOnFinish] = useState(() => {
-    if (typeof window === 'undefined') return false
-    return localStorage.getItem('halo_notify_on_finish') === 'true'
-  })
-  const toggleNotify = useCallback(async () => {
-    // Turning it ON in a plain browser needs Notification permission, and the
-    // browser only grants requestPermission() from a user gesture — this click
-    // is that gesture. Desktop (haloNotify) manages permission natively, so
-    // skip the prompt there. If the user denied it, don't flip on (the toggle
-    // would be a lie); the browser won't re-prompt until they reset it in site
-    // settings.
-    const isDesktop = !!(window as unknown as { haloNotify?: unknown }).haloNotify
-    if (!notifyOnFinish && !isDesktop && 'Notification' in window) {
-      let perm = Notification.permission
-      if (perm === 'default') perm = await Notification.requestPermission()
-      if (perm !== 'granted') return
-    }
-    setNotifyOnFinish((prev) => {
-      const next = !prev
-      try { localStorage.setItem('halo_notify_on_finish', String(next)) } catch { /* ignore */ }
-      return next
-    })
-  }, [notifyOnFinish])
+  // Quick toggles (network / notify-on-finish / pin / keep-awake) — one list
+  // drives the activity-bar entry's status segments, panel rows and tooltip.
+  const { items: quickToggleItems, notifyOnFinish } = useQuickToggleItems(linkState)
 
   // Dynamic window title, driven by the busy state of the chat tab on screen.
   // Runs in every environment — document.title is harmless in a plain browser
@@ -164,7 +125,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       // when you're looking at the tab (a native banner would be noise there, so
       // that still waits for blur below). Self-synthesized so there's no audio
       // asset to bundle; browsers/Electron gate WebAudio behind a prior user
-      // gesture, which the bell toggle click already satisfied.
+      // gesture, which the notify toggle click already satisfied.
       playChime()
       if (document.hasFocus()) return
       const name = activeProject?.name
@@ -548,40 +509,12 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         {topTabs.map(renderTabButton)}
         <div className="flex-1" />
         {bottomTabs.map(renderTabButton)}
-        {pinned !== null && (
-          <button
-            onClick={togglePin}
-            title={pinned ? t('workspace.unpin') : t('workspace.pin')}
-            className={cn(
-              'flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
-              pinned ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]',
-            )}
-          >
-            {pinned ? <Pin className="h-5 w-5" /> : <PinOff className="h-5 w-5" />}
-          </button>
-        )}
-        {notifyAvailable && (
-          <button
-            onClick={toggleNotify}
-            title={notifyOnFinish ? t('workspace.notifyOn') : t('workspace.notifyOff')}
-            className={cn(
-              'flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
-              notifyOnFinish ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]',
-            )}
-          >
-            {notifyOnFinish ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
-          </button>
-        )}
-        {/* Tri-state link light. Green used to mean only "last known state
-            was open" — a zombie socket kept it green while sends vanished
-            (see .halo/tmp/idle-reconnect-msg-loss.md). Now: green = inbound
-            traffic is fresh, amber = OPEN but silent past the stale window
-            (probing), red = down/reconnecting. */}
-        <div className="pb-2" title={t(`link.${linkState}`)}>
-          {linkState === 'fresh' ? <Wifi className="h-4 w-4 text-emerald-400" />
-            : linkState === 'stale' ? <Wifi className="h-4 w-4 text-amber-400 animate-pulse" />
-              : <WifiOff className="h-4 w-4 text-[var(--destructive)]" />}
-        </div>
+        {/* Network segment = the tri-state link light. Green used to mean only
+            "last known state was open" — a zombie socket kept it green while
+            sends vanished (see .halo/tmp/idle-reconnect-msg-loss.md). Now:
+            green = inbound traffic is fresh, amber = OPEN but silent past the
+            stale window (probing), red = down/reconnecting. */}
+        <QuickToggles items={quickToggleItems} />
       </div>
 
       {/* Explorer — always mounted so CanvasPanel/Monaco/file tree survive activity-tab switches and maximize.

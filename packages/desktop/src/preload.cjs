@@ -169,13 +169,21 @@ window.confirm = function (message) {
 }
 
 // Always-on-top bridge. setAlwaysOnTop is a main-process API; expose a tiny
-// async surface the admin pin button calls. Only defined in the desktop shell
-// — in a plain browser `window.haloPin` is undefined, so the button hides
+// async surface the admin pin toggle calls. Only defined in the desktop shell
+// — in a plain browser `window.haloPin` is undefined, so the toggle hides
 // itself. Both methods resolve to the resulting pinned state (boolean).
 const { ipcRenderer } = require('electron')
 window.haloPin = {
   get: () => ipcRenderer.invoke('halo:pin-get'),
   toggle: () => ipcRenderer.invoke('halo:pin-toggle'),
+}
+
+// Keep-screen-awake bridge (powerSaveBlocker is main-process only), same shape
+// as haloPin: both methods resolve to this window's resulting state. Undefined
+// in a plain browser, so the quick-toggle row hides itself.
+window.haloAwake = {
+  get: () => ipcRenderer.invoke('halo:awake-get'),
+  toggle: () => ipcRenderer.invoke('halo:awake-toggle'),
 }
 
 // Reveal-in-file-manager bridge. shell.showItemInFolder / openPath are

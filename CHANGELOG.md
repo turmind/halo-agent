@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Admin: the pin, finish-bell and connection-light buttons at the bottom of the activity bar are merged into one quick-toggles gear. A thin bar under the gear shows each item's state: network, finish notification, and in the desktop app also pin and keep-awake. The gear turns red when the connection is down. Click it to open a panel where you switch the items; the panel stays open while you switch.
+- Desktop: a "Keep screen awake" toggle, per window. While it's on and the window isn't minimized or hidden, the screen won't sleep or lock. It starts off after a restart and in new windows.
+
 ## [1.5.4] - 2026-10-02
 
 First stable release since 1.4.6. It includes everything in 1.5.0-alpha through 1.5.3-alpha, plus the changes below.

@@ -658,11 +658,23 @@ export const zh: Record<string, string> = {
   'time.hours': '{n} 小时前',
   'time.days': '{n} 天前',
 
-  // ── 工作区（桌面端）──
-  'workspace.pin': '窗口置顶',
-  'workspace.unpin': '取消置顶',
-  'workspace.notifyOn': '完成回复时响提示音(失焦时另弹通知)—— 已开',
-  'workspace.notifyOff': '完成回复时响提示音(失焦时另弹通知)—— 已关',
+  // ── 快捷开关（侧栏）──
+  'quick.title': '快捷开关',
+  'quick.panelTitle': '状态与窗口',
+  'quick.on': '开',
+  'quick.off': '关',
+  'quick.network': '网络',
+  'quick.networkTitle': '网络连接',
+  'quick.networkSub': '只显示，不可切换',
+  'quick.notify': '通知',
+  'quick.notifyTitle': '完成时通知',
+  'quick.notifySub': '始终响提示音，窗口失焦时另弹通知',
+  'quick.pin': '置顶',
+  'quick.pinTitle': '窗口置顶',
+  'quick.pinSub': '浮在其他程序之上',
+  'quick.awake': '常亮',
+  'quick.awakeTitle': '保持屏幕常亮',
+  'quick.awakeSub': '窗口未最小化时生效；人离开也不会锁屏',
 
   // ── 屏幕捕获（桌面端）──
   'capture.button': '共享一个窗口/屏幕给 AI 查看',

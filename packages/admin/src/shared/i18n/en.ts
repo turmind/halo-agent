@@ -658,11 +658,23 @@ export const en: Record<string, string> = {
   'time.hours': '{n}h ago',
   'time.days': '{n}d ago',
 
-  // ── Workspace (desktop) ──
-  'workspace.pin': 'Keep window on top',
-  'workspace.unpin': 'Stop keeping on top',
-  'workspace.notifyOn': 'Chime when agent finishes (banner too if unfocused) — on',
-  'workspace.notifyOff': 'Chime when agent finishes (banner too if unfocused) — off',
+  // ── Quick toggles (activity bar) ──
+  'quick.title': 'Quick toggles',
+  'quick.panelTitle': 'Status & window',
+  'quick.on': 'on',
+  'quick.off': 'off',
+  'quick.network': 'Network',
+  'quick.networkTitle': 'Connection',
+  'quick.networkSub': 'Status only, not a toggle',
+  'quick.notify': 'Notify',
+  'quick.notifyTitle': 'Notify when finished',
+  'quick.notifySub': 'Always chimes; also a banner when the window is unfocused',
+  'quick.pin': 'Pin',
+  'quick.pinTitle': 'Keep window on top',
+  'quick.pinSub': 'Float above other apps',
+  'quick.awake': 'Awake',
+  'quick.awakeTitle': 'Keep screen awake',
+  'quick.awakeSub': "While not minimized; the screen won't lock when you step away",
 
   // ── Screen capture (desktop) ──
   'capture.button': 'Share a window/screen for the AI to see',

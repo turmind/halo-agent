@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences, Notification, crashReporter } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences, Notification, crashReporter, powerSaveBlocker } = require('electron')
 const { spawn, spawnSync, execFile, execSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
@@ -375,6 +375,11 @@ function createWindow() {
   // (or before any focus event) have a sensible target.
   mainWindow = win
   win.on('focus', () => { mainWindow = win })
+  // Keep-awake only holds while an opted-in window is visible — re-evaluate on
+  // every visibility change, and drop this window's opt-in when it closes.
+  for (const ev of ['minimize', 'restore', 'hide', 'show']) win.on(ev, syncAwakeBlocker)
+  const winId = win.id
+  win.on('closed', () => { awakeWindows.delete(winId); syncAwakeBlocker() })
   win.loadURL(`http://127.0.0.1:${PORT}`)
   mainWindowEverShown = true
   // Hand off from the splash once the admin UI has actually painted, so there's
@@ -441,7 +446,7 @@ function createWindow() {
   return win
 }
 
-// Always-on-top toggle, driven by a pin button in the admin UI (preload
+// Always-on-top toggle, driven by the pin quick toggle in the admin UI (preload
 // exposes `window.haloPin`). Renderer can't call setAlwaysOnTop itself, so
 // we bridge over IPC. 'floating' level keeps the window above other apps'
 // windows on macOS, not just our own. Both handlers return the resulting
@@ -457,6 +462,41 @@ ipcMain.handle('halo:pin-toggle', (e) => {
   if (!win) return false
   const next = !win.isAlwaysOnTop()
   win.setAlwaysOnTop(next, 'floating')
+  return next
+})
+
+// Keep-screen-awake toggle (preload exposes `window.haloAwake`), per window
+// like pin. Opt-in is in-memory only: a restart or a new window starts off; a
+// reload of the same window keeps it. One global blocker is held while any
+// opted-in window is neither minimized nor hidden — being covered by other
+// windows doesn't count. Keyed by win.id since a destroyed window can't be
+// queried in its 'closed' handler.
+const awakeWindows = new Set()
+let awakeBlockerId = null
+function syncAwakeBlocker() {
+  const want = BrowserWindow.getAllWindows().some(
+    (w) => awakeWindows.has(w.id) && !w.isDestroyed() && w.isVisible() && !w.isMinimized(),
+  )
+  if (want && awakeBlockerId === null) {
+    awakeBlockerId = powerSaveBlocker.start('prevent-display-sleep')
+    console.log(`[Awake] blocker started id=${awakeBlockerId}`)
+  } else if (!want && awakeBlockerId !== null) {
+    powerSaveBlocker.stop(awakeBlockerId)
+    console.log(`[Awake] blocker stopped id=${awakeBlockerId}`)
+    awakeBlockerId = null
+  }
+}
+ipcMain.handle('halo:awake-get', (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || mainWindow
+  return win ? awakeWindows.has(win.id) : false
+})
+ipcMain.handle('halo:awake-toggle', (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || mainWindow
+  if (!win) return false
+  const next = !awakeWindows.has(win.id)
+  if (next) awakeWindows.add(win.id)
+  else awakeWindows.delete(win.id)
+  syncAwakeBlocker()
   return next
 })
 

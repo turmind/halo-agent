@@ -35,7 +35,9 @@ The docked Bottom Panel belongs to the Explorer tab; every other tab fills the w
 | 💬 Chat bubble | Channels | Web / Telegram / Slack / Feishu / WeCom / WeChat accounts |
 | ✨ Sparkles | Evolution | Self-evolution runs and review |
 | 🕐 Clock | Cron | Scheduled agent runs |
-| ⚙️ Gear | Settings | Settings form (bottom of the bar) |
+| 🎚️ Sliders | Settings | Settings form (bottom of the bar) |
+
+Below Settings sits the **quick toggles** gear. The thin bar under it has one segment per item: network (green = connected, amber = probing, red = disconnected; the gear turns red too), finish notification, and in the desktop app also pin-on-top and keep-screen-awake (amber when on). Hover for a summary. Click to open a panel where you switch them; it stays open until you click outside, press Esc, or click the gear again.
 
 ## Switching workspace
 

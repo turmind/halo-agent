@@ -42,6 +42,8 @@ The Bottom Panel (Chat + Terminal) can also be **floated** into a draggable wind
 
 The Source Control entry is hidden in workspaces that are not git repos.
 
+Below Settings sits the quick-toggles entry (network status, finish notification, and on desktop pin / keep-screen-awake) — see [explorer.md → Desktop windows](explorer.md#desktop-windows-multi-window).
+
 ## Resizable panels
 - **Sidebar width**: drag between sidebar and main content
 - **Bottom panel height**: drag between main content and bottom panel
