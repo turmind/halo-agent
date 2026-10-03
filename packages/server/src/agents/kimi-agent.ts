@@ -82,8 +82,11 @@ export class KimiAgent extends AgentLoop {
     const usage = folded.usage as Record<string, number> | undefined
     const inputTokens = usage?.prompt_tokens ?? 0
     const outputTokens = usage?.completion_tokens ?? 0
-    // Which key Kimi reports cached tokens under isn't pinned (this file used
-    // to read only the top-level `cached_tokens`), so read every known key.
+    // Live-probed 2026-10-03 (api.moonshot.cn, streamed + include_usage):
+    // K2.6 and K3 report the hit under BOTH top-level `cached_tokens` and
+    // `prompt_tokens_details.cached_tokens`, same value, and `prompt_tokens`
+    // includes it (hence the subtraction). K3 also sends
+    // `prompt_tokens_details.cache_write_tokens` on the first call — not mapped.
     const cachedTokens = cachedPromptTokens(usage)
 
     return chatCompletionResult(folded, { inputTokens: Math.max(0, inputTokens - cachedTokens), outputTokens, cacheReadInputTokens: cachedTokens }, startTime)
