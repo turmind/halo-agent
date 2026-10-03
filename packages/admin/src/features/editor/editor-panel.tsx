@@ -397,17 +397,24 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     return unsub
   }, [projectId, workspaceRoot, useEditorStore])
 
+  // Skipped in tree-only: Explorer mounts it beside an editor-only panel on the
+  // same store, which already refreshes — two listeners meant two stats.
   useEffect(() => {
+    if (mode === 'tree-only') return
     const onFocus = () => refreshActiveTab()
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [refreshActiveTab])
+  }, [refreshActiveTab, mode])
 
   // Reconnect reconciliation — a `change` event lost while the socket was down
   // leaves an open tab stale (see shared/ws-reconnect). Active tab only: the
   // effect on [activeTab] above re-checks a background tab the moment it's
   // switched to, so refreshing every open tab here would be wasted round-trips.
-  useEffect(() => onWsReconnect(wsClient, refreshActiveTab), [refreshActiveTab])
+  // Tree-only skips it for the same reason as the focus listener.
+  useEffect(() => {
+    if (mode === 'tree-only') return
+    return onWsReconnect(wsClient, refreshActiveTab)
+  }, [refreshActiveTab, mode])
 
   const handleFileSelect = useCallback(
     async (path: string) => {
