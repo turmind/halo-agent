@@ -86,7 +86,7 @@ export function AccessLevelSelect(props: {
       <option value="readonly">{t(`${ns}.readonly`)}</option>
       {props.observer
         ? <option value="observer">{t(`${ns}.observer`)}</option>
-        : props.value === 'observer' && <option value="observer" disabled>Observer</option>}
+        : props.value === 'observer' && <option value="observer" disabled>{t('channels.observerAdminOnly')}</option>}
       <option value="workspace">{t(`${ns}.wsWrite`)}</option>
       <option value="full">{t(`${ns}.full`)}</option>
     </select>

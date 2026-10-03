@@ -1,6 +1,7 @@
 export const en: Record<string, string> = {
   // ── Channels sidebar ──
   'channels.wechat': 'WeChat',
+  'channels.observerAdminOnly': 'Observer (set by admin)',
 
   // ── Telegram settings ──
   'tg.title': 'Telegram Bot',

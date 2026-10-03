@@ -1,6 +1,7 @@
 export const zh: Record<string, string> = {
   // ── Channels sidebar ──
   'channels.wechat': '微信',
+  'channels.observerAdminOnly': 'Observer（仅管理员可设）',
 
   // ── Telegram settings ──
   'tg.title': 'Telegram Bot',
