@@ -172,4 +172,4 @@ Two consumers apply the same chain: `buildModelRuntime` (session-agent-builder.t
 
 ## Error handling
 
-When a sub-agent session crashes, the error is auto-reported back to its parent through the `.then()` callback chain — the parent never silently loses work.
+When a sub-agent session crashes, the error is auto-reported back to its parent from `runSession`'s finally (`tryReportToParent`, with a `[SUB-AGENT ABORTED …]` prefix when the turn died) — the parent never silently loses work.

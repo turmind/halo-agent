@@ -86,7 +86,7 @@ Optional `chat` fields:
 
 ## Server → Client
 
-Source: [event-processor.ts:53-129](../../../packages/server/src/ws/event-processor.ts#L53) `sendWsNotification` switch.
+Source: [event-processor.ts](../../../packages/server/src/ws/event-processor.ts) `sendWsNotification` switch.
 
 ### Agent event → WS message mapping
 
@@ -118,7 +118,7 @@ Every provider streams (Bedrock, the Anthropic-Messages providers anthropic / mi
 
 `chat:system` producers (`session-manager.ts`'s `stop` event handling): a `max_tokens` stop emits `⚠️ [<agent>] Response truncated: output token limit reached.`; a `refusal` stop (Anthropic `stop_reason: "refusal"`, HTTP 200 — the model declined, not an error) emits `⚠️ [<agent>] Model declined to respond (<category>): <explanation> — …` suggesting `/new` (see [session.md](session.md#resilient-execution-loop)).
 
-Server-internal flags on `AgentSessionEvent` that are **not** carried into the WS frame: `stream.final` (marks the turn's wrap-up text vs. pre-tool filler — consumed by channel responders and the cli, see [session.md](session.md#message-queue-and-drain)), `stream.streamed` / `thinking.streamed` (the text already went out as deltas — decides whether the whole event is forwarded at all) and `complete.batchBoundary`. The admin renders every streamed block, so none is needed on the wire.
+Server-internal flags on `AgentSessionEvent` that are **not** carried into the WS frame: `stream.final` (marks the turn's wrap-up text vs. pre-tool filler — consumed by channel responders and the cli, see [session.md](session.md#message-queue-and-drain)), `stream.streamed` / `thinking.streamed` (the text already went out as deltas — decides whether the whole event is forwarded at all). The admin renders every streamed block, so none is needed on the wire.
 
 ### Other Server → Client messages
 
@@ -231,11 +231,11 @@ Client reconnects and sends `subscribe`:
 
 ### Double-subscribe guard
 
-Inside the subscribe handler, `messageLog.length === 0` is a precondition for loading from file — so if reattach has already populated the log, subsequent subscribes can't overwrite it with stale file data. Prevents two consecutive subscribes from losing state.
+The reattach path reads the cached UIState (`getCachedUIState`), never disk. A plain subscribe goes through `getSessionView` → `prepareForView`, which keeps the cached state while the session is live in this process (self-driven, or active work in its tree) and re-seeds from disk otherwise — so a repeat subscribe can't overwrite in-flight state with stale file data.
 
 ### Client-side reconnect reconciliation
 
-The chat stream reconciles itself (above), but several admin panels keep state in sync purely from incremental `file:changed` / bus deltas — events emitted while the socket was down are lost forever, leaving them stale until an unrelated event arrives, or indefinitely when none does. Every such subscriber pairs its delta subscription with `onWsReconnect(wsClient, <its existing refetch>)` ([ws-reconnect.ts](../../../packages/admin/src/shared/ws-reconnect.ts)) — a reconnect re-reads from the server instead of trusting the gap. Current consumers: file tree (`use-file-tree.ts` → `loadFileTree`, silent replace), editor open tabs (`editor-panel.tsx` → `refreshActiveTab`), git decorations, Source Control panel + history graph, skills sidebar, agent-management list, agent session-chat panel, and the session-list bus (`state-handlers.ts`).
+The chat stream reconciles itself (above), but several admin panels keep state in sync purely from incremental `file:changed` / bus deltas — events emitted while the socket was down are lost forever, leaving them stale until an unrelated event arrives, or indefinitely when none does. Every such subscriber pairs its delta subscription with `onWsReconnect(wsClient, <its existing refetch>)` ([ws-reconnect.ts](../../../packages/admin/src/shared/ws-reconnect.ts)) — a reconnect re-reads from the server instead of trusting the gap. Current consumers: file tree (`use-file-tree.ts` → `loadFileTree`, silent replace), editor open tabs (`editor-panel.tsx` → `refreshActiveTab`), git decorations, Source Control panel + history graph, skills sidebar, agent-management list, agent session-chat panel, the session-list bus and the preview-extension list (`state-handlers.ts`).
 
 `everConnected` seeds from `client.connected`, which makes "reconnect" mean the same thing for both mount timings: a panel mounting on an already-open socket treats the next `_connected` as a reconnect, while a page-load mount does **not** fire on its first `_connected` (the subscriber's own mount fetch already covered it — firing would be a pure double-pull).
 

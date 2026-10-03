@@ -1,6 +1,6 @@
 # Command — Design
 
-Unified command processing layer — all channels (WS, WeChat, Telegram, Web, CLI/TUI) share a single dispatch path.
+Unified command processing layer — all channels (WS, WeChat, Telegram, Slack, Feishu, WeCom, Web, CLI/TUI) share a single dispatch path.
 
 ## Architecture
 
@@ -32,9 +32,9 @@ WS handler special-cases `/session compact` because it needs UI progress callbac
 1. Channel receives a slash command from user input (or WS `command:<name>` message)
 2. Channel builds a `CommandContext` (shared interface: sm, userId, sessionPrefix, accessLevel, workspacePath, lang)
 3. Channel calls `dispatchCommand(ctx, '/command', args)`
-4. `dispatchCommand` switch: `/help` and `/evo` call `exec*` directly; object commands (`/session`, `/agent`, `/skill`, `/workspace`) and the default case route through `routeObjectOrSkill`
+4. `dispatchCommand` switch: `/help` and `/evo` call `exec*` directly; object commands (`/session`, `/agent`, `/skill`, `/workspace`, `/goal` when goal mode is enabled) and the default case route through `routeObjectOrSkill`
 5. `routeObjectOrSkill` tries the builtin noun-verb table first (`SUBCOMMAND_ROUTES`, per-verb access via `verbAccessMap`), else falls through to `execSkillCommand` for the same-named skill — verb/permission model in [requirements/command.md](../requirements/command.md)
-6. Returns `CommandResult { text, switchTo?, workspace? }` — channel formats and sends to user
+6. Returns `CommandResult { text, switchTo?, workspace?, startedTurn?, sessionId? }` — channel formats and sends to user
 
 `scanSkillDescriptors` drops skill commands that collide with a built-in (or another skill) at scan time, so dispatch and the discovery API stay consistent — see [requirements/command.md](../requirements/command.md#conflict-detection).
 
@@ -53,6 +53,6 @@ packages/server/src/channels/shared/
 
 ## Frontend integration
 
-- `features/chat/slash-commands.ts` — `refreshCommands(projectId)` pulls from REST API and merges client-only fallbacks
+- `features/chat/slash-commands.ts` — `refreshCommands(projectId, sessionId?, agentId?)` pulls from REST API; a client-side fallback list is used only when that fails
 - `features/chat/use-chat.ts` — handles client-only commands locally; server commands sent as `command:<name>` via WS
-- `features/chat/chat-panel.tsx` — calls `refreshCommands()` on project switch
+- `features/chat/chat-panel.tsx` — calls `refreshCommands()` on project / session / agent switch

@@ -11,8 +11,8 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── USER.md                        # User profile (bootstrap-generated)
 │   ├── prompts/                       # User-editable system prompts (externalised)
 │   │   ├── bootstrap/BOOTSTRAP.md     # First-run guidance
-│   │   ├── all/                       # Every agent (TOOL_GUIDELINES.md, TOOL_SHELL[.windows].md)
-│   │   └── root/                      # Root agent only — empty by default; user-set
+│   │   ├── all/                       # Every agent (TOOL_GUIDELINES.md, TOOL_SHELL[.windows].md, WORKSPACE_CONVENTIONS.md, RUNTIME.md)
+│   │   └── root/                      # Root agent only (DELEGATION.md, WORKSPACE_MEMORY.md)
 │   ├── agents/<id>/
 │   │   ├── agent.yaml                 # Agent config
 │   │   └── AGENT.md                   # Agent personality
@@ -26,7 +26,8 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── evo.db                         # Cross-workspace evolution queue (evolution_runs + evolution_applies)
 │   ├── cron.db                        # Cross-workspace cron jobs + run history (cron_jobs + cron_runs)
 │   ├── runs.db                        # Run ledger: (workspace, session_id) rows for server-driven runs in flight; steady state empty (running_sessions)
-│   ├── logs/                          # Runtime logs
+│   ├── extensions/<id>/               # Installed Canvas preview extensions (halo-extension.json + bundle)
+│   ├── logs/                          # Runtime logs (server.log)
 │   │   ├── evo/                       # Per-evo-run wrapper logs
 │   │   └── cron/                      # Per-cron-run cli stdout/stderr (30-day retention)
 │   ├── server.lock                    # Single-instance pid lock
@@ -62,7 +63,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 ├── tmp/                                 # Agent scratch files (logs, downloads, intermediate artifacts) — convention from TOOL_GUIDELINES
 ├── assets/<channel>/inbound/<accountId>/<date>/  # Inbound media per channel (image/voice/video/file)
 ├── runtime.lock                       # Workspace runtime ownership marker (pid) — see below
-├── halo.db                           # Per-workspace sqlite (sessions metadata, command registry, disabled-items)
+├── halo.db                           # Per-workspace sqlite (sessions metadata, disabled-items)
 └── docs/                               # Project docs (requirements/design/dev/test/plans)
 ```
 
@@ -148,11 +149,11 @@ type MessageType =
 interface SessionMessage {
   // Required
   id: string                     // "m_{timestamp36}_{counter36}"
-  type: MessageType
+  type?: MessageType             // optional for backward compat (inferMessageType)
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: number              // Unix ms
-  agentName: string
+  agentName?: string
 
   // Optional scope
   taskId?: string                // Sub-agent task ID
@@ -181,6 +182,9 @@ interface SessionMessage {
 
   // Transient (not persisted)
   streaming?: boolean
+
+  // Soft delete (deleteExchange) — greyed out in the UI, removed from raw context
+  deleted?: boolean
 }
 ```
 
@@ -287,12 +291,15 @@ interface AgentYamlConfig {
     maxTokens?: number
     promptCaching?: boolean | string
     thinking?: { enabled?: boolean; budget?: string; effort?: string }
+    verbosity?: string
   }
   system_prompt?: string
   tools?: string[]
   skills?: string[]
   context?: { maxTokens?: number; compressAt?: number }
   priority?: number
+  internal?: boolean    // platform tooling — off the roster, no workspace context
+  team?: string[]      // delegation whitelist; non-empty = can delegate
 }
 ```
 
@@ -335,7 +342,7 @@ general:                                  # built-in declarer (the server itself
     max_summary_input: 15000
     max_message_slice: 800
   sandbox:
-    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh"
+    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs"
     hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm"
   logging:
     level: warn
@@ -536,6 +543,8 @@ interface SkillMeta {
   name: string         // from frontmatter
   description: string  // from frontmatter
   path: string         // absolute path to SKILL.md
+  command?: string     // from frontmatter
+  requiresAccess?: 'full' | 'workspace' | 'readonly'  // from frontmatter
 }
 ```
 
@@ -551,16 +560,6 @@ ORM: `packages/server/src/db/schema.ts`, `packages/server/src/db/channel-db.ts`
 The databases hold session metadata indexes and workspace-scoped preferences (e.g. disabled items); message content lives in JSON files. Agent/skill/project config goes through the filesystem.
 
 ### Tables
-
-**`sessions`** — frontend session index (created on first chat)
-
-| Column | Type | Notes |
-|---|---|---|
-| id | TEXT PK | Session ID |
-| title | TEXT NOT NULL DEFAULT '' | Truncated first user message |
-| messages | TEXT | Legacy field, unused (content now in JSON) |
-| message_count | INTEGER | Message count |
-| created_at / updated_at | INTEGER | Unix ms |
 
 **`agent_sessions`** — agent session index (root + sub-sessions)
 
@@ -602,7 +601,7 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 | Column | Type | Notes |
 |---|---|---|
 | account_id | TEXT PK | Channel-specific ID (e.g. `halo_agent_bot`, `abc-im-bot`, `e718bb7b`) |
-| channel_type | TEXT NOT NULL | `'telegram'`, `'web'`, `'wechat'`, `'slack'`, or `'feishu'` |
+| channel_type | TEXT NOT NULL | `'telegram'`, `'web'`, `'wechat'`, `'slack'`, `'feishu'`, or `'wecom'` |
 | workspace_path | TEXT NOT NULL | Absolute path of the bound workspace |
 | label | TEXT | User-chosen name |
 | enabled | INTEGER | 1 = active, 0 = disabled |
@@ -620,6 +619,7 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 | wechat | `botToken`, `baseUrl`, `userId`, `syncBuf` |
 | slack | `botToken`, `appToken`, `botUserId`, `teamId` |
 | feishu | `appId`, `appSecret`, `verificationToken`, `encryptKey`, `botOpenId` |
+| wecom | `botId`, `secret` |
 
 ### Schema change rules
 

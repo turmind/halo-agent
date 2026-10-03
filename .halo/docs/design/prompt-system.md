@@ -2,7 +2,7 @@
 
 On agent startup, Halo assembles the system prompt by concatenating various MD files in a fixed order.
 
-Entry point: `session-manager.ts` `buildAgentInstance(agentId, sessionId, parentId?, workingDir?, accessLevel?)`
+Entry point: `session-agent-builder.ts` `SessionAgentBuilder.buildAgentInstance(agentId, sessionId, parentId?, workingDir?, accessLevel?)`
 
 **Root agent rule**: `!parentId` (parentId null/undefined = root). Does not depend on any `is_default` field.
 
@@ -17,7 +17,7 @@ Entry point: `session-manager.ts` `buildAgentInstance(agentId, sessionId, parent
 ├── prompts/                ← user-editable system prompts (externalised)
 │   ├── bootstrap/BOOTSTRAP.md             ← first-run guidance
 │   ├── all/                               ← every-agent rules (TOOL_GUIDELINES.md, TOOL_SHELL[.windows].md, WORKSPACE_CONVENTIONS.md, RUNTIME.md)
-│   └── root/                              ← root-agent-only (empty by default; user-set)
+│   └── root/                              ← root-agent-only (DELEGATION.md, WORKSPACE_MEMORY.md)
 ├── agents/<id>/{agent.yaml, AGENT.md}
 └── skills/<id>/SKILL.md       ← built-in `halo` skill carries platform self-knowledge (loaded on demand via activate_skill)
 ```
@@ -52,7 +52,7 @@ Resolution is by the agent's **folder** (`agentSourceDir`), not per file:
 agent entirely (both `agent.yaml` and `AGENT.md`), with no per-file fallback
 to global — a missing file inside it is just absent. YAML fields: `name` /
 `description` / `model` / `tools` / `skills` / `system_prompt` / `context` /
-`priority`.
+`priority` / `internal` / `team`.
 
 ## Step 2 — Resolve MD file paths
 
@@ -134,7 +134,7 @@ Result:
 
 Missing directory or read failure: warn + use built-in fallback.
 
-`loadSystemPrompts` also returns `files: { bootstrap: string[]; all: string[]; root: string[] }` — the absolute paths of the `.md` files actually read for each scope (empty when the built-in fallback was used). `session-manager.ts` forwards this list into `AgentMeta.mdFiles`, which `/session context` renders one line per file (label `prompt/<scope>/<basename>`). When a scope falls back to the built-in constants, a single line `prompt/<scope> (built-in fallback): <dir>` is shown instead.
+`loadSystemPrompts` also returns `files: { bootstrap: string[]; all: string[]; root: string[] }` — the absolute paths of the `.md` files actually read for each scope (empty when the built-in fallback was used). `session-agent-builder.ts` forwards this list into `AgentMeta.mdFiles`, which `/session context` renders one line per file (label `prompt/<scope>/<basename>`). When a scope falls back to the built-in constants, a single line `prompt/<scope> (built-in fallback): <dir>` is shown instead.
 
 ## Step 5 — Compose the MD prompt
 
@@ -159,8 +159,8 @@ Global and workspace-root INSTRUCTIONS share the same `## User Instructions` hea
 mdPrompt                                         ← incl. roster + working_dir scope (both inside composeMdPrompt)
 + "\n\nThe project workspace is at: {workspaceRoot}\n"
 + [optional] "Working directory: {workingDir}\n"
-+ allPrompt
 + rootPrompt
++ allPrompt
 ```
 
 (The `working_dir` directory-chain INSTRUCTIONS.md live *inside* `mdPrompt` — folded into the `## User Instructions` region by `composeMdPrompt` — not after the `Working directory:` tagline. That tagline is just a one-line focus marker.)
@@ -216,7 +216,7 @@ If `mdPrompt` is empty:
 
 ## Step 7 — Append skills and tool list
 
-[session-manager.ts:682-697](../../../packages/server/src/agents/session-manager.ts#L682)
+[session-agent-builder.ts](../../../packages/server/src/agents/session-agent-builder.ts) `composeSystemPrompt`
 
 ### Skills (progressive disclosure)
 
@@ -245,7 +245,7 @@ AGENT.md                                         ← workspace > global
 ## Your Team                                    ← roster (dropped when team is empty/unset)
 ## User Instructions                             ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
 ## User Instructions                             ← <ws>/.halo/INSTRUCTIONS.md (workspace root)
-## Project Knowledge                             ← <ws>/.halo/INDEX.md (or nudge)
+## Project Knowledge                             ← <ws>/.halo/INDEX.md (skipped when absent)
 "The project workspace is at: ..."
 "Working directory: ..."                         ← if workingDir is set
 rootPrompt                                       ← prompts/root/*.md (ws > global): DELEGATION.md, WORKSPACE_MEMORY.md
@@ -403,4 +403,4 @@ Schema declared by each package + values stored centrally is the same model VSCo
 - **Bootstrap trigger**: `!parentId && !userMd`
 - **System prompts are external**: resolved from workspace then global `prompts/{bootstrap,all,root}/*.md`, read live, sorted by filename.
 - **System prompt missing**: warn + use built-in fallback; `system-prompts.ts` is the seed source and fallback
-- **`.halo/` is not grep/globbed**: use `file_read` + INDEX.md navigation
+- **`.halo/` is grep/globbed** except its runtime subtrees (`sessions/ logs/ evo/ tmp/ assets/ canvas/`)

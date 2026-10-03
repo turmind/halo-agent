@@ -17,14 +17,20 @@
 │  Route mounts (direct):                                             │
 │    /api/auth/*        → createAuthRoutes()                          │
 │    /api/files/*       → createFileRoutes()                          │
+│    /api/data-preview/*→ createDataPreviewRoutes()                   │
+│    /api/git/*         → createGitRoutes()                           │
 │    /api/fs/*          → createFileRoutes (home/exists/browse/resolve)│
 │    /api/agent-configs/*→ createAgentConfigRoutes()                  │
 │    /api/skills/*      → createSkillRoutes()                         │
 │    /api/settings/*    → createSettingsRoutes()                      │
 │    /api/evolution/*   → createEvolutionRoutes()                     │
 │    /api/cron/*        → createCronRoutes()                          │
+│    /api/extensions/*  → createExtensionRoutes()                     │
 │    /api/sessions/*    → createSessionRoutes()                       │
+│    /api/sessions/logs/:id/archive/:n → createSessionArchiveRoutes() │
 │    /api/show/*        → createShowRoutes() (halo-city snapshot)     │
+│    /api/metrics       → createMetricsRoutes()                       │
+│    /api/health        (inline in index.ts)                          │
 │    /api/commands      → createCommandRoutes()                       │
 │  Route mounts (via bootChannels — registry-driven):                 │
 │    /api/web/*         (web descriptor)                              │
@@ -32,8 +38,10 @@
 │    /api/wechat/*      (wechat descriptor)                           │
 │    /api/slack/*       (slack descriptor)                            │
 │    /api/feishu/*      (feishu descriptor)                           │
+│    /api/wecom/*       (wecom descriptor)                            │
 │    /ws                → setupWebSocketHandler({wss,registry})       │
 │    /*                 → static frontend (Next.js out/)              │
+│    /ping, /invocations → createAgentCoreRoutes() (agentcore mode)   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -74,7 +82,7 @@ createModelRuntime(providerId: string, cfg: ModelRuntimeConfig): ModelRuntime
 **Current providers**:
 - `aws-bedrock-claude-invoke` → `BedrockAgent` (uses the Bedrock InvokeModelWithResponseStream API — text / thinking chunks reach the UI as they are generated)
 - `anthropic` / `mimo-token-plan-china` → `AnthropicAgent`, `minimax` → `MiniMaxAgent`, `qwen` → `QwenAgent` (Anthropic Messages API over HTTP with `stream: true`; the SSE is folded by the same `AnthropicStreamAccumulator` as Bedrock via `fetchAnthropicStream` in `anthropic-stream.ts`, so they stream too)
-- The OpenAI-family (`openai` / `deepseek` / `kimi` / `zhipu` / `doubao` / `hunyuan`) → `chat/completions` over HTTP with `stream: true` + `stream_options.include_usage`; the `chat.completion.chunk` SSE is folded back into the non-streaming `choices[0].message` shape by `fetchChatCompletionStream` in `openai-chat-stream.ts` (a transport helper, not a base class — each agent keeps its own body / message conversion / usage math), so they stream too
+- The OpenAI-family (`openai` / `deepseek` / `kimi` / `zhipu` / `doubao` / `hunyuan`) → `chat/completions` over HTTP with `stream: true` + `stream_options.include_usage`; the `chat.completion.chunk` SSE is folded back into the non-streaming `choices[0].message` shape by `fetchChatCompletionStream` in `openai-chat-stream.ts` (a transport helper, not a base class; message/tool conversion and result parsing are shared via `openai-chat-format.ts`, while each agent keeps its own request body / thinking / usage math), so they stream too
 - Mantle (`aws-bedrock-mantle` / `aws-bedrock-openai`) → `MantleAgent`, OpenAI Responses API over HTTP with `stream: true`; `readResponsesStream` (module-level in `mantle-agent.ts`) reports `response.output_text.delta` frames live and takes the full final response object off the terminal `response.completed` / `response.incomplete` frame, so the existing `output[]` parse runs unchanged (bedrock-mantle sends no `[DONE]`, bedrock-runtime does — `readSseJson` skips it either way)
 - Every provider streams; the `onDelta` hook is still optional per provider, so a future non-streaming one just ignores it
 
@@ -107,11 +115,11 @@ Message dispatch:
 
 File: `ws/event-processor.ts` (pure functions).
 
-`sendWsNotification(event, state, turnId, ctx)` — converts OrchestratorEvent into a WS JSON message and sends it. Called *after* `applyEvent` has already mutated UIState. Does NOT mutate state itself. `bufferDetachedNotification(event, pendingEvents)` is the offline equivalent that buffers structural events for replay.
+`sendWsNotification(event, state, turnId, ctx)` — converts OrchestratorEvent into a WS JSON message and sends it. Called *after* `applyEvent` has already mutated UIState. Does NOT mutate state itself. `bufferDetachedNotification(event, pendingEvents, sessionId)` is the offline equivalent that buffers structural events for replay.
 
 ### Broadcast — cross-client server-pushed events
 
-File: `ws/broadcast.ts`. Per-client `sendJson` is for chat-stream events that belong to one socket; `broadcast(event)` fans an event out to *every* connected admin client. Used for shared-state changes that any tab/browser cares about: evolution run state transitions, cron job/run state, channel binding changes. Replaces the `setInterval(fetch, ...)` polling pattern that earlier admin views used to detect server-side changes.
+File: `ws/broadcast.ts`. Per-client `sendJson` is for chat-stream events that belong to one socket; `broadcast(event)` fans an event out to *every* connected admin client. Used for shared-state changes that any tab/browser cares about: evolution run state transitions, cron job/run state, session list changes, goal state, preview extensions. Replaces the `setInterval(fetch, ...)` polling pattern that earlier admin views used to detect server-side changes.
 
 `setBroadcastWss(wss)` is called once at server boot from `index.ts`; modules then `import { broadcast }` without threading the wss handle through. Callers that emit:
 
@@ -119,6 +127,10 @@ File: `ws/broadcast.ts`. Per-client `sendJson` is for chat-stream events that be
 - `routes/evolution.ts` — REST mutations (approve/reject/retry) emit immediately so user-action latency is "instant"
 - `cron/runner.ts` — `runJob` insert + `finalize` emit `cron:run_changed`; `reconcileFromDb` emits `cron:job_changed kind=reconciled|deleted` for out-of-band db edits (e.g. the cron skill writing the db directly)
 - `routes/cron.ts` — REST mutations emit `cron:job_changed kind=created|updated|deleted` immediately
+- `agents/session-manager.ts` (root `createSession`), `agents/session-ui-store.ts` (root `complete`), `routes/sessions.ts` — `session:changed`
+- `agents/goal-mode.ts` — `goal:changed`
+- `extensions/watcher.ts` — `extension:changed` (full snapshot)
+- `routes/git.ts` — `broadcastToWorkspace` a `.git` `file:changed` so every socket on that workspace refreshes
 
 ### UILogBuilder — UI state reducer
 
@@ -146,7 +158,7 @@ File: `agents/session-skill-commands.ts`. Stateless, pure reads. Resolves which 
 
 ### SessionStateStore — rawMessages disk persistence
 
-File: `agents/session-state-store.ts`. Stateless. Saves/loads an agent's `rawMessages` (LLM-facing history) to its `.json` file via read-merge-write — the `rawMessages` half of session persistence (SessionUIStore owns the UI-log half; both write the same file). `saveAgentState` takes a narrow `SavableSession` (6 fields), not the full AgentSession. Host surface: workspaceRoot + `isSessionDeleted` (the tombstone short-circuit so a late save can't resurrect a deleted file).
+File: `agents/session-state-store.ts`. Stateless. Saves/loads an agent's `rawMessages` (LLM-facing history) to its `.json` file via read-merge-write — the `rawMessages` half of session persistence (SessionUIStore owns the UI-log half; both write the same file). `saveAgentState` takes a narrow `SavableSession` (8 fields), not the full AgentSession. Host surface: workspaceRoot + `isSessionDeleted` (the tombstone short-circuit so a late save can't resurrect a deleted file).
 
 ## Helper modules
 
@@ -163,7 +175,7 @@ File: `prompts/md-loader.ts`. See [design/prompt-system.md](prompt-system.md).
 File: `tools/workspace-tools.ts`. 9 tools: file_read / view_image / file_write / file_edit / file_list / shell_exec / grep / glob / web_fetch. See [dev/tools.md](../dev/tools.md).
 
 ### Detached event buffer — post-disconnect replay
-File: `ws/handler.ts` (`cleanupConnection`) + `bufferDetachedNotification` in `ws/event-processor.ts`. After WS disconnect, an inline handler takes over the session tree's events and buffers structural ones for replay on reconnect. A *cleared* session (`/session new`) gets no handler at all — see [design/background-dispatch.md](background-dispatch.md).
+File: `ws/handler.ts` (`cleanupConnection`) + `bufferDetachedNotification` in `ws/event-processor.ts`. After WS disconnect, an inline handler takes over the session tree's events and buffers structural ones for replay on reconnect. `/session new` only opens a draft tab — the previous session stays subscribed — see [design/background-dispatch.md](background-dispatch.md).
 
 ### WorkspaceWatcher — file watching
 File: `ws/file-watcher.ts`. `@parcel/watcher` recursive native subscription (one per workspace root, shared across connections via `ws/watcher-pool.ts`) → 300ms debounce + per-path Map dedup → callback. Ignores node_modules / .git / .next / dist etc. (`IGNORED_SEGMENTS`) — passed to parcel as the bare names (top-level `ignorePaths`, string compare) plus **one** `**/{a,b,…}/**` brace glob for nested occurrences. Not one glob per segment: parcel runs every ignore regex against every inode during the initial walk, and 52 separate regexes made subscribe on a ~26k-inode repo take ~13s (one brace regex: ~0.8s, same watch set). `.halo/sessions/` and `.halo/logs/` are **not** ignored — the dedup keeps volume low, and the front-end drops `change` events for files not open in the editor, so Explorer can reflect session deletions/creations while chat streaming stays cheap.
@@ -172,7 +184,7 @@ File: `ws/file-watcher.ts`. `@parcel/watcher` recursive native subscription (one
 File: `ws/terminal-manager.ts`. Spawns a shell via node-pty. On disconnect, detaches with a 50KB ring buffer; replays on reconnect.
 
 ### Self-Evolution — workspace prompt-tuning loop
-Files: `evolution/{ticker,evo-wrapper,enqueue,spawn,archive}.ts`, `db/evo-db.ts`, `routes/evolution.ts`. Internal agents `__evo_agent__` / `__score__` / `__apply_agent__` (in `templates/agents/`) drive a 12-phase orchestration: snapshot → evo drafts → wrapper dry-runs → scorer grades → reviewer approves → apply agent merges → wrapper history-snapshots + cps to main. Per-task wrapper Node child process owns all sub-cli calls; ticker is stateless and lives in the server. State in `~/.halo/global/evo.db`. See [plans/self-evolution.md](../plans/self-evolution.md).
+Files: `evolution/{ticker,evo-wrapper,enqueue,spawn,archive}.ts`, `db/evo-db.ts`, `routes/evolution.ts`. Internal agents `__evo_agent__` / `__score__` / `__apply_agent__` (in `templates/agents/`) drive a 12-phase orchestration: snapshot → evo drafts → wrapper dry-runs → scorer grades → reviewer approves → apply agent merges → wrapper history-snapshots + cps to main. Per-task wrapper Node child process owns all sub-cli calls; ticker is stateless and lives in the server. State in `~/.halo/global/evo.db`. See [evolution.md](evolution.md).
 
 ### Run ledger — restart nudge for interrupted roots
 Files: `agents/run-ledger.ts` (sweep + skip rules) + `db/runs-db.ts` (the global `~/.halo/global/runs.db` table `running_sessions`, same singleton pattern as `evo.db`/`cron.db`). `runSession` inserts its session id on entry and deletes it in the finally (server-only, gated on `reconcileOrphansOnBoot`), so whatever is left at boot is exactly what the previous process was mid-run on; the sweep drains those rows and nudges each interrupted root. `index.ts` runs this eagerly: right after constructing the `SessionManagerRegistry` and before `bootChannels`, it loops `listRunningWorkspaces()` and claims+builds a `SessionManager` for each one that isn't already owned by another live server, rather than waiting for someone to open the workspace. See [design/session.md](session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb).
@@ -185,7 +197,7 @@ See [dev/api.md](../dev/api.md).
 
 Standalone terminal client — imports agent-core modules from `@turmind/halo-server` via subpath exports, bypassing all HTTP/WS infrastructure.
 
-Entry: `packages/cli/src/index.ts` → `harness.ts` (wraps SessionManager) → `cli.ts` (non-interactive) / `tui.ts` (interactive readline).
+Entry: `packages/cli/src/index.ts` → `harness.ts` (wraps SessionManager) → `cli.ts` (non-interactive) / `tui.tsx` + `tui/` (interactive, ink/React).
 
 Uses `dispatchCommand()` from `channels/shared/commands.ts` for `/session new`, `/session list`, `/session switch`, `/session compact`, etc. Session prefix: `cli_`. Sessions are persisted identically to admin/channel sessions and are visible in the admin panel.
 
@@ -233,10 +245,8 @@ SQLite only holds metadata indexes; all content lives on the filesystem.
 
 | Medium | Writer | Contents |
 |---|---|---|
-| SQLite `sessions` | SessionRoutes, WS handler | Frontend session metadata |
 | SQLite `agent_sessions` | SessionManager | Agent session metadata (root + children; includes `working_dir` and `access_level` columns) |
 | `.halo/sessions/{agentId}/{sid}.json` | SessionManager, SessionStore | Session messages |
-| `.halo/sessions/{agentId}/{sid}.events.jsonl` | SessionManager | Event audit log |
 | `.halo/agents/{id}/agent.yaml` | AgentConfigRoutes | Agent YAML (workspace scope) |
 | `.halo/agents/{id}/AGENT.md` | AgentConfigRoutes | Agent personality |
 | `~/.halo/global/agents/{id}/agent.yaml` | AgentConfigRoutes | Agent YAML (global scope) |
@@ -246,12 +256,12 @@ SQLite only holds metadata indexes; all content lives on the filesystem.
 | `<project>/.halo/settings.yaml` | SettingsRoutes | Per-project overrides |
 | `~/.halo/global/models/<provider>.yaml` | Manual edit | Model registry — one file per provider, scanned at startup, used to dispatch to the matching runtime |
 | `~/.halo/global/prompts/{bootstrap,all,root}/*.md` | init.ts seed + user | System prompts |
-| `~/.halo/logs/server.log` or `<ws>/.halo/logs/server.log` | Logger | Server logs (10 MB rotation) |
-| `~/.halo/secrets/channels/channels.db` | All channels | Unified channel accounts (Telegram, Web, WeChat) — see [storage.md](storage.md#channel_accounts) |
+| `~/.halo/global/logs/server.log` | Logger | Server logs (10 MB rotation) |
+| `~/.halo/secrets/channels/channels.db` | All channels | Unified channel accounts (Web, Telegram, WeChat, Slack, Feishu, WeCom) — see [storage.md](storage.md#channel_accounts) |
 
 ## Coupling hot spots
 
-**SessionManager (~2260 lines)** — the central hub. Five concerns were carved out into one-directional sibling classes (see Key modules): UI-log/events (SessionUIStore), metadata queries (SessionQueryStore), agent construction (SessionAgentBuilder), skill-command permissions (SessionSkillCommands), rawMessages persistence (SessionStateStore). The carve-out is **complete** — what remains is the genuine high-cohesion core, all bound to the `sessions: Map` mutable state: the turn-execution loop, session lifecycle, the concurrency guards (`locks` init-mutex + `deletedSessionIds` delete-tombstone), and compaction.
+**SessionManager (~3350 lines)** — the central hub. Five concerns were carved out into one-directional sibling classes (see Key modules): UI-log/events (SessionUIStore), metadata queries (SessionQueryStore), agent construction (SessionAgentBuilder), skill-command permissions (SessionSkillCommands), rawMessages persistence (SessionStateStore). The carve-out is **complete** — what remains is the genuine high-cohesion core, all bound to the `sessions: Map` mutable state: the turn-execution loop, session lifecycle, the concurrency guards (`locks` init-mutex + `deletedSessionIds` delete-tombstone), and compaction.
 
 Compaction stays in, by deliberate decision at two levels. Cluster-level: it's bidirectionally interwoven with the turn loop (a beforeCallModel hook that itself runs a turn) and mutates shared per-session state, so extraction would widen the host interface and tangle control flow. Function-level: `selfCompactSession` is one connected chain (compute cut → summarize via LLM → rebuild `[summary+recent]` → write back) — pulling the pure bits into compact.ts would sever a coherent single-use method and scatter it across files, trading cohesion for testability. A long, single-purpose, sequentially-coupled method is fine; the inherent complexity of session handling doesn't shrink by relocating it.
 
@@ -259,7 +269,7 @@ Compaction stays in, by deliberate decision at two levels. Cluster-level: it's b
 
 **Low: REST Routes / Core / tools** — no cross-dependencies; interact via DB or filesystem.
 
-**Dual writes**: Session data lives in both SQLite and the on-disk JSON; deletion must synchronise all three (SQLite → JSON → JSONL).
+**Dual writes**: Session data lives in both SQLite and the on-disk JSON; deletion must synchronise both (SQLite → JSON + archive segments).
 
 ## Frontend (short version)
 
@@ -272,5 +282,5 @@ packages/admin
 
 Code structure:
 - `app/` — Next.js app router entry
-- `features/` — UI modules grouped by domain (agents / chat / editor / explorer / terminal / workspace / settings / skills / auth)
+- `features/` — UI modules grouped by domain (agents / chat / editor / explorer / terminal / workspace / settings / skills / auth / source-control / cron / evolution / channels, plus one dir per channel)
 - `shared/` — cross-feature resources (stores / components / ws-handlers / ws-client / api-client / types / utils)
