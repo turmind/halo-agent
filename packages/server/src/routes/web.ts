@@ -154,7 +154,7 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     const denied = sessionOverrideError(c, auth.account, opts.sessionId)
     if (denied) return denied
     return streamSSE(c, async (stream) => {
-      for await (const chunk of channel.handleMessage(token, body.message ?? '', body.images, opts)) {
+      for await (const chunk of channel.handleMessage(token, body.message ?? '', body.images, opts, c.req.raw.signal)) {
         await stream.write(chunk)
       }
     })

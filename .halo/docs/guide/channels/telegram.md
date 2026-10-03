@@ -83,7 +83,7 @@ If nothing happens, check halo server logs for `[Telegram]` lines.
 
 ## Cron jobs targeting Telegram
 
-When a cron job is created from inside a Telegram chat, the dispatcher targets that chat. From the admin UI you can also enter chat IDs directly (comma-separated for fan-out). A Telegram target **must** carry an explicit numeric chat ID (for a private chat it equals the user ID; a group's is negative) — there is no fallback to the whitelist or to the last inbound chat, and the dispatch fails without one. Per-recipient ✓/✗ is recorded in the cron run history.
+When a cron job is created from inside a Telegram chat, the dispatcher targets that chat. From the admin UI you can also enter chat IDs directly (comma-separated for fan-out). A Telegram target **must** carry an explicit numeric chat ID (for a private chat it equals the user ID; a group's is negative) — there is no fallback to the whitelist or to the last inbound chat, and the dispatch fails without one. Per-recipient ✓/✗ is recorded in the cron run history. A report longer than 4000 characters is sent as several messages, in order.
 
 ## Common problems
 

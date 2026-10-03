@@ -57,7 +57,9 @@ export interface WebRequestOverrides {
 }
 
 export interface WebChannel {
-  handleMessage(token: string, message: string, images?: Array<{ data: string; mimeType: string }>, opts?: WebRequestOverrides): AsyncGenerator<string, void, unknown>
+  /** `signal` = the HTTP request's abort: a client that disconnects ends the
+   *  stream (and drops the listener) instead of waiting for the turn's end. */
+  handleMessage(token: string, message: string, images?: Array<{ data: string; mimeType: string }>, opts?: WebRequestOverrides, signal?: AbortSignal): AsyncGenerator<string, void, unknown>
   handleStop(token: string, opts?: WebRequestOverrides): Promise<boolean>
   getHistory(token: string, opts?: WebRequestOverrides): { sessionId: string; messages: SessionMessage[]; running: boolean } | null
   subscribe(token: string, signal: AbortSignal, opts?: WebRequestOverrides): AsyncGenerator<string, void, unknown>
@@ -135,6 +137,8 @@ export function createWebChannel(deps: {
     let resolve: (() => void) | null = null
     let done = false
     const processEvent = createMediaBuffer()
+    // Idempotent (SessionUIStore's unsubscribe is a Set delete), so events()'s
+    // finally and handleMessage's finally may both call it.
     const unsubscribe = sm.registerEventListener(sessionId, (event: AgentSessionEvent) => {
       if (event.taskId) return
       queue.push(event)
@@ -143,6 +147,9 @@ export function createWebChannel(deps: {
 
     async function* events(signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
       const onAbort = () => { done = true; if (resolve) { resolve(); resolve = null } }
+      // Aborted before streaming began (client left during media save /
+      // sendUserMessage) — the 'abort' event already fired and won't again.
+      if (signal?.aborted) done = true
       signal?.addEventListener('abort', onAbort)
       try {
         while (!done) {
@@ -189,6 +196,7 @@ export function createWebChannel(deps: {
     sm: ReturnType<SessionManagerRegistry['getOrCreate']>,
     command: string,
     arg: string,
+    signal?: AbortSignal,
   ): AsyncGenerator<string, void, unknown> {
     const ctx = buildCommandContext(account, sm)
     const result = await dispatchCommand(ctx, command, arg, { channelName: 'web' })
@@ -206,7 +214,7 @@ export function createWebChannel(deps: {
     // response never reaches the user, and the next message they type
     // arrives at a busy session and gets queued silently.
     if (result.startedTurn && result.sessionId) {
-      yield* listenSession(sm, result.sessionId).events()
+      yield* listenSession(sm, result.sessionId).events(signal)
       return
     }
     yield sseData({ type: 'complete' })
@@ -217,6 +225,7 @@ export function createWebChannel(deps: {
     message: string,
     images?: Array<{ data: string; mimeType: string }>,
     opts?: WebRequestOverrides,
+    signal?: AbortSignal,
   ): AsyncGenerator<string, void, unknown> {
     const req = resolveRequest(token, opts?.workspace)
     if (!req.ok) {
@@ -239,7 +248,7 @@ export function createWebChannel(deps: {
       const spaceIdx = trimmed.indexOf(' ')
       const command = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)
       const arg = spaceIdx === -1 ? '' : trimmed.slice(spaceIdx + 1).trim()
-      yield* handleCommand(account, sm, command, arg)
+      yield* handleCommand(account, sm, command, arg, signal)
       return
     }
 
@@ -286,47 +295,53 @@ export function createWebChannel(deps: {
     yield sseData({ type: 'session', sessionId })
 
     const listener = listenSession(sm, sessionId)
+    // Everything between registering and streaming can throw (media save,
+    // sendUserMessage) or be abandoned by the consumer (client gone →
+    // generator .return()); the finally drops the listener on every exit.
+    try {
+      // Separate real images from other media (audio, etc.)
+      const imageTypes = VISION_IMAGE_MIME_TYPES
+      const realImages: Array<{ data: string; mimeType: string }> = []
+      const savedPaths: string[] = []
 
-    // Separate real images from other media (audio, etc.)
-    const imageTypes = VISION_IMAGE_MIME_TYPES
-    const realImages: Array<{ data: string; mimeType: string }> = []
-    const savedPaths: string[] = []
-
-    if (images && images.length > 0) {
-      for (const item of images) {
-        if (imageTypes.includes(item.mimeType)) {
-          realImages.push(item)
-        } else {
-          const buf = Buffer.from(item.data, 'base64')
-          const savedPath = await saveInboundMedia({
-            workspacePath: workspace,
-            accountId: account.accountId,
-            channel: 'web',
-            buffer: buf,
-            kind: item.mimeType.startsWith('audio/') ? 'voice' : 'file',
-            mimeType: item.mimeType,
-          })
-          savedPaths.push(savedPath)
+      if (images && images.length > 0) {
+        for (const item of images) {
+          if (imageTypes.includes(item.mimeType)) {
+            realImages.push(item)
+          } else {
+            const buf = Buffer.from(item.data, 'base64')
+            const savedPath = await saveInboundMedia({
+              workspacePath: workspace,
+              accountId: account.accountId,
+              channel: 'web',
+              buffer: buf,
+              kind: item.mimeType.startsWith('audio/') ? 'voice' : 'file',
+              mimeType: item.mimeType,
+            })
+            savedPaths.push(savedPath)
+          }
         }
       }
-    }
 
-    let fullMessage = message
-    if (savedPaths.length > 0) {
-      fullMessage += '\n\n' + savedPaths.map((p) => `[语音已保存: ${p}]`).join('\n')
-    }
+      let fullMessage = message
+      if (savedPaths.length > 0) {
+        fullMessage += '\n\n' + savedPaths.map((p) => `[语音已保存: ${p}]`).join('\n')
+      }
 
-    sm.appendUserMessage(sessionId, fullMessage)
-    const channelPrefix = `[channel: web | account: ${account.accountId}]\n\n`
-    const result = await sm.sendUserMessage(sessionId, channelPrefix + fullMessage, realImages.length > 0 ? realImages : undefined, accessLevel)
+      sm.appendUserMessage(sessionId, fullMessage)
+      const channelPrefix = `[channel: web | account: ${account.accountId}]\n\n`
+      const result = await sm.sendUserMessage(sessionId, channelPrefix + fullMessage, realImages.length > 0 ? realImages : undefined, accessLevel)
 
-    if (result === 'queued') {
+      if (result === 'queued') {
+        listener.close()
+        yield sseData({ type: 'queued' })
+        return
+      }
+
+      yield* listener.events(signal)
+    } finally {
       listener.close()
-      yield sseData({ type: 'queued' })
-      return
     }
-
-    yield* listener.events()
   }
 
   async function handleStop(token: string, opts?: WebRequestOverrides): Promise<boolean> {

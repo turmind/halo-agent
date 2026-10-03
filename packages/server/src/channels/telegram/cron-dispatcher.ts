@@ -23,6 +23,8 @@
 import { Bot } from 'grammy'
 import { getChannelDb } from '../../db/channel-db.js'
 import { getAccount as getTelegramAccount, listAccounts as listTelegramAccounts } from './accounts.js'
+import { TELEGRAM_TEXT_LIMIT } from './event-adapter.js'
+import { splitText } from '../shared/chunk.js'
 import { registerCronDispatcher, type CronTargetOption, type DispatchResult } from '../../cron/dispatcher.js'
 
 async function dispatch(accountId: string, text: string, explicitChatId?: string): Promise<DispatchResult[]> {
@@ -40,15 +42,23 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
       ok: false, error: `invalid chatId (must be numeric — @usernames don't work for sendMessage)`,
     }]
   }
-  try {
-    await new Bot(acct.botToken).api.sendMessage(chatIdNum, text, { parse_mode: undefined })
-    return [{ channelType: 'telegram', accountId, chatId: explicitChatId, ok: true }]
-  } catch (err) {
-    return [{
-      channelType: 'telegram', accountId, chatId: explicitChatId,
-      ok: false, error: err instanceof Error ? err.message : String(err),
-    }]
+  // Chunked like a chat reply — one sendMessage over the Bot API's 4096 cap
+  // failed the whole report. Chunks go out sequentially so a long report
+  // arrives in order; a failed chunk names its index so the run row shows how
+  // much already landed (chunks before it are delivered, not rolled back).
+  const api = new Bot(acct.botToken).api
+  const chunks = splitText(text, TELEGRAM_TEXT_LIMIT)
+  for (const [i, chunk] of chunks.entries()) {
+    try {
+      await api.sendMessage(chatIdNum, chunk, { parse_mode: undefined })
+    } catch (err) {
+      return [{
+        channelType: 'telegram', accountId, chatId: explicitChatId,
+        ok: false, error: `chunk ${i + 1}/${chunks.length}: ${err instanceof Error ? err.message : String(err)}`,
+      }]
+    }
   }
+  return [{ channelType: 'telegram', accountId, chatId: explicitChatId, ok: true }]
 }
 
 function listTargets(): CronTargetOption[] {

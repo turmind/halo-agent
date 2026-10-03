@@ -302,7 +302,7 @@ gets JSON, and additionally gates on `accessLevel`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?, workspace?, sessionId?, agentId?}` (overrides also accepted as `?workspace=`/`?sessionId=` query or `x-workspace`/`x-session-id` headers; `workspace` only honored when token has `accessLevel: full`). `sessionId` must be a safe id segment (else 400) and owned by the token unless `accessLevel: full` → otherwise 403. |
+| POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?, workspace?, sessionId?, agentId?}` (overrides also accepted as `?workspace=`/`?sessionId=` query or `x-workspace`/`x-session-id` headers; `workspace` only honored when token has `accessLevel: full`). `sessionId` must be a safe id segment (else 400) and owned by the token unless `accessLevel: full` → otherwise 403. A client that disconnects ends its stream right away; the turn keeps running (reconnect via `/subscribe`, stop via `/stop`). |
 | POST | `/api/web/sessions` | Mint a root session in the token's own `web_<accountId>_` namespace → `{sessionId}`. Body / query / header: `workspace?` (full tokens only), `agentId?`. Used by the ACP adapter's `session/new`. |
 | POST | `/api/web/stop` | Stop running task → `{stopped: boolean}` |
 | GET | `/api/web/history` | Active session history → `{sessionId, messages[], running}`. With an explicit `sessionId` that doesn't exist in the workspace → 404 `{error: "session not found"}` |

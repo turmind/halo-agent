@@ -117,7 +117,10 @@ export function createWechatRoutes(deps: { db: ChannelDb; channel: WechatChannel
     const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
     if (bodyError) return c.json({ error: bodyError }, 400)
 
-    updateAccount(db, id, body)
+    // Whitelist the row fields — passing the raw body let extra keys
+    // (botToken / baseUrl / userId) overwrite the account's config.
+    const { label, workspacePath, enabled, accessLevel, language } = body
+    updateAccount(db, id, { label, workspacePath, enabled, accessLevel, language })
     const newlyEnabled = body.enabled === true && !existing.enabled
     const newlyDisabled = body.enabled === false && existing.enabled
     if (newlyEnabled) channel.startAccount(id)

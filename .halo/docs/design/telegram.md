@@ -70,6 +70,8 @@ The telegram cron-dispatcher (`channels/telegram/cron-dispatcher.ts`) registers 
 
 Earlier drafts considered "fan-out to every id in `allowedUsers`" or "fall back to `lastActiveChatId`", but in practice both pushed the cron output to strangers' chats. The cron creator's intent is "reach me, the person who set this up" — so the only target is what the caller passes explicitly.
 
+The report is chunked like a chat reply — `splitText(text, TELEGRAM_TEXT_LIMIT)` (4000 chars, exported from `event-adapter.ts`; the Bot API rejects a message over 4096) — and the chunks are sent sequentially so a long report arrives in order. Before this the whole report went out in one `sendMessage` and anything over the cap failed outright. A failed chunk stops the send and is recorded as `chunk i/n: <error>` in the target's result row (chunks before it were delivered and stay); full success is one `ok` row regardless of chunk count. Same contract as the wechat dispatcher (see [cron.md](cron.md#dispatch-model)).
+
 ## Modules
 
 Files: `packages/server/src/channels/telegram/`
