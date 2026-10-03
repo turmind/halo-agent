@@ -143,7 +143,7 @@ export class MyProviderAgent extends AgentLoop {
 
 - **Tool results format.** Anthropic stores tool results as `{ role: 'user', content: [{ type: 'tool_result', ... }] }`. OpenAI-compatible APIs need separate `{ role: 'tool', tool_call_id, content }` messages, and tool-result images ride in a user message right after them. `toChatMessages()` in openai-chat-format.ts does both.
 - **Thinking/reasoning replay.** If the provider returns `reasoning_content` and requires it in follow-up messages (Kimi, DeepSeek with tool calls), it must be stored in `result.assistantBlocks` as a `{ type: 'thinking', thinking: '...' }` block and replayed as `reasoning_content` — `chatCompletionResult()` stores it and `toChatMessages()` replays it.
-- **Reasoning field name varies.** OpenAI o-series/DeepSeek emit reasoning in `message.reasoning_content`; Ollama / llama.cpp's OpenAI-compat layer uses `message.reasoning`. `OpenAIAgent` reads both (`reasoning_content ?? reasoning`). A vendor-specific class should read whichever its API uses.
+- **Reasoning field name varies.** OpenAI o-series/DeepSeek emit reasoning in `message.reasoning_content`; Ollama / llama.cpp's OpenAI-compat layer uses `message.reasoning`. The shared stream accumulator (`ChatCompletionAccumulator` in `openai-chat-stream.ts`) folds both into one reasoning stream (`reasoning_content ?? reasoning`), so every `fetchChatCompletionStream` provider gets it. A vendor-specific class should read whichever its API uses.
 - **Malformed tool arguments.** Parse tool-call arguments with `parseToolInput(json, toolName)` (`tool-input.ts`) — every built-in path does (Anthropic stream accumulator, `chatCompletionResult`, Mantle). Bad JSON (e.g. cut off at `max_tokens`) becomes `{}` plus a `[ToolInput]` warn with the tool name and the first 200 chars; the tool then fails its own argument check and the model can retry, where a throw would fail the whole call.
 - **Cancellation.** The caller passes `signal`; pass it to `fetch()` directly.
 - **Max tokens.** Use `config.maxTokens ?? resolveMaxOutputTokens(config.modelId)` for consistency.
@@ -345,7 +345,7 @@ myprovider:
 
 ### Effort labels are Halo-side only
 
-`effortPresets: [low, medium, high]` is purely a UI affordance — it lives on the form and gets translated to `budget_tokens` (or whatever the provider wants) inside the agent class via an effort→budget table. Don't write `effort=medium` directly to the wire. Provider doesn't know what `medium` means.
+`effortPresets: [low, medium, high]` is purely a UI affordance — it lives on the form and gets translated to `budget_tokens` (or whatever the provider wants) inside the agent class via an effort→budget table (for the Anthropic-format providers, `effortToBudget()` in `anthropic-request.ts`). Don't write `effort=medium` directly to the wire. Provider doesn't know what `medium` means.
 
 Probe each preset's actual budget against the model's `maxOutputTokens`. We hit this with MiniMax: `low` (1024 budget) caused `stop=max_tokens` before any thinking completed — left it out of the preset list.
 

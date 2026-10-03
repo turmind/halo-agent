@@ -241,7 +241,7 @@ A **Security** entry in the left nav (below the System group) opens a page with 
 
 ### DELETE body
 
-Same shape minus `value`. Removes the leaf at `key`. For Reset behaviour: workspace scope DELETE → field falls back to global / default; global scope DELETE → field becomes unset.
+Same shape minus `value`. Removes the leaf at `key`. For Reset behaviour: workspace scope DELETE → field falls back to global / default; global scope DELETE → field becomes unset. Like PUT / PATCH it fires the settings-change notification; deleting a key that is already absent is a no-op (no write, no notification).
 
 ## i18n
 

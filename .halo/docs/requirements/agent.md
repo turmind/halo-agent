@@ -30,9 +30,9 @@ Left sidebar has two collapsible groups (Global / Workspace — the latter only 
 |---|---|
 | List | `GET /api/agent-configs?projectId=xxx` |
 | Create | `POST /api/agent-configs` (body: `{name, description, scope, projectId?}`) |
-| Read YAML | `GET /api/agent-configs/:id/yaml` |
-| Write YAML | `PUT /api/agent-configs/:id/yaml` |
-| Delete | `DELETE /api/agent-configs/:id` |
+| Read YAML | `GET /api/agent-configs/:id/yaml` (`scope=workspace` requires `projectId`, else 400) |
+| Write YAML | `PUT /api/agent-configs/:id/yaml` (same `projectId` rule) |
+| Delete | `DELETE /api/agent-configs/:id` (same `projectId` rule — never falls back to deleting the same-named global agent) |
 | Toggle disabled | `PATCH /api/agent-configs/:id/toggle` → `{ ok, disabled }` |
 
 Creating requires a name (description is optional); the id is derived from the name. The backend uses `defaultAgentYaml(name, description)` to produce a full YAML and also scaffolds an `AGENT.md`.
