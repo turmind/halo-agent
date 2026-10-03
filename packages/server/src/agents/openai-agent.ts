@@ -82,6 +82,6 @@ export class OpenAIAgent extends AgentLoop {
     // Read cached prompt tokens from whichever field the provider uses.
     const cachedTokens = cachedPromptTokens(usage)
 
-    return chatCompletionResult(folded, { inputTokens: promptTokens - cachedTokens, outputTokens: completionTokens, cacheReadInputTokens: cachedTokens }, startTime)
+    return chatCompletionResult(folded, { inputTokens: Math.max(0, promptTokens - cachedTokens), outputTokens: completionTokens, cacheReadInputTokens: cachedTokens }, startTime)
   }
 }

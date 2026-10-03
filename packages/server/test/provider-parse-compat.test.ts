@@ -10,11 +10,12 @@ import { sseResponse } from './helpers/sse-response.js'
 
 /**
  * Parse-side compatibility shared by the provider families:
- *  - malformed tool-call arguments → `{}` + a `[ToolInput]` warn, never a
- *    throw — same in the Anthropic, chat/completions and Responses paths, so
- *    the tool's own argument check surfaces the error and the model retries
+ *  - malformed tool-call arguments → `input: {}` (replay-safe) + `inputError`
+ *    on the toolCalls entry + a `[ToolInput]` warn, never a throw — same in
+ *    the Anthropic, chat/completions and Responses paths; the agent loop then
+ *    answers the call with an error result instead of running the tool
  *  - openai / kimi read cached prompt tokens from every known usage key,
- *    first value > 0 wins
+ *    first value > 0 wins, and never report negative input tokens
  */
 
 const base = { modelId: 'm', endpoint: 'https://example.test/v1', apiKey: 'k', systemPrompt: 'sys', tools: [] }
@@ -36,7 +37,7 @@ afterEach(() => {
   warn?.mockRestore()
 })
 
-describe('malformed tool-call arguments → {} + warn', () => {
+describe('malformed tool-call arguments → {} + inputError + warn', () => {
   const spyWarn = () => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}) }
   const expectWarned = () => {
     expect(warn).toHaveBeenCalledTimes(1)
@@ -46,16 +47,40 @@ describe('malformed tool-call arguments → {} + warn', () => {
     expect(line).toContain(BAD)
   }
 
-  it('parseToolInput: valid / empty parse silently, malformed → {} with the raw string capped at 200 chars', () => {
+  it.each<[string, unknown]>([
+    ['object', '{"a":1}'],
+    ['empty string', ''],
+    ['undefined', undefined],
+  ])('parseToolInput: %s parses silently', (_label, json) => {
     spyWarn()
-    expect(parseToolInput('{"a":1}', 't')).toEqual({ a: 1 })
-    expect(parseToolInput('', 't')).toEqual({})
+    expect(parseToolInput(json, 't')).toEqual({ input: json ? { a: 1 } : {} })
     expect(warn).not.toHaveBeenCalled()
+  })
 
-    const long = '{"x":"' + 'y'.repeat(500)
-    expect(parseToolInput(long, 'file_write')).toEqual({})
+  it.each<[string, unknown, string]>([
+    ['malformed JSON', BAD, 'arguments were not valid JSON'],
+    ['JSON null', 'null', 'arguments must be a JSON object'],
+    ['JSON array', '[]', 'arguments must be a JSON object'],
+    ['JSON number', '123', 'arguments must be a JSON object'],
+    ['JSON string', '"x"', 'arguments must be a JSON object'],
+    ['non-string (object) input', { a: 1 }, 'arguments were not valid JSON'],
+  ])('parseToolInput: %s → {} + error + one warn, no throw', (_label, json, error) => {
+    spyWarn()
+    expect(parseToolInput(json, 'file_write')).toEqual({ input: {}, error })
+    expect(warn).toHaveBeenCalledTimes(1)
     const line = String(warn.mock.calls[0][0])
-    expect(line).toContain(`(${long.length} chars)`)
+    expect(line).toMatch(/^\[ToolInput\] /)
+    expect(line).toContain('"file_write"')
+    expect(line).toContain(error)
+    expect(line).toContain(String(json))
+  })
+
+  it('parseToolInput: the raw string in the warn is capped at 200 chars', () => {
+    spyWarn()
+    const long = '{"x":"' + 'y'.repeat(500)
+    expect(parseToolInput(long, 'file_write')).toEqual({ input: {}, error: 'arguments were not valid JSON' })
+    const line = String(warn.mock.calls[0][0])
+    expect(line).toContain(`${long.length} chars`)
     expect(line.endsWith(long.slice(0, 200))).toBe(true)
   })
 
@@ -69,7 +94,7 @@ describe('malformed tool-call arguments → {} + warn', () => {
 
     const result = acc.finish()
 
-    expect(result.toolCalls).toEqual([{ id: 'tu_1', name: 'file_write', input: {} }])
+    expect(result.toolCalls).toEqual([{ id: 'tu_1', name: 'file_write', input: {}, inputError: 'arguments were not valid JSON' }])
     expect(result.assistantBlocks).toEqual([{ type: 'tool_use', id: 'tu_1', name: 'file_write', input: {} }])
     expectWarned()
   })
@@ -77,7 +102,8 @@ describe('malformed tool-call arguments → {} + warn', () => {
   it('chat/completions (openai family)', async () => {
     spyWarn()
     const result = await callOf(new OpenAIAgent(base), chatToolReply(BAD))
-    expect(result.toolCalls).toEqual([{ id: 'c1', name: 'file_write', input: {} }])
+    expect(result.toolCalls).toEqual([{ id: 'c1', name: 'file_write', input: {}, inputError: 'arguments were not valid JSON' }])
+    expect(result.assistantBlocks).toEqual([{ type: 'tool_use', id: 'c1', name: 'file_write', input: {} }])
     expectWarned()
   })
 
@@ -86,7 +112,8 @@ describe('malformed tool-call arguments → {} + warn', () => {
     const call = { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'file_write', arguments: BAD, status: 'completed' }
     const reply = sseResponse([{ type: 'response.completed', response: { status: 'completed', output: [call] } }], { done: false })
     const result = await callOf(new MantleAgent(base), reply)
-    expect(result.toolCalls).toEqual([{ id: 'call_1', name: 'file_write', input: {} }])
+    expect(result.toolCalls).toEqual([{ id: 'call_1', name: 'file_write', input: {}, inputError: 'arguments were not valid JSON' }])
+    expect(result.assistantBlocks).toEqual([{ type: 'tool_use', id: 'call_1', name: 'file_write', input: {} }])
     expectWarned()
   })
 })
@@ -124,6 +151,11 @@ describe('cached prompt tokens — every known key, first > 0 wins', () => {
     ])(`${name}: %s → nets out of inputTokens`, async (_label, usage) => {
       const result = await callOf(make(), usageReply(usage))
       expect(result.usage).toEqual({ inputTokens: 60, outputTokens: 10, totalTokens: 70, cacheReadInputTokens: 40 })
+    })
+
+    it(`${name}: a cache count above prompt_tokens (non-inclusive gateway) floors inputTokens at 0`, async () => {
+      const result = await callOf(make(), usageReply({ cache_read_tokens: 150 }))
+      expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 10, totalTokens: 10, cacheReadInputTokens: 150 })
     })
   }
 })

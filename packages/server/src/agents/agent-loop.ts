@@ -130,7 +130,10 @@ export interface ModelCallResult {
   stopDetails?: StopDetails
   text: string
   thinking: string
-  toolCalls: Array<{ id: string; name: string; input: unknown }>
+  /** `inputError` (from `parseToolInput`): the arguments didn't parse to an
+   *  object — `input` is `{}` and the loop answers the call with an error
+   *  result instead of running the tool. */
+  toolCalls: Array<{ id: string; name: string; input: unknown; inputError?: string }>
   usage: {
     inputTokens: number
     outputTokens: number
@@ -347,15 +350,35 @@ export abstract class AgentLoop {
         ttftMs: result.ttftMs,
       }
 
+      const toolUseBlocks = result.assistantBlocks.filter(
+        (b): b is ContentBlock & { type: 'tool_use' } => b.type === 'tool_use',
+      )
+
       if (result.stopReason !== 'tool_use') {
+        // Output-limit stop mid tool call: none of the calls run (the last one's
+        // arguments may be cut off, and a truncated one parses to `{}`). Answer
+        // each one now so the UI's tool_call closes and conversation-repair
+        // doesn't pair it with its "interrupted — do not retry" marker, which
+        // is for a call that was actually started. The turn still stops here —
+        // auto-continuing could loop on the same truncation.
+        if (result.stopReason === 'max_tokens' && toolUseBlocks.length > 0) {
+          const notRun = toolUseBlocks.map((tu) => ({
+            name: tu.name,
+            id: tu.id,
+            content: `${TOOL_ERROR_MARKER}\nError: tool "${tu.name}" was not run — the response hit the output token limit, so its arguments may be cut off. Resend it, splitting large content into smaller calls.`,
+          }))
+          // Land before yielding: a consumer breaking out at a yield must not leave them unanswered.
+          this.messages.push({ role: 'user', content: notRun.map((r) => ({ type: 'tool_result' as const, tool_use_id: r.id, content: r.content, is_error: true })) })
+          for (const r of notRun) {
+            yield { type: 'tool_result', toolName: r.name, toolUseId: r.id, toolResult: r.content, toolResultFull: r.content, durationMs: 0 }
+          }
+        }
         yield { type: 'stop', stopReason: result.stopReason as StopReason }
         return
       }
 
-      const toolUseBlocks = result.assistantBlocks.filter(
-        (b): b is ContentBlock & { type: 'tool_use' } => b.type === 'tool_use',
-      )
       if (toolUseBlocks.length === 0) return
+      const inputErrors = new Map(result.toolCalls.filter((tc) => tc.inputError).map((tc) => [tc.id, tc.inputError!]))
 
       const toolResults: ContentBlock[] = []
       let shouldEndTurn = false
@@ -378,9 +401,16 @@ export abstract class AgentLoop {
           let resultContent: string | ToolResultBlock[]
           let resultText: string
           let isError = false
+          const inputError = inputErrors.get(tu.id)
 
           if (!toolDef) {
             resultContent = `${TOOL_ERROR_MARKER}\nError: unknown tool "${tu.name}"`
+            resultText = resultContent
+            isError = true
+          } else if (inputError) {
+            // Tools don't validate their schema — run on `{}` they misbehave
+            // (grep matches every line, file_list lists the root) instead of failing.
+            resultContent = `${TOOL_ERROR_MARKER}\nError: tool "${tu.name}" was not run — its arguments were not valid JSON (${inputError}). Resend the call with complete JSON arguments.`
             resultText = resultContent
             isError = true
           } else {

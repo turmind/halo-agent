@@ -11,6 +11,7 @@ import {
   type ToolDef,
 } from '../src/agents/agent-loop.js'
 import { config } from '../src/config.js'
+import { repairConversationMessages } from '../src/agents/conversation-repair.js'
 
 /**
  * Contract tests for AgentLoop.run()'s tool cycle — the provider-agnostic
@@ -191,6 +192,68 @@ describe('AgentLoop tool cycle', () => {
 
     expect(loop.calls).toBe(1)
     expect(events.at(-1)).toEqual({ type: 'stop', stopReason: 'max_tokens' })
+  })
+
+  it('tool_use with malformed arguments (inputError) → tool not run, is_error result, loop continues', async () => {
+    const write = vi.fn(() => 'written')
+    const a = vi.fn(() => 'A')
+    const bad: ToolCall = { id: 'tu_w', name: 'file_write', input: {}, inputError: 'arguments were not valid JSON' }
+    const loop = new ScriptedLoop([tool('file_write', write), tool('a', a)], [
+      toolUseTurn([bad, call('tu_a', 'a')]),
+      endTurn(),
+    ])
+    const events = await collect(loop.run('go'))
+
+    expect(write).not.toHaveBeenCalled()
+    expect(a).toHaveBeenCalledTimes(1)
+    const [r, ok] = toolResultBlocks(loop)
+    expect(r).toEqual({
+      type: 'tool_result',
+      tool_use_id: 'tu_w',
+      content: `${TOOL_ERROR_MARKER}\nError: tool "file_write" was not run — its arguments were not valid JSON (arguments were not valid JSON). Resend the call with complete JSON arguments.`,
+      is_error: true,
+    })
+    expect(ok).toEqual({ type: 'tool_result', tool_use_id: 'tu_a', content: 'A' })
+    expect(events.find((e) => e.type === 'tool_result')?.toolResult).toBe(r.content)
+    expect(loop.calls).toBe(2)
+    expect(events.at(-1)).toEqual({ type: 'stop', stopReason: 'end_turn' })
+  })
+
+  it('max_tokens with tool_use (one truncated) → no tool runs, each answered is_error, stop max_tokens, repair is a no-op', async () => {
+    const write = vi.fn(() => 'written')
+    const a = vi.fn(() => 'A')
+    const complete = call('tu_a', 'a')
+    const truncated: ToolCall = { id: 'tu_w', name: 'file_write', input: {}, inputError: 'arguments were not valid JSON' }
+    const loop = new ScriptedLoop([tool('a', a), tool('file_write', write)], [{
+      ...toolUseTurn([complete, truncated], 'writing it'),
+      stopReason: 'max_tokens',
+    }])
+    const events = await collect(loop.run('go'))
+
+    expect(a).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+    expect(loop.calls).toBe(1)
+    const limitError = (name: string) => `${TOOL_ERROR_MARKER}\nError: tool "${name}" was not run — the response hit the output token limit, so its arguments may be cut off. Resend it, splitting large content into smaller calls.`
+    expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(loop.messages.at(-1)?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'tu_a', content: limitError('a'), is_error: true },
+      { type: 'tool_result', tool_use_id: 'tu_w', content: limitError('file_write'), is_error: true },
+    ])
+    // Each announced tool_call is closed (UI stops showing it running), then the turn stops.
+    expect(events.map((e) => e.type)).toEqual(['text', 'tool_call', 'tool_call', 'usage', 'tool_result', 'tool_result', 'stop'])
+    expect(events.filter((e) => e.type === 'tool_result').map((e) => [e.toolUseId, e.toolResult])).toEqual([
+      ['tu_a', limitError('a')],
+      ['tu_w', limitError('file_write')],
+    ])
+    expect(events.at(-1)).toEqual({ type: 'stop', stopReason: 'max_tokens' })
+    // Every tool_use is already paired — repair synthesizes no "interrupted — do not retry" result.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      expect(repairConversationMessages(structuredClone(loop.messages))).toEqual(loop.messages)
+      expect(log).not.toHaveBeenCalled()
+    } finally {
+      log.mockRestore()
+    }
   })
 
   it('refusal stop: partial assistant output discarded, no tool_call event, tool not run, user turn left for coalescing', async () => {

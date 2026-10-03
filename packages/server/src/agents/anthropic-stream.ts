@@ -159,8 +159,8 @@ export class AnthropicStreamAccumulator {
         thinking += block.thinking
         // thinking blocks excluded from assistantBlocks per Anthropic API
       } else {
-        const input = parseToolInput(block.partialJson, block.name)
-        toolCalls.push({ id: block.id, name: block.name, input })
+        const { input, error } = parseToolInput(block.partialJson, block.name)
+        toolCalls.push({ id: block.id, name: block.name, input, ...(error ? { inputError: error } : {}) })
         assistantBlocks.push({ type: 'tool_use', id: block.id, name: block.name, input })
       }
     }

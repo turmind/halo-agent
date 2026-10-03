@@ -86,6 +86,6 @@ export class KimiAgent extends AgentLoop {
     // to read only the top-level `cached_tokens`), so read every known key.
     const cachedTokens = cachedPromptTokens(usage)
 
-    return chatCompletionResult(folded, { inputTokens: inputTokens - cachedTokens, outputTokens, cacheReadInputTokens: cachedTokens }, startTime)
+    return chatCompletionResult(folded, { inputTokens: Math.max(0, inputTokens - cachedTokens), outputTokens, cacheReadInputTokens: cachedTokens }, startTime)
   }
 }

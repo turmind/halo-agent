@@ -26,8 +26,8 @@ Each provider's SDK client and config details are encapsulated inside its runtim
 1. Append the user message to `messages`
 2. `callModel(signal, onDelta?)` → invoke the provider API. Every provider streams (Bedrock, the Anthropic-Messages providers anthropic / mimo / minimax / qwen, the OpenAI-family openai / deepseek / kimi / zhipu / doubao / hunyuan, and Mantle aws-bedrock-mantle / aws-bedrock-openai) and reports chunks through `onDelta` as they arrive; the loop yields them as `text_delta` / `thinking_delta` events *during* the call and re-arms the per-call timeout on any data received — including `activity` deltas (pings, tool-argument fragments, empty reasoning chunks, SSE comment frames), which only re-arm the timer and never reach the event stream (idle timeout, default 10 min). A provider that ignores `onDelta` still works — the loop only ever sees the whole event. Either way the call resolves with one complete `ModelCallResult`
 3. Yield the whole `thinking` / `text` (with `final`) / `tool_call` / `usage` events exactly as before — consumers that only care about `final` never see deltas
-4. If `stop_reason=tool_use` → execute tools, yield `tool_result` events → loop
-5. Otherwise yield a `stop` event and return
+4. If `stop_reason=tool_use` → execute tools, yield `tool_result` events → loop. A call whose `toolCalls[]` entry carries `inputError` (arguments weren't a valid JSON object) is not run — it gets an `is_error` result telling the model to resend with complete JSON; the rest of the batch runs normally
+5. Otherwise yield a `stop` event and return. On `max_tokens` with `tool_use` blocks in the reply, none of them run: each gets an `is_error` result ("hit the output token limit … resend, splitting large content") appended to `messages` and yielded as `tool_result` before the `stop`, so history stays paired without conversation repair
 
 ### Adding a new provider
 

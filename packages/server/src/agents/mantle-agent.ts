@@ -135,9 +135,8 @@ export class MantleAgent extends AgentLoop {
       } else if (itemType === 'function_call') {
         const callId = (item.call_id as string) ?? (item.id as string) ?? ''
         const name = (item.name as string) ?? ''
-        const args = (item.arguments as string) ?? '{}'
-        const input = parseToolInput(args, name)
-        toolCalls.push({ id: callId, name, input })
+        const { input, error } = parseToolInput(item.arguments ?? '{}', name)
+        toolCalls.push({ id: callId, name, input, ...(error ? { inputError: error } : {}) })
         assistantBlocks.push({ type: 'tool_use', id: callId, name, input })
       }
     }

@@ -81,8 +81,8 @@ export function chatCompletionResult(
   for (const tc of msg.tool_calls ?? []) {
     const { id } = tc
     const { name } = tc.function
-    const input = parseToolInput(tc.function.arguments, name)
-    toolCalls.push({ id, name, input })
+    const { input, error } = parseToolInput(tc.function.arguments, name)
+    toolCalls.push({ id, name, input, ...(error ? { inputError: error } : {}) })
     assistantBlocks.push({ type: 'tool_use', id, name, input })
   }
 
