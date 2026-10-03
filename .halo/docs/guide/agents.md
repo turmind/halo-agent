@@ -6,7 +6,7 @@ The agent is Halo's core abstraction: personality (AGENT.md) + config (agent.yam
 
 | Kind | Description |
 |---|---|
-| Built-in | Server-shipped agents (`default`, `executor`, `deep-executor` + the internal `goal` / `__evo_agent__` / `__score__` / `__apply_agent__`). Live under `~/.halo/global/agents/<id>/`. **Force-overwritten on every server startup** — local edits to these files will be lost on the next start. To customize: copy into the workspace scope (workspace replaces global) and edit there. |
+| Built-in | Server-shipped agents (`default`, `executor`, `deep-executor` + the internal `goal` / `__evo_agent__` / `__score__` / `__apply_agent__`; `goal` is seeded like the rest but only usable when `general.goal_mode_enabled` is set — off by default, no UI). Live under `~/.halo/global/agents/<id>/`. **Force-overwritten on every server startup** — local edits to these files will be lost on the next start. To customize: copy into the workspace scope (workspace replaces global) and edit there. |
 | Global | Any other agent under `~/.halo/global/agents/<id>/`, e.g. one you created via the admin UI. Shared across projects. Never overwritten by the server. |
 | Workspace | `<project>/.halo/agents/<id>/`, private to the current project; same-id workspace wins over global. Override is **whole-folder**: the workspace agent folder replaces the global one entirely, so copy *both* `agent.yaml` and `AGENT.md` when customizing — a folder with only `AGENT.md` has no model config and won't load. |
 

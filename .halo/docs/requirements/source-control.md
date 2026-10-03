@@ -30,7 +30,7 @@ A workspace placed *under* another repo (e.g. a dotfiles `$HOME`, or a monorepo 
 - CHANGES section lists every modified/added/deleted/untracked/renamed file, split into **Staged** and **Changes** groups (mirrors the porcelain X/Y status chars).
 - Each row shows a VSCode-style status badge: **M** modified (blue), **A** added / **U** untracked (green), **D** deleted (red), **R** renamed / **C** copied (blue), **U→Conflict** unmerged (red).
 - Stage / unstage individual files or all at once (`POST /api/git/stage` · `unstage`).
-- Click a file → opens a **Monaco side-by-side diff** (`GET /api/git/diff`); original side is HEAD (or the rename's old path), modified side is the working/staged copy. Binary files show git's "Binary files differ" rather than crashing.
+- Click a file → opens a **Monaco side-by-side diff** (`GET /api/git/diff`); original side is HEAD (or the rename's old path), modified side is the working/staged copy. There is no binary special case: both sides are read as UTF-8 text (`git show` / the working-tree file), so a binary file opens as garbled text rather than a "Binary files differ" notice.
 - **Single-file discard is intentionally omitted** — it's an "operation", not a "view". Use the command line (`git checkout`).
 
 ## Commit & sync
@@ -39,6 +39,7 @@ A workspace placed *under* another repo (e.g. a dotfiles `$HOME`, or a monorepo 
 - **Push** (`POST /api/git/push`): first push of an untracked branch sets upstream automatically (`-u origin <branch>`).
 - **Push failure is surfaced as a friendly red banner**, never a raw leak. A missing-credentials push (`fatal: could not read Username for 'https://...'`) is detected and rephrased into a "configure credentials" guide rather than dumping git's stderr.
 - Pull (`POST /api/git/pull`).
+- The branch row shows the current branch plus **ahead / behind** counts against its upstream (↑N / ↓N, from `GET /api/git/status`; hidden when both are 0), next to the Pull / Push buttons (shown only once a remote exists).
 
 ## Auto-refresh (no polling)
 
@@ -80,4 +81,4 @@ The file tree colors and badges files by git status (VSCode-style), driven by th
 
 ## Out of scope (this round)
 
-Branch create / switch / merge, ahead/behind indicator, AI-generated commit messages, clone, merge-conflict resolution UI, stash, worktree, timeline, PR management, the **DAG rail graph** (branch fork/merge visualization), and single-file discard. The DAG graph + ahead/behind are deferred to the branch-operations round, where they have live branch actions to feed them — standalone they're decoration, not a viewing need.
+Branch create / switch / merge, AI-generated commit messages, clone, merge-conflict resolution UI, stash, worktree, timeline, PR management, the **DAG rail graph** (branch fork/merge visualization), and single-file discard. The DAG graph is deferred to the branch-operations round, where it has live branch actions to feed it — standalone it's decoration, not a viewing need.
