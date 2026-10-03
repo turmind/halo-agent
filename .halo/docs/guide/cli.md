@@ -29,7 +29,7 @@ bundle flattens them.
 # 2. build the upstream artifacts the bundle consumes
 pnpm --filter @turmind/halo-core build
 pnpm --filter @turmind/halo-server build
-cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs && cd ../..
+pnpm --filter @turmind/halo-admin build
 # 3. stage the release bundle — HALO_RELEASE=1 stamps the bare version
 #    (0.1.2), NOT the default <version>-<sha>: a `-<sha>` suffix is a semver
 #    prerelease that `npm install` skips and never tags as `latest`.
@@ -136,6 +136,7 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | `/session interrupt` | Interrupt the running turn now (aborts a command mid-run); any messages queued while busy then run as one follow-up turn |
 | `/session compact` | Compact session context |
 | `/session context` | Show context window + agent info |
+| `/session info` | Show the session tree (descendants) |
 | `/agent <verb>` | Manage agents: `list` / `switch <name\|index>` / `desc` / `delete` / `create` / `update` |
 | `/skill <verb>` | Manage skills: `list` / `desc` / `disable` / `enable` / `delete` / `create` / `update` |
 | `/workspace info` | Show current workspace |
@@ -143,6 +144,7 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | `/workspace setup` / `/workspace tidy` / `/workspace share` | Set up / tidy the `.halo/` knowledge files, or export a shareable bundle (workspace skill) |
 | `/cron <verb>` | Manage scheduled agent runs: `create` / `list` / `update` / `enable` / `disable` / `delete` |
 | `/acp <verb>` | Ask other agents over ACP (`kiro <q>` / `claude <q>`) and manage `ask-*` bindings (`add` / `list` / `remove`) |
+| `/extension <verb>` | Canvas preview extensions: `install` / `list` / `remove` (full access only) |
 | `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
 | `/quit` | Exit |
 
@@ -216,7 +218,7 @@ same binary. `start -d` runs it in the background **with a bounded respawn
 supervisor**: the detached process supervises the server and brings it back on
 a crash (non-zero exit, or a kill by anything other than SIGTERM/SIGINT), at
 most 5 times per 5 minutes with a 2s pause, logging each decision as
-`[respawn] …` into `~/.halo/global/logs/server.log`. `halo server stop` is
+`[respawn] …` into `~/.halo/logs/server.log`. `halo server stop` is
 recognized as intentional and never respawns; `halo server stop|restart|status`
 still target the server's own pid. Full policy in
 [dev/deploy.md](../dev/deploy.md#crash-semantics--why-restarton-failure-is-load-bearing).
@@ -226,8 +228,9 @@ still target the server's own pid. Full policy in
 ```
 packages/cli/
   src/
-    index.ts        — Entry: subcommand dispatch (tui/cli/agents/sessions/server/setup/acp), SIGINT/SIGTERM handling
+    index.ts        — Entry: subcommand dispatch (tui/cli/agents/sessions/server/setup/upgrade/acp), SIGINT/SIGTERM handling
     harness.ts      — Shared agent harness wrapping SessionManager
+    server-supervisor.ts — Respawn policy for `halo server start -d`
     cli.ts          — Non-interactive: stdin/args → agent → stdout → exit
     tui.tsx         — Interactive entry: mounts the ink app
     tui/
@@ -247,9 +250,8 @@ Session prefix: `cli_`. Sessions are persisted to `<workspace>/.halo/sessions/` 
 
 ### Initialization
 
-The CLI replicates the server's init sequence:
+`tui` / `cli` / `agents` / `sessions` refuse to run ("~/.halo/global/ not initialized. Run halo setup first.") until `halo setup` has seeded `~/.halo/global/`. Then the CLI replicates the server's init sequence (`initRuntime()` in `harness.ts`):
 1. `initLogger()` — redirect console to stderr + file logger
-2. `ensureHaloHome()` — ensure `~/.halo/` structure
-3. `initBwrapCheck()` — probe sandbox availability
-4. `setSandboxHiddenPaths()` — configure sandbox paths
-5. `new SessionManager(workspace)` — create agent session manager
+2. `initBwrapCheck()` — probe sandbox availability
+3. `setSandboxHiddenPaths()` — configure sandbox paths
+4. `new SessionManager(workspace)` — create agent session manager (the workspace's `.halo/` is seeded via `ensureWorkspaceHalo`)

@@ -21,18 +21,18 @@ Halo auto-creates `.halo/` inside the folder if it doesn't exist; the path itsel
 
 ## Step 2 — Open the admin scan flow
 
-Open halo admin → **Channels** → **WeChat** → **Add Account**.
+Open halo admin → **Channels** → **WeChat** → **Add Bot**.
 
 The form is **just the workspace + label + access level + language** — no bot token field, because the token comes from the scan:
 
 | Field | Value |
 |---|---|
-| Workspace path | absolute path from Step 1, e.g. `/home/ubuntu/my-project` |
-| Label | optional, shown in admin's account list |
+| Bind to workspace | absolute path from Step 1, e.g. `/home/ubuntu/my-project` |
+| Name (optional) | shown in admin's account list |
 | Access level | `readonly` (default), `workspace`, or `full` |
 | Language | `en` or `zh` |
 
-Click **Generate QR**. Halo hits `ilinkai.weixin.qq.com` to mint a fresh QR code and starts a poll loop waiting for the scan.
+Click **Next: Scan**. Halo hits `ilinkai.weixin.qq.com` to mint a fresh QR code and starts a poll loop waiting for the scan.
 
 > **What the access level covers.** A WeChat account is bound to exactly one WeChat user — the one who scans — so there's no whitelist to configure; the scanner *is* the whitelist. The level you choose here is what that phone gets: `full` means whoever holds the unlocked phone has shell access as the server user. The same applies to invite QRs minted with `/qr full` from inside the chat — each scan creates a separate account at the level you named, so hand those out as you would an SSH key.
 
@@ -43,19 +43,19 @@ Click **Generate QR**. Halo hits `ilinkai.weixin.qq.com` to mint a fresh QR code
 3. Aim at the QR shown in the admin UI
 4. Tap **Confirm Login / 确认登录** on the phone
 
-Within a few seconds the admin UI shows "登录成功" / "Logged in" and switches to the success page. Behind the scenes:
+Within a few seconds the admin UI shows "Connected (<id>)" and closes the dialog. Behind the scenes:
 
 - iLink returns the bot's token, the IDC-specific `baseUrl`, and your WeChat-side `ilink_user_id`
 - Halo writes those into the new account row
 - The long-poll loop starts immediately — the bot is now live
 
-The QR is valid for ~3 minutes; if it expires the admin UI auto-refreshes. If you cancel and come back later, just open the form again — a new QR is minted.
+The server waits up to ~8 minutes for the scan and gives up after the QR has expired three times; the dialog then shows the error and a **Start over** button. If you cancel and come back later, just open the form again — a new QR is minted.
 
 ## Step 4 — Test it
 
 The bot's name in your WeChat contacts is whatever the iLink platform set it to (typically a generic placeholder like `小助手`; you can rename it locally). Open the bot's chat in WeChat and send `hello` → expect a streamed reply.
 
-If nothing happens, check halo server logs for `[wechat]` lines.
+If nothing happens, check halo server logs for `[WeChat]` lines.
 
 ## How halo handles inbound
 
@@ -72,12 +72,13 @@ Same set as the other channels — type as plain text in your WeChat DM with the
 
 | Command | Effect |
 |---|---|
-| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` |
+| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` / `info` |
 | `/agent <verb>` | Manage agents (`list` / `switch` / `desc` open to all; `delete` full; `create` / `update` via skill, full) |
 | `/skill <verb>` | Manage skills (`list` / `desc` open; `disable` / `enable` workspace; `delete` full; `create` / `update` via skill, full) |
 | `/workspace <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
+| `/cron` `/acp` `/extension` | Skill-backed object commands (full access); `/evo [hint]` queues a self-evolution run |
 | `/help` | List commands — object commands show only the verbs you can run |
-| `/qr [level]` | Generate an invite QR (admin only) |
+| `/qr [level]` | Generate an invite QR (`full`-access bot only; `level` = `readonly` (default) / `workspace` / `full`) |
 
 ## Cron jobs targeting WeChat
 
@@ -94,11 +95,10 @@ Fan-out across multiple WeChat users is not supported — one bot, one owner.
 | Symptom | Cause / fix |
 |---|---|
 | QR shows but scan does nothing | iLink platform thinks the QR is for a different account. Cancel and regenerate |
-| "二维码已过期" / QR expired | Admin UI should auto-refresh. If not, click Generate again |
+| "登录超时：二维码多次过期" / QR expired | Click **Start over** in the dialog and scan the new QR |
 | Bot stops responding after a few hours | Long-poll likely lost its `syncBuf`. Restart the server; reconnect is automatic |
-| Two halo processes both poll the same bot | Each process gets a copy of every message, replied twice. Make sure only one server runs — see `~/.halo/global/server.pid` |
+| Two halo processes both poll the same bot | Each process gets a copy of every message, replied twice. Make sure only one server runs — see `~/.halo/global/server.lock` |
 | Group chat doesn't trigger the bot | Expected — groups aren't supported in v1 |
-| Sent voice message returns no reply | Check that the account has `workspace` or `full` access; readonly cannot save inbound media |
 | Cron push or a delayed reply fails with `ret=-2 prepare failed` while fresh chat replies work | Three causes: the report exceeds 16 KB (halo chunks at 3500 chars, so this is rare now); the account has no stored `context_token` for the recipient yet — the gateway wants outbound to echo the user's latest inbound token, which halo persists on every inbound message since 1.1.8; or that token has **expired** — the gateway stops accepting it some time after the user's last message (the window isn't fixed; failures were seen 12 min and 79 min after the last inbound), and only a new inbound message from that user refreshes it. In all cases: send the bot any message once and the next push carries a fresh token. The error names which case it is (`context_token missing` / `context_token age 79m`), and a dropped chat reply now shows up as a `⚠️ WeChat delivery failed` notification in the session log (admin Sessions tab) instead of vanishing silently |
 
 ## Multi-workspace / multi-bot

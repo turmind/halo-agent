@@ -21,17 +21,21 @@ Overall interface layout plus the three sidebar features.
 - **Sidebar** is resizable
 - **Bottom Panel** is resizable; the header has a Chat / Terminal switch
 
-The Skills tab is an exception — it takes the full right side, no Bottom Panel.
+The docked Bottom Panel belongs to the Explorer tab; every other tab fills the whole right side (a floating panel stays visible on any tab).
 
 ## Activity Bar tabs
 
 | Icon | Tab | Purpose |
 |---|---|---|
 | 📄 Files | Explorer | File tree + Monaco editor |
+| 🌿 Branch | Source Control | Changes, commit, push, history (hidden for non-git workspaces) |
 | 📨 Messages | Sessions | Session history + debug viewer |
-| 🪄 Wand | Skills | Skill editing (mini workspace) |
-| 👥 Users | Agents | Agent configuration (Form/YAML/MD) |
-| ⚙️ Gear | Settings | Settings editor (Form/YAML) |
+| ⚡ Zap | Skills | Skill editing (mini workspace) |
+| 🤖 Bot | Agents | Agent configuration (Form / Edit) |
+| 💬 Chat bubble | Channels | Web / Telegram / Slack / Feishu / WeCom / WeChat accounts |
+| ✨ Sparkles | Evolution | Self-evolution runs and review |
+| 🕐 Clock | Cron | Scheduled agent runs |
+| ⚙️ Gear | Settings | Settings form (bottom of the bar) |
 
 ## Switching workspace
 
@@ -44,29 +48,30 @@ The Explorer top bar has a path input + 📁🔍 picker button:
   - Single click to select / double click to enter
   - Open button to confirm
 
-The URL carries `?folder=/abs/path`, persisting the workspace across refreshes. When `folder` is absent, Halo falls back to the home directory.
+The URL carries `?folder=/abs/path`, persisting the workspace across refreshes. When `folder` is absent, Halo reopens the last workspace you used, or the home directory if there isn't one.
 
 ## Explorer (file tree)
 
 VS Code style:
-- Click: select
-- Double click: open in a new Tab
+- Click a file: select, then open it after a short delay (300 ms)
+- Double click: open the file right away; on a folder, expand / collapse it
+- Click a folder: expand / collapse
 - Ctrl/Cmd + click: toggle multi-select
 - Shift + click: range select
 - Drag: move files/folders (multi-select drag supported)
 
-Right-click menu: New File / New Folder / Rename / Delete / Download.
+Right-click menu: New File / New Folder / Open in Integrated Terminal / Reveal in File Manager (desktop app only) / Open to the Side / Download / Rename / Delete / Open as Workspace (folders).
 
 **Quick Open**: `Cmd/Ctrl+P` opens fuzzy file search — server-side, full-project, independent of expansion state.
 
 ### Skipped directories
-`node_modules`, `__pycache__`, `.halo` (knowledge dir, not shown in the tree; use `file_read` directly).
+`.git`, `.DS_Store`, `node_modules`, `__pycache__`.
 
 ## Editor
 
 Monaco, multi-tab:
 - Drag tabs to reorder
-- Unsaved tabs show a red dot
+- Unsaved tabs show an amber dot
 - Closing an unsaved tab prompts for confirmation
 - **Auto-refresh**: detects agent-written file changes by mtime and updates contents
 - **Tab persistence**: stored in localStorage, survives refreshes
@@ -91,13 +96,13 @@ Once installed, matching files open in the extension's viewer. If more than one 
 
 Bottom-panel Terminal tab:
 - xterm.js frontend + node-pty backend
-- Multi-instance (each tab owns its own PTY)
+- Multi-instance (each terminal owns its own PTY), listed as a collapsible vertical tab strip on the right
 - cwd = current project root
-- Reconnect grace: 60 s
+- Reconnect grace: 5 min (`timeout.terminal_grace`)
 
 ## Settings
 
-`⚙️ Settings` tab. Form / YAML split view:
+`⚙️ Settings` tab. Form view:
 - Auto-generated controls (text / number / password / toggle) per declared field
 - Each row shows source (`workspace` / `inherited from global` / `unset`) + Reset
 
@@ -105,7 +110,10 @@ Scope: Global / Workspace toggle. Same key: workspace overrides global, leaf by 
 
 Sections are grouped by declarer:
 - **System** — server-built-in knobs (session limits, compaction, sandbox, logging)
+- **Security** — change password, log out
+- **Extensions** — installed canvas preview extensions
 - **Model Providers** — secrets declared by each `models/<id>.yaml` (AWS, Kimi, DeepSeek, …)
+- **Agents** — params/secrets declared by each global agent's `agent-config.yaml`
 - **Skills** — params/secrets declared by each `skills/<id>/config.yaml`
 - **Orphans** — values in settings.yaml whose namespace isn't currently declared (uninstalled skill leftovers); manual cleanup only
 
@@ -127,11 +135,13 @@ See [requirements/settings.md](../requirements/settings.md), [secrets-and-creden
 |---|---|
 | `Cmd/Ctrl + P` | Quick Open |
 | `Cmd/Ctrl + S` | Save file |
-| `Cmd/Ctrl + W` | Close tab |
+| `Alt + W` | Close editor tab (browser; the desktop app uses `Cmd/Ctrl + W`) |
+| `Cmd/Ctrl + \`` | Switch the bottom panel between Chat and Terminal |
+| `Esc` | Leave editor maximize |
 
 ## Bottom panel switching
 
-Two tabs in the header: Chat / Terminal. Current tab lives in `editorStore.bottomTab` and survives refresh.
+Two tabs in the header: Chat / Terminal, plus maximize and float / dock buttons. The panel opens on Chat after a refresh.
 
 ## Login / logout
 

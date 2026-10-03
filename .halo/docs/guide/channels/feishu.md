@@ -77,16 +77,16 @@ After approval the bot is visible in your Feishu tenant. Repeat this step **ever
 
 ## Step 7 — Add the account in halo admin
 
-Open halo admin → **Channels** → **Feishu** → **Add Account**:
+Open halo admin → **Channels** → **Feishu** → **Add Bot**:
 
 | Field | Value |
 |---|---|
 | App ID | from Step 2 |
 | App Secret | from Step 2 |
-| Verification token | leave blank (long-connect doesn't use it) |
-| Encrypt key | leave blank (long-connect doesn't encrypt the wire) |
-| Workspace path | absolute path, e.g. `/home/ubuntu/my-project` |
-| Label | optional |
+| Verification Token (optional) | leave blank (long-connect doesn't use it) |
+| Encrypt Key (optional) | leave blank (long-connect doesn't encrypt the wire) |
+| Bind to workspace | absolute path, e.g. `/home/ubuntu/my-project` |
+| Name (optional) | a label for the account |
 | Access level | `readonly` (default), `workspace`, or `full` |
 | Language | `en` or `zh` |
 
@@ -109,7 +109,7 @@ In Feishu desktop / mobile:
 1. Top-bar search → type the bot's name → click into the bot's profile → start a DM → send `hello` → expect a streamed reply
 2. Add the bot to a group: open a group → 设置 → 群机器人 → add → `@halo hi` → expect a reply
 
-If nothing happens, check halo server logs (`/tmp/halo-server.log`) for `[feishu]` lines.
+If nothing happens, check halo server logs (`~/.halo/global/logs/server.log`) for `[Feishu]` lines.
 
 ## How halo handles inbound
 
@@ -121,14 +121,15 @@ If nothing happens, check halo server logs (`/tmp/halo-server.log`) for `[feishu
 
 ## Slash commands
 
-Same set as the other channels — type as plain text in a DM or thread:
+Same set as the other channels — type as plain text, **in a 1:1 DM only** (in a group the text goes to the agent as a normal message):
 
 | Command | Effect |
 |---|---|
-| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` |
+| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` / `info` |
 | `/agent <verb>` | Manage agents (`list` / `switch` / `desc` open to all; `delete` full; `create` / `update` via skill, full) |
 | `/skill <verb>` | Manage skills (`list` / `desc` open; `disable` / `enable` workspace; `delete` full; `create` / `update` via skill, full) |
 | `/workspace <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
+| `/cron` `/acp` `/extension` | Skill-backed object commands (full access); `/evo [hint]` queues a self-evolution run |
 | `/help` | List commands — object commands show only the verbs you can run |
 
 ## Cron jobs targeting Feishu
@@ -145,12 +146,12 @@ Search depends on the contact and `im:chat:readonly` scopes from Step 4. If auto
 
 | Symptom | Cause / fix |
 |---|---|
-| `99991663` on Add Account | App Secret wrong — copy it again from Step 2 |
-| `99991668` on Add Account | Bot capability not enabled — go back to Step 3 |
+| `99991663` on Add Bot | App Secret wrong — copy it again from Step 2 |
+| `99991668` on Add Bot | Bot capability not enabled — go back to Step 3 |
 | Bot exists but receives no events | Step 5 mode is set to webhook (not long-connect), or Step 6 wasn't done |
 | Permission errors when sending images / reading group info | New scope was approved but app version wasn't republished — go to Step 6 |
 | Can't find the bot in Feishu search | Step 6 wasn't done. Search results are tenant-wide and only show **published** apps |
-| Multiple halo instances reply to the same message | Only one process should hold the long-connect. Check `~/.halo/global/server.pid` for the lock |
+| Multiple halo instances reply to the same message | Only one process should hold the long-connect. Check `~/.halo/global/server.lock` for the lock |
 
 ## Multi-tenant setup
 

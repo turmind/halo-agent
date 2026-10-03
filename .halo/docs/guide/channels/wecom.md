@@ -40,7 +40,7 @@ Open halo admin → **Channels** → **WeCom** → **Add Bot**:
 | Bot ID | from Step 3 |
 | Secret | from Step 3 |
 | Bind to workspace | absolute path, e.g. `/home/ubuntu/my-project` |
-| Name | optional label |
+| Name (optional) | a label for the account |
 | Access level | `readonly` (default), `workspace`, or `full` |
 | Language | `en` or `zh` — for hints and command replies |
 
@@ -97,10 +97,11 @@ Same set as the other channels — type as plain text in a **single chat** (comm
 
 | Command | Effect |
 |---|---|
-| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` |
+| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` / `info` |
 | `/agent <verb>` | Manage agents (`list` / `switch` / `desc` open to all; `delete` full; `create` / `update` via skill, full) |
 | `/skill <verb>` | Manage skills (`list` / `desc` open; `disable` / `enable` workspace; `delete` full; `create` / `update` via skill, full) |
 | `/workspace <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
+| `/cron` `/acp` `/extension` | Skill-backed object commands (full access); `/evo [hint]` queues a self-evolution run |
 | `/help` | List commands — object commands show only the verbs you can run |
 
 ## Cron jobs targeting WeCom

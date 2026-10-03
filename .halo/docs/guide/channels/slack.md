@@ -83,14 +83,14 @@ In the Slack desktop client, fully quit and reopen (or `Cmd+R` to reload) — ot
 
 ## Step 7 — Add the account in halo admin
 
-Open halo admin → **Channels** → **Slack** → **Add Account**:
+Open halo admin → **Channels** → **Slack** → **Add Bot**:
 
 | Field | Value |
 |---|---|
-| Bot token | the `xoxb-…` from Step 5 |
-| App token | the `xapp-…` from Step 2 |
-| Workspace path | absolute path to the workspace this bot drives, e.g. `/home/ubuntu/my-project` |
-| Label | optional, e.g. "Engineering bot" |
+| Bot Token (xoxb-…) | the `xoxb-…` from Step 5 |
+| App Token (xapp-…) | the `xapp-…` from Step 2 |
+| Bind to workspace | absolute path to the workspace this bot drives, e.g. `/home/ubuntu/my-project` |
+| Name (optional) | e.g. "Engineering bot" |
 | Access level | `readonly` (default), `workspace`, or `full` |
 | Language | `en` or `zh` |
 
@@ -111,7 +111,7 @@ Pick the level with that in mind:
 1. In Slack, click the bot's name in the sidebar to start a DM → type `hello` → expect a streamed reply
 2. Invite the bot into a channel: `/invite @halo` → mention it: `@halo what files are in this workspace?` → expect a reply in the same thread
 
-If nothing happens, check the halo server logs (`/tmp/halo-server.log`) for `[slack]` lines.
+If nothing happens, check the halo server logs (`~/.halo/global/logs/server.log`) for `[Slack]` lines.
 
 ## How halo handles inbound
 
@@ -123,14 +123,15 @@ If nothing happens, check the halo server logs (`/tmp/halo-server.log`) for `[sl
 
 ## Slash commands
 
-Same set as the other channels — type these as plain text in a DM or thread:
+Same set as the other channels, but **only in a DM with the bot** — in a channel or thread the text goes to the agent as a normal message. Slack's own client intercepts a leading `/`, so type `!` instead (e.g. `!session list`); halo treats `!cmd` as `/cmd` and shows `!…` in its replies. The table below uses `/`:
 
 | Command | Effect |
 |---|---|
-| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` |
+| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` / `info` |
 | `/agent <verb>` | Manage agents (`list` / `switch` / `desc` open to all; `delete` full; `create` / `update` via skill, full) |
 | `/skill <verb>` | Manage skills (`list` / `desc` open; `disable` / `enable` workspace; `delete` full; `create` / `update` via skill, full) |
 | `/workspace <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
+| `/cron` `/acp` `/extension` | Skill-backed object commands (full access); `/evo [hint]` queues a self-evolution run |
 | `/help` | List commands — object commands show only the verbs you can run |
 
 ## Cron jobs targeting Slack
@@ -149,10 +150,10 @@ The search depends on the `users:read` / `channels:read` scopes added in Step 4.
 |---|---|
 | **"向此应用发送消息的功能已关闭"** banner on the DM page | Step 6 wasn't done — open App Home, enable Messages Tab, reload Slack |
 | Account created but no events arrive | Socket Mode token (`xapp-`) is wrong, or `connections:write` scope missing on it |
-| `not_authed` / `invalid_auth` error on Add Account | Bot token (`xoxb-`) typo, or you pasted the App token in the Bot field by mistake |
+| `not_authed` / `invalid_auth` error on Add Bot | Bot token (`xoxb-`) typo, or you pasted the App token in the Bot field by mistake |
 | Bot replies to itself in a loop | Should never happen — halo drops all `bot_id`-tagged messages. If it does, file a bug |
 | Search dropdown empty in cron form | Missing `users:read` / `channels:read` scopes — add them, then Reinstall to Workspace |
-| Multiple halo instances reply to the same message | Only one process should hold the Socket Mode connection. Check `~/.halo/global/server.pid` for the lock |
+| Multiple halo instances reply to the same message | Only one process should hold the Socket Mode connection. Check `~/.halo/global/server.lock` for the lock |
 
 ## Multi-workspace setup
 

@@ -35,7 +35,7 @@ Goal: a skill called `caption-image` that calls `api.example.com` with an API ke
 Beside `SKILL.md`:
 
 ```yaml
-# extensions/skills/caption-image/config.yaml
+# skills/caption-image/config.yaml
 params:
   - key: api_key
     description: API key for api.example.com
@@ -107,7 +107,7 @@ env vars (process.env.X) > workspace settings.yaml > global settings.yaml > sche
 
 If `process.env.EXAMPLE_KEY` is unset and the value at `caption-image.params.api_key` is `<<EXAMPLE_KEY>>`:
 - The agent sees the literal `<<EXAMPLE_KEY>>` in the rendered skill body
-- The server logs `[md-vars] Env var "EXAMPLE_KEY" not set — keeping <<EXAMPLE_KEY>> literal`
+- The server logs `[MdVars] Env var "EXAMPLE_KEY" not set — keeping <<EXAMPLE_KEY>> literal`
 - API calls the agent makes will fail with a clear error (usually HTTP 401) and the error message will reveal the literal, so the user can tell what to fix
 
 This is intentional: empty strings hide the misconfiguration; literals make it visible.
@@ -155,7 +155,7 @@ Free-form, but consistency helps. Common patterns in Halo:
 | Env var | Purpose |
 |---|---|
 | `HALO_PASSWORD` | Server login password |
-| `HALO_MODEL_ID` / `HALO_MODEL_PROVIDER` / `HALO_MAX_CONTEXT_TOKENS` | Server defaults |
+| `HALO_MAX_CONTEXT_TOKENS` | Server default context window (272000) |
 | `AWS_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | AWS / Bedrock |
 
 For your own skills, `UPPER_SNAKE` prefixed by the product is idiomatic (`NANO_BANANA_KEY`, `EXAMPLE_API_TOKEN`). The placeholder is case-sensitive — `<<example_key>>` won't match `EXAMPLE_KEY`.

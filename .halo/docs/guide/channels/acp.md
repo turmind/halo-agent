@@ -54,6 +54,8 @@ halo acp \
 | `--token` | yes | Web-channel token. `full` access required for multi-workspace use |
 | `--workspace` | yes | Absolute server-side path for this adapter |
 | `--agent-id` | no | Halo agent profile to use when ACP `session/new` creates a fresh session. Default `default` (alias `--agent`) |
+| `--scheme` | no | `http` (default) or `https` — use `https` for a server behind a TLS reverse proxy |
+| `--header "Name: value"` | no | Repeatable. Extra HTTP header sent on every request (like `curl -H`), for auth in front of the server — proxy cookie, `CF-Access-*`, basic auth |
 
 Each adapter process binds to **one** workspace. To drive multiple workspaces concurrently from one token, run multiple adapter processes — one per workspace.
 
@@ -139,7 +141,7 @@ For now: if you want the agent to see a Mac-side file, paste it into the prompt.
 | `401` on first prompt | Token typo, or token was deleted from admin |
 | `403` when launching with `--workspace /some/other/path` | Token is `readonly` / `workspace` access — use a `full` token or omit `--workspace` |
 | Tool calls don't appear in Claude Code | Expected — halo doesn't translate every event back as ACP `tool_call`. See [docs/dev/acp-adapter.md](../../dev/acp-adapter.md) for the full mapping |
-| Two `session/prompt` calls on the same id, second hangs | Halo queues messages when a session is busy; ACP adapter ends the response with `[queued]`. Wait for the first to finish |
+| Two `session/prompt` calls on the same id, second hangs | Halo queues messages when a session is busy; ACP adapter ends the response with `[queued — session busy]`. Wait for the first to finish |
 | `/workspace switch <path>` worked but other tokens broke | You changed the db-level default. Switch back with another `/workspace switch`, or stop using slash commands from the adapter |
 
 ## Reference

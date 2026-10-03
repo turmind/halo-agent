@@ -6,17 +6,17 @@ The agent is Halo's core abstraction: personality (AGENT.md) + config (agent.yam
 
 | Kind | Description |
 |---|---|
-| Built-in | Server-shipped agents (`default`, `executor`, `deep-executor` + the three internal `__evo_agent__` / `__score__` / `__apply_agent__`). Live under `~/.halo/global/agents/<id>/`. **Force-overwritten on every server startup** — local edits to these files will be lost on the next start. To customize: copy into the workspace scope (workspace replaces global) and edit there. |
+| Built-in | Server-shipped agents (`default`, `executor`, `deep-executor` + the internal `goal` / `__evo_agent__` / `__score__` / `__apply_agent__`). Live under `~/.halo/global/agents/<id>/`. **Force-overwritten on every server startup** — local edits to these files will be lost on the next start. To customize: copy into the workspace scope (workspace replaces global) and edit there. |
 | Global | Any other agent under `~/.halo/global/agents/<id>/`, e.g. one you created via the admin UI. Shared across projects. Never overwritten by the server. |
 | Workspace | `<project>/.halo/agents/<id>/`, private to the current project; same-id workspace wins over global. Override is **whole-folder**: the workspace agent folder replaces the global one entirely, so copy *both* `agent.yaml` and `AGENT.md` when customizing — a folder with only `AGENT.md` has no model config and won't load. |
 
 ## Open the Agents panel
 
-Click the `👥 Agents` icon in the Activity Bar.
+Click the `🤖 Agents` icon in the Activity Bar.
 
 ```
 ┌─────────────────┬──────────────────────────┐
-│ Agents          │  Form / YAML / MD Editor │
+│ Agents          │  Form / Edit             │
 │─────────────────│                          │
 │ ▼ Global    (2) │                          │
 │   🤖 Default    │                          │
@@ -28,38 +28,32 @@ Click the `👥 Agents` icon in the Activity Bar.
 
 ## Create an agent
 
-Top-of-sidebar `+` button; modal asks for:
+Click the `+` on the **Global** or **Workspace** group header in the sidebar (the group you click decides the scope; Workspace needs an open workspace). Two prompts follow:
 - **Name**: display name (e.g. "Coder")
-- **Description**: one-line description
-- **Scope**: Global / Workspace
+- **Description**: one-line description (optional)
 
 The backend calls `defaultAgentYaml(name, description)` to generate a minimal `agent.yaml`.
 
 ## Edit an agent
 
-Click an agent in the sidebar to open the right-hand editor. Three views:
+Click an agent in the sidebar to open the right-hand editor. Two views:
 
 ### Form view
-Data-driven form for name / description / model / tools / skills / thinking — click Save.
+Data-driven form for name / description / model / tools / skills / thinking. Changes auto-save about half a second after you stop editing — there's no Save button. The agent's AGENT.md is shown below the form as a read-only preview.
 
 **Model section** has four fields:
 - `provider` — dropdown populated from `~/.halo/global/models/*.yaml`
-- `id` — combobox (input + datalist); preset options filtered by current provider, also accepts manual input of any Bedrock model ID
+- `id` — combobox (input + datalist); preset options filtered by current provider, also accepts manual input of any model ID
 - `endpoint` — combobox (input + datalist); full endpoint URL (e.g. `https://bedrock-runtime.ap-northeast-1.amazonaws.com`), supports custom proxy URLs
 - `maxTokens` — optional; defaults to `maxOutputTokens` in the provider yaml
 
-Switching provider auto-resets the model id to the first model of the new provider.
+Switching provider resets the model id to the new provider's default model (its `defaultModelId`), keeping the current id when the new provider lists it too.
 
 **Capability buttons** (Prompt Caching / Thinking) appear when the selected model matches a registry entry with declared capabilities. For manually entered model IDs not in the registry, default presets are shown (5min/1hour for caching, Low/Medium/High/Max for thinking).
 
-### YAML view
-Edit `agent.yaml` directly (Monaco). Use this for advanced settings (like `context.maxTokens`, `promptCaching`).
-
-### MD view
-Edit `AGENT.md` (personality) and `INSTRUCTIONS.md` (preferences).
+### Edit view
+The **Edit** button (top right) opens the agent's folder in a mini workspace (file tree + Monaco); **Back** returns to the form. Edit `agent.yaml` directly for advanced settings (like `context.maxTokens`, `promptCaching`) and `AGENT.md` for the personality.
 - `AGENT.md` takes precedence over YAML's `system_prompt`
-- `INSTRUCTIONS.md` is injected into every agent, not just this one
-- When a workspace is open, the top-right toggles **Global / Workspace**; both MDs can be edited independently of which scope the current agent lives in. Switching to a non-existent file shows `(new)`; saving auto-creates the dir/file.
 - AGENT.md supports `{{var}}` placeholders (`{{<skill-id>.params.<key>}}` / `<<ENV>>` / built-ins) rendered on agent start — see [skills.md placeholder section](skills.md#placeholders-template-variables)
 
 ## Tool configuration
@@ -75,7 +69,7 @@ team:                 # a non-empty team is what enables delegation
   - executor          # the agent ids this one may spawn
 ```
 
-**Workspace tools**: `file_read / file_write / file_edit / file_list / shell_exec / grep / glob / web_fetch` — listed by name under `tools`.
+**Workspace tools**: `file_read / view_image / file_write / file_edit / file_list / shell_exec / grep / glob / web_fetch` — listed by name under `tools`.
 
 **Session tools**: `start_session / session_list / query_session / interrupt_session / stop_session / archive_session / get_session_output / query_agent` — **not** listed under `tools`. The whole bundle is granted automatically the moment an agent declares a non-empty `team`; an empty/absent `team` means no delegation (no session tools, no roster). To let a sub-agent delegate further, give it its own `team`. Add the agent's own id to its `team` to enable parallel self-spawn.
 
@@ -123,13 +117,14 @@ Internal agents (`internal: true`, e.g. self-evolution agents) have no Test butt
 
 ## Delete
 
-Right-click → Delete. Constraints:
+Hover a **workspace** agent in the sidebar and click its trash icon. Global agents show a crown instead (no delete button there). Constraints:
 - The last global agent cannot be deleted (server-enforced)
 - Workspace agents delete freely
+- `/agent delete <name>` (full access) removes either kind
 
 ## Common workflows
 
-**Copy a global agent into workspace for customisation**: edit it in Form view, switch scope to Workspace, Save — creates an independent copy under `<project>/.halo/agents/<id>/`.
+**Copy a global agent into workspace for customisation**: copy the whole folder `~/.halo/global/agents/<id>/` to `<project>/.halo/agents/<id>/` and edit there. (Clicking `+` on Workspace with the same name creates a fresh scaffold under the same id, not a copy.)
 
 **Multi-agent collaboration**: the Default agent sees its teammates in the prompt roster, starts them with `start_session`, and the sub-agent auto-reports on completion. See [sessions.md](sessions.md).
 
@@ -146,7 +141,7 @@ priority: 0
 
 model:
   provider: aws-bedrock-claude-invoke       # required, matches ~/.halo/global/models/<provider>.yaml
-  id: global.anthropic.claude-sonnet-4-6   # default from settings.yaml params.model.default
+  id: global.anthropic.claude-sonnet-4-6   # the provider yaml's defaultModelId
   endpoint: https://bedrock-runtime.us-west-2.amazonaws.com  # full endpoint URL; supports custom proxy
   maxTokens: 16384                   # optional, max output tokens (default from provider yaml)
 
@@ -226,41 +221,12 @@ nano-banana:
     api_key: <<NANO_BANANA_KEY>>
 ```
 
-…where the schema lives at `extensions/skills/nano-banana/config.yaml`.
+…where the schema lives in the skill's own `config.yaml` (`skills/nano-banana/config.yaml`).
 
 With `export NANO_BANANA_KEY=sk-xxx` in the env, the agent's system prompt gets the real key on start.
 
 ## Model registry — adding a new provider
 
-Halo ships with `aws-bedrock-claude-invoke` only. Hooking up OpenAI / direct Anthropic / another Bedrock variant takes two steps:
+Halo ships 13 providers (`aws-bedrock-claude-invoke`, `aws-bedrock-mantle`, `aws-bedrock-openai`, `anthropic`, `openai`, `kimi`, `deepseek`, `minimax`, `qwen`, `hunyuan`, `doubao`, `zhipu`, `mimo-token-plan-china`); each one is a yaml under `~/.halo/global/models/` plus a matching case in [packages/server/src/agents/model-runtime.ts](../../../packages/server/src/agents/model-runtime.ts). For any OpenAI- or Anthropic-compatible endpoint you don't need new code: pick `openai` or `anthropic` as the provider and fill in the endpoint and model id in Form view.
 
-### 1. Declare the provider
-
-Create `~/.halo/global/models/<providerId>.yaml`:
-
-```yaml
-id: openai                             # required; matches the filename
-displayName: OpenAI
-description: OpenAI Chat Completions
-models:
-  - id: gpt-4o
-    displayName: GPT-4o
-    maxOutputTokens: 16384
-    capabilities:
-      promptCaching:
-        ttlPresets:
-          - { value: 5m, label: 5min }
-  # No thinking block → UI automatically hides the Thinking button
-```
-
-### 2. Implement the runtime
-
-Add a case in the switch inside [packages/server/src/agents/model-runtime.ts](../../../packages/server/src/agents/model-runtime.ts) returning a class that implements `ModelRuntime` (`messages` + `run()`). Interface detail in [design/agent.md](../design/agent.md#agent-instance).
-
-### Usage
-
-Set `model.provider: openai` in your agent.yaml; the Provider dropdown in Form view lists it automatically.
-
-### Current state
-
-Only `aws-bedrock-claude-invoke` ships an implementation. If you drop a provider yaml without a runtime implementation, session spawn fails with `Unknown provider "..."`.
+A truly new provider takes a yaml manifest plus a runtime case; the step-by-step is in [dev/add-model-provider.md](../dev/add-model-provider.md). If you drop a provider yaml without a runtime case, session spawn fails with `Unknown provider "..."`.

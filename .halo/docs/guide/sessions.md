@@ -24,7 +24,7 @@ The main agent (the one you talk to directly) sits at the top; any sub-agents it
 
 - Collapse/expand: click the arrow
 - Count badge `+3`: 3 descendants
-- Red ⏹ icon: session was stopped (stopped_at is set)
+- ⏹ icon: session was stopped (stopped_at is set)
 
 ## Message viewer
 
@@ -48,7 +48,7 @@ Top-right Bug icon toggles it. When on you also see:
 
 ## System prompt viewer
 
-In Debug mode the top-right gets an extra `Prompt` button; click to expand the full system prompt (AGENT.md + INSTRUCTIONS.md + INDEX.md + TOOL_GUIDELINES + skill metadata).
+Next to the Debug toggle, a `Prompt` button appears once the session has a recorded system prompt; click to expand the full system prompt (AGENT.md + INSTRUCTIONS.md + INDEX.md + TOOL_GUIDELINES + skill metadata).
 
 Use it to see exactly what context the agent was given for a given turn.
 
@@ -71,7 +71,7 @@ Refreshing the browser or a network blip:
 
 ## Deleting a session
 
-Click a session's trash icon (Sessions page) or ✕ on its chat tab, then confirm:
+Hover a session and click its trash icon (Sessions page or a chat tab), then confirm:
 - Cascade delete in SQLite (parent + all descendants)
 - `.halo/sessions/{agentId}/{sid}.json` removed
 - Sidebar entry removed

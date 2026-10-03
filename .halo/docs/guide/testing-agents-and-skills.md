@@ -6,7 +6,7 @@ How to verify an agent you just created behaves right, and how to exercise a ski
 
 ### 1. Open the agent
 
-Activity Bar → `👥 Agents` → click the agent you want to test.
+Activity Bar → `🤖 Agents` → click the agent you want to test.
 
 ### 2. Click Test
 
@@ -32,21 +32,20 @@ The Explorer's Chat panel is now ready with your agent pre-selected. Send a mess
 
 - **Does it greet the way AGENT.md says?** Send "Hi". Check the reply matches the personality you wrote.
 - **Does it call the right tools?** If the agent is supposed to read files, ask it to. Watch the inline tool-call card — it shows the tool name, arguments, and (expandable) output.
-- **Is the system prompt what you expect?** Open the Sessions panel (Activity Bar → `🕘 Sessions`), select this session, toggle **Debug mode**, click the **Prompt** button on the first message. Full rendered system prompt (AGENT.md + USER.md + INSTRUCTIONS.md + skill metadata + tool list).
+- **Is the system prompt what you expect?** Open the Sessions panel (Activity Bar → `📨 Sessions`), select this session, toggle **Debug mode**, click the **Prompt** button in the viewer header. Full rendered system prompt (AGENT.md + USER.md + INSTRUCTIONS.md + skill metadata + tool list).
 - **Is the model correct?** Debug mode's usage badges show `model` on every assistant turn.
 
 ### 5. Iterate
 
-Edits take effect on the **next** session, not retroactively:
+Edits are never retroactive — the turn that is running finishes on the old config — but a session is rebuilt from disk after every run, so the **next turn** of an existing session already picks them up:
 
 | What you changed | When it takes effect |
 |---|---|
-| `AGENT.md` body | Next `/session new` session |
-| `agent.yaml` tools / skills / model | Next session spawn |
-| `settings.yaml` values | Next session spawn (or next `activate_skill` call for SKILL bodies) |
-| Env vars (`<<ENV>>` placeholders) | Restart server, then next session spawn |
+| `AGENT.md` body, `agent.yaml` tools / skills / model | Next turn (and any new session) |
+| `settings.yaml` values | Next turn (or next `activate_skill` call for SKILL bodies) |
+| Env vars (`<<ENV>>` placeholders) | Restart server, then next turn |
 
-So the loop is: edit → `/session new` → re-test. No server restart for MD/YAML/settings changes.
+So the loop is: edit → send another message (or `/session new` for a clean slate) → re-test. No server restart for MD/YAML/settings changes. Full table in [delegation-and-access.md](delegation-and-access.md#2-when-a-config-edit-takes-effect).
 
 ---
 
@@ -56,7 +55,7 @@ There is **no separate "test this skill" button**. Skills exist to be called by 
 
 ### 1. Attach the skill to an agent
 
-In the agent's Form view, the **Skills** section lists every skill in the workspace. Check the one you want to test. Save.
+In the agent's Form view, the **Skills** section lists every skill in the workspace. Check the one you want to test (the form auto-saves).
 
 Equivalent YAML edit:
 
@@ -114,22 +113,22 @@ The env var is unset. Halo renders the literal placeholder so you (and the agent
 
 ### Saved agent changes don't seem to apply
 
-You might be looking at a session that started *before* the edit. Every session caches its own assembled system prompt at spawn time. `/session new` to start fresh, or switch to a different session and back.
+You might be looking at a turn that was already running when you saved — it finishes on the old config, and the edit applies from the next turn. If the next turn still behaves the old way, `/session new` to start fresh.
 
 ### Deleting a test session
 
-Sessions → select → context menu → Delete. Or programmatically: `DELETE /api/sessions/logs/:id`. Deletion cascades to child sessions (sub-agents), their JSON files, and the SQLite rows. See [dev/api.md#session-logs](../dev/api.md#session-logs-unified).
+Sessions → hover the session → trash icon. Or programmatically: `DELETE /api/sessions/logs/:id`. Deletion cascades to child sessions (sub-agents), their JSON files, and the SQLite rows. See [dev/api.md#session-logs](../dev/api.md#session-logs-unified).
 
 ### "Test button does something weird" — the session is orphaned
 
-Since 1.5.3-alpha, Test no longer clears any stored session: it only opens a new draft tab (the old `localStorage.halo_session_<projectId>` key is gone). The new session is created by the first message you send from that tab. If you see an old conversation instead of an empty one, the draft tab isn't the one on screen. Click **+** at the bottom of the session tabs to bring it back (an unused draft is reused).
+Since 1.5.3-alpha, Test no longer clears any stored session: it only opens a new draft tab (the old `localStorage.halo_session_<projectId>` key is gone). The new session is created by the first message you send from that tab. If you see an old conversation instead of an empty one, the draft tab isn't the one on screen. Click **+** below the session tabs to bring it back (an unused draft is reused).
 
 ---
 
 ## References
 
 - Test button implementation: `testAgent` in [packages/admin/src/features/agents/agent-management-main.tsx](../../../packages/admin/src/features/agents/agent-management-main.tsx)
-- `activate_skill` runtime: [packages/server/src/agents/agent-loader.ts:111-159](../../../packages/server/src/agents/agent-loader.ts#L111-L159) (function `createSkillTool`)
-- Skill metadata → system prompt: [packages/server/src/agents/agent-loader.ts:97-102](../../../packages/server/src/agents/agent-loader.ts#L97-L102) (function `buildSkillPrompt`)
-- Chat session creation on first message: [packages/server/src/ws/handler.ts:263-344](../../../packages/server/src/ws/handler.ts#L263-L344) (function `handleChat`)
+- `activate_skill` runtime: [packages/server/src/agents/agent-loader.ts](../../../packages/server/src/agents/agent-loader.ts) (function `createSkillTool`)
+- Skill metadata → system prompt: [packages/server/src/agents/agent-loader.ts](../../../packages/server/src/agents/agent-loader.ts) (function `buildSkillPrompt`)
+- Chat session creation on first message: [packages/server/src/ws/handler.ts](../../../packages/server/src/ws/handler.ts) (function `handleChat`)
 - End-to-end test scenarios for the session system: [test/session.md](../test/session.md)

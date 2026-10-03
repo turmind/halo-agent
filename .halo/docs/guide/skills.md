@@ -30,7 +30,7 @@ Putting those in AGENT.md would bloat the system prompt. Skills use **progressiv
 
 Workspace overrides global (same id).
 
-**Built-in skills** (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`) are server-shipped and **force-overwritten on every server startup**. Local edits to these directories under `~/.halo/global/skills/` will be lost. To customize one, copy it into `<project>/.halo/skills/<id>/` (workspace replaces global) and edit there. Other skills under `~/.halo/global/skills/` — including any the user created via the admin UI — are untouched by the seeder.
+**Built-in skills** (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `web-search`, `halo`, `extension`) are server-shipped and **force-overwritten on every server startup**. Local edits to these directories under `~/.halo/global/skills/` will be lost. To customize one, copy it into `<project>/.halo/skills/<id>/` (workspace replaces global) and edit there. Other skills under `~/.halo/global/skills/` — including any the user created via the admin UI — are untouched by the seeder.
 
 ## SKILL.md format
 
@@ -63,7 +63,7 @@ Follow the checklist in checklist.md...
 
 ## Open the Skills panel
 
-Left-side Activity Bar → `🪄 Skills` icon.
+Left-side Activity Bar → `⚡ Skills` icon.
 
 Click any skill and the right pane becomes a mini workspace:
 - File tree (every file in the skill directory) on the left
@@ -73,9 +73,9 @@ You can edit SKILL.md, add scripts, templates, example docs.
 
 ## Create / delete
 
-`+` button on the sidebar — fill in name / description / scope.
+Click the `+` on the **Global** or **Workspace** group header in the sidebar (the group you click decides the scope) and type a name.
 
-Delete: right-click → Delete.
+Delete: hover a skill and click its trash icon (after a confirmation). The toggle next to it disables / enables the skill.
 
 ## Letting an agent use a skill
 
@@ -158,7 +158,9 @@ Halo seeds these skills on every startup (the ids in `BUILTIN_SKILL_IDS`, `packa
 | send-file | Deliver an image/video/file as a channel attachment by emitting `MEDIA:<absolute_path>` — works on Web / WeChat / Telegram / Slack / Feishu (no command; model-activated, workspace access) |
 | self | The agent's own visual space (`.halo/canvas/self.html`) for self-expression (no command; model-activated, full access) |
 | aws-knowledge | Query the official AWS Knowledge MCP server for up-to-date AWS docs (no command, `user-invocable: false`; model auto-activates) |
-| nova-web-search | Real-time web search via Amazon Nova 2 Lite's nova_grounding (no command, `user-invocable: false`; model auto-activates) |
+| web-search | Real-time web search in two gears: fast (Amazon Nova grounding, default) and deep (`--deep`, GPT-5.6 `web_search` via Bedrock Mantle, slower and token-expensive) (no command, `user-invocable: false`; model auto-activates) |
+| halo | Platform self-knowledge — config directories, MD scopes, which bundled doc answers what (no command, `user-invocable: false`; model auto-activates) |
+| extension | Install / list / remove canvas preview extensions — backs `/extension` (full access) |
 
 All live under `~/.halo/global/skills/` and are force-overwritten on startup. To customize one, copy it into `<project>/.halo/skills/<id>/` and edit there (workspace overrides global). `tavily-web-search` remains an optional (non-seeded) skill.
 
@@ -278,7 +280,7 @@ nano-banana:
 
 1. **Merge order**: workspace `<project>/.halo/settings.yaml` deep-merges over global `~/.halo/secrets/settings.yaml` (field-level merge, not block replacement)
 2. **Env vars**: `<<ENV_NAME>>` inside a value is replaced with `process.env.ENV_NAME` at render time. **If the env var is missing, the `<<ENV_NAME>>` literal is kept** so agents can see what's unset and the user can fix it
-3. **Unknown placeholders** stay as-is (e.g. `{{foo}}`, `{{nano-banana.params.missing-key}}`); the server logs a `[md-vars] Unknown placeholder "…"` warning
+3. **Unknown placeholders** stay as-is (e.g. `{{foo}}`, `{{nano-banana.params.missing-key}}`); the server logs a `[MdVars]` line saying it left the placeholder as-is
 4. **Key charset**: `[\w-]`, hyphens allowed (e.g. `nano-banana`)
 
 ### Why put credentials in env vars

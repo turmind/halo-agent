@@ -28,16 +28,16 @@ A change applies from the next message you send, and the level is saved per sess
 
 ## Context injection
 
-Next to the chat is a `📎 Context` toggle (on by default). When on, Halo auto-injects:
+The input toolbar shows a context chip (the open file's name, or the selection) — click it to toggle; on by default. When on, Halo auto-injects:
 - The currently open file path: `[Currently viewing: src/foo.ts]`
 - The editor's current selection: `[Selected text in foo.ts:10-25]\n\`\`\`...\n\`\`\``
 
-Turn it off if you don't want that context injected.
+Click the chip (it turns struck-through) if you don't want that context injected.
 
 ## `@` file mention
 
 Typing `@` in the input opens a file search:
-- Real-time fuzzy matching (150 ms debounce)
+- Real-time fuzzy matching (120 ms debounce)
 - Selecting inserts a path chip
 - You can `@` multiple files back-to-back
 
@@ -49,7 +49,7 @@ The search scans the whole project on the server — independent of Explorer exp
 - **Paste**: paste an image from the clipboard
 - **Button**: click the 📎 on the left
 
-Images are sent to the agent as base64, with multimodal support (Claude 4.6 can see images).
+Chat attachments are images only — other dropped or pasted files are ignored. Images are sent to the agent as base64, with multimodal support (Claude 4.6 can see images).
 
 ## Slash commands
 
@@ -59,13 +59,14 @@ Most commands are noun-verb **object commands**: `/<obj> <verb> [args]`. Bare `/
 
 | Command | Purpose |
 |---|---|
-| `/session <verb>` | Manage sessions — `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context`. All built-in, available to everyone. `new` starts a fresh conversation (old session stays in the sidebar; running sub-agents keep going); `compact` keeps the most recent N messages intact (N defaults to 5, `general.compact.keep_messages`); `context` shows token usage, agent info, and available tools |
+| `/session <verb>` | Manage sessions — `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` / `info` (session tree). All built-in, available to everyone. `new` starts a fresh conversation (old session stays in the sidebar; running sub-agents keep going); `compact` keeps the most recent N messages intact (N defaults to 5, `general.compact.keep_messages`); `context` shows token usage, agent info, and available tools |
 | `/clear` | Admin-UI alias for `/session new` |
 | `/agent <verb>` | Manage agents — `list` / `switch <name\|index>` / `desc` (built-in, open to all) · `delete` (built-in, full access) · `create` / `update` (handled by the `agent` skill, full access) |
 | `/skill <verb>` | Manage skills — `list` / `desc` (built-in, open to all) · `disable` / `enable` (built-in, workspace access) · `delete` (built-in, full access) · `create` / `update` (handled by the `skill` skill, full access) |
 | `/workspace <verb>` | Manage the workspace — `info` (built-in, open to all) · `switch <path>` (built-in, full access) · `setup` / `tidy` (workspace skill, workspace access; init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) · `share` (workspace skill, full access; export a shareable bundle) |
 | `/cron <verb>` | Scheduled agent runs — `create` / `list` / `update` / `enable` / `disable` / `delete` (cron skill, full access) |
 | `/acp <verb>` | Talk to other agents over ACP — `kiro <q>` / `claude <q>` ask a local agent directly; `add` / `list` / `remove` manage generated `ask-<label>` bindings (acp skill, full access) |
+| `/extension <verb>` | Canvas preview extensions — `install <id\|zip\|url>` / `list` / `remove <id>` (extension skill, full access) |
 | `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
 | `/help` | List every command — object commands only show the verbs you can run |
 
@@ -103,8 +104,8 @@ Three ways to cut in while the agent is running:
 The ring in the bottom-right of the input shows context window usage:
 - Green: < 50%
 - Yellow: 50–70%
-- Orange: 70–90%
-- Red: > 90%
+- Orange: 70–85%
+- Red: > 85%
 
 Reaching `compressAt` (default 90%, setting `general.compact.compress_at`) auto-triggers compact. If the LLM summary fails or times out, Halo falls back to a local compact (notice: `Auto-compacted N older messages (local fallback — LLM summary failed: <reason>)`) rather than retrying. An auto-compact has no overall time limit — it only times out after 10 minutes with no data from the model. While the agent is running you can't click the TokenRing (guarded by `isStreaming`).
 
@@ -126,6 +127,6 @@ Long messages you sent are collapsed to a one-line header: a chevron, the send t
 
 **"Queued" hint**: the previous turn hasn't finished; your message is queued and will run next turn.
 
-**"Rate limited, retrying in Xs..."**: Bedrock throttled; automatic exponential backoff (up to 5 retries).
+**"Rate limited, retrying in Xs..."**: the model provider throttled; automatic backoff, up to `general.agent.max_retries` attempts (default 5).
 
 **A sudden `[Message from xxx]`**: a sub-agent finished and auto-reported back to the parent agent's conversation.

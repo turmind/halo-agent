@@ -12,7 +12,7 @@ Open `http://localhost:9527` (or your deployment URL) in a browser and enter the
 
 ## Open a workspace
 
-After login, you land in the workspace. A URL with `?folder=/abs/path` opens that directory directly; without `?folder`, Halo falls back to your home directory as the workspace — everything still works.
+After login, you land in the workspace. A URL with `?folder=/abs/path` opens that directory directly; without `?folder`, Halo reopens the last workspace you used, or your home directory if there isn't one — everything still works.
 
 The Explorer top bar has two ways to switch workspace:
 - **Type an absolute path** + Enter — invalid paths raise an error
@@ -22,7 +22,7 @@ Halo auto-creates a `.halo/` subdirectory in the target folder (for sessions, ag
 
 ## First conversation (bootstrap)
 
-The first time a new user chats with the Default agent, the agent asks a few questions:
+The first time a new user chats with the Default agent, it works in a few getting-to-know-you questions (if you open with a real task, it does the task first and asks over the next turns):
 - What should I call you?
 - What would you like to call me?
 - Preferred communication style (formal/casual, English/other language, etc.)
@@ -79,7 +79,7 @@ After `halo setup`:
 
 **When does "refreshed on upgrade" actually run?** `halo setup` always re-runs the seed; the server's startup check also re-runs it automatically when `~/.halo/global/.template-version` is behind the bundled `TEMPLATE_VERSION`. So the routine flow `halo upgrade && halo server restart` is enough — no need to remember `halo setup`.
 
-**Server-refreshed**: `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `nova-web-search`, `halo`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
+**Server-refreshed**: `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `goal`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `web-search`, `halo`, `extension`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
 
 **Never overwritten**: anything else under `agents/` or `skills/` (your own creations), and everything under `secrets/`.
 

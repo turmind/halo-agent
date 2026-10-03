@@ -13,13 +13,13 @@ The token is **the** credential — anyone holding it can talk to the agent at t
 
 ## Step 1 — Create an account
 
-Open halo admin → **Channels** → **Web** → **Add Account**:
+Open halo admin → **Channels** → **Web** → **Create Access**:
 
 | Field | Value |
 |---|---|
-| Workspace path | absolute path, e.g. `/home/ubuntu/my-project` |
-| Label | optional |
-| Access level | `readonly` (default), `workspace`, or `full` |
+| Bind to workspace | absolute path, e.g. `/home/ubuntu/my-project` |
+| Name (optional) | a label for the account |
+| Access level | `readonly` (default), `workspace`, `full`, or `observer` (global read-only, for dashboards / metrics) |
 | Language | `en` or `zh` |
 
 Click **Create**. The success screen shows the auto-generated token **once** — copy it now, you can't retrieve it again. (You can always delete the account and create a new one if you lose the token.)
@@ -55,11 +55,13 @@ Parse the `type` field on each event to render text vs tool calls vs completion.
 | Method | Path | Purpose |
 |---|---|---|
 | `POST /api/web/chat` | Send a message; SSE response |
+| `POST /api/web/sessions` | Mint a new root session in the token's namespace; returns `{sessionId}` |
 | `POST /api/web/stop` | Cancel the running task |
 | `GET /api/web/history` | Fetch session message history |
 | `GET /api/web/subscribe` | Reconnect to a running session's SSE stream |
+| `GET /api/web/file?path=…` | Fetch a file from the bound workspace (path relative to it; `.halo` runtime state is refused) |
 
-All four accept the same auth header.
+All six accept the same auth header.
 
 ### Per-request overrides
 
@@ -86,7 +88,7 @@ For browser apps you almost never want these — leave them off and use the per-
 }
 ```
 
-Images go to the LLM as multimodal content. Audio and other binary uploads aren't supported on this endpoint directly — for those, save the file to `<workspace>/.halo/assets/web/inbound/<accountId>/<date>/` first (out-of-band) and reference its path in your message text.
+Images go to the LLM as multimodal content. Any other `mimeType` (audio, PDF, …) in the same array is not sent to the model: the server saves it to `<workspace>/.halo/assets/web/inbound/<accountId>/<date>/` and appends a `[语音已保存: <path>]` line to your message so the agent can open it with its file tools.
 
 The standalone web-demo handles voice + arbitrary files for you; if you want that, use it as a reference implementation.
 
@@ -96,10 +98,11 @@ Slash commands are intercepted before they reach the agent — same set as every
 
 | Command | Effect |
 |---|---|
-| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` |
+| `/session <verb>` | Session lifecycle: `new` / `list` / `switch <n>` / `stop` / `interrupt` / `compact` / `context` / `info` |
 | `/agent <verb>` | Manage agents (`list` / `switch` / `desc` open to all; `delete` full; `create` / `update` via skill, full) |
 | `/skill <verb>` | Manage skills (`list` / `desc` open; `disable` / `enable` workspace; `delete` full; `create` / `update` via skill, full) |
 | `/workspace <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
+| `/cron` `/acp` `/extension` | Skill-backed object commands (full access); `/evo [hint]` queues a self-evolution run |
 | `/help` | List commands — object commands show only the verbs you can run |
 
 Send a slash command exactly like a normal message — the server detects the leading `/`.
@@ -109,6 +112,7 @@ Send a slash command exactly like a normal message — the server detects the le
 | Symptom | Cause / fix |
 |---|---|
 | `401` on every call | Missing `x-token` header, or token is for a deleted account |
+| `429` | 5 bad tokens from one IP within 15 minutes locks that IP out for 15 minutes (in-memory, cleared on restart) |
 | `403` when passing `workspace=…` | Token is `readonly` / `workspace` access — only `full` can override |
 | SSE stream hangs forever | Reverse proxy buffering. Disable buffering for `text/event-stream` (nginx: `proxy_buffering off`, Cloudflare: enable streaming) |
 | Token leaked accidentally | Delete the account in admin, create a new one. The old token is invalidated immediately |
@@ -139,9 +143,9 @@ Alternatively, the gear icon (header / login screen) opens **direct-connect mode
 ## Security notes
 
 - **Tokens are unhashed** in `~/.halo/secrets/channels/channels.db`. Restrict that file to the user that runs halo
-- **No rate limit at the channel level** — if you expose the API on the public internet, put a reverse proxy with rate limits in front
+- **Bad-token lockout only** — 5 invalid tokens from one IP in 15 minutes locks that IP out (`429`) for 15 minutes; there is no per-token request rate limit, so if you expose the API on the public internet put a reverse proxy with rate limits in front
 - **Admin endpoints** (`POST /api/web/accounts`, `PATCH`, `DELETE`) require admin cookie auth, **not** the token. They're for the admin panel, not for the token holder
-- A `full`-access token can call `/workspace <abs-path>` to switch the bound workspace database-side. If you don't want that, give out `workspace` or `readonly` tokens instead
+- A `full`-access token can call `/workspace switch <abs-path>` to switch the bound workspace database-side. If you don't want that, give out `workspace` or `readonly` tokens instead
 
 ## Reference
 

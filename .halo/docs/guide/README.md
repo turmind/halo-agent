@@ -20,6 +20,7 @@ Aimed at Halo end-users. Pick the doc that matches your situation.
 - [Telegram](channels/telegram.md) — BotFather token, long-poll
 - [Slack](channels/slack.md) — Socket Mode (no public webhook needed)
 - [Feishu / Lark](channels/feishu.md) — long-connect with appId + appSecret
+- [WeCom](channels/wecom.md) — 企业微信 intelligent bot, long-connect with Bot ID + Secret
 - [WeChat](channels/wechat.md) — QR-scan iLink bot
 - [ACP](channels/acp.md) — Claude Code or other ACP clients driving a remote halo
 
