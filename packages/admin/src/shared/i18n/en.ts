@@ -282,6 +282,9 @@ export const en: Record<string, string> = {
   'agent.editHint': 'Open agent.yaml + AGENT.md in a mini workspace',
   'agent.saving': 'saving…',
   'agent.loading': 'Loading...',
+  'agent.loadFailed': 'Failed to load agent.yaml',
+  'agent.yamlInvalid': 'agent.yaml could not be parsed — fix it in the Edit view',
+  'agent.retry': 'Retry',
   'agent.mdPreviewHint': 'preview (read-only — edit via "Edit" above)',
 
   // ── Agent form ──

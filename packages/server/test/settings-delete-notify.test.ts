@@ -66,3 +66,51 @@ describe('DELETE /settings → onSettingsChange', () => {
     expect(notified).toBe(0)
   })
 })
+
+describe('DELETE /settings rejects globalOnly keys at workspace scope (same as PUT/PATCH)', () => {
+  let ws: string
+  let wsSettingsPath: string
+  const WS_TREE = { general: { theme: 'light' }, sandbox: { keep: 1 } }
+
+  beforeAll(() => {
+    ws = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-settings-delete-ws-'))
+    wsSettingsPath = path.join(ws, '.halo', 'settings.yaml')
+  })
+
+  afterAll(() => {
+    fs.rmSync(ws, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    fs.mkdirSync(path.dirname(wsSettingsPath), { recursive: true })
+    fs.writeFileSync(wsSettingsPath, YAML.stringify(WS_TREE))
+    fs.writeFileSync(settingsPath, YAML.stringify({ general: { theme: 'warm' } }))
+  })
+
+  const delAt = (scope: 'global' | 'workspace', key: string) => app.request('/settings', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(scope === 'workspace' ? { scope, projectId: ws, key } : { scope, key }),
+  })
+
+  it('workspace scope + globalOnly key → 400, file untouched', async () => {
+    const before = fs.readFileSync(wsSettingsPath, 'utf-8')
+    const res = await delAt('workspace', 'general.theme')
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('general.theme is global-only and cannot be set per workspace')
+    expect(fs.readFileSync(wsSettingsPath, 'utf-8')).toBe(before)
+    expect(notified).toBe(0)
+  })
+
+  it('global scope deletes the same key', async () => {
+    const res = await delAt('global', 'general.theme')
+    expect(res.status).toBe(200)
+    expect(YAML.parse(fs.readFileSync(settingsPath, 'utf-8'))).toEqual({ general: {} })
+  })
+
+  it('workspace scope still deletes an ordinary key', async () => {
+    const res = await delAt('workspace', 'sandbox.keep')
+    expect(res.status).toBe(200)
+    expect(YAML.parse(fs.readFileSync(wsSettingsPath, 'utf-8'))).toEqual({ general: { theme: 'light' }, sandbox: {} })
+  })
+})

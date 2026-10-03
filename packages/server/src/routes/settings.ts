@@ -352,6 +352,8 @@ export function createSettingsRoutes() {
 
     const resolved = await resolveSettingsPath(body.scope, body.projectId)
     if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+    const offending = rejectGlobalOnlyAtWorkspace(body.scope, [body.key])
+    if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
     const { filePath } = resolved
 
     const current = await readSettingsFile(filePath)

@@ -282,6 +282,9 @@ export const zh: Record<string, string> = {
   'agent.editHint': '打开 agent.yaml + AGENT.md 编辑器',
   'agent.saving': '保存中…',
   'agent.loading': '加载中...',
+  'agent.loadFailed': 'agent.yaml 加载失败',
+  'agent.yamlInvalid': 'agent.yaml 无法解析，请到"编辑"视图中修复',
+  'agent.retry': '重试',
   'agent.mdPreviewHint': '预览（只读 — 点击上方"编辑"修改）',
 
   // ── Agent form ──

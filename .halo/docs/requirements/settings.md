@@ -125,7 +125,7 @@ The value is read once at process start, so unlike other settings it is **not** 
 | `description_zh` | no | Chinese description (UI picks based on lang) |
 | `default` | no | Placeholder shown when the value is unset; supports `<<ENV>>` |
 | `secret` | no | `true` → masked in API responses + password input in UI |
-| `globalOnly` | no | `true` → read from global settings only; workspace overrides are ignored at runtime. UI disables the workspace input and shows a "global only" hint; `PUT` / `PATCH` of such a key at workspace scope is rejected with 400. Set by the built-in `general` section only — provider / skill / agent yaml declarations don't read it |
+| `globalOnly` | no | `true` → read from global settings only; workspace overrides are ignored at runtime. UI disables the workspace input and shows a "global only" hint; `PUT` / `PATCH` / `DELETE` of such a key at workspace scope is rejected with 400. Set by the built-in `general` section only — provider / skill / agent yaml declarations don't read it |
 
 ## Scope: global vs. workspace
 
@@ -241,7 +241,7 @@ A **Security** entry in the left nav (below the System group) opens a page with 
 
 ### DELETE body
 
-Same shape minus `value`. Removes the leaf at `key`. For Reset behaviour: workspace scope DELETE → field falls back to global / default; global scope DELETE → field becomes unset. Like PUT / PATCH it fires the settings-change notification; deleting a key that is already absent is a no-op (no write, no notification).
+Same shape minus `value`. Removes the leaf at `key`. For Reset behaviour: workspace scope DELETE → field falls back to global / default; global scope DELETE → field becomes unset. Like PUT / PATCH it fires the settings-change notification; deleting a key that is already absent is a no-op (no write, no notification). Like PATCH, a `globalOnly` key at workspace scope is rejected with 400 and the file is left untouched.
 
 ## i18n
 

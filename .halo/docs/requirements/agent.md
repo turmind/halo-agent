@@ -21,7 +21,7 @@ Left sidebar has two collapsible groups (Global / Workspace — the latter only 
 ## Core behaviour
 
 ### Form / Edit dual view
-- **Form view** (default): data-driven form derived from the YAML fields (name / description / priority / model incl. thinking and capabilities / system_prompt / team / tools / skills). Edits auto-save to `agent.yaml` (debounced 500 ms); below the form, a read-only preview of `AGENT.md` is shown when it has content
+- **Form view** (default): data-driven form derived from the YAML fields (name / description / priority / model incl. thinking and capabilities / system_prompt / team / tools / skills). Edits auto-save to `agent.yaml` (debounced 500 ms). If `agent.yaml` fails to load or parse, the form is replaced by an error with a Retry button and nothing is auto-saved (an unparsable file is fixed in Edit view); below the form, a read-only preview of `AGENT.md` is shown when it has content
 - **Edit view**: the **Edit** button opens a mini workspace (file tree + editor) rooted at the agent's folder, for editing `agent.yaml` / `AGENT.md` directly; **Back** returns to the form, which reloads from disk
 - The chosen view is remembered per agent in `localStorage`
 

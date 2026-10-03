@@ -369,7 +369,7 @@ function testAgent(agentId: string) {
 }
 
 /** Form + YAML + MD editor */
-function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { agent: AgentMeta; allAgents: Array<{ id: string; name: string }>; modelsRegistry: ModelsRegistry; onSaved: (a: AgentMeta) => void }) {
+export function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { agent: AgentMeta; allAgents: Array<{ id: string; name: string }>; modelsRegistry: ModelsRegistry; onSaved: (a: AgentMeta) => void }) {
   const t = useT()
   const { skills: availableSkills } = useSkillStore()
   const activeProject = useProjectStore((s) => s.activeProject)
@@ -386,6 +386,10 @@ function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { ag
     setViewRaw(v)
   }, [viewStorageKey])
   const [loading, setLoading] = useState(true)
+  // i18n key of a failed yaml load / parse. While set, the form is replaced by
+  // an error + retry and auto-save is off — otherwise it would PUT `{}` (or
+  // only the edited keys) over the real agent.yaml.
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [availableTools, setAvailableTools] = useState<Array<{ name: string; description: string }>>([])
   const [agentMd, setAgentMd] = useState<string>('')
@@ -405,19 +409,28 @@ function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { ag
   // this catches changes made in the mini-workspace.
   const loadFromDisk = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     const projectId = agent.scope === 'workspace' ? activeProject?.path : undefined
     try {
       const res = await api.agentConfigs.getYaml(agent.id, { scope: agent.scope, projectId })
       const { parse, stringify } = await import('yaml')
-      let parsed: unknown = {}
-      try { parsed = parse(res.yaml) } catch { /* unparsable yaml → empty */ }
-      const safeParsed = (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : {}
-      setParsedData(safeParsed)
-      // Establish a baseline so auto-save won't re-write the just-loaded content.
-      // Must match the stringify format used by the save effect exactly.
-      lastSavedYamlRef.current = stringify(safeParsed, { lineWidth: 120 })
+      let parsed: unknown = null
+      let parseFailed = false
+      try { parsed = parse(res.yaml) } catch { parseFailed = true }
+      // A bare scalar / list root (e.g. a typo'd `name Coder`) is as unusable
+      // as a parse error; an empty file (null) has nothing to lose and starts as {}.
+      if (parseFailed || (parsed !== null && (typeof parsed !== 'object' || Array.isArray(parsed)))) {
+        setLoadError('agent.yamlInvalid')
+      } else {
+        const safeParsed = (parsed ?? {}) as Record<string, unknown>
+        setParsedData(safeParsed)
+        // Establish a baseline so auto-save won't re-write the just-loaded content.
+        // Must match the stringify format used by the save effect exactly.
+        lastSavedYamlRef.current = stringify(safeParsed, { lineWidth: 120 })
+      }
     } catch (err) {
       console.error('[AgentEditor] Load YAML failed:', err)
+      setLoadError('agent.loadFailed')
       setParsedData({})
       lastSavedYamlRef.current = null
     }
@@ -445,7 +458,7 @@ function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { ag
   // Guards against re-saving the same content (onSaved from parent updates agents
   // state → component re-renders → effect re-runs — without this guard it would loop).
   useEffect(() => {
-    if (loading) return
+    if (loading || loadError) return
     const timer = setTimeout(async () => {
       try {
         const { stringify } = await import('yaml')
@@ -464,7 +477,7 @@ function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { ag
       }
     }, 500)
     return () => clearTimeout(timer)
-  }, [parsedData, agent.id, agent.scope, activeProject?.path, loading])
+  }, [parsedData, agent.id, agent.scope, activeProject?.path, loading, loadError])
 
   // Reset baseline when agent changes or after disk reload — treat the just-loaded
   // yaml as "already saved" so the next effect doesn't re-save it.
@@ -543,6 +556,17 @@ function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { ag
           </EditorStoreProvider>
         ) : loading ? (
           <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">{t('agent.loading')}</div>
+        ) : loadError ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-[var(--muted-foreground)]">
+            <span>{t(loadError)}</span>
+            <button
+              onClick={() => loadFromDisk()}
+              className="flex items-center gap-1.5 rounded bg-[var(--secondary)] px-2.5 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--secondary)]/80"
+            >
+              <RefreshCw className="h-3 w-3" />
+              {t('agent.retry')}
+            </button>
+          </div>
         ) : (
           <div className="h-full overflow-y-auto">
             <AgentForm

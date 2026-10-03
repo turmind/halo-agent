@@ -766,7 +766,7 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:`, `skills/<id>/confi
 { "ok": true }
 ```
 
-PUT replaces the full scope; PUT / PATCH with `scope: "workspace"` reject a `globalOnly` key with 400 (`<key> is global-only and cannot be set per workspace`) and an unresolvable `projectId` with 404 `Project not found`. DELETE takes `{scope, projectId, key}` and removes the key. PUT / PATCH / DELETE fire the server's `onSettingsChange` listeners (e.g. the sandbox hidden-paths reload); a DELETE of an already-absent key is a no-op — `{ ok: true }`, no file write, no notify. The Settings page uses DELETE for both Reset (current scope removed → falls back to lower scope / unset) and orphan Remove.
+PUT replaces the full scope; PUT / PATCH / DELETE with `scope: "workspace"` reject a `globalOnly` key with 400 (`<key> is global-only and cannot be set per workspace`) and an unresolvable `projectId` with 404 `Project not found`. DELETE takes `{scope, projectId, key}` and removes the key. PUT / PATCH / DELETE fire the server's `onSettingsChange` listeners (e.g. the sandbox hidden-paths reload); a DELETE of an already-absent key is a no-op — `{ ok: true }`, no file write, no notify. The Settings page uses DELETE for both Reset (current scope removed → falls back to lower scope / unset) and orphan Remove.
 
 ### POST `/api/wechat/login/start`
 
