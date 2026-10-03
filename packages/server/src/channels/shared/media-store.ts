@@ -1,8 +1,8 @@
 /**
  * Persist inbound media files into the bound workspace.
  *
- * WeChat: <workspace>/.halo/assets/weixin/inbound/<accountId>/<yyyy-mm-dd>/
- * Web:    <workspace>/.halo/assets/web/inbound/<yyyy-mm-dd>/
+ * <workspace>/.halo/assets/<channel>/inbound/<accountId>/<yyyy-mm-dd>/
+ * (`channel` defaults to `weixin`; every other channel passes its own type).
  *
  * Agents can reference the saved path via their file tools, and the chat UI
  * uses the same [kind已保存: /path] marker to render thumbnails.

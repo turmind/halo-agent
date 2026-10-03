@@ -11,7 +11,7 @@
  *     - `templates/prompts/{bootstrap,all,root}/*` → system prompts
  *     - `templates/models/*.yaml`      → model registry
  *     - bundled platform docs (BUNDLED_DOCS list) → ~/.halo/global/docs/
- *     - the 6 built-in agent IDs       → ~/.halo/global/agents/<id>/
+ *     - BUILTIN_AGENT_IDS              → ~/.halo/global/agents/<id>/
  *     - the built-in skill IDs         → ~/.halo/global/skills/<id>/
  *
  * - **User-owned files** are left alone:

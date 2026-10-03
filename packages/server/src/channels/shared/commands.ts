@@ -631,8 +631,8 @@ async function execGoalClear(ctx: CommandContext): Promise<CommandResult> {
  * matching case here at server startup — keeping this list and the switch
  * below aligned is otherwise manual and easy to forget.
  *
- * `/help`, `/clear` are absent: those are `type: 'client'` (handled by the
- * channel's frontend or by WS handler before reaching dispatch).
+ * `/clear` is absent: it is `type: 'client'` (handled by the admin
+ * frontend before reaching dispatch).
  */
 export const DISPATCH_COMMANDS = [
   '/help', '/workspace', '/evo', '/session', '/agent', '/skill', '/goal',
