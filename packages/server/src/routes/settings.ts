@@ -363,9 +363,13 @@ export function createSettingsRoutes() {
       if (!target[parts[i]] || typeof target[parts[i]] !== 'object') return c.json({ ok: true })
       target = target[parts[i]] as Record<string, unknown>
     }
-    delete target[parts[parts.length - 1]]
+    const leaf = parts[parts.length - 1]
+    // Key already absent → nothing changed: skip the write and the notify.
+    if (!Object.hasOwn(target, leaf)) return c.json({ ok: true })
+    delete target[leaf]
 
     await writeSettingsFile(filePath, current)
+    notifySettingsChange()
     return c.json({ ok: true })
   })
 

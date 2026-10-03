@@ -157,11 +157,14 @@ async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true })
 }
 
-/** Directory of an existing agent: workspace scope (with a projectId) or global. */
-function resolveAgentDir(id: string, scope: string, projectId: string | undefined): string {
-  return scope === 'workspace' && projectId
-    ? path.join(projectId, '.halo', 'agents', id)
-    : path.join(GLOBAL_AGENTS_DIR, id)
+/**
+ * Directory of an existing agent: workspace scope or global. `null` when
+ * workspace scope lacks a projectId — callers 400 rather than fall back to
+ * the same-named global agent (a DELETE would otherwise remove it).
+ */
+function resolveAgentDir(id: string, scope: string, projectId: string | undefined): string | null {
+  if (scope !== 'workspace') return path.join(GLOBAL_AGENTS_DIR, id)
+  return projectId ? path.join(projectId, '.halo', 'agents', id) : null
 }
 
 /** Per-`agent.yaml` parse cache — see mtime-cache.ts for the scheme. */
@@ -342,6 +345,7 @@ export function createAgentConfigRoutes() {
     const projectId = c.req.query('projectId')
 
     const agentDir = resolveAgentDir(id, scope, projectId)
+    if (!agentDir) return c.json({ error: 'projectId required for workspace agents' }, 400)
     const yamlPath = path.join(agentDir, 'agent.yaml')
     try {
       const content = await fs.readFile(yamlPath, 'utf-8')
@@ -370,6 +374,7 @@ export function createAgentConfigRoutes() {
 
     const scope = body.scope ?? 'global'
     const agentDir = resolveAgentDir(id, scope, body.projectId)
+    if (!agentDir) return c.json({ error: 'projectId required for workspace agents' }, 400)
     const yamlPath = path.join(agentDir, 'agent.yaml')
     try {
       await fs.access(agentDir)
@@ -395,6 +400,7 @@ export function createAgentConfigRoutes() {
     const projectId = c.req.query('projectId')
 
     const agentDir = resolveAgentDir(id, scope, projectId)
+    if (!agentDir) return c.json({ error: 'projectId required for workspace agents' }, 400)
     try {
       await fs.access(agentDir)
     } catch {

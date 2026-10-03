@@ -340,9 +340,9 @@ File: `packages/server/src/routes/agent-configs.ts`
 | GET | `/api/agent-configs/tools` | Available workspace tools |
 | GET | `/api/agent-configs/models` | Available model providers and models |
 | POST | `/api/agent-configs` | Create a new agent |
-| GET | `/api/agent-configs/:id/yaml?scope=&projectId=` | Read agent.yaml |
-| PUT | `/api/agent-configs/:id/yaml?scope=&projectId=` | Write agent.yaml |
-| DELETE | `/api/agent-configs/:id?scope=&projectId=` | Delete agent (global has "last one" protection) |
+| GET | `/api/agent-configs/:id/yaml?scope=&projectId=` | Read agent.yaml. `scope=workspace` without `projectId` → 400 |
+| PUT | `/api/agent-configs/:id/yaml?scope=&projectId=` | Write agent.yaml. `scope=workspace` without `projectId` → 400 |
+| DELETE | `/api/agent-configs/:id?scope=&projectId=` | Delete agent (global has "last one" protection). `scope=workspace` without `projectId` → 400 (never falls back to the same-named global agent) |
 | PATCH | `/api/agent-configs/:id/toggle?scope=&projectId=` | Toggle disabled in workspace DB. `projectId` required. Returns `{ ok, disabled }`. |
 | GET | `/api/agent-configs/:id/md/:fileType` | Read an MD file (AGENT.md / INSTRUCTIONS.md / INDEX.md) |
 | PUT | `/api/agent-configs/:id/md/:fileType` | Write an MD file (AGENT.md / INSTRUCTIONS.md) |
@@ -573,6 +573,9 @@ Files created:
 // 400 invalid YAML
 { "error": "Invalid YAML: <parser message>" }
 
+// 400 scope=workspace without projectId
+{ "error": "projectId required for workspace agents" }
+
 // 404
 { "error": "Agent not found" }
 ```
@@ -760,7 +763,7 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:`, `skills/<id>/confi
 { "ok": true }
 ```
 
-PUT replaces the full scope; PUT / PATCH with `scope: "workspace"` reject a `globalOnly` key with 400 (`<key> is global-only and cannot be set per workspace`) and an unresolvable `projectId` with 404 `Project not found`. DELETE takes `{scope, projectId, key}` and removes the key. The Settings page uses DELETE for both Reset (current scope removed → falls back to lower scope / unset) and orphan Remove.
+PUT replaces the full scope; PUT / PATCH with `scope: "workspace"` reject a `globalOnly` key with 400 (`<key> is global-only and cannot be set per workspace`) and an unresolvable `projectId` with 404 `Project not found`. DELETE takes `{scope, projectId, key}` and removes the key. PUT / PATCH / DELETE fire the server's `onSettingsChange` listeners (e.g. the sandbox hidden-paths reload); a DELETE of an already-absent key is a no-op — `{ ok: true }`, no file write, no notify. The Settings page uses DELETE for both Reset (current scope removed → falls back to lower scope / unset) and orphan Remove.
 
 ### POST `/api/wechat/login/start`
 
