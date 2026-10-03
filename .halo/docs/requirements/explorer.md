@@ -6,13 +6,14 @@ VS Code-style file tree sidebar with multi-select, drag-drop, right-click menu.
 
 ### Initialization
 - URL `?folder=/abs/path` → use that directly as workspace
-- No `?folder` → call `GET /api/fs/home`, take the home directory as fallback, write it back into the URL; UI behaves identically
+- No `?folder` → reopen the last workspace (`halo_last_folder` in localStorage); if none is stored or it no longer resolves, fall back to `GET /api/fs/home`. Either way the path is written back into the URL; UI behaves identically
+- The path is resolved through `POST /api/fs/workspace/resolve`, which rejects non-directories and filesystem roots and seeds the workspace's `.halo/` scaffold
 - There's always a valid workspace; every frontend feature (file tree / sessions / agents / settings) depends on it
 
 ### Path input
 - Explorer top bar has a path input + 📁🔍 picker button
-- Pressing Enter calls `GET /api/fs/exists?path=...` first — a miss shows an alert, no switch
-- **Recent-workspaces dropdown**: focusing the input shows the most-recently-used list; typing filters it by substring. Each row shows the folder name + full path; clicking one switches to it; a hover "×" removes a single entry. Entries are recorded only after a switch validates the path (so invalid paths never land), in canonical resolved form, MRU-ordered and deduped, capped at 8. Persisted in localStorage (`halo_recent_workspaces`)
+- Pressing Enter calls `GET /api/fs/exists?path=...` first — a miss (or a non-directory) shows an alert, no switch
+- **Recent-workspaces dropdown**: focusing the input shows the most-recently-used list; typing filters it by substring. The current workspace is left out. Each row shows the folder name + full path; clicking one switches to it; a hover "×" removes a single entry. Entries are recorded only after a switch validates the path (so invalid paths never land), in canonical resolved form, MRU-ordered and deduped, capped at 8. Persisted in localStorage (`halo_recent_workspaces`)
 
 ### Desktop windows (multi-window)
 Desktop app only — the browser has one tab per window natively.
@@ -47,8 +48,8 @@ Visual directory browser opened by the 📁🔍 button:
 
 ### Selection model
 VS Code-style highlight selection (no checkboxes):
-- **Click**: select and highlight
-- **Double click**: open in editor tab
+- **Click**: select and highlight; a file also opens in the editor after a short (300 ms) delay, a folder toggles open/closed
+- **Double click**: open the file in an editor tab right away (cancels the delayed open)
 - **Ctrl/Cmd + click**: toggle multi-select
 - **Shift + click**: range select
 
@@ -60,7 +61,7 @@ VS Code-style highlight selection (no checkboxes):
 
 ### Right-click menu
 
-Items shown depend on the click target:
+Items shown depend on the click target. With several items selected the menu offers only Delete; on the workspace root row only New File / New Folder / Open in Integrated Terminal / Reveal in File Manager apply:
 
 | Action | Shown when | API / behavior |
 |---|---|---|

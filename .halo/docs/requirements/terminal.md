@@ -5,11 +5,11 @@ xterm.js terminal with a node-pty backend, multi-tab, reconnect-resilient.
 ## Core behaviour
 
 ### Multi-tab
-- Each tab owns an independent PTY
+- Each tab owns an independent PTY; the first one is spawned only when the Terminal tab is first opened
 - Every terminal has a unique `terminalId` for routing
 - Tabs close independently
 - All tabs on a client share one WebSocket connection (multiplexed by `terminalId`)
-- The tab list is a column of Chrome-style **vertical tabs** on the right of the terminal (same `VerticalTabList` + `ResizableSidebar` components as the chat session tabs). Each row has a terminal icon and its name, and a ✕ to close it, shown while more than one terminal is open. A "+" at the bottom opens a new terminal
+- The tab list is a column of Chrome-style **vertical tabs** on the right of the terminal (same `VerticalTabRow` / `ResizableSidebar` components as the chat session tabs). Each row has a terminal icon and its name, and a ✕ that closes just that terminal; it appears on hover only, and not at all while a single terminal is left. A "+" at the bottom opens a new terminal
 - The list can be **resized** by dragging its left edge (120–480px, default 160px), and **collapsed** to a `w-10` rail of square icons with a "+" at the bottom. Both settings persist globally in `localStorage` (`halo_terminal_sidebar_open`, `halo_terminal_sidebar_width`)
 
 ### Working directory
@@ -17,12 +17,12 @@ xterm.js terminal with a node-pty backend, multi-tab, reconnect-resilient.
 | Scenario | Initial cwd |
 |---|---|
 | Default workspace terminal | Current project's workspace root (`activeProject.path`) |
-| Skill mini-workspace terminal | The skill directory (cwd prop passed by caller) |
+| Explorer context menu → open in terminal | A new terminal in the right-clicked folder (or the file's parent) |
 | No workspace bound | `?folder=` URL param, falling back to server `$HOME` |
 
-Derivation in [packages/admin/src/features/terminal/terminal-panel.tsx:108](../../../packages/admin/src/features/terminal/terminal-panel.tsx#L108); backend resolution in [packages/server/src/ws/terminal-manager.ts:46](../../../packages/server/src/ws/terminal-manager.ts#L46).
+Derivation in `createTerminal` in [packages/admin/src/features/terminal/terminal-panel.tsx](../../../packages/admin/src/features/terminal/terminal-panel.tsx); backend resolution in `TerminalManager.start` in [packages/server/src/ws/terminal-manager.ts](../../../packages/server/src/ws/terminal-manager.ts).
 
-Workspace switch does **not** migrate existing terminals — they keep their original cwd. Close and reopen to pick up the new workspace root.
+Workspace switch reloads the page and does **not** migrate existing terminals — they keep their original cwd and are only reattached in their own workspace (within the grace period); the new workspace starts a fresh terminal at its root.
 
 ### Reconnect resilience
 
@@ -31,19 +31,19 @@ When the WebSocket drops:
 1. PTYs are **not killed** — they stay in the module-level `terminals` map with `currentWs = null` (`packages/server/src/ws/terminal-manager.ts`)
 2. Output during detach is buffered (ring buffer, up to `config.limits.terminalOutputBuffer` = 50 KB per terminal)
 3. Grace period: `config.timeout.terminalGrace` (default 5 min)
-4. On reconnect, the client sends `terminal:reattach` (sent on initial mount **and** on every subsequent `_connected` event)
+4. On reconnect, the client sends `terminal:reattach` with its `browserId` and workspace path (sent on initial mount **and** on every subsequent `_connected` event); only PTYs of that browser × workspace are claimed
 5. Server replays the entire output buffer, reattaches live I/O, and responds with `terminal:reattached { terminalIds: [...] }`
 6. If the grace timer expires first, the PTY is killed and the detach entry removed
 
 Connection-level liveness and reconnect (server keepalive tolerance, client self-check timer, auth-expiry handling) are owned by the shared WS client — see [design/ws.md](../design/ws.md#client-side-liveness--reconnect).
 
-On the reattach handler ([packages/admin/src/features/terminal/terminal-panel.tsx](../../../packages/admin/src/features/terminal/terminal-panel.tsx)), each id in `terminalIds` is dispatched by whether a local xterm instance already exists:
+When the WS drops, the bottom panel remounts `TerminalPanel` (fresh key on `_disconnected`): local xterm instances are disposed without sending `terminal:close`, and the new panel reattaches like a page load. The local scrollback is lost; the server replays only what was buffered while detached. On the reattach handler ([packages/admin/src/features/terminal/terminal-panel.tsx](../../../packages/admin/src/features/terminal/terminal-panel.tsx)), each id in `terminalIds` is dispatched by whether a local xterm instance already exists:
 
-- **Already exists** (typical after a transient WS reconnect): only a `terminal:resize` is sent so server PTY dimensions resync; the existing instance keeps its scrollback and continues receiving live output.
-- **Does not exist** (first mount, or the previous instance was disposed): a fresh xterm container is created and bound to that id. Bracketed paste mode is resynced by locally writing `\x1b[?2004h` into the new instance — bash enabled the mode on the PTY at spawn time, but that sequence went to the disposed instance; without the resync, a multi-line paste into the reattached terminal would be sent unbracketed and execute line by line.
+- **Already exists** (a reattach without a remount): only a `terminal:resize` is sent so server PTY dimensions resync; the existing instance keeps its scrollback and continues receiving live output.
+- **Does not exist** (first mount, or after the remount above): a fresh xterm container is created and bound to that id. Bracketed paste mode is resynced by locally writing `\x1b[?2004h` into the new instance — bash enabled the mode on the PTY at spawn time, but that sequence went to the disposed instance; without the resync, a multi-line paste into the reattached terminal would be sent unbracketed and execute line by line.
 
 ### Environment
-- Shell: `$SHELL` or `/bin/bash`
+- Shell: `$SHELL` or `/bin/bash` (`ComSpec` / `powershell.exe` on Windows); bash / zsh / sh / fish start as login shells (`-l`)
 - Terminal type: `xterm-256color`
 - Default size: 80 × 24 (resize requests override)
 - Strips `npm_config_prefix` env (avoids nvm warnings when starting node)
@@ -95,7 +95,7 @@ Source: [packages/server/src/ws/terminal-manager.ts](../../../packages/server/sr
 | Config key | Default | Purpose |
 |---|---|---|
 | `config.timeout.terminalGrace` | 300,000 ms | Detach retention period |
-| `config.limits.terminalOutputBuffer` | 50,000 bytes | Detach output ring buffer cap |
+| `config.limits.terminalOutputBuffer` (setting `general.limits.terminal_scrollback_bytes`) | 50,000 bytes | Detach output ring buffer cap |
 
 Defined in [packages/server/src/config.ts](../../../packages/server/src/config.ts).
 
@@ -104,12 +104,12 @@ Defined in [packages/server/src/config.ts](../../../packages/server/src/config.t
 | # | Scenario | Expected |
 |---|---|---|
 | T1 | Start, run `ls` | Output arrives; prompt returns |
-| T2 | Start in skill mini-workspace | cwd is the skill directory (`pwd` confirms) |
+| T2 | Explorer → right-click a folder → Open in Integrated Terminal | A new terminal whose cwd is that folder (`pwd` confirms) |
 | T3 | Resize window | PTY cols/rows update; long-running process (e.g. `watch ls`) reflows |
 | T4 | Disconnect mid-command (`sleep 5 && echo done`) → reconnect within grace period | Buffered output replayed; `done` visible |
 | T5 | Disconnect → wait > grace period → reconnect | Terminal gone (PTY killed at grace expiry) |
 | T6 | Open 3 tabs, close 1 explicitly | Other 2 keep their PTYs; closed one gets `terminal:exit` |
-| T7 | `exit` from within shell | `terminal:exit` with exitCode=0; tab shows closed |
+| T7 | `exit` from within shell | `terminal:exit` with the shell's exit code; the terminal prints `[Process exited]` and its tab stays until closed |
 | T8 | Paste a 10 KB block | Sent as `terminal:input` without choking; shell echoes in chunks |
 
 Follows the pattern of [test/session.md](../test/session.md).

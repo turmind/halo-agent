@@ -19,7 +19,7 @@ The Source Control **activity-bar entry itself is hidden in non-git workspaces**
 Once the entry is shown, the panel resolves to one of these on open, driven by `GET /api/git/status`:
 
 1. **Not a repo** (`{isRepo: false}`) — the folder has no git work-tree at its root (either no repo at all, or it only sits *inside* an ancestor's repo). Shows an **Initialize Repository** empty state. Never a 500/console error — a non-repo folder is a normal state.
-2. **Repo, no remote** — `GET /api/git/remotes` is empty. Shows an **Add Remote** prompt to guide first publish. Adding a remote is a purely local op with **no commit precondition** — a freshly-`init`'d empty repo can set its remote URL right away (not gated behind "must have a commit first", which would be a mis-applied VSCode *Publish* gate).
+2. **Repo, no remote** — `GET /api/git/remotes` is empty. The Changes view shows an **Add Remote** prompt (push/pull buttons hidden) to guide first publish. Adding a remote is a purely local op with **no commit precondition** — a freshly-`init`'d empty repo can set its remote URL right away (not gated behind "must have a commit first", which would be a mis-applied VSCode *Publish* gate).
 3. **Repo with remote** — the full panel: CHANGES list, commit box, history graph.
 
 ### Ancestor-repo guard

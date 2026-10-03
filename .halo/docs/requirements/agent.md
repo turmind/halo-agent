@@ -1,10 +1,10 @@
 # Agent — Requirements
 
-Agent configuration management: creating, editing YAML / Form / AGENT.md.
+Agent configuration management: creating, editing via Form / mini workspace (agent.yaml, AGENT.md).
 
 ## Layout
 
-Left sidebar has two collapsible groups (Global / Workspace); right side is the editor:
+Left sidebar has two collapsible groups (Global / Workspace — the latter only while a workspace is open); right side is the editor. Each group header has a `+` to create an agent in that scope, and the sidebar header has a refresh button:
 
 ```
 ┌─────────────────┬───────────────────────────────┐
@@ -20,10 +20,10 @@ Left sidebar has two collapsible groups (Global / Workspace); right side is the 
 
 ## Core behaviour
 
-### YAML / Form dual view
-- **YAML view**: Monaco-edit the raw `agent.yaml`
-- **Form view**: data-driven form derived from YAML fields (name / description / model / tools / skills / thinking)
-- Switching views preserves edits
+### Form / Edit dual view
+- **Form view** (default): data-driven form derived from the YAML fields (name / description / priority / model incl. thinking and capabilities / system_prompt / team / tools / skills). Edits auto-save to `agent.yaml` (debounced 500 ms); below the form, a read-only preview of `AGENT.md` is shown when it has content
+- **Edit view**: the **Edit** button opens a mini workspace (file tree + editor) rooted at the agent's folder, for editing `agent.yaml` / `AGENT.md` directly; **Back** returns to the form, which reloads from disk
+- The chosen view is remembered per agent in `localStorage`
 
 ### CRUD
 | Operation | API |
@@ -35,7 +35,7 @@ Left sidebar has two collapsible groups (Global / Workspace); right side is the 
 | Delete | `DELETE /api/agent-configs/:id` |
 | Toggle disabled | `PATCH /api/agent-configs/:id/toggle` → `{ ok, disabled }` |
 
-Creating requires name + description; the backend uses `defaultAgentYaml(name, description)` to produce a full YAML.
+Creating requires a name (description is optional); the id is derived from the name. The backend uses `defaultAgentYaml(name, description)` to produce a full YAML and also scaffolds an `AGENT.md`.
 
 ### Scope (Global / Workspace)
 - **Global**: `~/.halo/global/agents/<id>/agent.yaml` — shared across projects
@@ -45,18 +45,18 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 
 **Cross-scope conflict**: creating a same-name agent in the other scope prompts about the overwrite behaviour.
 
-**Delete protection**: at least one global agent must remain (server-enforced).
+**Delete protection**: at least one global agent must remain (server-enforced). The sidebar offers delete (hover trash) on workspace agents only; global rows show a crown instead.
 
 ### Disable / Enable
-- Toggle switch on each agent row in the admin sidebar. Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Both global and workspace agents can be independently toggled per workspace.
+- Toggle switch on each agent row in the admin sidebar (shown on hover while enabled; not offered for internal agents or when no workspace is open). Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in agent.yaml). Both global and workspace agents can be independently toggled per workspace.
 - Disabled agents are greyed out (opacity-40) with sub-text "disabled"; the toggle stays visible.
 - Hidden from: the delegation roster, chat agent selector, `/workspace share` export.
 - Still visible in the admin management sidebar for re-enabling.
 
 ### Tool selection
 - **Session tools**: `start_session` / `session_list` / `query_session` / `interrupt_session` / `stop_session` / `archive_session` / `get_session_output` / `query_agent` — **not** selected by name; the whole bundle is granted automatically by a non-empty `team` (see below). Listing them under `agent.yaml tools` has no effect.
-- **Workspace tools**: `file_read` / `file_write` / `file_edit` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`, returned by `GET /api/agent-configs/tools`
-- **`activate_skill`**: auto-injected whenever the YAML lists `skills`; loads the full SKILL.md on demand
+- **Workspace tools**: `file_read` / `view_image` / `file_write` / `file_edit` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`, plus the single `relay_send` chip (grants the whole cross-workspace relay set, full-access sessions only), returned by `GET /api/agent-configs/tools`. `view_image` is dropped at runtime when the model can't take images (the form dims it)
+- **`activate_skill`**: auto-injected when the YAML lists at least one usable skill (not disabled, allowed at the session's access level); loads the full SKILL.md on demand
 
 ### Team (delegation switch + whitelist)
 - Optional `team: [id, …]` field in `agent.yaml`. A **non-empty** list is the on/off switch for delegation: it grants the whole session-tool bundle (`start_session` / `query_agent` / …) plus the prompt roster, AND scopes which agents this one may reach.
@@ -67,7 +67,7 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 - **Picker only offers effective, enabled agents.** A chip shows iff the *effective* agent for that id is runnable — same resolve-then-check the runtime uses: a workspace agent shadows the same-id global (the overridden global is skipped), then anything disabled is dropped. So a global stays out of the picker when its workspace override is disabled, even though that global's own record isn't flagged disabled. Matches the chat / cron selectors and the runtime roster — you can never pick a teammate that can't actually run.
 
 ### Skill selection
-`GET /api/skills?projectId=xxx` lists available skills; `agent.yaml`'s `skills` references them by id.
+`GET /api/skills?projectId=xxx` lists available skills; `agent.yaml`'s `skills` references them by id. The form offers enabled skills only; ids that are referenced but not installed show as red ⚠ chips (click to remove).
 
 ### MD file editing
 
@@ -75,13 +75,14 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 |---|---|---|
 | AGENT.md | yes | Agent personality / behaviour (overrides YAML `system_prompt`) |
 | INSTRUCTIONS.md | yes | User preferences (global or workspace scope) |
+| INDEX.md | no | Project index, read-only through this API |
 
-The MD editor has a **Global / Workspace** scope toggle (visible when a workspace is open).
+The admin edits `AGENT.md` through the Edit mini workspace; `INSTRUCTIONS.md` is not edited from this tab.
 
-API: `GET/PUT /api/agent-configs/:id/md/:fileType`
+API: `GET/PUT /api/agent-configs/:id/md/:fileType`, `GET /api/agent-configs/:id/md-all`
 
 ### Test button
-- Sets `selectedAgentId` in the chat store
+- Opens a fresh chat draft tab (an untouched draft is reused) with this agent selected
 - Dispatches a `halo:navigate` event to switch to explorer/chat
 - The user chats with the selected agent in the main chat panel
 - **Not rendered for internal agents** (`internal: true`) — they're delegated to by other agents, never driven directly

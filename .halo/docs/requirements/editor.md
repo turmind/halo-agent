@@ -15,18 +15,19 @@ Monaco-based multi-tab code editor + binary file previewer — surfaced in the U
 ## Core behaviour
 
 ### Multi-tab editing
-- Click a file in Explorer (single click = select, double click = open tab)
+- Click a file in Explorer (single click = select, then opens after a 300 ms delay; double click opens immediately)
 - Each tab independently tracks content, original content, language, mtime
-- Unsaved tabs show a small red dot
+- Unsaved tabs show a small amber dot (the ✕ appears on hover)
 - Closing an unsaved tab prompts for confirmation
+- The tab bar's **Split right** button opens a second pane (two at most); each pane has its own tabs, Edit/Preview and Diff state
 
 ### Save
 - `Cmd+S` / `Ctrl+S` calls `PUT /api/files`
 - Server returns the new `modifiedAt`; the tab updates its mtime
 
 ### Auto-refresh (mtime-based)
-When agents write files through tools, the canvas detects it:
-1. Periodically poll `GET /api/files/stat`
+When agents write files through tools, the canvas detects it — push-based, no polling:
+1. The server's WS `file:changed` (`change`) event re-reads the matching open tab; the active tab is also re-checked with `GET /api/files/stat` on tab switch, window focus and WS reconnect
 2. If `diskMtime > tab.mtime`, pull fresh content
 3. Skip if the user has unsaved edits (don't overwrite)
 
@@ -34,7 +35,7 @@ When agents write files through tools, the canvas detects it:
 Open tabs and the active tab live in localStorage; survive refresh.
 
 ### Diff view
-- Tracked files → `GET /api/git/diff` (returns `{ original, modified }`) for git diff
+- A tab with unsaved edits shows a **Diff** button in its pane's tab bar: last saved content vs. the current buffer, computed in the client (no git involved; `GET /api/git/diff` is the Source Control panel's)
 - Monaco left/right compare view
 
 ### Binary previews
@@ -66,13 +67,13 @@ File types without a built-in plugin can be handled by an **installed extension*
 
 ### Renderable text formats (Markdown / HTML)
 Markdown and HTML open as text in Monaco *and* have a rendered view — Canvas defaults to the **rendered** view since the primary audience is an AI generating reports / pages for humans to read.
-- Header shows an **Edit / Preview** toggle (same `textRenderMode` state for both formats)
+- Each pane's tab bar shows an **Edit / Preview** toggle for the active Markdown / HTML tab; the state is per pane, shared by both formats
 - **Markdown** → `MarkdownPreview` (react-markdown + GFM; relative image `src` rewritten to the download endpoint so local images work)
-- **HTML** → sandboxed iframe (`sandbox="allow-same-origin"`; scripts, top-navigation, forms, pop-ups all blocked — safe against hostile HTML)
+- **HTML** → sandboxed iframe (`sandbox="allow-scripts allow-same-origin"`: the page's own JS runs, so a self-contained page renders live; top-navigation, forms and pop-ups stay blocked. Trusted like opening the file in Monaco — it comes from the user's own workspace)
 - Toggle to Edit → Monaco source, Cmd+S saves as usual
 
 ### Preview caching (MRU)
-Recently opened preview tabs stay mounted (up to 5, MRU) so switching between them doesn't re-fetch or re-parse. Plugins flagged `heavy: true` bypass the cache — only the active instance mounts, others unmount. Closing a preview tab removes it from the cache immediately (aborting any in-flight fetch).
+Recently opened preview tabs stay mounted (up to 5, MRU) so switching between them doesn't re-fetch or re-parse. Plugins flagged `heavy: true` bypass the cache — only the active instance mounts, others unmount. An extension tab with unsaved edits stays pinned beyond the 5. Closing a preview tab removes it from the cache immediately (aborting any in-flight fetch).
 
 ### File metadata in header
 The Canvas header shows `(size · Created … · Modified …)` for the active tab. Both text tabs and preview tabs populate this — preview tabs fetch `GET /api/files/stat` on open (and on tab restore from localStorage) since they never read content.
@@ -91,5 +92,5 @@ Canvas (including Monaco instances, file tree, and open tab contents) stays moun
 |---|---|
 | Cmd/Ctrl + P | Quick Open (fuzzy file search) |
 | Cmd/Ctrl + S | Save current tab |
-| Alt + W | Close current tab (Cmd+W cannot be overridden in browsers) |
+| Alt + W | Close current tab (Cmd+W cannot be overridden in browsers; the desktop app uses Cmd/Ctrl + W, and closes the window when no tab is open) |
 | Esc | Exit maximized Canvas (when not inside an input / Monaco / Quick Open) |

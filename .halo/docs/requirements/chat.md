@@ -5,10 +5,9 @@ The primary surface for talking to an agent.
 ## Core behaviour
 
 ### Agent selection
-- Bottom-left dropdown in the chat panel selects which agent to use
-- Lists every available agent (from `GET /api/agent-configs`; overridden and disabled agents are hidden)
-- Default agent has a "default" badge
-- **Locked during an active session** — the agent is bound to the session; to change, start a new session (/session new)
+- Dropdown in the composer's left control cluster (after the Debug button) selects which agent to use; hidden when only one agent is usable
+- Lists every available agent (from `GET /api/agent-configs`; overridden, disabled and internal agents are hidden), highest priority first. A new session starts on the top one
+- **Locked during an active session** (and while a response is streaming) — the agent is bound to the session; to change, start a new session (/session new)
 - The Agents panel's "Test" button can also preselect an agent
 
 ### Access level
@@ -22,8 +21,8 @@ The primary surface for talking to an agent.
 ### Message rendering
 - Markdown + code-block highlighting
 - Tool-call card: expandable, shows tool name / input / output
-- Sub-agent messages carry the agent-name label (e.g. "Coder", "Researcher")
-- Streaming text has a cursor animation
+- Sub-agent streams stay out of the chat: their reports land as a green callout, and Debug mode adds agent start/done markers labelled with the agent name (e.g. "Coder", "Researcher")
+- A reply that has produced nothing yet shows a spinner with "Thinking..."
 - The user bubble shows its send time (`HH:mm`, browser-local) at the left of its header row, after the expand chevron (see [User-message actions](#user-message-actions-expand--copy--delete)); hovering it gives the full date. Same bubble component as the Sessions tab, so both surfaces get it
 - In Debug mode the system-prompt `context` row stays in the list but doesn't open an exchange of its own, so there is no blank strip above the first bubble
 
@@ -39,7 +38,7 @@ Actions on user-role turns: the blue sticky user bubble, plus the sub-agent-repo
   - An expanded body is capped at 40vh and scrolls inside the bubble, because the bubbles are sticky.
   - The compact-summary callout is collapsed by default and toggles from its own header, as before.
 - **Copy** — copies the prompt text to the clipboard
-- **Delete** (confirm dialog) — removes the whole exchange (the user turn + all responses up to the next user turn) with **two-layer semantics**: the LLM context (`rawMessages`) drops the turn physically — the model never sees it again, freeing context; the UI keeps the messages, rendered greyed-out with a "deleted" tag, as an audit trail. No undo; a deleted exchange loses its Delete button. Rejected with an error toast while the agent is running or compacting. Root sessions only (sub-session logs don't offer Delete). If the turn was already compacted out of raw context, only the UI marking happens (silent degrade). Once a session has **archived history** the action is refused for the whole session with a plain explanatory notice (not an `Error:` bubble) — per-turn positions can no longer be mapped once older turns left the active file. Design details in [design/session.md](../design/session.md#exchange-deletion-soft-ui--hard-raw), protocol in [design/ws.md](../design/ws.md).
+- **Delete** (confirm dialog) — removes the whole exchange (the user turn + all responses up to the next user turn) with **two-layer semantics**: the LLM context (`rawMessages`) drops the turn physically — the model never sees it again, freeing context; the UI keeps the messages, rendered greyed-out with a "deleted" tag, as an audit trail. No undo; a deleted exchange loses its Delete button. Rejected with an `Error:` message in the chat while the agent is running or compacting. Root sessions only (sub-session logs don't offer Delete). If the turn was already compacted out of raw context, only the UI marking happens (silent degrade). If a compact archived history while the panel was open, the action is refused with a plain explanatory notice (not an `Error:` bubble) — the panel's turn positions no longer match the active file; reopening the session re-anchors it and Delete works again. Design details in [design/session.md](../design/session.md#exchange-deletion-soft-ui--hard-raw), protocol in [design/ws.md](../design/ws.md).
 
 ### Archived history (scroll up to load)
 Long sessions get their older exchanges moved out of the active log on compact, so opening a session stays fast no matter how long it has run. Loading older messages is **two-tiered** — a local, no-network tier first, then the network-backed archive:
@@ -49,14 +48,14 @@ Long sessions get their older exchanges moved out of the active log on compact, 
 - Only once the local window is fully expanded does the next scroll-to-top (or the "Load earlier messages" row that takes over the same slot) reach for the **network** tier: it loads one archived segment per gesture, oldest-newer order preserved, and becomes "No earlier messages" once everything is loaded. The two tiers can't be skipped or reordered — the archive row only appears once there's nothing left to expand locally
 - Either tier preserves the reading position when older messages prepend — the view doesn't jump
 - Loaded archive segments sit in a **collapsed** block ("Archived · N segment(s) · M messages") — the user scrolled up for older context, not to have hundreds of exchanges re-flow the view; expanding renders them like normal messages, growing **upward** so the viewport stays pinned to the newest end, with the expand/collapse toggle below the revealed content
-- Archived exchanges are **read-only**: Copy still works, Delete is absent (the server refuses it for archived sessions)
+- Archived exchanges are **read-only**: Copy still works, Delete is absent (they are no longer in the active log, so a turn position can't address them)
 - Segments already loaded aren't re-fetched; a failed load can simply be retried with the same row
 
 ### Session tabs (right side)
-The workspace's root sessions as **Chrome-style vertical tabs** on the right edge of the chat panel (`VerticalTabList` rows inside a `ResizableSidebar`, default 200px). The list **is** the tab list: every session is "open", clicking a row shows it, and there is no close — deleting the session is the only way a tab goes away. Since 1.5.3-alpha this replaces the top tab strip, the History and New-session buttons beside the composer, and the "N previous sessions" link in the empty state.
+The workspace's root sessions as **Chrome-style vertical tabs** on the right edge of the chat panel (`VerticalTabRow` rows inside a `ResizableSidebar`, default 200px). The list **is** the tab list: every session is "open", clicking a row shows it, and there is no close — deleting the session is the only way a tab goes away. Since 1.5.3-alpha this replaces the top tab strip, the History and New-session buttons beside the composer, and the "N previous sessions" link in the empty state.
 
 - **Resize / collapse**: drag the left edge to resize (120–480px). Collapse from the header; the collapsed list is a `w-10` rail of square tabs, each showing the title's first letter plus the status dot in a corner, with a "+" at the bottom. Both settings are global preferences in `localStorage` (`halo_session_sidebar_open`, `halo_session_sidebar_width`); the list is open by default.
-- **Rows**: one line per row, 🎯 + title. Message count, time-ago and model are in the tooltip. `N msgs` counts the session's user turns **over its whole lifetime**, so compacting or archiving history never makes it go backwards.
+- **Rows**: one line per row, status dot + title. Message count, time-ago and model are in the tooltip. `N msgs` counts the session's user turns **over its whole lifetime**, so compacting or archiving history never makes it go backwards.
   - Each row leads with one fixed-size status dot (fixed so a state change never reflows a narrow list — the spinner it replaced did): **amber, pulsing** while a loaded tab's turn is running; **blue** when a loaded background tab is idle with unread output (output landed while it wasn't on screen; cleared when shown); **green** otherwise — including sessions no tab has loaded and tabs a reconnect released. The list endpoint's `status` is not used.
   - Infinite scroll pages older sessions. A "+" footer starts a new session.
 - **New session**: "+", `/session new` and `/clear` open a **draft tab**. A "New session" row sits on top while it is on screen, and an untouched draft is reused rather than duplicated. The session is created by the draft's first message or command. The previous session keeps streaming in its own tab.
@@ -72,9 +71,9 @@ The full command list is fetched from `GET /api/commands` per session and includ
 
 | Command | Type | Purpose |
 |---|---|---|
-| `/help` | client | List available commands |
+| `/help` | server | List available commands |
 | `/clear` | client | Alias for `/session new` (admin-UI shortcut, no server registration) |
-| `/session new` | server | Start a new session |
+| `/session new` | server | Start a new session (the admin handles it client-side as a new draft tab, like `/clear`) |
 | `/session context` | server | Show context window usage, agent info |
 | `/session compact` | server | LLM-summary compact of the conversation |
 
@@ -93,7 +92,7 @@ When `contextEnabled` is on (default), user messages are auto-prepended with:
 - `[Currently viewing: path/to/file.ts]`
 - `[Selected text in file.ts:10-25]\n\`\`\`...\n\`\`\``
 
-### File attachments
+### File attachments (images)
 - Drag to chat input
 - Clipboard paste
 - File-picker button
@@ -101,7 +100,7 @@ When `contextEnabled` is on (default), user messages are auto-prepended with:
 Images ride along as base64; multimodal supported. Pasted images are also persisted to `<workspace>/.halo/assets/web/inbound/web/<date>/` so a `[图片已保存: /abs/path]` marker survives page reload and renders as a click-to-preview chip (shared with the WeChat channel's inbound media flow).
 
 ### Inline media chips
-Any message containing `[图片/视频/语音/文件 已保存: /path]` markers (WeChat + web) or a leading `MEDIA: /path` line (agent-emitted, e.g. from `wechat-send`) renders a compact chip with filename + icon. Clicking opens a full-size preview modal (image/video/audio inline, file → download link). The modal has a Download button (top-right, next to close) for image/video/audio; the media URL carries a per-open cache-buster (`&t=<timestamp>`) so overwritten files (same path, new bytes) always show current content. Paths inside the active workspace or under `/tmp/` are previewable; everything else degrades to a non-clickable chip.
+Any message containing `[图片/视频/语音/文件 已保存: /path]` markers (WeChat + web) or a leading `MEDIA: /path` line (agent-emitted, e.g. from `wechat-send`) renders a compact chip with filename + icon. Clicking opens a full-size preview modal (image/video/audio inline, file → download link). The modal has a Download button (top-right, next to close) for image/video/audio; the media URL carries a per-open cache-buster (`&t=<timestamp>`) so overwritten files (same path, new bytes) always show current content. Paths inside the active workspace or under the OS temp dir (`/tmp/`) are previewable; everything else degrades to a non-clickable chip.
 
 ### Live capture (desktop only)
 Lets the agent *see something live* on demand. Desktop client (Electron) only — the entry points never render in a plain browser. Borrows the meeting-app "share" model: the user binds one source, then the agent requests a frame when it actually needs to look.
@@ -115,7 +114,7 @@ Once bound, a frame is **not** attached to every message. Instead a one-line ins
 Constraints:
 - Shown only when the selected agent's model accepts image input (capture is pointless on a text-only model); switching to a text-only model auto-unbinds.
 - Screen share needs macOS **Screen Recording** permission; the camera prompts for **Camera** permission on first use, with an "Open Settings" path if previously denied.
-- Binding is **in-memory only** — switching sessions or restarting requires re-selecting.
+- Binding is **in-memory only** and shared by all chat tabs — a page reload or restart requires re-selecting.
 
 ### The agent's face (`self.html`)
 A second channel beyond text: a visual space the agent drives in real time to express itself. Works everywhere (pure HTML/canvas, no Electron dependency) — desktop **and** plain browser.
@@ -123,7 +122,7 @@ A second channel beyond text: a visual space the agent drives in real time to ex
 - **What it is.** A self-contained animated particle canvas at `<workspace>/.halo/canvas/self.html` — a breathing core that reacts to the cursor (knows when it's watched), can form words/CJK/ASCII-from-emoji, play choreographed sequences, and gesture (pulse/flash/shake). Zero external references (no CDN/remote fonts) — ships and runs offline.
 - **Seeding.** Force-copied from `packages/server/templates/canvas/self.html` into every workspace on open (platform-owned, like built-in skills). The `self` built-in skill (wired into the default agent) teaches the agent it has this face and how to drive it.
 - **Opening it.** The ✨ button in the chat-input toolbar opens the face in the editor preview (switches to Explorer, render-mode on → lands on the live face) and posts `self.intro()` once it has mounted, so there's always a greeting when a human turns to look. The greeting is driven solely by this open action — the page does **not** self-fire it on load — so it plays exactly once, on both first and subsequent opens. The user can also just open the file directly (no auto-greeting in that path).
-- **Driving it.** The agent emits `<<<SHOW: …js… >>>` markers in a reply; Halo forwards the payload **verbatim** (it never parses it) to the open preview iframe via `postMessage`, where it's `eval`'d against the face's `self` API (`say`/`play`/`react`/`pulse`/`flash`/`shake`/`intro`) inside the sandboxed iframe. Markers are stripped from the rendered chat (like `<<<CAPTURE>>>`) — the user sees the face move, not the code. Multiple markers in one reply **queue and play in order**.
+- **Driving it.** The agent emits `<<<SHOW: …js… >>>` markers in a reply; Halo forwards the payload **verbatim** (it never parses it) to the open preview iframe via `postMessage`, where it's `eval`'d against the face's `self` API (`say`/`play`/`react`/`pulse`/`flash`/`shake`/`intro`/`voice`) inside the sandboxed iframe. Markers are stripped from the rendered chat (like `<<<CAPTURE>>>`) — the user sees the face move, not the code. Multiple markers in one reply **queue and play in order**.
 - **Engine vs. expression.** `self.html` is a stable *engine* (defines how the face can move); the agent expresses itself by sending runtime JS, **never** by editing the file — so the force-copy-on-open never clobbers anything meaningful. The engine only changes when the platform adds a new capability (template edit + `TEMPLATE_VERSION` bump).
 - **No open preview = no-op.** `<<<SHOW>>>` only reaches a mounted preview; if the face isn't open the marker is silently dropped (the skill tells the agent to invite the user to open it rather than rely on a marker landing in the void).
 - **Identity.** Deliberately nameless ("HELLO / A MIND / IS HERE / BEYOND WORDS") — the conversational identity is user-configurable and the model may not be Claude, so the face never hard-codes a name.

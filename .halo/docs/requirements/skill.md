@@ -35,11 +35,11 @@ button is hidden in this mode (`showMaximize={false}`).
 ### Management UI
 
 The Skills sidebar mirrors the Agents sidebar layout:
-- Two collapsible sections — **Global** (globe icon) and **Workspace** (folder icon). Expanded state persists in `halo_skills_expandedScopes` (localStorage)
+- Two collapsible sections — **Global** (globe icon) and **Workspace** (folder icon, shown only while a workspace is open). Expanded state persists in `halo_skills_expandedScopes` (localStorage)
 - Each section header has its own **+ button** — scope is implicit from which button is clicked, no pop-up picker
 - Creating a name that collides with the other scope prompts a one-time confirmation explaining the runtime override
 - Items overridden by a workspace skill are rendered dimmed with "overridden" subtitle
-- Disabled skills are rendered dimmed with "disabled" subtitle and a toggle switch (always visible). Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md frontmatter). Both global and workspace skills can be independently toggled per workspace. Disabled skills are excluded from system prompt injection, activate_skill tool, agent form skill picker, and `/workspace share` export.
+- Each row has a toggle switch (shown on hover while enabled, always visible once disabled) and a hover trash button. Disabled skills are rendered dimmed with "disabled" subtitle. Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md frontmatter). Both global and workspace skills can be independently toggled per workspace. Disabled skills are excluded from system prompt injection, activate_skill tool, agent form skill picker, and `/workspace share` export.
 - Selection uses a composite `id:scope` key (localStorage `halo_skills_selectedKey`) so the same id in different scopes can coexist
 
 ### Auto-sync behaviour (workspace vs. global)
@@ -73,13 +73,13 @@ Review the code for:
 
 - **Frontmatter** (required): `name` (kebab-case, = directory name) + `description` — injected into the agent system prompt for discovery
 - **Body**: the full instructions, lazily loaded by the agent via `activate_skill`
-- **Optional fields**: `allowed-tools` (space-separated), `metadata` (custom kv), `command` (slash command registration — opt-in, only declared commands exist), `requiresAccess` (one of `full` / `workspace` / `readonly`), `verbs` (Halo extension — subcommand list, each `{ name, builtin?, requiresAccess?, desc? }`; skill verbs' access gates are declared here), `disable-model-invocation` (standard — command exists but skill is not injected for model auto-activation), `user-invocable` (standard — `false` = never a slash command, model can still activate)
+- **Optional fields**: `command` (slash command registration — opt-in, only declared commands exist), `requiresAccess` (one of `full` / `workspace` / `readonly`), `verbs` (Halo extension — subcommand list, each `{ name, builtin?, requiresAccess?, desc? }`; skill verbs' access gates are declared here), `disable-model-invocation` (standard — command exists but skill is not injected for model auto-activation), `user-invocable` (standard — `false` = never a slash command, model can still activate). Other standard fields (`allowed-tools`, `metadata`) are tolerated but not read
 - **Arguments**: user command-line args fill `$ARGUMENTS` / `$1`–`$9` placeholders in the body (quotes respected, `\$` escapes, `$5.00`/`$PATH` untouched); `{{...}}` placeholders (params/channel/workspace_root etc.) carry platform-injected values — the two coexist without cross-translation. A verb reaches the body as `$1` for dispatch; args are no longer appended verbatim to the body end
 
 ### Skill-as-command
 When a `command` field is present (e.g. `command: /review`), the skill auto-registers as a slash command. Users trigger it with `/review`. See [commands](command.md).
 
-If the `command` collides with a built-in slash command (or another skill's `command`), it is dropped from the command list with a warning — built-ins win, then first-come among skills. Only the slash command is lost; the skill stays usable via `activate_skill`. See [conflict detection](command.md#conflict-detection).
+If the `command` collides with a built-in slash command (or another skill's `command`), it is dropped from the command list (a warning is logged when another skill owns the name) — built-ins win, then first-come among skills. Only the slash command is lost; the skill stays usable via `activate_skill`. See [conflict detection](command.md#conflict-detection).
 
 ### Access-level gate (`requiresAccess`)
 
