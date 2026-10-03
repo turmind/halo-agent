@@ -512,9 +512,10 @@ function renderFieldControl(field: Field, saving: boolean, onSave: (value: strin
   switch (field.type) {
     case 'int':
     case 'float':
-      return <NumberInput
+      return <TextInput
         initial={field.value ?? ''}
         placeholder={field.default ?? ''}
+        type="number"
         step={field.type === 'int' ? 1 : 0.1}
         saving={saving}
         onCommit={onSave}
@@ -573,11 +574,15 @@ function SourceBadge({ source, inherited }: { source: Field['source']; inherited
 
 const ENV_PATTERN = /^<<[A-Z_][A-Z0-9_]*>>$/
 
+/** Text input for `type: string`, and (with `type="number"` + `step`) for
+ *  `type: int | float`. */
 function TextInput({
-  initial, placeholder, saving, onCommit,
+  initial, placeholder, type = 'text', step, saving, onCommit,
 }: {
   initial: string
   placeholder?: string
+  type?: 'text' | 'number'
+  step?: number
   saving: boolean
   onCommit: (v: string) => void
 }) {
@@ -604,59 +609,12 @@ function TextInput({
   const display = isUsingDefault && !editing ? (placeholder ?? '') : local
   return (
     <input
-      type="text"
-      value={display}
-      placeholder={placeholder}
-      onFocus={() => {
-        if (isUsingDefault) setLocal('')  // start fresh; don't carry the default into the actual value
-        setEditing(true)
-      }}
-      onChange={(e) => { setLocal(e.target.value); setEditing(true) }}
-      onBlur={commit}
-      onKeyDown={(e) => { if (e.key === 'Enter') commit() }}
-      disabled={saving}
-      className={cn(
-        'h-7 w-full max-w-md rounded border border-[var(--border)] bg-[var(--card)] px-2 text-xs outline-none focus:border-[var(--primary)]',
-        isUsingDefault && !editing ? 'text-[var(--muted-foreground)] italic' : 'text-[var(--foreground)]',
-      )}
-    />
-  )
-}
-
-/** Number input for `type: int | float`. Same default-display behaviour as TextInput. */
-function NumberInput({
-  initial, placeholder, step, saving, onCommit,
-}: {
-  initial: string
-  placeholder?: string
-  step?: number
-  saving: boolean
-  onCommit: (v: string) => void
-}) {
-  const isUsingDefault = initial === '' && !!placeholder
-  const [local, setLocal] = useState(initial)
-  const [editing, setEditing] = useState(false)
-  const committed = useRef(initial)
-  useEffect(() => {
-    setLocal(initial)
-    committed.current = initial
-    setEditing(false)
-  }, [initial])
-  function commit() {
-    setEditing(false)
-    if (local === committed.current) return
-    committed.current = local
-    onCommit(local)
-  }
-  const display = isUsingDefault && !editing ? (placeholder ?? '') : local
-  return (
-    <input
-      type="number"
+      type={type}
       step={step}
       value={display}
       placeholder={placeholder}
       onFocus={() => {
-        if (isUsingDefault) setLocal('')
+        if (isUsingDefault) setLocal('')  // start fresh; don't carry the default into the actual value
         setEditing(true)
       }}
       onChange={(e) => { setLocal(e.target.value); setEditing(true) }}

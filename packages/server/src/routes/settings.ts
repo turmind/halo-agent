@@ -263,6 +263,18 @@ export function createSettingsRoutes() {
     return dottedKeys.find((k) => globalOnly.has(k)) ?? null
   }
 
+  /** Settings file for a write: workspace scope → `<project>/.halo/settings.yaml`
+   *  (same projectId contract as files.ts: an absolute path that exists on
+   *  disk — without it a write lands in `<anything>/.halo/settings.yaml`),
+   *  anything else → the global file. */
+  async function resolveSettingsPath(scope: string, projectId: string | undefined): Promise<{ filePath: string } | { error: string; status: 400 | 404 }> {
+    if (scope !== 'workspace') return { filePath: GLOBAL_SETTINGS_PATH }
+    if (!projectId) return { error: 'projectId required for workspace settings', status: 400 }
+    const projectPath = await resolveProjectPath(projectId)
+    if (!projectPath) return { error: 'Project not found', status: 404 }
+    return { filePath: path.join(projectPath, '.halo', 'settings.yaml') }
+  }
+
   /** Flatten a nested record into dotted keys for rejection scanning. */
   function flattenDotted(tree: Record<string, unknown>, prefix = ''): string[] {
     const out: string[] = []
@@ -285,19 +297,13 @@ export function createSettingsRoutes() {
       settings: Record<string, unknown>
     }>()
 
+    const resolved = await resolveSettingsPath(body.scope, body.projectId)
+    if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
     if (body.scope === 'workspace') {
-      if (!body.projectId) return c.json({ error: 'projectId required for workspace settings' }, 400)
-      // Same projectId contract as files.ts: absolute path that exists on
-      // disk. Without it this endpoint writes `<anything>/.halo/settings.yaml`.
-      const projectPath = await resolveProjectPath(body.projectId)
-      if (!projectPath) return c.json({ error: 'Project not found' }, 404)
       const offending = rejectGlobalOnlyAtWorkspace('workspace', flattenDotted(body.settings))
       if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
-      const wsPath = path.join(projectPath, '.halo', 'settings.yaml')
-      await writeSettingsFile(wsPath, body.settings)
-    } else {
-      await writeSettingsFile(GLOBAL_SETTINGS_PATH, body.settings)
     }
+    await writeSettingsFile(resolved.filePath, body.settings)
 
     notifySettingsChange()
     return c.json({ ok: true })
@@ -312,17 +318,11 @@ export function createSettingsRoutes() {
       value: unknown
     }>()
 
-    let filePath: string
-    if (body.scope === 'workspace') {
-      if (!body.projectId) return c.json({ error: 'projectId required for workspace settings' }, 400)
-      const projectPath = await resolveProjectPath(body.projectId)
-      if (!projectPath) return c.json({ error: 'Project not found' }, 404)
-      const offending = rejectGlobalOnlyAtWorkspace('workspace', [body.key])
-      if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
-      filePath = path.join(projectPath, '.halo', 'settings.yaml')
-    } else {
-      filePath = GLOBAL_SETTINGS_PATH
-    }
+    const resolved = await resolveSettingsPath(body.scope, body.projectId)
+    if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+    const offending = rejectGlobalOnlyAtWorkspace(body.scope, [body.key])
+    if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
+    const { filePath } = resolved
 
     const current = await readSettingsFile(filePath)
 
@@ -350,15 +350,9 @@ export function createSettingsRoutes() {
       key: string
     }>()
 
-    let filePath: string
-    if (body.scope === 'workspace') {
-      if (!body.projectId) return c.json({ error: 'projectId required for workspace settings' }, 400)
-      const projectPath = await resolveProjectPath(body.projectId)
-      if (!projectPath) return c.json({ error: 'Project not found' }, 404)
-      filePath = path.join(projectPath, '.halo', 'settings.yaml')
-    } else {
-      filePath = GLOBAL_SETTINGS_PATH
-    }
+    const resolved = await resolveSettingsPath(body.scope, body.projectId)
+    if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+    const { filePath } = resolved
 
     const current = await readSettingsFile(filePath)
 

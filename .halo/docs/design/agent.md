@@ -132,7 +132,7 @@ When the admin UI creates a new agent (POST `/agent-configs`) or seeds the defau
    - The selected model's `capabilities.promptCaching.default` → `model.promptCaching`
    - `capabilities.thinking.defaultEnabled / default / defaultBudgetTokens` → `model.thinking.{enabled, effort, budget_tokens}`
 
-The provider YAML is the single source of truth. Existing `agent.yaml` files are never rewritten when the General default is changed — the setting only affects subsequently-scaffolded agents. Implementation: [packages/server/src/routes/agent-configs.ts](../../../packages/server/src/routes/agent-configs.ts) `buildScaffoldModelBlock()`.
+The provider YAML is the single source of truth. Existing `agent.yaml` files are never rewritten when the General default is changed — the setting only affects subsequently-scaffolded agents. Implementation: [packages/server/src/routes/agent-configs.ts](../../../packages/server/src/routes/agent-configs.ts) `buildScaffoldModelBlock()` (provider pick); the field derivation is `modelBlockFromProvider()` in [packages/server/src/setup-providers.ts](../../../packages/server/src/setup-providers.ts), shared with `halo setup`'s provider rebind.
 
 ## Graceful interrupt (message queueing)
 

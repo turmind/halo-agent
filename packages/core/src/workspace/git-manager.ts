@@ -140,16 +140,12 @@ export class GitManager {
         console.log('[GitManager] Nothing to commit');
         return '';
       }
-
-      const result = await this.git.commit(message);
-      const hash = result.commit || '';
-      console.log(`[GitManager] Committed: ${hash} - ${message}`);
-      return hash;
     } catch (err) {
       const message2 = err instanceof Error ? err.message : String(err);
       console.error(`[GitManager] Commit error: ${message2}`);
       throw new GitManagerError(`Failed to commit: ${message2}`);
     }
+    return this.commit(message);
   }
 
   /** Recent commits as structured entries for the Graph view. simple-git's

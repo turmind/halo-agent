@@ -8,6 +8,15 @@ import { imageMimeFromExt, type FileTreeNode } from '@turmind/halo-core'
 import { isInTempDir } from '../channels/shared/media.js'
 import { resolveProjectPath, validatePath } from './workspace-path.js'
 
+/** Guard shared by the single-path handlers: projectId → workspace root,
+ *  then `filePath` must resolve inside it. */
+async function resolveProjectFile(projectId: string, filePath: string): Promise<{ projectPath: string; absolutePath: string } | { error: string; status: 403 | 404 }> {
+  const projectPath = await resolveProjectPath(projectId)
+  if (!projectPath) return { error: 'Project not found', status: 404 }
+  if (!validatePath(filePath, projectPath)) return { error: 'Path traversal not allowed', status: 403 }
+  return { projectPath, absolutePath: path.resolve(projectPath, filePath) }
+}
+
 export function createFileRoutes() {
   const app = new Hono()
 
@@ -263,16 +272,9 @@ export function createFileRoutes() {
         return c.json({ error: 'path, content, and projectId are required' }, 400)
       }
 
-      const projectPath = await resolveProjectPath(projectId)
-      if (!projectPath) {
-        return c.json({ error: 'Project not found' }, 404)
-      }
-
-      if (!validatePath(filePath, projectPath)) {
-        return c.json({ error: 'Path traversal not allowed' }, 403)
-      }
-
-      const absolutePath = path.resolve(projectPath, filePath)
+      const resolved = await resolveProjectFile(projectId, filePath)
+      if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+      const { absolutePath } = resolved
       await fs.writeFile(absolutePath, content, 'utf-8')
       const stat = await fs.stat(absolutePath)
 
@@ -304,15 +306,9 @@ export function createFileRoutes() {
         return c.json({ error: 'expectMtime must be a number' }, 400)
       }
 
-      const projectPath = await resolveProjectPath(projectId)
-      if (!projectPath) {
-        return c.json({ error: 'Project not found' }, 404)
-      }
-      if (!validatePath(filePath, projectPath)) {
-        return c.json({ error: 'Path traversal not allowed' }, 403)
-      }
-
-      const absolutePath = path.resolve(projectPath, filePath)
+      const resolved = await resolveProjectFile(projectId, filePath)
+      if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+      const { absolutePath } = resolved
       let before
       try {
         before = await fs.stat(absolutePath)
@@ -345,16 +341,9 @@ export function createFileRoutes() {
         return c.json({ error: 'path and projectId are required' }, 400)
       }
 
-      const projectPath = await resolveProjectPath(projectId)
-      if (!projectPath) {
-        return c.json({ error: 'Project not found' }, 404)
-      }
-
-      if (!validatePath(filePath, projectPath)) {
-        return c.json({ error: 'Path traversal not allowed' }, 403)
-      }
-
-      const absolutePath = path.resolve(projectPath, filePath)
+      const resolved = await resolveProjectFile(projectId, filePath)
+      if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+      const { absolutePath } = resolved
 
       // Ensure parent directory exists
       await fs.mkdir(path.dirname(absolutePath), { recursive: true })
@@ -386,17 +375,9 @@ export function createFileRoutes() {
         return c.json({ error: 'path and projectId are required' }, 400)
       }
 
-      const projectPath = await resolveProjectPath(projectId)
-      if (!projectPath) {
-        return c.json({ error: 'Project not found' }, 404)
-      }
-
-      if (!validatePath(dirPath, projectPath)) {
-        return c.json({ error: 'Path traversal not allowed' }, 403)
-      }
-
-      const absolutePath = path.resolve(projectPath, dirPath)
-      await fs.mkdir(absolutePath, { recursive: true })
+      const resolved = await resolveProjectFile(projectId, dirPath)
+      if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+      await fs.mkdir(resolved.absolutePath, { recursive: true })
 
       return c.json({ ok: true, path: dirPath })
     } catch (err) {
@@ -450,16 +431,9 @@ export function createFileRoutes() {
         return c.json({ error: 'path and projectId are required' }, 400)
       }
 
-      const projectPath = await resolveProjectPath(projectId)
-      if (!projectPath) {
-        return c.json({ error: 'Project not found' }, 404)
-      }
-
-      if (!validatePath(filePath, projectPath)) {
-        return c.json({ error: 'Path traversal not allowed' }, 403)
-      }
-
-      const absolutePath = path.resolve(projectPath, filePath)
+      const resolved = await resolveProjectFile(projectId, filePath)
+      if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+      const { projectPath, absolutePath } = resolved
       // Prevent deleting the project root
       if (absolutePath === path.resolve(projectPath)) {
         return c.json({ error: 'Cannot delete project root' }, 403)
@@ -576,11 +550,9 @@ export function createFileRoutes() {
       const filePath = c.req.query('path')
       const projectId = c.req.query('projectId')
       if (!filePath || !projectId) return c.json({ error: 'path and projectId are required' }, 400)
-      const projectPath = await resolveProjectPath(projectId)
-      if (!projectPath) return c.json({ error: 'Project not found' }, 404)
-      if (!validatePath(filePath, projectPath)) return c.json({ error: 'Path traversal not allowed' }, 403)
-      const absolutePath = path.resolve(projectPath, filePath)
-      const stat = await fs.stat(absolutePath)
+      const resolved = await resolveProjectFile(projectId, filePath)
+      if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+      const stat = await fs.stat(resolved.absolutePath)
       return c.json({ path: filePath, modifiedAt: stat.mtimeMs, createdAt: stat.birthtimeMs, size: stat.size })
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return c.json({ error: 'File not found' }, 404)
@@ -598,16 +570,9 @@ export function createFileRoutes() {
         return c.json({ error: 'path and projectId are required' }, 400)
       }
 
-      const projectPath = await resolveProjectPath(projectId)
-      if (!projectPath) {
-        return c.json({ error: 'Project not found' }, 404)
-      }
-
-      if (!validatePath(filePath, projectPath)) {
-        return c.json({ error: 'Path traversal not allowed' }, 403)
-      }
-
-      const absolutePath = path.resolve(projectPath, filePath)
+      const resolved = await resolveProjectFile(projectId, filePath)
+      if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+      const { absolutePath } = resolved
 
       try {
         const stat = await fs.stat(absolutePath)

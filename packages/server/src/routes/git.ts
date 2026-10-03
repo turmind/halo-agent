@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import os from 'node:os'
 import path from 'node:path'
 import { Workspace, GitManager } from '@turmind/halo-core'
@@ -198,43 +198,33 @@ export function createGitRoutes() {
     }
   })
 
-  // POST /git/stage — body { projectId, paths: string[] }
-  app.post('/git/stage', async (c) => {
-    try {
-      const body = await c.req.json<{ projectId?: string; paths?: string[] }>()
-      const res = await getGitForWrite(body.projectId)
-      if ('error' in res) return c.json({ error: res.error }, res.status)
-      if (!Array.isArray(body.paths) || body.paths.length === 0) {
-        return c.json({ error: 'paths is required' }, 400)
+  /** POST body { projectId, paths: string[] } → `op` on the index. Shared by
+   *  /git/stage and /git/unstage; `verb` only words the error log. */
+  function indexRoute(op: 'stage' | 'unstage', verb: string) {
+    return async (c: Context) => {
+      try {
+        const body = await c.req.json<{ projectId?: string; paths?: string[] }>()
+        const res = await getGitForWrite(body.projectId)
+        if ('error' in res) return c.json({ error: res.error }, res.status)
+        if (!Array.isArray(body.paths) || body.paths.length === 0) {
+          return c.json({ error: 'paths is required' }, 400)
+        }
+        await res.git[op](body.paths)
+        notifyGitChanged(res.projectPath)
+        return c.json({ ok: true })
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        console.log(`[Git] Error ${verb}: ${errorMessage}`)
+        return c.json({ error: errorMessage }, 500)
       }
-      await res.git.stage(body.paths)
-      notifyGitChanged(res.projectPath)
-      return c.json({ ok: true })
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err)
-      console.log(`[Git] Error staging: ${errorMessage}`)
-      return c.json({ error: errorMessage }, 500)
     }
-  })
+  }
+
+  // POST /git/stage — body { projectId, paths: string[] }
+  app.post('/git/stage', indexRoute('stage', 'staging'))
 
   // POST /git/unstage — body { projectId, paths: string[] }
-  app.post('/git/unstage', async (c) => {
-    try {
-      const body = await c.req.json<{ projectId?: string; paths?: string[] }>()
-      const res = await getGitForWrite(body.projectId)
-      if ('error' in res) return c.json({ error: res.error }, res.status)
-      if (!Array.isArray(body.paths) || body.paths.length === 0) {
-        return c.json({ error: 'paths is required' }, 400)
-      }
-      await res.git.unstage(body.paths)
-      notifyGitChanged(res.projectPath)
-      return c.json({ ok: true })
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err)
-      console.log(`[Git] Error unstaging: ${errorMessage}`)
-      return c.json({ error: errorMessage }, 500)
-    }
-  })
+  app.post('/git/unstage', indexRoute('unstage', 'unstaging'))
 
   // POST /git/commit — body { projectId, message }
   app.post('/git/commit', async (c) => {

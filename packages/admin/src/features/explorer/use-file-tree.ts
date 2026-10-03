@@ -7,6 +7,17 @@ import { wsClient } from '@/shared/ws-client'
 import type { WsClient } from '@/shared/ws-client-types'
 import { onWsReconnect } from '@/shared/ws-reconnect'
 
+/** Wrap a root `/files/tree` response in the synthetic workspace-root node. */
+function toRootNode(projectId: string, data: Awaited<ReturnType<typeof api.files.tree>>): FileTreeNode {
+  return {
+    name: data.root ?? projectId.split('/').filter(Boolean).pop() ?? 'root',
+    path: '',
+    type: 'directory',
+    hasChildren: data.tree.length > 0,
+    children: data.tree as FileTreeNode[],
+  }
+}
+
 /** Imperatively fetch the root file tree (one level) and set in the given
  *  editor store. Defaults to the global singleton — pass a scoped store for
  *  nested EditorPanels (e.g. Skills). */
@@ -14,14 +25,7 @@ export function loadFileTree(projectId: string, store: EditorStoreApi = useEdito
   api.files
     .tree(projectId)
     .then((data) => {
-      const rootNode: FileTreeNode = {
-        name: data.root ?? projectId.split('/').filter(Boolean).pop() ?? 'root',
-        path: '',
-        type: 'directory',
-        hasChildren: data.tree.length > 0,
-        children: data.tree as FileTreeNode[],
-      }
-      store.getState().setFileTree(rootNode)
+      store.getState().setFileTree(toRootNode(projectId, data))
     })
     .catch((err) => {
       console.error('[Explorer] Failed to load file tree:', err)
@@ -68,14 +72,7 @@ export function useFileTree(projectId: string | null) {
     setError(null)
     try {
       const data = await api.files.tree(projectId)
-      const rootNode: FileTreeNode = {
-        name: data.root ?? projectId.split('/').filter(Boolean).pop() ?? 'root',
-        path: '',
-        type: 'directory',
-        hasChildren: data.tree.length > 0,
-        children: data.tree as FileTreeNode[],
-      }
-      store.getState().setFileTree(rootNode)
+      store.getState().setFileTree(toRootNode(projectId, data))
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load file tree'
       setError(message)

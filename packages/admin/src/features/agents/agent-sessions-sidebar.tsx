@@ -12,6 +12,7 @@ import { useSessionBus, bumpSessionBus } from '@/shared/session-bus'
 import { api } from '@/shared/api-client'
 import { cn, confirmAction, formatRelativeTime } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
+import { useInfiniteScroll } from '@/shared/use-infinite-scroll'
 import { Bot, Trash2, ChevronRight, MessageSquare, Loader2, StopCircle, Archive, RefreshCw, Pencil } from 'lucide-react'
 import type { ChatMessage } from '@/shared/types'
 
@@ -107,6 +108,35 @@ function patchNodeTitle(nodes: SessionNode[], id: string, title: string): Sessio
   )
 }
 
+/** Inline title input for session rename: Enter / blur commit, Escape cancels.
+ *  Click / double-click stay inside so the row underneath doesn't react.
+ *  `textSize` matches the row it replaces (sub-agent vs main session). */
+function RenameInput({
+  value, onChange, onCommit, onCancel, textSize,
+}: {
+  value: string
+  onChange: (v: string) => void
+  onCommit: () => void
+  onCancel: () => void
+  textSize: 'text-[10px]' | 'text-[11px]'
+}) {
+  return (
+    <input
+      autoFocus
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); onCommit() }
+        else if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+      }}
+      onBlur={onCommit}
+      className={cn('min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--background)] px-1 py-0.5 text-[var(--foreground)] outline-none focus:border-blue-500', textSize)}
+    />
+  )
+}
+
 /** Recursive session tree renderer */
 function SessionTree({
   nodes, depth, expanded, selectedSessionId, onToggle, onSelect,
@@ -165,18 +195,12 @@ function SessionTree({
                     {sub.agentName || sub.agentId}
                   </span>
                   {editingId === sub.id ? (
-                    <input
-                      autoFocus
+                    <RenameInput
                       value={editingTitle}
-                      onChange={(e) => setEditingTitle(e.target.value)}
-                      onClick={(e) => e.stopPropagation()}
-                      onDoubleClick={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') { e.preventDefault(); void onCommitRename(sub.id) }
-                        else if (e.key === 'Escape') { e.preventDefault(); onCancelRename() }
-                      }}
-                      onBlur={() => onCommitRename(sub.id)}
-                      className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--background)] px-1 py-0.5 text-[10px] text-[var(--foreground)] outline-none focus:border-blue-500"
+                      onChange={setEditingTitle}
+                      onCommit={() => onCommitRename(sub.id)}
+                      onCancel={onCancelRename}
+                      textSize="text-[10px]"
                     />
                   ) : (
                     <p className="truncate text-[10px] text-[var(--foreground)]">
@@ -602,19 +626,8 @@ export function AgentSessionsSidebar() {
 
   const totalSessions = tree.length
 
-  // Infinite scroll. Mirrors evolution-sidebar.tsx: sentinel + IO with
-  // rootMargin, dep on `tree.length` so each appended page reattaches
-  // the observer to a fresh sentinel position.
-  const sentinelRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    const el = sentinelRef.current
-    if (!el || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) void loadMore()
-    }, { rootMargin: '64px' })
-    io.observe(el)
-    return () => io.disconnect()
-  }, [loadMore, tree.length])
+  // Infinite scroll — `tree.length` re-attaches the observer per page.
+  const sentinelRef = useInfiniteScroll<HTMLDivElement>(loadMore, tree.length)
 
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">
@@ -694,18 +707,12 @@ export function AgentSessionsSidebar() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       {editingId === main.id ? (
-                        <input
-                          autoFocus
+                        <RenameInput
                           value={editingTitle}
-                          onChange={(e) => setEditingTitle(e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          onDoubleClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') { e.preventDefault(); void commitRename(main.id) }
-                            else if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
-                          }}
-                          onBlur={() => commitRename(main.id)}
-                          className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--background)] px-1 py-0.5 text-[11px] text-[var(--foreground)] outline-none focus:border-blue-500"
+                          onChange={setEditingTitle}
+                          onCommit={() => void commitRename(main.id)}
+                          onCancel={cancelRename}
+                          textSize="text-[11px]"
                         />
                       ) : (
                         <p className="truncate text-[11px] font-medium text-[var(--foreground)]">

@@ -183,25 +183,44 @@ function promptSelectRich(
   options: SelectOption[],
   initialIndex: number,
 ): Promise<string | null> {
+  return runRichList(
+    question,
+    options.length,
+    Math.max(0, Math.min(initialIndex, options.length - 1)),
+    (cursor) => options.map((opt, i) => {
+      const prefix = i === cursor ? '\x1b[36m❯ \x1b[0m' : '  '
+      const label = i === cursor ? `\x1b[36m${opt.label}\x1b[0m` : opt.label
+      const hint = opt.hint ? ` \x1b[2m${opt.hint}\x1b[0m` : ''
+      return `${prefix}${label}${hint}`
+    }),
+    (cursor) => options[cursor]!.value,
+  )
+}
+
+/** Raw-mode loop shared by the rich prompts. Prints `question`, draws
+ *  `render(cursor)` (one string per line, redrawn in place), ↑↓ wraps the
+ *  cursor over `count` rows, Enter resolves `onEnter(cursor)`, Ctrl+C
+ *  resolves null. Any other chunk goes to `onKey`; return true to redraw. */
+function runRichList<T>(
+  question: string,
+  count: number,
+  initialCursor: number,
+  render: (cursor: number) => string[],
+  onEnter: (cursor: number) => T,
+  onKey?: (chunk: string, cursor: number) => boolean,
+): Promise<T | null> {
   return new Promise((resolve) => {
     const stdin = process.stdin as NodeJS.ReadStream
     const stdout = process.stdout as NodeJS.WriteStream
-    let cursor = Math.max(0, Math.min(initialIndex, options.length - 1))
-    let drawn = false
+    let cursor = initialCursor
+    let prevLines: number | null = null
 
     const draw = () => {
-      if (drawn) {
-        // Move cursor up by N lines and clear each
-        stdout.write(`\x1b[${options.length}A`)
-      }
-      for (let i = 0; i < options.length; i++) {
-        const opt = options[i]!
-        const prefix = i === cursor ? '\x1b[36m❯ \x1b[0m' : '  '
-        const label = i === cursor ? `\x1b[36m${opt.label}\x1b[0m` : opt.label
-        const hint = opt.hint ? ` \x1b[2m${opt.hint}\x1b[0m` : ''
-        stdout.write(`\x1b[2K${prefix}${label}${hint}\n`)
-      }
-      drawn = true
+      // Move cursor up over the previous frame; each line clears itself.
+      if (prevLines !== null) stdout.write(`\x1b[${prevLines}A`)
+      const lines = render(cursor)
+      for (const line of lines) stdout.write(`\x1b[2K${line}\n`)
+      prevLines = lines.length
     }
 
     stdout.write(`${question}\n`)
@@ -222,18 +241,18 @@ function promptSelectRich(
       // We just look at the first identifying bytes — arrow keys are 3 bytes
       // (\x1b [ A/B), Enter is 1 byte (\r or \n).
       if (chunk === '\x1b[A' || chunk === '\x1bOA') {            // up
-        cursor = (cursor - 1 + options.length) % options.length
+        cursor = (cursor - 1 + count) % count
         draw()
         return
       }
       if (chunk === '\x1b[B' || chunk === '\x1bOB') {            // down
-        cursor = (cursor + 1) % options.length
+        cursor = (cursor + 1) % count
         draw()
         return
       }
       if (chunk === '\r' || chunk === '\n') {
         cleanup()
-        resolve(options[cursor]!.value)
+        resolve(onEnter(cursor))
         return
       }
       if (chunk === '\x03') {                                     // Ctrl+C
@@ -241,7 +260,7 @@ function promptSelectRich(
         resolve(null)
         return
       }
-      // ignore everything else
+      if (onKey?.(chunk, cursor)) draw()
     }
     stdin.on('data', onData)
   })
@@ -300,70 +319,27 @@ function promptMultiSelectRich(
   question: string,
   options: SelectOption[],
 ): Promise<string[] | null> {
-  return new Promise((resolve) => {
-    const stdin = process.stdin as NodeJS.ReadStream
-    const stdout = process.stdout as NodeJS.WriteStream
-    let cursor = 0
-    const checked = options.map((o) => Boolean(o.checked))
-    let drawn = false
-
-    // Including the hint line at the bottom — accounted for in redraw.
-    const totalLines = options.length + 1
-
-    const draw = () => {
-      if (drawn) stdout.write(`\x1b[${totalLines}A`)
-      for (let i = 0; i < options.length; i++) {
-        const opt = options[i]!
+  const checked = options.map((o) => Boolean(o.checked))
+  return runRichList(
+    question,
+    options.length,
+    0,
+    (cursor) => [
+      ...options.map((opt, i) => {
         const cursorMark = i === cursor ? '\x1b[36m❯\x1b[0m' : ' '
         const checkMark = checked[i] ? '\x1b[32m●\x1b[0m' : '○'
         const label = i === cursor ? `\x1b[36m${opt.label}\x1b[0m` : opt.label
         const hint = opt.hint ? ` \x1b[2m${opt.hint}\x1b[0m` : ''
-        stdout.write(`\x1b[2K${cursorMark} ${checkMark} ${label}${hint}\n`)
-      }
-      stdout.write(`\x1b[2K\x1b[2m  (space to toggle · enter to confirm · ctrl-c to cancel)\x1b[0m\n`)
-      drawn = true
-    }
-
-    stdout.write(`${question}\n`)
-    draw()
-
-    stdin.setRawMode(true)
-    stdin.resume()
-    stdin.setEncoding('utf8')
-
-    const cleanup = () => {
-      stdin.setRawMode(false)
-      stdin.pause()
-      stdin.removeListener('data', onData)
-    }
-
-    const onData = (chunk: string) => {
-      if (chunk === '\x1b[A' || chunk === '\x1bOA') {
-        cursor = (cursor - 1 + options.length) % options.length
-        draw()
-        return
-      }
-      if (chunk === '\x1b[B' || chunk === '\x1bOB') {
-        cursor = (cursor + 1) % options.length
-        draw()
-        return
-      }
-      if (chunk === ' ') {
-        checked[cursor] = !checked[cursor]
-        draw()
-        return
-      }
-      if (chunk === '\r' || chunk === '\n') {
-        cleanup()
-        resolve(options.filter((_, i) => checked[i]).map((o) => o.value))
-        return
-      }
-      if (chunk === '\x03') {
-        cleanup()
-        resolve(null)
-        return
-      }
-    }
-    stdin.on('data', onData)
-  })
+        return `${cursorMark} ${checkMark} ${label}${hint}`
+      }),
+      // Hint line at the bottom — part of the redrawn frame.
+      `\x1b[2m  (space to toggle · enter to confirm · ctrl-c to cancel)\x1b[0m`,
+    ],
+    () => options.filter((_, i) => checked[i]).map((o) => o.value),
+    (chunk, cursor) => {
+      if (chunk !== ' ') return false
+      checked[cursor] = !checked[cursor]
+      return true
+    },
+  )
 }

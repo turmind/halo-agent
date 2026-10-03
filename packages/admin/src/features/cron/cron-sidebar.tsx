@@ -6,12 +6,13 @@
  * form-open state live in the shared `cron-store` so the right pane
  * (cron-main) can render the matching detail/form.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Clock, Plus, RefreshCw } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
 import { cn } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
+import { useInfiniteScroll } from '@/shared/use-infinite-scroll'
 import { useCronStore } from './cron-store'
 
 type Job = Awaited<ReturnType<typeof api.cron.listJobs>>['jobs'][number]
@@ -60,20 +61,8 @@ export function CronSidebar() {
     }
   }, [nextCursor, loadingMore])
 
-  // Infinite-scroll trigger: a sentinel <li> at the bottom of the list
-  // observed by IntersectionObserver. When it scrolls into view (user has
-  // reached the end of the loaded slice), `loadMore` fires. Cheaper than
-  // a scroll listener and naturally handles container size changes.
-  const sentinelRef = useRef<HTMLLIElement | null>(null)
-  useEffect(() => {
-    const el = sentinelRef.current
-    if (!el || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) void loadMore()
-    }, { rootMargin: '64px' })
-    io.observe(el)
-    return () => io.disconnect()
-  }, [loadMore, jobs.length])
+  // Infinite-scroll trigger: a sentinel <li> at the bottom of the list.
+  const sentinelRef = useInfiniteScroll<HTMLLIElement>(loadMore, jobs.length)
 
   // Spin for at least 400ms so a network-cached refresh still gives the
   // user visible feedback when they click the button.

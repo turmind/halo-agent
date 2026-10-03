@@ -16,7 +16,7 @@
  * `workspace_path` from the db row, then read `patch.md` / `score.json`
  * lazily on detail fetch (small files, no caching).
  */
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { eq, desc, lt, and, or, sql } from 'drizzle-orm'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -300,6 +300,20 @@ export function createEvolutionRoutes(): Hono {
     return c.json({ ok: true })
   })
 
+  /** Shared preamble of retry / hint: required trimmed `hint` from the body
+   *  (400) and the run row (404). */
+  async function readHintRequest(c: Context) {
+    const id = c.req.param('id') ?? ''
+    const body = await c.req.json().catch(() => ({})) as { hint?: string }
+    const hint = typeof body.hint === 'string' ? body.hint.trim() : ''
+    if (!hint) return { error: 'hint is required', status: 400 as const }
+
+    const db = getEvoDb()
+    const row = db.select().from(evolutionRuns).where(eq(evolutionRuns.id, id)).get()
+    if (!row) return { error: 'not found', status: 404 as const }
+    return { id, hint, db, row }
+  }
+
   // POST /api/evolution/runs/:id/retry { hint }
   //
   // Reviewer-driven retry. Either the dry-run failed and they want another
@@ -313,14 +327,9 @@ export function createEvolutionRoutes(): Hono {
   // Allowed from any status except 'running' (which would race the live
   // wrapper) and 'pending' (already queued — nothing to retry).
   router.post('/evolution/runs/:id/retry', async (c) => {
-    const id = c.req.param('id')
-    const body = await c.req.json().catch(() => ({})) as { hint?: string }
-    const hint = typeof body.hint === 'string' ? body.hint.trim() : ''
-    if (!hint) return c.json({ error: 'hint is required' }, 400)
-
-    const db = getEvoDb()
-    const row = db.select().from(evolutionRuns).where(eq(evolutionRuns.id, id)).get()
-    if (!row) return c.json({ error: 'not found' }, 404)
+    const req = await readHintRequest(c)
+    if ('error' in req) return c.json({ error: req.error }, req.status)
+    const { id, hint, db, row } = req
     if (row.status === 'running' || row.status === 'pending') {
       return c.json({ error: `cannot retry run in status=${row.status}` }, 409)
     }
@@ -345,14 +354,9 @@ export function createEvolutionRoutes(): Hono {
   // user_hint on apply, so this is the user's chance to leave a note that
   // the apply agent will see.
   router.post('/evolution/runs/:id/hint', async (c) => {
-    const id = c.req.param('id')
-    const body = await c.req.json().catch(() => ({})) as { hint?: string }
-    const hint = typeof body.hint === 'string' ? body.hint.trim() : ''
-    if (!hint) return c.json({ error: 'hint is required' }, 400)
-
-    const db = getEvoDb()
-    const row = db.select().from(evolutionRuns).where(eq(evolutionRuns.id, id)).get()
-    if (!row) return c.json({ error: 'not found' }, 404)
+    const req = await readHintRequest(c)
+    if ('error' in req) return c.json({ error: req.error }, req.status)
+    const { id, hint, db, row } = req
 
     // Append to existing user_hint with a separator. Multiple appends from
     // the reviewer accumulate so the apply agent sees the full conversation

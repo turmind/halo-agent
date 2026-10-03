@@ -75,6 +75,22 @@ function deriveActiveView(state: { buffers: Record<string, EditorBuffer>; groups
   return { tabs, activeTab: grp.activeTab }
 }
 
+/** Open `path` in group `idx`: seed its buffer via `makeBuffer` when none
+ *  exists yet, append it to the group's tabs if absent, and make it that
+ *  group's active tab. Shared by openFile / openPreview / openFileInGroup. */
+function showInGroup(
+  state: { buffers: Record<string, EditorBuffer>; groups: EditorGroup[] },
+  idx: number,
+  path: string,
+  makeBuffer: () => EditorBuffer,
+): { buffers: Record<string, EditorBuffer>; groups: EditorGroup[] } {
+  const buffers = state.buffers[path] ? state.buffers : { ...state.buffers, [path]: makeBuffer() }
+  const cur = state.groups[idx]
+  const tabs = cur.tabs.includes(path) ? cur.tabs : [...cur.tabs, path]
+  const groups = state.groups.map((g, i) => i === idx ? { ...g, tabs, activeTab: path } : g)
+  return { buffers, groups }
+}
+
 interface EditorStore {
   // ── New pane-aware shape ──────────────────────────────────────────
   buffers: Record<string, EditorBuffer>
@@ -242,13 +258,8 @@ export function createEditorStore() {
 
       openFile(path, content, language, mtime, meta) {
         set((state) => {
-          const buffers = state.buffers[path]
-            ? state.buffers
-            : { ...state.buffers, [path]: { path, content, originalContent: content, language, mtime, size: meta?.size, createdAt: meta?.createdAt } }
-          const idx = state.activeGroupIdx
-          const cur = state.groups[idx]
-          const tabs = cur.tabs.includes(path) ? cur.tabs : [...cur.tabs, path]
-          const groups = state.groups.map((g, i) => i === idx ? { ...g, tabs, activeTab: path } : g)
+          const { buffers, groups } = showInGroup(state, state.activeGroupIdx, path,
+            () => ({ path, content, originalContent: content, language, mtime, size: meta?.size, createdAt: meta?.createdAt }))
           const next = { ...state, buffers, groups }
           return { buffers, groups, ...deriveActiveView(next) }
         })
@@ -256,13 +267,8 @@ export function createEditorStore() {
 
       openPreview(path, downloadUrl, viewUrl, meta) {
         set((state) => {
-          const buffers = state.buffers[path]
-            ? state.buffers
-            : { ...state.buffers, [path]: { path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl, tooLarge: meta?.tooLarge }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt } }
-          const idx = state.activeGroupIdx
-          const cur = state.groups[idx]
-          const tabs = cur.tabs.includes(path) ? cur.tabs : [...cur.tabs, path]
-          const groups = state.groups.map((g, i) => i === idx ? { ...g, tabs, activeTab: path } : g)
+          const { buffers, groups } = showInGroup(state, state.activeGroupIdx, path,
+            () => ({ path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl, tooLarge: meta?.tooLarge }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt }))
           const next = { ...state, buffers, groups }
           return { buffers, groups, ...deriveActiveView(next) }
         })
@@ -271,12 +277,8 @@ export function createEditorStore() {
       openFileInGroup(groupIdx, path, content, language, mtime, meta) {
         set((state) => {
           if (groupIdx < 0 || groupIdx >= state.groups.length) return state
-          const buffers = state.buffers[path]
-            ? state.buffers
-            : { ...state.buffers, [path]: { path, content, originalContent: content, language, mtime, size: meta?.size, createdAt: meta?.createdAt } }
-          const cur = state.groups[groupIdx]
-          const tabs = cur.tabs.includes(path) ? cur.tabs : [...cur.tabs, path]
-          const groups = state.groups.map((g, i) => i === groupIdx ? { ...g, tabs, activeTab: path } : g)
+          const { buffers, groups } = showInGroup(state, groupIdx, path,
+            () => ({ path, content, originalContent: content, language, mtime, size: meta?.size, createdAt: meta?.createdAt }))
           const activeGroupIdx = groupIdx
           const next = { ...state, buffers, groups, activeGroupIdx }
           return { buffers, groups, activeGroupIdx, ...deriveActiveView(next) }

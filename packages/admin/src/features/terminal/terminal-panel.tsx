@@ -138,6 +138,41 @@ const XTERM_OPTIONS = {
   scrollback: 10000,
 }
 
+/** Mount a hidden xterm for PTY `id` into `host`: input → `terminal:input`,
+ *  container resize → fit + debounced `terminal:resize`. Shared by fresh
+ *  tabs (createTerminal) and server-reattached ones. */
+function mountXterm(host: HTMLDivElement, id: string, theme: Theme): Pick<TermInstance, 'term' | 'fit' | 'container' | 'ro'> {
+  const container = document.createElement('div')
+  container.className = 'absolute inset-0'
+  container.style.display = 'none'
+  host.appendChild(container)
+
+  const term = new XTerm({ ...XTERM_OPTIONS, theme: XTERM_THEMES[theme] })
+
+  const fit = new FitAddon()
+  term.loadAddon(fit)
+  term.open(container)
+  fit.fit()
+
+  // Input → server
+  term.onData((data) => {
+    wsClient.send({ type: 'terminal:input', data, terminalId: id })
+  })
+
+  // Resize observer
+  let resizeTimer: ReturnType<typeof setTimeout> | null = null
+  const ro = new ResizeObserver(() => {
+    fit.fit()
+    if (resizeTimer) clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(() => {
+      wsClient.send({ type: 'terminal:resize', cols: term.cols, rows: term.rows, terminalId: id })
+    }, 150)
+  })
+  ro.observe(container)
+
+  return { term, fit, container, ro }
+}
+
 interface TerminalPanelProps {
   headerless?: boolean
   cwd?: string
@@ -176,33 +211,7 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
     const id = `term_${Date.now().toString(36)}_${termCounter}`
     const name = tabs.length === 0 ? 'bash' : `bash (${termCounter})`
 
-    const container = document.createElement('div')
-    container.className = 'absolute inset-0'
-    container.style.display = 'none'
-    host.appendChild(container)
-
-    const term = new XTerm({ ...XTERM_OPTIONS, theme: XTERM_THEMES[themeRef.current] })
-
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    term.open(container)
-    fit.fit()
-
-    // Input → server
-    term.onData((data) => {
-      wsClient.send({ type: 'terminal:input', data, terminalId: id })
-    })
-
-    // Resize observer
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null
-    const ro = new ResizeObserver(() => {
-      fit.fit()
-      if (resizeTimer) clearTimeout(resizeTimer)
-      resizeTimer = setTimeout(() => {
-        wsClient.send({ type: 'terminal:resize', cols: term.cols, rows: term.rows, terminalId: id })
-      }, 150)
-    })
-    ro.observe(container)
+    const { term, fit, container, ro } = mountXterm(host, id, themeRef.current)
 
     const inst: TermInstance = { id, name, term, fit, container, ro, ready: false, exited: false }
     instancesRef.current.set(id, inst)
@@ -358,16 +367,7 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
         const name = firstNewIndex === 0 && instancesRef.current.size === 0 ? 'bash' : `bash (${termCounter})`
         firstNewIndex++
 
-        const container = document.createElement('div')
-        container.className = 'absolute inset-0'
-        container.style.display = 'none'
-        host.appendChild(container)
-
-        const term = new XTerm({ ...XTERM_OPTIONS, theme: XTERM_THEMES[themeRef.current] })
-        const fit = new FitAddon()
-        term.loadAddon(fit)
-        term.open(container)
-        fit.fit()
+        const { term, fit, container, ro } = mountXterm(host, id, themeRef.current)
 
         // Resync bracketed paste mode (DECSET 2004). Bash readline enabled it
         // when the PTY's current prompt was drawn — but that sequence went to
@@ -378,20 +378,6 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
         // nothing sent to the PTY); bash keeps it in sync from the next
         // prompt onward.
         term.write('\x1b[?2004h')
-
-        term.onData((data) => {
-          wsClient.send({ type: 'terminal:input', data, terminalId: id })
-        })
-
-        let resizeTimer: ReturnType<typeof setTimeout> | null = null
-        const ro = new ResizeObserver(() => {
-          fit.fit()
-          if (resizeTimer) clearTimeout(resizeTimer)
-          resizeTimer = setTimeout(() => {
-            wsClient.send({ type: 'terminal:resize', cols: term.cols, rows: term.rows, terminalId: id })
-          }, 150)
-        })
-        ro.observe(container)
 
         const inst: TermInstance = { id, name, term, fit, container, ro, ready: true, exited: false }
         instancesRef.current.set(id, inst)

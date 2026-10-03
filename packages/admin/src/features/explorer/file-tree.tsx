@@ -246,16 +246,19 @@ async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> 
   return Array.from(dataTransfer.files)
 }
 
+/** Tree order: directories first, then by name. */
+function compareTreeNodes(a: FileTreeNode, b: FileTreeNode): number {
+  if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+  return a.name.localeCompare(b.name)
+}
+
 /** Collect visible (expanded) paths in tree order. Exported so the host's
  *  keyboard navigation walks the exact same flat order the tree renders. */
 export function collectVisiblePaths(node: FileTreeNode): string[] {
   const result: string[] = []
   if (node.path) result.push(node.path)
   if (node.type === 'directory' && node.children && (node.path ? isPathExpanded(node.path) : true)) {
-    const sorted = [...(node.children ?? [])].sort((a, b) => {
-      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-      return a.name.localeCompare(b.name)
-    })
+    const sorted = [...(node.children ?? [])].sort(compareTreeNodes)
     for (const child of sorted) {
       result.push(...collectVisiblePaths(child))
     }
@@ -312,6 +315,43 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
 
   const isRoot = depth === 0 && !node.path
 
+  // Optional create-row + sorted child nodes at `childDepth` — shared by the
+  // root and expanded-directory branches below.
+  const renderChildren = (showCreate: boolean, childDepth: number, childVisiblePaths: string[] | undefined) => (
+    <>
+      {showCreate && pendingEdit && (
+        <EditInputRow
+          depth={childDepth}
+          initialValue=""
+          iconKind={pendingEdit.mode === 'create-folder' ? 'folder' : 'file'}
+          onCommit={(v) => onCommitEdit?.(v)}
+          onCancel={() => onCancelEdit?.()}
+        />
+      )}
+      {(node.children ?? [])
+        .sort(compareTreeNodes)
+        .map((child) => (
+          <FileTree
+            key={child.path}
+            node={child}
+            projectId={projectId}
+            onSelect={onSelect}
+            onContextMenu={onContextMenu}
+            onDropFiles={onDropFiles}
+            onMoveFile={onMoveFile}
+            selectedPaths={selectedPaths}
+            onSelectionChange={onSelectionChange}
+            lastAnchor={lastAnchor}
+            visiblePaths={childVisiblePaths}
+            depth={childDepth}
+            pendingEdit={pendingEdit}
+            onCommitEdit={onCommitEdit}
+            onCancelEdit={onCancelEdit}
+          />
+        ))}
+    </>
+  )
+
   // Root: compute visiblePaths once, render children
   if (isRoot) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
@@ -366,39 +406,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
         onDrop={handleRootDrop}
         className={cn('min-h-full', dragOver && 'bg-[var(--accent)]/30')}
       >
-        {showRootCreateRow && pendingEdit && (
-          <EditInputRow
-            depth={0}
-            initialValue=""
-            iconKind={pendingEdit.mode === 'create-folder' ? 'folder' : 'file'}
-            onCommit={(v) => onCommitEdit?.(v)}
-            onCancel={() => onCancelEdit?.()}
-          />
-        )}
-        {node.children
-          ?.sort((a, b) => {
-            if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-            return a.name.localeCompare(b.name)
-          })
-          .map((child) => (
-            <FileTree
-              key={child.path}
-              node={child}
-              projectId={projectId}
-              onSelect={onSelect}
-              onContextMenu={onContextMenu}
-              onDropFiles={onDropFiles}
-              onMoveFile={onMoveFile}
-              selectedPaths={selectedPaths}
-              onSelectionChange={onSelectionChange}
-              lastAnchor={lastAnchor}
-              visiblePaths={vPaths}
-              depth={0}
-              pendingEdit={pendingEdit}
-              onCommitEdit={onCommitEdit}
-              onCancelEdit={onCancelEdit}
-            />
-          ))}
+        {renderChildren(!!showRootCreateRow, 0, vPaths)}
       </div>
     )
   }
@@ -660,39 +668,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
 
       {isDir && expanded && (node.children || showCreateRow) && (
         <div>
-          {showCreateRow && pendingEdit && (
-            <EditInputRow
-              depth={depth + 1}
-              initialValue=""
-              iconKind={pendingEdit.mode === 'create-folder' ? 'folder' : 'file'}
-              onCommit={(v) => onCommitEdit?.(v)}
-              onCancel={() => onCancelEdit?.()}
-            />
-          )}
-          {(node.children ?? [])
-            .sort((a, b) => {
-              if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-              return a.name.localeCompare(b.name)
-            })
-            .map((child) => (
-              <FileTree
-                key={child.path}
-                node={child}
-                projectId={projectId}
-                onSelect={onSelect}
-                onContextMenu={onContextMenu}
-                onDropFiles={onDropFiles}
-                onMoveFile={onMoveFile}
-                selectedPaths={selectedPaths}
-                onSelectionChange={onSelectionChange}
-                lastAnchor={lastAnchor}
-                visiblePaths={visiblePaths}
-                depth={depth + 1}
-                pendingEdit={pendingEdit}
-                onCommitEdit={onCommitEdit}
-                onCancelEdit={onCancelEdit}
-              />
-            ))}
+          {renderChildren(!!showCreateRow, depth + 1, visiblePaths)}
         </div>
       )}
     </div>

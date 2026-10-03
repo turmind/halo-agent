@@ -232,26 +232,13 @@ export function mergeAgentYaml(srcAbs: string, dstAbs: string): void {
  *  preservation on the agent.yaml. Other files (AGENT.md, USER.md, etc.)
  *  are plain overwrites. */
 function forceCopyAgentDir(srcDir: string, dstDir: string): void {
-  if (!fs.existsSync(srcDir)) return
-  fs.mkdirSync(dstDir, { recursive: true })
-  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    if (SKIP_NAMES.has(entry.name)) continue
-    const srcAbs = path.join(srcDir, entry.name)
-    const dstAbs = path.join(dstDir, entry.name)
-    if (entry.isDirectory()) {
-      forceCopyDir(srcAbs, dstAbs)
-    } else if (entry.isFile()) {
-      try {
-        if (entry.name === 'agent.yaml') {
-          mergeAgentYaml(srcAbs, dstAbs)
-        } else {
-          copyTemplate(srcAbs, dstAbs)
-        }
-      } catch (err) {
-        console.log(`[Init] Failed to seed ${srcAbs}: ${err instanceof Error ? err.message : String(err)}`)
-      }
+  forceCopyDir(srcDir, dstDir, (srcAbs, dstAbs) => {
+    if (path.basename(srcAbs) === 'agent.yaml') {
+      mergeAgentYaml(srcAbs, dstAbs)
+    } else {
+      copyTemplate(srcAbs, dstAbs)
     }
-  }
+  })
 }
 
 // ── Optional skills ─────────────────────────────────────────────────────────
@@ -329,8 +316,10 @@ function syncOptionalSkills(globalDir: string): void {
 // ── Generic helpers ─────────────────────────────────────────────────────────
 
 /** Recursively force-copy `srcDir` → `dstDir`. Existing files in dst that
- *  aren't in src are left alone (we only refresh what's bundled). */
-function forceCopyDir(srcDir: string, dstDir: string): void {
+ *  aren't in src are left alone (we only refresh what's bundled).
+ *  `copyFile` applies to `srcDir`'s own files only — subdirectories always
+ *  use plain copyTemplate (forceCopyAgentDir relies on this). */
+function forceCopyDir(srcDir: string, dstDir: string, copyFile: (srcAbs: string, dstAbs: string) => void = copyTemplate): void {
   if (!fs.existsSync(srcDir)) return
   fs.mkdirSync(dstDir, { recursive: true })
   for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
@@ -341,7 +330,7 @@ function forceCopyDir(srcDir: string, dstDir: string): void {
       forceCopyDir(srcAbs, dstAbs)
     } else if (entry.isFile()) {
       try {
-        copyTemplate(srcAbs, dstAbs)
+        copyFile(srcAbs, dstAbs)
       } catch (err) {
         console.log(`[Init] Failed to seed ${srcAbs}: ${err instanceof Error ? err.message : String(err)}`)
       }

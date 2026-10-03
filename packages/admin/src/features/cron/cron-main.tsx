@@ -11,13 +11,14 @@
  * old hard-coded `w-[420px]` left rail that couldn't be resized or
  * collapsed.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Clock, Edit3, Play, Trash2 } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
 import { cn, confirmAction } from '@/shared/utils'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useT } from '@/shared/i18n'
+import { useInfiniteScroll } from '@/shared/use-infinite-scroll'
 import { Combobox } from '@/shared/components/combobox'
 import { useCronStore } from './cron-store'
 
@@ -150,18 +151,8 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
 
   useEffect(() => { void refresh() }, [refresh])
 
-  // IntersectionObserver-based infinite scroll for run history. Mirrors
-  // the pattern in cron-sidebar / evolution-sidebar.
-  const sentinelRef = useRef<HTMLLIElement | null>(null)
-  useEffect(() => {
-    const el = sentinelRef.current
-    if (!el || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) void loadMore()
-    }, { rootMargin: '64px' })
-    io.observe(el)
-    return () => io.disconnect()
-  }, [loadMore, runs.length])
+  // Infinite scroll for run history.
+  const sentinelRef = useInfiniteScroll<HTMLLIElement>(loadMore, runs.length)
 
   // Re-fetch run history whenever this job's runs change server-side.
   // Only refreshes the head — older pages stay where they were.

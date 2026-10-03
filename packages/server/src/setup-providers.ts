@@ -182,14 +182,12 @@ export function readDefaultAgentProvider(): string | undefined {
   return typeof provider === 'string' && provider.length > 0 ? provider : undefined
 }
 
-/** Derive an agent.yaml `model:` block from the bundled provider template.
- *  Near-duplicate of routes/agent-configs.ts:buildScaffoldModelBlock, but
- *  reads templates/models/ directly (setup runs outside the server process,
- *  so the seeded registry cache isn't available) — kept separate so the CLI
- *  setup path doesn't import the routes/tools chain. */
-function buildTemplateModelBlock(providerId: string): Record<string, unknown> | null {
-  const data = readYamlFile(path.join(TEMPLATES_DIR, 'models', `${providerId}.yaml`)) as Record<string, unknown> | null
-  if (!data || typeof data !== 'object') return null
+/** Derive an agent.yaml `model:` block (id / endpoint / promptCaching /
+ *  thinking) from one provider's models YAML. Shared by setup (bundled
+ *  templates, below) and routes/agent-configs.ts (seeded registry) — this
+ *  module stays free of the routes/tools chain so the CLI setup path can
+ *  import it. */
+export function modelBlockFromProvider(providerId: string, data: Record<string, unknown>): Record<string, unknown> {
   const models = Array.isArray(data.models) ? data.models as Array<Record<string, unknown>> : []
   const modelId = (typeof data.defaultModelId === 'string' ? data.defaultModelId : undefined)
     ?? (models[0] ? models[0].id as string | undefined : undefined)
@@ -212,6 +210,15 @@ function buildTemplateModelBlock(providerId: string): Record<string, unknown> | 
     block.thinking = thinking
   }
   return block
+}
+
+/** Model block from the bundled provider template — reads templates/models/
+ *  directly (setup runs outside the server process, so the seeded registry
+ *  cache isn't available). */
+function buildTemplateModelBlock(providerId: string): Record<string, unknown> | null {
+  const data = readYamlFile(path.join(TEMPLATES_DIR, 'models', `${providerId}.yaml`)) as Record<string, unknown> | null
+  if (!data || typeof data !== 'object') return null
+  return modelBlockFromProvider(providerId, data)
 }
 
 /** Rebind the user-facing built-in agents to `providerId`, deriving model id /

@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { homedir } from 'node:os'
@@ -10,6 +10,7 @@ import { resolveMdFilePath, writeMdFile } from '../prompts/md-loader.js'
 import { config, getModelsRegistry } from '../config.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
 import { hasWorkspaceHalo } from '../init.js'
+import { modelBlockFromProvider } from '../setup-providers.js'
 import { isSafeIdSegment } from './workspace-path.js'
 import { createMtimeCache } from './mtime-cache.js'
 
@@ -116,30 +117,7 @@ function buildScaffoldModelBlock(): Record<string, unknown> {
   if (!provider) {
     return { provider: FALLBACK_SCAFFOLD_PROVIDER }
   }
-  const providerId = provider.id as string
-  const modelId = (provider.defaultModelId as string | undefined)
-    ?? (Array.isArray(provider.models) && provider.models[0] ? (provider.models[0] as { id?: string }).id : undefined)
-  const endpoint = provider.defaultEndpoint as string | undefined
-  const model = Array.isArray(provider.models)
-    ? (provider.models as Array<Record<string, unknown>>).find((m) => m.id === modelId)
-    : undefined
-  const caps = (model?.capabilities as Record<string, unknown> | undefined) ?? {}
-  const promptCaching = (caps.promptCaching as { default?: string } | undefined)?.default
-  const thinkingCap = caps.thinking as
-    | { defaultEnabled?: boolean; default?: string; defaultBudgetTokens?: number }
-    | undefined
-
-  const block: Record<string, unknown> = { provider: providerId }
-  if (modelId) block.id = modelId
-  if (endpoint) block.endpoint = endpoint
-  if (promptCaching) block.promptCaching = promptCaching
-  if (thinkingCap?.defaultEnabled) {
-    const thinking: Record<string, unknown> = { enabled: true }
-    if (thinkingCap.default) thinking.effort = thinkingCap.default
-    if (thinkingCap.defaultBudgetTokens != null) thinking.budget_tokens = thinkingCap.defaultBudgetTokens
-    block.thinking = thinking
-  }
-  return block
+  return modelBlockFromProvider(provider.id as string, provider)
 }
 
 /** Create default agent.yaml content for new agents */
@@ -177,6 +155,13 @@ function defaultAgentYamlTemplate(): string {
 
 async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true })
+}
+
+/** Directory of an existing agent: workspace scope (with a projectId) or global. */
+function resolveAgentDir(id: string, scope: string, projectId: string | undefined): string {
+  return scope === 'workspace' && projectId
+    ? path.join(projectId, '.halo', 'agents', id)
+    : path.join(GLOBAL_AGENTS_DIR, id)
 }
 
 /** Per-`agent.yaml` parse cache — see mtime-cache.ts for the scheme. */
@@ -356,13 +341,7 @@ export function createAgentConfigRoutes() {
     const scope = c.req.query('scope') ?? 'global'
     const projectId = c.req.query('projectId')
 
-    let agentDir: string
-    if (scope === 'workspace' && projectId) {
-      agentDir = path.join(projectId, '.halo', 'agents', id)
-    } else {
-      agentDir = path.join(GLOBAL_AGENTS_DIR, id)
-    }
-
+    const agentDir = resolveAgentDir(id, scope, projectId)
     const yamlPath = path.join(agentDir, 'agent.yaml')
     try {
       const content = await fs.readFile(yamlPath, 'utf-8')
@@ -390,13 +369,7 @@ export function createAgentConfigRoutes() {
     }
 
     const scope = body.scope ?? 'global'
-    let agentDir: string
-    if (scope === 'workspace' && body.projectId) {
-      agentDir = path.join(body.projectId, '.halo', 'agents', id)
-    } else {
-      agentDir = path.join(GLOBAL_AGENTS_DIR, id)
-    }
-
+    const agentDir = resolveAgentDir(id, scope, body.projectId)
     const yamlPath = path.join(agentDir, 'agent.yaml')
     try {
       await fs.access(agentDir)
@@ -421,13 +394,7 @@ export function createAgentConfigRoutes() {
     const scope = c.req.query('scope') ?? 'global'
     const projectId = c.req.query('projectId')
 
-    let agentDir: string
-    if (scope === 'workspace' && projectId) {
-      agentDir = path.join(projectId, '.halo', 'agents', id)
-    } else {
-      agentDir = path.join(GLOBAL_AGENTS_DIR, id)
-    }
-
+    const agentDir = resolveAgentDir(id, scope, projectId)
     try {
       await fs.access(agentDir)
     } catch {
@@ -594,18 +561,21 @@ export function createAgentConfigRoutes() {
     return c.json({ sessions })
   })
 
-  // GET /agent-configs/:id/sessions/:sessionId?source=&projectId=
-  app.get('/agent-configs/:id/sessions/:sessionId', async (c) => {
+  /** `:id` + `:sessionId` + `?source=&projectId=` → the session's JSON file,
+   *  or null when either id fails the traversal guard. */
+  function sessionFileFromParams(c: Context): string | null {
     const agentId = c.req.param('id')
     const sessionId = c.req.param('sessionId')
-    if (!isSafeIdSegment(agentId) || !isSafeIdSegment(sessionId)) {
-      return c.json({ error: 'Invalid id' }, 400)
-    }
+    if (!agentId || !sessionId || !isSafeIdSegment(agentId) || !isSafeIdSegment(sessionId)) return null
     const projectId = c.req.query('projectId')
     const source = c.req.query('source') || 'test-chat'
+    return path.join(getSessionsDir(agentId, source, projectId || undefined), `${sessionId}.json`)
+  }
 
-    const dir = getSessionsDir(agentId, source, projectId || undefined)
-    const filePath = path.join(dir, `${sessionId}.json`)
+  // GET /agent-configs/:id/sessions/:sessionId?source=&projectId=
+  app.get('/agent-configs/:id/sessions/:sessionId', async (c) => {
+    const filePath = sessionFileFromParams(c)
+    if (!filePath) return c.json({ error: 'Invalid id' }, 400)
     try {
       const raw = await fs.readFile(filePath, 'utf-8')
       return c.json({ session: JSON.parse(raw) })
@@ -681,17 +651,10 @@ export function createAgentConfigRoutes() {
 
   // DELETE /agent-configs/:id/sessions/:sessionId?source=&projectId=
   app.delete('/agent-configs/:id/sessions/:sessionId', async (c) => {
-    const agentId = c.req.param('id')
-    const sessionId = c.req.param('sessionId')
-    if (!isSafeIdSegment(agentId) || !isSafeIdSegment(sessionId)) {
-      return c.json({ error: 'Invalid id' }, 400)
-    }
-    const projectId = c.req.query('projectId')
-    const source = c.req.query('source') || 'test-chat'
-
-    const dir = getSessionsDir(agentId, source, projectId || undefined)
+    const filePath = sessionFileFromParams(c)
+    if (!filePath) return c.json({ error: 'Invalid id' }, 400)
     try {
-      await fs.rm(path.join(dir, `${sessionId}.json`))
+      await fs.rm(filePath)
       return c.json({ ok: true })
     } catch {
       return c.json({ error: 'Session not found' }, 404)

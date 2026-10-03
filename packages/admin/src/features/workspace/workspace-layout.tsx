@@ -520,51 +520,34 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     }
   }, [bottomHost, activeBottomSlot])
 
+  const renderTabButton = (tab: typeof tabs[number]) => {
+    const Icon = tab.icon
+    const isActive = activeTab === tab.id
+    return (
+      <button
+        key={tab.id}
+        onClick={() => handleTabClick(tab.id)}
+        title={tab.label}
+        className={cn(
+          'relative flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
+          isActive ? 'text-[var(--foreground)]' : 'text-[var(--muted-foreground)]',
+        )}
+      >
+        {isActive && (
+          <div className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[var(--primary)]" />
+        )}
+        <Icon className="h-5 w-5" />
+      </button>
+    )
+  }
+
   return (
     <div className="flex h-full">
       {/* Activity Bar — hidden when maximized */}
       <div className={cn('flex w-12 shrink-0 flex-col items-center border-r border-[var(--border)] bg-[var(--card)] py-2', maximized && 'hidden')}>
-        {topTabs.map((tab) => {
-          const Icon = tab.icon
-          const isActive = activeTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              onClick={() => handleTabClick(tab.id)}
-              title={tab.label}
-              className={cn(
-                'relative flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
-                isActive ? 'text-[var(--foreground)]' : 'text-[var(--muted-foreground)]',
-              )}
-            >
-              {isActive && (
-                <div className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[var(--primary)]" />
-              )}
-              <Icon className="h-5 w-5" />
-            </button>
-          )
-        })}
+        {topTabs.map(renderTabButton)}
         <div className="flex-1" />
-        {bottomTabs.map((tab) => {
-          const Icon = tab.icon
-          const isActive = activeTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              onClick={() => handleTabClick(tab.id)}
-              title={tab.label}
-              className={cn(
-                'relative flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
-                isActive ? 'text-[var(--foreground)]' : 'text-[var(--muted-foreground)]',
-              )}
-            >
-              {isActive && (
-                <div className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[var(--primary)]" />
-              )}
-              <Icon className="h-5 w-5" />
-            </button>
-          )
-        })}
+        {bottomTabs.map(renderTabButton)}
         {pinned !== null && (
           <button
             onClick={togglePin}
