@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Server: a server started with `HALO_BADGE=DEV` never claims or rewrites a workspace's `.halo/runtime.lock` and runs no restart cleanup (stopping orphaned sub-sessions, resuming interrupted runs); the server without the badge that shares those workspaces owns all of it. Before, a dev server restoring a channel's reply route could take the lock of a workspace prod also serves.
+
 ## [1.5.5] - 2026-10-03
 
 ### Added

@@ -264,8 +264,10 @@ export function restoreChannelRoute<Route>(args: {
   // Boot-time first touch: same ownership gate as the run-ledger eager sweep
   // in index.ts — building the SessionManager of a workspace another live
   // process owns would cache a non-owner manager for this process lifetime.
+  // A registry that never reconciles (HALO_BADGE=DEV server) has no cleanup
+  // to protect, so it builds directly and never claims the lock.
   const sm = registry.peek(workspacePath)
-    ?? (claimWorkspaceRuntime(workspacePath) ? registry.getOrCreate(workspacePath) : undefined)
+    ?? (!registry.reconcilesOnBoot || claimWorkspaceRuntime(workspacePath) ? registry.getOrCreate(workspacePath) : undefined)
   if (!sm) {
     console.warn(`[${bridge.channel}] reply route not restored for ${sessionPrefix}*: ${workspacePath} runtime is owned by another live process (.halo/runtime.lock)`)
     return null

@@ -97,6 +97,8 @@ Protocol (single-machine scope; NFS / cross-host explicitly out):
 
 Bias is deliberate: pid reuse can read a stale pid as "alive," which only costs one missed cleanup round; a false-dead could stop another process's live sessions. Full race analysis in the file's header comment.
 
+**`HALO_BADGE=DEV` servers never claim.** dev and prod serve the same workspaces, so prod (any other badge, or none) owns the lock outright: a DEV server (`config.server.ownsWorkspaceRuntimes === false`) builds its registry with `reconcileOrphansOnBoot: false`, skips the run-ledger eager sweep, and has channel route restore build the SessionManager directly. It never creates, rewrites or takes over `runtime.lock`, and runs no boot cleanup. Two costs: orphans left by a dev crash stay until prod's next restart cleans them, and a prod restart stamps the sub-sessions dev is running in a shared workspace stopped. That is what prod ownership means.
+
 ## Session file format (v1)
 
 Path: `.halo/sessions/{agentId}/{sessionId}.json`

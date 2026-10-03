@@ -18,6 +18,11 @@ export class SessionManagerRegistry {
    */
   constructor(private opts: { reconcileOrphansOnBoot?: boolean } = {}) {}
 
+  /** Whether managers built here claim `.halo/runtime.lock` + run boot cleanup. */
+  get reconcilesOnBoot(): boolean {
+    return this.opts.reconcileOrphansOnBoot === true
+  }
+
   getOrCreate(workspacePath: string): SessionManager {
     const resolved = fs.realpathSync(workspacePath)
     ensureWorkspaceHalo(resolved)

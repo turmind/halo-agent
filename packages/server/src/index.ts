@@ -408,7 +408,14 @@ if (!AGENTCORE) {
 // per-workspace via `.halo/runtime.lock` (two servers with different
 // HALO_HOME can share one workspace — server.lock can't see that), so this
 // flag means "reconcile if the workspace claim succeeds", not "always".
-const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
+// A HALO_BADGE=DEV server shares prod's workspaces and leaves all of this to
+// prod: it never claims runtime.lock and runs no boot cleanup (orphan
+// reconcile, goal / run-ledger sweeps) — see config.server.ownsWorkspaceRuntimes.
+const OWNS_RUNTIMES = config.server.ownsWorkspaceRuntimes
+const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: OWNS_RUNTIMES })
+if (!OWNS_RUNTIMES) {
+  console.log('[Server] HALO_BADGE=DEV: workspace runtime.lock left to the owning server — no claim, no boot cleanup')
+}
 setRelayRegistry(registry)
 // Cron jobs may run in a user-picked session; the runner peeks the live
 // managers to skip busy sessions and drop stale caches after a cli run.
@@ -425,14 +432,17 @@ setCronSessionRegistry(registry)
 // lifetime (never reconciles, never nudges, even after the holder exits),
 // whereas skipping keeps the rows and lets the first real touch claim
 // normally. claimWorkspaceRuntime is idempotent for our own pid, so the
-// constructor's own claim just re-confirms.
-for (const ws of listRunningWorkspaces()) {
-  if (!fs.existsSync(path.join(ws, '.halo'))) continue
-  if (!claimWorkspaceRuntime(ws)) continue
-  try {
-    registry.getOrCreate(ws)
-  } catch (err) {
-    console.error(`[RunLedger] Boot sweep could not open ${ws}: ${err instanceof Error ? err.message : String(err)}`)
+// constructor's own claim just re-confirms. Non-owner (DEV) servers skip the
+// sweep entirely — their ledger is off, so they write no rows to drain.
+if (OWNS_RUNTIMES) {
+  for (const ws of listRunningWorkspaces()) {
+    if (!fs.existsSync(path.join(ws, '.halo'))) continue
+    if (!claimWorkspaceRuntime(ws)) continue
+    try {
+      registry.getOrCreate(ws)
+    } catch (err) {
+      console.error(`[RunLedger] Boot sweep could not open ${ws}: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 }
 

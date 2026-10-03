@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { claimWorkspaceRuntime, releaseWorkspaceRuntime, RUNTIME_LOCK_FILE } from '../src/agents/workspace-runtime-lock.js'
 import { SessionManager } from '../src/agents/session-manager.js'
+import { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
 import { agentSessions } from '../src/db/schema.js'
 import { createRunsDb, setRunsDb } from '../src/db/runs-db.js'
 import { eq } from 'drizzle-orm'
@@ -164,5 +165,34 @@ describe('SessionManager boot reconcile gated on the runtime claim', () => {
     expect(existsSync(lockPath())).toBe(false)
     expect(rowStoppedAt(sm, 'root1>kid')).toBeNull()
     void seeder
+  })
+})
+
+describe('non-owner registry (HALO_BADGE=DEV server: reconcileOrphansOnBoot false)', () => {
+  function seedOrphanKid(): void {
+    const seeder = new SessionManager(ws)
+    seeder.getDb().insert(agentSessions).values({
+      id: 'root1>kid', parentId: 'root1', agentId: 'executor', agentName: 'Executor',
+      description: '', workingDir: null, accessLevel: null,
+      createdAt: 1000, updatedAt: 1000, stoppedAt: null, archivedAt: null,
+    }).run()
+  }
+
+  it('no existing lock: getOrCreate creates no runtime.lock and reconciles nothing', () => {
+    seedOrphanKid()
+    const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: false })
+    expect(registry.reconcilesOnBoot).toBe(false)
+    const sm = registry.getOrCreate(ws)
+    expect(existsSync(lockPath())).toBe(false)
+    const row = sm.getDb().select().from(agentSessions).where(eq(agentSessions.id, 'root1>kid')).get()
+    expect(row?.stoppedAt ?? null).toBeNull()
+  })
+
+  it('live foreign lock: getOrCreate leaves its content and mtime unchanged', () => {
+    writeFileSync(lockPath(), String(foreignLivePid()))
+    const before = statSync(lockPath()).mtimeMs
+    new SessionManagerRegistry({ reconcileOrphansOnBoot: false }).getOrCreate(ws)
+    expect(readFileSync(lockPath(), 'utf-8')).toBe(String(foreignLivePid()))
+    expect(statSync(lockPath()).mtimeMs).toBe(before)
   })
 })

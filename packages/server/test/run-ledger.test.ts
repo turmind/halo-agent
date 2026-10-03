@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
@@ -237,8 +237,10 @@ describe('runSession ledger hooks', () => {
 
 // ── Boot: eager sweep through the registry ───────────────────────────
 
-/** What index.ts does after building the server registry. */
+/** What index.ts does after building the server registry (its OWNS_RUNTIMES
+ *  gate is the same value the registry was built with). */
 function eagerSweep(registry: SessionManagerRegistry): void {
+  if (!registry.reconcilesOnBoot) return
   for (const w of listRunningWorkspaces()) {
     if (!claimWorkspaceRuntime(w)) continue
     registry.getOrCreate(w)
@@ -285,6 +287,22 @@ describe('eager boot sweep', () => {
     // A cached non-owner SM would freeze "not owner" for the whole process
     // lifetime — the first real touch must still get a fresh claim.
     expect(registry.peek(ws)).toBeUndefined()
+    expect(sent).toEqual([])
+    expect(ledgerRows().map((r) => r.sessionId)).toEqual(['r1'])
+  })
+
+  it('non-owner (HALO_BADGE=DEV) server: no claim, no SM, no nudge, rows kept for the owner', () => {
+    seedSession('r1')
+    insertRunning(ws, 'r1')
+    const sent: string[] = []
+    vi.spyOn(SessionManager.prototype, 'appendUserMessage').mockImplementation(() => {})
+    vi.spyOn(SessionManager.prototype, 'sendUserMessage').mockImplementation(async (id) => { sent.push(id); return 'running' })
+    const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: false })
+    eagerSweep(registry)
+    expect(registry.peek(ws)).toBeUndefined()
+    // A later first touch (channel route restore, admin open) still sweeps nothing.
+    registry.getOrCreate(ws)
+    expect(existsSync(join(ws, '.halo', RUNTIME_LOCK_FILE))).toBe(false)
     expect(sent).toEqual([])
     expect(ledgerRows().map((r) => r.sessionId)).toEqual(['r1'])
   })

@@ -322,6 +322,12 @@ export const config = {
       const v = process.env.HALO_BADGE?.trim()
       return v ? v : null
     },
+    /** false on a `HALO_BADGE=DEV` instance: dev and prod serve the same
+     *  workspaces, so prod alone claims `.halo/runtime.lock` and runs the
+     *  boot cleanup (orphan reconcile, goal / run-ledger sweeps). */
+    get ownsWorkspaceRuntimes(): boolean {
+      return process.env.HALO_BADGE?.trim().toUpperCase() !== 'DEV'
+    },
     /** `HALO_RUNTIME_MODE=agentcore` runs the server as an Amazon Bedrock
      *  AgentCore Runtime container: auth is terminated upstream by AgentCore,
      *  so password/JWT checks, channels, cron/evolution and the instance lock

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, statSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -259,14 +259,40 @@ describe('wechat — reply route restored at account start', () => {
 
   it('workspace runtime owned by another live process → skipped, and no SessionManager gets cached', async () => {
     seedRow(WX_SID)
-    // Fresh registry = a second server that has never touched the workspace;
-    // the lock names a live pid that isn't ours (our parent).
-    registry = new SessionManagerRegistry()
+    // Fresh owner-mode registry = a second server that has never touched the
+    // workspace; the lock names a live pid that isn't ours (our parent).
+    registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
     mkdirSync(join(workspace, '.halo'), { recursive: true })
     writeFileSync(join(workspace, '.halo', RUNTIME_LOCK_FILE), String(process.ppid))
     patchConfig(channelDb, 'wx-acc', { contextTokens: { [WX_USER]: 'ctx-1' } })
     wx = startWechatChannel({ registry, db: channelDb })
     expect(registry.peek(workspace)).toBeUndefined()
+  })
+
+  it('non-owner (HALO_BADGE=DEV) registry: restores the route despite a live foreign lock, lock untouched', async () => {
+    seedRow(WX_SID)
+    registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: false })
+    const lock = join(workspace, '.halo', RUNTIME_LOCK_FILE)
+    writeFileSync(lock, String(process.ppid))
+    const before = statSync(lock).mtimeMs
+    patchConfig(channelDb, 'wx-acc', { contextTokens: { [WX_USER]: 'ctx-1' } })
+    wx = startWechatChannel({ registry, db: channelDb })
+    expect(registry.peek(workspace)).toBeDefined()
+
+    emitReply(WX_SID, 'dev reply')
+    await tick()
+    expect(wxSends).toEqual([{ to: WX_USER, token: 'ctx-1', text: 'dev reply' }])
+    expect(readFileSync(lock, 'utf-8')).toBe(String(process.ppid))
+    expect(statSync(lock).mtimeMs).toBe(before)
+  })
+
+  it('non-owner registry with no lock present: restores the route and never creates runtime.lock', async () => {
+    seedRow(WX_SID)
+    registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: false })
+    patchConfig(channelDb, 'wx-acc', { contextTokens: { [WX_USER]: 'ctx-1' } })
+    wx = startWechatChannel({ registry, db: channelDb })
+    expect(registry.peek(workspace)).toBeDefined()
+    expect(existsSync(join(workspace, '.halo', RUNTIME_LOCK_FILE))).toBe(false)
   })
 })
 
