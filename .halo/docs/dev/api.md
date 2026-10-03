@@ -340,13 +340,13 @@ File: `packages/server/src/routes/agent-configs.ts`
 | GET | `/api/agent-configs/tools` | Available workspace tools |
 | GET | `/api/agent-configs/models` | Available model providers and models |
 | POST | `/api/agent-configs` | Create a new agent |
-| GET | `/api/agent-configs/:id/yaml?scope=&projectId=` | Read agent.yaml. `scope=workspace` without `projectId` → 400 |
-| PUT | `/api/agent-configs/:id/yaml?scope=&projectId=` | Write agent.yaml. `scope=workspace` without `projectId` → 400 |
-| DELETE | `/api/agent-configs/:id?scope=&projectId=` | Delete agent (global has "last one" protection). `scope=workspace` without `projectId` → 400 (never falls back to the same-named global agent) |
+| GET | `/api/agent-configs/:id/yaml?scope=&projectId=` | Read agent.yaml. `scope=workspace` without `projectId` → 400; `scope` other than `global` / `workspace` (omitted = `global`) → 400 `Invalid scope` |
+| PUT | `/api/agent-configs/:id/yaml?scope=&projectId=` | Write agent.yaml. Same 400s as GET |
+| DELETE | `/api/agent-configs/:id?scope=&projectId=` | Delete agent (global has "last one" protection). Same 400s as GET — never falls back to the same-named global agent or skips the last-one guard |
 | PATCH | `/api/agent-configs/:id/toggle?scope=&projectId=` | Toggle disabled in workspace DB. `projectId` required. Returns `{ ok, disabled }`. |
 | GET | `/api/agent-configs/:id/md/:fileType` | Read an MD file (AGENT.md / INSTRUCTIONS.md / INDEX.md) |
-| PUT | `/api/agent-configs/:id/md/:fileType` | Write an MD file (AGENT.md / INSTRUCTIONS.md) |
-| GET | `/api/agent-configs/:id/md-all` | Read every MD at once |
+| PUT | `/api/agent-configs/:id/md/:fileType` | Write an MD file (AGENT.md / INSTRUCTIONS.md). `scope=workspace` without `projectId` → 400 (never writes the global AGENT.md / INSTRUCTIONS.md) |
+| GET | `/api/agent-configs/:id/md-all` | Read every MD at once. `scope=workspace` without `projectId` → 400 |
 | GET | `/api/agent-configs/:id/sessions?projectId=` | List the agent's session files |
 | GET | `/api/agent-configs/:id/sessions/:sessionId` | Read a session |
 | POST | `/api/agent-configs/:id/sessions` | Save / update a session |
@@ -575,6 +575,9 @@ Files created:
 
 // 400 scope=workspace without projectId
 { "error": "projectId required for workspace agents" }
+
+// 400 scope other than global / workspace
+{ "error": "Invalid scope" }
 
 // 404
 { "error": "Agent not found" }

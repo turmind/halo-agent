@@ -158,13 +158,17 @@ async function ensureDir(dir: string) {
 }
 
 /**
- * Directory of an existing agent: workspace scope or global. `null` when
- * workspace scope lacks a projectId — callers 400 rather than fall back to
- * the same-named global agent (a DELETE would otherwise remove it).
+ * Directory of an existing agent: workspace scope or global. Any other scope,
+ * or workspace scope without a projectId, is an error the callers 400 on —
+ * never a fallback to the global dir (a DELETE would otherwise remove the
+ * same-named global agent, and skip the keep-one-global guard).
  */
-function resolveAgentDir(id: string, scope: string, projectId: string | undefined): string | null {
-  if (scope !== 'workspace') return path.join(GLOBAL_AGENTS_DIR, id)
-  return projectId ? path.join(projectId, '.halo', 'agents', id) : null
+function resolveAgentDir(id: string, scope: string, projectId: string | undefined): { agentDir: string } | { error: string } {
+  if (scope === 'global') return { agentDir: path.join(GLOBAL_AGENTS_DIR, id) }
+  if (scope !== 'workspace') return { error: 'Invalid scope' }
+  return projectId
+    ? { agentDir: path.join(projectId, '.halo', 'agents', id) }
+    : { error: 'projectId required for workspace agents' }
 }
 
 /** Per-`agent.yaml` parse cache — see mtime-cache.ts for the scheme. */
@@ -344,8 +348,9 @@ export function createAgentConfigRoutes() {
     const scope = c.req.query('scope') ?? 'global'
     const projectId = c.req.query('projectId')
 
-    const agentDir = resolveAgentDir(id, scope, projectId)
-    if (!agentDir) return c.json({ error: 'projectId required for workspace agents' }, 400)
+    const resolved = resolveAgentDir(id, scope, projectId)
+    if ('error' in resolved) return c.json({ error: resolved.error }, 400)
+    const { agentDir } = resolved
     const yamlPath = path.join(agentDir, 'agent.yaml')
     try {
       const content = await fs.readFile(yamlPath, 'utf-8')
@@ -373,8 +378,9 @@ export function createAgentConfigRoutes() {
     }
 
     const scope = body.scope ?? 'global'
-    const agentDir = resolveAgentDir(id, scope, body.projectId)
-    if (!agentDir) return c.json({ error: 'projectId required for workspace agents' }, 400)
+    const resolved = resolveAgentDir(id, scope, body.projectId)
+    if ('error' in resolved) return c.json({ error: resolved.error }, 400)
+    const { agentDir } = resolved
     const yamlPath = path.join(agentDir, 'agent.yaml')
     try {
       await fs.access(agentDir)
@@ -399,8 +405,9 @@ export function createAgentConfigRoutes() {
     const scope = c.req.query('scope') ?? 'global'
     const projectId = c.req.query('projectId')
 
-    const agentDir = resolveAgentDir(id, scope, projectId)
-    if (!agentDir) return c.json({ error: 'projectId required for workspace agents' }, 400)
+    const resolved = resolveAgentDir(id, scope, projectId)
+    if ('error' in resolved) return c.json({ error: resolved.error }, 400)
+    const { agentDir } = resolved
     try {
       await fs.access(agentDir)
     } catch {
@@ -481,6 +488,8 @@ export function createAgentConfigRoutes() {
 
     const body = await c.req.json<{ content: string; scope?: string; projectId?: string }>()
     const scope = (body.scope ?? 'global') as 'global' | 'workspace'
+    // resolveMdFilePath falls back to the global file without a workspaceRoot.
+    if (scope === 'workspace' && !body.projectId) return c.json({ error: 'projectId required for workspace agents' }, 400)
 
     const filePath = resolveMdFilePath(id, fileType as 'AGENT.md' | 'INSTRUCTIONS.md' | 'INDEX.md', scope, body.projectId || undefined)
     if (!filePath) return c.json({ error: 'Cannot resolve file path' }, 400)
@@ -496,6 +505,7 @@ export function createAgentConfigRoutes() {
     if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid agent id' }, 400)
     const scope = (c.req.query('scope') ?? 'global') as 'global' | 'workspace'
     const projectId = c.req.query('projectId')
+    if (scope === 'workspace' && !projectId) return c.json({ error: 'projectId required for workspace agents' }, 400)
 
     const result: Record<string, { content: string; exists: boolean; path: string | null; readOnly: boolean }> = {}
     for (const ft of MD_ALL_TYPES) {

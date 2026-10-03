@@ -4,8 +4,9 @@ import os from 'node:os'
 import path from 'node:path'
 
 /**
- * Workspace-scoped agent GET/PUT yaml + DELETE without a projectId must 400,
- * never fall back to the same-named global agent (a DELETE would remove it).
+ * Workspace-scoped agent GET/PUT yaml, PUT md, GET md-all + DELETE without a
+ * projectId must 400, never fall back to the same-named global agent (a DELETE
+ * would remove it); an unknown scope must 400 too, never pass as global.
  *
  * GLOBAL_AGENTS_DIR resolves from os.homedir() at module load → redirect HOME
  * to a temp dir BEFORE the dynamic import, so no test touches real agents.
@@ -72,6 +73,35 @@ describe('workspace scope without projectId → 400, global agent untouched', ()
     expect(res.status).toBe(400)
     expect(fs.readFileSync(globalYaml(), 'utf-8')).toBe('name: Global Shared\n')
   })
+
+  it('PUT md (AGENT.md / INSTRUCTIONS.md)', async () => {
+    for (const fileType of ['AGENT.md', 'INSTRUCTIONS.md']) {
+      const res = await app.request(`/agent-configs/shared/md/${fileType}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'overwritten', scope: 'workspace' }),
+      })
+      expect(res.status, fileType).toBe(400)
+    }
+    expect(fs.existsSync(path.join(globalAgentsDir, 'shared', 'AGENT.md'))).toBe(false)
+    expect(fs.existsSync(path.join(tmpHome, '.halo', 'global', 'INSTRUCTIONS.md'))).toBe(false)
+  })
+
+  it('GET md-all', async () => {
+    const res = await app.request('/agent-configs/shared/md-all?scope=workspace')
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('unknown scope → 400, never treated as global', () => {
+  it('DELETE with scope=bogus / internal / empty keeps the last global agent', async () => {
+    fs.rmSync(path.join(globalAgentsDir, 'other'), { recursive: true, force: true })
+    for (const scope of ['bogus', 'internal', '']) {
+      const res = await app.request(`/agent-configs/shared?scope=${scope}`, { method: 'DELETE' })
+      expect(res.status, scope).toBe(400)
+    }
+    expect(fs.existsSync(globalYaml())).toBe(true)
+  })
 })
 
 describe('well-formed requests unaffected', () => {
@@ -98,6 +128,22 @@ describe('well-formed requests unaffected', () => {
     expect(res.status).toBe(200)
     expect(fs.existsSync(wsYaml())).toBe(false)
     expect(fs.existsSync(globalYaml())).toBe(true)
+  })
+
+  it('PUT md writes the workspace AGENT.md only', async () => {
+    const res = await app.request('/agent-configs/shared/md/AGENT.md', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '# ws', scope: 'workspace', projectId: ws }),
+    })
+    expect(res.status).toBe(200)
+    expect(fs.readFileSync(path.join(ws, '.halo', 'agents', 'shared', 'AGENT.md'), 'utf-8')).toBe('# ws')
+    expect(fs.existsSync(path.join(globalAgentsDir, 'shared', 'AGENT.md'))).toBe(false)
+  })
+
+  it('GET md-all resolves workspace and global scope', async () => {
+    expect((await app.request(`/agent-configs/shared/md-all?${wsQuery()}`)).status).toBe(200)
+    expect((await app.request('/agent-configs/shared/md-all')).status).toBe(200)
   })
 
   it('DELETE global agent (no scope) still works', async () => {
