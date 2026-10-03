@@ -4,12 +4,12 @@
  * hunyuan). POSTs with `stream: true`, folds the `chat.completion.chunk`
  * frames back into the same `choices[0].message` + `finish_reason` + `usage`
  * shape the non-streaming JSON body had, and reports text / reasoning chunks
- * through `onDelta` as they arrive — so each agent's existing parse code
- * (reasoning_content → thinking, tool_calls → safeParse, per-provider usage
- * math) runs unchanged on the folded result.
+ * through `onDelta` as they arrive — so the non-streaming parse code
+ * (`chatCompletionResult` in openai-chat-format.ts, plus each agent's own
+ * usage math) runs unchanged on the folded result.
  *
  * A transport helper, deliberately not a base class: each agent still owns
- * its request body, message conversion and usage mapping.
+ * its request body and usage mapping.
  *
  * Wire facts (live-probed 2026-09-29 against deepseek / kimi / zhipu /
  * doubao / hunyuan): `tool_calls[]` fragments are matched by `index` — the
@@ -97,7 +97,7 @@ export class ChatCompletionAccumulator {
         this.toolCalls[slot] = call
       }
       if (tc.function?.name && !call.function.name) call.function.name = tc.function.name
-      // Never parsed here — the agents' safeParse does that on the whole string.
+      // Never parsed here — chatCompletionResult's safeParse does that on the whole string.
       call.function.arguments += tc.function?.arguments ?? ''
     }
   }

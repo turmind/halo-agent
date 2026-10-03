@@ -14,6 +14,7 @@ import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop, ACTIVITY_DELTA } from './agent-loop.js'
 import type { ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
 import { AnthropicStreamAccumulator } from './anthropic-stream.js'
+import { anthropicPromptFields, capThinkingBudget, effortToBudget } from './anthropic-request.js'
 
 // Re-export types so existing imports from './bedrock-agent.js' still work
 export type { ToolResultBlock, ToolDef, ContentBlock, AnthropicMessage, StopReason, AgentEvent } from './agent-loop.js'
@@ -36,7 +37,7 @@ export interface BedrockAgentConfig {
    *  How it's sent on the wire depends on `thinkingMode`:
    *   - 'adaptive' → `thinking:{type:'adaptive'}` + `output_config.effort`
    *   - 'manual'   → `thinking:{type:'enabled', budget_tokens:N}` where N is
-   *                  derived from effort via EFFORT_TO_BUDGET below. */
+   *                  derived from effort via `effortToBudget` (anthropic-request.ts). */
   thinking?: { enabled: boolean; effort?: string }
   /** Which thinking API the model wants. Resolved from the model registry by
    *  the caller. Defaults to 'adaptive' when omitted (matches our 4.6/4.7
@@ -47,30 +48,6 @@ export interface BedrockAgentConfig {
   thinkingBudgetTokens?: number
   /** Explicit AWS credentials — if empty, falls back to default credential chain */
   credentials?: { accessKeyId: string; secretAccessKey: string }
-}
-
-/**
- * Translate an effort label to a budget_tokens value for legacy thinking
- * (Haiku 4.5 and other manual-mode models). Numbers are loose proxies for
- * Anthropic's adaptive-mode targets and clamped against the model's
- * maxOutputTokens so we never request more thinking budget than the model
- * is allowed to emit total.
- */
-function effortToBudget(effort: string, maxTokens?: number): number {
-  const table: Record<string, number> = {
-    low: 2048,
-    medium: 8192,
-    high: 24576,
-    xhigh: 40000,
-    max: 60000,
-  }
-  const requested = table[effort] ?? table.medium
-  // budget_tokens must leave room for actual output. Cap at half of max
-  // tokens to be safe.
-  if (typeof maxTokens === 'number' && maxTokens > 0) {
-    return Math.min(requested, Math.floor(maxTokens / 2))
-  }
-  return requested
 }
 
 // ── BedrockAgent ─────────────────────────────────────────────────────
@@ -139,46 +116,7 @@ export class BedrockAgent extends AgentLoop {
     const body: Record<string, unknown> = {
       anthropic_version: 'bedrock-2023-05-31',
       max_tokens: this.config.maxTokens ?? resolveMaxOutputTokens(this.config.modelId),
-      messages: this.messages,
-    }
-
-    // System prompt with optional cache_control
-    if (cacheControl) {
-      body.system = [{
-        type: 'text',
-        text: this.config.systemPrompt,
-        cache_control: cacheControl,
-      }]
-    } else {
-      body.system = this.config.systemPrompt
-    }
-
-    // Tools — cache_control on the last tool
-    if (this.config.tools.length > 0) {
-      const tools: Record<string, unknown>[] = this.config.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.inputSchema,
-      }))
-      if (cacheControl && tools.length > 0) {
-        tools[tools.length - 1].cache_control = cacheControl
-      }
-      body.tools = tools
-    }
-
-    // Messages — cache_control on the last content block of the last message
-    if (cacheControl && this.messages.length > 0) {
-      const msgs = this.messages.map((m, i) => {
-        if (i !== this.messages.length - 1) return m
-        const blocks: Record<string, unknown>[] = typeof m.content === 'string'
-          ? [{ type: 'text', text: m.content }]
-          : (m.content as Record<string, unknown>[]).map((b) => ({ ...b }))
-        if (blocks.length > 0) {
-          blocks[blocks.length - 1].cache_control = cacheControl
-        }
-        return { role: m.role, content: blocks }
-      })
-      body.messages = msgs
+      ...anthropicPromptFields(this.config.systemPrompt, this.config.tools, this.messages, cacheControl),
     }
 
     // Thinking — two API shapes depending on the model's thinkingMode.
@@ -192,11 +130,7 @@ export class BedrockAgent extends AgentLoop {
         // one in agent.yaml; otherwise translate the effort label.
         const budget = this.config.thinkingBudgetTokens
           ?? effortToBudget(this.config.thinking.effort, this.config.maxTokens)
-        // budget must always be < max_tokens — clamp defensively.
-        const cappedBudget = (typeof this.config.maxTokens === 'number' && this.config.maxTokens > 0)
-          ? Math.min(budget, Math.max(1024, Math.floor(this.config.maxTokens / 2)))
-          : budget
-        body.thinking = { type: 'enabled', budget_tokens: cappedBudget }
+        body.thinking = { type: 'enabled', budget_tokens: capThinkingBudget(budget, this.config.maxTokens) }
       }
     }
 

@@ -57,7 +57,7 @@ export interface ModelRuntime {
 }
 ```
 
-`AgentLoop` handles the tool execution loop (call model → execute tools → loop). You only implement `callModel(signal, onDelta?)` — the provider-specific API call. It always returns a `Promise<ModelCallResult>` containing the complete response; the base class `run()` method yields events per loop iteration. **Streaming is optional and per-provider**: if the upstream API streams, call `onDelta({ type: 'text_delta' | 'thinking_delta', text })` per chunk as it arrives — the loop yields those as `text_delta` / `thinking_delta` events during the call and re-arms the per-call timeout on each (so it becomes an idle timeout) — then still return the whole result. For data that arrives but has nothing to show (ping events, tool-argument fragments, empty reasoning chunks, SSE comment frames) call `onDelta(ACTIVITY_DELTA)` (exported from `agent-loop.ts`; `type: 'activity'`, empty text): it only re-arms the idle timer and never reaches the event stream, so a long tool-call argument or a silent reasoning stretch doesn't trip the idle timeout. The shared readers do this for you — `readSseJson`'s per-chunk callback is wired to it in `fetchAnthropicStream` / `fetchChatCompletionStream` / `readResponsesStream`, and the Bedrock agent reports it once per stream event. A non-streaming provider would simply ignore `onDelta`; today every built-in provider streams — Bedrock, the Anthropic-Messages providers (anthropic / mimo / minimax / qwen), the OpenAI-family (openai / deepseek / kimi / zhipu / doubao / hunyuan) and Mantle (aws-bedrock-mantle / aws-bedrock-openai). The fold from Anthropic stream events into a `ModelCallResult` lives in `anthropic-stream.ts` (`AnthropicStreamAccumulator`); for an HTTP gateway speaking Anthropic Messages, `fetchAnthropicStream({ url, headers, body, signal, onDelta, tag })` in the same file is the whole `callModel` body — it posts with `stream: true`, parses the SSE with the generic `readSseJson` reader in `sse.ts` (also skips the OpenAI `[DONE]` terminator), maps a mid-stream `event: error` frame onto the `[tag] <status> <type>: <message>` error shape `classifyModelError` parses, and re-throws `AbortError` if the body ended at the abort instant. For an OpenAI-compatible `chat/completions` endpoint, `fetchChatCompletionStream({ url, headers, body, signal, onDelta, tag })` in `openai-chat-stream.ts` is the transport half of `callModel` — it posts with `stream: true` + `stream_options: { include_usage: true }`, folds the `chat.completion.chunk` frames (text / `reasoning_content` (or the Ollama `reasoning` alias) appended and reported via `onDelta`; `tool_calls[]` fragments matched by `index`, the first fragment carrying `id` + `function.name`, later ones appending `function.arguments`; `finish_reason` / `usage` last-non-null-wins — the usage chunk arrives with `choices` on deepseek / zhipu and as `choices: []` on kimi / doubao / hunyuan) back into the non-streaming `choices[0].message` + `finishReason` + `usage` shape, and throws today's `[<Tag>Agent] API error <status>: <body>` on non-2xx — the agent's existing parse / usage code runs unchanged on the folded result. Mantle's Responses API needs no accumulator at all: `readResponsesStream` (module-level in `mantle-agent.ts`) reports `response.output_text.delta` / `response.reasoning_summary_text.delta` live and keeps the `response` object off the terminal `response.completed` / `response.incomplete` frame, which is the full final response in exactly the non-streaming JSON shape — the existing `output[]` / `incomplete_details` / `usage` parse runs on it unchanged; a stream that ends without a terminal frame throws the same `MantleEmptyResponse` marker as the empty-`output[]` glitch so `classifyModelError`'s `empty_response` retry covers both.
+`AgentLoop` handles the tool execution loop (call model → execute tools → loop). You only implement `callModel(signal, onDelta?)` — the provider-specific API call. It always returns a `Promise<ModelCallResult>` containing the complete response; the base class `run()` method yields events per loop iteration. **Streaming is optional and per-provider**: if the upstream API streams, call `onDelta({ type: 'text_delta' | 'thinking_delta', text })` per chunk as it arrives — the loop yields those as `text_delta` / `thinking_delta` events during the call and re-arms the per-call timeout on each (so it becomes an idle timeout) — then still return the whole result. For data that arrives but has nothing to show (ping events, tool-argument fragments, empty reasoning chunks, SSE comment frames) call `onDelta(ACTIVITY_DELTA)` (exported from `agent-loop.ts`; `type: 'activity'`, empty text): it only re-arms the idle timer and never reaches the event stream, so a long tool-call argument or a silent reasoning stretch doesn't trip the idle timeout. The shared readers do this for you — `readSseJson`'s per-chunk callback is wired to it in `fetchAnthropicStream` / `fetchChatCompletionStream` / `readResponsesStream`, and the Bedrock agent reports it once per stream event. A non-streaming provider would simply ignore `onDelta`; today every built-in provider streams — Bedrock, the Anthropic-Messages providers (anthropic / mimo / minimax / qwen), the OpenAI-family (openai / deepseek / kimi / zhipu / doubao / hunyuan) and Mantle (aws-bedrock-mantle / aws-bedrock-openai). The fold from Anthropic stream events into a `ModelCallResult` lives in `anthropic-stream.ts` (`AnthropicStreamAccumulator`); for an HTTP gateway speaking Anthropic Messages, `fetchAnthropicStream({ url, headers, body, signal, onDelta, tag })` in the same file is the whole `callModel` body — it posts with `stream: true`, parses the SSE with the generic `readSseJson` reader in `sse.ts` (also skips the OpenAI `[DONE]` terminator), maps a mid-stream `event: error` frame onto the `[tag] <status> <type>: <message>` error shape `classifyModelError` parses, and re-throws `AbortError` if the body ended at the abort instant. For an OpenAI-compatible `chat/completions` endpoint, `fetchChatCompletionStream({ url, headers, body, signal, onDelta, tag })` in `openai-chat-stream.ts` is the transport half of `callModel` — it posts with `stream: true` + `stream_options: { include_usage: true }`, folds the `chat.completion.chunk` frames (text / `reasoning_content` (or the Ollama `reasoning` alias) appended and reported via `onDelta`; `tool_calls[]` fragments matched by `index`, the first fragment carrying `id` + `function.name`, later ones appending `function.arguments`; `finish_reason` / `usage` last-non-null-wins — the usage chunk arrives with `choices` on deepseek / zhipu and as `choices: []` on kimi / doubao / hunyuan) back into the non-streaming `choices[0].message` + `finishReason` + `usage` shape, and throws today's `[<Tag>Agent] API error <status>: <body>` on non-2xx — `chatCompletionResult(folded, usage, startTime)` in `openai-chat-format.ts` then turns the folded reply into a `ModelCallResult`, with the usage numbers the agent computed itself. Mantle's Responses API needs no accumulator at all: `readResponsesStream` (module-level in `mantle-agent.ts`) reports `response.output_text.delta` / `response.reasoning_summary_text.delta` live and keeps the `response` object off the terminal `response.completed` / `response.incomplete` frame, which is the full final response in exactly the non-streaming JSON shape — the existing `output[]` / `incomplete_details` / `usage` parse runs on it unchanged; a stream that ends without a terminal frame throws the same `MantleEmptyResponse` marker as the empty-`output[]` glitch so `classifyModelError`'s `empty_response` retry covers both.
 
 Two important constraints:
 
@@ -103,38 +103,46 @@ For providers where the API returns `prompt_tokens` inclusive of cached (e.g. Ki
 Create `packages/server/src/agents/<provider>-agent.ts`. Extend `AgentLoop` and implement `callModel()`.
 
 Reference implementations:
-- OpenAI-compatible: [kimi-agent.ts](../../../packages/server/src/agents/kimi-agent.ts), [deepseek-agent.ts](../../../packages/server/src/agents/deepseek-agent.ts)
+- OpenAI-compatible: [kimi-agent.ts](../../../packages/server/src/agents/kimi-agent.ts), [deepseek-agent.ts](../../../packages/server/src/agents/deepseek-agent.ts) — conversion helpers in [openai-chat-format.ts](../../../packages/server/src/agents/openai-chat-format.ts)
+- Anthropic Messages over HTTP: [qwen-agent.ts](../../../packages/server/src/agents/qwen-agent.ts), [minimax-agent.ts](../../../packages/server/src/agents/minimax-agent.ts) — body helpers in [anthropic-request.ts](../../../packages/server/src/agents/anthropic-request.ts)
 - AWS native: [bedrock-agent.ts](../../../packages/server/src/agents/bedrock-agent.ts)
 
-Rough shape for OpenAI-compatible providers:
+Rough shape for OpenAI-compatible providers — the format conversion is shared (`openai-chat-format.ts`); what the class writes itself is the provider's quirks: the request body (output-cap field, thinking / reasoning knobs), the image mode, the usage mapping and the error tag:
 
 ```ts
 import { AgentLoop } from './agent-loop.js'
-import type { ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
+import type { ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
+import { fetchChatCompletionStream } from './openai-chat-stream.js'
+import { chatCompletionResult, toChatMessages, toChatTools } from './openai-chat-format.js'
 
 export class MyProviderAgent extends AgentLoop {
   constructor(config: MyConfig) { super(config.tools); ... }
 
   protected async callModel(signal, onDelta?): Promise<ModelCallResult> {
     const startTime = Date.now()
-    const messages = this.buildMessages()  // translate AnthropicMessage[] → provider format
-    const tools = this.buildTools()        // translate ToolDef[] → provider format
+    // AnthropicMessage[] → chat messages; image mode = the provider's vision support:
+    // 'parts' (image_url parts) | 'if-image' (parts only when an image is present) | 'drop' (text only)
+    const messages = toChatMessages(this.config.systemPrompt, this.messages, 'parts')
+    const tools = toChatTools(this.config.tools)   // ToolDef[] → OpenAI function calling format
 
-    // call fetchChatCompletionStream({ url, headers, body, signal, onDelta, tag }) from
-    // openai-chat-stream.ts (see kimi-agent.ts) — it POSTs with stream: true, reports
-    // text / reasoning chunks through onDelta and returns the folded { message, finishReason, usage, ttftMs }
-    // Return ModelCallResult with assistantBlocks, stopReason, text, thinking, toolCalls, usage, durationMs, ttftMs
+    const body = { model, messages, max_tokens /* or max_completion_tokens */, ...(tools.length > 0 ? { tools } : {}) }
+    // + this provider's thinking / reasoning fields
+
+    // POSTs with stream: true, reports text / reasoning chunks through onDelta,
+    // returns the folded { message, finishReason, usage, ttftMs }
+    const folded = await fetchChatCompletionStream({ url, headers, body, signal, onDelta, tag: 'MyProviderAgent' })
+
+    // Per-provider usage math: which field carries cached tokens, how they're deducted.
+    const cached = ...
+    return chatCompletionResult(folded, { inputTokens: prompt - cached, outputTokens, cacheReadInputTokens: cached }, startTime)
   }
-
-  private buildMessages() { ... }  // system + user/assistant/tool message conversion
-  private buildTools() { ... }     // OpenAI function calling format
 }
 ```
 
 **Things that bite**:
 
-- **Tool results format.** Anthropic stores tool results as `{ role: 'user', content: [{ type: 'tool_result', ... }] }`. OpenAI-compatible APIs need separate `{ role: 'tool', tool_call_id, content }` messages. See `convertToolResults()` in kimi-agent.ts.
-- **Thinking/reasoning replay.** If the provider returns `reasoning_content` and requires it in follow-up messages (Kimi, DeepSeek with tool calls), you must store it in `result.assistantBlocks` as a `{ type: 'thinking', thinking: '...' }` block and replay it as `reasoning_content` in `convertAssistantMessage()`.
+- **Tool results format.** Anthropic stores tool results as `{ role: 'user', content: [{ type: 'tool_result', ... }] }`. OpenAI-compatible APIs need separate `{ role: 'tool', tool_call_id, content }` messages, and tool-result images ride in a user message right after them. `toChatMessages()` in openai-chat-format.ts does both.
+- **Thinking/reasoning replay.** If the provider returns `reasoning_content` and requires it in follow-up messages (Kimi, DeepSeek with tool calls), it must be stored in `result.assistantBlocks` as a `{ type: 'thinking', thinking: '...' }` block and replayed as `reasoning_content` — `chatCompletionResult()` stores it and `toChatMessages()` replays it.
 - **Reasoning field name varies.** OpenAI o-series/DeepSeek emit reasoning in `message.reasoning_content`; Ollama / llama.cpp's OpenAI-compat layer uses `message.reasoning`. `OpenAIAgent` reads both (`reasoning_content ?? reasoning`). A vendor-specific class should read whichever its API uses.
 - **Cancellation.** The caller passes `signal`; pass it to `fetch()` directly.
 - **Max tokens.** Use `config.maxTokens ?? resolveMaxOutputTokens(config.modelId)` for consistency.
@@ -378,7 +386,7 @@ The `MantleEmptyResponse` retry guard in session-manager is unrelated to this an
 
 Keeping it a hard-coded switch is deliberate for now:
 - Each provider has enough quirks (auth, response format, tool calling conventions, thinking replay rules) that a generic "provider interface with fetch client" would leak abstractions
-- Each provider independently extends `AgentLoop` — no shared OpenAI-compatible base class, to avoid coupling when APIs diverge; the shared piece is a transport helper function (`fetchChatCompletionStream`, like `fetchAnthropicStream`), not a base class — each agent still owns its body / message conversion / usage mapping
+- Each provider independently extends `AgentLoop` — no shared OpenAI-compatible base class, to avoid coupling when APIs diverge; the shared pieces are helper functions, not a base class — transport (`fetchChatCompletionStream`, `fetchAnthropicStream`) and format (`openai-chat-format.ts`: message / tool / result conversion; `anthropic-request.ts`: system / tools / `cache_control` placement and the thinking-budget math) — each agent still owns its request body, thinking shape, usage mapping and error tag
 - The Agent management UI reads the manifest directly; a runtime-registered plugin would need to notify the frontend dynamically
 - One provider lands every few months, not every week
 
@@ -393,6 +401,8 @@ If / when Halo has 5+ providers and the switch becomes unwieldy, the next step w
 - Bedrock (Anthropic native): [packages/server/src/agents/bedrock-agent.ts](../../../packages/server/src/agents/bedrock-agent.ts)
 - Kimi (OpenAI-compatible + vision): [packages/server/src/agents/kimi-agent.ts](../../../packages/server/src/agents/kimi-agent.ts)
 - DeepSeek (OpenAI-compatible, no vision): [packages/server/src/agents/deepseek-agent.ts](../../../packages/server/src/agents/deepseek-agent.ts)
+- OpenAI-family format helpers: [packages/server/src/agents/openai-chat-format.ts](../../../packages/server/src/agents/openai-chat-format.ts)
+- Anthropic-family body helpers: [packages/server/src/agents/anthropic-request.ts](../../../packages/server/src/agents/anthropic-request.ts)
 - Manifest examples: [packages/server/templates/models/](../../../packages/server/templates/models/)
 - Models registry loader: [packages/server/src/config.ts](../../../packages/server/src/config.ts) (`getModelsRegistry`)
 - Architecture context: [design/architecture.md#modelruntime](../design/architecture.md#modelruntime--llm-interaction-layer-provider-agnostic)

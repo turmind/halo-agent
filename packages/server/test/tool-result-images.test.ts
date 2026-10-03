@@ -5,6 +5,8 @@ import { KimiAgent } from '../src/agents/kimi-agent.js'
 import { DeepSeekAgent } from '../src/agents/deepseek-agent.js'
 import { OpenAIAgent } from '../src/agents/openai-agent.js'
 import { ZhipuAgent } from '../src/agents/zhipu-agent.js'
+import { DoubaoAgent } from '../src/agents/doubao-agent.js'
+import { HunyuanAgent } from '../src/agents/hunyuan-agent.js'
 import { sseResponse } from './helpers/sse-response.js'
 
 /**
@@ -82,6 +84,18 @@ describe('tool_result images reach OpenAI-format runtimes', () => {
         { type: 'text', text: '[Images from the tool results above]' },
         { type: 'image_url', image_url: { url: dataUrl } },
       ])
+    })
+  }
+
+  const textOnlyRuntimes: Array<[string, () => AgentLoop]> = [
+    ['Doubao', () => new DoubaoAgent(base)],
+    ['Hunyuan', () => new HunyuanAgent(base)],
+  ]
+  for (const [name, make] of textOnlyRuntimes) {
+    it(`${name} (no vision) keeps an [image] placeholder and forwards no image`, async () => {
+      const body = await captureBody(make(), chatOk)
+      const msgs = body.messages as Array<Record<string, unknown>>
+      expect(msgs[msgs.length - 1]).toEqual({ role: 'tool', tool_call_id: 'call_1', content: 'shot.png (4 bytes)\n[image]' })
     })
   }
 

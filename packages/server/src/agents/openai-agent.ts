@@ -28,9 +28,10 @@
  *     OpenAI-compat naming), whichever is present.
  */
 import { resolveMaxOutputTokens } from '../config.js'
-import { AgentLoop, toolResultImages } from './agent-loop.js'
-import type { AnthropicMessage, ContentBlock, ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
+import { AgentLoop } from './agent-loop.js'
+import type { ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
 import { fetchChatCompletionStream } from './openai-chat-stream.js'
+import { chatCompletionResult, toChatMessages, toChatTools } from './openai-chat-format.js'
 
 export interface OpenAIAgentConfig {
   modelId: string
@@ -56,8 +57,10 @@ export class OpenAIAgent extends AgentLoop {
     const url = this.config.endpoint.replace(/\/+$/, '') + '/chat/completions'
     const startTime = Date.now()
 
-    const messages = this.buildMessages()
-    const tools = this.buildTools()
+    // Text-only stays a plain string (widest OpenAI-compatible support); images
+    // need content parts — gpt-4o is registered image-capable.
+    const messages = toChatMessages(this.config.systemPrompt, this.messages, 'if-image')
+    const tools = toChatTools(this.config.tools)
 
     const body: Record<string, unknown> = {
       model: this.config.modelId,
@@ -70,51 +73,11 @@ export class OpenAIAgent extends AgentLoop {
       body.reasoning_effort = this.config.thinking.effort
     }
 
-    const { message: msg, finishReason, usage, ttftMs } = await fetchChatCompletionStream({
+    const folded = await fetchChatCompletionStream({
       url, headers: { 'Authorization': `Bearer ${this.config.apiKey}` }, body, signal, onDelta, tag: 'OpenAIAgent',
     })
 
-    let text = ''
-    let thinking = ''
-    const toolCalls: Array<{ id: string; name: string; input: unknown }> = []
-    const assistantBlocks: ModelCallResult['assistantBlocks'] = []
-
-    if (msg) {
-      // Reasoning field alias: OpenAI o-series/DeepSeek use `reasoning_content`,
-      // Ollama / llama.cpp OpenAI-compat layer uses `reasoning` — the stream
-      // fold (fetchChatCompletionStream) lands both in `reasoning_content`.
-      const reasoning = msg.reasoning_content
-      if (reasoning && typeof reasoning === 'string') {
-        thinking = reasoning
-      }
-      if (msg.content && typeof msg.content === 'string') {
-        text = msg.content
-      }
-      const rawToolCalls = msg.tool_calls as Array<Record<string, unknown>> | undefined
-      if (rawToolCalls) {
-        for (const tc of rawToolCalls) {
-          const fn = tc.function as Record<string, unknown> | undefined
-          const id = tc.id as string
-          const name = (fn?.name as string) ?? ''
-          const args = (fn?.arguments as string) ?? '{}'
-          const input = safeParse(args)
-          toolCalls.push({ id, name, input })
-          assistantBlocks.push({ type: 'tool_use', id, name, input })
-        }
-      }
-    }
-
-    if (thinking) {
-      assistantBlocks.unshift({ type: 'thinking', thinking } as unknown as ContentBlock)
-    }
-    if (text) {
-      assistantBlocks.push({ type: 'text', text })
-    }
-
-    const stopReason = finishReason === 'tool_calls' ? 'tool_use'
-      : finishReason === 'length' ? 'max_tokens'
-      : 'end_turn'
-
+    const { usage } = folded
     const promptTokens = (usage?.prompt_tokens as number) ?? 0
     const completionTokens = (usage?.completion_tokens as number) ?? 0
     // Read cached prompt tokens from whichever field the provider uses.
@@ -124,119 +87,6 @@ export class OpenAIAgent extends AgentLoop {
       ?? (usage?.cache_read_tokens as number)
       ?? 0
 
-    return {
-      assistantBlocks,
-      stopReason,
-      text,
-      thinking,
-      toolCalls,
-      usage: {
-        inputTokens: promptTokens - cachedTokens,
-        outputTokens: completionTokens,
-        totalTokens: (promptTokens - cachedTokens) + completionTokens,
-        ...(cachedTokens ? { cacheReadInputTokens: cachedTokens } : {}),
-      },
-      durationMs: Date.now() - startTime,
-      ttftMs,
-    }
+    return chatCompletionResult(folded, { inputTokens: promptTokens - cachedTokens, outputTokens: completionTokens, cacheReadInputTokens: cachedTokens }, startTime)
   }
-
-  private buildMessages(): Array<Record<string, unknown>> {
-    const msgs: Array<Record<string, unknown>> = []
-    msgs.push({ role: 'system', content: this.config.systemPrompt })
-
-    for (const msg of this.messages) {
-      if (msg.role === 'user') {
-        if (typeof msg.content !== 'string' && msg.content.some((b) => b.type === 'tool_result')) {
-          msgs.push(...this.convertToolResults(msg.content))
-          // Mixed tool_result + user-content turn (interrupt-repair synthesis
-          // coalesced with the next user message, or a stop-fold): emit the
-          // non-tool_result remainder too, or that user text silently vanishes.
-          const rest = [...toolResultImages(msg.content), ...msg.content.filter((b) => b.type !== 'tool_result')]
-          if (rest.length > 0) {
-            msgs.push({ role: 'user', content: this.convertUserContent(rest) })
-          }
-        } else {
-          msgs.push({ role: 'user', content: this.convertUserContent(msg.content) })
-        }
-      } else {
-        msgs.push(...this.convertAssistantMessage(msg))
-      }
-    }
-    return msgs
-  }
-
-  private convertToolResults(content: ContentBlock[]): Array<Record<string, unknown>> {
-    const results: Array<Record<string, unknown>> = []
-    for (const block of content) {
-      if (block.type === 'tool_result') {
-        const text = typeof block.content === 'string'
-          ? block.content
-          : block.content.map((b) => b.type === 'text' ? b.text : '[image: in the next user message]').join('\n')
-        results.push({ role: 'tool', tool_call_id: block.tool_use_id, content: text })
-      }
-    }
-    return results
-  }
-
-  private convertUserContent(content: string | ContentBlock[]): unknown {
-    if (typeof content === 'string') return content
-    // Text-only stays a plain string (widest OpenAI-compatible support); images
-    // need content parts — gpt-4o is registered image-capable, and before this
-    // its user and view_image images were silently dropped.
-    if (!content.some((b) => b.type === 'image')) {
-      return content
-        .filter((b) => b.type === 'text')
-        .map((b) => (b as { type: 'text'; text: string }).text)
-        .join('\n')
-    }
-    const parts: Array<Record<string, unknown>> = []
-    for (const b of content) {
-      if (b.type === 'text') parts.push({ type: 'text', text: b.text })
-      else if (b.type === 'image') parts.push({ type: 'image_url', image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } })
-    }
-    return parts
-  }
-
-  private convertAssistantMessage(msg: AnthropicMessage): Array<Record<string, unknown>> {
-    const results: Array<Record<string, unknown>> = []
-    if (typeof msg.content === 'string') {
-      results.push({ role: 'assistant', content: msg.content })
-      return results
-    }
-    const textParts: string[] = []
-    const toolCalls: Array<Record<string, unknown>> = []
-    let reasoningContent = ''
-    for (const block of msg.content) {
-      if (block.type === 'text') {
-        textParts.push(block.text)
-      } else if ((block as Record<string, unknown>).type === 'thinking') {
-        reasoningContent = (block as Record<string, unknown>).thinking as string ?? ''
-      } else if (block.type === 'tool_use') {
-        toolCalls.push({
-          id: block.id,
-          type: 'function',
-          function: { name: block.name, arguments: JSON.stringify(block.input) },
-        })
-      }
-    }
-    if (textParts.length > 0 || toolCalls.length > 0 || reasoningContent) {
-      const assistantMsg: Record<string, unknown> = { role: 'assistant', content: textParts.join('') || null }
-      if (reasoningContent) assistantMsg.reasoning_content = reasoningContent
-      if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls
-      results.push(assistantMsg)
-    }
-    return results
-  }
-
-  private buildTools(): Array<Record<string, unknown>> {
-    return this.config.tools.map((t) => ({
-      type: 'function',
-      function: { name: t.name, description: t.description, parameters: t.inputSchema },
-    }))
-  }
-}
-
-function safeParse(json: string): unknown {
-  try { return JSON.parse(json || '{}') } catch { return {} }
 }

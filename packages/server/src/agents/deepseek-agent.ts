@@ -9,9 +9,10 @@
  * Caching is fully automatic (no explicit parameter needed).
  */
 import { resolveMaxOutputTokens } from '../config.js'
-import { AgentLoop, toolResultImages } from './agent-loop.js'
-import type { AnthropicMessage, ContentBlock, ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
+import { AgentLoop } from './agent-loop.js'
+import type { ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
 import { fetchChatCompletionStream } from './openai-chat-stream.js'
+import { chatCompletionResult, toChatMessages, toChatTools } from './openai-chat-format.js'
 
 export interface DeepSeekAgentConfig {
   modelId: string
@@ -38,8 +39,10 @@ export class DeepSeekAgent extends AgentLoop {
     const url = this.config.endpoint.replace(/\/+$/, '') + '/chat/completions'
     const startTime = Date.now()
 
-    const messages = this.buildMessages()
-    const tools = this.buildTools()
+    // Only `deepseek-flash` actually sees images — the registry has `image: false`
+    // on v4-pro, so the session manager strips them before they reach here.
+    const messages = toChatMessages(this.config.systemPrompt, this.messages, 'parts')
+    const tools = toChatTools(this.config.tools)
 
     const body: Record<string, unknown> = {
       model: this.config.modelId,
@@ -54,185 +57,15 @@ export class DeepSeekAgent extends AgentLoop {
       body.thinking = { type: 'enabled' }
     }
 
-    const { message: msg, finishReason, usage: rawUsage, ttftMs } = await fetchChatCompletionStream({
+    const folded = await fetchChatCompletionStream({
       url, headers: { 'Authorization': `Bearer ${this.config.apiKey}` }, body, signal, onDelta, tag: 'DeepSeekAgent',
     })
 
-    let text = ''
-    let thinking = ''
-    const toolCalls: Array<{ id: string; name: string; input: unknown }> = []
-    const assistantBlocks: ModelCallResult['assistantBlocks'] = []
-
-    if (msg) {
-      if (msg.reasoning_content && typeof msg.reasoning_content === 'string') {
-        thinking = msg.reasoning_content
-      }
-
-      if (msg.content && typeof msg.content === 'string') {
-        text = msg.content
-      }
-
-      const rawToolCalls = msg.tool_calls as Array<Record<string, unknown>> | undefined
-      if (rawToolCalls) {
-        for (const tc of rawToolCalls) {
-          const fn = tc.function as Record<string, unknown> | undefined
-          const id = tc.id as string
-          const name = (fn?.name as string) ?? ''
-          const args = (fn?.arguments as string) ?? '{}'
-          const input = safeParse(args)
-          toolCalls.push({ id, name, input })
-          assistantBlocks.push({ type: 'tool_use', id, name, input })
-        }
-      }
-    }
-
-    if (thinking) {
-      assistantBlocks.unshift({ type: 'thinking', thinking } as unknown as ContentBlock)
-    }
-    if (text) {
-      assistantBlocks.push({ type: 'text', text })
-    }
-
-    const stopReason = finishReason === 'tool_calls' ? 'tool_use'
-      : finishReason === 'length' ? 'max_tokens'
-      : 'end_turn'
-
-    const usage = rawUsage as Record<string, number> | undefined
+    const usage = folded.usage as Record<string, number> | undefined
     const inputTokens = usage?.prompt_tokens ?? 0
     const outputTokens = usage?.completion_tokens ?? 0
     const cacheHitTokens = usage?.prompt_cache_hit_tokens ?? 0
 
-    return {
-      assistantBlocks,
-      stopReason,
-      text,
-      thinking,
-      toolCalls,
-      usage: {
-        inputTokens: inputTokens - cacheHitTokens,
-        outputTokens,
-        totalTokens: (inputTokens - cacheHitTokens) + outputTokens,
-        ...(cacheHitTokens ? { cacheReadInputTokens: cacheHitTokens } : {}),
-      },
-      durationMs: Date.now() - startTime,
-      ttftMs,
-    }
+    return chatCompletionResult(folded, { inputTokens: inputTokens - cacheHitTokens, outputTokens, cacheReadInputTokens: cacheHitTokens }, startTime)
   }
-
-  private buildMessages(): Array<Record<string, unknown>> {
-    const msgs: Array<Record<string, unknown>> = []
-    msgs.push({ role: 'system', content: this.config.systemPrompt })
-
-    for (const msg of this.messages) {
-      if (msg.role === 'user') {
-        if (typeof msg.content !== 'string' && msg.content.some((b) => b.type === 'tool_result')) {
-          msgs.push(...this.convertToolResults(msg.content))
-          // A user turn can mix tool_result blocks with real user content —
-          // e.g. an interrupted tool's repaired (synthesized) result with the
-          // user's next message coalesced in, or a stop-fold landing on a
-          // tool_results turn. Converting only the tool_results would silently
-          // drop that text from the model's view — emit the remainder as a
-          // user message right after the tool messages.
-          const rest = [...toolResultImages(msg.content), ...msg.content.filter((b) => b.type !== 'tool_result')]
-          if (rest.length > 0) {
-            msgs.push({ role: 'user', content: this.convertUserContent(rest) })
-          }
-        } else {
-          msgs.push({ role: 'user', content: this.convertUserContent(msg.content) })
-        }
-      } else {
-        msgs.push(...this.convertAssistantMessage(msg))
-      }
-    }
-
-    return msgs
-  }
-
-  private convertToolResults(content: ContentBlock[]): Array<Record<string, unknown>> {
-    const results: Array<Record<string, unknown>> = []
-    for (const block of content) {
-      if (block.type === 'tool_result') {
-        const text = typeof block.content === 'string'
-          ? block.content
-          : block.content.map((b) => b.type === 'text' ? b.text : '[image: in the next user message]').join('\n')
-        results.push({
-          role: 'tool',
-          tool_call_id: block.tool_use_id,
-          content: text,
-        })
-      }
-    }
-    return results
-  }
-
-  /** Block arrays become OpenAI content parts — text as-is, image blocks as
-   *  `image_url` data URLs (same shape as Kimi). Only `deepseek-flash`
-   *  actually sees images — the registry has `image: false` on v4-pro, so the
-   *  session manager strips them before they reach here for that model. */
-  private convertUserContent(content: string | ContentBlock[]): unknown {
-    if (typeof content === 'string') return content
-    const parts: Array<Record<string, unknown>> = []
-    for (const block of content) {
-      if (block.type === 'text') {
-        parts.push({ type: 'text', text: block.text })
-      } else if (block.type === 'image') {
-        parts.push({
-          type: 'image_url',
-          image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` },
-        })
-      }
-    }
-    return parts
-  }
-
-  private convertAssistantMessage(msg: AnthropicMessage): Array<Record<string, unknown>> {
-    const results: Array<Record<string, unknown>> = []
-
-    if (typeof msg.content === 'string') {
-      results.push({ role: 'assistant', content: msg.content })
-      return results
-    }
-
-    const textParts: string[] = []
-    const toolCalls: Array<Record<string, unknown>> = []
-    let reasoningContent = ''
-
-    for (const block of msg.content) {
-      if (block.type === 'text') {
-        textParts.push(block.text)
-      } else if ((block as Record<string, unknown>).type === 'thinking') {
-        reasoningContent = (block as Record<string, unknown>).thinking as string ?? ''
-      } else if (block.type === 'tool_use') {
-        toolCalls.push({
-          id: block.id,
-          type: 'function',
-          function: { name: block.name, arguments: JSON.stringify(block.input) },
-        })
-      }
-    }
-
-    if (textParts.length > 0 || toolCalls.length > 0 || reasoningContent) {
-      const assistantMsg: Record<string, unknown> = { role: 'assistant', content: textParts.join('') || null }
-      if (reasoningContent) assistantMsg.reasoning_content = reasoningContent
-      if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls
-      results.push(assistantMsg)
-    }
-
-    return results
-  }
-
-  private buildTools(): Array<Record<string, unknown>> {
-    return this.config.tools.map((t) => ({
-      type: 'function',
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.inputSchema,
-      },
-    }))
-  }
-}
-
-function safeParse(json: string): unknown {
-  try { return JSON.parse(json || '{}') } catch { return {} }
 }
