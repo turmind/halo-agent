@@ -16,6 +16,7 @@
 import type { ContentBlock, ModelCallResult, ModelDelta, StopDetails } from './agent-loop.js'
 import { ACTIVITY_DELTA } from './agent-loop.js'
 import { readSseJson } from './sse.js'
+import { parseToolInput } from './tool-input.js'
 
 /** Anthropic stream event — only the fields we consume. */
 export interface AnthropicStreamEvent {
@@ -158,7 +159,7 @@ export class AnthropicStreamAccumulator {
         thinking += block.thinking
         // thinking blocks excluded from assistantBlocks per Anthropic API
       } else {
-        const input: unknown = JSON.parse(block.partialJson || '{}')
+        const input = parseToolInput(block.partialJson, block.name)
         toolCalls.push({ id: block.id, name: block.name, input })
         assistantBlocks.push({ type: 'tool_use', id: block.id, name: block.name, input })
       }

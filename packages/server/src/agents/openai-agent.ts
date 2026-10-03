@@ -17,10 +17,9 @@
  *   - Reasoning is opted in via OpenAI-style `reasoning_effort: low|medium|high`.
  *     Vendors that use `thinking:{type:'enabled'}` instead won't get this
  *     enabled — use their dedicated provider class.
- *   - Cached prompt tokens are read from any of the three observed keys:
- *       usage.prompt_tokens_details.cached_tokens   (OpenAI o-series, Doubao, Hy3, Qwen)
- *       usage.prompt_cache_hit_tokens               (DeepSeek)
- *       usage.cache_read_tokens                     (Hy3)
+ *   - Cached prompt tokens: the first non-zero of every observed key
+ *     (`cachedPromptTokens` — prompt_tokens_details.cached_tokens,
+ *     cached_tokens, prompt_cache_hit_tokens, cache_read_tokens).
  *     usage.prompt_tokens is treated as inclusive of cached tokens; we
  *     subtract before reporting `inputTokens`.
  *   - Reasoning content is read from `message.reasoning_content` (OpenAI
@@ -31,7 +30,7 @@ import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop } from './agent-loop.js'
 import type { ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
 import { fetchChatCompletionStream } from './openai-chat-stream.js'
-import { chatCompletionResult, toChatMessages, toChatTools } from './openai-chat-format.js'
+import { cachedPromptTokens, chatCompletionResult, toChatMessages, toChatTools } from './openai-chat-format.js'
 
 export interface OpenAIAgentConfig {
   modelId: string
@@ -81,11 +80,7 @@ export class OpenAIAgent extends AgentLoop {
     const promptTokens = (usage?.prompt_tokens as number) ?? 0
     const completionTokens = (usage?.completion_tokens as number) ?? 0
     // Read cached prompt tokens from whichever field the provider uses.
-    const promptDetails = usage?.prompt_tokens_details as Record<string, unknown> | undefined
-    const cachedTokens = (promptDetails?.cached_tokens as number)
-      ?? (usage?.prompt_cache_hit_tokens as number)
-      ?? (usage?.cache_read_tokens as number)
-      ?? 0
+    const cachedTokens = cachedPromptTokens(usage)
 
     return chatCompletionResult(folded, { inputTokens: promptTokens - cachedTokens, outputTokens: completionTokens, cacheReadInputTokens: cachedTokens }, startTime)
   }

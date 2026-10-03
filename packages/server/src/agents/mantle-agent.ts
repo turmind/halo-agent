@@ -35,6 +35,7 @@ import { defaultProvider } from '@aws-sdk/credential-provider-node'
 import { AgentLoop, ACTIVITY_DELTA } from './agent-loop.js'
 import type { AnthropicMessage, ContentBlock, ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
 import { readSseJson } from './sse.js'
+import { parseToolInput } from './tool-input.js'
 
 export interface MantleAgentConfig {
   modelId: string
@@ -135,7 +136,7 @@ export class MantleAgent extends AgentLoop {
         const callId = (item.call_id as string) ?? (item.id as string) ?? ''
         const name = (item.name as string) ?? ''
         const args = (item.arguments as string) ?? '{}'
-        const input = safeParse(args)
+        const input = parseToolInput(args, name)
         toolCalls.push({ id: callId, name, input })
         assistantBlocks.push({ type: 'tool_use', id: callId, name, input })
       }
@@ -404,9 +405,4 @@ async function readResponsesStream(
 function extractRegionFromHost(hostname: string): string {
   const m = hostname.match(/^bedrock-(?:mantle|runtime)\.([a-z0-9-]+)\./)
   return m?.[1] ?? 'us-east-1'
-}
-
-/** Parse tool-call arguments, falling back to `{}` on malformed JSON. */
-function safeParse(json: string): unknown {
-  try { return JSON.parse(json || '{}') } catch { return {} }
 }

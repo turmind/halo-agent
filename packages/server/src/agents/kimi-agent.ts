@@ -17,7 +17,7 @@ import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop } from './agent-loop.js'
 import type { ModelCallResult, ModelDelta, ToolDef } from './agent-loop.js'
 import { fetchChatCompletionStream } from './openai-chat-stream.js'
-import { chatCompletionResult, toChatMessages, toChatTools } from './openai-chat-format.js'
+import { cachedPromptTokens, chatCompletionResult, toChatMessages, toChatTools } from './openai-chat-format.js'
 
 export interface KimiAgentConfig {
   modelId: string
@@ -82,7 +82,9 @@ export class KimiAgent extends AgentLoop {
     const usage = folded.usage as Record<string, number> | undefined
     const inputTokens = usage?.prompt_tokens ?? 0
     const outputTokens = usage?.completion_tokens ?? 0
-    const cachedTokens = usage?.cached_tokens ?? 0
+    // Which key Kimi reports cached tokens under isn't pinned (this file used
+    // to read only the top-level `cached_tokens`), so read every known key.
+    const cachedTokens = cachedPromptTokens(usage)
 
     return chatCompletionResult(folded, { inputTokens: inputTokens - cachedTokens, outputTokens, cacheReadInputTokens: cachedTokens }, startTime)
   }

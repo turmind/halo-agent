@@ -97,7 +97,7 @@ export class ChatCompletionAccumulator {
         this.toolCalls[slot] = call
       }
       if (tc.function?.name && !call.function.name) call.function.name = tc.function.name
-      // Never parsed here — chatCompletionResult's safeParse does that on the whole string.
+      // Never parsed here — chatCompletionResult's parseToolInput does that on the whole string.
       call.function.arguments += tc.function?.arguments ?? ''
     }
   }

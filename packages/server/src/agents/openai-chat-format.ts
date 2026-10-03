@@ -13,6 +13,7 @@
 import { toolResultImages } from './agent-loop.js'
 import type { AnthropicMessage, ContentBlock, ModelCallResult, ToolDef } from './agent-loop.js'
 import type { ChatCompletionFolded } from './openai-chat-stream.js'
+import { parseToolInput } from './tool-input.js'
 
 /**
  * How a provider's user turns carry images (its vision support):
@@ -80,7 +81,7 @@ export function chatCompletionResult(
   for (const tc of msg.tool_calls ?? []) {
     const { id } = tc
     const { name } = tc.function
-    const input = safeParse(tc.function.arguments)
+    const input = parseToolInput(tc.function.arguments, name)
     toolCalls.push({ id, name, input })
     assistantBlocks.push({ type: 'tool_use', id, name, input })
   }
@@ -111,6 +112,24 @@ export function chatCompletionResult(
     durationMs: Date.now() - startTime,
     ttftMs: folded.ttftMs,
   }
+}
+
+/**
+ * Cached prompt tokens for the providers that can't pin one field (generic
+ * openai gateways, kimi): the first value > 0 among every known key —
+ *   prompt_tokens_details.cached_tokens   (OpenAI o-series, Doubao, Hy3, Zhipu)
+ *   cached_tokens                         (Moonshot / Kimi, top level)
+ *   prompt_cache_hit_tokens               (DeepSeek)
+ *   cache_read_tokens                     (Hy3)
+ * — else 0. A key reporting 0 doesn't stop the search: gateways send
+ * `cached_tokens: 0` placeholders next to the real field.
+ */
+export function cachedPromptTokens(usage: Record<string, unknown> | undefined): number {
+  const details = usage?.prompt_tokens_details as Record<string, unknown> | undefined
+  for (const v of [details?.cached_tokens, usage?.cached_tokens, usage?.prompt_cache_hit_tokens, usage?.cache_read_tokens]) {
+    if (typeof v === 'number' && v > 0) return v
+  }
+  return 0
 }
 
 /** `tool` messages are text-only — an image part becomes a placeholder saying where it went. */
@@ -185,8 +204,4 @@ function assistantMessages(msg: AnthropicMessage): Array<Record<string, unknown>
   }
 
   return results
-}
-
-function safeParse(json: string): unknown {
-  try { return JSON.parse(json || '{}') } catch { return {} }
 }
