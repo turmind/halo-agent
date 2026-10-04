@@ -56,7 +56,7 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 81 // default agent lists the extension skill; extension SKILL.md gets the payload via $ARGUMENTS and installs right away when a source is given. extension skill: hub_repo param (config.yaml) + multi-platform hub in ext.sh (no bump — 81 unreleased).
+export const TEMPLATE_VERSION = 81 // default agent lists the extension skill; extension SKILL.md gets the payload via $ARGUMENTS and installs right away when a source is given. extension skill: hub_repo param (config.yaml) + multi-platform hub in ext.sh. web-search: fast_region / deep_region params (config.yaml) + Bedrock dependency notes (no bump — 81 unreleased).
 const VERSION_FILE = '.template-version'
 
 /** Read the seed version stamped into `~/.halo/global/.template-version`.

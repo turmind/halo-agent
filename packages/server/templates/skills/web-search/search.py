@@ -12,27 +12,44 @@ Usage:
 Auth is automatic in both gears (machine AWS credentials): fast uses boto3's
 default credential chain; deep mints a 12-hour bearer token on every call via
 aws-bedrock-token-generator — no API key to configure or rotate.
+
+Regions: WEB_SEARCH_FAST_REGION / WEB_SEARCH_DEEP_REGION override the defaults
+below (the skill passes its fast_region / deep_region params through them).
 """
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
-MANTLE_URL = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
 MODELS = {"luna": "openai.gpt-5.6-luna", "sol": "openai.gpt-5.6-sol"}
+# Nova web grounding is US-only; us-east-1 / us-east-2 / us-west-2 all verified.
+FAST_REGION = "us-east-1"
+# bedrock-mantle: Luna is in us-east-1 / us-east-2 / us-west-2, Sol only in
+# us-east-1 / us-east-2. us-west-2 answered 3-8x faster than us-east-1 in
+# 2026-10-04 tests, so Luna defaults there; Sol takes us-east-1.
+DEEP_REGION = {"openai.gpt-5.6-luna": "us-west-2", "openai.gpt-5.6-sol": "us-east-1"}
 # luna (default) runs effort=max to squeeze out its retrieval planning; sol's
 # retrieval is already exhaustive at medium (measured 48 search queries on one
 # question), so it gets xhigh to avoid pointless token doubling — max over
 # xhigh measured only ~6% more reasoning tokens.
 EFFORTS = {"openai.gpt-5.6-luna": "max", "openai.gpt-5.6-sol": "xhigh"}
+SOL_REGIONS = ("us-east-1", "us-east-2")
+
+
+def env_region(name: str) -> str:
+    """Region from env; empty or an unsubstituted `{{…}}` skill-param placeholder = unset."""
+    v = os.environ.get(name, "").strip()
+    return "" if v.startswith("{{") else v
 
 
 def fast_search(question: str) -> None:
     import boto3
     from botocore.config import Config
 
+    region = env_region("WEB_SEARCH_FAST_REGION") or FAST_REGION
     bedrock = boto3.client(
-        "bedrock-runtime", region_name="us-east-1", config=Config(read_timeout=60)
+        "bedrock-runtime", region_name=region, config=Config(read_timeout=60)
     )
     response = bedrock.converse(
         modelId="us.amazon.nova-2-lite-v1:0",
@@ -55,13 +72,17 @@ def fast_search(question: str) -> None:
         for u in sources:
             print(" -", u)
     usage = response.get("usage", {})
-    print(f"\n[gear=fast model=nova-2-lite total_tokens={usage.get('totalTokens')}]", file=sys.stderr)
+    print(f"\n[gear=fast model=nova-2-lite region={region} total_tokens={usage.get('totalTokens')}]", file=sys.stderr)
 
 
 def deep_search(question: str, model: str) -> None:
     from aws_bedrock_token_generator import provide_token
 
-    token = provide_token(region="us-east-2")
+    region = env_region("WEB_SEARCH_DEEP_REGION") or DEEP_REGION[model]
+    if model == MODELS["sol"] and region not in SOL_REGIONS:
+        print(f"[sol is not offered in {region}; using {DEEP_REGION[model]}]", file=sys.stderr)
+        region = DEEP_REGION[model]
+    token = provide_token(region=region)
     body = json.dumps(
         {
             "model": model,
@@ -71,7 +92,7 @@ def deep_search(question: str, model: str) -> None:
         }
     ).encode()
     req = urllib.request.Request(
-        MANTLE_URL,
+        f"https://bedrock-mantle.{region}.api.aws/openai/v1/responses",
         data=body,
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         method="POST",
@@ -101,7 +122,7 @@ def deep_search(question: str, model: str) -> None:
         for u in sources:
             print(" -", u)
     usage = data.get("usage", {})
-    print(f"\n[gear=deep model={model} total_tokens={usage.get('total_tokens')}]", file=sys.stderr)
+    print(f"\n[gear=deep model={model} region={region} total_tokens={usage.get('total_tokens')}]", file=sys.stderr)
 
 
 def main() -> None:

@@ -1,0 +1,13 @@
+displayName_zh: 联网搜索
+description: Real-time web search on AWS Bedrock — needs AWS credentials with Bedrock access.
+description_zh: 基于 AWS Bedrock 的实时联网搜索，需要有 Bedrock 权限的 AWS 凭证。
+
+params:
+  - key: fast_region
+    description: "AWS region for the fast gear (Amazon Nova 2 Lite + web grounding, US regions only: us-east-1 / us-east-2 / us-west-2). Empty = us-east-1."
+    description_zh: "快速档（Amazon Nova 2 Lite + Web Grounding）使用的 AWS 区域，仅限美国区域：us-east-1 / us-east-2 / us-west-2。留空 = us-east-1。"
+    default: us-east-1
+  - key: deep_region
+    description: "AWS region for the deep gear (OpenAI GPT-5.6 on Bedrock Mantle). Luna: us-east-1 / us-east-2 / us-west-2; Sol: us-east-1 / us-east-2. Empty = us-west-2 for Luna, us-east-1 for Sol."
+    description_zh: "深度档（Bedrock Mantle 上的 OpenAI GPT-5.6）使用的 AWS 区域。Luna：us-east-1 / us-east-2 / us-west-2；Sol：us-east-1 / us-east-2。留空 = Luna 用 us-west-2，Sol 用 us-east-1。"
+    default: us-west-2

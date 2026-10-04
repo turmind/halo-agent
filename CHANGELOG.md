@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Skills: web-search's deep gear now defaults to us-west-2 for luna and us-east-1 for sol (was us-east-2 for both), and both gears' AWS regions are set in Settings → Skills → web-search (`fast_region`, default us-east-1; `deep_region`). Sol set to us-west-2, where it isn't offered, falls back to us-east-1. The skill description and instructions now state that it runs on AWS Bedrock and which permissions each gear needs.
 - Setup: `halo setup` asks only for built-in skills' secret params. Plain skill settings (like the extension hub) stay in Settings → Skills.
 - Server: a server started with `HALO_BADGE=DEV` never claims or rewrites a workspace's `.halo/runtime.lock` and runs no restart cleanup (stopping orphaned sub-sessions, resuming interrupted runs); the server without the badge that shares those workspaces owns all of it. Before, a dev server restoring a channel's reply route could take the lock of a workspace prod also serves.
 
