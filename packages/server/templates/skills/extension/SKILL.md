@@ -11,8 +11,9 @@ verbs:
 
 # extension
 
-The requested action is **`$1`**; the rest of the line is the payload. With
-natural language ("install the glb viewer"), infer both.
+The requested action is **`$1`**; everything after it is the payload
+(`$ARGUMENTS` minus the first token). With natural language ("install the glb
+viewer"), infer both.
 
 Preview extensions are static bundles the admin editor loads in a sandboxed
 iframe to preview file types it has no built-in viewer for (e.g. `.glb`).
@@ -29,6 +30,9 @@ wins if it exists, else the global one:
 Pick EXT = the first that exists, then:
 
 ## install
+
+When the payload names a source, run the install right away — no confirmation,
+no explanation first. Ask only when no source was given.
 
 `bash EXT install <source>` where `<source>` is one of:
 - an extension id (e.g. `glb`) → downloads the newest `glb-v*` release asset
@@ -63,8 +67,9 @@ the user first if they didn't name the id explicitly.
 
 - Extensions are global (all workspaces on this server). Say so if the user
   asks "install it for this project".
-- To find what's available, point the user at https://github.com/turmind/halo-hub
-  (the `extensions/` directory); do not scrape it.
+- Mention https://github.com/turmind/halo-hub (the `extensions/` directory)
+  only when the user asks what extensions exist or an install fails; do not
+  scrape it.
 - The script only pre-checks the required fields; the server's scanner is the
   authority. A package it rejects shows up in `list` (and the admin) as
   `ERROR` with the reason.

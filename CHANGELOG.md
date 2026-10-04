@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Server: a server started with `HALO_BADGE=DEV` never claims or rewrites a workspace's `.halo/runtime.lock` and runs no restart cleanup (stopping orphaned sub-sessions, resuming interrupted runs); the server without the badge that shares those workspaces owns all of it. Before, a dev server restoring a channel's reply route could take the lock of a workspace prod also serves.
 
+### Fixed
+
+- Skills: the default agent lists the `extension` skill, so `/extension` shows in the command popup and runs the skill. Before, it was sent as a plain chat message and the agent had no install instructions. `/extension install <id|zip|url>` now passes the source to the agent, which installs right away without asking first, and mentions halo-hub only when asked what's available or when an install fails.
+
 ## [1.5.5] - 2026-10-03
 
 ### Added

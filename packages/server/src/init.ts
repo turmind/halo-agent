@@ -56,7 +56,7 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 80 // config.yaml: timeout.model_request leaf; bundled docs rechecked against code. guide/workspace.md: quick-toggles entry; requirements/settings.md: DELETE refuses globalOnly keys (no bump — 80 unreleased).
+export const TEMPLATE_VERSION = 81 // default agent lists the extension skill; extension SKILL.md gets the payload via $ARGUMENTS and installs right away when a source is given.
 const VERSION_FILE = '.template-version'
 
 /** Read the seed version stamped into `~/.halo/global/.template-version`.
