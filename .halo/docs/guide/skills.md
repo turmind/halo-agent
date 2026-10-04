@@ -138,7 +138,7 @@ params:
 secrets: []   # rare for skills — server-side only, never substituted into shell_exec
 ```
 
-The Settings page reads this declaration and renders inputs grouped under the skill's name. The user's value lands in `~/.halo/secrets/settings.yaml` at `<skill-id>.params.api_key`.
+The Settings page reads this declaration and renders inputs grouped under the skill's name. The user's value lands in `~/.halo/secrets/settings.yaml` at `<skill-id>.params.api_key`. Among built-ins, `extension` declares a plain `hub_repo` param; `halo setup` asks only for built-in skills' `secret: true` params, so plain ones are set in Settings → Skills.
 
 > Credentials **do not** belong directly in `settings.yaml` — use `<<ENV_NAME>>` placeholders with the real value in env vars, or type them once into the Settings page (which still encrypts in the UI but stores plaintext on disk). Don't write credentials in SKILL.md either. SKILL.md + the schema in `config.yaml` are meant to be shareable; values are the user's.
 
@@ -160,7 +160,7 @@ Halo seeds these skills on every startup (the ids in `BUILTIN_SKILL_IDS`, `packa
 | aws-knowledge | Query the official AWS Knowledge MCP server for up-to-date AWS docs (no command, `user-invocable: false`; model auto-activates) |
 | web-search | Real-time web search in two gears: fast (Amazon Nova grounding, default) and deep (`--deep`, GPT-5.6 `web_search` via Bedrock Mantle, slower and token-expensive) (no command, `user-invocable: false`; model auto-activates) |
 | halo | Platform self-knowledge — config directories, MD scopes, which bundled doc answers what (no command, `user-invocable: false`; model auto-activates) |
-| extension | Install / list / remove canvas preview extensions — backs `/extension` (full access) |
+| extension | Install / list / remove canvas preview extensions — backs `/extension` (full access); its `hub_repo` param (Settings → Skills) picks the hub `install <id>` pulls from (default turmind/halo-hub) |
 
 All live under `~/.halo/global/skills/` and are force-overwritten on startup. To customize one, copy it into `<project>/.halo/skills/<id>/` and edit there (workspace overrides global). `tavily-web-search` remains an optional (non-seeded) skill.
 

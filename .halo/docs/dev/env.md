@@ -87,6 +87,7 @@ Three config file types, precedence **env vars > config.yaml / settings.yaml > c
 - **Always overwritten** (platform-owned, refreshed when the template version moves): `~/.halo/global/{prompts,models,docs}/`, `INSTRUCTIONS.md`, the built-in agent ids (`default`, `executor`, `deep-executor`, `goal`, `__evo_agent__`, `__score__`, `__apply_agent__`), built-in skill ids (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `aws-knowledge`, `web-search`, `self`, `halo`, `extension`).
 - **Built-in agents** keep the user's `model:` and `context:` blocks on overwrite — the admin UI lets users change which model an agent uses and its context limits, and that choice survives upgrades.
 - **Optional skills** (`tavily-web-search`) install only when picked via `halo setup`; the opt-in list is `~/.halo/global/.installed-optional-skills`. Picked skills are force-overwritten alongside the always-overwritten set.
+- **Skill params in `halo setup`**: a newly picked optional skill walks all its declared params; for built-in skills setup asks only the `secret: true` ones (`listRequiredSkillsWithSecrets`, `setup-providers.ts`) — plain params such as `extension.params.hub_repo` are set in Settings → Skills only.
 - **`secrets/config.yaml`** is leaf-merged: existing leaf `value`s preserved, new leaves added when a server upgrade introduces them.
 - **`secrets/settings.yaml`** is created empty if missing and never touched again. Defaults live in `settings-schema.ts`.
 
@@ -145,6 +146,7 @@ When a provider manifest declares a `default: <<NAME>>` for a secret, `halo setu
 
 `<skill-id>.params.*` (referenceable from skills via `{{<skill-id>.params.<key>}}`, or short form `{{params.<key>}}` inside SKILL.md; declared in `skills/<id>/config.yaml`):
 - `tavily-web-search.params.api_key` — example only; declared by whichever skill needs it
+- `extension.params.hub_repo` — hub `/extension install <id>` pulls from (empty = `https://github.com/turmind/halo-hub`); the skill's `ext.sh` also reads the optional `GITHUB_TOKEN` / `GITLAB_TOKEN` / `GITEA_TOKEN` from the server environment and sends them to that hub's release API only. See [design/canvas-extensions.md](../design/canvas-extensions.md#extension-skill-and-halo-hub)
 
 Hardcoded (config.ts, no override):
 - `auth.tokenMaxAge` — 14 days

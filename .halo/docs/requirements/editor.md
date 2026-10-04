@@ -62,6 +62,7 @@ File types without a built-in plugin can be handled by an **installed extension*
 - **Open with** (header menu, shown only when there are >2 candidates counting *Open as text*): switches the current tab's viewer; the choice is per tab and not persisted
 - **Fallback**: a file with no built-in plugin and no installed extension shows a static page — "no built-in preview for this type; extensions for more file types are on halo-hub ↗" — plus Open as text / Download. No online lookup
 - **Editable extensions** (manifest `capabilities: ["save"]`): the iframe reports dirty → tab shows the dirty dot → header **Save** button (Ctrl/Cmd+S is *not* wired for extension tabs — Monaco isn't mounted) → `PUT /api/files/raw`. If the file changed on disk since it was loaded the save gets a 409 and the user is asked "changed on disk … Overwrite?". An external change while the tab is clean reloads it; while dirty, local edits are kept silently and the conflict surfaces at the next save
+- **Install sources**: Settings → Extensions zip upload; `/extension install <id|zip|url>` (listed by the built-in `default` agent, full access), where an id comes from the hub in Settings → Skills → extension → `hub_repo` (default halo-hub; GitHub / Gitea / Forgejo / GitLab release zips, or tags of any other git repo); or a manual directory drop
 - **Live install / upgrade / uninstall** (from Settings → Extensions upload / remove, the `/extension` skill, or a manual directory change): pushed over WS, no reload. An upgraded extension remounts open tabs (or shows a "updated — reload" banner if the tab is dirty); uninstalling drops clean tabs to the fallback page and keeps dirty tabs alive with a banner
 - **Settings → Extensions**: lists installed extensions (name, version, file types, license/homepage) and manifest errors; upload `.zip` (≤ 100 MB) and remove. Any logged-in admin can do both — the admin cookie has no access level
 
@@ -73,7 +74,7 @@ Markdown and HTML open as text in Monaco *and* have a rendered view — Canvas d
 - Toggle to Edit → Monaco source, Cmd+S saves as usual
 
 ### Preview caching (MRU)
-Recently opened preview tabs stay mounted (up to 5, MRU) so switching between them doesn't re-fetch or re-parse. Plugins flagged `heavy: true` bypass the cache — only the active instance mounts, others unmount. An extension tab with unsaved edits stays pinned beyond the 5. Closing a preview tab removes it from the cache immediately (aborting any in-flight fetch).
+Recently opened preview tabs stay mounted (up to 5, MRU) so switching between them doesn't re-fetch or re-parse. Plugins flagged `heavy: true` bypass the cache — only the active instance mounts, others unmount; switching between two heavy tabs of the same type (e.g. two `.ipynb`) remounts the viewer, so it shows the newly active file. An extension tab with unsaved edits stays pinned beyond the 5. Closing a preview tab removes it from the cache immediately (aborting any in-flight fetch).
 
 ### File metadata in header
 The Canvas header shows `(size · Created … · Modified …)` for the active tab. Both text tabs and preview tabs populate this — preview tabs fetch `GET /api/files/stat` on open (and on tab restore from localStorage) since they never read content.

@@ -91,6 +91,8 @@ params:
 secrets: []
 ```
 
+Built-in skills declare theirs the same way — today only `extension`, with a plain `hub_repo` param (the hub `/extension install <id>` pulls from; empty = turmind/halo-hub). `halo setup` asks only for built-in skills' `secret: true` params; plain params are configured in Settings → Skills only.
+
 Global agents declare theirs the same way in `agents/<agent-id>/agent-config.yaml` (same `params:` / `secrets:` lists; shown under Settings → Agents).
 
 ### General — built-in
@@ -123,7 +125,7 @@ The value is read once at process start, so unlike other settings it is **not** 
 | `options` / `optionLabels` | no | For `type: enum`: the allowed values, and optional display labels parallel to them |
 | `description` | no | English description rendered as help text |
 | `description_zh` | no | Chinese description (UI picks based on lang) |
-| `default` | no | Placeholder shown when the value is unset; supports `<<ENV>>` |
+| `default` | no | Placeholder shown when the value is unset; supports `<<ENV>>`. For provider / skill / agent fields it is display-only: an unset param's `{{<id>.params.<key>}}` stays literal at substitution, so the consumer applies its own fallback (the `extension` skill's `ext.sh` treats `{{…}}` as "use the default hub") |
 | `secret` | no | `true` → masked in API responses + password input in UI |
 | `globalOnly` | no | `true` → read from global settings only; workspace overrides are ignored at runtime. UI disables the workspace input and shows a "global only" hint; `PUT` / `PATCH` / `DELETE` of such a key at workspace scope is rejected with 400. Set by the built-in `general` section only — provider / skill / agent yaml declarations don't read it |
 
