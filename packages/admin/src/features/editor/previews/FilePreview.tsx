@@ -9,7 +9,7 @@
  * dependencies only ship when the user actually opens one.
  */
 
-import { Suspense, useState, type ReactNode } from 'react'
+import { Suspense, useEffect, useState, type ReactNode } from 'react'
 import { File as FileIcon } from 'lucide-react'
 import './plugins' // side-effect: registers all built-in plugins
 import { resolve, resolvedKey, useRegistryVersion } from './registry'
@@ -20,8 +20,21 @@ import type { PreviewProps, Resolved } from './types'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { formatFileSize, confirmAction } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
+import { api } from '@/shared/api-client'
 
 const HALO_HUB_URL = 'https://github.com/turmind/halo-hub'
+
+/** Browsable URL for the extension skill's `hub_repo` param, normalized like
+ *  its `ext.sh`: empty / unsubstituted `{{…}}` = default hub, `owner/repo` =
+ *  GitHub. A local path or ssh remote has no web page → null (shown as text). */
+function hubWebUrl(raw: string | null | undefined): string | null {
+  const h = (raw ?? '').trim()
+  if (!h || h.startsWith('{{')) return HALO_HUB_URL
+  if (/^[A-Za-z0-9][\w.-]*\/[\w.-]+$/.test(h)) return `https://github.com/${h}`
+  if (/^https?:\/\//.test(h)) return h.replace(/\/+$/, '').replace(/\.git$/, '')
+  return null
+}
+
 // Extension hosts fetch the whole file into an ArrayBuffer via the streaming
 // view URL (no server-side 10MB cap), so the ceiling is client memory (§16.6).
 const EXTENSION_MAX_BYTES = 100 * 1024 * 1024
@@ -130,11 +143,23 @@ function TooLargePreview({ name, size, downloadUrl, maxLabel = '10MB' }: Preview
   )
 }
 
-/** No viewer for this type. Static pointer to halo-hub — no lookup, no
- *  per-extension URL: the admin can't know what the hub has without a network
- *  call, and a bundled index would go stale (§8). */
-function UnsupportedPreview({ name, downloadUrl, onOpenAsText }: PreviewProps) {
+/** No viewer for this type. Points at the configured hub (extension skill's
+ *  `hub_repo`, read once per mount) — no per-extension URL: the admin can't
+ *  know what the hub has without querying it, and a bundled index would go
+ *  stale (§8). */
+function UnsupportedPreview({ name, projectId, downloadUrl, onOpenAsText }: PreviewProps) {
   const t = useT()
+  const [hub, setHub] = useState<{ url: string | null; raw: string }>({ url: HALO_HUB_URL, raw: '' })
+  useEffect(() => {
+    let alive = true
+    api.settings.getSchema(projectId)
+      .then((schema) => {
+        const field = schema.sections.find((s) => s.namespaceId === 'extension')?.fields.find((f) => f.key === 'hub_repo')
+        if (alive) setHub({ url: hubWebUrl(field?.value), raw: field?.value ?? '' })
+      })
+      .catch(() => { /* keep the default hub link */ })
+    return () => { alive = false }
+  }, [projectId])
   return (
     <PreviewShell name={name} downloadUrl={downloadUrl} onOpenAsText={onOpenAsText}>
       <div className="flex h-full flex-col items-center justify-center gap-4 bg-[var(--background)] p-8">
@@ -145,7 +170,9 @@ function UnsupportedPreview({ name, downloadUrl, onOpenAsText }: PreviewProps) {
         <p className="text-xs text-[var(--muted-foreground)]">{t('editor.unsupported.title')}</p>
         <p className="text-xs text-[var(--muted-foreground)]">
           {t('editor.unsupported.hub')}{' '}
-          <a href={HALO_HUB_URL} target="_blank" rel="noopener" className="text-[var(--primary)] hover:underline">halo-hub ↗</a>
+          {hub.url
+            ? <a href={hub.url} target="_blank" rel="noopener" className="text-[var(--primary)] hover:underline">{hub.url === HALO_HUB_URL ? 'halo-hub' : hub.url.replace(/^https?:\/\//, '')} ↗</a>
+            : <code className="text-[var(--foreground)]">{hub.raw}</code>}
         </p>
         <div className="flex items-center gap-2">
           {onOpenAsText && (

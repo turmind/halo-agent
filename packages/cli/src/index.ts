@@ -47,8 +47,10 @@ Steps:
   2. Pick admin password mode: keep / set new / use HALO_PASSWORD env
   3. Prompt for listen port (default 9527; Enter to keep current)
   4. Configure model provider keys (optional sub-menu)
-  5. Toggle optional skills (tavily / nova / aws-knowledge), then walk
-     their secret fields
+  5. Toggle optional skills (e.g. tavily-web-search), then walk their
+     params
+  6. Ask built-in skills' secret params, if any (plain params such as the
+     extension hub are set in Settings → Skills)
 
 Options:
   --non-interactive, -y    Skip every prompt. Only seed templates and

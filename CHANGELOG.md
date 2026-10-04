@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Editor: the "no built-in preview" page links to the hub set in Settings → Skills → extension → `hub_repo`. Before, it always linked to turmind/halo-hub.
+- CLI: `halo setup --help` describes the optional-skill step correctly (it no longer lists aws-knowledge, which is built in) and mentions the built-in skills' secret step.
 - Editor: opening a second file of the same heavy-preview type (e.g. two `.ipynb` / `.glb` / `.drawio` files) while one is showing now displays the new file. Before, the preview kept showing the previous file until the tab was reopened.
 - Skills: the default agent lists the `extension` skill, so `/extension` shows in the command popup and runs the skill. Before, it was sent as a plain chat message and the agent had no install instructions. `/extension install <id|zip|url>` now passes the source to the agent, which installs right away without asking first, and mentions halo-hub only when asked what's available or when an install fails.
 
