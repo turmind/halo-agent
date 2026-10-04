@@ -175,9 +175,9 @@ This is a known, unfixed gap (not a bug in a specific route): don't hand out `wo
 
 Sensitive directories and files are hidden from workspace/readonly sessions via bwrap overlays / Seatbelt deny rules (and the same lists gate `assertPathAllowed` for in-process file tools). Under bwrap a hidden file reads as empty and a hidden dir as an empty directory; under Seatbelt both are denied outright. Paths that don't exist on the filesystem are silently skipped. Two categories coexist:
 
-**Global lists (built-in + configurable extras)** — credentials and cross-workspace state. The built-in lists are code constants in `sandbox.ts` (`DEFAULT_HIDDEN_DIRS` / `DEFAULT_HIDDEN_FILES`, the single source) and are always hidden; `settings.yaml` `general.sandbox.hidden_dirs` / `hidden_files` hold extra entries that are **appended** (deduped) — they never replace the built-ins, so a built-in entry cannot be un-hidden from settings. `config.ts` `resolveSandboxPaths()` builds the effective lists for both the server and the CLI:
+**Global lists (built-in + configurable extras)** — credentials and cross-workspace state. The built-in lists are code constants in `sandbox.ts` (`DEFAULT_HIDDEN_DIRS` / `DEFAULT_HIDDEN_FILES`, the single source) and are always included in the effective lists (which apply to workspace/readonly sessions only — Full sessions skip the sandbox entirely); `settings.yaml` `general.sandbox.hidden_dirs` / `hidden_files` hold extra entries that are **appended** (deduped) — they never replace the built-ins, so a built-in entry cannot be removed from the list in settings. `config.ts` `resolveSandboxPaths()` builds the effective lists for both the server and the CLI:
 
-| Setting | Built-in (always hidden) | Method |
+| Setting | Built-in (always included) | Method |
 |---|---|---|
 | `hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs` | bwrap `--tmpfs` overlay (empty directory); Seatbelt `subpath` deny |
 | `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files | bwrap `--ro-bind ~/.halo/.sandbox-empty` (reads as empty); Seatbelt `literal` deny |

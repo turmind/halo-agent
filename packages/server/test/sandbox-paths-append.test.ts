@@ -70,7 +70,7 @@ describe('resolveSandboxPaths', () => {
     expect(resolveSandboxPaths().hiddenDirs).toContain('~/.ssh')
   })
 
-  it('schema: empty default, description names the always-hidden built-ins', async () => {
+  it('schema: empty default, description names the built-ins and the session scope', async () => {
     const { loadSettingsSchema } = await import('../src/settings-schema.js')
     const general = loadSettingsSchema().find((s) => s.namespaceId === 'general')!
     const dirs = general.fields.find((f) => f.key === 'sandbox.hidden_dirs')!
@@ -80,6 +80,8 @@ describe('resolveSandboxPaths', () => {
     expect(dirs.description).toContain('~/.ssh')
     expect(dirs.description_zh).toContain('~/.ssh')
     expect(files.description).toContain('~/.git-credentials')
+    expect(dirs.description).toContain('Full sessions')
+    expect(dirs.description_zh).toContain('Full 会话')
   })
 })
 
