@@ -1,4 +1,5 @@
 id: anthropic
+runtime: anthropic-messages
 displayName: Anthropic (Generic)
 displayName_zh: Anthropic（通用）
 description: Generic Anthropic Messages API. Use for api.anthropic.com or any Anthropic-compatible third-party gateway.

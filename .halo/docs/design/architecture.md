@@ -63,7 +63,7 @@ Five concerns were split into their own files (SessionManager keeps thin pass-th
 
 ### ModelRuntime — LLM interaction layer (provider-agnostic)
 
-Files: `agents/model-runtime.ts` (interface + dispatcher), `agents/bedrock-agent.ts` (the `aws-bedrock-claude-invoke` implementation).
+Files: `agents/model-runtime.ts` (interface + dispatcher), `agents/bedrock-agent.ts` (the `bedrock-invoke` runtime behind the `aws-bedrock-claude-invoke` provider).
 
 **Interface**:
 
@@ -72,23 +72,24 @@ interface ModelRuntime {
   messages: AnthropicMessage[]
   run(input, opts?): AsyncGenerator<AgentEvent>
 }
-createModelRuntime(providerId: string, cfg: ModelRuntimeConfig): ModelRuntime
+resolveProviderRuntime(providerId: string): string          // provider yaml → `runtime`
+createModelRuntime(runtime: string, cfg: ModelRuntimeConfig): ModelRuntime
 ```
 
-**Dispatch**: `agent.yaml`'s `model.provider` is looked up against `~/.halo/global/models/<providerId>.yaml`; the dispatcher's switch instantiates the matching implementation.
+**Dispatch**: `agent.yaml`'s `model.provider` is looked up against `~/.halo/global/models/<providerId>.yaml`; that yaml's `runtime:` field names the implementation (wire protocol), and the dispatcher's switch matches on the runtime name only. The provider `id` stays the identity (model picker, `model.provider`, `<id>.secrets.*`). Missing yaml / missing `runtime:` / unknown runtime → the session build throws.
 
 **Modality capabilities**: Each model in the manifest declares `capabilities.image` / `capabilities.video` / `capabilities.audio` (boolean). SessionManager checks `modelSupportsImage()` at session creation in two places: (1) `createWorkspaceTools()` is passed `supportsVision` so the `view_image` tool is dropped from the tool list when the model can't ingest vision blocks — no exposed tool, no errant call, no provider 400; (2) user-supplied images on inbound messages are stripped at `buildInput()` with a text notice. Query functions: `config.ts` exports `modelSupportsImage()` / `modelSupportsVideo()` / `modelSupportsAudio()`.
 
-**Current providers**:
-- `aws-bedrock-claude-invoke` → `BedrockAgent` (uses the Bedrock InvokeModelWithResponseStream API — text / thinking chunks reach the UI as they are generated)
-- `anthropic` / `mimo-token-plan-china` → `AnthropicAgent`, `minimax` → `MiniMaxAgent`, `qwen` → `QwenAgent` (Anthropic Messages API over HTTP with `stream: true`; the SSE is folded by the same `AnthropicStreamAccumulator` as Bedrock via `fetchAnthropicStream` in `anthropic-stream.ts`, so they stream too)
-- The OpenAI-family (`openai` / `deepseek` / `kimi` / `zhipu` / `doubao` / `hunyuan`) → `chat/completions` over HTTP with `stream: true` + `stream_options.include_usage`; the `chat.completion.chunk` SSE is folded back into the non-streaming `choices[0].message` shape by `fetchChatCompletionStream` in `openai-chat-stream.ts` (a transport helper, not a base class; message/tool conversion and result parsing are shared via `openai-chat-format.ts`, while each agent keeps its own request body / thinking / usage math), so they stream too
-- Mantle (`aws-bedrock-mantle` / `aws-bedrock-openai`) → `MantleAgent`, OpenAI Responses API over HTTP with `stream: true`; `readResponsesStream` (module-level in `mantle-agent.ts`) reports `response.output_text.delta` frames live and takes the full final response object off the terminal `response.completed` / `response.incomplete` frame, so the existing `output[]` parse runs unchanged (bedrock-mantle sends no `[DONE]`, bedrock-runtime does — `readSseJson` skips it either way)
+**Current providers** (provider id → `runtime` → class):
+- `aws-bedrock-claude-invoke` → `bedrock-invoke` → `BedrockAgent` (uses the Bedrock InvokeModelWithResponseStream API — text / thinking chunks reach the UI as they are generated)
+- `anthropic` / `mimo-token-plan-china` → `anthropic-messages` → `AnthropicAgent`, `minimax` → `MiniMaxAgent`, `qwen` → `QwenAgent` (vendor runtimes keep the vendor name; Anthropic Messages API over HTTP with `stream: true`; the SSE is folded by the same `AnthropicStreamAccumulator` as Bedrock via `fetchAnthropicStream` in `anthropic-stream.ts`, so they stream too)
+- The OpenAI-family (`openai` → `openai-chat` → `OpenAIAgent`; `deepseek` / `kimi` / `zhipu` / `doubao` / `hunyuan` → same-named vendor runtimes) → `chat/completions` over HTTP with `stream: true` + `stream_options.include_usage`; the `chat.completion.chunk` SSE is folded back into the non-streaming `choices[0].message` shape by `fetchChatCompletionStream` in `openai-chat-stream.ts` (a transport helper, not a base class; message/tool conversion and result parsing are shared via `openai-chat-format.ts`, while each agent keeps its own request body / thinking / usage math), so they stream too
+- Mantle (`aws-bedrock-mantle` / `aws-bedrock-openai`) → `bedrock-mantle` → `MantleAgent`, OpenAI Responses API over HTTP with `stream: true`; `readResponsesStream` (module-level in `mantle-agent.ts`) reports `response.output_text.delta` frames live and takes the full final response object off the terminal `response.completed` / `response.incomplete` frame, so the existing `output[]` parse runs unchanged (bedrock-mantle sends no `[DONE]`, bedrock-runtime does — `readSseJson` skips it either way)
 - Every provider streams; the `onDelta` hook is still optional per provider, so a future non-streaming one just ignores it
 
 **Adding a new provider**:
-1. Add a manifest at `models/<providerId>.yaml` (include modality flags)
-2. Add a case in `model-runtime.ts` returning your runtime class
+1. Add a manifest at `models/<providerId>.yaml` (include modality flags) with `runtime:` — an existing runtime name when the wire protocol is already supported (then you're done)
+2. For a new protocol: add the name to `MODEL_RUNTIME_NAMES` and a case in `model-runtime.ts` returning your runtime class
 3. Implement `callModel(signal, onDelta?)` (returns `Promise<ModelCallResult>`; call `onDelta` per chunk if the API streams, otherwise ignore it) and maintain `messages`
 
 **Core loop** (`AgentLoop.run()`, shared by all providers):
@@ -254,7 +255,7 @@ SQLite only holds metadata indexes; all content lives on the filesystem.
 | `~/.halo/global/skills/{id}/SKILL.md` | SkillRoutes | Skill definition (global scope) |
 | `~/.halo/secrets/settings.yaml` | SettingsRoutes | Global settings |
 | `<project>/.halo/settings.yaml` | SettingsRoutes | Per-project overrides |
-| `~/.halo/global/models/<provider>.yaml` | Manual edit | Model registry — one file per provider, scanned at startup, used to dispatch to the matching runtime |
+| `~/.halo/global/models/<provider>.yaml` | Manual edit | Model registry — one file per provider, scanned at startup; its `runtime:` field picks the implementation class |
 | `~/.halo/global/prompts/{bootstrap,all,root}/*.md` | init.ts seed + user | System prompts |
 | `~/.halo/global/logs/server.log` | Logger | Server logs (10 MB rotation) |
 | `~/.halo/secrets/channels/channels.db` | All channels | Unified channel accounts (Web, Telegram, WeChat, Slack, Feishu, WeCom) — see [storage.md](storage.md#channel_accounts) |

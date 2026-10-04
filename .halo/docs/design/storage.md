@@ -425,6 +425,7 @@ Path: `~/.halo/global/models/<providerId>.yaml` — one file per provider. All f
 ```yaml
 # aws-bedrock-claude-invoke.yaml
 id: aws-bedrock-claude-invoke                  # required, must match filename and agent.yaml model.provider
+runtime: bedrock-invoke                        # required, implementation class (wire protocol) — see below
 displayName: AWS Bedrock Claude (Invoke API)   # shown in UI
 displayName_zh: AWS Bedrock Claude（Invoke API） # optional zh override
 description: Invokes Bedrock via InvokeModel (non-streaming)
@@ -498,7 +499,7 @@ Existing agent yaml values always win over these defaults — switching provider
 
 `agent.yaml`'s `model.provider` must match a provider's `id` — otherwise session spawn fails.
 
-Routing: `createModelRuntime(providerId, cfg)` → looks up the implementation by `providerId`. See [design/agent.md](../design/agent.md#agent-instance).
+Routing: `id` is the provider identity (model picker, `agent.yaml` `model.provider`, `<id>.secrets.*`); `runtime:` picks the implementation class. `resolveProviderRuntime(providerId)` reads `runtime` from the registry entry, then `createModelRuntime(runtime, cfg)` dispatches on the runtime name only — the provider id is never matched against it. Runtimes: `bedrock-invoke` (BedrockAgent), `bedrock-mantle` (MantleAgent, OpenAI Responses), `anthropic-messages` (AnthropicAgent), `openai-chat` (OpenAIAgent, Chat Completions), and the vendor subclasses under their own names (`kimi`, `deepseek`, `minimax`, `qwen`, `hunyuan`, `doubao`, `zhipu`). Several providers can share one runtime (`anthropic` + `mimo-token-plan-china`; `aws-bedrock-mantle` + `aws-bedrock-openai`). No yaml for the id, no `runtime:` (a seed older than template v82), or an unknown name → session build throws naming the provider and yaml path. See [design/agent.md](../design/agent.md#agent-instance).
 
 ## Skill schema (`config.yaml`)
 

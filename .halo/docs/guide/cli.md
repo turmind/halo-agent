@@ -251,7 +251,8 @@ Session prefix: `cli_`. Sessions are persisted to `<workspace>/.halo/sessions/` 
 ### Initialization
 
 `tui` / `cli` / `agents` / `sessions` refuse to run ("~/.halo/global/ not initialized. Run halo setup first.") until `halo setup` has seeded `~/.halo/global/`. Then the CLI replicates the server's init sequence (`initRuntime()` in `harness.ts`):
-1. `initLogger()` — redirect console to stderr + file logger
-2. `initBwrapCheck()` — probe sandbox availability
-3. `setSandboxHiddenPaths()` — configure sandbox paths
-4. `new SessionManager(workspace)` — create agent session manager (the workspace's `.halo/` is seeded via `ensureWorkspaceHalo`)
+1. `refreshTemplatesIfOutdated()` — the server's template startup check: when `~/.halo/global/.template-version` is behind the bundled `TEMPLATE_VERSION` (typically right after `halo upgrade`), re-seed `~/.halo/global/` before anything reads the models registry; logs `[CLI] Templates outdated (vX → vY), refreshing ~/.halo/global/` to stderr. Runs once per upgrade — afterwards the stamp matches and it's a single file read
+2. `initLogger()` — redirect console to stderr + file logger
+3. `initBwrapCheck()` — probe sandbox availability
+4. `setSandboxHiddenPaths()` — configure sandbox paths
+5. `new SessionManager(workspace)` — create agent session manager (the workspace's `.halo/` is seeded via `ensureWorkspaceHalo`)

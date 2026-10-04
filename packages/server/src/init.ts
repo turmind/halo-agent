@@ -56,7 +56,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 81 // default agent lists the extension skill; extension SKILL.md gets the payload via $ARGUMENTS and installs right away when a source is given. extension skill: hub_repo param (config.yaml) + multi-platform hub in ext.sh. web-search: fast_region / deep_region params (config.yaml) + Bedrock dependency notes (no bump — 81 unreleased).
+export const TEMPLATE_VERSION = 82 // models/*.yaml: `runtime:` field (createModelRuntime dispatches on it).
+// 81: default agent lists the extension skill; extension SKILL.md gets the payload via $ARGUMENTS and installs right away when a source is given. extension skill: hub_repo param (config.yaml) + multi-platform hub in ext.sh. web-search: fast_region / deep_region params (config.yaml) + Bedrock dependency notes (no bump — 81 unreleased).
 const VERSION_FILE = '.template-version'
 
 /** Read the seed version stamped into `~/.halo/global/.template-version`.
@@ -67,6 +68,21 @@ export function readSeedVersion(haloHome: string): number {
     const raw = fs.readFileSync(path.join(haloHome, 'global', VERSION_FILE), 'utf-8')
     return parseInt(raw.trim(), 10) || 0
   } catch { return 0 }
+}
+
+/** Startup check shared by the server and the CLI: when an already-seeded
+ *  home is behind the bundled templates (typical case: user just `npm
+ *  upgrade`d), re-run `ensureHaloHome`. A never-seeded home (stamp 0) is left
+ *  for `halo setup`. Failure is non-fatal — the caller keeps the older seed. */
+export function refreshTemplatesIfOutdated(haloHome: string, logTag: string): void {
+  const seedVersion = readSeedVersion(haloHome)
+  if (seedVersion <= 0 || seedVersion >= TEMPLATE_VERSION) return
+  console.log(`[${logTag}] Templates outdated (v${seedVersion} → v${TEMPLATE_VERSION}), refreshing ~/.halo/global/`)
+  try {
+    ensureHaloHome(haloHome)
+  } catch (err) {
+    console.error(`[${logTag}] Template refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 const SKIP_NAMES = new Set(['.DS_Store', 'schema.sql', '__pycache__', '.pytest_cache'])

@@ -1,4 +1,5 @@
 id: mimo-token-plan-china
+runtime: anthropic-messages
 displayName: Xiaomi MiMo
 displayName_zh: 小米 MiMo
 description: Xiaomi MiMo via its Anthropic-compatible gateway — Token Plan (China / Singapore / Europe clusters) or pay-as-you-go. Supports 1M context window.

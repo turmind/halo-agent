@@ -1,7 +1,7 @@
 /**
  * MantleAgent — the **OpenAI Responses API** surface of Amazon Bedrock. Two
- * hosts speak the identical format, so one class serves two providers
- * (selected in model-runtime.ts):
+ * hosts speak the identical format, so one class serves two providers (both
+ * yamls say `runtime: bedrock-mantle`; the endpoint picks the host):
  *   - `aws-bedrock-mantle` → bedrock-mantle.<region>.api.aws/openai/v1
  *     (OpenAI GPT-6 / 5.6; templates/models/aws-bedrock-mantle.yaml)
  *   - `aws-bedrock-openai` → bedrock-runtime.<region>.amazonaws.com/openai/v1

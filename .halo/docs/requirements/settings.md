@@ -62,7 +62,8 @@ Schema lives **inside the package**, alongside its other files:
 ### Provider secrets — `models/<provider-id>.yaml`
 
 ```yaml
-id: aws-bedrock-claude-invoke
+id: aws-bedrock-claude-invoke       # provider identity — also the settings namespace below
+runtime: bedrock-invoke             # implementation class; not part of the settings schema
 displayName: AWS Bedrock Claude (Invoke API)
 defaultEndpoint: https://bedrock-runtime.us-west-2.amazonaws.com
 

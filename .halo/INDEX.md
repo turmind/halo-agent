@@ -12,7 +12,7 @@ halo setup                      # interactive: password / port / model keys / op
 halo server start               # launch on :9527 (default)
 ```
 
-Upgrade later with `halo upgrade && halo server restart` — the server's startup check refreshes bundled docs / agents / skills when the on-disk template version is behind.
+Upgrade later with `halo upgrade && halo server restart` — the server's startup check (and the same check when `halo cli` / `halo tui` starts) refreshes bundled docs / agents / skills / model providers when the on-disk template version is behind.
 
 For Docker / CI use `halo setup --non-interactive` and supply credentials via `HALO_PASSWORD` env. Full deployment guide at [docs/dev/deploy.md](docs/dev/deploy.md).
 

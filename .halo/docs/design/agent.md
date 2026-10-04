@@ -4,11 +4,11 @@ Agent instances, lifecycle, tools, and message formats.
 
 ## Agent instance
 
-Each session is 1:1 with a `ModelRuntime`. `ModelRuntime` is a provider-agnostic interface; `agent.yaml`'s `model.provider` selects the concrete implementation.
+Each session is 1:1 with a `ModelRuntime`. `ModelRuntime` is a provider-agnostic interface; `agent.yaml`'s `model.provider` names a provider, and that provider yaml's `runtime:` field selects the concrete implementation.
 
 **Files**:
-- [packages/server/src/agents/model-runtime.ts](../../../packages/server/src/agents/model-runtime.ts) — the interface plus the `createModelRuntime(providerId, cfg)` dispatcher
-- [packages/server/src/agents/bedrock-agent.ts](../../../packages/server/src/agents/bedrock-agent.ts) — the `aws-bedrock-claude-invoke` implementation (Bedrock InvokeModelWithResponseStream, streaming)
+- [packages/server/src/agents/model-runtime.ts](../../../packages/server/src/agents/model-runtime.ts) — the interface, `resolveProviderRuntime(providerId)` (provider yaml → `runtime` name) and the `createModelRuntime(runtime, cfg)` dispatcher
+- [packages/server/src/agents/bedrock-agent.ts](../../../packages/server/src/agents/bedrock-agent.ts) — the `bedrock-invoke` runtime, used by the `aws-bedrock-claude-invoke` provider (Bedrock InvokeModelWithResponseStream, streaming)
 - [packages/server/src/agents/anthropic-stream.ts](../../../packages/server/src/agents/anthropic-stream.ts) — `AnthropicStreamAccumulator` (stream events → `ModelCallResult`, shared by every Anthropic-Messages provider) + `fetchAnthropicStream` (the HTTP + SSE `callModel` body of anthropic / mimo / minimax / qwen); `sse.ts` is the generic SSE → JSON reader underneath
 
 ### State
@@ -31,9 +31,9 @@ Each provider's SDK client and config details are encapsulated inside its runtim
 
 ### Adding a new provider
 
-1. Write the model manifest and capabilities at `~/.halo/global/models/<providerId>.yaml` (see `aws-bedrock-claude-invoke.yaml` for shape)
-2. Add a case to the switch in `model-runtime.ts` returning a class that implements `ModelRuntime`
-3. Nothing else changes — session-manager will automatically route by `agent.yaml`'s `model.provider`
+1. Write the model manifest and capabilities at `~/.halo/global/models/<providerId>.yaml` (see `aws-bedrock-claude-invoke.yaml` for shape), with `runtime:` naming the implementation
+2. Reusing an existing wire protocol (e.g. another Anthropic- or OpenAI-compatible gateway)? Set `runtime:` to that runtime's name (`anthropic-messages`, `openai-chat`, …) and stop. A new protocol: add its name to `MODEL_RUNTIME_NAMES` and a case to the switch in `model-runtime.ts` returning a class that implements `ModelRuntime`
+3. Nothing else changes — session-manager resolves `agent.yaml`'s `model.provider` → the yaml's `runtime` → the class
 
 ## Agent build pipeline (SessionManager.buildAgentInstance)
 
@@ -44,7 +44,7 @@ Each provider's SDK client and config details are encapsulated inside its runtim
 5. Inject the MD layers (USER.md / AGENT.md / INSTRUCTIONS.md chain / INDEX.md)
 6. **Render AGENT.md placeholders**: `{{var}}` / `{{<skill-id>.params.<key>}}` / `<<ENV>>` substitution (see [prompt-system.md](prompt-system.md#placeholder-rendering-pipeline))
 7. Inject skill metadata (use `activate_skill` to load the full body on demand)
-8. `createModelRuntime(providerId, {modelId, endpoint, systemPrompt, tools, ...})`
+8. `createModelRuntime(resolveProviderRuntime(providerId), {modelId, endpoint, systemPrompt, tools, ...})` — the provider yaml must exist and carry a known `runtime:`, else the build throws; credentials (`resolveApiKey` / `resolveAwsCredentials`) stay keyed by the provider id
 
 See [prompt-system.md](prompt-system.md).
 

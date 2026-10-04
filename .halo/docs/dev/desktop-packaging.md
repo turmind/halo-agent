@@ -374,9 +374,10 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
 
 - **Changing anything under `templates/` requires bumping `TEMPLATE_VERSION`
   (`packages/server/src/init.ts`) — otherwise the change never reaches existing
-  installs.** Server startup only re-runs `ensureHaloHome` (the template
-  reseed) when the on-disk `~/.halo/global/.template-version` is *strictly less
-  than* the compiled `TEMPLATE_VERSION` (`index.ts` startup block). Equal → the
+  installs.** Server startup (and `halo cli` / `halo tui` start) only re-runs
+  `ensureHaloHome` (the template reseed) when the on-disk
+  `~/.halo/global/.template-version` is *strictly less than* the compiled
+  `TEMPLATE_VERSION` (`init.ts` `refreshTemplatesIfOutdated`). Equal → the
   whole reseed is skipped, so a template edit with no version bump is invisible
   to every machine that already has the prior version stamped. This bit the
   `team`-delegation rewrite: `default/AGENT.md` gained the "team whitelist"

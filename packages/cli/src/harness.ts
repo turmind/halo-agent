@@ -4,8 +4,8 @@ import { SessionManager, type SessionTreeNode } from '@turmind/halo-server/agent
 import { SessionManagerRegistry } from '@turmind/halo-server/agents/session-manager-registry'
 import type { AgentSessionEvent } from '@turmind/halo-server/agents/agent-events'
 import { scanAvailableAgents } from '@turmind/halo-server/agents/agent-loader'
-import { ensureWorkspaceHalo } from '@turmind/halo-server/init'
-import { config, modelSupportsImage, resolveSandboxPaths } from '@turmind/halo-server/config'
+import { ensureWorkspaceHalo, refreshTemplatesIfOutdated } from '@turmind/halo-server/init'
+import { config, HALO_HOME, modelSupportsImage, resolveSandboxPaths } from '@turmind/halo-server/config'
 import { getDisabledSet } from '@turmind/halo-server/db/index'
 import { initBwrapCheck, setSandboxHiddenPaths } from '@turmind/halo-server/tools/sandbox'
 import { initLogger } from '@turmind/halo-server/logger'
@@ -105,6 +105,11 @@ export async function initRuntime(): Promise<void> {
   // Redirect console.log to stderr so stdout stays clean for agent output only.
   // initLogger() captures this as origLog, so all subsequent console output goes to stderr.
   console.log = (...args: unknown[]) => process.stderr.write(args.map(String).join(' ') + '\n')
+  // Same startup check as the server: an `npm upgrade` without a server
+  // restart must still refresh ~/.halo/global/ (e.g. models/*.yaml `runtime:`)
+  // before anything reads the models registry. Before initLogger, like the
+  // server, so the notice isn't filtered by the log level.
+  refreshTemplatesIfOutdated(HALO_HOME, 'CLI')
   initLogger()
   await initBwrapCheck()
   const { hiddenDirs, hiddenFiles } = resolveSandboxPaths()

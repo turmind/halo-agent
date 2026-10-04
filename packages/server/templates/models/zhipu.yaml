@@ -1,4 +1,5 @@
 id: zhipu
+runtime: zhipu
 displayName: Zhipu AI (GLM)
 displayName_zh: 智谱 AI（GLM）
 description: Zhipu GLM-5.x family on open.bigmodel.cn, OpenAI-compatible chat completions

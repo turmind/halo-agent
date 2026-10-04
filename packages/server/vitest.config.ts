@@ -7,6 +7,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    setupFiles: ['test/setup-home.ts'],
     // Cap worker concurrency. Each worker loads the full server module graph
     // (better-sqlite3 native + aws-sdk + drizzle); on a 4-core box vitest's
     // default of one-worker-per-core lets the combined peak spike high enough

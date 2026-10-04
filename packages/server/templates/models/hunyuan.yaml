@@ -1,4 +1,5 @@
 id: hunyuan
+runtime: hunyuan
 displayName: Hunyuan (Tencent)
 displayName_zh: 混元（腾讯）
 description: Tencent Hunyuan Hy3 preview — 295B/21B MoE, agent-oriented with no_think / think_low / think_high modes

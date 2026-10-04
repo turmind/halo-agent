@@ -1,6 +1,6 @@
 import path from 'node:path'
 import type { ToolDef } from './bedrock-agent.js'
-import { createModelRuntime, type ModelRuntime } from './model-runtime.js'
+import { createModelRuntime, resolveProviderRuntime, type ModelRuntime } from './model-runtime.js'
 import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { loadSystemPrompts } from '../prompts/system-prompts.js'
 import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } from '../prompts/md-loader.js'
@@ -451,7 +451,7 @@ ${roster}`
     const aws = resolveAwsCredentials(providerId, this.host.workspaceRoot)
     const awsCreds = aws.accessKeyId && aws.secretAccessKey ? aws : undefined
     const apiKey = resolveApiKey(providerId, this.host.workspaceRoot)
-    const agent = createModelRuntime(providerId, {
+    const agent = createModelRuntime(resolveProviderRuntime(providerId), {
       modelId,
       endpoint,
       systemPrompt,

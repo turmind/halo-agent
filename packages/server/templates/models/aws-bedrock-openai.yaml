@@ -1,4 +1,5 @@
 id: aws-bedrock-openai
+runtime: bedrock-mantle
 displayName: AWS Bedrock OpenAI-compatible (GPT-6.1 / 6 / 5.6 · Grok 4.6 · Kimi K3)
 displayName_zh: AWS Bedrock OpenAI 兼容接口（GPT-6.1 / 6 / 5.6 · Grok 4.6 · Kimi K3）
 description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6.1 Sol, GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.6, Moonshot Kimi K3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).

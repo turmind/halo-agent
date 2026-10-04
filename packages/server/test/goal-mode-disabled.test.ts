@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CommandContext } from '../src/channels/shared/commands.js'
+import { seedBundledModels } from './helpers/seed-models.js'
 
 let home: string
 let workspace: string
@@ -49,6 +50,7 @@ beforeAll(async () => {
   vi.stubEnv('HOME', home)
   fs.mkdirSync(join(home, '.halo', 'global'), { recursive: true })
   fs.writeFileSync(join(home, '.halo', 'global', 'aliases.yaml'), 'top:\n  /g: /goal\n  /gc: /goal create\nverb:\n  c: create\n')
+  seedBundledModels(home)
   ;({ SessionManager } = await import('../src/agents/session-manager.js'))
   ;({ agentSessions } = await import('../src/db/schema.js'))
   commands = await import('../src/channels/shared/commands.js')

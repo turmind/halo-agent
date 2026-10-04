@@ -1,11 +1,15 @@
 /**
  * ModelRuntime — provider-agnostic interface for LLM streaming agents.
  *
- * Each provider (aws-bedrock-claude-invoke, openai, etc.) ships an implementation that
- * adapts its native SDK to this interface. `createModelRuntime` dispatches by
- * `providerId` — the same id that appears in `<global>/models/<providerId>.yaml`
- * and in `agent.yaml` `model.provider`.
+ * Each wire protocol (Bedrock InvokeModel, Anthropic Messages, OpenAI Chat
+ * Completions, …) ships an implementation that adapts its native API to this
+ * interface. A provider yaml (`<global>/models/<providerId>.yaml`) keeps `id`
+ * as the provider identity (model picker, `agent.yaml` `model.provider`,
+ * `<id>.secrets.*`) and names its implementation in `runtime:` —
+ * `resolveProviderRuntime` reads that field, `createModelRuntime` dispatches
+ * on it.
  */
+import path from 'node:path'
 import { BedrockAgent } from './bedrock-agent.js'
 import { DeepSeekAgent } from './deepseek-agent.js'
 import { KimiAgent } from './kimi-agent.js'
@@ -18,6 +22,7 @@ import { OpenAIAgent } from './openai-agent.js'
 import { MantleAgent } from './mantle-agent.js'
 import { AnthropicAgent } from './anthropic-agent.js'
 import type { AgentEvent, AnthropicMessage, ContentBlock, ToolDef } from './bedrock-agent.js'
+import { getModelsRegistry, HALO_GLOBAL_DIR } from '../config.js'
 
 export interface ModelRuntimeConfig {
   modelId: string
@@ -35,8 +40,8 @@ export interface ModelRuntimeConfig {
   /** Explicit budget_tokens for manual-mode thinking. When set, it overrides
    *  the effort→budget translation. Ignored in adaptive mode. */
   thinkingBudgetTokens?: number
-  /** Provider endpoint URL */
-  endpoint?: string
+  /** Provider endpoint URL (agent.yaml `model.endpoint`, required there) */
+  endpoint: string
   /** Explicit AWS credentials — if empty, falls back to default credential chain */
   credentials?: { accessKeyId: string; secretAccessKey: string }
   /** API key for providers that use bearer token auth (Kimi, DeepSeek, etc.) */
@@ -62,12 +67,39 @@ export interface ModelRuntime {
   ): AsyncGenerator<AgentEvent>
 }
 
-export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig): ModelRuntime {
-  switch (providerId) {
-    case 'aws-bedrock-claude-invoke':
+/** Values a provider yaml's `runtime:` may name — one per implementation
+ *  class. Vendor subclasses keep their vendor name. */
+export const MODEL_RUNTIME_NAMES = [
+  'anthropic-messages', 'openai-chat', 'bedrock-invoke', 'bedrock-mantle',
+  'kimi', 'deepseek', 'minimax', 'qwen', 'hunyuan', 'doubao', 'zhipu',
+] as const
+
+/** Look up the `runtime:` of a provider's yaml in the models registry. Throws
+ *  when the yaml is missing, lacks the field (seed predates it), or names a
+ *  runtime this build doesn't know. */
+export function resolveProviderRuntime(providerId: string): string {
+  const yamlPath = path.join(HALO_GLOBAL_DIR, 'models', `${providerId}.yaml`)
+  const providers = (getModelsRegistry() as { providers: Array<Record<string, unknown>> }).providers
+  const entry = providers.find((p) => p.id === providerId)
+  if (!entry) {
+    throw new Error(`[model-runtime] Unknown provider "${providerId}": no provider yaml with that id (expected ${yamlPath}). Check agent.yaml model.provider, or run \`halo setup\` to install the bundled providers.`)
+  }
+  const runtime = entry.runtime
+  if (typeof runtime !== 'string' || !runtime) {
+    throw new Error(`[model-runtime] Provider "${providerId}" has no \`runtime:\` field in ${yamlPath}. Run \`halo setup\` or restart the Halo server to refresh templates.`)
+  }
+  if (!(MODEL_RUNTIME_NAMES as readonly string[]).includes(runtime)) {
+    throw new Error(`[model-runtime] Provider "${providerId}" names unknown runtime "${runtime}" in ${yamlPath}. Valid runtimes: ${MODEL_RUNTIME_NAMES.join(', ')}.`)
+  }
+  return runtime
+}
+
+export function createModelRuntime(runtime: string, cfg: ModelRuntimeConfig): ModelRuntime {
+  switch (runtime) {
+    case 'bedrock-invoke':
       return new BedrockAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://bedrock-runtime.us-east-1.amazonaws.com',
+        endpoint: cfg.endpoint,
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
         maxTokens: cfg.maxTokens,
@@ -80,7 +112,7 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
     case 'kimi':
       return new KimiAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://api.moonshot.cn/v1',
+        endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
@@ -91,7 +123,7 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
     case 'deepseek':
       return new DeepSeekAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://api.deepseek.com',
+        endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
@@ -101,7 +133,7 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
     case 'minimax':
       return new MiniMaxAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://api.minimaxi.com/anthropic',
+        endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
@@ -114,7 +146,7 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
     case 'qwen':
       return new QwenAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://dashscope.aliyuncs.com/apps/anthropic',
+        endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
@@ -126,7 +158,7 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
     case 'hunyuan':
       return new HunyuanAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://tokenhub.tencentmaas.com/v1',
+        endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
@@ -136,7 +168,7 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
     case 'doubao':
       return new DoubaoAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://ark.cn-beijing.volces.com/api/v3',
+        endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
@@ -146,34 +178,30 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
     case 'zhipu':
       return new ZhipuAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://open.bigmodel.cn/api/paas/v4',
+        endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
         maxTokens: cfg.maxTokens,
         thinking: cfg.thinking,
       })
-    case 'openai':
+    case 'openai-chat':
       return new OpenAIAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://api.openai.com/v1',
+        endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
         maxTokens: cfg.maxTokens,
         thinking: cfg.thinking,
       })
-    // aws-bedrock-openai is the same OpenAI Responses wire format on the
-    // bedrock-runtime host (/openai/v1, cross-Region profile ids only) —
-    // Grok 4.6 / Kimi K3 live there and not (or not everywhere) on Mantle.
-    // See aws-bedrock-openai.yaml.
-    case 'aws-bedrock-mantle':
-    case 'aws-bedrock-openai':
+    // OpenAI Responses API on Bedrock — serves both aws-bedrock-mantle
+    // (bedrock-mantle host) and aws-bedrock-openai (bedrock-runtime host,
+    // /openai/v1); the endpoint alone picks the host and SigV4 region.
+    case 'bedrock-mantle':
       return new MantleAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? (providerId === 'aws-bedrock-openai'
-          ? 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1'
-          : 'https://bedrock-mantle.us-east-1.api.aws/openai/v1'),
+        endpoint: cfg.endpoint,
         // No bearer token → MantleAgent falls back to SigV4 IAM auth using
         // these creds (or the SDK default chain when also empty).
         apiKey: cfg.apiKey ?? '',
@@ -184,22 +212,10 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
         thinking: cfg.thinking,
         verbosity: cfg.verbosity,
       })
-    case 'anthropic':
+    case 'anthropic-messages':
       return new AnthropicAgent({
         modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://api.anthropic.com',
-        apiKey: cfg.apiKey ?? '',
-        systemPrompt: cfg.systemPrompt,
-        tools: cfg.tools,
-        maxTokens: cfg.maxTokens,
-        promptCaching: cfg.promptCaching,
-        thinking: cfg.thinking,
-        thinkingBudgetTokens: cfg.thinkingBudgetTokens,
-      })
-    case 'mimo-token-plan-china':
-      return new AnthropicAgent({
-        modelId: cfg.modelId,
-        endpoint: cfg.endpoint ?? 'https://token-plan-cn.xiaomimimo.com/anthropic',
+        endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',
         systemPrompt: cfg.systemPrompt,
         tools: cfg.tools,
@@ -209,6 +225,6 @@ export function createModelRuntime(providerId: string, cfg: ModelRuntimeConfig):
         thinkingBudgetTokens: cfg.thinkingBudgetTokens,
       })
     default:
-      throw new Error(`[model-runtime] Unknown provider "${providerId}". Check agent.yaml model.provider and <global>/models/*.yaml.`)
+      throw new Error(`[model-runtime] Unknown runtime "${runtime}". Valid runtimes: ${MODEL_RUNTIME_NAMES.join(', ')}.`)
   }
 }

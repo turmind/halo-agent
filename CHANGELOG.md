@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Models: each provider yaml in `~/.halo/global/models/` names its implementation in a new `runtime:` field (`anthropic-messages`, `openai-chat`, `bedrock-invoke`, `bedrock-mantle`, or the vendor name such as `kimi` / `deepseek`), and Halo picks the implementation from that field instead of from the provider id. A provider of your own for an Anthropic- or OpenAI-compatible gateway is now just a yaml with `runtime: anthropic-messages` or `runtime: openai-chat` (picked up on the next server start), no code change. A provider yaml without `runtime:`, or with a name Halo doesn't know, fails with an error naming the file. The bundled providers get the field automatically on the next server start or `halo cli` / `halo tui` run.
+- CLI: `halo cli` / `halo tui` refresh `~/.halo/global/` on start when the installed templates are older than the bundled ones, like the server does. Before, after `halo upgrade` a CLI-only install kept the old templates until `halo setup` or a server restart.
+
 ## [1.5.6] - 2026-10-04
 
 ### Added

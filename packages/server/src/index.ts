@@ -51,7 +51,7 @@ import { initLogger } from './logger.js'
 import { initObservability, shutdownObservability } from './observability/otel.js'
 import { config, resolveSandboxPaths } from './config.js'
 import { initBwrapCheck, getSandboxBackend, setSandboxHiddenPaths } from './tools/sandbox.js'
-import { ensureHaloHome, readSeedVersion, TEMPLATE_VERSION } from './init.js'
+import { refreshTemplatesIfOutdated } from './init.js'
 import { ensureSshAgent } from './git-ssh.js'
 
 // ------------------------------------------------------------------
@@ -194,18 +194,8 @@ if (!fs.existsSync(path.join(HALO_HOME, 'global', '.template-version'))) {
 // templates have moved ahead of the on-disk seed (typical case: user just
 // `npm upgrade`d). `ensureHaloHome` is idempotent and follows the same
 // platform-owned vs user-owned policy as `halo setup`, so user state survives.
-{
-  const seedVersion = readSeedVersion(HALO_HOME)
-  if (seedVersion > 0 && seedVersion < TEMPLATE_VERSION) {
-    console.log(`[Server] Templates outdated (v${seedVersion} → v${TEMPLATE_VERSION}), refreshing ~/.halo/global/`)
-    try {
-      ensureHaloHome(HALO_HOME)
-    } catch (err) {
-      console.error(`[Server] Template refresh failed: ${err instanceof Error ? err.message : String(err)}`)
-      // Non-fatal — fall through and start with the older seed.
-    }
-  }
-}
+// Non-fatal on failure — the server starts with the older seed.
+refreshTemplatesIfOutdated(HALO_HOME, 'Server')
 
 // Amazon Bedrock AgentCore Runtime mode: auth is terminated upstream by
 // AgentCore (SigV4/OAuth), each session runs in its own microVM, and the only

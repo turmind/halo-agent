@@ -1,4 +1,5 @@
 id: openai
+runtime: openai-chat
 displayName: OpenAI (Generic)
 displayName_zh: OpenAI（通用）
 description: Generic OpenAI-compatible chat completions. Use for native OpenAI or any third-party OpenAI-compatible gateway. Capabilities are exposed openly — the user is expected to know what their endpoint supports.
