@@ -1141,7 +1141,10 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                           too would double it, and moving it would drop a dirty extension
                           that FilePreview keeps alive after uninstall. It ages out of the cache. */}
                       {paneFile?.preview && isHeavyPath(paneFile.path) && !mountedPreviews.includes(paneFile.path) && (
-                        <div className="h-full">
+                        // Keyed by path: two heavy tabs of the same file type would otherwise
+                        // reuse one FilePreview (its Dispatch key is only the extension) and keep
+                        // showing the previous file — an extension host loads bytes once per mount.
+                        <div key={paneFile.path} className="h-full">
                           <FilePreview
                             path={paneFile.path}
                             name={paneFile.path.split('/').pop() ?? ''}
