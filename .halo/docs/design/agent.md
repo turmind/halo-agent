@@ -85,7 +85,7 @@ Plus the workspace tools for direct work. The tool set varies by access level an
 
 When `accessLevel` is not `full`, tool execution is routed through an OS sandbox (`packages/server/src/tools/sandbox.ts`) — bwrap on Linux, Seatbelt (`sandbox-exec`) for `shell_exec` on macOS; `getSandboxBackend()` reports which one (`'bwrap' | 'seatbelt' | null`, also exposed as `sandbox` on `/api/health`):
 - Base: `--ro-bind / /` (entire filesystem read-only) + `--tmpfs /tmp` (isolated writable temp)
-- Sensitive paths hidden via tmpfs / empty-file overlays — configurable in `settings.yaml general.sandbox.hidden_dirs/hidden_files` (scope: global only, workspace cannot override). Hidden files are covered with a zero-byte `~/.halo/.sandbox-empty`, not `/dev/null` (a `/dev/null` bind reads as EACCES inside bwrap, and git treats an unreadable `~/.gitconfig` as fatal) — so they read as empty
+- Sensitive paths hidden via tmpfs / empty-file overlays — the built-in `DEFAULT_HIDDEN_DIRS` / `DEFAULT_HIDDEN_FILES` (single source, `tools/sandbox.ts`) plus extra entries from `settings.yaml general.sandbox.hidden_dirs/hidden_files`, which are appended, never replace the built-ins (`config.ts` `resolveSandboxPaths()`, shared by server and CLI; scope: global only, workspace cannot override). Hidden files are covered with a zero-byte `~/.halo/.sandbox-empty`, not `/dev/null` (a `/dev/null` bind reads as EACCES inside bwrap, and git treats an unreadable `~/.gitconfig` as fatal) — so they read as empty
 - `workspace`: workspace directory overridden with `--bind` (rw)
 - `readonly`: workspace stays ro from the root bind; without an OS sandbox, tool set is reduced to 5 read-only tools
 - Host git identity (`user.name` / `user.email` only, read once at boot) is passed in as `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env, since `~/.gitconfig` is hidden
@@ -121,18 +121,20 @@ Root agent = `!parentId` (i.e. `parentId === null`).
 
 Seed default agent: id `default`, priority 99. The chat panel auto-selects the highest-priority agent when no session is active and the user hasn't picked one manually, so `default` wins as long as no other agent is configured with `priority > 99`.
 
-## Scaffolding new agents (`buildScaffoldModelBlock`)
+## Scaffolding new agents (`scaffoldModelBlock`)
 
-When the admin UI creates a new agent (POST `/agent-configs`) or seeds the default agent on first run, the `model:` block in the freshly written `agent.yaml` is generated, not hard-coded. Sources, in order:
+When the admin UI creates a new agent (POST `/agent-configs`), the `model:` block in the freshly written `agent.yaml` is a **copy of the default agent's `model:` mapping**: for workspace scope `<project>/.halo/agents/default/agent.yaml` if it exists, else the global `~/.halo/global/agents/default/agent.yaml`; for global scope the global one. So switching the default agent's model (by hand, or `halo setup`'s provider rebind) makes later agents follow it — there is no separate "default provider" setting.
 
-1. **Provider** — `general.agent.default_provider` from `settings.yaml` (Settings → General). Fallback chain: configured value → `aws-bedrock-claude-invoke` if installed → first provider on disk.
+When that file is missing or has no `model` mapping — and always when `ensureDefaultAgent` seeds the default agent itself — the block comes from the provider registry (`registryModelBlock`):
+
+1. **Provider** — `aws-bedrock-claude-invoke` if installed, else the first provider on disk.
 2. **Model id, endpoint, prompt-caching TTL, thinking defaults** — read from that provider's YAML in `<global>/models/<id>.yaml`:
    - `defaultModelId` → `model.id`
    - `defaultEndpoint` → `model.endpoint`
    - The selected model's `capabilities.promptCaching.default` → `model.promptCaching`
    - `capabilities.thinking.defaultEnabled / default / defaultBudgetTokens` → `model.thinking.{enabled, effort, budget_tokens}`
 
-The provider YAML is the single source of truth. Existing `agent.yaml` files are never rewritten when the General default is changed — the setting only affects subsequently-scaffolded agents. Implementation: [packages/server/src/routes/agent-configs.ts](../../../packages/server/src/routes/agent-configs.ts) `buildScaffoldModelBlock()` (provider pick); the field derivation is `modelBlockFromProvider()` in [packages/server/src/setup-providers.ts](../../../packages/server/src/setup-providers.ts), shared with `halo setup`'s provider rebind.
+Only `model` is copied; `context` stays the scaffold default. Existing `agent.yaml` files are never rewritten — only subsequently-scaffolded agents pick up the default agent's model. Implementation: [packages/server/src/routes/agent-configs.ts](../../../packages/server/src/routes/agent-configs.ts) `scaffoldModelBlock()` / `registryModelBlock()`; the field derivation is `modelBlockFromProvider()` in [packages/server/src/setup-providers.ts](../../../packages/server/src/setup-providers.ts), shared with `halo setup`'s provider rebind.
 
 ## Graceful interrupt (message queueing)
 

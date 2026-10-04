@@ -8,6 +8,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { loadSettingsSchema } from './settings-schema.js'
+import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
 
 export const HALO_HOME = path.join(homedir(), '.halo')
 export const HALO_GLOBAL_DIR = path.join(HALO_HOME, 'global')
@@ -372,12 +373,6 @@ export const config = {
       'shell_exec', 'grep', 'glob', 'web_fetch',
     ],
     maxRetries: settingsInt('general.agent.max_retries', 5),
-    /** Provider used when scaffolding a new agent.yaml (set in Settings →
-     *  General). Empty string means "fall back to whatever the scaffold code
-     *  picks" — historically aws-bedrock-claude-invoke. */
-    get defaultProvider(): string {
-      return settingsValue('general.agent.default_provider') ?? ''
-    },
   },
 
   timeout: {
@@ -424,12 +419,6 @@ export const config = {
     maxCachedSessions: envInt('HALO_MAX_CACHED_SESSIONS', 50),
     maxQueueSize: settingsInt('general.session.max_queue_size', 256),
     maxNestingDepth: settingsInt('general.session.max_nesting_depth', 16),
-  },
-
-  sandbox: {
-    hiddenDirs: settingsStr('general.sandbox.hidden_dirs', '~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs').split(',').map((s) => s.trim()).filter(Boolean),
-    hiddenFiles: settingsStr('general.sandbox.hidden_files', '~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm').split(',').map((s) => s.trim()).filter(Boolean),
-    writableDirs: settingsStr('general.sandbox.writable_dirs', '').split(',').map((s) => s.trim()).filter(Boolean),
   },
 
   logging: {
@@ -486,15 +475,21 @@ export const config = {
   },
 } as const
 
-const HIDDEN_DIRS_DEFAULT = '~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs'
-const HIDDEN_FILES_DEFAULT = '~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm'
+export interface SandboxPaths { hiddenDirs: string[]; hiddenFiles: string[]; writableDirs: string[] }
 
-export function reloadSandboxConfig(): { hiddenDirs: string[]; hiddenFiles: string[]; writableDirs: string[] } {
-  // getSettings() is mtime-watched, so this picks up the latest file content.
+function splitList(raw: string): string[] {
+  return raw.split(',').map((s) => s.trim()).filter(Boolean)
+}
+
+/** Effective sandbox lists. hidden_dirs / hidden_files are extras APPENDED to
+ *  the built-in DEFAULT_HIDDEN_* (tools/sandbox.ts, the single source) and
+ *  deduped — a user value never replaces the defaults. getSettings() is
+ *  mtime-watched, so each call reflects the latest file content. */
+export function resolveSandboxPaths(): SandboxPaths {
   return {
-    hiddenDirs: settingsStr('general.sandbox.hidden_dirs', HIDDEN_DIRS_DEFAULT).split(',').map((s) => s.trim()).filter(Boolean),
-    hiddenFiles: settingsStr('general.sandbox.hidden_files', HIDDEN_FILES_DEFAULT).split(',').map((s) => s.trim()).filter(Boolean),
-    writableDirs: settingsStr('general.sandbox.writable_dirs', '').split(',').map((s) => s.trim()).filter(Boolean),
+    hiddenDirs: [...new Set([...DEFAULT_HIDDEN_DIRS, ...splitList(settingsStr('general.sandbox.hidden_dirs', ''))])],
+    hiddenFiles: [...new Set([...DEFAULT_HIDDEN_FILES, ...splitList(settingsStr('general.sandbox.hidden_files', ''))])],
+    writableDirs: splitList(settingsStr('general.sandbox.writable_dirs', '')),
   }
 }
 

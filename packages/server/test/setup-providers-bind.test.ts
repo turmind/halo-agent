@@ -102,9 +102,10 @@ describe('bindBuiltinAgentsToProvider', () => {
     expect(raw).toContain('priority: 99')
   })
 
-  it('records the choice as general.agent.default_provider so future scaffolds match', () => {
+  it('writes no general.agent.* setting — new agents copy the rebound default agent instead', () => {
     mod.bindBuiltinAgentsToProvider('kimi')
-    expect(settings.readSetting('general.agent.default_provider')).toBe('kimi')
+    expect(settings.readSetting('general.agent.default_provider')).toBeUndefined()
+    expect(fs.readFileSync(path.join(agentsDir, 'default', 'agent.yaml'), 'utf-8')).toContain('provider: kimi')
   })
 
   it('returns null for an unknown provider and leaves agents untouched', () => {

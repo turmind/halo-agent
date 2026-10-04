@@ -17,8 +17,8 @@ general:                                  # built-in declarer (server itself)
     max_summary_input: 15000
     ...
   sandbox:
-    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs"
-    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm"
+    hidden_dirs: "~/.kube"                # extras — appended to the built-in list, never replace it
+    hidden_files: "~/.pgpass"             # extras — appended to the built-in list, never replace it
     writable_dirs: ""                     # e.g. ~/.kiro,~/.local/share/kiro-cli — rw bind-mounts in bwrap; ignored for readonly sessions
   logging:
     level: warn
@@ -97,11 +97,11 @@ Global agents declare theirs the same way in `agents/<agent-id>/agent-config.yam
 
 ### General — built-in
 
-Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `theme`, `agent.*`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `observability.*` (read once at boot — restart to apply), `evolution.*`, `limits.*`. All `general.*` keys are `globalOnly`: `config.ts` resolves them through `settingsValue()` against `~/.halo/secrets/settings.yaml` only, so a workspace `settings.yaml` cannot override them. Per-workspace layering applies to namespaced `params` / `secrets` (`getServerSecret(ns, key, workspaceRoot)`, `substituteSecrets`).
+Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `theme`, `agent.max_retries`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `observability.*` (read once at boot — restart to apply), `evolution.*`, `limits.*`. All `general.*` keys are `globalOnly`: `config.ts` resolves them through `settingsValue()` against `~/.halo/secrets/settings.yaml` only, so a workspace `settings.yaml` cannot override them. Per-workspace layering applies to namespaced `params` / `secrets` (`getServerSecret(ns, key, workspaceRoot)`, `substituteSecrets`).
 
 `server.trust_proxy` (boolean, default `false`, `globalOnly`): whether the brute-force rate limiter (`middleware/brute-force.ts` `getClientIp`) trusts the `x-forwarded-for` header for client IP resolution. Direct-connect deployments leave it `false` and get the socket address. Behind a reverse proxy (nginx / Cloudflare / etc.), set it to `true` so the real client IP is honored instead of the proxy's — but only when that proxy is one you control and rewrites the header itself, otherwise a client can forge XFF to dodge lockouts.
 
-`sandbox.hidden_dirs` / `sandbox.hidden_files` / `sandbox.writable_dirs` are `globalOnly` — they define the security boundary agents run inside, so a workspace `settings.yaml` cannot override them (a workspace overriding them could lift its own sandbox constraints).
+`sandbox.hidden_dirs` / `sandbox.hidden_files` / `sandbox.writable_dirs` are `globalOnly` — they define the security boundary agents run inside, so a workspace `settings.yaml` cannot override them (a workspace overriding them could lift its own sandbox constraints). `hidden_dirs` / `hidden_files` hold **extra** entries: the effective list is the built-in default (`DEFAULT_HIDDEN_DIRS` / `DEFAULT_HIDDEN_FILES` in `tools/sandbox.ts`, the single source — `~/.halo/secrets`, `~/.aws`, `~/.ssh`, `~/.gnupg`, `~/.docker`, `~/.config/gh`, `~/.halo/global/internal-sessions`, `~/.halo/global/logs`; `~/.npmrc`, `~/.bash_history`, `~/.gitconfig`, `~/.git-credentials`, `~/.netrc`, the global `evo` / `cron` / `runs` databases + `-wal` / `-shm`) plus the user's entries, deduped (`config.ts` `resolveSandboxPaths()`, used by both the server and the CLI). A default entry cannot be un-hidden from settings. The schema `default` is empty so the placeholder doesn't suggest copying the built-ins; the field description names them. `writable_dirs` is a plain list (no built-ins).
 
 `evolution.*` controls the self-evolution subsystem (see [design/evolution.md](../design/evolution.md)). All `evolution.*` keys are `globalOnly` — they live in `~/.halo/secrets/settings.yaml` only, not workspace settings. Notable knobs: `evolution.level` (`L0` = manual only: `/evo` drafts, a reviewer approves; `L1` = L0 plus automatic drafting on pre-compact), `evolution.max_concurrent_run` / `max_concurrent_apply` (wrapper concurrency caps), `evolution.run_timeout_minutes` / `apply_timeout_minutes` (heartbeat timeouts), `evolution.max_attempts` (per-row retry cap), `evolution.triggers.pre_compact` (snapshot session before compaction).
 
@@ -114,7 +114,11 @@ general:
 
 The value is read once at process start, so unlike other settings it is **not** picked up by the mtime-watching reload.
 
-`agent.default_provider` is rendered as an `enum` whose options are the provider ids found under `~/.halo/global/models/*.yaml`. It controls **which provider a freshly scaffolded agent.yaml uses** — the model id, endpoint, prompt-caching TTL and thinking defaults are then derived from that provider's YAML (`defaultModelId`, `defaultEndpoint`, per-model `capabilities.promptCaching.default`, `capabilities.thinking.defaultEnabled / default / defaultBudgetTokens`). Existing agents are not retroactively touched. Implementation: [packages/server/src/routes/agent-configs.ts](../../../packages/server/src/routes/agent-configs.ts) `buildScaffoldModelBlock()`.
+There is no "default provider" setting: a newly created agent's `model:` is a copy of the **default agent's** `model:` mapping — for workspace scope `<project>/.halo/agents/default/agent.yaml` when it exists, else the global `~/.halo/global/agents/default/agent.yaml`; for global scope the global one. When that file is missing or has no `model` mapping, the scaffold falls back to the provider registry (`aws-bedrock-claude-invoke` if installed, else the first provider on disk), deriving model id / endpoint / prompt caching / thinking from that provider's YAML. Only `model` is copied; `context` stays the scaffold default. Existing agents are not retroactively touched. A leftover `general.agent.default_provider` in `settings.yaml` is ignored. Implementation: [packages/server/src/routes/agent-configs.ts](../../../packages/server/src/routes/agent-configs.ts) `scaffoldModelBlock()`.
+
+**Advanced fold**: on the General page, `language` and `theme` are shown in the open; every other General field is in an "Advanced" area, collapsed by default (schema flag `advanced: true`, set in `generalSection()`).
+
+**Restart-required fields**: `agent.max_retries`, `session.max_queue_size`, `session.max_nesting_depth`, `compact.keep_messages`, `compact.max_summary_input`, `compact.max_message_slice`, `logging.level` and the four `observability.*` keys are read once at server start (object literals in `config.ts`; observability is mapped onto `OTEL_*` env by `initObservability()` at boot). They carry `restartRequired: true`; after a save or Reset of one of them the Settings page shows a notice above the section listing the saved keys and saying the Halo server must be restarted (dismissable; it stays until dismissed). Every other General key is read live.
 
 ### Field attributes
 
@@ -127,6 +131,8 @@ The value is read once at process start, so unlike other settings it is **not** 
 | `description_zh` | no | Chinese description (UI picks based on lang) |
 | `default` | no | Placeholder shown when the value is unset; supports `<<ENV>>`. For provider / skill / agent fields it is display-only: an unset param's `{{<id>.params.<key>}}` stays literal at substitution, so the consumer applies its own fallback (the `extension` skill's `ext.sh` treats `{{…}}` as "use the default hub"; `web-search`'s `search.py` as "use the default region") |
 | `secret` | no | `true` → masked in API responses + password input in UI |
+| `restartRequired` | no | `true` → read once at server start; the Settings page shows a restart notice after saving it. Built-in `general` section only |
+| `advanced` | no | `true` → rendered in the collapsed "Advanced" area. Built-in `general` section only (every field except `language` / `theme`) |
 | `globalOnly` | no | `true` → read from global settings only; workspace overrides are ignored at runtime. UI disables the workspace input and shows a "global only" hint; `PUT` / `PATCH` / `DELETE` of such a key at workspace scope is rejected with 400. Set by the built-in `general` section only — provider / skill / agent yaml declarations don't read it |
 
 ## Scope: global vs. workspace
@@ -251,4 +257,4 @@ The admin UI is bilingual (en/zh). Field descriptions are localized via `descrip
 
 ## Config caching
 
-`config.ts` reads `settings.yaml` lazily with mtime-watching: every read stats the file and reparses if the mtime has changed. UI saves bump the mtime, so the server picks up new secrets on the next call without a restart. See [packages/server/src/config.ts](../../../packages/server/src/config.ts) `getSettings()`.
+`config.ts` reads `settings.yaml` lazily with mtime-watching: every read stats the file and reparses if the mtime has changed. UI saves bump the mtime, so the server picks up new secrets, params and most General keys on the next read without a restart. The exceptions are the `restartRequired` General keys (see General above) and `general.goal_mode_enabled`, which are read once at boot — those need a server restart. See [packages/server/src/config.ts](../../../packages/server/src/config.ts) `getSettings()`.

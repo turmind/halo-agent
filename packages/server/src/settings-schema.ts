@@ -35,6 +35,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
+import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
 
 const GLOBAL_MODELS_DIR = path.join(homedir(), '.halo', 'global', 'models')
 const GLOBAL_SKILLS_DIR = path.join(homedir(), '.halo', 'global', 'skills')
@@ -75,6 +76,11 @@ export interface SchemaField {
    *  overrides are ignored at runtime. UI should disable the workspace input
    *  and show a "global only" hint so users don't waste time editing it. */
   globalOnly?: boolean
+  /** Read once at server boot (config.ts object literal / boot-time init) —
+   *  a saved change only applies after a restart. UI shows a notice on save. */
+  restartRequired?: boolean
+  /** UI hint: render inside the collapsed "Advanced" area. */
+  advanced?: boolean
 }
 
 export interface SchemaSection {
@@ -90,29 +96,12 @@ export interface SchemaSection {
   fields: SchemaField[]
 }
 
-/** General settings — built-in declarations for the server's own knobs. */
-/** List provider ids from `<global>/models/*.yaml` for the general section's
- *  default-provider enum. Sorted for stable UI ordering. */
-function listProviderIds(): string[] {
-  const ids: string[] = []
-  let entries: fs.Dirent[] = []
-  try { entries = fs.readdirSync(GLOBAL_MODELS_DIR, { withFileTypes: true }) } catch { return ids }
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.yaml')) continue
-    const parsed = readYamlFile(path.join(GLOBAL_MODELS_DIR, entry.name))
-    if (parsed && typeof parsed.id === 'string') ids.push(parsed.id)
-  }
-  return ids.sort()
-}
+/** Built-in hidden files for the hidden_files description — SQLite -wal/-shm
+ *  sidecars folded into one "plus sidecars" note to keep the text readable. */
+const DEFAULT_FILES_SUMMARY = DEFAULT_HIDDEN_FILES.filter((f) => !/-(wal|shm)$/.test(f)).join(', ')
 
+/** General settings — built-in declarations for the server's own knobs. */
 function generalSection(): SchemaSection {
-  const providerIds = listProviderIds()
-  // Pick aws-bedrock-claude-invoke if available (legacy default), otherwise the
-  // first provider on disk. When no providers are installed the enum has no
-  // options and the field renders empty — UI will show it disabled.
-  const defaultProvider = providerIds.includes('aws-bedrock-claude-invoke')
-    ? 'aws-bedrock-claude-invoke'
-    : providerIds[0] ?? ''
   return {
     namespaceId: 'general',
     source: 'general',
@@ -131,35 +120,33 @@ function generalSection(): SchemaSection {
       // admin UI color theme. Consumed only by the admin frontend (shared/theme);
       // stored server-side so the choice follows the user across browsers.
       { key: 'theme', type: 'enum', options: ['dark', 'light', 'midnight', 'warm'], optionLabels: ['Dark', 'Light', 'Midnight', 'Warm'], globalOnly: true, description: 'Admin UI color theme.', description_zh: 'Admin 界面配色主题。', default: 'dark' },
-      // agent scaffold
-      { key: 'agent.default_provider', type: 'enum', options: providerIds, globalOnly: true, description: 'Provider used when scaffolding a new agent. Model id, endpoint, prompt-caching TTL, and thinking defaults are read from that provider\'s YAML.', description_zh: '新建 agent 时使用的供应商。模型 id、endpoint、提示缓存 TTL、Thinking 默认值都从该供应商的 YAML 读取。', default: defaultProvider },
-      { key: 'agent.max_retries', type: 'int', globalOnly: true, description: 'Max attempts per model call on transient errors (rate limit, 5xx, network). Backoff grows between attempts.', description_zh: '单次模型调用遇到瞬态错误（限流、5xx、网络）时的最大尝试次数，重试间隔递增。', default: '5' },
+      { key: 'agent.max_retries', type: 'int', globalOnly: true, restartRequired: true, description: 'Max attempts per model call on transient errors (rate limit, 5xx, network). Backoff grows between attempts.', description_zh: '单次模型调用遇到瞬态错误（限流、5xx、网络）时的最大尝试次数，重试间隔递增。', default: '5' },
       // server — network-facing knobs; global-only since they alter how the
       // server itself authenticates clients.
       { key: 'server.trust_proxy', type: 'boolean', globalOnly: true, description: 'Trust the x-forwarded-for header for client IP resolution (brute-force rate limiting). Enable ONLY when a reverse proxy you control sits in front and rewrites the header — otherwise clients can forge it to bypass lockouts.', description_zh: '信任 x-forwarded-for 请求头解析客户端 IP（暴力破解限速用）。仅当前面有你控制的反向代理并会重写该头时才开启——否则客户端可伪造绕过锁定。', default: 'false' },
       // session
-      { key: 'session.max_queue_size', type: 'int', globalOnly: true, description: 'Maximum queued messages per session', description_zh: '每个会话最大排队消息数', default: '256' },
-      { key: 'session.max_nesting_depth', type: 'int', globalOnly: true, description: 'Maximum session nesting depth for agent delegation', description_zh: 'Agent 委派的最大会话嵌套深度', default: '16' },
+      { key: 'session.max_queue_size', type: 'int', globalOnly: true, restartRequired: true, description: 'Maximum queued messages per session', description_zh: '每个会话最大排队消息数', default: '256' },
+      { key: 'session.max_nesting_depth', type: 'int', globalOnly: true, restartRequired: true, description: 'Maximum session nesting depth for agent delegation', description_zh: 'Agent 委派的最大会话嵌套深度', default: '16' },
       // compact
       { key: 'compact.compress_at', type: 'float', globalOnly: true, description: 'Auto-compact threshold as a fraction of max context (e.g. 0.9 = compact when 90% full)', description_zh: '自动压缩阈值，最大上下文的比例（如 0.9 表示用满 90% 时压缩）', default: '0.9' },
-      { key: 'compact.keep_messages', type: 'int', globalOnly: true, description: 'Recent messages kept intact during compaction', description_zh: '压缩时保留最后多少条消息不动', default: '5' },
-      { key: 'compact.max_summary_input', type: 'int', globalOnly: true, description: 'Max chars fed into local truncation fallback', description_zh: '本地截断兜底时的总输入字符上限', default: '15000' },
-      { key: 'compact.max_message_slice', type: 'int', globalOnly: true, description: 'Max chars kept per old message during local truncation', description_zh: '本地截断兜底时每条旧消息保留的最大字符数', default: '800' },
+      { key: 'compact.keep_messages', type: 'int', globalOnly: true, restartRequired: true, description: 'Recent messages kept intact during compaction', description_zh: '压缩时保留最后多少条消息不动', default: '5' },
+      { key: 'compact.max_summary_input', type: 'int', globalOnly: true, restartRequired: true, description: 'Max chars fed into local truncation fallback', description_zh: '本地截断兜底时的总输入字符上限', default: '15000' },
+      { key: 'compact.max_message_slice', type: 'int', globalOnly: true, restartRequired: true, description: 'Max chars kept per old message during local truncation', description_zh: '本地截断兜底时每条旧消息保留的最大字符数', default: '800' },
       // sandbox (Linux bwrap / macOS sandbox-exec) — global-only: these define the security
       // boundary agents run inside; a workspace overriding them could lift
       // its own sandbox constraints.
-      { key: 'sandbox.hidden_dirs', globalOnly: true, description: 'Comma-separated dirs hidden from workspace/readonly sessions (Linux bwrap / macOS sandbox-exec)', description_zh: '对 workspace/readonly 会话隐藏的目录（逗号分隔，Linux bwrap / macOS sandbox-exec）', default: '~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs' },
+      { key: 'sandbox.hidden_dirs', globalOnly: true, description: `Extra comma-separated dirs to hide from workspace/readonly sessions (Linux bwrap / macOS sandbox-exec). Added to the built-in list, which is always hidden: ${DEFAULT_HIDDEN_DIRS.join(', ')}.`, description_zh: `额外要对 workspace/readonly 会话隐藏的目录（逗号分隔，Linux bwrap / macOS sandbox-exec）。会追加到内置列表之后，内置项始终隐藏：${DEFAULT_HIDDEN_DIRS.join('、')}。`, default: '' },
       { key: 'sandbox.writable_dirs', globalOnly: true, description: 'Comma-separated dirs writable inside the sandbox besides the workspace (Linux / macOS) — for external CLIs that keep local state, e.g. ~/.kiro,~/.local/share/kiro-cli. Not applied to readonly sessions.', description_zh: '除 workspace 外在沙箱内可写的目录（逗号分隔，Linux / macOS）——给需要本地状态的外部 CLI 用，如 ~/.kiro,~/.local/share/kiro-cli。readonly 会话不生效。', default: '' },
-      { key: 'sandbox.hidden_files', globalOnly: true, description: 'Comma-separated files hidden from workspace/readonly sessions — read as empty (Linux / macOS)', description_zh: '对 workspace/readonly 会话隐藏的文件，读到的是空文件（逗号分隔，Linux / macOS）', default: '~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm' },
+      { key: 'sandbox.hidden_files', globalOnly: true, description: `Extra comma-separated files to hide from workspace/readonly sessions — read as empty (Linux / macOS). Added to the built-in list, which is always hidden: ${DEFAULT_FILES_SUMMARY} (plus their -wal / -shm sidecars).`, description_zh: `额外要对 workspace/readonly 会话隐藏的文件，读到的是空文件（逗号分隔，Linux / macOS）。会追加到内置列表之后，内置项始终隐藏：${DEFAULT_FILES_SUMMARY}（及其 -wal / -shm 附属文件）。`, default: '' },
       // logging
-      { key: 'logging.level', type: 'enum', options: ['debug', 'info', 'warn', 'error'], globalOnly: true, description: 'Log level', description_zh: '日志级别', default: 'warn' },
+      { key: 'logging.level', type: 'enum', options: ['debug', 'info', 'warn', 'error'], globalOnly: true, restartRequired: true, description: 'Log level', description_zh: '日志级别', default: 'warn' },
       // observability (OpenTelemetry). Read once at boot by observability/otel.ts
       // and mapped onto the standard OTEL_* env vars — hence "takes effect on
       // restart" everywhere below.
-      { key: 'observability.endpoint', type: 'string', globalOnly: true, description: 'OTLP base URL of an OpenTelemetry collector (e.g. http://localhost:4318). Traces, metrics and logs are all exported there over OTLP http/protobuf — http:// or https://, on the collector\'s OTLP/HTTP port (4318 by default); gRPC (4317) is not supported. Empty = observability off. Takes effect on server restart.', description_zh: 'OpenTelemetry collector 的 OTLP 基础地址（如 http://localhost:4318），trace / metrics / 日志三类信号都以 OTLP http/protobuf 发到这里。http:// 或 https:// 均可，端口须是 collector 的 OTLP/HTTP 端口（默认 4318），不支持 gRPC（4317）。留空 = 关闭。重启服务后生效。', default: '' },
-      { key: 'observability.service_name', type: 'string', globalOnly: true, description: 'OTel resource service.name reported for this server. Takes effect on restart.', description_zh: '本服务在 OTel 中上报的 service.name。重启后生效。', default: 'halo' },
-      { key: 'observability.headers', type: 'string', secret: true, globalOnly: true, description: 'Extra headers for every OTLP request, comma-separated k=v (e.g. authorization=Bearer …). Takes effect on restart.', description_zh: '附加到每个 OTLP 请求的 header，逗号分隔的 k=v（如 authorization=Bearer …）。重启后生效。', default: '' },
-      { key: 'observability.capture_content', type: 'boolean', globalOnly: true, description: 'Put prompt / completion / tool argument and result text on spans (gen_ai.*.messages etc.). Off = only metadata (model, tokens, latency, tool names). Takes effect on restart.', description_zh: '是否把提示词 / 模型输出 / 工具参数与结果正文写到 span 上（gen_ai.*.messages 等）。关 = 只上报元数据（模型、token、耗时、工具名）。重启后生效。', default: 'false' },
+      { key: 'observability.endpoint', type: 'string', globalOnly: true, restartRequired: true, description: 'OTLP base URL of an OpenTelemetry collector (e.g. http://localhost:4318). Traces, metrics and logs are all exported there over OTLP http/protobuf — http:// or https://, on the collector\'s OTLP/HTTP port (4318 by default); gRPC (4317) is not supported. Empty = observability off. Takes effect on server restart.', description_zh: 'OpenTelemetry collector 的 OTLP 基础地址（如 http://localhost:4318），trace / metrics / 日志三类信号都以 OTLP http/protobuf 发到这里。http:// 或 https:// 均可，端口须是 collector 的 OTLP/HTTP 端口（默认 4318），不支持 gRPC（4317）。留空 = 关闭。重启服务后生效。', default: '' },
+      { key: 'observability.service_name', type: 'string', globalOnly: true, restartRequired: true, description: 'OTel resource service.name reported for this server. Takes effect on restart.', description_zh: '本服务在 OTel 中上报的 service.name。重启后生效。', default: 'halo' },
+      { key: 'observability.headers', type: 'string', secret: true, globalOnly: true, restartRequired: true, description: 'Extra headers for every OTLP request, comma-separated k=v (e.g. authorization=Bearer …). Takes effect on restart.', description_zh: '附加到每个 OTLP 请求的 header，逗号分隔的 k=v（如 authorization=Bearer …）。重启后生效。', default: '' },
+      { key: 'observability.capture_content', type: 'boolean', globalOnly: true, restartRequired: true, description: 'Put prompt / completion / tool argument and result text on spans (gen_ai.*.messages etc.). Off = only metadata (model, tokens, latency, tool names). Takes effect on restart.', description_zh: '是否把提示词 / 模型输出 / 工具参数与结果正文写到 span 上（gen_ai.*.messages 等）。关 = 只上报元数据（模型、token、耗时、工具名）。重启后生效。', default: 'false' },
       // self-evolution (see plans/self-evolution.md). All evo settings are
       // global-only — the worker / ticker live in the server process and
       // would have to reload mid-flight if a workspace could override them.
@@ -180,7 +167,13 @@ function generalSection(): SchemaSection {
       { key: 'limits.tool_result_ui_chars', type: 'int', globalOnly: true, description: 'Per-tool-result cap on the content stored for UI display (admin/web chat panel). Far larger than the LLM cap so the full output of a normal command stays visible, but bounded so a multi-MB `cat` does not bloat the session file, the WS payload, or the browser render. Output past this is truncated with a marker pointing at file_read for the complete content.', description_zh: '每条 tool result 存给 UI 展示（admin/web 聊天面板）的内容长度上限。远大于 LLM 上限，保证普通命令的完整输出都能看到；但仍有界，避免 cat 个几 MB 的文件撑爆会话文件、WS 传输和浏览器渲染。超出部分截断并附标记，提示用 file_read 看完整内容。', default: String(64 * 1024) },
       { key: 'limits.auto_report_chars', type: 'int', globalOnly: true, description: 'Cap on the auto-report a finished sub-agent delivers to its parent. Longer reports are truncated with a pointer to get_session_output for the full text.', description_zh: '子会话完成后自动上报给父会话的内容长度上限。超出截断，并提示用 get_session_output 取全文。', default: '8192' },
       { key: 'limits.terminal_scrollback_bytes', type: 'int', globalOnly: true, description: 'Off-screen scrollback bytes retained per persistent terminal while detached.', description_zh: '终端断开期间保留的回滚缓冲字节数。', default: '50000' },
-    ] as Array<Omit<SchemaField, 'kind'>>).map((f) => ({ ...f, kind: 'param' as const })),
+    ] as Array<Omit<SchemaField, 'kind'>>).map((f) => ({
+      ...f,
+      kind: 'param' as const,
+      // Only language + theme stay in the open; everything else is folded
+      // under the UI's collapsed "Advanced" area.
+      advanced: f.key !== 'language' && f.key !== 'theme',
+    })),
   }
 }
 

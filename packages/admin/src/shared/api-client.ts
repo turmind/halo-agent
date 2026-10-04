@@ -951,6 +951,8 @@ export const api = {
             default?: string
             secret?: boolean
             globalOnly?: boolean
+            restartRequired?: boolean
+            advanced?: boolean
             value: string | null
             hasValue: boolean
             source: 'workspace' | 'global' | 'unset'

@@ -104,7 +104,7 @@ Extra rules:
 - `view_image` also needs a vision-capable model.
 - A skill with `requiresAccess` above the session level is hidden (no metadata, no `activate_skill`).
 - Relay tools are only built for `full` sessions.
-- Hidden from `workspace` / `readonly` sessions: the `general.sandbox.hidden_dirs` / `hidden_files` lists (default: `~/.halo/secrets`, `~/.aws`, `~/.ssh`, `~/.gnupg`, `~/.docker`, `~/.config/gh`, `~/.gitconfig`, `~/.git-credentials`, `~/.npmrc`, `~/.netrc`, the global evo/cron/runs databases, internal-session transcripts, logs, …) plus the workspace's own `.halo/sessions`, `.halo/logs`, `.halo/evo`, `.halo/halo.db*` (fixed in code). The rest of `.halo/` stays readable.
+- Hidden from `workspace` / `readonly` sessions: a built-in list that is always hidden (`~/.halo/secrets`, `~/.aws`, `~/.ssh`, `~/.gnupg`, `~/.docker`, `~/.config/gh`, `~/.gitconfig`, `~/.git-credentials`, `~/.npmrc`, `~/.netrc`, the global evo/cron/runs databases, internal-session transcripts, logs, …), any extra paths added in `general.sandbox.hidden_dirs` / `hidden_files` (they add to the built-in list, never replace it), plus the workspace's own `.halo/sessions`, `.halo/logs`, `.halo/evo`, `.halo/halo.db*` (fixed in code). The rest of `.halo/` stays readable.
 
 ### Where a session's level comes from
 

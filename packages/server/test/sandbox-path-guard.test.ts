@@ -2,13 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { assertPathAllowed, buildBwrapArgs, buildSeatbeltProfile, setSandboxHiddenPaths, type SandboxOptions } from '../src/tools/sandbox.js'
+import { assertPathAllowed, buildBwrapArgs, buildSeatbeltProfile, setSandboxHiddenPaths, DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES, type SandboxOptions } from '../src/tools/sandbox.js'
 
-// Mirrors the module defaults (settings-schema.ts) — restored after tests
-// that swap the lists.
-const DEFAULT_DIRS = ['~/.halo/secrets', '~/.aws', '~/.ssh', '~/.gnupg', '~/.docker', '~/.config/gh', '~/.halo/global/internal-sessions', '~/.halo/global/logs']
-const DEFAULT_FILES = ['~/.npmrc', '~/.bash_history', '~/.gitconfig', '~/.git-credentials', '~/.netrc',
-  ...['evo', 'cron', 'runs'].flatMap((n) => ['', '-wal', '-shm'].map((s) => `~/.halo/global/${n}.db${s}`))]
+// The module defaults — restored after tests that swap the lists.
+const DEFAULT_DIRS = DEFAULT_HIDDEN_DIRS
+const DEFAULT_FILES = DEFAULT_HIDDEN_FILES
 const EMPTY_MASK = path.join(os.homedir(), '.halo', '.sandbox-empty')
 
 /**

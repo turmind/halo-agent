@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound, Puzzle } from 'lucide-react'
+import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound, Puzzle, AlertTriangle, X, ChevronRight } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { useI18n } from '@/shared/i18n'
 import { useTheme } from '@/shared/theme'
@@ -40,6 +40,9 @@ export function SettingsMain() {
   const [saving, setSaving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [version, setVersion] = useState<string | null>(null)
+  // Dotted keys of saved boot-only settings (`restartRequired`) — shown in a
+  // notice until dismissed, since the running server won't pick them up.
+  const [restartKeys, setRestartKeys] = useState<string[]>([])
 
   const projectId = scope === 'workspace' ? activeProject?.path : undefined
 
@@ -69,6 +72,11 @@ export function SettingsMain() {
       .catch(() => setVersion(null))
   }, [])
 
+  function noteRestart(field: Field, dotPath: string) {
+    if (!field.restartRequired) return
+    setRestartKeys((prev) => (prev.includes(dotPath) ? prev : [...prev, dotPath]))
+  }
+
   async function handleSave(namespaceId: string, field: Field, rawValue: string) {
     setSaving(true)
     try {
@@ -85,6 +93,7 @@ export function SettingsMain() {
         const coerced = coerceForSchema(field.type, rawValue)
         await api.settings.patch(scope, dotPath, coerced, projectId)
       }
+      noteRestart(field, dotPath)
       refresh()
       // Settings can affect cross-cutting state. The ones we refresh in-place
       // are the i18n context (`general.language`) and the theme context
@@ -107,6 +116,7 @@ export function SettingsMain() {
         ? `general.${field.key}`
         : `${namespaceId}.${field.kind}s.${field.key}`
       await api.settings.remove(scope, dotPath, projectId)
+      noteRestart(field, dotPath)
       refresh()
       void refreshI18nLang()
       void refreshTheme()
@@ -212,6 +222,20 @@ export function SettingsMain() {
                 </>}
           </span>
         </div>
+
+        {restartKeys.length > 0 && (
+          <div className="flex shrink-0 items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] text-amber-400">
+            <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 break-words">{t('settings.restartNotice', { keys: restartKeys.join(', ') })}</span>
+            <button
+              onClick={() => setRestartKeys([])}
+              title={t('settings.restartNotice.dismiss')}
+              className="shrink-0 cursor-pointer rounded p-0.5 hover:bg-amber-500/20"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {activeNs === '__security' ? (
@@ -367,8 +391,22 @@ function SectionView({
   onReset: (field: Field) => void
 }) {
   const { t, lang } = useI18n()
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const params = section.fields.filter((f) => f.kind === 'param')
+  const basicParams = params.filter((f) => !f.advanced)
+  const advancedParams = params.filter((f) => f.advanced)
   const secrets = section.fields.filter((f) => f.kind === 'secret')
+  const renderRow = (f: Field) => (
+    <FieldRow
+      key={f.key}
+      namespaceId={section.namespaceId}
+      field={f}
+      scope={scope}
+      saving={saving}
+      onSave={(v) => onSave(f, v)}
+      onReset={() => onReset(f)}
+    />
+  )
   const displayName = (lang === 'zh' && section.displayName_zh) || section.displayName
   const description = (lang === 'zh' && section.description_zh) || section.description
   // The secret-section hint contains a `<<ENV_NAME>>` chip — split the
@@ -395,17 +433,20 @@ function SectionView({
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
             {section.namespaceId === 'general' ? t('settings.section.settings') : t('settings.section.params')}
           </h3>
-          {params.map((f) => (
-            <FieldRow
-              key={f.key}
-              namespaceId={section.namespaceId}
-              field={f}
-              scope={scope}
-              saving={saving}
-              onSave={(v) => onSave(f, v)}
-              onReset={() => onReset(f)}
-            />
-          ))}
+          {basicParams.map(renderRow)}
+          {advancedParams.length > 0 && (
+            <div className="space-y-4 border-t border-[var(--border)] pt-3">
+              <button
+                onClick={() => setShowAdvanced((v) => !v)}
+                className="flex cursor-pointer items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              >
+                <ChevronRight className={cn('h-3 w-3 transition-transform', showAdvanced && 'rotate-90')} />
+                {t('settings.section.advanced')}
+                <span className="rounded bg-[var(--card)] px-1 py-0 text-[9px] font-normal normal-case">{advancedParams.length}</span>
+              </button>
+              {showAdvanced && advancedParams.map(renderRow)}
+            </div>
+          )}
         </div>
       )}
 
@@ -419,17 +460,7 @@ function SectionView({
             <code className="rounded bg-[var(--card)] px-1 py-0.5">{'<<ENV_NAME>>'}</code>
             {hintAfter}
           </p>
-          {secrets.map((f) => (
-            <FieldRow
-              key={f.key}
-              namespaceId={section.namespaceId}
-              field={f}
-              scope={scope}
-              saving={saving}
-              onSave={(v) => onSave(f, v)}
-              onReset={() => onReset(f)}
-            />
-          ))}
+          {secrets.map(renderRow)}
         </div>
       )}
     </div>

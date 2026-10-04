@@ -92,40 +92,49 @@ function parseAgentYaml(content: string): { name: string; description: string; m
   }
 }
 
-/** Hard fallback used when General → agent.default_provider is unset and the
- *  models registry doesn't tell us which provider to pick first. */
+/** Registry pick used when there is no default agent model to copy. */
 const FALLBACK_SCAFFOLD_PROVIDER = 'aws-bedrock-claude-invoke' as const
 
-/** Read provider + model defaults out of the loaded models registry and
- *  return the model block to embed in a freshly scaffolded agent.yaml.
- *  Provider is chosen by:
- *    1. `general.agent.default_provider` from settings.yaml (Settings UI),
- *    2. else `aws-bedrock-claude-invoke` if installed,
- *    3. else the first provider on disk.
- *  Model id / endpoint / prompt-caching / thinking come from that provider's
- *  YAML — single source of truth. */
-function buildScaffoldModelBlock(): Record<string, unknown> {
+/** Model block from the provider registry: `aws-bedrock-claude-invoke` if
+ *  installed, else the first provider on disk. Model id / endpoint /
+ *  prompt-caching / thinking come from that provider's YAML. */
+function registryModelBlock(): Record<string, unknown> {
   const registry = getModelsRegistry() as { providers?: Array<Record<string, unknown>> }
   const providers = registry.providers ?? []
-  const configured = config.agent.defaultProvider
-  // Resolve provider in 3 steps so an empty `configured` string doesn't poison
-  // the `??` chain (`'' ?? x` keeps `''` because empty strings aren't nullish).
-  const explicit = configured ? providers.find((p) => p.id === configured) : undefined
-  const provider = explicit
-    ?? providers.find((p) => p.id === FALLBACK_SCAFFOLD_PROVIDER)
-    ?? providers[0]
+  const provider = providers.find((p) => p.id === FALLBACK_SCAFFOLD_PROVIDER) ?? providers[0]
   if (!provider) {
     return { provider: FALLBACK_SCAFFOLD_PROVIDER }
   }
   return modelBlockFromProvider(provider.id as string, provider)
 }
 
+/** `model:` block for a newly created agent: a copy of the default agent's
+ *  `model:` mapping — the workspace's `.halo/agents/default/agent.yaml` when
+ *  creating in workspace scope and it exists, else the global one. Falls back
+ *  to the registry pick when that file is missing or has no `model` mapping. */
+async function scaffoldModelBlock(scope: 'global' | 'workspace', projectId: string | undefined): Promise<Record<string, unknown>> {
+  const candidates = [path.join(GLOBAL_AGENTS_DIR, 'default', 'agent.yaml')]
+  if (scope === 'workspace' && projectId) candidates.unshift(path.join(projectId, '.halo', 'agents', 'default', 'agent.yaml'))
+  for (const yamlPath of candidates) {
+    let content: string
+    try { content = await fs.readFile(yamlPath, 'utf-8') } catch { continue }
+    let model: unknown
+    try { model = YAML.parse(content)?.model } catch { model = undefined }
+    // First existing file is the effective default agent (workspace overrides
+    // global); if it has no usable `model:` mapping, use the registry pick.
+    return model && typeof model === 'object' && !Array.isArray(model)
+      ? model as Record<string, unknown>
+      : registryModelBlock()
+  }
+  return registryModelBlock()
+}
+
 /** Create default agent.yaml content for new agents */
-function defaultAgentYaml(name: string, description: string): string {
+function defaultAgentYaml(name: string, description: string, model: Record<string, unknown>): string {
   return YAML.stringify({
     name,
     description,
-    model: buildScaffoldModelBlock(),
+    model,
     system_prompt: `You are ${name}. ${description}\n`,
     context: {
       maxTokens: config.model.maxContextTokens,
@@ -142,7 +151,8 @@ function defaultAgentYamlTemplate(): string {
     name: 'Default',
     description: 'Default agent — handles tasks directly and delegates to sub-agents',
     priority: 99,
-    model: buildScaffoldModelBlock(),
+    // Can't copy from itself — always the registry pick.
+    model: registryModelBlock(),
     system_prompt: 'You are the Default agent of Halo. You understand user intent, break down tasks, create and coordinate sub-agents, and deliver results.\n',
     context: {
       maxTokens: config.model.maxContextTokens,
@@ -322,10 +332,11 @@ export function createAgentConfigRoutes() {
       try { await fs.access(path.join(body.projectId, '.halo', 'agents', id)); conflictScope = 'workspace' } catch { /* no conflict */ }
     }
 
+    const scaffoldModel = await scaffoldModelBlock(scope, body.projectId)
     await ensureDir(agentDir)
     await fs.writeFile(
       path.join(agentDir, 'agent.yaml'),
-      defaultAgentYaml(body.name, body.description ?? ''),
+      defaultAgentYaml(body.name, body.description ?? '', scaffoldModel),
       'utf-8',
     )
     // Also scaffold an empty AGENT.md so users can edit it straight away —
@@ -336,7 +347,6 @@ export function createAgentConfigRoutes() {
       'utf-8',
     )
 
-    const scaffoldModel = buildScaffoldModelBlock()
     const agent: AgentMeta = { id, name: body.name, description: body.description ?? '', model: (scaffoldModel.id as string | undefined) ?? '', path: agentDir, scope, priority: 0 }
     return c.json({ agent, conflictScope }, 201)
   })

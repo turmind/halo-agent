@@ -5,7 +5,7 @@ import { SessionManagerRegistry } from '@turmind/halo-server/agents/session-mana
 import type { AgentSessionEvent } from '@turmind/halo-server/agents/agent-events'
 import { scanAvailableAgents } from '@turmind/halo-server/agents/agent-loader'
 import { ensureWorkspaceHalo } from '@turmind/halo-server/init'
-import { config, modelSupportsImage } from '@turmind/halo-server/config'
+import { config, modelSupportsImage, resolveSandboxPaths } from '@turmind/halo-server/config'
 import { getDisabledSet } from '@turmind/halo-server/db/index'
 import { initBwrapCheck, setSandboxHiddenPaths } from '@turmind/halo-server/tools/sandbox'
 import { initLogger } from '@turmind/halo-server/logger'
@@ -107,7 +107,8 @@ export async function initRuntime(): Promise<void> {
   console.log = (...args: unknown[]) => process.stderr.write(args.map(String).join(' ') + '\n')
   initLogger()
   await initBwrapCheck()
-  setSandboxHiddenPaths(config.sandbox.hiddenDirs, config.sandbox.hiddenFiles)
+  const { hiddenDirs, hiddenFiles } = resolveSandboxPaths()
+  setSandboxHiddenPaths(hiddenDirs, hiddenFiles)
 }
 
 export async function listAgents(workspace: string): Promise<{ id: string; description?: string; scope: string }[]> {

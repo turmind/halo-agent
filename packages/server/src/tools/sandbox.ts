@@ -333,7 +333,10 @@ function ensureEmptyMaskFile(): string {
   return EMPTY_MASK_FILE
 }
 
-const DEFAULT_HIDDEN_DIRS = [
+// Built-in hidden lists — the single source. general.sandbox.hidden_dirs /
+// hidden_files only ADD entries to these (config.ts merges them), so a default
+// entry can never be un-hidden from settings.
+export const DEFAULT_HIDDEN_DIRS = [
   '~/.halo/secrets',
   '~/.aws',
   '~/.ssh',
@@ -347,11 +350,7 @@ const DEFAULT_HIDDEN_DIRS = [
   '~/.halo/global/internal-sessions',
   '~/.halo/global/logs',
 ]
-// Keep in sync with the schema default in settings-schema.ts and the callsite
-// fallback in config.ts — the server overwrites this list at boot via
-// setSandboxHiddenPaths(config.sandbox.*), so a file added only here never
-// reaches a running server.
-const DEFAULT_HIDDEN_FILES = [
+export const DEFAULT_HIDDEN_FILES = [
   '~/.npmrc',
   '~/.bash_history',
   '~/.gitconfig',

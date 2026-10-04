@@ -182,7 +182,7 @@ The orphan reconcile above fixes the *children*'s `stoppedAt`; nobody told the *
 
 **Eager boot** (`index.ts`): rather than waiting for someone to open a workspace, right after constructing `SessionManagerRegistry` (before `bootChannels`) the server calls `listRunningWorkspaces()` and for each workspace with leftover rows whose `.halo` dir still exists: `claimWorkspaceRuntime(ws)` first — if another live server owns it, `continue` (rows stay for a later boot, and no SessionManager is built, since caching a non-owner SM would freeze "not owner" for the whole process lifetime) — otherwise `registry.getOrCreate(ws)`, which fires the same constructor chain (claim → reconcile → retained `sweepActiveGoals` → `sweepInterruptedRuns`). An interrupted root with nobody around is exactly the one that must nudge itself without a human opening the tab first.
 
-`runs.db`/`-wal`/`-shm` join the sandbox `hidden_files` default alongside `evo.db` / `cron.db` (see [storage.md](storage.md)). Known gap carried from the design doc: `<ISO>` in the nudge is sweep time, not the actual interruption time — for a workspace that sat locked by another server before this boot could claim it, that's a real but accepted drift.
+`runs.db`/`-wal`/`-shm` join the built-in sandbox hidden-files list (`DEFAULT_HIDDEN_FILES`, always hidden; `general.sandbox.hidden_files` only adds to it) alongside `evo.db` / `cron.db` (see [storage.md](storage.md)). Known gap carried from the design doc: `<ISO>` in the nudge is sweep time, not the actual interruption time — for a workspace that sat locked by another server before this boot could claim it, that's a real but accepted drift.
 
 ### Message queue and drain
 

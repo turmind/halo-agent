@@ -558,7 +558,7 @@ Source: [packages/server/src/routes/agent-configs.ts](../../../packages/server/s
 ```
 
 Files created:
-- `<agentDir>/agent.yaml` — scaffold whose `model` block comes from the provider named by `general.agent.default_provider` (else `aws-bedrock-claude-invoke`, else the first installed provider), empty tools/skills
+- `<agentDir>/agent.yaml` — scaffold whose `model` block is a copy of the default agent's `model:` mapping (workspace scope: `<projectId>/.halo/agents/default/agent.yaml` if it exists, else the global default agent; global scope: the global one). Missing file / no `model` mapping → derived from the provider registry (`aws-bedrock-claude-invoke` if installed, else the first installed provider). Empty tools/skills; the response's `agent.model` is that block's `id`
 - `<agentDir>/AGENT.md` — `# <name>\n\n<description>\n`
 
 ### PUT `/api/agent-configs/:id/yaml?scope=&projectId=`
@@ -735,6 +735,9 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:`, `skills/<id>/confi
           "description_zh": "...",
           "default": "...",                        // schema-default placeholder; omitted when the schema declares none
           "secret": true,                          // UI masks input + value
+          "globalOnly": false,                     // general.* only: workspace overrides ignored, workspace writes 400
+          "restartRequired": false,                // general.* only: read once at boot — UI shows a restart notice after saving
+          "advanced": false,                       // general.* only: rendered in the collapsed "Advanced" area (all but language / theme)
           "value": "AK****ST",                     // already masked when secret:true; null = unset
           "hasValue": true,                        // any layer has a non-empty value
           "source": "global",                      // 'workspace' | 'global' | 'unset'

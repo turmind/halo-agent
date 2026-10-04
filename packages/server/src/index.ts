@@ -49,7 +49,7 @@ import { defaultChannelDescriptors } from './channels/descriptors.js'
 import { createAuthRoutes, authMiddleware, getTokenFromCookieHeader, isAuthenticated } from './middleware/auth.js'
 import { initLogger } from './logger.js'
 import { initObservability, shutdownObservability } from './observability/otel.js'
-import { config, reloadSandboxConfig } from './config.js'
+import { config, resolveSandboxPaths } from './config.js'
 import { initBwrapCheck, getSandboxBackend, setSandboxHiddenPaths } from './tools/sandbox.js'
 import { ensureHaloHome, readSeedVersion, TEMPLATE_VERSION } from './init.js'
 import { ensureSshAgent } from './git-ssh.js'
@@ -239,11 +239,12 @@ await initObservability()
 initLogger()
 
 await initBwrapCheck()
-setSandboxHiddenPaths(config.sandbox.hiddenDirs, config.sandbox.hiddenFiles, config.sandbox.writableDirs)
-onSettingsChange(() => {
-  const { hiddenDirs, hiddenFiles, writableDirs } = reloadSandboxConfig()
+function applySandboxPaths(): void {
+  const { hiddenDirs, hiddenFiles, writableDirs } = resolveSandboxPaths()
   setSandboxHiddenPaths(hiddenDirs, hiddenFiles, writableDirs)
-})
+}
+applySandboxPaths()
+onSettingsChange(applySandboxPaths)
 console.log(`[Server] OS sandbox: ${getSandboxBackend() ?? 'NOT available (non-full sessions: no shell_exec, file tools path-checked in-process)'}`)
 
 // Hold one ssh-agent for the process so the built-in terminal and git children

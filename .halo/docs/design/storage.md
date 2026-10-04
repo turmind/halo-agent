@@ -344,8 +344,8 @@ general:                                  # built-in declarer (the server itself
     max_summary_input: 15000
     max_message_slice: 800
   sandbox:
-    hidden_dirs: "~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs"
-    hidden_files: "~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm"
+    hidden_dirs: "~/.kube"                # extras, appended to the built-in list
+    hidden_files: "~/.pgpass"             # extras, appended to the built-in list
   logging:
     level: warn
 
@@ -387,20 +387,20 @@ A value of the form `<<ENV_NAME>>` is replaced at read time with `process.env.EN
 
 | Path | Default | Notes |
 |---|---|---|
-| `general.session.max_queue_size` | 256 | Max queued messages per session |
-| `general.session.max_nesting_depth` | 16 | Sub-session nesting cap |
-| `general.compact.keep_messages` | 5 | Recent messages kept intact during compaction |
-| `general.compact.max_summary_input` | 15000 | Local truncation fallback total char cap |
-| `general.compact.max_message_slice` | 800 | Local truncation per-message char cap |
+| `general.session.max_queue_size` | 256 | Max queued messages per session. Restart required |
+| `general.session.max_nesting_depth` | 16 | Sub-session nesting cap. Restart required |
+| `general.compact.keep_messages` | 5 | Recent messages kept intact during compaction. Restart required |
+| `general.compact.max_summary_input` | 15000 | Local truncation fallback total char cap. Restart required |
+| `general.compact.max_message_slice` | 800 | Local truncation per-message char cap. Restart required |
 | `general.limits.shell_output_bytes` | 5242880 | Max bytes captured from one `shell_exec` (stdout+stderr); excess truncated with a `[truncated]` marker |
 | `general.limits.web_fetch_bytes` | 51200 | Max bytes downloaded by one `web_fetch` |
 | `general.limits.grep_default_matches` | 50 | Default `grep` match cap when no explicit `max` is passed |
 | `general.limits.tool_result_render_chars` | 8000 | Per-tool-result cap on the content **fed to the LLM** (truncated with a re-run marker to protect the context window / prompt cache). The UI gets a much larger slice — see `tool_result_ui_chars` and `agent-loop.ts` (`resultContent` = LLM cap, `resultTextFull` = UI cap) |
 | `general.limits.tool_result_ui_chars` | 65536 | Per-tool-result cap on the content **stored for UI display** (admin/web chat panel). Far larger than the LLM cap so a normal command's full output stays visible, but bounded so a multi-MB `cat` can't bloat the session file / WS payload / browser render; excess truncated with a marker pointing at `file_read` |
 | `general.limits.terminal_scrollback_bytes` | 50000 | Off-screen scrollback bytes retained per detached persistent terminal |
-| `general.sandbox.hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs` | Hidden from workspace/readonly sessions — bwrap tmpfs overlay (Linux) / Seatbelt deny (macOS) |
-| `general.sandbox.hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/evo.db,~/.halo/global/evo.db-wal,~/.halo/global/evo.db-shm,~/.halo/global/cron.db,~/.halo/global/cron.db-wal,~/.halo/global/cron.db-shm,~/.halo/global/runs.db,~/.halo/global/runs.db-wal,~/.halo/global/runs.db-shm` | Hidden from workspace/readonly sessions — bwrap bind of the empty `~/.halo/.sandbox-empty`, reads as empty (Linux) / Seatbelt deny (macOS) |
-| `general.logging.level` | warn | `debug` / `info` / `warn` / `error` |
+| `general.sandbox.hidden_dirs` | `''` | Extra dirs hidden from workspace/readonly sessions — bwrap tmpfs overlay (Linux) / Seatbelt deny (macOS). **Appended** to the built-in `DEFAULT_HIDDEN_DIRS` (`tools/sandbox.ts`: `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs`), which are always hidden |
+| `general.sandbox.hidden_files` | `''` | Extra files hidden from workspace/readonly sessions — bwrap bind of the empty `~/.halo/.sandbox-empty`, reads as empty (Linux) / Seatbelt deny (macOS). **Appended** to the built-in `DEFAULT_HIDDEN_FILES` (`~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + `-wal` / `-shm`), which are always hidden |
+| `general.logging.level` | warn | `debug` / `info` / `warn` / `error`. Restart required |
 | `general.observability.endpoint` | `''` | OTLP base URL of an OpenTelemetry collector (e.g. `http://localhost:4318`); empty = off. Restart required. See [observability.md](observability.md) |
 | `general.observability.service_name` | `halo` | OTel resource `service.name`. Restart required |
 | `general.observability.headers` | `''` | **Secret.** Extra OTLP request headers, comma-separated `k=v`. Restart required |
@@ -410,7 +410,7 @@ Schema source: [packages/server/src/settings-schema.ts](../../../packages/server
 
 ### Caching
 
-`config.ts` reads settings.yaml lazily with mtime-watching: every read stats the file and reparses if mtime changed. UI saves bump mtime, so the server picks up new values on the next read **without a restart**.
+`config.ts` reads settings.yaml lazily with mtime-watching: every read stats the file and reparses if mtime changed. UI saves bump mtime, so the server picks up new values on the next read **without a restart** — except the keys marked "Restart required" above plus `general.agent.max_retries`, which `config.ts` reads once into object literals at boot (observability: `initObservability()`); their schema fields carry `restartRequired: true` and the Settings page shows a restart notice after saving one.
 
 ### Orphans
 

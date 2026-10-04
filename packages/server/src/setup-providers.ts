@@ -9,7 +9,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { TEMPLATES_DIR } from './init.js'
-import { readSetting, writeSetting } from './setup-settings.js'
+import { readSetting } from './setup-settings.js'
 
 export interface SecretSpec {
   /** Setting-leaf key e.g. `api_key`. The full path is `<id>.<bucket>.<key>`. */
@@ -241,10 +241,6 @@ export function bindBuiltinAgentsToProvider(providerId: string): { modelId?: str
       agents.push(id)
     } catch { /* skip agents with broken yaml — never fail the whole setup */ }
   }
-  // Keep future scaffolds consistent with the explicit choice: without this,
-  // agents created later from the admin UI would still default to Bedrock
-  // (config.agent.defaultProvider falls back to it when unset).
-  writeSetting('general.agent.default_provider', providerId)
   return { modelId: typeof block.id === 'string' ? block.id : undefined, agents }
 }
 

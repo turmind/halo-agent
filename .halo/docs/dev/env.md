@@ -121,17 +121,17 @@ Source: `packages/server/src/config.ts`
 | `HALO_PROMPT` | (none) | — | `plain` makes `halo setup` use numbered-menu prompts instead of the raw-mode TUI |
 
 settings.yaml only (no env override):
-- `general.session.max_queue_size` (default 256)
-- `general.session.max_nesting_depth` (default 16)
-- `general.agent.max_retries` (default 5)
-- `general.compact.keep_messages` (default 5) — recent messages to keep uncompacted
-- `general.compact.max_summary_input` (default 15000) — local compaction fallback input cap
-- `general.compact.max_message_slice` (default 800) — local compaction per-message cap
+- `general.session.max_queue_size` (default 256), restart required
+- `general.session.max_nesting_depth` (default 16), restart required
+- `general.agent.max_retries` (default 5), restart required
+- `general.compact.keep_messages` (default 5) — recent messages to keep uncompacted, restart required
+- `general.compact.max_summary_input` (default 15000) — local compaction fallback input cap, restart required
+- `general.compact.max_message_slice` (default 800) — local compaction per-message cap, restart required
 - `general.server.trust_proxy` (default `false`) — trust `x-forwarded-for` for client IP resolution, scope: global (enable only behind a reverse proxy you control)
-- `general.sandbox.hidden_dirs` (default `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs`) — hidden from workspace/readonly sessions (bwrap tmpfs overlays on Linux, Seatbelt deny on macOS), scope: global
+- `general.sandbox.hidden_dirs` (default empty) — extra dirs hidden from workspace/readonly sessions (bwrap tmpfs overlays on Linux, Seatbelt deny on macOS), **appended** to the built-in list that is always hidden (`~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs`), scope: global
 - `general.sandbox.writable_dirs` (default empty) — dirs writable inside the sandbox besides the workspace (Linux / macOS), for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions, scope: global
-- `general.sandbox.hidden_files` (default `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files) — hidden from workspace/readonly sessions, read as empty files (bwrap bind of `~/.halo/.sandbox-empty` on Linux, Seatbelt deny on macOS), scope: global
-- `general.logging.level` (default `warn`) — log level: debug | info | warn | error
+- `general.sandbox.hidden_files` (default empty) — extra files hidden from workspace/readonly sessions, read as empty files (bwrap bind of `~/.halo/.sandbox-empty` on Linux, Seatbelt deny on macOS), **appended** to the built-in list that is always hidden (`~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files), scope: global
+- `general.logging.level` (default `warn`) — log level: debug | info | warn | error, restart required
 - `general.observability.endpoint` (default `''`) — OTLP collector base URL (e.g. `http://localhost:4318`); empty = off, scope: global, restart required. See [design/observability.md](../design/observability.md)
 - `general.observability.service_name` (default `halo`) — OTel resource `service.name`, scope: global, restart required
 - `general.observability.headers` (default `''`, secret) — extra OTLP request headers, comma-separated `k=v`, scope: global, restart required

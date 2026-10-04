@@ -98,6 +98,10 @@ interface ResolvedField {
   /** Field is only honored at the global layer; workspace overrides ignored
    *  at runtime. UI should disable the workspace input. */
   globalOnly?: boolean
+  /** Boot-only setting — UI shows a restart notice after saving it. */
+  restartRequired?: boolean
+  /** Rendered inside the collapsed "Advanced" area. */
+  advanced?: boolean
   /** Effective value as stored — already masked if `secret:true`. */
   value: string | null
   /** Whether a non-empty value exists at any layer. */
@@ -174,6 +178,8 @@ function fieldFor(
     default: f.default,
     secret: f.secret,
     globalOnly: f.globalOnly,
+    restartRequired: f.restartRequired,
+    advanced: f.advanced,
     value,
     hasValue: raw !== undefined,
     source,
