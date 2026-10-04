@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-04
+
 ### Added
 
 - Skills: the `extension` skill's hub is configurable in Settings → Skills → extension → `hub_repo` (empty = https://github.com/turmind/halo-hub; `owner/repo` means GitHub). `install <id>` reads the newest `<id>-v*` release zip from a GitHub, Gitea / Forgejo (e.g. codeberg.org) or GitLab (gitlab.com or self-hosted) repo; any other git URL or local repo installs from its newest `<id>-v<x.y.z>` tag, and an extension that needs a build step is refused there with a hint to use its release zip. A failed release lookup (rate limit, private repo, wrong URL) stops with a hint and never falls back to git; `GITHUB_TOKEN` / `GITLAB_TOKEN` / `GITEA_TOKEN` in the server environment are sent when set.
@@ -759,7 +761,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.5...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.6...HEAD
+[1.5.6]: https://github.com/turmind/halo-agent/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/turmind/halo-agent/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/turmind/halo-agent/compare/v1.5.3-alpha...v1.5.4
 [1.5.3-alpha]: https://github.com/turmind/halo-agent/compare/v1.5.2-alpha...v1.5.3-alpha
