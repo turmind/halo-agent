@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-10-04
+
 ### Changed
 
 - Models: each provider yaml in `~/.halo/global/models/` names its implementation in a new `runtime:` field (`anthropic-messages`, `openai-chat`, `bedrock-invoke`, `bedrock-mantle`, or the vendor name such as `kimi` / `deepseek`), and Halo picks the implementation from that field instead of from the provider id. A provider of your own for an Anthropic- or OpenAI-compatible gateway is now just a yaml with `runtime: anthropic-messages` or `runtime: openai-chat` (picked up on the next server start), no code change. A provider yaml without `runtime:`, or with a name Halo doesn't know, fails with an error naming the file. The bundled providers get the field automatically on the next server start or `halo cli` / `halo tui` run.
@@ -766,7 +768,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.6...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.7...HEAD
+[1.5.7]: https://github.com/turmind/halo-agent/compare/v1.5.6...v1.5.7
 [1.5.6]: https://github.com/turmind/halo-agent/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/turmind/halo-agent/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/turmind/halo-agent/compare/v1.5.3-alpha...v1.5.4
