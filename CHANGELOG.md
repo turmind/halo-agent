@@ -6,8 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Skills: the `extension` skill's hub is configurable in Settings → Skills → extension → `hub_repo` (empty = https://github.com/turmind/halo-hub; `owner/repo` means GitHub). `install <id>` reads the newest `<id>-v*` release zip from a GitHub, Gitea / Forgejo (e.g. codeberg.org) or GitLab (gitlab.com or self-hosted) repo; any other git URL or local repo installs from its newest `<id>-v<x.y.z>` tag, and an extension that needs a build step is refused there with a hint to use its release zip. A failed release lookup (rate limit, private repo, wrong URL) stops with a hint and never falls back to git; `GITHUB_TOKEN` / `GITLAB_TOKEN` / `GITEA_TOKEN` in the server environment are sent when set.
+
 ### Changed
 
+- Setup: `halo setup` asks only for built-in skills' secret params. Plain skill settings (like the extension hub) stay in Settings → Skills.
 - Server: a server started with `HALO_BADGE=DEV` never claims or rewrites a workspace's `.halo/runtime.lock` and runs no restart cleanup (stopping orphaned sub-sessions, resuming interrupted runs); the server without the badge that shares those workspaces owns all of it. Before, a dev server restoring a channel's reply route could take the lock of a workspace prod also serves.
 
 ### Fixed

@@ -248,8 +248,10 @@ export function bindBuiltinAgentsToProvider(providerId: string): { modelId?: str
   return { modelId: typeof block.id === 'string' ? block.id : undefined, agents }
 }
 
-/** Look up info for required skills (templates/skills/<id>/) — only those whose
- *  config.yaml declares params. Used by setup to walk required-skill secrets. */
+/** Look up info for required skills (templates/skills/<id>/) — only their
+ *  `secret: true` params; skills with none are skipped. Plain params (e.g. the
+ *  extension skill's hub_repo) stay in Settings → Skills, so setup doesn't ask
+ *  about them. Used by setup to walk required-skill secrets. */
 export function listRequiredSkillsWithSecrets(): SkillInfo[] {
   const dir = path.join(TEMPLATES_DIR, 'skills')
   if (!fs.existsSync(dir)) return []
@@ -260,7 +262,7 @@ export function listRequiredSkillsWithSecrets(): SkillInfo[] {
     const cfgPath = path.join(skillDir, 'config.yaml')
     if (!fs.existsSync(cfgPath)) continue
     const cfg = readYamlFile(cfgPath) as Record<string, unknown> | null
-    const fields = parseFields(cfg?.params)
+    const fields = parseFields(cfg?.params).filter((f) => f.secret)
     if (fields.length === 0) continue
     const skillMd = path.join(skillDir, 'SKILL.md')
     let name = id

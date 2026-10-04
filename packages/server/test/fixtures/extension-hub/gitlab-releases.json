@@ -1,0 +1,462 @@
+[
+ {
+  "name": "other-v9.0.0",
+  "tag_name": "other-v9.0.0",
+  "description": "## Changelog   \n### ✨ Features   \n* c81a40c8: feat(df): add ",
+  "created_at": "2026-09-29T12:19:38.124Z",
+  "released_at": "2026-09-29T12:19:38.124Z",
+  "upcoming_release": false,
+  "author": {
+   "id": 40269453,
+   "username": "service-code-review-glab",
+   "public_email": null,
+   "name": "Service Account - Code Review - glab",
+   "state": "active",
+   "locked": false,
+   "avatar_url": "https://secure.gravatar.com/avatar/0b52ce5e9676d0efbb3cc3cd1f60dd8695be6b3e4d57b31166346e0a8c37fd05?s=80&d=identicon",
+   "web_url": "https://gitlab.com/service-code-review-glab"
+  },
+  "commit": {
+   "id": "78790114c4d7196c97b2b1a1263a0d725835640d",
+   "short_id": "78790114",
+   "created_at": "2026-09-29T17:12:44.000+10:00",
+   "parent_ids": [
+    "b8b4e0988bbf2f6fed4752a88ce29ecfb7df44cc",
+    "6df4dae42c464a2dba3865697cd5fbbcd531f719"
+   ],
+   "title": "Merge branch 'kxrma47/8547-validate-list-output' into 'main'",
+   "message": "Merge branch 'kxrma47/8547-validate-list-output' into 'main'\n\nfix(issue): reject invalid list output flags\n\nCloses #8547\n\nSee merge request https://gitlab.com/gitlab-org/cli/-/merge_requests/3941\n\nMerged-by: James Hebden <jhebden@gitlab.com>\nApproved-by: James Hebden <jhebden@gitlab.com>\nCo-authored-by: Mahidul Haque <mahidulhaqalif@gmail.com>",
+   "author_name": "James Hebden",
+   "author_email": "jhebden@gitlab.com",
+   "authored_date": "2026-09-29T17:12:44.000+10:00",
+   "committer_name": "GitLab",
+   "committer_email": "noreply@gitlab.com",
+   "committed_date": "2026-09-29T17:12:44.000+10:00",
+   "trailers": {},
+   "extended_trailers": {},
+   "web_url": "https://gitlab.com/gitlab-org/cli/-/commit/78790114c4d7196c97b2b1a1263a0d725835640d"
+  },
+  "commit_path": "/gitlab-org/cli/-/commit/78790114c4d7196c97b2b1a1263a0d725835640d",
+  "tag_path": "/gitlab-org/cli/-/tags/other-v9.0.0",
+  "assets": {
+   "count": 6,
+   "sources": [
+    {
+     "format": "zip",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/other-v9.0.0/cli-other-v9.0.0.zip"
+    },
+    {
+     "format": "tar.gz",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/other-v9.0.0/cli-other-v9.0.0.tar.gz"
+    },
+    {
+     "format": "tar.bz2",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/other-v9.0.0/cli-other-v9.0.0.tar.bz2"
+    },
+    {
+     "format": "tar",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/other-v9.0.0/cli-other-v9.0.0.tar"
+    }
+   ],
+   "links": [
+    {
+     "id": 13298120,
+     "name": "glab_1.120.0_linux_ppc64le.rpm",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E120%2E0/glab_1%2E120%2E0_linux_ppc64le%2Erpm",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/other-v9.0.0/downloads/glab_1.120.0_linux_ppc64le.rpm",
+     "link_type": "other"
+    },
+    {
+     "id": 13298095,
+     "name": "other-9.0.0.zip",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E120%2E0/other-9.0.0.zip",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/other-v9.0.0/downloads/other-9.0.0.zip",
+     "link_type": "other"
+    }
+   ]
+  },
+  "evidences": [
+   {
+    "sha": "e13b17af25e2b530c2dd28412b3da47d8cf232e8062d",
+    "filepath": "https://gitlab.com/gitlab-org/cli/-/releases/other-v9.0.0/evidences/24597270.json",
+    "collected_at": "2026-09-29T12:20:01.509Z"
+   }
+  ],
+  "_links": {
+   "closed_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=other-v9.0.0&scope=all&state=closed",
+   "closed_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=other-v9.0.0&scope=all&state=closed",
+   "merged_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=other-v9.0.0&scope=all&state=merged",
+   "opened_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=other-v9.0.0&scope=all&state=opened",
+   "opened_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=other-v9.0.0&scope=all&state=opened",
+   "self": "https://gitlab.com/gitlab-org/cli/-/releases/other-v9.0.0"
+  }
+ },
+ {
+  "name": "demo-viewer-v3.0.0",
+  "tag_name": "demo-viewer-v3.0.0",
+  "description": "## Changelog   \n### ✨ Features   \n* d95ea085: feat(df): add ",
+  "created_at": "2026-09-22T12:17:10.933Z",
+  "released_at": "2026-09-22T12:17:10.933Z",
+  "upcoming_release": false,
+  "author": {
+   "id": 40269453,
+   "username": "service-code-review-glab",
+   "public_email": null,
+   "name": "Service Account - Code Review - glab",
+   "state": "active",
+   "locked": false,
+   "avatar_url": "https://secure.gravatar.com/avatar/0b52ce5e9676d0efbb3cc3cd1f60dd8695be6b3e4d57b31166346e0a8c37fd05?s=80&d=identicon",
+   "web_url": "https://gitlab.com/service-code-review-glab"
+  },
+  "commit": {
+   "id": "f5016eda261bb7142627d05d1d85a20d6dd56ddc",
+   "short_id": "f5016eda",
+   "created_at": "2026-09-22T14:02:44.000+02:00",
+   "parent_ids": [
+    "e9e360763319734865d09237ee5f4a4d68d94a60",
+    "99ffb5f86d8168e85c78b57ee11c92138ac137d3"
+   ],
+   "title": "Merge branch 'renovate/github.com-docker-cli-29.x' into 'main'",
+   "message": "Merge branch 'renovate/github.com-docker-cli-29.x' into 'main'\n\nchore(deps): update module github.com/docker/cli to v29.8.1+incompatible\n\nSee merge request https://gitlab.com/gitlab-org/cli/-/merge_requests/3953\n\nMerged-by: Ahmed Hemdan <ahemdan@gitlab.com>\nApproved-by: Ahmed Hemdan <ahemdan@gitlab.com>\nCo-authored-by: GitLab Renovate Bot <gitlab-bot@gitlab.com>",
+   "author_name": "Ahmed Hemdan",
+   "author_email": "ahemdan@gitlab.com",
+   "authored_date": "2026-09-22T14:02:44.000+02:00",
+   "committer_name": "GitLab",
+   "committer_email": "noreply@gitlab.com",
+   "committed_date": "2026-09-22T14:02:44.000+02:00",
+   "trailers": {},
+   "extended_trailers": {},
+   "web_url": "https://gitlab.com/gitlab-org/cli/-/commit/f5016eda261bb7142627d05d1d85a20d6dd56ddc"
+  },
+  "commit_path": "/gitlab-org/cli/-/commit/f5016eda261bb7142627d05d1d85a20d6dd56ddc",
+  "tag_path": "/gitlab-org/cli/-/tags/demo-viewer-v3.0.0",
+  "assets": {
+   "count": 6,
+   "sources": [
+    {
+     "format": "zip",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-viewer-v3.0.0/cli-demo-viewer-v3.0.0.zip"
+    },
+    {
+     "format": "tar.gz",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-viewer-v3.0.0/cli-demo-viewer-v3.0.0.tar.gz"
+    },
+    {
+     "format": "tar.bz2",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-viewer-v3.0.0/cli-demo-viewer-v3.0.0.tar.bz2"
+    },
+    {
+     "format": "tar",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-viewer-v3.0.0/cli-demo-viewer-v3.0.0.tar"
+    }
+   ],
+   "links": [
+    {
+     "id": 13191381,
+     "name": "glab_1.119.0_linux_386.deb",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E119%2E0/glab_1%2E119%2E0_linux_386%2Edeb",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/demo-viewer-v3.0.0/downloads/glab_1.119.0_linux_386.deb",
+     "link_type": "other"
+    },
+    {
+     "id": 13191373,
+     "name": "demo-viewer-3.0.0.zip",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E119%2E0/demo-viewer-3.0.0.zip",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/demo-viewer-v3.0.0/downloads/demo-viewer-3.0.0.zip",
+     "link_type": "other"
+    }
+   ]
+  },
+  "evidences": [
+   {
+    "sha": "2ee658be2c0f1e62547ad9bd77f9ceb801cbb0edd92d",
+    "filepath": "https://gitlab.com/gitlab-org/cli/-/releases/demo-viewer-v3.0.0/evidences/24397947.json",
+    "collected_at": "2026-09-22T12:17:27.165Z"
+   }
+  ],
+  "_links": {
+   "closed_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=demo-viewer-v3.0.0&scope=all&state=closed",
+   "closed_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-viewer-v3.0.0&scope=all&state=closed",
+   "merged_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-viewer-v3.0.0&scope=all&state=merged",
+   "opened_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=demo-viewer-v3.0.0&scope=all&state=opened",
+   "opened_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-viewer-v3.0.0&scope=all&state=opened",
+   "self": "https://gitlab.com/gitlab-org/cli/-/releases/demo-viewer-v3.0.0"
+  }
+ },
+ {
+  "name": "demo-v2.1.0",
+  "tag_name": "demo-v2.1.0",
+  "description": "## Changelog   \n### ✨ Features   \n* 25090286: feat(auth): gu",
+  "created_at": "2026-09-15T12:29:10.343Z",
+  "released_at": "2026-09-15T12:29:10.343Z",
+  "upcoming_release": true,
+  "author": {
+   "id": 40269453,
+   "username": "service-code-review-glab",
+   "public_email": null,
+   "name": "Service Account - Code Review - glab",
+   "state": "active",
+   "locked": false,
+   "avatar_url": "https://secure.gravatar.com/avatar/0b52ce5e9676d0efbb3cc3cd1f60dd8695be6b3e4d57b31166346e0a8c37fd05?s=80&d=identicon",
+   "web_url": "https://gitlab.com/service-code-review-glab"
+  },
+  "commit": {
+   "id": "570955d4252f860d6b0cbf3fd2ec44f86a7e6957",
+   "short_id": "570955d4",
+   "created_at": "2026-09-15T11:18:58.000+02:00",
+   "parent_ids": [
+    "24ac09735c46babfada55dc8dbbc739bf1c22e15",
+    "8d6e643e0817643e6ead9c37db61aa79a802a6cf"
+   ],
+   "title": "Merge branch 'renovate/github.com-modelcontextprotocol-go-sdk-1.x' into 'main'",
+   "message": "Merge branch 'renovate/github.com-modelcontextprotocol-go-sdk-1.x' into 'main'\n\nchore(deps): update module github.com/modelcontextprotocol/go-sdk to v1.8.0\n\nSee merge request https://gitlab.com/gitlab-org/cli/-/merge_requests/3901\n\nMerged-by: Tomas Vik <tvik@gitlab.com>\nApproved-by: Tomas Vik <tvik@gitlab.com>\nCo-authored-by: GitLab Renovate Bot <gitlab-bot@gitlab.com>",
+   "author_name": "Tomas Vik",
+   "author_email": "tvik@gitlab.com",
+   "authored_date": "2026-09-15T11:18:58.000+02:00",
+   "committer_name": "GitLab",
+   "committer_email": "noreply@gitlab.com",
+   "committed_date": "2026-09-15T11:18:58.000+02:00",
+   "trailers": {},
+   "extended_trailers": {},
+   "web_url": "https://gitlab.com/gitlab-org/cli/-/commit/570955d4252f860d6b0cbf3fd2ec44f86a7e6957"
+  },
+  "commit_path": "/gitlab-org/cli/-/commit/570955d4252f860d6b0cbf3fd2ec44f86a7e6957",
+  "tag_path": "/gitlab-org/cli/-/tags/demo-v2.1.0",
+  "assets": {
+   "count": 6,
+   "sources": [
+    {
+     "format": "zip",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v2.1.0/cli-demo-v2.1.0.zip"
+    },
+    {
+     "format": "tar.gz",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v2.1.0/cli-demo-v2.1.0.tar.gz"
+    },
+    {
+     "format": "tar.bz2",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v2.1.0/cli-demo-v2.1.0.tar.bz2"
+    },
+    {
+     "format": "tar",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v2.1.0/cli-demo-v2.1.0.tar"
+    }
+   ],
+   "links": [
+    {
+     "id": 13008421,
+     "name": "glab_1.118.0_linux_386.deb",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E118%2E0/glab_1%2E118%2E0_linux_386%2Edeb",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v2.1.0/downloads/glab_1.118.0_linux_386.deb",
+     "link_type": "other"
+    },
+    {
+     "id": 13008414,
+     "name": "demo-2.1.0.zip",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E118%2E0/demo-2.1.0.zip",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v2.1.0/downloads/demo-2.1.0.zip",
+     "link_type": "other"
+    }
+   ]
+  },
+  "evidences": [
+   {
+    "sha": "e0dc19268302a3c48fefd1a93f07bbbe856788f32dcd",
+    "filepath": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v2.1.0/evidences/24168912.json",
+    "collected_at": "2026-09-15T12:29:11.300Z"
+   }
+  ],
+  "_links": {
+   "closed_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=demo-v2.1.0&scope=all&state=closed",
+   "closed_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-v2.1.0&scope=all&state=closed",
+   "merged_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-v2.1.0&scope=all&state=merged",
+   "opened_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=demo-v2.1.0&scope=all&state=opened",
+   "opened_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-v2.1.0&scope=all&state=opened",
+   "self": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v2.1.0"
+  }
+ },
+ {
+  "name": "demo-v1.2.0",
+  "tag_name": "demo-v1.2.0",
+  "description": "## Changelog   \n### ✨ Features   \n* a24a29f5: feat(attach): ",
+  "created_at": "2026-09-08T12:22:28.543Z",
+  "released_at": "2026-09-08T12:22:28.543Z",
+  "upcoming_release": false,
+  "author": {
+   "id": 40269453,
+   "username": "service-code-review-glab",
+   "public_email": null,
+   "name": "Service Account - Code Review - glab",
+   "state": "active",
+   "locked": false,
+   "avatar_url": "https://secure.gravatar.com/avatar/0b52ce5e9676d0efbb3cc3cd1f60dd8695be6b3e4d57b31166346e0a8c37fd05?s=80&d=identicon",
+   "web_url": "https://gitlab.com/service-code-review-glab"
+  },
+  "commit": {
+   "id": "44790937bcbf6120698250cc41c9b4fb811c2a03",
+   "short_id": "44790937",
+   "created_at": "2026-09-07T20:47:01.000+10:00",
+   "parent_ids": [
+    "5fe11130d4f48916a40833cd7078cc5b21122b49",
+    "35f640c00d0e37fdacf8cc952ae067c3b667c579"
+   ],
+   "title": "Merge branch 'docs/env-var-reference' into 'main'",
+   "message": "Merge branch 'docs/env-var-reference' into 'main'\n\ndocs(config): publish one environment variable reference\n\nSee merge request https://gitlab.com/gitlab-org/cli/-/merge_requests/3827\n\nMerged-by: James Hebden <jhebden@gitlab.com>\nApproved-by: Brendan Lynch <blynch@gitlab.com>\nApproved-by: James Hebden <jhebden@gitlab.com>\nReviewed-by: Brendan Lynch <blynch@gitlab.com>\nReviewed-by: GitLab Duo <gitlab-duo@gitlab.com>\nCo-authored-by: Kai Armstrong <karmstrong@gitlab.com>",
+   "author_name": "James Hebden",
+   "author_email": "jhebden@gitlab.com",
+   "authored_date": "2026-09-07T20:47:01.000+10:00",
+   "committer_name": "GitLab",
+   "committer_email": "noreply@gitlab.com",
+   "committed_date": "2026-09-07T20:47:01.000+10:00",
+   "trailers": {},
+   "extended_trailers": {},
+   "web_url": "https://gitlab.com/gitlab-org/cli/-/commit/44790937bcbf6120698250cc41c9b4fb811c2a03"
+  },
+  "commit_path": "/gitlab-org/cli/-/commit/44790937bcbf6120698250cc41c9b4fb811c2a03",
+  "tag_path": "/gitlab-org/cli/-/tags/demo-v1.2.0",
+  "assets": {
+   "count": 6,
+   "sources": [
+    {
+     "format": "zip",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v1.2.0/cli-demo-v1.2.0.zip"
+    },
+    {
+     "format": "tar.gz",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v1.2.0/cli-demo-v1.2.0.tar.gz"
+    },
+    {
+     "format": "tar.bz2",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v1.2.0/cli-demo-v1.2.0.tar.bz2"
+    },
+    {
+     "format": "tar",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v1.2.0/cli-demo-v1.2.0.tar"
+    }
+   ],
+   "links": [
+    {
+     "id": 12874903,
+     "name": "glab_1.117.0_Windows_arm64_installer.exe",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E117%2E0/glab_1%2E117%2E0_Windows_arm64_installer%2Eexe",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v1.2.0/downloads/glab_1.117.0_Windows_arm64_installer.exe",
+     "link_type": "other"
+    },
+    {
+     "id": 12874889,
+     "name": "demo-1.2.0.zip",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E117%2E0/demo-1.2.0.zip",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v1.2.0/downloads/demo-1.2.0.zip",
+     "link_type": "other"
+    }
+   ]
+  },
+  "evidences": [
+   {
+    "sha": "ec088c2b8bea5b57cf20fca53f128a29c9abd534eb8d",
+    "filepath": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v1.2.0/evidences/23992722.json",
+    "collected_at": "2026-09-08T12:22:29.052Z"
+   }
+  ],
+  "_links": {
+   "closed_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=demo-v1.2.0&scope=all&state=closed",
+   "closed_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-v1.2.0&scope=all&state=closed",
+   "merged_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-v1.2.0&scope=all&state=merged",
+   "opened_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=demo-v1.2.0&scope=all&state=opened",
+   "opened_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-v1.2.0&scope=all&state=opened",
+   "self": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v1.2.0"
+  }
+ },
+ {
+  "name": "demo-v1.1.0",
+  "tag_name": "demo-v1.1.0",
+  "description": "## Changelog   \n### ✨ Features   \n* 6ee323d4: feat(config): ",
+  "created_at": "2026-09-01T12:34:53.033Z",
+  "released_at": "2026-09-01T12:34:53.033Z",
+  "upcoming_release": false,
+  "author": {
+   "id": 40269453,
+   "username": "service-code-review-glab",
+   "public_email": null,
+   "name": "Service Account - Code Review - glab",
+   "state": "active",
+   "locked": false,
+   "avatar_url": "https://secure.gravatar.com/avatar/0b52ce5e9676d0efbb3cc3cd1f60dd8695be6b3e4d57b31166346e0a8c37fd05?s=80&d=identicon",
+   "web_url": "https://gitlab.com/service-code-review-glab"
+  },
+  "commit": {
+   "id": "e8436ca8a1715369087a8c67787493b2434a3822",
+   "short_id": "e8436ca8",
+   "created_at": "2026-09-01T09:06:40.000+02:00",
+   "parent_ids": [
+    "0b85a17a54a7e054663d3f3cbda2e35c3db78dd5",
+    "b0fea85e82d9d255ae74a7a88f9b6c44a0cd10c6"
+   ],
+   "title": "Merge branch 'renovate/gitlab.com-gitlab-org-api-client-go-v2-2.x' into 'main'",
+   "message": "Merge branch 'renovate/gitlab.com-gitlab-org-api-client-go-v2-2.x' into 'main'\n\nchore(deps): update module gitlab.com/gitlab-org/api/client-go/v2 to v2.61.0\n\nSee merge request https://gitlab.com/gitlab-org/cli/-/merge_requests/3811\n\nMerged-by: Ahmed Hemdan <ahemdan@gitlab.com>\nApproved-by: Ahmed Hemdan <ahemdan@gitlab.com>\nCo-authored-by: GitLab Renovate Bot <gitlab-bot@gitlab.com>",
+   "author_name": "Ahmed Hemdan",
+   "author_email": "ahemdan@gitlab.com",
+   "authored_date": "2026-09-01T09:06:40.000+02:00",
+   "committer_name": "GitLab",
+   "committer_email": "noreply@gitlab.com",
+   "committed_date": "2026-09-01T09:06:40.000+02:00",
+   "trailers": {},
+   "extended_trailers": {},
+   "web_url": "https://gitlab.com/gitlab-org/cli/-/commit/e8436ca8a1715369087a8c67787493b2434a3822"
+  },
+  "commit_path": "/gitlab-org/cli/-/commit/e8436ca8a1715369087a8c67787493b2434a3822",
+  "tag_path": "/gitlab-org/cli/-/tags/demo-v1.1.0",
+  "assets": {
+   "count": 6,
+   "sources": [
+    {
+     "format": "zip",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v1.1.0/cli-demo-v1.1.0.zip"
+    },
+    {
+     "format": "tar.gz",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v1.1.0/cli-demo-v1.1.0.tar.gz"
+    },
+    {
+     "format": "tar.bz2",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v1.1.0/cli-demo-v1.1.0.tar.bz2"
+    },
+    {
+     "format": "tar",
+     "url": "https://gitlab.com/gitlab-org/cli/-/archive/demo-v1.1.0/cli-demo-v1.1.0.tar"
+    }
+   ],
+   "links": [
+    {
+     "id": 12724829,
+     "name": "glab_1.116.0_source.tar.gz",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E116%2E0/glab_1%2E116%2E0_source%2Etar%2Egz",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v1.1.0/downloads/glab_1.116.0_source.tar.gz",
+     "link_type": "other"
+    },
+    {
+     "id": 12724817,
+     "name": "demo-1.1.0.zip",
+     "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E116%2E0/demo-1.1.0.zip",
+     "direct_asset_url": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v1.1.0/downloads/demo-1.1.0.zip",
+     "link_type": "other"
+    }
+   ]
+  },
+  "evidences": [
+   {
+    "sha": "ebafaa2e00c3038ecb9307e30abe04d0b0931ec833cd",
+    "filepath": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v1.1.0/evidences/23803827.json",
+    "collected_at": "2026-09-01T12:34:54.010Z"
+   }
+  ],
+  "_links": {
+   "closed_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=demo-v1.1.0&scope=all&state=closed",
+   "closed_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-v1.1.0&scope=all&state=closed",
+   "merged_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-v1.1.0&scope=all&state=merged",
+   "opened_issues_url": "https://gitlab.com/gitlab-org/cli/-/issues?release_tag=demo-v1.1.0&scope=all&state=opened",
+   "opened_merge_requests_url": "https://gitlab.com/gitlab-org/cli/-/merge_requests?release_tag=demo-v1.1.0&scope=all&state=opened",
+   "self": "https://gitlab.com/gitlab-org/cli/-/releases/demo-v1.1.0"
+  }
+ }
+]
