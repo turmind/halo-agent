@@ -42,7 +42,7 @@ Click an agent in the sidebar to open the right-hand editor. Two views:
 Data-driven form for name / description / model / tools / skills / thinking. Changes auto-save about half a second after you stop editing — there's no Save button. The agent's AGENT.md is shown below the form as a read-only preview.
 
 **Model section** has four fields:
-- `provider` — dropdown populated from `~/.halo/global/models/*.yaml`
+- `provider` — dropdown populated from `~/.halo/global/models/*.yaml` plus hub-installed `~/.halo/global/models.d/*.yaml` (`/extension models`; updates the list live)
 - `id` — combobox (input + datalist); preset options filtered by current provider, also accepts manual input of any model ID
 - `endpoint` — combobox (input + datalist); full endpoint URL (e.g. `https://bedrock-runtime.ap-northeast-1.amazonaws.com`), supports custom proxy URLs
 - `maxTokens` — optional; defaults to `maxOutputTokens` in the provider yaml
@@ -227,6 +227,6 @@ With `export NANO_BANANA_KEY=sk-xxx` in the env, the agent's system prompt gets 
 
 ## Model registry — adding a new provider
 
-Halo ships 13 providers (`aws-bedrock-claude-invoke`, `aws-bedrock-mantle`, `aws-bedrock-openai`, `anthropic`, `openai`, `kimi`, `deepseek`, `minimax`, `qwen`, `hunyuan`, `doubao`, `zhipu`, `mimo-token-plan-china`); each one is a yaml under `~/.halo/global/models/` whose `runtime:` field names the implementation in [packages/server/src/agents/model-runtime.ts](../../../packages/server/src/agents/model-runtime.ts) (e.g. `anthropic-messages`, `openai-chat`, `bedrock-invoke`). For any OpenAI- or Anthropic-compatible endpoint you don't need new code: pick `openai` or `anthropic` as the provider and fill in the endpoint and model id in Form view.
+Halo ships 13 providers (`aws-bedrock-claude-invoke`, `aws-bedrock-mantle`, `aws-bedrock-openai`, `anthropic`, `openai`, `kimi`, `deepseek`, `minimax`, `qwen`, `hunyuan`, `doubao`, `zhipu`, `mimo-token-plan-china`); each one is a yaml under `~/.halo/global/models/` (refreshed between releases by `/extension models`, which installs newer copies into `~/.halo/global/models.d/`) whose `runtime:` field names the implementation in [packages/server/src/agents/model-runtime.ts](../../../packages/server/src/agents/model-runtime.ts) (e.g. `anthropic-messages`, `openai-chat`, `bedrock-invoke`). For any OpenAI- or Anthropic-compatible endpoint you don't need new code: pick `openai` or `anthropic` as the provider and fill in the endpoint and model id in Form view.
 
 A provider that speaks an existing wire protocol needs only a yaml manifest with that `runtime:`; a new protocol also needs a runtime class. The step-by-step is in [dev/add-model-provider.md](../dev/add-model-provider.md). A provider yaml without `runtime:` (or with a name Halo doesn't know) makes session spawn fail with an error naming the yaml; for a bundled provider that means the seed is stale — run `halo setup` or restart the Halo server.

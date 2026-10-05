@@ -17,6 +17,7 @@ import { newTab } from '@/features/chat/chat-tabs'
 import { wsClient } from '@/shared/ws-client'
 import { onWsReconnect } from '@/shared/ws-reconnect'
 import { useAgentBus, bumpAgentBus } from '@/shared/agent-bus'
+import { useModelsBus } from '@/shared/models-bus'
 
 interface AgentMeta {
   id: string
@@ -75,9 +76,11 @@ export function AgentManagementMain() {
     localStorage.setItem(AGENT_EXPANDED_KEY, JSON.stringify([...expandedScopes]))
   }, [expandedScopes])
 
+  // Re-fetched on `models:changed` (hub provider configs installed live).
+  const modelsVersion = useModelsBus((s) => s.version)
   useEffect(() => {
     api.agentConfigs.models().then(setModelsRegistry).catch(() => {})
-  }, [])
+  }, [modelsVersion])
 
   const loadAgents = useCallback(async () => {
     setRefreshing(true)

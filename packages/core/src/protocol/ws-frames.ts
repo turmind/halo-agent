@@ -153,6 +153,8 @@ export type WsServerMessage =
   | { type: 'evolution:apply_changed'; id: string; status?: string; kind?: 'deleted' }
   // ~/.halo/global/extensions/ changed (install / upgrade / uninstall) — full snapshot, not a diff
   | ({ type: 'extension:changed' } & ExtensionsSnapshot)
+  // ~/.halo/global/models.d/ changed (hub provider configs installed / removed) — re-fetch /agent-configs/models
+  | { type: 'models:changed' }
 
 export type WsServerMessageType = WsServerMessage['type']
 

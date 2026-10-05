@@ -1,5 +1,6 @@
 id: kimi
 runtime: kimi
+revision: 2026100501
 displayName: Kimi (Moonshot AI)
 displayName_zh: Kimi（月之暗面）
 description: Kimi K3 / K2.6 via OpenAI-compatible chat completions API

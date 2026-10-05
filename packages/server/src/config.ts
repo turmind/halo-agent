@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { loadSettingsSchema } from './settings-schema.js'
 import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
+import { loadProviders } from './models/registry.js'
 
 export const HALO_HOME = path.join(homedir(), '.halo')
 export const HALO_GLOBAL_DIR = path.join(HALO_HOME, 'global')
@@ -24,29 +25,11 @@ function loadYamlFile(filePath: string): Record<string, unknown> {
   }
 }
 
-/** Load the models registry by scanning `{global}/models/*.yaml`.
- *  Each file describes one provider: { id, displayName?, description?, models: [...] }. */
+/** The models registry: `{global}/models/*.yaml` merged with the hub-installed
+ *  `{global}/models.d/*.yaml` (rule in models/registry.ts). Each entry is one
+ *  provider: { id, runtime, revision?, displayName?, models: [...] }. */
 function loadModelsRegistry(): { providers: Array<Record<string, unknown>> } {
-  const providers: Array<Record<string, unknown>> = []
-  const modelsDir = path.join(HALO_GLOBAL_DIR, 'models')
-  try {
-    const entries = fs.readdirSync(modelsDir, { withFileTypes: true })
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.yaml')) continue
-      try {
-        const raw = fs.readFileSync(path.join(modelsDir, entry.name), 'utf-8')
-        const parsed = YAML.parse(raw) as Record<string, unknown> | null
-        if (parsed && typeof parsed === 'object' && typeof parsed.id === 'string') {
-          providers.push(parsed)
-        } else {
-          console.log(`[Config] Skipping ${entry.name}: missing provider id`)
-        }
-      } catch (err) {
-        console.log(`[Config] Failed to load ${entry.name}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-  } catch { /* dir missing — leave providers empty */ }
-  return { providers }
+  return { providers: loadProviders().effective.map((p) => p.data) }
 }
 
 // Lazy, not eager: `ensureHaloHome` seeds/refreshes `{global}/models/*.yaml`
@@ -54,11 +37,17 @@ function loadModelsRegistry(): { providers: Array<Record<string, unknown>> } {
 // `loadModelsRegistry()` at import time therefore reads the models dir
 // *before* a freshly-added provider yaml lands, so the new provider is
 // missing until a second restart. Loading on first access (always after
-// `ensureHaloHome`) closes that startup race.
+// `ensureHaloHome`) closes that startup race. models/watcher.ts drops it when
+// `models.d/` changes, so a hub install applies without a restart.
 let _modelsRegistryCache: { providers: Array<Record<string, unknown>> } | null = null
 function modelsRegistry(): { providers: Array<Record<string, unknown>> } {
   if (!_modelsRegistryCache) _modelsRegistryCache = loadModelsRegistry()
   return _modelsRegistryCache
+}
+
+/** Drop the cached registry; the next read re-merges both dirs from disk. */
+export function invalidateModelsRegistry(): void {
+  _modelsRegistryCache = null
 }
 /** Mtime-watched like getSettings() below. config.yaml used to be read once
  *  at module load, but POST /api/auth/change-password rewrites

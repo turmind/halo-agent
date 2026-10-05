@@ -1,5 +1,6 @@
 id: doubao
 runtime: doubao
+revision: 2026100501
 displayName: Doubao (Volcengine)
 displayName_zh: 豆包（火山方舟）
 description: ByteDance Doubao Seed-2.0 family on Volcengine Ark — pro / lite / mini / code, OpenAI-compatible

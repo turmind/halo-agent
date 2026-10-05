@@ -76,7 +76,7 @@ resolveProviderRuntime(providerId: string): string          // provider yaml →
 createModelRuntime(runtime: string, cfg: ModelRuntimeConfig): ModelRuntime
 ```
 
-**Dispatch**: `agent.yaml`'s `model.provider` is looked up against `~/.halo/global/models/<providerId>.yaml`; that yaml's `runtime:` field names the implementation (wire protocol), and the dispatcher's switch matches on the runtime name only. The provider `id` stays the identity (model picker, `model.provider`, `<id>.secrets.*`). Missing yaml / missing `runtime:` / unknown runtime → the session build throws.
+**Dispatch**: `agent.yaml`'s `model.provider` is looked up against `~/.halo/global/models/<providerId>.yaml` (or its hub-installed `models.d/` copy when that has the higher `revision` — see [storage.md](storage.md#model-registry-format)); that yaml's `runtime:` field names the implementation (wire protocol), and the dispatcher's switch matches on the runtime name only. The provider `id` stays the identity (model picker, `model.provider`, `<id>.secrets.*`). Missing yaml / missing `runtime:` / unknown runtime → the session build throws.
 
 **Modality capabilities**: Each model in the manifest declares `capabilities.image` / `capabilities.video` / `capabilities.audio` (boolean). SessionManager checks `modelSupportsImage()` at session creation in two places: (1) `createWorkspaceTools()` is passed `supportsVision` so the `view_image` tool is dropped from the tool list when the model can't ingest vision blocks — no exposed tool, no errant call, no provider 400; (2) user-supplied images on inbound messages are stripped at `buildInput()` with a text notice. Query functions: `config.ts` exports `modelSupportsImage()` / `modelSupportsVideo()` / `modelSupportsAudio()`.
 
@@ -255,7 +255,8 @@ SQLite only holds metadata indexes; all content lives on the filesystem.
 | `~/.halo/global/skills/{id}/SKILL.md` | SkillRoutes | Skill definition (global scope) |
 | `~/.halo/secrets/settings.yaml` | SettingsRoutes | Global settings |
 | `<project>/.halo/settings.yaml` | SettingsRoutes | Per-project overrides |
-| `~/.halo/global/models/<provider>.yaml` | Manual edit | Model registry — one file per provider, scanned at startup; its `runtime:` field picks the implementation class |
+| `~/.halo/global/models/<provider>.yaml` | Template refresh (overwritten) | Model registry, bundled — one file per provider, read on first access; its `runtime:` field picks the implementation class |
+| `~/.halo/global/models.d/<provider>.yaml` | `halo models install` (`/extension models`) | Hub-installed provider yamls; per id the higher `revision` wins over `models/` (tie → `models.d`); watched, applied without restart |
 | `~/.halo/global/prompts/{bootstrap,all,root}/*.md` | init.ts seed + user | System prompts |
 | `~/.halo/global/logs/server.log` | Logger | Server logs (10 MB rotation) |
 | `~/.halo/secrets/channels/channels.db` | All channels | Unified channel accounts (Web, Telegram, WeChat, Slack, Feishu, WeCom) — see [storage.md](storage.md#channel_accounts) |

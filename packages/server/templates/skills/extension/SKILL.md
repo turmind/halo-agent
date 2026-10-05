@@ -1,19 +1,20 @@
 ---
 name: extension
-description: Install / list / remove admin preview extensions (`~/.halo/global/extensions/<id>/`) — static viewers the admin editor loads for file types it has no built-in preview for (e.g. `.glb`). `/extension install <id|zip|url>` pulls the latest `<id>-v*` release from the configured hub (default turmind/halo-hub). Activate when the user wants to preview a file type the editor can't open, or asks to install / update / remove an extension.
+description: Install / list / remove admin preview extensions (`~/.halo/global/extensions/<id>/`) — static viewers the admin editor loads for file types it has no built-in preview for (e.g. `.glb`) — and update the model provider list (new models, changed provider endpoints) from the hub. `/extension install <id|zip|url>` pulls the latest `<id>-v*` release from the configured hub (default turmind/halo-hub); `/extension models` pulls the latest `models-v*` provider configs. Activate when the user wants to preview a file type the editor can't open, asks to install / update / remove an extension, or asks to update the model list / get a newly released model ("更新模型列表").
 command: /extension
 requiresAccess: full
 verbs:
   - { name: install, desc: "Install or upgrade an extension from the hub (by id), a local zip path, or a zip URL" }
   - { name: list,    desc: List installed extensions with version and status }
   - { name: remove,  desc: Remove an installed extension by id }
+  - { name: models,  desc: "Update the model provider list from the hub (newest models-v* release)" }
 ---
 
 # extension
 
 The requested action is **`$1`**; everything after it is the payload
 (`$ARGUMENTS` minus the first token). With natural language ("install the glb
-viewer"), infer both.
+viewer", "更新模型列表"), infer both.
 
 Preview extensions are static bundles the admin editor loads in a sandboxed
 iframe to preview file types it has no built-in viewer for (e.g. `.glb`).
@@ -69,6 +70,33 @@ short `-` list; `(none)` when empty.
 
 `bash EXT remove <id>` → deletes `~/.halo/global/extensions/<id>/`. Confirm with
 the user first if they didn't name the id explicitly.
+
+## models
+
+Updates the model provider list (the providers / models / endpoints the agent
+editor offers) from the hub's newest `models-v*` release. Also run it for
+natural language like "更新模型列表" / "update the model list" / "is there a
+newer model". Run it right away:
+
+`HALO_HUB_REPO='{{params.hub_repo}}' bash EXT models update`
+
+The script prints one line per provider (`install` / `up-to-date` / `skip` /
+`refuse` + reason), then a summary as its last line. By exit code:
+- `0` — done. Relay the summary line; name any `refuse`d provider and its reason
+  (e.g. "needs a newer halo" → run `halo upgrade`). Takes effect immediately
+  — no restart, no page reload. Existing agents keep their own model / endpoint
+  (they live in each agent.yaml); only the choices offered change.
+- `3` — nothing was written: a provider is new or its endpoints change. Show
+  the user the indented endpoint lines verbatim and ask whether to apply them.
+  Only after they agree, run the same command with `--yes` appended. Never add
+  `--yes` on your own.
+- anything else — relay the error. Model configs come only from an https
+  GitHub / Gitea / Forgejo / GitLab hub with releases; a local / plain-git /
+  http hub is refused. "release API failed" / "no release for models" → same
+  hints as for `install`.
+
+`bash EXT models list` shows each provider, which copy is in effect (`bundled`
+= shipped with halo, `hub` = installed by this command) and its revision.
 
 ## Notes
 

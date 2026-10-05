@@ -1,5 +1,6 @@
 id: aws-bedrock-claude-invoke
 runtime: bedrock-invoke
+revision: 2026100501
 displayName: AWS Bedrock Claude (Invoke API)
 displayName_zh: AWS Bedrock Claude（Invoke API）
 description: Invokes Bedrock via InvokeModel (non-streaming), sends raw Anthropic Messages API format

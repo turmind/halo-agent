@@ -4,6 +4,6 @@ description_zh: 安装 / 列出 / 删除管理后台的预览扩展。
 
 params:
   - key: hub_repo
-    description: "Hub that `install <id>` pulls from: a GitHub / Gitea / Forgejo / GitLab repo URL (newest `<id>-v*` release zip), `owner/repo` for GitHub, or any git URL / local repo path (newest `<id>-v<x.y.z>` tag). Empty = https://github.com/turmind/halo-hub."
-    description_zh: "`install <id>` 的来源仓库：GitHub / Gitea / Forgejo / GitLab 仓库地址（取最新的 `<id>-v*` release zip），GitHub 可简写为 `owner/repo`；也可以是任意 git 地址或本地仓库路径（取最新的 `<id>-v<x.y.z>` 标签）。留空 = https://github.com/turmind/halo-hub。"
+    description: "Hub that `install <id>` and `models` pull from: a GitHub / Gitea / Forgejo / GitLab repo URL (newest `<id>-v*` release zip), `owner/repo` for GitHub, or any git URL / local repo path (newest `<id>-v<x.y.z>` tag; not for `models`, which needs an https release hub). Empty = https://github.com/turmind/halo-hub."
+    description_zh: "`install <id>` 和 `models` 的来源仓库：GitHub / Gitea / Forgejo / GitLab 仓库地址（取最新的 `<id>-v*` release zip），GitHub 可简写为 `owner/repo`；也可以是任意 git 地址或本地仓库路径（取最新的 `<id>-v<x.y.z>` 标签；`models` 不支持，它只认 https 的 release 仓库）。留空 = https://github.com/turmind/halo-hub。"
     default: https://github.com/turmind/halo-hub

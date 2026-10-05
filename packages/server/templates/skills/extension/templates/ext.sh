@@ -8,6 +8,8 @@
 #   ext.sh install <id | path/to.zip | https://…zip>
 #   ext.sh list
 #   ext.sh remove <id>
+#   ext.sh models update [--yes]   # hub's newest models-v* zip → halo models install
+#   ext.sh models list             # = halo models list
 #
 # `install <id>` reads the hub in $HALO_HUB_REPO (the skill's hub_repo param;
 # empty → https://github.com/turmind/halo-hub). GitHub / Gitea-Forgejo / GitLab
@@ -153,24 +155,69 @@ hub_git_package() {
   echo "$dir"
 }
 
-# Fetch hub package <id> from hub URL $1 into $3: echo a zip path (release
-# API) or the package dir (git tags). API errors never fall back to git — a
-# git checkout of a build-step package would install broken.
-hub_fetch() {
-  local hub=$1 id=$2 tmp=$3 platform api url token page
-  platform=$(hub_platform "$hub")
-  if [[ $platform == git ]]; then hub_git_package "$hub" "$id" "$tmp"; return; fi
+# Download the newest `<id>-v*` release zip of <platform> hub $2 into $4 and
+# echo its path. Extra args ($5…) go to every curl (models pass
+# `--proto =https --proto-redir =https`).
+hub_fetch_release() {
+  local platform=$1 hub=$2 id=$3 tmp=$4 api url token page
+  shift 4
   api=$(hub_releases_api "$platform" "$hub")
   page=$(hub_releases_page "$platform" "$hub")
   case $platform in github) token=GITHUB_TOKEN ;; gitlab) token=GITLAB_TOKEN ;; *) token=GITEA_TOKEN ;; esac
-  hub_curl "$platform" "$api" -o "$tmp/releases.json" \
+  hub_curl "$platform" "$@" "$api" -o "$tmp/releases.json" \
     || { echo "$platform release API failed for $hub — rate-limited, private or wrong repo? set $token, or download the zip from $page and run: install <path>" >&2; exit 1; }
   url=$(hub_pick_release "$platform" "$id" <"$tmp/releases.json") \
     || { echo "no release for $id in $hub — check the id, or download the zip from $page and run: install <path>" >&2; exit 1; }
   # No token here: asset links redirect to other hosts and curl -L would
   # forward a custom header like PRIVATE-TOKEN there.
-  curl -fsSL "$url" -o "$tmp/pkg.zip" || { echo "download failed: $url" >&2; exit 1; }
+  curl -fsSL "$@" "$url" -o "$tmp/pkg.zip" || { echo "download failed: $url" >&2; exit 1; }
   echo "$tmp/pkg.zip"
+}
+
+# Fetch hub package <id> from hub URL $1 into $3: echo a zip path (release
+# API) or the package dir (git tags). API errors never fall back to git — a
+# git checkout of a build-step package would install broken.
+hub_fetch() {
+  local hub=$1 id=$2 tmp=$3 platform
+  platform=$(hub_platform "$hub")
+  if [[ $platform == git ]]; then hub_git_package "$hub" "$id" "$tmp"; return; fi
+  hub_fetch_release "$platform" "$hub" "$id" "$tmp"
+}
+
+# Unpack zip $1 into the new dir $2 with the same refusals as the server's zip
+# installer: no `..`, no absolute paths, no symlinks (zipinfo mode column
+# starts with `l`).
+safe_unzip() {
+  if unzip -Z1 "$1" | grep -Eq '(^|/)\.\.(/|$)|^/'; then echo "zip contains ../ or absolute entries" >&2; exit 1; fi
+  if unzip -Z "$1" | grep -q '^l'; then echo "zip contains symlinks" >&2; exit 1; fi
+  mkdir -p "$2"
+  unzip -q "$1" -d "$2"
+}
+
+# Model provider configs: newest `models-v*` release of hub $1, https +
+# release API only (a provider yaml carries endpoints the server will call —
+# no plain-git / local / http source). Validation, planning and the write into
+# ~/.halo/global/models.d/ belong to `halo models install` ($HALO_CLI in dev);
+# its exit code (3 = endpoint changes need --yes) passes through.
+models_update() {
+  local hub=$1 platform zip; shift
+  if [[ $hub != https://* ]]; then
+    echo "model configs need an https release hub (GitHub / Gitea / Forgejo / GitLab) — $hub is not one" >&2; exit 1
+  fi
+  platform=$(hub_platform "$hub")
+  if [[ $platform == git ]]; then
+    echo "model configs need a release-API hub (GitHub / Gitea / Forgejo / GitLab) — $hub has no release API" >&2; exit 1
+  fi
+  zip=$(hub_fetch_release "$platform" "$hub" models "$TMP" --proto =https --proto-redir =https)
+  safe_unzip "$zip" "$TMP/models"
+  local dir="$TMP/models" only
+  # A zip wrapping everything in one directory — descend into it.
+  if ! compgen -G "$dir/*.yaml" >/dev/null; then
+    only=$(find "$dir" -mindepth 1 -maxdepth 1 | head -2)
+    if [[ $(printf '%s\n' "$only" | wc -l) -eq 1 && -d $only ]]; then dir=$only; fi
+  fi
+  # Last command: under `set -e` its non-zero status (3 = confirm) is the script's.
+  "${HALO_CLI:-halo}" models install "$dir" "$@"
 }
 
 # Echo a local zip or an unpacked package dir for source $1 (path, https URL, or hub id).
@@ -196,12 +243,7 @@ case $cmd in
     if [[ -d $pkg ]]; then
       dir=$pkg
     else
-      # Same refusals as the server's zip installer: no `..`, no absolute paths,
-      # no symlinks (zipinfo mode column starts with `l`).
-      if unzip -Z1 "$pkg" | grep -Eq '(^|/)\.\.(/|$)|^/'; then echo "zip contains ../ or absolute entries" >&2; exit 1; fi
-      if unzip -Z "$pkg" | grep -q '^l'; then echo "zip contains symlinks" >&2; exit 1; fi
-      mkdir -p "$TMP/x"
-      unzip -q "$pkg" -d "$TMP/x"
+      safe_unzip "$pkg" "$TMP/x"
       # `zip -r glb.zip glb/` wraps everything in one directory — descend into it.
       dir="$TMP/x"
       if [[ ! -f $dir/halo-extension.json ]]; then
@@ -239,6 +281,17 @@ case $cmd in
     [[ -d $ROOT/$id ]] || { echo "not installed: $id" >&2; exit 1; }
     rm -rf "$ROOT/$id"
     echo "removed $id" ;;
+  models)
+    sub=${1:-update}
+    shift || true
+    case $sub in
+      list) exec "${HALO_CLI:-halo}" models list ;;
+      update)
+        for a in "$@"; do [[ $a == --yes ]] || { echo "usage: ext.sh models update [--yes] | models list" >&2; exit 1; }; done
+        TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+        models_update "$(hub_url "${HALO_HUB_REPO:-}")" "$@" ;;
+      *) echo "usage: ext.sh models update [--yes] | models list" >&2; exit 1 ;;
+    esac ;;
   *)
-    echo "unknown command: $cmd (install | list | remove)" >&2; exit 1 ;;
+    echo "unknown command: $cmd (install | list | remove | models)" >&2; exit 1 ;;
 esac

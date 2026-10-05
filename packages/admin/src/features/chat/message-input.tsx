@@ -8,6 +8,7 @@ import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useGoalStore } from '@/features/chat/goal-store'
+import { useModelsBus } from '@/shared/models-bus'
 import { postToFace } from '@/features/editor/face-bridge'
 import { matchCommands, matchVerbs, getCommands, type SlashCommand } from './slash-commands'
 import { CommandPalette } from './command-palette'
@@ -125,11 +126,17 @@ function getHaloCamera(): HaloCamera | undefined {
 }
 
 /** Process-local cache of which model ids support image input, built from the
- *  models registry (`/agent-configs/models`). The registry is effectively
- *  static for a session, so we fetch it once. */
+ *  models registry (`/agent-configs/models`). Fetched once per models-bus
+ *  version — the registry only changes on a hub install (`models:changed`). */
 let imageModelCache: Record<string, boolean> | null = null
 let imageModelCachePromise: Promise<Record<string, boolean>> | null = null
-function loadImageModelMap(): Promise<Record<string, boolean>> {
+let imageModelCacheVersion = -1
+function loadImageModelMap(version: number): Promise<Record<string, boolean>> {
+  if (version !== imageModelCacheVersion) {
+    imageModelCacheVersion = version
+    imageModelCache = null
+    imageModelCachePromise = null
+  }
   if (imageModelCache) return Promise.resolve(imageModelCache)
   if (!imageModelCachePromise) {
     imageModelCachePromise = api.agentConfigs.models()
@@ -158,6 +165,7 @@ function loadImageModelMap(): Promise<Record<string, boolean>> {
 function useCurrentModelSupportsImage(): boolean {
   const selectedAgentId = useChatStore((s) => s.selectedAgentId)
   const activeProjectPath = useProjectStore((s) => s.activeProject?.path)
+  const modelsVersion = useModelsBus((s) => s.version)
   const [supported, setSupported] = useState(true)
 
   useEffect(() => {
@@ -165,7 +173,7 @@ function useCurrentModelSupportsImage(): boolean {
     let cancelled = false
     Promise.all([
       api.agentConfigs.list(activeProjectPath),
-      loadImageModelMap(),
+      loadImageModelMap(modelsVersion),
     ]).then(([cfg, imageMap]) => {
       if (cancelled) return
       const agent = cfg.agents.find((a) => a.id === selectedAgentId) ?? cfg.agents[0]
@@ -176,7 +184,7 @@ function useCurrentModelSupportsImage(): boolean {
       setSupported(imageMap[modelId])
     }).catch(() => { if (!cancelled) setSupported(true) })
     return () => { cancelled = true }
-  }, [selectedAgentId, activeProjectPath])
+  }, [selectedAgentId, activeProjectPath, modelsVersion])
 
   return supported
 }

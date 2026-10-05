@@ -30,6 +30,7 @@ Commands:
   server               Start the HTTP/WS server + admin web UI
   agents               List available agents and exit
   sessions             List recent sessions and exit
+  models               Install / list hub model provider configs
   acp                  Bridge a halo server to an ACP client (stdio)
   --help, -h           Show this help
   --version            Show version
@@ -203,6 +204,33 @@ ACP method coverage:
   implemented — see .halo/docs/dev/acp-adapter.md for the full matrix.
 `
 
+const HELP_MODELS = `Usage: halo models install <dir> [--yes]
+       halo models list
+
+Model provider configs from a hub (normally run by the extension skill's
+\`/extension models\`, which downloads and unpacks the hub's newest
+\`models-v*\` release and passes the directory here).
+
+  install <dir>   Install every <id>.yaml in <dir> into ~/.halo/global/models.d/.
+                  Per provider id the higher \`revision\` is in effect (tie →
+                  the models.d copy); an older one is skipped. Refused: an
+                  unknown \`runtime:\` (needs a newer halo), no \`revision\`, a
+                  \`secrets[].default\` that isn't empty or <<ENV_NAME>>.
+                  A new provider or a changed defaultEndpoint / endpointPresets
+                  stops the run before anything is written: the changes are
+                  listed and the exit code is 3 — re-run with --yes to apply.
+                  A running server picks the files up without a restart.
+  list            Each provider id, the copy in effect (bundled | hub), its
+                  revision and runtime, and any copy it shadows.
+
+Options:
+  -y, --yes       Apply endpoint changes / new providers (install only)
+  -h, --help      Show this help
+
+Exit codes: 0 = ok (refusals are listed in the summary), 1 = error,
+3 = endpoint changes need --yes (nothing written).
+`
+
 const HELP_BY_CMD: Record<string, string> = {
   setup: HELP_SETUP,
   upgrade: HELP_UPGRADE,
@@ -212,6 +240,7 @@ const HELP_BY_CMD: Record<string, string> = {
   agents: HELP_AGENTS,
   sessions: HELP_SESSIONS,
   acp: HELP_ACP,
+  models: HELP_MODELS,
 }
 
 /** Parse common harness-related flags shared by tui / cli / agents / sessions. */
@@ -832,6 +861,35 @@ async function cmdSessions(flags: HarnessFlags): Promise<void> {
   }
 }
 
+/** `halo models install <dir> [--yes]` / `halo models list` — logic in
+ *  @turmind/halo-server/models/install (plan → print → write into models.d/). */
+async function cmdModels(argv: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { yes: { type: 'boolean', short: 'y', default: false } },
+  })
+  const [sub, dir] = positionals
+  const mod = await import('@turmind/halo-server/models/install')
+  if (sub === 'list') {
+    for (const line of mod.formatModelsList()) process.stdout.write(`${line}\n`)
+    return
+  }
+  if (sub !== 'install' || !dir) {
+    process.stderr.write(HELP_MODELS)
+    process.exitCode = 1
+    return
+  }
+  const plan = mod.planModelsInstall(path.resolve(dir))
+  for (const line of mod.formatPlan(plan)) process.stdout.write(`${line}\n`)
+  if (plan.needsConfirm && !values.yes) {
+    process.stdout.write(`${mod.summaryLine(plan, null)}\n`)
+    process.exitCode = mod.EXIT_NEEDS_CONFIRM
+    return
+  }
+  process.stdout.write(`${mod.summaryLine(plan, mod.applyModelsInstall(plan))}\n`)
+}
+
 async function cmdTui(flags: HarnessFlags): Promise<void> {
   // The TUI needs a keyboard: ink's useInput throws "Raw mode is not supported"
   // when stdin isn't a TTY (CI, `halo tui < file`, `echo x | halo tui`). Fail
@@ -1269,6 +1327,12 @@ async function main(): Promise<void> {
 
   // From here on, every subcommand needs ~/.halo/global/ populated.
   if (!isHaloHomeReady()) exitMissingSetup()
+
+  // Own flags (--yes) — parsed before the harness flags, which would reject them.
+  if (cmd === 'models') {
+    await cmdModels(subArgs)
+    return
+  }
 
   const flags = parseHarnessFlags(subArgs)
 

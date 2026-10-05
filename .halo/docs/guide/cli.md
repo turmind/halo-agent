@@ -144,7 +144,7 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | `/workspace setup` / `/workspace tidy` / `/workspace share` | Set up / tidy the `.halo/` knowledge files, or export a shareable bundle (workspace skill) |
 | `/cron <verb>` | Manage scheduled agent runs: `create` / `list` / `update` / `enable` / `disable` / `delete` |
 | `/acp <verb>` | Ask other agents over ACP (`kiro <q>` / `claude <q>`) and manage `ask-*` bindings (`add` / `list` / `remove`) |
-| `/extension <verb>` | Canvas preview extensions: `install` / `list` / `remove` (full access only) |
+| `/extension <verb>` | Canvas preview extensions: `install` / `list` / `remove`; `models` updates the model provider list from the hub (full access only) |
 | `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
 | `/quit` | Exit |
 
@@ -210,6 +210,15 @@ Attach files or images to your message with `@file` and `@image`, or pull a dire
 - **Text files**: truncated at 100KB with a `[truncated]` marker
 - **Images**: skipped if larger than 5MB
 - If the current model does not support vision, a warning is shown and images are ignored
+
+## Model provider configs (`halo models`)
+
+```bash
+halo models install <dir> [--yes]   # install <dir>/*.yaml into ~/.halo/global/models.d/
+halo models list                    # id · copy in effect (bundled | hub) · revision · runtime
+```
+
+Normally run for you by `/extension models`, which downloads the hub's newest `models-v*` release (https GitHub / Gitea / Forgejo / GitLab only) and passes the unpacked directory to `halo models install`. Per provider id the copy with the higher `revision` is in effect (tie → the `models.d` copy); an older one is skipped, an identical one reported up to date. Refused per provider: a `runtime:` this halo doesn't know (needs a newer halo), no `revision`, a `secrets[].default` that isn't empty or `<<ENV_NAME>>`. If any provider is new or changes `defaultEndpoint` / `endpointPresets`, the changes are listed, **nothing is written**, and the exit code is `3` — re-run with `--yes` to apply. Writes are atomic (tmp + rename); a running server reloads its registry from `models.d/` without a restart and pushes the change to open admin pages. Existing agents keep the model / endpoint in their own `agent.yaml`. Exit codes: `0` ok (refusals listed in the summary line), `1` error, `3` needs `--yes`. To undo, delete the file from `~/.halo/global/models.d/`.
 
 ## Server Mode (background daemon)
 

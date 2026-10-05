@@ -10,6 +10,7 @@ import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { TEMPLATES_DIR } from './init.js'
 import { readSetting } from './setup-settings.js'
+import { loadProviders } from './models/registry.js'
 
 export interface SecretSpec {
   /** Setting-leaf key e.g. `api_key`. The full path is `<id>.<bucket>.<key>`. */
@@ -76,16 +77,17 @@ function parseFields(raw: unknown): SecretSpec[] {
     .filter((f) => f.key.length > 0)
 }
 
-/** Enumerate model providers shipped in templates/models/. */
+/** The providers setup offers: the bundled templates/models/ merged with the
+ *  hub-installed `~/.halo/global/models.d/` (same rule as the server registry,
+ *  models/registry.ts). Setup runs outside the server, so it reads both fresh. */
+function setupProviders(): Array<{ id: string; data: Record<string, unknown> }> {
+  return loadProviders(path.join(TEMPLATES_DIR, 'models')).effective
+}
+
+/** Enumerate model providers: bundled templates/models/ + hub-installed models.d/. */
 export function listModelProviders(): ProviderInfo[] {
-  const dir = path.join(TEMPLATES_DIR, 'models')
-  if (!fs.existsSync(dir)) return []
   const out: ProviderInfo[] = []
-  for (const f of fs.readdirSync(dir)) {
-    if (!f.endsWith('.yaml')) continue
-    const data = readYamlFile(path.join(dir, f)) as Record<string, unknown> | null
-    if (!data || typeof data !== 'object') continue
-    const id = typeof data.id === 'string' ? data.id : f.replace(/\.yaml$/, '')
+  for (const { id, data } of setupProviders()) {
     out.push({
       id,
       displayName: typeof data.displayName === 'string' ? data.displayName : id,
@@ -212,12 +214,12 @@ export function modelBlockFromProvider(providerId: string, data: Record<string, 
   return block
 }
 
-/** Model block from the bundled provider template — reads templates/models/
- *  directly (setup runs outside the server process, so the seeded registry
- *  cache isn't available). */
+/** Model block from the provider's effective yaml — bundled templates/models/
+ *  or its hub copy in models.d/ (setup runs outside the server process, so the
+ *  seeded registry cache isn't available). */
 function buildTemplateModelBlock(providerId: string): Record<string, unknown> | null {
-  const data = readYamlFile(path.join(TEMPLATES_DIR, 'models', `${providerId}.yaml`)) as Record<string, unknown> | null
-  if (!data || typeof data !== 'object') return null
+  const data = setupProviders().find((p) => p.id === providerId)?.data
+  if (!data) return null
   return modelBlockFromProvider(providerId, data)
 }
 

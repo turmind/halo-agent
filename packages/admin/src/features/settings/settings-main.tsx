@@ -9,6 +9,7 @@ import { useI18n } from '@/shared/i18n'
 import { useTheme } from '@/shared/theme'
 import { SecurityView } from './security-view'
 import { ExtensionsView } from './extensions-view'
+import { useModelsBus } from '@/shared/models-bus'
 
 type Schema = Awaited<ReturnType<typeof api.settings.getSchema>>
 type Section = Schema['sections'][number]
@@ -62,7 +63,9 @@ export function SettingsMain() {
     }).finally(() => setRefreshing(false))
   }, [projectId])
 
-  useEffect(() => { refresh() }, [refresh])
+  // Provider sections come from the models registry — re-fetch on `models:changed`.
+  const modelsVersion = useModelsBus((s) => s.version)
+  useEffect(() => { refresh() }, [refresh, modelsVersion])
 
   // App version — fetched once from /api/health (server stamps it at bundle
   // time via esbuild define; 'dev' under tsx). Shown at the sidebar foot.

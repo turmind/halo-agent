@@ -1,5 +1,6 @@
 id: minimax
 runtime: minimax
+revision: 2026100501
 displayName: MiniMax
 displayName_zh: MiniMax
 description: MiniMax M3 / M2.7 family via the Anthropic-compatible Messages API

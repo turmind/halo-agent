@@ -1,5 +1,6 @@
 id: aws-bedrock-mantle
 runtime: bedrock-mantle
+revision: 2026100501
 displayName: AWS Bedrock Mantle (OpenAI GPT-6.1 / 6 / 5.6)
 displayName_zh: AWS Bedrock Mantle（OpenAI GPT-6.1 / 6 / 5.6）
 description: OpenAI GPT-6.1 Sol, GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna) on Amazon Bedrock via the bedrock-mantle endpoint (OpenAI Responses API only — not Converse/InvokeModel). Region-split — GPT-6.1 Sol and GPT-6 Sol / Luna are on us-east-1 only, Astra on us-west-2 only.

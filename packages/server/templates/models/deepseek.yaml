@@ -1,5 +1,6 @@
 id: deepseek
 runtime: deepseek
+revision: 2026100501
 displayName: DeepSeek
 displayName_zh: DeepSeek
 description: DeepSeek V4 via OpenAI-compatible chat completions API

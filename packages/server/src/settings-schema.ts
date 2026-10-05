@@ -6,6 +6,7 @@
  *                                            below since the server itself is the
  *                                            "declarer".
  *   2. **Provider secrets**              — declared in `models/<provider-id>.yaml`
+ *                                            (or its `models.d/` hub copy)
  *                                            under `secrets:`. Stored at
  *                                            `<provider-id>.secrets.<key>`.
  *   3. **Skill params/secrets**          — declared in
@@ -36,8 +37,8 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
+import { loadProviders } from './models/registry.js'
 
-const GLOBAL_MODELS_DIR = path.join(homedir(), '.halo', 'global', 'models')
 const GLOBAL_SKILLS_DIR = path.join(homedir(), '.halo', 'global', 'skills')
 const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
 
@@ -224,21 +225,17 @@ function normalizeFieldList(raw: unknown, kind: FieldKind): SchemaField[] {
   return out
 }
 
-/** Walk `models/*.yaml` and collect each provider's `secrets:` declaration. */
+/** Collect each effective provider's `secrets:` declaration — the merged
+ *  `models/` + `models.d/` view, so a hub-only provider gets its form too. */
 function providerSections(): SchemaSection[] {
   const sections: SchemaSection[] = []
-  let entries: fs.Dirent[] = []
-  try { entries = fs.readdirSync(GLOBAL_MODELS_DIR, { withFileTypes: true }) } catch { return sections }
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.yaml')) continue
-    const parsed = readYamlFile(path.join(GLOBAL_MODELS_DIR, entry.name))
-    if (!parsed || typeof parsed.id !== 'string') continue
+  for (const { id, data: parsed } of loadProviders().effective) {
     const fields = normalizeFieldList(parsed.secrets, 'secret')
     if (fields.length === 0) continue
     sections.push({
-      namespaceId: parsed.id,
+      namespaceId: id,
       source: 'provider',
-      displayName: typeof parsed.displayName === 'string' ? parsed.displayName : parsed.id,
+      displayName: typeof parsed.displayName === 'string' ? parsed.displayName : id,
       displayName_zh: typeof parsed.displayName_zh === 'string' ? parsed.displayName_zh : undefined,
       description: typeof parsed.description === 'string' ? parsed.description : undefined,
       description_zh: typeof parsed.description_zh === 'string' ? parsed.description_zh : undefined,

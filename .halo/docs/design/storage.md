@@ -16,8 +16,10 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── agents/<id>/
 │   │   ├── agent.yaml                 # Agent config
 │   │   └── AGENT.md                   # Agent personality
-│   ├── models/                        # Model registry — one file per provider, scanned at startup
+│   ├── models/                        # Model registry, bundled — one file per provider, overwritten on template refresh
 │   │   └── <providerId>.yaml          # e.g. aws-bedrock-claude-invoke.yaml
+│   ├── models.d/                      # Hub-installed provider yamls (`/extension models`); never touched by seeding
+│   │   └── <providerId>.yaml          # merged with models/ by revision (see Model registry format)
 │   ├── skills/<id>/
 │   │   └── SKILL.md                   # Skill definition (frontmatter + body)
 │   ├── internal-sessions/<agentId>/   # Internal-agent sessions (`__evo_agent__`, `__score__`, `__apply_agent__`)
@@ -420,12 +422,17 @@ Values present in `settings.yaml` whose namespace isn't currently declared by an
 
 ## Model registry format
 
-Path: `~/.halo/global/models/<providerId>.yaml` — one file per provider. All files are scanned at startup and merged into the in-memory registry. The same yaml also declares the provider's required server-side credentials (`secrets:` section), which the Settings page renders.
+Paths: `~/.halo/global/models/<providerId>.yaml` (bundled, seeded from `templates/models/` and overwritten on every template refresh) and `~/.halo/global/models.d/<providerId>.yaml` (hub-installed by `halo models install` / `/extension models`; seeding and refresh never touch it) — one file per provider. Both dirs are read on first access and merged into the in-memory registry. The same yaml also declares the provider's required server-side credentials (`secrets:` section), which the Settings page renders.
+
+**Merge rule** (one implementation, `packages/server/src/models/registry.ts` `loadProviders`, behind the server registry, the Settings secrets forms, `halo setup` and the hub installer): per provider `id` the copy with the higher `revision` wins; on a tie the `models.d` copy wins; a yaml without `revision` counts as 0 (users' own custom yamls in `models/`). A `models.d` copy whose `runtime:` this build doesn't know is skipped with a `[Config]` log, so the bundled copy stays in effect. `halo setup` merges the package's `templates/models/` with `models.d/` the same way.
+
+**Live reload**: `models/watcher.ts` watches `models.d/` (non-recursive, 300 ms debounce; created at boot), drops the registry cache and broadcasts `models:changed` when the merged view changed; admin pages re-fetch `/agent-configs/models` and the settings schema. `models/` isn't watched — only template refresh writes it, before the registry is first read.
 
 ```yaml
 # aws-bedrock-claude-invoke.yaml
 id: aws-bedrock-claude-invoke                  # required, must match filename and agent.yaml model.provider
 runtime: bedrock-invoke                        # required, implementation class (wire protocol) — see below
+revision: 2026100501                           # integer YYYYMMDDNN — bump on every edit; absent = 0
 displayName: AWS Bedrock Claude (Invoke API)   # shown in UI
 displayName_zh: AWS Bedrock Claude（Invoke API） # optional zh override
 description: Invokes Bedrock via InvokeModel (non-streaming)

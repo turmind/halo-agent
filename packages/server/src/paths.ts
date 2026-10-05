@@ -214,9 +214,17 @@ export function globalPromptsDir(): string {
   return path.join(globalDir(), 'prompts')
 }
 
-/** `~/.halo/global/models`. */
+/** `~/.halo/global/models` — bundled provider yamls (seeded, overwritten on
+ *  every template refresh). */
 export function globalModelsDir(): string {
   return path.join(globalDir(), 'models')
+}
+
+/** `~/.halo/global/models.d` — hub-installed provider yamls (`halo models
+ *  install`); never touched by seeding. Merged with `models/` by
+ *  models/registry.ts. */
+export function globalHubModelsDir(): string {
+  return path.join(globalDir(), 'models.d')
 }
 
 /** `~/.halo/global/builtin` — server self-knowledge docs. */

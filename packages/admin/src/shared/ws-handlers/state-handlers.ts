@@ -8,6 +8,7 @@ import { bumpSessionBus } from '@/shared/session-bus'
 import { onWsReconnect } from '@/shared/ws-reconnect'
 import { api } from '@/shared/api-client'
 import { setExtensions } from '@/features/editor/previews/registry'
+import { bumpModelsBus } from '@/shared/models-bus'
 
 export function registerStateHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
@@ -149,6 +150,12 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
     wsClient.on('extension:changed', ({ extensions, errors }) => setExtensions({ extensions, errors })),
   )
   unsubs.push(onWsReconnect(wsClient, () => { api.extensions.list().then(setExtensions).catch(() => {}) }))
+
+  // Hub provider configs installed / removed (`~/.halo/global/models.d/`) —
+  // the server already dropped its registry cache; every model-list consumer
+  // re-fetches. Reconnect bumps too: a frame lost while down is otherwise gone.
+  unsubs.push(wsClient.on('models:changed', () => bumpModelsBus()))
+  unsubs.push(onWsReconnect(wsClient, () => bumpModelsBus()))
 
   return () => unsubs.forEach((fn) => fn())
 }

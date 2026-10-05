@@ -40,6 +40,7 @@ import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/
 import { createCronRoutes } from './routes/cron.js'
 import { createExtensionRoutes } from './routes/extensions.js'
 import { start as startExtensionsWatcher, stop as stopExtensionsWatcher } from './extensions/watcher.js'
+import { start as startModelsWatcher, stop as stopModelsWatcher } from './models/watcher.js'
 import { createEvoDb, setEvoDb } from './db/evo-db.js'
 import { setEvoSpawner, startEvoTicker, stopEvoTicker } from './evolution/ticker.js'
 import { startArchiveDaemon, stopArchiveDaemon } from './evolution/archive.js'
@@ -363,6 +364,9 @@ app.route('/api', cronRoutes)
 const extensionRoutes = createExtensionRoutes()
 app.route('/api', extensionRoutes)
 if (!AGENTCORE) startExtensionsWatcher()
+// Hub-installed provider yamls (~/.halo/global/models.d/): drop the registry
+// cache + push `models:changed` on change, so `/extension models` applies live.
+startModelsWatcher()
 
 const channelDb = createChannelDb(path.join(HALO_HOME, 'secrets'))
 setChannelDb(channelDb)
@@ -567,6 +571,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   stopEvoTicker()
   stopArchiveDaemon()
   stopExtensionsWatcher()
+  stopModelsWatcher()
   // Before channels drain: the 10s reconcile poll would otherwise rebuild
   // schedules (and fire new runs) while we're mid-shutdown.
   stopCronDaemon()

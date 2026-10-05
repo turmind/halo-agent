@@ -31,8 +31,8 @@ const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
 
 /** Run `source ext.sh; <script>` with $1.. = args. ($0 must not be ext.sh
  *  itself, or its sourced-vs-executed guard sees "executed".) */
-function fn(script: string, args: string[] = [], input?: string) {
-  const r = spawnSync('bash', ['-c', `source "$EXT"; ${script}`, 'test', ...args], { env: env({ EXT }), input, encoding: 'utf8' })
+function fn(script: string, args: string[] = [], input?: string, extra: Record<string, string> = {}) {
+  const r = spawnSync('bash', ['-c', `source "$EXT"; ${script}`, 'test', ...args], { env: env({ EXT, ...extra }), input, encoding: 'utf8' })
   return { code: r.status, out: r.stdout.trim(), err: r.stderr.trim() }
 }
 
@@ -192,6 +192,47 @@ describe('git mode end to end', () => {
     const r = ext(['install', 'nope'], { HALO_HUB_REPO: repo })
     expect(r.code).not.toBe(0)
     expect(r.err).toContain('no release for nope')
+  })
+})
+
+describe('models update (https release hubs only)', () => {
+  it.each([
+    ['a local repo path', () => path.join(tmpRoot, 'hub-repo'), /need an https release hub/],
+    ['an http URL', () => 'http://127.0.0.1:9/o/r', /need an https release hub/],
+    ['an ssh git URL', () => 'git@host:o/r.git', /need an https release hub/],
+    ['an https host without a release API', () => 'https://git.invalid/o/r', /has no release API/],
+  ])('refuses %s', (_label, hub, msg) => {
+    const r = ext(['models', 'update'], { HALO_HUB_REPO: hub(), HALO_CLI: '/bin/false' })
+    expect(r.code).toBe(1)
+    expect(r.err).toMatch(msg)
+  })
+
+  it('fetches the newest models-v* zip over https only, unpacks it, and passes the CLI exit code through', async () => {
+    const dir = path.join(tmpRoot, 'models-pkg')
+    fs.mkdirSync(dir, { recursive: true })
+    const { default: JSZip } = await import('jszip')
+    const z = new JSZip()
+    z.file('models/kimi.yaml', 'id: kimi\n') // wrapped in one dir → ext.sh descends
+    fs.writeFileSync(path.join(dir, 'models.zip'), await z.generateAsync({ type: 'nodebuffer', platform: 'UNIX' }))
+    fs.writeFileSync(path.join(dir, 'releases.json'), JSON.stringify([
+      { tag_name: 'glb-v1.1.0', assets: [{ name: 'glb-1.1.0.zip', browser_download_url: 'https://x/glb.zip' }] },
+      { tag_name: 'models-v2026.10.05', assets: [{ name: 'models-2026.10.05.zip', browser_download_url: 'https://x/models.zip' }] },
+    ]))
+    const cli = path.join(dir, 'halo-stub.sh')
+    fs.writeFileSync(cli, '#!/bin/sh\necho "cli $1 $2 $4"; ls "$3"; exit 3\n', { mode: 0o755 })
+    const log = path.join(dir, 'calls.log')
+    // Stub the network: hub_curl / curl record their args and drop the fixture at the -o target.
+    const r = fn([
+      'hub_curl() { echo "hub_curl $*" >>"$LOG"; cp "$DIR/releases.json" "${@: -1}"; }',
+      'curl() { echo "curl $*" >>"$LOG"; cp "$DIR/models.zip" "${@: -1}"; }',
+      'TMP=$(mktemp -d); trap \'rm -rf "$TMP"\' EXIT',
+      'models_update https://github.com/o/r --yes',
+    ].join('\n'), [], undefined, { LOG: log, DIR: dir, HALO_CLI: cli })
+    expect(r.code).toBe(3)
+    expect(r.out.split('\n')).toEqual(['cli models install --yes', 'kimi.yaml'])
+    const calls = fs.readFileSync(log, 'utf8').trim().split('\n')
+    expect(calls[0]).toBe('hub_curl github --proto =https --proto-redir =https https://api.github.com/repos/o/r/releases?per_page=100 -o ' + calls[0]!.split(' -o ')[1])
+    expect(calls[1]).toMatch(/^curl -fsSL --proto =https --proto-redir =https https:\/\/x\/models\.zip -o /)
   })
 })
 

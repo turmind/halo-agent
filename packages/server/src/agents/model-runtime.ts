@@ -23,6 +23,7 @@ import { MantleAgent } from './mantle-agent.js'
 import { AnthropicAgent } from './anthropic-agent.js'
 import type { AgentEvent, AnthropicMessage, ContentBlock, ToolDef } from './bedrock-agent.js'
 import { getModelsRegistry, HALO_GLOBAL_DIR } from '../config.js'
+import { MODEL_RUNTIME_NAMES } from '../models/registry.js'
 
 export interface ModelRuntimeConfig {
   modelId: string
@@ -67,16 +68,14 @@ export interface ModelRuntime {
   ): AsyncGenerator<AgentEvent>
 }
 
-/** Values a provider yaml's `runtime:` may name — one per implementation
- *  class. Vendor subclasses keep their vendor name. */
-export const MODEL_RUNTIME_NAMES = [
-  'anthropic-messages', 'openai-chat', 'bedrock-invoke', 'bedrock-mantle',
-  'kimi', 'deepseek', 'minimax', 'qwen', 'hunyuan', 'doubao', 'zhipu',
-] as const
+// The list lives in models/registry.ts (dependency-free, so setup / the CLI's
+// `halo models install` can validate against it); the switch below must cover it.
+export { MODEL_RUNTIME_NAMES }
 
 /** Look up the `runtime:` of a provider's yaml in the models registry. Throws
  *  when the yaml is missing, lacks the field (seed predates it), or names a
- *  runtime this build doesn't know. */
+ *  runtime this build doesn't know. (A `models.d` copy with an unknown runtime
+ *  never reaches the registry — the bundled copy stays in effect.) */
 export function resolveProviderRuntime(providerId: string): string {
   const yamlPath = path.join(HALO_GLOBAL_DIR, 'models', `${providerId}.yaml`)
   const providers = (getModelsRegistry() as { providers: Array<Record<string, unknown>> }).providers

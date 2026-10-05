@@ -160,6 +160,7 @@ Create `packages/server/templates/models/<provider>.yaml` (deployed to `~/.halo/
 ```yaml
 id: myprovider                         # required, must match filename and agent.yaml model.provider
 runtime: myprovider                    # required, implementation class — an existing name (e.g. openai-chat) or your new one
+revision: 2026100501                   # required for bundled / hub yamls — integer YYYYMMDDNN, bump on every edit
 displayName: My Provider
 description: Short description
 defaultEndpoint: https://api.example.com/v1
@@ -193,14 +194,22 @@ models:
 
 Shape source: [packages/server/templates/models/aws-bedrock-claude-invoke.yaml](../../../packages/server/templates/models/aws-bedrock-claude-invoke.yaml) and [design/storage.md#model-registry-format](../design/storage.md#model-registry-format).
 
+**`revision` decides which copy is in effect.** The same provider yaml can exist twice: the bundled copy (`templates/models/` → `~/.halo/global/models/`, overwritten on every template refresh) and a hub copy (`~/.halo/global/models.d/<id>.yaml`, installed by `/extension models` from the hub's `models-v*` release, never touched by seeding). Per `id` the higher `revision` wins; on a tie the `models.d` copy wins; a yaml without `revision` counts as 0 (a user's own custom yaml in `models/`). The merge lives in one place, [models/registry.ts](../../../packages/server/src/models/registry.ts) (`loadProviders`), behind the server registry, the Settings secrets forms, `halo setup` and the hub installer. **Bump `revision` on every edit — bundled or hub — or the edit loses to the other copy.** Use the edit date: `YYYYMMDD` + a two-digit sequence for that day.
+
+### Distributing a provider change through the hub
+
+A new model, a renamed model id or a changed endpoint doesn't need a halo release: edit the yaml in [halo-hub](https://github.com/turmind/halo-hub) `models/`, bump its `revision`, `node scripts/pack.mjs models`, and publish the zip as release `models-v<YYYY.MM.DD>` (see the hub README). Users run `/extension models` (or say "更新模型列表"); `halo models install` writes the files into `models.d/`, and the server's `models.d` watcher drops the registry cache and pushes `models:changed`, so open admins re-fetch — no restart, no reload. Install-time refusals: a `runtime:` this build doesn't know ("needs a newer halo" — a **new runtime class always needs a halo release**), a missing `revision`, a `secrets[].default` other than empty / `<<ENV_NAME>>`. A new provider or a changed `defaultEndpoint` / `endpointPresets` is listed and needs the user's explicit OK (`--yes`). Mirror the change in `templates/models/` with the same revision so the next release bundles it.
+
 ### 3. Wire the dispatcher
 
-Skip this step when the manifest's `runtime:` names an existing runtime. For a new one, edit [packages/server/src/agents/model-runtime.ts](../../../packages/server/src/agents/model-runtime.ts) — add the name to `MODEL_RUNTIME_NAMES`, then the import and switch case (keyed by the runtime name, not the provider id):
+Skip this step when the manifest's `runtime:` names an existing runtime. For a new one, add the name to `MODEL_RUNTIME_NAMES` in [packages/server/src/models/registry.ts](../../../packages/server/src/models/registry.ts) (kept there, dependency-free, so `halo models install` can validate against it; `model-runtime.ts` re-exports it), then the import and switch case in [packages/server/src/agents/model-runtime.ts](../../../packages/server/src/agents/model-runtime.ts) (keyed by the runtime name, not the provider id):
 
 ```ts
-import { MyProviderAgent } from './myprovider-agent.js'
-
+// models/registry.ts
 export const MODEL_RUNTIME_NAMES = [/* … */, 'myprovider'] as const
+
+// agents/model-runtime.ts
+import { MyProviderAgent } from './myprovider-agent.js'
 
 case 'myprovider':
   return new MyProviderAgent({
@@ -246,7 +255,7 @@ If a user wants to keep the key in an env var, they leave the `default` (`<<MY_P
 
 ### 5. Bump template version
 
-In [packages/server/src/init.ts](../../../packages/server/src/init.ts), increment `TEMPLATE_VERSION` so new manifests and settings deploy on the next server start or `halo cli` / `halo tui` run (both call `refreshTemplatesIfOutdated`).
+In [packages/server/src/init.ts](../../../packages/server/src/init.ts), increment `TEMPLATE_VERSION` so new manifests and settings deploy on the next server start or `halo cli` / `halo tui` run (both call `refreshTemplatesIfOutdated`). Editing an existing bundled yaml also bumps its `revision` (step 2).
 
 ### 6. Use it
 
@@ -331,9 +340,9 @@ If you POST `cache_control: { ttl: 'banana' }` and the server doesn't 400, that'
 
 (Example: MiniMax docs say 5min, no `1h` mention → manifest only exposes `5m`. Aliyun's `cache_creation` field name is `ephemeral_5m_input_tokens`, also confirming 5min default. Don't put `1h` in the form just because `ttl: '1h'` doesn't 400.)
 
-### Manifest changes need a server restart
+### Manifest changes in `models/` need a server restart
 
-The models registry is read from `{global}/models/*.yaml` and cached for the process lifetime (see [config.ts:loadModelsRegistry](../../../packages/server/src/config.ts)). Editing or copying a new `models/<provider>.yaml` while the server is running has **no effect on a running session** — the form will keep showing the old presets. Either restart, or wait for the next process boot.
+The models registry is `{global}/models/*.yaml` merged with `{global}/models.d/*.yaml`, cached in the process (see [config.ts:loadModelsRegistry](../../../packages/server/src/config.ts)). Only `models.d/` is watched ([models/watcher.ts](../../../packages/server/src/models/watcher.ts) drops the cache and broadcasts `models:changed`). Editing or copying a new `models/<provider>.yaml` while the server is running has **no effect** — the form will keep showing the old presets until the next restart. To try a change live, put it in `models.d/` with a higher `revision` (or `halo models install <dir>`).
 
 The cache is built **lazily on first access**, not at module-init. This is load-bearing for the seed flow: `ensureHaloHome` (which writes new provider manifests into `{global}/models/`) runs inside `main()`, but ES module imports — including `config.ts` — evaluate *first*. An eager `const registry = loadModelsRegistry()` at import time would read the dir before a freshly-added manifest lands, so a brand-new provider would be missing from the dropdown until a *second* restart. Lazy loading defers the read to a request / session-build path, which is always after `ensureHaloHome`. Don't switch it back to eager. (Fixed 2026-06-15; surfaced when a new provider needed two restarts to appear.)
 
@@ -414,6 +423,6 @@ The switch is keyed by runtime name (one case per wire protocol / vendor class),
 - OpenAI-family format helpers: [packages/server/src/agents/openai-chat-format.ts](../../../packages/server/src/agents/openai-chat-format.ts)
 - Anthropic-family body helpers: [packages/server/src/agents/anthropic-request.ts](../../../packages/server/src/agents/anthropic-request.ts)
 - Manifest examples: [packages/server/templates/models/](../../../packages/server/templates/models/)
-- Models registry loader: [packages/server/src/config.ts](../../../packages/server/src/config.ts) (`getModelsRegistry`)
+- Models registry loader: [packages/server/src/config.ts](../../../packages/server/src/config.ts) (`getModelsRegistry`), merge rule in [packages/server/src/models/registry.ts](../../../packages/server/src/models/registry.ts), hub installer in [models/install.ts](../../../packages/server/src/models/install.ts), live reload in [models/watcher.ts](../../../packages/server/src/models/watcher.ts)
 - Architecture context: [design/architecture.md#modelruntime](../design/architecture.md#modelruntime--llm-interaction-layer-provider-agnostic)
 - Agent lifecycle context: [design/agent.md#agent-instance](../design/agent.md#agent-instance)
