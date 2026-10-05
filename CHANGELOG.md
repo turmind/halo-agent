@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Chat: every user message is now a single row — time plus a one-line preview. A message with line breaks, or too long for the row, gets an expand arrow and is cut by width with `…` (instead of after 20 characters); a message that fits shows a `·` in the arrow's place, so the times line up.
+
 ## [1.5.7] - 2026-10-04
 
 ### Changed

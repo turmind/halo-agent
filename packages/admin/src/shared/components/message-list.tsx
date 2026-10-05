@@ -570,16 +570,34 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
   const tr = useT()
   const { text, media } = useMemo(() => parseMediaMarkers(content), [content])
   const [zoom, setZoom] = useState<string | null>(null)
-  // Collapsed long messages hide the body entirely (height 0, not
-  // display:none — useCollapsible must still measure scrollHeight); the
-  // header's preview stands in for it, CompactSummary style.
-  const { contentRef, clamped, expanded, toggle, contentStyle } = useCollapsible(2, 0)
+  // Every message is one header row: marker · time · one-line preview. A
+  // message that has line breaks or overflows that row is expandable (▸, CSS
+  // ellipsis) and shows its full body below only when expanded; one that fits
+  // has nothing more to show (· keeps the time column aligned).
+  const [expanded, setExpanded] = useState(false)
+  const [overflow, setOverflow] = useState(false)
+  const previewRef = useRef<HTMLSpanElement>(null)
+  const lines = text.trim().split('\n')
+  const multiline = lines.length > 1
+  const preview = (multiline ? `${lines[0].trim()}…` : lines[0].trim()) || (media.length > 0 || localImages?.length ? '(attachment)' : '')
+  const expandable = multiline || overflow
+  // ResizeObserver, not a one-shot measure: the chat panel may be display:none
+  // at mount (width 0), and the row width follows the window. The marker
+  // column is fixed-width, so toggling it never feeds back into the measure.
+  useEffect(() => {
+    const el = previewRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      const next = el.scrollWidth > el.clientWidth
+      setOverflow((prev) => prev === next ? prev : next)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [preview])
   // Send time, browser-local HH:mm; full date on hover.
   const sent = new Date(timestamp)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
-  const flat = text.replace(/\s+/g, ' ').trim()
-  const chars = Array.from(flat)
-  const preview = chars.length > 20 ? `${chars.slice(0, 20).join('')}…` : flat
+  const textCls = deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]'
 
   return (
     <>
@@ -598,28 +616,28 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
           )}
           <ExchangeActions copyText={text} userOrdinal={userOrdinal} deleted={deleted} messageId={messageId} deletable={deletable} />
         </div>
-        {/* Header row: whole row toggles when the body is clamped. Actions
-            overlay it as absolute siblings (button-in-button is invalid). */}
+        {/* Header row: whole row toggles when expandable. Actions overlay it
+            as absolute siblings (button-in-button is invalid). */}
         <button
-          onClick={toggle}
-          disabled={!clamped}
+          onClick={() => setExpanded((v) => !v)}
+          disabled={!expandable}
           className={cn('flex w-full min-w-0 items-center gap-1.5 text-left', deleted || sendFailed ? 'pr-32' : 'pr-14')}
         >
-          {clamped && (expanded
-            ? <ChevronDown className="h-3 w-3 shrink-0 text-[var(--muted-foreground)]" />
-            : <ChevronRight className="h-3 w-3 shrink-0 text-[var(--muted-foreground)]" />)}
+          <span className="flex w-3 shrink-0 justify-center text-[var(--muted-foreground)]">
+            {!expandable ? '·' : expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          </span>
           <span className="shrink-0 text-[10px] font-mono text-[var(--muted-foreground)] opacity-70" title={sent.toLocaleString()}>
             {pad2(sent.getHours())}:{pad2(sent.getMinutes())}
           </span>
-          {clamped && !expanded && (
-            <span className={cn('truncate text-xs', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>{preview}</span>
-          )}
+          {/* Stays mounted while expanded (just invisible) so the overflow
+              measure keeps tracking the row width. */}
+          <span ref={previewRef} className={cn('min-w-0 truncate text-xs', textCls, expanded && expandable && 'invisible')}>{preview}</span>
         </button>
-        <div ref={contentRef} style={contentStyle} className={cn(clamped && !expanded ? '' : 'mt-1')}>
-          <div className={cn('text-xs leading-relaxed whitespace-pre-wrap', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
-            {text || (media.length > 0 || localImages?.length ? '(attachment)' : '')}
+        {expanded && expandable && (
+          <div className="mt-1 max-h-[40vh] overflow-y-auto">
+            <div className={cn('text-xs leading-relaxed whitespace-pre-wrap', textCls)}>{text}</div>
           </div>
-        </div>
+        )}
       </div>
       {/* Client-only inline previews (e.g. desktop screen captures) — render
           straight from the data URL, click to zoom. */}
