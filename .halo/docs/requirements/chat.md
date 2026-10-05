@@ -97,7 +97,7 @@ When `contextEnabled` is on (default), user messages are auto-prepended with:
 - Clipboard paste
 - File-picker button
 
-Images ride along as base64; multimodal supported. Pasted images are also persisted to `<workspace>/.halo/assets/web/inbound/web/<date>/` so a `[图片已保存: /abs/path]` marker survives page reload and renders as a click-to-preview chip (shared with the WeChat channel's inbound media flow).
+Images ride along as base64; multimodal supported. Before sending, every attachment is downscaled (long edge ≤ 1568) and re-encoded as JPEG; an SVG is rasterized the same way (long edge 1024, on white), since vision input only takes jpeg / png / gif / webp. An image the browser can't decode (e.g. HEIC / TIFF in Chrome) and that isn't one of those four is refused when attached, with an inline notice naming the file — it is never sent only to be dropped server-side. Pasted images are also persisted to `<workspace>/.halo/assets/web/inbound/web/<date>/` so a `[图片已保存: /abs/path]` marker survives page reload and renders as a click-to-preview chip (shared with the WeChat channel's inbound media flow).
 
 ### Inline media chips
 Any message containing `[图片/视频/语音/文件 已保存: /path]` markers (WeChat + web) or a leading `MEDIA: /path` line (agent-emitted, e.g. from `wechat-send`) renders a compact chip with filename + icon. Clicking opens a full-size preview modal (image/video/audio inline, file → download link). The modal has a Download button (top-right, next to close) for image/video/audio; the media URL carries a per-open cache-buster (`&t=<timestamp>`) so overwritten files (same path, new bytes) always show current content. Paths inside the active workspace or under the OS temp dir (`/tmp/`) are previewable; everything else degrades to a non-clickable chip.

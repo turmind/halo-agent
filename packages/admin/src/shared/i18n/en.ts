@@ -231,6 +231,7 @@ export const en: Record<string, string> = {
   'chat.imageSent': '[Sent {n} image(s)]',
   'chat.sendFailed': 'Send failed — the server never confirmed receipt. Please resend.',
   'chat.sendFailedBadge': 'send failed',
+  'chat.attachUnsupported': "Can't attach {names}: the model doesn't take this image format and the browser can't convert it. Convert to png or jpg first.",
   'chat.interrupted': 'No response received — the connection may have dropped. Resend if needed.',
   'chat.window.showEarlier': 'Show earlier messages ({count} more in this session)',
   'chat.archive.loadOlder': 'Load earlier messages',

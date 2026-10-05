@@ -29,38 +29,72 @@ function rawFileToBase64(file: File): Promise<string> {
 // bandwidth and tokens. 1568 is Anthropic's documented max useful edge.
 const IMG_MAX_EDGE = 1568
 const IMG_JPEG_QUALITY = 0.85
+// What the model accepts as vision input (server VISION_IMAGE_MIME_TYPES).
+// Anything else must be re-encoded here or it is dropped server-side.
+const VISION_MIME = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+// Long edge an svg is rasterized at. Vector, so scale is free — and a sizeless
+// svg reports a tiny default (Chrome 150×150, others 0×0), too small to read.
+const SVG_RASTER_EDGE = 1024
+
+/** Decode a File for canvas drawing. createImageBitmap rejects svg (vector,
+ *  no intrinsic bitmap), so svg goes through an <img> and is sized to
+ *  SVG_RASTER_EDGE on its long side, keeping its aspect. */
+async function decodeImage(file: File): Promise<{ source: CanvasImageSource; width: number; height: number; close: () => void }> {
+  if (file.type !== 'image/svg+xml') {
+    const bitmap = await createImageBitmap(file)
+    return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() }
+  }
+  const url = URL.createObjectURL(file)
+  try {
+    const img = new Image()
+    img.src = url
+    await img.decode()
+    const nw = img.naturalWidth || 1, nh = img.naturalHeight || 1
+    const k = SVG_RASTER_EDGE / Math.max(nw, nh)
+    return { source: img, width: Math.round(nw * k), height: Math.round(nh * k), close: () => {} }
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
 
 /**
  * Convert an image File to a compressed base64 JPEG (no data URL prefix):
  * decode → downscale so the long edge ≤ IMG_MAX_EDGE → re-encode as JPEG 0.85.
  * This is the single choke point for every attachment path (file picker, drag,
- * paste), matching the camera/screenshot compression. Falls back to the raw
- * bytes if the browser can't decode it (non-raster, decode error) so we never
- * silently drop an attachment. Returns { base64, mimeType }.
+ * paste), matching the camera/screenshot compression. svg is rasterized the
+ * same way (on white — JPEG has no alpha). If the browser can't decode it, the
+ * original bytes go out only when the model accepts that type as-is; any other
+ * type throws (addFiles already refused it with a notice). Returns { base64, mimeType }.
  */
 async function fileToBase64(file: File): Promise<{ base64: string; mimeType: string }> {
-  if (!file.type.startsWith('image/')) {
-    return { base64: await rawFileToBase64(file), mimeType: file.type || 'application/octet-stream' }
-  }
   try {
-    const bitmap = await createImageBitmap(file)
-    const scale = Math.min(1, IMG_MAX_EDGE / Math.max(bitmap.width, bitmap.height))
-    const w = Math.max(1, Math.round(bitmap.width * scale))
-    const h = Math.max(1, Math.round(bitmap.height * scale))
+    const img = await decodeImage(file)
+    const scale = Math.min(1, IMG_MAX_EDGE / Math.max(img.width, img.height))
+    const w = Math.max(1, Math.round(img.width * scale))
+    const h = Math.max(1, Math.round(img.height * scale))
     const canvas = document.createElement('canvas')
     canvas.width = w; canvas.height = h
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('no 2d context')
-    ctx.drawImage(bitmap, 0, 0, w, h)
-    bitmap.close()
+    if (file.type === 'image/svg+xml') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h) }
+    ctx.drawImage(img.source, 0, 0, w, h)
+    img.close()
     const dataUrl = canvas.toDataURL('image/jpeg', IMG_JPEG_QUALITY)
     const base64 = dataUrl.split(',')[1]
     if (!base64) throw new Error('encode failed')
     return { base64, mimeType: 'image/jpeg' }
-  } catch {
+  } catch (err) {
     // Decode/encode failed — send the original rather than lose the image.
-    return { base64: await rawFileToBase64(file), mimeType: file.type || 'image/png' }
+    if (VISION_MIME.includes(file.type)) return { base64: await rawFileToBase64(file), mimeType: file.type }
+    throw err
   }
+}
+
+/** Can this attachment reach the model? Accepted types always can (raw
+ *  fallback); anything else only if the browser decodes it for re-encoding. */
+async function isSendableImage(file: File): Promise<boolean> {
+  if (VISION_MIME.includes(file.type)) return true
+  try { (await decodeImage(file)).close(); return true } catch { return false }
 }
 
 /** Desktop-shell capture bridge (preload injects it). Undefined in a browser. */
@@ -679,6 +713,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   const [mentionIndex, setMentionIndex] = useState(0)
   const [cursorPos, setCursorPos] = useState(0)
   const [mentionDismissed, setMentionDismissed] = useState(false)
+  const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const activeProject = useProjectStore((s) => s.activeProject)
@@ -862,14 +897,20 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     // Chat attachments are images only — they go to the model as vision input.
     // Real file uploads have their own entry points (file explorer / editor),
     // so drag/paste of non-images here is dropped rather than silently dumped
-    // into the workspace root.
+    // into the workspace root. An image the model can't take and the browser
+    // can't re-encode (heic / tiff in Chrome …) is refused here with a notice
+    // instead of being sent and silently dropped server-side.
     const files = Array.from(fileList).filter((f) => f.type.startsWith('image/'))
-    const newPending: PendingFile[] = files.map((file) => ({
-      file,
-      preview: URL.createObjectURL(file),
-    }))
-    setPendingFiles((prev) => [...prev, ...newPending])
-  }, [])
+    void Promise.all(files.map(isSendableImage)).then((ok) => {
+      const rejected = files.filter((_, i) => !ok[i])
+      setAttachNotice(rejected.length > 0 ? t('chat.attachUnsupported', { names: rejected.map((f) => f.name).join(', ') }) : null)
+      const newPending: PendingFile[] = files.filter((_, i) => ok[i]).map((file) => ({
+        file,
+        preview: URL.createObjectURL(file),
+      }))
+      if (newPending.length > 0) setPendingFiles((prev) => [...prev, ...newPending])
+    })
+  }, [t])
 
   const removeFile = useCallback((index: number) => {
     setPendingFiles((prev) => {
@@ -1046,6 +1087,13 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
 
       <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden"
         onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
+
+      {attachNotice && (
+        <div className="mb-1 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
+          <span className="flex-1">{attachNotice}</span>
+          <button onClick={() => setAttachNotice(null)} className="shrink-0 rounded p-0.5 hover:bg-amber-500/20"><X className="h-3 w-3" /></button>
+        </div>
+      )}
 
       {/* Unified input container */}
       <div className={cn(

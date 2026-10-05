@@ -231,6 +231,7 @@ export const zh: Record<string, string> = {
   'chat.imageSent': '[已发送 {n} 张图片]',
   'chat.sendFailed': '发送失败——服务器未确认收到这条消息,请重新发送。',
   'chat.sendFailedBadge': '发送失败',
+  'chat.attachUnsupported': '无法发送：{names}。这种图片格式模型不认，浏览器也转不了，请转成 png 或 jpg 再发。',
   'chat.interrupted': '未收到响应——连接可能已断开,如有需要请重发。',
   'chat.window.showEarlier': '显示更早的消息（本会话还有 {count} 轮）',
   'chat.archive.loadOlder': '加载更早的消息',

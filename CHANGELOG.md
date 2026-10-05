@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Chat: every user message is now a single row — time plus a one-line preview. A message with line breaks, or too long for the row, gets an expand arrow and is cut by width with `…` (instead of after 20 characters); a message that fits shows a `·` in the arrow's place, so the times line up.
 
+### Fixed
+
+- Chat: an SVG attached in the admin chat (picker, drag or paste) is now converted to an image the model can see, instead of being dropped with a "format not supported" note. An image the browser can't convert either (e.g. HEIC in Chrome) is refused when attached, with a notice to convert it to png or jpg.
+
 ## [1.5.7] - 2026-10-04
 
 ### Changed
