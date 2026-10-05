@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Face: the agent can show an image on its face (`self.show(path, ms)`, and a `show` beat in `self.play()` so a sequence of pictures plays in order). The dots fly in and gather into the picture's outline, the real image fades in over them, holds (default 6 s, or until the next scene / a click), and fades out as the dots dissolve back. Supports png / jpg / webp / gif / svg; for a diagram the agent writes an SVG and shows that. Combines with `self.voice()` for a talking picture book.
+
 ### Changed
 
 - Chat: every user message is now a single row — time plus a one-line preview. A message with line breaks, or too long for the row, gets an expand arrow and is cut by width with `…` (instead of after 20 characters); a message that fits shows a `·` in the arrow's place, so the times line up.

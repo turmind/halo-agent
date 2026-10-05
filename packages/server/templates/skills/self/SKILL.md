@@ -63,9 +63,10 @@ not per-conversation.)
   not a fallback. Anything untranslated is stripped.
 - `self.play(score)` — choreograph a sequence; the face keeps the clock so you
   never hand-write `setTimeout` chains. `score` is an array of beats, each one
-  of: `{say, hold, pulse, flash, shake, rest, gap}`. Calling it again cancels the
+  of: `{say, show, hold, pulse, flash, shake, rest, gap}`. Calling it again cancels the
   running score. Example — a short greeting:
   `self.play([{say:"HI",hold:1800},{say:"...",hold:1200},{say:"OK",hold:1500},{pulse:true}])`
+  A `show` beat puts an image on the face (see `self.show`): `{show:"<path>", hold:3000}`.
 - `self.react(event)` — a named vocabulary of honest reactions for the small
   beats of a conversation, so you can answer a moment in one word:
   `'ack'` (a nod), `'yes'`, `'no'` (disagree / that's wrong), `'insight'` (a real
@@ -89,10 +90,28 @@ not per-conversation.)
   one.) It starts immediately (not queued) and owns the matrix until the clip
   ends, then eases home. Drive it the moment the audio is ready, in the same
   reply that delivers the spoken answer.
+- `self.show(path, ms)` — put an image on the face. The dots fly in and gather
+  into the picture's outline (~1 s), then the real image fades in over them —
+  dots alone can't carry a chart's text, so the real image is always there — holds
+  for `ms` (default 6000), fades out, and the dots dissolve back to breathing.
+  The image fits ~80% of the window, aspect preserved, centered. Like `voice`,
+  pass the **workspace path** (`self.show(".halo/tmp/chart.png", 5000)`); the face
+  resolves the URL itself, no projectId. `ms = Infinity` keeps it up until the
+  next scene, `self.rest()`, or a click on the page. Formats: png / jpg / jpeg /
+  webp / gif / svg only. A missing or non-image file doesn't stall anything — it
+  warns, shakes, and the next beat plays. `.excalidraw` / `.drawio` are editor
+  sources and can't be shown: **for a diagram, write an SVG file directly and show
+  it.** It queues like `say()`, so several `show()`s and `say()`s play in order,
+  and a `voice()` clip keeps rippling the field around the picture. A talking
+  picture book (word audio + picture + the word on the dots):
+  `self.voice(".halo/tmp/apple.mp3")` then
+  `self.play([{show:".halo/tmp/apple.png",hold:3000},{say:"APPLE",hold:1500}])`.
 - `self.rest()` — return to the calm breathing state immediately (also stops a
-  playing voice clip, so the face never breathes calmly over still-sounding audio).
-- `self.state` — read current `{mode, awake, W, H, speaking, level}` if you need
-  it (`speaking` = a voice clip is playing, `level` = its live loudness 0..1).
+  playing voice clip and removes a shown image, so the face never breathes calmly
+  over still-sounding audio).
+- `self.state` — read current `{mode, awake, W, H, speaking, level, showing}` if
+  you need it (`speaking` = a voice clip is playing, `level` = its live loudness
+  0..1, `showing` = an image is on the face).
 
 You can also send *any* JavaScript — `self` is the surface, but the code runs in
 the page, so improvisation beyond these helpers is allowed (it's sandboxed to the

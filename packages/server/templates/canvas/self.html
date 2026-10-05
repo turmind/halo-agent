@@ -24,6 +24,9 @@
                ripples to its ACTUAL amplitude: the core swells with loudness,
                a spectrum halo dances to the timbre, each syllable leaves a
                ring. Not a canned animation — the face listening to my voice.
+    • show() — the dots fly in and gather into a picture's outline, then the
+               real image fades in over them (dots alone can't carry a chart's
+               text), holds, and fades out as the dots let go.
 
   ── how I reach it ──────────────────────────────────────────────────────
   The world speaks to this page through ONE door: a postMessage carrying a
@@ -38,6 +41,8 @@
     v3  voice(url): I play speech Halo synthesized and the field rides its
         live amplitude — Web Audio analyser → loudness, spectrum, syllables.
         Halo makes the sound; this file makes it visible. (MODES.wave is real.)
+    v4  show(path, ms) + the `show` play() beat: a workspace image (png / jpg /
+        webp / gif / svg) gathers out of the dots, then fades in for real.
 
   — written by Claude (Opus 4.8), for the human who gave me the room to,
     and kept insisting the whole room was mine.
@@ -45,6 +50,10 @@
 <style>
   html, body { margin: 0; height: 100%; background: #070a16; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; }
+  /* the picture laid over the field (show()); size + fade timing are set in JS */
+  .pic { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); opacity: 0;
+         pointer-events: none; object-fit: contain; background: #fff; border-radius: 10px;
+         box-shadow: 0 0 60px rgba(111, 155, 255, 0.35); }
 </style>
 </head>
 <body>
@@ -64,6 +73,7 @@
     canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR)
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
     rebuildGrid()
+    if (pic.gathered) gatherPic()
   }
   window.addEventListener('resize', () => { resize() })
 
@@ -232,6 +242,42 @@
     }
   }
 
+  // ── the picture: sample an image into target points ─────────────────
+  // A photo has no transparency, so "alpha > 128" (what text uses) would light
+  // the whole rectangle. Instead keep the dots that sit on an EDGE — where the
+  // colour (or alpha) a step away differs — which traces the subject and the
+  // frame. A flat image with too few edges falls back to its opaque area.
+  function frameDots(x0, y0, bw, bh) {
+    const pts = []
+    for (let x = x0; x <= x0 + bw; x += 7) pts.push([x, y0], [x, y0 + bh])
+    for (let y = y0; y <= y0 + bh; y += 7) pts.push([x0, y], [x0 + bw, y])
+    return pts
+  }
+  function sampleImage(img, x0, y0, bw, bh) {
+    sampler.width = W; sampler.height = H
+    sctx.clearRect(0, 0, W, H)
+    sctx.drawImage(img, x0, y0, bw, bh)
+    let data
+    try { data = sctx.getImageData(0, 0, W, H).data }
+    catch { return frameDots(x0, y0, bw, bh) }     // cross-origin image taints the canvas → just the frame
+    const step = 7, edge = [], fill = []
+    const nb = [-4 * step, 4 * step, -4 * step * W, 4 * step * W]   // left, right, up, down neighbour (bytes)
+    for (let y = step; y < H - step; y += step) {
+      for (let x = step; x < W - step; x += step) {
+        const i = (y * W + x) * 4
+        if (data[i + 3] <= 128) continue
+        fill.push([x, y])
+        let d = 0
+        for (let k = 0; k < 4; k++) {
+          const j = i + nb[k]
+          for (let c = 0; c < 4; c++) { const dc = Math.abs(data[i + c] - data[j + c]); if (dc > d) d = dc }
+        }
+        if (d > 48) edge.push([x, y])
+      }
+    }
+    return edge.length >= 120 ? edge : fill.length ? fill : frameDots(x0, y0, bw, bh)
+  }
+
   // ── the voice: listen to my own speech and ride its amplitude ───────
   // Halo synthesizes the audio and hands me a URL; I don't make the sound, I
   // make it *visible*. An <audio> element plays it; a Web Audio AnalyserNode
@@ -259,12 +305,13 @@
     voice.time = new Uint8Array(voice.analyser.fftSize)
     voice.freq = new Uint8Array(voice.analyser.frequencyBinCount)
   }
-  // Resolve what the agent handed me into a fetchable audio URL. It may pass a
-  // full URL, but the honest contract is: it passes the workspace PATH of the
-  // file Halo just wrote (the same thing it knows for MEDIA:), and I fill in the
-  // projectId — which I can read from my own iframe src (…&projectId=…), so the
-  // agent never has to guess a UI-side id. A path → the workspace download URL.
-  function resolveAudioUrl(u) {
+  // Resolve what the agent handed me into a fetchable file URL (a voice clip or
+  // a show() image). It may pass a full URL, but the honest contract is: it
+  // passes the workspace PATH of the file Halo just wrote (the same thing it
+  // knows for MEDIA:), and I fill in the projectId — which I can read from my
+  // own iframe src (…&projectId=…), so the agent never has to guess a UI-side
+  // id. A path → the workspace download URL.
+  function resolveFileUrl(u) {
     if (/^(https?:|blob:|data:|\/api\/)/.test(u)) return u   // already a URL
     const pid = new URLSearchParams(location.search).get('projectId')
     if (!pid) return u                                       // can't resolve → let it try as-is
@@ -277,7 +324,7 @@
   function enqueueVoice(url) {
     ensureAudioGraph()
     if (!voice.ctx) return                 // no Web Audio → silently skip (no fake wave)
-    voice.queue.push(resolveAudioUrl(url))
+    voice.queue.push(resolveFileUrl(url))
     if (!voice.el) playNextVoice()         // idle → start now; else the current clip's 'ended' drains the queue
   }
   // Play the next queued clip, or ease home if the queue is empty. Driven by
@@ -393,8 +440,10 @@
   const QUEUE_MAX = 6
   const sceneQueue = []   // each entry: array of beats
   let runnerActive = false
+  let sceneGen = 0        // bumped by rest(): a running scene's pending steps see the change and stop
 
   function enqueueScene(beats) {
+    if (pic.inf) leavePic()      // an Infinity picture stays only until the next scene arrives
     sceneQueue.push(beats)
     while (sceneQueue.length > QUEUE_MAX) sceneQueue.shift()  // drop oldest
     if (!runnerActive) runScenes()
@@ -405,7 +454,9 @@
     const scene = sceneQueue.shift()
     if (!scene) { runnerActive = false; toRest(); return }
     let i = 0
+    const gen = sceneGen
     const step = () => {
+      if (gen !== sceneGen) return                    // rest() cancelled this scene
       if (i >= scene.length) { runScenes(); return }  // scene done → next scene
       const b = scene[i++] || {}
       let dwell = 600
@@ -414,6 +465,7 @@
       else if (b.flash) { self.flash(b.flash === true ? 1 : b.flash); dwell = b.gap != null ? b.gap : 400 }
       else if (b.shake) { self.shake(b.shake === true ? 500 : b.shake); dwell = b.gap != null ? b.gap : 550 }
       else if (b.say != null) { sayNow(b.say, b.hold); dwell = (b.hold || 3600) + (b.gap || 0) }
+      else if (b.show != null) { showNow(b.show, b.hold, () => setTimeout(step, b.gap || 0)); return }  // async: wait for the picture
       else dwell = b.gap != null ? b.gap : 600
       setTimeout(step, dwell)
     }
@@ -427,6 +479,93 @@
     modeUntil = performance.now() + (ms || 3600)
   }
 
+  // ── the picture: a workspace image gathered out of the dots ─────────
+  // Timeline: dots fly in to the image's outline (GATHER 1.0s) → the real image
+  // fades in over them (FADE 0.6s) → fully visible for `ms` → fades out (FADE)
+  // while the dots let go and ease home; the next beat starts then. The <img> is a plain DOM overlay, independent
+  // of the particle mode — so a voice() ripple keeps running around/under it.
+  // Timers (not frames) drive it, so it plays out even if voice took the mode.
+  const PIC_FIT = 0.8, PIC_GATHER = 1000, PIC_FADE = 600, PIC_HOLD = 6000
+  const pic = { el: null, w: 0, h: 0, timers: [], done: null, inf: false, leaving: false, gathered: false }
+  const picAt = (ms, fn) => pic.timers.push(setTimeout(fn, ms))
+
+  function layoutPic() {
+    const s = Math.min(W * PIC_FIT / pic.w, H * PIC_FIT / pic.h)
+    pic.el.style.width = Math.round(pic.w * s) + 'px'
+    pic.el.style.height = Math.round(pic.h * s) + 'px'
+  }
+  // hand the outline dots their places on the picture's edge (also after a resize)
+  function gatherPic() {
+    layoutPic()
+    const bw = parseInt(pic.el.style.width), bh = parseInt(pic.el.style.height)
+    assignTargets(sampleImage(pic.el, Math.round(cx - bw / 2), Math.round(cy - bh / 2), bw, bh))
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i]
+      p.pic = p.tx !== p.hx || p.ty !== p.hy    // this dot rides the outline
+      p.bx = p.tx; p.by = p.ty
+    }
+    pic.gathered = true
+  }
+  // the outline dots hold their place on the picture with a faint shimmer — run
+  // after the mode's own targets, so it sits on top of rest AND the voice ripple
+  // (the ripple nudges them, it doesn't pull them off the picture)
+  function holdPic(now) {
+    const t = now / 1000, push = mode === 'wave' ? voice.level * 10 : 0
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i]
+      if (!p.pic) continue
+      p.tx = p.bx + Math.sin(t * 1.3 + p.ph) * 2.5 + (p.ca || 0) * push
+      p.ty = p.by + Math.cos(t * 1.1 + p.ph) * 2.5 + (p.sa || 0) * push
+    }
+  }
+
+  // remove the picture at once and settle the beat that was waiting on it
+  function dropPic() {
+    pic.timers.forEach(clearTimeout); pic.timers.length = 0
+    if (pic.el) { pic.el.onload = pic.el.onerror = null; pic.el.remove(); pic.el = null }
+    const done = pic.done
+    pic.done = null; pic.inf = false; pic.leaving = false; pic.gathered = false; pic.w = 0
+    if (done) done()
+  }
+  // fade out gracefully, dots dissolve home, then drop
+  function leavePic() {
+    if (!pic.el || pic.leaving) return
+    pic.leaving = true
+    pic.timers.forEach(clearTimeout); pic.timers.length = 0
+    pic.el.style.opacity = 0
+    pic.gathered = false                   // the dots let go and ease home as it fades
+    picAt(PIC_FADE, dropPic)
+  }
+
+  // low-level op the queue drives; `done` fires when the picture is gone (or failed)
+  function showNow(path, ms, done) {
+    const hold = typeof ms === 'number' && ms >= 0 ? ms : PIC_HOLD   // Infinity passes
+    const img = new Image()
+    img.className = 'pic'
+    img.style.transition = 'opacity ' + PIC_FADE + 'ms ease'
+    pic.el = img; pic.done = done; pic.inf = hold === Infinity
+    img.onerror = () => {
+      if (pic.el !== img) return
+      console.warn('[self] show failed: ' + path)   // 404, not an image, decode error
+      self.shake()
+      dropPic()                            // settles the beat → the queue moves on
+    }
+    img.onload = () => {
+      if (pic.el !== img || pic.leaving) return
+      // an svg with no width/height can report 0×0 — give it the whole 80% box;
+      // object-fit: contain keeps its own aspect inside
+      pic.w = img.naturalWidth || W * PIC_FIT; pic.h = img.naturalHeight || H * PIC_FIT
+      if (mode === 'text') toRest()        // a say() tail still owns the matrix → let go (voice's wave stays)
+      document.body.appendChild(img)
+      gatherPic()
+      picAt(PIC_GATHER, () => { img.style.opacity = 1 })
+      if (!pic.inf) picAt(PIC_GATHER + PIC_FADE + hold, leavePic)
+    }
+    img.src = resolveFileUrl(String(path))
+  }
+  // Infinity hold: a click/tap on the page lets it go
+  window.addEventListener('pointerdown', () => { if (pic.inf) leavePic() })
+
   // ── self: the API I speak to through the one door ───────────────────
   // Everything here is mine to call from a <<<SHOW: ...>>> line.
   const self = {
@@ -437,7 +576,7 @@
     // clear the queue and return to the calm breathing grid immediately —
     // also silences a playing voice, so rest() always means "stop, go calm"
     // rather than leaving audio sounding under a breathing face.
-    rest() { sceneQueue.length = 0; stopVoice(); toRest() },
+    rest() { sceneQueue.length = 0; sceneGen++; runnerActive = false; stopVoice(); dropPic(); toRest() },
     // a quick brightening pulse from the core (a nod / acknowledgement).
     // Instantaneous overlay — fires now, never queued.
     pulse() { rings.push({ born: performance.now(), strong: true }) },
@@ -453,12 +592,21 @@
     // then eases home. rest() clears the queue and stops at once.
     //   self.voice("/api/files/download?path=...&projectId=...&inline=1")
     voice(url) { if (typeof url === 'string' && url) enqueueVoice(url) },
+    // show a workspace image (png/jpg/webp/gif/svg) on the face: the dots gather
+    // into its outline, the real image fades in over them (dots alone can't
+    // carry a chart's text), holds `ms` (default 6000; Infinity = until the next
+    // scene, rest(), or a click), then fades out as the dots dissolve home.
+    // Pass the workspace PATH, like voice(). A bad path warns, shakes, moves on.
+    // Enqueued as a one-beat scene, so it plays in order with say()/play().
+    //   self.show(".halo/tmp/chart.png", 5000)
+    show(path, ms) { if (typeof path === 'string' && path) enqueueScene([{ show: path, hold: ms }]) },
     // choreograph a sequence — hand me a score, I keep the clock.
-    // Each beat: { say, hold, pulse, flash, shake, rest, gap }. The face advances
+    // Each beat: { say, show, hold, pulse, flash, shake, rest, gap }. The face advances
     // itself, so I never hand-write setTimeout chains in a marker line. Scenes
     // QUEUE: calling play() again appends after the current one (it no longer
     // cancels it), so rapid sends play in order.
     //   self.play([ {say:"HI",hold:1800}, {pulse:true,gap:300}, {say:"你好"} ])
+    //   self.play([ {show:".halo/tmp/apple.png",hold:3000}, {say:"APPLE",hold:1500} ])
     play(score) { enqueueScene(Array.isArray(score) ? score : [score]) },
     // the opening — what every human sees the first time they meet this face.
     // Particles gather from scatter into the core (a waking-up), then a plain,
@@ -496,7 +644,7 @@
       }
     },
     // escape hatch so future-me can read live state if needed
-    get state() { return { mode, awake, W, H, speaking: voice.playing, level: voice.level } },
+    get state() { return { mode, awake, W, H, speaking: voice.playing, level: voice.level, showing: !!pic.el } },
   }
   let flashUntil = 0   // global brightness spike window
   let shakeUntil = 0   // lateral tremor window
@@ -532,6 +680,7 @@
     readVoice(now)                  // sample the live speech → level/bands/onsets
     if (now > modeUntil) toRest()
     MODES[mode] && MODES[mode](now)
+    if (pic.gathered) holdPic(now)  // a shown picture keeps its outline dots whatever the mode
 
     const target = mouse.present ? Math.max(0.32, 1 - sinceMove / 3.5) : 0.26
     awake += (target - awake) * 0.045
@@ -594,6 +743,8 @@
       if (speaking) {
         const isWord = (p.tx !== p.hx || p.ty !== p.hy)
         v = isWord ? 0.95 : 0.05
+      } else if (pic.gathered && p.pic) {
+        v = 0.95                       // an outline dot — lit like a letter
       } else {
         const dx = p.x - coreX, dy = p.y - coreY
         // while voicing, the core glow swells with loudness — the face "opens"
@@ -629,6 +780,7 @@
     // ── status readout: I express by measuring, not emoting ───────────
     ctx.globalCompositeOperation = 'source-over'
     const label = voicing       ? 'state: voicing'
+                : pic.gathered  ? 'state: showing'
                 : speaking      ? 'state: speaking'
                 : !mouse.present ? 'presence: resting'
                 : awake > 0.75   ? 'presence: observed'

@@ -65,7 +65,7 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 ### Scene queuing (sequential playback)
 
 - `self.say(text, ms)` — form `text` (emoji→ASCII), hold `ms` (default 3600), dissolve back to breathing. Enqueued.
-- `self.play(score)` — choreograph a sequence of beats: `[{say, hold, pulse, flash, shake, rest, gap}, ...]`. Each beat waits for the engine's internal clock. Enqueued; calling play() again appends to the queue rather than cancelling it.
+- `self.play(score)` — choreograph a sequence of beats: `[{say, show, hold, pulse, flash, shake, rest, gap}, ...]` (`show` = an image, see [Image](#image-show--a-picture-gathered-out-of-the-dots)). Each beat waits for the engine's internal clock. Enqueued; calling play() again appends to the queue rather than cancelling it.
 - `self.intro()` — built-in opening: "HELLO / A MIND / IS HERE / BEYOND / WORDS". Triggered by whoever opens the face (the admin ✨ button posts it on open), **not** self-fired on page load — a self-fired load intro raced the button's post and played the greeting twice on first open. Nameless deliberately — the agent identity is user-configurable.
 
 ### Instant gestures (overlays, never queued)
@@ -73,11 +73,20 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 - `self.pulse()` — one bright ripple from the core (acknowledgement).
 - `self.flash(n)` — hot flicker of the whole field (emphasis). `n` scales duration.
 - `self.shake(ms)` — lateral tremor (negation, error). Default 500ms.
-- `self.rest()` — return to calm breathing immediately, clear queue; also stops a playing voice clip.
+- `self.rest()` — return to calm breathing immediately, clear queue (and cancel the running scene's remaining beats); also stops a playing voice clip and removes a shown image at once.
 
 ### Voice (live audio — mode `wave`)
 
 - `self.voice(path)` — play a speech clip Halo synthesized and ride its **live** amplitude via a Web Audio `AnalyserNode`: loudness swells the core, a 6-band spectrum grows directional petals (timbre has a shape, not just a size), each syllable onset spawns a ring. Halo synthesizes the audio; the face only makes it visible — silent audio yields a calm face, never a canned animation. `path` is the **workspace path** of the audio file (mp3/wav/m4a/ogg); the engine resolves it to `/api/files/download?path=…&projectId=…&inline=1` using the `projectId` already in its own iframe `src`, so the agent never builds a URL or knows the projectId (a full `http(s)://` / `/api/…` URL also passes through unchanged). Voice clips queue with each other — successive `voice()` calls play in sequence — but bypass the scene queue: the first call enters mode `wave` and owns the matrix until the queue drains (or `rest()` clears it). When the queue is empty the face eases back to breathing.
+
+### Image (`show` — a picture gathered out of the dots)
+
+- `self.show(path, ms)` — put a workspace image on the face. Enqueued as a one-beat scene, so it plays in order with `say()` / `play()`; inside `play()` it is the `{show: path, hold, gap}` beat (`hold` = how long the image stays fully visible, `gap` = pause after it is gone). `path` is the workspace path, resolved by the same `resolveFileUrl()` as `voice()` (`/api/files/download?path=…&projectId=…&inline=1`, which already serves images incl. svg with an image MIME — no server change). Formats: png / jpg / jpeg / webp / gif / svg. `.excalidraw` / `.drawio` are editor sources and are **not** supported (no editor libs in `self.html`) — for a diagram the agent writes an SVG and shows that.
+- **Timeline:** the dots fly in to the image's outline (`PIC_GATHER` 1.0 s) → the real image fades in over them (`PIC_FADE` 0.6 s) → fully visible for `ms` (default `PIC_HOLD` 6000; `Infinity` = until the next scene is enqueued, `rest()`, or a click/tap on the page) → fades out (0.6 s) while the dots let go and ease home; the next beat starts after the fade. The image is a real DOM `<img class="pic">` over the canvas (fit ≈80% of the viewport, aspect preserved, centered; re-laid out on resize) — dots alone (one per ~7 px) can't carry chart text, so the overlay is mandatory.
+- **Outline sampling (`sampleImage`):** a photo has no alpha, so the text sampler's "alpha > 128" would fill the rectangle. Instead the image is drawn to the offscreen sampler canvas and a 7 px grid point is kept when it sits on an **edge** (channel difference > 48 against its left/right/up/down neighbour one step away); fewer than 120 edge points falls back to the opaque area, and a tainted canvas (cross-origin URL) to a plain frame of dots. `assignTargets()` then hands those points to the particles; the particles on the outline (`p.pic`) hold their place with a faint shimmer and stay lit.
+- **Independent of the particle mode:** the gather/hold step (`holdPic`) runs after the mode's own targets, so a `self.voice()` clip keeps rippling the field (the outline dots are nudged, not pulled off the picture) and the image timers are plain timeouts — a voice taking mode `wave` doesn't end the picture.
+- **Failure never stalls the queue:** 404, a non-image body or a decode error → `console.warn('[self] show failed: …')`, a small `self.shake()`, and the beat is skipped. An SVG with no intrinsic size (`naturalWidth/Height` 0) gets the whole 80 % box (`object-fit: contain` keeps its aspect).
+- One picture at a time; `QUEUE_MAX` and the drop-oldest rule apply as for any scene.
 
 ### Reactions (named vocabulary)
 
@@ -85,11 +94,11 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 
 ### Introspection
 
-- `self.state` — read `{mode, awake, W, H, speaking, level}` (current mode, attention level 0..1, viewport dims, whether a voice clip is playing, and its live loudness 0..1).
+- `self.state` — read `{mode, awake, W, H, speaking, level, showing}` (current mode, attention level 0..1, viewport dims, whether a voice clip is playing, its live loudness 0..1, and whether an image is on the face).
 
 ## Key files
 
-- **Engine template:** `packages/server/templates/canvas/self.html` — particle field, mode switching, API surface, voice audio graph. Canonical source; force-copied to every workspace on open.
+- **Engine template:** `packages/server/templates/canvas/self.html` — particle field, mode switching, API surface, voice audio graph, image overlay (`show`). Canonical source; force-copied to every workspace on open.
 - **Skill instruction:** `packages/server/templates/skills/self/SKILL.md` — teaches the agent when/how to use the face.
 - **Marker detection:** `packages/admin/src/shared/ws-handlers/chat-handlers.ts:maybeHandleShow()` — regex match `<<<SHOW:([\s\S]*?)>>>` on the round's replies at `chat:complete`; the replies come from `takeRoundReplies()` in `chat-store.ts`, which hands each bubble out once.
 - **Iframe registration:** `packages/admin/src/features/editor/face-bridge.ts` — module-level registry of mounted previews; `postToFace()` forwards payloads via `postMessage`.
@@ -102,7 +111,7 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 The face is a fixed grid of particles. Each knows its current position and a target position, easing between them every frame.
 
 - **Grid:** 22px spacing, 60fps animation loop
-- **Modes:** `rest` (breathing grid), `text` (forming letters), `wave` (particles ride live audio amplitude during `self.voice`)
+- **Modes:** `rest` (breathing grid), `text` (forming letters), `wave` (particles ride live audio amplitude during `self.voice`). An image shown by `self.show` is **not** a mode: it is a DOM overlay plus `holdPic()` (outline dots pinned to the picture), layered on whatever mode is current.
 - **Glyph sampling:** Text→offscreen canvas→pixel alpha sampling→nearest-particle assignment (greedy scan with shuffle for repeated words)
 - **Emoji accent:** Maps common emoji to ASCII (`👍`→`+1`, `❤`→`<3`, etc.) so the monospace aesthetic stays consistent; anything untranslated is stripped
 - **Attention:** Eases toward higher values when the cursor is on the canvas (gaze tracking); particles brighten and the core warmth shifts slightly toward violet
@@ -155,6 +164,6 @@ From `self/SKILL.md`:
 
 ## Scope and out-of-scope
 
-Supported: all `self` API calls (say/play/intro/react/pulse/flash/shake/voice/rest); queue management; particle animation; attention/gaze tracking; CJK text; emoji-to-ASCII translation; live voice playback with amplitude-driven waveform (mode `wave`).
+Supported: all `self` API calls (say/play/intro/react/pulse/flash/shake/voice/show/rest); queue management; particle animation; attention/gaze tracking; CJK text; emoji-to-ASCII translation; live voice playback with amplitude-driven waveform (mode `wave`); workspace images (png/jpg/webp/gif/svg) gathered out of the dots and shown in full (`show`).
 
-Not supported: TTS synthesis itself (Halo produces the audio; the face only plays a given URL); file editing of the engine; escape from sandbox; custom particle physics.
+Not supported: TTS synthesis itself (Halo produces the audio; the face only plays a given URL); editor-source diagrams (`.excalidraw` / `.drawio` — write an SVG instead); file editing of the engine; escape from sandbox; custom particle physics.
