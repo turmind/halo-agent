@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-10-05
+
 ### Added
 
 - Face: the agent can show an image on its face (`self.show(path, ms)`, and a `show` beat in `self.play()` so a sequence of pictures plays in order). The dots fly in and gather into the picture's outline, the real image fades in over them, holds (default 6 s, or until the next scene / a click), and fades out as the dots dissolve back. Supports png / jpg / webp / gif / svg; for a diagram the agent writes an SVG and shows that. Combines with `self.voice()` for a talking picture book.
@@ -781,7 +783,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.7...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.8...HEAD
+[1.5.8]: https://github.com/turmind/halo-agent/compare/v1.5.7...v1.5.8
 [1.5.7]: https://github.com/turmind/halo-agent/compare/v1.5.6...v1.5.7
 [1.5.6]: https://github.com/turmind/halo-agent/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/turmind/halo-agent/compare/v1.5.4...v1.5.5
