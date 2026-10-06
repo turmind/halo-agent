@@ -4,7 +4,7 @@ import { noteLinkDrop, forEachChatStore, getActiveChatStore, type ChatStoreApi }
 import { focusSessionTab, getLoadedStore, storeForFrame } from '@/features/chat/chat-tabs'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { generateId } from '@/shared/utils'
-import { postToFace } from '@/features/editor/face-bridge'
+import { postToFace, onFaceSnap, pushFaceAck, faceRoundSettled } from '@/features/editor/face-bridge'
 import { en } from '@/shared/i18n/en'
 import { zh } from '@/shared/i18n/zh'
 
@@ -21,6 +21,12 @@ const CAPTURE_MARKER = /<<<CAPTURE>>>/
  *  Non-greedy dot-all because payloads legitimately contain `>`, `(`, and
  *  newlines (e.g. `self.play([{...}])`). Global: a reply may carry several. */
 const SHOW_MARKER = /<<<SHOW:([\s\S]*?)>>>/g
+
+/** Text of the image message a `self.snap()` frame is sent back as. */
+const FACE_SNAP_TEXT = '[Face snapshot]'
+
+/** The tab whose last round drove the face (set when its markers fire). */
+let faceRoundStore: ChatStoreApi | null = null
 
 /**
  * On turn completion, forward the `<<<SHOW: …>>>` payloads of the round's
@@ -120,8 +126,51 @@ async function maybeHandleCapture(wsClient: WsClient, tabStore: ChatStoreApi, re
   })
 }
 
+/**
+ * A `self.snap()` frame from the face (face-bridge has already applied the
+ * one-per-round / no-chain gate) → send it to the session on screen as an
+ * image message. Same raw `wsClient.send` path as maybeHandleCapture, so the
+ * `[Face open: …]` line and receipts are NOT re-injected on it. Returns false
+ * (and records why) when there's no session to send it to.
+ */
+function sendFaceSnap(wsClient: WsClient, data: string, mimeType: string): boolean {
+  const project = useProjectStore.getState().activeProject
+  const tabStore = getActiveChatStore()
+  // The snap belongs to the round whose markers drove the face; if the user
+  // has since switched chat tabs, it must not land in the other session.
+  if (faceRoundStore && faceRoundStore !== tabStore) { pushFaceAck('snap skipped (tab switched)'); return false }
+  const store = tabStore.getState()
+  const sessionId = store.sessionId
+  if (!project || !sessionId) { pushFaceAck('snap skipped (no session)'); return false }
+  const clientMsgId = generateId()
+  store.addMessage({
+    id: generateId(),
+    role: 'user',
+    content: FACE_SNAP_TEXT,
+    timestamp: Date.now(),
+    clientMsgId,
+    localImages: [`data:${mimeType};base64,${data}`],
+  })
+  if (!store.messages.some((m) => m.streaming && m.role === 'assistant' && !m.taskId)) {
+    store.addMessage({ id: generateId(), role: 'assistant', content: '', timestamp: Date.now(), streaming: true })
+  }
+  const agentId = store.selectedAgentId
+  wsClient.send({
+    type: 'chat',
+    sessionId,
+    projectId: project.id,
+    message: FACE_SNAP_TEXT,
+    clientMsgId,
+    ...(agentId !== 'default' ? { agentId } : {}),
+    images: [{ data, mimeType }],
+  })
+  return true
+}
+
 export function registerChatHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
+
+  unsubs.push(onFaceSnap((data, mimeType) => sendFaceSnap(wsClient, data, mimeType)))
 
   // ws-client gave up on a chat (no server ack after all retries): mark the
   // user bubble red + converge its placeholder so the loss is visible.
@@ -183,6 +232,9 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
       // forget — never let a capture failure break the completion handler.
       void maybeHandleCapture(wsClient, tabStore, replies)
       // Also forward any face-drive markers (<<<SHOW: …>>>) to the live preview.
+      // A round with replies opens a fresh one-snap budget (face-bridge) — the
+      // snap its markers request arrives after this, so it gets that budget.
+      if (replies.length > 0) { faceRoundSettled(); faceRoundStore = tabStore }
       maybeHandleShow(replies)
     }),
   )

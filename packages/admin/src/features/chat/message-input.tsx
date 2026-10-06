@@ -2,14 +2,15 @@
 
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { Send, Paperclip, X, FileIcon, Square, MonitorUp, Camera, Sparkles, ChevronDown } from 'lucide-react'
-import { cn, getLanguageFromPath } from '@/shared/utils'
+import { cn } from '@/shared/utils'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useGoalStore } from '@/features/chat/goal-store'
 import { useModelsBus } from '@/shared/models-bus'
-import { postToFace } from '@/features/editor/face-bridge'
+import { requestFaceIntro } from '@/features/editor/face-bridge'
+import { useFaceOn, useFaceStore, requestFaceFocus } from '@/features/editor/face-store'
 import { matchCommands, matchVerbs, getCommands, type SlashCommand } from './slash-commands'
 import { CommandPalette } from './command-palette'
 import { FileMentionPicker } from './file-mention-picker'
@@ -189,46 +190,44 @@ function useCurrentModelSupportsImage(): boolean {
   return supported
 }
 
-const FACE_PATH = '.halo/canvas/self.html'
-
 /**
- * Face control — opens the assistant's living self-portrait (`self.html`) in the
- * editor preview. The face is seeded into every workspace (server init) and is
- * pure HTML/canvas, so unlike CaptureControl this is NOT gated on any desktop
- * bridge — it works in a plain browser too. Opening it switches to the Explorer
- * activity tab and opens the file; render mode defaults to on, so it lands on
- * the live face. If a preview is already mounted, re-fire the intro so there's
- * always a greeting when a human turns to look.
+ * Face toggle — the assistant's living self-portrait (`self.html`). On pins an
+ * unclosable face tab in the editor (editor-panel), kept mounted while other
+ * tabs are shown, and makes every user message carry `[Face open: …]`
+ * (use-chat); off removes both. Per workspace, persisted (face-store). The face
+ * is seeded into every workspace (server init) and is pure HTML/canvas, so
+ * unlike CaptureControl this is NOT gated on any desktop bridge. Turning it on
+ * switches to Explorer, focuses the face and greets with `self.intro()` once
+ * the iframe has loaded (face-bridge).
  */
 function FaceControl() {
   const t = useT()
   const activeProject = useProjectStore((s) => s.activeProject)
+  const on = useFaceOn(activeProject?.id)
   if (!activeProject) return null
 
-  const openFace = async () => {
+  const toggle = () => {
     const projectId = activeProject.id
-    try {
-      const data = await api.files.read(FACE_PATH, projectId)
-      window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer' } }))
-      useEditorStore.getState().openFile(
-        FACE_PATH, data.content, getLanguageFromPath(FACE_PATH), data.modifiedAt,
-        { size: data.size, createdAt: data.createdAt },
-      )
-      // Greet whoever just turned to look — the moment of being seen is the
-      // whole point. A tick after open so the iframe has mounted + registered.
-      setTimeout(() => postToFace('self.intro()'), 400)
-    } catch {
-      // First-open race (seeded on workspace open, but be defensive) — no-op.
-    }
+    if (on) { useFaceStore.getState().setFaceOn(projectId, false); return }
+    window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer' } }))
+    requestFaceFocus()
+    requestFaceIntro()
+    useFaceStore.getState().setFaceOn(projectId, true)
   }
 
   return (
     <button
-      onClick={openFace}
-      title={t('face.button')}
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+      onClick={toggle}
+      aria-pressed={on}
+      title={on ? t('face.on') : t('face.button')}
+      className={cn(
+        'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors',
+        on
+          ? 'bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-inset ring-[var(--primary)]/40 hover:bg-[var(--primary)]/25'
+          : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+      )}
     >
-      <Sparkles className="h-4 w-4" />
+      <Sparkles className={cn('h-4 w-4', on && 'fill-current')} />
     </button>
   )
 }

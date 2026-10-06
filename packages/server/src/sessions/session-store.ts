@@ -233,6 +233,7 @@ export function saveSessionToFile(opts: SessionSaveOptions): SessionFileMeta | n
       let rawTitle = firstUser ? firstUser.content : ''
       rawTitle = rawTitle
         .replace(/\[Currently viewing:[^\]]*\]\s*/g, '')
+        .replace(/\[Face open:[^\]]*\]\s*/g, '')
         .replace(/\[Selected text in[^\]]*\]\n```[\s\S]*?```\s*/g, '')
         .trim()
       title = (rawTitle || 'New session').slice(0, 60)

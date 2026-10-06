@@ -1,12 +1,16 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { registerFaceIframe } from './face-bridge'
+import { registerFaceIframe, faceLoaded } from './face-bridge'
 
 interface HtmlPreviewProps {
   /** URL to fetch the HTML from — typically the workspace file download URL */
   url: string
   name: string
+  /** This preview is the assistant's face (`FACE_PATH`): register it with the
+   *  face-bridge so `<<<SHOW>>>` payloads reach it and its receipts / snaps
+   *  are accepted. Other HTML previews never talk to the face-bridge. */
+  face?: boolean
 }
 
 /**
@@ -21,17 +25,16 @@ interface HtmlPreviewProps {
  * from the user's own workspace (same trust boundary as opening them in Monaco),
  * not third-party content.
  *
- * Every mounted preview registers its iframe with the face-bridge so a
+ * A face preview registers its iframe with the face-bridge so a
  * `<<<SHOW: …>>>` payload from the assistant can be forwarded to it (see
- * face-bridge.ts). Only the face page (`self.html`) acts on those messages;
- * other HTML previews ignore them.
+ * face-bridge.ts).
  */
-export function HtmlPreview({ url, name }: HtmlPreviewProps) {
+export function HtmlPreview({ url, name, face }: HtmlPreviewProps) {
   const ref = useRef<HTMLIFrameElement>(null)
   useEffect(() => {
-    if (!ref.current) return
+    if (!face || !ref.current) return
     return registerFaceIframe(ref.current)
-  }, [])
+  }, [face])
   return (
     <iframe
       ref={ref}
@@ -42,6 +45,7 @@ export function HtmlPreview({ url, name }: HtmlPreviewProps) {
       // self.html plays Halo-synthesized speech (self.voice) on a postMessage,
       // not a direct click — delegate autoplay so the browser doesn't gate it.
       allow="autoplay"
+      onLoad={face ? (e) => faceLoaded(e.currentTarget) : undefined}
     />
   )
 }

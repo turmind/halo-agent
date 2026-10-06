@@ -7,6 +7,8 @@ import { bindActiveTabSession, dropSessionTab, newTab, restoreTabs } from '@/fea
 import { removeCachedView } from '@/features/agents/session-view-cache'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
+import { faceContextLine, faceUserMessage, takeFaceAcks } from '@/features/editor/face-bridge'
+import { isFaceOn } from '@/features/editor/face-store'
 import { useT } from '@/shared/i18n'
 import { wsClient } from '@/shared/ws-client'
 import { generateId } from '@/shared/utils'
@@ -83,6 +85,12 @@ export function useChat() {
           contextParts.push(t('capture.llmPrompt', { name: captureSource.name }))
         }
       }
+      // Face toggle on → tell the agent its face is open, plus whatever the face
+      // reported since the last message (face-bridge receipts, then cleared).
+      // Independent of contextEnabled. Like the capture prompt it rides only this
+      // dispatch — the snapshot reply (chat-handlers raw send) never carries it.
+      faceUserMessage()
+      if (isFaceOn(activeProject.id)) contextParts.push(faceContextLine(takeFaceAcks()))
       const contextPrefix = contextParts.length > 0 ? contextParts.join('\n') + '\n\n' : ''
       const fullMessage = contextPrefix + text.trim()
 

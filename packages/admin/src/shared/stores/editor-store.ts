@@ -92,6 +92,14 @@ function showInGroup(
   return { buffers, groups }
 }
 
+/** `g` without `path`; its active tab moves to the neighbour when it was `path`. */
+function withoutTab(g: EditorGroup, path: string): EditorGroup {
+  if (!g.tabs.includes(path)) return g
+  const tabs = g.tabs.filter((p) => p !== path)
+  const activeTab = g.activeTab === path ? (tabs[Math.min(g.tabs.indexOf(path), tabs.length - 1)] ?? null) : g.activeTab
+  return { ...g, tabs, activeTab }
+}
+
 interface EditorStore {
   // ── New pane-aware shape ──────────────────────────────────────────
   buffers: Record<string, EditorBuffer>
@@ -161,6 +169,16 @@ interface EditorStore {
    *  and for spawning the right pane via splitToRight). */
   openFileInGroup(groupIdx: number, path: string, content: string, language: string, mtime?: number, meta?: { size?: number; createdAt?: number }): void
 
+  // ── Pinned tab (the face toggle) ──────────────────────────────────
+  /** A tab no close path removes and every open path re-uses: it lives in
+   *  exactly one pane, is never persisted with `halo_tabs:*`, and only
+   *  `unpinTab` drops it. Used for the assistant's face (face-store). */
+  pinnedTab: string | null
+  /** Pin `buffer` as the first tab of the active pane, replacing any plain
+   *  tab of the same path. `activate` = make it that pane's active tab. */
+  pinTab(buffer: EditorBuffer, activate: boolean): void
+  unpinTab(): void
+
   setFileTree(tree: FileTreeNode): void
   setDirChildren(dirPath: string, children: FileTreeNode[]): void
   markModified(path: string): void
@@ -221,6 +239,42 @@ export function createEditorStore() {
         if (get().modelPathPrefix !== prefix) set({ modelPathPrefix: prefix })
       },
 
+      pinnedTab: null,
+
+      pinTab(buffer, activate) {
+        const path = buffer.path
+        const prev = get().buffers[path]
+        set((state) => {
+          // Re-pinning keeps the pane it already lives in; a first pin takes the active pane.
+          const home = state.groups.findIndex((g) => g.tabs.includes(path))
+          const idx = state.pinnedTab === path && home >= 0 ? home : state.activeGroupIdx
+          const placed = state.groups.map((g, i) => {
+            if (i !== idx) return withoutTab(g, path)
+            const tabs = [path, ...g.tabs.filter((p) => p !== path)]
+            return { ...g, tabs, activeTab: activate ? path : (g.activeTab ?? path) }
+          })
+          // Pulling a plain copy out of the other pane may empty it → collapse.
+          const groups = placed.length > 1 ? placed.filter((g) => g.tabs.length > 0) : placed
+          const at = groups.indexOf(placed[idx])
+          const activeGroupIdx = activate || groups.length !== placed.length ? at : state.activeGroupIdx
+          const buffers = { ...state.buffers, [path]: buffer }
+          const modifiedPaths = state.modifiedPaths.has(path)
+            ? (() => { const next = new Set(state.modifiedPaths); next.delete(path); return next })()
+            : state.modifiedPaths
+          const next = { ...state, buffers, groups, activeGroupIdx, modifiedPaths }
+          return { buffers, groups, activeGroupIdx, modifiedPaths, pinnedTab: path, ...deriveActiveView(next) }
+        })
+        // It replaced a plain text tab of the same file → that Monaco model is orphaned.
+        if (prev && !prev.preview) disposeMonacoModels(get().modelPathPrefix, [path])
+      },
+
+      unpinTab() {
+        const path = get().pinnedTab
+        if (!path) return
+        set({ pinnedTab: null })
+        get().closeTab(path)
+      },
+
       fileTree: null,
       modifiedPaths: new Set(),
       rejectedFile: null,
@@ -258,6 +312,7 @@ export function createEditorStore() {
       },
 
       openFile(path, content, language, mtime, meta) {
+        if (path === get().pinnedTab) { get().setActiveTab(path); return }
         set((state) => {
           const { buffers, groups } = showInGroup(state, state.activeGroupIdx, path,
             () => ({ path, content, originalContent: content, language, mtime, size: meta?.size, createdAt: meta?.createdAt }))
@@ -267,6 +322,7 @@ export function createEditorStore() {
       },
 
       openPreview(path, downloadUrl, viewUrl, meta) {
+        if (path === get().pinnedTab) { get().setActiveTab(path); return }
         set((state) => {
           const { buffers, groups } = showInGroup(state, state.activeGroupIdx, path,
             () => ({ path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl, tooLarge: meta?.tooLarge, ...(meta?.bundle ? { bundle: true } : {}) }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt }))
@@ -276,6 +332,7 @@ export function createEditorStore() {
       },
 
       openFileInGroup(groupIdx, path, content, language, mtime, meta) {
+        if (path === get().pinnedTab) { get().setActiveTab(path); return }
         set((state) => {
           if (groupIdx < 0 || groupIdx >= state.groups.length) return state
           const { buffers, groups } = showInGroup(state, groupIdx, path,
@@ -287,6 +344,7 @@ export function createEditorStore() {
       },
 
       closeTab(path) {
+        if (path === get().pinnedTab) return
         set((state) => {
           const groups = state.groups
             .map((g) => {
@@ -319,6 +377,7 @@ export function createEditorStore() {
       },
 
       closeTabIn(groupIdx, path) {
+        if (path === get().pinnedTab) return
         set((state) => {
           if (groupIdx < 0 || groupIdx >= state.groups.length) return state
           const tgt = state.groups[groupIdx]
@@ -394,7 +453,12 @@ export function createEditorStore() {
       splitToRight(path) {
         set((state) => {
           if (state.groups.length >= 2) return state
-          const sourcePath = path ?? state.groups[state.activeGroupIdx]?.activeTab ?? null
+          let sourcePath = path ?? state.groups[state.activeGroupIdx]?.activeTab ?? null
+          // The pinned tab lives in one pane only — seed the new pane with
+          // another tab of this one instead (none → no split).
+          if (sourcePath && sourcePath === state.pinnedTab) {
+            sourcePath = state.groups[state.activeGroupIdx]?.tabs.find((p) => p !== state.pinnedTab) ?? null
+          }
           if (!sourcePath) return state
           if (!state.buffers[sourcePath]) return state
           const right: EditorGroup = { id: newGroupId(), tabs: [sourcePath], activeTab: sourcePath }

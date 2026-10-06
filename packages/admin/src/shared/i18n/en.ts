@@ -728,5 +728,6 @@ export const en: Record<string, string> = {
   'capture.cameraFailNote': '[📷 {name} — photo failed: the camera may be in use by another app, or its permission was turned off]',
   'capture.dismiss': 'Dismiss',
   // ── The assistant's face (self.html) ──
-  'face.button': "Open the assistant's face",
+  'face.button': "Show the assistant's face",
+  'face.on': "Face on (the assistant can see it's open) — click to close",
 }

@@ -62,19 +62,22 @@ function TabContextMenu({ x, y, path, groupIdx, onClose, onCloseTab }: TabContex
 
   const store = useEditorStore.getState()
   const groupPaths = store.groups[groupIdx]?.tabs ?? []
-  const tabs = groupPaths.map((p) => store.buffers[p]).filter((b): b is NonNullable<typeof b> => !!b)
+  // The pinned (face) tab is out of reach of every close action.
+  const tabs = groupPaths.filter((p) => p !== store.pinnedTab).map((p) => store.buffers[p]).filter((b): b is NonNullable<typeof b> => !!b)
   const idx = tabs.findIndex((t) => t.path === path)
+  const pinned = path === store.pinnedTab
 
   const actions = [
-    { label: 'Close', action: () => onCloseTab(path) },
+    { label: 'Close', action: () => onCloseTab(path), disabled: pinned },
     {
       label: 'Close Others',
       action: () => {
         tabs.forEach((t) => { if (t.path !== path) onCloseTab(t.path) })
       },
-      disabled: tabs.length <= 1,
+      disabled: tabs.filter((t) => t.path !== path).length === 0,
     },
     {
+      // The pinned tab sits first, so "right of" it is every other tab.
       label: 'Close to the Right',
       action: () => {
         tabs.slice(idx + 1).forEach((t) => onCloseTab(t.path))
@@ -253,6 +256,7 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
   }
 
   const activePane = useEditorStore((s) => s.activeGroupIdx)
+  const pinnedTab = useEditorStore((s) => s.pinnedTab)
 
   return (
     <div
@@ -315,7 +319,7 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
               <span className="max-w-40 truncate">
                 {labels.get(tab.path) ?? tab.path.split('/').pop()}
               </span>
-              {tab.modified ? (
+              {tab.path === pinnedTab ? null : tab.modified ? (
                 <Circle className="h-2 w-2 fill-amber-400 text-amber-400 shrink-0" />
               ) : (
                 <button
@@ -328,7 +332,7 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
                   <X className="h-3 w-3" />
                 </button>
               )}
-              {tab.modified && (
+              {tab.modified && tab.path !== pinnedTab && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation()

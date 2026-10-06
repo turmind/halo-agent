@@ -101,6 +101,22 @@ describe('session-store round-trip', () => {
     expect(readSessionFileMeta('sess-3', 'default', projectPath)!.title).toBe('first question wins the title')
   })
 
+  it('keeps the injected [Currently viewing] / [Face open] context lines out of the title', () => {
+    saveSessionToFile({
+      sessionId: 'sess-face',
+      projectPath,
+      messages: [msg({
+        id: 'a',
+        role: 'user',
+        content: '[Currently viewing: src/a.ts]\n[Face open: .halo/canvas/self.html · last: js ok, show a.png fail, voice blocked (needs a click)]\n\nhow are you',
+      })],
+      contextTokens: 0,
+      outputTokens: 0,
+      agentId: 'default',
+    })
+    expect(readSessionFileMeta('sess-face', 'default', projectPath)!.title).toBe('how are you')
+  })
+
   it('preserves createdAt across re-saves while advancing updatedAt', () => {
     saveSessionToFile({
       sessionId: 'sess-4',

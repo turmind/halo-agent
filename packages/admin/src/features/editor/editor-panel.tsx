@@ -8,6 +8,8 @@ import { FileContextMenu, type ContextMenuAction } from '@/features/explorer/fil
 import { CodeEditor } from './code-editor'
 import { MarkdownPreview } from './markdown-preview'
 import { HtmlPreview } from './html-preview'
+import { FACE_PATH } from './face-bridge'
+import { useFaceOn, consumeFaceFocus } from './face-store'
 import { DiffViewer } from './diff-viewer'
 import { TabBar } from './tab-bar'
 import { FilePreview, canPreview, isBundleName, isHeavyPreview, loadExtensions, useRegistryVersion } from './previews/FilePreview'
@@ -108,6 +110,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   const buffers = useEditorStore((s) => s.buffers)
   const groups = useEditorStore((s) => s.groups)
   const activeGroupIdx = useEditorStore((s) => s.activeGroupIdx)
+  const pinnedTab = useEditorStore((s) => s.pinnedTab)
   const maximized = useEditorStore((s) => s.maximized)
   const splitEnabled = mode === 'editor-only'
   const [showSidebar, setShowSidebar] = useState(true)
@@ -168,6 +171,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       if (!path) continue
       const buf = buffers[path]
       if (!buf?.preview) continue
+      if (path === pinnedTab) continue   // the pinned face has its own always-mounted slot
       if (isHeavyPath(path)) continue   // heavy previews render only when actively shown
       activeRequired.push(path)
     }
@@ -188,7 +192,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       if (prev.length === next.length && prev.every((p, i) => p === next[i])) return prev
       return next
     })
-  }, [groups, buffers, isHeavyPath, registryVersion])
+  }, [groups, buffers, isHeavyPath, registryVersion, pinnedTab])
 
   // Drop entries when no pane references the path anymore. Use ALL panes
   // (not the active one) so a preview kept open in the right pane while the
@@ -226,6 +230,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
           tabs: [],
           activeTab: null,
           modifiedPaths: new Set(),
+          pinnedTab: null,
         }
       })
       setTabsRestored(false)
@@ -353,17 +358,46 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
 
   // Persist groups (multi-pane tab layout) to localStorage. Older saves
   // used `{ tabs, activeTab }`; restore() understands both shapes.
+  // The pinned face tab is left out: the face toggle (face-store) restores it.
   useEffect(() => {
     if (!projectId || !tabsRestored) return
     const persistedGroups = groups.map((g) => ({
-      tabs: g.tabs.map((p) => {
+      tabs: g.tabs.filter((p) => p !== pinnedTab).map((p) => {
         const buf = buffers[p]
         return { path: p, isPreview: !!buf?.preview, ...(buf?.preview?.bundle ? { bundle: true } : {}), language: buf?.language }
       }),
-      activeTab: g.activeTab,
+      activeTab: g.activeTab === pinnedTab ? null : g.activeTab,
     }))
     localStorage.setItem(`halo_tabs:${projectId}`, JSON.stringify({ groups: persistedGroups, activeGroupIdx }))
-  }, [groups, activeGroupIdx, buffers, projectId, tabsRestored])
+  }, [groups, activeGroupIdx, buffers, projectId, tabsRestored, pinnedTab])
+
+  // Face toggle → the pinned face tab (main editor only; scoped Skills /
+  // Agents editors never host it). Runs after the tab restore so the restore's
+  // wholesale state replace can't drop it; a toggle-on (not a refresh-restore)
+  // also focuses it. Presence is checked on the groups + buffer, not on
+  // `pinnedTab` alone: a restore that lands late replaces the groups (and may
+  // bring back an old saved layout's plain self.html text tab) under it.
+  const faceOn = useFaceOn(projectId)
+  useEffect(() => {
+    if (mode !== 'editor-only' || !projectId || !tabsRestored) return
+    const store = useEditorStore.getState()
+    if (!faceOn) { store.unpinTab(); return }
+    const focus = consumeFaceFocus()
+    if (store.pinnedTab === FACE_PATH && store.buffers[FACE_PATH]?.preview && store.groups.some((g) => g.tabs.includes(FACE_PATH))) {
+      if (focus) store.setActiveTab(FACE_PATH)
+      return
+    }
+    let cancelled = false
+    api.files.stat(FACE_PATH, projectId).then((stat) => {
+      if (cancelled) return
+      useEditorStore.getState().pinTab({
+        path: FACE_PATH, content: '', originalContent: '', language: '',
+        size: stat.size, mtime: stat.modifiedAt, createdAt: stat.createdAt,
+        preview: previewMeta(FACE_PATH, projectId, false),
+      }, focus)
+    }).catch((err) => console.warn('[EditorPanel] Face page missing:', err))
+    return () => { cancelled = true }
+  }, [faceOn, projectId, tabsRestored, mode, useEditorStore])
 
   const activeFile = tabs.find((t) => t.path === activeTab)
 
@@ -441,6 +475,11 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   const handleFileSelect = useCallback(
     async (path: string, opts?: { bundle?: boolean }) => {
       if (!projectId) return
+      // The pinned face tab is the one copy of its file — jump to it.
+      if (path === useEditorStore.getState().pinnedTab) {
+        useEditorStore.getState().setActiveTab(path)
+        return
+      }
 
       const ext = path.split('.').pop()?.toLowerCase() ?? ''
       // `bundle` = the tree says this is a bundle DIRECTORY (`foo.htrans/`).
@@ -1171,6 +1210,14 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                       )
                     })()}
                     <div className="flex-1 overflow-hidden">
+                      {/* The pinned face stays mounted while its pane shows another tab —
+                          hidden, not unmounted, so its audio / animation keep running and
+                          <<<SHOW>>> still lands. */}
+                      {pinnedTab && group.tabs.includes(pinnedTab) && buffers[pinnedTab]?.preview && (
+                        <div className={cn('h-full', paneActive !== pinnedTab && 'hidden')}>
+                          <HtmlPreview url={buffers[pinnedTab].preview!.viewUrl} name={baseName(pinnedTab)} face />
+                        </div>
+                      )}
                       {mountedPreviews
                         .map((p) => paneTabs.find((t) => t.path === p && t.preview))
                         .filter((t): t is NonNullable<typeof t> => !!t)
@@ -1193,7 +1240,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                           turned heavy under the open tab (registry changed): mounting it here
                           too would double it, and moving it would drop a dirty extension
                           that FilePreview keeps alive after uninstall. It ages out of the cache. */}
-                      {paneFile?.preview && isHeavyPath(paneFile.path) && !mountedPreviews.includes(paneFile.path) && (
+                      {paneFile?.preview && paneFile.path !== pinnedTab && isHeavyPath(paneFile.path) && !mountedPreviews.includes(paneFile.path) && (
                         // Keyed by path: two heavy tabs of the same file type would otherwise
                         // reuse one FilePreview (its Dispatch key is only the extension) and keep
                         // showing the previous file — an extension host loads bytes once per mount.
@@ -1251,7 +1298,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                                 <MarkdownPreview content={paneFile.content} filePath={paneFile.path} projectId={projectId} />
                               )}
                               {htmlPreview && (
-                                <HtmlPreview url={api.files.viewUrl(paneFile.path, projectId!)} name={paneFile.path.split('/').pop() ?? ''} />
+                                <HtmlPreview url={api.files.viewUrl(paneFile.path, projectId!)} name={paneFile.path.split('/').pop() ?? ''} face={paneFile.path === FACE_PATH} />
                               )}
                               <div className={cn('h-full', (mdPreview || htmlPreview) && 'hidden')}>
                                 <CodeEditor

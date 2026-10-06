@@ -728,5 +728,6 @@ export const zh: Record<string, string> = {
   'capture.cameraFailNote': '[📷 {name} — 拍照失败:摄像头可能被其他应用占用或权限被关闭]',
   'capture.dismiss': '关闭',
   // ── AI 的面孔（self.html）──
-  'face.button': '打开 AI 的面孔',
+  'face.button': '显示 AI 的面孔',
+  'face.on': '面孔已打开（AI 知道它开着）— 点击关闭',
 }
