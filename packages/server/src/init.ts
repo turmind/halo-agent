@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 84 // models/*.yaml: `revision:` field (merge with hub-installed models.d/); extension skill: `models` verb (ext.sh `models update|list` → `halo models install`).
+export const TEMPLATE_VERSION = 85 // self.html: haloFaceAck receipts, snap(), voice cues, show/say pos (nine-grid corners), clear(), blocked voice replays on next click; self SKILL.md: `[Face open: …]` signal + receipt line + the new API.
+// 84: models/*.yaml: `revision:` field (merge with hub-installed models.d/); extension skill: `models` verb (ext.sh `models update|list` → `halo models install`).
 // 83: self skill: self.show(path, ms) + the `show` play() beat (self.html itself is force-copied on open).
 // 82: models/*.yaml: `runtime:` field (createModelRuntime dispatches on it).
 // 81: default agent lists the extension skill; extension SKILL.md gets the payload via $ARGUMENTS and installs right away when a source is given. extension skill: hub_repo param (config.yaml) + multi-platform hub in ext.sh. web-search: fast_region / deep_region params (config.yaml) + Bedrock dependency notes (no bump — 81 unreleased).
