@@ -14,7 +14,8 @@ import { WebSocket } from 'ws'
  *    come back as `partial` / `final` frames, `{"type":"end"}` flushes and
  *    the server closes 1000;
  *  - `lang=auto` → IdentifyMultipleLanguages + LanguageOptions from the
- *    extension param (manifest default otherwise); region/creds from
+ *    extension param (manifest default otherwise); `lang=xx-XX,yy-YY` (2–5
+ *    distinct codes) → the same over that list; region/creds from
  *    `ext-<id>` settings, else the default chain;
  *  - upstream errors map to the wire codes; the client closing aborts the
  *    upstream stream (no orphans);
@@ -190,6 +191,30 @@ describe('transcribe proxy streaming', () => {
   it('invalid lang → error bad-request, upstream never started', async () => {
     const { frames, code } = await run(connect('ext=htrans&lang=chinese'))
     expect(frames).toEqual([{ type: 'error', code: 'bad-request', message: 'invalid lang: chinese' }])
+    expect(code).toBe(1011)
+    expect(up.input).toBeUndefined()
+  })
+
+  it('lang list (2–5 distinct codes) → multi-language identification over exactly that list', async () => {
+    settings.set('ext-htrans.params.auto_languages', 'ja-JP,ko-KR')
+    for (const list of ['zh-CN,en-US', 'zh-HK,en-US', 'zh-CN,zh-HK,en-US,ja-JP,ko-KR']) {
+      up = { destroyed: false, audioBytes: 0 }
+      await run(connect(`ext=htrans&lang=${encodeURIComponent(list)}`), (s) => s.send(JSON.stringify({ type: 'end' })))
+      expect(up.input).toMatchObject({ IdentifyMultipleLanguages: true, LanguageOptions: list })
+      expect(up.input).not.toHaveProperty('LanguageCode')
+    }
+  })
+
+  it.each([
+    ['one code with a trailing comma', 'zh-CN,'],
+    ['six codes', 'zh-CN,zh-HK,en-US,ja-JP,ko-KR,fr-FR'],
+    ['a duplicate', 'zh-CN,en-US,zh-CN'],
+    ['a malformed code', 'zh-CN,english'],
+    ['an empty item', 'zh-CN,,en-US'],
+    ['spaces', 'zh-CN, en-US'],
+  ])('lang list with %s → error bad-request, upstream never started', async (_label, lang) => {
+    const { frames, code } = await run(connect(`ext=htrans&lang=${encodeURIComponent(lang)}`))
+    expect(frames).toEqual([{ type: 'error', code: 'bad-request', message: `invalid lang: ${lang}` }])
     expect(code).toBe(1011)
     expect(up.input).toBeUndefined()
   })

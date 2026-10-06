@@ -1,5 +1,5 @@
 /**
- * Streaming transcription proxy — WS `/api/transcribe/stream?ext=<id>&lang=<auto|xx-XX>`.
+ * Streaming transcription proxy — WS `/api/transcribe/stream?ext=<id>&lang=<auto|xx-XX|xx-XX,yy-YY,…>`.
  *
  * A canvas extension declaring capability `transcribe` streams raw PCM
  * (s16le mono 16 kHz) here; the server relays it to Amazon Transcribe
@@ -32,6 +32,18 @@ import { getServerParam, getServerSecret } from '../config.js'
 export const TRANSCRIBE_PATH = '/api/transcribe/stream'
 
 const LANG_RE = /^[a-z]{2}-[A-Z]{2}$/
+
+/** `lang` query → upstream language options: `auto` → the extension's
+ *  auto_languages; one code → LanguageCode; 2–5 distinct codes (comma-separated)
+ *  → IdentifyMultipleLanguages over exactly those. Anything else → null.
+ *  "One dialect per language" is left to Transcribe (BadRequest → bad-request). */
+function parseLang(lang: string): { auto: true } | { code: string } | { options: string } | null {
+  if (lang === 'auto') return { auto: true }
+  if (LANG_RE.test(lang)) return { code: lang }
+  const codes = lang.split(',')
+  if (codes.length < 2 || codes.length > 5 || new Set(codes).size !== codes.length || !codes.every((c) => LANG_RE.test(c))) return null
+  return { options: lang }
+}
 /** 30 s of s16le mono 16 kHz. More than this queued = upstream isn't keeping
  *  up (or never started) — fail the stream rather than buffer unboundedly. */
 const MAX_BACKLOG_BYTES = 16000 * 2 * 30
@@ -132,7 +144,8 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
       ws.close(1011, code)
     }
 
-    if (lang !== 'auto' && !LANG_RE.test(lang)) {
+    const langSpec = parseLang(lang)
+    if (!langSpec) {
       fail('bad-request', `invalid lang: ${lang}`)
       return
     }
@@ -197,9 +210,9 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
       console.log(`[Transcribe] stream closed after ${((Date.now() - openedAt) / 1000).toFixed(1)}s ext=${extId}`)
     })
 
-    const languageOpts = lang === 'auto'
-      ? { IdentifyMultipleLanguages: true, LanguageOptions: extParam(extId, 'auto_languages', 'zh-CN,zh-HK,en-US') }
-      : { LanguageCode: lang as StartStreamTranscriptionCommand['input']['LanguageCode'] }
+    const languageOpts = 'code' in langSpec
+      ? { LanguageCode: langSpec.code as StartStreamTranscriptionCommand['input']['LanguageCode'] }
+      : { IdentifyMultipleLanguages: true, LanguageOptions: 'options' in langSpec ? langSpec.options : extParam(extId, 'auto_languages', 'zh-CN,zh-HK,en-US') }
 
     // `ready` = the proxy takes audio now. It can't wait for Transcribe's
     // acceptance: the SDK's send() only resolves after the FIRST audio event
@@ -227,7 +240,7 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
               start: r.StartTime ?? 0,
               end: r.EndTime ?? 0,
               text,
-              lang: r.LanguageCode ?? (lang === 'auto' ? '' : lang),
+              lang: r.LanguageCode ?? ('code' in langSpec ? langSpec.code : ''),
             })
           }
         }
