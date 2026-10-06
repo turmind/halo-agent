@@ -88,6 +88,6 @@ API: `GET/PUT /api/agent-configs/:id/md/:fileType`, `GET /api/agent-configs/:id/
 - **Not rendered for internal agents** (`internal: true`) — they're delegated to by other agents, never driven directly
 
 ### Internal agents
-Agents flagged `internal: true` in agent.yaml (e.g. `__evo_agent__`, `__apply_agent__`, `__score__`) are platform tooling. They are hidden from every user-facing surface: the delegation roster, `/session new` default pick, and the chat agent selector — and have no Test button. They stay editable in the management sidebar's collapsed **Internal** group.
+Agents flagged `internal: true` in agent.yaml (e.g. `__evo_agent__`, `__apply_agent__`, `__score__`) are platform tooling. They are hidden from every user-facing surface: the delegation roster, `/session new` default pick, the chat agent selector, the Cron job agent picker and `halo cli`'s agent list (`halo agents`) — and have no Test button. They stay editable in the management sidebar's collapsed **Internal** group.
 
 Replaces the old built-in test chat panel, giving a more realistic environment (full workspace tools + session persistence).

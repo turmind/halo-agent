@@ -31,10 +31,10 @@ The Bottom Panel (Chat + Terminal) can also be **floated** into a draggable wind
 | Icon | Tab | Sidebar | Main content | Bottom panel |
 |---|---|---|---|---|
 | FolderTree | Explorer | File tree + ops | Canvas (Monaco + previews) | Chat + Terminal |
-| GitBranch | Source Control | Changes + commit box | Diff / history graph | — |
 | MessageSquare | Sessions | Session list | Session message viewer | — |
-| Zap | Skills | Skill list | SkillsMain (full height) | — |
+| GitBranch | Source Control | Changes + commit box | Diff / history graph | — |
 | Bot | Agents | — | Agent config editor + Test (full width) | — |
+| Zap | Skills | Skill list | SkillsMain (full height) | — |
 | MessageCircle | Channels | Channel list | Channel config editor | — |
 | Sparkles | Evolution | Run list + status filters | Evolution main (run/apply review) | — |
 | Clock | Cron | Job list | Cron job detail / form + run audit | — |

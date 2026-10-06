@@ -28,10 +28,10 @@ The docked Bottom Panel belongs to the Explorer tab; every other tab fills the w
 | Icon | Tab | Purpose |
 |---|---|---|
 | 📄 Files | Explorer | File tree + Monaco editor |
-| 🌿 Branch | Source Control | Changes, commit, push, history (hidden for non-git workspaces) |
 | 📨 Messages | Sessions | Session history + debug viewer |
-| ⚡ Zap | Skills | Skill editing (mini workspace) |
+| 🌿 Branch | Source Control | Changes, commit, push, history (hidden for non-git workspaces) |
 | 🤖 Bot | Agents | Agent configuration (Form / Edit) |
+| ⚡ Zap | Skills | Skill editing (mini workspace) |
 | 💬 Chat bubble | Channels | Web / Telegram / Slack / Feishu / WeCom / WeChat accounts |
 | ✨ Sparkles | Evolution | Self-evolution runs and review |
 | 🕐 Clock | Cron | Scheduled agent runs |
