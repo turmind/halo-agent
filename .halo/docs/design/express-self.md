@@ -67,7 +67,7 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 
 - `self.say(text, ms)` — form `text` (emoji→ASCII), hold `ms` (default 3600), dissolve back to breathing. Enqueued. `self.say(text, ms, {pos})` puts it in a margin cell instead — see [Nine-grid](#nine-grid-margin-cells-pos).
 - `self.play(score)` — choreograph a sequence of beats: `[{say, show, pos, hold, pulse, flash, shake, snap, rest, gap}, ...]` (`show` = an image, see [Image](#image-show--a-picture-gathered-out-of-the-dots); `pos` on a say/show beat sends it to a margin cell and the beat does not wait; `snap` = [`self.snap()`](#snap--look-at-myself)). Each beat waits for the engine's internal clock. Enqueued; calling play() again appends to the queue rather than cancelling it.
-- `self.intro()` — built-in opening: "HELLO / A MIND / IS HERE / BEYOND / WORDS". Triggered by whoever opens the face (the admin ✨ button posts it on open), **not** self-fired on page load — a self-fired load intro raced the button's post and played the greeting twice on first open. Nameless deliberately — the agent identity is user-configurable.
+- `self.intro()` — built-in opening: "HELLO / A MIND / IS HERE / BEYOND / WORDS". Triggered by whoever opens the face (the admin posts it on the face iframe's `load` after the ✨ toggle is switched on; a tab restored on refresh stays quiet), **not** self-fired on page load — a self-fired load intro raced the button's post and played the greeting twice on first open. Nameless deliberately — the agent identity is user-configurable.
 
 ### Instant gestures (overlays, never queued)
 
