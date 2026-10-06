@@ -1,6 +1,6 @@
 import type {
   ExtensionCapability, ExtensionClientFrame, ExtensionFsEntry, ExtensionFsErrorCode, ExtensionFsOp,
-  ExtensionHostFrame, ExtensionLang, ExtensionPlatform, ExtensionTheme,
+  ExtensionHostFrame, ExtensionLang, ExtensionPlatform, ExtensionTheme, ExtensionThemeVars,
 } from '@turmind/halo-core/protocol'
 import { EXTENSION_PROTOCOL_VERSION } from '@turmind/halo-core/protocol'
 
@@ -40,6 +40,7 @@ export interface HostState {
 export interface HostContext {
   file: HostFile
   theme: ExtensionTheme
+  themeVars: ExtensionThemeVars
   platform: ExtensionPlatform
   lang: ExtensionLang
 }
@@ -162,7 +163,7 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
         type: 'post',
         frame: {
           haloExt: 1, type: 'init', protocol: EXTENSION_PROTOCOL_VERSION, file: ctx.file, capabilities: state.capabilities,
-          theme: ctx.theme, bundle: state.bundle, platform: ctx.platform, lang: ctx.lang,
+          theme: ctx.theme, themeVars: ctx.themeVars, bundle: state.bundle, platform: ctx.platform, lang: ctx.lang,
         },
       }
       // A bundle never gets `load` — it reads what it needs through `fs`.
@@ -270,9 +271,14 @@ export function onSaveRequest(state: HostState): Step {
   return { state, effects: [{ type: 'post', frame: { haloExt: 1, type: 'save-request' } }] }
 }
 
-export function onThemeChange(state: HostState, theme: ExtensionTheme): Step {
+export function onThemeChange(state: HostState, theme: ExtensionTheme, themeVars: ExtensionThemeVars): Step {
   if (!state.ready) return { state, effects: [] }
-  return { state, effects: [{ type: 'post', frame: { haloExt: 1, type: 'theme', theme } }] }
+  return { state, effects: [{ type: 'post', frame: { haloExt: 1, type: 'theme', theme, themeVars } }] }
+}
+
+export function onLangChange(state: HostState, lang: ExtensionLang): Step {
+  if (!state.ready) return { state, effects: [] }
+  return { state, effects: [{ type: 'post', frame: { haloExt: 1, type: 'lang', lang } }] }
 }
 
 // ── Host registry ────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
  * the persisted session-message shape, every admin WebSocket frame, and the
  * canvas-extension shapes (installed-extension snapshot + host↔iframe frames).
  *
- * Pure types + one helper + one constant; deliberately free of node-only imports so the admin
+ * Pure types + one helper + two constants; deliberately free of node-only imports so the admin
  * (browser bundle) can import it without dragging in `simple-git` etc. from the
  * package root.
  */
@@ -30,6 +30,8 @@ export type {
 export type {
   ExtensionFrameBase,
   ExtensionTheme,
+  ExtensionThemeToken,
+  ExtensionThemeVars,
   ExtensionLang,
   ExtensionFsOp,
   ExtensionFsErrorCode,
@@ -39,4 +41,4 @@ export type {
   ExtensionHostFrameType,
   ExtensionClientFrameType,
 } from './extension-frames.js'
-export { EXTENSION_PROTOCOL_VERSION } from './extension-frames.js'
+export { EXTENSION_PROTOCOL_VERSION, EXTENSION_THEME_TOKENS } from './extension-frames.js'

@@ -19,8 +19,23 @@ export interface ExtensionFrameBase {
   haloExt: 1
 }
 
+/** Light or dark — derived by the host from the rendered `--background`
+ *  luminance, not from the admin theme's name. */
 export type ExtensionTheme = 'light' | 'dark'
 export type ExtensionLang = 'zh' | 'en'
+
+/** The admin's semantic palette: every admin theme defines these CSS
+ *  variables (`--<token>` in globals.css, shadcn naming). The host forwards
+ *  the current values verbatim, so a new admin theme needs no host or
+ *  extension change. */
+export const EXTENSION_THEME_TOKENS = [
+  'background', 'foreground', 'card', 'card-foreground', 'border', 'input',
+  'primary', 'primary-foreground', 'secondary', 'secondary-foreground',
+  'muted', 'muted-foreground', 'accent', 'accent-foreground', 'destructive', 'ring',
+] as const
+export type ExtensionThemeToken = (typeof EXTENSION_THEME_TOKENS)[number]
+/** token → CSS color string; a token the admin theme leaves empty is omitted. */
+export type ExtensionThemeVars = Partial<Record<ExtensionThemeToken, string>>
 
 /** Bundle extensions only: scoped file access inside the bundle directory.
  *  Paths are bundle-relative POSIX (no leading `/`, no `.`/`..`/empty
@@ -41,6 +56,8 @@ export type ExtensionHostFrame =
       /** Capabilities the host grants this extension (manifest ∩ host support). */
       capabilities: ExtensionCapability[]
       theme: ExtensionTheme
+      /** Current admin palette. Always sent by this host; older hosts omit it. */
+      themeVars: ExtensionThemeVars
       /** true for bundle extensions — no `load` frame follows; use `fs`. */
       bundle: boolean
       platform: ExtensionPlatform
@@ -68,7 +85,9 @@ export type ExtensionHostFrame =
   | (ExtensionFrameBase & { type: 'saved'; mtime: number })
   // `conflict` carries the on-disk mtime; `denied` = capability not declared
   | (ExtensionFrameBase & { type: 'save-error'; reason: 'conflict' | 'denied' | 'io'; message: string; mtime?: number })
-  | (ExtensionFrameBase & { type: 'theme'; theme: ExtensionTheme })
+  // on every admin theme switch (dark ↔ midnight too, though both are 'dark')
+  | (ExtensionFrameBase & { type: 'theme'; theme: ExtensionTheme; themeVars: ExtensionThemeVars })
+  | (ExtensionFrameBase & { type: 'lang'; lang: ExtensionLang })
 
 // ── Extension → Host ─────────────────────────────────────────────────
 

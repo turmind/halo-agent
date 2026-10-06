@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest'
 import type { ExtensionCapability, ExtensionClientFrame, ExtensionTheme } from '@turmind/halo-core/protocol'
 import {
   initialHostState, isClientFrame, onClientFrame, onLoaded, onPutResult, onConflictChoice,
-  onFileChanged, onSaveRequest, onThemeChange, registerExtensionHost, getExtensionHost,
+  onFileChanged, onLangChange, onSaveRequest, onThemeChange, registerExtensionHost, getExtensionHost,
   onFsResult, isBundlePath, createKeyedQueue,
   type HostState, type HostEffect, type HostContext,
 } from '../src/features/editor/previews/extension-host-logic'
+import { readThemeVars, schemeFromRgb } from '../src/shared/theme/palette'
 
 /**
  * Contract (design §6.4): the extension host is a pure state machine over
@@ -14,7 +15,8 @@ import {
  * second time; the host's own save echo is not a reload.
  */
 
-const ctx: HostContext = { file: { name: 'a.echo', path: 'dir/a.echo', size: 3, ext: 'echo' }, theme: 'dark' as ExtensionTheme, platform: 'web', lang: 'en' }
+const darkVars = { background: '#0a0a0a', foreground: '#ededed', primary: '#3b82f6' }
+const ctx: HostContext = { file: { name: 'a.echo', path: 'dir/a.echo', size: 3, ext: 'echo' }, theme: 'dark' as ExtensionTheme, themeVars: darkVars, platform: 'web', lang: 'en' }
 const buf = () => new ArrayBuffer(4)
 
 function ready(caps: ExtensionCapability[] = ['save'], mtime: number | null = 1000): HostState {
@@ -44,15 +46,43 @@ describe('ready handshake', () => {
     const init = step.effects[0]
     expect(init.type === 'post' && init.frame.type === 'init' && init.frame.capabilities).toEqual(['save'])
     expect(init.type === 'post' && init.frame.type === 'init' && init.frame.theme).toBe('dark')
+    expect(init.type === 'post' && init.frame.type === 'init' && init.frame.themeVars).toEqual(darkVars)
     const again = onClientFrame(step.state, frame({ type: 'ready', protocol: 1 }), ctx)
     expect(types(again.effects)).toEqual(['warn'])
   })
 
   it('nothing is posted before ready: theme change and save request are no-ops', () => {
     const s0 = initialHostState(['save'])
-    expect(onThemeChange(s0, 'light').effects).toEqual([])
+    expect(onThemeChange(s0, 'light', { background: '#ffffff' }).effects).toEqual([])
+    expect(onLangChange(s0, 'zh').effects).toEqual([])
     expect(onSaveRequest({ ...s0, dirty: true }).effects).toEqual([])
     expect(onFileChanged(s0, 5000).effects).toEqual([])
+  })
+
+  it('after ready a language switch posts exactly one lang frame', () => {
+    expect(onLangChange(ready(), 'zh').effects).toEqual([{ type: 'post', frame: { haloExt: 1, type: 'lang', lang: 'zh' } }])
+  })
+
+  it('after ready a theme switch posts exactly one theme frame carrying the palette', () => {
+    const warm = { background: '#f6f1e7', foreground: '#3d3427' }
+    expect(onThemeChange(ready(), 'light', warm).effects).toEqual([{ type: 'post', frame: { haloExt: 1, type: 'theme', theme: 'light', themeVars: warm } }])
+  })
+})
+
+describe('theme palette', () => {
+  const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as [number, number, number]
+
+  it('light / dark comes from the background luminance, not the theme name', () => {
+    expect(schemeFromRgb(hex('#0a0a0a'))).toBe('dark') // dark
+    expect(schemeFromRgb(hex('#f6f1e7'))).toBe('light') // warm
+    expect(schemeFromRgb(hex('#0b1220'))).toBe('dark') // midnight
+    expect(schemeFromRgb(hex('#ffffff'))).toBe('light') // light
+  })
+
+  it('reads every --<token> trimmed and leaves out empty ones', () => {
+    const css: Record<string, string> = { '--background': ' #f6f1e7', '--foreground': '#3d3427 ', '--ring': '  ' }
+    const vars = readThemeVars({ getPropertyValue: (p: string) => css[p] ?? '' })
+    expect(vars).toEqual({ background: '#f6f1e7', foreground: '#3d3427' })
   })
 })
 
@@ -211,7 +241,7 @@ describe('host registry', () => {
  * `dirty` (= busy) is honoured without `save`, and Ctrl+S on it is a no-op.
  */
 describe('bundle extensions', () => {
-  const bundleCtx: HostContext = { file: { name: 'm.htrans', path: 'notes/m.htrans', size: 0, ext: 'htrans' }, theme: 'light', platform: 'desktop-mac', lang: 'zh' }
+  const bundleCtx: HostContext = { file: { name: 'm.htrans', path: 'notes/m.htrans', size: 0, ext: 'htrans' }, theme: 'light', themeVars: { background: '#f6f1e7' }, platform: 'desktop-mac', lang: 'zh' }
   const readyBundle = (): HostState => ({ ...initialHostState(['media'], true), ready: true })
   const fsFrame = (op: string, path: unknown, extra: Record<string, unknown> = {}) =>
     ({ haloExt: 1, type: 'fs', id: 7, op, path, ...extra } as unknown as ExtensionClientFrame)
@@ -225,7 +255,7 @@ describe('bundle extensions', () => {
     expect(types(step.effects)).toEqual(['post'])
     const init = step.effects[0]
     expect(init.type === 'post' && init.frame).toMatchObject({
-      type: 'init', protocol: 1, bundle: true, platform: 'desktop-mac', lang: 'zh', theme: 'light',
+      type: 'init', protocol: 1, bundle: true, platform: 'desktop-mac', lang: 'zh', theme: 'light', themeVars: { background: '#f6f1e7' },
       capabilities: ['media'], file: { name: 'm.htrans', path: 'notes/m.htrans' },
     })
   })

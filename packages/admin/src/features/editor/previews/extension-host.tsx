@@ -1,10 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { ExtensionInfo, ExtensionTheme } from '@turmind/halo-core/protocol'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import type { ExtensionInfo } from '@turmind/halo-core/protocol'
 import { api } from '@/shared/api-client'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { useTheme } from '@/shared/theme'
+import { readHostTheme } from '@/shared/theme/palette'
 import { useI18n } from '@/shared/i18n'
 import { confirmAction } from '@/shared/utils'
 import { PreviewShell, ToolbarButton } from './ui/preview-shell'
@@ -12,7 +13,7 @@ import { extensionEntryUrl, getExtensionToken } from './extension-token'
 import { currentPlatform } from './registry'
 import {
   createKeyedQueue, initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onFsResult, onLoaded,
-  onPutResult, onSaveRequest, onThemeChange, registerExtensionHost,
+  onLangChange, onPutResult, onSaveRequest, onThemeChange, registerExtensionHost,
   type FsOutcome, type HostContext, type HostEffect, type HostState, type Step,
 } from './extension-host-logic'
 import type { PreviewProps } from './types'
@@ -89,7 +90,11 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   const { t, lang } = useI18n()
   const useEditorStore = useScopedEditorStore()
   const { theme } = useTheme()
-  const extTheme: ExtensionTheme = theme === 'light' ? 'light' : 'dark'
+  // The provider stamps <html data-theme> in the same tick as its setState, so
+  // by this render the DOM already carries `theme`'s variables. Keyed on the
+  // raw theme: dark ↔ midnight are both 'dark' but repaint the palette.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `theme` is the DOM-change signal, not an input
+  const hostTheme = useMemo(() => readHostTheme(), [theme])
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const stateRef = useRef<HostState>(initialHostState(info.capabilities, info.bundle))
   // Bundle write / append, serialized per file so appends land in request order (§3).
@@ -114,7 +119,8 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   // effects have run, so the one-render lag is never observed.
   const ctx: HostContext = {
     file: { name, path, size: size ?? 0, ext: name.split('.').pop()?.toLowerCase() ?? '' },
-    theme: extTheme,
+    theme: hostTheme.theme,
+    themeVars: hostTheme.themeVars,
     platform: currentPlatform(),
     lang,
   }
@@ -260,8 +266,12 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   }, [run])
 
   useEffect(() => {
-    run(onThemeChange(stateRef.current, extTheme))
-  }, [extTheme, run])
+    run(onThemeChange(stateRef.current, hostTheme.theme, hostTheme.themeVars))
+  }, [hostTheme, run])
+
+  useEffect(() => {
+    run(onLangChange(stateRef.current, lang))
+  }, [lang, run])
 
   const requestSave = useCallback(() => {
     const step = onSaveRequest(stateRef.current)

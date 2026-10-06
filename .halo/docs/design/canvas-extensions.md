@@ -114,7 +114,7 @@ Types in `packages/core/src/protocol/extension-frames.ts` (`EXTENSION_PROTOCOL_V
 | Dir | `type` | Fields | Semantics |
 |---|---|---|---|
 | ext→host | `ready` | `protocol` | listener installed; host sends nothing before it. v1 host doesn't read `protocol` (field reserved for negotiation) |
-| host→ext | `init` | `protocol`, `file{name,path,size,ext}`, `capabilities`, `theme`, `bundle`, `platform`, `lang` | once, right after `ready`; `capabilities` = what the host grants; for a bundle `file` is the directory; `platform` = host platform, `lang` = `zh`\|`en` admin UI language |
+| host→ext | `init` | `protocol`, `file{name,path,size,ext}`, `capabilities`, `theme`, `themeVars`, `bundle`, `platform`, `lang` | once, right after `ready`; `capabilities` = what the host grants; for a bundle `file` is the directory; `platform` = host platform, `lang` = `zh`\|`en` admin UI language; `theme` / `themeVars` see [Theme tokens](#theme-tokens) |
 | host→ext | `load` | `buffer`, `mtime` | file bytes (transferred); resent when the file changes on disk and the doc isn't dirty → "replace current document". **Never sent to a bundle** |
 | ext→host | `dirty` | `dirty` | needs `save` (or `bundle`, where it means "busy"); otherwise ignored + `console.warn` |
 | ext→host | `fs` | `id`, `op: read\|write\|append\|list\|stat`, `path`, `buffer?` | bundle only (else `fs-result{denied}` + warn); `path` bundle-relative POSIX, validated before any request |
@@ -123,7 +123,8 @@ Types in `packages/core/src/protocol/extension-frames.ts` (`EXTENSION_PROTOCOL_V
 | ext→host | `save` | `buffer` | no `save` capability → `save-error{denied}`, no network; a save while one is in flight is dropped |
 | host→ext | `saved` | `mtime` | PUT succeeded; ext clears dirty, `mtime` is the new baseline |
 | host→ext | `save-error` | `reason: conflict\|denied\|io`, `message`, `mtime?` | ext stays dirty; UI is the host's |
-| host→ext | `theme` | `theme` | on admin theme switch; may be ignored |
+| host→ext | `theme` | `theme`, `themeVars` | on every admin theme switch (dark ↔ midnight too); may be ignored |
+| host→ext | `lang` | `lang` (`zh`\|`en`) | on admin UI language switch; may be ignored (older hosts never send it — use `init.lang`) |
 | ext→host | `error` | `message` | can't handle the file; host shows message + Open as Text / Download |
 
 ```
@@ -140,6 +141,13 @@ host                              extension
  |   PUT /files/raw?expectMtime=…   |
  |-- saved{mtime} ----------------->|  200        (409 → conflict flow below)
 ```
+
+### Theme tokens
+
+- `themeVars` (in `init` and every `theme` frame) is the admin's current semantic palette, forwarded verbatim: the 16 tokens `background`, `foreground`, `card`, `card-foreground`, `border`, `input`, `primary`, `primary-foreground`, `secondary`, `secondary-foreground`, `muted`, `muted-foreground`, `accent`, `accent-foreground`, `destructive`, `ring` (`EXTENSION_THEME_TOKENS`, shadcn naming = globals.css `--<token>` without the `--`). Values are CSS color strings as the admin theme declares them (hex today; `rgb()` / `oklch()` pass through untouched); a token the theme leaves empty is omitted.
+- Recommended use: set each as `--halo-<token>` on the extension's own `:root` and reference those, with the extension's own values as the fallback — older hosts send no `themeVars`, so treat it as optional.
+- `theme` is `light` \| `dark` derived from the rendered `--background` (WCAG relative luminance > 0.4 → `light`; the host paints it onto a 1×1 canvas so any CSS color notation resolves to sRGB). Use it for `color-scheme` or anything not covered by the palette. There is no theme-name table: `warm` (#f6f1e7, luminance 0.88) is now correctly sent as `light` — the old `theme === 'light' ? 'light' : 'dark'` sent it as `dark`.
+- The host reads the palette off `<html>`'s computed style whenever `useTheme().theme` changes; the theme provider stamps `data-theme` in the same tick as its `setState`, so the DOM is already the new theme by then. A new admin theme only has to define the same 16 variables in globals.css — neither the host nor any extension changes.
 
 ### Dirty, save, conflict
 
@@ -205,7 +213,7 @@ The hub repo keeps one directory per extension (`glb` / `ipynb` commit their ven
 
 ## Extension capability boundary
 
-An extension **can**: receive one file's bytes and metadata; render in its own iframe; load static assets from its own directory via the path token; report `error`; receive `theme`; with `save`, report `dirty` and hand back bytes for the host to write to **that same file**; with `bundle`, read / write / append / list / stat **inside its bundle directory** via `fs`; with `media`, use the microphone and screen capture; with `transcribe`, stream audio to the server's transcription proxy (results only — credentials stay server-side).
+An extension **can**: receive one file's bytes and metadata; render in its own iframe; load static assets from its own directory via the path token; report `error`; receive `theme` and `lang`; with `save`, report `dirty` and hand back bytes for the host to write to **that same file**; with `bundle`, read / write / append / list / stat **inside its bundle directory** via `fs`; with `media`, use the microphone and screen capture; with `transcribe`, stream audio to the server's transcription proxy (results only — credentials stay server-side).
 
 An extension **cannot** (sandbox + protocol): open popups, downloads, forms or navigate the top window; use camera / autoplay, or mic / screen capture without `media` (`allow=""`); add admin UI (toolbar, commands, sidebar); talk to other iframes. The **protocol** gives it no way to read or write any workspace file except the open one, or outside its bundle directory. Since the host grants `allow-same-origin` (see Host), the sandbox no longer isolates it from the admin's origin: a hostile extension *could* script `parent.document` or call the cookie-authed `/api/*` (measured: `fetch('/api/extensions')` from inside → 200). That is the accepted trust model — installing an extension is like installing a skill — not a gap to patch per route. **Outbound network is not blocked** — no CSP is injected, so `fetch('https://…')` works where the remote allows CORS; trust model is "code the user chose to install" (same as a skill), and hub policy is offline-capable extensions. A hard block would be one `Content-Security-Policy` header on the asset route, no protocol change.
 
