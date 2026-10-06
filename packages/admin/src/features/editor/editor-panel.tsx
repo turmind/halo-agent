@@ -10,7 +10,7 @@ import { MarkdownPreview } from './markdown-preview'
 import { HtmlPreview } from './html-preview'
 import { DiffViewer } from './diff-viewer'
 import { TabBar } from './tab-bar'
-import { FilePreview, canPreview, isHeavyPreview, loadExtensions, useRegistryVersion } from './previews/FilePreview'
+import { FilePreview, canPreview, isBundleName, isHeavyPreview, loadExtensions, useRegistryVersion } from './previews/FilePreview'
 import { getExtensionHost } from './previews/extension-host-logic'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
@@ -81,6 +81,17 @@ async function isBinaryExtension(ext: string): Promise<boolean> {
   return canPreview(ext)
 }
 
+/** Preview-buffer urls. A bundle is a DIRECTORY: nothing to download or view
+ *  (its extension reads inside it via `fs` frames), so both stay empty. */
+function previewMeta(path: string, projectId: string, bundle: boolean): { downloadUrl: string; viewUrl: string; bundle?: boolean } {
+  if (bundle) return { downloadUrl: '', viewUrl: '', bundle: true }
+  return { downloadUrl: api.files.downloadUrl(path, projectId), viewUrl: api.files.viewUrl(path, projectId) }
+}
+
+function baseName(path: string): string {
+  return path.split('/').pop() ?? ''
+}
+
 interface EditorPanelProps {
   projectId: string | null
   mode?: 'full' | 'tree-only' | 'editor-only'
@@ -143,8 +154,8 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   const registryVersion = useRegistryVersion()
   const isHeavyPath = useCallback((path: string) => {
     const ext = path.split('.').pop()?.toLowerCase() ?? ''
-    return isHeavyPreview(ext)
-  }, [])
+    return isHeavyPreview(ext, !!useEditorStore.getState().buffers[path]?.preview?.bundle)
+  }, [useEditorStore])
   const [mountedPreviews, setMountedPreviews] = useState<string[]>([])
   // Panel-level MRU cache: mount every pane's currently-active preview, not
   // just the focused pane's. Without this a PDF in the right pane would
@@ -233,7 +244,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       try {
         const parsed = JSON.parse(saved!) as {
           // New shape (multi-pane): { groups: [{ tabs: [{path, ...}], activeTab }], activeGroupIdx }
-          groups?: Array<{ tabs: Array<{ path: string; isPreview?: boolean; language?: string }>; activeTab: string | null }>
+          groups?: Array<{ tabs: Array<{ path: string; isPreview?: boolean; bundle?: boolean; language?: string }>; activeTab: string | null }>
           activeGroupIdx?: number
           // Legacy shape: { tabs: [{path, ...}], activeTab }
           tabs?: Array<{ path: string; isPreview?: boolean; language?: string }>
@@ -241,7 +252,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         }
         // Normalize to the multi-pane shape so the rest of the function only
         // deals with one path. Old single-pane state becomes a 1-group restore.
-        const groupsToRestore: Array<{ tabs: Array<{ path: string; isPreview?: boolean; language?: string }>; activeTab: string | null }> =
+        const groupsToRestore: Array<{ tabs: Array<{ path: string; isPreview?: boolean; bundle?: boolean; language?: string }>; activeTab: string | null }> =
           parsed.groups ?? (parsed.tabs ? [{ tabs: parsed.tabs, activeTab: parsed.activeTab ?? null }] : [])
         const restoredActiveGroupIdx = parsed.activeGroupIdx ?? 0
         if (groupsToRestore.length === 0) { setTabsRestored(true); return }
@@ -250,14 +261,25 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         // exactly once — same file in two panes shares a single buffer.
         const allPaths = Array.from(new Set(groupsToRestore.flatMap((g) => g.tabs.map((t) => t.path))))
         const langByPath = new Map<string, string | undefined>()
+        const bundlePaths = new Set<string>()
         for (const g of groupsToRestore) for (const t of g.tabs) {
           if (!langByPath.has(t.path)) langByPath.set(t.path, t.language)
+          if (t.bundle) bundlePaths.add(t.path)
         }
 
         const fetched = await Promise.all(
           allPaths.map(async (path) => {
             const ext = path.split('.').pop()?.toLowerCase() ?? ''
-            const isPreview = await isBinaryExtension(ext)
+            // A bundle tab is a directory: reopen it only while a bundle
+            // extension that runs here still claims it, else drop the tab (the
+            // directory is a plain folder again — never read it as text).
+            let bundle = false
+            if (bundlePaths.has(path)) {
+              await loadExtensions()
+              if (!isBundleName(baseName(path))) return null
+              bundle = true
+            }
+            const isPreview = bundle || await isBinaryExtension(ext)
             if (isPreview) {
               try {
                 const stat = await api.files.stat(path, projectId!)
@@ -269,7 +291,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                   size: stat.size,
                   mtime: stat.modifiedAt,
                   createdAt: stat.createdAt,
-                  preview: { downloadUrl: api.files.downloadUrl(path, projectId!), viewUrl: api.files.viewUrl(path, projectId!) },
+                  preview: previewMeta(path, projectId!, bundle),
                 }
               } catch { return null }
             }
@@ -336,7 +358,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     const persistedGroups = groups.map((g) => ({
       tabs: g.tabs.map((p) => {
         const buf = buffers[p]
-        return { path: p, isPreview: !!buf?.preview, language: buf?.language }
+        return { path: p, isPreview: !!buf?.preview, ...(buf?.preview?.bundle ? { bundle: true } : {}), language: buf?.language }
       }),
       activeTab: g.activeTab,
     }))
@@ -417,20 +439,21 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   }, [refreshActiveTab, mode])
 
   const handleFileSelect = useCallback(
-    async (path: string) => {
+    async (path: string, opts?: { bundle?: boolean }) => {
       if (!projectId) return
 
       const ext = path.split('.').pop()?.toLowerCase() ?? ''
-      if (await isBinaryExtension(ext)) {
-        // Known binary/media file → open as preview tab
-        const downloadUrl = api.files.downloadUrl(path, projectId)
-        const viewUrl = api.files.viewUrl(path, projectId)
+      // `bundle` = the tree says this is a bundle DIRECTORY (`foo.htrans/`).
+      const bundle = !!opts?.bundle
+      if (bundle || await isBinaryExtension(ext)) {
+        // Known binary/media file (or bundle directory) → open as preview tab
+        const { downloadUrl, viewUrl } = previewMeta(path, projectId, bundle)
         let meta: { size?: number; mtime?: number; createdAt?: number } | undefined
         try {
           const stat = await api.files.stat(path, projectId)
           meta = { size: stat.size, mtime: stat.modifiedAt, createdAt: stat.createdAt }
         } catch { /* meta is optional */ }
-        useEditorStore.getState().openPreview(path, downloadUrl, viewUrl, meta)
+        useEditorStore.getState().openPreview(path, downloadUrl, viewUrl, { ...meta, bundle })
         return
       }
 
@@ -470,16 +493,32 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   // Close a tab in a *specific pane*. The buffer survives if the same path
   // is still open in another pane (so "split → close right" doesn't lose
   // unsaved edits in the left pane). The unsaved-confirmation only fires
-  // when this is the last view of a modified file.
+  // when this is the last view of a modified file — except previews: each
+  // pane runs its own extension iframe, so the edits / busy work of THIS
+  // pane's iframe die with it regardless of the other pane.
   const handleCloseTabInGroup = useCallback(async (groupIdx: number, path: string) => {
     const state = useEditorStore.getState()
     const buf = state.buffers[path]
     const otherPaneHasIt = state.groups.some((g, i) => i !== groupIdx && g.tabs.includes(path))
-    if (buf?.modified && !otherPaneHasIt) {
+    if (buf?.modified && (!otherPaneHasIt || buf.preview)) {
       if (!(await confirmAction(`"${path.split('/').pop()}" has unsaved changes. Close anyway?`))) return
     }
     useEditorStore.getState().closeTabIn(groupIdx, path)
   }, [])
+
+  // Delete / rename / move of a busy bundle tab's directory (or an ancestor):
+  // confirm like a tab close, then close those tabs BEFORE the file op so the
+  // unmounted extension stops writing into the old path. false = cancelled.
+  const closeBusyBundleTabs = useCallback(async (paths: string[]): Promise<boolean> => {
+    const busy = Object.values(useEditorStore.getState().buffers)
+      .filter((b) => b.modified && b.preview?.bundle && paths.some((p) => b.path === p || b.path.startsWith(`${p}/`)))
+      .map((b) => b.path)
+    for (const p of busy) {
+      if (!(await confirmAction(`"${baseName(p)}" has unsaved changes. Close anyway?`))) return false
+    }
+    for (const p of busy) useEditorStore.getState().closeTab(p)
+    return true
+  }, [useEditorStore])
 
   const handleOpenAsText = useCallback(async (filePath: string) => {
     if (!projectId) return
@@ -504,6 +543,8 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       if (!savePath || !projectId) return
       const tab = useEditorStore.getState().tabs.find((t) => t.path === savePath)
       if (!tab || !tab.modified) return
+      // A bundle tab's "modified" is its extension's busy flag — nothing to save.
+      if (tab.preview?.bundle) return
       // Extension preview tabs keep their content inside the iframe; the host
       // asks the extension to serialize and PUTs the bytes itself.
       const host = getExtensionHost(projectId, savePath)
@@ -563,6 +604,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       const fileName = oldPath.split('/').pop() ?? ''
       const newPath = newDir ? `${newDir}/${fileName}` : fileName
       if (oldPath === newPath) return
+      if (!(await closeBusyBundleTabs([oldPath]))) return
       try {
         await api.files.rename(oldPath, newPath, projectId)
         // Update tab path if the moved file was open
@@ -577,7 +619,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         window.alert(err instanceof Error ? err.message : 'Move failed')
       }
     },
-    [projectId],
+    [projectId, closeBusyBundleTabs],
   )
 
   const handleSelectionChange = useCallback((paths: Set<string>, anchor: string) => {
@@ -627,10 +669,11 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         // pane, splitting the editor if it's still a single-pane layout.
         // Mirrors VSCode "Open to the Side": if a right pane already exists,
         // we just open the file there; otherwise splitToRight first.
-        if (action.isDir) return
+        const bundle = action.isDir && isBundleName(baseName(action.path))
+        if (action.isDir && !bundle) return
         try {
           const ext = action.path.split('.').pop()?.toLowerCase() ?? ''
-          const isPreview = await isBinaryExtension(ext)
+          const isPreview = bundle || await isBinaryExtension(ext)
           const state = useEditorStore.getState()
           const onlyOnePane = state.groups.length === 1
           if (onlyOnePane) state.splitToRight(state.groups[0].activeTab ?? action.path)
@@ -646,7 +689,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
             useEditorStore.setState((s) => ({
               buffers: { ...s.buffers, [action.path]: {
                 ...s.buffers[action.path],
-                preview: { downloadUrl: api.files.downloadUrl(action.path, projectId), viewUrl: api.files.viewUrl(action.path, projectId) },
+                preview: previewMeta(action.path, projectId, bundle),
               } },
             }))
           } else {
@@ -734,6 +777,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
           const label = action.isDir ? 'folder' : 'file'
           if (!(await confirmAction(`Delete ${label} "${action.path.split('/').pop()}"?`))) return
         }
+        if (!(await closeBusyBundleTabs(pathsToDelete))) return
 
         try {
           for (const p of pathsToDelete) {
@@ -749,7 +793,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         }
       }
     },
-    [projectId, selectedPaths],
+    [projectId, selectedPaths, closeBusyBundleTabs],
   )
 
   const cancelPendingEdit = useCallback(() => {
@@ -771,6 +815,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         if (!originalPath) { setPendingEdit(null); return }
         if (trimmed === originalName) { setPendingEdit(null); return }
         const newPath = parentDir ? `${parentDir}/${trimmed}` : trimmed
+        if (!(await closeBusyBundleTabs([originalPath]))) { setPendingEdit(null); return }
         try {
           await api.files.rename(originalPath, newPath, projectId)
           useEditorStore.getState().closeTab(originalPath)
@@ -784,20 +829,24 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       }
 
       const fullPath = parentDir ? `${parentDir}/${trimmed}` : trimmed
+      // "New File" named after a bundle suffix (`Standup.htrans`) makes the
+      // bundle DIRECTORY and opens it in its extension.
+      const bundle = mode === 'create-file' && isBundleName(trimmed)
       try {
-        if (mode === 'create-file') {
+        if (mode === 'create-file' && !bundle) {
           await api.files.create(fullPath, projectId)
         } else {
           await api.files.mkdir(fullPath, projectId)
         }
         loadFileTree(projectId, useEditorStore)
+        if (bundle) void handleFileSelect(fullPath, { bundle: true })
       } catch (err) {
         console.error('[EditorPanel] Create failed:', err)
         window.alert(err instanceof Error ? err.message : 'Create failed')
       }
       setPendingEdit(null)
     },
-    [projectId, pendingEdit, useEditorStore],
+    [projectId, pendingEdit, useEditorStore, handleFileSelect, closeBusyBundleTabs],
   )
 
   // ── File-tree keyboard navigation (VSCode-style) ────────────────────
@@ -907,7 +956,10 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
           if (e.shiftKey || focusIdx < 0) return
           e.preventDefault()
           const p = visible[focusIdx]
-          if (isPathDir(tree, p)) setPathExpanded(p, !isPathExpanded(p))
+          const dir = isPathDir(tree, p)
+          // A bundle directory opens like a file (same as a click on its row).
+          if (dir && isBundleName(baseName(p))) handleFileSelect(p, { bundle: true })
+          else if (dir) setPathExpanded(p, !isPathExpanded(p))
           else handleFileSelect(p) // keyboard open is immediate — no double-click delay
           return
         }
@@ -1131,6 +1183,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                               downloadUrl={t.preview!.downloadUrl}
                               viewUrl={t.preview!.viewUrl}
                               tooLarge={t.preview!.tooLarge}
+                              bundle={t.preview!.bundle}
                               size={t.size}
                               onOpenAsText={() => handleOpenAsText(t.path)}
                             />
@@ -1152,6 +1205,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                             downloadUrl={paneFile.preview.downloadUrl}
                             viewUrl={paneFile.preview.viewUrl}
                             tooLarge={paneFile.preview.tooLarge}
+                            bundle={paneFile.preview.bundle}
                             size={paneFile.size}
                             onOpenAsText={() => handleOpenAsText(paneFile.path)}
                           />

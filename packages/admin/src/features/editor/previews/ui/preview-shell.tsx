@@ -44,15 +44,18 @@ export function PreviewShell({ name, downloadUrl, onOpenAsText, extraToolbar, lo
             <span>{t('editor.openAsText')}</span>
           </ToolbarButton>
         )}
-        <a
-          href={downloadUrl}
-          download
-          className="flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
-          title={t('editor.download')}
-        >
-          <DownloadIcon className="h-3 w-3" />
-          <span>{t('editor.download')}</span>
-        </a>
+        {/* '' = nothing downloadable (a bundle directory) */}
+        {downloadUrl && (
+          <a
+            href={downloadUrl}
+            download
+            className="flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+            title={t('editor.download')}
+          >
+            <DownloadIcon className="h-3 w-3" />
+            <span>{t('editor.download')}</span>
+          </a>
+        )}
       </div>
       <div className="relative min-h-0 flex-1">
         {error ? (

@@ -14,8 +14,10 @@ import {
   FolderOpen,
   Circle,
   Loader2,
+  Package,
 } from 'lucide-react'
 import { getFileIcon } from '@/shared/file-icons'
+import { isBundleName, useRegistryVersion } from '@/features/editor/previews/registry'
 
 // ── Expanded state persistence ──────────────────────────────────
 // Module-level Set is the source of truth; mounted FileTree nodes subscribe so
@@ -100,8 +102,8 @@ export interface PendingEdit {
 interface FileTreeProps {
   node: FileTreeNode
   projectId: string
-  /** Called on double-click (open file) */
-  onSelect: (path: string) => void
+  /** Called on double-click (open file); `bundle` = a bundle directory row */
+  onSelect: (path: string, opts?: { bundle?: boolean }) => void
   onContextMenu?: (info: FileContextInfo) => void
   onDropFiles?: (files: File[], targetDir: string) => void
   onMoveFile?: (oldPath: string, newDir: string) => void
@@ -275,6 +277,11 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
   const dragExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isDir = node.type === 'directory'
+  // Bundle directory (`foo.htrans/`) with a bundle extension that runs here:
+  // the row opens it like a file; only the chevron expands it. Re-judged on
+  // every registry change (install / uninstall turns it back into a folder).
+  useRegistryVersion()
+  const isBundle = isDir && isBundleName(node.name)
   const needsLoad = isDir && node.hasChildren !== false && node.children === undefined
   // Previous `expanded` value, to detect the collapsed→expanded transition in
   // the load effect below without refetching on unrelated re-renders.
@@ -432,8 +439,9 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation()
 
-    // Directory chevron area: always toggle expand, no selection
-    if (isDir && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+    // Directory chevron area: always toggle expand, no selection.
+    // A bundle row is a file for clicks: falls through to the delayed open.
+    if (isDir && !isBundle && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
       // Single click on dir → select it + toggle expand
       if (onSelectionChange) {
         onSelectionChange(new Set([node.path]), node.path)
@@ -465,7 +473,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
     }
 
     // Normal single click on file → select + delayed open (cancelled by double-click)
-    if (!isDir) {
+    if (!isDir || isBundle) {
       if (onSelectionChange) {
         onSelectionChange(new Set([node.path]), node.path)
       }
@@ -473,7 +481,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
       if (clickTimerRef.current) clearTimeout(clickTimerRef.current)
       clickTimerRef.current = setTimeout(() => {
         clickTimerRef.current = null
-        onSelect(node.path)
+        onSelect(node.path, isBundle ? { bundle: true } : undefined)
       }, 300)
     }
   }
@@ -485,11 +493,18 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
       clearTimeout(clickTimerRef.current)
       clickTimerRef.current = null
     }
-    if (isDir) {
+    if (isDir && !isBundle) {
       setExpanded(!expanded)
     } else {
-      onSelect(node.path)
+      onSelect(node.path, isBundle ? { bundle: true } : undefined)
     }
+  }
+
+  // Bundle row's chevron: the only way to browse into the bundle.
+  const handleChevronClick = (e: React.MouseEvent) => {
+    if (!isBundle) return // plain folder: the row click already toggles
+    e.stopPropagation()
+    setExpanded(!expanded)
   }
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -617,7 +632,11 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
       >
         {isDir && (
-          <span className="shrink-0 text-[var(--muted-foreground)]">
+          <span
+            className={cn('shrink-0 text-[var(--muted-foreground)]', isBundle && 'rounded hover:bg-[var(--accent)] hover:text-[var(--foreground)]')}
+            onClick={handleChevronClick}
+            onDoubleClick={isBundle ? (e) => e.stopPropagation() : undefined}
+          >
             {expanded ? (
               <ChevronDown className="h-3.5 w-3.5" />
             ) : (
@@ -627,7 +646,9 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
         )}
         {!isDir && <span className="w-3.5 shrink-0" />}
 
-        {isDir ? (
+        {isBundle ? (
+          <Package className={cn('h-3.5 w-3.5 shrink-0 text-violet-400', gitIgnored && 'opacity-60')} />
+        ) : isDir ? (
           expanded ? (
             <FolderOpen className={cn('h-3.5 w-3.5 shrink-0 text-blue-400', gitIgnored && 'opacity-60')} />
           ) : (

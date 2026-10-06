@@ -286,22 +286,31 @@ export function createFileRoutes() {
     }
   })
 
-  // PUT /files/raw?path=xxx&projectId=xxx[&expectMtime=ms] - Replace an
-  // EXISTING file's bytes with the request body (binary-safe; PUT /files is
-  // utf-8 text only). Used by canvas preview extensions' save path. The
-  // file must already exist (404 otherwise — save targets an open file, it
-  // never creates). `expectMtime` is the mtime the client loaded; when the
-  // on-disk mtime differs the write is refused with 409 + the current mtime so
-  // the client can offer overwrite / discard / cancel.
+  // PUT /files/raw?path=xxx&projectId=xxx[&expectMtime=ms][&create=1][&append=1]
+  // - Replace an EXISTING file's bytes with the request body (binary-safe;
+  // PUT /files is utf-8 text only). Used by canvas preview extensions' save
+  // path. Without `create=1` the file must already exist (404 otherwise —
+  // save targets an open file, it never creates). `expectMtime` is the mtime
+  // the client loaded; when the on-disk mtime differs the write is refused
+  // with 409 + the current mtime so the client can offer overwrite / discard /
+  // cancel. Bundle extensions' `fs` write/append ride `create=1` (missing
+  // file + parents created) and `append=1` (appendFile; expectMtime ignored).
+  // `root=<dir>` (bundle hosts always send it): the write must land inside
+  // that EXISTING directory, else 404 'Bundle root not found' — so a bundle
+  // deleted / renamed mid-recording is never resurrected by `create=1`'s
+  // mkdir -p at its old path.
   app.put('/files/raw', async (c) => {
     try {
       const filePath = c.req.query('path')
       const projectId = c.req.query('projectId')
       const expectMtimeRaw = c.req.query('expectMtime')
+      const create = c.req.query('create') === '1'
+      const append = c.req.query('append') === '1'
+      const root = c.req.query('root')
       if (!filePath || !projectId) {
         return c.json({ error: 'path and projectId are required' }, 400)
       }
-      const expectMtime = expectMtimeRaw === undefined ? undefined : Number(expectMtimeRaw)
+      const expectMtime = expectMtimeRaw === undefined || append ? undefined : Number(expectMtimeRaw)
       if (expectMtime !== undefined && !Number.isFinite(expectMtime)) {
         return c.json({ error: 'expectMtime must be a number' }, 400)
       }
@@ -309,19 +318,30 @@ export function createFileRoutes() {
       const resolved = await resolveProjectFile(projectId, filePath)
       if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
       const { absolutePath } = resolved
+      if (root !== undefined) {
+        const rootResolved = await resolveProjectFile(projectId, root)
+        if ('error' in rootResolved) return c.json({ error: rootResolved.error }, rootResolved.status)
+        const rel = path.relative(rootResolved.absolutePath, absolutePath)
+        const inside = rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+        const rootIsDir = await fs.stat(rootResolved.absolutePath).then((s) => s.isDirectory(), () => false)
+        if (!inside || !rootIsDir) return c.json({ error: 'Bundle root not found' }, 404)
+      }
       let before
       try {
         before = await fs.stat(absolutePath)
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return c.json({ error: 'File not found' }, 404)
-        throw err
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+        if (!create) return c.json({ error: 'File not found' }, 404)
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true })
       }
-      if (before.isDirectory()) return c.json({ error: 'Cannot write a directory' }, 400)
-      if (expectMtime !== undefined && Math.round(before.mtimeMs) !== Math.round(expectMtime)) {
+      if (before?.isDirectory()) return c.json({ error: 'Cannot write a directory' }, 400)
+      if (before && expectMtime !== undefined && Math.round(before.mtimeMs) !== Math.round(expectMtime)) {
         return c.json({ error: 'conflict', mtime: before.mtimeMs, size: before.size }, 409)
       }
 
-      await fs.writeFile(absolutePath, Buffer.from(await c.req.arrayBuffer()))
+      const bytes = Buffer.from(await c.req.arrayBuffer())
+      if (append) await fs.appendFile(absolutePath, bytes)
+      else await fs.writeFile(absolutePath, bytes)
       const stat = await fs.stat(absolutePath)
       return c.json({ ok: true, path: filePath, mtime: stat.mtimeMs, size: stat.size })
     } catch (err) {
@@ -538,6 +558,7 @@ export function createFileRoutes() {
 
       return new Response(webStream, { status, headers })
     } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return c.json({ error: 'File not found' }, 404)
       const errorMessage = err instanceof Error ? err.message : String(err)
       console.log(`[Files] Error downloading: ${errorMessage}`)
       return c.json({ error: errorMessage }, 500)

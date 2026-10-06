@@ -3,7 +3,8 @@ import type { ExtensionCapability, ExtensionClientFrame, ExtensionTheme } from '
 import {
   initialHostState, isClientFrame, onClientFrame, onLoaded, onPutResult, onConflictChoice,
   onFileChanged, onSaveRequest, onThemeChange, registerExtensionHost, getExtensionHost,
-  type HostState, type HostEffect,
+  onFsResult, isBundlePath, createKeyedQueue,
+  type HostState, type HostEffect, type HostContext,
 } from '../src/features/editor/previews/extension-host-logic'
 
 /**
@@ -13,7 +14,7 @@ import {
  * second time; the host's own save echo is not a reload.
  */
 
-const ctx = { file: { name: 'a.echo', path: 'dir/a.echo', size: 3, ext: 'echo' }, theme: 'dark' as ExtensionTheme }
+const ctx: HostContext = { file: { name: 'a.echo', path: 'dir/a.echo', size: 3, ext: 'echo' }, theme: 'dark' as ExtensionTheme, platform: 'web', lang: 'en' }
 const buf = () => new ArrayBuffer(4)
 
 function ready(caps: ExtensionCapability[] = ['save'], mtime: number | null = 1000): HostState {
@@ -200,5 +201,113 @@ describe('host registry', () => {
     expect(getExtensionHost('/ws', 'x.echo')).toBe(b)
     unB()
     expect(getExtensionHost('/ws', 'x.echo')).toBeUndefined()
+  })
+})
+
+/**
+ * Contract (htrans protocol §2–§4): init always carries bundle / platform /
+ * lang; a bundle gets init and NO load; `fs` is bundle-only, path-validated
+ * before any I/O, answered exactly once with the request id; a bundle's
+ * `dirty` (= busy) is honoured without `save`, and Ctrl+S on it is a no-op.
+ */
+describe('bundle extensions', () => {
+  const bundleCtx: HostContext = { file: { name: 'm.htrans', path: 'notes/m.htrans', size: 0, ext: 'htrans' }, theme: 'light', platform: 'desktop-mac', lang: 'zh' }
+  const readyBundle = (): HostState => ({ ...initialHostState(['media'], true), ready: true })
+  const fsFrame = (op: string, path: unknown, extra: Record<string, unknown> = {}) =>
+    ({ haloExt: 1, type: 'fs', id: 7, op, path, ...extra } as unknown as ExtensionClientFrame)
+  const fsReply = (effects: HostEffect[]) => {
+    const e = effects.find((x) => x.type === 'post')
+    return e?.type === 'post' && e.frame.type === 'fs-result' ? e.frame : null
+  }
+
+  it('init carries bundle / platform / lang; a bundle gets no load frame', () => {
+    const step = onClientFrame(initialHostState(['media'], true), frame({ type: 'ready', protocol: 1 }), bundleCtx)
+    expect(types(step.effects)).toEqual(['post'])
+    const init = step.effects[0]
+    expect(init.type === 'post' && init.frame).toMatchObject({
+      type: 'init', protocol: 1, bundle: true, platform: 'desktop-mac', lang: 'zh', theme: 'light',
+      capabilities: ['media'], file: { name: 'm.htrans', path: 'notes/m.htrans' },
+    })
+  })
+
+  it('a non-bundle init says bundle:false and still loads', () => {
+    const step = onClientFrame(initialHostState(['save']), frame({ type: 'ready', protocol: 1 }), ctx)
+    expect(types(step.effects)).toEqual(['post', 'load'])
+    const init = step.effects[0]
+    expect(init.type === 'post' && init.frame).toMatchObject({ type: 'init', bundle: false, platform: 'web', lang: 'en' })
+  })
+
+  it('dirty (busy) is honoured without save; Ctrl+S on a busy bundle forwards nothing', () => {
+    const busy = onClientFrame(readyBundle(), frame({ type: 'dirty', dirty: true }), bundleCtx)
+    expect(busy.state.dirty).toBe(true)
+    expect(busy.effects).toEqual([{ type: 'set-modified', modified: true }])
+    expect(onSaveRequest(busy.state).effects).toEqual([])
+    const idle = onClientFrame(busy.state, frame({ type: 'dirty', dirty: false }), bundleCtx)
+    expect(idle.effects).toEqual([{ type: 'set-modified', modified: false }])
+  })
+
+  it('file:changed never reloads a bundle', () => {
+    expect(onFileChanged(readyBundle(), 9999).effects).toEqual([])
+  })
+
+  it('fs from a non-bundle extension → denied + console warn, no I/O', () => {
+    const step = onClientFrame(ready(['save']), fsFrame('read', 'a.txt'), ctx)
+    expect(types(step.effects)).toEqual(['post', 'warn'])
+    expect(fsReply(step.effects)).toMatchObject({ id: 7, ok: false, code: 'denied' })
+  })
+
+  it('valid requests become one fs effect each, with the id and bundle-relative path', () => {
+    const b = buf()
+    expect(onClientFrame(readyBundle(), fsFrame('read', 'audio/001.webm'), bundleCtx).effects)
+      .toEqual([{ type: 'fs', id: 7, op: 'read', path: 'audio/001.webm' }])
+    expect(onClientFrame(readyBundle(), fsFrame('list', ''), bundleCtx).effects)
+      .toEqual([{ type: 'fs', id: 7, op: 'list', path: '' }])
+    expect(onClientFrame(readyBundle(), fsFrame('append', 'transcript.md', { buffer: b }), bundleCtx).effects)
+      .toEqual([{ type: 'fs', id: 7, op: 'append', path: 'transcript.md', buffer: b }])
+  })
+
+  it('invalid paths are refused before any request', () => {
+    for (const p of ['/abs', 'a\\b', 'a//b', './a', 'a/./b', '../x', 'a/..', 'a/', 'nul\0', 3, undefined]) {
+      const step = onClientFrame(readyBundle(), fsFrame('read', p), bundleCtx)
+      expect(types(step.effects)).toEqual(['post'])
+      expect(fsReply(step.effects)).toMatchObject({ id: 7, ok: false, code: 'invalid-path' })
+    }
+    // '' is the root: list only
+    expect(fsReply(onClientFrame(readyBundle(), fsFrame('stat', ''), bundleCtx).effects)).toMatchObject({ code: 'invalid-path' })
+    expect(isBundlePath('', true)).toBe(true)
+    expect(isBundlePath('shots/000750.jpg', false)).toBe(true)
+  })
+
+  it('write / append without an ArrayBuffer, or an unknown op, are refused', () => {
+    expect(fsReply(onClientFrame(readyBundle(), fsFrame('write', 'a'), bundleCtx).effects)).toMatchObject({ ok: false, code: 'io' })
+    expect(fsReply(onClientFrame(readyBundle(), fsFrame('append', 'a', { buffer: 'x' }), bundleCtx).effects)).toMatchObject({ ok: false, code: 'io' })
+    expect(fsReply(onClientFrame(readyBundle(), fsFrame('delete', 'a'), bundleCtx).effects)).toMatchObject({ ok: false, code: 'denied' })
+  })
+
+  it('results map to fs-result: buffer transferred, 404 → not-found, 403 → denied, else io', () => {
+    const b = buf()
+    const okStep = onFsResult(readyBundle(), 3, { ok: true, buffer: b })
+    expect(okStep.effects).toEqual([{ type: 'post', frame: { haloExt: 1, type: 'fs-result', id: 3, ok: true, buffer: b }, transfer: [b] }])
+    expect(onFsResult(readyBundle(), 4, { ok: true, size: 5, mtime: 6 }).effects)
+      .toEqual([{ type: 'post', frame: { haloExt: 1, type: 'fs-result', id: 4, ok: true, size: 5, mtime: 6 } }])
+    expect(fsReply(onFsResult(readyBundle(), 5, { ok: false, status: 404, message: 'File not found' }).effects)).toMatchObject({ id: 5, code: 'not-found', error: 'File not found' })
+    expect(fsReply(onFsResult(readyBundle(), 5, { ok: false, status: 403, message: 'x' }).effects)).toMatchObject({ code: 'denied' })
+    expect(fsReply(onFsResult(readyBundle(), 5, { ok: false, status: 0, message: 'net' }).effects)).toMatchObject({ code: 'io' })
+  })
+})
+
+describe('createKeyedQueue (per-path append ordering)', () => {
+  it('runs tasks for one key in request order even when earlier ones are slower; other keys run concurrently', async () => {
+    const q = createKeyedQueue()
+    const log: string[] = []
+    const task = (name: string, ms: number, fail = false) => () =>
+      new Promise<string>((resolve, reject) => setTimeout(() => { log.push(name); if (fail) reject(new Error(name)); else resolve(name) }, ms))
+    const a1 = q.run('t.md', task('a1', 30))
+    const a2 = q.run('t.md', task('a2', 1, true))  // a failure must not stall the queue
+    const a3 = q.run('t.md', task('a3', 1))
+    const other = q.run('o.webm', task('o1', 5))
+    await expect(a2).rejects.toThrow('a2')
+    await Promise.all([a1, a3, other])
+    expect(log).toEqual(['o1', 'a1', 'a2', 'a3'])
   })
 })

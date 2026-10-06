@@ -30,7 +30,7 @@ function errorOf(r: ReturnType<typeof parseManifest>): string {
 describe('parseManifest', () => {
   it('accepts a minimal manifest with defaults filled in', () => {
     const r = parse({})
-    expect(r).toEqual({ id: 'glb', name: 'GLB Viewer', version: '1.0.0', extensions: ['.glb'], entry: 'index.html', priority: 'default', capabilities: [] })
+    expect(r).toEqual({ id: 'glb', name: 'GLB Viewer', version: '1.0.0', extensions: ['.glb'], entry: 'index.html', priority: 'default', capabilities: [], bundle: false })
   })
 
   it('keeps optional fields when present', () => {
@@ -87,6 +87,72 @@ describe('parseManifest', () => {
   it('homepage must be http(s)', () => {
     expect(errorOf(parse({ homepage: 'ftp://x' }))).toMatch(/homepage/)
     expect(errorOf(parse({ license: 3 }))).toMatch(/license/)
+  })
+
+  // htrans protocol §1: bundle / platforms / media.
+  it('bundle: optional boolean, default false, incompatible with save', () => {
+    expect(parse({ bundle: true, extensions: ['.htrans'] })).toMatchObject({ bundle: true })
+    expect(parse({ bundle: false })).toMatchObject({ bundle: false })
+    expect(errorOf(parse({ bundle: 'yes' }))).toBe('bundle must be a boolean')
+    expect(errorOf(parse({ bundle: 1 }))).toBe('bundle must be a boolean')
+    expect(errorOf(parse({ bundle: true, capabilities: ['save'] }))).toBe('bundle extensions cannot declare save')
+    expect(parse({ bundle: false, capabilities: ['save'] })).not.toHaveProperty('error')
+  })
+
+  it('capability media is accepted (and de-duplicated); unknown still rejected', () => {
+    expect(parse({ bundle: true, capabilities: ['media', 'media'] })).toMatchObject({ capabilities: ['media'] })
+    expect(parse({ capabilities: ['save', 'media'] })).toMatchObject({ capabilities: ['save', 'media'] })
+    expect(errorOf(parse({ capabilities: ['camera'] }))).toMatch(/unknown capability: camera/)
+  })
+
+  it('platforms: omitted = absent; non-empty array of known values, de-duplicated', () => {
+    expect(parse({})).not.toHaveProperty('platforms')
+    expect(parse({ platforms: ['desktop-mac', 'desktop-win', 'desktop-mac'] })).toMatchObject({ platforms: ['desktop-mac', 'desktop-win'] })
+    expect(parse({ platforms: ['web', 'desktop-mac', 'desktop-win', 'desktop-linux'] })).not.toHaveProperty('error')
+    expect(errorOf(parse({ platforms: [] }))).toBe('platforms must be a non-empty array')
+    expect(errorOf(parse({ platforms: 'web' }))).toBe('platforms must be a non-empty array')
+    expect(errorOf(parse({ platforms: ['ios'] }))).toBe('unknown platform: ios')
+    expect(errorOf(parse({ platforms: [1] }))).toBe('unknown platform: 1')
+    expect(errorOf(parse({ platforms: ['Web'] }))).toBe('unknown platform: Web')
+  })
+
+  // Rev 2026-10-06: transcribe capability + extension-declared settings.
+  it('capability transcribe is accepted', () => {
+    expect(parse({ capabilities: ['media', 'transcribe'] })).toMatchObject({ capabilities: ['media', 'transcribe'] })
+  })
+
+  it('settings: declarations parsed (values never), scalar defaults stringified, empty = absent', () => {
+    const r = parse({
+      settings: {
+        params: [{ key: 'region', default: 'us-east-1', description: 'AWS region', description_zh: '区域' }, { key: 'rate', default: 16000, type: 'int' }],
+        secrets: [{ key: 'access_key_id' }, { key: 'mode', type: 'enum', options: ['a', 'b'] }],
+      },
+    })
+    expect(r).toMatchObject({
+      settings: {
+        params: [{ key: 'region', default: 'us-east-1', description: 'AWS region', description_zh: '区域' }, { key: 'rate', default: '16000', type: 'int' }],
+        secrets: [{ key: 'access_key_id' }, { key: 'mode', type: 'enum', options: ['a', 'b'] }],
+      },
+    })
+    expect(parse({})).not.toHaveProperty('settings')
+    expect(parse({ settings: {} })).not.toHaveProperty('settings')
+    expect(parse({ settings: { params: [] } })).not.toHaveProperty('settings')
+  })
+
+  it('settings: malformed = manifest error', () => {
+    expect(errorOf(parse({ settings: [] }))).toBe('settings must be an object')
+    expect(errorOf(parse({ settings: { params: {} } }))).toBe('settings.params must be an array')
+    expect(errorOf(parse({ settings: { secrets: ['k'] } }))).toBe('settings.secrets entries must be objects')
+    expect(errorOf(parse({ settings: { params: [{ key: 'Region' }] } }))).toMatch(/settings key "Region" must match/)
+    expect(errorOf(parse({ settings: { params: [{ key: '1x' }] } }))).toMatch(/settings key "1x" must match/)
+    expect(errorOf(parse({ settings: { params: [{ key: 'a.b' }] } }))).toMatch(/settings key "a.b" must match/)
+    expect(errorOf(parse({ settings: { params: [{}] } }))).toMatch(/settings key "undefined" must match/)
+    expect(errorOf(parse({ settings: { params: [{ key: 'k' }], secrets: [{ key: 'k' }] } }))).toBe('duplicate settings key: k')
+    expect(errorOf(parse({ settings: { params: [{ key: 'k', description: 1 }] } }))).toBe('settings k.description must be a string')
+    expect(errorOf(parse({ settings: { params: [{ key: 'k', default: {} }] } }))).toBe('settings k.default must be a scalar')
+    expect(errorOf(parse({ settings: { params: [{ key: 'k', type: 'date' }] } }))).toMatch(/settings k.type must be one of/)
+    expect(errorOf(parse({ settings: { params: [{ key: 'k', options: [] }] } }))).toMatch(/settings k.options must be/)
+    expect(errorOf(parse({ settings: { params: [{ key: 'k', type: 'enum' }] } }))).toBe('settings k: type enum requires options')
   })
 })
 

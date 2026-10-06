@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import {
   register, setExtensions, resolve, resolvedKey, canPreview, isHeavyPreview, getVersion, subscribe,
+  detectPlatform, currentPlatform, runsHere, excludedByPlatform, resolveBundle, isBundleName,
 } from '../src/features/editor/previews/registry'
 import type { PreviewPlugin } from '../src/features/editor/previews/types'
 
@@ -32,7 +33,7 @@ function plugin(id: string, extensions: string[], heavy = false): PreviewPlugin 
 function ext(id: string, over: Partial<ExtensionInfo> = {}): ExtensionInfo {
   return {
     id, name: id, version: '1.0.0', extensions: ['.glb'], entry: 'index.html',
-    priority: 'option', capabilities: [], installedAt: 1_000, ...over,
+    priority: 'option', capabilities: [], bundle: false, installedAt: 1_000, ...over,
   }
 }
 
@@ -117,6 +118,65 @@ describe('isHeavyPreview', () => {
     })
     expect(isHeavyPreview('ro')).toBe(true)
     expect(isHeavyPreview('rw')).toBe(false)
+  })
+})
+
+/**
+ * Contract (htrans protocol §1): `platforms` excluding the current host makes
+ * an extension invisible to routing (as if not installed) but still nameable
+ * by the fallback page; bundle extensions only ever resolve for directories
+ * and are never heavy (a recording must survive tab switches).
+ */
+describe('platforms + bundle', () => {
+  it('detectPlatform: Electron UA → desktop-<os>, anything else → web', () => {
+    expect(detectPlatform('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Chrome/130.0 Safari/537.36')).toBe('web')
+    expect(detectPlatform('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 Chrome/130.0 Electron/33.0.0 Safari/537.36')).toBe('desktop-mac')
+    expect(detectPlatform('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0 Electron/33.0.0')).toBe('desktop-win')
+    expect(detectPlatform('Mozilla/5.0 (X11; Linux x86_64) Chrome/130.0 Electron/33.0.0')).toBe('desktop-linux')
+    expect(currentPlatform()).toBe('web') // jsdom UA has no Electron/
+  })
+
+  it('an extension whose platforms exclude this host is skipped by resolve, kept for the fallback text', () => {
+    register(plugin('glb-builtin', ['glb']))
+    setExtensions({
+      extensions: [
+        ext('desk-only', { priority: 'default', platforms: ['desktop-mac', 'desktop-win'] }),
+        ext('web-ok', { priority: 'option', platforms: ['web'] }),
+      ],
+      errors: [],
+    })
+    expect(keys('glb')).toEqual(['builtin:glb-builtin', 'extension:web-ok', 'text'])
+    expect(excludedByPlatform('glb').map((e) => e.id)).toEqual(['desk-only'])
+    expect(runsHere(ext('any'))).toBe(true) // platforms absent = everywhere
+  })
+
+  it('bundle extensions resolve only for directories; isBundleName needs a default one that runs here', () => {
+    setExtensions({
+      extensions: [
+        ext('htrans', { priority: 'default', extensions: ['.htrans'], bundle: true }),
+        ext('opt', { priority: 'option', extensions: ['.htrans'], bundle: true, installedAt: 5 }),
+      ],
+      errors: [],
+    })
+    expect(keys('htrans')).toEqual(['text'])                 // a FILE named x.htrans is untouched
+    expect(canPreview('htrans')).toBe(false)
+    expect(resolveBundle('htrans').map(resolvedKey)).toEqual(['extension:htrans', 'extension:opt', 'text'])
+    expect(isBundleName('Standup.htrans')).toBe(true)
+    expect(isBundleName('Standup.HTRANS')).toBe(true)
+    expect(isBundleName('htrans')).toBe(false)
+    expect(isBundleName('.htrans')).toBe(false)
+    expect(isBundleName('a.txt')).toBe(false)
+
+    setExtensions({ extensions: [ext('htrans', { priority: 'default', extensions: ['.htrans'], bundle: true, platforms: ['desktop-mac'] })], errors: [] })
+    expect(isBundleName('Standup.htrans')).toBe(false)       // excluded here → plain folder
+    expect(resolveBundle('htrans').map(resolvedKey)).toEqual(['text'])
+    expect(excludedByPlatform('htrans', true).map((e) => e.id)).toEqual(['htrans'])
+    expect(excludedByPlatform('htrans', false)).toEqual([])
+  })
+
+  it('a bundle extension is never heavy, even without save', () => {
+    setExtensions({ extensions: [ext('htrans', { priority: 'default', extensions: ['.htrans'], bundle: true, capabilities: ['media'] })], errors: [] })
+    expect(isHeavyPreview('htrans', true)).toBe(false)
   })
 })
 

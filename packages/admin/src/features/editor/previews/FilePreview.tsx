@@ -12,7 +12,7 @@
 import { Suspense, useEffect, useState, type ReactNode } from 'react'
 import { File as FileIcon } from 'lucide-react'
 import './plugins' // side-effect: registers all built-in plugins
-import { resolve, resolvedKey, useRegistryVersion } from './registry'
+import { excludedByPlatform, platformLabels, resolve, resolveBundle, resolvedKey, useRegistryVersion } from './registry'
 import { ExtensionHostPreview } from './extension-host'
 import { OpenWithMenu } from './ui/open-with-menu'
 import { PreviewShell, OpenWithSlot } from './ui/preview-shell'
@@ -50,8 +50,10 @@ export function FilePreview(props: PreviewProps) {
   // a plugin, the underlying reads are capped server-side at 10MB.
   if (props.tooLarge) return <TooLargePreview {...props} />
   const ext = props.name.split('.').pop()?.toLowerCase() ?? ''
-  const candidates = resolve(ext)
-  return <Dispatch key={ext} {...props} candidates={candidates} useEditorStore={useEditorStore} />
+  const candidates = props.bundle ? resolveBundle(ext) : resolve(ext)
+  // A bundle is a directory: there is no text to open it as.
+  const onOpenAsText = props.bundle ? undefined : props.onOpenAsText
+  return <Dispatch key={ext} {...props} onOpenAsText={onOpenAsText} candidates={candidates} useEditorStore={useEditorStore} />
 }
 
 /** Split out so the "open with" choice is state keyed to this tab. */
@@ -91,12 +93,14 @@ function Dispatch({ candidates, useEditorStore, ...props }: PreviewProps & {
   }
   // Only worth a menu when there is a real alternative beyond current + text.
   // Every viewer renders a PreviewShell, which picks the menu up from context.
+  // A bundle directory never opens as text, so its menu lists extensions only.
   const menu = candidates.length > 2
-    ? <OpenWithMenu candidates={candidates} current={current} onPick={pick} />
+    ? <OpenWithMenu candidates={props.bundle ? candidates.filter((c) => c.kind !== 'text') : candidates} current={current} onPick={pick} />
     : null
 
   let body: ReactNode
-  if (current.kind === 'extension' && (props.size ?? 0) > EXTENSION_MAX_BYTES) {
+  // A bundle's size is its directory entry's, and its bytes are never buffered whole.
+  if (current.kind === 'extension' && !props.bundle && (props.size ?? 0) > EXTENSION_MAX_BYTES) {
     body = (
       <PreviewShell name={props.name} downloadUrl={props.downloadUrl} onOpenAsText={props.onOpenAsText}>
         <TooLargePreview {...props} maxLabel="100MB" />
@@ -147,9 +151,11 @@ function TooLargePreview({ name, size, downloadUrl, maxLabel = '10MB' }: Preview
  *  `hub_repo`, read once per mount) — no per-extension URL: the admin can't
  *  know what the hub has without querying it, and a bundled index would go
  *  stale (§8). */
-function UnsupportedPreview({ name, projectId, downloadUrl, onOpenAsText }: PreviewProps) {
+function UnsupportedPreview({ name, projectId, downloadUrl, onOpenAsText, bundle }: PreviewProps) {
   const t = useT()
   const [hub, setHub] = useState<{ url: string | null; raw: string }>({ url: HALO_HUB_URL, raw: '' })
+  // Installed, but this platform is excluded by its manifest `platforms`.
+  const excluded = excludedByPlatform(name.split('.').pop() ?? '', !!bundle)
   useEffect(() => {
     let alive = true
     api.settings.getSchema(projectId)
@@ -168,6 +174,11 @@ function UnsupportedPreview({ name, projectId, downloadUrl, onOpenAsText }: Prev
         </div>
         <p className="text-sm font-medium text-[var(--foreground)]">{name}</p>
         <p className="text-xs text-[var(--muted-foreground)]">{t('editor.unsupported.title')}</p>
+        {excluded.map((e) => (
+          <p key={e.id} className="text-xs text-[var(--foreground)]">
+            {t('editor.unsupported.platform', { name: e.name, platforms: platformLabels(e.platforms ?? [], t) })}
+          </p>
+        ))}
         <p className="text-xs text-[var(--muted-foreground)]">
           {t('editor.unsupported.hub')}{' '}
           {hub.url
@@ -183,13 +194,15 @@ function UnsupportedPreview({ name, projectId, downloadUrl, onOpenAsText }: Prev
               {t('editor.openAsText')}
             </button>
           )}
-          <a
-            href={downloadUrl}
-            download
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-colors hover:opacity-90"
-          >
-            {t('editor.download')}
-          </a>
+          {downloadUrl && (
+            <a
+              href={downloadUrl}
+              download
+              className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-colors hover:opacity-90"
+            >
+              {t('editor.download')}
+            </a>
+          )}
         </div>
       </div>
     </PreviewShell>
@@ -197,4 +210,4 @@ function UnsupportedPreview({ name, projectId, downloadUrl, onOpenAsText }: Prev
 }
 
 // Re-export helpers editor-panel uses
-export { canPreview, isHeavyPreview, loadExtensions, useRegistryVersion } from './registry'
+export { canPreview, isBundleName, isHeavyPreview, loadExtensions, useRegistryVersion } from './registry'

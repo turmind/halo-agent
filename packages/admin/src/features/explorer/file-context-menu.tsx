@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Download, Pencil, Trash2, FilePlus, FolderPlus, Terminal, SplitSquareHorizontal, FolderOpen, FolderSearch } from 'lucide-react'
+import { isBundleName } from '@/features/editor/previews/registry'
 
 export interface ContextMenuAction {
   type: 'download' | 'rename' | 'delete' | 'new-file' | 'new-folder' | 'open-terminal' | 'open-to-side' | 'open-as-workspace' | 'reveal-in-file-manager'
@@ -113,7 +114,10 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
               { icon: SplitSquareHorizontal, label: 'Open to the Side', type: 'open-to-side' as const, separatorAfter: false },
               { icon: Download, label: 'Download', type: 'download' as const },
             ]
-          : []),
+          // A bundle directory opens like a file, so it can open to the side too.
+          : isBundleName(name)
+            ? [{ icon: SplitSquareHorizontal, label: 'Open to the Side', type: 'open-to-side' as const }]
+            : []),
         { icon: Pencil, label: 'Rename', type: 'rename' },
         { icon: Trash2, label: 'Delete', type: 'delete', danger: true, separatorAfter: isDir },
         ...(isDir

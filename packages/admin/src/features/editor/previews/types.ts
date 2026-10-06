@@ -39,6 +39,8 @@ export interface PreviewProps {
   tooLarge?: boolean
   /** On-disk size in bytes (from stat) — shown by the too-large placeholder. */
   size?: number
+  /** `path` is a bundle DIRECTORY: only bundle extensions are candidates. */
+  bundle?: boolean
 }
 
 export interface PreviewPlugin {

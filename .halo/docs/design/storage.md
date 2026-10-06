@@ -370,6 +370,7 @@ Path conventions:
 - `<provider-id>.secrets.<key>` — server-side credentials for a model provider
 - `<skill-id>.params.<key>` — values an agent can reference via `{{<skill-id>.params.<key>}}`
 - `<skill-id>.secrets.<key>` — server-side keys a skill needs but agents must not see
+- `ext-<extension-id>.params.<key>` / `ext-<extension-id>.secrets.<key>` — a canvas extension's manifest-declared `settings` (global file only, read by server code such as the transcription proxy; never by the extension itself) — see [canvas-extensions.md → Extension settings](canvas-extensions.md#extension-settings)
 
 ### Load precedence
 

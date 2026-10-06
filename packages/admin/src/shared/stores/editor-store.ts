@@ -41,7 +41,8 @@ export interface EditorBuffer {
   mtime?: number
   createdAt?: number
   size?: number
-  preview?: { downloadUrl: string; viewUrl: string; tooLarge?: boolean }
+  /** `bundle` = the path is a bundle DIRECTORY opened by a bundle extension. */
+  preview?: { downloadUrl: string; viewUrl: string; tooLarge?: boolean; bundle?: boolean }
 }
 
 /** Legacy alias kept for selectors that read `s.tabs`. Same shape as
@@ -131,7 +132,7 @@ interface EditorStore {
 
   // ── File ops (default to active group) ────────────────────────────
   openFile(path: string, content: string, language: string, mtime?: number, meta?: { size?: number; createdAt?: number }): void
-  openPreview(path: string, downloadUrl: string, viewUrl: string, meta?: { size?: number; mtime?: number; createdAt?: number; tooLarge?: boolean }): void
+  openPreview(path: string, downloadUrl: string, viewUrl: string, meta?: { size?: number; mtime?: number; createdAt?: number; tooLarge?: boolean; bundle?: boolean }): void
   /** Close `path` in every group it appears in, then drop the buffer if no
    *  group still references it. Used by destructive flows (rename, delete)
    *  where the path is gone from disk and shouldn't linger anywhere. */
@@ -268,7 +269,7 @@ export function createEditorStore() {
       openPreview(path, downloadUrl, viewUrl, meta) {
         set((state) => {
           const { buffers, groups } = showInGroup(state, state.activeGroupIdx, path,
-            () => ({ path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl, tooLarge: meta?.tooLarge }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt }))
+            () => ({ path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl, tooLarge: meta?.tooLarge, ...(meta?.bundle ? { bundle: true } : {}) }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt }))
           const next = { ...state, buffers, groups }
           return { buffers, groups, ...deriveActiveView(next) }
         })

@@ -5,19 +5,64 @@ import type { ExtensionInfo, ExtensionTheme } from '@turmind/halo-core/protocol'
 import { api } from '@/shared/api-client'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { useTheme } from '@/shared/theme'
-import { useT } from '@/shared/i18n'
+import { useI18n } from '@/shared/i18n'
 import { confirmAction } from '@/shared/utils'
 import { PreviewShell, ToolbarButton } from './ui/preview-shell'
 import { extensionEntryUrl, getExtensionToken } from './extension-token'
+import { currentPlatform } from './registry'
 import {
-  initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onLoaded,
+  createKeyedQueue, initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onFsResult, onLoaded,
   onPutResult, onSaveRequest, onThemeChange, registerExtensionHost,
-  type HostEffect, type HostState, type Step,
+  type FsOutcome, type HostContext, type HostEffect, type HostState, type Step,
 } from './extension-host-logic'
 import type { PreviewProps } from './types'
 
 const READY_TIMEOUT_MS = 10_000
 const SAVE_TIMEOUT_MS = 5_000
+/** `media` capability: mic + screen capture (+ copy). Everyone else gets nothing. */
+const MEDIA_ALLOW = 'microphone; display-capture; clipboard-write'
+
+async function httpFailure(res: Response): Promise<FsOutcome> {
+  const body = await res.json().catch(() => ({})) as { error?: string }
+  return { ok: false, status: res.status, message: body.error ?? res.statusText }
+}
+
+/** Run one validated bundle `fs` request (protocol §3) against the files API;
+ *  `eff.path` is bundle-relative, '' = the bundle root (list only). */
+async function execBundleFs(projectId: string, bundlePath: string, eff: Extract<HostEffect, { type: 'fs' }>): Promise<FsOutcome> {
+  const full = eff.path ? `${bundlePath}/${eff.path}` : bundlePath
+  const query = new URLSearchParams({ path: full, projectId })
+  try {
+    switch (eff.op) {
+      case 'read': {
+        const res = await fetch(api.files.viewUrl(full, projectId))
+        return res.ok ? { ok: true, buffer: await res.arrayBuffer() } : await httpFailure(res)
+      }
+      case 'list': {
+        const res = await fetch(`/api/files/tree?${query}`)
+        if (!res.ok) return await httpFailure(res)
+        const body = await res.json() as { tree: Array<{ name: string; type: 'file' | 'directory' }> }
+        return { ok: true, entries: body.tree.map(({ name, type }) => ({ name, type })) }
+      }
+      case 'stat': {
+        const res = await fetch(`/api/files/stat?${query}`)
+        if (!res.ok) return await httpFailure(res)
+        const body = await res.json() as { size: number; modifiedAt: number }
+        return { ok: true, size: body.size, mtime: body.modifiedAt }
+      }
+      case 'write':
+      case 'append': {
+        // root = the bundle dir: a bundle deleted / renamed mid-recording 404s
+        // (→ not-found) instead of being recreated at its old path.
+        const r = await api.files.saveRaw(full, eff.buffer!, projectId, undefined, { create: true, append: eff.op === 'append', root: bundlePath })
+        if (r.ok) return { ok: true, size: r.size, mtime: r.mtime }
+        return { ok: false, status: r.status, message: 'message' in r ? r.message : 'conflict' }
+      }
+    }
+  } catch (err) {
+    return { ok: false, status: 0, message: err instanceof Error ? err.message : String(err) }
+  }
+}
 
 interface Props extends PreviewProps {
   info: ExtensionInfo
@@ -41,14 +86,20 @@ interface Props extends PreviewProps {
  * this component only executes the effects it returns.
  */
 export function ExtensionHostPreview({ info, uninstalled, name, path, projectId, viewUrl, downloadUrl, size, onOpenAsText }: Props) {
-  const t = useT()
+  const { t, lang } = useI18n()
   const useEditorStore = useScopedEditorStore()
   const { theme } = useTheme()
   const extTheme: ExtensionTheme = theme === 'light' ? 'light' : 'dark'
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const stateRef = useRef<HostState>(initialHostState(info.capabilities))
+  const stateRef = useRef<HostState>(initialHostState(info.capabilities, info.bundle))
+  // Bundle write / append, serialized per file so appends land in request order (§3).
+  const fsQueueRef = useRef(createKeyedQueue())
   // Bumped on every reload (retry / upgrade) so the iframe remounts.
   const [attempt, setAttempt] = useState(0)
+  // Mounted attempt, read when an async fs result lands: a result for an
+  // iframe that has since been remounted is dropped (its ids mean nothing
+  // to the new document).
+  const attemptRef = useRef(attempt)
   const [src, setSrc] = useState<string | null>(null)
   const [phase, setPhase] = useState<'token' | 'loading' | 'ready' | 'failed'>('token')
   const [message, setMessage] = useState<string | null>(null)
@@ -61,7 +112,12 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   // Latest-props refs (same pattern as code-editor.tsx's onSaveRef) so the
   // stable `run` never executes a stale closure. Frames only arrive after
   // effects have run, so the one-render lag is never observed.
-  const ctx = { file: { name, path, size: size ?? 0, ext: name.split('.').pop()?.toLowerCase() ?? '' }, theme: extTheme }
+  const ctx: HostContext = {
+    file: { name, path, size: size ?? 0, ext: name.split('.').pop()?.toLowerCase() ?? '' },
+    theme: extTheme,
+    platform: currentPlatform(),
+    lang,
+  }
   const ctxRef = useRef(ctx)
   const applyEffectRef = useRef<(eff: HostEffect) => void>(() => {})
   const run = useCallback((step: Step) => {
@@ -124,6 +180,22 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
       case 'warn':
         console.warn(`[ExtensionHost] ${info.id}: ${eff.message}`)
         return
+      case 'fs': {
+        if (!projectId) {
+          run(onFsResult(stateRef.current, eff.id, { ok: false, status: 0, message: 'no workspace' }))
+          return
+        }
+        const issuedFor = attemptRef.current
+        const exec = () => execBundleFs(projectId, path, eff)
+        const pending = eff.op === 'write' || eff.op === 'append'
+          ? fsQueueRef.current.run(eff.path, exec)
+          : exec()
+        void pending.then((outcome) => {
+          if (attemptRef.current !== issuedFor) return
+          run(onFsResult(stateRef.current, eff.id, outcome))
+        })
+        return
+      }
     }
   }
   useEffect(() => {
@@ -144,10 +216,11 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   // Mount / reload: mint (or reuse) the asset token, then navigate the iframe.
   useEffect(() => {
     let cancelled = false
+    attemptRef.current = attempt
     // A confirmed "discard and reload" throws the iframe's edits away — the
     // tab's dirty dot goes with them.
     if (stateRef.current.dirty) useEditorStore.getState().clearModified(path)
-    stateRef.current = initialHostState(info.capabilities)
+    stateRef.current = initialHostState(info.capabilities, info.bundle)
     getExtensionToken().then((token) => {
       if (cancelled) return
       mountedVersionRef.current = info.version
@@ -191,9 +264,11 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   }, [extTheme, run])
 
   const requestSave = useCallback(() => {
-    const before = stateRef.current
-    run(onSaveRequest(before))
-    if (!before.ready || !before.dirty || before.saving) return
+    const step = onSaveRequest(stateRef.current)
+    run(step)
+    // Nothing forwarded (not ready / clean / saving / no save capability —
+    // e.g. a busy bundle tab's Ctrl+S) → nothing to wait for.
+    if (step.effects.length === 0) return
     clearSaveTimer()
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = null
@@ -205,7 +280,8 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   useEffect(() => registerExtensionHost(projectId, path, {
     requestSave,
     fileChanged() {
-      if (!projectId) return
+      // A bundle reads its directory through `fs`; there is nothing to reload.
+      if (!projectId || stateRef.current.bundle) return
       api.files.stat(path, projectId)
         .then((stat) => run(onFileChanged(stateRef.current, stat.modifiedAt)))
         .catch(() => { /* file gone or unreadable — nothing to reload */ })
@@ -282,7 +358,7 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
                 ref={iframeRef}
                 src={src}
                 sandbox="allow-scripts allow-same-origin"
-                allow=""
+                allow={info.capabilities.includes('media') ? MEDIA_ALLOW : ''}
                 referrerPolicy="no-referrer"
                 title={info.name}
                 className="h-full w-full border-0 bg-[var(--background)]"

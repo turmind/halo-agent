@@ -4,7 +4,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react
 import { createPortal } from 'react-dom'
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle } from 'react-resizable-panels'
 import { EditorPanel } from '@/features/editor/editor-panel'
-import { loadExtensions } from '@/features/editor/previews/registry'
+import { currentPlatform, loadExtensions } from '@/features/editor/previews/registry'
 import { BottomPanel } from '@/features/workspace/bottom-panel'
 import { FloatingBottomPanel } from '@/features/workspace/floating-bottom-panel'
 import { QuickOpen } from '@/features/explorer/quick-open'
@@ -211,6 +211,10 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   useEffect(() => {
     function handleBeforeUnload(e: BeforeUnloadEvent) {
       if (suppressUnloadWarning.current) return
+      // The desktop shell answers every blocked unload with a native confirm,
+      // so block there only when something would be lost (unsaved / busy
+      // tab); browsers keep the always-on generic leave-site prompt.
+      if (currentPlatform() !== 'web' && useEditorStore.getState().modifiedPaths.size === 0) return
       e.preventDefault()
     }
     window.addEventListener('beforeunload', handleBeforeUnload)

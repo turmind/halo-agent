@@ -52,6 +52,7 @@ Visual directory browser opened by the 📁🔍 button:
 VS Code-style highlight selection (no checkboxes):
 - **Click**: select and highlight; a file also opens in the editor after a short (300 ms) delay, a folder toggles open/closed
 - **Double click**: open the file in an editor tab right away (cancels the delayed open)
+- **Bundle directory** (a folder whose suffix an installed bundle extension claims, e.g. `Standup.htrans/`, shown with a package icon): click, double-click or Enter **opens** it in its extension like a file; only the chevron expands it
 - **Ctrl/Cmd + click**: toggle multi-select
 - **Shift + click**: range select
 
@@ -59,6 +60,7 @@ VS Code-style highlight selection (no checkboxes):
 - Selected files/folders drag onto a target dir
 - Multi-file drag supported
 - Each file goes through `POST /api/files/rename` with `{oldPath, newPath}`
+- Moving (also deleting / renaming) a bundle directory — or a folder containing one — whose tab is busy (e.g. recording) first asks the "Close anyway?" confirm; on OK the tab is closed before the file operation, on Cancel nothing happens
 - **Spring-loaded expand** (applies to both tree-internal drags and OS-file drops): a collapsed folder does **not** expand the moment a drag passes over it — it unfolds only after the drag hovers on it for ~600ms (VSCode/Finder behaviour; the timer cancels on drag-leave). Dropping into a collapsed folder expands it immediately to show the result
 
 ### Right-click menu
@@ -67,10 +69,10 @@ Items shown depend on the click target. With several items selected the menu off
 
 | Action | Shown when | API / behavior |
 |---|---|---|
-| New File / New Folder | Always | `POST /api/files/new` · `mkdir`; auto-expands the parent folder so the inline input is visible |
+| New File / New Folder | Always | `POST /api/files/new` · `mkdir`; auto-expands the parent folder so the inline input is visible. A New File name ending in a bundle suffix (`Standup.htrans`) creates the bundle **directory** and opens it |
 | Open in Integrated Terminal | Always | Spawns a terminal at the target dir (or file's parent) |
 | Reveal in File Manager | Desktop app only | Opens the OS file manager (Finder / Explorer / Linux FM) at the target — a folder opens itself, a file is highlighted in its parent dir. Hidden in a plain browser (gated on the `window.haloReveal` IPC bridge exposed by the desktop preload) |
-| Open to the Side | File only | Splits the editor and opens the file in the right pane |
+| Open to the Side | File or bundle directory | Splits the editor and opens the file (or bundle) in the right pane |
 | Download | File only | `GET /api/files/download?path=...` |
 | Rename | Single file/folder | `POST /api/files/rename` |
 | Delete | Single or multi-select | `DELETE /api/files?path=...` (with confirm) |

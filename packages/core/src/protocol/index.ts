@@ -19,7 +19,10 @@ export type {
 } from './ws-frames.js'
 export type {
   ExtensionCapability,
+  ExtensionPlatform,
   ExtensionPriority,
+  ExtensionSettingField,
+  ExtensionSettings,
   ExtensionInfo,
   ExtensionError,
   ExtensionsSnapshot,
@@ -27,6 +30,10 @@ export type {
 export type {
   ExtensionFrameBase,
   ExtensionTheme,
+  ExtensionLang,
+  ExtensionFsOp,
+  ExtensionFsErrorCode,
+  ExtensionFsEntry,
   ExtensionHostFrame,
   ExtensionClientFrame,
   ExtensionHostFrameType,

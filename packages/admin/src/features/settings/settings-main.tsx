@@ -283,7 +283,8 @@ function NavList({
     const providers = sections.filter((s) => s.source === 'provider')
     const skills = sections.filter((s) => s.source === 'skill')
     const agents = sections.filter((s) => s.source === 'agent')
-    return { general, providers, skills, agents }
+    const extensions = sections.filter((s) => s.source === 'extension')
+    return { general, providers, skills, agents, extensions }
   }, [sections])
   return (
     <div className="py-1">
@@ -316,6 +317,7 @@ function NavList({
         <Puzzle className="h-3 w-3" />
         <span>{t('settings.nav.extensions')}</span>
       </button>
+      <NavGroup label={t('settings.nav.extensionSettings')} items={grouped.extensions} active={active} onPick={onPick} />
       <NavGroup label={t('settings.nav.providers')} items={grouped.providers} active={active} onPick={onPick} />
       <NavGroup label={t('settings.nav.agents')} items={grouped.agents} active={active} onPick={onPick} />
       <NavGroup label={t('settings.nav.skills')} items={grouped.skills} active={active} onPick={onPick} />

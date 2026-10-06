@@ -269,6 +269,13 @@ export function getServerSecret(namespaceId: string, key: string, workspaceRoot?
   return expandEnv(settingsValue(`${namespaceId}.secrets.${key}`))
 }
 
+/** Global-only twin of getServerSecret for `<ns>.params.<key>` — for server
+ *  code reading a namespaced param (extension settings are all global-only).
+ *  '' when unset; `<<ENV>>` placeholders expanded. */
+export function getServerParam(namespaceId: string, key: string): string {
+  return expandEnv(settingsValue(`${namespaceId}.params.${key}`))
+}
+
 
 export const config = {
   // Goal entry points are retired, not the runtime. Internal/global-only, no UI:

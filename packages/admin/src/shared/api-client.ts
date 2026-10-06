@@ -151,14 +151,18 @@ export const api = {
 
     /** Binary-safe overwrite of an existing file (canvas extensions' save
      *  path). Resolves instead of throwing on failure: a 409 carries the
-     *  on-disk mtime the caller needs to offer overwrite / discard. */
-    async saveRaw(path: string, buffer: ArrayBuffer, projectId: string, expectMtime?: number): Promise<
+     *  on-disk mtime the caller needs to offer overwrite / discard.
+     *  `create` / `append` = bundle extensions' fs write / append. */
+    async saveRaw(path: string, buffer: ArrayBuffer, projectId: string, expectMtime?: number, opts?: { create?: boolean; append?: boolean; root?: string }): Promise<
       | { ok: true; mtime: number; size: number }
       | { ok: false; status: 409; mtime: number }
       | { ok: false; status: number; message: string }
     > {
       const params = new URLSearchParams({ path, projectId })
       if (expectMtime != null) params.set('expectMtime', String(expectMtime))
+      if (opts?.create) params.set('create', '1')
+      if (opts?.append) params.set('append', '1')
+      if (opts?.root) params.set('root', opts.root)
       let res: Response
       try {
         res = await fetch(`${API_BASE}/files/raw?${params}`, {
@@ -935,7 +939,7 @@ export const api = {
         scope: 'global' | 'workspace'
         sections: Array<{
           namespaceId: string
-          source: 'general' | 'provider' | 'skill' | 'agent'
+          source: 'general' | 'provider' | 'skill' | 'agent' | 'extension'
           displayName: string
           displayName_zh?: string
           description?: string

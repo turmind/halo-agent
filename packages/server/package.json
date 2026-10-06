@@ -82,6 +82,7 @@
   "dependencies": {
     "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1142.0",
+    "@aws-sdk/client-transcribe-streaming": "^3.1142.0",
     "@aws-sdk/credential-provider-node": "^3.972.30",
     "@hono/node-server": "^1.19.17",
     "@larksuiteoapi/node-sdk": "^1.65.0",

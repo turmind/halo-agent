@@ -5,7 +5,7 @@ import { Upload, Trash2, AlertTriangle } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { useI18n } from '@/shared/i18n'
 import { confirmAction } from '@/shared/utils'
-import { getExtensionsSnapshot, subscribe } from '@/features/editor/previews/registry'
+import { getExtensionsSnapshot, platformLabels, runsHere, subscribe } from '@/features/editor/previews/registry'
 
 /**
  * Settings → Extensions: the installed canvas preview extensions
@@ -89,11 +89,23 @@ export function ExtensionsView() {
                 <div className="flex items-baseline gap-2">
                   <span className="truncate text-xs font-medium text-[var(--foreground)]">{ext.name}</span>
                   <code className="text-[10px] text-[var(--muted-foreground)]">{ext.id}@{ext.version}</code>
+                  {ext.platforms && (
+                    <span className="shrink-0 rounded border border-[var(--border)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
+                      {platformLabels(ext.platforms, t)}
+                    </span>
+                  )}
+                  {!runsHere(ext) && (
+                    <span className="shrink-0 rounded bg-[var(--secondary)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
+                      {t('settings.extensions.unsupportedHere')}
+                    </span>
+                  )}
                 </div>
                 <p className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">
                   {ext.extensions.join(' ')}
                   {ext.priority === 'option' && ` · ${t('settings.extensions.optionOnly')}`}
+                  {ext.bundle && ` · ${t('settings.extensions.bundle')}`}
                   {ext.capabilities.includes('save') && ` · ${t('settings.extensions.canSave')}`}
+                  {ext.capabilities.includes('media') && ` · ${t('settings.extensions.media')}`}
                   {ext.description && ` — ${ext.description}`}
                 </p>
               </div>

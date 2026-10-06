@@ -1,4 +1,7 @@
-import type { ExtensionCapability, ExtensionClientFrame, ExtensionHostFrame, ExtensionTheme } from '@turmind/halo-core/protocol'
+import type {
+  ExtensionCapability, ExtensionClientFrame, ExtensionFsEntry, ExtensionFsErrorCode, ExtensionFsOp,
+  ExtensionHostFrame, ExtensionLang, ExtensionPlatform, ExtensionTheme,
+} from '@turmind/halo-core/protocol'
 import { EXTENSION_PROTOCOL_VERSION } from '@turmind/halo-core/protocol'
 
 /**
@@ -29,6 +32,16 @@ export interface HostState {
   /** The user already chose "overwrite" once for this save; a second 409 is an error. */
   retried: boolean
   capabilities: ExtensionCapability[]
+  /** Bundle extension: the tab is a directory; `fs` frames instead of load/save,
+   *  and `dirty` means "busy — don't drop me". */
+  bundle: boolean
+}
+
+export interface HostContext {
+  file: HostFile
+  theme: ExtensionTheme
+  platform: ExtensionPlatform
+  lang: ExtensionLang
 }
 
 export type HostEffect =
@@ -46,14 +59,17 @@ export type HostEffect =
   | { type: 'confirm-conflict'; buffer: ArrayBuffer; diskMtime: number }
   /** Extension-author mistake, not the user's: console only. */
   | { type: 'warn'; message: string }
+  /** Run a validated bundle `fs` request (path is bundle-relative); feed the
+   *  outcome to `onFsResult`. write / append to one path run in request order. */
+  | { type: 'fs'; id: number; op: ExtensionFsOp; path: string; buffer?: ArrayBuffer }
 
 export interface Step {
   state: HostState
   effects: HostEffect[]
 }
 
-export function initialHostState(capabilities: ExtensionCapability[]): HostState {
-  return { ready: false, dirty: false, mtime: null, saving: false, retried: false, capabilities }
+export function initialHostState(capabilities: ExtensionCapability[], bundle = false): HostState {
+  return { ready: false, dirty: false, mtime: null, saving: false, retried: false, capabilities, bundle }
 }
 
 export function isClientFrame(data: unknown): data is ExtensionClientFrame {
@@ -66,21 +82,96 @@ function canSave(state: HostState): boolean {
   return state.capabilities.includes('save')
 }
 
-export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx: { file: HostFile; theme: ExtensionTheme }): Step {
+const FS_OPS: ReadonlySet<string> = new Set<ExtensionFsOp>(['read', 'write', 'append', 'list', 'stat'])
+
+/** Bundle-relative POSIX path: no leading `/`, no `\`, no NUL, no empty / `.`
+ *  / `..` segment. `''` (= the bundle root) only where `allowRoot`. */
+export function isBundlePath(p: unknown, allowRoot: boolean): boolean {
+  if (typeof p !== 'string') return false
+  if (p === '') return allowRoot
+  if (p.includes('\\') || p.includes('\0')) return false
+  return p.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..')
+}
+
+function isArrayBuffer(v: unknown): v is ArrayBuffer {
+  // Not `instanceof`: the frame may come from another realm.
+  return Object.prototype.toString.call(v) === '[object ArrayBuffer]'
+}
+
+function fsError(id: number, code: ExtensionFsErrorCode, error: string): HostEffect {
+  return { type: 'post', frame: { haloExt: 1, type: 'fs-result', id, ok: false, code, error } }
+}
+
+/** Validate one `fs` request: exactly one reply comes out of here (an error
+ *  frame) or out of `onFsResult` (after the `fs` effect ran). */
+function onFsFrame(state: HostState, frame: Extract<ExtensionClientFrame, { type: 'fs' }>): Step {
+  const { id } = frame
+  if (typeof id !== 'number' || !Number.isFinite(id)) return { state, effects: [{ type: 'warn', message: 'fs frame without a numeric id ignored' }] }
+  if (!state.bundle) {
+    return { state, effects: [fsError(id, 'denied', 'fs is only available to bundle extensions'), { type: 'warn', message: 'fs from a non-bundle extension denied' }] }
+  }
+  if (!FS_OPS.has(frame.op)) return { state, effects: [fsError(id, 'denied', `unknown fs op: ${String(frame.op)}`)] }
+  if (!isBundlePath(frame.path, frame.op === 'list')) {
+    return { state, effects: [fsError(id, 'invalid-path', `invalid bundle path: ${JSON.stringify(frame.path)}`)] }
+  }
+  if (frame.op === 'write' || frame.op === 'append') {
+    if (!isArrayBuffer(frame.buffer)) return { state, effects: [fsError(id, 'io', `${frame.op} needs an ArrayBuffer buffer`)] }
+    return { state, effects: [{ type: 'fs', id, op: frame.op, path: frame.path, buffer: frame.buffer }] }
+  }
+  return { state, effects: [{ type: 'fs', id, op: frame.op, path: frame.path }] }
+}
+
+/** Outcome of one executed `fs` effect. Failures carry the HTTP status (0 = network). */
+export type FsOutcome =
+  | { ok: true; buffer?: ArrayBuffer; entries?: ExtensionFsEntry[]; size?: number; mtime?: number }
+  | { ok: false; status: number; message: string }
+
+export function onFsResult(state: HostState, id: number, outcome: FsOutcome): Step {
+  if (!outcome.ok) {
+    const code: ExtensionFsErrorCode = outcome.status === 404 ? 'not-found' : outcome.status === 403 ? 'denied' : 'io'
+    return { state, effects: [fsError(id, code, outcome.message)] }
+  }
+  const { ok: _ok, ...data } = outcome
+  return {
+    state,
+    effects: [{ type: 'post', frame: { haloExt: 1, type: 'fs-result', id, ok: true, ...data }, ...(data.buffer ? { transfer: [data.buffer] } : {}) }],
+  }
+}
+
+/** Per-key FIFO: a task starts only after every earlier task for the same key
+ *  settled (resolved or rejected); different keys run concurrently. The host
+ *  routes write / append through it so appends to one file land in request order. */
+export function createKeyedQueue() {
+  const tails = new Map<string, Promise<void>>()
+  return {
+    run<T>(key: string, task: () => Promise<T>): Promise<T> {
+      const result = (tails.get(key) ?? Promise.resolve()).then(task)
+      const tail = result.then(() => {}, () => {})
+      tails.set(key, tail)
+      void tail.then(() => { if (tails.get(key) === tail) tails.delete(key) })
+      return result
+    },
+  }
+}
+
+export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx: HostContext): Step {
   switch (frame.type) {
     case 'ready': {
       if (state.ready) return { state, effects: [{ type: 'warn', message: 'duplicate ready frame ignored' }] }
-      return {
-        state: { ...state, ready: true },
-        effects: [
-          { type: 'post', frame: { haloExt: 1, type: 'init', protocol: EXTENSION_PROTOCOL_VERSION, file: ctx.file, capabilities: state.capabilities, theme: ctx.theme } },
-          { type: 'load' },
-        ],
+      const init: HostEffect = {
+        type: 'post',
+        frame: {
+          haloExt: 1, type: 'init', protocol: EXTENSION_PROTOCOL_VERSION, file: ctx.file, capabilities: state.capabilities,
+          theme: ctx.theme, bundle: state.bundle, platform: ctx.platform, lang: ctx.lang,
+        },
       }
+      // A bundle never gets `load` — it reads what it needs through `fs`.
+      return { state: { ...state, ready: true }, effects: state.bundle ? [init] : [init, { type: 'load' }] }
     }
     case 'dirty': {
       if (!state.ready) return { state, effects: [{ type: 'warn', message: 'dirty before ready ignored' }] }
-      if (!canSave(state)) return { state, effects: [{ type: 'warn', message: 'dirty from an extension without the save capability ignored' }] }
+      // Bundle: dirty = busy (recording) — same tab dot / close confirm / MRU pin.
+      if (!canSave(state) && !state.bundle) return { state, effects: [{ type: 'warn', message: 'dirty from an extension without the save capability ignored' }] }
       if (state.dirty === frame.dirty) return { state, effects: [] }
       return { state: { ...state, dirty: frame.dirty }, effects: [{ type: 'set-modified', modified: frame.dirty }] }
     }
@@ -100,6 +191,8 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
     }
     case 'error':
       return { state, effects: [{ type: 'error', message: frame.message }] }
+    case 'fs':
+      return onFsFrame(state, frame)
   }
 }
 
@@ -164,7 +257,8 @@ export function onConflictChoice(state: HostState, choice: ConflictChoice, buffe
  *  and changes under a dirty document are ignored — the latter surfaces as a
  *  409 on the next save instead. */
 export function onFileChanged(state: HostState, diskMtime: number): Step {
-  if (!state.ready) return { state, effects: [] }
+  // A bundle owns its directory's contents and never gets `load`.
+  if (!state.ready || state.bundle) return { state, effects: [] }
   if (state.mtime != null && diskMtime <= state.mtime) return { state, effects: [] }
   if (state.dirty) return { state, effects: [] }
   return { state, effects: [{ type: 'load' }] }

@@ -1,5 +1,5 @@
 /**
- * Settings schema registry — aggregates declared parameters from three sources:
+ * Settings schema registry — aggregates declared parameters from these sources:
  *
  *   1. **General** (built-in)            — server's own behavior knobs (compaction,
  *                                            sandbox, session limits…). Hardcoded
@@ -14,6 +14,10 @@
  *                                            Stored at
  *                                            `<skill-id>.params.<key>` /
  *                                            `<skill-id>.secrets.<key>`.
+ *   4. **Extension params/secrets**      — declared in a canvas extension's
+ *                                            `halo-extension.json` `settings`.
+ *                                            Stored at `ext-<id>.params.<key>` /
+ *                                            `ext-<id>.secrets.<key>` (global only).
  *
  * Each declared field carries enough metadata for the admin UI to render a
  * proper input (label, help text, secret masking, default placeholder).
@@ -38,6 +42,7 @@ import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
 import { loadProviders } from './models/registry.js'
+import { getSnapshot as getExtensionsSnapshot } from './extensions/registry.js'
 
 const GLOBAL_SKILLS_DIR = path.join(homedir(), '.halo', 'global', 'skills')
 const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
@@ -88,7 +93,7 @@ export interface SchemaSection {
   /** Namespace id used in settings.yaml — provider id or skill id. */
   namespaceId: string
   /** Origin: where this section was declared. */
-  source: 'general' | 'provider' | 'skill' | 'agent'
+  source: 'general' | 'provider' | 'skill' | 'agent' | 'extension'
   /** Human label for the section header. */
   displayName: string
   displayName_zh?: string
@@ -359,5 +364,31 @@ function agentSections(): SchemaSection[] {
  * Without it the schema only covers globally-deployed skills.
  */
 export function loadSettingsSchema(workspaceRoot?: string): SchemaSection[] {
-  return [generalSection(), ...providerSections(), ...skillSections(workspaceRoot), ...agentSections()]
+  return [generalSection(), ...providerSections(), ...skillSections(workspaceRoot), ...agentSections(), ...extensionSections()]
+}
+
+/** One section per installed extension that declares manifest `settings`,
+ *  namespace `ext-<id>` (prefixed so an extension id can't collide with a
+ *  skill / provider namespace). Read from the registry's cached snapshot —
+ *  the manifest was already strictly validated there. Global-only: only
+ *  server code (e.g. the transcribe proxy) reads these, never per workspace. */
+function extensionSections(): SchemaSection[] {
+  const sections: SchemaSection[] = []
+  for (const ext of getExtensionsSnapshot().extensions) {
+    if (!ext.settings) continue
+    const fields: SchemaField[] = []
+    for (const kind of ['param', 'secret'] as const) {
+      for (const f of ext.settings[`${kind}s`] ?? []) {
+        fields.push({ ...f, kind, globalOnly: true, ...(kind === 'secret' ? { secret: true } : {}) })
+      }
+    }
+    sections.push({
+      namespaceId: `ext-${ext.id}`,
+      source: 'extension',
+      displayName: ext.name,
+      ...(ext.description !== undefined ? { description: ext.description } : {}),
+      fields,
+    })
+  }
+  return sections
 }

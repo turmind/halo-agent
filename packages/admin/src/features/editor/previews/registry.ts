@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import type { ExtensionInfo, ExtensionPlatform, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { api } from '@/shared/api-client'
 import type { PreviewPlugin, Resolved } from './types'
 
@@ -90,10 +90,44 @@ function normalize(ext: string): string {
   return ext.toLowerCase().replace(/^\./, '')
 }
 
-function extensionsFor(key: string, priority: ExtensionInfo['priority']): Resolved[] {
-  const dotted = `.${key}`
+/** The desktop shell keeps Chromium's UA, which carries `Electron/<ver>`. */
+export function detectPlatform(ua: string): ExtensionPlatform {
+  if (!ua.includes('Electron/')) return 'web'
+  if (/Macintosh|Mac OS X/.test(ua)) return 'desktop-mac'
+  if (ua.includes('Windows')) return 'desktop-win'
+  return 'desktop-linux'
+}
+
+let platform: ExtensionPlatform | null = null
+/** Host platform, computed once (prerender has no navigator → 'web', uncached). */
+export function currentPlatform(): ExtensionPlatform {
+  if (platform) return platform
+  if (typeof navigator === 'undefined') return 'web'
+  platform = detectPlatform(navigator.userAgent)
+  return platform
+}
+
+/** "Browser, Mac app" / "浏览器、Mac 客户端" — shared by the no-preview page and
+ *  Settings → Extensions (lives here, not in FilePreview, so Settings doesn't
+ *  pull in the plugin registrations). */
+export function platformLabels(platforms: readonly string[], t: (key: string) => string): string {
+  return platforms.map((p) => t(`extensions.platform.${p}`)).join(t('extensions.platform.sep'))
+}
+
+/** `platforms` absent = everywhere. An excluded extension routes as if not installed. */
+export function runsHere(info: ExtensionInfo): boolean {
+  return !info.platforms || info.platforms.includes(currentPlatform())
+}
+
+/** `bundle` extensions only open directories, the rest only files; `!!` so a
+ *  snapshot without the field (older server) reads as non-bundle. */
+function claims(e: ExtensionInfo, key: string, bundle: boolean): boolean {
+  return !!e.bundle === bundle && e.extensions.includes(`.${key}`)
+}
+
+function extensionsFor(key: string, priority: ExtensionInfo['priority'], bundle = false): Resolved[] {
   return snapshot.extensions
-    .filter((e) => e.priority === priority && e.extensions.includes(dotted))
+    .filter((e) => e.priority === priority && claims(e, key, bundle) && runsHere(e))
     .sort((a, b) => b.installedAt - a.installedAt) // newest install first
     .map((info) => ({ kind: 'extension', info }))
 }
@@ -118,6 +152,30 @@ export function resolve(ext: string): Resolved[] {
   return out
 }
 
+/** Candidates for a bundle DIRECTORY (`foo.htrans/`): bundle extensions only
+ *  (default → option, newest first). Text stays last only as the "nothing can
+ *  open this" terminal (→ fallback page); a directory never opens as text. */
+export function resolveBundle(ext: string): Resolved[] {
+  const key = normalize(ext)
+  return [...extensionsFor(key, 'default', true), ...extensionsFor(key, 'option', true), { kind: 'text' }]
+}
+
+/** True when a directory with this name opens as a preview tab instead of
+ *  expanding: a `default` bundle extension that runs here claims its suffix.
+ *  Dot-less / dot-first names never qualify (`htrans`, `.htrans`). */
+export function isBundleName(name: string): boolean {
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return false
+  return extensionsFor(normalize(name.slice(dot + 1)), 'default', true).length > 0
+}
+
+/** Installed extensions for this suffix that this platform excludes — what the
+ *  fallback page names ("only runs on …"). */
+export function excludedByPlatform(ext: string, bundle = false): ExtensionInfo[] {
+  const key = normalize(ext)
+  return snapshot.extensions.filter((e) => claims(e, key, bundle) && !runsHere(e))
+}
+
 /** Stable identity for a candidate — what the "open with" menu remembers. */
 export function resolvedKey(r: Resolved): string {
   switch (r.kind) {
@@ -137,11 +195,12 @@ export function canPreview(ext: string): boolean {
  * built-in is heavy when it says so (pptx). A read-only extension is heavy:
  * nothing to lose on unmount, and every viewer iframe may hold a WebGL
  * context (Chrome caps ~16 per page). An extension with `save` stays mounted
- * — its dirty state lives inside the iframe. Judged on the default candidate.
+ * — its dirty state lives inside the iframe — and so does a bundle extension:
+ * switching tabs must not unmount a recording. Judged on the default candidate.
  */
-export function isHeavyPreview(ext: string): boolean {
-  const first = resolve(ext)[0]
+export function isHeavyPreview(ext: string, bundle = false): boolean {
+  const first = (bundle ? resolveBundle(ext) : resolve(ext))[0]
   if (first.kind === 'builtin') return !!first.plugin.heavy
-  if (first.kind === 'extension') return !first.info.capabilities.includes('save')
+  if (first.kind === 'extension') return !first.info.capabilities.includes('save') && !first.info.bundle
   return false
 }

@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ExtensionCapability, ExtensionError, ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import type { ExtensionCapability, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { globalExtensionsDir } from '../paths.js'
 
 export const MANIFEST_FILE = 'halo-extension.json'
@@ -28,7 +28,53 @@ export const MANIFEST_FILE = 'halo-extension.json'
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
 const FILE_EXT_RE = /^\.[a-z0-9]+$/
-const CAPABILITIES: ReadonlySet<string> = new Set<ExtensionCapability>(['save'])
+const CAPABILITIES: ReadonlySet<string> = new Set<ExtensionCapability>(['save', 'media', 'transcribe'])
+const PLATFORMS: ReadonlySet<string> = new Set<ExtensionPlatform>(['web', 'desktop-mac', 'desktop-win', 'desktop-linux'])
+/** Settings keys become the leaf of `ext-<id>.{params|secrets}.<key>`. */
+const SETTING_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/
+const SETTING_TYPES: ReadonlySet<string> = new Set(['string', 'int', 'float', 'boolean', 'enum'])
+
+/** Strict `settings` validation (skills' config.yaml parsing is lenient; a
+ *  manifest is the extension author's contract, so a bad field is a red row). */
+function parseSettings(raw: unknown): ExtensionSettings | { error: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { error: 'settings must be an object' }
+  const s = raw as Record<string, unknown>
+  const seen = new Set<string>()
+  const out: ExtensionSettings = {}
+  for (const kind of ['params', 'secrets'] as const) {
+    if (s[kind] === undefined) continue
+    if (!Array.isArray(s[kind])) return { error: `settings.${kind} must be an array` }
+    const fields: ExtensionSettingField[] = []
+    for (const item of s[kind] as unknown[]) {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) return { error: `settings.${kind} entries must be objects` }
+      const f = item as Record<string, unknown>
+      if (typeof f.key !== 'string' || !SETTING_KEY_RE.test(f.key)) return { error: `settings key "${String(f.key)}" must match ^[a-z][a-z0-9_]{0,63}$` }
+      if (seen.has(f.key)) return { error: `duplicate settings key: ${f.key}` }
+      seen.add(f.key)
+      for (const k of ['description', 'description_zh'] as const) {
+        if (f[k] !== undefined && typeof f[k] !== 'string') return { error: `settings ${f.key}.${k} must be a string` }
+      }
+      // JSON `"default": 16000` is natural to write — stringify scalars like
+      // the skill config.yaml parser does; objects/arrays are malformed.
+      if (f.default !== undefined && !['string', 'number', 'boolean'].includes(typeof f.default)) return { error: `settings ${f.key}.default must be a scalar` }
+      if (f.type !== undefined && (typeof f.type !== 'string' || !SETTING_TYPES.has(f.type))) return { error: `settings ${f.key}.type must be one of string|int|float|boolean|enum` }
+      if (f.options !== undefined && (!Array.isArray(f.options) || f.options.length === 0 || f.options.some((o) => typeof o !== 'string'))) {
+        return { error: `settings ${f.key}.options must be a non-empty string array` }
+      }
+      if (f.type === 'enum' && f.options === undefined) return { error: `settings ${f.key}: type enum requires options` }
+      fields.push({
+        key: f.key,
+        ...(f.description !== undefined ? { description: f.description as string } : {}),
+        ...(f.description_zh !== undefined ? { description_zh: f.description_zh as string } : {}),
+        ...(f.default !== undefined ? { default: String(f.default) } : {}),
+        ...(f.type !== undefined ? { type: f.type as ExtensionSettingField['type'] } : {}),
+        ...(f.options !== undefined ? { options: f.options as string[] } : {}),
+      })
+    }
+    if (fields.length > 0) out[kind] = fields
+  }
+  return out
+}
 
 export function isExtensionId(id: string): boolean {
   return ID_RE.test(id)
@@ -83,6 +129,29 @@ export function parseManifest(
     }
   }
 
+  // bundle = every suffix names a DIRECTORY; the extension gets scoped `fs`
+  // frames instead of load/save, so `save` makes no sense alongside it.
+  if (m.bundle !== undefined && typeof m.bundle !== 'boolean') return { error: 'bundle must be a boolean' }
+  const bundle = m.bundle === true
+  if (bundle && capabilities.includes('save')) return { error: 'bundle extensions cannot declare save' }
+
+  let platforms: ExtensionPlatform[] | undefined
+  if (m.platforms !== undefined) {
+    if (!Array.isArray(m.platforms) || m.platforms.length === 0) return { error: 'platforms must be a non-empty array' }
+    platforms = []
+    for (const p of m.platforms) {
+      if (typeof p !== 'string' || !PLATFORMS.has(p)) return { error: `unknown platform: ${String(p)}` }
+      if (!platforms.includes(p as ExtensionPlatform)) platforms.push(p as ExtensionPlatform)
+    }
+  }
+
+  let settings: ExtensionSettings | undefined
+  if (m.settings !== undefined) {
+    const parsed = parseSettings(m.settings)
+    if ('error' in parsed) return parsed
+    if (parsed.params || parsed.secrets) settings = parsed
+  }
+
   if (m.homepage !== undefined && (typeof m.homepage !== 'string' || !/^https?:\/\//.test(m.homepage))) return { error: 'homepage must be an http(s) URL' }
   if (m.license !== undefined && typeof m.license !== 'string') return { error: 'license must be a string' }
 
@@ -95,6 +164,9 @@ export function parseManifest(
     entry: m.entry,
     priority,
     capabilities,
+    bundle,
+    ...(platforms ? { platforms } : {}),
+    ...(settings ? { settings } : {}),
     ...(m.homepage !== undefined ? { homepage: m.homepage } : {}),
     ...(m.license !== undefined ? { license: m.license } : {}),
   }
