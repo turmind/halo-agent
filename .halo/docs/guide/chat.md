@@ -34,6 +34,9 @@ The input toolbar shows a context chip (the open file's name, or the selection) 
 
 Click the chip (it turns struck-through) if you don't want that context injected.
 
+Independent of the chip, while the ✨ **face** toggle in the toolbar is on (the agent's live face, `.halo/canvas/self.html`, pinned as an editor tab) every message also carries one line:
+- `[Face open: .halo/canvas/self.html · last: …]` — tells the agent the face is on screen; the optional `last:` part is a short receipt of what its previous face actions did (e.g. `show a.png fail`, `voice blocked (needs a click)`). Receipts never wake the agent on their own; they ride along with your next message. The line is not shown in your bubble and is stripped from session titles.
+
 ## `@` file mention
 
 Typing `@` in the input opens a file search:
