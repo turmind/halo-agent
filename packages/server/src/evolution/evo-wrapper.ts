@@ -76,21 +76,26 @@ const FIX_BUDGET = 1
  *  target agent (which may be a slow model doing several tool calls), so it
  *  gets the same generous budget as the LLM-driven phases — 180s was
  *  tripping legitimate-but-slow runs. */
-const DRY_RUN_TIMEOUT_SEC = 1800
+const DRY_RUN_TIMEOUT_SEC = 2700
 
-/** Wall-clock cap for the LLM-driven phases (draft / fix / score / apply-merge
- *  / apply-score), in seconds. The wrapper heartbeats the row for as long as
+/** Wall-clock cap for the LLM-driven phases (score / apply-merge /
+ *  apply-score), in seconds. The wrapper heartbeats the row for as long as
  *  the wrapper process itself lives, so a sub-cli that wedges — a model looping
  *  over tool calls, a stalled response stream — would otherwise run unbounded
  *  without the ticker's heartbeat-timeout ever firing (the wrapper is healthy;
- *  only the inner cli is stuck). 30 minutes gives a multi-turn draft on a slow
- *  model (Opus + xhigh thinking legitimately needed >5min on a long source
- *  session; slower providers need more) real headroom while still bounding a
- *  wedged cli — one wedge costs at most one phase, and the row fails cleanly
- *  instead of hanging. Same SIGTERM→exit-124 contract as the dry-run timeout.
- *  Note this is NOT gated by evolution.run_timeout_minutes — that setting only
- *  detects dead wrappers (heartbeat loss), never slow phases. */
-const PHASE_TIMEOUT_SEC = 1800
+ *  only the inner cli is stuck). The cap bounds such a wedge to one phase (the
+ *  row fails cleanly instead of hanging) while leaving a slow model (Opus +
+ *  xhigh thinking, 35–100s per turn) wide headroom. Same SIGTERM→exit-124
+ *  contract as the dry-run timeout. Note this is NOT gated by
+ *  evolution.run_timeout_minutes — that setting only detects dead wrappers
+ *  (heartbeat loss), never slow phases. */
+const PHASE_TIMEOUT_SEC = 2700
+
+/** Drafting (phase A and the phase B fix pass) gets the widest cap: it reads
+ *  the source session plus the prompt surface and, for a global agent / skill
+ *  target, re-writes the whole folder byte-exact into the sandbox — a 600s cap
+ *  once cut a draft off mid-write after 14 turns of steady progress. */
+const DRAFT_TIMEOUT_SEC = 3600
 
 /** Prompt-surface entries copied into the evo sandbox (read side — every
  *  LLM phase reads these via buildEvoSandbox). This is the source of truth
@@ -973,7 +978,7 @@ async function phaseDraft(args: {
     args.logFd,
     subCliLogPath(args.runDir),
     brief,
-    PHASE_TIMEOUT_SEC,
+    DRAFT_TIMEOUT_SEC,
   )
   if (result.exitCode !== 0) {
     writeLog(args.logFd, `[phaseDraft] evo cli exited ${result.exitCode}\n`)
@@ -1177,7 +1182,7 @@ async function runFix(args: {
     args.logFd,
     subCliLogPath(args.runDir),
     brief,  // stdin, not argv — see spawnProc / draft
-    PHASE_TIMEOUT_SEC,
+    DRAFT_TIMEOUT_SEC,
   )
   return result.exitCode === 0
 }

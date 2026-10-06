@@ -451,9 +451,10 @@ export const config = {
     },
     // Heartbeat-loss threshold the ticker uses to decide a wrapper died and
     // requeue its run. It is not a phase limit: a healthy wrapper heart-beats
-    // every 60s for its whole run, including a phase that burns the full
-    // PHASE_TIMEOUT_SEC (1800s) in evo-wrapper.ts. 12min tolerates many
-    // missed beats before a second wrapper could be spawned for the same run.
+    // every 60s for its whole run, including a phase that burns its full cap
+    // (DRAFT_TIMEOUT_SEC 3600s / PHASE_TIMEOUT_SEC 2700s in evo-wrapper.ts).
+    // 12min tolerates many missed beats before a second wrapper could be
+    // spawned for the same run.
     get runTimeoutMinutes(): number {
       return settingsInt('general.evolution.run_timeout_minutes', 12)
     },

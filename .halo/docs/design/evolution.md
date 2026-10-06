@@ -93,7 +93,7 @@ The wrapper is the orchestrator; individual agents do focused work only. Every p
 
 ### Phase A — Draft
 
-`spawn('halo', ['cli', '-a', '__evo_agent__', '-n', '-w', '<runDir>/sandbox'])` — the brief goes in on stdin (multi-KB; argv would hit Windows limits), capped at `PHASE_TIMEOUT_SEC` (30 min).
+`spawn('halo', ['cli', '-a', '__evo_agent__', '-n', '-w', '<runDir>/sandbox'])` — the brief goes in on stdin (multi-KB; argv would hit Windows limits), capped at `DRAFT_TIMEOUT_SEC` (60 min; the Phase B fix pass gets the same). Dry-runs (`DRY_RUN_TIMEOUT_SEC`) and the other LLM phases — score, apply-merge, apply-score (`PHASE_TIMEOUT_SEC`) — are capped at 45 min. All are wall-clock caps on the sub-cli, not idle timers.
 
 Agent writes:
 - `patch.md` — Markdown with YAML frontmatter + body. Frontmatter includes `testScenario: { agentId, testMessage, originalMessage }` and `target: .halo/<path>`.
@@ -112,7 +112,7 @@ The copy is `copyDereferenced` in `evo-wrapper.ts`, a hand-rolled recursive walk
 
 ```
 halo cli -a <patch.testScenario.agentId> -n -w <runDir>/sandbox --access workspace
-  # testMessage on stdin; Node-side 1800s timer → exit 124
+  # testMessage on stdin; Node-side 2700s timer → exit 124
 ```
 
 `--access workspace` masks `~/.aws`, `~/.ssh`, etc. (safety: test probe's behavior, not side effects).
@@ -176,7 +176,7 @@ The wrapper clears any stale ABORT.md (from a crashed previous attempt) at the s
 For each source_run_id:
 
 1. Read `testScenario` from source run's `patch.md`.
-2. Run `halo cli -a <agentId> -n -w <applyDir>/sandbox --access workspace` (testMessage on stdin, same 1800s timer) against merged sandbox.
+2. Run `halo cli -a <agentId> -n -w <applyDir>/sandbox --access workspace` (testMessage on stdin, same 2700s timer) against merged sandbox.
 3. Spawn `__score__` with regress-mode brief, write `regress/<runId>/score.json`.
 4. Any score with `lint < 50` or `behavior < 50` (or a missing / malformed `score.json`) → regression, abort with `failed`.
 
