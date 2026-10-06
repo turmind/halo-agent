@@ -74,6 +74,31 @@ describe('VerticalTabRow', () => {
     const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!
     expect(close.querySelector('svg')).not.toBeNull()
   })
+
+  it('without icon no icon cell is reserved; with icon (terminal usage) the cell stays first', () => {
+    render(createElement('div', null,
+      createElement(VerticalTabRow, { key: 'a', label: 'bare', active: false, onActivate: () => {} }),
+      createElement(VerticalTabRow, { key: 'b', icon: createElement('i', { 'data-testid': 'ico' }), label: 'term', active: false, onActivate: () => {} }),
+    ))
+    const [bare, term] = [...container.querySelectorAll<HTMLElement>('[aria-selected]')]
+    expect(bare.children).toHaveLength(1)
+    expect(bare.firstElementChild!.textContent).toBe('bare')
+    expect(term.children).toHaveLength(2)
+    expect(term.firstElementChild!.className).toContain('w-3.5')
+    expect(term.querySelector('[data-testid="ico"]')).not.toBeNull()
+  })
+
+  it('renders statusBar last inside a relative row; rows without it are unchanged', () => {
+    render(createElement('div', null,
+      createElement(VerticalTabRow, { key: 'a', label: 'sess', active: false, onActivate: () => {}, statusBar: createElement('span', { 'data-testid': 'bar' }) }),
+      createElement(VerticalTabRow, { key: 'b', icon: 'I', label: 'term', active: false, onActivate: () => {}, onClose: () => {}, closeLabel: 'Close' }),
+    ))
+    const [sess, term] = [...container.querySelectorAll<HTMLElement>('[aria-selected]')]
+    expect(sess.className).toContain('relative')
+    expect(sess.lastElementChild!.getAttribute('data-testid')).toBe('bar')
+    expect(term.querySelector('[data-testid="bar"]')).toBeNull()
+    expect(term.lastElementChild!.tagName).toBe('BUTTON')
+  })
 })
 
 describe('collapsed sidebar', () => {

@@ -18,7 +18,8 @@ const itemState = (active: boolean) =>
     : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)]/50 hover:text-[var(--foreground)]'
 
 interface VerticalTabRowProps {
-  icon: ReactNode
+  /** Leading glyph; omit and no icon cell is reserved — the label starts at the padding. */
+  icon?: ReactNode
   label: ReactNode
   /** Native tooltip of the whole row. */
   tooltip?: string
@@ -26,6 +27,8 @@ interface VerticalTabRowProps {
   onActivate: () => void
   /** After the label, always visible (unread dot). */
   badge?: ReactNode
+  /** Overlay along the row's bottom edge — absolutely positioned by the caller (row is `relative`; `group-hover:` works on it). */
+  statusBar?: ReactNode
   /** Hover-only buttons before ✕ (they stop their own click propagation). */
   actions?: ReactNode
   /** ✕ — shown on hover only, active row included. Omit for none. */
@@ -35,18 +38,18 @@ interface VerticalTabRowProps {
   closeIcon?: ReactNode
 }
 
-export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge, actions, onClose, closeLabel, closeIcon }: VerticalTabRowProps) {
+export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge, statusBar, actions, onClose, closeLabel, closeIcon }: VerticalTabRowProps) {
   return (
     <div
       onClick={onActivate}
       title={tooltip}
       aria-selected={active}
       className={cn(
-        'group mx-1.5 flex h-7 shrink-0 cursor-pointer select-none items-center gap-2 rounded-md px-2 text-[11px] transition-colors',
+        'group relative mx-1.5 flex h-7 shrink-0 cursor-pointer select-none items-center gap-2 rounded-md px-2 text-[11px] transition-colors',
         itemState(active),
       )}
     >
-      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">{icon}</span>
+      {icon && <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">{icon}</span>}
       <div className="min-w-0 flex-1 truncate">{label}</div>
       {badge}
       {actions && <span className="flex shrink-0 items-center opacity-0 group-hover:opacity-100">{actions}</span>}
@@ -60,6 +63,7 @@ export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge
           {closeIcon ?? <X className="h-3 w-3" />}
         </button>
       )}
+      {statusBar}
     </div>
   )
 }
@@ -70,7 +74,7 @@ interface VerticalTabSquareProps {
   tooltip: string
   active: boolean
   onActivate: () => void
-  /** Overlays (spinner, unread dot) — absolutely positioned by the caller. */
+  /** Overlays (spinner, status bar) — absolutely positioned by the caller; `group-hover:` works on them. */
   badge?: ReactNode
 }
 
@@ -82,7 +86,7 @@ export function VerticalTabSquare({ icon, tooltip, active, onActivate, badge }: 
       aria-label={tooltip}
       aria-pressed={active}
       className={cn(
-        'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[11px] font-medium transition-colors',
+        'group relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[11px] font-medium transition-colors',
         itemState(active),
       )}
     >

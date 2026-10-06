@@ -190,7 +190,6 @@ export function SessionSidebar({
       <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto py-1">
         {isDraft && (
           <VerticalTabRow
-            icon={<MessageSquare className="h-3 w-3" />}
             label={t('chat.tabs.newSession')}
             active
             onActivate={() => {}}
@@ -206,9 +205,10 @@ export function SessionSidebar({
             const editing = editingId === s.id
             const model = typeof s.agentSnapshot?.model === 'string' ? ` · ${s.agentSnapshot.model.split('.').pop()}` : ''
             return (
-              <VerticalTabRow
+              <SessionRow
                 key={s.id}
-                icon={<SessionStatusDot store={tab?.store} unread={unreadOf(s)} />}
+                store={tab?.store}
+                unread={unreadOf(s)}
                 tooltip={`${titleOf(s)}\n${s.exchangeCount} msgs · ${formatRelativeTime(s.updatedAt, t)}${model}`}
                 active={currentSessionId === s.id}
                 onActivate={() => onSelect(s.id)}
@@ -271,25 +271,54 @@ function useSessionBusy(store: ChatStoreApi | undefined): boolean {
   return useSyncExternalStore(subscribe, getStreaming, getStreaming)
 }
 
-/** One fixed-size dot per tab — busy (amber, pulsing) / unread (blue) /
- *  idle (green), same look as the Explorer header's busy dot. Fixed size so
- *  a state change never reflows a narrow column (a spinner did). */
-function SessionStatusDot({ store, unread, className }: { store?: ChatStoreApi; unread: boolean; className?: string }) {
-  const t = useT()
+type SessionStatus = 'busy' | 'unread' | 'idle'
+
+/** busy (a loaded tab streams) wins over unread, unread over idle. */
+function useSessionStatus(store: ChatStoreApi | undefined, unread: boolean): SessionStatus {
   const busy = useSessionBusy(store)
+  return busy ? 'busy' : unread ? 'unread' : 'idle'
+}
+
+const STATUS_LABEL_KEY = { busy: 'status.busy', unread: 'chat.tabs.unread', idle: 'status.idle' } as const
+
+/** A 2px line along the bottom of a tab — busy (amber, breathing) / unread
+ *  (blue) / idle (green, dimmed: it is the norm, so it recedes; brighter on
+ *  the selected / hovered tab). Absolutely positioned, so a state change never
+ *  reflows the list. Decorative: the state text lives in the tab's tooltip. */
+function SessionStatusBar({ status, active, className }: { status: SessionStatus; active: boolean; className: string }) {
   return (
     <span
-      title={busy ? t('status.busy') : unread ? t('chat.tabs.unread') : t('status.idle')}
+      aria-hidden
       className={cn(
-        'inline-block h-2 w-2 shrink-0 rounded-full',
-        busy ? 'bg-amber-400 animate-pulse' : unread ? 'bg-blue-500' : 'bg-emerald-500',
+        'pointer-events-none absolute bottom-0 h-0.5 rounded-full transition-colors',
+        status === 'busy' && 'bg-amber-400 animate-pulse',
+        status === 'unread' && 'bg-blue-500',
+        status === 'idle' && (active ? 'bg-emerald-500/70' : 'bg-emerald-500/40 group-hover:bg-emerald-500/70'),
         className,
       )}
     />
   )
 }
 
-/** Collapsed tab: the title's first letter, with the status dot in a corner. */
+/** A session row: VerticalTabRow plus the bottom status bar, with the state
+ *  text appended to the tooltip's second line. A component of its own because
+ *  each row subscribes to its own tab's store. */
+function SessionRow({ store, unread, tooltip, ...row }: Omit<React.ComponentProps<typeof VerticalTabRow>, 'statusBar'> & {
+  store?: ChatStoreApi
+  unread: boolean
+}) {
+  const t = useT()
+  const status = useSessionStatus(store, unread)
+  return (
+    <VerticalTabRow
+      {...row}
+      tooltip={`${tooltip} · ${t(STATUS_LABEL_KEY[status])}`}
+      statusBar={<SessionStatusBar status={status} active={row.active} className="inset-x-1.5" />}
+    />
+  )
+}
+
+/** Collapsed tab: the title's first letter, with a short status bar along the bottom. */
 function SessionSquare({ title, tooltip, active, store, unread, onActivate }: {
   title: string
   tooltip: string
@@ -298,14 +327,16 @@ function SessionSquare({ title, tooltip, active, store, unread, onActivate }: {
   unread: boolean
   onActivate: () => void
 }) {
+  const t = useT()
+  const status = useSessionStatus(store, unread)
   const initial = Array.from(title.trim())[0]
   return (
     <VerticalTabSquare
       icon={initial ? initial.toUpperCase() : <MessageSquare className="h-3.5 w-3.5" />}
-      tooltip={tooltip}
+      tooltip={`${tooltip} · ${t(STATUS_LABEL_KEY[status])}`}
       active={active}
       onActivate={onActivate}
-      badge={<SessionStatusDot store={store} unread={unread} className="absolute right-0.5 top-0.5" />}
+      badge={<SessionStatusBar status={status} active={active} className="inset-x-[20%]" />}
     />
   )
 }
