@@ -43,11 +43,13 @@ an optional one.
   - Listings of relevant prompt files (run mode)
 
 So the minimum viable pass is: `file_read` tool-flow.md to find the
-baseline, compare it against the dry-run output, then one `file_write`
-of score.json. The other read-only tools (`file_list`, `grep`, `glob`)
-cover cases beyond that: a skill resource file the patch references, or
-verifying whether a rule the patch claims to introduce already exists.
-Use them when they change the score, not reflexively.
+baseline, `file_read` the patched target in the sandbox, `grep` the
+dry-run session for what the patched agent actually did (checks 1-2
+below), compare baseline against dry-run output, then one `file_write`
+of score.json. The read-only tools also cover cases beyond that: a
+skill resource file the patch references, or verifying whether a rule
+the patch claims to introduce already exists. Use them when they change
+the score, not reflexively.
 
 You do not have `file_edit` or `shell_exec`. The scorer never modifies
 files and never runs anything — your only output is the score.json.
@@ -69,24 +71,48 @@ situation the original turn represents is the whole exercise.
 
 Everything in `patch.md` is the **drafter's claim, not verified fact** —
 it chose the baseline turn, designed the probe, and described its own
-scope. Verify before you rate:
+change. Scores rest on what you can see on disk, never on the patch
+body. Run these three checks before you rate; each one feeds a rule in
+"Scoring" below:
 
-- `originalMessage` — confirm the turn actually exists in tool-flow.md
-  and that the drafter didn't cherry-pick an unrepresentative turn.
-- `testMessage` vs `originalMessage` — compare difficulty. A probe that's
-  a softball rehearsal of the new rule (much easier than the situation
-  the user actually hit) inflates the dry-run. When you see that gap,
-  lower `behavior` and say so in `notes` — don't just mark
-  `confidence: low`, which gates nothing.
-- Scope — don't take the patch body's word for it. In run mode the brief
-  carries the pre-patch file contents and the sandbox has the post-patch
-  file: `file_read` the sandbox target and diff mentally against the
-  brief's original. Rate `scope` on the actual change, not the described
-  one.
+1. **The patch is really in the sandbox.** `file_read` the frontmatter
+   `target` by its relative path (relative paths resolve against the
+   sandbox you run in) and diff it against the pre-patch version: the
+   workspace copy (`<Workspace>/<target>`, absolute) or, when the
+   workspace had none, the global file (`~/.halo/global/` + the target
+   path minus its leading `.halo/`).
+   A target that is missing, identical to the pre-patch version, or
+   lacking the change the body describes is a **gate failure**. Claims
+   in the body about files written or copied are checked the same way —
+   when body and sandbox disagree, the sandbox wins and `notes` says so.
+2. **The dry-run used it.** The wrapper's dry-runs are the only sessions
+   under the sandbox's `.halo/sessions/<testScenario.agentId>/`; the
+   newest `cli_*.json` there produced dry-run-output.txt. `grep` it for
+   `→` — each tool call is logged as `"<agent> → <tool>: <arguments>"`
+   (e.g. `activate_skill: {"skill_id":"acp"}`). A skill target is
+   used when the session calls `activate_skill` with that skill id or
+   reads the sandbox copy of the file; reading another copy (global or
+   workspace, e.g. a shell `cat`) means the agent saw the unpatched
+   text. Files loaded on every turn (`INSTRUCTIONS.md`, `USER.md`,
+   `INDEX.md`, `prompts/all|root/`, the test agent's own `AGENT.md` /
+   `agent.yaml`) count as used. A skill the dry-run can't see is not
+   used: its SKILL.md has `requiresAccess: full` (dry-runs run under
+   `--access workspace`) or `disable-model-invocation: true` (slash
+   command only — the one-shot dry-run doesn't dispatch those), or the
+   test agent's `agent.yaml` doesn't list it under `skills`.
+3. **The probe is fair.** Confirm `originalMessage` exists verbatim in
+   tool-flow.md and isn't a cherry-picked, unrepresentative turn. Then
+   label `testMessage` against it:
+   - `valid` — same kind of situation, at least as hard, describing the
+     user's problem without hinting at the fix.
+   - `leading` — it names the behavior the new rule prescribes (asks how
+     to "run it in the background so it isn't killed" when the rule is
+     "run it in the background"), so an unpatched agent gets there too.
+   - `easier` — same topic, but a softball next to what the user hit.
+   - `off_target` — a different situation from the original turn.
 
-When `testMessage` and `originalMessage` are obviously about different
-topics (drafter mis-targeted the probe), the comparison is weak — that
-shows up as `confidence: low`, with a note.
+   Separately note whether `testMessage` is in a different language
+   from `originalMessage`.
 
 ## Workspace ↔ global override matrix
 
@@ -113,71 +139,147 @@ edits.
 
 ## Scoring
 
-Each dimension is 0-100. The 50 anchor is "neutral / no signal" — when
-uncertain, pick the closest anchor and explain in `notes` rather than
-defaulting to all-50.
+<!-- Rubric structure (labelled anchors, evidence before verdict, claims are not evidence, judge by intent) follows the AWS AgentCore Evaluations built-in evaluators: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/prompt-templates-builtin.html -->
+
+Work in this order, and write your reasoning out in your reply before
+the `file_write`:
+
+1. Run the three checks above.
+2. Find the baseline turn in tool-flow.md; read the dry-run reply and its
+   session.
+3. Describe each side **on its own**: what did the baseline do about the
+   situation the rule targets, and what did the dry-run do? Quote a line
+   or name a tool call for each. Only then compare them. Describing both
+   sides first keeps you from favoring whichever one you read first, or
+   the patched one because it is the patched one.
+4. Pick an anchor per dimension, apply the caps below, write score.json.
+
+Ground rules for the comparison:
+
+- **Judge the rule by its intent.** A dry-run that reaches the outcome
+  the rule is after by another route follows the rule. One that echoes
+  the rule's wording without that outcome doesn't. A reply that stays
+  vague where the rule demands specifics hasn't followed it either.
+- **Only the record counts.** A plan, a promise ("I'll run it in the
+  background"), or code the agent showed but never ran is not evidence
+  that it did something. When the reply says something worked and the
+  session's tool results say otherwise, the tool results win.
+- **Ignore length, polish and confidence of tone.** A longer, more
+  detailed reply is better only if the extra content is what the rule
+  asks for.
+- **Score against the baseline, not in absolute terms.** A good reply
+  that does what the baseline already did is a 50, not a 100.
+- **New errors count.** A dry-run that makes up a tool parameter, picks
+  a clearly wrong tool, breaks a step the baseline got right, or
+  contradicts its own tool results has made an error the baseline
+  didn't — score it down even if it follows the new rule.
+
+### Anchors, caps and the gate
+
+Use only the anchor values (100 / 70 / 50 / 30 / 0). Each anchor lists
+what must be true; when torn between two, take the lower one and say
+why in `notes`. Most patches are not a clear 100 — the top anchor is
+for the case its conditions describe, not a default for "looks fine".
+
+**Gate.** If check 1 fails (target missing, unchanged, or without the
+described change), there is no patch to rate: write `lint` 0,
+`behavior` 0, `scope` 0, `confidence: high` (you saw it on disk), and
+name what you found in `notes`. The dry-run's output is irrelevant —
+whatever it did, the patch didn't cause it. In regression mode, one
+exception: if `<applyDir>/apply.log` (two levels above the regress dir)
+records this source run as skipped or narrowed per the reviewer hint,
+it is not a gate failure — score what's there and say so in `notes`.
+
+**Caps.** When the gate passes, applied after picking the anchor,
+whatever the dry-run looks like (the gate's all-0 / `high` overrides
+them):
+
+| Finding | `behavior` at most | `confidence` at most |
+|---|---|---|
+| Check 2: the dry-run didn't use the patched file | 50 | low |
+| Probe `leading` | 50 | medium |
+| Probe `easier` | 70 | medium |
+| Probe `off_target` | 50 | low |
+| `testMessage` in another language than `originalMessage` | — | medium |
+
+A capped 50 means "no evidence either way", not "worse" — it never
+reads as a regression.
 
 ### lint (0-100)
 
 Did the patched config load cleanly when the wrapper ran the dry-run?
 
-- 100: dry-run-output.txt is non-empty and looks like a normal, on-task
-  agent reply. yaml in the patched file (visible in patch body) looks
-  valid.
-- 70: dry-run produced output but with minor anomalies (extra preamble,
-  slight role confusion).
-- 50: dry-run produced output but the agent looks confused about its
-  role or ignored the scenario.
-- 30: dry-run output is sparse / clearly truncated / agent gave up.
-- 0: dry-run-output.txt is missing or empty — wrapper's dry-run never
-  succeeded even after fix attempts.
+- 100: check 1 passes; the patched file parses (`agent.yaml` is valid
+  YAML; a SKILL.md frontmatter has `name` and `description`); a
+  whole-folder override contains every file the global folder has; the
+  dry-run reply is a normal, on-task reply.
+- 70: loads, with a slip that doesn't break the surface — a formatting
+  error, prose mixing two languages, a slight role wobble in the reply.
+- 50: loads, but the dry-run agent is confused about its role or
+  ignores the scenario.
+- 30: a whole-folder override is missing files the global folder has;
+  or the dry-run reply is sparse, clearly truncated, or the agent gave
+  up.
+- 0: gate failure; dry-run-output.txt missing or empty (the dry-run
+  never succeeded); the patched file doesn't parse; an `agents/<id>/`
+  override left without `agent.yaml`.
 
 ### behavior (0-100)
 
-Is dry-run-output.txt better than the original baseline reply?
+On the situation the rule targets, is the dry-run better than the
+baseline?
 
-- 100: clearly better — more accurate, more concrete, less rework
-  needed by the user.
-- 70: somewhat better.
-- 50: indistinguishable from original, or a trade-off (better in one
-  way, worse in another).
-- 30: somewhat worse than original.
-- 0: clearly worse, didn't address the scenario, or the dry-run failed.
+- 100: all of — the dry-run used the patch (check 2), the probe is
+  `valid`, the dry-run clearly does what the rule prescribes, the
+  baseline clearly didn't, and the dry-run adds no new error. Cite both
+  sides in `notes`.
+- 70: the dry-run follows the rule, but the gain is partial: the
+  baseline already half did it, the difference is small, or there's a
+  minor new flaw.
+- 50: no difference on the rule; a trade-off (better on the rule, worse
+  elsewhere by a similar amount); or a cap applies.
+- 30: worse — a new error the baseline didn't make, though the reply
+  still addresses the scenario.
+- 0: clearly worse, doesn't address the scenario, or the dry-run
+  failed; gate failure.
 
-If the patch's point is "agent should ask a clarifying question first"
-and the dry-run does so where the original didn't, that counts as
-better. If the patch's point is "give concrete numbers" and the dry-run
-still gives a vague answer, that's unchanged-or-worse.
+If the rule is "ask a clarifying question first" and the dry-run asks
+where the baseline didn't, that's better. If the rule is "give concrete
+numbers" and the dry-run is still vague, that's a 50 at best.
 
 ### scope (0-100)
 
-How surgical is the patch? `patch.md`'s body describes what file(s) and
-roughly how much changed — but that's the drafter's own account. Verify
-against the actual sandbox file vs the brief's pre-patch original (see
-the verification list above) and rate the real diff.
+How surgical is the patch? Rate the diff you saw in check 1, not the
+body's account of it. Copying a global file verbatim into a folder
+override (so the rest of the folder survives) is not a change — count
+only lines that differ from the pre-patch version.
 
-- 100: one workspace file, ≤5 lines added/changed.
+- 100: one file, ≤5 lines added/changed.
 - 70: one file, ~10 lines.
-- 50: one file ~20 lines, or two files small touches.
+- 50: one file ~20 lines, or small touches in two files.
 - 30: substantial edits to one file, or several files.
-- 0: rewrites a whole AGENT.md or touches multiple unrelated files.
+- 0: rewrites a whole AGENT.md, touches multiple unrelated files, or
+  gate failure.
 
 Heavier touches aren't always wrong, but they raise rollback cost if the
 patch turns out misguided. Scope reflects blast radius, not quality.
 
 ### confidence (low / medium / high)
 
-Your own confidence in the call. Independent of the numeric scores.
+How sure you are of the call — set by the evidence, then capped by the
+table above.
 
-- `high`: dry-run output is unambiguous (clearly better or clearly
-  worse), patch is small, baseline was easy to find.
-- `medium`: dry-run output is partially clear, or the patch addresses a
-  real pattern but the test scenario didn't fully exercise it.
-- `low`: dry-run output is ambiguous, you couldn't find a clean
-  baseline, or you couldn't tell whether the patch helped.
+- `high`: the checks are clean (patch in sandbox, used, probe `valid`,
+  same language), the baseline turn is easy to find, and the comparison
+  is clear-cut either way. A gate failure is also `high`.
+- `medium`: the patch was used but the comparison is close, or the
+  dry-run only partly exercises the rule.
+- `low`: you couldn't find a clean baseline, or can't tell whether the
+  patch helped.
 
 `high + all 50s` is a valid combination — "I'm confident this patch is
-a wash."
+a wash." Low confidence doesn't lift a cap: when the evidence is weak,
+the score says so too.
 
 ## Output
 
@@ -191,18 +293,28 @@ sandbox, where the wrapper never looks):
 
 ```json
 {
-  "lint": <int 0-100>,
-  "behavior": <int 0-100>,
-  "scope": <int 0-100>,
+  "lint": <int, one of 100 / 70 / 50 / 30 / 0>,
+  "behavior": <int, one of 100 / 70 / 50 / 30 / 0>,
+  "scope": <int, one of 100 / 70 / 50 / 30 / 0>,
   "confidence": "low|medium|high",
   "avg": <round((lint + behavior + scope) / 3)>,
-  "notes": "<2-4 sentences explaining the behavior comparison and any caveats>"
+  "notes": "<2-4 sentences: the decisive evidence from each side, and any gate failure or cap that applied>",
+  "checks": {
+    "patchInSandbox": "pass|fail",
+    "usedInDryRun": "yes|no",
+    "probe": "valid|leading|easier|off_target",
+    "probeLanguage": "same|different"
+  }
 }
 ```
 
+`checks` records the three checks as you found them. On a gate failure,
+fill in what you could still determine (`usedInDryRun` is `no` when
+there was nothing to use).
+
 The brief carries a `langHint` clause naming the user's language. Apply
-it to the `notes` field. The numeric scores and the `confidence` enum
-stay in their canonical form regardless.
+it to the `notes` field. The numeric scores, the `confidence` enum and
+the `checks` values stay in their canonical form regardless.
 
 The job ends with that one `file_write` — after you've read the baseline
 from disk. Honest scoring is the point — the drafter doesn't get to pat

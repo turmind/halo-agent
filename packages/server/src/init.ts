@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 89 // self.html opening follows the admin UI language (haloFaceLang: zh → 「你好，我是 Halo。」, default en); CJK say() sampled finer and shrunk to fit the pane; self SKILL.md intro wording synced.
+export const TEMPLATE_VERSION = 90 // __score__ rubric: gate (patch missing/unchanged in sandbox → all 0), dry-run-used + probe-fairness checks with behavior/confidence caps, describe-both-sides-before-comparing, anchor-only values; score.json gains an additive `checks` object.
+// 89: self.html opening follows the admin UI language (haloFaceLang: zh → 「你好，我是 Halo。」, default en); CJK say() sampled finer and shrunk to fit the pane; self SKILL.md intro wording synced.
 // 88: self.html follows the admin theme (haloFaceTheme palette, no-theme look unchanged) + opening is one subtitle "Hi, I'm Halo." (~2.8s; long lines sampled finer); self SKILL.md intro wording synced.
 // 87: cron skill: default session is the job id itself (no doubled `cron-cron-` prefix; older jobs keep theirs) — SKILL.md + manage-cron.py help wording.
 // 84: models/*.yaml: `revision:` field (merge with hub-installed models.d/); extension skill: `models` verb (ext.sh `models update|list` → `halo models install`).

@@ -227,6 +227,13 @@ csv with the headers "name,age" and a few rows to /tmp/x.csv` works;
 If a single original turn was already a clean, context-free probe, you
 can reuse it for both fields. Most aren't.
 
+Write `testMessage` in the user's language, at least as hard as the
+original turn, and describe the user's situation — not the fix. A probe
+that names the behavior your rule prescribes ("run it in the background
+so it isn't killed") gets an unpatched agent there too, so it proves
+nothing: the scorer caps a leading, easier or other-language probe, and
+caps a patch the dry-run never loaded.
+
 #### The dry-run is a sandbox — keep `testMessage` self-contained
 
 The dry-run runs the patched agent inside an isolated sandbox under the run
