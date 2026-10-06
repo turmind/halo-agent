@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-06
+
+### Added
+
+- Extensions: a meeting-recorder-class extension can now own a whole directory (`<title>.htrans/`, opened as one file), capture the microphone / screen audio, and stream audio to a server-side transcription proxy (Amazon Transcribe) that returns live captions without AWS keys reaching the browser. Extensions can declare their own settings (Settings → Extension settings), and follow the admin's theme tokens and UI language live. Transcribe `lang` accepts an explicit list (`zh-CN,en-US`); `auto` defaults to Mandarin, Cantonese and English. Desktop: a screen / system-audio picker, and a leave confirmation while a recording tab is open.
+- Face: the agent's face talks back — acknowledgements, snap, voice cues, resume after a blocked voice, a nine-grid — follows the admin theme, and opens with "Hi, I'm Halo." (「你好，我是 Halo。」 in Chinese UI). A face toggle with a pinned tab, receipts and snapshots in the admin.
+- Cron: recurring jobs get an active window (`activeFrom` / `activeUntil`) — "pause until" / "send until"; the cron skill takes `--active-from` / `--active-until`.
+- Evolution: the scorer follows a stricter rubric — a gate (patch not really in the sandbox → all 0), dry-run-used and probe-fairness checks with score caps, anchor-only scores (100/70/50/30/0), and a `checks` object in `score.json`.
+- Admin: an image that fails to load in chat, the markdown preview or the media viewer shows a readable "image unavailable" placeholder instead of the browser's broken-image glyph.
+
+### Changed
+
+- Admin: Settings navigation has a General icon and collapsible groups; the activity bar lists Sessions before Source Control and Agents before Skills; the session-list status dot moved to the bottom status bar.
+- Evolution: phase time limits widened — draft / fix 60 min, dry-run / score / apply 45 min.
+
+### Fixed
+
+- Cron: a job's default session id is the job id (was `cron-cron-<id>`); existing jobs keep their old session.
+- Admin / CLI: internal agents stay out of the cron picker, the CLI agent list and the Agents page (Internal group is back; the goal agent is hidden).
+- Evolution: a draft cut off by a timeout, or that never wrote its target file, now fails instead of being scored.
+- Extensions: the transcribe WebSocket upgrade is hardened.
+
 ## [1.5.8] - 2026-10-05
 
 ### Added
@@ -783,7 +805,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.8...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.9...HEAD
+[1.5.9]: https://github.com/turmind/halo-agent/compare/v1.5.8...v1.5.9
 [1.5.8]: https://github.com/turmind/halo-agent/compare/v1.5.7...v1.5.8
 [1.5.7]: https://github.com/turmind/halo-agent/compare/v1.5.6...v1.5.7
 [1.5.6]: https://github.com/turmind/halo-agent/compare/v1.5.5...v1.5.6
