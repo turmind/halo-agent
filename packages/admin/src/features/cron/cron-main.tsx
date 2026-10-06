@@ -207,7 +207,7 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
           {job.activeFrom != null && <div><span className="text-[var(--foreground)]">{t('cron.field.activeFrom')}</span> <span className="font-mono">{new Date(job.activeFrom).toLocaleString()}</span></div>}
           {job.activeUntil != null && <div><span className="text-[var(--foreground)]">{t('cron.field.activeUntil')}</span> <span className="font-mono">{new Date(job.activeUntil).toLocaleString()}</span></div>}
           <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.workspace')}</span> {job.workspacePath}</div>
-          <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.session')}</span> <span className="font-mono">{job.sessionId ?? t('cron.field.sessionDefault', { id: `cron-${job.id}` })}</span></div>
+          <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.session')}</span> <span className="font-mono">{job.sessionId ?? t('cron.field.sessionDefault', { id: job.effectiveSessionId })}</span></div>
           <div className="col-span-2"><span className="text-[var(--foreground)]">{t('cron.field.targets')}</span> {job.targets.length === 0
             ? t('cron.field.targetsLogOnly')
             : job.targets.map((tg) => `${tg.channelType}:${tg.accountId}${tg.chatId ? '/' + tg.chatId : ''}`).join(', ')}</div>
@@ -334,7 +334,7 @@ function CronForm({ initial, onClose, onSaved }: {
   const [committedPath, setCommittedPath] = useState(workspacePath)
   const [agentId, setAgentId] = useState(initial?.agentId ?? 'default')
   const [agentOptions, setAgentOptions] = useState<Array<{ id: string; name: string }>>([])
-  // Empty string = the job's own `cron-<jobId>` session (server stores null).
+  // Empty string = the job's own session (server stores null).
   const [sessionId, setSessionId] = useState(initial?.sessionId ?? '')
   const [sessionOptions, setSessionOptions] = useState<Array<{ id: string; label: string }>>([])
   // Trigger mode: cron expression vs. one-shot (at-mode). For an existing

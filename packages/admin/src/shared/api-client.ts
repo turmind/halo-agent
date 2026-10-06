@@ -1107,6 +1107,8 @@ export const api = {
           createdAt: number
           updatedAt: number
           nextRunAt: number | null
+          /** Session the cli runs in — `sessionId`, else the job's own. */
+          effectiveSessionId: string
         }>
         hasMore: boolean
         nextCursor: number | null

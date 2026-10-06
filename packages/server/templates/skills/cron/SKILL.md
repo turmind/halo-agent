@@ -60,7 +60,7 @@ Sensible defaults if user didn't say:
 | targets    | none (log only — the run shows in admin Cron tab)             |
 | label      | summarize from prompt + schedule                              |
 | timeout    | leave unset (3600s) — see `--timeout-sec` below               |
-| session    | leave unset (the job's own `cron-<jobId>`) — see `--session` below |
+| session    | leave unset (the job's own session) — see `--session` below   |
 | prompt     | pass the user's task as-is — the runner prepends an "unattended run, don't ask questions" notice to every fire, so don't add one yourself |
 
 ### 2. Translate the schedule
@@ -95,7 +95,9 @@ heavy analysis run that needs more than an hour (`--timeout-sec 7200`). On
 `update`, pass `--timeout-sec ""` to clear back to the default.
 
 **Run inside an existing session (`--session`, optional)** — by default every
-job accumulates its own `cron-<jobId>` session. Pass `--session <rootSessionId>`
+job accumulates its own session (same id as the job; older jobs keep the
+`cron-cron-…` session they already have, shown as their `session_id`).
+Pass `--session <rootSessionId>`
 only when the user wants the runs to continue a specific conversation (the
 agent then sees that session's history). Rules the user should hear once:
 - the session keeps **its own agent and access level** — `--agent` only
@@ -106,7 +108,9 @@ agent then sees that session's history). Rules the user should hear once:
 
 Root session ids only (no `>` sub-session paths). You don't know session ids
 yourself — ask the user (admin → Sessions) rather than guessing. On `update`,
-pass `--session ""` to go back to the job's own session.
+pass `--session ""` to go back to the job's own session (for an older job
+pinned to `cron-cron-…` that starts a fresh session — leave it alone unless
+the user asks).
 
 **Active window (`--active-from` / `--active-until`, optional, recurring
 jobs only)** — the schedule fires only inside `[from, until)`; fires outside

@@ -16,7 +16,7 @@ import { eq, desc, lt, and } from 'drizzle-orm'
 import fs from 'node:fs/promises'
 import { Cron } from 'croner'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
-import { reloadAll, scheduleJob, unscheduleJob, runJob, activeWindowOptions } from '../cron/runner.js'
+import { reloadAll, scheduleJob, unscheduleJob, runJob, activeWindowOptions, effectiveSessionId } from '../cron/runner.js'
 import { listAllCronTargets } from '../cron/dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
 
@@ -35,8 +35,8 @@ interface CreateBody {
   /** Max seconds one cron-fired cli may run (60–21600). Unset/null = the
    *  runner's default 3600. */
   timeoutSec?: number
-  /** Root session the cli runs in. Unset/null/'' = the job's own
-   *  `cron-<jobId>` session. An existing session keeps its own agent. */
+  /** Root session the cli runs in. Unset/null/'' = the job's own session
+   *  (id = the job id). An existing session keeps its own agent. */
   sessionId?: string
   /** Active window (epoch ms; unset/null = unbounded), recurring jobs only:
    *  the schedule fires only inside `[activeFrom, activeUntil)`. */
@@ -52,7 +52,7 @@ interface CreateBody {
 /** PUT body — same fields as create, all optional. `runAt: null` explicitly
  *  clears the one-shot fire time (the admin form sends it when switching a
  *  job back to recurring); `timeoutSec: null` clears back to the default;
- *  `sessionId: null` (or '') clears back to `cron-<jobId>`. */
+ *  `sessionId: null` (or '') clears back to the job's own session. */
 type UpdateBody = Partial<Omit<CreateBody, 'runAt' | 'timeoutSec' | 'sessionId'>> & { runAt?: number | null; timeoutSec?: number | null; sessionId?: string | null }
 
 function newJobId(): string {
@@ -94,7 +94,7 @@ function validateTimeoutSec(v: unknown): string | null {
 const SESSION_ID_RE = /^[A-Za-z0-9_:-]{1,200}$/
 
 /** Normalize a `sessionId` body value: null/undefined/blank → null (= the
- *  job's default `cron-<jobId>`), else a validated root session id. */
+ *  job's own session), else a validated root session id. */
 function parseSessionId(v: unknown): { sessionId: string | null } | { error: string } {
   if (v === undefined || v === null) return { sessionId: null }
   if (typeof v !== 'string') return { error: 'sessionId must be a string or null' }
@@ -158,6 +158,9 @@ export function createCronRoutes(): Hono {
       // `nextRun` is computed live from the schedule — cheap and avoids a
       // stale-value problem when the db row hasn't been touched recently.
       nextRunAt: computeNextRun(r),
+      // The session the cli actually runs in (picked or the job's own) —
+      // the runner's rule, so the admin never re-derives it.
+      effectiveSessionId: effectiveSessionId(r),
     }))
     const nextCursor = hasMore ? trimmed[trimmed.length - 1]!.createdAt : null
     return c.json({ jobs: items, hasMore, nextCursor })
@@ -265,7 +268,7 @@ export function createCronRoutes(): Hono {
       if (err) return c.json({ error: err }, 400)
     }
     // sessionId: same partial-body contract — undefined = untouched,
-    // null / '' = clear back to cron-<jobId>.
+    // null / '' = clear back to the job's own session.
     const session = parseSessionId(body.sessionId)
     if ('error' in session) return c.json({ error: session.error }, 400)
 

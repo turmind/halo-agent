@@ -589,7 +589,7 @@ export const zh: Record<string, string> = {
   'cron.form.activeClear': '清空',
   'cron.form.active.hint': '只在这个时间段内按调度触发（按所选时区，止时刻不含）；段外的触发静默跳过。想暂停到某天，就把「生效起」设成那天。「立即运行」不受限制。',
   'cron.form.session': '会话',
-  'cron.form.session.placeholder': '留空 = 任务自己的 cron-<任务ID> 会话',
+  'cron.form.session.placeholder': '留空 = 任务自己的会话（id 与任务 id 相同）',
   'cron.form.session.hint': '选一个已有会话，任务就在其中继续对话：沿用该会话自己的 agent 和访问级别（上面的 Agent 只在会话还不存在时生效）。该会话正有回合在跑时本次运行会跳过；若运行期间你恰好在里面发消息，其中一轮可能从历史中丢失。',
   'cron.form.userPrompt': '用户提示词 *',
   'cron.form.userPrompt.placeholder': '从 .halo/memory/ 整理今天的状态摘要',

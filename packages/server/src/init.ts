@@ -57,7 +57,7 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 86 // cron skill: manage-cron.py create/update gain --active-from / --active-until (recurring-job active window); SKILL.md documents pause-until / send-until.
+export const TEMPLATE_VERSION = 87 // cron skill: default session is the job id itself (no doubled `cron-cron-` prefix; older jobs keep theirs) — SKILL.md + manage-cron.py help wording.
 // 84: models/*.yaml: `revision:` field (merge with hub-installed models.d/); extension skill: `models` verb (ext.sh `models update|list` → `halo models install`).
 // 83: self skill: self.show(path, ms) + the `show` play() beat (self.html itself is force-copied on open).
 // 82: models/*.yaml: `runtime:` field (createModelRuntime dispatches on it).

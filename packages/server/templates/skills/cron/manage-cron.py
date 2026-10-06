@@ -132,8 +132,8 @@ SESSION_ID_RE = re.compile(r'^[A-Za-z0-9_:-]{1,200}$')
 
 def parse_session(raw: str | None) -> str | None:
     """Validate --session: a root session id (same rule as the admin REST
-    routes — no `>` sub-session path). Empty = None = the job's own
-    `cron-<jobId>` session."""
+    routes — no `>` sub-session path). Empty = None = the job's own session
+    (same id as the job)."""
     if raw is None or not raw.strip():
         return None
     v = raw.strip()
@@ -383,7 +383,7 @@ def cmd_update(args):
         # same convention as `--run-at ""`.
         sets.append(('timeout_sec', parse_timeout_sec(args.timeout_sec)))
     if args.session is not None:
-        # `--session ""` clears back to the job's own cron-<jobId> session.
+        # `--session ""` clears back to the job's own session (id = job id).
         sets.append(('session_id', parse_session(args.session)))
     if args.targets is not None:
         sets.append(('targets', json.dumps(parse_targets(args.targets), ensure_ascii=False)))
@@ -553,7 +553,7 @@ def main():
     c.add_argument('--timeout-sec', dest='timeout_sec',
                    help='max run time in seconds, 60–21600 (default: unset = 3600)')
     c.add_argument('--session',
-                   help="run in this existing root session id (default: the job's own cron-<jobId>)")
+                   help="run in this existing root session id (default: the job's own session, same id as the job)")
     c.add_argument('--targets',
                    help='comma-separated channelType:accountId[:chatId] list, or JSON array. '
                         'chatId pins delivery to a specific chat (e.g. when scheduling from inside a chat).')
@@ -578,7 +578,8 @@ def main():
     u.add_argument('--timeout-sec', dest='timeout_sec',
                    help='max run time in seconds, 60–21600; pass "" to clear back to default 3600')
     u.add_argument('--session',
-                   help='root session id to run in; pass "" to clear back to cron-<jobId>')
+                   help='root session id to run in; pass "" to clear back to the job\'s own session '
+                        '(same id as the job — an older job pinned to cron-cron-… then starts a fresh one)')
     u.add_argument('--targets')
     u.add_argument('--active-from', dest='active_from',
                    help='recurring only: YYYY-MM-DD (= that day 00:00), ISO-8601 or unix ms, in the job timezone; '

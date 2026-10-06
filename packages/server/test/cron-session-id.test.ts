@@ -16,7 +16,8 @@ import { createCronRoutes } from '../src/routes/cron.js'
 
 /**
  * Per-job session (`cron_jobs.session_id`):
- *   - nullable; NULL = the job's own `cron-<jobId>` session
+ *   - nullable; NULL = the job's own session (the job id; `cron-<id>` for an
+ *     unprefixed custom id — migration v4 pins pre-fix jobs to `cron-cron-…`)
  *   - REST validates a root session id (no `>`), blank = null, PUT null clears
  *   - runner passes `-s <session>`, keeps the session's access level, skips a
  *     fire while the server is mid-turn on the session or another job's cli
@@ -148,6 +149,48 @@ describe('cron session_id — REST', () => {
     expect(reopened.pragma('user_version', { simple: true })).toBe(CRON_MIGRATIONS.length)
     reopened.close()
   })
+
+  it('migration v4 pins only jobs that already ran under the old cron-cron- default', () => {
+    const legacyDir = path.join(tmpHome, 'legacy-v4')
+    const raw = rawSqlite(createCronDb(legacyDir))
+    const job = raw.prepare(`INSERT INTO cron_jobs(id, workspace_path, agent_id, user_prompt, schedule, session_id, last_run_id, created_at, updated_at)
+      VALUES (?, '/w', 'default', 'p', '0 9 * * *', ?, ?, 1, 1)`)
+    job.run('cron-ran', null, 'run-1')           // ran → pinned
+    job.run('cron-never', null, null)            // never ran → new rule
+    job.run('cron-inflight', null, null)         // first run in flight across the upgrade → pinned
+    job.run('cron-skipped', null, null)          // only ever skipped (never spawned) → new rule
+    job.run('cron-picked', 'chat-1', 'run-2')    // picked session → untouched
+    job.run('custom', null, 'run-3')             // no cron- prefix: rule unchanged → untouched
+    const run = raw.prepare(`INSERT INTO cron_runs(id, job_id, trigger_kind, status, started_at) VALUES (?, ?, 'scheduled', ?, 1)`)
+    run.run('r-a', 'cron-inflight', 'running')
+    run.run('r-b', 'cron-skipped', 'skipped')
+    // A db from the previous build: v1–v3 applied, v4 not yet.
+    raw.pragma('user_version = 3')
+    raw.close()
+    const reopened = rawSqlite(createCronDb(legacyDir))
+    const sessions = Object.fromEntries((reopened.prepare('SELECT id, session_id FROM cron_jobs').all() as Array<{ id: string; session_id: string | null }>)
+      .map((r) => [r.id, r.session_id]))
+    expect(sessions).toEqual({
+      'cron-ran': 'cron-cron-ran',
+      'cron-never': null,
+      'cron-inflight': 'cron-cron-inflight',
+      'cron-skipped': null,
+      'cron-picked': 'chat-1',
+      'custom': null,
+    })
+    expect(reopened.pragma('user_version', { simple: true })).toBe(CRON_MIGRATIONS.length)
+    reopened.close()
+  })
+
+  it('GET returns effectiveSessionId (the runner rule) for the admin', async () => {
+    const res = await post({})
+    const { id } = await res.json() as { id: string }
+    await post({ sessionId: 'chat-9' })
+    const { jobs } = await (await app.request('/cron/jobs')).json() as { jobs: Array<{ id: string; sessionId: string | null; effectiveSessionId: string }> }
+    expect(id.startsWith('cron-')).toBe(true)
+    expect(jobs.find((j) => j.id === id)!.effectiveSessionId).toBe(id)
+    expect(jobs.find((j) => j.sessionId === 'chat-9')!.effectiveSessionId).toBe('chat-9')
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('cron session_id — runner', () => {
@@ -157,6 +200,33 @@ describe.skipIf(process.platform === 'win32')('cron session_id — runner', () =
     expect(run.status).toBe('succeeded')
     expect(run.output).toContain('-s cron-job-a')
     expect(run.output).not.toContain('--access')
+  })
+
+  it('a cron- prefixed job id is its own session id (no doubled prefix)', async () => {
+    insertJob('cron-xxx', null)
+    const run = getRun(await runJob('cron-xxx', 'manual'))
+    expect(run.status).toBe('succeeded')
+    expect(run.output).toMatch(/-s cron-xxx(\s|$)/)
+    expect(run.output).not.toContain('cron-cron-')
+  })
+
+  it('a job pinned by migration v4 keeps resuming its cron-cron- session; orphan sweep matches it', async () => {
+    // After v4 a pre-fix job carries session_id = 'cron-cron-old' explicitly.
+    insertJob('cron-old', 'cron-cron-old')
+    const run = getRun(await runJob('cron-old', 'manual'))
+    expect(run.output).toMatch(/-s cron-cron-old(\s|$)/)
+
+    // An orphan spawned by the previous build (always-prefix rule) carries
+    // `-s cron-cron-old` — the sweep must still recognize and reap it.
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', '-s', 'cron-cron-old'], { stdio: 'ignore' })
+    const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()))
+    await new Promise((r) => setTimeout(r, 150))
+    db.insert(cronRuns).values({ id: 'run-old', jobId: 'cron-old', triggerKind: 'scheduled', status: 'running', startedAt: Date.now(), pid: child.pid! }).run()
+    sweepOrphanRuns({ graceMs: 500 })
+    expect(getRun('run-old').failureReason).toContain('SIGTERM sent')
+    await exited
+    await new Promise((r) => setTimeout(r, 600))
+    expect(_inflight.has('cron-old')).toBe(false)
   })
 
   it('runs in the picked session and keeps its stored access level', async () => {

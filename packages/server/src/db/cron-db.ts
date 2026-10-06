@@ -45,8 +45,8 @@ export const cronJobs = sqliteTable('cron_jobs', {
    *  it. NULL = default 3600 (runner.ts CLI_TIMEOUT_SEC). Range 60–21600,
    *  enforced at the write points (REST routes / skill helper). */
   timeoutSec: integer('timeout_sec'),
-  /** Root session id the cli runs in. NULL = the job's own `cron-<jobId>`
-   *  session. When it names an existing session the cli resumes it with that
+  /** Root session id the cli runs in. NULL = the job's own session (id =
+   *  the job id; `cron-<id>` for a custom id without that prefix). When it names an existing session the cli resumes it with that
    *  session's own agent (`agentId` only applies when the session is new). */
   sessionId: text('session_id'),
   /** Active window (epoch ms, null = unbounded) — recurring jobs only.
@@ -159,6 +159,20 @@ export const CRON_MIGRATIONS: Migration[] = [
     addColumnIfMissing(s, 'cron_jobs', 'active_from', 'INTEGER')
     addColumnIfMissing(s, 'cron_jobs', 'active_until', 'INTEGER')
   },
+  // v4: the default session dropped its doubled prefix (`cron-<jobId>` →
+  // the `cron-…` job id itself, runner.ts effectiveSessionId). Pin every job
+  // that ever spawned a cli — so its history already lives in `cron-cron-…`
+  // — to that session: a finished run (last_run_id), or a non-skipped run row
+  // without one (first run still in flight across this upgrade's restart, or
+  // an orphan an earlier sweep marked failed). The in-flight case matters:
+  // the orphan sweep must fingerprint the orphan's `-s cron-cron-…`. Jobs
+  // that never spawned take the new rule.
+  (s) => s.exec(`
+    UPDATE cron_jobs SET session_id = 'cron-' || id
+    WHERE session_id IS NULL AND id LIKE 'cron-%'
+      AND (last_run_id IS NOT NULL
+        OR EXISTS (SELECT 1 FROM cron_runs WHERE cron_runs.job_id = cron_jobs.id AND cron_runs.status != 'skipped'))
+  `),
 ]
 
 export function createCronDb(globalDir: string) {

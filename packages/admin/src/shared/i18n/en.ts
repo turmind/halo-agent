@@ -589,7 +589,7 @@ export const en: Record<string, string> = {
   'cron.form.activeClear': 'Clear',
   'cron.form.active.hint': 'Fires only inside this window (chosen timezone; until is exclusive). Fires outside it are skipped silently. To pause until a date, set “from”. Run now ignores it.',
   'cron.form.session': 'Session',
-  'cron.form.session.placeholder': "Empty = the job's own cron-<jobId> session",
+  'cron.form.session.placeholder': "Empty = the job's own session (same id as the job)",
   'cron.form.session.hint': "Pick an existing session to continue its conversation: it keeps its own agent and access level (the Agent above only applies when the session doesn't exist yet). A run is skipped while a turn is running in that session; if you send a message there mid-run, one of the two turns may be lost from its history.",
   'cron.form.userPrompt': 'User prompt *',
   'cron.form.userPrompt.placeholder': "Generate today's status digest from .halo/memory/",

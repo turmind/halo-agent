@@ -10,8 +10,8 @@
  *   - in-memory state is rebuilt from the db on every server boot
  *     (durable schedule survives restart)
  *
- * Each job runs in one stable session (`-s`): its own `cron-<jobId>` by
- * default, or an existing root session picked on the job (`session_id`) —
+ * Each job runs in one stable session (`-s`): its own (id = the job id,
+ * see effectiveSessionId) by default, or an existing root session picked on the job (`session_id`) —
  * see runJob's session strategy for the shared-session guards.
  */
 import { spawn, execFileSync } from 'node:child_process'
@@ -124,7 +124,7 @@ function listDescendants(rootPid: number): number[] {
  *  a foreground server signals the whole foreground group) — the in-memory
  *  `_inflight` guard assumes exactly that; a detached child surviving a server
  *  death would race the restarted server's next fire as a second writer on the
- *  same `cron-<jobId>` session. And a group kill wouldn't even reach shell_exec
+ *  same session. And a group kill wouldn't even reach shell_exec
  *  grandchildren, which lead their own groups (see listDescendants). */
 function killTreeHard(rootPid: number): void {
   if (process.platform === 'win32') {
@@ -155,9 +155,14 @@ function isCronCliProcess(pid: number, sessionId: string): boolean {
   }
 }
 
-/** The session a job's cli runs in: the picked root session, else its own. */
-function effectiveSessionId(job: { id: string; sessionId: string | null }): string {
-  return job.sessionId ?? `cron-${job.id}`
+/** The session a job's cli runs in: the picked root session, else its own —
+ *  the job id itself (generated ids are already `cron-<ts>-<rand>`), or
+ *  `cron-<id>` for a custom id without the prefix. Jobs that ran under the
+ *  old always-prefix rule were pinned to their `cron-cron-…` session by
+ *  CRON_MIGRATIONS v4, so their history continues. The one copy of this
+ *  rule: the REST list returns it as `effectiveSessionId` for the admin. */
+export function effectiveSessionId(job: { id: string; sessionId: string | null }): string {
+  return job.sessionId ?? (job.id.startsWith('cron-') ? job.id : `cron-${job.id}`)
 }
 
 /** `_inflightSessions` key. Realpath so two spellings of one workspace
@@ -196,7 +201,7 @@ const _active = new Map<string, ActiveSchedule>()
  *  firing again (whether croner-scheduled or a manual run-now click) while
  *  the previous run is still in-flight is rejected immediately with a
  *  `skipped` cron_runs row — the cli child uses a stable session id
- *  `cron-<jobId>`, so two overlapping runs would double-write the same
+ *  (effectiveSessionId), so two overlapping runs would double-write the same
  *  on-disk session state. SessionManager's per-session lock is
  *  in-process, but cron spawns a fresh cli child per fire, so the lock
  *  never sees the contention; this set is the cheapest place to enforce
@@ -242,7 +247,7 @@ function newRunId(): string {
  * rebuilt from db on boot. If the previous server died hard (SIGKILL), its
  * attached cli children reparent to init on POSIX and keep running — and the
  * restarted server's next fire would spawn a second writer on the same
- * stable `cron-<jobId>` session. Per project rule, the sweep trusts ONLY the
+ * stable session. Per project rule, the sweep trusts ONLY the
  * db: any `cron_runs` row still 'running' at boot must be a previous
  * generation's leftover (this process hasn't run anything yet).
  *
@@ -250,8 +255,8 @@ function newRunId(): string {
  *   a. register jobId in `_inflight` FIRST — the core invariant: while an
  *      orphan may be alive, no new cli is spawned for that job.
  *   b. POSIX + recorded pid: verify identity via the process command line
- *      (must carry the job's session id as an argv token — `cron-<jobId>`
- *      unless the job picked a session — guarding against pid reuse), then
+ *      (must carry the job's effectiveSessionId as an argv token — guarding
+ *      against pid reuse), then
  *      SIGTERM (cli handles it gracefully) with a SIGKILL-tree escalation
  *      after the grace window — same two-phase contract as the in-run
  *      timeout path.
@@ -694,7 +699,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   // feed it into the channel dispatcher.
   //
   // Session strategy: every job runs in one stable session — its own
-  // `cron-<jobId>` unless the job picked an existing root session. First
+  // (effectiveSessionId) unless the job picked an existing root session. First
   // fire creates it (cli's `-s` is create-on-missing, with the job's agent);
   // subsequent fires resume it (with the session's own agent), so the
   // conversation accumulates and the user can review it in the Sessions tab.
@@ -743,7 +748,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     // generation's boot-time orphan sweep can find (and verify + reap) this
     // cli if we die before finalize — on POSIX a SIGKILL'd server leaves the
     // child alive (reparented to init), where it would race the restarted
-    // server's next fire as a second writer on the same cron-<jobId> session.
+    // server's next fire as a second writer on the same session.
     if (child.pid !== undefined) {
       db.update(cronRuns).set({ pid: child.pid }).where(eq(cronRuns.id, runId)).run()
     }
