@@ -113,7 +113,7 @@ Top-right `Test` button:
 
 Better than the old built-in test chat — it has full workspace tools + session persistence.
 
-Internal agents (`internal: true`, e.g. self-evolution agents) have no Test button and never appear in the chat agent selector or `/session new`'s default pick — they're delegated to by other agents, never driven directly. They remain editable in the management sidebar's collapsed **Internal** group.
+Internal agents (`internal: true`, e.g. self-evolution agents and the goal-mode judge) don't appear on the Agents page, in the chat agent selector, the Cron agent picker or `/session new`'s default pick — they're platform tooling, delegated to by other agents and never driven directly. To change one, edit its `agent.yaml` on disk.
 
 ## Delete
 

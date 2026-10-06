@@ -6,7 +6,7 @@ import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSkillStore } from '@/features/skills/skills-sidebar'
 import type { Skill } from '@/shared/types'
-import { Bot, Plus, Trash2, Crown, Globe, FolderOpen, ChevronRight, Play, Pencil, ArrowLeft, RefreshCw, Cog, ToggleLeft, ToggleRight } from 'lucide-react'
+import { Bot, Plus, Trash2, Crown, Globe, FolderOpen, ChevronRight, Play, Pencil, ArrowLeft, RefreshCw, ToggleLeft, ToggleRight } from 'lucide-react'
 import { cn, promptInput, confirmAction } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import { AgentForm } from './agent-form'
@@ -29,8 +29,7 @@ interface AgentMeta {
   priority: number
   overridden?: boolean
   disabled?: boolean
-  /** Hidden from the delegation roster (e.g. self-evolution agents). Shown in
-   *  admin with a small "internal" badge so users know it's system-managed. */
+  /** Platform tooling (evo / score / apply / goal) — filtered out of this page on load. */
   internal?: boolean
 }
 
@@ -86,9 +85,14 @@ export function AgentManagementMain() {
     setRefreshing(true)
     try {
       const res = await api.agentConfigs.list(projectId)
-      setAgents(res.agents)
-      if (!selectedKey && res.agents.length > 0) {
-        setSelectedKey(agentKey(res.agents[0]))
+      // Internal agents (evo / score / apply / goal) are platform tooling, not
+      // something to configure here — kept off the page entirely, like every
+      // other user-facing agent list. Edit their agent.yaml on disk if needed.
+      const visible = res.agents.filter((a) => !a.internal)
+      setAgents(visible)
+      // a remembered selection that's no longer listed (deleted, or an internal agent picked before they were hidden) → first
+      if (!visible.some((a) => agentKey(a) === selectedKey) && visible.length > 0) {
+        setSelectedKey(agentKey(visible[0]))
       }
     } catch (err) {
       console.error('[AgentManagement] Load failed:', err)
@@ -205,13 +209,8 @@ export function AgentManagementMain() {
     }
   }
 
-  // Internal agents (e.g. self-evolution) get their own section so they stay
-  // out of users' way until explicitly opened. They're always global-scoped
-  // but treating them as a separate "scope" in the UI keeps the regular
-  // global / workspace lists clean.
-  const internalAgents = agents.filter((a) => a.internal)
-  const globalAgents = agents.filter((a) => a.scope === 'global' && !a.internal)
-  const workspaceAgents = agents.filter((a) => a.scope === 'workspace' && !a.internal)
+  const globalAgents = agents.filter((a) => a.scope === 'global')
+  const workspaceAgents = agents.filter((a) => a.scope === 'workspace')
 
   // Delegation targets for the Team picker. A target is offerable iff the
   // *effective* agent for that id is runnable — same resolve-then-check the
@@ -229,14 +228,13 @@ export function AgentManagementMain() {
     return [...byId.values()]
   })()
 
-  type SectionScope = 'global' | 'workspace' | 'internal'
+  type SectionScope = 'global' | 'workspace'
 
   const renderSection = (
     scope: SectionScope,
     icon: React.ElementType,
     label: string,
     items: AgentMeta[],
-    opts: { allowCreate: boolean } = { allowCreate: true },
   ) => {
     const Icon = icon
     const expanded = expandedScopes.has(scope)
@@ -250,15 +248,13 @@ export function AgentManagementMain() {
             <span className="text-[11px] font-medium text-[var(--foreground)] truncate">{label}</span>
             <span className="text-[10px] text-[var(--muted-foreground)] ml-auto">{items.length}</span>
           </button>
-          {opts.allowCreate && scope !== 'internal' && (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleCreate(scope as 'global' | 'workspace') }}
-              title={`New ${scope} agent`}
-              className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]"
-            >
-              <Plus className="h-3 w-3" />
-            </button>
-          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); handleCreate(scope) }}
+            title={`New ${scope} agent`}
+            className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
         </div>
         {/* Agent items */}
         {expanded && items.map((agent) => {
@@ -283,11 +279,10 @@ export function AgentManagementMain() {
                 )}
               </div>
               {/* Disable toggle — hides the agent from the roster
-                  without deleting it. Not offered for internal agents (already
-                  hidden from delegation by their `internal` flag), nor when no
+                  without deleting it. Not offered when no
                   workspace is open (disabled state lives in the workspace DB,
                   so there's nowhere to persist it). */}
-              {scope !== 'internal' && projectId && (
+              {projectId && (
                 <button
                   onClick={(e) => { e.stopPropagation(); handleToggle(agent) }}
                   title={agent.disabled ? 'Enable (show in roster)' : 'Disable (hide from roster)'}
@@ -335,7 +330,6 @@ export function AgentManagementMain() {
           <div className="flex-1 overflow-y-auto py-1">
             {renderSection('global', Globe, t('common.global'), globalAgents)}
             {projectId && renderSection('workspace', FolderOpen, t('common.workspace'), workspaceAgents)}
-            {internalAgents.length > 0 && renderSection('internal', Cog, t('common.internal'), internalAgents, { allowCreate: false })}
           </div>
         </div>
       </Panel>
