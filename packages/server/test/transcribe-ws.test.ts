@@ -36,6 +36,7 @@ vi.mock('../src/middleware/auth.js', () => ({
 const extensions: Record<string, unknown> = {
   htrans: { id: 'htrans', capabilities: ['media', 'transcribe'], settings: { params: [{ key: 'auto_languages', default: 'ja-JP,en-US' }] } },
   glb: { id: 'glb', capabilities: [] },
+  bare: { id: 'bare', capabilities: ['transcribe'] },
 }
 vi.mock('../src/extensions/registry.js', () => ({ getExtension: (id: string) => extensions[id] }))
 
@@ -179,6 +180,11 @@ describe('transcribe proxy streaming', () => {
     expect(up.input).toMatchObject({ IdentifyMultipleLanguages: true, LanguageOptions: 'zh-CN,en-US' })
     expect(up.region).toBe('ap-northeast-1')
     expect(up.credentials).toEqual({ accessKeyId: 'AKIDTEST', secretAccessKey: 'SECRET' })
+  })
+
+  it('lang=auto without settings or manifest default → Mandarin, Cantonese, English', async () => {
+    await run(connect('ext=bare'), (s) => s.send(JSON.stringify({ type: 'end' })))
+    expect(up.input).toMatchObject({ IdentifyMultipleLanguages: true, LanguageOptions: 'zh-CN,zh-HK,en-US' })
   })
 
   it('invalid lang → error bad-request, upstream never started', async () => {

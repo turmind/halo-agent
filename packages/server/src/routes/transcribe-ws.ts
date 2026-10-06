@@ -198,7 +198,7 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
     })
 
     const languageOpts = lang === 'auto'
-      ? { IdentifyMultipleLanguages: true, LanguageOptions: extParam(extId, 'auto_languages', 'zh-CN,en-US') }
+      ? { IdentifyMultipleLanguages: true, LanguageOptions: extParam(extId, 'auto_languages', 'zh-CN,zh-HK,en-US') }
       : { LanguageCode: lang as StartStreamTranscriptionCommand['input']['LanguageCode'] }
 
     // `ready` = the proxy takes audio now. It can't wait for Transcribe's
