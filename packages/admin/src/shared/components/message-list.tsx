@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 import type { ChatMessage, ToolCallInfo, ContentBlock } from '@/shared/types'
 import { inferMessageType } from '@/shared/types'
 import { MediaAttachments, parseMediaMarkers } from '@/shared/components/media-attachments'
+import { SafeImage } from '@/shared/components/safe-image'
 import { cn, confirmAction } from '@/shared/utils'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useSessionViewStore } from '@/features/agents/agent-sessions-sidebar'
@@ -644,12 +645,13 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
       {localImages && localImages.length > 0 && (
         <div className="flex flex-wrap gap-2 px-4 py-2 border-b border-[var(--border)]/30">
           {localImages.map((src, i) => (
-            <img
+            <SafeImage
               key={i}
               src={src}
               alt="screenshot"
               onClick={() => setZoom(src)}
               className="max-h-40 max-w-[240px] cursor-pointer rounded border border-[var(--border)] object-contain hover:ring-1 hover:ring-[var(--primary)]/40"
+              placeholderClassName="aspect-video w-40"
             />
           ))}
         </div>
@@ -661,7 +663,7 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
       )}
       {zoom && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6" onClick={() => setZoom(null)}>
-          <img src={zoom} alt="screenshot" className="max-h-[90vh] max-w-[92vw] object-contain" />
+          <SafeImage src={zoom} alt="screenshot" className="max-h-[90vh] max-w-[92vw] object-contain" placeholderClassName="aspect-video w-[min(92vw,640px)]" />
         </div>
       )}
     </>
@@ -692,6 +694,9 @@ function TextBlock({ text }: { text: string }) {
             // out so the spread doesn't leak it onto the DOM element.
             a({ href, children, node: _node, ...props }) {
               return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
+            },
+            img({ src, alt, node: _node, ...props }) {
+              return <SafeImage src={src} alt={alt ?? ''} {...props} placeholderClassName="my-2 aspect-[4/3] w-full max-w-sm" />
             },
             pre({ children }) { return <pre className="overflow-x-auto">{children}</pre> },
             code({ className, children, node: _node, ...props }) {

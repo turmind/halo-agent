@@ -480,6 +480,7 @@ export const en: Record<string, string> = {
   'common.global': 'Global',
   'common.workspace': 'Workspace',
   'common.internal': 'Internal',
+  'common.imageUnavailable': 'Image unavailable',
   'sidebar.collapse': 'Collapse',
   'sidebar.expand': 'Expand',
   'sidebar.resize': 'Drag to resize',

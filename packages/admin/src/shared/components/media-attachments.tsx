@@ -21,6 +21,7 @@
 
 import { useState, useEffect } from 'react'
 import { useProjectStore } from '@/shared/stores/project-store'
+import { SafeImage } from '@/shared/components/safe-image'
 import { X, Download, FileText, Music, Video, Image as ImageIcon } from 'lucide-react'
 
 export interface MediaRef {
@@ -207,7 +208,12 @@ function MediaModal({ media, onClose }: { media: MediaRef; onClose: () => void }
       </button>
       <div className="flex max-h-full max-w-full flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>
         {media.kind === 'image' && (
-          <img src={viewUrl} alt={media.path} className="max-h-[85vh] max-w-[90vw] object-contain" />
+          <SafeImage
+            src={viewUrl}
+            alt={media.path}
+            className="max-h-[85vh] max-w-[90vw] object-contain"
+            placeholderClassName="aspect-video w-[min(90vw,640px)]"
+          />
         )}
         {media.kind === 'video' && (
           <video src={viewUrl} controls autoPlay className="max-h-[85vh] max-w-[90vw]" />

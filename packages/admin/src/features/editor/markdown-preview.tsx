@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { useT } from '@/shared/i18n'
+import { SafeImage } from '@/shared/components/safe-image'
 
 /** Slugify a heading's text into an id/anchor (lowercase, spaces→-, strip
  *  punctuation). Keeps CJK as-is. Mirrors common markdown-anchor behavior. */
@@ -281,7 +282,7 @@ export function MarkdownPreview({ content, filePath, projectId }: MarkdownPrevie
                   // Unresolvable — don't let the browser hit the current origin and 404
                   return <span className="rounded border border-[var(--border)] bg-[var(--secondary)]/30 px-2 py-1 text-xs text-[var(--muted-foreground)]">[image unavailable: {alt || String(src)}]</span>
                 }
-                return <img src={resolved} alt={alt ?? ''} {...rest} />
+                return <SafeImage src={resolved} alt={alt ?? ''} {...rest} placeholderClassName="my-2 aspect-[4/3] w-full max-w-sm" />
               },
             }}
           >

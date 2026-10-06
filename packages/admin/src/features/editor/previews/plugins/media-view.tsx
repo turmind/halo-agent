@@ -13,6 +13,7 @@ import { PreviewShell, ToolbarButton } from '../ui/preview-shell'
 import { printHtml } from '../ui/print'
 import { IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS } from './media'
 import { useT } from '@/shared/i18n'
+import { SafeImage } from '@/shared/components/safe-image'
 
 function kindOf(name: string): 'image' | 'video' | 'audio' | null {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
@@ -140,11 +141,15 @@ export function MediaPreview(props: PreviewProps) {
           onPointerUp={zoom.onPointerUp}
           onPointerCancel={zoom.onPointerUp}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
+          {/* Loaded: SafeImage's wrapper is display:contents, so the img sits
+              at the container origin exactly as a bare <img> — the zoom /
+              pan transform is unchanged. Loading / error: the box fills the
+              container, so the error hint is centered in it. */}
+          <SafeImage
             src={viewUrl}
             alt={name}
             draggable={false}
+            placeholderClassName="h-full w-full rounded-none"
             style={{
               transformOrigin: '0 0',
               transform: `translate(${zoom.translate.x}px, ${zoom.translate.y}px) scale(${zoom.scale})`,
