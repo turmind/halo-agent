@@ -102,6 +102,8 @@ Images ride along as base64; multimodal supported. Before sending, every attachm
 ### Inline media chips
 Any message containing `[图片/视频/语音/文件 已保存: /path]` markers (WeChat + web) or a leading `MEDIA: /path` line (agent-emitted, e.g. from `wechat-send`) renders a compact chip with filename + icon. Clicking opens a full-size preview modal (image/video/audio inline, file → download link). The modal has a Download button (top-right, next to close) for image/video/audio; the media URL carries a per-open cache-buster (`&t=<timestamp>`) so overwritten files (same path, new bytes) always show current content. Paths inside the active workspace or under the OS temp dir (`/tmp/`) are previewable; everything else degrades to a non-clickable chip.
 
+Images in chat (the modal's full-size image, a user message's screenshot strip and its zoom, markdown images in replies) never show the browser's broken-image icon: a themed pulsing box while loading, the image once loaded, and an `ImageOff` icon + "Image unavailable" / 「图片无法加载」 box if it fails (`shared/components/safe-image.tsx`).
+
 ### Live capture (desktop only)
 Lets the agent *see something live* on demand. Desktop client (Electron) only — the entry points never render in a plain browser. Borrows the meeting-app "share" model: the user binds one source, then the agent requests a frame when it actually needs to look.
 
