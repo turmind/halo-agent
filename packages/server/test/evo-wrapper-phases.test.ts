@@ -8,6 +8,7 @@ import {
   spawnProc,
   readPatchFrontmatter,
   extractTestScenario,
+  judgeDraft,
   buildEvoSandbox,
   phaseApplyPreflight,
   phaseApplyPublish,
@@ -92,6 +93,86 @@ describe('readPatchFrontmatter / extractTestScenario', () => {
   it('returns null on invalid YAML', () => {
     expect(scenario('---\nfoo: [\n---\nbody')).toBeNull()
     expect(readPatchFrontmatter(tmp)).toBeNull()
+  })
+})
+
+describe('judgeDraft', () => {
+  const TARGET = '.halo/skills/acp/SKILL.md'
+  const patch = (fm: string) => writeFile(tmp, 'patch.md', `---\n${fm}\n---\nbody`)
+  const writeTarget = () => writeFile(evoSandboxHaloDir(tmp), 'skills/acp/SKILL.md', 'new')
+  let ws: string
+  // buildEvoSandbox always creates sandbox/.halo before the drafter runs.
+  beforeEach(() => {
+    ws = path.join(tmp, 'ws')
+    fs.mkdirSync(evoSandboxHaloDir(tmp), { recursive: true })
+  })
+
+  it('.skip.md wins even on exit 124', () => {
+    writeFile(tmp, '.skip.md', 'nothing to add')
+    patch(`target: ${TARGET}`)
+    writeTarget()
+    expect(judgeDraft(tmp, ws, 124).outcome).toBe('skipped')
+  })
+
+  it('exit 124 with a complete patch → failed (timeout)', () => {
+    patch(`target: ${TARGET}`)
+    writeTarget()
+    const r = judgeDraft(tmp, ws, 124)
+    expect(r.outcome).toBe('failed')
+    expect(r.why).toContain('124')
+    expect(r.why).toContain('timeout')
+  })
+
+  it('exit 0, target file missing from sandbox → failed', () => {
+    patch(`target: ${TARGET}`)
+    const r = judgeDraft(tmp, ws, 0)
+    expect(r.outcome).toBe('failed')
+    expect(r.why).toContain('target not written to sandbox')
+  })
+
+  it('exit 0, target file present → drafted', () => {
+    patch(`target: ${TARGET}`)
+    writeTarget()
+    expect(judgeDraft(tmp, ws, 0).outcome).toBe('drafted')
+  })
+
+  it('target escaping the sandbox → failed', () => {
+    patch('target: ../x')
+    writeFile(tmp, 'x', 'outside')
+    expect(judgeDraft(tmp, ws, 0).outcome).toBe('failed')
+  })
+
+  it('target inside sandbox but outside .halo/ → failed', () => {
+    patch('target: x.md')
+    writeFile(path.join(tmp, 'sandbox'), 'x.md', 'stray')
+    expect(judgeDraft(tmp, ws, 0).outcome).toBe('failed')
+  })
+
+  it('no patch.md → failed', () => {
+    expect(judgeDraft(tmp, ws, 0).outcome).toBe('failed')
+  })
+
+  it('frontmatter without target → drafted (back-compat)', () => {
+    patch('testScenario:\n  agentId: a\n  testMessage: t')
+    const r = judgeDraft(tmp, ws, 0)
+    expect(r.outcome).toBe('drafted')
+    expect(r.why).toContain('no target')
+  })
+
+  it('target byte-identical to the workspace file → failed', () => {
+    patch(`target: ${TARGET}`)
+    writeFile(wsHaloDir(ws), 'skills/acp/SKILL.md', 'new')
+    writeTarget()
+    const r = judgeDraft(tmp, ws, 0)
+    expect(r.outcome).toBe('failed')
+    expect(r.why).toContain('target unchanged from workspace')
+  })
+
+  it('target differs from the workspace file → drafted', () => {
+    patch(`target: ${TARGET}`)
+    writeFile(wsHaloDir(ws), 'skills/acp/SKILL.md', 'old')
+    writeTarget()
+    expect(judgeDraft(tmp, ws, 0).outcome).toBe('drafted')
   })
 })
 

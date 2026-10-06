@@ -910,10 +910,12 @@ function buildScoreBrief(args: {
  *   - 'skipped'  → evo wrote `.skip.md`, deciding the run has no patch
  *                  worth proposing. Wrapper short-circuits straight to
  *                  finalize without running phase B/C.
- *   - 'drafted'  → evo wrote patch.md + sandbox/.halo. Wrapper proceeds
- *                  to phase B (dry-run) and phase C (score).
- *   - 'failed'   → evo neither wrote .skip.md nor produced patch.md +
- *                  sandbox. Wrapper marks the run failed.
+ *   - 'drafted'  → evo exited 0 with patch.md + its target file in the
+ *                  sandbox. Wrapper proceeds to phase B (dry-run) and
+ *                  phase C (score).
+ *   - 'failed'   → no .skip.md, and evo exited non-zero or left patch.md /
+ *                  the target file missing (see judgeDraft). Wrapper marks
+ *                  the run failed.
  *
  * The agent picks 'skipped' vs 'drafted' explicitly — we don't infer it
  * by diff'ing the sandbox against main. That keeps the contract simple
@@ -978,21 +980,60 @@ async function phaseDraft(args: {
     if (result.stderr) writeLog(args.logFd, `[phaseDraft] stderr: ${result.stderr.slice(-2000)}\n`)
     if (result.stdout) writeLog(args.logFd, `[phaseDraft] stdout (last 1KB): ${result.stdout.slice(-1000)}\n`)
   }
-  // Skip marker takes precedence over patch.md / sandbox checks. If the
-  // agent wrote both .skip.md AND a patch (e.g. it changed its mind
-  // mid-run), we treat .skip.md as the latest decision — agents should
-  // never write both, but if it happens, skip is the safer interpretation
-  // (we don't apply ambiguous output).
-  const hasSkipMarker = fs.existsSync(path.join(args.runDir, '.skip.md'))
-  if (hasSkipMarker) {
-    writeLog(args.logFd, `[phaseDraft] .skip.md present — evo declared skip\n`)
-    return 'skipped'
+  const { outcome, why } = judgeDraft(args.runDir, args.workspacePath, result.exitCode)
+  writeLog(args.logFd, `[phaseDraft] outcome=${outcome} — ${why}\n`)
+  return outcome
+}
+
+/**
+ * Pure judgment of phase A's on-disk result. Sandbox/.halo existing proves
+ * nothing — buildEvoSandbox creates it before the drafter spawns — so the
+ * check is on the patch's own `target` file instead.
+ *
+ * Order matters:
+ *   1. `.skip.md` wins even over a non-zero exit. If the agent wrote both
+ *      .skip.md AND a patch (changed its mind mid-run), skip is the safer
+ *      interpretation — we don't apply ambiguous output.
+ *   2. Non-zero exit (124 = timeout) → failed: the drafter was cut off, so
+ *      whatever patch.md it left is not trustworthy.
+ *   3. patch.md must exist, and a string `target` must resolve under
+ *      `<sandbox>/.halo/` and be a file there. The whitelist cp seeds the
+ *      sandbox from the workspace, so existence alone doesn't prove a
+ *      write: if the workspace has the same file and the sandbox copy is
+ *      byte-identical, the drafter never changed it → failed. No workspace
+ *      file (new workspace override) → existence is enough.
+ *   4. No `target` in frontmatter → drafted (back-compat with old patches).
+ */
+export function judgeDraft(runDir: string, workspacePath: string, exitCode: number): { outcome: DraftOutcome; why: string } {
+  if (fs.existsSync(path.join(runDir, '.skip.md'))) {
+    return { outcome: 'skipped', why: '.skip.md present — evo declared skip' }
   }
-  const hasPatch = fs.existsSync(path.join(args.runDir, 'patch.md'))
-  const hasSandbox = fs.existsSync(evoSandboxHaloDir(args.runDir))
-  writeLog(args.logFd, `[phaseDraft] patch.md=${hasPatch} sandbox=${hasSandbox}\n`)
-  if (hasPatch && hasSandbox) return 'drafted'
-  return 'failed'
+  if (exitCode !== 0) {
+    const timeout = exitCode === 124 ? ' (timeout)' : ''
+    return { outcome: 'failed', why: `drafter exited ${exitCode}${timeout} — draft interrupted, not trusted` }
+  }
+  if (!fs.existsSync(path.join(runDir, 'patch.md'))) {
+    return { outcome: 'failed', why: 'patch.md missing' }
+  }
+  const target = readPatchFrontmatter(runDir)?.target
+  if (typeof target !== 'string') {
+    return { outcome: 'drafted', why: 'patch.md present, no target in frontmatter — target file not checked' }
+  }
+  const sandboxDir = evoSandboxDir(runDir)
+  const rel = path.relative(sandboxDir, path.resolve(sandboxDir, target))
+  if (!rel.startsWith('.halo' + path.sep)) {
+    return { outcome: 'failed', why: `target ${JSON.stringify(target)} does not resolve under sandbox/.halo/` }
+  }
+  const sandboxFile = path.join(sandboxDir, rel)
+  if (!fs.statSync(sandboxFile, { throwIfNoEntry: false })?.isFile()) {
+    return { outcome: 'failed', why: `target not written to sandbox: ${target}` }
+  }
+  const wsFile = path.join(workspacePath, rel)
+  if (fs.statSync(wsFile, { throwIfNoEntry: false })?.isFile()
+    && fs.readFileSync(wsFile).equals(fs.readFileSync(sandboxFile))) {
+    return { outcome: 'failed', why: `target unchanged from workspace: ${target}` }
+  }
+  return { outcome: 'drafted', why: `patch.md + target ${target} present` }
 }
 
 /**
@@ -1267,7 +1308,7 @@ async function runMode(id: string, logFd: number): Promise<void> {
   try {
     const outcome = await phaseDraft(ctx)
     if (outcome === 'failed') {
-      finalize(id, 'failed', 'phase A: drafter did not produce patch.md/sandbox or .skip.md', logFd)
+      finalize(id, 'failed', 'phase A: draft incomplete (drafter exited non-zero, or patch.md / target file missing or unchanged) — see run log', logFd)
       return
     }
     if (outcome === 'skipped') {
