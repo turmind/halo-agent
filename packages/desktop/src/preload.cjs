@@ -341,3 +341,154 @@ window.haloCamera = {
 window.haloNotify = {
   notify: (payload) => ipcRenderer.invoke('halo:notify', payload),
 }
+
+// getDisplayMedia source picker. Electron has no built-in one, so main.cjs's
+// setDisplayMediaRequestHandler sends the candidate sources here (even when the
+// request came from a same-origin iframe — this preload only runs in the main
+// frame) and waits for 'halo:display-picked'. Same card style as showOverlay.
+// sources: [{ id, name, thumb|null, blank, icon|null }], screens first.
+const openDisplayPickers = new Map() // reqId -> close(), for main-initiated cancel
+ipcRenderer.on('halo:display-pick-cancel', (_e, reqId) => {
+  const close = openDisplayPickers.get(reqId)
+  if (close) close()
+})
+ipcRenderer.on('halo:display-pick', (_e, { reqId, sources, audioSupported }) => {
+  let overlay = null
+  const close = () => {
+    openDisplayPickers.delete(reqId)
+    document.removeEventListener('keydown', onKey, true)
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay)
+  }
+  const finish = (id, audio) => {
+    close()
+    ipcRenderer.send('halo:display-picked', { reqId, id, audio: !!audio })
+  }
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return
+    e.preventDefault()
+    e.stopPropagation()
+    finish(null, false)
+  }
+  if (!document.body) return finish(null, false)
+
+  overlay = document.createElement('div')
+  overlay.style.cssText = `
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 2147483647;
+    display: flex; align-items: center; justify-content: center;
+    font: 14px -apple-system, BlinkMacSystemFont, sans-serif;
+  `
+  const card = document.createElement('div')
+  card.style.cssText = `
+    display: flex; flex-direction: column; width: min(780px, 92vw); max-height: 82vh;
+    background: #18181b; color: #ededed; border: 1px solid #2a2a2a;
+    border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); padding: 16px 20px;
+  `
+  const header = document.createElement('div')
+  header.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 12px;'
+  const iconWrap = document.createElement('div')
+  iconWrap.style.cssText = 'flex: none; width: 36px; height: 36px;'
+  iconWrap.innerHTML = HALO_ICON_SVG.replace('width="32" height="32"', 'width="36" height="36"')
+  const title = document.createElement('div')
+  title.textContent = '选择要共享的窗口或屏幕 / Choose a window or screen'
+  title.style.cssText = 'font-weight: 600;'
+  header.appendChild(iconWrap)
+  header.appendChild(title)
+
+  const grid = document.createElement('div')
+  grid.style.cssText = `
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px;
+    overflow-y: auto; min-height: 0; margin-bottom: 12px; padding: 2px;
+  `
+  const actions = document.createElement('div')
+  actions.style.cssText = 'display: flex; align-items: center; gap: 8px;'
+
+  let selectedId = null
+  let selectedTile = null
+  let includeAudio = null
+  const shareBtn = document.createElement('button')
+  shareBtn.textContent = '共享 / Share'
+  shareBtn.disabled = true
+  shareBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid transparent; background: #0a84ff; color: #fff; cursor: pointer; opacity: .5;'
+  const share = () => { if (selectedId) finish(selectedId, includeAudio ? includeAudio.checked : false) }
+  shareBtn.onclick = share
+
+  for (const s of sources) {
+    const tile = document.createElement('div')
+    tile.tabIndex = 0
+    tile.style.cssText = 'cursor: pointer; border: 2px solid #2a2a2a; border-radius: 6px; padding: 6px; background: #27272a; min-width: 0;'
+    const preview = document.createElement('div')
+    preview.style.cssText = 'aspect-ratio: 16 / 10; background: #0a0a0a; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; color: #71717a; font-size: 12px;'
+    if (s.thumb) {
+      const img = document.createElement('img')
+      img.src = s.thumb
+      img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;'
+      preview.appendChild(img)
+    } else {
+      preview.textContent = '无预览 / No preview'
+    }
+    const label = document.createElement('div')
+    label.style.cssText = 'display: flex; align-items: center; gap: 6px; margin-top: 6px; min-width: 0;'
+    if (s.icon) {
+      const ic = document.createElement('img')
+      ic.src = s.icon
+      ic.style.cssText = 'flex: none; width: 16px; height: 16px;'
+      label.appendChild(ic)
+    }
+    const name = document.createElement('div')
+    name.textContent = s.name
+    name.title = s.name
+    name.style.cssText = 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px;'
+    label.appendChild(name)
+    tile.appendChild(preview)
+    tile.appendChild(label)
+    const select = () => {
+      if (selectedTile) selectedTile.style.borderColor = '#2a2a2a'
+      selectedTile = tile
+      selectedId = s.id
+      tile.style.borderColor = '#0a84ff'
+      shareBtn.disabled = false
+      shareBtn.style.opacity = '1'
+    }
+    tile.onclick = select
+    tile.ondblclick = () => { select(); share() }
+    tile.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select() } }
+    grid.appendChild(tile)
+  }
+  if (!sources.length) {
+    const empty = document.createElement('div')
+    empty.textContent = '没有可共享的窗口或屏幕 / No windows or screens available'
+    empty.style.cssText = 'grid-column: 1 / -1; color: #71717a; padding: 24px 0; text-align: center;'
+    grid.appendChild(empty)
+  }
+
+  if (audioSupported) {
+    const audioLabel = document.createElement('label')
+    audioLabel.style.cssText = 'display: flex; align-items: center; gap: 6px; cursor: pointer; margin-right: auto;'
+    includeAudio = document.createElement('input')
+    includeAudio.type = 'checkbox'
+    includeAudio.checked = true
+    audioLabel.appendChild(includeAudio)
+    audioLabel.appendChild(document.createTextNode('同时录制系统声音 / Include system audio'))
+    actions.appendChild(audioLabel)
+  } else {
+    actions.style.justifyContent = 'flex-end'
+  }
+  const cancelBtn = document.createElement('button')
+  cancelBtn.textContent = '取消 / Cancel'
+  cancelBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid #2a2a2a; background: #27272a; color: #ededed; cursor: pointer;'
+  cancelBtn.onclick = () => finish(null, false)
+  actions.appendChild(cancelBtn)
+  actions.appendChild(shareBtn)
+
+  card.appendChild(header)
+  card.appendChild(grid)
+  card.appendChild(actions)
+  overlay.appendChild(card)
+  document.body.appendChild(overlay)
+  openDisplayPickers.set(reqId, close)
+  document.addEventListener('keydown', onKey, true)
+  // Pull focus off a possibly-focused iframe so Esc reaches this document.
+  card.tabIndex = -1
+  card.style.outline = 'none'
+  card.focus()
+})

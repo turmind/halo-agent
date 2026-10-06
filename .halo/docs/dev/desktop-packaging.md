@@ -405,6 +405,32 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   confirm does nothing, because `if (!confirm(...)) return` always returns). In
   a plain browser the helpers fall back to the native sync dialogs.
 
+- **Media capture for extensions (`media` capability, e.g. htrans) —
+  ⚠ not yet verified on a real Mac.** Three pieces, all needed:
+  - **Info.plist usage strings** (`electron-builder.yml` → `mac.extendInfo`):
+    `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`, and
+    `NSAudioCaptureUsageDescription` (system-audio capture; required on macOS
+    14.2+). Missing ones make macOS deny / kill the request silently.
+  - **`--enable-features=MacLoopbackAudioForScreenShare,MacSckSystemAudioLoopbackOverride`**
+    on macOS (`main.cjs`, appended before app `ready`, merged with any existing
+    `enable-features` value) — Chromium's loopback (system-audio) capture is
+    behind these flags; macOS 13+ (Darwin 22+) only, so older macOS never
+    offers or passes `audio:'loopback'`.
+  - **`getDisplayMedia()` picker**: Electron has no built-in one (the call just
+    fails), so `session.setDisplayMediaRequestHandler` (mac / win only; Linux
+    keeps Electron's default) lists `desktopCapturer` sources and asks the
+    requesting window's preload to render a picker (IPC `halo:display-pick` /
+    `halo:display-picked` / `halo:display-pick-cancel`; resolved against the
+    top frame, since preload doesn't run in the extension iframe). One answer
+    per request: cancel / 120 s timeout / page gone → `callback(null)` (the
+    page's promise rejects) — never `callback({})`, which throws when video was
+    requested. Audio = `'loopback'` only when requested AND supported (win, or
+    macOS 13+).
+  - **Unload confirm**: `will-prevent-unload` shows a native Leave / Stay box
+    (zh / en by app locale); the admin only blocks the unload while a tab is
+    busy (recording) or unsaved, so it doesn't fire on an ordinary close or a
+    workspace switch.
+
 - **Cross-staging needs a full restage — auto-fast skips the native fixup.**
   After editing `stage-runtime.mjs`, or any time you cross-stage a target whose
   `node_modules` differs from what's on disk, run with `HALO_STAGE_FULL=1`. The

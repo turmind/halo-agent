@@ -50,6 +50,13 @@ mac:
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
+  # TCC usage strings. Without them macOS kills/denies the request silently:
+  # camera (AI photo), microphone + system-audio capture (getDisplayMedia
+  # loopback; NSAudioCaptureUsageDescription is required on macOS 14.2+).
+  extendInfo:
+    NSCameraUsageDescription: Halo uses the camera when you ask the AI to take a photo.
+    NSMicrophoneUsageDescription: Halo records meeting audio from your microphone when you start a recording.
+    NSAudioCaptureUsageDescription: Halo records system audio during a meeting recording you start.
 dmg:
   writeUpdateInfo: false
   icon: resources/icon.icns

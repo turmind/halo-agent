@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences, Notification, crashReporter, powerSaveBlocker } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences, Notification, crashReporter, powerSaveBlocker, session, webContents } = require('electron')
 const { spawn, spawnSync, execFile, execSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
@@ -289,10 +289,10 @@ function startServer() {
   })
 }
 
-// Kill the spawned server tree. Called from before-quit (normal quit) and, on
+// Kill the spawned server tree. Called from will-quit (normal quit) and, on
 // Windows, from process 'exit' as a catch-all (every app.exit(1) path — crash
-// dialog, setup failure, health timeout — skips before-quit entirely).
-// Guarded: after before-quit already killed the tree, the 'exit'-time re-run
+// dialog, setup failure, health timeout — skips will-quit entirely).
+// Guarded: after will-quit already killed the tree, the 'exit'-time re-run
 // would only add quit latency.
 let serverKillIssued = false
 function killServer() {
@@ -386,12 +386,26 @@ function createWindow() {
   // no flash of empty window between the two.
   win.webContents.once('did-finish-load', () => closeSplash())
   if (!app.isPackaged || process.env.HALO_DEVTOOLS) win.webContents.openDevTools({ mode: 'detach' })
-  // Admin UI registers beforeunload+preventDefault to warn on tab close.
-  // In a browser that pops a "Leave site?" dialog and the user can OK; in
-  // Electron the dialog is silently swallowed and navigation is blocked
-  // entirely — so workspace switching (which does `location.href = ...`)
-  // looks like a no-op. Auto-allow the unload.
-  win.webContents.on('will-prevent-unload', (event) => { event.preventDefault() })
+  // Admin UI only registers beforeunload+preventDefault while a tab would lose
+  // something (a recording in progress, unsaved edits, a busy tab); a workspace
+  // switch (`location.href = ...`) suppresses it entirely. So this event only
+  // fires when leaving really would drop data — close, Cmd/Ctrl+Q, reload.
+  // Electron doesn't render the browser's "Leave site?" prompt (navigation
+  // would just be blocked silently), so ask with a native dialog instead:
+  // preventDefault() here = ignore the page's veto and let the unload proceed.
+  win.webContents.on('will-prevent-unload', (event) => {
+    const zh = app.getLocale().toLowerCase().startsWith('zh')
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'question',
+      buttons: zh ? ['离开', '留下'] : ['Leave', 'Stay'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'Halo',
+      message: zh ? '有正在录音或未保存的标签页，确定离开？' : 'A tab is recording or has unsaved changes. Leave anyway?',
+      detail: zh ? '离开后正在进行的录音和未保存的内容会丢失。' : 'An active recording and unsaved changes will be lost.',
+    })
+    if (choice === 0) event.preventDefault()
+  })
   win.webContents.setWindowOpenHandler(({ url }) => {
     // about:blank = window.open('') from the renderer (e.g. the print helper,
     // which writes HTML into the popup) — must stay in-app, and openExternal
@@ -577,20 +591,143 @@ ipcMain.handle('halo:capture-list', async () => {
     thumbnailSize: { width: 200, height: 150 },
     fetchWindowIcons: true,
   })
-  return sources.map((s) => {
-    // An empty thumbnail means macOS hasn't granted Screen Recording — the
-    // frame comes back blank. Flag it (blank:true, thumb:null) so the UI shows
-    // a placeholder + permission hint instead of a broken <img>.
-    const blank = s.thumbnail.isEmpty()
-    return {
-      id: s.id,
-      name: s.name,
-      thumb: blank ? null : s.thumbnail.toDataURL(),
-      blank,
-      icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : null,
+  return sources.map(toCaptureListItem)
+})
+
+// DesktopCapturerSource → plain object safe to send over IPC (shared by the
+// bind-a-window picker above and the getDisplayMedia picker below).
+function toCaptureListItem(s) {
+  // An empty thumbnail means macOS hasn't granted Screen Recording — the
+  // frame comes back blank. Flag it (blank:true, thumb:null) so the UI shows
+  // a placeholder + permission hint instead of a broken <img>.
+  const blank = s.thumbnail.isEmpty()
+  return {
+    id: s.id,
+    name: s.name,
+    thumb: blank ? null : s.thumbnail.toDataURL(),
+    blank,
+    icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : null,
+  }
+}
+
+// navigator.mediaDevices.getDisplayMedia() support (meeting-recorder extension:
+// periodic screenshots of a chosen window + the meeting's sound). Electron has
+// no built-in picker — with no handler the call simply fails — so we answer
+// each request with our own picker rendered by preload.cjs in the requesting
+// window, then hand the chosen DesktopCapturerSource back. Only mac/win; on
+// Linux Electron's default behaviour stays.
+//
+// macOS system audio: Chromium's loopback capture on macOS is behind these
+// features (macOS 13+ only). This is the same switch `electron-audio-loopback`
+// sets for Electron 31–38. On macOS 14.2+ the app additionally needs
+// NSAudioCaptureUsageDescription in Info.plist (electron-builder.yml mac.extendInfo).
+// Must run before app 'ready'; merge with any existing --enable-features value.
+if (process.platform === 'darwin') {
+  const features = app.commandLine.getSwitchValue('enable-features').split(',').filter(Boolean)
+  for (const f of ['MacLoopbackAudioForScreenShare', 'MacSckSystemAudioLoopbackOverride']) {
+    if (!features.includes(f)) features.push(f)
+  }
+  app.commandLine.removeSwitch('enable-features')
+  app.commandLine.appendSwitch('enable-features', features.join(','))
+}
+
+// In-flight picker requests, reqId → { sender, finish }. A reply from any
+// webContents other than the one we asked is ignored.
+const pendingDisplayPicks = new Map()
+let displayPickSeq = 0
+
+ipcMain.on('halo:display-picked', (e, reply) => {
+  const pending = pendingDisplayPicks.get(reply?.reqId)
+  if (pending && pending.sender === e.sender) pending.finish(reply)
+})
+
+// A picker nobody answers (user walked away, overlay lost) must not hold the
+// page's getDisplayMedia() promise forever.
+const DISPLAY_PICK_TIMEOUT_MS = 120_000
+
+// Ask the renderer to pick one of `sources`; resolves to { id, audio } or null
+// (cancelled, timed out, or the page went away before answering). Every exit
+// path goes through finish(), which runs once: it drops the timer, the
+// pendingDisplayPicks entry and all three sender listeners, then resolves.
+function askDisplayPick(sender, sources, audioSupported) {
+  return new Promise((resolve) => {
+    if (sender.isDestroyed()) return resolve(null) // closed while sources were being listed
+    const reqId = ++displayPickSeq
+    let done = false
+    const onGone = () => finish(null)
+    // The overlay lives in the page: a top-level, cross-document navigation
+    // (reload, workspace switch) wipes it. Sub-frame and same-document (hash /
+    // pushState) navigations leave it in place.
+    const onNavigate = (details) => { if (details.isMainFrame && !details.isSameDocument) finish(null) }
+    const timer = setTimeout(() => {
+      logDesktop('display-media picker timed out')
+      finish(null, true)
+    }, DISPLAY_PICK_TIMEOUT_MS)
+    function finish(reply, closeOverlay) {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      pendingDisplayPicks.delete(reqId)
+      sender.removeListener('destroyed', onGone)
+      sender.removeListener('render-process-gone', onGone)
+      sender.removeListener('did-start-navigation', onNavigate)
+      // Only the timeout leaves a live page showing a now-orphaned overlay.
+      if (closeOverlay && !sender.isDestroyed()) sender.send('halo:display-pick-cancel', reqId)
+      resolve(reply && reply.id ? { id: reply.id, audio: !!reply.audio } : null)
+    }
+    pendingDisplayPicks.set(reqId, { sender, finish })
+    sender.once('destroyed', onGone)
+    sender.once('render-process-gone', onGone)
+    sender.on('did-start-navigation', onNavigate)
+    sender.send('halo:display-pick', { reqId, sources: sources.map(toCaptureListItem), audioSupported })
+  })
+}
+
+// System-audio loopback needs Windows, or macOS 13+ (Darwin 22+; ScreenCaptureKit
+// audio). Below that we neither offer the checkbox nor ever pass audio:'loopback'.
+const LOOPBACK_AUDIO_SUPPORTED =
+  process.platform === 'win32' || (process.platform === 'darwin' && parseInt(os.release(), 10) >= 22)
+
+function installDisplayMediaHandler() {
+  if (!CAPTURE_SUPPORTED) return
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    // Electron 33's callback has no "reject" form in its typings, but at
+    // runtime null/undefined resolves the request as CAPTURE_FAILURE (the page's
+    // getDisplayMedia() rejects) without throwing. `callback({})` must NOT be
+    // used: with video requested it throws "Video was requested, but no video
+    // stream was provided" in the main process.
+    // Answer exactly once: if callback() itself throws (bad streams object),
+    // the catch below must not call it a second time.
+    let answered = false
+    const answer = (streams) => { if (!answered) { answered = true; callback(streams) } }
+    const deny = () => answer(null)
+    try {
+      // The picker lives in the top-level document even when the request comes
+      // from a same-origin iframe (preload only runs in the main frame).
+      const frame = request.frame
+      const owner = (frame && (webContents.fromFrame(frame) || (frame.top && webContents.fromFrame(frame.top))))
+        || BrowserWindow.getFocusedWindow()?.webContents
+        || mainWindow?.webContents
+      if (!owner || owner.isDestroyed()) { logDesktop('display-media denied (no window)'); return deny() }
+      const sources = await desktopCapturer.getSources({
+        types: ['screen', 'window'],
+        thumbnailSize: { width: 320, height: 200 },
+        fetchWindowIcons: true,
+      })
+      sources.sort((a, b) => Number(b.id.startsWith('screen:')) - Number(a.id.startsWith('screen:')))
+      const audioSupported = request.audioRequested && LOOPBACK_AUDIO_SUPPORTED
+      const reply = await askDisplayPick(owner, sources, audioSupported)
+      const picked = reply && sources.find((s) => s.id === reply.id)
+      if (!picked) { logDesktop('display-media cancelled'); return deny() }
+      const withAudio = reply.audio && audioSupported
+      logDesktop(`display-media picked "${picked.name}" audio=${withAudio}`)
+      answer(withAudio ? { video: picked, audio: 'loopback' } : { video: picked })
+    } catch (err) {
+      logDesktop(`display-media failed: ${String(err)}`)
+      deny()
     }
   })
-})
+}
 
 // When a window has sat occluded/minimized long enough for macOS to reclaim
 // its backing store, desktopCapturer hands back a frame that's NOT empty (it
@@ -821,6 +958,7 @@ app.on('ready', async () => {
   // Admin renders in dark mode unconditionally; tell macOS so the window
   // chrome (title bar, traffic-light area) follows suit.
   nativeTheme.themeSource = 'dark'
+  installDisplayMediaHandler()
   setupAppMenu()
   setDockIconIfDev()
   showSplash()
@@ -850,7 +988,7 @@ app.on('ready', async () => {
     closeSplash()
     logDesktop(`server failed health check: ${String(err)}`)
     dialog.showErrorBox('Server failed to start', String(err))
-    // The child is alive but unhealthy here, and app.exit() skips before-quit
+    // The child is alive but unhealthy here, and app.exit() skips will-quit
     // — kill explicitly or this path guarantees an orphaned node.exe on
     // Windows (the process 'exit' hook would also catch it; this is the
     // deterministic first line).
@@ -862,7 +1000,7 @@ app.on('ready', async () => {
 })
 
 // macOS convention: closing every window doesn't quit the app — it stays in the
-// Dock and clicking the icon reopens a window. Only Cmd+Q (→ before-quit) truly
+// Dock and clicking the icon reopens a window. Only Cmd+Q (→ app.quit()) truly
 // exits. Recreate a window here if the server is still running; if it somehow
 // died, a click can't do anything useful, so ignore.
 app.on('activate', () => {
@@ -871,12 +1009,12 @@ app.on('activate', () => {
 
 // Don't quit when the (transient) setup window closes — startup runs the
 // sequence setup-window → close → start server → main window. If we
-// quit on window-all-closed during that gap, before-quit kills the
+// quit on window-all-closed during that gap, will-quit kills the
 // server we just started. Only honor window-all-closed once the main
 // window has existed at least once.
 //
 // Platform split: on macOS, keep running when all windows close (Cmd+Q quits
-// via before-quit); on Windows/Linux there's no Dock to resummon from, so a
+// via app.quit()); on Windows/Linux there's no Dock to resummon from, so a
 // windowless background app is a bug — quit as usual.
 let mainWindowEverShown = false
 app.on('window-all-closed', () => {
@@ -884,12 +1022,21 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', (e) => {
+// Server teardown lives in will-quit, NOT before-quit. app.quit() emits
+// before-quit first, then closes every window — which runs beforeunload, so a
+// window with a recording / unsaved tab can veto it via the "Leave?" dialog in
+// createWindow()'s will-prevent-unload handler. A vetoed quit never reaches
+// will-quit, so the server stays up and the page keeps working; killing the
+// server in before-quit would leave a live window talking to a dead backend.
+// isQuitting is set here for the same reason: a cancelled quit must not leave
+// it stuck at true, or a later real server crash would be treated as expected.
+app.on('will-quit', (e) => {
   app.isQuitting = true
   // POSIX: hold the quit until the server has actually exited. Electron exits
-  // right after before-quit, which dropped killServer's (unref'd) SIGKILL
+  // right after will-quit, which dropped killServer's (unref'd) SIGKILL
   // fallback and orphaned a wedged server still holding port + server.lock.
-  // The server's exit re-enters here with serverProcess null → quit proceeds.
+  // The server's exit re-enters here via app.quit() — windows are already
+  // closed and serverProcess is null → quit proceeds.
   const proc = serverProcess
   if (proc && process.platform !== 'win32' && proc.exitCode === null && proc.signalCode === null) {
     e.preventDefault()
@@ -907,7 +1054,7 @@ app.on('before-quit', (e) => {
 // fires on every normal Node/Electron exit path (including app.exit), and
 // killServer's win32 branch is fully synchronous, so it's safe here (async
 // work would be silently dropped). POSIX doesn't need this: children get
-// SIGTERM'd in before-quit and a stale server.lock is pid-probed away on the
+// SIGTERM'd in will-quit and a stale server.lock is pid-probed away on the
 // next launch anyway.
 process.on('exit', () => {
   if (process.platform === 'win32') killServer()
