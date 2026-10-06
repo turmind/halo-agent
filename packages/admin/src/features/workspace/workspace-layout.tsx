@@ -419,10 +419,10 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
 
   const tabs: { id: SidebarTab; icon: typeof FolderTree; label: string; position?: 'bottom' }[] = [
     { id: 'explorer', icon: FolderTree, label: t('nav.explorer') },
-    { id: 'source-control', icon: GitBranch, label: t('nav.sourceControl') },
     { id: 'sessions', icon: MessageSquare, label: t('nav.sessions') },
-    { id: 'skills', icon: Zap, label: 'Skills' },
+    { id: 'source-control', icon: GitBranch, label: t('nav.sourceControl') },
     { id: 'management', icon: Bot, label: 'Agents' },
+    { id: 'skills', icon: Zap, label: 'Skills' },
     { id: 'channels', icon: MessageCircle, label: t('nav.channels') },
     { id: 'evolution', icon: Sparkles, label: 'Evolution' },
     { id: 'cron', icon: Clock, label: 'Cron' },
