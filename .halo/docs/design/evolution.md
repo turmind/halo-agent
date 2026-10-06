@@ -133,22 +133,52 @@ The score brief packs patch.md + dry-run-output.txt + meta.json + evo-context.js
 
 ```json
 {
-  "lint": 90,
-  "behavior": 75,
-  "scope": 80,
+  "lint": 100,
+  "behavior": 70,
+  "scope": 100,
   "confidence": "high",
-  "avg": 82,
-  "notes": "…"
+  "avg": 90,
+  "notes": "…",
+  "checks": {
+    "patchInSandbox": "pass",
+    "usedInDryRun": "yes",
+    "probe": "valid",
+    "probeLanguage": "same"
+  }
 }
 ```
 
-Dimensions (0-100, anchored at 50="neutral"):
-- **lint**: patched files load cleanly (YAML valid, cross-refs resolve).
-- **behavior**: dry-run output better than original assistant reply (baseline).
-- **scope**: surgical (100) vs sweeping (0).
-- **confidence**: scorer's own confidence (independent of numeric scores).
+patch.md is treated as the drafter's claim, not evidence — every score rests on what the scorer sees on disk. Before rating it runs three checks, recorded in `checks`:
 
-`avg = round((lint + behavior + scope) / 3)` — single sort key for admin UI.
+1. **Patch in sandbox** (`patchInSandbox`) — the frontmatter `target` exists in the sandbox and differs from the pre-patch copy (workspace file, or the global one when the workspace had none) in the way the body describes.
+2. **Dry-run used it** (`usedInDryRun`) — the dry-run session under `sandbox/.halo/sessions/<agentId>/` activated the target skill or read the sandbox copy; files loaded every turn count as used. A skill the `--access workspace` dry-run can't see (`requiresAccess: full`, `disable-model-invocation: true`, not in the test agent's `skills:`) is not used.
+3. **Fair probe** (`probe` + `probeLanguage`) — `originalMessage` appears verbatim in tool-flow.md, and `testMessage` is labelled `valid` / `leading` (names the prescribed fix) / `easier` / `off_target`, plus whether it's in another language.
+
+**Gate.** Check 1 failing means there is no patch to rate: `lint` / `behavior` / `scope` all 0, `confidence: high`, whatever the dry-run did. Regression mode exempts a source run that `apply.log` records as skipped or narrowed per the reviewer hint.
+
+**Caps** (gate passed, applied after picking the anchor):
+
+| Finding | `behavior` at most | `confidence` at most |
+|---|---|---|
+| Dry-run didn't use the patch | 50 | low |
+| Probe `leading` | 50 | medium |
+| Probe `easier` | 70 | medium |
+| Probe `off_target` | 50 | low |
+| Probe in another language | — | medium |
+
+A capped 50 means "no evidence either way" and never reads as a regression.
+
+**Comparison.** The scorer describes the baseline turn and the dry-run each on its own (quoting a line or naming a tool call) before comparing them; only the record counts (plans, promises and unrun code don't), length and polish don't, scores are relative to the baseline (doing what the baseline already did = 50), and new errors the baseline didn't make count against the patch.
+
+Dimensions — values restricted to the anchors **100 / 70 / 50 / 30 / 0** (torn between two → the lower one, reason in `notes`):
+- **lint**: patched file parses and a whole-folder override carries every file of the global folder; 0 on gate failure, empty dry-run output, unparseable file, or an `agents/<id>/` override without `agent.yaml`.
+- **behavior**: dry-run better than the baseline on the situation the rule targets; 100 needs check 2 passed, a `valid` probe, a clear gain and no new error; 50 = no difference / trade-off / capped.
+- **scope**: blast radius of the actual diff seen in check 1 (verbatim copies into a folder override don't count) — 100 = one file ≤5 lines, down to 0 = whole AGENT.md rewrite or unrelated files.
+- **confidence**: set by the evidence, then capped by the table; a gate failure is `high`.
+
+`avg = round((lint + behavior + scope) / 3)` — single sort key for admin UI. `checks` is additive: the wrapper and admin read only the numeric fields + `confidence` / `notes`, so older score.json files without it still parse.
+
+The rubric structure (labelled anchors, evidence before verdict, claims are not evidence) follows the AWS AgentCore Evaluations built-in evaluator templates.
 
 Scorer is read+write only (`file_read` / `file_write` / `file_list` / `grep` / `glob`); no execution / no shell. Outputs only `score.json`. Same scorer agent reused at apply time (phase B') as regression gate.
 
@@ -203,7 +233,7 @@ Per-workspace mutex in ticker prevents two applies from racing on the same works
     images/<msgIdx>-<blockIdx>.<ext>  # decoded base64 images
     patch.md                  # __evo_agent__ writes (has testScenario frontmatter)
     .skip.md                  # evo wrote this → no patch proposed
-    score.json                # __score__ writes (lint/behavior/scope/avg)
+    score.json                # __score__ writes (lint/behavior/scope/avg + checks)
     dry-run-output.txt        # stdout from phase B dry-run
     dry-run-fail-<n>.log      # failure logs from dry-run attempts
     sub-cli.log               # tee'd stdout+stderr of every halo cli spawn

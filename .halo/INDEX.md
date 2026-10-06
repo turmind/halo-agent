@@ -73,7 +73,7 @@ Outbound delegation is what the `acp` skill exists for. As soon as you run more 
 
 ## Self-Evolution
 
-Active workspaces learn from their own conversations: when a user invokes `/evo` (or pre-compact fires), an `__evo_agent__` analyzes the session, drafts a prompt-file improvement, runs a sandbox dry-run, and an `__score__` agent grades the result. Reviewer approves in the **Evolution** admin tab → `__apply_agent__` merges into a sandbox, wrapper re-runs regression scoring, then publishes to the workspace's `.halo/`. See [design/evolution.md](docs/design/evolution.md) for the full design (wrapper-orchestrated Run/Apply phases); early proposal notes in `plans/self-evolution.md` (local-only).
+Active workspaces learn from their own conversations: when a user invokes `/evo` (or pre-compact fires), an `__evo_agent__` analyzes the session, drafts a prompt-file improvement, runs a sandbox dry-run, and an `__score__` agent grades the result against the baseline turn (gate: the patch must really be in the sandbox, else all 0; dry-run-used and fair-probe checks cap the score; anchor values 100/70/50/30/0). Reviewer approves in the **Evolution** admin tab → `__apply_agent__` merges into a sandbox, wrapper re-runs regression scoring, then publishes to the workspace's `.halo/`. See [design/evolution.md](docs/design/evolution.md) for the full design (wrapper-orchestrated Run/Apply phases); early proposal notes in `plans/self-evolution.md` (local-only).
 
 Key state lives in:
 - `~/.halo/global/evo.db` — global queue tables `evolution_runs` + `evolution_applies` (separate from per-workspace sqlite)
