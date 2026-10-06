@@ -1097,6 +1097,8 @@ export const api = {
           timezone: string | null
           timeoutSec: number | null
           sessionId: string | null
+          activeFrom: number | null
+          activeUntil: number | null
           targets: Array<{ channelType: string; accountId: string; chatId?: string }>
           enabled: number
           lastRunStatus: string | null
@@ -1121,6 +1123,8 @@ export const api = {
       timezone?: string
       timeoutSec?: number
       sessionId?: string
+      activeFrom?: number | null
+      activeUntil?: number | null
       targets?: Array<{ channelType: string; accountId: string; chatId?: string }>
       enabled?: boolean
     }) {
@@ -1140,6 +1144,8 @@ export const api = {
       timezone: string
       timeoutSec: number | null
       sessionId: string | null
+      activeFrom: number | null
+      activeUntil: number | null
       targets: Array<{ channelType: string; accountId: string; chatId?: string }>
       enabled: boolean
     }>) {

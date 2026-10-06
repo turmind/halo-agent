@@ -16,7 +16,7 @@ import { eq, desc, lt, and } from 'drizzle-orm'
 import fs from 'node:fs/promises'
 import { Cron } from 'croner'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
-import { reloadAll, scheduleJob, unscheduleJob, runJob } from '../cron/runner.js'
+import { reloadAll, scheduleJob, unscheduleJob, runJob, activeWindowOptions } from '../cron/runner.js'
 import { listAllCronTargets } from '../cron/dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
 
@@ -38,6 +38,10 @@ interface CreateBody {
   /** Root session the cli runs in. Unset/null/'' = the job's own
    *  `cron-<jobId>` session. An existing session keeps its own agent. */
   sessionId?: string
+  /** Active window (epoch ms; unset/null = unbounded), recurring jobs only:
+   *  the schedule fires only inside `[activeFrom, activeUntil)`. */
+  activeFrom?: number | null
+  activeUntil?: number | null
   /** Per-target `chatId` is optional. When set, dispatch only sends to that
    *  chat (pinning the schedule to where it was created). When unset,
    *  telegram fans out to every numeric id in `allowedUsers`. */
@@ -102,6 +106,28 @@ function parseSessionId(v: unknown): { sessionId: string | null } | { error: str
   return { sessionId: s }
 }
 
+/** Type-check one active-window body value: epoch-ms number, null, or
+ *  undefined (= not supplied). */
+function validateActiveBound(name: 'activeFrom' | 'activeUntil', v: unknown): string | null {
+  if (v === undefined || v === null) return null
+  if (typeof v !== 'number' || !Number.isFinite(v)) return `${name} must be a number (epoch ms) or null`
+  return null
+}
+
+/** Cross-field rules for the active window on the (merged) row: recurring
+ *  jobs only, and `activeUntil` must come after `activeFrom`. The
+ *  "activeUntil in the future" check is the caller's — PUT only applies it
+ *  to a newly supplied value, so editing an already-expired job's other
+ *  fields isn't blocked by its own stored past bound. */
+function validateActiveWindow(row: { runAt: number | null; activeFrom: number | null; activeUntil: number | null }): string | null {
+  if (row.activeFrom == null && row.activeUntil == null) return null
+  if (row.runAt != null) return 'activeFrom/activeUntil only apply to recurring jobs, not runAt one-shots'
+  if (row.activeFrom != null && row.activeUntil != null && row.activeUntil <= row.activeFrom) {
+    return 'activeUntil must be after activeFrom'
+  }
+  return null
+}
+
 export function createCronRoutes(): Hono {
   const router = new Hono()
 
@@ -163,6 +189,17 @@ export function createCronRoutes(): Hono {
     }
     const session = parseSessionId(body.sessionId)
     if ('error' in session) return c.json({ error: session.error }, 400)
+    for (const k of ['activeFrom', 'activeUntil'] as const) {
+      const err = validateActiveBound(k, body[k])
+      if (err) return c.json({ error: err }, 400)
+    }
+    const activeFrom = body.activeFrom ?? null
+    const activeUntil = body.activeUntil ?? null
+    if (activeUntil !== null && activeUntil <= Date.now()) {
+      return c.json({ error: 'activeUntil must be in the future' }, 400)
+    }
+    const windowErr = validateActiveWindow({ runAt: hasRunAt ? body.runAt! : null, activeFrom, activeUntil })
+    if (windowErr) return c.json({ error: windowErr }, 400)
 
     const id = newJobId()
     const now = Date.now()
@@ -177,6 +214,8 @@ export function createCronRoutes(): Hono {
       timezone: body.timezone ?? null,
       timeoutSec: body.timeoutSec ?? null,
       sessionId: session.sessionId,
+      activeFrom,
+      activeUntil,
       targets: JSON.stringify(body.targets ?? []),
       enabled: body.enabled === false ? 0 : 1,
       lastRunStatus: null,
@@ -253,6 +292,22 @@ export function createCronRoutes(): Hono {
     if (nextSchedule.trim().length === 0 && typeof nextRunAt !== 'number') {
       return c.json({ error: 'schedule or runAt required' }, 400)
     }
+    // Active window: same partial-body contract (undefined = untouched,
+    // null = clear), cross-field rules checked on the merged row — so a
+    // mode switch to runAt has to clear a stored window in the same body.
+    for (const k of ['activeFrom', 'activeUntil'] as const) {
+      const err = validateActiveBound(k, body[k])
+      if (err) return c.json({ error: err }, 400)
+    }
+    if (typeof body.activeUntil === 'number' && body.activeUntil <= Date.now()) {
+      return c.json({ error: 'activeUntil must be in the future' }, 400)
+    }
+    const windowErr = validateActiveWindow({
+      runAt: nextRunAt,
+      activeFrom: body.activeFrom !== undefined ? body.activeFrom : existing.activeFrom,
+      activeUntil: body.activeUntil !== undefined ? body.activeUntil : existing.activeUntil,
+    })
+    if (windowErr) return c.json({ error: windowErr }, 400)
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() }
     if (body.label !== undefined) patch.label = body.label?.trim() || null
@@ -264,6 +319,8 @@ export function createCronRoutes(): Hono {
     if (body.timezone !== undefined) patch.timezone = body.timezone || null
     if (body.timeoutSec !== undefined) patch.timeoutSec = body.timeoutSec
     if (body.sessionId !== undefined) patch.sessionId = session.sessionId
+    if (body.activeFrom !== undefined) patch.activeFrom = body.activeFrom
+    if (body.activeUntil !== undefined) patch.activeUntil = body.activeUntil
     if (body.targets !== undefined) patch.targets = JSON.stringify(body.targets)
     if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
 
@@ -399,14 +456,16 @@ function safeParseDispatch(raw: string | null): Array<{ channelType: string; acc
   } catch { return null }
 }
 
-function computeNextRun(j: { schedule: string; runAt: number | null; timezone: string | null; enabled: number }): number | null {
+function computeNextRun(j: { schedule: string; runAt: number | null; timezone: string | null; enabled: number; activeFrom: number | null; activeUntil: number | null }): number | null {
   if (j.enabled !== 1) return null
   // At-mode: the configured runAt is itself the next (and only) fire.
   // If it's already past, the runner won't schedule it — surface null so
   // the UI doesn't show a stale "next run" for an expired one-shot.
   if (j.runAt) return j.runAt > Date.now() ? j.runAt : null
   try {
-    const cron = new Cron(j.schedule, { timezone: j.timezone ?? undefined, paused: true })
+    // Same window options the runner schedules with — a job paused until
+    // after a holiday lists its first post-holiday fire.
+    const cron = new Cron(j.schedule, { timezone: j.timezone ?? undefined, paused: true, ...activeWindowOptions(j) })
     const next = cron.nextRun()
     return next ? next.getTime() : null
   } catch { return null }

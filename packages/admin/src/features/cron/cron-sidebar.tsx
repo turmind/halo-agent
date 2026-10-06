@@ -27,6 +27,9 @@ export function CronSidebar() {
   const [refreshing, setRefreshing] = useState(false)
   const [nextCursor, setNextCursor] = useState<number | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  // "Now" for the active-window badges, stamped per list load (render must
+  // stay pure); every WS cron event reloads the list, so it stays fresh.
+  const [loadedAt, setLoadedAt] = useState(0)
   const selectedId = useCronStore((s) => s.selectedId)
   const setSelectedId = useCronStore((s) => s.setSelectedId)
   const openCreate = useCronStore((s) => s.openCreate)
@@ -37,6 +40,7 @@ export function CronSidebar() {
     try {
       const res = await api.cron.listJobs({ limit: PAGE_SIZE })
       setJobs(res.jobs)
+      setLoadedAt(Date.now())
       setNextCursor(res.hasMore ? res.nextCursor : null)
       setError(null)
     } catch (err) {
@@ -146,6 +150,13 @@ export function CronSidebar() {
                         'bg-[var(--muted-foreground)]',
                     )} />
                     <span className="truncate font-medium text-[var(--foreground)]">{j.label || j.id}</span>
+                    {j.activeUntil != null && j.activeUntil <= loadedAt ? (
+                      <span className="shrink-0 rounded bg-[var(--accent)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">{t('cron.badge.ended')}</span>
+                    ) : j.activeFrom != null && j.activeFrom > loadedAt ? (
+                      <span className="shrink-0 rounded bg-[var(--accent)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+                        {t('cron.badge.activeFrom', { date: new Date(j.activeFrom).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) })}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="mt-1 flex items-center justify-between gap-2 text-[var(--muted-foreground)]">
                     <span className="font-mono">{j.runAt ? new Date(j.runAt).toLocaleString() : j.schedule}</span>

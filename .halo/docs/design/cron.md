@@ -27,7 +27,7 @@ Two halves, cleanly split:
 
 Schedules are **durable** — the source of truth is the `cron_jobs` table; in-memory croner state is rebuilt on every server boot (`startCronDaemon` → `reloadAll`). A restart never loses a schedule.
 
-- **Recurring**: standard cron expression (`job.schedule`), optional `timezone`.
+- **Recurring**: standard cron expression (`job.schedule`), optional `timezone`, optional **active window** `[activeFrom, activeUntil)` (epoch ms, `active_from` / `active_until`, NULL = unbounded; `CRON_MIGRATIONS` slot 2). The window is passed to croner as native `startAt` / `stopAt` (`activeWindowOptions` in `runner.ts`; `startAt` is `activeFrom − 1 ms` because croner's startAt is exclusive), so fires outside it simply never happen — no `cron_runs` row. "Pause until X" = push `activeFrom` to X; there is no skip-list for a gap in the middle. Past `activeUntil` the job stays `enabled` (so it can be extended later) but `scheduleJob` creates no croner and logs `past activeUntil; not scheduled` once — the id goes into `_expired` so reconcile's "fingerprint cached but not in `_active`" retry branch treats it as handled instead of re-scheduling (and re-logging) every 10s. The REST `nextRunAt` uses the same options, so the list shows the first post-pause fire; the admin badges a job "active from …" / "ended". Run-now ignores the window. Recurring only: a window together with `runAt` is rejected at every write surface (REST on the merged row, skill helper).
 - **One-shot**: `job.runAt` (epoch ms) — croner fires once at that instant. After it completes, `finalize` sets `enabled=0` so it never re-fires. A `runAt` already in the past at schedule time is marked `lastRunStatus='missed'` and disabled (rather than firing immediately or retrying every reconcile). The `run_at` column is `CRON_MIGRATIONS` slot 0 in `db/cron-db.ts`, run through the shared `runMigrations` / `PRAGMA user_version` mechanism (see [storage.md](storage.md#schema-change-rules)).
 
 ### Trigger-mode exclusivity (the db contract)
@@ -44,7 +44,7 @@ Exactly **one** of `schedule` / `runAt` is set per job. `runner.ts` `scheduleJob
 REST route mutations call `scheduleJob` / `unscheduleJob` directly. But the `cron` skill (and manual ops) edit `cron.db` over a *different* sqlite connection. `reconcileFromDb` (10s timer) catches those:
 
 - Fast path: `PRAGMA data_version` flips only when *another* connection commits. If unchanged since last pass, skip the full select entirely — one pragma read (~µs) vs. a select-all + per-row fingerprint compare. The pragma (and the run-pruning `NOT IN (subquery)` below) needs the raw better-sqlite3 handle, which the runner gets from the shared `rawSqlite(db)` helper (`db/raw-sqlite.ts`) instead of re-spelling drizzle's `$client` / `.session.client` cast at each site — it did, three times, each with its own hand-written method shape.
-- On change: diff db rows against the in-memory `_fingerprint` map (`enabled|schedule|runAt|timezone`); schedule new rows, unschedule deleted ones, re-instantiate croner only for rows whose fingerprint changed. Broadcasts a coalesced `cron:job_changed` per affected job.
+- On change: diff db rows against the in-memory `_fingerprint` map (`enabled|schedule|runAt|timezone|activeFrom|activeUntil`); schedule new rows, unschedule deleted ones, re-instantiate croner only for rows whose fingerprint changed. Broadcasts a coalesced `cron:job_changed` per affected job.
 
 ## Execution (`runJob`)
 
@@ -121,6 +121,6 @@ interface CronChannelDispatcher {
 
 ## Scope
 
-Supported: recurring (cron expr) + one-shot (`runAt`) schedules; per-timezone; per-job configurable timeout (`timeoutSec`, 60–21600s, default 3600); multi-target fan-out; stable accumulating session per job — its own `cron-<jobId>` or a picked existing root session (`sessionId`); run-now (manual trigger); admin UI history with per-run logs + dispatch results.
+Supported: recurring (cron expr) + one-shot (`runAt`) schedules; per-timezone; optional active window for recurring jobs (`activeFrom` / `activeUntil` — "pause until", "send until"); per-job configurable timeout (`timeoutSec`, 60–21600s, default 3600); multi-target fan-out; stable accumulating session per job — its own `cron-<jobId>` or a picked existing root session (`sessionId`); run-now (manual trigger); admin UI history with per-run logs + dispatch results.
 
 Not supported: sub-minute schedules below croner's resolution; in-process job execution (always a fresh cli child); running in a sub-session (`>` paths — root sessions only); a conflict-free shared session — a message sent into a picked session while its cron run is in flight can lose one of the two turns (logged, not prevented; see step 4).

@@ -217,6 +217,10 @@ export const _inflightSessions = new Set<string>()
  *  croner when we have to. */
 const _fingerprint = new Map<string, string>()
 
+/** Enabled recurring jobs `scheduleJob` deliberately left unscheduled
+ *  because they're past `activeUntil` — "handled", not "lost". */
+const _expired = new Set<string>()
+
 /** Resolves `~/.halo/global/logs/cron/`. Created on first use. */
 function logsDir(): string {
   return path.join(homedir(), '.halo', 'global', 'logs', 'cron')
@@ -376,6 +380,7 @@ export function stopCronDaemon(): void {
     try { a.cron.stop() } catch { /* best effort */ }
   }
   _active.clear()
+  _expired.clear()
 }
 
 /**
@@ -388,6 +393,7 @@ export function reloadAll(): void {
     try { a.cron.stop() } catch { /* best effort */ }
   }
   _active.clear()
+  _expired.clear()
   _fingerprint.clear()
 
   const db = getCronDb()
@@ -401,9 +407,27 @@ export function reloadAll(): void {
 
 /** Per-row fingerprint used by `reconcileFromDb` and `scheduleJob` to
  *  detect "did anything change that requires re-instantiating croner?".
- *  Includes runAt so flipping a job from recurring → one-shot is noticed. */
+ *  Includes runAt so flipping a job from recurring → one-shot is noticed,
+ *  and the active window so a skill-side "pause until X" reschedules. */
 function jobFingerprint(j: typeof cronJobs.$inferSelect): string {
-  return `${j.enabled}|${j.schedule}|${j.runAt ?? ''}|${j.timezone ?? ''}`
+  return `${j.enabled}|${j.schedule}|${j.runAt ?? ''}|${j.timezone ?? ''}|${j.activeFrom ?? ''}|${j.activeUntil ?? ''}`
+}
+
+/** Recurring job past its `activeUntil` — enabled but never scheduled. */
+function isPastActiveUntil(j: { activeUntil: number | null }): boolean {
+  return j.activeUntil != null && j.activeUntil <= Date.now()
+}
+
+/** croner `startAt` / `stopAt` for a recurring job's active window
+ *  `[activeFrom, activeUntil)`. croner treats startAt as exclusive (a fire
+ *  exactly at startAt is skipped), so it gets activeFrom − 1 ms to keep a
+ *  `0 0 * * *` job firing at the activeFrom midnight; stopAt is already
+ *  exclusive. Shared with the REST `nextRunAt` so list and runner agree. */
+export function activeWindowOptions(j: { activeFrom: number | null; activeUntil: number | null }): { startAt?: Date; stopAt?: Date } {
+  return {
+    ...(j.activeFrom != null ? { startAt: new Date(j.activeFrom - 1) } : {}),
+    ...(j.activeUntil != null ? { stopAt: new Date(j.activeUntil) } : {}),
+  }
 }
 
 /** Schedule one job by id. Idempotent — replaces an existing schedule. */
@@ -413,6 +437,7 @@ export function scheduleJob(jobId: string): void {
     try { existing.cron.stop() } catch { /* best effort */ }
     _active.delete(jobId)
   }
+  _expired.delete(jobId)
 
   const db = getCronDb()
   const job = db.select().from(cronJobs).where(eq(cronJobs.id, jobId)).get()
@@ -445,7 +470,17 @@ export function scheduleJob(jobId: string): void {
       }
       cron = new Cron(new Date(job.runAt), { timezone: job.timezone ?? undefined }, handler)
     } else {
-      cron = new Cron(job.schedule, { timezone: job.timezone ?? undefined }, handler)
+      // Past the active window: stays enabled (so the window can be
+      // extended later) but gets no croner. Recorded in `_expired` so
+      // reconcile's "fingerprint cached but not in _active" retry branch
+      // doesn't re-run this (and re-log) on every pass.
+      if (isPastActiveUntil(job)) {
+        _expired.add(jobId)
+        _fingerprint.set(jobId, jobFingerprint(job))
+        console.log(`[Cron] ${jobId} past activeUntil; not scheduled`)
+        return
+      }
+      cron = new Cron(job.schedule, { timezone: job.timezone ?? undefined, ...activeWindowOptions(job) }, handler)
     }
   } catch (err) {
     console.log(`[Cron] ${jobId} schedule invalid (${job.schedule}): ${err instanceof Error ? err.message : String(err)}`)
@@ -457,11 +492,15 @@ export function scheduleJob(jobId: string): void {
   _fingerprint.set(jobId, jobFingerprint(job))
   const next = cron.nextRun()
   const sched = job.runAt ? `runAt=${new Date(job.runAt).toISOString()}` : job.schedule
-  console.log(`[Cron] ${jobId} scheduled (${sched}) next=${next?.toISOString() ?? 'n/a'}`)
+  const window = job.activeFrom != null || job.activeUntil != null
+    ? ` active=[${job.activeFrom != null ? new Date(job.activeFrom).toISOString() : '-'}, ${job.activeUntil != null ? new Date(job.activeUntil).toISOString() : '-'})`
+    : ''
+  console.log(`[Cron] ${jobId} scheduled (${sched})${window} next=${next?.toISOString() ?? 'n/a'}`)
 }
 
 /** Cancel a single job's schedule. Doesn't touch the db row. */
 export function unscheduleJob(jobId: string): void {
+  if (_expired.delete(jobId)) _fingerprint.delete(jobId)
   const existing = _active.get(jobId)
   if (!existing) return
   try { existing.cron.stop() } catch { /* best effort */ }
@@ -505,9 +544,10 @@ function readCronDataVersion(): number | null {
  *
  * Called on a 10s timer from `startCronDaemon`. The fast path checks
  * `data_version` first and skips the full select when no other
- * connection has written since the last reconcile pass.
+ * connection has written since the last reconcile pass. Exported for
+ * tests only.
  */
-function reconcileFromDb(): void {
+export function reconcileFromDb(): void {
   const dv = readCronDataVersion()
   if (dv !== null && _lastCronDataVersion === dv) return
   _lastCronDataVersion = dv
@@ -524,7 +564,7 @@ function reconcileFromDb(): void {
     liveIds.add(job.id)
     const fp = jobFingerprint(job)
     const prev = _fingerprint.get(job.id)
-    if (prev === fp && _active.has(job.id)) continue
+    if (prev === fp && (_active.has(job.id) || _expired.has(job.id))) continue
     if (prev === fp && !_active.has(job.id) && job.enabled === 1) {
       // Edge case: in-memory cleared but fingerprint cached. Re-add.
       scheduleJob(job.id)
@@ -547,7 +587,7 @@ function reconcileFromDb(): void {
     }
   }
   for (const id of [..._fingerprint.keys()]) {
-    if (!liveIds.has(id)) _fingerprint.delete(id)
+    if (!liveIds.has(id)) { _fingerprint.delete(id); _expired.delete(id) }
   }
 
   for (const id of changedIds) {

@@ -204,6 +204,8 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
             : <div><span className="text-[var(--foreground)]">{t('cron.field.schedule')}</span> <span className="font-mono">{job.schedule}{job.timezone ? ` (${job.timezone})` : ''}</span></div>}
           <div><span className="text-[var(--foreground)]">{t('cron.field.agent')}</span> {job.agentId}</div>
           <div><span className="text-[var(--foreground)]">{t('cron.field.timeoutSec')}</span> {job.timeoutSec != null ? `${job.timeoutSec}s` : t('cron.field.timeoutSecDefault')}</div>
+          {job.activeFrom != null && <div><span className="text-[var(--foreground)]">{t('cron.field.activeFrom')}</span> <span className="font-mono">{new Date(job.activeFrom).toLocaleString()}</span></div>}
+          {job.activeUntil != null && <div><span className="text-[var(--foreground)]">{t('cron.field.activeUntil')}</span> <span className="font-mono">{new Date(job.activeUntil).toLocaleString()}</span></div>}
           <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.workspace')}</span> {job.workspacePath}</div>
           <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.session')}</span> <span className="font-mono">{job.sessionId ?? t('cron.field.sessionDefault', { id: `cron-${job.id}` })}</span></div>
           <div className="col-span-2"><span className="text-[var(--foreground)]">{t('cron.field.targets')}</span> {job.targets.length === 0
@@ -306,6 +308,17 @@ function toDatetimeLocalValue(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/** Same `YYYY-MM-DDTHH:mm` shape as `toDatetimeLocalValue`, but the wall
+ *  clock of `tz` instead of the browser's — the inverse of the form's
+ *  `computeRunAtMs`, so a stored active-window bound shows in the job's tz. */
+function toDatetimeLocalInTz(ms: number, tz: string): string {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(ms)).filter((p) => p.type !== 'literal').map((p) => [p.type, p.value]))
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour === '24' ? '00' : parts.hour}:${parts.minute}`
+}
+
 function CronForm({ initial, onClose, onSaved }: {
   initial?: Job
   onClose: () => void
@@ -365,6 +378,12 @@ function CronForm({ initial, onClose, onSaved }: {
   // Empty string = "use server default (3600s)" sentinel (server stores
   // null). Kept as raw text so partial typing isn't clamped mid-edit.
   const [timeoutSecInput, setTimeoutSecInput] = useState(initial?.timeoutSec != null ? String(initial.timeoutSec) : '')
+  // Active window inputs (recurring only). null = untouched: the input shows
+  // the stored bound in the job's tz and submit keeps the stored ms as-is
+  // (no tz round-trip drift, and an already-past activeUntil doesn't block
+  // editing other fields). '' = cleared.
+  const [activeFromLocal, setActiveFromLocal] = useState<string | null>(null)
+  const [activeUntilLocal, setActiveUntilLocal] = useState<string | null>(null)
   const [userPrompt, setUserPrompt] = useState(initial?.userPrompt ?? '')
   const [enabled, setEnabled] = useState(initial?.enabled !== 0)
   const [channelTargets, setChannelTargets] = useState<Awaited<ReturnType<typeof api.cron.listChannelTargets>>['targets']>([])
@@ -506,6 +525,21 @@ function CronForm({ initial, onClose, onSaved }: {
       setFormError(t('cron.form.err.timeoutSec'))
       return
     }
+    // Active window: touched inputs convert in the job tz; untouched keep
+    // the stored value. Mirrors the server rules (recurring only, until in
+    // the future when changed, until after from).
+    const boundMs = (local: string | null, stored: number | null | undefined): number | null =>
+      local === null ? (stored ?? null) : (local ? computeRunAtMs(local, tzForRunAt) : null)
+    const activeFrom = mode === 'recurring' ? boundMs(activeFromLocal, initial?.activeFrom) : null
+    const activeUntil = mode === 'recurring' ? boundMs(activeUntilLocal, initial?.activeUntil) : null
+    if (activeUntilLocal && activeUntil !== null && activeUntil <= Date.now()) {
+      setFormError(t('cron.form.err.activeUntilPast'))
+      return
+    }
+    if (activeFrom !== null && activeUntil !== null && activeUntil <= activeFrom) {
+      setFormError(t('cron.form.err.activeOrder'))
+      return
+    }
     // Build the targets payload. Each picked (channelType, accountId)
     // expands to one row per chatId entered by the user. WeChat ignores
     // the chatId field (its dispatcher falls back to the QR-bound
@@ -570,6 +604,10 @@ function CronForm({ initial, onClose, onSaved }: {
           timeoutSec: timeoutSec ?? null,
           // '' = default session; null clears a previously-picked one.
           sessionId: sessionId || null,
+          // Untouched bounds are left out (server keeps them); one-shot
+          // mode always clears them (server rejects a window with runAt).
+          ...(mode === 'oneShot' || activeFromLocal !== null ? { activeFrom } : {}),
+          ...(mode === 'oneShot' || activeUntilLocal !== null ? { activeUntil } : {}),
         })
       } else {
         await api.cron.createJob({
@@ -578,6 +616,8 @@ function CronForm({ initial, onClose, onSaved }: {
           runAt: mode === 'oneShot' ? runAtMs : undefined,
           timeoutSec,
           sessionId: sessionId || undefined,
+          activeFrom: activeFrom ?? undefined,
+          activeUntil: activeUntil ?? undefined,
         })
       }
       onSaved()
@@ -586,7 +626,7 @@ function CronForm({ initial, onClose, onSaved }: {
     } finally {
       setSubmitting(false)
     }
-  }, [initial, label, workspacePath, agentId, sessionId, userPrompt, mode, schedule, runAtLocal, timezone, hostTz, computeRunAtMs, timeoutSecInput, pickedTargets, chatIdInputs, enabled, onSaved, t])
+  }, [initial, label, workspacePath, agentId, sessionId, userPrompt, mode, schedule, runAtLocal, timezone, hostTz, computeRunAtMs, timeoutSecInput, activeFromLocal, activeUntilLocal, pickedTargets, chatIdInputs, enabled, onSaved, t])
 
   return (
     <div className="flex h-full flex-col">
@@ -675,6 +715,37 @@ function CronForm({ initial, onClose, onSaved }: {
             minWidth={280}
           />
         </Field>
+
+        {mode === 'recurring' && (
+          <div>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                ['cron.form.activeFrom', activeFromLocal, initial?.activeFrom, setActiveFromLocal],
+                ['cron.form.activeUntil', activeUntilLocal, initial?.activeUntil, setActiveUntilLocal],
+              ] as const).map(([labelKey, local, stored, setLocal]) => {
+                const value = local ?? (stored != null ? toDatetimeLocalInTz(stored, timezone || hostTz) : '')
+                return (
+                  <Field key={labelKey} label={t(labelKey)}>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="datetime-local"
+                        value={value}
+                        onChange={(e) => setLocal(e.target.value)}
+                        className="input-base font-mono"
+                      />
+                      {value && (
+                        <button type="button" onClick={() => setLocal('')} className="shrink-0 rounded px-2 py-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)]">
+                          {t('cron.form.activeClear')}
+                        </button>
+                      )}
+                    </div>
+                  </Field>
+                )
+              })}
+            </div>
+            <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.active.hint')}</div>
+          </div>
+        )}
 
         <Field label={t('cron.form.timeoutSec')}>
           <input

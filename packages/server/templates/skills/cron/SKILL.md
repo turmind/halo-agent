@@ -38,6 +38,12 @@ loop). No restart needed after edits.
   the result back to the current chat with `{{channel.chat_id}}` — the user
   almost always means "send it to me here"
 - **edit / pause / resume** → `update`, `enable`, `disable`
+- **skip / pause until a date / resume** ("no A-share report over the holiday",
+  "skip this week", "send until month end", "start again") → `update <id>
+  --active-from …` / `--active-until …` (see *Active window* in step 2).
+  A pause with a known end date goes through `--active-from`, **not**
+  `disable` — a disabled job only comes back if someone remembers to
+  re-enable it
 - **delete / remove** → `delete`. From inside a channel the user won't
   know the cron `id`; first run `list --chat-id {{channel.chat_id}}` to find
   the matching job, confirm which one, then delete by id
@@ -101,6 +107,28 @@ agent then sees that session's history). Rules the user should hear once:
 Root session ids only (no `>` sub-session paths). You don't know session ids
 yourself — ask the user (admin → Sessions) rather than guessing. On `update`,
 pass `--session ""` to go back to the job's own session.
+
+**Active window (`--active-from` / `--active-until`, optional, recurring
+jobs only)** — the schedule fires only inside `[from, until)`; fires outside
+it are skipped silently (no run recorded). "Run now" ignores the window.
+- Values: `YYYY-MM-DD`, ISO-8601 (`2026-10-08T09:00`) or unix ms. A time
+  without an offset is read in the **job's timezone** (on `update`: the new
+  `--timezone` if you pass one, else the job's stored one; host time if
+  the job has none).
+- A bare date means **that day 00:00** for `--active-from`, and **the next
+  day 00:00** for `--active-until` — the date itself is included
+  (`--active-until 2026-10-31` still fires on the 31st).
+- `--active-from` may be in the past (= active now); `--active-until` must
+  be in the future and after `--active-from`. `""` clears either bound.
+- Past `--active-until` the job stays enabled but stops firing; the admin
+  shows it as "ended". Extending `--active-until` brings it back.
+- Rejected together with `--run-at` (one-shot jobs have no window).
+- There is **no "skip a middle stretch, keep firing before it"**: one
+  window per job. If the user asks for that (e.g. "keep sending this week,
+  skip next week, then resume"), say so plainly and offer a workaround —
+  usually: leave it running now and push `--active-from` past the gap just
+  before the gap starts (a one-shot cron can remind you), or create a
+  second job for the earlier stretch with an `--active-until`.
 
 ### 3. Channels (only when delivery is wanted)
 
@@ -188,11 +216,26 @@ shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py update <id> \
   --schedule "0 10 * * 1"
 ```
 
-**Pause / unpause:**
+**Pause / unpause (no end date in mind):**
 ```bash
 shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py disable <id>
 shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py enable <id>
 ```
+
+**Skip / pause until a date / resume (active window):** find the job first
+(`list`, or `list --chat-id {{channel.chat_id}}` inside a chat), then:
+```bash
+# "Don't send the English weekly this week" → active from next Monday
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py update <id> --active-from 2026-10-12
+# "No A-share report over the National Day holiday" → resume on Oct 8
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py update <id> --active-from 2026-10-08
+# "Send it until the end of the month" → Oct 31 still fires
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py update <id> --active-until 2026-10-31
+# "Start sending again" → clear the pause
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py update <id> --active-from ""
+```
+Prefer this over `disable` whenever the pause has a known end — it resumes
+on its own.
 
 **Delete:**
 ```bash
@@ -228,6 +271,14 @@ picks it up within ~10s. Example:
 
 > Created cron job `cron-mphsy-abc123`: runs the `default` agent every day at 9am,
 > output will be pushed to this chat. The runner picks it up within ~10s.
+
+For an active-window change, say when it resumes / stops — read
+`active_from_iso` / `active_until_iso` back with `get <id>` and name the
+first fire on or after it from the schedule (`get` has no computed next-run
+field; the admin Cron tab shows it):
+
+> Paused `A-share daily brief` over the holiday: it resumes on Oct 8 —
+> next run Oct 8 09:30 (Asia/Shanghai). Nothing is sent before that.
 
 ## Patterns that go sideways
 

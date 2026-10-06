@@ -32,6 +32,12 @@ Subcommands:
 
 `--targets` arg: comma-separated `channelType:accountId` pairs.
   example: `--targets telegram:halo_agent_bot,wechat:alice`
+
+`--active-from` / `--active-until` (recurring jobs only): the schedule fires
+only inside [from, until); fires outside it are skipped silently. Accepts
+YYYY-MM-DD, ISO-8601 or unix ms; a time without offset is read in the job's
+timezone. A bare date means that day 00:00 for --active-from and the NEXT
+day 00:00 for --active-until (so the date itself is included). `""` clears.
 """
 import argparse
 import json
@@ -157,6 +163,90 @@ def parse_run_at(raw: str | None) -> int | None:
     return int(dt.timestamp() * 1000)
 
 
+DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def _tzinfo(tz_name: str | None):
+    """ZoneInfo for an IANA name; None for unset or unknown names."""
+    if not tz_name:
+        return None
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try:
+        return ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
+def job_tz(tz_name: str | None):
+    """tzinfo for the job's timezone; None = host-local."""
+    tz = _tzinfo(tz_name)
+    if tz_name and tz is None:
+        die(f'unknown timezone "{tz_name}"; expected an IANA name like Asia/Shanghai')
+    return tz
+
+
+def parse_active_bound(flag: str, raw: str, tz_name: str | None) -> int | None:
+    """Parse --active-from / --active-until into epoch ms; "" = None (clear).
+
+    YYYY-MM-DD → that day 00:00 (from) or the NEXT day 00:00 (until, so the
+    date is included). ISO without offset / bare dates are read in the job's
+    timezone (host-local when the job has none)."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    from datetime import datetime, timedelta
+    tz = job_tz(tz_name)
+    if DATE_RE.match(raw):
+        try:
+            dt = datetime.strptime(raw, '%Y-%m-%d')
+        except ValueError:
+            die(f'invalid {flag} "{raw}": not a calendar date')
+        if flag == '--active-until':
+            dt += timedelta(days=1)
+    else:
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            die(f'invalid {flag} "{raw}": expected YYYY-MM-DD, ISO-8601 (e.g. 2026-10-08T09:00) or unix ms')
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz) if tz else dt.astimezone()
+    return int(dt.timestamp() * 1000)
+
+
+def validate_active_window(run_at, active_from, active_until, new_until: bool):
+    """Same rules as the admin REST routes, on the merged row: recurring jobs
+    only; a newly set --active-until must be in the future and after from."""
+    if active_from is None and active_until is None:
+        return
+    if run_at is not None:
+        die('--active-from/--active-until only apply to recurring jobs, not --run-at one-shots '
+            '(on update, clear them with --active-from "" --active-until "")')
+    if new_until and active_until is not None and active_until <= now_ms():
+        die('--active-until must be in the future')
+    if active_from is not None and active_until is not None and active_until <= active_from:
+        die('--active-until must be after --active-from')
+
+
+def require_active_columns(conn: sqlite3.Connection):
+    """cron.db gains active_from/active_until via the server's boot migration;
+    a server that hasn't restarted onto this version yet won't have them."""
+    cols = {r[1] for r in conn.execute('PRAGMA table_info(cron_jobs)').fetchall()}
+    if 'active_from' not in cols or 'active_until' not in cols:
+        die('cron.db has no active_from/active_until columns yet — restart the halo server '
+            'once so it migrates cron.db, then retry')
+
+
+def ms_to_iso(ms, tz_name: str | None) -> str | None:
+    if ms is None:
+        return None
+    from datetime import datetime
+    tz = _tzinfo(tz_name)  # display only — never die on a stored bad tz
+    dt = datetime.fromtimestamp(ms / 1000, tz=tz) if tz else datetime.fromtimestamp(ms / 1000).astimezone()
+    return dt.isoformat(timespec='minutes')
+
+
 def row_to_job(row: sqlite3.Row) -> dict:
     j = dict(row)
     try:
@@ -164,6 +254,11 @@ def row_to_job(row: sqlite3.Row) -> dict:
     except Exception:
         j['targets'] = []
     j['enabled'] = bool(j['enabled'])
+    # Active window: ms (as stored) + ISO in the job's timezone. Pre-migration
+    # dbs have no columns — report them as unset.
+    for k in ('active_from', 'active_until'):
+        j.setdefault(k, None)
+        j[f'{k}_iso'] = ms_to_iso(j[k], j.get('timezone'))
     return j
 
 
@@ -222,6 +317,9 @@ def cmd_create(args):
         die('--run-at must be in the future')
     timeout_sec = parse_timeout_sec(args.timeout_sec)
     session_id = parse_session(args.session)
+    active_from = parse_active_bound('--active-from', args.active_from or '', args.timezone)
+    active_until = parse_active_bound('--active-until', args.active_until or '', args.timezone)
+    validate_active_window(run_at_ms, active_from, active_until, new_until=True)
 
     job_id = args.id or gen_job_id()
     now = now_ms()
@@ -232,25 +330,31 @@ def cmd_create(args):
     if existing:
         die(f'job id {job_id} already exists; pick another with --id', 2)
 
+    values: dict[str, object] = {
+        'id': job_id,
+        'label': args.label,
+        'workspace_path': args.workspace,
+        'agent_id': args.agent or 'default',
+        'user_prompt': args.prompt,
+        'schedule': args.schedule or '',
+        'run_at': run_at_ms,
+        'timezone': args.timezone,
+        'timeout_sec': timeout_sec,
+        'session_id': session_id,
+        'targets': json.dumps(targets, ensure_ascii=False),
+        'enabled': 0 if args.disabled else 1,
+        'created_at': now,
+        'updated_at': now,
+    }
+    # Only name the window columns when used, so jobs without a window can
+    # still be created on a cron.db the server hasn't migrated yet.
+    if active_from is not None or active_until is not None:
+        require_active_columns(conn)
+        values['active_from'] = active_from
+        values['active_until'] = active_until
     conn.execute(
-        'INSERT INTO cron_jobs(id, label, workspace_path, agent_id, user_prompt, schedule, '
-        'run_at, timezone, timeout_sec, session_id, targets, enabled, created_at, updated_at) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (
-            job_id,
-            args.label,
-            args.workspace,
-            args.agent or 'default',
-            args.prompt,
-            args.schedule or '',
-            run_at_ms,
-            args.timezone,
-            timeout_sec,
-            session_id,
-            json.dumps(targets, ensure_ascii=False),
-            0 if args.disabled else 1,
-            now, now,
-        ),
+        f'INSERT INTO cron_jobs({", ".join(values)}) VALUES ({", ".join("?" for _ in values)})',
+        list(values.values()),
     )
     conn.commit()
     print(json.dumps({'id': job_id, 'created': True}, ensure_ascii=False))
@@ -283,8 +387,25 @@ def cmd_update(args):
         sets.append(('session_id', parse_session(args.session)))
     if args.targets is not None:
         sets.append(('targets', json.dumps(parse_targets(args.targets), ensure_ascii=False)))
+    cur = dict(row)
+    if args.active_from is not None or args.active_until is not None:
+        require_active_columns(conn)
+        # Bare dates / offset-less times read in the job's timezone after
+        # this update: the new --timezone if given, else the stored one.
+        tz = args.timezone if args.timezone is not None else cur.get('timezone')
+        if args.active_from is not None:
+            sets.append(('active_from', parse_active_bound('--active-from', args.active_from, tz)))
+        if args.active_until is not None:
+            sets.append(('active_until', parse_active_bound('--active-until', args.active_until, tz)))
+    # Window rules on the merged row (also catches --run-at on a job that
+    # still has a window).
+    merged = {**cur, **dict(sets)}
+    validate_active_window(
+        merged.get('run_at'), merged.get('active_from'), merged.get('active_until'),
+        new_until=bool(args.active_until and args.active_until.strip()),
+    )
     if not sets:
-        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--timezone/--timeout-sec/--session/--targets')
+        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--timezone/--timeout-sec/--session/--targets/--active-from/--active-until')
     sets.append(('updated_at', now_ms()))
 
     placeholders = ', '.join(f'{k} = ?' for k, _ in sets)
@@ -436,6 +557,12 @@ def main():
     c.add_argument('--targets',
                    help='comma-separated channelType:accountId[:chatId] list, or JSON array. '
                         'chatId pins delivery to a specific chat (e.g. when scheduling from inside a chat).')
+    c.add_argument('--active-from', dest='active_from',
+                   help='recurring only: start firing from this time — YYYY-MM-DD (= that day 00:00), '
+                        'ISO-8601 or unix ms; no offset = the job timezone. Use it to "pause until" a date.')
+    c.add_argument('--active-until', dest='active_until',
+                   help='recurring only: stop firing at this time (exclusive) — YYYY-MM-DD (= the NEXT day 00:00, '
+                        'so the date itself still fires), ISO-8601 or unix ms; must be in the future')
     c.add_argument('--disabled', action='store_true', help='create paused (default: enabled)')
     c.set_defaults(func=cmd_create)
 
@@ -453,6 +580,12 @@ def main():
     u.add_argument('--session',
                    help='root session id to run in; pass "" to clear back to cron-<jobId>')
     u.add_argument('--targets')
+    u.add_argument('--active-from', dest='active_from',
+                   help='recurring only: YYYY-MM-DD (= that day 00:00), ISO-8601 or unix ms, in the job timezone; '
+                        'pass "" to clear (= active now)')
+    u.add_argument('--active-until', dest='active_until',
+                   help='recurring only: YYYY-MM-DD (= the NEXT day 00:00, date included), ISO-8601 or unix ms, '
+                        'in the job timezone; pass "" to clear (= no end)')
     u.set_defaults(func=cmd_update)
 
     e = sub.add_parser('enable')

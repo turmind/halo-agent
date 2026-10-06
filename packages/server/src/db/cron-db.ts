@@ -49,6 +49,14 @@ export const cronJobs = sqliteTable('cron_jobs', {
    *  session. When it names an existing session the cli resumes it with that
    *  session's own agent (`agentId` only applies when the session is new). */
   sessionId: text('session_id'),
+  /** Active window (epoch ms, null = unbounded) — recurring jobs only.
+   *  The schedule fires only inside `[activeFrom, activeUntil)`; fires
+   *  outside it are skipped silently (no cron_runs row). "Pause until X"
+   *  = push activeFrom to X. Past activeUntil the job stays enabled (so it
+   *  can be extended later) but is not scheduled. Run-now ignores the
+   *  window. Set together with `runAt` is rejected at the write points. */
+  activeFrom: integer('active_from'),
+  activeUntil: integer('active_until'),
   /** JSON array of `{channelType, accountId}` records. Cron output (final
    *  assistant text) is dispatched to each one. Empty array = log only. */
   targets: text('targets').notNull().default('[]'),
@@ -102,6 +110,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   timezone        TEXT,
   timeout_sec     INTEGER,
   session_id      TEXT,
+  active_from     INTEGER,
+  active_until    INTEGER,
   targets         TEXT NOT NULL DEFAULT '[]',
   enabled         INTEGER NOT NULL DEFAULT 1,
   last_run_status TEXT,
@@ -143,6 +153,12 @@ export const CRON_MIGRATIONS: Migration[] = [
   },
   // v2: `session_id` — run the job in a chosen root session instead of cron-<jobId>.
   (s) => addColumnIfMissing(s, 'cron_jobs', 'session_id', 'TEXT'),
+  // v3: `active_from` / `active_until` — recurring-job active window. Old
+  // rows stay NULL = unbounded, same behaviour as before.
+  (s) => {
+    addColumnIfMissing(s, 'cron_jobs', 'active_from', 'INTEGER')
+    addColumnIfMissing(s, 'cron_jobs', 'active_until', 'INTEGER')
+  },
 ]
 
 export function createCronDb(globalDir: string) {

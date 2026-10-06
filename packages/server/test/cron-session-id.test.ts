@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { eq } from 'drizzle-orm'
-import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src/db/cron-db.js'
+import { createCronDb, setCronDb, cronJobs, cronRuns, CRON_MIGRATIONS, type CronDb } from '../src/db/cron-db.js'
 import { rawSqlite } from '../src/db/raw-sqlite.js'
 import { getWorkspaceDb } from '../src/db/index.js'
 import { agentSessions } from '../src/db/schema.js'
@@ -145,7 +145,7 @@ describe('cron session_id — REST', () => {
     const reopened = rawSqlite(createCronDb(legacyDir))
     const cols = (reopened.prepare('PRAGMA table_info(cron_jobs)').all() as Array<{ name: string }>).map((c) => c.name)
     expect(cols).toContain('session_id')
-    expect(reopened.pragma('user_version', { simple: true })).toBe(2)
+    expect(reopened.pragma('user_version', { simple: true })).toBe(CRON_MIGRATIONS.length)
     reopened.close()
   })
 })
