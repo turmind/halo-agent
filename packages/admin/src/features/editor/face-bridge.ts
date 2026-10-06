@@ -20,6 +20,8 @@
  * the handler chat-handlers installs, behind the loop gate below.
  */
 
+import { readHostTheme } from '@/shared/theme/palette'
+
 /** The face page, seeded into every workspace (server init). */
 export const FACE_PATH = '.halo/canvas/self.html'
 
@@ -52,8 +54,18 @@ let introPending = false
 
 export function requestFaceIntro(): void { introPending = true }
 
-/** HtmlPreview (face) calls this on iframe load. */
+/** Hand one face the admin's current palette (`{ haloFaceTheme: { scheme,
+ *  vars } }`). The face re-colours in place and sends no receipt — a theme
+ *  switch is not something the agent needs to hear about. */
+export function postFaceTheme(el: HTMLIFrameElement): void {
+  const { theme, themeVars } = readHostTheme()
+  try { el.contentWindow?.postMessage({ haloFaceTheme: { scheme: theme, vars: themeVars } }, '*') } catch { /* torn down */ }
+}
+
+/** HtmlPreview (face) calls this on iframe load. The theme goes first: posts
+ *  to one window arrive in order, so the intro already plays in its colours. */
 export function faceLoaded(el: HTMLIFrameElement): void {
+  postFaceTheme(el)
   if (!introPending) return
   introPending = false
   try { el.contentWindow?.postMessage({ haloFace: 'self.intro()' }, '*') } catch { /* torn down */ }

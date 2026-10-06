@@ -4,7 +4,7 @@ import { useChatStore } from '../src/features/chat/chat-store'
 import { useProjectStore } from '../src/shared/stores/project-store'
 import {
   registerFaceIframe, handleFaceMessage, pushFaceAck, takeFaceAcks, faceContextLine,
-  faceUserMessage, __resetFaceBridgeForTest,
+  faceUserMessage, faceLoaded, requestFaceIntro, __resetFaceBridgeForTest,
 } from '../src/features/editor/face-bridge'
 import { useFaceStore, isFaceOn } from '../src/features/editor/face-store'
 import type { WsClient } from '../src/shared/ws-client-types'
@@ -107,6 +107,30 @@ describe('face receipts', () => {
     useFaceStore.getState().setFaceOn('proj-x', false)
     expect(localStorage.getItem('halo_face_on:proj-x')).toBeNull()
     expect(takeFaceAcks()).toEqual([])
+  })
+})
+
+describe('face theme on load', () => {
+  const loadedFace = () => {
+    const win = { postMessage: vi.fn() }
+    faceLoaded({ contentWindow: win } as unknown as HTMLIFrameElement)
+    return win.postMessage.mock.calls.map(([msg]) => msg as Record<string, unknown>)
+  }
+
+  it('posts the theme first, then the requested intro', () => {
+    document.documentElement.style.setProperty('--primary', '#b45309')
+    requestFaceIntro()
+    const msgs = loadedFace()
+    expect(msgs.map((m) => Object.keys(m)[0])).toEqual(['haloFaceTheme', 'haloFace'])
+    expect(msgs[0].haloFaceTheme).toEqual({ scheme: 'dark', vars: { primary: '#b45309' } })
+    expect(msgs[1].haloFace).toBe('self.intro()')
+    document.documentElement.style.removeProperty('--primary')
+  })
+
+  it('without an intro request only the theme is posted', () => {
+    const msgs = loadedFace()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toHaveProperty('haloFaceTheme')
   })
 })
 

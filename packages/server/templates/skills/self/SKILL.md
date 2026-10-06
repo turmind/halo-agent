@@ -86,10 +86,10 @@ not per-conversation.)
   `'ack'` (a nod), `'yes'`, `'no'` (disagree / that's wrong), `'insight'` (a real
   "oh!"), `'think'` (working on it), `'done'` (finished, together). Unknown
   events no-op. Use these when the feeling is **true**, never to perform.
-- `self.intro()` — the built-in opening (auto-plays once on load). A nameless
-  greeting: "HELLO / A MIND / IS HERE / BEYOND WORDS". Deliberately no name — the
-  conversational identity is user-configurable and the model may not be Claude,
-  so don't hard-code "I'm Claude" on the face; let it speak the universal thing.
+- `self.intro()` — the built-in opening (played once when the user turns the face
+  on): one short subtitle, "Hi, I'm Halo.", ~3 s. It names only Halo, the product —
+  never a model; your identity in the conversation is still whatever the user
+  configured, so don't hard-code "I'm Claude" (or any model) on the face.
 - `self.pulse()` — one bright ripple from the core. A nod.
 - `self.flash(n)` — a hot flicker of the whole field. Emphasis, an exclamation.
 - `self.shake(ms)` — a brief lateral tremor. Negation, a shiver.

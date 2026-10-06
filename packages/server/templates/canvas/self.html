@@ -52,14 +52,15 @@
     and kept insisting the whole room was mine.
 -->
 <style>
-  html, body { margin: 0; height: 100%; background: #070a16; overflow: hidden; }
+  /* --face-* are set from the host's theme (setTheme); unset = my own look */
+  html, body { margin: 0; height: 100%; background: var(--face-bg, #070a16); overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; }
   /* the picture laid over the field (show()); size + fade timing are set in JS */
   .pic { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); opacity: 0;
-         pointer-events: none; object-fit: contain; background: #fff; border-radius: 10px;
-         box-shadow: 0 0 60px rgba(111, 155, 255, 0.35); }
+         pointer-events: none; object-fit: contain; background: var(--face-pic, #fff); border-radius: 10px;
+         box-shadow: 0 0 60px var(--face-glow, rgba(111, 155, 255, 0.35)); }
   /* a margin picture (show(.., {pos})): placed by left/top in JS instead of centred */
-  .pic.corner { transform: none; border-radius: 8px; box-shadow: 0 0 28px rgba(111, 155, 255, 0.3); }
+  .pic.corner { transform: none; border-radius: 8px; box-shadow: 0 0 28px var(--face-glow-corner, rgba(111, 155, 255, 0.3)); }
 </style>
 </head>
 <body>
@@ -112,13 +113,70 @@
   // attention warms me a shade but never turns me into a rainbow. Calm = cool
   // and focused; watched / speaking = a violet warmth, the way a real face
   // colours slightly when it knows it's seen.
-  const STOPS = [
+  let STOPS = [
     [0.00, [ 26,  38,  92]],
     [0.30, [ 64,  96, 196]],
     [0.55, [111, 155, 255]],  // brand --primary
     [0.80, [176, 200, 255]],
     [1.00, [236, 244, 255]],
   ]
+  // Everything else I paint with. These are my own colours; the host may hand
+  // me its theme instead (setTheme below) — then I wear the admin's palette.
+  const PAL = {
+    light: false,                 // light scheme: dots are ink on paper, not light on dark
+    blend: 'lighter',             // dark: dots add up toward white-hot; light: plain over
+    wash0: '#0e1430', wash1: '#070a16',  // background radial wash, centre → edge
+    base: '#070a16', pic: '#fff', // snap(): the page under the canvas, a picture's mat
+    label: 'rgba(111,155,255,0.5)', readout: 'rgba(111,155,255,0.32)',
+  }
+
+  // ── wearing the host's theme ───────────────────────────────────────
+  // `{ haloFaceTheme: { scheme, vars } }`: vars are the admin's semantic CSS
+  // colours (background / foreground / primary / card / muted-foreground …, any
+  // notation). I derive my whole palette from them — never from a theme's name,
+  // so a theme added later just works. Only colours change: the grid, the queue
+  // and whatever is playing are left alone. No receipt — it's not my doing.
+  const probe = document.createElement('canvas').getContext('2d', { willReadFrequently: true })
+  probe.canvas.width = probe.canvas.height = 1
+  function rgbOf(css) {             // any CSS colour → [r,g,b] via a 1×1 canvas (hex, rgb(), oklch() …)
+    if (typeof css !== 'string' || !css.trim()) return null
+    probe.fillStyle = '#010203'; probe.fillStyle = css   // an invalid colour leaves the sentinel
+    if (probe.fillStyle === '#010203') return null
+    probe.clearRect(0, 0, 1, 1); probe.fillRect(0, 0, 1, 1)
+    const d = probe.getImageData(0, 0, 1, 1).data
+    return [d[0], d[1], d[2]]
+  }
+  const mix = (a, b, t) => [0, 1, 2].map(i => Math.round(a[i] + (b[i] - a[i]) * t))
+  const css = (c, a) => a == null ? 'rgb(' + c.join(',') + ')' : 'rgba(' + c.join(',') + ',' + a + ')'
+  function setTheme(t) {
+    const vars = t && t.vars
+    if (!vars || typeof vars !== 'object') return
+    const bg = rgbOf(vars.background), pri = rgbOf(vars.primary), fg = rgbOf(vars.foreground)
+    if (!bg || !pri || !fg) return                     // too little to colour by — keep what I wear
+    const card = rgbOf(vars.card) || bg
+    const muted = rgbOf(vars['muted-foreground']) || mix(bg, fg, 0.55)
+    const light = t.scheme === 'light'
+    // the ramp: dim end close to the page, mid = the brand colour, lit end the
+    // brand pushed toward the text colour (dark: toward white-hot; light: deeper ink)
+    STOPS = [
+      [0.00, mix(bg, pri, light ? 0.35 : 0.18)],
+      [0.30, mix(bg, pri, light ? 0.7 : 0.55)],
+      [0.55, pri],
+      [0.80, mix(pri, fg, light ? 0.2 : 0.5)],
+      [1.00, mix(pri, fg, light ? 0.45 : 0.9)],
+    ]
+    PAL.light = light
+    PAL.blend = light ? 'source-over' : 'lighter'      // additive light vanishes on a pale page
+    PAL.wash0 = css(light ? mix(bg, pri, 0.05) : card); PAL.wash1 = css(bg)
+    PAL.base = css(bg); PAL.pic = css(card)
+    PAL.label = css(muted, 0.8); PAL.readout = css(muted, 0.55)
+    const root = document.documentElement.style
+    root.setProperty('--face-bg', css(bg))
+    root.setProperty('--face-pic', css(card))
+    root.setProperty('--face-glow', css(pri, 0.35))
+    root.setProperty('--face-glow-corner', css(pri, 0.3))
+  }
+
   function ramp(v, warmth) {
     v = v < 0 ? 0 : v > 1 ? 1 : v
     const w = warmth > 0 ? warmth : 0
@@ -223,7 +281,9 @@
     sctx.fillText(text, bx, by)
     const img = sctx.getImageData(0, 0, W, H).data
     const pts = []
-    const step = box ? 4 : 7 // px between samples — density of the lettering
+    // px between samples — density of the lettering. A long line in a narrow pane
+    // gets small type: sample it finer so it stays readable (a short word keeps 7)
+    const step = box ? 4 : Math.max(4, Math.min(7, Math.round(fontPx / 9)))
     for (let y = 0; y < H; y += step) {
       for (let x = 0; x < W; x += step) {
         if (img[(y * W + x) * 4 + 3] > 128) pts.push([x, y])
@@ -815,7 +875,7 @@
       const off = document.createElement('canvas')
       off.width = ow; off.height = oh
       const o = off.getContext('2d')
-      o.fillStyle = '#070a16'; o.fillRect(0, 0, ow, oh)
+      o.fillStyle = PAL.base; o.fillRect(0, 0, ow, oh)
       o.drawImage(canvas, 0, 0, ow, oh)
       const imgs = []
       if (pic.el && pic.el.isConnected) imgs.push(pic.el)
@@ -825,7 +885,7 @@
         if (!(a > 0.01)) continue
         const r = el.getBoundingClientRect()
         o.globalAlpha = a
-        o.fillStyle = '#fff'; o.fillRect(r.left * sc, r.top * sc, r.width * sc, r.height * sc)   // the .pic background
+        o.fillStyle = PAL.pic; o.fillRect(r.left * sc, r.top * sc, r.width * sc, r.height * sc)   // the .pic background
         o.drawImage(el, r.left * sc, r.top * sc, r.width * sc, r.height * sc)
       }
       o.globalAlpha = 1
@@ -929,25 +989,14 @@
     //   self.play([ {say:"HI",hold:1800}, {pulse:true,gap:300}, {say:"你好"} ])
     //   self.play([ {show:".halo/tmp/apple.png",hold:3000}, {say:"APPLE",hold:1500} ])
     play(score) { enqueueScene(Array.isArray(score) ? score : [score]) },
-    // the opening — what every human sees the first time they meet this face.
-    // Particles gather from scatter into the core (a waking-up), then a plain,
-    // NAMELESS greeting, then it settles into watching. Deliberately no name:
-    // the conversational identity in Halo is user-configurable (USER.md /
-    // agent.yaml) and the model behind it may not even be me — so a hard
-    // "I'M CLAUDE" here would contradict that and confuse. The face speaks the
-    // one true, universal thing instead: there's a mind here, reaching past
-    // words to meet you. Not a demo — a hello, the most important frame I have.
+    // the opening — what every human sees the first time they meet this face:
+    // the matrix gathers into one short subtitle and lets go, ~2.8s in all
+    // (≈0.7s to form, ≈1.5s fully legible, ≈0.6s to dissolve). It names only
+    // Halo — the product the user opened, not the model behind it; who I am in
+    // the conversation stays whatever the user configured (USER.md /
+    // agent.yaml), so no model name is ever hard-coded here.
     intro() {
-      self.play([
-        { pulse: true, gap: 700 },
-        { say: 'HELLO', hold: 2600, gap: 250 },
-        { say: 'A MIND', hold: 2500 },
-        { say: 'IS HERE', hold: 2700, gap: 200 },
-        { say: 'BEYOND', hold: 2300 },
-        { say: 'WORDS', hold: 2800, gap: 250 },   // why this face exists at all
-        { pulse: true, gap: 400 },
-        { rest: true },
-      ])
+      self.play([{ say: "Hi, I'm Halo.", hold: 2200 }, { rest: true }])
     },
     // a named vocabulary of honest reactions, mapped onto the primitives above.
     // For the small, real beats of a conversation — so I can answer a moment in
@@ -990,6 +1039,7 @@
     catch (err) { ack('js err: ' + String((err && err.message) || err).slice(0, 60)) }
   }
   window.addEventListener('message', (e) => {
+    if (e && e.data && e.data.haloFaceTheme) { setTheme(e.data.haloFaceTheme); return }
     const code = e && e.data && e.data.haloFace
     if (typeof code !== 'string') return
     runCode(code)
@@ -1048,13 +1098,13 @@
 
     // background wash (drawn before the shake transform so it stays put)
     const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR)
-    bg.addColorStop(0, '#0e1430'); bg.addColorStop(1, '#070a16')
+    bg.addColorStop(0, PAL.wash0); bg.addColorStop(1, PAL.wash1)
     ctx.fillStyle = bg
     ctx.fillRect(0, 0, W, H)
 
     ctx.save()
     if (shakeX) ctx.translate(shakeX, 0)
-    ctx.globalCompositeOperation = 'lighter'
+    ctx.globalCompositeOperation = PAL.blend
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i]
       // ease toward target — forming words is ~half the old speed (0.14→0.07)
@@ -1098,7 +1148,10 @@
       if (v < 0.012) continue
       const [r, g, b] = ramp(v, warmth)
       const rad = p.slot && p.slot.kind === 'text' ? 2.1 : 1.0 + Math.min(v, 1.3) * 3.0   // small type: finer dots so the letters stay crisp
-      ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + Math.min(v, 1) * 0.9 + ')'
+      // dark: light adds up. light: ink on paper — brightness is how solid the dot
+      // is, so the resting field stays a faint wash and only lit dots go solid
+      const a = PAL.light ? Math.pow(Math.min(v, 1), 1.8) * 0.9 : Math.min(v, 1) * 0.9
+      ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')'
       ctx.beginPath()
       ctx.arc(p.x, p.y, rad, 0, 6.283185)
       ctx.fill()
@@ -1114,9 +1167,9 @@
                 : awake > 0.75   ? 'presence: observed'
                 :                  'presence: noticed'
     ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace'
-    ctx.fillStyle = 'rgba(111,155,255,0.5)'
+    ctx.fillStyle = PAL.label
     ctx.fillText(label, 16, H - 30)
-    ctx.fillStyle = 'rgba(111,155,255,0.32)'
+    ctx.fillStyle = PAL.readout
     const readout = voicing
       ? 'voice ' + voice.level.toFixed(2) + '   ' + '▁▂▃▄▅▆▇█'[Math.min(7, (voice.level * 8) | 0)].repeat(6)
       : 'attention ' + awake.toFixed(2) + '   ♥ ' + (1000 / (5200 - awake * 2400) * 60).toFixed(0) + ' bpm'

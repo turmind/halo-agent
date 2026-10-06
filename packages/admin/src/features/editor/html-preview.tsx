@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { registerFaceIframe, faceLoaded } from './face-bridge'
+import { useTheme } from '@/shared/theme'
+import { registerFaceIframe, faceLoaded, postFaceTheme } from './face-bridge'
 
 interface HtmlPreviewProps {
   /** URL to fetch the HTML from — typically the workspace file download URL */
@@ -31,16 +32,24 @@ interface HtmlPreviewProps {
  */
 export function HtmlPreview({ url, name, face }: HtmlPreviewProps) {
   const ref = useRef<HTMLIFrameElement>(null)
+  const { theme } = useTheme()
   useEffect(() => {
     if (!face || !ref.current) return
     return registerFaceIframe(ref.current)
   }, [face])
+  // A theme switch re-colours an open face. The provider stamps <html
+  // data-theme> in the same tick as its setState, so the palette read here is
+  // already the new one. Before `load` the post is lost — faceLoaded sends it.
+  useEffect(() => {
+    if (face && ref.current) postFaceTheme(ref.current)
+  }, [face, theme])
   return (
     <iframe
       ref={ref}
       src={url}
       title={name}
-      className="h-full w-full border-0 bg-white"
+      // the face paints the admin background itself; matching it here avoids a white flash before load
+      className={`h-full w-full border-0 ${face ? 'bg-[var(--background)]' : 'bg-white'}`}
       sandbox="allow-scripts allow-same-origin"
       // self.html plays Halo-synthesized speech (self.voice) on a postMessage,
       // not a direct click — delegate autoplay so the browser doesn't gate it.
