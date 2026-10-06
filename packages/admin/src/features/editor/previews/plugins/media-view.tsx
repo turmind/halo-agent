@@ -149,7 +149,7 @@ export function MediaPreview(props: PreviewProps) {
             src={viewUrl}
             alt={name}
             draggable={false}
-            placeholderClassName="h-full w-full rounded-none"
+            placeholderClassName="h-full w-full rounded-none bg-white/5 text-white/60"
             style={{
               transformOrigin: '0 0',
               transform: `translate(${zoom.translate.x}px, ${zoom.translate.y}px) scale(${zoom.scale})`,
