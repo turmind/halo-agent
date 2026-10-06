@@ -21,6 +21,7 @@
  */
 
 import { readHostTheme } from '@/shared/theme/palette'
+import type { Lang } from '@/shared/i18n'
 
 /** The face page, seeded into every workspace (server init). */
 export const FACE_PATH = '.halo/canvas/self.html'
@@ -62,10 +63,18 @@ export function postFaceTheme(el: HTMLIFrameElement): void {
   try { el.contentWindow?.postMessage({ haloFaceTheme: { scheme: theme, vars: themeVars } }, '*') } catch { /* torn down */ }
 }
 
-/** HtmlPreview (face) calls this on iframe load. The theme goes first: posts
- *  to one window arrive in order, so the intro already plays in its colours. */
-export function faceLoaded(el: HTMLIFrameElement): void {
+/** Tell one face the admin's UI language (`{ haloFaceLang }`); it only
+ *  remembers it for the next intro — a switch replays nothing, no receipt. */
+export function postFaceLang(el: HTMLIFrameElement, lang: Lang): void {
+  try { el.contentWindow?.postMessage({ haloFaceLang: lang }, '*') } catch { /* torn down */ }
+}
+
+/** HtmlPreview (face) calls this on iframe load. Theme and language go first:
+ *  posts to one window arrive in order, so the intro already plays in its
+ *  colours and its language. */
+export function faceLoaded(el: HTMLIFrameElement, lang: Lang): void {
   postFaceTheme(el)
+  postFaceLang(el, lang)
   if (!introPending) return
   introPending = false
   try { el.contentWindow?.postMessage({ haloFace: 'self.intro()' }, '*') } catch { /* torn down */ }

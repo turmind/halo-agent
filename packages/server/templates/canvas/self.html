@@ -266,10 +266,12 @@
   const sampler = document.createElement('canvas')
   const sctx = sampler.getContext('2d', { willReadFrequently: true })
   // `box` ({x,y,w,h} centre + size) = small type inside a margin cell, sampled finer
+  const CJK = /[\u2E80-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF]/
   function sampleText(text, box) {
     const bx = box ? box.x : cx, by = box ? box.y : cy
-    const fontPx = box ? Math.min(box.h * 0.4, box.w * 0.9 / Math.max(1, text.length) * 1.6)
-                       : Math.min(H * 0.42, (W * 0.8) / Math.max(1, text.length) * 1.6)
+    const maxW = box ? box.w * 0.9 : W * 0.8
+    let fontPx = box ? Math.min(box.h * 0.4, maxW / Math.max(1, text.length) * 1.6)
+                     : Math.min(H * 0.42, maxW / Math.max(1, text.length) * 1.6)
     sampler.width = W; sampler.height = H
     sctx.clearRect(0, 0, W, H)
     sctx.fillStyle = '#fff'
@@ -278,12 +280,18 @@
     // CJK fallbacks so 你好 forms too — ASCII uses the mono face, CJK falls
     // through to the system Chinese font instead of rendering empty tofu.
     sctx.font = '700 ' + Math.round(fontPx) + 'px ' + FONT
+    // the size above assumes mono cells; a CJK glyph is two cells wide, so a long
+    // CJK line would run off the pane — shrink it to fit (mono text never needs to)
+    const tw = sctx.measureText(text).width
+    if (tw > maxW) { fontPx *= maxW / tw; sctx.font = '700 ' + Math.round(fontPx) + 'px ' + FONT }
     sctx.fillText(text, bx, by)
     const img = sctx.getImageData(0, 0, W, H).data
     const pts = []
     // px between samples — density of the lettering. A long line in a narrow pane
-    // gets small type: sample it finer so it stays readable (a short word keeps 7)
-    const step = box ? 4 : Math.max(4, Math.min(7, Math.round(fontPx / 9)))
+    // gets small type: sample it finer so it stays readable (a short word keeps 7).
+    // CJK packs many strokes into one glyph, so it is sampled finer still.
+    const step = box ? 4 : CJK.test(text) ? Math.max(4, Math.min(7, Math.round(fontPx / 16)))
+                                         : Math.max(4, Math.min(7, Math.round(fontPx / 9)))
     for (let y = 0; y < H; y += step) {
       for (let x = 0; x < W; x += step) {
         if (img[(y * W + x) * 4 + 3] > 128) pts.push([x, y])
@@ -994,9 +1002,10 @@
     // (≈0.7s to form, ≈1.5s fully legible, ≈0.6s to dissolve). It names only
     // Halo — the product the user opened, not the model behind it; who I am in
     // the conversation stays whatever the user configured (USER.md /
-    // agent.yaml), so no model name is ever hard-coded here.
+    // agent.yaml), so no model name is ever hard-coded here. Spoken in the
+    // admin's UI language (haloFaceLang); English until told otherwise.
     intro() {
-      self.play([{ say: "Hi, I'm Halo.", hold: 2200 }, { rest: true }])
+      self.play([lang === 'zh' ? { say: '你好，我是 Halo。', hold: 2000 } : { say: "Hi, I'm Halo.", hold: 2200 }, { rest: true }])
     },
     // a named vocabulary of honest reactions, mapped onto the primitives above.
     // For the small, real beats of a conversation — so I can answer a moment in
@@ -1038,8 +1047,12 @@
     try { (new Function('self', code))(self); ack('js ok') }
     catch (err) { ack('js err: ' + String((err && err.message) || err).slice(0, 60)) }
   }
+  // `{ haloFaceLang: 'zh' | 'en' }` — the admin's UI language, remembered for
+  // intro(). Like the theme: no receipt, and nothing replays on a switch.
+  let lang = 'en'
   window.addEventListener('message', (e) => {
     if (e && e.data && e.data.haloFaceTheme) { setTheme(e.data.haloFaceTheme); return }
+    if (e && e.data && e.data.haloFaceLang) { lang = e.data.haloFaceLang === 'zh' ? 'zh' : 'en'; return }
     const code = e && e.data && e.data.haloFace
     if (typeof code !== 'string') return
     runCode(code)

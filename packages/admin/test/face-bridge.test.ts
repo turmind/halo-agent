@@ -4,7 +4,7 @@ import { useChatStore } from '../src/features/chat/chat-store'
 import { useProjectStore } from '../src/shared/stores/project-store'
 import {
   registerFaceIframe, handleFaceMessage, pushFaceAck, takeFaceAcks, faceContextLine,
-  faceUserMessage, faceLoaded, requestFaceIntro, __resetFaceBridgeForTest,
+  faceUserMessage, faceLoaded, postFaceLang, requestFaceIntro, __resetFaceBridgeForTest,
 } from '../src/features/editor/face-bridge'
 import { useFaceStore, isFaceOn } from '../src/features/editor/face-store'
 import type { WsClient } from '../src/shared/ws-client-types'
@@ -110,27 +110,37 @@ describe('face receipts', () => {
   })
 })
 
-describe('face theme on load', () => {
-  const loadedFace = () => {
+describe('face theme + language on load', () => {
+  const posts = (win: { postMessage: ReturnType<typeof vi.fn> }) => win.postMessage.mock.calls.map(([msg]) => msg as Record<string, unknown>)
+  const loadedFace = (lang: 'en' | 'zh' = 'en') => {
     const win = { postMessage: vi.fn() }
-    faceLoaded({ contentWindow: win } as unknown as HTMLIFrameElement)
-    return win.postMessage.mock.calls.map(([msg]) => msg as Record<string, unknown>)
+    faceLoaded({ contentWindow: win } as unknown as HTMLIFrameElement, lang)
+    return posts(win)
   }
 
-  it('posts the theme first, then the requested intro', () => {
+  it('posts the theme, then the language, then the requested intro', () => {
     document.documentElement.style.setProperty('--primary', '#b45309')
     requestFaceIntro()
-    const msgs = loadedFace()
-    expect(msgs.map((m) => Object.keys(m)[0])).toEqual(['haloFaceTheme', 'haloFace'])
+    const msgs = loadedFace('zh')
+    expect(msgs.map((m) => Object.keys(m)[0])).toEqual(['haloFaceTheme', 'haloFaceLang', 'haloFace'])
     expect(msgs[0].haloFaceTheme).toEqual({ scheme: 'dark', vars: { primary: '#b45309' } })
-    expect(msgs[1].haloFace).toBe('self.intro()')
+    expect(msgs[1].haloFaceLang).toBe('zh')
+    expect(msgs[2].haloFace).toBe('self.intro()')
     document.documentElement.style.removeProperty('--primary')
   })
 
-  it('without an intro request only the theme is posted', () => {
+  it('without an intro request only theme and language are posted', () => {
     const msgs = loadedFace()
-    expect(msgs).toHaveLength(1)
-    expect(msgs[0]).toHaveProperty('haloFaceTheme')
+    expect(msgs.map((m) => Object.keys(m)[0])).toEqual(['haloFaceTheme', 'haloFaceLang'])
+    expect(msgs[1].haloFaceLang).toBe('en')
+  })
+
+  it('a language switch posts only the language — no intro replay', () => {
+    requestFaceIntro()
+    loadedFace('en')                 // the open consumed the intro
+    const win = { postMessage: vi.fn() }
+    postFaceLang({ contentWindow: win } as unknown as HTMLIFrameElement, 'zh')
+    expect(posts(win)).toEqual([{ haloFaceLang: 'zh' }])
   })
 })
 

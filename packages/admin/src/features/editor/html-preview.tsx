@@ -2,7 +2,8 @@
 
 import { useEffect, useRef } from 'react'
 import { useTheme } from '@/shared/theme'
-import { registerFaceIframe, faceLoaded, postFaceTheme } from './face-bridge'
+import { useI18n } from '@/shared/i18n'
+import { registerFaceIframe, faceLoaded, postFaceLang, postFaceTheme } from './face-bridge'
 
 interface HtmlPreviewProps {
   /** URL to fetch the HTML from — typically the workspace file download URL */
@@ -33,6 +34,7 @@ interface HtmlPreviewProps {
 export function HtmlPreview({ url, name, face }: HtmlPreviewProps) {
   const ref = useRef<HTMLIFrameElement>(null)
   const { theme } = useTheme()
+  const { lang } = useI18n()
   useEffect(() => {
     if (!face || !ref.current) return
     return registerFaceIframe(ref.current)
@@ -43,6 +45,10 @@ export function HtmlPreview({ url, name, face }: HtmlPreviewProps) {
   useEffect(() => {
     if (face && ref.current) postFaceTheme(ref.current)
   }, [face, theme])
+  // A language switch is only remembered by the face (for its next intro).
+  useEffect(() => {
+    if (face && ref.current) postFaceLang(ref.current, lang)
+  }, [face, lang])
   return (
     <iframe
       ref={ref}
@@ -54,7 +60,7 @@ export function HtmlPreview({ url, name, face }: HtmlPreviewProps) {
       // self.html plays Halo-synthesized speech (self.voice) on a postMessage,
       // not a direct click — delegate autoplay so the browser doesn't gate it.
       allow="autoplay"
-      onLoad={face ? (e) => faceLoaded(e.currentTarget) : undefined}
+      onLoad={face ? (e) => faceLoaded(e.currentTarget, lang) : undefined}
     />
   )
 }

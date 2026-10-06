@@ -87,7 +87,8 @@ not per-conversation.)
   "oh!"), `'think'` (working on it), `'done'` (finished, together). Unknown
   events no-op. Use these when the feeling is **true**, never to perform.
 - `self.intro()` — the built-in opening (played once when the user turns the face
-  on): one short subtitle, "Hi, I'm Halo.", ~3 s. It names only Halo, the product —
+  on): one short subtitle in the admin's UI language — "Hi, I'm Halo." / 「你好，我是
+  Halo。」 — ~3 s. It names only Halo, the product —
   never a model; your identity in the conversation is still whatever the user
   configured, so don't hard-code "I'm Claude" (or any model) on the face.
 - `self.pulse()` — one bright ripple from the core. A nod.
