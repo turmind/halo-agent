@@ -42,7 +42,7 @@ tavily-web-search:                        # skill id from skills/<id>/config.yam
 ```
 
 The path always reads as `<namespace-id>.<kind>s.<key>`:
-- `<namespace-id>` is `general`, a provider id, a skill id, or an agent id
+- `<namespace-id>` is `general`, a provider id, a skill id, an agent id, or `ext-<extension-id>` (a canvas extension)
 - `<kind>` is `param` or `secret`
 - `<key>` is the leaf, dotted for grouping (e.g. `general.compact.keep_messages`)
 
@@ -96,6 +96,10 @@ Built-in skills declare theirs the same way — today `extension`, with a plain 
 
 Global agents declare theirs the same way in `agents/<agent-id>/agent-config.yaml` (same `params:` / `secrets:` lists; shown under Settings → Agents).
 
+### Extension params/secrets — `halo-extension.json` `settings`
+
+An installed canvas extension declares its own config in its manifest: `"settings": { "params": [field…], "secrets": [field…] }`, same field format as a skill's `config.yaml` (`key`, `description`, `description_zh`, `default`, `type`, `options`) but validated strictly — a malformed field makes the whole manifest an error (red row in Settings → Extensions) instead of being skipped. Each such extension becomes one section with `source: "extension"`, namespace **`ext-<extension-id>`** (the prefix keeps it from colliding with a skill / provider namespace) and the manifest `name` as title, listed in the left nav under its own group **Extension settings / 扩展配置**, right below the Extensions entry. Every field is `globalOnly` (stored in `~/.halo/secrets/settings.yaml` only; a workspace write is rejected with 400) and every `secrets` field is masked. Only server code reads the values (e.g. the Meeting Recorder's Amazon Transcribe region and keys) — they never reach the extension, the manifest or the hub. The section appears / disappears live: installing or removing an extension pushes `extension:changed`, and the open Settings page re-fetches the schema. See [design/canvas-extensions.md → Extension settings](../design/canvas-extensions.md#extension-settings).
+
 ### General — built-in
 
 Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `theme`, `agent.max_retries`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `observability.*` (read once at boot — restart to apply), `evolution.*`, `limits.*`. All `general.*` keys are `globalOnly`: `config.ts` resolves them through `settingsValue()` against `~/.halo/secrets/settings.yaml` only, so a workspace `settings.yaml` cannot override them. Per-workspace layering applies to namespaced `params` / `secrets` (`getServerSecret(ns, key, workspaceRoot)`, `substituteSecrets`).
@@ -134,7 +138,7 @@ There is no "default provider" setting: a newly created agent's `model:` is a co
 | `secret` | no | `true` → masked in API responses + password input in UI |
 | `restartRequired` | no | `true` → read once at server start; the Settings page shows a restart notice after saving it. Built-in `general` section only |
 | `advanced` | no | `true` → rendered in the collapsed "Advanced" area. Built-in `general` section only (every field except `language` / `theme`) |
-| `globalOnly` | no | `true` → read from global settings only; workspace overrides are ignored at runtime. UI disables the workspace input and shows a "global only" hint; `PUT` / `PATCH` / `DELETE` of such a key at workspace scope is rejected with 400. Set by the built-in `general` section only — provider / skill / agent yaml declarations don't read it |
+| `globalOnly` | no | `true` → read from global settings only; workspace overrides are ignored at runtime. UI disables the workspace input and shows a "global only" hint; `PUT` / `PATCH` / `DELETE` of such a key at workspace scope is rejected with 400. Set by the built-in `general` section and forced on every extension field — provider / skill / agent yaml declarations don't read it |
 
 ## Scope: global vs. workspace
 

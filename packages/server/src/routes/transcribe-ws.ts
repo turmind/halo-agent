@@ -6,12 +6,12 @@
  * streaming and sends back `ready` / `partial` / `final` / `error` text
  * frames. The browser never sees AWS credentials: they come from the
  * extension's own global settings (`ext-<id>.secrets.*`, read per connection
- * so a change needs no restart) or the SDK default chain.
+ * so a change needs no restart) or, when none are set, the SDK default chain.
  *
- * Mounted from index.ts's http `upgrade` dispatcher (noServer mode) next to
- * the admin `/ws`; not mounted in AgentCore mode.
+ * Mounted from index.ts's http `upgrade` router (noServer mode) next to the
+ * admin `/ws`; not mounted in AgentCore mode.
  *
- * Spec: .halo/tmp/htrans/protocol.md §8.
+ * Spec: .halo/docs/design/canvas-extensions.md#streaming-transcription-proxy
  */
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -35,6 +35,9 @@ const LANG_RE = /^[a-z]{2}-[A-Z]{2}$/
 /** 30 s of s16le mono 16 kHz. More than this queued = upstream isn't keeping
  *  up (or never started) — fail the stream rather than buffer unboundedly. */
 const MAX_BACKLOG_BYTES = 16000 * 2 * 30
+/** Per-frame cap. Clients send ~100–250 ms of PCM (3–8 KB) per frame; ws's
+ *  100 MiB default would let one frame allocate that much. */
+const MAX_FRAME_BYTES = 1024 * 1024
 
 export type TranscribeErrorCode = 'credentials' | 'denied' | 'limit' | 'bad-request' | 'io'
 
@@ -67,17 +70,27 @@ function extParam(extId: string, key: string, fallback: string): string {
   return getServerParam(`ext-${extId}`, key) || declared || fallback
 }
 
-function credentialsFor(extId: string): Credentials {
+/** Extension-configured static keys, or the SDK default chain when NONE of
+ *  the three is set. A partial set (e.g. a session token without keys, or a
+ *  key id without its secret) is a configuration error, not a cue to quietly
+ *  switch identity to whatever the machine's chain resolves to. */
+function credentialsFor(extId: string): Credentials | { missing: string[] } {
   const ns = `ext-${extId}`
   const accessKeyId = getServerSecret(ns, 'access_key_id')
   const secretAccessKey = getServerSecret(ns, 'secret_access_key')
-  if (!accessKeyId || !secretAccessKey) return defaultProvider()
   const sessionToken = getServerSecret(ns, 'session_token')
+  if (!accessKeyId && !secretAccessKey && !sessionToken) return defaultProvider()
+  const missing = [!accessKeyId && 'access_key_id', !secretAccessKey && 'secret_access_key'].filter((k): k is string => !!k)
+  if (missing.length > 0) return { missing }
   return { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) }
 }
 
+/** Query of a raw request-target. Never throws (the router passed us only an
+ *  exact pathname match, but the query part is still unvalidated input). */
 function parseQuery(req: IncomingMessage): URLSearchParams {
-  return new URL(req.url ?? '/', 'http://localhost').searchParams
+  const url = req.url ?? ''
+  const i = url.indexOf('?')
+  return new URLSearchParams(i < 0 ? '' : url.slice(i + 1))
 }
 
 export function createTranscribeProxy(deps: { createClient?: TranscribeClientFactory } = {}) {
@@ -85,6 +98,7 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
 
   const wss = new WebSocketServer({
     noServer: true,
+    maxPayload: MAX_FRAME_BYTES,
     // Same cookie gate as /ws; the extension iframe is same-origin with the
     // admin, so its WS handshake carries the login cookie.
     verifyClient: (info, callback) => {
@@ -102,6 +116,14 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
     const openedAt = Date.now()
     let closed = false
 
+    // Before anything else: a protocol violation (invalid UTF-8 text frame,
+    // frame > maxPayload) is emitted as 'error' on this socket — unhandled it
+    // crashes the process. ws closes the socket itself afterwards, so the
+    // 'close' handler below runs the teardown (upstream abort).
+    ws.on('error', (err) => {
+      console.log(`[Transcribe] client error ext=${extId}: ${err.message}`)
+    })
+
     const send = (frame: Record<string, unknown>) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame))
     }
@@ -112,6 +134,12 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
 
     if (lang !== 'auto' && !LANG_RE.test(lang)) {
       fail('bad-request', `invalid lang: ${lang}`)
+      return
+    }
+
+    const credentials = credentialsFor(extId)
+    if ('missing' in credentials) {
+      fail('credentials', `incomplete credentials in ext-${extId} settings: missing ${credentials.missing.join(', ')} (set both keys, or clear all three to use the default AWS credential chain)`)
       return
     }
 
@@ -137,7 +165,7 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
     }
 
     const abort = new AbortController()
-    const client = createClient({ region, credentials: credentialsFor(extId) })
+    const client = createClient({ region, credentials })
 
     ws.on('message', (data, isBinary) => {
       if (ended) return

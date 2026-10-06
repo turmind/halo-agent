@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound, Puzzle, AlertTriangle, X, ChevronRight } from 'lucide-react'
@@ -10,6 +10,7 @@ import { useTheme } from '@/shared/theme'
 import { SecurityView } from './security-view'
 import { ExtensionsView } from './extensions-view'
 import { useModelsBus } from '@/shared/models-bus'
+import { getExtensionsSnapshot, subscribe as subscribeExtensions } from '@/features/editor/previews/registry'
 
 type Schema = Awaited<ReturnType<typeof api.settings.getSchema>>
 type Section = Schema['sections'][number]
@@ -63,9 +64,12 @@ export function SettingsMain() {
     }).finally(() => setRefreshing(false))
   }, [projectId])
 
-  // Provider sections come from the models registry — re-fetch on `models:changed`.
+  // Provider sections come from the models registry — re-fetch on `models:changed`;
+  // extension sections from the installed extensions — re-fetch when an
+  // `extension:changed` frame replaces the snapshot (a new object each time).
   const modelsVersion = useModelsBus((s) => s.version)
-  useEffect(() => { refresh() }, [refresh, modelsVersion])
+  const extensionsSnapshot = useSyncExternalStore(subscribeExtensions, getExtensionsSnapshot, getExtensionsSnapshot)
+  useEffect(() => { refresh() }, [refresh, modelsVersion, extensionsSnapshot])
 
   // App version — fetched once from /api/health (server stamps it at bundle
   // time via esbuild define; 'dev' under tsx). Shown at the sidebar foot.

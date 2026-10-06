@@ -27,6 +27,7 @@ import { createMetricsRoutes } from './routes/metrics.js'
 import { createCommandRoutes } from './routes/commands.js'
 import { createAgentCoreRoutes, setupAgentCoreWebSocket } from './routes/agentcore.js'
 import { createTranscribeProxy, TRANSCRIBE_PATH } from './routes/transcribe-ws.js'
+import { createUpgradeRouter, type UpgradeHandler } from './ws/upgrade-router.js'
 import { commandRegistry } from './commands/index.js'
 import { DISPATCH_COMMANDS } from './channels/shared/commands.js'
 import { setupWebSocketHandler } from './ws/handler.js'
@@ -532,9 +533,7 @@ const server = serve({
   console.log(`[Server] Hono server listening on http://localhost:${info.port}`)
 })
 
-// noServer + one `upgrade` dispatcher: a ws server attached with
-// `{ server, path }` aborts every other path's handshake with 400, so a
-// second WS endpoint can't just attach alongside — route by pathname here.
+// noServer: handshakes reach it through the `upgrade` router below.
 const wss = new WebSocketServer({
   noServer: true,
   // AgentCore terminates auth upstream (SigV4/OAuth) before the connection
@@ -566,12 +565,11 @@ if (AGENTCORE) {
 // settings, neither of which exists in AgentCore mode.
 const transcribe = AGENTCORE ? null : createTranscribeProxy()
 
-;(server as import('node:http').Server).on('upgrade', (req, socket, head) => {
-  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
-  if (pathname === '/ws') wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
-  else if (transcribe && pathname === TRANSCRIBE_PATH) transcribe.handleUpgrade(req, socket, head)
-  else socket.destroy()
-})
+const upgradeRoutes = new Map<string, UpgradeHandler>([
+  ['/ws', (req, socket, head) => wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))],
+])
+if (transcribe) upgradeRoutes.set(TRANSCRIBE_PATH, transcribe.handleUpgrade)
+;(server as import('node:http').Server).on('upgrade', createUpgradeRouter(upgradeRoutes))
 
 console.log(`[Server] WebSocket server ready on ws://localhost:${PORT}/ws`)
 

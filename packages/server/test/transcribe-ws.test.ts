@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import http from 'node:http'
-import type { AddressInfo } from 'node:net'
+import net, { type AddressInfo } from 'node:net'
 import { WebSocket } from 'ws'
 
 /**
- * Contract for the `/api/transcribe/stream` proxy (protocol.md §8):
+ * Contract for the `/api/transcribe/stream` proxy
+ * (.halo/docs/design/canvas-extensions.md#streaming-transcription-proxy):
  *  - handshake: no/invalid cookie → 401; ext not installed or without the
  *    `transcribe` capability → 403;
  *  - `ready` is sent on connect, before the upstream call resolves (the SDK's
@@ -16,7 +17,10 @@ import { WebSocket } from 'ws'
  *    extension param (manifest default otherwise); region/creds from
  *    `ext-<id>` settings, else the default chain;
  *  - upstream errors map to the wire codes; the client closing aborts the
- *    upstream stream (no orphans).
+ *    upstream stream (no orphans);
+ *  - hostile input never crashes the process: a malformed request-target or
+ *    unknown path gets a 400 from the upgrade router, a bad / oversized frame
+ *    closes only that socket (and aborts its upstream).
  * The SDK client is injected; auth / registry / config are mocked.
  */
 
@@ -36,6 +40,7 @@ const extensions: Record<string, unknown> = {
 vi.mock('../src/extensions/registry.js', () => ({ getExtension: (id: string) => extensions[id] }))
 
 const { createTranscribeProxy, classifyTranscribeError, TRANSCRIBE_PATH } = await import('../src/routes/transcribe-ws.js')
+const { createUpgradeRouter } = await import('../src/ws/upgrade-router.js')
 type Factory = NonNullable<Parameters<typeof createTranscribeProxy>[0]>['createClient']
 
 interface Upstream {
@@ -75,18 +80,18 @@ function echo(lang = 'zh-CN') {
 }
 
 let server: http.Server
+let port: number
 let base: string
 let proxy: ReturnType<typeof createTranscribeProxy>
 
 beforeAll(async () => {
   proxy = createTranscribeProxy({ createClient: factory })
   server = http.createServer()
-  server.on('upgrade', (req, socket, head) => {
-    if (new URL(req.url ?? '/', 'http://x').pathname === TRANSCRIBE_PATH) proxy.handleUpgrade(req, socket, head)
-    else socket.destroy()
-  })
+  // The same router index.ts installs (there `/ws` is the other route).
+  server.on('upgrade', createUpgradeRouter(new Map([[TRANSCRIBE_PATH, proxy.handleUpgrade]])))
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
-  base = `ws://127.0.0.1:${(server.address() as AddressInfo).port}${TRANSCRIBE_PATH}`
+  port = (server.address() as AddressInfo).port
+  base = `ws://127.0.0.1:${port}${TRANSCRIBE_PATH}`
 })
 
 afterAll(() => {
@@ -242,5 +247,89 @@ describe('classifyTranscribeError', () => {
     ['TypeError', 'io'],
   ])('%s → %s', (name, code) => {
     expect(classifyTranscribeError(named(name))).toBe(code)
+  })
+})
+
+/** Raw handshake with an arbitrary request-target; resolves to the status line. */
+function rawUpgrade(target: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(port, '127.0.0.1', () => {
+      sock.write(`GET ${target} HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nCookie: halo_token=good\r\n\r\n`)
+    })
+    let buf = ''
+    sock.on('data', (d) => { buf += d.toString() })
+    sock.on('close', () => resolve(buf.split('\r\n')[0]))
+    sock.on('error', reject)
+  })
+}
+
+/** Open a stream (handshake ok → `ready`), then hand the socket to `act`. */
+function openThen(act: (ws: WebSocket) => void): Promise<number> {
+  const ws = connect('ext=htrans')
+  return new Promise((resolve) => {
+    ws.on('message', (d) => { if (JSON.parse(d.toString()).type === 'ready') act(ws) })
+    ws.on('close', (code) => resolve(code))
+  })
+}
+
+describe('hostile input never crashes the process', () => {
+  it('malformed request-target and unknown paths → 400 from the upgrade router', async () => {
+    expect(await rawUpgrade('//[')).toBe('HTTP/1.1 400 Bad Request')
+    expect(await rawUpgrade('/nope')).toBe('HTTP/1.1 400 Bad Request')
+    expect(await rawUpgrade(`${TRANSCRIBE_PATH}/x`)).toBe('HTTP/1.1 400 Bad Request')
+    // A garbled query on the real path still reaches the proxy (no parse throw).
+    expect(await rawUpgrade(`${TRANSCRIBE_PATH}?ext=%E0%A4%A&lang=[`)).toBe('HTTP/1.1 403 Forbidden')
+    // …and the server keeps serving.
+    const { frames } = await run(connect('ext=htrans&lang=zh-CN'), (s) => s.send(JSON.stringify({ type: 'end' })))
+    expect(frames.at(-1)).toMatchObject({ type: 'final' })
+  })
+
+  it('invalid UTF-8 text frame → that socket closes 1007, upstream aborted', async () => {
+    behavior = async (_input, signal) => (async function* () {
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()))
+      yield* []
+    })()
+    const code = await openThen((ws) => ws.send(Buffer.from([0xff, 0xfe, 0xfd]), { binary: false }))
+    expect(code).toBe(1007)
+    await vi.waitFor(() => expect(up.signal?.aborted).toBe(true))
+  })
+
+  it('frame over the 1 MiB maxPayload → that socket closes 1009, upstream aborted', async () => {
+    behavior = async (_input, signal) => (async function* () {
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()))
+      yield* []
+    })()
+    const code = await openThen((ws) => ws.send(Buffer.alloc(1024 * 1024 + 1)))
+    expect(code).toBe(1009)
+    await vi.waitFor(() => expect(up.signal?.aborted).toBe(true))
+  })
+})
+
+describe('credential selection', () => {
+  it.each([
+    [{ access_key_id: 'AKID' }, 'secret_access_key'],
+    [{ secret_access_key: 'S' }, 'access_key_id'],
+    [{ session_token: 'T' }, 'access_key_id, secret_access_key'],
+    [{ access_key_id: 'AKID', session_token: 'T' }, 'secret_access_key'],
+  ])('partial set %o → error credentials naming %s; no upstream call', async (secrets, missing) => {
+    for (const [k, v] of Object.entries(secrets)) settings.set(`ext-htrans.secrets.${k}`, v)
+    const { frames, code } = await run(connect('ext=htrans'))
+    expect(frames).toHaveLength(1)
+    expect(frames[0]).toMatchObject({ type: 'error', code: 'credentials' })
+    expect(frames[0].message).toContain(`missing ${missing}`)
+    expect(code).toBe(1011)
+    expect(up.credentials).toBeUndefined()
+    expect(up.input).toBeUndefined()
+  })
+
+  it('all three empty → SDK default chain; both keys (+ token) → static credentials', async () => {
+    await run(connect('ext=htrans'), (s) => s.send(JSON.stringify({ type: 'end' })))
+    expect(typeof up.credentials).toBe('function')
+
+    settings.set('ext-htrans.secrets.access_key_id', 'AKID')
+    settings.set('ext-htrans.secrets.secret_access_key', 'S')
+    settings.set('ext-htrans.secrets.session_token', 'T')
+    await run(connect('ext=htrans'), (s) => s.send(JSON.stringify({ type: 'end' })))
+    expect(up.credentials).toEqual({ accessKeyId: 'AKID', secretAccessKey: 'S', sessionToken: 'T' })
   })
 })
