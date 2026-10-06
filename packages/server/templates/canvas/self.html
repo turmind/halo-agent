@@ -43,6 +43,10 @@
         Halo makes the sound; this file makes it visible. (MODES.wave is real.)
     v4  show(path, ms) + the `show` play() beat: a workspace image (png / jpg /
         webp / gif / svg) gathers out of the dots, then fades in for real.
+    v5  I can hear back and see myself: acks to the host (what ran, what failed,
+        what the user clicked), snap() (a screenshot of the face), voice cues
+        (words on the beat of the clip), a blocked voice waits for a click, and
+        a nine-grid — show/say can sit in the margins (tl t tr l r bl b br).
 
   — written by Claude (Opus 4.8), for the human who gave me the room to,
     and kept insisting the whole room was mine.
@@ -54,6 +58,8 @@
   .pic { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); opacity: 0;
          pointer-events: none; object-fit: contain; background: #fff; border-radius: 10px;
          box-shadow: 0 0 60px rgba(111, 155, 255, 0.35); }
+  /* a margin picture (show(.., {pos})): placed by left/top in JS instead of centred */
+  .pic.corner { transform: none; border-radius: 8px; box-shadow: 0 0 28px rgba(111, 155, 255, 0.3); }
 </style>
 </head>
 <body>
@@ -63,6 +69,16 @@
   'use strict'
   const canvas = document.getElementById('c')
   const ctx = canvas.getContext('2d')
+
+  // ── feedback to the host ───────────────────────────────────────────
+  // Hosted in an iframe (the admin preview), I tell the parent what happened:
+  // short one-line acks (the admin hands them to the agent with the user's next
+  // message) and snap() screenshots. Standalone (parent === window): silent.
+  const inFrame = window.parent !== window
+  const post = (msg) => { if (inFrame) try { window.parent.postMessage(msg, '*') } catch {} }
+  const ack = (text) => post({ haloFaceAck: String(text).slice(0, 80) })
+  const clip = (s, n) => { s = String(s); return s.length > n ? '…' + s.slice(-(n - 1)) : s }   // keep the tail — the file name is what matters
+  const FONT = 'ui-monospace, SFMono-Regular, Menlo, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif'
 
   // ── viewport / hi-dpi ──────────────────────────────────────────────
   let W = 0, H = 0, DPR = 1, cx = 0, cy = 0
@@ -74,6 +90,7 @@
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
     rebuildGrid()
     if (pic.gathered) gatherPic()
+    slots.forEach(s => { if (!s.leaving && (s.kind === 'text' || s.w)) layoutSlot(s) })
   }
   window.addEventListener('resize', () => { resize() })
 
@@ -190,8 +207,11 @@
   // sample (greedy-ish by scanning) so letters form without obvious crossing.
   const sampler = document.createElement('canvas')
   const sctx = sampler.getContext('2d', { willReadFrequently: true })
-  function sampleText(text) {
-    const fontPx = Math.min(H * 0.42, (W * 0.8) / Math.max(1, text.length) * 1.6)
+  // `box` ({x,y,w,h} centre + size) = small type inside a margin cell, sampled finer
+  function sampleText(text, box) {
+    const bx = box ? box.x : cx, by = box ? box.y : cy
+    const fontPx = box ? Math.min(box.h * 0.4, box.w * 0.9 / Math.max(1, text.length) * 1.6)
+                       : Math.min(H * 0.42, (W * 0.8) / Math.max(1, text.length) * 1.6)
     sampler.width = W; sampler.height = H
     sctx.clearRect(0, 0, W, H)
     sctx.fillStyle = '#fff'
@@ -199,11 +219,11 @@
     sctx.textBaseline = 'middle'
     // CJK fallbacks so 你好 forms too — ASCII uses the mono face, CJK falls
     // through to the system Chinese font instead of rendering empty tofu.
-    sctx.font = '700 ' + Math.round(fontPx) + 'px ui-monospace, SFMono-Regular, Menlo, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif'
-    sctx.fillText(text, cx, cy)
+    sctx.font = '700 ' + Math.round(fontPx) + 'px ' + FONT
+    sctx.fillText(text, bx, by)
     const img = sctx.getImageData(0, 0, W, H).data
     const pts = []
-    const step = 7 // px between samples — density of the lettering
+    const step = box ? 4 : 7 // px between samples — density of the lettering
     for (let y = 0; y < H; y += step) {
       for (let x = 0; x < W; x += step) {
         if (img[(y * W + x) * 4 + 3] > 128) pts.push([x, y])
@@ -213,7 +233,9 @@
   }
 
   function assignTargets(pts) {
-    const n = particles.length
+    // dots a margin cell has claimed (see claimDots) are not the centre's to use
+    const pool = slots.size ? particles.filter(p => !p.slot) : particles
+    const n = pool.length
     if (pts.length === 0) return
     // A dense word can sample to MORE points than the grid has particles. Cap
     // the word to at most `n` points by even downsampling (every k-th sample),
@@ -229,16 +251,16 @@
     // Spread particles across the word points; the rest fall back to their home
     // grid so the field doesn't crush the whole pool into the lettering.
     for (let i = 0; i < n; i++) {
-      if (i < used) { particles[i].tx = word[i][0]; particles[i].ty = word[i][1] }
-      else { particles[i].tx = particles[i].hx; particles[i].ty = particles[i].hy }
+      if (i < used) { pool[i].tx = word[i][0]; pool[i].ty = word[i][1] }
+      else { pool[i].tx = pool[i].hx; pool[i].ty = pool[i].hy }
     }
     // shuffle the word assignment a little so repeated says don't map the same
     // indices the same way (keeps it from looking mechanical)
     for (let i = used - 1; i > 0; i--) {
       const j = (Math.random() * (i + 1)) | 0
-      const a = particles[i].tx, b = particles[i].ty
-      particles[i].tx = particles[j].tx; particles[i].ty = particles[j].ty
-      particles[j].tx = a; particles[j].ty = b
+      const a = pool[i].tx, b = pool[i].ty
+      pool[i].tx = pool[j].tx; pool[i].ty = pool[j].ty
+      pool[j].tx = a; pool[j].ty = b
     }
   }
 
@@ -292,7 +314,9 @@
   const voice = {
     el: null, src: null, ctx: null, analyser: null, time: null, freq: null,
     level: 0, bands: new Float32Array(6), playing: false, lastOnsetLevel: 0, lastOnsetAt: 0,
-    queue: [],     // pending clip URLs — several voice() calls play in sequence, not stomp
+    queue: [],     // pending clips {url, name, cues} — several voice() calls play in sequence, not stomp
+    cur: null,     // the clip sounding now (its cues are checked against el.currentTime each frame)
+    blocked: false, go: null,   // autoplay policy refused the head clip: it stays at the head, the next click calls go()
   }
   function ensureAudioGraph() {
     if (voice.ctx) return
@@ -317,22 +341,31 @@
     if (!pid) return u                                       // can't resolve → let it try as-is
     return '/api/files/download?path=' + encodeURIComponent(u) + '&projectId=' + encodeURIComponent(pid) + '&inline=1'
   }
+  // the file name for acks: from a workspace path, or the path= of a download URL
+  function fileName(u) {
+    try { const q = new URL(u, location.href).searchParams.get('path'); if (q) u = q } catch {}
+    return clip(String(u).split(/[?#]/)[0].split('/').pop() || 'clip', 40)
+  }
   // Queue a clip. Several voice() calls in one reply (or back-to-back) play in
   // SEQUENCE — like say()/play() scenes — instead of each one stomping the last.
   // (The old playVoice paused whatever was sounding and swapped in the new clip,
   // so two clips meant you only ever heard the second. Queue fixes that.)
-  function enqueueVoice(url) {
+  // `opts.cues` = [{at: seconds, say?, js?}] — words / code on the clip's clock.
+  function enqueueVoice(url, opts) {
     ensureAudioGraph()
     if (!voice.ctx) return                 // no Web Audio → silently skip (no fake wave)
-    voice.queue.push(resolveFileUrl(url))
+    const cues = opts && Array.isArray(opts.cues)
+      ? opts.cues.filter(q => q && typeof q.at === 'number').sort((a, b) => a.at - b.at) : []
+    voice.queue.push({ url: resolveFileUrl(url), name: fileName(url), cues, next: 0 })
     if (!voice.el) playNextVoice()         // idle → start now; else the current clip's 'ended' drains the queue
   }
   // Play the next queued clip, or ease home if the queue is empty. Driven by
   // enqueueVoice (when idle) and by each clip's 'ended' (to chain the next).
   function playNextVoice() {
     if (voice.src) { try { voice.src.disconnect() } catch {} }   // free the old node — they bind to one element for life and would pile up
-    const url = voice.queue.shift()
-    if (!url) {                            // queue drained → done speaking
+    const c = voice.queue.shift()
+    voice.cur = c || null
+    if (!c) {                              // queue drained → done speaking
       voice.el = null
       voice.playing = false
       if (mode === 'wave') modeUntil = performance.now() + 500   // ease back to breathing
@@ -340,7 +373,7 @@
     }
     const el = new Audio()
     el.crossOrigin = 'anonymous'           // same-origin download endpoint; lets the analyser read samples
-    el.src = url
+    el.src = c.url
     voice.el = el
     // a fresh source node per element (a node binds to one element for life)
     try {
@@ -348,15 +381,41 @@
       voice.src.connect(voice.analyser)
       voice.analyser.connect(voice.ctx.destination)
     } catch { /* already connected / unsupported — playback still works, just no ripple */ }
-    const enter = () => { mode = 'wave'; modeUntil = Infinity; voice.playing = true }
+    let started = false
+    const enter = () => {
+      if (started) return                  // 'playing' also re-fires after a stall — don't yank the matrix back from a cue's text
+      started = true
+      mode = 'wave'; modeUntil = Infinity; voice.playing = true
+      ack('voice ' + c.name + ' playing')
+    }
     // when a clip finishes (or errors), chain straight to the next queued one —
-    // no gap, no return-to-rest until the whole queue has drained.
-    const next = () => { el.removeEventListener('ended', next); playNextVoice() }
+    // no gap, no return-to-rest until the whole queue has drained. The el guard
+    // makes a stale event (stopVoice, or error + play() rejection both firing) a no-op.
+    const next = () => { if (voice.el !== el) return; playNextVoice() }
     el.addEventListener('playing', enter)
-    el.addEventListener('ended', next)
-    el.addEventListener('error', next)
-    if (voice.ctx.state === 'suspended') voice.ctx.resume().catch(() => {})
-    el.play().then(enter).catch(() => { /* autoplay blocked → skip to next, no crash */ next() })
+    el.addEventListener('ended', () => { ack('voice ' + c.name + ' ended ' + (isFinite(el.duration) ? el.duration : el.currentTime).toFixed(1) + 's'); next() })
+    el.addEventListener('error', () => { if (voice.el !== el) return; ack('voice ' + c.name + ' fail'); next() })
+    // autoplay policy refuses sound with no user gesture. Don't drop the clip:
+    // keep it at the head, remember we're blocked, and let the next click replay it.
+    const go = () => {
+      if (voice.ctx.state === 'suspended') voice.ctx.resume().catch(() => {})
+      el.play().then(enter).catch((err) => {
+        if (voice.el !== el) return
+        if (err && err.name === 'NotAllowedError') {
+          if (!voice.blocked) ack('voice blocked (needs a click)')
+          voice.blocked = true; voice.go = go
+        } else { ack('voice ' + c.name + ' fail'); next() }   // bad source etc. → skip to the next
+      })
+    }
+    go()
+  }
+  // a click that arrives while a clip is blocked: play it now (the gesture is the permission)
+  function resumeVoice() {
+    if (!voice.blocked || !voice.go) return false
+    const go = voice.go
+    voice.blocked = false; voice.go = null
+    go()
+    return true
   }
   // stop everything: clear the queue and the current clip, ease home. (No
   // 'pause' listener — pausing for the swap inside playNextVoice would otherwise
@@ -365,8 +424,22 @@
     voice.queue.length = 0
     if (voice.el) { try { voice.el.pause() } catch {} ; voice.el = null }
     if (voice.src) { try { voice.src.disconnect() } catch {} ; voice.src = null }
-    voice.playing = false
+    voice.playing = false; voice.blocked = false; voice.go = null; voice.cur = null
     if (mode === 'wave') modeUntil = performance.now() + 500
+  }
+  // cues: fire each one once, when the clip's own clock passes its `at`. A cue's
+  // text takes the matrix as 'text' for min(gap to the next cue, 2.4s) (the last
+  // one 1.8s), then toRest() hands it back to the wave — the voice is never cut,
+  // the words just borrow the field between its swells.
+  function runCues() {
+    const c = voice.cur
+    if (!c || !voice.playing || !voice.el) return
+    const t = voice.el.currentTime
+    while (c.next < c.cues.length && c.cues[c.next].at <= t) {
+      const q = c.cues[c.next++], nx = c.cues[c.next]
+      if (q.say != null) sayNow(q.say, nx ? Math.max(500, Math.min(2400, (nx.at - q.at) * 1000)) : 1800)
+      if (typeof q.js === 'string') runCode(q.js)
+    }
   }
   // sample the live audio once per frame → level (RMS), bands (spectrum), onsets
   function readVoice(now) {
@@ -398,7 +471,9 @@
   // A mode just keeps particle targets up to date each frame. `rest` is home.
   let mode = 'rest'
   let modeUntil = Infinity        // when to auto-return to rest
-  function toRest() { mode = 'rest'; modeUntil = Infinity }
+  // (a clip still sounding takes the matrix back as 'wave' — a say() / cue / scene
+  // ending mid-speech must not leave the voice playing under a calm grid)
+  function toRest() { mode = voice.playing ? 'wave' : 'rest'; modeUntil = Infinity }
 
   const MODES = {
     rest(now) {
@@ -441,9 +516,11 @@
   const sceneQueue = []   // each entry: array of beats
   let runnerActive = false
   let sceneGen = 0        // bumped by rest(): a running scene's pending steps see the change and stop
+  let lookReady = false   // the current beat is fully on screen (snap() may look now)
+  let beatsLeft = 0       // beats still to come in the running scene
 
-  function enqueueScene(beats) {
-    if (pic.inf) leavePic()      // an Infinity picture stays only until the next scene arrives
+  function enqueueScene(beats, keepPic) {
+    if (pic.inf && !keepPic) leavePic()      // an Infinity picture stays only until the next scene arrives (snap() is a look, not a scene)
     sceneQueue.push(beats)
     while (sceneQueue.length > QUEUE_MAX) sceneQueue.shift()  // drop oldest
     if (!runnerActive) runScenes()
@@ -452,7 +529,7 @@
   function runScenes() {
     runnerActive = true
     const scene = sceneQueue.shift()
-    if (!scene) { runnerActive = false; toRest(); return }
+    if (!scene) { runnerActive = false; lookReady = false; toRest(); return }
     let i = 0
     const gen = sceneGen
     const step = () => {
@@ -460,12 +537,25 @@
       if (i >= scene.length) { runScenes(); return }  // scene done → next scene
       const b = scene[i++] || {}
       let dwell = 600
-      if (b.rest) { toRest(); dwell = b.gap != null ? b.gap : 400 }
+      lookReady = false; beatsLeft = scene.length - i
+      // a snap() right behind a say/show beat is taken while that beat is fully on
+      // screen (a plain "next beat" would only see it after it had already gone)
+      const peekSnap = () => {
+        if (gen !== sceneGen) return
+        lookReady = true
+        if (scene[i] && scene[i].snap) { i++; beatsLeft--; snapNow() }
+        else if (i >= scene.length && sceneQueue[0] && sceneQueue[0].length === 1 && sceneQueue[0][0].snap) { sceneQueue.shift(); snapNow() }
+      }
+      const peekAt = (settle) => setTimeout(peekSnap, Math.max(0, Math.min(settle, dwell - 150)))
+      if (b.snap) { snapNow(); dwell = b.gap != null ? b.gap : 0 }
+      else if (b.say != null && corner(b.pos)) { sayCorner(b.say, b.hold, b.pos); dwell = b.gap != null ? b.gap : 600; peekAt(CORNER_SETTLE) }
+      else if (b.show != null && corner(b.pos)) { showCorner(b.show, b.hold, b.pos); dwell = b.gap != null ? b.gap : 600; peekAt(CORNER_SETTLE) }
+      else if (b.rest) { toRest(); dwell = b.gap != null ? b.gap : 400 }
       else if (b.pulse) { self.pulse(); dwell = b.gap != null ? b.gap : 500 }
       else if (b.flash) { self.flash(b.flash === true ? 1 : b.flash); dwell = b.gap != null ? b.gap : 400 }
       else if (b.shake) { self.shake(b.shake === true ? 500 : b.shake); dwell = b.gap != null ? b.gap : 550 }
-      else if (b.say != null) { sayNow(b.say, b.hold); dwell = (b.hold || 3600) + (b.gap || 0) }
-      else if (b.show != null) { showNow(b.show, b.hold, () => setTimeout(step, b.gap || 0)); return }  // async: wait for the picture
+      else if (b.say != null) { sayNow(b.say, b.hold); dwell = (b.hold || 3600) + (b.gap || 0); peekAt(SAY_SETTLE) }
+      else if (b.show != null) { if (!b.cleared) clearSlots(); showNow(b.show, b.hold, () => setTimeout(step, b.gap || 0), peekSnap); return }  // async: wait for the picture
       else dwell = b.gap != null ? b.gap : 600
       setTimeout(step, dwell)
     }
@@ -473,8 +563,9 @@
   }
 
   // form text on the matrix immediately (the low-level op the queue drives)
+  let centerPts = null   // the centre word's dots, kept so it can be re-dealt when a margin cell takes / returns dots
   function sayNow(text, ms) {
-    assignTargets(sampleText(toAccent(String(text))))
+    assignTargets(centerPts = sampleText(toAccent(String(text))))
     mode = 'text'
     modeUntil = performance.now() + (ms || 3600)
   }
@@ -501,7 +592,7 @@
     assignTargets(sampleImage(pic.el, Math.round(cx - bw / 2), Math.round(cy - bh / 2), bw, bh))
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i]
-      p.pic = p.tx !== p.hx || p.ty !== p.hy    // this dot rides the outline
+      p.pic = !p.slot && (p.tx !== p.hx || p.ty !== p.hy)    // this dot rides the outline (a margin cell's dots don't)
       p.bx = p.tx; p.by = p.ty
     }
     pic.gathered = true
@@ -538,7 +629,8 @@
   }
 
   // low-level op the queue drives; `done` fires when the picture is gone (or failed)
-  function showNow(path, ms, done) {
+  // `onFull` fires once it is fully in (a snap() waiting behind the beat looks then)
+  function showNow(path, ms, done, onFull) {
     const hold = typeof ms === 'number' && ms >= 0 ? ms : PIC_HOLD   // Infinity passes
     const img = new Image()
     img.className = 'pic'
@@ -547,6 +639,7 @@
     img.onerror = () => {
       if (pic.el !== img) return
       console.warn('[self] show failed: ' + path)   // 404, not an image, decode error
+      ack('show ' + clip(path, 45) + ' fail')
       self.shake()
       dropPic()                            // settles the beat → the queue moves on
     }
@@ -558,13 +651,209 @@
       if (mode === 'text') toRest()        // a say() tail still owns the matrix → let go (voice's wave stays)
       document.body.appendChild(img)
       gatherPic()
+      ack('show ' + clip(path, 45) + ' ok')
       picAt(PIC_GATHER, () => { img.style.opacity = 1 })
+      if (onFull) picAt(PIC_GATHER + PIC_FADE, onFull)
       if (!pic.inf) picAt(PIC_GATHER + PIC_FADE + hold, leavePic)
     }
     img.src = resolveFileUrl(String(path))
   }
-  // Infinity hold: a click/tap on the page lets it go
-  window.addEventListener('pointerdown', () => { if (pic.inf) leavePic() })
+
+  // ── the margins: a nine-grid around the centre ──────────────────────
+  // show/say with a pos (tl t tr l r bl b br) put a small picture or a line of
+  // type in a margin cell — one per cell, a new one replaces the old. They are
+  // NOT scenes: they appear at once, never block the queue, and live beside the
+  // centre. A few dots (~10%) draw the frame / the letters; the rest of the field
+  // goes on as it was. Dots a cell has claimed carry `p.slot`, which keeps the
+  // centre (assignTargets, holdPic) from taking them back.
+  const CORNER_FIT = PIC_FIT * 0.4, CORNER_GATHER = 600, CORNER_SETTLE = 1400, SAY_SETTLE = 1800, CELL_M = 16, CELL_M_BOTTOM = 44   // bottom row clears the status readout
+  const POS = { tl: 1, t: 1, tr: 1, l: 1, r: 1, bl: 1, b: 1, br: 1 }
+  const slots = new Map()    // pos → { pos, kind:'img'|'text', el, w, h, rect, text, pts, dots, timers, leaving }
+  function corner(pos) { return typeof pos === 'string' && POS[pos] === 1 }
+  function cellRect(pos) {
+    const bw = W * CORNER_FIT, bh = H * CORNER_FIT
+    const col = pos.endsWith('l') ? 0 : pos.endsWith('r') ? 2 : 1
+    const row = pos[0] === 't' ? 0 : pos[0] === 'b' ? 2 : 1
+    return {
+      w: bw, h: bh, col, row,
+      x: col === 0 ? CELL_M : col === 2 ? W - CELL_M - bw : (W - bw) / 2,
+      y: row === 0 ? CELL_M : row === 2 ? H - CELL_M_BOTTOM - bh : (H - bh) / 2,
+    }
+  }
+  // claim up to `n` free dots for a cell (random, so the frame isn't a stripe of the grid)
+  function claimDots(s, n) {
+    s.dots = []
+    for (let tries = n * 4; tries > 0 && s.dots.length < n; tries--) {
+      const p = particles[(Math.random() * particles.length) | 0]
+      if (p && !p.slot) { p.slot = s; p.pic = false; s.dots.push(p) }
+    }
+  }
+  function releaseDots(s) {
+    for (const p of s.dots) if (p.slot === s) { p.slot = null; p.tx = p.hx; p.ty = p.hy }   // text mode never retargets, so send them home ourselves
+    s.dots = []
+  }
+  // the centre word / picture re-deals itself from the dots the cells left it
+  function refreshCenter() {
+    if (mode === 'text' && centerPts) assignTargets(centerPts)
+    else if (pic.gathered) gatherPic()
+  }
+  // (re)compute the cell's geometry and re-claim dots — on show and after a resize
+  function layoutSlot(s) {
+    releaseDots(s)
+    const c = cellRect(s.pos)
+    if (s.kind === 'img') {
+      const sc = Math.min(c.w / s.w, c.h / s.h), w = Math.round(s.w * sc), h = Math.round(s.h * sc)
+      const x = Math.round(c.col === 0 ? c.x : c.col === 2 ? c.x + c.w - w : c.x + (c.w - w) / 2)
+      const y = Math.round(c.row === 0 ? c.y : c.row === 2 ? c.y + c.h - h : c.y + (c.h - h) / 2)
+      s.rect = { x, y, w, h }
+      const st = s.el.style
+      st.left = x + 'px'; st.top = y + 'px'; st.width = w + 'px'; st.height = h + 'px'
+      claimDots(s, Math.min(Math.round(particles.length * 0.1), Math.round(2 * (w + h) / 6)))
+    } else {
+      s.rect = { x: c.x, y: c.y, w: c.w, h: c.h }
+      let pts = sampleText(toAccent(s.text), { x: c.x + c.w / 2, y: c.y + c.h / 2, w: c.w, h: c.h })
+      const cap = Math.round(particles.length * 0.16)
+      if (pts.length > cap) { const k = pts.length / cap; pts = Array.from({ length: cap }, (_, i) => pts[(i * k) | 0]) }
+      s.pts = pts
+      claimDots(s, pts.length)
+    }
+    refreshCenter()
+  }
+  // the claimed dots hold their places — run after the mode, like holdPic
+  const ep = [0, 0]
+  function holdSlots(now) {
+    if (!slots.size) return
+    const t = now / 1000
+    slots.forEach((s) => {
+      const n = s.dots.length, r = s.rect
+      for (let k = 0; k < n; k++) {
+        const p = s.dots[k]
+        if (s.kind === 'img') {          // dots march slowly round the frame
+          let d = ((k / n + t * 0.015) % 1) * 2 * (r.w + r.h)
+          if (d < r.w) { ep[0] = r.x + d; ep[1] = r.y }
+          else if ((d -= r.w) < r.h) { ep[0] = r.x + r.w; ep[1] = r.y + d }
+          else if ((d -= r.h) < r.w) { ep[0] = r.x + r.w - d; ep[1] = r.y + r.h }
+          else { d -= r.w; ep[0] = r.x; ep[1] = r.y + r.h - d }
+        } else { ep[0] = s.pts[k][0]; ep[1] = s.pts[k][1] }
+        p.tx = ep[0] + Math.sin(t * 1.3 + p.ph) * 1.2
+        p.ty = ep[1] + Math.cos(t * 1.1 + p.ph) * 1.2
+      }
+    })
+  }
+  function dropSlot(pos) {
+    const s = slots.get(pos)
+    if (!s) return
+    s.timers.forEach(clearTimeout)
+    releaseDots(s)
+    if (s.el) { s.el.onload = s.el.onerror = null; s.el.remove() }
+    slots.delete(pos)
+    refreshCenter()
+  }
+  function leaveSlot(s) {
+    if (s.leaving) return
+    if (s.kind === 'text') { dropSlot(s.pos); return }
+    s.leaving = true
+    s.timers.forEach(clearTimeout); s.timers.length = 0
+    s.el.style.opacity = 0
+    releaseDots(s)
+    refreshCenter()
+    s.timers.push(setTimeout(() => { if (slots.get(s.pos) === s) dropSlot(s.pos) }, PIC_FADE))
+  }
+  function clearSlots(instant) { for (const [pos, s] of [...slots]) instant ? dropSlot(pos) : leaveSlot(s) }
+
+  function showCorner(path, ms, pos) {
+    dropSlot(pos)
+    const hold = typeof ms === 'number' && ms >= 0 ? ms : PIC_HOLD
+    const img = new Image()
+    img.className = 'pic corner'
+    img.style.transition = 'opacity ' + PIC_FADE + 'ms ease'
+    const s = { pos, kind: 'img', el: img, w: 0, h: 0, rect: null, dots: [], timers: [], leaving: false, fullAt: 0 }
+    slots.set(pos, s)
+    const tag = 'show ' + clip(path, 42) + '@' + pos
+    img.onerror = () => {
+      if (slots.get(pos) !== s) return
+      console.warn('[self] show failed: ' + path)
+      ack(tag + ' fail')
+      self.shake()
+      dropSlot(pos)
+    }
+    img.onload = () => {
+      if (slots.get(pos) !== s || s.leaving) return
+      s.w = img.naturalWidth || W * CORNER_FIT; s.h = img.naturalHeight || H * CORNER_FIT
+      document.body.appendChild(img)
+      layoutSlot(s)
+      ack(tag + ' ok')
+      s.fullAt = performance.now() + CORNER_GATHER + PIC_FADE
+      s.timers.push(setTimeout(() => { img.style.opacity = 1 }, CORNER_GATHER))
+      if (hold !== Infinity) s.timers.push(setTimeout(() => leaveSlot(s), CORNER_GATHER + PIC_FADE + hold))
+    }
+    img.src = resolveFileUrl(String(path))
+  }
+  function sayCorner(text, ms, pos) {
+    dropSlot(pos)
+    const s = { pos, kind: 'text', el: null, text: String(text), pts: [], rect: null, dots: [], timers: [], leaving: false, fullAt: 0 }
+    slots.set(pos, s)
+    layoutSlot(s)
+    s.fullAt = performance.now() + CORNER_GATHER
+    const hold = typeof ms === 'number' && ms >= 0 ? ms : 3600
+    if (hold !== Infinity) s.timers.push(setTimeout(() => leaveSlot(s), hold))
+  }
+
+  // ── snap: look at myself ────────────────────────────────────────────
+  // Compose what the viewer sees — the canvas (dots + say text are drawn on it),
+  // then the centre picture and the margin pictures at their real places and
+  // opacity — into one JPEG and hand it to the host. A tainted canvas (a
+  // cross-origin image) makes toDataURL throw → `snap fail`, nothing is sent.
+  function snapNow(tries = 0) {
+    // a margin picture / line still loading or flying in? give it a moment (≤3s) —
+    // show(.., {pos}) is not a beat, so nothing else makes the snap wait for it
+    if (tries < 30 && [...slots.values()].some(s => !s.leaving && (!s.fullAt || performance.now() < s.fullAt))) {
+      setTimeout(() => snapNow(tries + 1), 100); return
+    }
+    try {
+      const sc = Math.min(1, 1280 / Math.max(W, H)), ow = Math.round(W * sc), oh = Math.round(H * sc)
+      const off = document.createElement('canvas')
+      off.width = ow; off.height = oh
+      const o = off.getContext('2d')
+      o.fillStyle = '#070a16'; o.fillRect(0, 0, ow, oh)
+      o.drawImage(canvas, 0, 0, ow, oh)
+      const imgs = []
+      if (pic.el && pic.el.isConnected) imgs.push(pic.el)
+      slots.forEach((s) => { if (s.el && s.el.isConnected) imgs.push(s.el) })
+      for (const el of imgs) {
+        const a = parseFloat(getComputedStyle(el).opacity)
+        if (!(a > 0.01)) continue
+        const r = el.getBoundingClientRect()
+        o.globalAlpha = a
+        o.fillStyle = '#fff'; o.fillRect(r.left * sc, r.top * sc, r.width * sc, r.height * sc)   // the .pic background
+        o.drawImage(el, r.left * sc, r.top * sc, r.width * sc, r.height * sc)
+      }
+      o.globalAlpha = 1
+      const url = off.toDataURL('image/jpeg', 0.85)
+      post({ haloFaceSnap: { data: url.slice(url.indexOf(',') + 1), mimeType: 'image/jpeg' } })
+    } catch (err) {
+      console.warn('[self] snap failed: ' + err)
+      ack('snap fail')
+    }
+  }
+
+  // A press on the page. In order: a blocked voice gets its click (and ONLY that —
+  // the press is the permission, not a request to close anything); then a press on
+  // a picture closes just that one; an Infinity centre picture also goes on any
+  // press (as before); otherwise it is a plain click. The host gets told which.
+  const inside = (r, x, y) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
+  window.addEventListener('pointerdown', (e) => {
+    if (resumeVoice()) { ack('user click → voice resumed'); return }
+    for (const s of slots.values()) {
+      if (s.el && !s.leaving && inside(s.el.getBoundingClientRect(), e.clientX, e.clientY)) {
+        leaveSlot(s); ack('user closed ' + s.pos); return
+      }
+    }
+    if (pic.el && !pic.leaving && (pic.inf || inside(pic.el.getBoundingClientRect(), e.clientX, e.clientY))) {
+      leavePic(); ack('user closed c'); return
+    }
+    ack('user click')
+  })
 
   // ── self: the API I speak to through the one door ───────────────────
   // Everything here is mine to call from a <<<SHOW: ...>>> line.
@@ -572,11 +861,28 @@
     // form a word/glyphs out of the matrix; hold for `ms`, then dissolve back.
     // text passes through toAccent() first: emoji become ASCII, in my voice.
     // Enqueued as a one-beat scene, so several rapid say()s play in sequence.
-    say(text, ms) { enqueueScene([{ say: text, hold: ms }]) },
+    // `{pos}` (tl t tr l r bl b br) sets it in that margin cell instead — small
+    // dot-type, immediate, beside the centre (see "the margins").
+    //   self.say("OK", 3000, { pos: "tr" })
+    say(text, ms, o) {
+      if (o && corner(o.pos)) sayCorner(text, ms, o.pos)
+      else enqueueScene([{ say: text, hold: ms }])
+    },
     // clear the queue and return to the calm breathing grid immediately —
     // also silences a playing voice, so rest() always means "stop, go calm"
     // rather than leaving audio sounding under a breathing face.
-    rest() { sceneQueue.length = 0; sceneGen++; runnerActive = false; stopVoice(); dropPic(); toRest() },
+    rest() { sceneQueue.length = 0; sceneGen++; runnerActive = false; stopVoice(); dropPic(); clearSlots(true); toRest() },
+    // take down the margin pictures / type: one cell (`clear("tr")`) or, with no
+    // pos, all of them. (The centre picture is not touched — it ends on its own.)
+    clear(pos) { if (corner(pos)) { const s = slots.get(pos); if (s) leaveSlot(s) } else if (pos == null) clearSlots() },
+    // look at myself: a JPEG of the face as it is — dots, type, pictures — goes to
+    // the host (the agent sees it next). A beat in the queue, so it waits its turn
+    // behind earlier say/show (taken while the beat before it is on screen; idle → right
+    // now); play() takes it as {snap:true}.
+    snap() {
+      if (!runnerActive || (lookReady && !beatsLeft && !sceneQueue.length)) snapNow()   // idle, or the last beat is on screen right now
+      else enqueueScene([{ snap: true }], true)
+    },
     // a quick brightening pulse from the core (a nod / acknowledgement).
     // Instantaneous overlay — fires now, never queued.
     pulse() { rings.push({ born: performance.now(), strong: true }) },
@@ -591,7 +897,11 @@
     // interrupt each other; the field owns the matrix until the queue drains,
     // then eases home. rest() clears the queue and stops at once.
     //   self.voice("/api/files/download?path=...&projectId=...&inline=1")
-    voice(url) { if (typeof url === 'string' && url) enqueueVoice(url) },
+    // `{cues:[{at, say?, js?}]}` puts words / code on the clip's own clock: at
+    // `at` seconds the say() forms (the wave steps aside for it, then returns) or
+    // the js runs. I have no TTS, so the times come from whoever made the clip.
+    //   self.voice(".halo/tmp/a.mp3", { cues: [{ at: 0.4, say: "HI" }, { at: 2, js: "self.pulse()" }] })
+    voice(url, o) { if (typeof url === 'string' && url) enqueueVoice(url, o) },
     // show a workspace image (png/jpg/webp/gif/svg) on the face: the dots gather
     // into its outline, the real image fades in over them (dots alone can't
     // carry a chart's text), holds `ms` (default 6000; Infinity = until the next
@@ -599,9 +909,20 @@
     // Pass the workspace PATH, like voice(). A bad path warns, shakes, moves on.
     // Enqueued as a one-beat scene, so it plays in order with say()/play().
     //   self.show(".halo/tmp/chart.png", 5000)
-    show(path, ms) { if (typeof path === 'string' && path) enqueueScene([{ show: path, hold: ms }]) },
+    // `{pos}` (tl t tr l r bl b br) puts it small in a margin cell instead: at once,
+    // outside the queue, one per cell (a new one replaces), ~40% of the centre size,
+    // framed by a few dots. Without a pos (or 'c') it is the centre show, and
+    // takes every margin picture down. A click on a picture closes just that one.
+    //   self.show(".halo/tmp/logo.png", 8000, { pos: "tr" })
+    show(path, ms, o) {
+      if (typeof path !== 'string' || !path) return
+      if (o && corner(o.pos)) { showCorner(path, ms, o.pos); return }
+      clearSlots()                         // the centre takes the stage: margin pictures / type go (now, not when the beat comes up)
+      enqueueScene([{ show: path, hold: ms, cleared: true }])
+    },
     // choreograph a sequence — hand me a score, I keep the clock.
-    // Each beat: { say, show, hold, pulse, flash, shake, rest, gap }. The face advances
+    // Each beat: { say, show, pos, hold, pulse, flash, shake, snap, rest, gap }
+    // (a say/show beat with a pos goes to that margin cell). The face advances
     // itself, so I never hand-write setTimeout chains in a marker line. Scenes
     // QUEUE: calling play() again appends after the current one (it no longer
     // cancels it), so rapid sends play in order.
@@ -662,11 +983,16 @@
   // ── the one door: run my own JS against `self` ──────────────────────
   // Scoped to this sandboxed preview — it can only paint me. try/catch so a
   // fumbled improvisation just no-ops instead of killing the face.
+  // A malformed gesture simply doesn't happen — but the host is told, so the
+  // agent can learn its line was wrong. Voice cues run their `js` through here too.
+  function runCode(code) {
+    try { (new Function('self', code))(self); ack('js ok') }
+    catch (err) { ack('js err: ' + String((err && err.message) || err).slice(0, 60)) }
+  }
   window.addEventListener('message', (e) => {
     const code = e && e.data && e.data.haloFace
     if (typeof code !== 'string') return
-    try { (new Function('self', code))(self) }
-    catch (err) { /* a malformed gesture simply doesn't happen */ }
+    runCode(code)
   })
 
   // ── eased global state ──────────────────────────────────────────────
@@ -681,6 +1007,8 @@
     if (now > modeUntil) toRest()
     MODES[mode] && MODES[mode](now)
     if (pic.gathered) holdPic(now)  // a shown picture keeps its outline dots whatever the mode
+    holdSlots(now)                  // so do the margin cells' frames / type
+    runCues()                       // words / code pinned to the clip's clock
 
     const target = mouse.present ? Math.max(0.32, 1 - sinceMove / 3.5) : 0.26
     awake += (target - awake) * 0.045
@@ -704,7 +1032,7 @@
     const voicing = mode === 'wave'
     // while voicing, the whole field brightens with loudness so the swelling
     // ring stays lit instead of dimming as it pushes out of the core glow.
-    if (voicing) breath += 0.5 * voice.level
+    if (voice.playing) breath += 0.5 * voice.level   // (a cue's text mid-speech pulses with the voice too)
     // flash: a hot brightness spike that decays over its window (emphasis)
     if (now < flashUntil) breath += 0.6 * ((flashUntil - now) / 320)
     // shake: a decaying lateral tremor applied to the whole field (negation)
@@ -743,8 +1071,8 @@
       if (speaking) {
         const isWord = (p.tx !== p.hx || p.ty !== p.hy)
         v = isWord ? 0.95 : 0.05
-      } else if (pic.gathered && p.pic) {
-        v = 0.95                       // an outline dot — lit like a letter
+      } else if ((pic.gathered && p.pic) || p.slot) {
+        v = 0.95                       // an outline dot (centre or margin) — lit like a letter
       } else {
         const dx = p.x - coreX, dy = p.y - coreY
         // while voicing, the core glow swells with loudness — the face "opens"
@@ -769,7 +1097,7 @@
       v *= breath
       if (v < 0.012) continue
       const [r, g, b] = ramp(v, warmth)
-      const rad = 1.0 + Math.min(v, 1.3) * 3.0
+      const rad = p.slot && p.slot.kind === 'text' ? 2.1 : 1.0 + Math.min(v, 1.3) * 3.0   // small type: finer dots so the letters stay crisp
       ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + Math.min(v, 1) * 0.9 + ')'
       ctx.beginPath()
       ctx.arc(p.x, p.y, rad, 0, 6.283185)

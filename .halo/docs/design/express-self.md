@@ -23,6 +23,8 @@ canvas animation (visible to user)
 
 The marker is **stripped from rendered chat** so the user sees only the face moving, not the code driving it.
 
+The channel is two-way. The face reports back to its host (`parent.postMessage`) — one-line **receipts** of what ran / failed / was clicked, and `self.snap()` **screenshots** — see [Face → admin messages](#face--admin-messages-receipts-and-snapshots). The admin side (the ✨ switch, the `[Face open: …]` tag, receipt injection, snapshot return) is described in [requirements/chat.md](../requirements/chat.md).
+
 ## Data flow
 
 **Seeding:** `init.ts` calls `ensureWorkspaceHalo()` on workspace open, force-copying the canonical engine from `packages/server/templates/canvas/self.html` to `<workspace>/.halo/canvas/self.html`.
@@ -42,15 +44,14 @@ The marker is **stripped from rendered chat** so the user sees only the face mov
 el.contentWindow?.postMessage({ haloFace: payload }, '*')
 ```
 
-**Reception:** `self.html` listens on `window.message`:
+**Reception:** `self.html` listens on `window.message` and hands the code to `runCode()` — the one function every JS entry goes through (the message door and voice-cue `js`):
 ```javascript
-window.addEventListener('message', (e) => {
-  const code = e?.data?.haloFace
-  if (typeof code !== 'string') return
-  try { (new Function('self', code))(self) }
-  catch (err) { /* malformed line no-ops */ }
-})
+function runCode(code) {
+  try { (new Function('self', code))(self); ack('js ok') }
+  catch (err) { ack('js err: ' + String(err?.message || err).slice(0, 60)) }
+}
 ```
+A malformed line still no-ops for the face, but the host now hears about it.
 
 **UI stripping:** `message-list.tsx:TextBlock()` strips both markers before render:
 ```javascript
@@ -64,8 +65,8 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 
 ### Scene queuing (sequential playback)
 
-- `self.say(text, ms)` — form `text` (emoji→ASCII), hold `ms` (default 3600), dissolve back to breathing. Enqueued.
-- `self.play(score)` — choreograph a sequence of beats: `[{say, show, hold, pulse, flash, shake, rest, gap}, ...]` (`show` = an image, see [Image](#image-show--a-picture-gathered-out-of-the-dots)). Each beat waits for the engine's internal clock. Enqueued; calling play() again appends to the queue rather than cancelling it.
+- `self.say(text, ms)` — form `text` (emoji→ASCII), hold `ms` (default 3600), dissolve back to breathing. Enqueued. `self.say(text, ms, {pos})` puts it in a margin cell instead — see [Nine-grid](#nine-grid-margin-cells-pos).
+- `self.play(score)` — choreograph a sequence of beats: `[{say, show, pos, hold, pulse, flash, shake, snap, rest, gap}, ...]` (`show` = an image, see [Image](#image-show--a-picture-gathered-out-of-the-dots); `pos` on a say/show beat sends it to a margin cell and the beat does not wait; `snap` = [`self.snap()`](#snap--look-at-myself)). Each beat waits for the engine's internal clock. Enqueued; calling play() again appends to the queue rather than cancelling it.
 - `self.intro()` — built-in opening: "HELLO / A MIND / IS HERE / BEYOND / WORDS". Triggered by whoever opens the face (the admin ✨ button posts it on open), **not** self-fired on page load — a self-fired load intro raced the button's post and played the greeting twice on first open. Nameless deliberately — the agent identity is user-configurable.
 
 ### Instant gestures (overlays, never queued)
@@ -73,11 +74,15 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 - `self.pulse()` — one bright ripple from the core (acknowledgement).
 - `self.flash(n)` — hot flicker of the whole field (emphasis). `n` scales duration.
 - `self.shake(ms)` — lateral tremor (negation, error). Default 500ms.
-- `self.rest()` — return to calm breathing immediately, clear queue (and cancel the running scene's remaining beats); also stops a playing voice clip and removes a shown image at once.
+- `self.rest()` — return to calm breathing immediately, clear queue (and cancel the running scene's remaining beats); also stops a playing voice clip (and drops a voice that was waiting for a click) and removes the centre image and every margin picture / line at once.
+- `self.clear(pos?)` — take down the margin cell `pos`; with no argument, all margin cells. The centre picture is not touched (it ends on its own, or by click / next scene).
 
 ### Voice (live audio — mode `wave`)
 
 - `self.voice(path)` — play a speech clip Halo synthesized and ride its **live** amplitude via a Web Audio `AnalyserNode`: loudness swells the core, a 6-band spectrum grows directional petals (timbre has a shape, not just a size), each syllable onset spawns a ring. Halo synthesizes the audio; the face only makes it visible — silent audio yields a calm face, never a canned animation. `path` is the **workspace path** of the audio file (mp3/wav/m4a/ogg); the engine resolves it to `/api/files/download?path=…&projectId=…&inline=1` using the `projectId` already in its own iframe `src`, so the agent never builds a URL or knows the projectId (a full `http(s)://` / `/api/…` URL also passes through unchanged). Voice clips queue with each other — successive `voice()` calls play in sequence — but bypass the scene queue: the first call enters mode `wave` and owns the matrix until the queue drains (or `rest()` clears it). When the queue is empty the face eases back to breathing.
+- **Blocked by autoplay → kept, not dropped.** The browser may refuse `el.play()` (`NotAllowedError`) when the page has had no user gesture — in the admin the clip is triggered by a postMessage, and `allow="autoplay"` on the iframe does not help if the top page has never been touched. The blocked clip **stays at the head of the queue**; `voice.blocked = true` and `voice blocked (needs a click)` is acked once. The next `pointerdown` on the page replays it (the gesture lets us `ctx.resume()` + `play()`); that press is **only** the permission — it closes nothing — and acks `user click → voice resumed`, then the usual `voice <name> playing`. Other `play()` failures (bad source) ack `voice <name> fail` and move to the next clip. `rest()` clears a waiting clip.
+- **Cues:** `self.voice(path, {cues:[{at, say?, js?}]})`. Cues are sorted by `at`; every frame `runCues()` compares `el.currentTime` with the next cue's `at` and fires each cue exactly once (a seek back doesn't re-fire). `js` goes through `runCode()` (same receipts as the message door). `say` calls `sayNow()` with a hold of `min(gap to next cue, 2.4 s)` (last cue 1.8 s): the matrix switches `wave → text`, and when the hold lapses `toRest()` hands it back to `wave` because `toRest()` is voice-aware (`mode = voice.playing ? 'wave' : 'rest'`). The audio is never touched — only the field is borrowed between swells, and `voice.level` keeps brightening the lettering. Chosen over overlaying text on the live waveform because it reuses the existing glyph sampler untouched and reads cleanly; the cost is that the ripple pauses while a cue's word is up. Halo has no TTS clock, so the `at` times come from the agent (clip duration, or the synthesizer's timestamps such as Polly speech marks).
+- **Acks:** `voice <file> playing` (first `playing` event of a clip), `voice <file> ended <s>s` (duration, 1 decimal), `voice <file> fail`.
 
 ### Image (`show` — a picture gathered out of the dots)
 
@@ -86,7 +91,60 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 - **Outline sampling (`sampleImage`):** a photo has no alpha, so the text sampler's "alpha > 128" would fill the rectangle. Instead the image is drawn to the offscreen sampler canvas and a 7 px grid point is kept when it sits on an **edge** (channel difference > 48 against its left/right/up/down neighbour one step away); fewer than 120 edge points falls back to the opaque area, and a tainted canvas (cross-origin URL) to a plain frame of dots. `assignTargets()` then hands those points to the particles; the particles on the outline (`p.pic`) hold their place with a faint shimmer and stay lit.
 - **Independent of the particle mode:** the gather/hold step (`holdPic`) runs after the mode's own targets, so a `self.voice()` clip keeps rippling the field (the outline dots are nudged, not pulled off the picture) and the image timers are plain timeouts — a voice taking mode `wave` doesn't end the picture.
 - **Failure never stalls the queue:** 404, a non-image body or a decode error → `console.warn('[self] show failed: …')`, a small `self.shake()`, and the beat is skipped. An SVG with no intrinsic size (`naturalWidth/Height` 0) gets the whole 80 % box (`object-fit: contain` keeps its aspect).
-- One picture at a time; `QUEUE_MAX` and the drop-oldest rule apply as for any scene.
+- One centre picture at a time; `QUEUE_MAX` and the drop-oldest rule apply as for any scene.
+- **Acks:** `show <path> ok` once loaded, `show <path> fail` on load failure (path tail-clipped to fit the 80-char ack).
+- **Infinity and the queue:** unchanged — an `Infinity` picture holds its beat until it leaves, and the next scene enqueued (`enqueueScene`) lets it go. A `self.snap()` is the exception: it is enqueued with `keepPic`, so it looks at the picture instead of dismissing it (the beat in front of it hands it the turn once the picture is fully in).
+- **Click:** a press on an `Infinity` centre picture closes it from anywhere (as before); a press on a finite centre picture closes it when the press lands on it. Either acks `user closed c`.
+
+### Nine-grid (margin cells, `pos`)
+
+`self.show(path, ms, {pos})` and `self.say(text, ms, {pos})`, `pos` ∈ `tl t tr l r bl b br` (`c` / absent = the centre behaviour above).
+
+- **Not scenes.** A margin show/say appears **at once**, never enters `sceneQueue`, and never blocks the say/show after it (inside `play()` the beat dwells ~0.6 s and moves on). One occupant per cell — a new one in the same cell replaces the old.
+- **Plain centre `show()` clears every margin cell** (immediately on the call, not when its beat comes up); a plain centre `say()` leaves them. `rest()` clears all; `self.clear(pos?)` one or all. Each leaves with the same 0.6 s fade as the centre.
+- **Geometry (`cellRect`):** the cell box is `PIC_FIT × 0.4` of the viewport (32 % × 32 %), pinned to its edge/corner with a 16 px margin (44 px at the bottom, clearing the status readout); `l`/`r` centre vertically, `t`/`b` horizontally. The `<img class="pic corner">` is fitted inside the box (aspect kept) and anchored toward its edge. `ms` defaults to `PIC_HOLD`; `Infinity` stays. All cells are re-laid out on resize.
+- **Dots:** a cell *claims* free particles (`p.slot`): ~10 % of the pool at most (`min(10 % of the pool, perimeter/6)`) and marches them slowly round the picture's frame (`holdSlots`, after the mode and `holdPic`). The claimed dots are excluded from the centre's pool in `assignTargets`, so a centre word/picture is dealt from what is left; whenever a cell appears or leaves, `refreshCenter()` re-deals the centre word (`centerPts`) / picture so the two never fight over a dot. Released dots are sent home explicitly (text mode doesn't retarget every frame).
+- **Corner text:** drawn as small dot-type, not DOM — `sampleText(text, box)` samples the line into the cell box at a finer 4 px step (the centre uses 7 px), capped at ~16 % of the pool, and the claimed dots form the letters at a smaller radius (2.1 px). Same engine, same look as the centre word, zero DOM; the price is that long lines get sparse, so keep corner text to a word.
+- **Failure:** load error → `console.warn`, `self.shake()`, `show <path>@<pos> fail`; nothing else is affected.
+- **Acks:** `show <path>@tr ok` / `fail`.
+- **Click hit-testing:** a `pointerdown` is tested against margin pictures first, then the centre picture. A hit closes only that one and acks `user closed <pos>` (`c` for the centre). A press that hits nothing acks `user click` (and, for an `Infinity` centre picture, still closes it as before).
+
+### Snap (look at myself)
+
+- `self.snap()` — one beat in the scene queue (`{snap:true}` inside `play()`). When its turn comes `snapNow()` composites an offscreen canvas at ≤ 1280 px on the long side: background `#070a16`, the main canvas (dots **and** `say` lettering — it's drawn there, nothing extra to paint), then the centre `<img>` and each margin `<img>` via `drawImage` at their live `getBoundingClientRect()` and computed opacity (white backing like `.pic`). It exports JPEG q 0.85 and posts `{haloFaceSnap:{data, mimeType:'image/jpeg'}}` (base64 without the `data:` prefix), then the queue moves on immediately (0 dwell).
+- **Waiting for what it should see:** the snap is taken while the beat in front of it is fully on screen (word formed after 1.8 s; centre picture fully faded in; margin cell ~1.4 s), not after it has gone — so `self.say("OK"); self.snap()` returns the finished word. With the queue idle, `snap()` runs at once. A snap does not count as a "next scene" for an `Infinity` picture. If a margin picture is still loading/flying in, `snapNow()` retries every 100 ms for up to 3 s.
+- **Failure:** a cross-origin image taints the offscreen canvas; `toDataURL` throws → `snap fail` ack and no `haloFaceSnap`. Standalone (no parent) it is a no-op that posts nothing.
+- Once-per-round and the anti-chain rule are the admin's job (face posts once per call).
+
+## Face → admin messages (receipts and snapshots)
+
+The face talks to its host with `window.parent.postMessage(msg, '*')`. When `parent === window` (page opened directly) it posts nothing. The admin only accepts messages whose `e.source` is a registered face iframe's `contentWindow`.
+
+| Message | Shape | When |
+|---|---|---|
+| Receipt | `{haloFaceAck: '<text ≤ 80 chars>'}` | each event below |
+| Snapshot | `{haloFaceSnap: {data: '<base64>', mimeType: 'image/jpeg'}}` | `self.snap()` produced an image |
+
+Receipt texts (the admin treats them as opaque: dedupe, keep the last 8, join with `, `):
+
+| Text | Meaning |
+|---|---|
+| `js ok` | a `haloFace` line (or a cue's `js`) ran without throwing |
+| `js err: <message, ≤ 60 chars>` | it threw (syntax error, undefined name, …) |
+| `show <path> ok` / `show <path> fail` | centre image loaded / failed to load (404, not an image) |
+| `show <path>@<pos> ok` / `… fail` | the same for a margin cell |
+| `voice <file> playing` | the clip started |
+| `voice blocked (needs a click)` | autoplay refused; clip kept, sent once per block |
+| `voice <file> ended <n.n>s` | the clip finished (its duration) |
+| `voice <file> fail` | source error / non-autoplay `play()` failure |
+| `snap fail` | export failed (tainted canvas); no snapshot posted |
+| `user click` | a press on the face that hit nothing and resumed nothing |
+| `user closed <pos>` | the press closed a picture (`c` = centre, else the cell) |
+| `user click → voice resumed` | the press replayed a blocked clip |
+
+Paths and file names are tail-clipped (`…`) so the line stays within 80 characters.
+
+The admin turns the queued receipts into the `· last: …` part of the `[Face open: …]` tag on the user's next message; they never wake the agent — see [requirements/chat.md](../requirements/chat.md).
 
 ### Reactions (named vocabulary)
 
@@ -98,7 +156,7 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 
 ## Key files
 
-- **Engine template:** `packages/server/templates/canvas/self.html` — particle field, mode switching, API surface, voice audio graph, image overlay (`show`). Canonical source; force-copied to every workspace on open.
+- **Engine template:** `packages/server/templates/canvas/self.html` — particle field, mode switching, API surface, voice audio graph (blocked-voice resume, cues), image overlay (`show`), nine-grid margin cells, `snap`, host receipts. Canonical source; force-copied to every workspace on open.
 - **Skill instruction:** `packages/server/templates/skills/self/SKILL.md` — teaches the agent when/how to use the face.
 - **Marker detection:** `packages/admin/src/shared/ws-handlers/chat-handlers.ts:maybeHandleShow()` — regex match `<<<SHOW:([\s\S]*?)>>>` on the round's replies at `chat:complete`; the replies come from `takeRoundReplies()` in `chat-store.ts`, which hands each bubble out once.
 - **Iframe registration:** `packages/admin/src/features/editor/face-bridge.ts` — module-level registry of mounted previews; `postToFace()` forwards payloads via `postMessage`.
@@ -111,7 +169,7 @@ Provided by `self.html` as `const self = {…}`. All expression methods are sand
 The face is a fixed grid of particles. Each knows its current position and a target position, easing between them every frame.
 
 - **Grid:** 22px spacing, 60fps animation loop
-- **Modes:** `rest` (breathing grid), `text` (forming letters), `wave` (particles ride live audio amplitude during `self.voice`). An image shown by `self.show` is **not** a mode: it is a DOM overlay plus `holdPic()` (outline dots pinned to the picture), layered on whatever mode is current.
+- **Modes:** `rest` (breathing grid), `text` (forming letters), `wave` (particles ride live audio amplitude during `self.voice`). An image shown by `self.show` is **not** a mode: it is a DOM overlay plus `holdPic()` (outline dots pinned to the picture), layered on whatever mode is current. Margin cells likewise (`holdSlots()`).
 - **Glyph sampling:** Text→offscreen canvas→pixel alpha sampling→nearest-particle assignment (greedy scan with shuffle for repeated words)
 - **Emoji accent:** Maps common emoji to ASCII (`👍`→`+1`, `❤`→`<3`, etc.) so the monospace aesthetic stays consistent; anything untranslated is stripped
 - **Attention:** Eases toward higher values when the cursor is on the canvas (gaze tracking); particles brighten and the core warmth shifts slightly toward violet
@@ -125,10 +183,10 @@ The marker is a **verbatim pipe** — Halo never parses or validates the payload
 
 - **Format:** `<<<SHOW: <js> >>>` where `<js>` is a complete JavaScript expression or statement
 - **Scope:** The code runs in a function closure with `self` as the API surface: `(new Function('self', code))(self)`
-- **Errors:** Non-greedy pattern `[\s\S]*?` handles newlines and nested `>` characters. Malformed lines silently no-op (caught in try/catch).
+- **Errors:** Non-greedy pattern `[\s\S]*?` handles newlines and nested `>` characters. Malformed lines no-op on the face (caught in try/catch) and send a `js err: …` receipt to the host.
 - **Order:** Multiple markers in one reply are extracted in sequence and forwarded in order; scene beats queue and play sequentially
 - **Once-only:** Each marker fires exactly once — `takeRoundReplies()` hands every bubble out a single time, so duplicate queue-drain `chat:complete` events find nothing new, and markers in loaded history never fire
-- **Window:** Markers are dropped silently if no face preview is open; the registry is empty so `postToFace()` has no targets
+- **Window:** Markers are dropped silently if no face preview is open; the registry is empty so `postToFace()` has no targets. The agent learns whether the face is open from the `[Face open: …]` tag the admin puts on each message (admin side: [requirements/chat.md](../requirements/chat.md)).
 
 ### Trust model — why `new Function` is acceptable here
 
@@ -164,6 +222,6 @@ From `self/SKILL.md`:
 
 ## Scope and out-of-scope
 
-Supported: all `self` API calls (say/play/intro/react/pulse/flash/shake/voice/show/rest); queue management; particle animation; attention/gaze tracking; CJK text; emoji-to-ASCII translation; live voice playback with amplitude-driven waveform (mode `wave`); workspace images (png/jpg/webp/gif/svg) gathered out of the dots and shown in full (`show`).
+Supported: all `self` API calls (say/play/intro/react/pulse/flash/shake/voice/show/clear/snap/rest); margin cells (`pos`); voice cues; blocked-voice resume; receipts and snapshots to the host; queue management; particle animation; attention/gaze tracking; CJK text; emoji-to-ASCII translation; live voice playback with amplitude-driven waveform (mode `wave`); workspace images (png/jpg/webp/gif/svg) gathered out of the dots and shown in full (`show`).
 
 Not supported: TTS synthesis itself (Halo produces the audio; the face only plays a given URL); editor-source diagrams (`.excalidraw` / `.drawio` — write an SVG instead); file editing of the engine; escape from sandbox; custom particle physics.
