@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound, Puzzle, AlertTriangle, X, ChevronRight } from 'lucide-react'
+import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound, Puzzle, AlertTriangle, X, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { useI18n } from '@/shared/i18n'
 import { useTheme } from '@/shared/theme'
@@ -290,99 +290,113 @@ function NavList({
     const extensions = sections.filter((s) => s.source === 'extension')
     return { general, providers, skills, agents, extensions }
   }, [sections])
+  const [collapsed, toggle] = useCollapsedNavGroups()
+  const group = (id: string, label: string) => ({ label, collapsed: collapsed.has(id), onToggle: () => toggle(id) })
   return (
     <div className="py-1">
-      <NavGroup label={t('settings.nav.system')} items={grouped.general} active={active} onPick={onPick} />
-      {/* Security — synthetic nav target like __orphans; credentials live in
-          config.yaml, not the schema-driven settings.yaml. */}
-      <button
-        onClick={() => onPick('__security')}
-        className={cn(
-          'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] transition-colors',
-          active === '__security'
-            ? 'bg-[var(--secondary)] text-[var(--foreground)]'
-            : 'text-[var(--foreground)]/80 hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
-        )}
-      >
-        <KeyRound className="h-3 w-3" />
-        <span>{t('settings.nav.security')}</span>
-      </button>
-      {/* Extensions — synthetic like __security; installed canvas preview
-          extensions live in ~/.halo/global/extensions/, not settings.yaml. */}
-      <button
-        onClick={() => onPick('__extensions')}
-        className={cn(
-          'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] transition-colors',
-          active === '__extensions'
-            ? 'bg-[var(--secondary)] text-[var(--foreground)]'
-            : 'text-[var(--foreground)]/80 hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
-        )}
-      >
-        <Puzzle className="h-3 w-3" />
-        <span>{t('settings.nav.extensions')}</span>
-      </button>
-      <NavGroup label={t('settings.nav.extensionSettings')} items={grouped.extensions} active={active} onPick={onPick} />
-      <NavGroup label={t('settings.nav.providers')} items={grouped.providers} active={active} onPick={onPick} />
-      <NavGroup label={t('settings.nav.agents')} items={grouped.agents} active={active} onPick={onPick} />
-      <NavGroup label={t('settings.nav.skills')} items={grouped.skills} active={active} onPick={onPick} />
+      <NavGroup {...group('system', t('settings.nav.system'))} items={grouped.general} icons={{ general: SlidersHorizontal }} active={active} onPick={onPick}>
+        {/* Security / Extensions — synthetic nav targets like __orphans:
+            credentials live in config.yaml and installed canvas preview
+            extensions in ~/.halo/global/extensions/, not settings.yaml. */}
+        <NavItem active={active === '__security'} onClick={() => onPick('__security')}>
+          <KeyRound className="h-3 w-3 shrink-0" />
+          <span>{t('settings.nav.security')}</span>
+        </NavItem>
+        <NavItem active={active === '__extensions'} onClick={() => onPick('__extensions')}>
+          <Puzzle className="h-3 w-3 shrink-0" />
+          <span>{t('settings.nav.extensions')}</span>
+        </NavItem>
+      </NavGroup>
+      <NavGroup {...group('extensions', t('settings.nav.extensionSettings'))} items={grouped.extensions} active={active} onPick={onPick} />
+      <NavGroup {...group('providers', t('settings.nav.providers'))} items={grouped.providers} active={active} onPick={onPick} />
+      <NavGroup {...group('agents', t('settings.nav.agents'))} items={grouped.agents} active={active} onPick={onPick} />
+      <NavGroup {...group('skills', t('settings.nav.skills'))} items={grouped.skills} active={active} onPick={onPick} />
       {orphans.length > 0 && (
-        <>
-          <div className="mt-2 px-3 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-            {t('settings.nav.orphans')}
-          </div>
-          <button
-            onClick={() => onPick('__orphans')}
-            className={cn(
-              'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] transition-colors',
-              active === '__orphans'
-                ? 'bg-[var(--secondary)] text-[var(--foreground)]'
-                : 'text-[var(--foreground)]/80 hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
-            )}
-          >
-            <Trash2 className="h-3 w-3" />
+        <NavGroup {...group('orphans', t('settings.nav.orphans'))} items={[]} active={active} onPick={onPick}>
+          <NavItem active={active === '__orphans'} onClick={() => onPick('__orphans')}>
+            <Trash2 className="h-3 w-3 shrink-0" />
             <span>{t('settings.nav.unclaimed')}</span>
             <span className="ml-auto rounded bg-[var(--card)] px-1 py-0 text-[9px]">{orphans.length}</span>
-          </button>
-        </>
+          </NavItem>
+        </NavGroup>
       )}
     </div>
   )
 }
 
+/** Collapsed nav groups, remembered per browser. Stores the collapsed ids so a
+ *  group added later (a new provider / skill source) starts expanded. */
+const NAV_COLLAPSED_KEY = 'halo_settings_navCollapsed'
+function useCollapsedNavGroups(): [Set<string>, (id: string) => void] {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try { return new Set(JSON.parse(localStorage.getItem(NAV_COLLAPSED_KEY) ?? '[]') as string[]) } catch { return new Set() }
+  })
+  const toggle = useCallback((id: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(id)) next.add(id)
+      localStorage.setItem(NAV_COLLAPSED_KEY, JSON.stringify([...next]))
+      return next
+    })
+  }, [])
+  return [collapsed, toggle]
+}
+
+function NavItem({ active, onClick, title, children }: { active: boolean; onClick: () => void; title?: string; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'flex w-full cursor-pointer items-center gap-2 py-1.5 pl-6 pr-3 text-[11px] transition-colors',
+        active
+          ? 'bg-[var(--secondary)] text-[var(--foreground)]'
+          : 'text-[var(--foreground)]/80 hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
 function NavGroup({
-  label, items, active, onPick,
+  label, items, icons, active, onPick, collapsed, onToggle, children,
 }: {
   label: string
   items: Section[]
+  /** Optional leading icon per namespaceId. */
+  icons?: Record<string, React.ElementType>
   active: string
   onPick: (ns: string) => void
+  collapsed: boolean
+  onToggle: () => void
+  children?: React.ReactNode
 }) {
   const { lang } = useI18n()
-  if (items.length === 0) return null
+  if (items.length === 0 && !children) return null
   return (
     <>
-      <div className="px-3 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-        {label}
-      </div>
-      {items.map((s) => {
+      <button
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        className="flex w-full cursor-pointer items-center gap-1 px-2 pb-1 pt-2.5 text-[10px] font-medium tracking-wide text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+      >
+        <ChevronRight className={cn('h-3 w-3 shrink-0 transition-transform', !collapsed && 'rotate-90')} />
+        <span className="truncate">{label}</span>
+      </button>
+      {!collapsed && items.map((s) => {
         const name = (lang === 'zh' && s.displayName_zh) || s.displayName
         const desc = (lang === 'zh' && s.description_zh) || s.description
+        const Icon = icons?.[s.namespaceId]
         return (
-          <button
-            key={s.namespaceId}
-            onClick={() => onPick(s.namespaceId)}
-            className={cn(
-              'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] transition-colors',
-              active === s.namespaceId
-                ? 'bg-[var(--secondary)] text-[var(--foreground)]'
-                : 'text-[var(--foreground)]/80 hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
-            )}
-            title={desc ?? s.namespaceId}
-          >
+          <NavItem key={s.namespaceId} active={active === s.namespaceId} onClick={() => onPick(s.namespaceId)} title={desc ?? s.namespaceId}>
+            {Icon && <Icon className="h-3 w-3 shrink-0" />}
             <span className="truncate">{name}</span>
-          </button>
+          </NavItem>
         )
       })}
+      {!collapsed && children}
     </>
   )
 }

@@ -191,9 +191,13 @@ A malicious skill that tries `curl -H "Bearer {{aws-bedrock-claude-invoke.secret
 
 `general.*` is intentionally excluded from orphan detection — its declared keys are enumerated by the built-in schema, so anything else there is treated as either a typo or a forward-compat field, not an orphan.
 
+## Left nav
+
+Groups top to bottom: **System** (General · Security · Extensions, each with a leading icon), **Extension settings**, **Model providers**, **Agents**, **Skills**, and **Orphans** when there are any. Each group header is a quiet toggle (chevron + smaller muted label) that collapses its items; all groups start expanded, and the collapsed ones are remembered per browser (`localStorage` `halo_settings_navCollapsed`, collapsed ids only — so a group that appears later starts expanded).
+
 ## Security view (change password + logout)
 
-A **Security** entry in the left nav (below the System group) opens a page with two cards. Like `__orphans` it's a synthetic nav target, not a schema section — the credential lives in `~/.halo/secrets/config.yaml` (`server.password`, scrypt hash), not `settings.yaml`, and the header shows that path accordingly.
+A **Security** entry in the left nav (inside the System group, below General) opens a page with two cards. Like `__orphans` it's a synthetic nav target, not a schema section — the credential lives in `~/.halo/secrets/config.yaml` (`server.password`, scrypt hash), not `settings.yaml`, and the header shows that path accordingly.
 
 **Change password** — three inputs: current password, new password, confirm. Live client-side feedback while typing: strength rule (≥8 chars, at least one letter and one digit), new ≠ current, confirm matches; the submit button stays disabled until all pass. Submit posts to `POST /api/auth/change-password` (see [dev/api.md](../dev/api.md)) — the server re-runs the same checks authoritatively; a server rejection is shown verbatim under the form. Success shows an inline confirmation and clears all three fields. When the password is supplied by the `HALO_PASSWORD` env var the endpoint refuses with 400, since the stored hash is not what login checks. Existing sessions stay signed in (`jwt_secret` is not rotated). Forgotten password (can't provide the current one) is out of scope here — that's `halo setup`'s reset path.
 
