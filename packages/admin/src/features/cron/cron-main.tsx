@@ -424,7 +424,7 @@ function CronForm({ initial, onClose, onSaved }: {
       try {
         const { agents } = await api.agentConfigs.list(committedPath || undefined)
         if (!alive) return
-        const effective = agents.filter((a) => !a.id.startsWith('__') && !a.overridden && !a.disabled)
+        const effective = agents.filter((a) => !a.internal && !a.overridden && !a.disabled)
         const opts = effective.map((a) => ({ id: a.id, name: a.name || a.id }))
         setAgentOptions(opts)
         // Reset the picker when the previously-selected agent no longer

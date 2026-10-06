@@ -122,7 +122,7 @@ export async function listAgents(workspace: string): Promise<{ id: string; descr
   const sm = new SessionManager(absWs)
   const disabledSet = getDisabledSet(sm.getDb(), 'agent')
   const agents = await scanAvailableAgents(absWs, disabledSet)
-  return agents.map(a => ({ id: a.id, description: a.description, scope: a.scope }))
+  return agents.filter(a => !a.internal).map(a => ({ id: a.id, description: a.description, scope: a.scope }))
 }
 
 export function listSessions(workspace: string): { id: string; description?: string; createdAt: number }[] {
