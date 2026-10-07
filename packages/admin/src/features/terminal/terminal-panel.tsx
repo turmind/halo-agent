@@ -12,6 +12,8 @@ import { Terminal as TerminalIcon } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 import { ResizableSidebar } from '@/shared/components/resizable-sidebar'
 import { VerticalTabAdd, VerticalTabRow, VerticalTabSquare } from '@/shared/components/vertical-tab-list'
+import { IS_MAC, terminalClipboardKey } from './terminal-clipboard'
+import { TerminalContextMenu } from './terminal-context-menu'
 import '@xterm/xterm/css/xterm.css'
 
 interface TermInstance {
@@ -133,15 +135,18 @@ const XTERM_THEMES: Record<Theme, ITheme> = {
 const XTERM_OPTIONS = {
   fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, Monaco, monospace",
   fontSize: 13,
-  lineHeight: 1.4,
+  lineHeight: 1,
   cursorBlink: true,
   scrollback: 10000,
 }
 
+interface MenuState { x: number; y: number; term: XTerm }
+
 /** Mount a hidden xterm for PTY `id` into `host`: input → `terminal:input`,
- *  container resize → fit + debounced `terminal:resize`. Shared by fresh
- *  tabs (createTerminal) and server-reattached ones. */
-function mountXterm(host: HTMLDivElement, id: string, theme: Theme): Pick<TermInstance, 'term' | 'fit' | 'container' | 'ro'> {
+ *  container resize → fit + debounced `terminal:resize`, clipboard keys,
+ *  right-click → `onMenu`. Shared by fresh tabs (createTerminal) and
+ *  server-reattached ones. */
+function mountXterm(host: HTMLDivElement, id: string, theme: Theme, onMenu: (menu: MenuState) => void): Pick<TermInstance, 'term' | 'fit' | 'container' | 'ro'> {
   const container = document.createElement('div')
   container.className = 'absolute inset-0'
   container.style.display = 'none'
@@ -157,6 +162,32 @@ function mountXterm(host: HTMLDivElement, id: string, theme: Theme): Pick<TermIn
   // Input → server
   term.onData((data) => {
     wsClient.send({ type: 'terminal:input', data, terminalId: id })
+  })
+
+  // Non-mac clipboard keys (see terminalClipboardKey). Returning false makes
+  // xterm skip the key. Paste then runs as the browser's native paste event
+  // into xterm's own handler (bracketed). Copy calls execCommand('copy'),
+  // which fires the native copy event in the same way: Chromium binds no copy
+  // to Ctrl+Shift+C, and the selection can only be cleared after the copy has
+  // read it. Neither path uses the async Clipboard API, so plain-http origins
+  // work too.
+  term.attachCustomKeyEventHandler((e) => {
+    const action = terminalClipboardKey(e, { isMac: IS_MAC, hasSelection: term.hasSelection() })
+    if (action === 'copy') {
+      e.preventDefault()
+      if (term.hasSelection()) {
+        document.execCommand('copy')
+        term.clearSelection()
+      }
+    }
+    return action === null
+  })
+
+  // Bubble phase: xterm's own contextmenu listener (inner element) has
+  // already run — on mac it selects the word under the cursor first.
+  container.addEventListener('contextmenu', (e) => {
+    e.preventDefault()
+    onMenu({ x: e.clientX, y: e.clientY, term })
   })
 
   // Resize observer
@@ -183,6 +214,8 @@ export function TerminalPanel({ headerless }: TerminalPanelProps = {}) {
   const instancesRef = useRef<Map<string, TermInstance>>(new Map())
   const [tabs, setTabs] = useState<{ id: string; name: string }[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [menu, setMenu] = useState<MenuState | null>(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
   const activeProject = useProjectStore((s) => s.activeProject)
   const { theme } = useTheme()
 
@@ -210,7 +243,7 @@ export function TerminalPanel({ headerless }: TerminalPanelProps = {}) {
     const id = `term_${Date.now().toString(36)}_${termCounter}`
     const name = tabs.length === 0 ? 'bash' : `bash (${termCounter})`
 
-    const { term, fit, container, ro } = mountXterm(host, id, themeRef.current)
+    const { term, fit, container, ro } = mountXterm(host, id, themeRef.current, setMenu)
 
     const inst: TermInstance = { id, name, term, fit, container, ro, ready: false, exited: false }
     instancesRef.current.set(id, inst)
@@ -365,7 +398,7 @@ export function TerminalPanel({ headerless }: TerminalPanelProps = {}) {
         const name = firstNewIndex === 0 && instancesRef.current.size === 0 ? 'bash' : `bash (${termCounter})`
         firstNewIndex++
 
-        const { term, fit, container, ro } = mountXterm(host, id, themeRef.current)
+        const { term, fit, container, ro } = mountXterm(host, id, themeRef.current, setMenu)
 
         // Resync bracketed paste mode (DECSET 2004). Bash readline enabled it
         // when the PTY's current prompt was drawn — but that sequence went to
@@ -438,6 +471,7 @@ export function TerminalPanel({ headerless }: TerminalPanelProps = {}) {
     <div className="flex h-full min-h-0 bg-[var(--background)]">
       {/* Terminal host — main area */}
       <div ref={hostRef} className="relative min-h-0 flex-1 overflow-hidden" />
+      {menu && <TerminalContextMenu x={menu.x} y={menu.y} term={menu.term} onClose={closeMenu} />}
 
       {/* Right sidebar — terminal list (collapsible, drag to resize) */}
       <ResizableSidebar

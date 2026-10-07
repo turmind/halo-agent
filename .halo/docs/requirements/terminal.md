@@ -47,6 +47,19 @@ When the WS drops, the bottom panel remounts `TerminalPanel` (fresh key on `_dis
 - Terminal type: `xterm-256color`
 - Default size: 80 × 24 (resize requests override)
 - Strips `npm_config_prefix` env (avoids nvm warnings when starting node)
+- Font: JetBrains Mono 13px, line height 1 (no extra leading — box-drawing / TUI rows join up)
+
+### Copy & paste
+Keys depend on the client's OS (the keyboard in front of the user — the PTY is always the server's):
+
+| Client | Copy | Paste |
+|---|---|---|
+| macOS | `Cmd+C` | `Cmd+V` |
+| Windows / Linux | `Ctrl+C` **with a selection** (copies and clears the selection; no selection → `^C` / SIGINT as usual) · `Ctrl+Shift+C` | `Ctrl+V` · `Ctrl+Shift+V` (literal `^V` is given up) |
+
+- Keyboard copy / paste ride the browser's native copy / paste events (paste stays bracketed), so they work on a plain-http origin too
+- **Right-click menu** (inside the terminal): Copy (disabled with no selection) · Paste · Select all · Clear. Menu copy / paste use the async Clipboard API; when paste is refused (plain-http origin or no clipboard-read permission) the menu says to use the keyboard shortcut instead
+- Key mapping: `terminalClipboardKey` in [packages/admin/src/features/terminal/terminal-clipboard.ts](../../../packages/admin/src/features/terminal/terminal-clipboard.ts); menu in `terminal-context-menu.tsx`
 
 ### Lifecycle
 
@@ -111,6 +124,8 @@ Defined in [packages/server/src/config.ts](../../../packages/server/src/config.t
 | T6 | Open 3 tabs, close 1 explicitly | Other 2 keep their PTYs; closed one gets `terminal:exit` |
 | T7 | `exit` from within shell | `terminal:exit` with the shell's exit code; the terminal prints `[Process exited]` and its tab stays until closed |
 | T8 | Paste a 10 KB block | Sent as `terminal:input` without choking; shell echoes in chunks |
+| T9 | Windows/Linux: select text → `Ctrl+C`; then `Ctrl+C` again with nothing selected | First copies and clears the selection; second sends `^C` (interrupts a running `sleep 30`) |
+| T10 | Right-click in the terminal → Paste | Clipboard text inserted at the prompt (or the "use the shortcut" hint on a plain-http origin) |
 
 Follows the pattern of [test/session.md](../test/session.md).
 

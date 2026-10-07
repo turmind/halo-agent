@@ -489,6 +489,11 @@ export const zh: Record<string, string> = {
   'terminal.list.title': '终端',
   'terminal.list.new': '新建终端',
   'terminal.list.close': '关闭终端',
+  'terminal.menu.copy': '复制',
+  'terminal.menu.paste': '粘贴',
+  'terminal.menu.selectAll': '全选',
+  'terminal.menu.clear': '清屏',
+  'terminal.menu.pasteHint': '此处无法读取剪贴板，请按 {key} 粘贴。',
 
   // ── Data previews (parquet / sqlite) ──
   'dataPreview.range': '第 {from}–{to} 行 / 共 {total} 行',

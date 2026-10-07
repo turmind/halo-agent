@@ -489,6 +489,11 @@ export const en: Record<string, string> = {
   'terminal.list.title': 'Terminals',
   'terminal.list.new': 'New terminal',
   'terminal.list.close': 'Close terminal',
+  'terminal.menu.copy': 'Copy',
+  'terminal.menu.paste': 'Paste',
+  'terminal.menu.selectAll': 'Select All',
+  'terminal.menu.clear': 'Clear',
+  'terminal.menu.pasteHint': 'Clipboard access unavailable here — press {key} to paste.',
 
   // ── Data previews (parquet / sqlite) ──
   'dataPreview.range': '{from}–{to} of {total} rows',

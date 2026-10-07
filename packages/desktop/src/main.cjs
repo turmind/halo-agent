@@ -347,6 +347,26 @@ function waitForHealth(timeoutMs = 30_000) {
   })
 }
 
+// Right-click menu for the page's own text: Electron shows none by default, so
+// the chat input, settings fields or selected chat text got nothing (a browser
+// gives its native menu there). Menus the admin draws itself (file tree,
+// editor tabs, terminal, Monaco) preventDefault the DOM contextmenu event, and
+// Electron then doesn't emit 'context-menu' — no double menu. Empty = no menu.
+function buildContextMenuTemplate(params, zh) {
+  if (params.isEditable) {
+    const f = params.editFlags
+    return [
+      { role: 'cut', label: zh ? '剪切' : 'Cut', enabled: f.canCut },
+      { role: 'copy', label: zh ? '复制' : 'Copy', enabled: f.canCopy },
+      { role: 'paste', label: zh ? '粘贴' : 'Paste', enabled: f.canPaste },
+      { type: 'separator' },
+      { role: 'selectAll', label: zh ? '全选' : 'Select All', enabled: f.canSelectAll },
+    ]
+  }
+  if (params.selectionText.trim()) return [{ role: 'copy', label: zh ? '复制' : 'Copy' }]
+  return []
+}
+
 // Create a new main window pointed at the local server. Callable repeatedly —
 // Cmd/Ctrl+N and the macOS Dock 'activate' both open additional windows. All
 // windows share the single server + its origin (so one localStorage), so a
@@ -405,6 +425,10 @@ function createWindow() {
       detail: zh ? '离开后正在进行的录音和未保存的内容会丢失。' : 'An active recording and unsaved changes will be lost.',
     })
     if (choice === 0) event.preventDefault()
+  })
+  win.webContents.on('context-menu', (_e, params) => {
+    const template = buildContextMenuTemplate(params, app.getLocale().toLowerCase().startsWith('zh'))
+    if (template.length) Menu.buildFromTemplate(template).popup({ window: win })
   })
   win.webContents.setWindowOpenHandler(({ url }) => {
     // about:blank = window.open('') from the renderer (e.g. the print helper,
