@@ -114,7 +114,7 @@ Types in `packages/core/src/protocol/extension-frames.ts` (`EXTENSION_PROTOCOL_V
 | Dir | `type` | Fields | Semantics |
 |---|---|---|---|
 | ext→host | `ready` | `protocol` | listener installed; host sends nothing before it. v1 host doesn't read `protocol` (field reserved for negotiation) |
-| host→ext | `init` | `protocol`, `file{name,path,size,ext}`, `capabilities`, `theme`, `themeVars`, `bundle`, `platform`, `lang` | once, right after `ready`; `capabilities` = what the host grants; for a bundle `file` is the directory; `platform` = host platform, `lang` = `zh`\|`en` admin UI language; `theme` / `themeVars` see [Theme tokens](#theme-tokens) |
+| host→ext | `init` | `protocol`, `file{name,path,size,ext}`, `capabilities`, `theme`, `themeVars`, `bundle`, `platform`, `lang`, `export` | once, right after `ready`; `capabilities` = what the host grants; for a bundle `file` is the directory; `platform` = host platform, `lang` = `zh`\|`en` admin UI language; `theme` / `themeVars` see [Theme tokens](#theme-tokens); `export` = this host accepts `export` frames (see [Export](#export)) — older hosts omit it, so show export UI only when it is `true` |
 | host→ext | `load` | `buffer`, `mtime` | file bytes (transferred); resent when the file changes on disk and the doc isn't dirty → "replace current document". **Never sent to a bundle** |
 | ext→host | `dirty` | `dirty` | needs `save` (or `bundle`, where it means "busy"); otherwise ignored + `console.warn` |
 | ext→host | `fs` | `id`, `op: read\|write\|append\|list\|stat`, `path`, `buffer?` | bundle only (else `fs-result{denied}` + warn); `path` bundle-relative POSIX, validated before any request |
@@ -126,6 +126,9 @@ Types in `packages/core/src/protocol/extension-frames.ts` (`EXTENSION_PROTOCOL_V
 | host→ext | `theme` | `theme`, `themeVars` | on every admin theme switch (dark ↔ midnight too); may be ignored |
 | host→ext | `lang` | `lang` (`zh`\|`en`) | on admin UI language switch; may be ignored (older hosts never send it — use `init.lang`) |
 | ext→host | `error` | `message` | can't handle the file; host shows message + Open as Text / Download |
+| ext→host | `export` | `name`, `buffer` | `init.export` hosts only; write `buffer` (transferred) next to the open file as `name` — see [Export](#export) |
+| host→ext | `exported` | `name`, `path` | export written; `path` = workspace-relative path |
+| host→ext | `export-error` | `reason: denied\|cancelled\|invalid\|io`, `message` | exactly one of `exported` / `export-error` per `export`; `cancelled` = the user declined to overwrite |
 
 ```
 host                              extension
@@ -155,6 +158,15 @@ host                              extension
 - Save trigger is the toolbar **Save** button → `requestSave` → `save-request`; `editor-panel.handleSave` also forwards to the mounted host via `getExtensionHost(projectId, path)` (a module-level registry keyed by panel + path, same shape as `face-bridge.ts`). 5 s without a `save` reply → alert "did not respond".
 - `file:changed` for an extension tab is routed by `editor-panel` to `host.fileChanged()` → stat → `onFileChanged`: ignored when `diskMtime <= state.mtime` (our own save's echo) or when dirty; otherwise re-`load`.
 - **409**: `onPutResult` emits `confirm-conflict`. `confirmAction` is yes/no, so the three-way choice is two chained questions — *Overwrite the disk version?* yes → re-PUT once with the 409's mtime as `expectMtime` (`retried`; a second 409 → `save-error{conflict}` + banner); no → *Discard your changes and reload?* yes → re-`load`, no → cancel (stay dirty). IO failure → `save-error{io}` + banner, stays dirty.
+
+### Export
+
+An extension that can render its document as an image (draw.io *File ▸ Export as*, Excalidraw *Export PNG / SVG*) can't hand the user a download: the iframe sandbox has no `allow-downloads` (adding it didn't help — draw.io raised neither a save picker nor a download event). Instead the extension sends the bytes to the host, which writes them **into the workspace, next to the open file**.
+
+- **Who may export**: a `save`-capable, non-bundle extension — the host sends `init.export: true` exactly then. No separate manifest capability: a 1.5.9 registry rejects unknown capability values, so a new one would make the extension uninstallable on older hosts; riding on `save` keeps one zip working everywhere (older hosts omit `init.export`, the extension hides its export UI).
+- **Validation** (`extension-host-logic.ts` `onExportFrame`): before `ready` → ignored + warn; no `save` / bundle → `export-error{denied}`; `name` not a plain file name (empty, `.` / `..`, contains `/` `\` NUL) or equal to the open file's own name → `export-error{invalid}`; `buffer` not an ArrayBuffer → `invalid`. All of these do no I/O.
+- **Write** (`extension-host.tsx`): target = open file's directory + `name`; `stat` it, and if it exists `confirmAction` "already exists — overwrite?" (declined → `export-error{cancelled}`); then `PUT /files/raw?create=1`. Success → `exported{name, path}` + a banner "Exported to <path>" with a Download link (`/files/download`); failure → `export-error{io}` + banner. Exporting never touches the dirty state or the open file. Replies for a since-remounted iframe are dropped (same guard as `fs`).
+- Extensions name the file `<stem>.<ext>` from `init.file.name` (draw.io's own `filename` is odd — `-Order flow.drawio.png` — so only its extension is kept). drawio 1.1.0 turns on draw.io's `exportProtocol: 1` only when `init.export` is true.
 
 ### MRU, keep-alive, upgrade, uninstall
 
@@ -213,7 +225,7 @@ The hub repo keeps one directory per extension (`glb` / `ipynb` commit their ven
 
 ## Extension capability boundary
 
-An extension **can**: receive one file's bytes and metadata; render in its own iframe; load static assets from its own directory via the path token; report `error`; receive `theme` and `lang`; with `save`, report `dirty` and hand back bytes for the host to write to **that same file**; with `bundle`, read / write / append / list / stat **inside its bundle directory** via `fs`; with `media`, use the microphone and screen capture; with `transcribe`, stream audio to the server's transcription proxy (results only — credentials stay server-side).
+An extension **can**: receive one file's bytes and metadata; render in its own iframe; load static assets from its own directory via the path token; report `error`; receive `theme` and `lang`; with `save`, report `dirty` and hand back bytes for the host to write to **that same file**, and (on `init.export` hosts) hand back export bytes the host writes as a **new sibling file** after an overwrite confirm; with `bundle`, read / write / append / list / stat **inside its bundle directory** via `fs`; with `media`, use the microphone and screen capture; with `transcribe`, stream audio to the server's transcription proxy (results only — credentials stay server-side).
 
 An extension **cannot** (sandbox + protocol): open popups, downloads, forms or navigate the top window; use camera / autoplay, or mic / screen capture without `media` (`allow=""`); add admin UI (toolbar, commands, sidebar); talk to other iframes. The **protocol** gives it no way to read or write any workspace file except the open one, or outside its bundle directory. Since the host grants `allow-same-origin` (see Host), the sandbox no longer isolates it from the admin's origin: a hostile extension *could* script `parent.document` or call the cookie-authed `/api/*` (measured: `fetch('/api/extensions')` from inside → 200). That is the accepted trust model — installing an extension is like installing a skill — not a gap to patch per route. **Outbound network is not blocked** — no CSP is injected, so `fetch('https://…')` works where the remote allows CORS; trust model is "code the user chose to install" (same as a skill), and hub policy is offline-capable extensions. A hard block would be one `Content-Security-Policy` header on the asset route, no protocol change.
 
