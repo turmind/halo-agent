@@ -132,40 +132,32 @@ Both `SKILL.md.tmpl` and `config.yaml.tmpl` use `{{NAME}}` markers. Substitute t
 | `{{WORKSPACE}}` | remote workspace path |
 | `{{SKILL_DIR}}` | absolute path of the new skill dir; use this in the `python3 …/ask.py` line so the cmd works regardless of cwd |
 
-Implementation hint — small Python / shell pipeline works fine:
+**Substitute with Python on every OS — not sed.** Git-for-Windows' sed mangles `{{LABEL}}` passed as `-e` args, and Step 4 needs Python anyway. Replace only the `{{NAME}}` keys above; the body's `$ARGUMENTS` (slash-command args) and `{{params.X}}` (shell_exec-time settings) must survive verbatim — no regex, no blanket `{{…}}` replace:
 
-```bash
-LABEL=sa-agent
-LABEL_DISPLAY="SA Agent"
-HOST=ec2-1-2-3-4.compute.amazonaws.com
-PORT=9527
-SCHEME=http                                   # or https if the remote is behind a TLS proxy
-WORKSPACE=/home/ubuntu/sa-agent
-SCOPE_DIR=$HOME/.halo/global/skills           # or the workspace's .halo/skills
-SKILL_DIR=$SCOPE_DIR/ask-$LABEL
-TPL=$HOME/.halo/global/skills/acp/templates
-
-mkdir -p "$SKILL_DIR"
-sed -e "s|{{LABEL}}|$LABEL|g" \
-    -e "s|{{LABEL_DISPLAY}}|$LABEL_DISPLAY|g" \
-    -e "s|{{HOST}}|$HOST|g" \
-    -e "s|{{PORT}}|$PORT|g" \
-    -e "s|{{SCHEME}}|$SCHEME|g" \
-    -e "s|{{WORKSPACE}}|$WORKSPACE|g" \
-    -e "s|{{SKILL_DIR}}|$SKILL_DIR|g" \
-    "$TPL/SKILL.md.tmpl" > "$SKILL_DIR/SKILL.md"
-sed -e "s|{{LABEL}}|$LABEL|g" \
-    -e "s|{{LABEL_DISPLAY}}|$LABEL_DISPLAY|g" \
-    -e "s|{{HOST}}|$HOST|g" \
-    -e "s|{{PORT}}|$PORT|g" \
-    -e "s|{{SCHEME}}|$SCHEME|g" \
-    -e "s|{{WORKSPACE}}|$WORKSPACE|g" \
-    "$TPL/config.yaml.tmpl" > "$SKILL_DIR/config.yaml"
-cp "$TPL/ask.py" "$SKILL_DIR/ask.py"
-chmod +x "$SKILL_DIR/ask.py"
+```python
+import pathlib, shutil
+home = pathlib.Path.home()
+tpl = home / ".halo/global/skills/acp/templates"
+skill_dir = home / ".halo/global/skills" / "ask-sa-agent"   # or <workspace>/.halo/skills/ask-<label>
+subs = {
+    "{{LABEL}}": "sa-agent",
+    "{{LABEL_DISPLAY}}": "SA Agent",
+    "{{HOST}}": "ec2-1-2-3-4.compute.amazonaws.com",
+    "{{PORT}}": "9527",
+    "{{SCHEME}}": "http",                    # or https if the remote is behind a TLS proxy
+    "{{WORKSPACE}}": "/home/ubuntu/sa-agent",
+    "{{SKILL_DIR}}": skill_dir.as_posix(),   # forward slashes, also on Windows
+}
+skill_dir.mkdir(parents=True, exist_ok=True)
+for src, dst in (("SKILL.md.tmpl", "SKILL.md"), ("config.yaml.tmpl", "config.yaml")):
+    text = (tpl / src).read_text(encoding="utf-8")
+    for key, val in subs.items():
+        text = text.replace(key, val)
+    (skill_dir / dst).write_text(text, encoding="utf-8", newline="\n")
+shutil.copyfile(tpl / "ask.py", skill_dir / "ask.py")   # verbatim
 ```
 
-If any path contains `|` (rare), pick a different sed delimiter or use Python.
+Then `chmod +x <skill-dir>/ask.py` — unix only; skip on Windows.
 
 ## Step 4 — write **all** params to settings.yaml
 
@@ -212,12 +204,12 @@ p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 
 ## Step 5 — wire into the agent that should use it
 
-The new skill exists but no agent will activate it until it's listed in an agent's `skills:` array. Two paths:
+The new skill exists but no agent will activate it until it's listed in an agent's `skills:` array. Target the agent the user is talking to right now. Its definition is `<workspace>/.halo/agents/<id>/` when that folder exists (it replaces the global one wholesale), else `~/.halo/global/agents/<id>/`.
 
-- **The current workspace's `default` agent**: read `<workspace>/.halo/agents/default/agent.yaml` (or whichever agent the user is talking to right now), add `ask-<label>` to its `skills:` list, write back.
-- **Skip and let the user do it**: surface the path + tell them.
-
-Default behavior: edit the **current agent's** yaml automatically; if the agent has no workspace-local yaml (i.e. it inherits a global agent), tell the user "add `ask-<label>` to your agent's skills list to enable" and surface the path.
+- **Workspace folder exists, or a user-created global agent**: edit its `agent.yaml` directly. Insert one `  - ask-<label>` line under `skills:` as a text edit (`file_edit`, matching the list's indentation; append a `skills:` block if there is none). Don't load + `yaml.safe_dump` the file back — that drops its comments.
+- **Built-in global agent** (`default`, `executor`, `deep-executor`, `goal`, or the internal `__evo_agent__` / `__score__` / `__apply_agent__`) with no workspace folder: **don't edit `~/.halo/global/agents/<id>/agent.yaml`**. Halo re-seeds built-in agents from its bundled templates on startup (every desktop launch; server / CLI after an upgrade), keeping only `model:` and `context:`, so an added skill silently vanishes and the file's comments go with it. Ask the user which they want:
+  - **(a) Workspace copy**: copy the whole `~/.halo/global/agents/<id>/` folder (agent.yaml, AGENT.md, anything else in it) to `<workspace>/.halo/agents/<id>/`, then add `ask-<label>` to the copy's `skills:` as above. Tell the user the copy now replaces the global agent in this workspace, so future upgrades of the built-in agent won't reach it until they delete or re-sync the copy.
+  - **(b) Leave it to them**: surface the agent path and the line to add (`- ask-<label>` under `skills:`).
 
 ## Step 6 — confirm
 
@@ -225,6 +217,7 @@ Reply with:
 
 - The four paths created (SKILL.md, config.yaml, ask.py, settings.yaml entry).
 - The new slash command (`/ask-<label>`) the user can now type.
+- Which agent now lists `ask-<label>` (and its yaml path) — or, for a built-in agent, the option the user picked; with (a), repeat that the workspace copy won't pick up upgrades of the global agent.
 - A reminder that admin Settings → Skills → ask-<label> will show the form with the token already filled.
 - One example invocation:
 
@@ -239,5 +232,7 @@ Reply with:
 
 - **Picking a label that contains uppercase / underscores** — file system ok, but `command: /ask-<label>` slash command names are case-sensitive and ugly. Stick to lowercase + dashes.
 - **Forgetting to wire the agent** — the binding installs cleanly but the agent never sees it (silently absent). Always do step 5 or be explicit about why you skipped.
+- **Adding the skill to a built-in agent's global yaml** (`~/.halo/global/agents/default/agent.yaml` etc.) — works until the next startup re-seed wipes it. Use step 5's workspace copy, or let the user decide.
+- **Substituting with sed or a blanket `{{…}}` regex** — Git-for-Windows sed mangles `{{LABEL}}`; a blanket replace also eats `{{params.X}}` / `$ARGUMENTS`. Use step 3's Python key-by-key replace.
 - **Putting the token into config.yaml `default:`** — config.yaml is committed code; settings.yaml is per-install secrets. Don't cross the streams.
 - **Reusing the same `label` for two different remotes** — Settings namespace collision. Detect at step 2.
