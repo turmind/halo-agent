@@ -47,6 +47,8 @@ The most common use of this adapter isn't a third-party ACP client — it's *ano
 - `claude` — spawns `claude-agent-acp` (npm `@agentclientprotocol/claude-agent-acp`): local Claude Code, zero config, just `--cwd`
 - `kiro` — spawns `kiro-cli acp --trust-all-tools`: local Kiro, zero config `--cwd`, optional `--agent-id`
 
+**Windows**: bare `halo` resolves to the desktop GUI `Halo.exe` (same PATH dir as the `halo.cmd` CLI launcher, and PATHEXT ranks `.EXE` first), so `ask.py` defaults to `halo.cmd` on win32 (same as `resolveHaloCli()` in `cron/runner.ts`; `--halo-bin` / `HALO_BIN` still override). It also resolves every peer binary through `shutil.which` before spawning — `Popen` doesn't search PATHEXT, so npm `.cmd` shims like `claude-agent-acp` would otherwise fail — and pins its pipes and stdout to UTF-8 (zh-CN Windows defaults to cp936). Invoke the helper as `python …`; `python3` there is usually the Microsoft Store stub.
+
 Session reuse works the same for every kind: the first call prints `SESSION: <id>` on stdout, follow-ups pass `--session-id <id>`. For `claude` / `kiro`, `session/load` must carry `cwd` + `mcpServers` exactly like `session/new` (kiro-cli exits silently without them) — ask.py fills these in.
 
 The question text reaches the peer **verbatim — including the peer's own slash commands**. Verified with kiro: `/model` as the question lists its available models; `/model <full-model-id>` switches its model and saves it as default (full id only — fuzzy names like `claude` are rejected). Use this to drive a peer's built-in command set.
@@ -66,6 +68,13 @@ Remote halo servers are **not** a direct verb: each remote needs its own host/to
 - writes the connection values into `settings.yaml` (workspace or global, user picks)
 
 After install, the local agent can simply do `shell_exec: python3 .../ask-<label>/ask.py "<question>" --host {{params.host}} ...` and halo's runtime substitutes the configured values. **Multiple bindings coexist** — each gets its own slash command, settings namespace, and Admin Settings page.
+
+Generation rules the meta-skill enforces (each was a real failure):
+
+- **Naming**: the skill's `name:` / H1 / config `displayName` are all `ask-<label>` (lowercase, dashed) — no "Ask Foo" title-casing.
+- **Slash args**: the generated SKILL.md carries a literal `` `$ARGUMENTS` `` line. `/ask-<label> <question>` args reach the body only through that placeholder (`skill-command.ts` doesn't re-append them), so without it every slash-command question arrives empty.
+- **Rendering**: placeholders are substituted with Python, key by key (`{{LABEL}}`, `{{HOST}}`, …), writing UTF-8 + LF. Not sed — Git-for-Windows sed mangles `{{LABEL}}` — and not a blanket `{{…}}` regex, which would also eat `{{params.X}}` and `$ARGUMENTS`.
+- **Wiring**: a built-in global agent (`default` / `executor` / `deep-executor` / `goal`, internal `__*__`) is re-seeded from bundled templates on startup (every desktop launch; server / CLI after an upgrade), keeping only `model:` / `context:` — a skill added to its global `agent.yaml` silently vanishes. The skill instead asks the user: (a) copy the agent folder to `<workspace>/.halo/agents/<id>/` and add the skill there (the copy replaces the global agent wholesale, so it won't pick up future upgrades), or (b) just get the path and line to add. User-created agents are edited in place with a one-line text insert (no yaml dump, so comments survive).
 
 Implementation: `~/.halo/global/skills/acp/`. Templates live under `templates/`. `/acp add` is the **only** supported way to set up a binding — there's no generic single-target `ask-acp-agent` skill, because per-binding namespaces (one token-host-workspace triple per skill id) are required for multi-remote use.
 
@@ -326,7 +335,7 @@ halo cli -a default -n -w /home/ubuntu/halo-test \
   '/acp add 参数：label=foo，host=localhost，port=9527，workspace=/home/ubuntu/sa-agent，token=<token>，scope=workspace。不要问后续问题，全自动创建。'
 ```
 
-Expect: agent creates `.halo/skills/ask-foo/{SKILL.md,config.yaml,ask.py}`, writes `ask-foo` block to `<workspace>/.halo/settings.yaml` with **all 5 user values** (host/port/workspace/label/token) plus `scheme: http` (defaulted — the prompt omits it), wires the binding into the current agent's skills list. Reply confirms the four paths.
+Expect: agent creates `.halo/skills/ask-foo/{SKILL.md,config.yaml,ask.py}` — SKILL.md frontmatter `name: ask-foo` and a literal `` `$ARGUMENTS` `` line — writes `ask-foo` block to `<workspace>/.halo/settings.yaml` with **all 5 user values** (host/port/workspace/label/token) plus `scheme: http` (defaulted — the prompt omits it), wires the binding into the current agent's skills list. Reply confirms the four paths. With `-a default` and no `<workspace>/.halo/agents/default/`, the global `~/.halo/global/agents/default/agent.yaml` must stay untouched (built-in agent — see the wiring rule above); under "全自动" the skill takes option (b) or the workspace copy, never the global file.
 
 **4.2 invoke the freshly-generated binding**
 
@@ -346,7 +355,7 @@ rm -rf /home/ubuntu/halo-test/.halo/skills/ask-foo
 
 ### Layer 5 — admin Settings UI
 
-Open admin → Settings → Skills → **Ask SA Agent** (or whichever binding):
+Open admin → Settings → Skills → **ask-sa-agent** (or whichever binding):
 
 **5.1** All 7 fields render: `host`, `port`, `scheme`, `workspace`, `label`, `agent_id`, `token` (with mask icon).
 

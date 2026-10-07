@@ -125,7 +125,7 @@ Startup seeds `templates/prompts/{bootstrap,all,root}/` into `~/.halo/global/pro
 - **On mac / linux**: every `*.windows.md` is ignored; only the plain `.md` files load.
 - Files with no `*.windows.md` sibling load on every platform.
 
-Replacement is **whole-file**, not per-section — so split the platform-divergent content into its own file and keep the common content in an un-suffixed file. Example in `prompts/all/`: `TOOL_GUIDELINES.md` (common) + `TOOL_SHELL.md` (unix Shell section) / `TOOL_SHELL.windows.md` (cmd.exe, `dir`/`findstr`, `%USERPROFILE%`, `python` vs `python3`, `.py` skill caveats). To add a new platform difference anywhere, extract that block to `FOO.md` and add `FOO.windows.md`.
+Replacement is **whole-file**, not per-section — so split the platform-divergent content into its own file and keep the common content in an un-suffixed file. Example in `prompts/all/`: `TOOL_GUIDELINES.md` (common) + `TOOL_SHELL.md` (unix Shell section) / `TOOL_SHELL.windows.md` (cmd.exe, `dir`/`findstr`, `%USERPROFILE%`, `python` vs `python3`, `halo.cmd` not bare `halo` — that resolves to the GUI `Halo.exe`, `.py` skill caveats). To add a new platform difference anywhere, extract that block to `FOO.md` and add `FOO.windows.md`.
 
 Result (the returned `systemPrompts` object; the sections below write these fields as `bootstrapPrompt` / `allPrompt` / `rootPrompt`):
 - `prompts/bootstrap/*.md` → `systemPrompts.bootstrap`

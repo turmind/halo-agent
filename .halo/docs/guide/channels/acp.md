@@ -79,7 +79,11 @@ It walks you through `(label, host, port, workspace, token)` and **stamps out a 
 
 It also writes the connection values into `settings.yaml` (workspace or global, you pick).
 
-After install, the local agent can do `shell_exec: python3 .../ask-<label>/ask.py "<question>"` and halo's runtime substitutes the configured values. **Multiple bindings coexist** — each gets its own slash command, settings namespace, and Admin Settings page. `/acp list` shows the bindings you've generated.
+The last step lists `ask-<label>` in an agent's `skills:`. If you're talking to a **built-in** agent (`default`, `executor`, …) that has no copy in this workspace, it won't edit the global agent file — Halo rewrites built-in agents from its bundled templates on startup, so the added skill would disappear. It asks instead: copy the agent into this workspace (`<workspace>/.halo/agents/<id>/`) and add the skill there — that copy then won't follow future upgrades of the built-in agent — or leave the edit to you.
+
+After install, type `/ask-<label> <question>` (or just "ask <label> …" in chat); the local agent runs `shell_exec: python3 .../ask-<label>/ask.py "<question>"` and halo's runtime substitutes the configured values. **Multiple bindings coexist** — each gets its own slash command, settings namespace, and Admin Settings page (Settings → Skills → `ask-<label>`). `/acp list` shows the bindings you've generated.
+
+**On Windows**: run the CLI as `halo.cmd`, never bare `halo` — the desktop installer puts the GUI `Halo.exe` in the same PATH folder and Windows picks `.exe` first, so bare `halo` opens the desktop app. `ask.py` already defaults to `halo.cmd` there, and the helper runs as `python …` (`python3` is usually the Microsoft Store stub).
 
 To remove a binding: `/acp remove` (deletes the skill directory and points out the leftover `ask-<label>:` block in `settings.yaml`).
 
