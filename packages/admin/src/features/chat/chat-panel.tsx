@@ -102,7 +102,7 @@ function AgentSelector() {
           locked ? 'text-[var(--muted-foreground)] opacity-50 cursor-default' : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
         )}
       >
-        <Bot className="h-3 w-3" />
+        <Bot className={cn('h-3 w-3', !locked && !isStreaming && 'text-[var(--primary)]')} />
         <span className="max-w-[80px] truncate">{displayName}</span>
         {!locked && <ChevronDown className="h-2.5 w-2.5" />}
       </button>
