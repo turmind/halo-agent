@@ -317,6 +317,10 @@ function placeAroundStreaming(
   }
 }
 
+/** A bound live-capture source (screen/window or camera) — what to grab and
+ *  the name its chip / prompt shows. */
+export interface CaptureSource { id: string; name: string }
+
 export interface ChatStore {
   messages: ChatMessage[]
   isStreaming: boolean
@@ -342,13 +346,15 @@ export interface ChatStore {
   /** Host has an OS sandbox (/api/health `sandbox`). false → selector is
    *  locked to full. null = not yet known. */
   sandboxAvailable: boolean | null
-  /** Bound source for the "let the AI see something" capture feature — either a
-   *  shared screen/window (`kind:'screen'`, grabbed via desktopCapturer) or the
-   *  webcam (`kind:'camera'`, grabbed via getUserMedia). Desktop-only, in-memory
-   *  (window ids don't survive a restart). When set, use-chat injects a
-   *  <<<CAPTURE>>> prompt and chat-handlers grabs a frame when the LLM emits the
-   *  marker. Only one bound at a time. null = nothing bound. */
-  captureSource: { id: string; name: string; thumb: string; kind: 'screen' | 'camera' } | null
+  /** Bound sources for the "let the AI see something" capture feature — a
+   *  shared screen/window (desktop shell: desktopCapturer; browser:
+   *  getDisplayMedia) and the webcam (getUserMedia). Independent: either, or
+   *  both at once. In-memory (window ids don't survive a restart). While any is
+   *  set, use-chat injects a <<<CAPTURE>>> prompt and chat-handlers grabs the
+   *  requested frame(s) when the LLM emits the marker. null = not bound. */
+  screenSource: CaptureSource | null
+  /** Camera half of the above; `id` is the chosen deviceId ('' = default). */
+  cameraSource: CaptureSource | null
 
   addMessage(msg: Partial<ChatMessage> & { role: ChatMessage['role']; content: string }): void
   appendThinking(text: string, agentName?: string, taskId?: string, turnId?: string): void
@@ -384,7 +390,8 @@ export interface ChatStore {
   setUsableAgentCount(n: number): void
   setAccessLevel(level: 'full' | 'workspace' | 'readonly'): void
   setSandboxAvailable(v: boolean): void
-  setCaptureSource(source: { id: string; name: string; thumb: string; kind: 'screen' | 'camera' } | null): void
+  setScreenSource(source: CaptureSource | null): void
+  setCameraSource(source: CaptureSource | null): void
   addPendingMessage(text: string): void
   removePendingMessage(index: number): void
   shiftPendingMessage(): string | undefined
@@ -401,10 +408,10 @@ export interface ChatStore {
 export type ChatStoreApi = StoreApi<ChatStore>
 
 /** App-wide values every tab's store mirrors — not per session: the agent
- *  picker's usable count, host sandbox capability, the bound capture source.
+ *  picker's usable count, host sandbox capability, the bound capture sources.
  *  Setters fan out to every live store; new stores start from here. */
-type SharedFields = Pick<ChatStore, 'usableAgentCount' | 'sandboxAvailable' | 'captureSource'>
-const shared: SharedFields = { usableAgentCount: -1, sandboxAvailable: null, captureSource: null }
+type SharedFields = Pick<ChatStore, 'usableAgentCount' | 'sandboxAvailable' | 'screenSource' | 'cameraSource'>
+const shared: SharedFields = { usableAgentCount: -1, sandboxAvailable: null, screenSource: null, cameraSource: null }
 
 /** Every store not yet disposed — one per loaded chat tab. */
 const liveStores = new Set<ChatStoreApi>()
@@ -731,8 +738,12 @@ const chatStoreState = (ix: StoreLocals, settled: () => void): StateCreator<Chat
     setShared({ sandboxAvailable: v })
   },
 
-  setCaptureSource(source) {
-    setShared({ captureSource: source })
+  setScreenSource(source) {
+    setShared({ screenSource: source })
+  },
+
+  setCameraSource(source) {
+    setShared({ cameraSource: source })
   },
 
   addPendingMessage(text: string) {

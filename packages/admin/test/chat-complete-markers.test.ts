@@ -5,7 +5,7 @@ import { restoreTabs, openTab, getLoadedStore } from '../src/features/chat/chat-
 import { wsClient } from '../src/shared/ws-client'
 import { useProjectStore } from '../src/shared/stores/project-store'
 import { registerFaceIframe } from '../src/features/editor/face-bridge'
-import { getScreenBridge, WEB_SCREEN_ID, type WebScreen } from '../src/features/chat/web-capture'
+import { getScreenBridge, WEB_SCREEN_ID, CAPTURE_MARKER, type WebScreen } from '../src/features/chat/web-capture'
 import { en } from '../src/shared/i18n/en'
 import type { WsClient } from '../src/shared/ws-client-types'
 
@@ -80,8 +80,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanups.forEach((fn) => fn())
-  useChatStore.getState().setCaptureSource(null)
+  useChatStore.getState().setScreenSource(null)
+  useChatStore.getState().setCameraSource(null)
   delete (window as unknown as { haloCapture?: unknown }).haloCapture
+  delete (window as unknown as { haloCamera?: unknown }).haloCamera
   useProjectStore.setState({ activeProject: null, folderPath: '', projects: [] })
   vi.restoreAllMocks()
 })
@@ -130,7 +132,7 @@ describe('chat:complete markers cover the whole round', () => {
     const grab = vi.fn(async () => 'B64')
     ;(window as unknown as { haloCapture?: unknown }).haloCapture = { grab }
     useProjectStore.getState().openFolder('/ws/markers')
-    useChatStore.getState().setCaptureSource({ id: 'win1', name: 'Editor', thumb: '', kind: 'screen' })
+    useChatStore.getState().setScreenSource({ id: 'win1', name: 'Editor' })
 
     useChatStore.getState().addMessage({ id: 'S', role: 'assistant', content: '', streaming: true })
     emit('chat:stream', { text: 'let me look <<<CAPTURE>>>', turnId: 't1' })
@@ -158,7 +160,7 @@ describe('chat:complete CAPTURE in a plain browser (web screen share)', () => {
     Object.defineProperty(navigator, 'mediaDevices', { value: { getDisplayMedia: vi.fn() }, configurable: true })
     const grab = vi.spyOn(getScreenBridge() as WebScreen, 'grab').mockResolvedValue(frame)
     useProjectStore.getState().openFolder('/ws/markers-web')
-    useChatStore.getState().setCaptureSource({ id: WEB_SCREEN_ID, name: 'Entire screen', thumb: '', kind: 'screen' })
+    useChatStore.getState().setScreenSource({ id: WEB_SCREEN_ID, name: 'Entire screen' })
     useChatStore.getState().addMessage({ id: 'S', role: 'assistant', content: '', streaming: true })
     emit('chat:stream', { text: 'let me look <<<CAPTURE>>>', turnId: 't1' })
     return grab
@@ -195,6 +197,102 @@ describe('chat:complete CAPTURE in a plain browser (web screen share)', () => {
   })
 })
 
+describe('chat:complete CAPTURE with screen + camera both bound', () => {
+  /** Desktop bridges for both (simplest to stub); the frames are fixed strings
+   *  so the sent images show which source answered. */
+  function bindBoth(opts: { screenFrame?: string | null; cameraFrame?: string | null } = {}) {
+    const grab = vi.fn(async () => opts.screenFrame === undefined ? 'SCR' : opts.screenFrame)
+    const snap = vi.fn(async () => opts.cameraFrame === undefined ? 'CAM' : opts.cameraFrame)
+    Object.assign(window, { haloCapture: { grab }, haloCamera: { snap } })
+    useProjectStore.getState().openFolder('/ws/markers-both')
+    useChatStore.getState().setScreenSource({ id: 'win1', name: 'Editor' })
+    useChatStore.getState().setCameraSource({ id: 'cam1', name: 'Front' })
+    useChatStore.getState().addMessage({ id: 'S', role: 'assistant', content: '', streaming: true })
+    return { grab, snap }
+  }
+  type Sent = { message: string; images?: Array<{ data: string }> }
+  const lastBubble = () => useChatStore.getState().messages.filter((m) => m.role === 'user').at(-1)
+
+  it(':screen sends only the screenshot', async () => {
+    const { grab, snap } = bindBoth()
+    emit('chat:stream', { text: 'looking <<<CAPTURE:screen>>>', turnId: 't1' })
+    emit('chat:complete')
+    await flush()
+    expect(grab).toHaveBeenCalledWith('win1')
+    expect(snap).not.toHaveBeenCalled()
+    expect(sent).toHaveLength(1)
+    expect((sent[0] as Sent).message).toBe('[Screenshot of "Editor"]')
+    expect((sent[0] as Sent).images?.map((i) => i.data)).toEqual(['SCR'])
+  })
+
+  it(':camera sends only the photo, from the bound device', async () => {
+    const { grab, snap } = bindBoth()
+    emit('chat:stream', { text: '<<<CAPTURE:camera>>>', turnId: 't1' })
+    emit('chat:complete')
+    await flush()
+    expect(grab).not.toHaveBeenCalled()
+    expect(snap).toHaveBeenCalledWith('cam1')
+    expect((sent[0] as Sent).message).toBe('[Photo from the camera]')
+    expect((sent[0] as Sent).images?.map((i) => i.data)).toEqual(['CAM'])
+  })
+
+  it('a bare marker sends both in one message, screen first', async () => {
+    bindBoth()
+    emit('chat:stream', { text: '<<<CAPTURE>>>', turnId: 't1' })
+    emit('chat:complete')
+    await flush()
+    expect(sent).toHaveLength(1)
+    expect((sent[0] as Sent).message).toBe('[Screenshot of "Editor"]\n[Photo from the camera]')
+    expect((sent[0] as Sent).images?.map((i) => i.data)).toEqual(['SCR', 'CAM'])
+    expect(lastBubble()?.content).toBe('[📷 Editor]\n[📷 Front]')
+    expect(lastBubble()?.localImages).toEqual(['data:image/jpeg;base64,SCR', 'data:image/jpeg;base64,CAM'])
+  })
+
+  it(':screen and :camera across the round\'s bubbles are unioned — still one send', async () => {
+    const { grab, snap } = bindBoth()
+    emit('chat:stream', { text: 'first <<<CAPTURE:camera>>>', turnId: 't1' })
+    emit('chat:stream', { text: 'then <<<CAPTURE:screen>>>', turnId: 't2' })
+    emit('chat:complete')
+    await flush()
+    expect(grab).toHaveBeenCalledTimes(1)
+    expect(snap).toHaveBeenCalledTimes(1)
+    expect(sent).toHaveLength(1)
+    expect((sent[0] as Sent).images?.map((i) => i.data)).toEqual(['SCR', 'CAM'])
+  })
+
+  it('a failed source contributes its fail note; the other\'s frame still goes', async () => {
+    bindBoth({ screenFrame: null })
+    emit('chat:stream', { text: '<<<CAPTURE>>>', turnId: 't1' })
+    emit('chat:complete')
+    await flush()
+    const msg = sent[0] as Sent
+    expect(msg.message.split('\n')[0]).toMatch(/^\[Could not capture "Editor"/)
+    expect(msg.message.split('\n')[1]).toBe('[Photo from the camera]')
+    expect(msg.images?.map((i) => i.data)).toEqual(['CAM'])
+    expect(lastBubble()?.content).toBe(`${en['capture.failNote'].replace('{name}', 'Editor')}\n[📷 Front]`)
+    expect(lastBubble()?.localImages).toEqual(['data:image/jpeg;base64,CAM'])
+  })
+
+  it('the shared CAPTURE_MARKER (message-list strips with it) covers every variant, nothing else', () => {
+    const text = 'a <<<CAPTURE>>> b <<<CAPTURE:screen>>> c <<<CAPTURE:camera>>> d <<<CAPTURE:mic>>>'
+    expect([...text.matchAll(CAPTURE_MARKER)].map((m) => m[1] ?? '')).toEqual(['', 'screen', 'camera'])
+    expect(text.replace(CAPTURE_MARKER, '')).toBe('a  b  c  d <<<CAPTURE:mic>>>')
+  })
+
+  it('asking for an unbound source falls back to what is bound', async () => {
+    const snap = vi.fn(async () => 'CAM')
+    Object.assign(window, { haloCamera: { snap } })
+    useProjectStore.getState().openFolder('/ws/markers-fallback')
+    useChatStore.getState().setCameraSource({ id: 'cam1', name: 'Front' })
+    useChatStore.getState().addMessage({ id: 'S', role: 'assistant', content: '', streaming: true })
+    emit('chat:stream', { text: '<<<CAPTURE:screen>>>', turnId: 't1' })
+    emit('chat:complete')
+    await flush()
+    expect(snap).toHaveBeenCalledTimes(1)
+    expect((sent[0] as Sent).images?.map((i) => i.data)).toEqual(['CAM'])
+  })
+})
+
 describe('chat:complete markers act only for the tab on screen', () => {
   it('a background tab takes its round but neither drives the face nor captures', async () => {
     vi.spyOn(wsClient, 'send').mockImplementation(() => {}) // chat-tabs' subscribes
@@ -203,7 +301,7 @@ describe('chat:complete markers act only for the tab on screen', () => {
     useProjectStore.getState().openFolder('/ws/markers-bg')
     restoreTabs('/ws/markers-bg')
     openTab('sess_bg')
-    useChatStore.getState().setCaptureSource({ id: 'win1', name: 'Editor', thumb: '', kind: 'screen' })
+    useChatStore.getState().setScreenSource({ id: 'win1', name: 'Editor' })
     getLoadedStore('sess_bg')!.getState().addMessage({ id: 'B', role: 'assistant', content: '', streaming: true })
     openTab('sess_front')
 

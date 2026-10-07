@@ -1,4 +1,4 @@
-import { useChatStore, type ChatStore } from './chat-store'
+import { useChatStore, type CaptureSource } from './chat-store'
 
 /**
  * Live-capture bridges for the chat toolbar's Share-screen / Camera buttons.
@@ -10,15 +10,14 @@ import { useChatStore, type ChatStore } from './chat-store'
  *
  * Unlike the desktop shell — which can grab any window at any time — a browser
  * only sees what the user granted, and only while the stream is open. So both
- * web bridges keep their stream alive while the source is bound (a hidden,
+ * web bridges keep their stream alive while their source is bound (a hidden,
  * playing <video> each, for instant frames) and release it on unbind:
- * `syncWebCapture` makes the open streams follow `captureSource`. The camera is
- * held open rather than opened per snap because browsers may re-prompt or defer
- * getUserMedia while the page has no focus — and the AI's request usually lands
- * while the user is looking elsewhere.
+ * `syncWebCapture` makes the open streams follow `screenSource` / `cameraSource`
+ * — independently, both may be live at once. The camera is held open rather
+ * than opened per snap because browsers may re-prompt or defer getUserMedia
+ * while the page has no focus — and the AI's request usually lands while the
+ * user is looking elsewhere.
  */
-
-type CaptureSource = NonNullable<ChatStore['captureSource']>
 
 /** A screen/window source the desktop shell lists. */
 export interface CaptureSrc { id: string; name: string; thumb: string | null; blank: boolean; icon: string | null }
@@ -64,7 +63,14 @@ export type WebCamera = Omit<HaloCamera, 'openSettings'> & { readonly web: true 
 export type ScreenBridge = (HaloCapture & { web?: undefined }) | WebScreen
 export type CameraBridge = (HaloCamera & { web?: undefined }) | WebCamera
 
-/** `captureSource.id` of a web screen share (desktop ids are `screen:…` / `window:…`). */
+/** The marker the LLM emits to request a live frame (prompt injected by
+ *  use-chat): bare `<<<CAPTURE>>>` = every bound source, `<<<CAPTURE:screen>>>`
+ *  / `<<<CAPTURE:camera>>>` = just that one. Global — a reply may carry several.
+ *  chat-handlers acts on it, message-list strips it at render; one regex so the
+ *  two never disagree. Use with matchAll / replace only (`g` + test() is stateful). */
+export const CAPTURE_MARKER = /<<<CAPTURE(?::(screen|camera))?>>>/g
+
+/** `screenSource.id` of a web screen share (desktop ids are `screen:…` / `window:…`). */
 export const WEB_SCREEN_ID = 'web:screen'
 
 const FRAME_MAX_WIDTH = 1920
@@ -156,7 +162,7 @@ function surfaceKey(surface: string | undefined): WebSurfaceKey {
 }
 
 function isWebScreenSource(source: CaptureSource | null): boolean {
-  return source?.kind === 'screen' && source.id === WEB_SCREEN_ID
+  return source?.id === WEB_SCREEN_ID
 }
 
 // ── Screen ──
@@ -186,13 +192,14 @@ const webScreen: WebScreen = {
     stopScreen()
     const next = { stream, video: attachVideo(stream) }
     share = next
-    // The browser's own "Stop sharing" bar ends the track → unbind, unless
-    // this share was already replaced/released or the binding moved on.
+    // The browser's own "Stop sharing" bar ends the track → unbind the screen
+    // (the camera is untouched), unless this share was already
+    // replaced/released or the screen binding moved on.
     track.addEventListener('ended', () => {
       if (share !== next) return
       stopScreen()
       const store = useChatStore.getState()
-      if (isWebScreenSource(store.captureSource)) store.setCaptureSource(null)
+      if (isWebScreenSource(store.screenSource)) store.setScreenSource(null)
     })
     return surfaceKey(track.getSettings().displaySurface)
   },
@@ -337,15 +344,16 @@ export function getCameraBridge(): CameraBridge | undefined {
 }
 
 /**
- * Make the browser streams follow the bound source. Idempotent — call it on
- * every `captureSource` change (from any number of mounted controls): stops a
- * web screen share the source no longer points at, releases the camera when
- * it's unbound or another device is bound, and opens the bound camera's stream
- * (web camera bridge only — the desktop shell snaps on its own).
+ * Make the browser streams follow the bound sources. Idempotent — call it on
+ * every `screenSource` / `cameraSource` change (from any number of mounted
+ * controls): stops a web screen share `screen` no longer points at, releases
+ * the camera when `camera` is unbound or another device is bound, and opens the
+ * bound camera's stream (web camera bridge only — the desktop shell snaps on
+ * its own). Each stream follows only its own source.
  */
-export function syncWebCapture(source: CaptureSource | null): void {
-  if (!isWebScreenSource(source)) stopScreen()
-  const deviceId = source?.kind === 'camera' && getCameraBridge()?.web ? source.id : null
+export function syncWebCapture(screen: CaptureSource | null, camera: CaptureSource | null): void {
+  if (!isWebScreenSource(screen)) stopScreen()
+  const deviceId = camera && getCameraBridge()?.web ? camera.id : null
   if (cam && cam.deviceId === deviceId) return
   stopCamera()
   if (deviceId === null) return

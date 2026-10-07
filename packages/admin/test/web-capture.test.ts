@@ -5,9 +5,10 @@ import { useChatStore } from '../src/features/chat/chat-store'
 /**
  * Contract: in a plain browser (no desktop-shell `window.haloCapture` /
  * `window.haloCamera`) the chat toolbar's capture buttons run on
- * getDisplayMedia / getUserMedia. The streams follow the bound
- * `captureSource` — open while bound, released on unbind / switch — and the
- * browser's own "Stop sharing" ends the binding. Streams and tracks are plain
+ * getDisplayMedia / getUserMedia. Each stream follows its own bound source
+ * (`screenSource` / `cameraSource`, independent — both may be live) — open
+ * while bound, released on unbind / switch — and the browser's own "Stop
+ * sharing" ends the screen binding only. Streams and tracks are plain
  * fakes; jsdom has no media pipeline, so <video>.play / videoWidth and the 2d
  * canvas are stubbed on the prototypes.
  */
@@ -47,11 +48,14 @@ function setMediaDevices(devices: Record<string, unknown> | undefined): void {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
-const source = () => useChatStore.getState().captureSource
-const bindWebScreen = () => useChatStore.getState().setCaptureSource({ id: WEB_SCREEN_ID, name: 'Entire screen', thumb: '', kind: 'screen' })
-const bindCamera = (id: string) => useChatStore.getState().setCaptureSource({ id, name: 'Front', thumb: '', kind: 'camera' })
-/** What CaptureControl's effect does on every captureSource change. */
-const sync = () => syncWebCapture(source())
+const screenSource = () => useChatStore.getState().screenSource
+const cameraSource = () => useChatStore.getState().cameraSource
+const bindWebScreen = () => useChatStore.getState().setScreenSource({ id: WEB_SCREEN_ID, name: 'Entire screen' })
+const unbindScreen = () => useChatStore.getState().setScreenSource(null)
+const bindCamera = (id: string) => useChatStore.getState().setCameraSource({ id, name: 'Front' })
+const unbindCamera = () => useChatStore.getState().setCameraSource(null)
+/** What CaptureControl's effect does on every screenSource / cameraSource change. */
+const sync = () => syncWebCapture(screenSource(), cameraSource())
 
 let pixel: number[]
 
@@ -71,8 +75,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  useChatStore.getState().setCaptureSource(null)
-  syncWebCapture(null)
+  unbindScreen()
+  unbindCamera()
+  syncWebCapture(null, null)
   delete (window as unknown as { haloCapture?: unknown }).haloCapture
   delete (window as unknown as { haloCamera?: unknown }).haloCamera
   setMediaDevices(undefined)
@@ -119,22 +124,27 @@ describe('web screen share', () => {
     sync()
 
     track.end()
-    expect(source()).toBeNull()
+    expect(screenSource()).toBeNull()
     expect(await screen().grab()).toBeNull()
   })
 
-  it('a stale "ended" does not unbind a camera bound since', async () => {
+  it('"Stop sharing" unbinds only the screen — a camera bound alongside stays live', async () => {
     const track = fakeTrack('monitor')
     getDisplayMedia.mockResolvedValueOnce(fakeStream(track))
     await screen().start()
     bindWebScreen()
     sync()
-    getUserMedia.mockResolvedValue(fakeStream(fakeTrack()))
+    const camTrack = fakeTrack()
+    getUserMedia.mockResolvedValue(fakeStream(camTrack))
     bindCamera('cam1')
     sync()
+    await flush()
 
     track.end()
-    expect(source()?.kind).toBe('camera')
+    expect(screenSource()).toBeNull()
+    expect(cameraSource()?.id).toBe('cam1')
+    sync()
+    expect(camTrack.stop).not.toHaveBeenCalled()
   })
 
   it('a cancelled re-pick keeps the current share', async () => {
@@ -147,7 +157,7 @@ describe('web screen share', () => {
     getDisplayMedia.mockRejectedValueOnce(new DOMException('cancelled', 'NotAllowedError'))
     expect(await screen().start()).toBeNull()
     expect(track.stop).not.toHaveBeenCalled()
-    expect(source()?.id).toBe(WEB_SCREEN_ID)
+    expect(screenSource()?.id).toBe(WEB_SCREEN_ID)
     expect(await screen().grab()).toBe('IMG')
   })
 
@@ -162,7 +172,7 @@ describe('web screen share', () => {
 
     expect(first.stop).toHaveBeenCalled()
     first.end()
-    expect(source()?.id).toBe(WEB_SCREEN_ID)
+    expect(screenSource()?.id).toBe(WEB_SCREEN_ID)
     expect(second.stop).not.toHaveBeenCalled()
   })
 
@@ -174,7 +184,7 @@ describe('web screen share', () => {
   })
 })
 
-describe('syncWebCapture follows captureSource', () => {
+describe('syncWebCapture follows screenSource / cameraSource', () => {
   it('stops the screen share on unbind', async () => {
     const track = fakeTrack('monitor')
     getDisplayMedia.mockResolvedValueOnce(fakeStream(track))
@@ -184,12 +194,12 @@ describe('syncWebCapture follows captureSource', () => {
     sync() // idempotent: a second mounted control changes nothing
     expect(track.stop).not.toHaveBeenCalled()
 
-    useChatStore.getState().setCaptureSource(null)
+    unbindScreen()
     sync()
     expect(track.stop).toHaveBeenCalled()
   })
 
-  it('switching to the camera stops the share and opens the bound camera once', async () => {
+  it('screen and camera are held together, each released by its own unbind', async () => {
     const screenTrack = fakeTrack('monitor')
     getDisplayMedia.mockResolvedValueOnce(fakeStream(screenTrack))
     await (getScreenBridge() as WebScreen).start()
@@ -201,9 +211,37 @@ describe('syncWebCapture follows captureSource', () => {
     bindCamera('cam1')
     sync()
     sync()
-    expect(screenTrack.stop).toHaveBeenCalled()
+    await flush()
+    expect(screenTrack.stop).not.toHaveBeenCalled()
     expect(getUserMedia).toHaveBeenCalledTimes(1)
     expect(getUserMedia.mock.calls[0][0]).toMatchObject({ video: { deviceId: { exact: 'cam1' } }, audio: false })
+    expect(await (getScreenBridge() as WebScreen).grab()).toBe('IMG')
+    expect(await getCameraBridge()!.snap('cam1')).toBe('IMG')
+
+    // Camera off → the share stays; screen off → the camera already gone.
+    unbindCamera()
+    sync()
+    expect(camTrack.stop).toHaveBeenCalled()
+    expect(screenTrack.stop).not.toHaveBeenCalled()
+    unbindScreen()
+    sync()
+    expect(screenTrack.stop).toHaveBeenCalled()
+  })
+
+  it('unbinding the screen keeps the bound camera stream open', async () => {
+    getDisplayMedia.mockResolvedValueOnce(fakeStream(fakeTrack('window')))
+    await (getScreenBridge() as WebScreen).start()
+    bindWebScreen()
+    const camTrack = fakeTrack()
+    getUserMedia.mockResolvedValue(fakeStream(camTrack))
+    bindCamera('cam1')
+    sync()
+    await flush()
+
+    unbindScreen()
+    sync()
+    expect(camTrack.stop).not.toHaveBeenCalled()
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
   })
 
   it('releases the camera on unbind and when another device is bound', async () => {
@@ -220,7 +258,7 @@ describe('syncWebCapture follows captureSource', () => {
     expect(first.stop).toHaveBeenCalled()
     expect(second.stop).not.toHaveBeenCalled()
 
-    useChatStore.getState().setCaptureSource(null)
+    unbindCamera()
     sync()
     expect(second.stop).toHaveBeenCalled()
   })
@@ -230,7 +268,7 @@ describe('syncWebCapture follows captureSource', () => {
     getUserMedia.mockReturnValueOnce(new Promise((r) => { grant = r }))
     bindCamera('cam1')
     sync()
-    useChatStore.getState().setCaptureSource(null)
+    unbindCamera()
     sync()
 
     const late = fakeTrack()

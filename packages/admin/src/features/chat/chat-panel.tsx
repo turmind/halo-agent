@@ -209,24 +209,20 @@ export function ChatPanel() {
             onRemovePending={removePendingMessage}
             onCommand={handleCommand}
             onCompact={() => handleCommand({ name: '/session', description: '', type: 'server' }, 'compact')}
-            renderLeftControls={() => (
-              <div className="relative flex items-center gap-0.5">
-                <button
-                  onClick={() => setDebugMode(!debugMode)}
-                  className={cn(
-                    'flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] transition-colors',
-                    debugMode
-                      ? 'bg-amber-900/50 text-amber-400'
-                      : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
-                  )}
-                  title="Debug mode: show all messages including tool calls and usage"
-                >
-                  <Bug className="h-3 w-3" />
-                  Debug
-                </button>
-                <AgentSelector />
-              </div>
-            )}
+            agentControl={<AgentSelector />}
+            debugControl={
+              <button
+                onClick={() => setDebugMode(!debugMode)}
+                aria-pressed={debugMode}
+                className={cn(
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--secondary)]',
+                  debugMode ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
+                )}
+                title="Debug mode: show all messages including tool calls and usage"
+              >
+                <Bug className="h-4 w-4" />
+              </button>
+            }
           />
         </div>
       </div>

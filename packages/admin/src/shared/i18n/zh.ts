@@ -710,7 +710,7 @@ export const zh: Record<string, string> = {
 
   // ── 屏幕捕获（桌面端）──
   'capture.button': '共享一个窗口/屏幕给 AI 查看',
-  'capture.bound': '正在共享：{name}（AI 可主动截图查看）',
+  'capture.bound': '正在共享：{name}（AI 可主动截图查看）— 点击停止共享',
   'capture.unbind': '停止共享',
   'capture.pickTitle': '选择要共享的窗口或屏幕',
   'capture.permissionHint': '需要「屏幕录制」权限。请在 系统设置 → 隐私与安全性 → 屏幕录制 里勾选 Halo，然后彻底退出并重新打开 Halo。',
@@ -725,7 +725,6 @@ export const zh: Record<string, string> = {
   'capture.cameraButton': '开启摄像头，让 AI 主动拍照',
   'capture.cameraBound': '摄像头已开启（AI 可主动拍照）— 点击关闭',
   'capture.cameraPick': '选择摄像头',
-  'capture.cameraCurrent': '当前',
   'capture.cameraUse': '使用此摄像头',
   'capture.cameraPermissionHint': '需要「摄像头」权限。请在 系统设置 → 隐私与安全性 → 摄像头 里勾选 Halo。',
   'capture.cameraLlmPrompt': '[系统：用户已为你开启摄像头。当你需要查看摄像头当前画面来回答时，单独输出一行 <<<CAPTURE>>>，系统会自动拍一张照片并作为下一条消息发给你。不需要查看时不要输出该标记。]',
@@ -737,6 +736,7 @@ export const zh: Record<string, string> = {
   'capture.webSurfaceTab': '浏览器标签页',
   'capture.webLlmPrompt': '[系统：用户正在通过浏览器共享{name}。当你需要查看它的当前画面来回答时，单独输出一行 <<<CAPTURE>>>，系统会自动截图并作为下一条消息发给你。不需要查看时不要输出该标记。]',
   'capture.webFailNote': '[📷 {name} — 截图失败：共享可能已停止，或共享的窗口被最小化了 — 恢复后再让我截一次]',
+  'capture.bothLlmPrompt': '[系统：用户正在共享「{name}」，同时开着摄像头。当你需要查看画面来回答时，单独输出一行标记：只看屏幕输出 <<<CAPTURE:screen>>>，只看摄像头输出 <<<CAPTURE:camera>>>，两个都看输出 <<<CAPTURE>>>，系统会截图 / 拍照并作为下一条消息发给你。不需要查看时不要输出任何标记。]',
   'capture.cameraPermissionHintWeb': '需要摄像头权限：点地址栏左侧的站点设置图标，允许摄像头后再试。',
   // ── AI 的面孔（self.html）──
   'face.button': '显示 AI 的面孔',

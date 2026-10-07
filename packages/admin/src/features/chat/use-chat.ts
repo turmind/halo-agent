@@ -76,13 +76,19 @@ export function useChat() {
       // raw wsClient.send path (chat-handlers), NOT this dispatch, so it never
       // gets this instruction re-injected (no capture loop). The camera variant
       // phrases it as "the user has turned the camera on" rather than "sharing a
-      // window"; a browser share as "sharing {name} from the browser".
-      const captureSource = useChatStore.getState().captureSource
-      if (captureSource?.kind === 'camera') {
-        if (getCameraBridge()) contextParts.push(t('capture.cameraLlmPrompt'))
-      } else if (captureSource?.kind === 'screen') {
-        const screen = getScreenBridge()
-        if (screen) contextParts.push(t(screen.web ? 'capture.webLlmPrompt' : 'capture.llmPrompt', { name: captureSource.name }))
+      // window"; a browser share as "sharing {name} from the browser". Both
+      // bound → one combined prompt offering <<<CAPTURE:screen>>> /
+      // <<<CAPTURE:camera>>> / bare <<<CAPTURE>>> (both).
+      const { screenSource, cameraSource } = useChatStore.getState()
+      const screen = getScreenBridge()
+      const screenOn = !!screenSource && !!screen
+      const cameraOn = !!cameraSource && !!getCameraBridge()
+      if (screenOn && cameraOn) {
+        contextParts.push(t('capture.bothLlmPrompt', { name: screenSource.name }))
+      } else if (cameraOn) {
+        contextParts.push(t('capture.cameraLlmPrompt'))
+      } else if (screenOn) {
+        contextParts.push(t(screen.web ? 'capture.webLlmPrompt' : 'capture.llmPrompt', { name: screenSource.name }))
       }
       // Face toggle on → tell the agent its face is open, plus whatever the face
       // reported since the last message (face-bridge receipts, then cleared).

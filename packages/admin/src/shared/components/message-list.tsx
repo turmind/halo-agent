@@ -15,6 +15,7 @@ import { useSessionArchiveStore } from '@/features/agents/session-archive-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { wsClient } from '@/shared/ws-client'
 import { useT } from '@/shared/i18n'
+import { CAPTURE_MARKER } from '@/features/chat/web-capture'
 import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2, AlertTriangle } from 'lucide-react'
 
 /**
@@ -673,13 +674,14 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
 function TextBlock({ text }: { text: string }) {
   const { text: parsed, media } = useMemo(() => parseMediaMarkers(text), [text])
   // Hide the LLM's control markers, never meant for the user to read:
-  //  • <<<CAPTURE>>>      — request a screenshot (handled in chat-handlers)
+  //  • <<<CAPTURE>>> / <<<CAPTURE:screen|camera>>> — request a live frame
+  //    (handled in chat-handlers; same CAPTURE_MARKER regex)
   //  • <<<SHOW: …js… >>>  — drive the visual face (forwarded to the preview)
   // Stripped at render so they stay hidden during streaming too, not just after
   // completion. SHOW uses the same non-greedy dot-all pattern as the handler so
   // the two never disagree on where a marker ends.
   const stripped = useMemo(
-    () => parsed.replace(/<<<CAPTURE>>>/g, '').replace(/<<<SHOW:[\s\S]*?>>>/g, '').trim(),
+    () => parsed.replace(CAPTURE_MARKER, '').replace(/<<<SHOW:[\s\S]*?>>>/g, '').trim(),
     [parsed],
   )
   return (

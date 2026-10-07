@@ -710,7 +710,7 @@ export const en: Record<string, string> = {
 
   // ── Screen capture (desktop) ──
   'capture.button': 'Share a window/screen for the AI to see',
-  'capture.bound': 'Sharing: {name} (AI can request a screenshot)',
+  'capture.bound': 'Sharing: {name} (AI can request a screenshot) — click to stop sharing',
   'capture.unbind': 'Stop sharing',
   'capture.pickTitle': 'Choose a window or screen to share',
   'capture.permissionHint': 'Screen Recording permission is needed. Enable Halo under System Settings → Privacy & Security → Screen Recording, then fully quit and reopen Halo.',
@@ -725,7 +725,6 @@ export const en: Record<string, string> = {
   'capture.cameraButton': 'Turn on the camera for the AI to take a photo',
   'capture.cameraBound': 'Camera on (AI can take a photo) — click to turn off',
   'capture.cameraPick': 'Choose camera',
-  'capture.cameraCurrent': 'current',
   'capture.cameraUse': 'Use this camera',
   'capture.cameraPermissionHint': 'Camera permission is needed. Enable Halo under System Settings → Privacy & Security → Camera.',
   'capture.cameraLlmPrompt': '[System: the user has turned the camera on for you. When you need to see what the camera is pointed at to answer, output a line containing exactly <<<CAPTURE>>> and the system will take a photo and send it back to you as the next message. Do not output the marker unless you actually need to look.]',
@@ -737,6 +736,7 @@ export const en: Record<string, string> = {
   'capture.webSurfaceTab': 'Browser tab',
   'capture.webLlmPrompt': '[System: the user is sharing {name} from the browser. When you need to see its current contents to answer, output a line containing exactly <<<CAPTURE>>> and the system will screenshot it and send it back to you as the next message. Do not output the marker unless you actually need to look.]',
   'capture.webFailNote': '[📷 {name} — screenshot failed: sharing may have stopped, or the shared window is minimized — restore it and ask me to capture again]',
+  'capture.bothLlmPrompt': '[System: the user is sharing "{name}" and has the camera on. When you need to look to answer, output one line with exactly one marker: <<<CAPTURE:screen>>> for the screen only, <<<CAPTURE:camera>>> for the camera only, or <<<CAPTURE>>> for both — the system will screenshot / take a photo and send it back to you as the next message. Do not output any marker unless you actually need to look.]',
   'capture.cameraPermissionHintWeb': 'Camera permission is needed. Click the site settings icon at the left of the address bar, allow the camera, then try again.',
   // ── The assistant's face (self.html) ──
   'face.button': "Show the assistant's face",

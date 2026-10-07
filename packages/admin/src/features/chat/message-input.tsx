@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
-import { Send, Paperclip, X, FileIcon, Square, MonitorUp, Camera, Sparkles, ChevronDown } from 'lucide-react'
+import { Send, Paperclip, X, FileIcon, FileText, Square, MonitorUp, Camera, Sparkles, ChevronDown, Check, LockOpen, FolderLock, Eye, type LucideIcon } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
@@ -195,10 +195,8 @@ function FaceControl() {
       aria-pressed={on}
       title={on ? t('face.on') : t('face.button')}
       className={cn(
-        'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors',
-        on
-          ? 'bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-inset ring-[var(--primary)]/40 hover:bg-[var(--primary)]/25'
-          : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+        'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--secondary)]',
+        on ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
       )}
     >
       <Sparkles className={cn('h-4 w-4', on && 'fill-current')} />
@@ -215,16 +213,15 @@ function FaceControl() {
  * (browser and Electron both have getUserMedia); the actual capture still goes
  * through the camera bridge's snap with the chosen deviceId.
  */
-function CameraPicker({ cameras, activeId, onPick, onTurnOff, onClose }: {
+function CameraPicker({ cameras, onPick, onClose }: {
   cameras: Array<{ deviceId: string; label: string }>
-  activeId: string | null
   onPick: (c: { deviceId: string; label: string }) => void
-  onTurnOff?: () => void
   onClose: () => void
 }) {
   const t = useT()
-  // Which device is being previewed (defaults to the active/remembered one, else first).
-  const [previewId, setPreviewId] = useState<string>(activeId || cameras[0]?.deviceId || '')
+  // Which device is being previewed (defaults to the first). The picker only
+  // opens while no camera is bound — a bound camera's button turns it off.
+  const [previewId, setPreviewId] = useState<string>(cameras[0]?.deviceId || '')
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
@@ -275,16 +272,10 @@ function CameraPicker({ cameras, activeId, onPick, onTurnOff, onClose }: {
             >
               <Camera className="h-3.5 w-3.5 shrink-0" />
               <span className="min-w-0 flex-1 truncate">{c.label}</span>
-              {activeId === c.deviceId && <span className="shrink-0 text-[10px]">{t('capture.cameraCurrent')}</span>}
             </button>
           ))}
         </div>
-        <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] px-4 py-3">
-          {onTurnOff ? (
-            <button onClick={onTurnOff} className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
-              {t('capture.cameraBound')}
-            </button>
-          ) : <span />}
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] px-4 py-3">
           <button
             onClick={() => { const c = cameras.find((x) => x.deviceId === previewId); if (c) onPick(c) }}
             className="rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
@@ -299,11 +290,12 @@ function CameraPicker({ cameras, activeId, onPick, onTurnOff, onClose }: {
 
 type AccessLevel = 'full' | 'workspace' | 'readonly'
 const ACCESS_LEVELS: AccessLevel[] = ['full', 'workspace', 'readonly']
-// Same palette as the channel account badges (slack-settings.tsx).
-const ACCESS_BADGE: Record<AccessLevel, string> = {
-  full: 'bg-amber-500/15 text-amber-300',
-  workspace: 'bg-blue-500/15 text-blue-300',
-  readonly: 'bg-emerald-500/15 text-emerald-300',
+// Icon + its tint — the selector's only colour (same hues as the channel
+// account badges; globals.css remaps the -400 shades for light/warm themes).
+const ACCESS_ICON: Record<AccessLevel, { Icon: LucideIcon; color: string }> = {
+  full: { Icon: LockOpen, color: 'text-amber-400' },
+  workspace: { Icon: FolderLock, color: 'text-blue-400' },
+  readonly: { Icon: Eye, color: 'text-emerald-400' },
 }
 
 /** Access level the next message runs at. Applied server-side when the
@@ -336,6 +328,7 @@ function AccessLevelSelector() {
   const noSandbox = sandboxAvailable === false
   const shown: AccessLevel = noSandbox ? 'full' : level
   const disabled = isStreaming || noSandbox
+  const { Icon, color } = ACCESS_ICON[shown]
 
   return (
     <div ref={ref} className="relative">
@@ -344,44 +337,84 @@ function AccessLevelSelector() {
         disabled={disabled}
         title={noSandbox ? t('chat.access.noSandbox') : t('chat.access.title')}
         className={cn(
-          'flex w-24 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-opacity',
-          ACCESS_BADGE[shown],
-          disabled ? 'opacity-50 cursor-default' : 'hover:opacity-80',
+          'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors',
+          disabled ? 'opacity-50 cursor-default' : 'hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
         )}
       >
-        <span className="truncate">{t(`chat.access.${shown}`)}</span>
+        <Icon className={cn('h-3 w-3', color)} />
+        <span>{t(`chat.access.${shown}`)}</span>
         {!disabled && <ChevronDown className="h-2.5 w-2.5" />}
       </button>
       {open && (
         <div className="absolute bottom-full left-0 mb-1 min-w-[180px] rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg z-30">
-          {ACCESS_LEVELS.map((l) => (
-            <button
-              key={l}
-              onClick={() => { useChatStore.getState().setAccessLevel(l); setOpen(false) }}
-              className={cn(
-                'flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors',
-                l === level ? 'bg-[var(--accent)]' : 'hover:bg-[var(--secondary)]',
-              )}
-            >
-              <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', ACCESS_BADGE[l])}>{t(`chat.access.${l}`)}</span>
-              <span className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">{t(`chat.access.${l}Desc`)}</span>
-            </button>
-          ))}
+          {ACCESS_LEVELS.map((l) => {
+            const { Icon: ItemIcon, color: itemColor } = ACCESS_ICON[l]
+            return (
+              <button
+                key={l}
+                onClick={() => { useChatStore.getState().setAccessLevel(l); setOpen(false) }}
+                className={cn(
+                  'flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs transition-colors',
+                  l === level ? 'bg-[var(--accent)] text-[var(--foreground)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)]',
+                )}
+              >
+                <ItemIcon className={cn('mt-0.5 h-3 w-3 shrink-0', itemColor)} />
+                <span className="flex min-w-0 flex-col">
+                  <span>{t(`chat.access.${l}`)}</span>
+                  <span className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">{t(`chat.access.${l}Desc`)}</span>
+                </span>
+                {l === level && <Check className="ml-auto h-3.5 w-3.5 shrink-0 self-center text-[var(--primary)]" />}
+              </button>
+            )
+          })}
         </div>
       )}
     </div>
   )
 }
 
+/** Thin group divider in the toolbar row. Each optional group renders its own
+ *  leading one, so a group that renders nothing leaves no stray divider. */
+function ToolbarDivider() {
+  return <span className="mx-1 h-4 w-px shrink-0 bg-[var(--border)]" />
+}
+
+/**
+ * Chips for the bound live sources, right after the agent selector — the
+ * agent-selector shape, tinted primary for "in progress". One per bound source
+ * (screen and camera may both be on); the X unbinds just that one
+ * (CaptureControl's syncWebCapture effect then releases a browser stream).
+ */
+function LiveSourceChips() {
+  const t = useT()
+  const screenSource = useChatStore((s) => s.screenSource)
+  const cameraSource = useChatStore((s) => s.cameraSource)
+  const chips = [
+    screenSource && { key: 'screen', Icon: MonitorUp, name: screenSource.name, unbind: () => useChatStore.getState().setScreenSource(null) },
+    cameraSource && { key: 'camera', Icon: Camera, name: cameraSource.name, unbind: () => useChatStore.getState().setCameraSource(null) },
+  ].filter((c) => !!c)
+  return chips.map(({ key, Icon, name, unbind }) => (
+    <div key={key} className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[var(--primary)]">
+      <Icon className="h-3 w-3 shrink-0" />
+      <span className="max-w-[80px] truncate" title={name}>{name}</span>
+      <button onClick={unbind} title={t('capture.unbind')} className="rounded opacity-75 hover:opacity-100">
+        <X className="h-2.5 w-2.5" />
+      </button>
+    </div>
+  ))
+}
+
 /**
  * Capture control — lets the user share something for the LLM to look at on
  * demand (via the <<<CAPTURE>>> marker, see use-chat / chat-handlers). Two
- * sources, mutually exclusive (only one bound at a time, like a meeting app's
- * "share screen OR camera"):
+ * independent sources — either one, or both at once:
  *   • screen/window — desktop shell: picked from a grid, grabbed via
  *     desktopCapturer (main); browser: the browser's own getDisplayMedia
  *     picker, the share kept live while bound (web-capture).
- *   • webcam — a one-click toggle, grabbed via getUserMedia.
+ *   • webcam — picked with a live preview, grabbed via getUserMedia.
+ * Each button toggles: clicking it while its source is bound turns that source
+ * off (to switch source / device, turn it off and on again). The bound sources
+ * show as chips after the agent selector (LiveSourceChips).
  * The desktop shell's bridges win; a plain browser falls back to web-capture's
  * (no screen button where getDisplayMedia is missing, e.g. mobile).
  * Bound state lives in chat-store so use-chat (prompt injection) and
@@ -389,16 +422,17 @@ function AccessLevelSelector() {
  */
 function CaptureControl() {
   const t = useT()
-  const captureSource = useChatStore((s) => s.captureSource)
-  const setCaptureSource = useChatStore((s) => s.setCaptureSource)
+  const screenSource = useChatStore((s) => s.screenSource)
+  const cameraSource = useChatStore((s) => s.cameraSource)
+  const setScreenSource = useChatStore((s) => s.setScreenSource)
+  const setCameraSource = useChatStore((s) => s.setCameraSource)
   const [open, setOpen] = useState(false)
   const [sources, setSources] = useState<CaptureSrc[]>([])
   const [denied, setDenied] = useState(false)
   const [loading, setLoading] = useState(false)
   const [cameraAvailable, setCameraAvailable] = useState(false)
   const [cameraDenied, setCameraDenied] = useState(false)
-  // Multi-camera: list of webcams + a small picker. Empty/single → no picker,
-  // the toggle binds directly. The chosen deviceId is remembered across opens.
+  // Multi-camera: list of webcams + a small picker with a live preview.
   const [cameraList, setCameraList] = useState<Array<{ deviceId: string; label: string }>>([])
   const [cameraMenuOpen, setCameraMenuOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -408,15 +442,18 @@ function CaptureControl() {
   const modelSupportsImage = useCurrentModelSupportsImage()
 
   // If the user switches to a text-only model while a source is bound, drop the
-  // binding — the frame could no longer be sent, and the control is about to
+  // bindings — the frame could no longer be sent, and the control is about to
   // hide.
   useEffect(() => {
-    if (!modelSupportsImage && captureSource) setCaptureSource(null)
-  }, [modelSupportsImage, captureSource, setCaptureSource])
+    if (modelSupportsImage) return
+    if (screenSource) setScreenSource(null)
+    if (cameraSource) setCameraSource(null)
+  }, [modelSupportsImage, screenSource, cameraSource, setScreenSource, setCameraSource])
 
-  // Browser streams follow the binding (stop an unbound share, hold the bound
-  // camera open). Idempotent, so every mounted control may call it.
-  useEffect(() => { syncWebCapture(captureSource) }, [captureSource])
+  // Browser streams follow the bindings (stop an unbound share, hold the bound
+  // camera open), each independently. Idempotent, so every mounted control may
+  // call it.
+  useEffect(() => { syncWebCapture(screenSource, cameraSource) }, [screenSource, cameraSource])
 
   // Is there a webcam on this machine? ("先判断有没有摄像头") — hide the camera
   // button entirely when none is present. Only meaningful on a vision model.
@@ -448,13 +485,15 @@ function CaptureControl() {
   // images (capture would be unsendable).
   if ((!cap && !camera) || !modelSupportsImage) return null
 
-  const openPicker = async () => {
+  // Screen toggle: bound → unbind (a browser share's stream stops via the
+  // syncWebCapture effect); otherwise pick a source.
+  const toggleScreen = async () => {
+    if (screenSource) { setScreenSource(null); return }
     // Browser: its own picker is the source chooser — straight from the click
-    // (getDisplayMedia needs the user gesture). While a share is bound this
-    // switches source; a cancel keeps whatever is bound.
+    // (getDisplayMedia needs the user gesture). A cancel binds nothing.
     if (cap?.web) {
       const key = await cap.start()
-      if (key) setCaptureSource({ id: WEB_SCREEN_ID, name: t(key), thumb: '', kind: 'screen' })
+      if (key) setScreenSource({ id: WEB_SCREEN_ID, name: t(key) })
       return
     }
     if (open) { setOpen(false); return }
@@ -484,17 +523,16 @@ function CaptureControl() {
     setCameraDenied(false)
     setCameraMenuOpen(false)
     if (deviceId) { try { localStorage.setItem('halo.cameraId', deviceId) } catch { /* ignore */ } }
-    setCaptureSource({ id: deviceId, name: label || t('capture.cameraName'), thumb: '', kind: 'camera' })
+    setCameraSource({ id: deviceId, name: label || t('capture.cameraName') })
   }
 
-  // Camera toggle: bound→reopen the picker (to re-aim, switch device, or turn
-  // off); otherwise request the camera permission (prompts on first use) and
-  // open the picker. The picker always shows a live preview — even with a
-  // single camera — so the user can frame the shot (e.g. aim a desk cam at
-  // homework) before binding. labels populate only after the grant, so list()
-  // runs after requestPermission.
+  // Camera toggle: bound → turn it off; otherwise request the camera
+  // permission (prompts on first use) and open the picker. The picker always
+  // shows a live preview — even with a single camera — so the user can frame
+  // the shot (e.g. aim a desk cam at homework) before binding. labels populate
+  // only after the grant, so list() runs after requestPermission.
   const toggleCamera = async () => {
-    if (captureSource?.kind === 'camera') { setCameraMenuOpen((v) => !v); return }
+    if (cameraSource) { setCameraSource(null); return }
     const granted = await camera!.requestPermission()
     if (!granted) { setCameraDenied(true); return }
     const list = await camera!.list()
@@ -507,11 +545,11 @@ function CaptureControl() {
     <div ref={ref} className="relative flex items-center gap-1">
       {cap && (
         <button
-          onClick={openPicker}
-          title={captureSource?.kind === 'screen' ? t('capture.bound', { name: captureSource.name }) : t('capture.button')}
+          onClick={toggleScreen}
+          title={screenSource ? t('capture.bound', { name: screenSource.name }) : t('capture.button')}
           className={cn(
             'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--secondary)]',
-            captureSource?.kind === 'screen' ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
+            screenSource ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
           )}
         >
           <MonitorUp className="h-4 w-4" />
@@ -520,30 +558,14 @@ function CaptureControl() {
       {camera && cameraAvailable && (
         <button
           onClick={toggleCamera}
-          title={captureSource?.kind === 'camera' ? t('capture.cameraBound') : t('capture.cameraButton')}
+          title={cameraSource ? t('capture.cameraBound') : t('capture.cameraButton')}
           className={cn(
             'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--secondary)]',
-            captureSource?.kind === 'camera' ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
+            cameraSource ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
           )}
         >
           <Camera className="h-4 w-4" />
         </button>
-      )}
-      {captureSource && (
-        <div className="flex items-center gap-1 rounded-full border border-[var(--primary)]/30 bg-[var(--primary)]/10 px-1.5 py-0.5 text-[10px] text-[var(--primary)]">
-          {captureSource.kind === 'camera' ? (
-            <Camera className="h-3.5 w-3.5" />
-          ) : captureSource.thumb ? (
-            <img src={captureSource.thumb} alt="" className="h-3.5 w-3.5 rounded-sm object-cover" />
-          ) : (
-            <MonitorUp className="h-3.5 w-3.5" />
-          )}
-          <span className="max-w-24 truncate">{captureSource.name}</span>
-          <button onClick={() => setCaptureSource(null)} title={t('capture.unbind')}
-            className="ml-0.5 rounded-full p-0.5 hover:bg-[var(--primary)]/20">
-            <X className="h-2.5 w-2.5" />
-          </button>
-        </div>
       )}
       {cameraDenied && (
         <div className="absolute bottom-full left-0 z-50 mb-1 w-64 rounded-md border border-amber-500/30 bg-[var(--background)] p-2.5 text-xs text-amber-300 shadow-lg">
@@ -564,9 +586,7 @@ function CaptureControl() {
       {cameraMenuOpen && cameraList.length >= 1 && (
         <CameraPicker
           cameras={cameraList}
-          activeId={captureSource?.kind === 'camera' ? captureSource.id : null}
           onPick={(c) => bindCamera(c.deviceId, c.label)}
-          onTurnOff={captureSource?.kind === 'camera' ? () => { setCaptureSource(null); setCameraMenuOpen(false) } : undefined}
           onClose={() => setCameraMenuOpen(false)}
         />
       )}
@@ -603,7 +623,7 @@ function CaptureControl() {
                   {sources.map((s) => (
                     <button
                       key={s.id}
-                      onClick={() => { setCaptureSource({ id: s.id, name: s.name, thumb: s.thumb ?? '', kind: 'screen' }); setOpen(false) }}
+                      onClick={() => { setScreenSource({ id: s.id, name: s.name }); setOpen(false) }}
                       title={s.name}
                       className="flex min-w-0 flex-col gap-1.5 overflow-hidden rounded-lg border border-[var(--border)] p-2 text-left transition-colors hover:border-[var(--primary)] hover:bg-[var(--secondary)]"
                     >
@@ -642,7 +662,10 @@ interface MessageInputProps {
   onRemovePending?: (index: number) => void
   onCommand?: (cmd: SlashCommand, args: string) => void
   onCompact?: () => void
-  renderLeftControls?: () => React.ReactNode
+  /** Agent picker, placed right after the access selector. */
+  agentControl?: React.ReactNode
+  /** Debug toggle, placed after the face toggle. */
+  debugControl?: React.ReactNode
 }
 
 interface PendingFile {
@@ -650,7 +673,8 @@ interface PendingFile {
   preview?: string // data URL for images
 }
 
-/** Small ring showing context window usage — click to compact when usage is high */
+/** Small ring showing context window usage — click to compact when usage is
+ *  high. Carries its own leading divider: hidden (null) until there's usage. */
 function TokenRing({ onCompact }: { onCompact?: () => void }) {
   const messages = useChatStore((s) => s.messages)
   const serverContextTokens = useChatStore((s) => s.contextTokens)
@@ -682,22 +706,25 @@ function TokenRing({ onCompact }: { onCompact?: () => void }) {
   const canCompact = messages.length > 5 && onCompact && !isCompacting && !isStreaming
 
   return (
-    <div
-      className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', canCompact && 'cursor-pointer hover:bg-[var(--secondary)]')}
-      title={isCompacting ? 'Compacting...' : `~${kTokens}K / ${maxTokens / 1000}K tokens (${Math.round(pct)}%)${canCompact ? '\nClick to compact context' : ''}`}
-      onClick={canCompact ? onCompact : undefined}
-    >
-      <svg width="22" height="22" viewBox="0 0 22 22" className={cn('transform -rotate-90', isCompacting && 'animate-pulse')}>
-        <circle cx="11" cy="11" r={radius} fill="none" stroke="var(--muted-foreground)" strokeWidth="2.5" opacity="0.3" />
-        <circle cx="11" cy="11" r={radius} fill="none" stroke={color} strokeWidth="2.5"
-          strokeDasharray={circumference} strokeDashoffset={dashOffset} strokeLinecap="round"
-          className="transition-all duration-300" />
-      </svg>
-    </div>
+    <>
+      <ToolbarDivider />
+      <div
+        className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', canCompact && 'cursor-pointer hover:bg-[var(--secondary)]')}
+        title={isCompacting ? 'Compacting...' : `~${kTokens}K / ${maxTokens / 1000}K tokens (${Math.round(pct)}%)${canCompact ? '\nClick to compact context' : ''}`}
+        onClick={canCompact ? onCompact : undefined}
+      >
+        <svg width="16" height="16" viewBox="0 0 22 22" className={cn('transform -rotate-90', isCompacting && 'animate-pulse')}>
+          <circle cx="11" cy="11" r={radius} fill="none" stroke="var(--muted-foreground)" strokeWidth="2.5" opacity="0.3" />
+          <circle cx="11" cy="11" r={radius} fill="none" stroke={color} strokeWidth="2.5"
+            strokeDasharray={circumference} strokeDashoffset={dashOffset} strokeLinecap="round"
+            className="transition-all duration-300" />
+        </svg>
+      </div>
+    </>
   )
 }
 
-export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrupt, pendingMessages, onRemovePending, onCommand, onCompact, renderLeftControls }: MessageInputProps) {
+export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrupt, pendingMessages, onRemovePending, onCommand, onCompact, agentControl, debugControl }: MessageInputProps) {
   const t = useT()
   const selectedText = useEditorStore((s) => s.selectedText)
   const selectedRange = useEditorStore((s) => s.selectedRange)
@@ -1110,15 +1137,36 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
 
         {/* Bottom toolbar + chips in one row */}
         <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
+          {/* Groups: settings + live sources · usage · inputs · modes. Each
+              optional group renders its own leading divider, so none doubles up
+              or dangles at either end. */}
           <AccessLevelSelector />
+          {agentControl}
+          <LiveSourceChips />
+          <TokenRing onCompact={onCompact} />
+          <ToolbarDivider />
           <button onClick={() => fileInputRef.current?.click()} disabled={disabled} title="Attach images"
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]">
             <Paperclip className="h-4 w-4" />
           </button>
           <CaptureControl />
+          {/* FaceControl renders only with a project open. */}
+          {(activeProject || debugControl || contextLabel) && <ToolbarDivider />}
           <FaceControl />
-          <TokenRing onCompact={onCompact} />
-          {renderLeftControls?.()}
+          {debugControl}
+          {contextLabel && (
+            <button
+              onClick={() => setContextEnabled(!contextEnabled)}
+              title={contextEnabled ? 'Click to exclude context' : 'Click to include context'}
+              className={cn(
+                'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+                !contextEnabled && 'line-through opacity-50',
+              )}
+            >
+              <FileText className="h-3 w-3 shrink-0" />
+              <span className="max-w-36 truncate">{contextLabel}</span>
+            </button>
+          )}
 
           {/* Inline chips */}
           {pendingMessages?.map((msg, i) => (
@@ -1129,20 +1177,6 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
               </button>
             </div>
           ))}
-          {contextLabel && (
-            <button
-              onClick={() => setContextEnabled(!contextEnabled)}
-              title={contextEnabled ? 'Click to exclude context' : 'Click to include context'}
-              className={cn(
-                'flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-colors',
-                contextEnabled
-                  ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
-                  : 'bg-[var(--background)] border-[var(--border)] text-[var(--muted-foreground)] line-through opacity-60',
-              )}
-            >
-              <span className="max-w-36 truncate">{contextLabel}</span>
-            </button>
-          )}
           {mentionedFiles.map((filePath) => (
             <div key={`@${filePath}`} className="flex items-center gap-1 rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[10px] text-green-400">
               <span className="max-w-32 truncate">@{filePath.split('/').pop()}</span>
