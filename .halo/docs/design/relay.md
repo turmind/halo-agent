@@ -57,7 +57,7 @@ No quiet gate (the session is by definition not done) and **`reply_to` is kept**
 
 ## Soft vs hard interrupt
 
-`relay_send` to a busy target = queued + soft interrupt (the current tool call finishes, then the message drains as part of one merged turn). That covers follow-ups and corrections — the secretary's default. `relay_interrupt` is for "stop what you're doing *now*": it aborts the in-flight turn (propagates to `shell_exec`, SIGTERMs the process group), then the queued message runs. Idle target → `relay_interrupt` degrades to a plain send (`interrupted: false`). The distinction is the same as `query_session` vs `interrupt_session` inside one workspace; relay just carries it across.
+`relay_send` to a busy target = queued + soft interrupt (the current batch of tool calls finishes, then the message drains as part of one merged turn). That covers follow-ups and corrections — the secretary's default. `relay_interrupt` is for "stop what you're doing *now*": it aborts the in-flight turn (propagates to `shell_exec`, SIGTERMs the process group), then the queued message runs. Idle target → `relay_interrupt` degrades to a plain send (`interrupted: false`). The distinction is the same as `query_session` vs `interrupt_session` inside one workspace; relay just carries it across.
 
 ## What it deliberately doesn't do
 

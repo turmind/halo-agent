@@ -21,7 +21,7 @@ vi.mock('../src/agents/relay.js', async (importOriginal) => {
  * Coverage for the built-in `continue_task` tool (resume after interrupt):
  *
  * A busy session that gets a user / parent message yields after its current
- * tool, and drainQueue runs the new message as a fresh turn. The model
+ * tool batch, and drainQueue runs the new message as a fresh turn. The model
  * answers and end_turns — saying "continuing" but never doing it. The tool
  * arms a one-turn `selfKick` flag; drainQueue turns it into ONE synthetic
  * resume turn. Invariants under test:

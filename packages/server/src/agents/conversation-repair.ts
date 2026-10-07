@@ -80,10 +80,13 @@ export function repairConversationMessages(raw: AnthropicMessage[], label = '[Re
   // doubling time and tokens. Synthesizing "[interrupted]" keeps the pair
   // protocol-valid AND tells the model the call was cut short, with wording
   // that steers it away from an automatic retry. This is deliberately in the
-  // shared repair path (not at each abort site): every interrupt flavor
-  // (Esc soft-interrupt, interrupt_session, stop_session, user stop button),
-  // crash recovery on reload, and the API-400 repair-retry all funnel through
-  // here, so one fix covers them all. For non-interrupt corruption (process
+  // shared repair path (not at each abort site): every hard interrupt flavor
+  // (Esc / interrupt_session, stop_session, user stop button), crash recovery
+  // on reload, and the API-400 repair-retry all funnel through here, so one
+  // fix covers them all. It only ever meets a call that was cut mid-run: the
+  // agent loop answers a cut batch's never-started calls itself ("not run —
+  // safe to re-issue"), and a soft interrupt waits for the batch boundary, so
+  // it leaves nothing unanswered. For non-interrupt corruption (process
   // crash) the text is still accurate — the call produced no result.
   // Idempotent: a synthesized result pairs its toolUse, so a later pass
   // sees a match and does nothing.

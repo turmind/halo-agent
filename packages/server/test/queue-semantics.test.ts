@@ -259,6 +259,20 @@ describe('interrupt marks pending UI tool calls as interrupted', () => {
     expect(state.messageLog.filter((m) => m.type === 'tool_result')).toHaveLength(1)
   })
 
+  it('parallel batch: only the first pending (running) call is "interrupted"; the unstarted rest are "not run"', () => {
+    seedRow('web_int4')
+    fakeBusySession('web_int4')
+    sm.emitEvent('web_int4', { type: 'tool_call', toolName: 'shell_exec', toolUseId: 'tu_1', toolInput: { command: 'echo 1' } })
+    sm.emitEvent('web_int4', { type: 'tool_call', toolName: 'shell_exec', toolUseId: 'tu_2', toolInput: { command: 'sleep 20' } })
+    sm.emitEvent('web_int4', { type: 'tool_call', toolName: 'shell_exec', toolUseId: 'tu_3', toolInput: { command: 'echo 3' } })
+    sm.emitEvent('web_int4', { type: 'tool_result', toolName: 'shell_exec', toolUseId: 'tu_1', toolResult: '1', durationMs: 5 })
+
+    sm.interruptSession('web_int4')
+
+    const state = sm.getCachedUIState('web_int4')!
+    expect(state.turnToolCalls.map((tc) => tc.output)).toEqual(['1', '[interrupted by user]', '[not run — interrupted]'])
+  })
+
   it('stopUserSession marks pending tool calls too', () => {
     seedRow('web_int3')
     fakeBusySession('web_int3', {
@@ -298,8 +312,8 @@ describe('interrupt abort reason is a recognizable AbortError', () => {
 
 // ── query_session on a BUSY target soft-interrupts (merge-answer parity) ──
 // A plain query_session (interrupt=false) into a busy session must set
-// `interruptRequested` so the in-flight turn unwinds after its current tool and
-// the queue drains as ONE merged turn — matching how root folds two user
+// `interruptRequested` so the in-flight turn unwinds after its current tool
+// batch and the queue drains as ONE merged turn — matching how root folds two user
 // messages into a single answer. Without this, a second queued question would
 // be answered as its own later turn (the "sub-agent answers one-by-one while
 // root answers together" divergence). The cap-bypassing interrupt=true path
@@ -316,12 +330,12 @@ describe('query_session busy → soft interrupt (merge parity with root)', () =>
     const res = JSON.parse(await sm.querySession('web_busy', 'kid1', 'second question'))
 
     expect(res.code).toBe(0)
-    // Soft interrupt requested: the live turn will unwind after its current tool.
+    // Soft interrupt requested: the live turn will unwind after its current tool batch.
     expect(session.interruptRequested).toBe(true)
     // Message enqueued (not lost) so drainQueue folds it into the merged turn.
     expect(session.messageQueue.some((q) => q.text === 'second question')).toBe(true)
     // Soft path must NOT hard-abort — the abortController stays live so the
-    // in-flight tool finishes; runAgentTurn's tool_result branch does the abort.
+    // batch finishes; runAgentTurn's beforeCallModel (batch boundary) does the abort.
     expect(session.abortController).not.toBeNull()
   })
 

@@ -467,16 +467,19 @@ describe('AgentLoop tool cycle', () => {
     })
   })
 
-  // Interrupt mid-batch. Two exits: the loop's own cancel check (soft
-  // interrupt — the consumer aborts after a tool_result, the next tool sees
-  // the signal) and the consumer breaking its for-await (hard interrupt —
-  // finishes the generator at the yield). Both used to skip the trailing
-  // push, so every FINISHED result in the batch was lost and repair marked
-  // the whole batch "[interrupted]" — the model re-ran work that had happened.
-  // The tool the abort landed on is dropped on purpose: its result is a
-  // killed shell's partial output, and repair's marker carries the
-  // do-not-retry steering for it.
-  it('cancel between tools: finished results land, the aborted tool and the rest are left for repair', async () => {
+  // Hard interrupt mid-batch. Two exits: the loop's own cancel checks (the
+  // abort lands while a tool runs, or between tools) and the consumer
+  // breaking its for-await (finishes the generator at the yield). Both used
+  // to skip the trailing push, so every FINISHED result in the batch was lost
+  // and repair marked the whole batch "[interrupted]" — the model re-ran work
+  // that had happened. The tool the abort landed on is dropped on purpose:
+  // its result is a killed shell's partial output, and repair's marker
+  // carries the do-not-retry steering for it. Calls that never started are
+  // answered "not run — safe to re-issue" by the loop itself.
+  const notRun = (name: string) => `${TOOL_ERROR_MARKER}\nError: tool "${name}" was not run — the turn was interrupted before this call started. Safe to re-issue if still needed.`
+  const INTERRUPTED = '[tool execution interrupted — no result. Do not automatically retry; ask the user or proceed without it.]'
+
+  it('hard interrupt while call 2 of 3 runs: 1 keeps its result, 2 gets do-not-retry, 3 gets "not run"', async () => {
     const ac = new AbortController()
     const c = vi.fn(() => 'C')
     const loop = new ScriptedLoop(
@@ -490,10 +493,15 @@ describe('AgentLoop tool cycle', () => {
     expect(events.some((e) => e.type === 'stop')).toBe(false)
     expect(events.filter((e) => e.type === 'tool_result').map((e) => e.toolUseId)).toEqual(['tu_a'])
     expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
-    expect(toolResultBlocks(loop).map((b) => [b.tool_use_id, b.content])).toEqual([['tu_a', 'A']])
+    expect(toolResultBlocks(loop).map((b) => [b.tool_use_id, b.content])).toEqual([['tu_a', 'A'], ['tu_c', notRun('c')]])
+
+    // Repair synthesizes the do-not-retry marker for exactly the cut call — no orphan tool_use.
+    const repaired = repairConversationMessages(loop.messages, '[test]')
+    const results = (repaired[2].content as ContentBlock[]).filter((b): b is ContentBlock & { type: 'tool_result' } => b.type === 'tool_result')
+    expect(Object.fromEntries(results.map((b) => [b.tool_use_id, b.content]))).toEqual({ tu_a: 'A', tu_b: INTERRUPTED, tu_c: notRun('c') })
   })
 
-  it('consumer breaks out mid-batch (hard interrupt): results yielded so far still land', async () => {
+  it('consumer breaks out mid-batch (hard interrupt): results yielded so far land, the rest are "not run"', async () => {
     const b = vi.fn(() => 'B')
     const loop = new ScriptedLoop(
       [tool('a', () => 'A'), tool('b', b)],
@@ -507,10 +515,10 @@ describe('AgentLoop tool cycle', () => {
 
     expect(b).not.toHaveBeenCalled()
     expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
-    expect(toolResultBlocks(loop).map((b) => b.tool_use_id)).toEqual(['tu_a'])
+    expect(toolResultBlocks(loop).map((b) => [b.tool_use_id, b.content])).toEqual([['tu_a', 'A'], ['tu_b', notRun('b')]])
   })
 
-  it('cancel before the first tool: nothing pushed, repair owns the whole batch', async () => {
+  it('cancel before the first tool: every call is answered "not run", nothing left for repair', async () => {
     const ac = new AbortController()
     const a = vi.fn(() => 'A')
     const loop = new ScriptedLoop([tool('a', a)], [
@@ -519,7 +527,24 @@ describe('AgentLoop tool cycle', () => {
     await collect(loop.run('go', { cancelSignal: ac.signal }))
 
     expect(a).not.toHaveBeenCalled()
-    expect(loop.messages.at(-1)?.role).toBe('assistant')
+    expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(toolResultBlocks(loop)).toEqual([{ type: 'tool_result', tool_use_id: 'tu_a', content: notRun('a'), is_error: true }])
+  })
+
+  it('abort at the batch boundary (beforeCallModel): the whole batch ran, next model call never happens', async () => {
+    const ac = new AbortController()
+    const runs: string[] = []
+    const loop = new ScriptedLoop(
+      ['a', 'b', 'c'].map((n) => tool(n, () => { runs.push(n); return n.toUpperCase() })),
+      [toolUseTurn([call('tu_a', 'a'), call('tu_b', 'b'), call('tu_c', 'c')]), endTurn()],
+    )
+    let hooks = 0
+    await collect(loop.run('go', { cancelSignal: ac.signal, beforeCallModel: async () => { if (++hooks === 2) ac.abort() } }))
+
+    expect(runs).toEqual(['a', 'b', 'c'])
+    expect(loop.calls).toBe(1)
+    expect(toolResultBlocks(loop).map((b) => [b.tool_use_id, b.content])).toEqual([['tu_a', 'A'], ['tu_b', 'B'], ['tu_c', 'C']])
+    expect(repairConversationMessages(loop.messages, '[test]')).toEqual(loop.messages)
   })
 
   it('run() coalesces into a trailing user message instead of pushing a consecutive user turn', async () => {

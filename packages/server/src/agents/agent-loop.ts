@@ -382,15 +382,19 @@ export abstract class AgentLoop {
 
       const toolResults: ContentBlock[] = []
       let shouldEndTurn = false
+      // The call the abort landed on while it ran — its result is dropped (see
+      // the post-callback check) and left for conversation-repair's marker.
+      let cutId: string | null = null
       // try/finally so the results that DID land reach this.messages even when
-      // the batch is cut short — by the cancel check below (soft interrupt: the
-      // consumer aborts after a tool_result and we return on the next tool) or
-      // by the consumer breaking out of its for-await (hard interrupt), which
-      // finishes this generator at the `yield` via .return(). Before this, both
-      // exits skipped the push, so an interrupt during a parallel batch dropped
-      // every finished result and conversation-repair marked ALL of the batch
-      // "[interrupted]" — the model then re-ran work that had already happened
-      // (a real hazard for side-effecting calls: commit, append, send).
+      // the batch is cut short by a hard interrupt — the cancel checks below,
+      // or the consumer breaking out of its for-await, which finishes this
+      // generator at the `yield` via .return(). (A soft interrupt never cuts a
+      // batch: SessionManager aborts at the batch boundary, beforeCallModel.)
+      // Before this, both exits skipped the push, so an interrupt during a
+      // parallel batch dropped every finished result and conversation-repair
+      // marked ALL of the batch "[interrupted]" — the model then re-ran work
+      // that had already happened (a real hazard for side-effecting calls:
+      // commit, append, send).
       try {
         for (const tu of toolUseBlocks) {
           if (options?.cancelSignal?.aborted) return
@@ -431,12 +435,13 @@ export abstract class AgentLoop {
           }
 
           // Cancel fired WHILE this tool ran → it is the one the abort killed (or
-          // raced). Drop its result and stop: the finally lands the earlier ones,
-          // and conversation-repair pairs this id with the "[interrupted — do not
-          // retry]" marker, same as before. Keeping a killed shell's "Command
-          // failed: aborted + partial stdout" here would read as a completed run
-          // and lose the anti-retry steering that marker exists for.
-          if (options?.cancelSignal?.aborted) return
+          // raced). Drop its result and stop: the finally lands the earlier ones
+          // plus "not run" for the later ones, and conversation-repair pairs this
+          // id with the "[interrupted — do not retry]" marker, same as before.
+          // Keeping a killed shell's "Command failed: aborted + partial stdout"
+          // here would read as a completed run and lose the anti-retry steering
+          // that marker exists for.
+          if (options?.cancelSignal?.aborted) { cutId = tu.id; return }
 
           // Truncate the tool result before it enters this.messages (the LLM
           // input). Without this cap, a single shell_exec / web_fetch can pull
@@ -505,8 +510,20 @@ export abstract class AgentLoop {
         }
       } finally {
         // Land whatever finished, whether the loop ran to completion or was cut
-        // short (see the comment above the try). Empty on an abort before the
-        // first result — push nothing; repair synthesizes the whole batch then.
+        // short (see the comment above the try). Calls the cut batch never
+        // started are answered "not run" here — safe to re-issue, unlike the
+        // cut call, which repair pairs with its "interrupted — do not retry"
+        // marker. Empty on a completed batch.
+        const answered = new Set(toolResults.map((b) => (b as { tool_use_id: string }).tool_use_id))
+        for (const tu of toolUseBlocks) {
+          if (answered.has(tu.id) || tu.id === cutId) continue
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content: `${TOOL_ERROR_MARKER}\nError: tool "${tu.name}" was not run — the turn was interrupted before this call started. Safe to re-issue if still needed.`,
+            is_error: true,
+          })
+        }
         if (toolResults.length > 0) {
           this.messages.push({ role: 'user', content: toolResults })
         }

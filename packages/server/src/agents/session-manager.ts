@@ -80,7 +80,7 @@ function abortReason(reason: string): DOMException {
 }
 
 /** Synthetic user turn pushed by drainQueue when the model called continue_task. */
-const CONTINUE_TASK_KICK = '[System] You called continue_task: the task interrupted earlier is not finished. Resume it now from where it stopped. Any tool call marked "[tool execution interrupted — no result]" did not run — re-issue it if you still need the result (this overrides the marker\'s do-not-retry note — you explicitly asked to continue).'
+const CONTINUE_TASK_KICK = '[System] You called continue_task: the task interrupted earlier is not finished. Resume it now from where it stopped. Any tool call marked "[tool execution interrupted — no result]" was cut off mid-run and its result is lost, and any marked "was not run" never started — re-issue either if you still need the result (this overrides the interrupted marker\'s do-not-retry note — you explicitly asked to continue).'
 
 /** Rough token estimate from message content — ~3.5 chars per token for mixed CJK/English; images count a flat 1500 each (no dimension decode). */
 function estimateMessageTokens(messages: AnthropicMessage[]): number {
@@ -209,7 +209,7 @@ interface AgentSession {
   warnedToolHashes: Set<string>
   /** Turn start timestamp — used for AbortSignal timing */
   turnStartTime: number
-  /** Graceful interrupt flag */
+  /** Soft-interrupt flag — the turn unwinds at the next batch boundary (beforeCallModel) */
   interruptRequested: boolean
   /** Set by the built-in continue_task tool: after this turn ends, drainQueue
    *  pushes a synthetic resume message and runs one more turn. One-turn lifetime
@@ -1371,6 +1371,11 @@ export class SessionManager implements SessionManagerInternals {
     // single endTurn at the exit below.
     beginTurn(session, message)
 
+    // Set once a tool batch has run in this turn (any attempt: a retry resumes
+    // on the history that batch left behind). Gates the soft-interrupt point in
+    // beforeCallModel below.
+    let batchRan = false
+
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       session.abortController = new AbortController()
       const signal = session.abortController.signal
@@ -1406,6 +1411,18 @@ export class SessionManager implements SessionManagerInternals {
             this.trimImages(session)
             await this.maybeAutoCompact(session)
             this.saveAgentState(session)
+            // Soft interrupt (a message queued while busy) lands HERE, at the
+            // batch boundary: the batch that just finished ran every call, so
+            // nothing is pending, and the turn unwinds before the next model
+            // call for drainQueue to fold the message(s) in. Checked after the
+            // compact so a message sent during it lands too. Never before the
+            // turn's first batch: the turn proceeds, and the message merges at
+            // the next boundary or drains after the turn ends — a turn never
+            // ends on a bare user message.
+            if (session.interruptRequested && batchRan) {
+              console.debug(`[SessionManager] Soft interrupt at batch boundary in ${session.id}`)
+              session.abortController?.abort(abortReason('interrupt'))
+            }
           },
         })
 
@@ -1414,19 +1431,9 @@ export class SessionManager implements SessionManagerInternals {
           if (event.type === 'text') {
             resultText += event.text ?? ''
           }
+          if (event.type === 'tool_result') batchRan = true
           onAgentEvent(session, event)
           this.processSessionEvent(session, event)
-
-          // Graceful interrupt: after tool execution completes, if a new user
-          // message arrived, cancel this turn's remaining cycles.
-          if (session.interruptRequested && event.type === 'tool_result') {
-            console.debug(`[SessionManager] Graceful interrupt after tool result in ${session.id}`)
-            session.abortController?.abort(abortReason('interrupt'))
-            // In a parallel-tool turn, tool_calls after the current one were
-            // already announced (agent-loop yields all upfront) but will never
-            // execute — close their UI blocks so they don't dangle. UI-only.
-            this.markPendingToolCallsInterrupted(session.id)
-          }
         }
 
         session.abortController = null
@@ -1854,8 +1861,8 @@ export class SessionManager implements SessionManagerInternals {
       const kickFlagReset = session.selfKick
       session.selfKick = false
       // Per merged batch reset (mirrors the opening turn): a prior interrupt may
-      // have left the flag set; clear it so the merged turn isn't aborted by its
-      // own first tool_result, and refresh the loop detector for the new turn.
+      // have left the flag set; clear it so the merged turn isn't aborted at its
+      // own first batch boundary, and refresh the loop detector for the new turn.
       session.interruptRequested = false
       session.toolCallLog = []
       session.warnedToolHashes.clear()
@@ -2030,15 +2037,18 @@ export class SessionManager implements SessionManagerInternals {
   // ── Session operations ─────────────────────────────────────────────
 
   /**
-   * UI-only repair for an aborted turn: emit a synthetic `tool_result` for
+   * UI-only repair for a hard-aborted turn: emit a synthetic `tool_result` for
    * every pending tool call (tool_call seen, no output yet) in the session's
    * cached UI log. On abort, runAgentTurn's consumer loop breaks on
    * `signal.aborted` BEFORE processing the in-flight tool's real tool_result
-   * event, so without this the UI block stays "running" forever. Routing
-   * through the normal emitEvent pipeline means ui-log-builder persistence,
-   * admin WS push, and TUI rendering all pick it up unchanged. Never touches
-   * agent.messages — the model-facing repair is conversation-repair's
-   * synthesized [interrupted] tool_result. Idempotent: completed tools
+   * event, so without this the UI block stays "running" forever. The batch
+   * runs serially and setToolResult fills the first pending entry, so the
+   * first pending call is the one that was running (`[interrupted by user]`,
+   * model side: repair's do-not-retry marker) and the rest never started
+   * (`[not run — interrupted]`, model side: agent-loop's "not run" result).
+   * Routing through the normal emitEvent pipeline means ui-log-builder
+   * persistence, admin WS push, and TUI rendering all pick it up unchanged.
+   * Never touches agent.messages. Idempotent: completed tools
    * (output already set) are never overwritten. Call BEFORE awaiting the
    * aborted turn's promise — its finally emits `complete`, which flushes and
    * clears the pending buffers this scans.
@@ -2054,12 +2064,12 @@ export class SessionManager implements SessionManagerInternals {
     const pending = target.turnToolCalls.filter((tc) => !tc.output)
     if (pending.length === 0) return
     const session = this.sessions.get(sessionId)
-    for (const tc of pending) {
+    for (const [i, tc] of pending.entries()) {
       this.emitEvent(sessionId, {
         type: 'tool_result',
         toolName: tc.name,
         toolUseId: tc.toolUseId,
-        toolResult: '[interrupted by user]',
+        toolResult: i === 0 ? '[interrupted by user]' : '[not run — interrupted]',
         agentName: session?.agentName,
         agentId: session?.agentId,
         taskId: sessionId === rootId ? undefined : sessionId,
@@ -2077,7 +2087,7 @@ export class SessionManager implements SessionManagerInternals {
    * single semantic shared by esc (TUI / admin) and the `interrupt_session`
    * tool:
    *
-   *   - abort the in-flight turn at once (not at the next tool_result),
+   *   - abort the in-flight turn at once (not at the next batch boundary),
    *   - do NOT discard `messageQueue`: once the aborted turn unwinds,
    *     runSession's runFn drains every queued message into ONE merged follow-up
    *     turn (drainQueue). An empty queue just goes idle.
@@ -2177,7 +2187,7 @@ export class SessionManager implements SessionManagerInternals {
         session.messageQueue = []
         // Clear before abort: the queue is empty now, so the aborted turn's
         // drain has nothing to fold — don't leave a stale interrupt flag that
-        // would fire a redundant second abort on the next tool_result.
+        // would fire a redundant second abort at the next batch boundary.
         session.interruptRequested = false
         // Stop must never resurrect: a pending continue_task kick dies here too.
         session.selfKick = false
@@ -2282,7 +2292,7 @@ export class SessionManager implements SessionManagerInternals {
     if (target.promise !== null) {
       // Busy → SOFT interrupt, mirroring a user message arriving mid-turn
       // (sendUserMessage's busy branch): the in-flight turn finishes its current
-      // tool, then runAgentTurn's interrupt branch unwinds and runSession's runFn
+      // tool batch, then runAgentTurn's interrupt branch unwinds and runSession's runFn
       // drains the queue, folding this message INTO the same merged turn as any
       // sibling reports that landed alongside it. Without this, the current turn
       // runs to completion first and this message drains as its own later turn —
@@ -2414,7 +2424,7 @@ export class SessionManager implements SessionManagerInternals {
 
     if (session.promise !== null) {
       // Busy → queue + SOFT interrupt: the in-flight turn finishes its current
-      // tool, then runAgentTurn's interrupt branch unwinds and runSession's
+      // tool batch, then runAgentTurn's interrupt branch unwinds and runSession's
       // runFn drains the queue. A mid-flight shell is NOT SIGTERM'd (that's the
       // hard interrupt_session path).
       session.messageQueue.push({ text: message, images })
@@ -3287,7 +3297,7 @@ export class SessionManager implements SessionManagerInternals {
   /** Enqueue a user message directly (admin WS busy/compacting queue path).
    *  Pushes onto the single messageQueue with no `sourceSessionId` (a user
    *  message), and requests a SOFT interrupt so a busy turn yields after its
-   *  current tool — same effect as sendUserMessage's busy branch, minus the
+   *  current tool batch — same effect as sendUserMessage's busy branch, minus the
    *  idle/run path (the caller already established the session is busy or
    *  compacting). A compact outside a live model loop (manual /compact, or the
    *  turn-end auto-compact — abortController already null) has nothing to
@@ -3295,7 +3305,7 @@ export class SessionManager implements SessionManagerInternals {
    *  compacting branch): the drain would snapshot it into resumedAfterInterrupt
    *  and let continue_task arm a kick in a turn that interrupted nothing. A
    *  mid-turn auto-compact (beforeCallModel) does interrupt a live turn — the
-   *  flag is set, so the turn yields after its next tool instead of running on
+   *  flag is set, so the turn yields at its next batch boundary instead of running on
    *  to its natural end with the message still queued. */
   async enqueueUserMessage(sessionId: string, text: string, images?: Array<{ data: string; mimeType: string }>): Promise<void> {
     const session = this.sessions.get(sessionId)
