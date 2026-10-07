@@ -79,6 +79,9 @@ export type Action =
 let blockSeq = 0
 function nextId(): string { return `b${++blockSeq}` }
 
+/** How many replayed blocks a resumed `halo tui` shows on startup. */
+const REPLAY_BLOCKS = 100
+
 export function initialState(verbose: boolean): State {
   return {
     blocks: [],
@@ -619,12 +622,17 @@ export function App({ harness, verbose }: AppProps): ReactElement {
   // On mount, replay the current session's persisted history so a resumed
   // `halo tui` shows the prior conversation (the agent already carries the
   // real context — this is display-only). Runs once; a fresh `--new` session
-  // simply has no messages and renders nothing.
+  // simply has no messages and renders nothing. Only the last
+  // REPLAY_BLOCKS are shown; the full log stays one ctrl+o away.
   useEffect(() => {
     let cancelled = false
     harness.getSessionMessages(harness.sessionId).then((msgs) => {
       if (cancelled || !msgs || msgs.length === 0) return
-      const blocks = messagesToBlocks(msgs)
+      const all = messagesToBlocks(msgs)
+      const hidden = all.length - REPLAY_BLOCKS
+      const blocks = hidden > 0
+        ? [{ id: nextId(), kind: 'system' as const, text: `── ${hidden} earlier messages hidden · ctrl+o for the full log ──` }, ...all.slice(-REPLAY_BLOCKS)]
+        : all
       if (blocks.length > 0) dispatch({ type: 'load-history', blocks })
     }).catch(() => { /* best-effort — empty screen is acceptable */ })
     return () => { cancelled = true }

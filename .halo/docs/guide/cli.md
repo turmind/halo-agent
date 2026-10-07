@@ -143,7 +143,6 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | `/workspace switch <path>` | Switch workspace (full access only) |
 | `/workspace setup` / `/workspace tidy` / `/workspace share` | Set up / tidy the `.halo/` knowledge files, or export a shareable bundle (workspace skill) |
 | `/cron <verb>` | Manage scheduled agent runs: `create` / `list` / `update` / `enable` / `disable` / `delete` |
-| `/acp <verb>` | Ask other agents over ACP (`kiro <q>` / `claude <q>`) and manage `ask-*` bindings (`add` / `list` / `remove`) |
 | `/extension <verb>` | Canvas preview extensions: `install` / `list` / `remove`; `models` updates the model provider list from the hub (full access only) |
 | `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
 | `/quit` | Exit |
@@ -181,7 +180,7 @@ The line under the input box:
 | `Ctrl+W` / `Alt+Backspace` | Delete the word before the cursor |
 | `Ctrl+U` / `Ctrl+K` | Delete to start / to end of input |
 
-On resume (`-s <id>`, or the default latest session), the TUI replays the session's prior conversation on screen so you see where you left off. `shell_exec` output is shown inline by default (other tools' output needs `-v`). Tool lines show a short argument summary and duration, e.g. `⚙ file_read hello.txt 4ms`.
+On resume (`-s <id>`, or the default latest session), the TUI replays the session's prior conversation on screen so you see where you left off — only the last 100 messages; anything older collapses into a first line `── N earlier messages hidden · ctrl+o for the full log ──`. `shell_exec` output is shown inline by default (other tools' output needs `-v`). Tool lines show a short argument summary and duration, e.g. `⚙ file_read hello.txt 4ms`.
 
 **Multi-line paste**: pasting text with newlines (or >800 chars) collapses into a compact placeholder like `[#1 pasted 3 lines]` in the input; you can keep typing around it, and the original text is expanded back in full on submit. Pasted content is inserted at the cursor position.
 
