@@ -19,6 +19,10 @@ def fail(msg: str, code: int = 1) -> None:
 
 
 def main() -> None:
+    # shell_exec reads our output as UTF-8; piped Python otherwise encodes by
+    # locale (gbk on zh Windows) and raises on CJK replies.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     p = argparse.ArgumentParser(prog="ask.py", description="Ask a remote agent over ACP.")
     p.add_argument("question")
     p.add_argument("--kind", default="halo", choices=["halo", "claude", "kiro"],
@@ -55,7 +59,9 @@ def main() -> None:
         for k in ("host", "port", "token", "workspace"):
             if not getattr(args, k):
                 fail(f"--{k} is required for --kind halo", 2)
-        halo = args.halo_bin or os.environ.get("HALO_BIN") or "halo"
+        # Windows: bare `halo` resolves to the desktop GUI (Halo.exe ranks above
+        # halo.cmd in PATHEXT) — same reason as resolveHaloCli() in cron/runner.ts.
+        halo = args.halo_bin or os.environ.get("HALO_BIN") or ("halo.cmd" if sys.platform == "win32" else "halo")
         if shutil.which(halo) is None and not os.path.isabs(halo):
             fail(f"`{halo}` not found in PATH. Install @turmind/halo or set --halo-bin.", 2)
         cmd = [halo, "acp", "--host", args.host, "--port", str(args.port),
@@ -71,8 +77,13 @@ def main() -> None:
     if aid and not (aid.startswith("{{") and aid.endswith("}}")):
         cmd += ["--agent-id", aid]
 
+    # Popen doesn't search PATHEXT on Windows (only appends .exe), so npm
+    # `.cmd` shims like claude-agent-acp would FileNotFoundError by bare name.
+    cmd[0] = shutil.which(cmd[0]) or cmd[0]
+    # The adapters speak UTF-8; don't let the locale (e.g. cp936) decode it.
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, bufsize=1)
+                            stderr=subprocess.PIPE, text=True, bufsize=1,
+                            encoding="utf-8", errors="replace")
     assert proc.stdin and proc.stdout and proc.stderr
 
     def _drain_stderr() -> None:

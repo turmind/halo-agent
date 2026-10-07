@@ -100,7 +100,7 @@ Before writing files:
 
 1. **Slug**: regex `^[a-z][a-z0-9-]*$`. Reject anything else.
 2. **Collision**: check whether `ask-<label>` already exists in the chosen scope. If yes, ask the user to pick a different label OR confirm overwrite.
-3. **`halo` binary**: confirm `halo` is on the PATH the local agent's `shell_exec` sees (`shell_exec: which halo`). If not, the binding will install but won't run — surface this and stop.
+3. **`halo` binary**: confirm `halo` is on the PATH the local agent's `shell_exec` sees (`shell_exec: which halo`; on Windows `where halo.cmd` — bare `halo` there resolves to the desktop GUI `Halo.exe`, which `ask.py` deliberately skips). If not, the binding will install but won't run — surface this and stop.
 
 ## Step 3 — stage files
 
