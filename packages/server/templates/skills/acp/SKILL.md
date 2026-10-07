@@ -187,7 +187,7 @@ Use Python for the merge — yaml-aware, won't trash existing keys:
 ```python
 import yaml, pathlib
 p = pathlib.Path("<settings-path>")
-data = yaml.safe_load(p.read_text()) if p.exists() else {}
+data = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
 if not isinstance(data, dict):
     data = {}
 ns = data.setdefault("ask-<label>", {})
@@ -199,7 +199,7 @@ params["workspace"] = "<workspace>"
 params["label"] = "<label_display>"
 params["token"] = "<token>"
 p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
+p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8", newline="\n")
 ```
 
 ## Step 5 — wire into the agent that should use it
