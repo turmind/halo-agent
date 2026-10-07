@@ -173,7 +173,7 @@ Optional `since=<epoch ms>`: only root-log rows (no `taskId` — sub-agent rows 
 
 ### GET `/api/web/subscribe`
 
-Reconnect to a running session's event stream (same SSE format as `/chat`, keepalive included). Opens with a `session` frame; then, if the session is neither running nor compacting, sends a single `complete` and closes immediately — otherwise it streams until the run's terminal `complete` (batch-boundary completes absorbed as on `/chat`). The listener is registered *before* the idle check, so a turn that ends in between still delivers its `complete`. (Before 2026-10 the idle case waited for the next turn's `complete` instead of returning.) Accepts the same `workspace` / `sessionId` overrides.
+Reconnect to a running session's event stream (same SSE format as `/chat`, keepalive included). Opens with a `session` frame; then, if the session is idle, sends a single `complete` and closes immediately — a manual `/compact` with no turn in flight counts as idle unless messages are queued (only then does `endCompact` drain them into a turn that ends in `complete`) — otherwise it streams until the run's terminal `complete` (batch-boundary completes absorbed as on `/chat`). The listener is registered *before* the idle check, so a turn that ends in between still delivers its `complete`. (Before 2026-10 the idle case waited for the next turn's `complete` instead of returning.) Accepts the same `workspace` / `sessionId` overrides.
 
 ## Halo API — Admin endpoints
 

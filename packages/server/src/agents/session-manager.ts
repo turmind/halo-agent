@@ -2634,6 +2634,11 @@ export class SessionManager implements SessionManagerInternals {
     return this.sessions.get(sessionId)?.isCompacting ?? false
   }
 
+  /** Any message waiting in the session's queue (a turn / endCompact drains it) */
+  hasQueuedMessages(sessionId: string): boolean {
+    return (this.sessions.get(sessionId)?.messageQueue.length ?? 0) > 0
+  }
+
   /** Check if a session is running */
   isSessionRunning(sessionId: string): boolean {
     const session = this.sessions.get(sessionId)

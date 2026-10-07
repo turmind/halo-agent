@@ -188,6 +188,26 @@ describe('web SSE frames — ACP adapter contract', () => {
     expect(listenerCount(SID)).toBe(before)
   })
 
+  it('subscribe during a manual compact with an empty queue → immediate complete (no turn follows)', async () => {
+    vi.spyOn(sm, 'isSessionCompacting').mockReturnValue(true)
+    const before = listenerCount(SID)
+    const chunks = await drain(channel.subscribe(TOKEN, new AbortController().signal, { sessionId: SID }))
+    expect(chunks.at(-1)).toBe(`data: ${JSON.stringify({ type: 'complete' })}\n\n`)
+    expect(listenerCount(SID)).toBe(before)
+  })
+
+  it('subscribe during a manual compact with queued messages → streams to the drain turn\'s complete', async () => {
+    vi.spyOn(sm, 'isSessionCompacting').mockReturnValue(true)
+    vi.spyOn(sm, 'hasQueuedMessages').mockReturnValue(true)
+    const done = drain(channel.subscribe(TOKEN, new AbortController().signal, { sessionId: SID }))
+    await new Promise((r) => setTimeout(r, 10))
+    sm.emitEvent(SID, { type: 'stream', text: 'drained\n', final: true })
+    sm.emitEvent(SID, { type: 'complete' })
+    const chunks = await done
+    expect(chunks.join('')).toContain('"drained\\n"')
+    expect(chunks.filter((c) => c.includes('"complete"'))).toHaveLength(1)
+  })
+
   it('subscribe on a running session streams to the terminal complete', async () => {
     vi.spyOn(sm, 'isSessionRunning').mockReturnValue(true)
     const ac = new AbortController()

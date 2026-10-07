@@ -479,10 +479,13 @@ export function createWebChannel(deps: {
 
     // Listener first, idle check second: a turn ending in between still
     // delivers its `complete`. Idle → the one `complete` the contract
-    // promises (design/web.md) instead of waiting for some later turn; a
-    // compacting session counts as busy (endCompact drains its queue).
+    // promises (design/web.md) instead of waiting for some later turn. A
+    // manual compact with no turn in flight is busy only while messages are
+    // queued: endCompact then drains them into a turn that ends in `complete`;
+    // an empty queue means no turn follows and no `complete` would ever come.
     const listener = listenSession(sm, sessionId)
-    if (!sm.isSessionRunning(sessionId) && !sm.isSessionCompacting(sessionId)) {
+    const busy = sm.isSessionRunning(sessionId) || (sm.isSessionCompacting(sessionId) && sm.hasQueuedMessages(sessionId))
+    if (!busy) {
       listener.close()
       yield sseData({ type: 'complete' })
       return
