@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-10-07
+
+### Added
+
+- Chat: live capture works in a plain browser, not only the desktop app. Screen share uses the browser's picker and is kept live while bound; the camera stream is held while bound. Needs HTTPS or localhost; mobile browsers have no screen button.
+- Chat: screen and camera are independent — either can be on alone, or both at once. With both on, the agent asks via `<<<CAPTURE:screen>>>` / `<<<CAPTURE:camera>>>` / `<<<CAPTURE>>>` (both) and the frames come back in one message.
+- Extensions: export. A save-capable extension can hand the host bytes that are written next to the open file, with an overwrite confirm and a banner with a Download link (`init.export`, `export` / `exported` / `export-error` frames; protocol still v1). drawio 1.1.0 and excalidraw 1.1.0 use it for PNG / SVG export.
+
+### Changed
+
+- Chat: the input toolbar is one consistent row — access · agent · source chips | usage ring | attach · screen · camera | face · debug · current file. Every icon is the same size; toggles are grey when off and change only the icon colour when on; Debug is icon-only; the access selector looks like the agent selector (level-coloured icon and a dropdown); clicking an active share / camera button turns it off.
+
 ## [1.5.9] - 2026-10-06
 
 ### Added
@@ -805,7 +817,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.9...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.10...HEAD
+[1.5.10]: https://github.com/turmind/halo-agent/compare/v1.5.9...v1.5.10
 [1.5.9]: https://github.com/turmind/halo-agent/compare/v1.5.8...v1.5.9
 [1.5.8]: https://github.com/turmind/halo-agent/compare/v1.5.7...v1.5.8
 [1.5.7]: https://github.com/turmind/halo-agent/compare/v1.5.6...v1.5.7
