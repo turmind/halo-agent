@@ -89,7 +89,7 @@ Optional:
 
 | Field | Default |
 |---|---|
-| `label_display` | Pretty display name (e.g. "SA Agent"). Defaults to `label` capitalized. |
+| `label_display` | Pretty display name (e.g. "SA Agent"). Defaults to the `label` as-is. |
 | `agent_id` | Remote agent profile to use. Blank = remote `default`. |
 
 Also ask **scope**: install the skill **globally** (`~/.halo/global/skills/`, available to every workspace's agents) or **only in this workspace** (`<workspace>/.halo/skills/`). Default to "this workspace" if unsure — share-workspace and reorg are easier.
@@ -125,7 +125,7 @@ Both `SKILL.md.tmpl` and `config.yaml.tmpl` use `{{NAME}}` markers. Substitute t
 | Placeholder | Replace with |
 |---|---|
 | `{{LABEL}}` | the slug (e.g. `sa-agent`) |
-| `{{LABEL_DISPLAY}}` | display name (defaults to `label_display` or capitalized label) |
+| `{{LABEL_DISPLAY}}` | display name (defaults to `label_display` or the label as-is) |
 | `{{HOST}}` | host |
 | `{{PORT}}` | port |
 | `{{SCHEME}}` | scheme (`http` / `https`; default `http`) |
@@ -225,7 +225,7 @@ Reply with:
 
 - The four paths created (SKILL.md, config.yaml, ask.py, settings.yaml entry).
 - The new slash command (`/ask-<label>`) the user can now type.
-- A reminder that admin Settings → Skills → Ask <Label_Display> will show the form with the token already filled.
+- A reminder that admin Settings → Skills → ask-<label> will show the form with the token already filled.
 - One example invocation:
 
 > All set! Two ways to use it:
@@ -233,7 +233,7 @@ Reply with:
 > - Type the slash command directly: `/ask-{{label}} What was our EC2 spend this month?`
 > - Or just mention the remote in chat: "ask {{label_display}} for this month's EC2 spend"
 >
-> The token is stored at {{settings_path}}; you can edit it in Admin → Settings → Skills → Ask {{label_display}}.
+> The token is stored at {{settings_path}}; you can edit it in Admin → Settings → Skills → ask-{{label}}.
 
 ## Patterns that go sideways
 

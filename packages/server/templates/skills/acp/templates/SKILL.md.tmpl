@@ -1,10 +1,12 @@
 ---
-name: Ask {{LABEL_DISPLAY}}
+name: ask-{{LABEL}}
 description: Ask a question to the {{LABEL_DISPLAY}} halo agent (running on {{HOST}}:{{PORT}}, workspace {{WORKSPACE}}) over ACP. Activate when the user names this remote ("ask {{LABEL}}…", "the {{LABEL_DISPLAY}} agent") or asks something only that workspace's agent has data / tools for. Returns the remote agent's reply as text.
 command: /ask-{{LABEL}}
 ---
 
-# Ask {{LABEL_DISPLAY}}
+# ask-{{LABEL}}
+
+**Question to forward**: `$ARGUMENTS` — everything the user typed after `/ask-{{LABEL}}`. If that's empty (or this skill was activated by natural language), take the question from the user's message; if there is none, ask what to forward.
 
 This binding talks to the **{{LABEL_DISPLAY}}** halo agent at `{{HOST}}:{{PORT}}`, workspace `{{WORKSPACE}}`. It spawns `halo acp`, pipes JSON-RPC over stdio, forwards the prompt, streams the reply back as text.
 
@@ -69,7 +71,7 @@ Quote directly when short. Summarize multi-section replies and offer to dig deep
 
 ## Failure modes
 
-- **HTTP 401**: token wrong / disabled. Tell the user to fix `ask-{{LABEL}}.params.token` in Settings → Skills → Ask {{LABEL_DISPLAY}}.
+- **HTTP 401**: token wrong / disabled. Tell the user to fix `ask-{{LABEL}}.params.token` in Settings → Skills → ask-{{LABEL}}.
 - **`fetch failed`**: server `{{HOST}}:{{PORT}}` unreachable.
 - **Timeout (exit 124)**: remote prompt > 10 min. Offer narrower question.
 - **stopReason ≠ end_turn**: stderr includes `stopReason=cancelled|refusal`. Pass along with the partial reply.
