@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 91 // acp skill on Windows: ask.py defaults to halo.cmd (bare halo = GUI Halo.exe), resolves .cmd shims via shutil.which before Popen, UTF-8 pipes + stdout; SKILL.md self-check uses `where halo.cmd`; TOOL_SHELL.windows.md tells agents to run the CLI as `halo.cmd`; generated ask-<label> skills are named `ask-<label>` (lowercase, dashed) + $ARGUMENTS so /ask-<label> args reach the body; acp SKILL.md Step 3 substitutes with Python (not sed), Step 5 never edits a built-in agent's global yaml (re-seeded on startup).
+export const TEMPLATE_VERSION = 92 // drop the built-in outbound `acp` skill (/acp kiro|claude, ask-<label> generator); startup removes the stale global skill dir; ACP adapter unchanged.
+// 91: acp skill on Windows: ask.py defaults to halo.cmd (bare halo = GUI Halo.exe), resolves .cmd shims via shutil.which before Popen, UTF-8 pipes + stdout; SKILL.md self-check uses `where halo.cmd`; TOOL_SHELL.windows.md tells agents to run the CLI as `halo.cmd`; generated ask-<label> skills are named `ask-<label>` (lowercase, dashed) + $ARGUMENTS so /ask-<label> args reach the body; acp SKILL.md Step 3 substitutes with Python (not sed), Step 5 never edits a built-in agent's global yaml (re-seeded on startup).
 // 90: __score__ rubric: gate (patch missing/unchanged in sandbox → all 0), dry-run-used + probe-fairness checks with behavior/confidence caps, describe-both-sides-before-comparing, anchor-only values; score.json gains an additive `checks` object.
 // 89: self.html opening follows the admin UI language (haloFaceLang: zh → 「你好，我是 Halo。」, default en); CJK say() sampled finer and shrunk to fit the pane; self SKILL.md intro wording synced.
 // 88: self.html follows the admin theme (haloFaceTheme palette, no-theme look unchanged) + opening is one subtitle "Hi, I'm Halo." (~2.8s; long lines sampled finer); self SKILL.md intro wording synced.
@@ -116,11 +117,6 @@ const BUILTIN_SKILL_IDS = new Set([
   'skill',
   'workspace',
   'cron',
-  // Meta-skill: walks the user through generating a per-remote
-  // `ask-<label>` ACP binding skill. The generated bindings live in
-  // user-owned skill dirs (workspace or global) and aren't templated;
-  // only this generator itself is platform-owned.
-  'acp',
   // Always-on file delivery primitive: every channel handler (web /
   // wechat / telegram / slack / feishu) intercepts `MEDIA:<path>` from
   // the agent's reply and uploads it. The skill body teaches the agent
@@ -559,6 +555,17 @@ export function ensureHaloHome(haloHome: string): void {
       fs.rmSync(staleDir, { recursive: true, force: true })
       console.log(`[Init] Removed stale \`${staleId}\` skill (merged into \`web-search\`)`)
     }
+  }
+
+  // One-time migration: the built-in outbound `acp` skill (ACP client:
+  // /acp kiro|claude + the ask-<label> generator) was dropped — halo→halo goes
+  // through relay; the inbound ACP adapter (`halo acp`) stays. Only the
+  // platform-owned `acp` dir goes: generated `ask-*` bindings are user-owned
+  // and carry their own ask.py copy, so they're left alone.
+  const staleAcpSkill = path.join(globalDir, 'skills', 'acp')
+  if (fs.existsSync(staleAcpSkill)) {
+    fs.rmSync(staleAcpSkill, { recursive: true, force: true })
+    console.log('[Init] Removed stale `acp` skill (outbound ACP client dropped)')
   }
 
   // ── Bundled platform docs ──────────────────────────────────────────────

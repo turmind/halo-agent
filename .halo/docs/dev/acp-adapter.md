@@ -1,6 +1,6 @@
 # ACP Adapter
 
-A stdio bridge that lets any [Agent Client Protocol](https://github.com/zed-industries/agent-client-protocol) (ACP) client — most importantly Anthropic's Claude Code — drive a halo server as if it were a native ACP agent.
+A stdio bridge that lets any [Agent Client Protocol](https://github.com/zed-industries/agent-client-protocol) (ACP) client — an ACP-capable editor such as Zed or a JetBrains IDE — drive a halo server as if it were a native ACP agent.
 
 The adapter is **only a translator**: ACP JSON-RPC over stdin/stdout on one side, halo's existing web channel HTTP + SSE on the other. It does not run agents itself, store any state on disk, or duplicate halo's auth / access-level model. One token in, one workspace out, one halo server upstream.
 
@@ -10,7 +10,7 @@ Topology that motivated the adapter:
 
 ```
 [Mac]                                    [EC2]
-Claude Code                                  halo server (port 9527)
+Zed / JetBrains IDE                          halo server (port 9527)
    │   ACP / JSON-RPC over stdio                │
    ▼                                            │
 halo acp adapter ────HTTP/SSE────────────────▶│
@@ -20,13 +20,13 @@ halo acp adapter ────HTTP/SSE──────────────�
                                            live on EC2)
 ```
 
-Claude Code on a developer's laptop wants to talk to a halo agent running in an EC2 / shared dev box. ACP is the protocol; this adapter is what makes the JSON-RPC stream Claude Code emits look like halo's HTTP + SSE chat to the server. Adapter and Claude Code typically run on the same machine; the halo server sits behind whatever endpoint the developer configures.
+An editor on a developer's laptop wants to talk to a halo agent running in an EC2 / shared dev box. ACP is the protocol; this adapter is what makes the JSON-RPC stream the editor emits look like halo's HTTP + SSE chat to the server. Adapter and editor typically run on the same machine; the halo server sits behind whatever endpoint the developer configures.
 
 ## Quick start
 
 1. Provision a web-channel token. Admin UI → Channels → Web → Create. Grab the token. **For multi-workspace use, pick `full` access level** — readonly / workspace tokens cannot override the workspace per request. For single-workspace use a readonly / workspace token works too: sessions are minted server-side in the token's own namespace, so the ownership gate never bites.
 
-2. Launch the adapter from your ACP client. For Claude Code, register it as a custom agent (see Claude Code's docs for `claude-code config agent add`):
+2. Launch the adapter from your ACP client. For Zed / JetBrains, register it as a custom agent (`agent_servers` in Zed's `settings.json` / `~/.jetbrains/acp.json` — full snippets in [guide/channels/acp.md](../guide/channels/acp.md#wiring-into-zed)):
 
    ```sh
    halo acp \
@@ -38,47 +38,6 @@ Claude Code on a developer's laptop wants to talk to a halo agent running in an 
    ```
 
 3. The adapter writes JSON-RPC frames to stdout (1 message per line) and reads stdin the same way. Stderr is reserved for human-readable diagnostics — do not parse.
-
-## The `acp` skill — direct asks + halo-to-halo bindings
-
-The most common use of this adapter isn't a third-party ACP client — it's *another halo agent* calling out over ACP. Halo ships a builtin skill `acp` (slash command `/acp`, full access). Its bundled `templates/ask.py` is a unified ACP client; `--kind` picks the peer:
-
-- `halo` (default) — spawns `halo acp --host --port --scheme --token --workspace` (this adapter) to reach a **remote halo server** (`--scheme` optional, default `http`; pass `https` for a TLS-fronted server)
-- `claude` — spawns `claude-agent-acp` (npm `@agentclientprotocol/claude-agent-acp`): local Claude Code, zero config, just `--cwd`
-- `kiro` — spawns `kiro-cli acp --trust-all-tools`: local Kiro, zero config `--cwd`, optional `--agent-id`
-
-**Windows**: bare `halo` resolves to the desktop GUI `Halo.exe` (same PATH dir as the `halo.cmd` CLI launcher, and PATHEXT ranks `.EXE` first), so `ask.py` defaults to `halo.cmd` on win32 (same as `resolveHaloCli()` in `cron/runner.ts`; `--halo-bin` / `HALO_BIN` still override). It also resolves every peer binary through `shutil.which` before spawning — `Popen` doesn't search PATHEXT, so npm `.cmd` shims like `claude-agent-acp` would otherwise fail — and pins its pipes and stdout to UTF-8 (zh-CN Windows defaults to cp936). Invoke the helper as `python …`; `python3` there is usually the Microsoft Store stub.
-
-Session reuse works the same for every kind: the first call prints `SESSION: <id>` on stdout, follow-ups pass `--session-id <id>`. For `claude` / `kiro`, `session/load` must carry `cwd` + `mcpServers` exactly like `session/new` (kiro-cli exits silently without them) — ask.py fills these in.
-
-The question text reaches the peer **verbatim — including the peer's own slash commands**. Verified with kiro: `/model` as the question lists its available models; `/model <full-model-id>` switches its model and saves it as default (full id only — fuzzy names like `claude` are rejected). Use this to drive a peer's built-in command set.
-
-`/acp` verbs:
-
-- `kiro <question>` / `claude <question>` — ask the local agent directly; no setup or binding needed
-- `add` / `list` / `remove` — manage generated `ask-<label>` binding skills (below)
-
-### `ask-*` bindings — the multi-remote-halo path
-
-Remote halo servers are **not** a direct verb: each remote needs its own host/token/workspace, so `/acp add` walks the user through (label, host, port, scheme, workspace, token), then **stamps out a new skill** named `ask-<label>` containing:
-
-- `SKILL.md` — slash command `/ask-<label>`, instructions tailored to this remote
-- `config.yaml` — declares the binding's params so admin Settings shows a form
-- `ask.py` — bundled JSON-RPC ↔ stdio helper (one copy per binding, intentional — keeps `/workspace share` bundles self-contained)
-- writes the connection values into `settings.yaml` (workspace or global, user picks)
-
-After install, the local agent can simply do `shell_exec: python3 .../ask-<label>/ask.py "<question>" --host {{params.host}} ...` and halo's runtime substitutes the configured values. **Multiple bindings coexist** — each gets its own slash command, settings namespace, and Admin Settings page.
-
-Generation rules the meta-skill enforces (each was a real failure):
-
-- **Naming**: the skill's `name:` / H1 / config `displayName` are all `ask-<label>` (lowercase, dashed) — no "Ask Foo" title-casing.
-- **Slash args**: the generated SKILL.md carries a literal `` `$ARGUMENTS` `` line. `/ask-<label> <question>` args reach the body only through that placeholder (`skill-command.ts` doesn't re-append them), so without it every slash-command question arrives empty.
-- **Rendering**: placeholders are substituted with Python, key by key (`{{LABEL}}`, `{{HOST}}`, …), writing UTF-8 + LF. Not sed — Git-for-Windows sed mangles `{{LABEL}}` — and not a blanket `{{…}}` regex, which would also eat `{{params.X}}` and `$ARGUMENTS`.
-- **Wiring**: a built-in global agent (`default` / `executor` / `deep-executor` / `goal`, internal `__*__`) is re-seeded from bundled templates on startup (every desktop launch; server / CLI after an upgrade), keeping only `model:` / `context:` — a skill added to its global `agent.yaml` silently vanishes. The skill instead asks the user: (a) copy the agent folder to `<workspace>/.halo/agents/<id>/` and add the skill there (the copy replaces the global agent wholesale, so it won't pick up future upgrades), or (b) just get the path and line to add. User-created agents are edited in place with a one-line text insert (no yaml dump, so comments survive).
-
-Implementation: `~/.halo/global/skills/acp/`. Templates live under `templates/`. `/acp add` is the **only** supported way to set up a binding — there's no generic single-target `ask-acp-agent` skill, because per-binding namespaces (one token-host-workspace triple per skill id) are required for multi-remote use.
-
-To remove a binding: `/acp remove` (deletes the skill directory and points out the leftover `ask-<label>:` block in `settings.yaml`).
 
 ## CLI flags
 
@@ -117,7 +76,6 @@ Notes:
 - **Repeatable** — pass `--header` as many times as the gateway needs.
 - **Colon-safe** — the value is split on the *first* `:` only, so header values that themselves contain colons (`Cookie: a=b:c`) survive intact.
 - **`x-token` always wins** — `--header` cannot override the adapter's own `x-token` / `content-type`; it only adds headers for the layer in front of halo.
-- The generated `ask-<label>` bindings (halo→halo, via `ask.py`) do **not** yet expose `--header`; upstream auth through a binding isn't wired. `halo acp` direct is the path when a gateway is in play.
 
 ## ACP method coverage
 
@@ -137,7 +95,7 @@ Notes:
 
 ACP sessionId == halo sessionId. There's no extra mapping layer in the adapter: `session/new` asks the server for a fresh session (`POST /api/web/sessions`), which mints `web_<accountId>_<ts>_<rand>` inside the token's own namespace and creates the `agent_sessions` row on the spot — that exact string is what the ACP client gets back. The server has to be the one minting because readonly / workspace tokens can only address ids under their own `web_<accountId>_` prefix (`canAddressSession` in `packages/server/src/channels/web/handler.ts`); an adapter-chosen id would 403 on the first prompt. When the ACP client persists the id and replays it via `session/load`, the adapter just calls `/api/web/history?sessionId=<id>` to verify the row still exists, then registers it in its local in-memory map for prompt / cancel routing.
 
-This keeps the adapter stateless on disk — losing the in-memory map on restart is harmless because the conversation lives on the halo server. **The ACP client is the source of truth for "which sessions are mine"**, which is the right shape: a Mac-side Claude Code knows about *its* sessions, the EC2-side halo agent doesn't need to enumerate them.
+This keeps the adapter stateless on disk — losing the in-memory map on restart is harmless because the conversation lives on the halo server. **The ACP client is the source of truth for "which sessions are mine"**, which is the right shape: a Mac-side editor knows about *its* sessions, the EC2-side halo agent doesn't need to enumerate them.
 
 ## Halo SSE → ACP `session/update` mapping
 
@@ -189,7 +147,7 @@ CLI integration is in `@turmind/halo-cli`'s `index.ts` `cmd === 'acp'` branch �
 
 ## Testing
 
-`packages/acp-adapter/test/` holds vitest unit tests for the JSON-RPC framing and SSE parsing (`pnpm --filter @turmind/halo-acp-adapter test`); the adapter ↔ server flow has no automated suite and is verified by manual smoke. The cases below cover the protocol surface and the realistic end-to-end shape (Claude Code → ACP adapter → halo server → remote agent). When you change adapter / web-channel / settings code, walk this list.
+`packages/acp-adapter/test/` holds vitest unit tests for the JSON-RPC framing and SSE parsing (`pnpm --filter @turmind/halo-acp-adapter test`); the adapter ↔ server flow has no automated suite and is verified by manual smoke. The cases below cover the protocol surface and the realistic end-to-end shape (ACP client → adapter → halo server → agent). When you change adapter / web-channel code, walk this list.
 
 ### Setup
 
@@ -208,8 +166,6 @@ WS=/home/ubuntu/sa-agent
 ```
 
 ### Layer 1 — adapter alone (raw stdio)
-
-Use these to bisect: if the adapter works here but the skill flow fails, the bug is in the skill / shell_exec substitution, not the adapter.
 
 **1.1 initialize handshake (1 line in, 1 response out, exits cleanly)**
 
@@ -247,127 +203,9 @@ Two `session/new` from the same adapter, two `session/prompt` fired with `Promis
 
 Long prompt (`"count to 50 with commentary"`), `setTimeout(() => send('session/cancel',{sessionId}), 1500)`, expect the original prompt resolves with `stopReason: 'cancelled'`.
 
-### Layer 2 — generated binding skill (helper script + settings)
-
-Each `/acp add` run produces a binding under `<scope>/skills/ask-<label>/`. These tests assume one binding `ask-sa-agent` already exists with the workspace-scope settings populated. Use a different `<label>` if you've changed the example.
-
-**2.1 minimal helper invocation**
-
-```sh
-cd /home/ubuntu/halo-test
-python3 .halo/skills/ask-sa-agent/ask.py \
-  "本月 EC2 总花费一句话告诉我" \
-  --host localhost --port 9527 --token "$TOKEN" --workspace "$WS"
-```
-
-Expect stdout:
-
-```
-SESSION: web_<accountId>_<ts>_<rand>
----
-本月（2026-05…）EC2 总花费 约 $1,846 …
-```
-
-**2.2 helper with `--agent-id ""` (empty literal — should be ignored)**
-
-```sh
-python3 .halo/skills/ask-sa-agent/ask.py "ping" \
-  --host localhost --port 9527 --token "$TOKEN" --workspace "$WS" --agent-id ""
-```
-
-Expect: works the same as 2.1 (uses remote `default` agent). Regression guard for the bug where an unset yaml `agent_id: ""` got passed through and crashed remote `createSession`.
-
-**2.3 helper with `--agent-id '{{params.agent_id}}'` (unsubstituted literal)**
-
-```sh
-python3 .halo/skills/ask-sa-agent/ask.py "ping" \
-  --host localhost --port 9527 --token "$TOKEN" --workspace "$WS" \
-  --agent-id "{{ask-sa-agent.params.agent_id}}"
-```
-
-Expect: same as 2.1. Regression guard for the case where `settings.yaml` doesn't have `agent_id` at all — `ask.py` detects the `{{…}}` shape and drops the flag.
-
-### Layer 3 — agent calls the binding via halo cli
-
-Tests the full chain: agent → `activate_skill` → `shell_exec` → ask.py → adapter → server → remote agent → reply.
-
-**3.1 explicit slash command**
-
-```sh
-cd /home/ubuntu/halo-test
-halo cli -a default -n -w /home/ubuntu/halo-test \
-  "/ask-sa-agent 一句话告诉我这个月 EC2 总花费"
-```
-
-Expect: agent activates the binding, runs `ask.py` once with all params populated from settings.yaml, replies with "我问了 SA Agent…本月 EC2 总花费 约 $1,846…".
-
-**3.2 implicit binding selection (agent picks on its own)**
-
-```sh
-halo cli -a default -n -w /home/ubuntu/halo-test \
-  "帮我问下 sa-agent 这个月 RDS 花了多少钱"
-```
-
-Expect: agent recognises "ask sa-agent" as a delegation cue, picks `ask-sa-agent` without being told. (Softer test — model behaviour, not protocol; failure usually means the binding's SKILL.md description needs sharpening for the model.)
-
-**3.3 multi-turn with session resume**
-
-In the same CLI session, send three messages in order:
-
-```
-让 sa-agent 拉一下本月 AWS top 10 service 费用
-让它把 Bedrock 那部分按模型拆细
-再问 us-east-1 跟 ap-northeast-1 的分布
-```
-
-Expect: agent saves the `SESSION:` id from message 1, passes `--session-id <id>` on messages 2/3. Remote sa-agent's responses build on the previous turn (no "what AWS account?" re-prompts).
-
-### Layer 4 — generator (`/acp add`)
-
-Tests that a fresh binding can be stamped out from scratch.
-
-**4.1 generate a binding**
-
-From a clean state (no `<workspace>/.halo/skills/ask-foo/`):
-
-```sh
-halo cli -a default -n -w /home/ubuntu/halo-test \
-  '/acp add 参数：label=foo，host=localhost，port=9527，workspace=/home/ubuntu/sa-agent，token=<token>，scope=workspace。不要问后续问题，全自动创建。'
-```
-
-Expect: agent creates `.halo/skills/ask-foo/{SKILL.md,config.yaml,ask.py}` — SKILL.md frontmatter `name: ask-foo` and a literal `` `$ARGUMENTS` `` line — writes `ask-foo` block to `<workspace>/.halo/settings.yaml` with **all 5 user values** (host/port/workspace/label/token) plus `scheme: http` (defaulted — the prompt omits it), wires the binding into the current agent's skills list. Reply confirms the four paths. With `-a default` and no `<workspace>/.halo/agents/default/`, the global `~/.halo/global/agents/default/agent.yaml` must stay untouched (built-in agent — see the wiring rule above); under "全自动" the skill takes option (b) or the workspace copy, never the global file.
-
-**4.2 invoke the freshly-generated binding**
-
-```sh
-halo cli -a default -n -w /home/ubuntu/halo-test \
-  '/ask-foo 给我一句话: 这个月 EC2 总花费'
-```
-
-Expect: real reply (not a 401 / "token not configured"). If 401, settings.yaml didn't get all 5 values written (regression on Step 4 of the meta-skill).
-
-**4.3 cleanup**
-
-```sh
-rm -rf /home/ubuntu/halo-test/.halo/skills/ask-foo
-# manually remove `ask-foo:` block from /home/ubuntu/halo-test/.halo/settings.yaml
-```
-
-### Layer 5 — admin Settings UI
-
-Open admin → Settings → Skills → **ask-sa-agent** (or whichever binding):
-
-**5.1** All 7 fields render: `host`, `port`, `scheme`, `workspace`, `label`, `agent_id`, `token` (with mask icon).
-
-**5.2** Each field's source label says **workspace** (not "继承自 global"), because values live in `<halo-test>/.halo/settings.yaml`.
-
-**5.3** Edit `label` (e.g. → "我的 SA 助手"), save, run a 3.1-style query — agent's reply preamble should use the new label.
-
 ### Bisection guide
 
 When something fails:
 
-1. **3.x fails, 2.x works**: bug is in the agent's command construction (SKILL.md prompts) or shell_exec substitution. Look at the actual `tool_call.input` in the session JSON — placeholder text `{{…}}` leaking into the cmd is the typical sign.
-2. **2.x fails, 1.x works**: bug is in `ask.py` (helper) or how params reach it.
-3. **1.x fails, raw curl to `/api/web/chat` works**: bug is in `halo acp` adapter (jsonrpc.ts / adapter.ts / halo-client.ts).
-4. **raw curl fails too**: bug is in halo server (web/handler.ts / session-manager) or the remote workspace itself (model creds, agent.yaml, …).
+1. **1.x fails, raw curl to `/api/web/chat` works**: bug is in `halo acp` adapter (jsonrpc.ts / adapter.ts / halo-client.ts).
+2. **raw curl fails too**: bug is in halo server (web/handler.ts / session-manager) or the remote workspace itself (model creds, agent.yaml, …).

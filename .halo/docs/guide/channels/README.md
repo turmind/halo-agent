@@ -12,7 +12,7 @@ This folder has one onboarding guide per channel. Pick the one you want and foll
 | [Feishu / Lark](feishu.md) | Chinese enterprise teams | Feishu open-platform App (`appId` + `appSecret`) + long connection | WebSocket (long-connect) |
 | [WeCom](wecom.md) | Chinese enterprise teams on 企业微信 (single chat + groups) | 智能机器人 (Bot ID + Secret) + long connection | WebSocket (long-connect) |
 | [WeChat](wechat.md) | China-side personal use; mobile-first | iLink-style bot, login by scanning a QR | Long-poll |
-| [ACP](acp.md) | Claude Code (or other ACP clients) driving a remote halo | Web token + adapter CLI | JSON-RPC over stdio |
+| [ACP](acp.md) | An ACP-speaking IDE (Zed / JetBrains / …) driving a remote halo | Web token + adapter CLI | JSON-RPC over stdio |
 
 ## How channels are wired
 
@@ -28,7 +28,7 @@ This folder has one onboarding guide per channel. Pick the one you want and foll
                           SessionManager (per workspace)
 ```
 
-Each channel handler is a thin adapter between its native protocol and halo's `SessionManager`. Slash commands (`/session` `/agent` `/skill` `/workspace` `/cron` `/acp` `/evo` `/extension` `/help`) are shared across all of them — see `channels/shared/commands.ts`.
+Each channel handler is a thin adapter between its native protocol and halo's `SessionManager`. Slash commands (`/session` `/agent` `/skill` `/workspace` `/cron` `/evo` `/extension` `/help`) are shared across all of them — see `channels/shared/commands.ts`.
 
 The ACP adapter is **not** a channel — it's a stdio bridge that translates ACP JSON-RPC into the web channel's HTTP+SSE. Counted here only because users go through the same "set up an account, get a token" flow.
 
@@ -62,7 +62,7 @@ When in doubt start at `readonly` and raise it later. The setting is on the **ac
 
 - Already know which channel you want → click the row above
 - New to halo and just want to chat in a browser → [Web](web.md)
-- Want to run halo from your IDE (Claude Code etc.) → [ACP](acp.md)
+- Want to run halo from your IDE (Zed / JetBrains) → [ACP](acp.md)
 - Setting up a team workspace → [Slack](slack.md), [Feishu](feishu.md) or [WeCom](wecom.md)
 
 For the design rationale and protocol details (not user-facing), see [docs/design/](../../design/) — one file per channel: `web.md`, `telegram.md`, `slack.md`, `feishu.md`, `wecom.md`, `wechat.md`.

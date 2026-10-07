@@ -79,7 +79,7 @@ After `halo setup`:
 
 **When does "refreshed on upgrade" actually run?** `halo setup` always re-runs the seed; the server's startup check — and the same check at the start of `halo cli` / `halo tui` — also re-runs it automatically when `~/.halo/global/.template-version` is behind the bundled `TEMPLATE_VERSION`. So the routine flow `halo upgrade && halo server restart` is enough — no need to remember `halo setup` — and a CLI-only user just runs `halo cli` / `halo tui` after `halo upgrade`.
 
-**Server-refreshed**: `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `goal`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `web-search`, `halo`, `extension`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
+**Server-refreshed**: `INSTRUCTIONS.md`, `prompts/`, `models/`, `docs/`, the built-in agent ids (`default`, `executor`, `deep-executor`, `goal`, `__evo_agent__`, `__score__`, `__apply_agent__`), and the built-in skill ids (`agent`, `skill`, `workspace`, `cron`, `send-file`, `self`, `aws-knowledge`, `web-search`, `halo`, `extension`). To customize one, copy it into the workspace scope (`<project>/.halo/...`) — workspace replaces global at runtime.
 
 **Never overwritten**: anything else under `agents/` or `skills/` (your own creations), and everything under `secrets/`.
 

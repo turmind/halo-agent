@@ -219,7 +219,7 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 | `halo tui` | Interactive TUI client |
 | `halo cli "<prompt>"` | One-shot prompt → reply, exit |
 | `halo agents` / `halo sessions` | List agents / sessions |
-| `halo acp` | Stdio bridge that lets an ACP client (e.g. Claude Code) drive a halo server — see [acp-adapter.md](acp-adapter.md) |
+| `halo acp` | Stdio bridge that lets an ACP client (e.g. Zed / JetBrains) drive a halo server — see [acp-adapter.md](acp-adapter.md) |
 
 ### Upgrade flow
 

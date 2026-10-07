@@ -89,7 +89,7 @@ body. Run these three checks before you rate; each one feeds a rule in
    under the sandbox's `.halo/sessions/<testScenario.agentId>/`; the
    newest `cli_*.json` there produced dry-run-output.txt. `grep` it for
    `→` — each tool call is logged as `"<agent> → <tool>: <arguments>"`
-   (e.g. `activate_skill: {"skill_id":"acp"}`). A skill target is
+   (e.g. `activate_skill: {"skill_id":"cron"}`). A skill target is
    used when the session calls `activate_skill` with that skill id or
    reads the sandbox copy of the file; reading another copy (global or
    workspace, e.g. a shell `cat`) means the agent saw the unpatched

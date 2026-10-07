@@ -202,7 +202,7 @@ Per-channel defaults: every channel session (Web, Telegram, Slack, Feishu, WeCom
 `grep` reads the first 512 bytes of each file looking for a null byte and skips binaries (`glob` matches paths only and never opens files).
 
 ### Tool result budget
-The orchestrator truncates tool results over 8000 chars and appends a `[Content truncated]` hint telling the agent to use `grep` for a targeted search. `activate_skill` results are exempt — a SKILL.md body is instructions, not data, and the built-in acp / cron / self skills exceed 8K.
+The orchestrator truncates tool results over 8000 chars and appends a `[Content truncated]` hint telling the agent to use `grep` for a targeted search. `activate_skill` results are exempt — a SKILL.md body is instructions, not data, and the built-in cron / self skills exceed 8K.
 
 ## Session tools
 

@@ -4,7 +4,7 @@
 
 ## Problem
 
-Halo runs many workspaces on one server — one per team / project / credential boundary — and each is a self-contained agent runtime. A "secretary" pattern falls out naturally: one workspace whose agent only knows *which department knows what* and forwards the user's question there. Before relay the only cross-workspace path was the ACP adapter (HTTP + SSE + web-channel tokens, and an `ask-<label>` binding per remote), which is the right tool for a *different server* but heavy for two sqlite files on the same box. Relay is the in-process version: no HTTP, no tokens, no polling — and the result comes back on its own.
+Halo runs many workspaces on one server — one per team / project / credential boundary — and each is a self-contained agent runtime. A "secretary" pattern falls out naturally: one workspace whose agent only knows *which department knows what* and forwards the user's question there. Before relay the only cross-workspace path was a remote call over HTTP + SSE + web-channel tokens, which is heavy for two sqlite files on the same box. Relay is the in-process version: no HTTP, no tokens, no polling — and the result comes back on its own.
 
 ## Mechanism
 
@@ -61,7 +61,7 @@ No quiet gate (the session is by definition not done) and **`reply_to` is kept**
 
 ## What it deliberately doesn't do
 
-- **No cross-server reach.** Same `SessionManagerRegistry`, same process. Different server → ACP adapter (`/acp add`).
+- **No cross-server reach.** Same `SessionManagerRegistry`, same process. Different server → not supported yet (A2A is planned).
 - **No session discovery beyond a flat root list.** `relay_list` returns a workspace's root sessions (id / agent / title / status, newest 100) so the secretary can reuse an existing conversation; it doesn't walk trees or search transcripts — that's the admin's job.
 - **No broadcast / fan-out helper.** The secretary calls `relay_send` once per department; the reports come back individually with the workspace + session id in the header, so it can tell them apart without extra bookkeeping.
 - **No ACL beyond full access.** A full-access secretary can reach every workspace on the box — that's the deployment's trust boundary already (it can `shell_exec` into them anyway).

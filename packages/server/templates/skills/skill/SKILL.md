@@ -45,7 +45,7 @@ simply absent. Consequences you must apply:
   behavior in a workspace where a workspace copy shadows it. To customize a
   global skill for one workspace, copy the WHOLE folder to workspace scope
   (including resource files — remember: no per-file fallback), then edit.
-- **Built-in skills** (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`,
+- **Built-in skills** (`agent`, `skill`, `workspace`, `cron`, `send-file`,
   `self`, `aws-knowledge`, `web-search`): their global copies are force re-seeded on every server
   start — direct edits to those global files are lost. Customize at workspace
   scope instead.

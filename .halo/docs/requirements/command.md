@@ -6,7 +6,7 @@ Unified command processing — all slash commands (built-in + skill) are dispatc
 
 Source: [commands/index.ts](../../../packages/server/src/commands/index.ts) (descriptors) + [channels/shared/commands.ts](../../../packages/server/src/channels/shared/commands.ts) (execution)
 
-Top-level built-in slash commands: `/help` `/evo` `/session` `/agent` `/skill` `/workspace`. (`/cron` and `/acp` look like top-level commands too but are provided by same-name skills — see the verb table below; they aren't registered in `commands/index.ts` or `DISPATCH_COMMANDS`.)
+Top-level built-in slash commands: `/help` `/evo` `/session` `/agent` `/skill` `/workspace`. (`/cron` looks like a top-level command too but is provided by a same-name skill — see the verb table below; it isn't registered in `commands/index.ts` or `DISPATCH_COMMANDS`.)
 
 | Name | Slash | Type | Purpose |
 |---|---|---|---|
@@ -22,7 +22,6 @@ The rest are noun-verb **object commands**: `/<obj> <verb> [args]`. Some verbs a
 | `/skill` | list / desc (built-in, no gate) · disable / enable (built-in, workspace) · delete (built-in, full) · create / update (skill verb, full) |
 | `/workspace` | info (built-in, no gate) · switch (built-in, full) · setup / tidy (skill verb, workspace) · share (skill verb, full) — `/w` is a built-in alias (see [Command aliases](#command-aliases)) |
 | `/cron` | create / list / update / enable / disable / delete — all skill verbs, full |
-| `/acp` | kiro / claude (ask a local agent directly; question = rest of line) · add / list / remove (manage generated ask-* bindings) — all full |
 
 Session lifecycle actions (`subscribe` / `unsubscribe`, `session:delete`) are handled inline by the WS handler, not as slash commands. In the admin, a bare `/session new` (and `/clear`) is handled client-side: it opens a new draft chat tab and sends nothing; `/session new <args>` still goes to the server. The WS `session:clear` frame was removed in 1.5.3-alpha.
 

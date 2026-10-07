@@ -68,7 +68,6 @@ Most commands are noun-verb **object commands**: `/<obj> <verb> [args]`. Bare `/
 | `/skill <verb>` | Manage skills — `list` / `desc` (built-in, open to all) · `disable` / `enable` (built-in, workspace access) · `delete` (built-in, full access) · `create` / `update` (handled by the `skill` skill, full access) |
 | `/workspace <verb>` | Manage the workspace — `info` (built-in, open to all) · `switch <path>` (built-in, full access) · `setup` / `tidy` (workspace skill, workspace access; init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) · `share` (workspace skill, full access; export a shareable bundle) |
 | `/cron <verb>` | Scheduled agent runs — `create` / `list` / `update` / `enable` / `disable` / `delete` (cron skill, full access) |
-| `/acp <verb>` | Talk to other agents over ACP — `kiro <q>` / `claude <q>` ask a local agent directly; `add` / `list` / `remove` manage generated `ask-<label>` bindings (acp skill, full access) |
 | `/extension <verb>` | Canvas preview extensions — `install <id\|zip\|url>` / `list` / `remove <id>` (extension skill, full access) |
 | `/evo [hint]` | Queue a self-evolution run on this session (full access only) |
 | `/help` | List every command — object commands only show the verbs you can run |

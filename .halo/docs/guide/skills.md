@@ -30,7 +30,7 @@ Putting those in AGENT.md would bloat the system prompt. Skills use **progressiv
 
 Workspace overrides global (same id).
 
-**Built-in skills** (`agent`, `skill`, `workspace`, `cron`, `acp`, `send-file`, `self`, `aws-knowledge`, `web-search`, `halo`, `extension`) are server-shipped and **force-overwritten on every server startup**. Local edits to these directories under `~/.halo/global/skills/` will be lost. To customize one, copy it into `<project>/.halo/skills/<id>/` (workspace replaces global) and edit there. Other skills under `~/.halo/global/skills/` — including any the user created via the admin UI — are untouched by the seeder.
+**Built-in skills** (`agent`, `skill`, `workspace`, `cron`, `send-file`, `self`, `aws-knowledge`, `web-search`, `halo`, `extension`) are server-shipped and **force-overwritten on every server startup**. Local edits to these directories under `~/.halo/global/skills/` will be lost. To customize one, copy it into `<project>/.halo/skills/<id>/` (workspace replaces global) and edit there. Other skills under `~/.halo/global/skills/` — including any the user created via the admin UI — are untouched by the seeder.
 
 ## SKILL.md format
 
@@ -154,7 +154,6 @@ Halo seeds these skills on every startup (the ids in `BUILTIN_SKILL_IDS`, `packa
 | skill | Create / update skills — backs the `create` / `update` verbs of `/skill` |
 | workspace | Workspace maintenance — backs `/workspace setup` / `tidy` (init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) and `/workspace share` (export a shareable bundle) |
 | cron | Create / list / update / enable / disable / delete scheduled agent runs — backs `/cron` |
-| acp | Talk to other agents over ACP (`/acp kiro\|claude <q>`) and manage `ask-<label>` bindings for halo-to-halo delegation (`/acp add\|list\|remove`) |
 | send-file | Deliver an image/video/file as a channel attachment by emitting `MEDIA:<absolute_path>` — works on Web / WeChat / Telegram / Slack / Feishu (no command; model-activated, workspace access) |
 | self | The agent's own visual space (`.halo/canvas/self.html`) for self-expression (no command; model-activated, full access) |
 | aws-knowledge | Query the official AWS Knowledge MCP server for up-to-date AWS docs (no command, `user-invocable: false`; model auto-activates) |

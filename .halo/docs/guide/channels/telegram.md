@@ -78,7 +78,7 @@ If nothing happens, check halo server logs for `[Telegram]` lines.
 | `/agent <verb>` | Manage agents (`list` / `switch` / `desc` open to all; `delete` full; `create` / `update` via skill, full) |
 | `/skill <verb>` | Manage skills (`list` / `desc` open; `disable` / `enable` workspace; `delete` full; `create` / `update` via skill, full) |
 | `/workspace <verb>` | Workspace: `info` (all) / `switch <path>` (full) / `setup` / `tidy` (workspace) / `share` (full) |
-| `/cron` `/acp` `/extension` | Skill-backed object commands (full access); `/evo [hint]` queues a self-evolution run |
+| `/cron` `/extension` | Skill-backed object commands (full access); `/evo [hint]` queues a self-evolution run |
 | `/help` | List commands — object commands show only the verbs you can run |
 
 ## Cron jobs targeting Telegram

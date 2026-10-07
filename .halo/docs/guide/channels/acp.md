@@ -1,6 +1,6 @@
 # ACP (Agent Client Protocol)
 
-Drive a halo server from any [ACP](https://github.com/zed-industries/agent-client-protocol)-speaking client. The most common use is **Claude Code on a developer's laptop, talking to a halo agent on EC2** — but any ACP client works.
+Drive a halo server from any [ACP](https://github.com/zed-industries/agent-client-protocol)-speaking client. The most common use is **an ACP-capable editor (Zed, a JetBrains IDE) on a developer's laptop, talking to a halo agent on EC2** — but any ACP client works.
 
 ACP isn't a channel of its own. The `halo acp` command is a **stdio bridge** that translates ACP JSON-RPC into the Web channel's HTTP+SSE. So setup = "create a Web account, then point an adapter at it."
 
@@ -8,7 +8,7 @@ ACP isn't a channel of its own. The `halo acp` command is a **stdio bridge** tha
 
 ```
 [Mac]                                    [EC2]
-Claude Code                                  halo server (port 9527)
+Zed / JetBrains IDE                          halo server (port 9527)
    │   ACP / JSON-RPC over stdio                │
    ▼                                            │
 halo acp adapter ────HTTP/SSE────────────────▶│
@@ -19,8 +19,7 @@ halo acp adapter ────HTTP/SSE──────────────�
 ```
 
 Use ACP when:
-- You want to use Claude Code locally as the chat UI but the agent's tools / workspace live on a remote machine
-- You want one halo server to delegate to **another** halo server on a different host (the `/acp add` flow below)
+- You want to use your editor (Zed, a JetBrains IDE) locally as the chat UI but the agent's tools / workspace live on a remote machine
 - You're integrating with any tool that already speaks ACP
 
 If you just want a browser UI, use the [Web](web.md) channel directly — ACP is overkill.
@@ -61,42 +60,54 @@ Each adapter process binds to **one** workspace. To drive multiple workspaces co
 
 The adapter reads/writes JSON-RPC frames on **stdin / stdout** (one message per line, no LSP-style framing). **Stderr** is reserved for human-readable diagnostics — never parse it.
 
-### Wiring into Claude Code
+### Wiring into Zed
 
-Claude Code lets you register a custom agent. Use its `claude-code config agent add` command (see Claude Code's own docs for the exact incantation) and point it at the `halo acp …` invocation above.
+Register the adapter as a custom agent in Zed's `settings.json` (Agent Settings → External Agents → Add Agent → Add Custom Agent opens it for you). See [Zed's External Agents docs](https://zed.dev/docs/ai/external-agents):
 
-After registration, you can launch a session in Claude Code that streams to the remote halo server transparently — Claude Code thinks it's talking to a local agent, halo thinks it's talking to a Web-channel client.
+```json
+{
+  "agent_servers": {
+    "halo": {
+      "type": "custom",
+      "command": "halo",
+      "args": [
+        "acp",
+        "--host", "my-ec2-or-localhost",
+        "--port", "9527",
+        "--token", "<web-token-from-step-1>",
+        "--workspace", "/abs/path/on/server"
+      ],
+      "env": {}
+    }
+  }
+}
+```
 
-## Step 3 — (Halo-to-halo) bind a remote with `/acp add`
+### Wiring into JetBrains IDEs
 
-The most common use of this adapter isn't a third-party ACP client — it's **another halo agent** delegating out to a remote halo workspace. Halo ships a builtin `acp` skill for this (slash command `/acp`, full access). Type `/acp add` — or just ask in chat (e.g. "add an ACP binding to my other halo").
+In the AI Chat tool window click the menu button in the upper-right corner and choose **Add Custom Agent**; the IDE creates and opens `~/.jetbrains/acp.json`. See [JetBrains' ACP docs](https://www.jetbrains.com/help/ai-assistant/acp.html):
 
-It walks you through `(label, host, port, workspace, token)` and **stamps out a new skill** named `ask-<label>` containing:
+```json
+{
+  "agent_servers": {
+    "halo": {
+      "command": "halo",
+      "args": [
+        "acp",
+        "--host", "my-ec2-or-localhost",
+        "--port", "9527",
+        "--token", "<web-token-from-step-1>",
+        "--workspace", "/abs/path/on/server"
+      ],
+      "env": {}
+    }
+  }
+}
+```
 
-- `SKILL.md` — slash command `/ask-<label>`, instructions tailored to this remote
-- `config.yaml` — declares the binding's params so admin Settings shows a form
-- `ask.py` — bundled JSON-RPC ↔ stdio helper (one copy per binding, intentional — keeps `/workspace share` bundles self-contained)
+If the IDE can't find `halo` on its `PATH`, use the absolute path to the binary as `command`.
 
-It also writes the connection values into `settings.yaml` (workspace or global, you pick).
-
-The last step lists `ask-<label>` in an agent's `skills:`. If you're talking to a **built-in** agent (`default`, `executor`, …) that has no copy in this workspace, it won't edit the global agent file — Halo rewrites built-in agents from its bundled templates on startup, so the added skill would disappear. It asks instead: copy the agent into this workspace (`<workspace>/.halo/agents/<id>/`) and add the skill there — that copy then won't follow future upgrades of the built-in agent — or leave the edit to you.
-
-After install, type `/ask-<label> <question>` (or just "ask <label> …" in chat); the local agent runs `shell_exec: python3 .../ask-<label>/ask.py "<question>"` and halo's runtime substitutes the configured values. **Multiple bindings coexist** — each gets its own slash command, settings namespace, and Admin Settings page (Settings → Skills → `ask-<label>`). `/acp list` shows the bindings you've generated.
-
-**On Windows**: run the CLI as `halo.cmd`, never bare `halo` — the desktop installer puts the GUI `Halo.exe` in the same PATH folder and Windows picks `.exe` first, so bare `halo` opens the desktop app. `ask.py` already defaults to `halo.cmd` there, and the helper runs as `python …` (`python3` is usually the Microsoft Store stub).
-
-To remove a binding: `/acp remove` (deletes the skill directory and points out the leftover `ask-<label>:` block in `settings.yaml`).
-
-This is the **only** supported way to set up a halo-to-halo binding — there's no generic single-target `ask-acp-agent` skill, because per-binding namespaces (one token-host-workspace triple per skill id) are required for multi-remote use.
-
-### Direct asks — `/acp kiro` / `/acp claude`
-
-Bindings are for **remote halo servers**. For agents on the **same machine** no binding is needed — the `acp` skill talks to them directly, zero config:
-
-- `/acp claude <question>` — local Claude Code (via npm `@agentclientprotocol/claude-agent-acp`)
-- `/acp kiro <question>` — local Kiro (via `kiro-cli acp`)
-
-The question is passed verbatim — including the other agent's own slash commands (e.g. `/acp kiro /model <full-model-id>` switches Kiro's model). Both coexist with `/ask-<label>` bindings.
+After registration, pick the agent in the editor's agent panel and chat — the editor thinks it's talking to a local agent, halo thinks it's talking to a Web-channel client.
 
 ## ACP method coverage
 
@@ -116,7 +127,7 @@ The question is passed verbatim — including the other agent's own slash comman
 
 ACP `sessionId` **is** the halo session id — there's no extra mapping layer. `session/new` asks the server to mint one (`POST /api/web/sessions`); it lands in the token's own `web_<accountId>_` namespace and the `agent_sessions` row exists immediately, so readonly / workspace tokens can drive it too. The ACP client persists ids itself; the adapter holds no on-disk state. Losing the adapter's in-memory map on restart is harmless because the conversation lives on the halo server.
 
-The ACP client is the source of truth for "which sessions are mine" — a Mac-side Claude Code knows about *its* sessions, the EC2-side halo agent doesn't need to enumerate them.
+The ACP client is the source of truth for "which sessions are mine" — a Mac-side editor knows about *its* sessions, the EC2-side halo agent doesn't need to enumerate them.
 
 ## Multi-workspace
 
@@ -144,7 +155,7 @@ For now: if you want the agent to see a Mac-side file, paste it into the prompt.
 | Adapter exits immediately on launch | Missing required flag, or the token / host are wrong. Check stderr |
 | `401` on first prompt | Token typo, or token was deleted from admin |
 | `403` when launching with `--workspace /some/other/path` | Token is `readonly` / `workspace` access — use a `full` token or omit `--workspace` |
-| Tool calls don't appear in Claude Code | Expected — halo doesn't translate every event back as ACP `tool_call`. See [docs/dev/acp-adapter.md](../../dev/acp-adapter.md) for the full mapping |
+| Tool calls don't appear in your IDE | Expected — halo doesn't translate every event back as ACP `tool_call`. See [docs/dev/acp-adapter.md](../../dev/acp-adapter.md) for the full mapping |
 | Two `session/prompt` calls on the same id, second hangs | Halo queues messages when a session is busy; ACP adapter ends the response with `[queued — session busy]`. Wait for the first to finish |
 | `/workspace switch <path>` worked but other tokens broke | You changed the db-level default. Switch back with another `/workspace switch`, or stop using slash commands from the adapter |
 

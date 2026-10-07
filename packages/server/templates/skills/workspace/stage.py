@@ -73,7 +73,7 @@ BUILTIN_AGENT_IDS = {
     "default", "executor", "deep-executor",
 }
 BUILTIN_SKILL_IDS = {
-    "agent", "skill", "workspace", "cron", "send-file", "acp",
+    "agent", "skill", "workspace", "cron", "send-file",
     "aws-knowledge", "web-search", "self",
 }
 
