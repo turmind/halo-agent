@@ -1159,8 +1159,8 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
               onClick={() => setContextEnabled(!contextEnabled)}
               title={contextEnabled ? 'Click to exclude context' : 'Click to include context'}
               className={cn(
-                'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
-                !contextEnabled && 'line-through opacity-50',
+                'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-[var(--secondary)]',
+                contextEnabled ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] line-through opacity-50',
               )}
             >
               <FileText className="h-3 w-3 shrink-0" />
