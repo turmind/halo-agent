@@ -112,6 +112,12 @@ js/
 
 ## 服务端配套
 
+- **部署:和 Halo 同源。** 页面所在域名下把 `/api/show/` 反代到 Halo,浏览器
+  只访问自己的 origin,也就不经过 CORS(`main.js` 自动连接时先试
+  `location.origin`)。不要跨域部署:请求带 `credentials: 'include'`,跨域时
+  只有 `server.cors_origins` 里逐字列出的 origin 才拿得到 Allow-Credentials,
+  换域名就挂;前置 SSO 的 307 也会被浏览器报成跨域错误。nginx 写法见
+  [halo-city/README.md](../../../halo-city/README.md#正式部署和-halo-同源)
 - `GET /api/show/session?ws=&id=` — 只读会话详情:裁剪后的消息日志 + 真实
   token 上限。鉴权同 `/api/show/state`(x-token;`full`/`observer` 可跨
   workspace 读取,其余 accessLevel 只能看自己 workspace,**且只能看自己

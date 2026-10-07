@@ -96,8 +96,21 @@ When `contextEnabled` is on (default), user messages are auto-prepended with:
 - Drag to chat input
 - Clipboard paste
 - File-picker button
+- Screenshot button (below)
 
 Images ride along as base64; multimodal supported. Before sending, every attachment is downscaled (long edge ≤ 1568) and re-encoded as JPEG; an SVG is rasterized the same way (long edge 1024, on white), since vision input only takes jpeg / png / gif / webp. An image the browser can't decode (e.g. HEIC / TIFF in Chrome) and that isn't one of those four is refused when attached, with an inline notice naming the file — it is never sent only to be dropped server-side. Pasted images are also persisted to `<workspace>/.halo/assets/web/inbound/web/<date>/` so a `[图片已保存: /abs/path]` marker survives page reload and renders as a click-to-preview chip (shared with the WeChat channel's inbound media flow).
+
+### Screenshot (drag-select a region)
+A Scissors button in the toolbar's input group (upload · **screenshot** · screen · camera) takes one still of the screen and lets the user crop it into an image attachment:
+- Click → a frozen frame opens in a full-window crop layer over the admin (dark backdrop, area outside the selection dimmed). Drag a box (dragging again redraws it); **Enter**, double-click or ✓ confirms, **Esc** or ✕ cancels. Confirming with no box (or one under 8 px) attaches the whole frame. Enter here never sends the message.
+- The crop is cut from the full-resolution frame and attached as `screenshot-YYYYMMDD-HHMMSS.png` — from then on it's an ordinary attachment (chip, X to remove, downscaled to JPEG on send like any upload).
+- Grey at rest, primary colour while the picker / crop layer is open; clicking it then cancels.
+- Frame source differs by client:
+  - **Desktop client** (mac / win): no picker — grabs the display the Halo window is on (only that one on multi-monitor), Halo itself visible in the shot. Needs macOS **Screen Recording**; without it the permission hint shows in the attachment-notice row.
+  - **Browser**: the browser's own `getDisplayMedia` picker every time (a page can't read the screen otherwise), one frame, stream stopped right away. Picking "Entire screen" includes the browser's own "sharing" bar — crop it out. Cancelling the picker does nothing.
+  - An older desktop client without the screenshot bridge falls back to the browser path (Halo's own source picker).
+- Independent of live capture: never reads or changes a bound screen share.
+- Shown only when a frame source exists and the selected agent's model accepts images — same gate as live capture (no button on mobile browsers).
 
 ### Inline media chips
 Any message containing `[图片/视频/语音/文件 已保存: /path]` markers (WeChat + web) or a leading `MEDIA: /path` line (agent-emitted, e.g. from `wechat-send`) renders a compact chip with filename + icon. Clicking opens a full-size preview modal (image/video/audio inline, file → download link). The modal has a Download button (top-right, next to close) for image/video/audio; the media URL carries a per-open cache-buster (`&t=<timestamp>`) so overwritten files (same path, new bytes) always show current content. Paths inside the active workspace or under the OS temp dir (`/tmp/`) are previewable; everything else degrades to a non-clickable chip.

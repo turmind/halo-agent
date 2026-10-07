@@ -431,6 +431,20 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
     busy (recording) or unsaved, so it doesn't fire on an ordinary close or a
     workspace switch.
 
+- **Chat screenshot button (`window.haloCapture.screenshot` → IPC
+  `halo:capture-screenshot`) — ⚠ not yet verified on a real Mac / Windows**
+  (only the main-side handler was exercised, under Electron on Linux/Xvfb).
+  mac / win only (`CAPTURE_SUPPORTED`; else `null`). Grabs the display the
+  requesting window is on (`screen.getDisplayMatching(win.getBounds())`) via
+  `desktopCapturer` `types: ['screen']` at `size × scaleFactor`, matched on
+  `display_id` (single source → used as is); returns base64 JPEG 92, `{ error:
+  'permission' }` on an empty thumbnail (macOS Screen Recording not granted),
+  `null` after 3 mostly-black tries (`isMostlyBlack`, so a near-black desktop
+  also fails). The crop UI lives in the admin, not the shell. An older shell
+  without `screenshot` makes the admin fall back to `getDisplayMedia` (the
+  picker above). Worth checking on real hardware: the permission path, Retina
+  (`scaleFactor` > 1), multi-monitor.
+
 - **Cross-staging needs a full restage — auto-fast skips the native fixup.**
   After editing `stage-runtime.mjs`, or any time you cross-stage a target whose
   `node_modules` differs from what's on disk, run with `HALO_STAGE_FULL=1`. The

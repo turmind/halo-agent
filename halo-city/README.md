@@ -62,6 +62,29 @@ python3 -m http.server 8080     # → http://localhost:8080
 
 离线预览:`node .devmock.mjs`(→ http://localhost:8897,token 随意)。
 
+### 正式部署:和 Halo 同源
+
+页面所在的域名下要把 `/api/show/` 反代到 Halo,让浏览器只访问**页面自己的
+域名**——之后在前面换 CloudFront / 自定义域名都不用改 Halo 配置。页面启动时
+先试 `location.origin`,所以前端不用改,地址栏留空即可。
+
+```nginx
+location /api/show/ {
+    proxy_pass http://127.0.0.1:9527;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+不要让页面跨域访问 Halo。页面请求带 `credentials: 'include'`(为了带上前置
+SSO 的 cookie),跨域时 Halo 只对 `server.cors_origins` 里**逐字列出**的
+origin 回 `Access-Control-Allow-Credentials`;换个域名就报跨域错误,改名单
+还得重启。前面有 SSO 时也一样:跨站请求被 307 到登录页,登录页不带 CORS 头,
+浏览器同样报跨域错误。
+
+经反代后 Halo 看到的客户端 IP 都是本机,所以 token 输错锁定(5 次 / 15 分钟)
+是所有 halo-city 用户共用的。
+
 ## 更多
 
 设计细节(市民行为/公共层/街景载具/快捷键/纯净模式/多语言/文件结构)见
