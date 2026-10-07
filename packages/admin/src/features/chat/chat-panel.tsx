@@ -35,6 +35,7 @@ function AgentSelector() {
   const [agents, setAgents] = useState<AgentOption[]>([])
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const t = useT()
   // Re-fetch when the agent list changes (enable/disable/create/delete in the
   // Agents tab calls bumpAgentBus). Without this the selector keeps a stale
   // snapshot: disable every agent then re-enable, and the dropdown never
@@ -96,7 +97,7 @@ function AgentSelector() {
       <button
         onClick={() => !locked && !isStreaming && setOpen(!open)}
         disabled={locked || isStreaming}
-        title={locked ? 'Agent is locked to current session. Start a new session to switch.' : 'Select agent'}
+        title={locked ? t('chat.agent.locked') : t('chat.agent.select')}
         className={cn(
           'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
           locked ? 'text-[var(--muted-foreground)] opacity-50 cursor-default' : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',

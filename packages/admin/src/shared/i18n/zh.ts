@@ -244,6 +244,8 @@ export const zh: Record<string, string> = {
   'chat.access.fullDesc': '不受限制',
   'chat.access.workspaceDesc': '只能写当前工作区',
   'chat.access.readonlyDesc': '只读，不能写',
+  'chat.agent.select': '选择本次会话使用的 Agent',
+  'chat.agent.locked': '会话开始后就不能再切换 Agent 啦，想换的话新建一个会话就行。',
   'chat.access.title': '下一条消息的访问级别',
   'chat.access.noSandbox': '本机没有可用的系统沙箱（bubblewrap / sandbox-exec），只能用完全档',
   'chat.tabs.newSession': '新会话',

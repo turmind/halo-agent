@@ -244,6 +244,8 @@ export const en: Record<string, string> = {
   'chat.access.fullDesc': 'No restrictions',
   'chat.access.workspaceDesc': 'Writes limited to this workspace',
   'chat.access.readonlyDesc': 'Read only, no writes',
+  'chat.agent.select': 'Choose the agent for this conversation',
+  'chat.agent.locked': 'The agent can’t be changed once the conversation has started — start a new session to use a different one.',
   'chat.access.title': 'Access level for the next message',
   'chat.access.noSandbox': 'This host has no OS sandbox (bubblewrap / sandbox-exec) — Full only',
   'chat.tabs.newSession': 'New session',

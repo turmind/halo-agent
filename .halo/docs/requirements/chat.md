@@ -8,7 +8,7 @@ The primary surface for talking to an agent.
 - Dropdown in the composer's left control cluster (after the Debug button) selects which agent to use; hidden when only one agent is usable
 - Lists every available agent (from `GET /api/agent-configs`; overridden, disabled and internal agents are hidden), highest priority first. A new session starts on the top one
 - **Locked during an active session** (and while a response is streaming) — the agent is bound to the session; to change, start a new session (/session new)
-- While it can be changed, the Bot icon is primary-coloured (same "active" colour as the other toolbar toggles); locked, it stays muted grey and dimmed
+- While it can be changed, the Bot icon is primary-coloured (same "active" colour as the other toolbar toggles); locked, it stays muted grey and dimmed, and hovering it explains that the agent can't change once the conversation has started — start a new session to use another (`chat.agent.locked`)
 - The Agents panel's "Test" button can also preselect an agent
 
 ### Access level
