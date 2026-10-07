@@ -31,7 +31,7 @@ The channel is two-way. The face reports back to its host (`parent.postMessage`)
 
 **Runtime expression:** Agent emits `<<<SHOW: payload >>>` in a reply. On `chat:complete`:
 1. `chat-handlers.ts` takes the round's replies with `takeRoundReplies()` (`chat-store.ts`) — every main assistant bubble since the previous `chat:complete`, in log order, each handed out once. A round can span several bubbles (the head an interjection split off, a turnId split, the follow-up answering a queued message), so scanning only the last bubble would miss earlier markers
-2. `maybeHandleShow(replies)` detects all `<<<SHOW:[\s\S]*?>>>` markers (non-greedy, global) in those bubbles; `maybeHandleCapture(wsClient, tabStore, replies)` looks for `<<<CAPTURE>>>` in the same set
+2. `maybeHandleShow(replies)` detects all `<<<SHOW:[\s\S]*?>>>` markers (non-greedy, global) in those bubbles; `maybeHandleCapture(wsClient, tabStore, replies)` looks for `<<<CAPTURE>>>` / `<<<CAPTURE:screen>>>` / `<<<CAPTURE:camera>>>` in the same set (`CAPTURE_MARKER`, exported from `features/chat/web-capture.ts`)
 3. For each match, extracts the payload (trimmed)
 4. Calls `postToFace(payload)` to forward it
 
@@ -53,9 +53,9 @@ function runCode(code) {
 ```
 A malformed line still no-ops for the face, but the host now hears about it.
 
-**UI stripping:** `message-list.tsx:TextBlock()` strips both markers before render:
+**UI stripping:** `message-list.tsx:TextBlock()` strips both markers before render — CAPTURE with the same shared regex the handler matches (`CAPTURE_MARKER = /<<<CAPTURE(?::(screen|camera))?>>>/g`):
 ```javascript
-parsed.replace(/<<<CAPTURE>>>/g, '')
+parsed.replace(CAPTURE_MARKER, '')
       .replace(/<<<SHOW:[\s\S]*?>>>/g, '')
 ```
 
@@ -170,7 +170,7 @@ The admin turns the queued receipts into the `· last: …` part of the `[Face o
 - **Marker detection:** `packages/admin/src/shared/ws-handlers/chat-handlers.ts:maybeHandleShow()` — regex match `<<<SHOW:([\s\S]*?)>>>` on the round's replies at `chat:complete`; the replies come from `takeRoundReplies()` in `chat-store.ts`, which hands each bubble out once.
 - **Iframe registration:** `packages/admin/src/features/editor/face-bridge.ts` — module-level registry of mounted previews; `postToFace()` forwards payloads via `postMessage`; `postFaceTheme()` / `postFaceLang()` send the palette and UI language; `faceLoaded(el, lang)` runs on iframe `load` and posts theme → language → (if requested) `self.intro()`, in that order.
 - **Preview component:** `packages/admin/src/features/editor/html-preview.tsx` — sandboxed iframe with `allow-scripts` + `allow-same-origin` and `allow="autoplay"` (so `self.voice` audio, triggered by postMessage rather than a click, isn't gated). For the face it calls `registerFaceIframe()` on mount, `faceLoaded()` from `onLoad`, and re-posts the theme on every `useTheme().theme` change and the language on every `useI18n().lang` change (a language switch replays no intro).
-- **Marker stripping:** `packages/admin/src/shared/components/message-list.tsx:TextBlock()` — strips both `<<<CAPTURE>>>` and `<<<SHOW:...>>>` before rendering.
+- **Marker stripping:** `packages/admin/src/shared/components/message-list.tsx:TextBlock()` — strips both `<<<CAPTURE>>>` (incl. the `:screen` / `:camera` variants, via `CAPTURE_MARKER` from `web-capture.ts`) and `<<<SHOW:...>>>` before rendering.
 - **Workspace init:** `packages/server/src/init.ts:ensureWorkspaceHalo()` — force-copies engine on workspace open. `self` is in `BUILTIN_SKILL_IDS` so the skill is always available.
 
 ## Engine architecture

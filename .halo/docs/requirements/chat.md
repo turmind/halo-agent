@@ -104,18 +104,24 @@ Any message containing `[图片/视频/语音/文件 已保存: /path]` markers 
 
 Images in chat (the modal's full-size image, a user message's screenshot strip and its zoom, markdown images in replies) never show the browser's broken-image icon: a themed pulsing box while loading, the image once loaded, and an `ImageOff` icon + "Image unavailable" / 「图片无法加载」 box if it fails (`shared/components/safe-image.tsx`).
 
-### Live capture (desktop only)
-Lets the agent *see something live* on demand. Desktop client (Electron) only — the entry points never render in a plain browser. Borrows the meeting-app "share" model: the user binds one source, then the agent requests a frame when it actually needs to look.
+### Live capture (screen share + camera)
+Lets the agent *see something live* on demand. Works in the desktop client (Electron) **and** a plain browser. Borrows the meeting-app "share" model: the user binds a source, then the agent requests a frame when it actually needs to look.
 
-Two source kinds in the chat-input toolbar, **mutually exclusive** (only one bound at a time):
-- **Screen / window share** (MonitorUp button) — opens a picker grid of screens + app windows. A bound window can be grabbed even while it sits in the background.
-- **Camera** (Camera button) — toggles the webcam on. Hidden entirely on a machine with no camera.
+Two source kinds in the chat-input toolbar, **independent** — either one alone, or both at once:
+- **Screen / window share** (MonitorUp button). Desktop: opens a picker grid of screens + app windows; a bound window can be grabbed even while it sits in the background. Browser: the browser's own `getDisplayMedia` picker; the share is kept live while bound (frames drawn from it on demand). No screen button where `getDisplayMedia` is missing (mobile browsers) — the camera button stays.
+- **Camera** (Camera button) — opens a picker with a live preview (even for a single webcam), then binds the chosen device. Hidden entirely on a machine with no camera. In the browser the camera stream is held open while bound (so a request that lands while the page has no focus doesn't re-prompt or stall) and released on unbind.
 
-Once bound, a frame is **not** attached to every message. Instead a one-line instruction is injected into the next send ("the user is sharing the «X» window" / "the user has turned the camera on") telling the model to output a line containing exactly `<<<CAPTURE>>>` when it needs to see the current view. On turn completion the frontend detects the marker in any of the turn's replies, grabs one frame, and sends it back as a **visible image message** — the model sees it on its following turn. So it's a cross-turn round-trip: model asks → frame is sent back → model answers next turn. The returned frame is also shown inline on the user bubble so you can see exactly what was sent.
+Each button is a toggle: grey when off, primary-coloured icon when on. **Clicking an active button again turns that source off** — no picker; in the browser the share / camera stream stops. To switch screen source or camera device, turn it off and on again. Each bound source also shows as a chip right after the agent selector (icon + name, primary colour, X to unbind just that one). In the browser, the browser's own "Stop sharing" bar unbinds the screen (the camera stays).
+
+Once bound, a frame is **not** attached to every message. Instead a one-line instruction is injected into the next send telling the model how to ask for a look:
+- Only one source bound — "the user is sharing the «X» window" / "sharing «X» from the browser" / "the user has turned the camera on", and the model outputs a line containing exactly `<<<CAPTURE>>>` when it needs the current view.
+- Both bound — one combined instruction ("the user is sharing «X» and has the camera on"): `<<<CAPTURE:screen>>>` for the screen only, `<<<CAPTURE:camera>>>` for the camera only, bare `<<<CAPTURE>>>` for both.
+
+On turn completion the frontend collects every capture marker in the turn's replies (union; a bare marker = every bound source; a request for a source that isn't on falls back to every bound one, so a request never goes unanswered), grabs each requested source and sends them back as **one visible image message** (screen first) — the model sees them on its following turn. So it's a cross-turn round-trip: model asks → frame(s) sent back → model answers next turn. The returned frames are shown inline on the user bubble so you can see exactly what was sent; a source that failed contributes a short failure note instead of its image. Markers are hidden from the rendered reply.
 
 Constraints:
-- Shown only when the selected agent's model accepts image input (capture is pointless on a text-only model); switching to a text-only model auto-unbinds.
-- Screen share needs macOS **Screen Recording** permission; the camera prompts for **Camera** permission on first use, with an "Open Settings" path if previously denied.
+- Shown only when the selected agent's model accepts image input (capture is pointless on a text-only model); switching to a text-only model auto-unbinds both.
+- Desktop: screen share needs macOS **Screen Recording** permission; the camera prompts for **Camera** permission on first use, with an "Open Settings" path if previously denied. Browser: the page must be served over HTTPS or from localhost (`getDisplayMedia` / `getUserMedia` are absent elsewhere, so the buttons don't render); a denied camera shows a hint pointing at the address bar's site settings.
 - Binding is **in-memory only** and shared by all chat tabs — a page reload or restart requires re-selecting.
 
 ### The agent's face (`self.html`)
