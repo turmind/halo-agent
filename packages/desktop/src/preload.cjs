@@ -217,6 +217,9 @@ window.haloCapture = {
   grab: (id) => ipcRenderer.invoke('halo:capture-grab', id),
   permission: () => ipcRenderer.invoke('halo:capture-permission'),
   openSettings: () => ipcRenderer.invoke('halo:capture-open-settings'),
+  // Screenshot button: still of the display Halo is on → base64 JPEG,
+  // { error: 'permission' }, or null (non-mac/win).
+  screenshot: () => ipcRenderer.invoke('halo:capture-screenshot'),
 }
 
 // Webcam capture bridge — the camera counterpart to haloCapture. Same

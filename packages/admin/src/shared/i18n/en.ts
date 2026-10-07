@@ -738,6 +738,12 @@ export const en: Record<string, string> = {
   'capture.webFailNote': '[📷 {name} — screenshot failed: sharing may have stopped, or the shared window is minimized — restore it and ask me to capture again]',
   'capture.bothLlmPrompt': '[System: the user is sharing "{name}" and has the camera on. When you need to look to answer, output one line with exactly one marker: <<<CAPTURE:screen>>> for the screen only, <<<CAPTURE:camera>>> for the camera only, or <<<CAPTURE>>> for both — the system will screenshot / take a photo and send it back to you as the next message. Do not output any marker unless you actually need to look.]',
   'capture.cameraPermissionHintWeb': 'Camera permission is needed. Click the site settings icon at the left of the address bar, allow the camera, then try again.',
+  // ── Screenshot (box a region as an image attachment) ──
+  'capture.screenshotButton': 'Screenshot: box a screen region as an image attachment',
+  'capture.screenshotActive': 'Taking a screenshot — click to cancel',
+  'capture.screenshotHint': 'Drag to select a region · Enter to confirm · Esc to cancel',
+  'capture.screenshotConfirm': 'Confirm (Enter)',
+  'capture.screenshotCancel': 'Cancel (Esc)',
   // ── The assistant's face (self.html) ──
   'face.button': "Show the assistant's face",
   'face.on': "Face on (the assistant can see it's open) — click to close",

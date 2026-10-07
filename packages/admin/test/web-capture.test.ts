@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { getScreenBridge, getCameraBridge, syncWebCapture, WEB_SCREEN_ID, type WebScreen } from '../src/features/chat/web-capture'
+import { getScreenBridge, getCameraBridge, getScreenshotBridge, syncWebCapture, WEB_SCREEN_ID, type WebScreen } from '../src/features/chat/web-capture'
 import { useChatStore } from '../src/features/chat/chat-store'
 
 /**
@@ -282,6 +282,54 @@ describe('syncWebCapture follows screenSource / cameraSource', () => {
     bindCamera('cam1')
     sync()
     expect(getUserMedia).not.toHaveBeenCalled()
+  })
+})
+
+describe('screenshot one-shot', () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((cb) => cb(new Blob(['png'], { type: 'image/png' })))
+    Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:shot') })
+  })
+  afterEach(() => { delete (window as unknown as { CaptureController?: unknown }).CaptureController })
+
+  it('the desktop shell\'s screenshot wins, its JPEG wrapped as a data URL; a permission error passes through', async () => {
+    const screenshot = vi.fn().mockResolvedValueOnce('JPG').mockResolvedValueOnce({ error: 'permission' })
+    Object.assign(window, { haloCapture: { grab: vi.fn(), screenshot } })
+    expect(await getScreenshotBridge()!()).toBe('data:image/jpeg;base64,JPG')
+    expect(await getScreenshotBridge()!()).toEqual({ error: 'permission' })
+    expect(getDisplayMedia).not.toHaveBeenCalled()
+  })
+
+  it('a shell without screenshot falls back to the browser picker; no getDisplayMedia → none', () => {
+    Object.assign(window, { haloCapture: { grab: vi.fn() } })
+    expect(getScreenshotBridge()).toBeTypeOf('function')
+    delete (window as unknown as { haloCapture?: unknown }).haloCapture
+    setMediaDevices({ getUserMedia, enumerateDevices })
+    expect(getScreenshotBridge()).toBeUndefined()
+  })
+
+  it('grabs one full-resolution frame, stops its own stream, and leaves the bound share alone', async () => {
+    const shareTrack = fakeTrack('monitor')
+    getDisplayMedia.mockResolvedValueOnce(fakeStream(shareTrack))
+    await (getScreenBridge() as WebScreen).start()
+    bindWebScreen()
+    sync()
+
+    const setFocusBehavior = vi.fn(() => { throw new Error('monitor') })
+    Object.assign(window, { CaptureController: class { setFocusBehavior = setFocusBehavior } })
+    const shotTrack = fakeTrack('window')
+    getDisplayMedia.mockResolvedValueOnce(fakeStream(shotTrack))
+    expect(await getScreenshotBridge()!()).toBe('blob:shot')
+    expect(getDisplayMedia.mock.calls[1][0]).toMatchObject({ video: true, audio: false, controller: expect.anything() })
+    expect(setFocusBehavior).toHaveBeenCalledWith('no-focus-change')
+    expect(shotTrack.stop).toHaveBeenCalled()
+    expect(shareTrack.stop).not.toHaveBeenCalled()
+    expect(screenSource()?.id).toBe(WEB_SCREEN_ID)
+  })
+
+  it('a cancelled picker yields nothing', async () => {
+    getDisplayMedia.mockRejectedValueOnce(new DOMException('cancelled', 'NotAllowedError'))
+    expect(await getScreenshotBridge()!()).toBeNull()
   })
 })
 

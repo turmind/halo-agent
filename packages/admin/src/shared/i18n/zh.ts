@@ -738,6 +738,12 @@ export const zh: Record<string, string> = {
   'capture.webFailNote': '[📷 {name} — 截图失败：共享可能已停止，或共享的窗口被最小化了 — 恢复后再让我截一次]',
   'capture.bothLlmPrompt': '[系统：用户正在共享「{name}」，同时开着摄像头。当你需要查看画面来回答时，单独输出一行标记：只看屏幕输出 <<<CAPTURE:screen>>>，只看摄像头输出 <<<CAPTURE:camera>>>，两个都看输出 <<<CAPTURE>>>，系统会截图 / 拍照并作为下一条消息发给你。不需要查看时不要输出任何标记。]',
   'capture.cameraPermissionHintWeb': '需要摄像头权限：点地址栏左侧的站点设置图标，允许摄像头后再试。',
+  // ── 截图（框选区域作为图片附件）──
+  'capture.screenshotButton': '截图：框选屏幕区域作为图片附件',
+  'capture.screenshotActive': '正在截图 — 点击取消',
+  'capture.screenshotHint': '拖拽框选区域 · Enter 确认 · Esc 取消',
+  'capture.screenshotConfirm': '确认（Enter）',
+  'capture.screenshotCancel': '取消（Esc）',
   // ── AI 的面孔（self.html）──
   'face.button': '显示 AI 的面孔',
   'face.on': '面孔已打开（AI 知道它开着）— 点击关闭',

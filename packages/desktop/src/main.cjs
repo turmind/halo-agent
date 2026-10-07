@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences, Notification, crashReporter, powerSaveBlocker, session, webContents } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences, Notification, crashReporter, powerSaveBlocker, session, webContents, screen } = require('electron')
 const { spawn, spawnSync, execFile, execSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
@@ -778,6 +778,32 @@ ipcMain.handle('halo:capture-grab', async (_e, sourceId) => {
     }
   }
   return null  // empty/black after retries (window occluded/minimized too long)
+})
+
+// Screenshot button (chat toolbar): one full-resolution still of the display
+// the requesting Halo window is on — no picker, Halo stays visible (like
+// WeChat's default; the admin's crop layer opens on top afterwards). Multi-
+// monitor: only that display. Base64 JPEG 92 (the crop cuts from it, so keep
+// it sharp); { error: 'permission' } on an empty thumbnail (macOS without
+// Screen Recording); null when unsupported or still black after retries.
+ipcMain.handle('halo:capture-screenshot', async (e) => {
+  if (!CAPTURE_SUPPORTED) return null
+  const win = BrowserWindow.fromWebContents(e.sender)
+  const display = win ? screen.getDisplayMatching(win.getBounds()) : screen.getPrimaryDisplay()
+  const thumbnailSize = {
+    width: Math.round(display.size.width * display.scaleFactor),
+    height: Math.round(display.size.height * display.scaleFactor),
+  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(200)
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize })
+    const match = sources.length === 1 ? sources[0] : sources.find((s) => s.display_id === String(display.id))
+    if (!match) return null
+    if (match.thumbnail.isEmpty()) return { error: 'permission' }
+    if (!isMostlyBlack(match.thumbnail)) return match.thumbnail.toJPEG(92).toString('base64')
+  }
+  return null
 })
 
 // macOS gates screen capture behind a "Screen Recording" permission; report it

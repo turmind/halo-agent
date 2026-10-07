@@ -28,6 +28,10 @@ export interface HaloCapture {
   grab: (id: string) => Promise<string | null>
   permission: () => Promise<'granted' | 'denied' | 'not-determined' | 'restricted'>
   openSettings: () => void
+  /** One-shot still of the display the Halo window is on (Screenshot button):
+   *  base64 JPEG, `{ error: 'permission' }` without macOS Screen Recording, null
+   *  when unsupported. Absent on shells older than the Screenshot button. */
+  screenshot?: () => Promise<string | { error: 'permission' } | null>
 }
 
 /** Desktop-shell webcam bridge (preload injects it). Undefined in a browser.
@@ -121,12 +125,12 @@ async function videoReady(video: HTMLVideoElement): Promise<void> {
   })
 }
 
-/** Draw the video's current frame, capped at FRAME_MAX_WIDTH wide (aspect
- *  kept). Null when there is no frame yet. */
-function drawFrame(video: HTMLVideoElement): HTMLCanvasElement | null {
+/** Draw the video's current frame, capped at `maxWidth` wide (aspect kept;
+ *  Infinity = original resolution). Null when there is no frame yet. */
+function drawFrame(video: HTMLVideoElement, maxWidth = FRAME_MAX_WIDTH): HTMLCanvasElement | null {
   const vw = video.videoWidth, vh = video.videoHeight
   if (!vw || !vh) return null
-  const scale = Math.min(1, FRAME_MAX_WIDTH / vw)
+  const scale = Math.min(1, maxWidth / vw)
   const canvas = document.createElement('canvas')
   canvas.width = Math.max(1, Math.round(vw * scale))
   canvas.height = Math.max(1, Math.round(vh * scale))
@@ -216,6 +220,69 @@ const webScreen: WebScreen = {
     }
     return null
   },
+}
+
+// ── Screenshot (one-shot) ──
+
+/** `CaptureController` (Chrome 109+) — not in TS's lib.dom yet. */
+interface FocusController { setFocusBehavior: (behavior: 'focus-captured-surface' | 'no-focus-change') => void }
+
+/** A screenshot frame for the crop layer: an image URL (blob: or data:), the
+ *  desktop shell's "no Screen Recording permission", or null (cancelled /
+ *  nothing captured). */
+export type ScreenshotFrame = string | { error: 'permission' } | null
+
+/** Browser one-shot for the Screenshot button: its own picker (call straight
+ *  from the click), the first non-black frame at the source's full resolution
+ *  (the crop needs the original pixels — no FRAME_MAX_WIDTH), then the stream
+ *  stops. Separate from the bound share — never reuses or touches it. Resolves
+ *  to a PNG blob URL (the caller revokes it), null when the picker was
+ *  cancelled. */
+async function grabWebScreenshot(): Promise<string | null> {
+  const Controller = (window as unknown as { CaptureController?: new () => FocusController }).CaptureController
+  const controller = Controller ? new Controller() : undefined
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false, ...(controller ? { controller } : {}) } as DisplayMediaStreamOptions)
+  } catch {
+    return null // cancelled / refused
+  }
+  // Keep focus on Halo when another tab / window was picked, so the crop layer
+  // stays in view. Must run synchronously right after the promise resolves (no
+  // await in between); throws for a whole screen, which has no focus to move.
+  try { controller?.setFocusBehavior('no-focus-change') } catch { /* monitor surface */ }
+  const video = attachVideo(stream)
+  let canvas: HTMLCanvasElement | null = null
+  try {
+    // The first frames of a fresh capture can come back black — probe a few
+    // times; a frame that stays black is still what's on screen, so keep it.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) await sleep(SCREEN_RETRY_MS)
+      await videoReady(video)
+      canvas = drawFrame(video, Infinity) ?? canvas
+      if (canvas && !frameIsBlack(canvas, 8)) break
+    }
+  } finally {
+    releaseMedia(stream, video)
+  }
+  if (!canvas) return null
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+  return blob ? URL.createObjectURL(blob) : null
+}
+
+/** The Screenshot button's frame source: the desktop shell's `screenshot` (the
+ *  display Halo is on, no picker) when the shell has it, else the browser's
+ *  picker one-shot, else undefined (no button — e.g. mobile). */
+export function getScreenshotBridge(): (() => Promise<ScreenshotFrame>) | undefined {
+  if (typeof window === 'undefined') return undefined
+  const shot = (window as unknown as { haloCapture?: HaloCapture }).haloCapture?.screenshot
+  if (typeof shot === 'function') {
+    return async () => {
+      const r = await shot()
+      return typeof r === 'string' ? `data:image/jpeg;base64,${r}` : r
+    }
+  }
+  return typeof navigator.mediaDevices?.getDisplayMedia === 'function' ? grabWebScreenshot : undefined
 }
 
 // ── Camera ──

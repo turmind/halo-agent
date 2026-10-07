@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
-import { Send, Paperclip, X, FileIcon, FileText, Square, MonitorUp, Camera, Sparkles, ChevronDown, Check, LockOpen, FolderLock, Eye, type LucideIcon } from 'lucide-react'
+import { Send, Paperclip, X, FileIcon, FileText, Square, MonitorUp, Camera, Scissors, Sparkles, ChevronDown, Check, LockOpen, FolderLock, Eye, type LucideIcon } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
@@ -14,7 +14,8 @@ import { useFaceOn, useFaceStore, requestFaceFocus } from '@/features/editor/fac
 import { matchCommands, matchVerbs, getCommands, type SlashCommand } from './slash-commands'
 import { CommandPalette } from './command-palette'
 import { FileMentionPicker } from './file-mention-picker'
-import { getScreenBridge, getCameraBridge, syncWebCapture, WEB_SCREEN_ID, type CaptureSrc } from './web-capture'
+import { getScreenBridge, getCameraBridge, getScreenshotBridge, syncWebCapture, WEB_SCREEN_ID, type CaptureSrc, type ScreenshotFrame } from './web-capture'
+import { ScreenshotCrop } from './screenshot-crop'
 import { useT } from '@/shared/i18n'
 
 /** Read a File to a base64 string (no data URL prefix), verbatim. */
@@ -420,7 +421,7 @@ function LiveSourceChips() {
  * Bound state lives in chat-store so use-chat (prompt injection) and
  * chat-handlers (frame grab) can read it.
  */
-function CaptureControl() {
+function CaptureControl({ modelSupportsImage }: { modelSupportsImage: boolean }) {
   const t = useT()
   const screenSource = useChatStore((s) => s.screenSource)
   const cameraSource = useChatStore((s) => s.cameraSource)
@@ -439,7 +440,6 @@ function CaptureControl() {
 
   const cap = getScreenBridge()
   const camera = getCameraBridge()
-  const modelSupportsImage = useCurrentModelSupportsImage()
 
   // If the user switches to a text-only model while a source is bound, drop the
   // bindings — the frame could no longer be sent, and the control is about to
@@ -650,6 +650,69 @@ function CaptureControl() {
   )
 }
 
+/**
+ * Screenshot button — one still of the screen, cropped in ScreenshotCrop and
+ * attached like an uploaded image (`onCapture` → addFiles). Unrelated to the
+ * bound share above: it never reads or changes `screenSource`. Desktop shell:
+ * the display Halo is on, no picker; browser: its own picker, one frame, stream
+ * stopped (web-capture getScreenshotBridge). Active while the picker / grab or
+ * the crop layer is open; clicking it then cancels. Hidden with no frame source
+ * (e.g. mobile); the parent hides it on a text-only model, like CaptureControl.
+ */
+function ScreenshotControl({ disabled, onCapture, onNotice }: { disabled?: boolean; onCapture: (file: File) => void; onNotice: (msg: string) => void }) {
+  const t = useT()
+  const shoot = getScreenshotBridge()
+  const [picking, setPicking] = useState(false)
+  /** Frozen frame (blob: / data: URL) while the crop layer is open. */
+  const [src, setSrc] = useState<string | null>(null)
+  // Bumped on cancel so a grab still in flight is dropped when it lands.
+  const seq = useRef(0)
+
+  // The web grab hands back a blob URL — free it when the layer closes.
+  useEffect(() => () => { if (src?.startsWith('blob:')) URL.revokeObjectURL(src) }, [src])
+
+  if (!shoot) return null
+  const active = picking || src !== null
+
+  const toggle = async () => {
+    if (active) { seq.current++; setPicking(false); setSrc(null); return }
+    const mine = ++seq.current
+    setPicking(true)
+    let frame: ScreenshotFrame = null
+    try { frame = await shoot() } catch { /* treated as cancelled */ }
+    if (mine !== seq.current) {
+      if (typeof frame === 'string' && frame.startsWith('blob:')) URL.revokeObjectURL(frame)
+      return
+    }
+    setPicking(false)
+    if (frame && typeof frame === 'object') onNotice(t('capture.permissionHint'))
+    else if (frame) setSrc(frame)
+  }
+
+  return (
+    <>
+      <button
+        onClick={toggle}
+        disabled={disabled}
+        title={active ? t('capture.screenshotActive') : t('capture.screenshotButton')}
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--secondary)]',
+          active ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
+        )}
+      >
+        <Scissors className="h-4 w-4" />
+      </button>
+      {src && (
+        <ScreenshotCrop
+          src={src}
+          onConfirm={(file) => { setSrc(null); onCapture(file) }}
+          onCancel={() => setSrc(null)}
+        />
+      )}
+    </>
+  )
+}
+
 interface MessageInputProps {
   onSend: (text: string, images?: Array<{ data: string; mimeType: string }>, mentionedFiles?: string[]) => void
   disabled?: boolean
@@ -740,6 +803,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   const [cursorPos, setCursorPos] = useState(0)
   const [mentionDismissed, setMentionDismissed] = useState(false)
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
+  const modelSupportsImage = useCurrentModelSupportsImage()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const activeProject = useProjectStore((s) => s.activeProject)
@@ -1149,7 +1213,8 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]">
             <Paperclip className="h-4 w-4" />
           </button>
-          <CaptureControl />
+          {modelSupportsImage && <ScreenshotControl disabled={disabled} onCapture={(file) => addFiles([file])} onNotice={setAttachNotice} />}
+          <CaptureControl modelSupportsImage={modelSupportsImage} />
           {/* FaceControl renders only with a project open. */}
           {(activeProject || debugControl || contextLabel) && <ToolbarDivider />}
           <FaceControl />
