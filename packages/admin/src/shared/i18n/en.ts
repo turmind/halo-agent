@@ -728,6 +728,13 @@ export const en: Record<string, string> = {
   'capture.cameraLlmPrompt': '[System: the user has turned the camera on for you. When you need to see what the camera is pointed at to answer, output a line containing exactly <<<CAPTURE>>> and the system will take a photo and send it back to you as the next message. Do not output the marker unless you actually need to look.]',
   'capture.cameraFailNote': '[📷 {name} — photo failed: the camera may be in use by another app, or its permission was turned off]',
   'capture.dismiss': 'Dismiss',
+  // ── Screen / camera capture (browser) ──
+  'capture.webSurfaceScreen': 'Entire screen',
+  'capture.webSurfaceWindow': 'Shared window',
+  'capture.webSurfaceTab': 'Browser tab',
+  'capture.webLlmPrompt': '[System: the user is sharing {name} from the browser. When you need to see its current contents to answer, output a line containing exactly <<<CAPTURE>>> and the system will screenshot it and send it back to you as the next message. Do not output the marker unless you actually need to look.]',
+  'capture.webFailNote': '[📷 {name} — screenshot failed: sharing may have stopped, or the shared window is minimized — restore it and ask me to capture again]',
+  'capture.cameraPermissionHintWeb': 'Camera permission is needed. Click the site settings icon at the left of the address bar, allow the camera, then try again.',
   // ── The assistant's face (self.html) ──
   'face.button': "Show the assistant's face",
   'face.on': "Face on (the assistant can see it's open) — click to close",

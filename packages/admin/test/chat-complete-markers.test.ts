@@ -5,6 +5,8 @@ import { restoreTabs, openTab, getLoadedStore } from '../src/features/chat/chat-
 import { wsClient } from '../src/shared/ws-client'
 import { useProjectStore } from '../src/shared/stores/project-store'
 import { registerFaceIframe } from '../src/features/editor/face-bridge'
+import { getScreenBridge, WEB_SCREEN_ID, type WebScreen } from '../src/features/chat/web-capture'
+import { en } from '../src/shared/i18n/en'
 import type { WsClient } from '../src/shared/ws-client-types'
 
 /**
@@ -146,6 +148,50 @@ describe('chat:complete markers cover the whole round', () => {
     await flush()
     expect(grab).toHaveBeenCalledTimes(1)
     expect(sent).toHaveLength(1)
+  })
+})
+
+describe('chat:complete CAPTURE in a plain browser (web screen share)', () => {
+  /** No desktop bridge; the browser has getDisplayMedia → the web bridge
+   *  serves the frame. Its grab is stubbed (web-capture.test covers it). */
+  function bindWebShare(frame: string | null) {
+    Object.defineProperty(navigator, 'mediaDevices', { value: { getDisplayMedia: vi.fn() }, configurable: true })
+    const grab = vi.spyOn(getScreenBridge() as WebScreen, 'grab').mockResolvedValue(frame)
+    useProjectStore.getState().openFolder('/ws/markers-web')
+    useChatStore.getState().setCaptureSource({ id: WEB_SCREEN_ID, name: 'Entire screen', thumb: '', kind: 'screen' })
+    useChatStore.getState().addMessage({ id: 'S', role: 'assistant', content: '', streaming: true })
+    emit('chat:stream', { text: 'let me look <<<CAPTURE>>>', turnId: 't1' })
+    return grab
+  }
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'mediaDevices', { value: undefined, configurable: true })
+  })
+
+  it('grabs the shared screen and sends one image message', async () => {
+    const grab = bindWebShare('WEB64')
+    emit('chat:complete')
+    await flush()
+    expect(grab).toHaveBeenCalledTimes(1)
+    expect(sent).toEqual([expect.objectContaining({
+      type: 'chat',
+      sessionId: 'sess_markers',
+      message: '[Screenshot of "Entire screen"]',
+      images: [{ data: 'WEB64', mimeType: 'image/jpeg' }],
+    })])
+  })
+
+  it('a failed grab sends the web fail note instead of an image', async () => {
+    bindWebShare(null)
+    emit('chat:complete')
+    await flush()
+    expect(sent).toHaveLength(1)
+    const msg = sent[0] as { message: string; images?: unknown }
+    expect(msg.message).toBe('[Could not capture the shared screen — sharing may have stopped, or the shared window is minimized. Ask the user to check, then request the capture again.]')
+    expect(msg.images).toBeUndefined()
+    const bubble = useChatStore.getState().messages.filter((m) => m.role === 'user').at(-1)
+    expect(bubble?.content).toBe(en['capture.webFailNote'].replace('{name}', 'Entire screen'))
+    expect(bubble?.localImages).toBeUndefined()
   })
 })
 

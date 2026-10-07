@@ -5,6 +5,7 @@ import type { WsClientMessage } from '@turmind/halo-core/protocol'
 import { useChatStore } from '@/features/chat/chat-store'
 import { bindActiveTabSession, dropSessionTab, newTab, restoreTabs } from '@/features/chat/chat-tabs'
 import { removeCachedView } from '@/features/agents/session-view-cache'
+import { getScreenBridge, getCameraBridge } from '@/features/chat/web-capture'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { faceContextLine, faceUserMessage, takeFaceAcks } from '@/features/editor/face-bridge'
@@ -68,22 +69,20 @@ export function useChat() {
         contextParts.push(`[Referenced files:\n${mentionedFiles.map((f) => `  - ${f}`).join('\n')}]`)
       }
       // Capture prompt injection: when the user has bound a screen/window or
-      // the webcam (and we're in the desktop shell — the matching bridge is
-      // present), tell the LLM it can request a live frame by emitting
+      // the webcam (and its bridge — desktop shell or browser, web-capture —
+      // is available), tell the LLM it can request a live frame by emitting
       // <<<CAPTURE>>>. chat-handlers detects the marker on completion, grabs the
       // frame, and sends it back as a new (image) message — that reply takes the
       // raw wsClient.send path (chat-handlers), NOT this dispatch, so it never
       // gets this instruction re-injected (no capture loop). The camera variant
       // phrases it as "the user has turned the camera on" rather than "sharing a
-      // window".
+      // window"; a browser share as "sharing {name} from the browser".
       const captureSource = useChatStore.getState().captureSource
-      const w = typeof window !== 'undefined' ? (window as unknown as { haloCapture?: unknown; haloCamera?: unknown }) : undefined
-      if (captureSource && w) {
-        if (captureSource.kind === 'camera' && w.haloCamera) {
-          contextParts.push(t('capture.cameraLlmPrompt'))
-        } else if (captureSource.kind === 'screen' && w.haloCapture) {
-          contextParts.push(t('capture.llmPrompt', { name: captureSource.name }))
-        }
+      if (captureSource?.kind === 'camera') {
+        if (getCameraBridge()) contextParts.push(t('capture.cameraLlmPrompt'))
+      } else if (captureSource?.kind === 'screen') {
+        const screen = getScreenBridge()
+        if (screen) contextParts.push(t(screen.web ? 'capture.webLlmPrompt' : 'capture.llmPrompt', { name: captureSource.name }))
       }
       // Face toggle on → tell the agent its face is open, plus whatever the face
       // reported since the last message (face-bridge receipts, then cleared).

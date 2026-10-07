@@ -14,6 +14,7 @@ import { useFaceOn, useFaceStore, requestFaceFocus } from '@/features/editor/fac
 import { matchCommands, matchVerbs, getCommands, type SlashCommand } from './slash-commands'
 import { CommandPalette } from './command-palette'
 import { FileMentionPicker } from './file-mention-picker'
+import { getScreenBridge, getCameraBridge, syncWebCapture, WEB_SCREEN_ID, type CaptureSrc } from './web-capture'
 import { useT } from '@/shared/i18n'
 
 /** Read a File to a base64 string (no data URL prefix), verbatim. */
@@ -99,33 +100,6 @@ async function isSendableImage(file: File): Promise<boolean> {
   try { (await decodeImage(file)).close(); return true } catch { return false }
 }
 
-/** Desktop-shell capture bridge (preload injects it). Undefined in a browser. */
-interface CaptureSrc { id: string; name: string; thumb: string | null; blank: boolean; icon: string | null }
-interface HaloCapture {
-  list: () => Promise<CaptureSrc[]>
-  grab: (id: string) => Promise<string | null>
-  permission: () => Promise<'granted' | 'denied' | 'not-determined' | 'restricted'>
-  openSettings: () => void
-}
-function getHaloCapture(): HaloCapture | undefined {
-  if (typeof window === 'undefined') return undefined
-  return (window as unknown as { haloCapture?: HaloCapture }).haloCapture
-}
-
-/** Desktop-shell webcam bridge (preload injects it). Undefined in a browser.
- *  Counterpart to HaloCapture for the camera — `snap` grabs a still JPEG. */
-interface HaloCamera {
-  has: () => Promise<boolean>
-  snap: (deviceId?: string) => Promise<string | null>
-  list: () => Promise<Array<{ deviceId: string; label: string }>>
-  requestPermission: () => Promise<boolean>
-  openSettings: () => void
-}
-function getHaloCamera(): HaloCamera | undefined {
-  if (typeof window === 'undefined') return undefined
-  return (window as unknown as { haloCamera?: HaloCamera }).haloCamera
-}
-
 /** Process-local cache of which model ids support image input, built from the
  *  models registry (`/agent-configs/models`). Fetched once per models-bus
  *  version — the registry only changes on a hub install (`models:changed`). */
@@ -196,7 +170,7 @@ function useCurrentModelSupportsImage(): boolean {
  * tabs are shown, and makes every user message carry `[Face open: …]`
  * (use-chat); off removes both. Per workspace, persisted (face-store). The face
  * is seeded into every workspace (server init) and is pure HTML/canvas, so
- * unlike CaptureControl this is NOT gated on any desktop bridge. Turning it on
+ * unlike CaptureControl this is NOT gated on any capture bridge. Turning it on
  * switches to Explorer, focuses the face and greets with `self.intro()` once
  * the iframe has loaded (face-bridge).
  */
@@ -237,9 +211,9 @@ function FaceControl() {
  * the user can see each one before binding — handy for aiming an external cam
  * (e.g. pointing it at a desk to photograph homework). Owns the preview
  * getUserMedia stream and tears it down on device-switch / close / unmount so
- * the camera light doesn't stay on. The preview runs in the renderer directly
- * (Electron has getUserMedia); the actual capture still goes through
- * haloCamera.snap with the chosen deviceId.
+ * the camera light doesn't stay on. The preview runs in the page directly
+ * (browser and Electron both have getUserMedia); the actual capture still goes
+ * through the camera bridge's snap with the chosen deviceId.
  */
 function CameraPicker({ cameras, activeId, onPick, onTurnOff, onClose }: {
   cameras: Array<{ deviceId: string; label: string }>
@@ -404,9 +378,12 @@ function AccessLevelSelector() {
  * demand (via the <<<CAPTURE>>> marker, see use-chat / chat-handlers). Two
  * sources, mutually exclusive (only one bound at a time, like a meeting app's
  * "share screen OR camera"):
- *   • screen/window — picked from a grid, grabbed via desktopCapturer (main).
- *   • webcam — a one-click toggle, grabbed via getUserMedia (renderer).
- * Desktop-only: renders nothing in a plain browser (no window.haloCapture).
+ *   • screen/window — desktop shell: picked from a grid, grabbed via
+ *     desktopCapturer (main); browser: the browser's own getDisplayMedia
+ *     picker, the share kept live while bound (web-capture).
+ *   • webcam — a one-click toggle, grabbed via getUserMedia.
+ * The desktop shell's bridges win; a plain browser falls back to web-capture's
+ * (no screen button where getDisplayMedia is missing, e.g. mobile).
  * Bound state lives in chat-store so use-chat (prompt injection) and
  * chat-handlers (frame grab) can read it.
  */
@@ -426,8 +403,8 @@ function CaptureControl() {
   const [cameraMenuOpen, setCameraMenuOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
-  const cap = getHaloCapture()
-  const camera = getHaloCamera()
+  const cap = getScreenBridge()
+  const camera = getCameraBridge()
   const modelSupportsImage = useCurrentModelSupportsImage()
 
   // If the user switches to a text-only model while a source is bound, drop the
@@ -437,9 +414,12 @@ function CaptureControl() {
     if (!modelSupportsImage && captureSource) setCaptureSource(null)
   }, [modelSupportsImage, captureSource, setCaptureSource])
 
+  // Browser streams follow the binding (stop an unbound share, hold the bound
+  // camera open). Idempotent, so every mounted control may call it.
+  useEffect(() => { syncWebCapture(captureSource) }, [captureSource])
+
   // Is there a webcam on this machine? ("先判断有没有摄像头") — hide the camera
-  // button entirely when none is present. Only meaningful on a vision model in
-  // the desktop shell.
+  // button entirely when none is present. Only meaningful on a vision model.
   useEffect(() => {
     if (!camera || !modelSupportsImage) { setCameraAvailable(false); return }
     let cancelled = false
@@ -463,11 +443,20 @@ function CaptureControl() {
     }
   }, [open, cameraMenuOpen])
 
-  // Desktop shell only — a browser has no capture bridge. Also hidden when the
-  // selected agent's model can't accept images (capture would be unsendable).
+  // Hidden without any capture bridge (no getUserMedia either — e.g. an
+  // insecure-origin browser), and when the selected agent's model can't accept
+  // images (capture would be unsendable).
   if ((!cap && !camera) || !modelSupportsImage) return null
 
   const openPicker = async () => {
+    // Browser: its own picker is the source chooser — straight from the click
+    // (getDisplayMedia needs the user gesture). While a share is bound this
+    // switches source; a cancel keeps whatever is bound.
+    if (cap?.web) {
+      const key = await cap.start()
+      if (key) setCaptureSource({ id: WEB_SCREEN_ID, name: t(key), thumb: '', kind: 'screen' })
+      return
+    }
     if (open) { setOpen(false); return }
     setOpen(true)
     setLoading(true)
@@ -558,11 +547,14 @@ function CaptureControl() {
       )}
       {cameraDenied && (
         <div className="absolute bottom-full left-0 z-50 mb-1 w-64 rounded-md border border-amber-500/30 bg-[var(--background)] p-2.5 text-xs text-amber-300 shadow-lg">
-          <div>{t('capture.cameraPermissionHint')}</div>
+          <div>{t(camera?.web ? 'capture.cameraPermissionHintWeb' : 'capture.cameraPermissionHint')}</div>
           <div className="mt-1.5 flex items-center gap-3">
-            <button onClick={() => camera!.openSettings()} className="underline hover:text-amber-200">
-              {t('capture.openSettings')}
-            </button>
+            {/* A page can't open the browser's site settings — the hint says where to go. */}
+            {camera && !camera.web && (
+              <button onClick={() => camera.openSettings()} className="underline hover:text-amber-200">
+                {t('capture.openSettings')}
+              </button>
+            )}
             <button onClick={() => setCameraDenied(false)} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
               {t('capture.dismiss')}
             </button>
@@ -594,10 +586,10 @@ function CaptureControl() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-4">
-              {denied && (
+              {denied && cap && !cap.web && (
                 <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
                   <div>{t('capture.permissionHint')}</div>
-                  <button onClick={() => cap!.openSettings()} className="mt-1.5 underline hover:text-amber-200">
+                  <button onClick={() => cap.openSettings()} className="mt-1.5 underline hover:text-amber-200">
                     {t('capture.openSettings')}
                   </button>
                 </div>

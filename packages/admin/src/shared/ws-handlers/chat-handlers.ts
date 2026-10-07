@@ -2,6 +2,7 @@ import type { WsClient } from '../ws-client-types'
 import type { ChatMessage } from '@/shared/types'
 import { noteLinkDrop, forEachChatStore, getActiveChatStore, type ChatStoreApi } from '@/features/chat/chat-store'
 import { focusSessionTab, getLoadedStore, storeForFrame } from '@/features/chat/chat-tabs'
+import { getScreenBridge, getCameraBridge } from '@/features/chat/web-capture'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { generateId } from '@/shared/utils'
 import { postToFace, onFaceSnap, pushFaceAck, faceRoundSettled } from '@/features/editor/face-bridge'
@@ -47,22 +48,20 @@ function maybeHandleShow(replies: ChatMessage[]): void {
 
 /**
  * On turn completion, if any of the round's replies contains the capture
- * marker and a source is bound (desktop shell only), grab a frame of that
- * source and send it back as a new image message so the LLM can see it —
- * once per round. Best-effort: any failure (no bridge, window closed, grab
- * error) sends a short text note instead of an image, never throws.
+ * marker and a source is bound, grab a frame of that source (desktop shell
+ * bridge, else the browser's — web-capture) and send it back as a new image
+ * message so the LLM can see it — once per round. Best-effort: any failure
+ * (no bridge, window closed, sharing stopped, grab error) sends a short text
+ * note instead of an image, never throws.
  */
 async function maybeHandleCapture(wsClient: WsClient, tabStore: ChatStoreApi, replies: ChatMessage[]): Promise<void> {
   const store = tabStore.getState()
-  const w = window as unknown as {
-    haloCapture?: { grab: (id: string) => Promise<string | null> }
-    haloCamera?: { snap: (deviceId?: string) => Promise<string | null> }
-  }
   const source = store.captureSource
   if (!source) return
   const isCamera = source.kind === 'camera'
-  const bridge = isCamera ? w.haloCamera : w.haloCapture
-  if (!bridge) return
+  const camera = isCamera ? getCameraBridge() : undefined
+  const screen = isCamera ? undefined : getScreenBridge()
+  if (!camera && !screen) return
   if (!replies.some((m) => CAPTURE_MARKER.test(m.content))) return
 
   const project = useProjectStore.getState().activeProject
@@ -76,24 +75,27 @@ async function maybeHandleCapture(wsClient: WsClient, tabStore: ChatStoreApi, re
   // The reply goes through raw wsClient.send (not use-chat's dispatchMessage),
   // so the capture instruction is NOT re-injected on it — that's what stops a
   // capture loop. We still echo a user bubble + streaming slot so the UI shows
-  // the round-trip, mirroring dispatchMessage. Both paths are now JPEG: camera
-  // via getUserMedia→canvas (quality 0.85), screen via NativeImage.toJPEG(85).
+  // the round-trip, mirroring dispatchMessage. All paths are JPEG: camera via
+  // getUserMedia→canvas (quality 0.85), desktop screen via
+  // NativeImage.toJPEG(85), browser screen via the live share→canvas (0.85).
   const mimeType = 'image/jpeg'
   let base64: string | null = null
   try {
     // For the camera, source.id holds the chosen deviceId ('' = default); pass
     // it through so multi-camera machines snap the camera the user picked.
-    base64 = isCamera ? await w.haloCamera!.snap(source.id || undefined) : await w.haloCapture!.grab(source.id)
+    base64 = camera ? await camera.snap(source.id || undefined) : await screen!.grab(source.id)
   } catch {
     base64 = null
   }
 
   // Non-React module: no useT(); read the provider's persisted lang cache (i18n/context.tsx) and pick the dict directly.
   const dict = typeof localStorage !== 'undefined' && localStorage.getItem('halo_lang') === 'zh' ? zh : en
-  const failNote = dict[isCamera ? 'capture.cameraFailNote' : 'capture.failNote'].replace('{name}', source.name)
+  const failNote = dict[isCamera ? 'capture.cameraFailNote' : screen?.web ? 'capture.webFailNote' : 'capture.failNote'].replace('{name}', source.name)
   const failMsg = isCamera
     ? `[Could not take a photo from the camera — it may be in use by another app, or camera permission was revoked. Ask the user to check, then request the capture again.]`
-    : `[Could not capture "${source.name}" — it was likely occluded/minimized long enough that macOS purged its rendered frame (came back blank/black). Ask the user to briefly bring that window to the foreground, then request the capture again.]`
+    : screen?.web
+      ? `[Could not capture the shared screen — sharing may have stopped, or the shared window is minimized. Ask the user to check, then request the capture again.]`
+      : `[Could not capture "${source.name}" — it was likely occluded/minimized long enough that macOS purged its rendered frame (came back blank/black). Ask the user to briefly bring that window to the foreground, then request the capture again.]`
 
   store.addMessage({
     id: generateId(),

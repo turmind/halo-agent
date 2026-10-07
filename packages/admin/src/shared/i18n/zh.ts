@@ -728,6 +728,13 @@ export const zh: Record<string, string> = {
   'capture.cameraLlmPrompt': '[系统：用户已为你开启摄像头。当你需要查看摄像头当前画面来回答时，单独输出一行 <<<CAPTURE>>>，系统会自动拍一张照片并作为下一条消息发给你。不需要查看时不要输出该标记。]',
   'capture.cameraFailNote': '[📷 {name} — 拍照失败:摄像头可能被其他应用占用或权限被关闭]',
   'capture.dismiss': '关闭',
+  // ── 屏幕 / 摄像头捕获（浏览器）──
+  'capture.webSurfaceScreen': '整个屏幕',
+  'capture.webSurfaceWindow': '共享的窗口',
+  'capture.webSurfaceTab': '浏览器标签页',
+  'capture.webLlmPrompt': '[系统：用户正在通过浏览器共享{name}。当你需要查看它的当前画面来回答时，单独输出一行 <<<CAPTURE>>>，系统会自动截图并作为下一条消息发给你。不需要查看时不要输出该标记。]',
+  'capture.webFailNote': '[📷 {name} — 截图失败：共享可能已停止，或共享的窗口被最小化了 — 恢复后再让我截一次]',
+  'capture.cameraPermissionHintWeb': '需要摄像头权限：点地址栏左侧的站点设置图标，允许摄像头后再试。',
   // ── AI 的面孔（self.html）──
   'face.button': '显示 AI 的面孔',
   'face.on': '面孔已打开（AI 知道它开着）— 点击关闭',
