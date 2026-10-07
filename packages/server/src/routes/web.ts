@@ -15,6 +15,33 @@ import { resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js
 import { isHiddenWorkspacePath } from '../tools/sandbox.js'
 import { isSafeIdSegment } from './workspace-path.js'
 
+/** A proxy in front of halo (CloudFront, nginx) cuts an SSE response that
+ *  stays silent past its idle timeout — and a long tool call emits nothing.
+ *  An SSE comment line keeps bytes flowing; every SSE parser skips it. */
+const SSE_KEEPALIVE_MS = 15_000
+
+/** Pipe `chunks` into an SSE response with a keepalive comment every
+ *  SSE_KEEPALIVE_MS; the timer dies with the stream. */
+function streamWithKeepalive(c: Context, chunks: () => AsyncGenerator<string, void, unknown>): Response {
+  return streamSSE(c, async (stream) => {
+    const timer = setInterval(() => { void stream.write(': keepalive\n\n') }, SSE_KEEPALIVE_MS)
+    try {
+      for await (const chunk of chunks()) {
+        await stream.write(chunk)
+      }
+    } finally {
+      clearInterval(timer)
+    }
+  })
+}
+
+/** An epoch-ms query param (`cursor`, `since`): absent or empty → undefined,
+ *  digits only → the number, anything else (`0x10`, `1e3`, `-1`) → null. */
+function epochParam(raw: string | undefined): number | undefined | null {
+  if (raw === undefined || raw === '') return undefined
+  return /^\d+$/.test(raw) ? Number(raw) : null
+}
+
 export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
   const { db, channel } = deps
   const app = new Hono()
@@ -153,11 +180,7 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     }
     const denied = sessionOverrideError(c, auth.account, opts.sessionId)
     if (denied) return denied
-    return streamSSE(c, async (stream) => {
-      for await (const chunk of channel.handleMessage(token, body.message ?? '', body.images, opts, c.req.raw.signal)) {
-        await stream.write(chunk)
-      }
-    })
+    return streamWithKeepalive(c, () => channel.handleMessage(token, body.message ?? '', body.images, opts, c.req.raw.signal))
   })
 
   // Mints a root session in the token's own namespace and returns its id.
@@ -175,6 +198,20 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     })
     if (!result.ok) return c.json({ error: result.error }, 403)
     return c.json({ sessionId: result.sessionId })
+  })
+
+  // One page of the token's own root sessions, newest first — backs ACP
+  // `session/list` (see handler `listSessions`). `cursor` = the previous
+  // page's `nextCursor`.
+  app.get('/web/sessions', (c) => {
+    const auth = authToken(c)
+    if (!auth.ok) return auth.response
+
+    const cursor = epochParam(c.req.query('cursor'))
+    if (cursor === null) return c.json({ error: 'Invalid cursor' }, 400)
+    const result = channel.listSessions(auth.token, { workspace: readOverrides(c).workspace, cursor })
+    if (!result.ok) return c.json({ error: result.error }, 403)
+    return c.json({ workspace: result.workspace, sessions: result.sessions, nextCursor: result.nextCursor })
   })
 
   app.post('/web/stop', async (c) => {
@@ -195,7 +232,9 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     const overrides = readOverrides(c)
     const denied = sessionOverrideError(c, auth.account, overrides.sessionId)
     if (denied) return denied
-    const result = channel.getHistory(auth.token, overrides)
+    const since = epochParam(c.req.query('since'))
+    if (since === null) return c.json({ error: 'Invalid since' }, 400)
+    const result = channel.getHistory(auth.token, { ...overrides, since })
     if (!result) {
       // When the caller asked for a specific sessionId and we got null
       // back, treat as 404 (the session doesn't exist in this workspace
@@ -217,11 +256,7 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     const opts = readOverrides(c)
     const denied = sessionOverrideError(c, auth.account, opts.sessionId)
     if (denied) return denied
-    return streamSSE(c, async (stream) => {
-      for await (const chunk of channel.subscribe(auth.token, abortController.signal, opts)) {
-        await stream.write(chunk)
-      }
-    })
+    return streamWithKeepalive(c, () => channel.subscribe(auth.token, abortController.signal, opts))
   })
 
   app.get('/web/file', async (c) => {

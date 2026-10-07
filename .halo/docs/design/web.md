@@ -63,7 +63,7 @@ File: `packages/server/src/routes/web.ts`
 
 All public endpoints require `x-token` header (or `?token=` query param) with a valid account token. No cookie auth needed.
 
-> These paths are listed in `PUBLIC_PATHS` (`middleware/auth.ts`) so they bypass the admin cookie gate: `/api/web/chat`, `/api/web/stop`, `/api/web/history`, `/api/web/subscribe`, `/api/web/file`, and `/api/show/state` (the [halo-city](../../../halo-city/) snapshot — see [dev/api.md](../dev/api.md#show-world-snapshot)). The server CORS allowlist includes the `x-token` header, so browser-based custom frontends (web-demo, halo-city) can call these cross-origin.
+> These paths are listed in `PUBLIC_PATHS` (`middleware/auth.ts`) so they bypass the admin cookie gate: `/api/web/chat`, `/api/web/sessions` (POST mint + GET list), `/api/web/stop`, `/api/web/history`, `/api/web/subscribe`, `/api/web/file`, and `/api/show/state` (the [halo-city](../../../halo-city/) snapshot — see [dev/api.md](../dev/api.md#show-world-snapshot)). The server CORS allowlist includes the `x-token` header, so browser-based custom frontends (web-demo, halo-city) can call these cross-origin.
 
 ### POST `/api/web/chat`
 
@@ -82,14 +82,21 @@ Send a message and receive streaming response via SSE.
 // Response: text/event-stream
 data: {"type":"session","sessionId":"web_abc123_m1xyz"}
 data: {"type":"thinking","text":"..."}
-data: {"type":"tool_call","toolName":"read_file","toolInput":{...}}
-data: {"type":"tool_result","toolName":"read_file","result":"..."}
+data: {"type":"tool_call","toolName":"file_read","toolUseId":"toolu_01…","toolInput":{...}}
+data: {"type":"tool_result","toolName":"file_read","toolUseId":"toolu_01…","result":"..."}   // result capped at 500 chars
+: keepalive                                  // SSE comment every 15 s, see below
 data: {"type":"stream","text":"Hello! "}
 data: {"type":"stream","text":"How can I help?"}
 data: {"type":"switch","sessionId":"..."}   // after /session switch or /session new command
 data: {"type":"complete"}
 data: {"type":"error","error":"..."}
 ```
+
+> **`toolUseId`**: both tool frames carry the provider's tool_use id, so a client can pair a result with its call even when calls interleave (the [ACP adapter](../dev/acp-adapter.md) uses it as the ACP `toolCallId`, and it matches the `toolUseId` in `/web/history`'s assistant `contentBlocks`). Additive — clients that pair by order can ignore it. It can be an empty string (some OpenAI-compatible streams carry no id); treat empty as missing.
+
+#### SSE keepalive
+
+`/web/chat` and `/web/subscribe` write an SSE comment line `: keepalive` every 15 s (`SSE_KEEPALIVE_MS` / `streamWithKeepalive` in `routes/web.ts`; the timer is cleared when the stream ends). A long tool call can otherwise leave the stream silent long enough for an idle reverse proxy / CDN to cut it. Comment lines aren't events — `EventSource` and any spec-following parser drop them; a hand-rolled parser must skip lines that don't start with `data:` (web-demo's both do).
 
 > **Batch-boundary `complete` (must be absorbed, never closes the stream)**: when a root session drains a queue of multiple messages, the server runs N merged turns and emits an internal `complete` with `batchBoundary: true` between rounds (see [session.md](session.md#message-queue-and-drain)). The SSE generators in `channels/web/handler.ts` (`listenSession().events()` plus the `createMediaBuffer()` event processor) flush the just-finished round's text on a `batchBoundary` complete but **do not** send a `complete` SSE frame and **do not** set `done` — the response stays open for the next round; only the **terminal** (unmarked) `complete` closes the HTTP stream. Without this guard a producer→sub-agent fan-out would truncate the web client after the first round. The `batchBoundary` flag is therefore an internal server-side event marker only — it is never serialized into the SSE payload a client sees, so a custom frontend just consumes one ordinary `complete` at the end. (ACP rides on this channel, so it inherits the same safe behavior.)
 
@@ -121,6 +128,25 @@ Minting never touches the account's active-session pointer — a side session cr
 
 **Namespace sharing**: sessions minted here live under the same `web_<accountId>_` prefix as browser sessions. When the token has no active-session pointer, `/web/chat` without `sessionId` falls back to the latest root session under that prefix — which may be an API-minted one. Use a dedicated token for ACP if the same token also drives a browser client.
 
+### GET `/api/web/sessions`
+
+One page of the token's own root sessions — `web_<accountId>_*`, `parent_id IS NULL`, not archived — newest `updatedAt` first, 50 per page (`listSessions` in `channels/web/handler.ts`, over `SessionManager.listSessions({ rootOnly, prefix, cursor })`). Backs ACP `session/list`.
+
+```json
+// GET /api/web/sessions?cursor=<nextCursor>   (cursor optional)
+{
+  "workspace": "/abs/resolved/path",
+  "sessions": [ { "sessionId": "web_abc123_m1xyz_q2", "title": "…", "updatedAt": 1791384914714 } ],
+  "nextCursor": 1791384900000     // null on the last page
+}
+```
+
+- `title` is the session title, falling back to its description, else `null`.
+- `cursor` = the previous page's `nextCursor` (an `updatedAt` epoch-ms); the next page is rows updated strictly before it. Digits only — anything else (`0x10`, `1e3`, `-1`) → 400 `{error: "Invalid cursor"}`; an empty `cursor=` is the same as none (first page). Rows sharing the boundary millisecond can be skipped (shared list-query behaviour).
+- A `workspace` override naming a directory with no `.halo/` → an empty page; the list never scaffolds a workspace (same guard as the admin `GET /api/sessions/logs`).
+- **Prefix-scoped for every access level, `full` included** — the list is "this token's conversations", not the workspace's. A full token can still address any id it knows on the other routes.
+- `workspace` override via query / `x-workspace` header, full tokens only (403 otherwise, like the mint). Bad token → 401.
+
 ### POST `/api/web/stop`
 
 Stop the currently running task. Accepts optional `workspace` / `sessionId` overrides as documented above.
@@ -134,6 +160,8 @@ Stop the currently running task. Accepts optional `workspace` / `sessionId` over
 
 Get a session's message history. Without overrides, returns the account's active session; with `sessionId` (and optionally `workspace`), returns whichever session you address.
 
+Optional `since=<epoch ms>`: only root-log rows (no `taskId` — sub-agent rows dropped) whose `timestamp >= since`, filtered **before** serialization. For a caller that only needs the latest turn — the [ACP adapter](../dev/acp-adapter.md) settling a reply after a reconnect / queued drain passes its turn's start time — instead of the whole log, which on a long session runs to many MB of JSON built on the server's main thread. Digits only; anything else → 400 `{error: "Invalid since"}`; empty = absent. Rows are stamped with the server's clock.
+
 ```json
 // Response
 {
@@ -145,7 +173,7 @@ Get a session's message history. Without overrides, returns the account's active
 
 ### GET `/api/web/subscribe`
 
-Reconnect to a running session's event stream (same SSE format as `/chat`). If session is not running, returns a single `complete` event immediately. Accepts the same `workspace` / `sessionId` overrides.
+Reconnect to a running session's event stream (same SSE format as `/chat`, keepalive included). Opens with a `session` frame; then, if the session is neither running nor compacting, sends a single `complete` and closes immediately — otherwise it streams until the run's terminal `complete` (batch-boundary completes absorbed as on `/chat`). The listener is registered *before* the idle check, so a turn that ends in between still delivers its `complete`. (Before 2026-10 the idle case waited for the next turn's `complete` instead of returning.) Accepts the same `workspace` / `sessionId` overrides.
 
 ## Halo API — Admin endpoints
 

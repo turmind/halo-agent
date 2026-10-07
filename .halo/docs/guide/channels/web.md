@@ -36,19 +36,20 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
   http://localhost:9527/api/web/chat
 ```
 
-Response is a stream of `data: {json}\n\n` SSE frames:
+Response is a standard SSE stream: `data: {json}` event lines, plus a `: keepalive` comment line every 15 s so an idle proxy doesn't cut the connection during a long tool call:
 
 ```
 data: {"type":"session","sessionId":"web_abc123_m1xyz"}
 data: {"type":"thinking","text":"..."}
-data: {"type":"tool_call","toolName":"file_read","toolInput":{...}}
-data: {"type":"tool_result","toolName":"file_read","result":"..."}
+data: {"type":"tool_call","toolName":"file_read","toolUseId":"toolu_01…","toolInput":{...}}
+: keepalive
+data: {"type":"tool_result","toolName":"file_read","toolUseId":"toolu_01…","result":"..."}
 data: {"type":"stream","text":"Hello! "}
 data: {"type":"stream","text":"How can I help?"}
 data: {"type":"complete"}
 ```
 
-Parse the `type` field on each event to render text vs tool calls vs completion.
+Parse the `type` field on each event to render text vs tool calls vs completion. **Only lines starting with `data:` are events** — skip everything else (the keepalive comment, blank separators). `EventSource` does this for you; a hand-rolled parser that splits on `\n\n` and slices off `data: ` will break on the keepalive. `toolUseId` pairs a `tool_result` with its `tool_call` when several run at once (it can be empty for some model providers — then pair with the most recent call).
 
 ### Other endpoints
 
@@ -56,12 +57,13 @@ Parse the `type` field on each event to render text vs tool calls vs completion.
 |---|---|---|
 | `POST /api/web/chat` | Send a message; SSE response |
 | `POST /api/web/sessions` | Mint a new root session in the token's namespace; returns `{sessionId}` |
+| `GET /api/web/sessions?cursor=…` | List the token's own conversations, newest first, 50 per page → `{workspace, sessions: [{sessionId, title, updatedAt}], nextCursor}`; pass `nextCursor` back as `cursor` for the next page (`null` = last page) |
 | `POST /api/web/stop` | Cancel the running task |
-| `GET /api/web/history` | Fetch session message history |
-| `GET /api/web/subscribe` | Reconnect to a running session's SSE stream |
+| `GET /api/web/history` | Fetch session message history (optional `since=<epoch ms>`: only rows from then on) |
+| `GET /api/web/subscribe` | Reconnect to a running session's SSE stream (an idle session answers with one `complete` straight away) |
 | `GET /api/web/file?path=…` | Fetch a file from the bound workspace (path relative to it; `.halo` runtime state is refused) |
 
-All six accept the same auth header.
+All seven accept the same auth header.
 
 ### Per-request overrides
 

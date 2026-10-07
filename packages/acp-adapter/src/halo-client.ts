@@ -1,17 +1,21 @@
 /**
  * Thin client for the halo server's web channel REST + SSE endpoints.
  *
- * Wraps the five endpoints the adapter cares about:
+ * Wraps the six endpoints the adapter cares about:
  *   POST /api/web/sessions    — mint a session id inside the token's own
  *                                namespace (backing ACP `session/new`)
+ *   GET  /api/web/sessions    — one page of the token's own root sessions
+ *                                (backing ACP `session/list`)
  *   POST /api/web/chat        — send a user message, receive SSE stream
  *   POST /api/web/stop        — cancel the running turn
- *   GET  /api/web/history     — probe that a session id still exists on
- *                                the server (`sessionExists`, backing
- *                                ACP `session/load`)
- *   GET  /api/web/subscribe   — long-lived SSE for an already-running
- *                                session (used when a stop was requested
- *                                or when the adapter reconnects mid-turn)
+ *   GET  /api/web/history     — a session's UI log (backing ACP
+ *                                `session/load` replay; 404 = no such
+ *                                session) and post-reconnect reply settling
+ *                                (`since` = the turn's start: only its tail)
+ *   GET  /api/web/subscribe   — SSE for an already-running session, same
+ *                                frames as /chat; a single `complete` when
+ *                                idle (the adapter follows a queued message
+ *                                or re-attaches after a dropped stream)
  *
  * The token authenticates the call. workspace + sessionId let one token
  * drive multiple halo sessions concurrently — see the matching server
@@ -40,6 +44,42 @@ export interface ChatOpts {
 export interface SseEvent {
   type: string
   [k: string]: unknown
+}
+
+/** The fields the adapter reads from a halo UI-log entry — a subset of
+ *  `SessionMessage` in packages/core/src/protocol/session-message.ts (the
+ *  adapter has no runtime dependency on core). */
+export interface HistoryToolCall {
+  name: string
+  input: string
+  output?: string
+  toolUseId?: string
+}
+
+export interface HistoryMessage {
+  id?: string
+  type?: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  taskId?: string
+  deleted?: boolean
+  contentBlocks?: Array<
+    | { type: 'text' | 'thinking'; text: string }
+    | { type: 'tool_call'; toolCall: HistoryToolCall }
+  >
+  toolCalls?: HistoryToolCall[]
+}
+
+export interface SessionHistory {
+  sessionId: string
+  messages: HistoryMessage[]
+  running: boolean
+}
+
+export interface SessionPage {
+  workspace: string
+  sessions: Array<{ sessionId: string; title: string | null; updatedAt: number }>
+  nextCursor: number | null
 }
 
 export class HaloClient {
@@ -98,23 +138,57 @@ export class HaloClient {
     return data.sessionId
   }
 
-  /** GET /api/web/history with an explicit sessionId, returns true iff
-   *  the server has a row for it (used by ACP `session/load`). */
-  async sessionExists(workspace: string, sessionId: string): Promise<boolean> {
-    const url = new URL(`${this.opts.baseUrl}/api/web/history`)
-    url.searchParams.set('workspace', workspace)
-    url.searchParams.set('sessionId', sessionId)
-    const res = await fetch(url, { headers: this.authHeaders({ 'x-token': this.opts.token }) })
-    if (res.status === 404) return false
+  /** GET /api/web/subscribe as SSE — same frames as `chat`. Ends after a
+   *  single `complete` when the session isn't running. */
+  async *subscribe(workspace: string, sessionId: string, signal?: AbortSignal): AsyncGenerator<SseEvent> {
+    const res = await fetch(this.sessionUrl('/api/web/subscribe', workspace, sessionId), {
+      headers: this.authHeaders({ 'x-token': this.opts.token }),
+      signal,
+    })
+    if (!res.ok || !res.body) {
+      const msg = await safeText(res)
+      throw new Error(`halo subscribe ${res.status}: ${msg}`)
+    }
+    yield* parseSseStream(res.body)
+  }
+
+  /** GET /api/web/history for an explicit sessionId; null when the server
+   *  has no such session (404). `since` (epoch ms) = only root-log rows
+   *  stamped at or after it — omitted for the full log. */
+  async history(workspace: string, sessionId: string, signal?: AbortSignal, since?: number): Promise<SessionHistory | null> {
+    const url = this.sessionUrl('/api/web/history', workspace, sessionId)
+    if (since !== undefined) url.searchParams.set('since', String(since))
+    const res = await fetch(url, {
+      headers: this.authHeaders({ 'x-token': this.opts.token }),
+      signal,
+    })
+    if (res.status === 404) return null
     if (!res.ok) {
       const msg = await safeText(res)
       throw new Error(`halo history ${res.status}: ${msg}`)
     }
-    // 200 with a real session id means the row exists. 200 with
-    // sessionId === null shouldn't happen here (we passed an explicit
-    // id), but guard anyway.
-    const data = (await res.json()) as { sessionId?: string | null }
-    return typeof data.sessionId === 'string' && data.sessionId === sessionId
+    return (await res.json()) as SessionHistory
+  }
+
+  /** GET /api/web/sessions — one page of the token's own root sessions,
+   *  newest first. `workspace` is the server-resolved absolute path. */
+  async listSessions(workspace: string, cursor?: number): Promise<SessionPage> {
+    const url = new URL(`${this.opts.baseUrl}/api/web/sessions`)
+    url.searchParams.set('workspace', workspace)
+    if (cursor !== undefined) url.searchParams.set('cursor', String(cursor))
+    const res = await fetch(url, { headers: this.authHeaders({ 'x-token': this.opts.token }) })
+    if (!res.ok) {
+      const msg = await safeText(res)
+      throw new Error(`halo session list ${res.status}: ${msg}`)
+    }
+    return (await res.json()) as SessionPage
+  }
+
+  private sessionUrl(path: string, workspace: string, sessionId: string): URL {
+    const url = new URL(`${this.opts.baseUrl}${path}`)
+    url.searchParams.set('workspace', workspace)
+    url.searchParams.set('sessionId', sessionId)
+    return url
   }
 
   /** POST /api/web/stop. */

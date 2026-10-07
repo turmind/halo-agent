@@ -69,4 +69,9 @@ describe('parseSseStream', () => {
     const events = await collect(streamOf(['data: \n\n']))
     expect(events).toEqual([])
   })
+
+  it('skips the server keepalive comment, including one split across chunks', async () => {
+    const events = await collect(streamOf(['data: {"type":"a"}\n\n: keep', 'alive\n\n', 'data: {"type":"b"}\n\n']))
+    expect(events).toEqual([{ type: 'a' }, { type: 'b' }])
+  })
 })

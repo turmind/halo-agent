@@ -157,3 +157,47 @@ describe('web handleMessage — listener cleanup', () => {
     expect(listenerCount(SID)).toBe(before)
   })
 })
+
+describe('web SSE frames — ACP adapter contract', () => {
+  it('tool_call / tool_result frames carry toolUseId', async () => {
+    vi.spyOn(sm, 'sendUserMessage').mockImplementation(async () => {
+      queueMicrotask(() => {
+        sm.emitEvent(SID, { type: 'tool_call', toolName: 'shell_exec', toolUseId: 'tu_1', toolInput: { command: 'ls' } })
+        sm.emitEvent(SID, { type: 'tool_result', toolName: 'shell_exec', toolUseId: 'tu_1', toolResult: 'a.txt' })
+        sm.emitEvent(SID, { type: 'complete' })
+      })
+      return undefined as never
+    })
+
+    const frames = (await drain(channel.handleMessage(TOKEN, 'hi', undefined, { sessionId: SID })))
+      // Only `data:` lines are frames — the route interleaves `: keepalive`
+      // comment lines, which a real parser (and this one) must skip.
+      .flatMap((c) => c.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice('data: '.length)) as Record<string, unknown>))
+
+    expect(frames.find((f) => f.type === 'tool_call')).toMatchObject({ toolName: 'shell_exec', toolUseId: 'tu_1', toolInput: { command: 'ls' } })
+    expect(frames.find((f) => f.type === 'tool_result')).toMatchObject({ toolName: 'shell_exec', toolUseId: 'tu_1', result: 'a.txt' })
+  })
+
+  it('subscribe on an idle session → session + one complete, no listener left behind', async () => {
+    const before = listenerCount(SID)
+    const chunks = await drain(channel.subscribe(TOKEN, new AbortController().signal, { sessionId: SID }))
+    expect(chunks).toEqual([
+      `data: ${JSON.stringify({ type: 'session', sessionId: SID })}\n\n`,
+      `data: ${JSON.stringify({ type: 'complete' })}\n\n`,
+    ])
+    expect(listenerCount(SID)).toBe(before)
+  })
+
+  it('subscribe on a running session streams to the terminal complete', async () => {
+    vi.spyOn(sm, 'isSessionRunning').mockReturnValue(true)
+    const ac = new AbortController()
+    const done = drain(channel.subscribe(TOKEN, ac.signal, { sessionId: SID }))
+    await new Promise((r) => setTimeout(r, 10))
+    sm.emitEvent(SID, { type: 'stream', text: 'tail\n', final: true })
+    sm.emitEvent(SID, { type: 'complete', batchBoundary: true })
+    sm.emitEvent(SID, { type: 'complete' })
+    const chunks = await done
+    expect(chunks.join('')).toContain('"tail\\n"')
+    expect(chunks.filter((c) => c.includes('"complete"'))).toHaveLength(1)
+  })
+})

@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
 import type { WebAccount } from './types.js'
@@ -12,6 +13,7 @@ import { resolveAccountWorkspace, sessionAccess } from '../shared/accounts.js'
 import { findActiveSessionId, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { scanAvailableAgents } from '../../agents/agent-loader.js'
 import { getDisabledSet } from '../../db/index.js'
+import { hasWorkspaceHalo } from '../../init.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { t, getLang } from '../shared/i18n.js'
 
@@ -61,10 +63,24 @@ export interface WebChannel {
    *  stream (and drops the listener) instead of waiting for the turn's end. */
   handleMessage(token: string, message: string, images?: Array<{ data: string; mimeType: string }>, opts?: WebRequestOverrides, signal?: AbortSignal): AsyncGenerator<string, void, unknown>
   handleStop(token: string, opts?: WebRequestOverrides): Promise<boolean>
-  getHistory(token: string, opts?: WebRequestOverrides): { sessionId: string; messages: SessionMessage[]; running: boolean } | null
+  /** `since` (epoch ms): only root-log rows (no `taskId`) stamped at or after it. */
+  getHistory(token: string, opts?: WebRequestOverrides & { since?: number }): { sessionId: string; messages: SessionMessage[]; running: boolean } | null
   subscribe(token: string, signal: AbortSignal, opts?: WebRequestOverrides): AsyncGenerator<string, void, unknown>
   createSession(token: string, opts?: Pick<WebRequestOverrides, 'workspace' | 'agentId'>): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }>
+  listSessions(token: string, opts?: Pick<WebRequestOverrides, 'workspace'> & { cursor?: number }): WebSessionPage | { ok: false; error: string }
 }
+
+export interface WebSessionPage {
+  ok: true
+  /** Resolved absolute workspace path (ACP `SessionInfo.cwd`). */
+  workspace: string
+  sessions: Array<{ sessionId: string; title: string | null; updatedAt: number }>
+  /** Pass back as `cursor` for the next page; null = last page. */
+  nextCursor: number | null
+}
+
+/** `/web/sessions` list page size. */
+const WEB_LIST_PAGE = 50
 
 export function createWebChannel(deps: {
   registry: SessionManagerRegistry
@@ -85,7 +101,7 @@ export function createWebChannel(deps: {
    * default. Throws-shaped error string when override is rejected; null
    * on a missing-on-disk path so the caller can SSE an `error` event.
    */
-  function resolveWorkspace(account: WebAccount, override?: string): { ok: true; path: string } | { ok: false; error: string } {
+  function resolveWorkspace(account: WebAccount, override?: string, scaffold = true): { ok: true; path: string } | { ok: false; error: string } {
     let path = account.workspacePath
     if (override && override !== account.workspacePath) {
       if (account.accessLevel !== 'full') {
@@ -93,17 +109,19 @@ export function createWebChannel(deps: {
       }
       path = override
     }
-    const resolved = resolveAccountWorkspace({ ...account, workspacePath: path })
+    // `scaffold: false` = a read-only lookup (the session list) — it must not
+    // turn a directory into a workspace (resolveAccountWorkspace seeds `.halo/`).
+    const resolved = scaffold ? resolveAccountWorkspace({ ...account, workspacePath: path }) : (fs.existsSync(path) ? path : null)
     if (!resolved) return { ok: false, error: 'workspace not found' }
     return { ok: true, path: resolved }
   }
 
   /** Token → enabled account → workspace (`resolveWorkspace`). Every public
    *  entry point starts here; each renders the error in its own shape. */
-  function resolveRequest(token: string, workspaceOverride?: string): { ok: true; account: WebAccount; workspace: string } | { ok: false; error: string } {
+  function resolveRequest(token: string, workspaceOverride?: string, scaffold = true): { ok: true; account: WebAccount; workspace: string } | { ok: false; error: string } {
     const account = getAccountByToken(db, token)
     if (!account || !account.enabled) return { ok: false, error: 'Invalid or disabled token' }
-    const ws = resolveWorkspace(account, workspaceOverride)
+    const ws = resolveWorkspace(account, workspaceOverride, scaffold)
     if (!ws.ok) return ws
     return { ok: true, account, workspace: ws.path }
   }
@@ -364,7 +382,7 @@ export function createWebChannel(deps: {
     return true
   }
 
-  function getHistory(token: string, opts?: WebRequestOverrides): { sessionId: string; messages: SessionMessage[]; running: boolean } | null {
+  function getHistory(token: string, opts?: WebRequestOverrides & { since?: number }): { sessionId: string; messages: SessionMessage[]; running: boolean } | null {
     const req = resolveRequest(token, opts?.workspace)
     if (!req.ok) return null
 
@@ -383,7 +401,12 @@ export function createWebChannel(deps: {
     const state = sm.getUIState(sessionId)
     if (!state) return { sessionId, messages: [], running: false }
 
-    const messages = createSaveSnapshot(state)
+    // `since` (epoch ms) trims to the root log's tail before the route
+    // serializes it: a caller that only wants one turn (the ACP adapter's
+    // reconnect settle) shouldn't pay for a multi-MB log + sub-agent rows.
+    const snapshot = createSaveSnapshot(state)
+    const since = opts?.since
+    const messages = since === undefined ? snapshot : snapshot.filter((m) => !m.taskId && m.timestamp >= since)
     const running = sm.isSessionRunning(sessionId)
     return { sessionId, messages, running }
   }
@@ -414,6 +437,30 @@ export function createWebChannel(deps: {
     return { ok: true, sessionId }
   }
 
+  /**
+   * One page of the token's own root sessions (`web_<accountId>_*`), most
+   * recently active first — backs ACP `session/list`. Prefix-scoped for
+   * every access level, full included: the list answers "my
+   * conversations", not "everything in the workspace" (a full token can
+   * still address any id it knows). `cursor` is the previous page's
+   * `nextCursor` (an updatedAt epoch-ms).
+   */
+  function listSessions(token: string, opts?: Pick<WebRequestOverrides, 'workspace'> & { cursor?: number }): WebSessionPage | { ok: false; error: string } {
+    const req = resolveRequest(token, opts?.workspace, false)
+    if (!req.ok) return req
+    // Same guard as GET /sessions/logs (routes/sessions.ts): getOrCreate
+    // scaffolds `.halo/`, and a list mustn't — no `.halo/` → no sessions.
+    if (!hasWorkspaceHalo(req.workspace)) return { ok: true, workspace: req.workspace, sessions: [], nextCursor: null }
+    const sm = registry.getOrCreate(req.workspace)
+    const page = sm.listSessions({ rootOnly: true, prefix: buildWebSessionPrefix(req.account.accountId), limit: WEB_LIST_PAGE, cursor: opts?.cursor })
+    return {
+      ok: true,
+      workspace: req.workspace,
+      sessions: page.sessions.map((s) => ({ sessionId: s.id, title: s.title || s.description || null, updatedAt: s.updatedAt })),
+      nextCursor: page.nextCursor,
+    }
+  }
+
   async function* subscribe(token: string, signal: AbortSignal, opts?: WebRequestOverrides): AsyncGenerator<string, void, unknown> {
     const req = resolveRequest(token, opts?.workspace)
     if (!req.ok) {
@@ -430,10 +477,20 @@ export function createWebChannel(deps: {
 
     yield sseData({ type: 'session', sessionId })
 
-    yield* listenSession(sm, sessionId).events(signal)
+    // Listener first, idle check second: a turn ending in between still
+    // delivers its `complete`. Idle → the one `complete` the contract
+    // promises (design/web.md) instead of waiting for some later turn; a
+    // compacting session counts as busy (endCompact drains its queue).
+    const listener = listenSession(sm, sessionId)
+    if (!sm.isSessionRunning(sessionId) && !sm.isSessionCompacting(sessionId)) {
+      listener.close()
+      yield sseData({ type: 'complete' })
+      return
+    }
+    yield* listener.events(signal)
   }
 
-  return { handleMessage, handleStop, getHistory, subscribe, createSession }
+  return { handleMessage, handleStop, getHistory, subscribe, createSession, listSessions }
 }
 
 function sseData(obj: Record<string, unknown>): string {
@@ -476,12 +533,14 @@ function createMediaBuffer() {
         const out = flushAll() + sseData({ type: 'thinking', text: event.text ?? '' })
         return out
       }
+      // `toolUseId` pairs a result with its call (the ACP adapter uses it as
+      // the stable toolCallId); additive — older clients ignore it.
       case 'tool_call': {
-        const out = flushAll() + sseData({ type: 'tool_call', toolName: event.toolName, toolInput: event.toolInput })
+        const out = flushAll() + sseData({ type: 'tool_call', toolName: event.toolName, toolUseId: event.toolUseId, toolInput: event.toolInput })
         return out
       }
       case 'tool_result': {
-        const out = flushAll() + sseData({ type: 'tool_result', toolName: event.toolName, result: event.toolResult?.slice(0, 500) })
+        const out = flushAll() + sseData({ type: 'tool_result', toolName: event.toolName, toolUseId: event.toolUseId, result: event.toolResult?.slice(0, 500) })
         return out
       }
       case 'complete': {

@@ -58,7 +58,7 @@ Halo currently supports these input channels — onboarding guides at [guide/cha
 
 ## ACP adapter
 
-Separate from the channel system: a stdio bridge (`halo acp`, package `@turmind/halo-acp-adapter`) that lets ACP clients — editors such as Zed and JetBrains IDEs — drive a halo server as if it were a native ACP agent. Internally it just translates ACP JSON-RPC into the existing web channel HTTP + SSE, reusing the same web-channel tokens. ACP sessionId === halo sessionId, so `session/load` works without adapter-side persistence (client owns ids). v1 covers `initialize` / `session/new` / `session/load` / `session/prompt` / `session/cancel`; reverse fs and `requestPermission` are intentionally out of scope.
+Separate from the channel system: a stdio bridge (`halo acp`, package `@turmind/halo-acp-adapter`) that lets ACP clients — editors such as Zed and JetBrains IDEs — drive a halo server as if it were a native ACP agent. Internally it just translates ACP JSON-RPC into the existing web channel HTTP + SSE, reusing the same web-channel tokens. ACP sessionId === halo sessionId, so `session/load` works without adapter-side persistence (client owns ids). v1 covers `initialize` / `session/new` / `session/load` / `session/list` / `session/prompt` / `session/cancel`; reverse fs and `requestPermission` are intentionally out of scope.
 
 Inbound only: the adapter lets an IDE drive halo, nothing calls out over ACP. Halo→halo on the same server goes through [relay](#relay-cross-workspace-dispatch); cross-server halo→halo is not supported yet (A2A is planned).
 

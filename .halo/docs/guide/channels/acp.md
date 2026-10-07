@@ -111,23 +111,31 @@ After registration, pick the agent in the editor's agent panel and chat — the 
 
 ## ACP method coverage
 
+The adapter speaks ACP protocol v1 and passes the [ACP TCK](https://github.com/agentclientprotocol/acp-tck) v1 suite (verdict CONFORMANT).
+
 | Method | Implemented | Notes |
 |---|---|---|
-| `initialize` | ✅ | Declares `protocolVersion: 1`, `loadSession: true`, no auth methods |
+| `initialize` | ✅ | Declares `protocolVersion: 1`, `loadSession: true`, `sessionCapabilities.list`, image + embedded-context prompts, no auth methods, and `agentInfo` (`halo` + adapter version) |
 | `authenticate` | ✅ (no-op) | Token is passed via launch flags; ACP-side auth has nothing to do |
 | `session/new` | ✅ | Calls `POST /api/web/sessions`; halo mints `web_<accountId>_<ts>_<rand>` and creates the row immediately |
-| `session/load` | ✅ | Verifies the supplied id still exists on the halo server, then registers it locally |
-| `session/prompt` | ✅ | Forwards text + image content blocks. Resource / embedded-context blocks log a stderr warning and are dropped (see "Reverse fs" below) |
-| `session/cancel` | ✅ | Aborts the in-flight HTTP/SSE stream and POSTs `/web/stop` |
+| `session/load` | ✅ | Replays the session's active log into the editor (your messages, the agent's thinking, tool calls with their output, replies), then resumes it. That's the whole conversation until the session is archived; after archiving only the newest part |
+| `session/list` | ✅ | Lists this token's own conversations, newest first — what an editor's session history / resume picker shows |
+| `session/prompt` | ✅ | Text and images go through as-is. A file the editor attaches with its content (an @-mention) is inlined into the message as `[resource: <uri>]` plus the content in a code block; a binary attachment becomes `[binary resource omitted: <uri>]`; a file *link* becomes `[resource link: <name> <uri>]` — only a pointer, since the server can't open a path on your laptop. Audio is not supported (dropped with a stderr warning) |
+| `session/cancel` | ✅ | Stops the turn server-side; the interrupted tool calls still show up before the prompt ends as `cancelled` |
+| `session/resume`, modes, config options, `session/delete` / `close`, `logout` | ❌ | Not advertised in `initialize`; calling them anyway gets "method not found" |
 | Reverse `fs/*` | ❌ | See "Reverse fs" below |
 | Reverse `terminal/*` | ❌ | Same reasoning |
 | `requestPermission` | ❌ | Halo has its own access-level system at the channel-account level |
 
+Tool calls show in the editor with a kind (read / edit / execute / search / fetch / other) and a one-line title such as `shell_exec: ls -la`. They carry no file locations — the paths are on the server, the editor couldn't open them. Your editor's own MCP servers are not connected to the halo agent.
+
+If the connection drops mid-turn (proxy timeout, network blip, server restart), the adapter re-attaches on its own and fills in whatever text it missed; after 5 failed attempts it ends the turn with `[adapter error] connection lost`. Sending a prompt while the session is already busy (another client is mid-turn on it) queues it on the server; the adapter waits for that run and returns the reply to your message when it finishes.
+
 ### Session id model
 
-ACP `sessionId` **is** the halo session id — there's no extra mapping layer. `session/new` asks the server to mint one (`POST /api/web/sessions`); it lands in the token's own `web_<accountId>_` namespace and the `agent_sessions` row exists immediately, so readonly / workspace tokens can drive it too. The ACP client persists ids itself; the adapter holds no on-disk state. Losing the adapter's in-memory map on restart is harmless because the conversation lives on the halo server.
+ACP `sessionId` **is** the halo session id — there's no extra mapping layer. `session/new` asks the server to mint one (`POST /api/web/sessions`); it lands in the token's own `web_<accountId>_` namespace and the `agent_sessions` row exists immediately, so readonly / workspace tokens can drive it too. The adapter holds no on-disk state; losing its in-memory map on restart is harmless because the conversation lives on the halo server.
 
-The ACP client is the source of truth for "which sessions are mine" — a Mac-side editor knows about *its* sessions, the EC2-side halo agent doesn't need to enumerate them.
+`session/list` asks the server for the token's own root conversations (every session under its `web_<accountId>_` prefix — including ones a browser client made with the same token; sub-agent sessions excluded). It's scoped to the token even for a `full` token. Each entry's `cwd` is the server-side workspace path, so if your editor filters the list by its local project directory it gets an empty list — that's expected.
 
 ## Multi-workspace
 
@@ -146,7 +154,7 @@ ACP optionally lets the agent (running on the server) request files from the cli
 1. The Web channel is HTTP + SSE — a one-way stream. Reverse fs would need WebSocket or long-poll
 2. Halo agents currently use `file_read` / `file_write` against the **server's** workspace; supporting reverse fs would need a parallel toolset
 
-For now: if you want the agent to see a Mac-side file, paste it into the prompt. The adapter logs a stderr warning when it sees a `resource` content block in `session/prompt`, so the failure mode is obvious.
+What works instead: attach the file with its content (e.g. an @-mention in your editor) — the adapter inlines it into the prompt, so the agent reads it. A plain file link only tells the agent the name and path; it can't open it. Or paste the content into the prompt.
 
 ## Common problems
 
@@ -155,8 +163,10 @@ For now: if you want the agent to see a Mac-side file, paste it into the prompt.
 | Adapter exits immediately on launch | Missing required flag, or the token / host are wrong. Check stderr |
 | `401` on first prompt | Token typo, or token was deleted from admin |
 | `403` when launching with `--workspace /some/other/path` | Token is `readonly` / `workspace` access — use a `full` token or omit `--workspace` |
-| Tool calls don't appear in your IDE | Expected — halo doesn't translate every event back as ACP `tool_call`. See [docs/dev/acp-adapter.md](../../dev/acp-adapter.md) for the full mapping |
-| Two `session/prompt` calls on the same id, second hangs | Halo queues messages when a session is busy; ACP adapter ends the response with `[queued — session busy]`. Wait for the first to finish |
+| Tool call shows no file link / can't jump to the file | Expected — tool paths are on the server, so the adapter sends no `locations`. See [docs/dev/acp-adapter.md](../../dev/acp-adapter.md) for the full mapping |
+| Second prompt rejected while the first is still running | ACP allows one prompt per session at a time — cancel the first, or wait for it |
+| Reply text appears again behind `[reconnected — full reply]` | The stream dropped mid-reply and the missed part couldn't be appended cleanly, so the adapter resent the whole reply. A proxy cutting long streams is the usual cause |
+| Session history picker is empty | If the editor filters by its local project directory, the list comes back empty: halo sessions live under the **server** workspace path |
 | `/workspace switch <path>` worked but other tokens broke | You changed the db-level default. Switch back with another `/workspace switch`, or stop using slash commands from the adapter |
 
 ## Reference
