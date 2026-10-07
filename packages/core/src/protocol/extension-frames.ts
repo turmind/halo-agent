@@ -62,6 +62,9 @@ export type ExtensionHostFrame =
       bundle: boolean
       platform: ExtensionPlatform
       lang: ExtensionLang
+      /** true = this host accepts `export` frames (save-capable, non-bundle
+       *  extension); older hosts omit it — show export UI only when true. */
+      export: boolean
     })
   // file bytes; after `init`, and again on external change while not dirty
   // (never sent to bundle extensions)
@@ -88,6 +91,10 @@ export type ExtensionHostFrame =
   // on every admin theme switch (dark ↔ midnight too, though both are 'dark')
   | (ExtensionFrameBase & { type: 'theme'; theme: ExtensionTheme; themeVars: ExtensionThemeVars })
   | (ExtensionFrameBase & { type: 'lang'; lang: ExtensionLang })
+  // exactly one reply per `export`: `path` = workspace-relative path written
+  | (ExtensionFrameBase & { type: 'exported'; name: string; path: string })
+  // `cancelled` = the user declined to overwrite an existing file
+  | (ExtensionFrameBase & { type: 'export-error'; reason: 'denied' | 'cancelled' | 'invalid' | 'io'; message: string })
 
 // ── Extension → Host ─────────────────────────────────────────────────
 
@@ -98,6 +105,9 @@ export type ExtensionClientFrame =
   | (ExtensionFrameBase & { type: 'dirty'; dirty: boolean })
   | (ExtensionFrameBase & { type: 'save'; buffer: ArrayBuffer })
   | (ExtensionFrameBase & { type: 'error'; message: string })
+  // init.export hosts only: write `buffer` (transferred) next to the open
+  // file as `name` (a plain file name, not the open file's own)
+  | (ExtensionFrameBase & { type: 'export'; name: string; buffer: ArrayBuffer })
   // bundle extensions only; `buffer` for write / append
   | (ExtensionFrameBase & { type: 'fs'; id: number; op: ExtensionFsOp; path: string; buffer?: ArrayBuffer })
 

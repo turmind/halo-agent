@@ -63,6 +63,9 @@ export type HostEffect =
   /** Run a validated bundle `fs` request (path is bundle-relative); feed the
    *  outcome to `onFsResult`. write / append to one path run in request order. */
   | { type: 'fs'; id: number; op: ExtensionFsOp; path: string; buffer?: ArrayBuffer }
+  /** Write a validated `export` next to the open file (`name` is a plain
+   *  file name); answer with exactly one `exported` / `export-error`. */
+  | { type: 'export'; name: string; buffer: ArrayBuffer }
 
 export interface Step {
   state: HostState
@@ -97,6 +100,26 @@ export function isBundlePath(p: unknown, allowRoot: boolean): boolean {
 function isArrayBuffer(v: unknown): v is ArrayBuffer {
   // Not `instanceof`: the frame may come from another realm.
   return Object.prototype.toString.call(v) === '[object ArrayBuffer]'
+}
+
+/** Export target: one path segment — non-empty, no `/` `\` NUL, not `.` / `..`. */
+function isPlainFileName(n: unknown): n is string {
+  return typeof n === 'string' && n !== '' && n !== '.' && n !== '..' && !/[/\\\0]/.test(n)
+}
+
+export function exportError(reason: 'denied' | 'cancelled' | 'invalid' | 'io', message: string): HostEffect {
+  return { type: 'post', frame: { haloExt: 1, type: 'export-error', reason, message } }
+}
+
+function onExportFrame(state: HostState, frame: Extract<ExtensionClientFrame, { type: 'export' }>, ctx: HostContext): Step {
+  if (!state.ready) return { state, effects: [{ type: 'warn', message: 'export before ready ignored' }] }
+  if (!canSave(state) || state.bundle) {
+    return { state, effects: [exportError('denied', 'export needs the save capability (non-bundle)'), { type: 'warn', message: 'export from an extension without export support denied' }] }
+  }
+  if (!isPlainFileName(frame.name)) return { state, effects: [exportError('invalid', `invalid export file name: ${JSON.stringify(frame.name)}`)] }
+  if (frame.name === ctx.file.name) return { state, effects: [exportError('invalid', 'export must not overwrite the open file')] }
+  if (!isArrayBuffer(frame.buffer)) return { state, effects: [exportError('invalid', 'export needs an ArrayBuffer buffer')] }
+  return { state, effects: [{ type: 'export', name: frame.name, buffer: frame.buffer }] }
 }
 
 function fsError(id: number, code: ExtensionFsErrorCode, error: string): HostEffect {
@@ -164,6 +187,7 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
         frame: {
           haloExt: 1, type: 'init', protocol: EXTENSION_PROTOCOL_VERSION, file: ctx.file, capabilities: state.capabilities,
           theme: ctx.theme, themeVars: ctx.themeVars, bundle: state.bundle, platform: ctx.platform, lang: ctx.lang,
+          export: canSave(state) && !state.bundle,
         },
       }
       // A bundle never gets `load` — it reads what it needs through `fs`.
@@ -194,6 +218,8 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
       return { state, effects: [{ type: 'error', message: frame.message }] }
     case 'fs':
       return onFsFrame(state, frame)
+    case 'export':
+      return onExportFrame(state, frame, ctx)
   }
 }
 

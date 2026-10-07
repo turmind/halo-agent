@@ -524,6 +524,9 @@ export const zh: Record<string, string> = {
   'editor.extension.unresponsive': '扩展「{name}」未响应。',
   'editor.extension.updated': '扩展已更新到 v{version}，保存后重新加载以使用新版本。',
   'editor.extension.uninstalled': '此扩展已卸载。保存修改后请关闭此标签页。',
+  'editor.extension.exported': '已导出到 {path}',
+  'editor.extension.exportOverwrite': '「{name}」已存在，是否覆盖？',
+  'editor.extension.exportFailed': '导出失败：{message}',
 
   // ── Cron jobs ──
   'cron.title': '定时任务',

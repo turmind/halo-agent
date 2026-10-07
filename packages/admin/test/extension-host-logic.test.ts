@@ -326,6 +326,63 @@ describe('bundle extensions', () => {
   })
 })
 
+/**
+ * Contract (export): init.export says whether `export` frames are accepted —
+ * save-capable non-bundle only. A valid export becomes one `export` effect;
+ * anything else is answered with exactly one export-error, no I/O.
+ */
+describe('export', () => {
+  const exportFrame = (name: unknown, buffer: unknown = buf()) =>
+    ({ haloExt: 1, type: 'export', name, buffer } as unknown as ExtensionClientFrame)
+  const exportReply = (effects: HostEffect[]) => {
+    const e = effects.find((x) => x.type === 'post')
+    return e?.type === 'post' && e.frame.type === 'export-error' ? e.frame : null
+  }
+  const initExport = (s: HostState) => {
+    const init = onClientFrame(s, frame({ type: 'ready', protocol: 1 }), ctx).effects[0]
+    return init.type === 'post' && init.frame.type === 'init' ? init.frame.export : undefined
+  }
+
+  it('init.export is true only for a save-capable non-bundle extension', () => {
+    expect(initExport(initialHostState(['save']))).toBe(true)
+    expect(initExport(initialHostState([]))).toBe(false)
+    expect(initExport(initialHostState(['save'], true))).toBe(false)
+    expect(initExport(initialHostState(['media'], true))).toBe(false)
+  })
+
+  it('a valid export becomes one export effect with the name and buffer', () => {
+    const b = buf()
+    const step = onClientFrame(ready(), exportFrame('a.png', b), ctx)
+    expect(step.effects).toEqual([{ type: 'export', name: 'a.png', buffer: b }])
+  })
+
+  it('export before ready only warns', () => {
+    expect(types(onClientFrame(initialHostState(['save']), exportFrame('a.png'), ctx).effects)).toEqual(['warn'])
+  })
+
+  it('without save, or from a bundle → export-error denied, no export effect', () => {
+    for (const s of [ready([]), { ...initialHostState(['save'], true), ready: true }]) {
+      const step = onClientFrame(s, exportFrame('a.png'), ctx)
+      expect(types(step.effects)).toEqual(['post', 'warn'])
+      expect(exportReply(step.effects)).toMatchObject({ reason: 'denied' })
+    }
+  })
+
+  it('names that are not a plain file name, or the open file itself, are invalid', () => {
+    for (const n of ['../x.png', 'a/b.png', 'a\\b.png', '/x.png', '.', '..', '', 'nul\0.png', 3, undefined, 'a.echo']) {
+      const step = onClientFrame(ready(), exportFrame(n), ctx)
+      expect(types(step.effects)).toEqual(['post'])
+      expect(exportReply(step.effects)).toMatchObject({ reason: 'invalid' })
+    }
+  })
+
+  it('a non-ArrayBuffer buffer is invalid', () => {
+    for (const b of ['png bytes', new Uint8Array(4), null]) {
+      expect(exportReply(onClientFrame(ready(), exportFrame('a.png', b), ctx).effects)).toMatchObject({ reason: 'invalid' })
+    }
+  })
+})
+
 describe('createKeyedQueue (per-path append ordering)', () => {
   it('runs tasks for one key in request order even when earlier ones are slower; other keys run concurrently', async () => {
     const q = createKeyedQueue()

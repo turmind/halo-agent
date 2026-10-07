@@ -12,7 +12,7 @@ import { PreviewShell, ToolbarButton } from './ui/preview-shell'
 import { extensionEntryUrl, getExtensionToken } from './extension-token'
 import { currentPlatform } from './registry'
 import {
-  createKeyedQueue, initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onFsResult, onLoaded,
+  createKeyedQueue, exportError, initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onFsResult, onLoaded,
   onLangChange, onPutResult, onSaveRequest, onThemeChange, registerExtensionHost,
   type FsOutcome, type HostContext, type HostEffect, type HostState, type Step,
 } from './extension-host-logic'
@@ -108,6 +108,8 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   const [src, setSrc] = useState<string | null>(null)
   const [phase, setPhase] = useState<'token' | 'loading' | 'ready' | 'failed'>('token')
   const [message, setMessage] = useState<string | null>(null)
+  // Last successful export: workspace-relative path + its download URL.
+  const [exported, setExported] = useState<{ path: string; url: string } | null>(null)
   const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const readyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -200,6 +202,34 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
           if (attemptRef.current !== issuedFor) return
           run(onFsResult(stateRef.current, eff.id, outcome))
         })
+        return
+      }
+      case 'export': {
+        const issuedFor = attemptRef.current
+        // A reply for a since-remounted iframe means nothing to the new document.
+        const reply = (frame: HostEffect) => { if (attemptRef.current === issuedFor) applyEffectRef.current(frame) }
+        if (!projectId) {
+          reply(exportError('io', 'no workspace'))
+          return
+        }
+        const slash = path.lastIndexOf('/')
+        const target = slash < 0 ? eff.name : `${path.slice(0, slash)}/${eff.name}`
+        void (async () => {
+          const exists = await api.files.stat(target, projectId).then(() => true, () => false)
+          if (exists && !(await confirmAction(t('editor.extension.exportOverwrite', { name: eff.name })))) {
+            reply(exportError('cancelled', 'overwrite declined'))
+            return
+          }
+          const r = await api.files.saveRaw(target, eff.buffer, projectId, undefined, { create: true })
+          if (r.ok) {
+            reply({ type: 'post', frame: { haloExt: 1, type: 'exported', name: eff.name, path: target } })
+            setExported({ path: target, url: api.files.downloadUrl(target, projectId) })
+            return
+          }
+          const reason = 'message' in r ? r.message : `HTTP ${r.status}`
+          reply(exportError('io', reason))
+          setMessage(t('editor.extension.exportFailed', { message: reason }))
+        })()
         return
       }
     }
@@ -339,6 +369,12 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
           </Banner>
         )}
         {message && phase !== 'failed' && <Banner onClose={() => setMessage(null)}>{message}</Banner>}
+        {exported && (
+          <Banner onClose={() => setExported(null)}>
+            {t('editor.extension.exported', { path: exported.path })}
+            <a href={exported.url} download className="ml-2 text-[var(--primary)] hover:underline">{t('editor.download')}</a>
+          </Banner>
+        )}
         {phase === 'failed' ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
             <p className="text-sm text-[var(--foreground)]">{t('editor.extension.unresponsive', { name: info.name })}</p>

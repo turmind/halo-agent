@@ -524,6 +524,9 @@ export const en: Record<string, string> = {
   'editor.extension.unresponsive': 'Extension "{name}" did not respond.',
   'editor.extension.updated': 'Extension updated to v{version} — save, then reload to use the new version.',
   'editor.extension.uninstalled': 'This extension has been uninstalled. Save your changes, then close the tab.',
+  'editor.extension.exported': 'Exported to {path}',
+  'editor.extension.exportOverwrite': '"{name}" already exists next to this file. Overwrite it?',
+  'editor.extension.exportFailed': 'Export failed: {message}',
 
   // ── Cron jobs ──
   'cron.title': 'Cron Jobs',
