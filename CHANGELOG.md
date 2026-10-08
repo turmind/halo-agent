@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.5.11] - 2026-10-08
+
+### Added
+
+- Chat: a screenshot button (upload · screenshot · screen · camera) — drag-select a region of a frozen screen still and it lands in the input as an image attachment. Desktop uses its own capture; a plain browser uses the screen picker.
+- Terminal: copy / paste keys on Windows / Linux (Ctrl+C copies when there is a selection, Ctrl+Shift+C, Ctrl+V / Ctrl+Shift+V) and a right-click menu (copy / paste / select all / clear); line height 1 so box-drawing rows join up.
+- ACP: the `halo acp` adapter conforms to ACP protocol v1 (official TCK: CONFORMANT, 21/21 mandatory checks). `session/cancel` stops the session actually running, `session/load` replays history, `session/list` is implemented, a dropped stream reconnects with backoff and settles the tail, tool call ids come from the server, embedded context and resource links are honoured. Needs server 1.5.11+ (tool-use ids, SSE keepalive, idle subscribe, goal-session addressing).
+
+### Changed
+
+- Interrupt: a soft interrupt now takes effect at the tool-batch boundary — the whole parallel batch finishes before the agent sees the new message. On a hard interrupt, calls that never started are reported as "not run, safe to re-issue" (`[not run — interrupted]` in the UI) instead of "interrupted".
+- TUI: resuming a session replays only the last 100 messages; the rest fold into one line, with the full log a ctrl+o away.
+- Admin: the current-file chip and the agent selector icon use the active colour while they are in effect / still changeable; the locked agent selector has a plain-words, translated hover hint.
+- Skills: the built-in outbound `acp` skill (`/acp kiro|claude`, `ask-<label>` bindings) is removed; startup deletes the stale global copy (templates v92). The inbound ACP adapter stays; same-server halo-to-halo is relay.
+- Prompts: Windows agents are told to run the CLI as `halo.cmd` (a bare `halo` launches the desktop app).
+
+### Fixed
+
+- Web: `/web/subscribe` during an idle manual compact returns `complete` instead of hanging; an idle subscribe completes immediately; chat / subscribe send an SSE keepalive every 15 s.
+- Web: a token may address the goal session bound to its own session (re-attach, history and stop no longer 403).
+- Sessions: `stop_session` / `archive_session` refuse the caller's own session or an ancestor; `relay_stop`, `relay_send` and `relay_interrupt` refuse the caller itself or an ancestor in its own workspace.
+
 ## [1.5.10] - 2026-10-07
 
 ### Added
@@ -817,7 +839,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.10...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.11...HEAD
+[1.5.11]: https://github.com/turmind/halo-agent/compare/v1.5.10...v1.5.11
 [1.5.10]: https://github.com/turmind/halo-agent/compare/v1.5.9...v1.5.10
 [1.5.9]: https://github.com/turmind/halo-agent/compare/v1.5.8...v1.5.9
 [1.5.8]: https://github.com/turmind/halo-agent/compare/v1.5.7...v1.5.8
