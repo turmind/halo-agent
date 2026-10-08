@@ -118,13 +118,10 @@ interface PromptTurn {
    *  end (closes the connection a `return` out of for-await leaves open). */
   http: AbortController
   /** Halo id the events come from — the `session` frame's (goal-mode
-   *  routing may divert a chat): the session a cancel stops. */
+   *  routing may divert a chat): the session a cancel stops and re-attach /
+   *  settle read from (the server lets a token address the goal session
+   *  bound to its own session). */
   haloSessionId: string
-  /** Where re-attach / settle read from: the routed id only while it stays
-   *  in the ACP id's own `web_<acct>_` namespace (`canAttach`) — a
-   *  readonly / workspace token gets 403 on anything else — else the ACP
-   *  id. */
-  attachSessionId: string
   /** The message as the server logs it — finds this turn's reply in
    *  history after a reconnect. */
   prompt: string
@@ -308,7 +305,6 @@ export class AcpAdapter {
       cancel: new AbortController(),
       http: new AbortController(),
       haloSessionId: p.sessionId,
-      attachSessionId: p.sessionId,
       prompt: text,
       startedAt: Date.now(),
       fallbackIds: 0,
@@ -356,7 +352,7 @@ export class AcpAdapter {
       // Busy session: the message is queued and drains as a merged turn
       // inside the run in flight — follow that run to its terminal
       // complete instead of ending the turn with no reply.
-      result = await this.pumpSafe(acpSessionId, turn, this.client.subscribe(state.workspace, turn.attachSessionId, turn.http.signal))
+      result = await this.pumpSafe(acpSessionId, turn, this.client.subscribe(state.workspace, turn.haloSessionId, turn.http.signal))
       if (turn.cancel.signal.aborted) return 'cancelled'
       if (result !== 'dropped') return this.settle(acpSessionId, state, turn)
     }
@@ -378,7 +374,7 @@ export class AcpAdapter {
       await sleep(this.retryDelaysMs[failures], turn.cancel.signal)
       if (turn.cancel.signal.aborted) return 'cancelled'
       const before = turn.contentEvents
-      const result = await this.pumpSafe(acpSessionId, turn, this.client.subscribe(state.workspace, turn.attachSessionId, turn.http.signal))
+      const result = await this.pumpSafe(acpSessionId, turn, this.client.subscribe(state.workspace, turn.haloSessionId, turn.http.signal))
       if (turn.cancel.signal.aborted) return 'cancelled'
       if (result !== 'dropped') return this.settle(acpSessionId, state, turn)
       failures = turn.contentEvents > before ? 0 : failures + 1
@@ -436,7 +432,7 @@ export class AcpAdapter {
       // file. The server stamps rows with ITS clock, so back off a margin
       // for adapter↔server skew.
       const since = Math.max(0, turn.startedAt - SETTLE_SKEW_MS)
-      const history = await this.client.history(state.workspace, turn.attachSessionId, turn.http.signal, since)
+      const history = await this.client.history(state.workspace, turn.haloSessionId, turn.http.signal, since)
       if (!history) return
       reply = replyAfterPrompt(history.messages, turn.prompt)
     } catch (err) {
@@ -494,10 +490,7 @@ export class AcpAdapter {
         // Halo echoes the resolved session id at the start of every
         // stream. Usually the ACP id itself; a goal-bound session routes
         // to its goal session, which is where a re-attach must listen.
-        if (typeof ev.sessionId === 'string' && ev.sessionId) {
-          turn.haloSessionId = ev.sessionId
-          if (canAttach(acpSessionId, ev.sessionId)) turn.attachSessionId = ev.sessionId
-        }
+        if (typeof ev.sessionId === 'string' && ev.sessionId) turn.haloSessionId = ev.sessionId
         return null
       case 'stream': {
         const text = typeof ev.text === 'string' ? ev.text : ''
@@ -676,17 +669,6 @@ function longestBacktickRun(s: string): number {
   let max = 0
   for (const m of s.matchAll(/`+/g)) max = Math.max(max, m[0].length)
   return max
-}
-
-/** Whether a re-attach may follow a routed id: only inside the ACP id's own
- *  `web_<accountId>_` namespace — the server 403s a readonly / workspace
- *  token on anything else (a goal session is `goal_<ts>`). An ACP id outside
- *  any web namespace was loaded by a full token, which may address any id.
- *  (Real fix would be server-side: let a token address the goal session
- *  bound to one of its own sessions.) */
-function canAttach(acpSessionId: string, routedId: string): boolean {
-  const prefix = /^web_[^_]+_/.exec(acpSessionId)?.[0]
-  return prefix === undefined || routedId.startsWith(prefix)
 }
 
 function nonEmpty(v: unknown): string | undefined {

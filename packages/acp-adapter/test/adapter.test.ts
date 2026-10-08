@@ -626,15 +626,15 @@ describe('busy session (queued)', () => {
     expect(call.since).toBeGreaterThan(before - 10 * 60_000)
   })
 
-  it('a goal-routed id outside the token prefix: re-attach + settle stay on the ACP id', async () => {
+  it('a goal-routed id: re-attach + settle follow the goal session (server lets the token address it)', async () => {
     const h = harness({
       chat: { events: [{ type: 'session', sessionId: 'goal_abc' }, { type: 'queued' }] },
       subscribes: [{ events: [{ type: 'complete' }] }],
     })
     await newSession(h)
     await h.waitFor(prompt(h, 'q'))
-    expect(h.calls.subscribeIds).toEqual([SID])
-    expect(h.calls.historyCalls.map((c) => c.sessionId)).toEqual([SID])
+    expect(h.calls.subscribeIds).toEqual(['goal_abc'])
+    expect(h.calls.historyCalls.map((c) => c.sessionId)).toEqual(['goal_abc'])
   })
 
   it('a routed id inside the same web_<acct>_ prefix is followed', async () => {

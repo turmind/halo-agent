@@ -12,9 +12,9 @@ import { extractMediaPaths } from '../shared/media.js'
 import { resolveAccountWorkspace, sessionAccess } from '../shared/accounts.js'
 import { findActiveSessionId, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { scanAvailableAgents } from '../../agents/agent-loader.js'
-import { getDisabledSet } from '../../db/index.js'
+import { getDisabledSet, getWorkspaceDb } from '../../db/index.js'
 import { hasWorkspaceHalo } from '../../init.js'
-import { resolveGoalRoute } from '../../agents/goal-mode.js'
+import { readGoalState, resolveGoalRoute } from '../../agents/goal-mode.js'
 import { t, getLang } from '../shared/i18n.js'
 
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
@@ -31,9 +31,21 @@ function buildWebSessionPrefix(accountId: string): string {
  * could read / post into / stop any session in the workspace just by
  * naming it. The routes call this before touching the channel so the
  * refusal is a real 403, not an SSE error event.
+ *
+ * One exception: the goal session (`goal_<ts>`) bound to one of the
+ * account's own sessions — goal mode routes that session's chat there and
+ * the `session` frame names it, so re-attach / history / stop must reach it.
  */
 export function canAddressSession(account: WebAccount, sessionId: string): boolean {
-  return account.accessLevel === 'full' || sessionId.startsWith(buildWebSessionPrefix(account.accountId))
+  const prefix = buildWebSessionPrefix(account.accountId)
+  return account.accessLevel === 'full' || sessionId.startsWith(prefix) || isOwnGoalSession(account, sessionId, prefix)
+}
+
+/** DB read only for a `goal_` id, never on the common path. Non-full tokens
+ *  are pinned to the account workspace, so that is the db to read. */
+function isOwnGoalSession(account: WebAccount, sessionId: string, prefix: string): boolean {
+  if (!sessionId.startsWith('goal_') || !hasWorkspaceHalo(account.workspacePath)) return false
+  return readGoalState(getWorkspaceDb(account.workspacePath).db, sessionId)?.workerSessionId.startsWith(prefix) ?? false
 }
 
 /**

@@ -10,6 +10,9 @@ import { createShowRoutes } from '../src/routes/halo-city.js'
 import { createMetricsRoutes } from '../src/routes/metrics.js'
 import { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
 import type { WebChannel } from '../src/channels/web/handler.js'
+import { getWorkspaceDb } from '../src/db/index.js'
+import { agentSessions } from '../src/db/schema.js'
+import { initialGoalState } from '../src/agents/goal-mode.js'
 
 /**
  * Contract (audit B hotspot #1): the three public `x-token` surfaces —
@@ -57,6 +60,7 @@ const registry = new SessionManagerRegistry()
  *  below tell "gate passed" (200) from "gate refused" (403). */
 const webStub = {
   getHistory: (_token: string, opts?: { sessionId?: string }) => ({ sessionId: opts?.sessionId ?? 'stub', messages: [], running: false }),
+  handleStop: async () => false,
 } as unknown as WebChannel
 
 const webApp = () => createWebRoutes({ db, channel: webStub })
@@ -256,6 +260,22 @@ describe('sessionId override is prefix-scoped for non-full tokens', () => {
   it('a full token may address any sessionId', async () => {
     const res = await webApp().request(`/web/history?sessionId=${OTHERS}&token=${FULL_TOKEN}`)
     expect(res.status).toBe(200)
+  })
+
+  it('the goal session bound to one of its own sessions passes; another account\'s goal does not', async () => {
+    const { db: wsDb } = getWorkspaceDb(ws)
+    const goalRow = (id: string, worker: string) => ({
+      id, agentId: 'goal', createdAt: 1, updatedAt: 1, goal: JSON.stringify(initialGoalState(id, worker)),
+    })
+    wsDb.insert(agentSessions).values([goalRow('goal_mine', MINE), goalRow('goal_others', OTHERS)]).run()
+
+    const mine = await webApp().request(`/web/history?sessionId=goal_mine&token=${WS_TOKEN}`)
+    expect(mine.status).toBe(200)
+    const stop = await webApp().request(`/web/stop?token=${WS_TOKEN}`, { method: 'POST', headers: { 'x-session-id': 'goal_mine' } })
+    expect(stop.status).toBe(200)
+    expect((await webApp().request(`/web/history?sessionId=goal_others&token=${WS_TOKEN}`)).status).toBe(403)
+    // A goal_ id with no goal row is just another foreign id.
+    expect((await webApp().request(`/web/history?sessionId=goal_nope&token=${WS_TOKEN}`)).status).toBe(403)
   })
 
   it('POST /web/chat, POST /web/stop, GET /web/subscribe refuse the same way', async () => {
