@@ -280,6 +280,40 @@ describe('relay_interrupt', () => {
   })
 })
 
+describe('relay_send / relay_interrupt within the own workspace', () => {
+  it('refuse the caller\'s own session or an ancestor — no send, no abort, reply_to untouched', async () => {
+    seedSession(deptSm, 'dept-1')
+    seedSession(deptSm, 'dept-1>kid', 'default', 'dept-1')
+    const send = vi.spyOn(deptSm, 'sendUserMessage')
+    const interrupt = vi.spyOn(deptSm, 'interruptSession')
+    // Same workspace: the caller's host IS the target manager.
+    const tools = buildRelayTools(deptSm, 'dept-1>kid')
+    for (const name of ['relay_send', 'relay_interrupt']) {
+      for (const target of ['dept-1>kid', 'dept-1']) {
+        const res = JSON.parse(await tools.find((t) => t.name === name)!.callback({ workspace: deptWs, session_id: target, message: 'hi' }) as string)
+        expect(res).toEqual({ code: 1, error: `cannot relay to session ${target}: it is your own session or one of its ancestors, so its report would come back to you. Talk to your parent through your final reply, or use the session tools.` })
+      }
+    }
+    expect(send).not.toHaveBeenCalled()
+    expect(interrupt).not.toHaveBeenCalled()
+    expect(readReplyTo(deptSm.getDb(), 'dept-1')).toBeNull()
+    expect(readReplyTo(deptSm.getDb(), 'dept-1>kid')).toBeNull()
+  })
+
+  it('still reach another session in the same workspace, and the same id in another workspace', async () => {
+    seedSession(deptSm, 'dept-1')
+    seedSession(deptSm, 'dept-2')
+    vi.spyOn(deptSm, 'sendUserMessage').mockResolvedValue('running')
+    vi.spyOn(deptSm, 'appendUserMessage')
+    const own = buildRelayTools(deptSm, 'dept-1').find((t) => t.name === 'relay_send')!
+    expect(JSON.parse(await own.callback({ workspace: deptWs, session_id: 'dept-2', message: 'hi' }) as string)).toMatchObject({ code: 0 })
+    expect(readReplyTo(deptSm.getDb(), 'dept-2')).toEqual({ workspace: deptWs, sessionId: 'dept-1' })
+    // Caller `dept-1` lives in callerWs — same id, different workspace: no cycle.
+    const cross = buildRelayTools(callerStub, 'dept-1').find((t) => t.name === 'relay_send')!
+    expect(JSON.parse(await cross.callback({ workspace: deptWs, session_id: 'dept-1', message: 'hi' }) as string)).toMatchObject({ code: 0 })
+  })
+})
+
 describe('relay_stop', () => {
   it('refuses, without calling stopSession, the caller\'s own session or an ancestor in its own workspace', async () => {
     seedSession(deptSm, 'dept-1')

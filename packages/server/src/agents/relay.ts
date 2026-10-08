@@ -260,6 +260,13 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
     const resolved = resolveTarget(params.workspace)
     if (typeof resolved === 'string') return resolved
     const { wsPath, target } = resolved
+    // Own workspace + self / an ancestor: reply_to would point the target's
+    // report back into the tree that is running this call — a self-report, or
+    // an ancestor whose reply_to names its own descendant and never clears
+    // cleanly. Other sessions in the same workspace stay allowed.
+    if (target === host && isSelfOrAncestor(callerSessionId, params.session_id)) {
+      return jsonErr(`cannot relay to session ${params.session_id}: it is your own session or one of its ancestors, so its report would come back to you. Talk to your parent through your final reply, or use the session tools.`)
+    }
     if (!target.getSessionById(params.session_id)) {
       if (hard) return jsonErr('session not found')
       // resolveDefaultAgentId only touches getDb() + the workspace path,
