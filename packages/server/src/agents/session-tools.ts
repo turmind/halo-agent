@@ -46,6 +46,20 @@ function isSameTree(a: string, b: string): boolean {
   return a.split('>')[0] === b.split('>')[0]
 }
 
+/** Stop / archive cascade over the target's subtree and await every running
+ *  turn in it. When the caller IS the target or sits inside its subtree, one of
+ *  those turns is the very one running this tool call — the await never
+ *  settles. Ids are path-shaped (`parent>child`, SessionManager.createSession),
+ *  so "inside the subtree" is a prefix test. Shared by stop_session /
+ *  archive_session and same-workspace relay_stop. */
+export function isSelfOrAncestor(callerId: string, targetId: string): boolean {
+  return callerId === targetId || callerId.startsWith(targetId + '>')
+}
+
+export function selfOrAncestorRefusal(verb: 'stop' | 'archive', targetId: string): string {
+  return `cannot ${verb} session ${targetId}: it is your own session or one of its ancestors, so the ${verb} would wait on the very turn making this call. To end your work, just finish this turn.`
+}
+
 export function buildSessionTools(sm: SessionManagerInternals, sessionId: string): ToolDef[] {
   const startSessionTool: ToolDef = {
     name: 'start_session',
@@ -236,6 +250,9 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
         if (!isSameTree(params.session_id, sessionId)) {
           return JSON.stringify({ code: 1, error: `session ${params.session_id} not found` })
         }
+        if (isSelfOrAncestor(sessionId, params.session_id)) {
+          return JSON.stringify({ code: 1, error: selfOrAncestorRefusal('stop', params.session_id) })
+        }
         await sm.stopSession(params.session_id)
         return JSON.stringify({ code: 0, message: `Session ${params.session_id} stopped.` })
       } catch (err) {
@@ -257,6 +274,9 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       try {
         if (!isSameTree(params.session_id, sessionId)) {
           return JSON.stringify({ code: 1, error: `session ${params.session_id} not found` })
+        }
+        if (isSelfOrAncestor(sessionId, params.session_id)) {
+          return JSON.stringify({ code: 1, error: selfOrAncestorRefusal('archive', params.session_id) })
         }
         const count = await sm.archiveSessionTree(params.session_id)
         return JSON.stringify({ code: 0, message: `Archived ${count} session(s).` })

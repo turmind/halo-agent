@@ -19,6 +19,7 @@ import type { ToolDef } from './bedrock-agent.js'
 import type { ModelErrorKind } from './model-error.js'
 import { config } from '../config.js'
 import { resolveDefaultAgentId } from '../channels/shared/commands.js'
+import { isSelfOrAncestor, selfOrAncestorRefusal } from './session-tools.js'
 
 /** What relay needs from a SessionManager — its own or a foreign workspace's.
  *  Structural — the manager satisfies it with `this`; tests pass a stub. */
@@ -295,6 +296,12 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
         if (typeof resolved === 'string') return resolved
         const { target } = resolved
         if (!target.getSessionById(params.session_id)) return jsonErr('session not found')
+        // Same workspace = the registry hands back this very manager, whose
+        // session map holds the caller's running turn — the one case where the
+        // stop can end up awaiting that turn (see isSelfOrAncestor).
+        if (target === host && isSelfOrAncestor(callerSessionId, params.session_id)) {
+          return jsonErr(selfOrAncestorRefusal('stop', params.session_id))
+        }
         await target.stopSession(params.session_id)
         return JSON.stringify({ code: 0, message: `Session ${params.session_id} stopped.` })
       } catch (err) {

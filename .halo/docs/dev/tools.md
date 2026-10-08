@@ -299,7 +299,7 @@ Equivalent to `query_session` **plus an immediate abort** of the in-flight turn.
 
 ### stop_session
 
-Abort the current task of a running session. Any queued messages are **not** dropped — they are folded into the conversation history before the abort, so nothing said while the session was busy is lost. The session stays usable — later `query_session` calls continue the conversation.
+Abort the current task of a running session. Any queued messages are **not** dropped — they are folded into the conversation history before the abort, so nothing said while the session was busy is lost. The session stays usable — later `query_session` calls continue the conversation. Refused with `{"code": 1}` (no stop) when `session_id` is the caller's own session or one of its ancestors — the stop would wait on the very turn making the call; to end its own work an agent just finishes its turn.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
@@ -307,7 +307,7 @@ Abort the current task of a running session. Any queued messages are **not** dro
 
 ### archive_session
 
-**Cascade** archive a session and every descendant. Aborts running work, clears queued messages. Archived sessions disappear from `session_list` and cannot be reached by `query_session`. Only use it when the whole subtree is done.
+**Cascade** archive a session and every descendant. Aborts running work, clears queued messages. Archived sessions disappear from `session_list` and cannot be reached by `query_session`. Only use it when the whole subtree is done. Refused with `{"code": 1}` (nothing archived) when `session_id` is the caller's own session or one of its ancestors, for the same reason as `stop_session`.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
@@ -417,7 +417,7 @@ Returns `{ "code": 0, "workspace", "session_id", "state": "running" | "queued", 
 
 ### relay_stop
 
-Cascades `stopSession` on the target session and its sub-agents. If the target was mid-turn the caller still receives a relay report describing where it was cut off (the stop ends the turn → finally → `deliverRelayReport`, with the partial trace as body).
+Cascades `stopSession` on the target session and its sub-agents. If the target was mid-turn the caller still receives a relay report describing where it was cut off (the stop ends the turn → finally → `deliverRelayReport`, with the partial trace as body). When `workspace` is the caller's own workspace, a `session_id` naming the caller itself or one of its ancestors is refused (`{"code": 1}`, no stop) — same rule as `stop_session`; the same id in another workspace is a different session and stops normally.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|

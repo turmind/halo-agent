@@ -280,6 +280,34 @@ describe('relay_interrupt', () => {
   })
 })
 
+describe('relay_stop', () => {
+  it('refuses, without calling stopSession, the caller\'s own session or an ancestor in its own workspace', async () => {
+    seedSession(deptSm, 'dept-1')
+    seedSession(deptSm, 'dept-1>kid', 'default', 'dept-1')
+    const stopSpy = vi.spyOn(deptSm, 'stopSession')
+    // Same workspace: the caller's host IS the target manager.
+    const relayStop = buildRelayTools(deptSm, 'dept-1>kid').find((t) => t.name === 'relay_stop')!
+    for (const target of ['dept-1>kid', 'dept-1']) {
+      const res = JSON.parse(await relayStop.callback({ workspace: deptWs, session_id: target }) as string)
+      expect(res.code).toBe(1)
+      expect(res.error).toBe(`cannot stop session ${target}: it is your own session or one of its ancestors, so the stop would wait on the very turn making this call. To end your work, just finish this turn.`)
+    }
+    expect(stopSpy).not.toHaveBeenCalled()
+  }, 2000)
+
+  it('still stops the same session id in ANOTHER workspace, and a non-ancestor in its own', async () => {
+    seedSession(deptSm, 'dept-1')
+    seedSession(deptSm, 'dept-2')
+    const stopSpy = vi.spyOn(deptSm, 'stopSession').mockResolvedValue()
+    // Caller `dept-1` lives in callerWs — same id, different workspace: no cycle.
+    const cross = buildRelayTools(callerStub, 'dept-1').find((t) => t.name === 'relay_stop')!
+    expect(JSON.parse(await cross.callback({ workspace: deptWs, session_id: 'dept-1' }) as string)).toEqual({ code: 0, message: 'Session dept-1 stopped.' })
+    const own = buildRelayTools(deptSm, 'dept-1').find((t) => t.name === 'relay_stop')!
+    expect(JSON.parse(await own.callback({ workspace: deptWs, session_id: 'dept-2' }) as string).code).toBe(0)
+    expect(stopSpy.mock.calls.map((c) => c[0])).toEqual(['dept-1', 'dept-2'])
+  })
+})
+
 describe('relay_list', () => {
   function relayList() {
     return buildRelayTools(callerStub, 'sec-1').find((t) => t.name === 'relay_list')!
