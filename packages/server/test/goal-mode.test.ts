@@ -46,6 +46,9 @@ function seedGoal(gId: string, wId: string, mutate?: (s: GoalState) => void): Go
   seedSession(gId, 'goal')
   const s = initialGoalState(gId, wId)
   mutate?.(s)
+  // findLatestGoal orders by the row's createdAt; keep it equal to the state's
+  // so a test-set createdAt decides order (Date.now() ties within one ms on fast CI).
+  sm.getDb().update(agentSessions).set({ createdAt: s.createdAt }).where(eq(agentSessions.id, gId)).run()
   writeGoalState(sm.getDb(), gId, s)
   setWorkerBackptr(sm.getDb(), wId, gId)
   return s
