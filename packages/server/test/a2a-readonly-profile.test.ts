@@ -130,28 +130,28 @@ describe('unchanged: full / workspace A2A and every non-A2A readonly session', (
     const sm = new SessionManager(ws)
     seed(sm, 'a2a_acc_full', 'boss', null)
     const names = await toolsOf(sm, 'a2a_acc_full')
-    for (const n of [...ALL_WS_FOR_MODEL, ...SESSION_TOOLS, 'relay_send', 'a2a_send']) expect(names).toContain(n)
+    for (const n of [...ALL_WS_FOR_MODEL, ...SESSION_TOOLS, 'relay_send', 'a2a_send', 'a2a_stop', 'a2a_read', 'a2a_list']) expect(names).toContain(n)
     expect(sm.getSessionSystemPrompt('a2a_acc_full') ?? '').toContain('## Your Team')
   })
 
-  it('workspace a2a_ session keeps the workspace set + delegation (no relay/a2a — full-only as before)', async () => {
+  it('workspace a2a_ session keeps the workspace set + delegation + the a2a opt-in (relay stays full-only)', async () => {
     const sm = new SessionManager(ws)
     seed(sm, 'a2a_acc_ws', 'boss', 'workspace')
     const names = await toolsOf(sm, 'a2a_acc_ws')
-    for (const n of [...ALL_WS_FOR_MODEL, ...SESSION_TOOLS]) expect(names).toContain(n)
+    for (const n of [...ALL_WS_FOR_MODEL, ...SESSION_TOOLS, 'a2a_send', 'a2a_stop', 'a2a_read', 'a2a_list']) expect(names).toContain(n)
     expect(names).not.toContain('relay_send')
-    expect(names).not.toContain('a2a_send')
     expect(sm.getSessionSystemPrompt('a2a_acc_ws') ?? '').toContain('## Your Team')
   })
 
-  it('readonly sessions of every other channel: same tools as before (sandbox-dependent set + delegation + roster)', async () => {
+  it('readonly sessions of every other channel: sandbox-dependent set + delegation + roster + the a2a opt-in (no relay)', async () => {
     const sm = new SessionManager(ws)
     const expectedWs = createWorkspaceTools(ws, { accessLevel: 'readonly', supportsVision: VISION }).map((t) => t.name)
     for (const id of ['tg_1_ro', 'wx_1_ro', 'web_acc_ro', 'slack_c_ro', 'feishu_c_ro', 'wecom_1_ro', 'sid_ro']) {
       seed(sm, id, 'boss', 'readonly')
       const names = await toolsOf(sm, id)
       for (const n of expectedWs) expect(names, id).toContain(n)
-      for (const n of SESSION_TOOLS) expect(names, id).toContain(n)
+      for (const n of [...SESSION_TOOLS, 'a2a_send', 'a2a_stop', 'a2a_read', 'a2a_list']) expect(names, id).toContain(n)
+      expect(names, id).not.toContain('relay_send')
       expect(sm.getSessionSystemPrompt(id) ?? '', id).toContain('## Your Team')
     }
   })

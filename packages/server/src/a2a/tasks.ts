@@ -11,8 +11,10 @@
  */
 import crypto from 'node:crypto'
 import { getA2ADb, type A2ADb } from '../db/a2a-db.js'
-import { taskJson, wireState, agentMessage, type TaskRow, type TaskState } from './wire.js'
+import type { AccountAccessLevel } from '../channels/shared/accounts.js'
+import { taskJson, wireState, agentMessage, type TaskRow, type TaskState, type WireFile } from './wire.js'
 import { kickPushSender } from './push.js'
+import { attachResultFiles } from './files.js'
 
 /** Process start — a WORKING task last touched before this is a candidate
  *  for the non-owner lazy-FAILED rule (routes.ts reconcileStale). */
@@ -89,17 +91,19 @@ function enqueuePush(taskId: string, eventKey: string, payload: unknown): number
  * rest are no-ops. Returns the terminal row, or null when the task was
  * already terminal / unknown.
  */
-export function transition(taskId: string, state: Exclude<TaskState, 'working'>, f: { statusText?: string | null; result?: string | null; errorKind?: string | null } = {}): TaskRow | null {
+export function transition(taskId: string, state: Exclude<TaskState, 'working'>, f: { statusText?: string | null; result?: string | null; resultFiles?: WireFile[]; errorKind?: string | null } = {}): TaskRow | null {
   const d = db()
   let row: TaskRow | null = null
   let pushes = 0
   d.transaction(() => {
-    const r = d.prepare(`UPDATE a2a_tasks SET state = ?, status_text = ?, result = ?, error_kind = ?, updated_at = ?
+    const r = d.prepare(`UPDATE a2a_tasks SET state = ?, status_text = ?, result = ?, result_files = ?, error_kind = ?, updated_at = ?
                          WHERE id = ? AND state = 'working'`)
-      .run(state, f.statusText ?? null, f.result ?? null, f.errorKind ?? null, Date.now(), taskId)
+      .run(state, f.statusText ?? null, f.result ?? null, f.resultFiles?.length ? JSON.stringify(f.resultFiles) : null, f.errorKind ?? null, Date.now(), taskId)
     if (r.changes === 0) return
     row = getTask(taskId)!
-    pushes = enqueuePush(taskId, `state:${state}`, { task: taskJson(row) })
+    // No file bytes in the outbox (up to ~13 MB per config per event): file
+    // parts are counted in `halo/omittedFiles`; a receiver wanting them GetTasks.
+    pushes = enqueuePush(taskId, `state:${state}`, { task: taskJson(row, true, false) })
   })()
   if (!row) return null
   console.debug(`[A2A] task ${taskId} → ${state}`)
@@ -135,20 +139,30 @@ export function statusUpdateJson(row: TaskRow, text: string): Record<string, unk
 }
 
 /** Turn-end completion, called from relay's deliverRelayReport once the
- *  session's subtree is quiet. Mirrors relay's completed / aborted split. */
-export function completeTask(taskId: string, s: { finalOutput: string; output: string; turnError: string | null; turnErrorKind: string | null }): void {
+ *  session's subtree is quiet. Mirrors relay's completed / aborted split.
+ *  `MEDIA:` image lines in the result become file parts (files.ts), sandboxed
+ *  by the session's access level (null = full; absent → treated as readonly). */
+export function completeTask(taskId: string, s: { finalOutput: string; output: string; turnError: string | null; turnErrorKind: string | null; accessLevel?: 'readonly' | 'workspace' | null }): void {
+  const row = getTask(taskId)
+  // Already terminal (cancel / lazy rule won): transition would no-op — skip the file reads.
+  if (!row || row.state !== 'working') return
+  const level: AccountAccessLevel = s.accessLevel === null ? 'full' : s.accessLevel ?? 'readonly'
+  const attach = (text: string) => attachResultFiles(text, row.workspace, level)
   if (s.turnError) {
     const next = s.turnErrorKind === 'account'
       ? 'This is a model account / credential / balance / permission problem on the remote: re-sending will fail the same way until its model configuration is fixed.'
       : 'Send again on the same context to let it resume.'
+    const partial = s.output ? attach(s.output) : null
     transition(taskId, 'failed', {
       statusText: `The last turn was terminated by an unrecoverable error, NOT completed. Error: ${s.turnError}. ${next}`,
-      result: s.output || null,
+      result: partial?.text || null,
+      resultFiles: partial?.files,
       errorKind: s.turnErrorKind === 'account' ? 'account' : null,
     })
     return
   }
-  transition(taskId, 'completed', { result: s.finalOutput || s.output || '' })
+  const done = attach(s.finalOutput || s.output || '')
+  transition(taskId, 'completed', { result: done.text, resultFiles: done.files })
 }
 
 // ── push configs ──────────────────────────────────────────────────────
@@ -196,7 +210,12 @@ export function deletePushConfig(taskId: string, id: string): void {
 
 // ── listing ───────────────────────────────────────────────────────────
 
-export interface ListFilter { workspace: string; accountId: string | null; contextId?: string; state?: string; after?: number }
+export interface ListFilter { workspace: string; accountId: string | null; contextId?: string; state?: string; after?: number; withFileCounts?: boolean }
+
+/** Every column but the file bytes, which never reach JS here. `file_count`
+ *  is computed (SQLite parses the JSON) only when artifacts are asked for. */
+const listCols = (withFileCounts: boolean) => `id, workspace, context_id, account_id, message_id, state, status_text, error_kind, result, interim_seq, created_at, updated_at,
+  NULL AS result_files, ${withFileCounts ? 'json_array_length(result_files)' : 'NULL'} AS file_count`
 
 export function listTasks(f: ListFilter, pageSize: number, cursor: { updatedAt: number; id: string } | null): { rows: TaskRow[]; total: number; next: string } {
   const where = ['workspace = ?']
@@ -209,7 +228,7 @@ export function listTasks(f: ListFilter, pageSize: number, cursor: { updatedAt: 
   const total = (d.prepare(`SELECT COUNT(*) AS n FROM a2a_tasks WHERE ${where.join(' AND ')}`).get(...args) as { n: number }).n
   const pageWhere = cursor ? [...where, '(updated_at < ? OR (updated_at = ? AND id < ?))'] : where
   const pageArgs = cursor ? [...args, cursor.updatedAt, cursor.updatedAt, cursor.id] : args
-  const rows = d.prepare(`SELECT * FROM a2a_tasks WHERE ${pageWhere.join(' AND ')} ORDER BY updated_at DESC, id DESC LIMIT ?`)
+  const rows = d.prepare(`SELECT ${listCols(!!f.withFileCounts)} FROM a2a_tasks WHERE ${pageWhere.join(' AND ')} ORDER BY updated_at DESC, id DESC LIMIT ?`)
     .all(...pageArgs, pageSize + 1) as TaskRow[]
   const more = rows.length > pageSize
   const page = more ? rows.slice(0, pageSize) : rows

@@ -23,17 +23,22 @@ import { extFromImageMime } from '@turmind/halo-core'
  *  later must not silently start being sent to the model. */
 export const VISION_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 
+/** Vision image MIME type from magic bytes, null when none matches. */
+export function sniffImageMime(buf: Buffer): string | null {
+  if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg'
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png'
+  if (buf.length >= 6 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif'
+  if (buf.length >= 12 && buf.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp'
+  return null
+}
+
 /**
  * Sniff an image MIME type from its magic bytes. Falls back to JPEG when no
  * signature matches — most channels deliver JPEG by default and downstream
  * tools tolerate the wrong tag better than no tag.
  */
 export function inferImageMime(buf: Buffer): string {
-  if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg'
-  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png'
-  if (buf.length >= 6 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif'
-  if (buf.length >= 12 && buf.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp'
-  return 'image/jpeg'
+  return sniffImageMime(buf) ?? 'image/jpeg'
 }
 
 /** Non-image types channels deliver. The image half of this lookup lives in

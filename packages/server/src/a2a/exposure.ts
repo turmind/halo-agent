@@ -12,9 +12,13 @@ import { config } from '../config.js'
 import { resolveTokenAuth } from '../middleware/web-token.js'
 import { getChannelDb } from '../db/channel-db.js'
 import type { AccountAccessLevel } from '../channels/shared/accounts.js'
+import { VISION_IMAGE_MIME_TYPES } from '../channels/shared/media-store.js'
 import { A2A_VERSION } from './wire.js'
 
 export const CARD_FILE = path.join('.halo', 'agent-card.json')
+
+/** Text plus the image types files.ts accepts in and attaches out. */
+const IO_MODES = ['text/plain', ...VISION_IMAGE_MIME_TYPES]
 
 export interface A2ACaller { accountId: string; label: string; accessLevel: AccountAccessLevel }
 export type AuthOutcome = { ok: true; caller: A2ACaller; workspace: string } | { ok: false; status: 401 | 404 | 429 }
@@ -24,6 +28,9 @@ export type AuthOutcome = { ok: true; caller: A2ACaller; workspace: string } | {
 export interface A2AStrategies {
   authenticate(c: Context, rel: string): AuthOutcome
   interfaceUrl(c: Context, rel: string): string
+  /** false → the card advertises no bearer / x-token schemes (auth is
+   *  terminated upstream, e.g. AgentCore's signed request). Default true. */
+  tokenAuth?: boolean
 }
 
 /** Win32 compares paths case-insensitively with either separator. */
@@ -100,7 +107,7 @@ export function publicOrigin(c: Context): string {
   return `${proto}://${c.req.header('host') ?? url.host}`
 }
 
-export interface CardCaps { streaming: boolean }
+export interface CardCaps { streaming: boolean; tokenAuth?: boolean }
 
 /** Read the user-authored card and fill in the server-owned fields.
  *  Throws on an unreadable / incomplete file (the route answers 500). */
@@ -115,13 +122,15 @@ export function buildCard(workspace: string, interfaceUrl: string, caps: CardCap
     version: typeof raw.version === 'string' ? raw.version : (process.env.HALO_VERSION ?? 'dev'),
     supportedInterfaces: [{ url: interfaceUrl, protocolBinding: 'JSONRPC', protocolVersion: A2A_VERSION }],
     capabilities: { streaming: caps.streaming, pushNotifications: true, extendedAgentCard: false },
-    securitySchemes: {
-      bearer: { httpAuthSecurityScheme: { scheme: 'Bearer' } },
-      xToken: { apiKeySecurityScheme: { location: 'header', name: 'x-token' } },
-    },
-    securityRequirements: [{ schemes: { bearer: { list: [] } } }, { schemes: { xToken: { list: [] } } }],
-    defaultInputModes: ['text/plain'],
-    defaultOutputModes: ['text/plain'],
+    ...(caps.tokenAuth === false ? {} : {
+      securitySchemes: {
+        bearer: { httpAuthSecurityScheme: { scheme: 'Bearer' } },
+        xToken: { apiKeySecurityScheme: { location: 'header', name: 'x-token' } },
+      },
+      securityRequirements: [{ schemes: { bearer: { list: [] } } }, { schemes: { xToken: { list: [] } } }],
+    }),
+    defaultInputModes: IO_MODES,
+    defaultOutputModes: IO_MODES,
     skills: raw.skills,
   }
 }

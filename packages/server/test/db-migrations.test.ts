@@ -5,6 +5,7 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { createDb, HALO_MIGRATIONS } from '../src/db/index.js'
 import { createCronDb, CRON_MIGRATIONS } from '../src/db/cron-db.js'
+import { createA2ADb, A2A_MIGRATIONS } from '../src/db/a2a-db.js'
 import { runMigrations } from '../src/db/migrate.js'
 import { rawSqlite } from '../src/db/raw-sqlite.js'
 
@@ -149,6 +150,37 @@ describe('cron.db migrations', () => {
         expect(userVersion(raw)).toBe(CRON_MIGRATIONS.length)
       } finally {
         raw.close()
+      }
+    })
+  })
+})
+
+describe('a2a.db migrations', () => {
+  it('fresh createA2ADb: CREATE_SQL alone has result_files, stamp = list length', () => {
+    withTmpDir('halo-a2a-db-fresh-', (dir) => {
+      const db = createA2ADb(dir)
+      try {
+        expect(columnNames(db, 'a2a_tasks')).toContain('result_files')
+        expect(userVersion(db)).toBe(A2A_MIGRATIONS.length)
+      } finally {
+        db.close()
+      }
+    })
+  })
+
+  it('legacy db (user_version 0, no result_files) gains the column', () => {
+    withTmpDir('halo-a2a-db-legacy-', (dir) => {
+      const legacy = new Database(path.join(dir, 'a2a.db'))
+      legacy.exec(`CREATE TABLE a2a_tasks (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, context_id TEXT NOT NULL, account_id TEXT NOT NULL,
+        message_id TEXT, state TEXT NOT NULL, status_text TEXT, error_kind TEXT, result TEXT, interim_seq INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`)
+      legacy.close()
+      const db = createA2ADb(dir)
+      try {
+        expect(columnNames(db, 'a2a_tasks')).toContain('result_files')
+        expect(userVersion(db)).toBe(A2A_MIGRATIONS.length)
+      } finally {
+        db.close()
       }
     })
   })

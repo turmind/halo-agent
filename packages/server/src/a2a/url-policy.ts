@@ -12,7 +12,7 @@
  *   - plain http only when the host matches a listed host pattern or every
  *     resolved IP is inside a listed CIDR (tailnet / same-VPC traffic)
  *
- * The allowlist is `general.a2a.url_allowlist`, default loopback + tailnet.
+ * The allowlist is `general.a2a.url_allowlist`, default tailnet only (loopback must be listed explicitly).
  */
 import { BlockList, isIP } from 'node:net'
 import dns from 'node:dns'

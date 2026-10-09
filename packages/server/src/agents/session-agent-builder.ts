@@ -232,10 +232,12 @@ export class SessionAgentBuilder {
     if (nameSet.has('relay_send') && accessLevel === null) {
       sessionTools.push(...this.host.createRelayTools(sessionId))
     }
-    // A2A outbound (a2a_send brings a2a_stop / a2a_read / a2a_list): same
-    // opt-in-by-name + full-access-only gate as relay — it reaches other servers.
-    if (nameSet.has('a2a_send') && accessLevel === null) {
-      sessionTools.push(...buildA2ATools(this.host.workspaceRoot, sessionId))
+    // A2A outbound (a2a_send brings a2a_stop / a2a_read / a2a_list): opt-in by
+    // name at every access level (owner, 2026-10-09; `files` is sandboxed by
+    // the level) — except the A2A read-only profile, which ignores yaml tools:
+    // a remote's readonly token must not make this server call third parties.
+    if (nameSet.has('a2a_send') && !a2aReadOnly) {
+      sessionTools.push(...buildA2ATools(this.host.workspaceRoot, sessionId, accessLevel))
     }
 
     return { workspaceTools, sessionTools, allowedNamespaces }

@@ -51,15 +51,23 @@ export interface TaskRow {
   status_text: string | null
   error_kind: string | null
   result: string | null
+  /** JSON `WireFile[]` read from the result's `MEDIA:` lines at completion; null = none. */
+  result_files: string | null
+  /** ListTasks rows only: how many files `result_files` holds — that column
+   *  is not loaded there (null), so a page never pulls the bytes. */
+  file_count?: number | null
   interim_seq: number
   created_at: number
   updated_at: number
 }
 
+/** A file Part as JSON (`raw` = base64). Halo only ever sends images. */
+export interface WireFile { filename: string; mediaType: string; raw: string }
+
 export interface WireMessage {
   messageId: string
   role: string
-  parts: Array<{ text: string }>
+  parts: Array<{ text: string } | WireFile>
   taskId?: string
   contextId?: string
 }
@@ -74,17 +82,23 @@ export function statusJson(row: TaskRow): Record<string, unknown> {
   return status
 }
 
-/** Final text as an Artifact: `result` on COMPLETED, `partial` on FAILED / CANCELED. */
-export function resultArtifact(row: TaskRow): Record<string, unknown> | null {
+/** Final text (+ attached images) as an Artifact: `result` on COMPLETED,
+ *  `partial` on FAILED / CANCELED. `inlineFiles: false` (ListTasks — 100
+ *  tasks × MBs) drops the file parts and counts them in `halo/omittedFiles`. */
+export function resultArtifact(row: TaskRow, inlineFiles = true): Record<string, unknown> | null {
   if (row.result == null) return null
   const name = row.state === 'completed' ? 'result' : 'partial'
-  return { artifactId: name, name, parts: [{ text: row.result }] }
+  const files = row.result_files ? JSON.parse(row.result_files) as WireFile[] : []
+  const art: Record<string, unknown> = { artifactId: name, name, parts: [{ text: row.result }, ...(inlineFiles ? files : [])] }
+  const omitted = inlineFiles ? 0 : (row.file_count ?? files.length)
+  if (omitted) art.metadata = { 'halo/omittedFiles': omitted }
+  return art
 }
 
-export function taskJson(row: TaskRow, includeArtifacts = true): Record<string, unknown> {
+export function taskJson(row: TaskRow, includeArtifacts = true, inlineFiles = true): Record<string, unknown> {
   const task: Record<string, unknown> = { id: row.id, contextId: row.context_id, status: statusJson(row) }
   if (includeArtifacts) {
-    const art = resultArtifact(row)
+    const art = resultArtifact(row, inlineFiles)
     task.artifacts = art ? [art] : []
   }
   if (row.error_kind) task.metadata = { 'halo/errorKind': row.error_kind }

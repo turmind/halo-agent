@@ -1,6 +1,6 @@
 /**
- * Boot-time schema migrations, shared by all five sqlite files
- * (halo.db / cron.db / channels.db / evo.db / runs.db).
+ * Boot-time schema migrations, shared by all six sqlite files
+ * (halo.db / cron.db / channels.db / evo.db / runs.db / a2a.db).
  *
  * Convention: `schema.sql` / `CREATE_SQL` always describes the FULL current
  * shape, so a fresh db is complete after the CREATEs alone. Every change to

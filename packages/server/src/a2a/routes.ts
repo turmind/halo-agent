@@ -20,6 +20,7 @@ import { resolveDefaultAgentId } from '../channels/shared/commands.js'
 import { sessionAccess } from '../channels/shared/accounts.js'
 import { sessionPrefix } from '../channels/shared/session-prefix.js'
 import { checkUrl } from './url-policy.js'
+import { parseMessageParts, fetchImageUrls, saveImage } from './files.js'
 import { buildCard, etagOf, homeStrategies, type A2ACaller, type A2AStrategies } from './exposure.js'
 import {
   BOOT_AT, createTask, findTaskByMessageId, getTask, touchTask, transition, onTaskEvent, statusUpdateJson,
@@ -33,7 +34,8 @@ const STREAMING = true
  *  returned and the client continues with GetTask / SubscribeToTask
  *  (documented deviation from "MUST block", plans/a2a.md §7). */
 const BLOCKING_WAIT_MS = 10 * 60_000
-const MAX_BODY = 1024 * 1024
+/** Fits a message's 10 MB of images (base64 ≈ 13.4 MB) plus its text. */
+const MAX_BODY = 16 * 1024 * 1024
 const SSE_KEEPALIVE_MS = 15_000
 
 interface Ctx { c: Context; sm: SessionManager; workspace: string; caller: A2ACaller; ownsRuntimes: boolean }
@@ -86,19 +88,6 @@ function liveTaskOf(x: Ctx, contextId: string): TaskRow | null {
   return fresh.state === 'working' ? fresh : null
 }
 
-function messageText(msg: Params): string {
-  const parts = Array.isArray(msg.parts) ? msg.parts as Params[] : []
-  if (parts.length === 0) throw new RpcError(RPC.INVALID_PARAMS, 'message.parts is empty')
-  const texts: string[] = []
-  for (const p of parts) {
-    if (typeof p.text !== 'string') throw new RpcError(RPC.CONTENT_TYPE, 'only text parts are supported')
-    texts.push(p.text)
-  }
-  const text = texts.join('\n\n').trim()
-  if (!text) throw new RpcError(RPC.INVALID_PARAMS, 'message text is empty')
-  return text
-}
-
 type PushConfigInput = Parameters<typeof putPushConfig>[1]
 
 /** Validate a push config (URL policy) without writing anything — callers
@@ -129,7 +118,7 @@ async function dispatchMessage(x: Ctx, p: Params): Promise<TaskRow> {
   if (!msg || typeof msg !== 'object') throw new RpcError(RPC.INVALID_PARAMS, 'message required')
   const role = str(msg.role)
   if (role && role !== 'ROLE_USER') throw new RpcError(RPC.INVALID_PARAMS, 'message.role must be ROLE_USER')
-  const text = messageText(msg)
+  const parsed = parseMessageParts(msg)
   const messageId = str(msg.messageId) || null
   const contextId = str(msg.contextId)
   const taskId = str(msg.taskId)
@@ -138,12 +127,11 @@ async function dispatchMessage(x: Ctx, p: Params): Promise<TaskRow> {
   const hard = meta['halo/interrupt'] === true
   const pushCfg = cfg.taskPushNotificationConfig
 
-  // The only await before the writes: validate first, so nothing below can
-  // refuse after a task exists. From the dedupe lookup to createTask the code
-  // is synchronous — two concurrent sends with one messageId can't interleave.
+  // Validate first, so nothing below can refuse after a task exists.
   const push = pushCfg ? await parsePushConfig(pushCfg) : null
 
-  // Retried send (same messageId) → same task, no second dispatch.
+  // Retried send (same messageId) → same task, no second dispatch (and no
+  // image fetch: the dedupe runs before any url part is downloaded).
   if (messageId) {
     const dup = findTaskByMessageId(x.workspace, x.caller.accountId, messageId)
     if (dup) return reconcileStale(x, dup)
@@ -153,6 +141,20 @@ async function dispatchMessage(x: Ctx, p: Params): Promise<TaskRow> {
     throw new RpcError(RPC.INVALID_PARAMS, `unknown contextId: ${contextId} (contexts are created by the agent; omit contextId to start one)`)
   }
   if (contextId && !x.sm.getSessionById(contextId)) throw new RpcError(RPC.INVALID_PARAMS, `unknown contextId: ${contextId}`)
+
+  // Image parts resolved (url fetched, every image saved) before any task row:
+  // a fetch / limit failure refuses the send with nothing created.
+  const images = await fetchImageUrls(parsed.images)
+  const saved = await Promise.all(images.map((img) => saveImage(x.workspace, x.caller.accountId, { buffer: img.buffer!, mediaType: img.mediaType, filename: img.filename })))
+  const text = [parsed.text, ...saved.map((p) => `[图片已保存: ${p}]`)].filter(Boolean).join('\n')
+
+  // Those awaits re-open the window the dedupe closed: from this lookup to
+  // createTask the code is synchronous, so two concurrent sends with one
+  // messageId can't interleave (the losing duplicate only leaves its saved files).
+  if (messageId) {
+    const dup = findTaskByMessageId(x.workspace, x.caller.accountId, messageId)
+    if (dup) return reconcileStale(x, dup)
+  }
 
   let sessionId = contextId
   let task: TaskRow | null = null
@@ -195,7 +197,8 @@ async function dispatchMessage(x: Ctx, p: Params): Promise<TaskRow> {
 
     const prefixed = `${A2A_CHANNEL_PREFIX}account: ${x.caller.accountId}]\n\n${text}`
     x.sm.appendUserMessage(sessionId, text)
-    const state = await x.sm.sendUserMessage(sessionId, prefixed, undefined, sessionAccess(x.caller.accessLevel))
+    const vision = images.map((img) => ({ data: img.buffer!.toString('base64'), mimeType: img.mediaType }))
+    const state = await x.sm.sendUserMessage(sessionId, prefixed, vision.length ? vision : undefined, sessionAccess(x.caller.accessLevel))
     // Hard interrupt: enqueue first, then abort (relay_interrupt's order) so the
     // finally never sees an empty queue and fires a spurious completion.
     if (hard && state === 'queued') x.sm.interruptSession(sessionId)
@@ -261,15 +264,17 @@ function listTasksRpc(x: Ctx, p: Params): unknown {
   }
   const state = p.status ? rowState(str(p.status)) : undefined
   if (p.status && !state && p.status !== 'TASK_STATE_UNSPECIFIED') throw new RpcError(RPC.INVALID_PARAMS, `unknown status ${String(p.status)}`)
+  const include = p.includeArtifacts === true
   const res = listTasks({
     workspace: x.workspace,
     accountId: x.caller.accessLevel === 'full' ? null : x.caller.accountId,
     contextId: str(p.contextId) || undefined,
     state: state || undefined,
     after,
+    withFileCounts: include,
   }, pageSize, cursor)
-  const include = p.includeArtifacts === true
-  return { tasks: res.rows.map((r) => taskJson(reconcileStale(x, r), include)), nextPageToken: res.next, pageSize, totalSize: res.total }
+  // Never inline file bytes in a list (100 tasks × MBs): GetTask carries them.
+  return { tasks: res.rows.map((r) => taskJson(reconcileStale(x, r), include, false)), nextPageToken: res.next, pageSize, totalSize: res.total }
 }
 
 async function createPushConfigRpc(x: Ctx, p: Params): Promise<unknown> {
@@ -312,7 +317,7 @@ function streamTask(x: Ctx, id: unknown, start: () => Promise<TaskRow>): Respons
     const push = (e: TaskEvent | { kind: 'delta'; text: string }) => { queue.push(e); wake?.() }
     const offTask = onTaskEvent(task.id, push)
     // Live text of the root's turns — a non-persisted `progress` artifact
-    // (owner to confirm, plans/a2a.md §14 #4). `result` stays the stored final text.
+    // (kept as-is by owner decision 2026-10-09, plans/a2a.md §14 #4). `result` stays the stored final text.
     const offDelta = x.sm.registerEventListener(task.context_id, (ev) => {
       if (ev.type === 'stream_delta' && !ev.taskId && ev.text) push({ kind: 'delta', text: ev.text })
     })
@@ -374,7 +379,7 @@ export function createA2ARoutes(deps: A2ARouteDeps): Hono {
     if (!auth.ok) return c.json({ error: auth.status === 401 ? 'token required' : auth.status === 429 ? 'too many failed attempts' : 'not found' }, auth.status)
     let body: string
     try {
-      body = JSON.stringify(buildCard(auth.workspace, strategies.interfaceUrl(c, rel), { streaming: STREAMING }))
+      body = JSON.stringify(buildCard(auth.workspace, strategies.interfaceUrl(c, rel), { streaming: STREAMING, tokenAuth: strategies.tokenAuth }))
     } catch (err) {
       console.error(`[A2A] invalid agent-card.json in ${auth.workspace}: ${err instanceof Error ? err.message : String(err)}`)
       return c.json({ error: 'agent card unavailable' }, 500)

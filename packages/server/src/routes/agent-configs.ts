@@ -30,10 +30,10 @@ function getAvailableTools(): Array<{ name: string; description: string }> {
     name: 'relay_send',
     description: `Cross-workspace relay (one toggle, grants the whole set; full-access sessions only): ${relay.map((t) => t.name).join(', ')}.\n\n${relay[0].description}`,
   }
-  const a2a = buildA2ATools('/tmp', '')
+  const a2a = buildA2ATools('/tmp', '', null)
   const a2aChip = {
     name: 'a2a_send',
-    description: `Cross-server A2A (one toggle, grants the whole set; full-access sessions only): ${a2a.map((t) => t.name).join(', ')}.\n\n${a2a[0].description}`,
+    description: `Cross-server A2A (one toggle, grants the whole set): ${a2a.map((t) => t.name).join(', ')}.\n\n${a2a[0].description}`,
   }
   _cachedTools = tools.map((t) => ({ name: t.name, description: t.description })).concat(relayChip, a2aChip)
   return _cachedTools

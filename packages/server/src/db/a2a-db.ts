@@ -1,7 +1,8 @@
 /**
  * A2A global db (see docs/plans/a2a.md §10).
  *
- * Lives at `~/.halo/global/a2a.db`. Inbound: `a2a_tasks` (one row per task =
+ * Lives at `~/.halo/global/a2a.db` (`<ws>/.halo/a2a.db` in AgentCore mode, on
+ * the EFS workspace, so tasks survive microVM recycling). Inbound: `a2a_tasks` (one row per task =
  * one reply_to cycle on a target session), `a2a_push_configs` (caller
  * webhooks per task), `a2a_push_outbox` (persisted push deliveries, one row
  * per (task, config, event) — the dedupe key). Outbound: `a2a_dispatches`
@@ -18,7 +19,7 @@
 import Database from 'better-sqlite3'
 import path from 'node:path'
 import fs from 'node:fs'
-import { runMigrations } from './migrate.js'
+import { runMigrations, addColumnIfMissing, type Migration } from './migrate.js'
 
 const CREATE_SQL = `
 CREATE TABLE IF NOT EXISTS a2a_tasks (
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS a2a_tasks (
   status_text TEXT,
   error_kind  TEXT,
   result      TEXT,
+  result_files TEXT,
   interim_seq INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
@@ -87,13 +89,20 @@ CREATE INDEX IF NOT EXISTS idx_a2a_dispatch_ctx ON a2a_dispatches(workspace, rem
 
 export type A2ADb = Database.Database
 
+/** Ordered a2a.db migrations (see migrate.ts). Append a slot per change;
+ *  CREATE_SQL already has the full shape, so each slot is a no-op on a fresh db. */
+export const A2A_MIGRATIONS: Migration[] = [
+  // v1: `result_files` — JSON [{ filename, mediaType, raw }] of the images a
+  // result attached via MEDIA: lines (plans/a2a.md §5 "Image parts").
+  (s) => addColumnIfMissing(s, 'a2a_tasks', 'result_files', 'TEXT'),
+]
+
 export function createA2ADb(globalDir: string): A2ADb {
   fs.mkdirSync(globalDir, { recursive: true })
   const sqlite = new Database(path.join(globalDir, 'a2a.db'))
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(CREATE_SQL)
-  // No migrations yet — append here; CREATE_SQL must always describe the full current shape.
-  runMigrations(sqlite, [])
+  runMigrations(sqlite, A2A_MIGRATIONS)
   return sqlite
 }
 

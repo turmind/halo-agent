@@ -115,6 +115,18 @@ describe('assertPathAllowed symlink boundary', () => {
     expect(() => assertPathAllowed(cred, opts('readonly'))).toThrow(/outside the allowed sandbox/)
   })
 
+  it('denies ~/.halo/secrets/a2a-remotes.yaml (the server-wide A2A remote list) to non-full sessions, read and write', () => {
+    // Full-only: a session that could edit it could repoint a remote's card at
+    // its own host and receive that remote's bearer token. Under the hidden
+    // ~/.halo/secrets dir, so denied whether or not the file exists.
+    const remotes = path.join(os.homedir(), '.halo', 'secrets', 'a2a-remotes.yaml')
+    for (const write of [false, true]) {
+      expect(() => assertPathAllowed(remotes, opts('workspace'), write)).toThrow(/outside the allowed sandbox/)
+      expect(() => assertPathAllowed(remotes, opts('readonly'), write)).toThrow(/outside the allowed sandbox/)
+    }
+    expect(() => assertPathAllowed(remotes, opts('full'), true)).not.toThrow()
+  })
+
   it('denies hidden ~/.halo/global paths to non-full sessions (evo/cron/runs dbs, internal-sessions, logs)', () => {
     // ~/.halo/global is readable by design (skills/agents/prompts), but the
     // hidden lists carve out cross-workspace state: evo.db / cron.db / runs.db

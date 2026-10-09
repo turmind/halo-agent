@@ -136,7 +136,7 @@ export function cancelA2AForSession(db: HaloDb, sessionId: string, reason: strin
  */
 export async function deliverRelayReport(
   host: RelayTarget,
-  session: { id: string; parentId: string | null; messageQueue: { length: number }; finalOutput: string; output: string; turnError: string | null; turnErrorKind: ModelErrorKind | null },
+  session: { id: string; parentId: string | null; messageQueue: { length: number }; finalOutput: string; output: string; turnError: string | null; turnErrorKind: ModelErrorKind | null; accessLevel?: 'readonly' | 'workspace' | null },
 ): Promise<void> {
   if (session.parentId !== null) return
   const db = host.getDb()

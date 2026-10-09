@@ -1,8 +1,9 @@
 /**
  * The one HTTP client A2A egress uses (push webhooks, remote cards, outbound
- * RPC): node:http(s) with the URL policy's guarded `lookup`, so the address
- * that was checked is the address that gets connected (no DNS rebinding gap).
- * Redirects are not followed — a 3xx is just a non-2xx status to the caller.
+ * RPC, inbound `url` image parts): node:http(s) with the URL policy's guarded
+ * `lookup`, so the address that was checked is the address that gets
+ * connected (no DNS rebinding gap). Redirects are not followed — a 3xx is
+ * just a non-2xx status to the caller.
  */
 import http from 'node:http'
 import https from 'node:https'
@@ -10,10 +11,14 @@ import { isIP } from 'node:net'
 import { checkUrlShape, checkAddress, currentAllowlist, guardedLookup } from './url-policy.js'
 
 export interface HttpResult { status: number; headers: http.IncomingHttpHeaders; body: string }
+export interface HttpBufferResult { status: number; headers: http.IncomingHttpHeaders; body: Buffer }
 
-const MAX_BODY = 8 * 1024 * 1024
+/** Fits a result carrying the 10 MB of images (base64 ≈ 13.4 MB) plus its text. */
+const MAX_BODY = 16 * 1024 * 1024
 
-export function policyRequest(rawUrl: string, opts: { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: string; timeoutMs: number }): Promise<HttpResult> {
+interface RequestOpts { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: string; timeoutMs: number }
+
+function requestBuffer(rawUrl: string, opts: RequestOpts & { maxBytes: number }): Promise<HttpBufferResult> {
   const shape = checkUrlShape(rawUrl)
   if ('error' in shape) return Promise.reject(Object.assign(new Error(shape.error), { code: 'A2A_URL_REFUSED' }))
   const url = shape.url
@@ -36,10 +41,10 @@ export function policyRequest(rawUrl: string, opts: { method: 'GET' | 'POST'; he
       let size = 0
       res.on('data', (c: Buffer) => {
         size += c.length
-        if (size > MAX_BODY) { req.destroy(new Error('response too large')); return }
+        if (size > opts.maxBytes) { req.destroy(new Error(`response larger than ${opts.maxBytes} bytes`)); return }
         chunks.push(c)
       })
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }))
       res.on('error', reject)
     })
     req.on('timeout', () => req.destroy(new Error(`timeout after ${opts.timeoutMs}ms`)))
@@ -47,4 +52,14 @@ export function policyRequest(rawUrl: string, opts: { method: 'GET' | 'POST'; he
     if (opts.body !== undefined) req.write(opts.body)
     req.end()
   })
+}
+
+export async function policyRequest(rawUrl: string, opts: RequestOpts): Promise<HttpResult> {
+  const res = await requestBuffer(rawUrl, { ...opts, maxBytes: MAX_BODY })
+  return { ...res, body: res.body.toString('utf8') }
+}
+
+/** Binary GET (inbound `url` image parts): the body as bytes, capped at `maxBytes`. */
+export function policyGetBuffer(rawUrl: string, opts: { timeoutMs: number; maxBytes: number }): Promise<HttpBufferResult> {
+  return requestBuffer(rawUrl, { method: 'GET', ...opts })
 }
