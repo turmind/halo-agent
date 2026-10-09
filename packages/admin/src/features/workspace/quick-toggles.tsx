@@ -5,6 +5,7 @@ import { Settings, Wifi, WifiOff, Bell, Pin, Sun, ToggleLeft, ToggleRight, type 
 import { cn } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import type { LinkState } from '@/shared/use-websocket'
+import { ActivityBarLabel } from './activity-bar-label'
 
 /** One quick-toggle entry. The status-bar segments, the panel rows and the
  *  hover summary are all generated from one list of these — adding an item
@@ -129,10 +130,18 @@ export function useQuickToggleItems(linkState: LinkState): { items: QuickToggleI
   return { items, notifyOnFinish }
 }
 
-/** Activity-bar entry (gear + segmented status bar) and its pop-up panel. */
-export function QuickToggles({ items: allItems }: { items: QuickToggleItem[] }) {
+/** Activity-bar entry (gear + segmented status bar) and its pop-up panel.
+ *  `expanded` = the activity bar's hover drawer is open: fade in the title +
+ *  description beside the icon column. `onOpenChange` lets the drawer stay
+ *  open while the panel is (else it would jump back to the 48px rail). */
+export function QuickToggles({ items: allItems, expanded = false, onOpenChange }: {
+  items: QuickToggleItem[]
+  expanded?: boolean
+  onOpenChange?: (open: boolean) => void
+}) {
   const t = useT()
   const [open, setOpen] = useState(false)
+  useEffect(() => { onOpenChange?.(open) }, [open, onOpenChange])
   const wrapRef = useRef<HTMLDivElement>(null)
   const items = allItems.filter((i) => i.available)
   const alert = items.some((i) => i.alert)
@@ -164,17 +173,20 @@ export function QuickToggles({ items: allItems }: { items: QuickToggleItem[] }) 
         title={summary}
         aria-expanded={open}
         className={cn(
-          'flex h-12 w-full flex-col items-center justify-center gap-1 transition-colors',
+          'flex h-12 w-full items-center overflow-hidden transition-colors',
           alert ? 'text-[var(--destructive)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
           open && 'bg-[var(--secondary)]',
         )}
       >
-        <Settings className="h-5 w-5" />
-        <span className="flex h-[3px] w-[30px] gap-[2px]">
-          {items.map((i) => (
-            <span key={i.id} data-segment={i.id} className={cn('flex-1 rounded-full bg-current', i.color)} />
-          ))}
+        <span className="flex w-12 shrink-0 flex-col items-center justify-center gap-1">
+          <Settings className="h-5 w-5" />
+          <span className="flex h-[3px] w-[30px] gap-[2px]">
+            {items.map((i) => (
+              <span key={i.id} data-segment={i.id} className={cn('flex-1 rounded-full bg-current', i.color)} />
+            ))}
+          </span>
         </span>
+        <ActivityBarLabel expanded={expanded} title={t('quick.title')} desc={t('nav.desc.quick')} />
       </button>
 
       {open && (

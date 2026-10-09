@@ -33,6 +33,8 @@ import { CronSidebar } from '@/features/cron/cron-sidebar'
 import { SourceControlSidebar } from '@/features/source-control/source-control-sidebar'
 import { SourceControlMain } from '@/features/source-control/source-control-main'
 import { QuickToggles, useQuickToggleItems } from '@/features/workspace/quick-toggles'
+import { ActivityBarLabel } from '@/features/workspace/activity-bar-label'
+import { useHoverIntent } from '@/shared/use-hover-intent'
 import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 import { envBadgeTitlePrefix } from '@/shared/env-badge'
@@ -100,6 +102,18 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   // Quick toggles (network / notify-on-finish / pin / keep-awake) — one list
   // drives the activity-bar entry's status segments, panel rows and tooltip.
   const { items: quickToggleItems, notifyOnFinish } = useQuickToggleItems(linkState)
+
+  // Activity-bar hover drawer (mouse only). Held open while the quick-toggles
+  // panel is up — the panel is anchored to the drawer's right edge.
+  const [quickOpen, setQuickOpen] = useState(false)
+  const drawer = useHoverIntent(quickOpen)
+  const closeDrawer = drawer.close
+  useEffect(() => {
+    if (!drawer.open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeDrawer() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [drawer.open, closeDrawer])
 
   // Dynamic window title, driven by the busy state of the chat tab on screen.
   // Runs in every environment — document.title is harmless in a plain browser
@@ -491,34 +505,51 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     return (
       <button
         key={tab.id}
-        onClick={() => handleTabClick(tab.id)}
-        title={tab.label}
+        onClick={() => { handleTabClick(tab.id); drawer.close() }}
+        aria-label={tab.label}
         className={cn(
-          'relative flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
+          'relative flex h-12 w-full shrink-0 items-center overflow-hidden transition-colors hover:text-[var(--foreground)]',
           isActive ? 'text-[var(--foreground)]' : 'text-[var(--muted-foreground)]',
         )}
       >
         {isActive && (
           <div className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[var(--primary)]" />
         )}
-        <Icon className="h-5 w-5" />
+        <span className="flex w-12 shrink-0 justify-center"><Icon className="h-5 w-5" /></span>
+        <ActivityBarLabel expanded={drawer.open} title={tab.label} desc={t(`nav.desc.${tab.id}`)} />
       </button>
     )
   }
 
   return (
     <div className="flex h-full">
-      {/* Activity Bar — hidden when maximized */}
-      <div className={cn('flex w-12 shrink-0 flex-col items-center border-r border-[var(--border)] bg-[var(--card)] py-2', maximized && 'hidden')}>
-        {topTabs.map(renderTabButton)}
-        <div className="flex-1" />
-        {bottomTabs.map(renderTabButton)}
-        {/* Network segment = the tri-state link light. Green used to mean only
-            "last known state was open" — a zombie socket kept it green while
-            sends vanished (see .halo/tmp/idle-reconnect-msg-loss.md). Now:
-            green = inbound traffic is fresh, amber = OPEN but silent past the
-            stale window (probing), red = down/reconnecting. */}
-        <QuickToggles items={quickToggleItems} />
+      {/* Activity Bar — hidden when maximized. The w-12 box only holds the
+          place; the bar itself is an absolute layer that widens into the
+          hover drawer over the sidebar / main area, so nothing reflows. Rows
+          clip their own labels (no overflow-hidden here — it would clip the
+          quick-toggles popover). z-[45]: above the editor / file tree / panel
+          groups (Monaco's widgets go up to 40), below the floating bottom
+          panel (z-50); z-[60] while the quick-toggles panel is open, so the
+          popover keeps sitting above that floating panel as before. */}
+      <div className={cn('relative w-12 shrink-0', maximized && 'hidden')}>
+        <div
+          {...drawer.bind}
+          className={cn(
+            'absolute inset-y-0 left-0 flex flex-col border-r border-[var(--border)] bg-[var(--card)] py-2 transition-[width,box-shadow] duration-150 ease-out motion-reduce:transition-none',
+            drawer.open ? 'w-60 shadow-[6px_0_16px_-6px_rgba(0,0,0,0.35)]' : 'w-12',
+            quickOpen ? 'z-[60]' : 'z-[45]',
+          )}
+        >
+          {topTabs.map(renderTabButton)}
+          <div className="flex-1" />
+          {bottomTabs.map(renderTabButton)}
+          {/* Network segment = the tri-state link light. Green used to mean only
+              "last known state was open" — a zombie socket kept it green while
+              sends vanished (see .halo/tmp/idle-reconnect-msg-loss.md). Now:
+              green = inbound traffic is fresh, amber = OPEN but silent past the
+              stale window (probing), red = down/reconnecting. */}
+          <QuickToggles items={quickToggleItems} expanded={drawer.open} onOpenChange={setQuickOpen} />
+        </div>
       </div>
 
       {/* Explorer — always mounted so CanvasPanel/Monaco/file tree survive activity-tab switches and maximize.

@@ -405,6 +405,16 @@ export const en: Record<string, string> = {
   'nav.canvas': 'Canvas',
   'nav.chat': 'CHAT',
   'nav.terminal': 'TERMINAL',
+  'nav.desc.explorer': 'Browse, edit and preview files',
+  'nav.desc.sessions': "Browse every session's history",
+  'nav.desc.source-control': 'Review changes, commit, push',
+  'nav.desc.management': 'Models, tools and prompts',
+  'nav.desc.skills': 'Manage skills and their settings',
+  'nav.desc.channels': 'Feishu, WeChat, Telegram…',
+  'nav.desc.evolution': 'Review self-improvements',
+  'nav.desc.cron': 'Run agents on a schedule',
+  'nav.desc.settings': 'Models, look, extensions…',
+  'nav.desc.quick': 'Network, notifications…',
 
   // ── Agent status ──
   'status.busy': 'Working…',

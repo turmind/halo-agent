@@ -11,6 +11,7 @@ import { api } from '@/shared/api-client'
 import { bumpSessionBus } from '@/shared/session-bus'
 import { cn, formatRelativeTime } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
+import { useHoverIntent } from '@/shared/use-hover-intent'
 import { useGoalStore } from './goal-store'
 import { useChatTabs } from './chat-tabs'
 import type { ChatStoreApi } from './chat-store'
@@ -28,7 +29,8 @@ interface SessionSidebarProps {
   /** null = a draft tab is on screen → "New session" row on top. */
   currentSessionId: string | null
   onSelect: (id: string) => void
-  onDelete: (id: string, e: React.MouseEvent) => void
+  /** Async (awaits the confirm dialog) — the hover peek stays up until it settles. */
+  onDelete: (id: string, e: React.MouseEvent) => void | Promise<void>
   onNew?: () => void
   onLoadMore?: () => void
   hasMore?: boolean
@@ -117,6 +119,25 @@ export function SessionSidebar({
     bumpSessionBus()
   }
 
+  // Collapsed-list hover peek. Held open while an interaction started in it
+  // is in progress: the rename input, or the delete confirm — a native /
+  // desktop-overlay dialog outside this subtree, so moving onto it reads as
+  // a leave and would otherwise unmount the row mid-confirm.
+  const [deleting, setDeleting] = useState(false)
+  const peek = useHoverIntent(editingId !== null || deleting)
+  const select = (id: string) => {
+    peek.close()
+    onSelect(id)
+  }
+  const remove = async (id: string, e: React.MouseEvent) => {
+    setDeleting(true)
+    try {
+      await onDelete(id, e)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   useEffect(() => {
     listedTitles.clear()
     for (const s of sessions) if (s.title) listedTitles.set(s.id, s.title)
@@ -124,16 +145,17 @@ export function SessionSidebar({
 
   // Infinite scroll: observe a sentinel at the list's bottom; when it enters
   // the scroll viewport, pull the next page. Dep on sessions.length re-attaches
-  // the observer to the fresh sentinel position after each appended page.
-  const sentinelRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    const el = sentinelRef.current
+  // the observer to the fresh sentinel position after each appended page. A
+  // callback ref, not an effect: the list mounts later than this component
+  // (expanding a collapsed list, the hover peek), and an effect wouldn't re-run.
+  const sentinelRef = useCallback((el: HTMLDivElement | null) => {
     if (!el || typeof IntersectionObserver === 'undefined') return
     const io = new IntersectionObserver((entries) => {
       if (entries[0]?.isIntersecting) onLoadMore?.()
     }, { rootMargin: '48px' })
     io.observe(el)
     return () => io.disconnect()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sessions.length is the re-attach trigger
   }, [onLoadMore, sessions.length])
 
   // The chat tab holding each session (loaded tabs carry a store + unread).
@@ -170,7 +192,7 @@ export function SessionSidebar({
               active={currentSessionId === s.id}
               store={tab?.store}
               unread={unreadOf(s)}
-              onActivate={() => onSelect(s.id)}
+              onActivate={() => select(s.id)}
             />
           )
         })}
@@ -186,6 +208,7 @@ export function SessionSidebar({
       defaultWidth={200}
       title={t('chat.sessions.title')}
       collapsedContent={collapsed}
+      hoverPeek={peek}
     >
       <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto py-1">
         {isDraft && (
@@ -211,7 +234,7 @@ export function SessionSidebar({
                 unread={unreadOf(s)}
                 tooltip={`${titleOf(s)}\n${s.exchangeCount} msgs · ${formatRelativeTime(s.updatedAt, t)}${model}`}
                 active={currentSessionId === s.id}
-                onActivate={() => onSelect(s.id)}
+                onActivate={() => select(s.id)}
                 label={editing ? (
                   <input
                     autoFocus
@@ -241,7 +264,7 @@ export function SessionSidebar({
                     <Pencil className="h-3 w-3" />
                   </button>
                 )}
-                onClose={editing ? undefined : (e) => onDelete(s.id, e)}
+                onClose={editing ? undefined : (e) => { void remove(s.id, e) }}
                 closeLabel={t('chat.sessions.delete')}
                 closeIcon={<Trash2 className="h-3 w-3" />}
               />
@@ -258,7 +281,7 @@ export function SessionSidebar({
           </div>
         )}
       </div>
-      {onNew && <VerticalTabAdd onClick={onNew} label={t('chat.sessions.new')} />}
+      {onNew && <VerticalTabAdd onClick={() => { peek.close(); onNew() }} label={t('chat.sessions.new')} />}
     </ResizableSidebar>
   )
 }

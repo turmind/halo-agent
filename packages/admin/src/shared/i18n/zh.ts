@@ -405,6 +405,16 @@ export const zh: Record<string, string> = {
   'nav.canvas': '画布',
   'nav.chat': '对话',
   'nav.terminal': '终端',
+  'nav.desc.explorer': '浏览、编辑和预览文件',
+  'nav.desc.sessions': '查看所有会话记录',
+  'nav.desc.source-control': '查看改动、提交和推送',
+  'nav.desc.management': '配置 Agent 的模型、工具和提示词',
+  'nav.desc.skills': '管理技能和技能配置',
+  'nav.desc.channels': '接入飞书、微信、Telegram 等',
+  'nav.desc.evolution': '审核 Agent 的自我改进',
+  'nav.desc.cron': '定时让 Agent 跑任务',
+  'nav.desc.settings': '模型、外观、扩展等全局设置',
+  'nav.desc.quick': '网络状态、完成通知等',
 
   // ── Agent status ──
   'status.busy': '运行中…',
