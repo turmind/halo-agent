@@ -100,6 +100,35 @@ describe('classifyModelError', () => {
     })
   })
 
+  describe('Mantle mid-stream codes — no HTTP status, the stream code decides', () => {
+    it.each<[string, ModelErrorKind]>([
+      ['server_error', 'server_error'],
+      ['internal_server_error', 'server_error'],
+      ['service_unavailable', 'server_error'],
+      ['rate_limit_exceeded', 'throttle'],
+      ['rate_limit_error', 'throttle'],
+      ['invalid_prompt', 'fatal'],
+    ])('API error in stream: %s → %s', (code, expected) => {
+      expect(classifyModelError(new Error(`[MantleAgent] API error in stream: ${code}: The server had an error`)).kind).toBe(expected)
+    })
+
+    it.each<[string, number | undefined, ModelErrorKind]>([
+      ['500', 500, 'server_error'],
+      ['401', 401, 'account'],
+      ['1302', undefined, 'throttle'],  // Zhipu business code — four digits, not an HTTP status; rate limit
+      ['1305', undefined, 'throttle'],  // Zhipu model overloaded
+      ['1301', undefined, 'fatal'],     // Zhipu content safety — not retried
+    ])('chat-completions numeric stream code %s → httpStatus %s, %s', (code, status, expected) => {
+      const c = classifyModelError(new Error(`[DeepSeekAgent] API error in stream: ${code}: upstream exploded`))
+      expect([c.httpStatus, c.kind]).toEqual([status, expected])
+    })
+
+    it('a 400 whose body says "server_error" stays non-retry', () => {
+      const err = new Error('[MantleAgent] API error 400: {"error":{"code":"invalid_value","message":"server_error is not a valid tool name"}}')
+      expect(classifyModelError(err).kind).toBe('fatal')
+    })
+  })
+
   describe('multimodal — 4xx gate', () => {
     it.each<[string, number | undefined, ModelErrorKind]>([
       ['with 400', 400, 'multimodal_4xx'],

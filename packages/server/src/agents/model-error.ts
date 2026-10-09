@@ -30,12 +30,19 @@ export function classifyModelError(err: unknown): ClassifiedModelError {
   const httpStatusFromMsg = msg.match(/API error (\d{3})/)?.[1]
     ?? msg.match(/\]\s+(\d{3})\b/)?.[1]
     ?? msg.match(/status=(\d{3})/)?.[1]
+    // Chat-completions gateways (OpenRouter / LiteLLM style) put the HTTP
+    // status in a mid-stream frame's numeric `code` → `API error in stream: 500: …`.
+    ?? msg.match(/API error in stream: (\d{3}):/)?.[1]
   const httpStatus = httpStatusFromMeta ?? (httpStatusFromMsg ? Number(httpStatusFromMsg) : undefined)
 
   return { kind: classifyKind(msg, errName, httpStatus), msg, errName, httpStatus }
 }
 
 function classifyKind(msg: string, errName: string, httpStatus: number | undefined): ModelErrorKind {
+  // MantleAgent's mid-stream failure frames (`API error in stream: <code>:
+  // …`) carry no HTTP status — the code is their only signal. Read only from
+  // that prefix, so a 4xx body that merely mentions "server_error" stays put.
+  const streamCode = msg.match(/API error in stream: ([\w.-]+):/)?.[1]
   // 2. Context overflow → local (no-LLM) compact then retry. Bedrock's bare
   // "Input is too long." is also what it returns for a request body over its
   // ~32 MB ceiling (token count irrelevant — e.g. 31 replayed 896px PNGs);
@@ -65,6 +72,9 @@ function classifyKind(msg: string, errName: string, httpStatus: number | undefin
     errName === 'ThrottlingException'
     || httpStatus === 429
     || msg.includes('throttl') || msg.includes('rate limit') || msg.includes('ThrottlingException') || msg.includes('ServiceUnavailableException') || msg.includes('API error 429')
+    || streamCode === 'rate_limit_exceeded' || streamCode === 'rate_limit_error'
+    // Moonshot capacity overload (type, code null) · Zhipu 1302 account rate limit / 1305 model overloaded
+    || streamCode === 'engine_overloaded_error' || streamCode === '1302' || streamCode === '1305'
   ) {
     return 'throttle'
   }
@@ -88,6 +98,7 @@ function classifyKind(msg: string, errName: string, httpStatus: number | undefin
     || httpStatus === 504
     || httpStatus === 529  // Anthropic Overloaded — transient
     || httpStatus === 408
+    || streamCode === 'server_error' || streamCode === 'internal_server_error' || streamCode === 'service_unavailable'
   ) {
     return 'server_error'
   }

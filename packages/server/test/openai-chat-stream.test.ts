@@ -7,6 +7,7 @@ import { KimiAgent } from '../src/agents/kimi-agent.js'
 import { ZhipuAgent } from '../src/agents/zhipu-agent.js'
 import { DoubaoAgent } from '../src/agents/doubao-agent.js'
 import { HunyuanAgent } from '../src/agents/hunyuan-agent.js'
+import { classifyModelError, type ModelErrorKind } from '../src/agents/model-error.js'
 import { sseResponse } from './helpers/sse-response.js'
 import { shownDeltas } from './helpers/model-deltas.js'
 
@@ -208,6 +209,40 @@ describe('fetchChatCompletionStream', () => {
     ]))
 
     await expect(call()).rejects.toThrow(/^\[DeepSeekAgent\] API error in stream: .*upstream exploded/)
+  })
+
+  // One row per distinct mid-stream error-frame shape: the thrown message
+  // (`<code>: <message>`) and how classifyModelError routes it.
+  it.each<[string, Record<string, unknown>, string, ModelErrorKind]>([
+    // DeepSeek / OpenAI-style {message, type, code}, string code
+    ['{message,type,code} rate limit', { message: 'Rate limit reached', type: 'rate_limit_error', code: 'rate_limit_exceeded' }, 'rate_limit_exceeded: Rate limit reached (rate_limit_error)', 'throttle'],
+    // The account keywords are lowercase — DeepSeek's capitalised message was
+    // already `fatal` in the old JSON form; non-retry either way.
+    ['{message,type,code} insufficient balance', { message: 'Insufficient Balance', type: 'invalid_request_error', code: 'insufficient_balance' }, 'insufficient_balance: Insufficient Balance (invalid_request_error)', 'fatal'],
+    // A `type` that isn't the code rides in the tail, so its keyword still hits.
+    ['{message,type,code} auth type', { message: 'Incorrect API key provided', type: 'authentication_error', code: 'invalid_api_key' }, 'invalid_api_key: Incorrect API key provided (authentication_error)', 'account'],
+    // OpenAI's own form: code null, type carries the class
+    ['{message,type,code:null}', { message: 'The server had an error', type: 'server_error', code: null }, 'server_error: The server had an error', 'server_error'],
+    // Gateway form: numeric HTTP-status code
+    ['{message,type,code:<http status>}', { message: 'upstream exploded', code: 500, type: 'server_error' }, '500: upstream exploded (server_error)', 'server_error'],
+    // Kimi / Moonshot {message, type}
+    ['Moonshot engine_overloaded', { message: 'The engine is currently overloaded, please try again later', type: 'engine_overloaded_error' }, 'engine_overloaded_error: The engine is currently overloaded, please try again later', 'throttle'],
+    ['Moonshot engine_overloaded, code null', { message: 'The engine is currently overloaded', type: 'engine_overloaded_error', code: null }, 'engine_overloaded_error: The engine is currently overloaded', 'throttle'],
+    ['Moonshot invalid_authentication', { message: 'Invalid Authentication', type: 'invalid_authentication_error' }, 'invalid_authentication_error: Invalid Authentication', 'account'],
+    // Zhipu {code: "<business code>", message}
+    ['Zhipu 1302 rate limit', { code: '1302', message: '您的账户已达到速率限制，请您控制请求频率' }, '1302: 您的账户已达到速率限制，请您控制请求频率', 'throttle'],
+    ['Zhipu 1305 model overloaded', { code: '1305', message: '该模型当前访问量过大，请您稍后再试' }, '1305: 该模型当前访问量过大，请您稍后再试', 'throttle'],
+    ['Zhipu 1301 content safety', { code: '1301', message: '系统检测到输入或生成内容可能包含不安全或敏感内容' }, '1301: 系统检测到输入或生成内容可能包含不安全或敏感内容', 'fatal'],
+    ['Zhipu 1113 balance', { code: '1113', message: '您的账户已欠费，请充值后重试' }, '1113: 您的账户已欠费，请充值后重试', 'fatal'],
+    // no message → frame JSON kept
+    ['{code} only', { code: 'server_error' }, 'server_error: {"code":"server_error"}', 'server_error'],
+  ])('mid-stream %s → "<code>: <message>", classified %s', async (_label, error, expected, kind) => {
+    stubFetch(() => sseResponse([chunk({ content: 'par' }), { error }]))
+
+    const err = await call().then(() => null, (e: unknown) => e as Error)
+
+    expect(err?.message).toBe(`[DeepSeekAgent] API error in stream: ${expected}`)
+    expect(classifyModelError(err).kind).toBe(kind)
   })
 
   it('abort mid-stream (body ends cleanly) → AbortError, only pre-abort deltas reported', async () => {

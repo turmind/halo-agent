@@ -175,6 +175,16 @@ describe('MantleAgent streaming callModel', () => {
     await expect(probe().call(undefined)).rejects.toThrow('[MantleAgent] API error in stream: rate_limit_exceeded: Too many requests')
   })
 
+  it('nested error event (bedrock-runtime shape) → rejects "API error in stream: <code>: <message>"', async () => {
+    stubFetch(() => mantle([
+      { type: 'response.created', response: { id: 'resp_4b', status: 'in_progress', output: [] } },
+      { type: 'error', error: { code: 'server_error', message: 'The server had an error', param: null, type: 'server_error' }, sequence_number: 2 },
+      { type: 'response.failed', response: { id: 'resp_4b', status: 'failed', output: [], error: { code: 'server_error', message: 'The server had an error' } } },
+    ]))
+
+    await expect(probe().call(undefined)).rejects.toThrow('[MantleAgent] API error in stream: server_error: The server had an error')
+  })
+
   it('stream ends without a terminal event → MantleEmptyResponse (retry marker)', async () => {
     stubFetch(() => mantle(textStream().slice(0, -1)))
 

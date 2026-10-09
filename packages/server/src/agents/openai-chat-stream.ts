@@ -41,6 +41,17 @@ export interface ChatCompletionChunk {
   error?: { message?: string; code?: unknown; type?: string }
 }
 
+/** `<code>: <message>` for a mid-stream error frame. code = the first string /
+ *  number of `code`, `type` (OpenAI sends `code: null` + `type`). A `type`
+ *  that isn't the code stays in the tail, so keyword checks on it still match
+ *  (Moonshot `invalid_authentication_error` → account); no message → the
+ *  frame JSON, so nothing the old JSON form carried is lost. */
+function streamErrorText(err: NonNullable<ChatCompletionChunk['error']>): string {
+  const code = [err.code, err.type].find((v) => typeof v === 'string' || typeof v === 'number') ?? '?'
+  if (!err.message) return `${code}: ${JSON.stringify(err).slice(0, 300)}`
+  return `${code}: ${err.message.slice(0, 300)}${err.type && err.type !== code ? ` (${err.type})` : ''}`
+}
+
 /** Folded result — shaped like the non-streaming `choices[0].message` + siblings so the agents' existing parse code runs unchanged. */
 export interface ChatCompletionFolded {
   message: {
@@ -165,8 +176,9 @@ export async function fetchChatCompletionStream(opts: FetchChatCompletionStreamO
   for await (const chunk of readSseJson<ChatCompletionChunk>(res.body, () => opts.onDelta?.(ACTIVITY_DELTA))) {
     if (chunk.error) {
       // No HTTP status exists mid-stream (the 200 already went out), so
-      // classifyModelError falls back to its keyword checks on this message.
-      throw new Error(`[${tag}] API error in stream: ${JSON.stringify(chunk.error).slice(0, 300)}`)
+      // classifyModelError reads the `<code>` of this message instead — the
+      // same `<code>: <message>` form as MantleAgent's stream errors.
+      throw new Error(`[${tag}] API error in stream: ${streamErrorText(chunk.error)}`)
     }
     acc.push(chunk)
   }

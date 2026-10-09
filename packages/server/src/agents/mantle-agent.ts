@@ -331,9 +331,16 @@ interface ResponsesStreamEvent {
   delta?: string
   /** `response.completed` / `response.incomplete` / `response.failed` carry the full final response object. */
   response?: Record<string, unknown>
-  /** Bare `error` event. */
+  /** `error` event — bedrock-runtime nests the fields under `error`; the flat shape is the older form. */
+  error?: { code?: string; message?: string; type?: string }
   code?: string
   message?: string
+}
+
+/** Both mid-stream failure frames throw this one `<code>: <message>` form —
+ *  model-error.ts keys its retry branches off the code. */
+function streamError(code: string | undefined, message: string | undefined): Error {
+  return new Error(`[MantleAgent] API error in stream: ${code ?? '?'}: ${message ?? ''}`)
 }
 
 /**
@@ -377,13 +384,14 @@ async function readResponsesStream(
         final = ev.response
         break
       // No HTTP status exists mid-stream (the 200 already went out), so
-      // classifyModelError falls back to its keyword checks on these messages.
+      // classifyModelError reads the `<code>` of these messages instead
+      // (server_error → transient retry, rate_limit_* → throttle).
       case 'response.failed': {
-        const failed = ev.response as { error?: unknown } | undefined
-        throw new Error(`[MantleAgent] API error in stream: ${JSON.stringify(failed?.error ?? ev.response).slice(0, 300)}`)
+        const err = (ev.response as { error?: { code?: string; message?: string } } | undefined)?.error
+        throw streamError(err?.code, err?.message ?? JSON.stringify(ev.response).slice(0, 300))
       }
       case 'error':
-        throw new Error(`[MantleAgent] API error in stream: ${ev.code ?? '?'}: ${ev.message ?? ''}`)
+        throw streamError(ev.error?.code ?? ev.error?.type ?? ev.code, ev.error?.message ?? ev.message)
       // created / in_progress / output_item.* / content_part.* / *.done: the
       // final response.output[] carries everything, nothing to fold.
     }
