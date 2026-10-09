@@ -38,7 +38,7 @@ import { listEnabledAccounts, getAccount, updateAccount, normalizeWecomId } from
 import type { WecomAccount } from './types.js'
 import { WecomResponder } from './event-adapter.js'
 import { classifyMedia, sendMediaOrReport } from '../shared/media.js'
-import { saveInboundMedia } from '../shared/media-store.js'
+import { inferImageMime, saveInboundMedia } from '../shared/media-store.js'
 import { resolveAccountWorkspace, getAccount as getSharedAccount } from '../shared/accounts.js'
 import { type CommandContext } from '../shared/commands.js'
 import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute } from '../shared/inbound.js'
@@ -129,14 +129,6 @@ export function stripGroupMention(text: string): string {
   return text.replace(/^(@\S+\s*)+/, '').trim()
 }
 
-/** WeCom images are png / gif / jpeg. Falls back to jpeg like
- *  `inferImageMime`, minus the webp branch WeCom never delivers. */
-export function sniffImageMime(buf: Buffer): string {
-  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png'
-  if (buf.length >= 3 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif'
-  return 'image/jpeg'
-}
-
 /** `{ url, aeskey }` — shape shared by image / file / video payloads. */
 type EncryptedRef = ImageContent
 
@@ -205,7 +197,7 @@ async function ingestContent(args: {
   for (const ref of imageRefs) {
     try {
       const { buffer } = await wsClient.downloadFile(ref.url, ref.aeskey)
-      const mimeType = sniffImageMime(buffer)
+      const mimeType = inferImageMime(buffer)
       const savedPath = await saveInboundMedia({
         workspacePath: workspace, accountId: account.accountId, channel: 'wecom',
         buffer, kind: 'image', mimeType,

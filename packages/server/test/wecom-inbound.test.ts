@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { BaseMessage } from '@wecom/aibot-node-sdk'
-import { stripGroupMention, pickConversation, sniffImageMime } from '../src/channels/wecom/handler.js'
+import { stripGroupMention, pickConversation } from '../src/channels/wecom/handler.js'
+import { inferImageMime } from '../src/channels/shared/media-store.js'
 import { normalizeWecomId } from '../src/channels/wecom/accounts.js'
 
 /**
@@ -86,16 +87,16 @@ describe('pickConversation', () => {
   })
 })
 
-describe('sniffImageMime', () => {
+describe('inferImageMime (wecom inbound images)', () => {
   it('png', () => {
-    expect(sniffImageMime(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe('image/png')
+    expect(inferImageMime(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe('image/png')
   })
   it('gif', () => {
-    expect(sniffImageMime(Buffer.from('GIF89a', 'ascii'))).toBe('image/gif')
+    expect(inferImageMime(Buffer.from('GIF89a', 'ascii'))).toBe('image/gif')
   })
   it('falls back to jpeg', () => {
-    expect(sniffImageMime(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg')
-    expect(sniffImageMime(Buffer.from('not an image'))).toBe('image/jpeg')
-    expect(sniffImageMime(Buffer.alloc(0))).toBe('image/jpeg')
+    expect(inferImageMime(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg')
+    expect(inferImageMime(Buffer.from('not an image'))).toBe('image/jpeg')
+    expect(inferImageMime(Buffer.alloc(0))).toBe('image/jpeg')
   })
 })
