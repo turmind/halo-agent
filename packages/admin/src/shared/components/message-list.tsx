@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useRef, useEffect, memo } from 'react'
+import { useState, useMemo, useRef, useEffect, useLayoutEffect, memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage, ToolCallInfo, ContentBlock } from '@/shared/types'
@@ -16,6 +16,7 @@ import { useProjectStore } from '@/shared/stores/project-store'
 import { wsClient } from '@/shared/ws-client'
 import { useT } from '@/shared/i18n'
 import { CAPTURE_MARKER } from '@/features/chat/web-capture'
+import { useStickToBottom } from '@/shared/stick-to-bottom'
 import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2, AlertTriangle } from 'lucide-react'
 
 /**
@@ -464,7 +465,11 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
     )
   }
 
-  if (message.streaming && !message.content && !message.toolCalls?.length) {
+  // Bare spinner only until reasoning text arrives — from then on the live
+  // thinking panel below stands in for it (providers that stream no reasoning
+  // text, e.g. Mantle GPT, stay on the spinner). Debug mode keeps the spinner.
+  if (message.streaming && !message.content && !message.toolCalls?.length
+    && (debugMode || !message.contentBlocks?.some((b) => b.type === 'thinking' && b.text.trim()))) {
     return (
       <div className="flex items-center gap-1.5 py-1">
         <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)]" />
@@ -480,8 +485,13 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
     let toolSeen = 0
     for (let i = 0; i < blocks.length; i++) {
       const block = blocks[i]
-      if (block.type === 'thinking' && block.text.trim() && debugMode) {
-        elements.push(<ThinkingBlock key={`b${i}`} text={block.text} />)
+      if (block.type === 'thinking' && block.text.trim()) {
+        // Live while it's the block being streamed; once text / a tool call
+        // follows it (or the message settles) it folds to the one-line header.
+        // Debug mode: the collapsed header throughout, as before.
+        elements.push(!debugMode && message.streaming && i === blocks.length - 1
+          ? <LiveThinkingBlock key={`b${i}`} text={block.text} />
+          : <ThinkingBlock key={`b${i}`} text={block.text} />)
       } else if (block.type === 'text' && block.text.trim()) {
         elements.push(<TextBlock key={`b${i}`} text={block.text} />)
       } else if (block.type === 'tool_call') {
@@ -560,6 +570,27 @@ function ThinkingBlock({ text }: { text: string }) {
       {expanded && (
         <pre className="px-2 pb-2 text-[11px] text-[var(--foreground)] whitespace-pre-wrap break-words leading-relaxed max-h-[50vh] overflow-y-auto">{text}</pre>
       )}
+    </div>
+  )
+}
+
+/** The thinking block being streamed: expanded, muted, capped at ~9 lines so
+ *  the chat log grows by at most the cap, tailing its own text. The tail pin
+ *  scrolls only this panel (`scroll` doesn't bubble to the chat container),
+ *  and a reader scrolling inside it stops the tail (useStickToBottom). */
+function LiveThinkingBlock({ text }: { text: string }) {
+  const bodyRef = useRef<HTMLPreElement>(null)
+  const detached = useRef(false)
+  const pin = useStickToBottom(bodyRef, detached)
+  useLayoutEffect(pin, [text, pin])
+  return (
+    <div data-thinking-live="" className="my-1 rounded border border-purple-900/50 bg-purple-950/20">
+      <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-purple-400">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span className="font-medium">Thinking...</span>
+        <span className="text-[10px] text-purple-400/60">{text.length.toLocaleString()} chars</span>
+      </div>
+      <pre ref={bodyRef} className="max-h-40 overflow-y-auto px-2 pb-2 text-[11px] leading-relaxed text-[var(--muted-foreground)] whitespace-pre-wrap break-words">{text}</pre>
     </div>
   )
 }

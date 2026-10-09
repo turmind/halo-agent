@@ -18,6 +18,7 @@ import { timeAgo } from '@/shared/components/session-list-dropdown'
 import { useT } from '@/shared/i18n'
 import { Bot, Bug, FileText, ListFilter, Loader2, X, Copy, Check } from 'lucide-react'
 import { cn } from '@/shared/utils'
+import { useStickToBottom } from '@/shared/stick-to-bottom'
 import { isMainConversationMessage, isDebugMessage, inferMessageType } from '@/shared/types'
 
 /**
@@ -277,7 +278,12 @@ export function SessionChatPanel({ visible }: { visible: boolean }) {
     return archMessages.filter((m) => !isDebugMessage(m))
   }, [archBound, archMessages, debugMode])
 
-  const wasAtBottom = useRef(true)
+  // "Reader detached from the tail": set by upward input, cleared on scrolling
+  // back down to the end (useStickToBottom — intent, not a distance check).
+  // Bound here, before the restore layout effect below, so the restore's pin
+  // has a binding on the first commit.
+  const userScrolledUp = useRef(false)
+  const pinToBottom = useStickToBottom(scrollRef, userScrolledUp)
   // Distance-from-bottom captured just before a segment prepend. Prepending
   // grows the content ABOVE the viewport while the browser keeps `scrollTop`,
   // which would yank the reader; the layout effect below restores the
@@ -319,7 +325,7 @@ export function SessionChatPanel({ visible }: { visible: boolean }) {
     topTriggerArmed.current = true
     archScrollAnchor.current = null
     pendingRestore.current = true
-    wasAtBottom.current = true // no saved position → follow the tail
+    userScrolledUp.current = false // no saved position → follow the tail
     lastOffset.current = 0
   }, [selectedSessionId])
   useLayoutEffect(() => {
@@ -336,11 +342,11 @@ export function SessionChatPanel({ visible }: { visible: boolean }) {
     pendingRestore.current = false
     const entry = selectedSessionId && !isLive ? getCachedView(selectedSessionId) : undefined
     if (entry) {
-      wasAtBottom.current = entry.atBottom
+      userScrolledUp.current = !entry.atBottom
       lastOffset.current = entry.scrollOffset
     }
-    if (wasAtBottom.current) {
-      el.scrollTop = el.scrollHeight
+    if (!userScrolledUp.current) {
+      pinToBottom()
     } else {
       el.scrollTop = (activeTopRef.current?.offsetTop ?? 0) + lastOffset.current
       // A restore isn't a scroll-to-top gesture — landing in the trigger
@@ -356,10 +362,9 @@ export function SessionChatPanel({ visible }: { visible: boolean }) {
     const onScroll = () => {
       // Hidden (display:none) reports a zero box — nothing real to read.
       if (!visibleRef.current) return
-      wasAtBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
       lastOffset.current = el.scrollTop - (activeTopRef.current?.offsetTop ?? 0)
       const sid = cachedSidRef.current
-      if (sid) saveCachedScroll(sid, lastOffset.current, wasAtBottom.current)
+      if (sid) saveCachedScroll(sid, lastOffset.current, !userScrolledUp.current)
       if (el.scrollTop > 200) topTriggerArmed.current = true
       else if (el.scrollTop < 80 && topTriggerArmed.current) {
         topTriggerArmed.current = false
@@ -381,12 +386,10 @@ export function SessionChatPanel({ visible }: { visible: boolean }) {
     archScrollAnchor.current = null
   }, [archMessages])
 
-  // Auto-scroll only when already at bottom
+  // Follow the tail unless the reader scrolled up
   useEffect(() => {
-    if (wasAtBottom.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages])
+    pinToBottom()
+  }, [messages, pinToBottom])
 
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">

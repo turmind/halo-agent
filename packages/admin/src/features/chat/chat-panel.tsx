@@ -18,6 +18,7 @@ import { useAgentBus } from '@/shared/agent-bus'
 import { isMainConversationMessage, type ChatMessage } from '@/shared/types'
 import { api } from '@/shared/api-client'
 import { cn, confirmAction } from '@/shared/utils'
+import { useStickToBottom } from '@/shared/stick-to-bottom'
 import { useT } from '@/shared/i18n'
 
 interface AgentOption {
@@ -274,6 +275,9 @@ function ChatTabView({ tab, sessionId, mainMessages, debugMode }: {
   }, [loading, attempt])
   const slowLoading = loading && slowAttempt === attempt
 
+  // "Reader detached from the bottom": set by the user's upward input, cleared
+  // when they scroll back down to the end (useStickToBottom below — intent,
+  // not a distance threshold).
   const userScrolledUp = useRef(restored?.userScrolledUp ?? false)
 
   // ── Render window over the in-memory log ─────────────────────────────
@@ -374,6 +378,12 @@ function ChatTabView({ tab, sessionId, mainMessages, debugMode }: {
     el.scrollTop = restored?.userScrolledUp ? restored.scrollTop : el.scrollHeight
   }, [restored])
 
+  // Bound right after the restore above (layout effects run in order), so it
+  // starts from the restored position and that write's scroll event reads as
+  // no movement; and before the scroll listener below (a passive effect), so
+  // saveTabView stores the state each scroll event produced.
+  const pinToBottom = useStickToBottom(scrollRef, userScrolledUp)
+
   // Distance from the bottom captured just before an archive segment is
   // prepended. Prepending grows the content ABOVE the viewport while the
   // browser keeps `scrollTop`, which yanks the reader downward; restoring this
@@ -398,9 +408,7 @@ function ChatTabView({ tab, sessionId, mainMessages, debugMode }: {
     const el = scrollRef.current
     if (!el) return
     const handleScroll = () => {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-      userScrolledUp.current = !atBottom
-      saveTabView(tabId, { scrollTop: el.scrollTop, userScrolledUp: !atBottom })
+      saveTabView(tabId, { scrollTop: el.scrollTop, userScrolledUp: userScrolledUp.current })
       if (el.scrollTop > 200) topTriggerArmed.current = true
       else if (el.scrollTop < 80 && topTriggerArmed.current) {
         topTriggerArmed.current = false
@@ -428,10 +436,8 @@ function ChatTabView({ tab, sessionId, mainMessages, debugMode }: {
   }, [archiveMessages])
 
   useEffect(() => {
-    if (scrollRef.current && !userScrolledUp.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [mainMessages])
+    pinToBottom()
+  }, [mainMessages, pinToBottom])
 
   // Bottom-anchor on container resize. Default browser behavior keeps
   // `scrollTop` stable so a vertical shrink (window resize, side-panel
@@ -442,12 +448,10 @@ function ChatTabView({ tab, sessionId, mainMessages, debugMode }: {
   useEffect(() => {
     const el = scrollRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => {
-      if (!userScrolledUp.current) el.scrollTop = el.scrollHeight
-    })
+    const ro = new ResizeObserver(pinToBottom)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [pinToBottom])
 
   return (
     <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
