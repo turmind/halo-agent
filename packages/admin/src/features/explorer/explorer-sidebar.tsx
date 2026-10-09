@@ -2,11 +2,13 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { EditorPanel } from '@/features/editor/editor-panel'
+import { isBundleName } from '@/features/editor/previews/FilePreview'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { FolderPicker } from '@/features/explorer/folder-picker'
 import { useRecentWorkspaces } from '@/features/explorer/use-recent-workspaces'
 import { useChatStore } from '@/features/chat/chat-store'
 import { api } from '@/shared/api-client'
+import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { cn, promptInput } from '@/shared/utils'
 import { FolderTree, FolderOpen, RefreshCw, FilePlus, FolderPlus, Upload, FolderSearch, History, X } from 'lucide-react'
 import { useT } from '@/shared/i18n'
@@ -22,6 +24,7 @@ interface ExplorerSidebarProps {
 
 export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpenFolder, onOpenPath, activeProject }: ExplorerSidebarProps) {
   const t = useT()
+  const useEditorStore = useScopedEditorStore()
   // Agent status light next to the workspace name: amber pulse while streaming
   // (busy), static emerald when idle. Sole state source is chat-store's
   // isStreaming (driven by message-streaming events).
@@ -62,9 +65,16 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
     if (!projectId) return
     const name = await promptInput('New file name (relative path, e.g. src/hello.ts):')
     if (!name?.trim()) return
+    const path = name.trim()
+    // Bundle suffix (`src/x.htrans`) → make the bundle DIRECTORY and open it in
+    // its extension, like the tree's inline New File (editor-panel commitEdit).
+    const bundle = isBundleName(path.split('/').pop() ?? '')
     try {
-      await api.files.create(name.trim(), projectId)
+      if (bundle) await api.files.mkdir(path, projectId)
+      else await api.files.create(path, projectId)
       loadFileTree(projectId)
+      // Bundle tabs carry no download / view URL (editor-panel previewMeta).
+      if (bundle) useEditorStore.getState().openPreview(path, '', '', { bundle: true })
     } catch (err) {
       console.error('[Explorer] Failed to create file:', err)
       window.alert(err instanceof Error ? err.message : 'Failed to create file')

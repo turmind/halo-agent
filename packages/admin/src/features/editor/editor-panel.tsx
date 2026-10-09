@@ -14,6 +14,7 @@ import { DiffViewer } from './diff-viewer'
 import { TabBar } from './tab-bar'
 import { FilePreview, canPreview, isBundleName, isHeavyPreview, loadExtensions, useRegistryVersion } from './previews/FilePreview'
 import { getExtensionHost } from './previews/extension-host-logic'
+import { ImmersivePane, armImmersiveFullscreen, useImmersive } from './immersive'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
@@ -112,6 +113,10 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   const activeGroupIdx = useEditorStore((s) => s.activeGroupIdx)
   const pinnedTab = useEditorStore((s) => s.pinnedTab)
   const maximized = useEditorStore((s) => s.maximized)
+  // Immersive maximize (immersive.ts): the focused pane's save-less extension
+  // viewer covers the viewport; this panel's chrome is class-hidden under it.
+  // Gated on showMaximize — nested editors never offer maximize.
+  const immersive = useImmersive() && showMaximize && maximized
   const splitEnabled = mode === 'editor-only'
   const [showSidebar, setShowSidebar] = useState(true)
   // Per-pane Diff + Edit/Preview state — keyed by group.id so each pane has
@@ -1098,7 +1103,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">
       {/* Panel header */}
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] px-3">
+      <div className={cn('flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] px-3', immersive && 'hidden')}>
         <div className="flex items-center gap-2">
           {mode === 'full' && (
             <button
@@ -1130,7 +1135,12 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
               Maximize button stays here — it operates on the whole panel. */}
           {showMaximize && (
           <button
-            onClick={() => useEditorStore.getState().toggleMaximized()}
+            onClick={() => {
+              const s = useEditorStore.getState()
+              // Entering from this click may go immersive → real fullscreen (needs the click's activation).
+              if (!s.maximized) armImmersiveFullscreen()
+              s.toggleMaximized()
+            }}
             title={maximized ? 'Exit full screen' : 'Maximize editor'}
             className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
           >
@@ -1185,7 +1195,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
               return (
                 <Panel key={group.id} defaultSize={100 / groups.length} minSize={20}>
                   <div
-                    className={cn('flex h-full flex-col overflow-hidden', isFocused && groups.length > 1 && 'ring-1 ring-inset ring-[var(--primary)]/30')}
+                    className={cn('flex h-full flex-col overflow-hidden', isFocused && groups.length > 1 && 'ring-1 ring-inset ring-[var(--primary)]/30', immersive && !isFocused && 'hidden')}
                     onMouseDown={() => useEditorStore.getState().setActiveGroup(gi)}
                   >
                     {paneTabs.length > 0 && (() => {
@@ -1193,6 +1203,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                       const paneDiff = diffByGroup[group.id]
                       const showDiffBtn = !!paneFile?.modified && !paneFile.preview
                       return (
+                        <div className={immersive ? 'hidden' : 'contents'}>
                         <TabBar
                           tabs={paneTabs}
                           activeTab={paneActive}
@@ -1207,8 +1218,12 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                             else if (paneFile) handleViewDiff(group.id, paneFile.path)
                           }}
                         />
+                        </div>
                       )
                     })()}
+                    {/* The pane's active tab while maximized: the extension host showing it
+                        decides whether that is immersive (immersive.ts). */}
+                    <ImmersivePane.Provider value={maximized && showMaximize && isFocused ? paneActive : null}>
                     <div className="flex-1 overflow-hidden">
                       {/* The pinned face stays mounted while its pane shows another tab —
                           hidden, not unmounted, so its audio / animation keep running and
@@ -1218,7 +1233,12 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                           <HtmlPreview url={buffers[pinnedTab].preview!.viewUrl} name={baseName(pinnedTab)} face />
                         </div>
                       )}
-                      {mountedPreviews
+                      {/* Stable (path-sorted) render order, NOT the MRU order: promoting a
+                          tab reorders the MRU, React then moves the keyed nodes with
+                          insertBefore, and moving an iframe in the DOM reloads it — a
+                          running emulator / editor in it starts over. Insertions and
+                          removals never move the siblings. */}
+                      {[...mountedPreviews].sort()
                         .map((p) => paneTabs.find((t) => t.path === p && t.preview))
                         .filter((t): t is NonNullable<typeof t> => !!t)
                         .map((t) => (
@@ -1325,6 +1345,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                         )
                       })()}
                     </div>
+                    </ImmersivePane.Provider>
                   </div>
                 </Panel>
               )

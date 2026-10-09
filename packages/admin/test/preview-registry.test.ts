@@ -3,7 +3,7 @@ import { createElement, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import {
-  register, setExtensions, resolve, resolvedKey, canPreview, isHeavyPreview, getVersion, subscribe,
+  register, setExtensions, resolve, resolvedKey, canPreview, isHeavyPreview, isReadOnlyViewer, isImmersiveViewer, getVersion, subscribe,
   detectPlatform, currentPlatform, runsHere, excludedByPlatform, resolveBundle, isBundleName,
 } from '../src/features/editor/previews/registry'
 import type { PreviewPlugin } from '../src/features/editor/previews/types'
@@ -118,6 +118,23 @@ describe('isHeavyPreview', () => {
     })
     expect(isHeavyPreview('ro')).toBe(true)
     expect(isHeavyPreview('rw')).toBe(false)
+  })
+})
+
+describe('isReadOnlyViewer (heavy)', () => {
+  it('only a single-file extension without save qualifies', () => {
+    expect(isReadOnlyViewer(ext('glb'))).toBe(true)
+    expect(isReadOnlyViewer(ext('ipynb', { capabilities: ['media'] }))).toBe(true)
+    expect(isReadOnlyViewer(ext('drawio', { capabilities: ['save'] }))).toBe(false)
+    expect(isReadOnlyViewer(ext('htrans', { bundle: true, capabilities: ['media', 'transcribe'] }))).toBe(false)
+  })
+})
+
+describe('isImmersiveViewer (immersive maximize)', () => {
+  it('any extension without save qualifies, bundles included', () => {
+    expect(isImmersiveViewer(ext('glb'))).toBe(true)
+    expect(isImmersiveViewer(ext('htrans', { bundle: true, capabilities: ['media', 'transcribe'] }))).toBe(true)
+    expect(isImmersiveViewer(ext('drawio', { capabilities: ['save'] }))).toBe(false)
   })
 })
 

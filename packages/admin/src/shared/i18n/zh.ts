@@ -544,6 +544,10 @@ export const zh: Record<string, string> = {
   'editor.extension.exported': '已导出到 {path}',
   'editor.extension.exportOverwrite': '「{name}」已存在，是否覆盖？',
   'editor.extension.exportFailed': '导出失败：{message}',
+  'editor.immersive.exit': '× 退出放大 · Esc',
+  'editor.immersive.replied': 'Agent 已回复 · {title}',
+  'editor.immersive.repliedMany': '{count} 个会话已回复',
+  'editor.immersive.backToChat': '回到对话',
 
   // ── Cron jobs ──
   'cron.title': '定时任务',

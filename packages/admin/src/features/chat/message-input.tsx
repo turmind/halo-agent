@@ -805,6 +805,12 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const modelSupportsImage = useCurrentModelSupportsImage()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // "Back to chat" (immersive reply toast, workspace-layout) lands the caret here.
+  useEffect(() => {
+    const focus = () => textareaRef.current?.focus()
+    window.addEventListener('halo:focus-chat-input', focus)
+    return () => window.removeEventListener('halo:focus-chat-input', focus)
+  }, [])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const activeProject = useProjectStore((s) => s.activeProject)
   // -1 = not yet loaded (treat as allow). 0 = every agent disabled → block

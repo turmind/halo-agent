@@ -201,6 +201,19 @@ export function canPreview(ext: string): boolean {
 export function isHeavyPreview(ext: string, bundle = false): boolean {
   const first = (bundle ? resolveBundle(ext) : resolve(ext))[0]
   if (first.kind === 'builtin') return !!first.plugin.heavy
-  if (first.kind === 'extension') return !first.info.capabilities.includes('save') && !first.info.bundle
+  if (first.kind === 'extension') return isReadOnlyViewer(first.info)
   return false
+}
+
+/** A single-file extension with nothing to save (no `save`, not a bundle) —
+ *  heavy above. */
+export function isReadOnlyViewer(info: ExtensionInfo): boolean {
+  return !info.capabilities.includes('save') && !info.bundle
+}
+
+/** An extension the canvas maximize turns immersive (iframe fills the
+ *  viewport, all chrome hidden): anything without `save` — bundles included,
+ *  whose state lives in their own directory, not behind a Save button. */
+export function isImmersiveViewer(info: ExtensionInfo): boolean {
+  return !info.capabilities.includes('save')
 }

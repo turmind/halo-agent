@@ -1,16 +1,17 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ExtensionInfo } from '@turmind/halo-core/protocol'
 import { api } from '@/shared/api-client'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { useTheme } from '@/shared/theme'
 import { readHostTheme } from '@/shared/theme/palette'
 import { useI18n } from '@/shared/i18n'
-import { confirmAction } from '@/shared/utils'
+import { cn, confirmAction } from '@/shared/utils'
 import { PreviewShell, ToolbarButton } from './ui/preview-shell'
 import { extensionEntryUrl, getExtensionToken } from './extension-token'
-import { currentPlatform } from './registry'
+import { currentPlatform, isImmersiveViewer } from './registry'
+import { ImmersivePane, claimImmersive, createExitPill, exitImmersive, takeFullscreenArm, takeRefocus } from '../immersive'
 import {
   createKeyedQueue, exportError, initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onFsResult, onLoaded,
   onLangChange, onPutResult, onSaveRequest, onThemeChange, registerExtensionHost,
@@ -351,6 +352,115 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
     remount()
   }
 
+  // Immersive maximize (immersive.ts): this viewer is the maximized panel's
+  // focused tab and has nothing to save (bundles included) → its banners +
+  // iframe region become a viewport overlay. Pure CSS: the iframe is never
+  // reparented or remounted.
+  const immersive = useContext(ImmersivePane) === path && isImmersiveViewer(info)
+  const [pillOpen, setPillOpen] = useState(false)
+  const [pill] = useState(() => createExitPill(setPillOpen))
+  const [coarse] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches)
+  // The pill exits only for a press that started on it: a touch tap in the
+  // band widens the pill on pointerdown, and that tap's click would otherwise
+  // land on the pill that just grew under the finger.
+  const pillPressRef = useRef(false)
+  // Bumped on every iframe `load`: each document needs its own listeners.
+  const [frameLoads, setFrameLoads] = useState(0)
+  const focusFrame = () => {
+    const el = iframeRef.current
+    el?.focus()
+    el?.contentWindow?.focus()
+  }
+
+  useEffect(() => {
+    if (!immersive) return
+    const release = claimImmersive()
+    pill.start()
+    // Real fullscreen only when the maximize click armed it (a maximize
+    // restored from localStorage has no user activation to spend). Left
+    // only if we entered it; the browser / Electron ending it (Esc) ends
+    // immersive too — one Esc, one exit.
+    let entered = false
+    let done = false
+    const root = document.documentElement
+    if (takeFullscreenArm() && !document.fullscreenElement && root.requestFullscreen) {
+      root.requestFullscreen().then(() => {
+        entered = true
+        if (done) void document.exitFullscreen().catch(() => { /* already left */ })
+      }, () => { /* refused (no activation / policy): immersive without it */ })
+    }
+    // A user Esc fully exits every fullscreen level; when the viewer had its
+    // own (an emulator — then our iframe is the parent's fullscreenElement)
+    // that Esc was meant for the viewer, so immersive stays.
+    let prevFs = document.fullscreenElement
+    const onFullscreen = () => {
+      const now = document.fullscreenElement
+      const viewerHadIt = prevFs !== null && prevFs !== root
+      prevFs = now
+      if (!entered || now) return
+      entered = false
+      if (!viewerHadIt) exitImmersive()
+    }
+    // pointermove, mouse only: a touch tap's compat mousemove would pin the pill.
+    const onMove = (e: PointerEvent) => { if (e.pointerType === 'mouse') pill.move(e.clientY) }
+    const onLeave = () => pill.move(Infinity)
+    const onDown = (e: PointerEvent) => { if (e.pointerType !== 'mouse') pill.tap(e.clientY) }
+    document.addEventListener('fullscreenchange', onFullscreen)
+    window.addEventListener('pointermove', onMove)
+    root.addEventListener('mouseleave', onLeave)
+    window.addEventListener('pointerdown', onDown, true)
+    return () => {
+      done = true
+      document.removeEventListener('fullscreenchange', onFullscreen)
+      window.removeEventListener('pointermove', onMove)
+      root.removeEventListener('mouseleave', onLeave)
+      window.removeEventListener('pointerdown', onDown, true)
+      pill.dispose()
+      release()
+      if (entered && document.fullscreenElement === root) void document.exitFullscreen().catch(() => { /* already left */ })
+      // Keys keep going to the viewer, not to the vanished exit control.
+      if (takeRefocus()) focusFrame()
+    }
+  }, [immersive, pill])
+
+  // Same-origin iframe (allow-same-origin): its keys / pointer never reach
+  // this window, so Esc and the top band are watched inside it, per document.
+  useEffect(() => {
+    if (!immersive || frameLoads === 0) return
+    const frame = iframeRef.current
+    const win = frame?.contentWindow
+    if (!frame || !win) return
+    const top = () => frame.getBoundingClientRect().top
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      // The viewer's own fullscreen (e.g. an emulator) takes this Esc.
+      if (win.document.fullscreenElement) return
+      e.preventDefault()
+      e.stopPropagation()
+      exitImmersive()
+    }
+    const onMove = (e: PointerEvent) => { if (e.pointerType === 'mouse') pill.move(e.clientY + top()) }
+    const onLeave = () => pill.move(Infinity)
+    const onDown = (e: PointerEvent) => { if (e.pointerType !== 'mouse') pill.tap(e.clientY + top()) }
+    let doc: Document | null = null
+    try {
+      doc = win.document
+      win.addEventListener('keydown', onKey, true)
+      win.addEventListener('pointermove', onMove)
+      win.addEventListener('pointerdown', onDown, true)
+      doc.documentElement.addEventListener('mouseleave', onLeave)
+    } catch { /* cross-origin document (navigated away) — parent-side Esc / pill still work */ }
+    focusFrame()
+    return () => {
+      try {
+        win.removeEventListener('keydown', onKey, true)
+        win.removeEventListener('pointermove', onMove)
+        win.removeEventListener('pointerdown', onDown, true)
+        doc?.documentElement.removeEventListener('mouseleave', onLeave)
+      } catch { /* document already gone */ }
+    }
+  }, [immersive, frameLoads, pill])
+
   const canSave = info.capabilities.includes('save')
   const toolbar = canSave ? (
     <ToolbarButton onClick={requestSave} title={t('editor.extension.save')}>
@@ -359,8 +469,8 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   ) : undefined
 
   return (
-    <PreviewShell name={name} downloadUrl={downloadUrl} onOpenAsText={onOpenAsText} extraToolbar={toolbar}>
-      <div className="flex h-full flex-col">
+    <PreviewShell name={name} downloadUrl={downloadUrl} onOpenAsText={onOpenAsText} extraToolbar={toolbar} hideHeader={immersive}>
+      <div data-immersive={immersive || undefined} className={cn('flex h-full flex-col', immersive && 'fixed inset-0 z-[70] bg-[var(--background)]')}>
         {uninstalled && <Banner>{t('editor.extension.uninstalled')}</Banner>}
         {upgradeNotice && (
           <Banner onClose={() => setUpgradeNotice(null)}>
@@ -408,6 +518,7 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
                 referrerPolicy="no-referrer"
                 title={info.name}
                 className="h-full w-full border-0 bg-[var(--background)]"
+                onLoad={() => setFrameLoads((n) => n + 1)}
               />
             )}
             {phase !== 'ready' && (
@@ -416,6 +527,37 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
               </div>
             )}
           </div>
+        )}
+        {immersive && (
+          // Mouse: top-center, only while the pointer is near the top (no
+          // hot-zone over the iframe — the band is watched by listeners).
+          // Touch: always on screen, so it sits top-left — where viewers put
+          // their title label (megadrive / arcade toolbars keep buttons
+          // centre-right) — as a compact ×; a tap in the band widens it.
+          <button
+            type="button"
+            onPointerDown={() => { pillPressRef.current = true }}
+            onClick={(e) => {
+              const pressed = pillPressRef.current
+              pillPressRef.current = false
+              if (pressed || e.detail === 0) exitImmersive() // detail 0 = keyboard activation
+            }}
+            // Appearing under the cursor fires the iframe document's mouseleave
+            // (→ hide timer); being hovered pins it like the band does.
+            onPointerEnter={(e) => { if (e.pointerType === 'mouse') pill.move(0) }}
+            aria-label={t('editor.immersive.exit')}
+            className={cn(
+              'absolute z-10 flex items-center justify-center rounded-full border border-[var(--border)] bg-[var(--card)]/90 text-xs text-[var(--foreground)] shadow-lg backdrop-blur transition-all duration-200',
+              coarse ? 'left-2' : 'left-1/2 -translate-x-1/2',
+              pillOpen
+                ? 'top-2 h-7 gap-1 px-3 opacity-100'
+                : coarse
+                  ? 'top-1.5 h-7 w-7 opacity-60'
+                  : 'pointer-events-none -top-2 h-7 px-3 opacity-0',
+            )}
+          >
+            {pillOpen || !coarse ? t('editor.immersive.exit') : '×'}
+          </button>
         )}
       </div>
     </PreviewShell>

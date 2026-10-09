@@ -544,6 +544,10 @@ export const en: Record<string, string> = {
   'editor.extension.exported': 'Exported to {path}',
   'editor.extension.exportOverwrite': '"{name}" already exists next to this file. Overwrite it?',
   'editor.extension.exportFailed': 'Export failed: {message}',
+  'editor.immersive.exit': '× Exit · Esc',
+  'editor.immersive.replied': 'Agent replied · {title}',
+  'editor.immersive.repliedMany': '{count} sessions replied',
+  'editor.immersive.backToChat': 'Back to chat',
 
   // ── Cron jobs ──
   'cron.title': 'Cron Jobs',

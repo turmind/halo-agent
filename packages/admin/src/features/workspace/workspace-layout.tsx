@@ -16,6 +16,8 @@ import { SkillsMain } from '@/features/skills/skills-main'
 import { SessionChatPanel } from '@/features/agents/session-chat-panel'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useChatStore, onTurnSettled } from '@/features/chat/chat-store'
+import { openTab } from '@/features/chat/chat-tabs'
+import { exitImmersive, isImmersive, useImmersive } from '@/features/editor/immersive'
 import { listedSessionTitle } from '@/features/chat/session-list'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
@@ -127,6 +129,26 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     document.title = envBadgeTitlePrefix() + (name ? `${isStreaming ? '● ' : ''}Halo — ${name}` : 'Halo')
   }, [isStreaming, activeProject?.name])
 
+  // "Agent replied" toast over an immersive viewer (filled by the effect
+  // below). Newest session first; `title` belongs to sessionIds[0]. Gone
+  // with immersive, and ~8s after the latest reply.
+  const immersive = useImmersive()
+  const [replyToast, setReplyToast] = useState<{ sessionIds: string[]; title?: string } | null>(null)
+  if (!immersive && replyToast) setReplyToast(null)
+  useEffect(() => {
+    if (!replyToast) return
+    const timer = setTimeout(() => setReplyToast(null), 8000)
+    return () => clearTimeout(timer)
+  }, [replyToast])
+  const backToChat = (sessionId: string) => {
+    setReplyToast(null)
+    exitImmersive({ refocus: false })
+    openTab(sessionId)
+    useEditorStore.getState().setBottomTab('chat')
+    // After the un-maximized layout has painted the docked / floating chat.
+    requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('halo:focus-chat-input')))
+  }
+
   // Finished-notification: any loaded chat tab's root turn settling — on
   // screen or in the background. onTurnSettled only reports a completion
   // action's busy→idle edge on a live store, so tab switches, snapshot
@@ -141,11 +163,16 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       // asset to bundle; browsers/Electron gate WebAudio behind a prior user
       // gesture, which the notify toggle click already satisfied.
       playChime()
+      const sid = store.getState().sessionId
+      const sessionTitle = sid ? listedSessionTitle(sid) : undefined
+      // Immersive viewer covers the chat — say so in-page (the native banner
+      // below waits for blur, and the title dot is off-screen too).
+      if (sid && isImmersive()) {
+        setReplyToast((prev) => ({ sessionIds: [sid, ...(prev?.sessionIds ?? []).filter((s) => s !== sid)], title: sessionTitle }))
+      }
       if (document.hasFocus()) return
       const name = activeProject?.name
       const title = name ? `Halo — ${name}` : 'Halo'
-      const sid = store.getState().sessionId
-      const sessionTitle = sid ? listedSessionTitle(sid) : undefined
       const body = sessionTitle ? t('status.notifyBodySession', { title: sessionTitle }) : t('status.notifyBody')
       const notify = (window as unknown as {
         haloNotify?: { notify: (p: { title: string; body: string }) => void }
@@ -618,7 +645,33 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
           this frame's slot (see bottomHost above), so floating is just another
           slot rather than a separate BottomPanel mount. */}
       {bottomFloating && (
-        <FloatingBottomPanel slotRef={setFloatingBottomSlot} dragHandleRef={bottomDragHandleRef} />
+        // Class-hidden under an immersive viewer — never unmounted (it hosts the one BottomPanel).
+        <div className={immersive ? 'hidden' : 'contents'}>
+          <FloatingBottomPanel slotRef={setFloatingBottomSlot} dragHandleRef={bottomDragHandleRef} />
+        </div>
+      )}
+
+      {immersive && replyToast && (
+        // Above the immersive overlay (explorer layer z-40), below the exit band;
+        // mousedown never moves focus out of the viewer.
+        <div
+          role="status"
+          onMouseDown={(e) => e.preventDefault()}
+          className="fixed right-4 top-14 z-[80] flex max-w-[360px] items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs text-[var(--foreground)] shadow-lg"
+        >
+          <span className="min-w-0 flex-1 truncate">
+            {replyToast.sessionIds.length > 1
+              ? t('editor.immersive.repliedMany', { count: replyToast.sessionIds.length })
+              : t('editor.immersive.replied', { title: replyToast.title ?? t('chat.tabs.untitled') })}
+          </span>
+          <button
+            type="button"
+            onClick={() => backToChat(replyToast.sessionIds[0])}
+            className="shrink-0 font-medium text-[var(--primary)] hover:underline"
+          >
+            {t('editor.immersive.backToChat')}
+          </button>
+        </div>
       )}
 
       {/* Maximized bottom panel — full viewport like editor maximize. Empty

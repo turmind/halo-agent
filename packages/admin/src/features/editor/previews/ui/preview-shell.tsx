@@ -25,15 +25,17 @@ export interface PreviewShellProps {
   loading?: boolean
   /** When set, renders a full-body error message instead of the content */
   error?: string | null
+  /** Class-hide the header row (immersive maximize) — never unmounts it. */
+  hideHeader?: boolean
   children: ReactNode
 }
 
-export function PreviewShell({ name, downloadUrl, onOpenAsText, extraToolbar, loading, error, children }: PreviewShellProps) {
+export function PreviewShell({ name, downloadUrl, onOpenAsText, extraToolbar, loading, error, hideHeader, children }: PreviewShellProps) {
   const t = useT()
   const openWith = useContext(OpenWithSlot)
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--card)] px-3">
+      <div className={`flex h-8 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--card)] px-3${hideHeader ? ' hidden' : ''}`}>
         <span className="truncate text-xs text-[var(--muted-foreground)]">{name}</span>
         <div className="flex-1" />
         {extraToolbar}
