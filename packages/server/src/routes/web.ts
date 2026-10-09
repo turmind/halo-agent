@@ -105,7 +105,7 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
 
   // Optional per-request overrides — used by external integrations (ACP
   // adapter, future server-to-server callers) so a single token can drive
-  // multiple workspaces / sessions concurrently. Browser web-demo doesn't
+  // multiple workspaces / sessions concurrently. A plain browser client doesn't
   // pass these and continues to use the account-level defaults.
   //
   // `workspace` override is only honored for full-access tokens (gate is

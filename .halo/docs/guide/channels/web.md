@@ -2,8 +2,6 @@
 
 Talk to a halo agent over plain HTTP from any client you control — a browser, a curl script, a custom frontend, your own mobile app. The Web channel is the "build your own UI" channel: it gives you a token, you give the token to whatever client you wrote.
 
-> If you want a ready-made browser frontend without writing code, halo ships `packages/web-demo` — a tiny Express app that wraps the Web channel with its own password gate. See "Standalone web-demo frontend" at the bottom.
-
 ## What you'll end up with
 
 - A 24-byte random token (base64url-encoded) bound to one workspace
@@ -92,8 +90,6 @@ For browser apps you almost never want these — leave them off and use the per-
 
 Images go to the LLM as multimodal content. Any other `mimeType` (audio, PDF, …) in the same array is not sent to the model: the server saves it to `<workspace>/.halo/assets/web/inbound/<accountId>/<date>/` and appends a `[语音已保存: <path>]` line to your message so the agent can open it with its file tools.
 
-The standalone web-demo handles voice + arbitrary files for you; if you want that, use it as a reference implementation.
-
 ## Slash commands
 
 Slash commands are intercepted before they reach the agent — same set as every other channel:
@@ -119,28 +115,6 @@ Send a slash command exactly like a normal message — the server detects the le
 | SSE stream hangs forever | Reverse proxy buffering. Disable buffering for `text/event-stream` (nginx: `proxy_buffering off`, Cloudflare: enable streaming) |
 | Token leaked accidentally | Delete the account in admin, create a new one. The old token is invalidated immediately |
 | Want to share one token across multiple users | Don't — every request would land on the same active session. Create one account per user / app |
-
-## Standalone web-demo frontend
-
-If you want a browser UI with login, image upload, voice recording, and multi-language support without writing it yourself:
-
-```bash
-cd packages/web-demo
-node server.js
-```
-
-Environment variables:
-
-| Variable | Required | Description |
-|---|---|---|
-| `HALO_API` | yes | Halo server URL, e.g. `http://localhost:9527` |
-| `HALO_TOKEN` | yes | The web-channel token from Step 1 |
-| `HALO_WEB_DEMO_PASSWORD` | no | Password gate; empty means open access |
-| `PORT` | no | Listen port; default `9528` |
-
-The demo holds your token server-side and exposes its own password-based session — the browser never sees the halo token. Open `http://localhost:9528` to use it.
-
-Alternatively, the gear icon (header / login screen) opens **direct-connect mode**: enter any halo server's URL + a web-channel token and the browser talks to that server's `/api/web/*` directly, skipping the proxy and its password. Handy for pointing one deployed web-demo at several halo servers. The token is kept in that browser's localStorage — only use it on devices you trust; clear it in the same panel to return to proxy mode.
 
 ## Security notes
 

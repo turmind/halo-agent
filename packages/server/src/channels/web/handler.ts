@@ -56,7 +56,7 @@ function isOwnGoalSession(account: WebAccount, sessionId: string, prefix: string
  * `workspace` override is only honored for `accessLevel === 'full'`
  * tokens — readonly / workspace tokens are pinned to whatever the admin
  * configured. `sessionId` lets a caller drive multiple halo sessions
- * concurrently from a single token (browser web-demo doesn't use this;
+ * concurrently from a single token (a plain browser client doesn't use this;
  * the ACP adapter does, since ACP itself supports multi-session).
  *
  * `agentId` is only consulted on the *creation* of a new halo session
@@ -287,7 +287,7 @@ export function createWebChannel(deps: {
     //   - opts.sessionId set + not found → create with that exact id
     //     (callers may pre-mint ids inside their own prefix)
     //   - opts.sessionId unset → fall back to the account's active
-    //     session (web-demo behaviour)
+    //     session (plain browser-client behaviour)
     //   - none → create a fresh `web_<acct>_<ts>` and mark it active
     let sessionId: string | undefined = opts?.sessionId
     let sessionExists = false

@@ -26,7 +26,6 @@ Packages live under `packages/`:
 | `cli` | The `halo` binary and the standalone TUI |
 | `acp-adapter` | stdio JSON-RPC bridge for ACP clients (Claude Code etc.) |
 | `desktop` | Electron shell (macOS dmg / Windows exe) |
-| `web-demo`, `agentcore-demo` | Deployment examples |
 
 ## Running locally
 

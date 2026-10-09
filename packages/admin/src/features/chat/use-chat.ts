@@ -222,7 +222,7 @@ export function useChat() {
     (cmd: SlashCommand, args: string) => {
       // Slash commands route through the server via WS. The server owns the
       // canonical implementation (execNew / execHelp / execList / skill
-      // activation / etc.) so wechat / telegram / web / web-demo / admin all
+      // activation / etc.) so wechat / telegram / web / admin all
       // see identical behaviour; a command that moves to another session
       // replies `session:switched`, which opens that session in its own tab
       // (chat-handlers).

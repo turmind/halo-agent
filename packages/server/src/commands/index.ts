@@ -6,7 +6,7 @@ export const commandRegistry = new CommandRegistry()
 // Command descriptors — single source of truth for the frontend command
 // palette, the slash-suggest popup, and `/help` text. Every command listed
 // here must have a server-side handler in dispatchCommand
-// (channels/shared/commands.ts) so wechat / telegram / web / web-demo
+// (channels/shared/commands.ts) so wechat / telegram / web
 // users can run it. Admin Web UI may additionally intercept some of these
 // for nicer local UX (e.g. /new / /help in use-chat.ts), but server-side
 // must work too — those intercepts are an optimisation, not a contract.
@@ -18,7 +18,7 @@ export const commandRegistry = new CommandRegistry()
 //
 // type field is currently only 'server'. Pre-existing 'client' values
 // were a leak of an admin-UI-only concept into the cross-channel
-// registry; it caused web-demo / wechat / telegram to list dead commands.
+// registry; it caused web / wechat / telegram to list dead commands.
 
 commandRegistry.registerDescriptor({ name: 'help',    slashName: '/help',    description: 'Show available commands',                type: 'server', source: 'builtin' })
 // Object commands declare their builtin verbs here so completion UIs (admin
