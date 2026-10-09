@@ -9,7 +9,7 @@
  * so a change needs no restart) or, when none are set, the SDK default chain.
  *
  * Mounted from index.ts's http `upgrade` router (noServer mode) next to the
- * admin `/ws`; not mounted in AgentCore mode.
+ * admin `/ws`; not mounted in AgentCore A2A mode.
  *
  * Spec: .halo/docs/design/canvas-extensions.md#streaming-transcription-proxy
  */

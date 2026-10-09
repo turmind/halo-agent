@@ -388,7 +388,9 @@ export const DEFAULT_HIDDEN_FILES = [
 // skills / agents / prompts / tmp / canvas / goal / settings.yaml) stays
 // readable — agents need it to work.
 const WORKSPACE_HIDDEN_DIRS = ['.halo/sessions', '.halo/logs', '.halo/evo']
-const WORKSPACE_HIDDEN_FILES = ['.halo/halo.db', '.halo/halo.db-wal', '.halo/halo.db-shm']
+// a2a.db sits here in AgentCore A2A mode (a2a/agentcore.ts) — push tokens, as in ~/.halo/global.
+// So does that mode's run ledger (runs.db) — which sessions are mid-run.
+const WORKSPACE_HIDDEN_FILES = ['.halo/halo.db', '.halo/halo.db-wal', '.halo/halo.db-shm', '.halo/a2a.db', '.halo/a2a.db-wal', '.halo/a2a.db-shm', '.halo/runs.db', '.halo/runs.db-wal', '.halo/runs.db-shm']
 
 let _hiddenDirs: string[] = DEFAULT_HIDDEN_DIRS
 let _hiddenFiles: string[] = DEFAULT_HIDDEN_FILES

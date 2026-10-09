@@ -76,7 +76,7 @@ export function validatePath(filePath: string, projectPath: string): boolean {
  *     allowed — see the slug rule in agent-configs.ts POST) plus
  *     `__internal__` platform agents
  *   - session ids: `sid_…`, `s-…`, `web_<hex>_…`, `tg_<n>_…`, `wx_…`,
- *     `cron-<id>`, `agentcore_…`, and slack/feishu thread ids which embed
+ *     `cron-<id>`, `a2a_<account>_…`, and slack/feishu thread ids which embed
  *     `:` and `.` (`slack_C123:1699.123_x`); `>` is the hierarchical-id
  *     separator (session files are leaf-named, but a full id is still a
  *     harmless literal filename char on POSIX)

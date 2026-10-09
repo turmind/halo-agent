@@ -86,7 +86,7 @@ my-project/
 
 ## 近期亮点
 
-- ☁️ **AgentCore 运行时模式** —— 同一套 server 可作为 Amazon Bedrock AgentCore Runtime 容器运行（`HALO_RUNTIME_MODE=agentcore`），按用户隔离的 EFS 工作区。
+- ☁️ **AgentCore 运行时模式** —— 用 `halo agentcore` 把 Halo 作为 Amazon Bedrock AgentCore Runtime（A2A 协议）运行，工作区放在 EFS 上。
 - 🎨 **四套 UI 主题** —— dark / light / midnight / warm，服务端同步，换个浏览器也是你选的那套。
 - ⌨️ **TUI 大改** —— 独立终端客户端重做了输入体验，新增 verbose 模式和历史持久化。
 - ✂️ **优雅打断，全程可见** —— 被打断的工具调用会被修复并显示在会话里，不再凭空消失。
@@ -175,7 +175,7 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
 
 ## 技术栈
 
-- **Monorepo**：pnpm workspace（`core`、`server`、`admin`、`cli`、`desktop`、`acp-adapter`、`web-demo`、`agentcore-demo`）
+- **Monorepo**：pnpm workspace（`core`、`server`、`admin`、`cli`、`desktop`、`acp-adapter`）
 - **后端**：Hono + WebSocket，单 Node.js 进程，端口 9527
 - **前端**：Next.js 15 静态导出，由 Hono 直接托管
 - **Agent**：自研编排循环，provider 无关的 `ModelRuntime` 接口

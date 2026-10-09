@@ -72,7 +72,7 @@ export function broadcast(event: WsServerMessage): void {
  * but may differ in trailing separator.
  *
  * Falls back to the global broadcast when no resolver is registered (the
- * AgentCore adapter never calls `setBroadcastWss`, so this is a no-op there;
+ * AgentCore A2A mode never calls `setBroadcastWss`, so this is a no-op there;
  * a future embedder without the resolver keeps the old, louder behavior
  * rather than silently dropping events).
  */

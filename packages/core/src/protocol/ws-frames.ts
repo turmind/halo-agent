@@ -8,8 +8,6 @@
  * presence (live event-processor vs. handler.ts reattach replay, or several
  * broadcast call sites), the member is the superset with the field optional.
  *
- * Not covered: the AgentCore `/ws` adapter (routes/agentcore.ts) speaks its own
- * `stream` / `thinking` / `history` / … frames and is not part of this union.
  * Doc: .halo/docs/design/ws.md
  */
 import type { SessionMessage } from './session-message.js'

@@ -25,7 +25,6 @@ import { createSessionArchiveRoutes } from './routes/session-archive.js'
 import { createShowRoutes } from './routes/halo-city.js'
 import { createMetricsRoutes } from './routes/metrics.js'
 import { createCommandRoutes } from './routes/commands.js'
-import { createAgentCoreRoutes, setupAgentCoreWebSocket } from './routes/agentcore.js'
 import { createTranscribeProxy, TRANSCRIBE_PATH } from './routes/transcribe-ws.js'
 import { createUpgradeRouter, type UpgradeHandler } from './ws/upgrade-router.js'
 import { commandRegistry } from './commands/index.js'
@@ -42,6 +41,7 @@ import { createA2ADb, setA2ADb } from './db/a2a-db.js'
 import { createA2ARoutes } from './a2a/routes.js'
 import { createA2APushRoutes, reconcileOpenDispatches, setA2AOutboundRegistry } from './a2a/outbound.js'
 import { startPushSender, stopPushSender } from './a2a/push.js'
+import { createAgentCoreA2A, type WorkspaceLease } from './a2a/agentcore.js'
 import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
 import { createExtensionRoutes } from './routes/extensions.js'
@@ -204,11 +204,12 @@ if (!fs.existsSync(path.join(HALO_HOME, 'global', '.template-version'))) {
 // Non-fatal on failure — the server starts with the older seed.
 refreshTemplatesIfOutdated(HALO_HOME, 'Server')
 
-// Amazon Bedrock AgentCore Runtime mode: auth is terminated upstream by
-// AgentCore (SigV4/OAuth), each session runs in its own microVM, and the only
-// exposed surface is /ping + /invocations + WS /ws (routes/agentcore.ts).
-// So: no password/JWT gate, no single-instance lock, no channels/cron/evo.
-const AGENTCORE = config.server.runtimeMode === 'agentcore'
+// Amazon Bedrock AgentCore A2A runtime mode (`halo agentcore`,
+// a2a/agentcore.ts): AgentCore verifies the caller's signed request upstream,
+// each runtime session runs in its own microVM, and the only exposed surface
+// is /ping + A2A JSON-RPC at `/`. So: no password/JWT gate, no single-instance
+// lock, no channels/cron/evo, no admin WS.
+const AGENTCORE = config.server.runtimeMode === 'agentcore-a2a'
 
 // HALO_PASSWORD env (plaintext) is a first-class credential, not just a login
 // bypass: the Docker/CI flow (`halo setup -y && HALO_PASSWORD=... halo server
@@ -275,7 +276,7 @@ const app = new Hono()
 // site's page make cookie-authenticated calls into a user's halo. Nothing
 // halo ships needs it in the default mode — the admin panel is same-origin
 // (cookie flows without CORS at all), and the cross-origin consumers
-// (web-demo, halo-city, ACP adapter) authenticate with the `x-token`
+// (halo-city, ACP adapter) authenticate with the `x-token`
 // web-channel header, which is *not* a credential in the CORS sense.
 // Deployments that genuinely need a cookie to ride cross-origin (e.g. halo
 // behind an SSO proxy, frontend on a sibling subdomain sharing the parent
@@ -292,8 +293,8 @@ app.use('/*', cors({
     : (origin) => origin ?? '*',
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   // `x-token` is the documented auth header for the public web API
-  // (/api/web/*, /api/show/state). Browser-based custom frontends — the
-  // web-demo, halo-city — are cross-origin to the server, so the header has
+  // (/api/web/*, /api/show/state). Browser-based custom frontends — e.g.
+  // halo-city — are cross-origin to the server, so the header has
   // to be in the CORS allowlist or the preflight strips it.
   allowHeaders: ['Content-Type', 'Authorization', 'x-token'],
   exposeHeaders: ['Content-Length'],
@@ -308,68 +309,72 @@ app.use('/*', cors({
 // (also skipped). Responses under 1 KiB pass through uncompressed.
 app.use('/*', compress({ threshold: 1024 }))
 
-// Auth middleware — protects API routes
-app.use('/api/*', authMiddleware() as never)
+// AgentCore A2A mode serves only its three contract paths (mounted below):
+// no /api surface, no auth middleware, no admin frontend — anything else 404s.
+if (!AGENTCORE) {
+  // Auth middleware — protects API routes
+  app.use('/api/*', authMiddleware() as never)
 
-// ------------------------------------------------------------------
-// Auth routes (public)
-// ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Auth routes (public)
+  // ------------------------------------------------------------------
 
-const authRoutes = createAuthRoutes()
-app.route('/api', authRoutes)
+  const authRoutes = createAuthRoutes()
+  app.route('/api', authRoutes)
 
-// ------------------------------------------------------------------
-// Health check
-// ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Health check
+  // ------------------------------------------------------------------
 
-app.get('/api/health', (c) => {
-  return c.json({
-    status: 'ok',
-    timestamp: Date.now(),
-    uptime: process.uptime(),
-    engine: 'agent',
-    version: HALO_VERSION,
-    gitSha: GIT_SHA,
-    // OS sandbox backing non-full access levels; null → admin locks the
-    // access-level selector to Full.
-    sandbox: getSandboxBackend(),
+  app.get('/api/health', (c) => {
+    return c.json({
+      status: 'ok',
+      timestamp: Date.now(),
+      uptime: process.uptime(),
+      engine: 'agent',
+      version: HALO_VERSION,
+      gitSha: GIT_SHA,
+      // OS sandbox backing non-full access levels; null → admin locks the
+      // access-level selector to Full.
+      sandbox: getSandboxBackend(),
+    })
   })
-})
 
-// ------------------------------------------------------------------
-// Mount routes
-// ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Mount routes
+  // ------------------------------------------------------------------
 
-const fileRoutes = createFileRoutes()
-app.route('/api', fileRoutes)
+  const fileRoutes = createFileRoutes()
+  app.route('/api', fileRoutes)
 
-const dataPreviewRoutes = createDataPreviewRoutes()
-app.route('/api', dataPreviewRoutes)
+  const dataPreviewRoutes = createDataPreviewRoutes()
+  app.route('/api', dataPreviewRoutes)
 
-const gitRoutes = createGitRoutes()
-app.route('/api', gitRoutes)
+  const gitRoutes = createGitRoutes()
+  app.route('/api', gitRoutes)
 
-const agentConfigRoutes = createAgentConfigRoutes()
-app.route('/api', agentConfigRoutes)
+  const agentConfigRoutes = createAgentConfigRoutes()
+  app.route('/api', agentConfigRoutes)
 
-const skillRoutes = createSkillRoutes()
-app.route('/api', skillRoutes)
+  const skillRoutes = createSkillRoutes()
+  app.route('/api', skillRoutes)
 
-const settingsRoutes = createSettingsRoutes()
-app.route('/api', settingsRoutes)
+  const settingsRoutes = createSettingsRoutes()
+  app.route('/api', settingsRoutes)
 
-const evolutionRoutes = createEvolutionRoutes()
-app.route('/api', evolutionRoutes)
+  const evolutionRoutes = createEvolutionRoutes()
+  app.route('/api', evolutionRoutes)
 
-const cronRoutes = createCronRoutes()
-app.route('/api', cronRoutes)
+  const cronRoutes = createCronRoutes()
+  app.route('/api', cronRoutes)
 
-// Canvas preview extensions: list / install / uninstall / static assets, plus
-// the root-dir watcher that pushes `extension:changed`. Not in AgentCore mode
-// — that surface has no admin editor.
-const extensionRoutes = createExtensionRoutes()
-app.route('/api', extensionRoutes)
-if (!AGENTCORE) startExtensionsWatcher()
+  // Canvas preview extensions: list / install / uninstall / static assets, plus
+  // the root-dir watcher that pushes `extension:changed`. Not in AgentCore mode
+  // — that surface has no admin editor.
+  const extensionRoutes = createExtensionRoutes()
+  app.route('/api', extensionRoutes)
+  startExtensionsWatcher()
+}
 // Hub-installed provider yamls (~/.halo/global/models.d/): drop the registry
 // cache + push `models:changed` on change, so `/extension models` applies live.
 startModelsWatcher()
@@ -385,8 +390,9 @@ setEvoDb(createEvoDb(path.join(HALO_HOME, 'global')))
 // it via DI.
 setCronDb(createCronDb(path.join(HALO_HOME, 'global')))
 // Run ledger global db (which sessions the server is mid-run on; see
-// agents/run-ledger.ts). Same singleton pattern.
-setRunsDb(createRunsDb(path.join(HALO_HOME, 'global')))
+// agents/run-ledger.ts). Same singleton pattern. AgentCore A2A mode keeps
+// it on the workspace instead, opened once the lease is held (a2a/agentcore.ts).
+if (!AGENTCORE) setRunsDb(createRunsDb(path.join(HALO_HOME, 'global')))
 // Cron dispatchers are registered per-channel by `bootChannels(...)`
 // further down (each descriptor's `registerCronDispatcher`). Daemon
 // is started after the channels boot so the registry is fully populated
@@ -435,7 +441,9 @@ setCronSessionRegistry(registry)
 // normally. claimWorkspaceRuntime is idempotent for our own pid, so the
 // constructor's own claim just re-confirms. Non-owner (DEV) servers skip the
 // sweep entirely — their ledger is off, so they write no rows to drain.
-if (OWNS_RUNTIMES) {
+// AgentCore A2A mode opens its workspace only once the lease is held, and
+// that SessionManager's constructor drains the rows itself.
+if (OWNS_RUNTIMES && !AGENTCORE) {
   for (const ws of listRunningWorkspaces()) {
     if (!fs.existsSync(path.join(ws, '.halo'))) continue
     if (!claimWorkspaceRuntime(ws)) continue
@@ -447,47 +455,41 @@ if (OWNS_RUNTIMES) {
   }
 }
 
-const sessionRoutes = createSessionRoutes(registry)
-app.route('/api', sessionRoutes)
-
-// Archived UI-log segments (scroll-up history). Separate router from
-// sessions.ts so the read side of archiving sits next to nothing else.
-const sessionArchiveRoutes = createSessionArchiveRoutes(registry)
-app.route('/api', sessionArchiveRoutes)
-
-// halo-city world snapshot — token-authed public endpoint (added to
-// PUBLIC_PATHS in auth.ts so it bypasses the admin cookie like /api/web/*).
-const showRoutes = createShowRoutes(registry)
-app.route('/api', showRoutes)
-
-const metricsRoutes = createMetricsRoutes(registry)
-app.route('/api', metricsRoutes)
-
-const commandRoutes = createCommandRoutes(commandRegistry, registry)
-app.route('/api', commandRoutes)
-
-// Boot every registered channel: registers its cron dispatcher, starts
-// long-poll/SSE runners, mounts admin routes. Adding a new channel =
-// add an entry to `defaultChannelDescriptors`; this block stays untouched.
 if (!AGENTCORE) {
+  const sessionRoutes = createSessionRoutes(registry)
+  app.route('/api', sessionRoutes)
+
+  // Archived UI-log segments (scroll-up history). Separate router from
+  // sessions.ts so the read side of archiving sits next to nothing else.
+  const sessionArchiveRoutes = createSessionArchiveRoutes(registry)
+  app.route('/api', sessionArchiveRoutes)
+
+  // halo-city world snapshot — token-authed public endpoint (added to
+  // PUBLIC_PATHS in auth.ts so it bypasses the admin cookie like /api/web/*).
+  const showRoutes = createShowRoutes(registry)
+  app.route('/api', showRoutes)
+
+  const metricsRoutes = createMetricsRoutes(registry)
+  app.route('/api', metricsRoutes)
+
+  const commandRoutes = createCommandRoutes(commandRegistry, registry)
+  app.route('/api', commandRoutes)
+
+  // Boot every registered channel: registers its cron dispatcher, starts
+  // long-poll/SSE runners, mounts admin routes. Adding a new channel =
+  // add an entry to `defaultChannelDescriptors`; this block stays untouched.
   bootChannels(app, defaultChannelDescriptors, { registry, db: channelDb })
 
   // Cron daemon runs after channels boot so every cron dispatcher is
   // registered before the first scheduled fire could happen.
   startCronDaemon()
-} else {
-  // AgentCore adapter: /ping + /invocations at the root (the AgentCore
-  // contract paths, not under /api — no auth middleware applies to them).
-  const agentcoreRoutes = createAgentCoreRoutes({ registry, workspace: config.server.agentcoreWorkspace })
-  app.route('/', agentcoreRoutes)
-  console.log(`[Server] AgentCore runtime mode — workspace: ${config.server.agentcoreWorkspace}`)
 }
 
 // A2A v1.0 (plans/a2a.md): inbound JSON-RPC under /a2a/<home-relative ws path>
 // + the outbound push receiver /a2a-push/:id. Both outside /api/* (own token
-// auth, no admin cookie) and BEFORE serveStatic / the SPA fallback. Not in
-// AgentCore mode this round. The outbox + boot reconcile run on every server
-// (incl. dev) — a2a.db is this process's own, not a shared workspace runtime.
+// auth, no admin cookie) and BEFORE serveStatic / the SPA fallback. AgentCore
+// mode mounts its own variant below. The outbox + boot reconcile run on every
+// server (incl. dev) — a2a.db is this process's own, not a shared workspace runtime.
 if (!AGENTCORE) {
   setA2ADb(createA2ADb(path.join(HALO_HOME, 'global')))
   setA2AOutboundRegistry(registry)
@@ -495,6 +497,22 @@ if (!AGENTCORE) {
   app.route('/', createA2APushRoutes())
   startPushSender()
   reconcileOpenDispatches()
+}
+
+// AgentCore A2A runtime: /ping + A2A at `/` on the fixed workspace (the
+// contract paths, outside /api — no auth middleware applies). a2a.db, the
+// SessionManager and the push sender start once the workspace lease is held
+// (a2a/agentcore.ts). No push receiver and no outbound registry: the
+// container can't be reached by a remote's webhook, so a2a_send reports
+// itself unavailable here.
+let agentcoreLease: WorkspaceLease | null = null
+if (AGENTCORE) {
+  // Lease lost = another runtime session owns the workspace now: exit without
+  // the graceful flush, which would write into its workspace.
+  const a2aMode = createAgentCoreA2A(registry, config.server.agentcoreWorkspace, () => process.exit(1))
+  app.route('/', a2aMode.app)
+  agentcoreLease = a2aMode.lease
+  console.log(`[Server] AgentCore A2A runtime mode — workspace: ${a2aMode.workspace}, interface: ${config.a2a.publicUrl || '(request origin)'}`)
 }
 
 // ------------------------------------------------------------------
@@ -518,18 +536,20 @@ function resolveFrontendDir(): string {
 }
 const FRONTEND_DIR = resolveFrontendDir()
 
-app.use('/*', serveStatic({ root: path.relative(process.cwd(), FRONTEND_DIR) }))
+if (!AGENTCORE) {
+  app.use('/*', serveStatic({ root: path.relative(process.cwd(), FRONTEND_DIR) }))
 
-// SPA fallback: serve index.html for any non-API route that didn't match a static file
-app.get('/*', (c) => {
-  const indexPath = path.join(FRONTEND_DIR, 'index.html')
-  try {
-    const html = fs.readFileSync(indexPath, 'utf-8')
-    return c.html(html)
-  } catch {
-    return c.text('Frontend not built. Run: cd packages/admin && npx next build', 503)
-  }
-})
+  // SPA fallback: serve index.html for any non-API route that didn't match a static file
+  app.get('/*', (c) => {
+    const indexPath = path.join(FRONTEND_DIR, 'index.html')
+    try {
+      const html = fs.readFileSync(indexPath, 'utf-8')
+      return c.html(html)
+    } catch {
+      return c.text('Frontend not built. Run: cd packages/admin && npx next build', 503)
+    }
+  })
+}
 
 // ------------------------------------------------------------------
 // Global error handler
@@ -554,9 +574,7 @@ const server = serve({
 // noServer: handshakes reach it through the `upgrade` router below.
 const wss = new WebSocketServer({
   noServer: true,
-  // AgentCore terminates auth upstream (SigV4/OAuth) before the connection
-  // reaches the container, so its /ws is open; normal mode keeps cookie auth.
-  verifyClient: AGENTCORE ? undefined : (info, callback) => {
+  verifyClient: (info, callback) => {
     // Authenticate WebSocket connections via cookie
     const token = getTokenFromCookieHeader(info.req.headers.cookie)
     if (isAuthenticated(token)) {
@@ -567,11 +585,8 @@ const wss = new WebSocketServer({
   },
 })
 
-if (AGENTCORE) {
-  setupAgentCoreWebSocket({ wss, registry, workspace: config.server.agentcoreWorkspace })
-  // No setBroadcastWss: admin broadcast frames (session:changed etc.) must
-  // not leak into the AgentCore WS protocol; broadcast() no-ops unset.
-} else {
+// AgentCore mode has no admin WS (broadcast() no-ops while unset).
+if (!AGENTCORE) {
   setupWebSocketHandler({ wss, registry })
   // Make `wss` reachable from non-handler code (evo wrapper, cron runner,
   // admin route mutations) so they can `broadcast({ type, ... })` without
@@ -583,13 +598,14 @@ if (AGENTCORE) {
 // settings, neither of which exists in AgentCore mode.
 const transcribe = AGENTCORE ? null : createTranscribeProxy()
 
-const upgradeRoutes = new Map<string, UpgradeHandler>([
+// AgentCore mode has no WS surface: every upgrade gets the router's 400.
+const upgradeRoutes = new Map<string, UpgradeHandler>(AGENTCORE ? [] : [
   ['/ws', (req, socket, head) => wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))],
 ])
 if (transcribe) upgradeRoutes.set(TRANSCRIBE_PATH, transcribe.handleUpgrade)
 ;(server as import('node:http').Server).on('upgrade', createUpgradeRouter(upgradeRoutes))
 
-console.log(`[Server] WebSocket server ready on ws://localhost:${PORT}/ws`)
+if (!AGENTCORE) console.log(`[Server] WebSocket server ready on ws://localhost:${PORT}/ws`)
 
 // ------------------------------------------------------------------
 // Graceful shutdown
@@ -630,6 +646,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
     try { sm.flushAll() } catch (err) { console.error(`[Server] flushAll failed for ${workspacePath}: ${err instanceof Error ? err.message : String(err)}`) }
     releaseWorkspaceRuntime(workspacePath)
   }
+  // Last workspace write: the next runtime session may take over from here.
+  agentcoreLease?.stop()
 
   console.log('[Server] Shutdown complete')
   // Last: flush buffered spans / metrics / log records (bounded to 3s) so the

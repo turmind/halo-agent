@@ -327,11 +327,12 @@ export const config = {
     get ownsWorkspaceRuntimes(): boolean {
       return process.env.HALO_BADGE?.trim().toUpperCase() !== 'DEV'
     },
-    /** `HALO_RUNTIME_MODE=agentcore` runs the server as an Amazon Bedrock
-     *  AgentCore Runtime container: auth is terminated upstream by AgentCore,
-     *  so password/JWT checks, channels, cron/evolution and the instance lock
-     *  are skipped, and the /ping + /invocations + WS /ws adapter is mounted
-     *  (see routes/agentcore.ts). Unset / any other value → normal server. */
+    /** `HALO_RUNTIME_MODE=agentcore-a2a` (`halo agentcore`) runs the server
+     *  as an Amazon Bedrock AgentCore Runtime container with the A2A
+     *  protocol: AgentCore verifies the caller's signed request upstream, so
+     *  password/JWT checks, channels, cron/evolution and the instance lock are
+     *  skipped, and /ping + A2A JSON-RPC are mounted at `/` on one fixed
+     *  workspace (see a2a/agentcore.ts). Unset / any other value → normal server. */
     runtimeMode: process.env.HALO_RUNTIME_MODE ?? null,
     /** Workspace for agentcore mode. Env `HALO_WORKSPACE`, fallback cwd. */
     agentcoreWorkspace: process.env.HALO_WORKSPACE ?? process.cwd(),

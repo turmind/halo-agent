@@ -32,7 +32,7 @@ import { createSettingsRoutes } from '../src/routes/settings.js'
  * Legit ids must keep working: agent slugs (CJK included), `__internal__`
  * platform agents, and every real session-id shape (sid_, s-, web_, tg_,
  * slack/feishu ids embedding `:` and `.`, hierarchical `a>b` ids,
- * cron-<id>, agentcore_).
+ * cron-<id>, a2a_<account>_).
  */
 
 // URL-encoded traversal shapes as they'd arrive on the wire; Hono decodes
@@ -45,7 +45,7 @@ describe('isSafeIdSegment', () => {
       'default', 'deep-executor', '__evo_agent__', '中文-agent',
       'sid_m1abc_x7', 's-1699999-ab12cd', 'web_1a2b3c4d_lmnop',
       'tg_12345_q1', 'wx_oAbC-123_z9', 'slack_C0AB:1699.1234_k2',
-      'feishu_oc_9f:om_8e_r4', 'cron-lx9-ab12cd', 'agentcore_user-1',
+      'feishu_oc_9f:om_8e_r4', 'cron-lx9-ab12cd', 'a2a_bd6e5512_mv0bul5m3085fe',
       'sid_root>sid_child', 'goal_x>sid_y',
     ]) {
       expect(isSafeIdSegment(id), id).toBe(true)

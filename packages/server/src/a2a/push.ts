@@ -27,6 +27,8 @@ interface ConfigRow { url: string; token: string | null; auth_scheme: string | n
 let timer: NodeJS.Timeout | null = null
 let inFlight = 0
 const sending = new Set<number>()
+/** Give-up age; startPushSender may lower it (AgentCore A2A mode: 1 h). */
+let maxAgeMs = MAX_AGE_MS
 
 /** Backoff before attempt n+1 (n = attempts so far, ≥1): 5 s · 2^(n-1), capped, ±20 % jitter. */
 export function backoffMs(attempts: number, rand: number = Math.random()): number {
@@ -48,7 +50,8 @@ export function hasPendingPushes(): boolean {
   return db.prepare('SELECT 1 FROM a2a_push_outbox WHERE dead = 0 LIMIT 1').get() !== undefined
 }
 
-export function startPushSender(): void {
+export function startPushSender(opts: { maxAgeMs?: number } = {}): void {
+  maxAgeMs = opts.maxAgeMs ?? MAX_AGE_MS
   const db = getA2ADb()
   if (!db) return
   db.prepare('DELETE FROM a2a_push_outbox WHERE dead = 1 AND created_at < ?').run(Date.now() - DEAD_KEEP_MS)
@@ -125,7 +128,7 @@ async function deliver(row: OutboxRow): Promise<void> {
     return
   }
   const attempts = row.attempts + 1
-  const dead = v === 'dead' || attempts >= MAX_ATTEMPTS || Date.now() - row.created_at > MAX_AGE_MS
+  const dead = v === 'dead' || attempts >= MAX_ATTEMPTS || Date.now() - row.created_at > maxAgeMs
   db.prepare('UPDATE a2a_push_outbox SET attempts = ?, next_at = ?, last_error = ?, dead = ? WHERE id = ?')
     .run(attempts, Date.now() + backoffMs(attempts), error.slice(0, 500), dead ? 1 : 0, row.id)
   console.warn(`[A2A] push ${row.event_key} for ${row.task_id} → ${cfg.url} failed (attempt ${attempts}${dead ? ', giving up' : ''}): ${error}`)

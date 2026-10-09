@@ -28,6 +28,7 @@ Commands:
   tui                  Start interactive TUI
   cli "<prompt>"       Run a one-shot prompt and exit (or pipe via stdin)
   server               Start the HTTP/WS server + admin web UI
+  agentcore            Run the server as an AgentCore A2A runtime container
   agents               List available agents and exit
   sessions             List recent sessions and exit
   models               Install / list hub model provider configs
@@ -157,6 +158,35 @@ most 5 times per 5 minutes; past that the daemon gives up and logs why.
 A clean exit — including \`halo server stop\` — never restarts.
 `
 
+const HELP_AGENTCORE = `Usage: halo agentcore --workspace <path> [-p N]
+
+Run the server in the foreground as an Amazon Bedrock AgentCore Runtime
+container with the A2A server protocol (HALO_RUNTIME_MODE=agentcore-a2a):
+GET /ping, POST / (A2A JSON-RPC) and GET /.well-known/agent-card.json on one
+fixed workspace. No admin UI, password, channels, cron or evolution — the
+caller's signed request is verified by AgentCore before it reaches here.
+
+Options:
+  -w, --workspace <path>   Workspace to serve (default: HALO_WORKSPACE env;
+                           required). Seeded with .halo/agent-card.json if
+                           missing.
+  -p, --port <n>           Listen port (default: 9000, the AgentCore contract)
+  -h, --help               Show this help
+
+Environment:
+  HALO_A2A_PUBLIC_URL      Interface URL advertised in the card — the runtime's
+                           invoke URL (…/runtimes/<escaped ARN>/invocations)
+  HALO_A2A_ACCESS          Session access level: workspace (default) | full |
+                           readonly
+
+Run \`halo setup --non-interactive\` first (in the image build): the server
+exits at boot if ~/.halo/global/ is not initialized.
+
+One runtime session id owns the workspace at a time
+(.halo/agentcore.lease); requests on another id are refused until the holder
+has been gone ~45s.
+`
+
 const HELP_AGENTS = `Usage: halo agents [options]
 
 List available agents in the workspace (workspace > global precedence).
@@ -237,6 +267,7 @@ const HELP_BY_CMD: Record<string, string> = {
   tui: HELP_TUI,
   cli: HELP_CLI,
   server: HELP_SERVER,
+  agentcore: HELP_AGENTCORE,
   agents: HELP_AGENTS,
   sessions: HELP_SESSIONS,
   acp: HELP_ACP,
@@ -1171,6 +1202,41 @@ async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
   process.exitCode = 1
 }
 
+/** `halo agentcore`: env for the AgentCore A2A runtime mode, then the same
+ *  foreground server import as `halo server start`. */
+async function cmdAgentcore(argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    allowPositionals: false,
+    options: {
+      workspace: { type: 'string', short: 'w' },
+      port: { type: 'string', short: 'p' },
+    },
+  })
+  const port = parsePort(values.port ?? '9000')
+  if (port == null) {
+    process.stderr.write(`Invalid port: ${values.port}\n`)
+    process.exitCode = 1
+    return
+  }
+  const raw = values.workspace ?? process.env.HALO_WORKSPACE
+  if (!raw) {
+    process.stderr.write(`halo agentcore needs a workspace: pass --workspace <path> or set HALO_WORKSPACE.\n\n${HELP_AGENTCORE}`)
+    process.exitCode = 1
+    return
+  }
+  const workspace = path.resolve(raw)
+  if (!fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
+    process.stderr.write(`Workspace is not a directory: ${workspace}\n`)
+    process.exitCode = 1
+    return
+  }
+  process.env.HALO_RUNTIME_MODE = 'agentcore-a2a'
+  process.env.HALO_PORT = String(port)
+  process.env.HALO_WORKSPACE = workspace
+  await import('@turmind/halo-server')
+}
+
 async function cmdServerStop(argv: string[]): Promise<void> {
   const { values } = parseArgs({
     args: argv,
@@ -1320,6 +1386,12 @@ async function main(): Promise<void> {
   // re-checks setup state when it imports the server module.
   if (cmd === 'server') {
     await cmdServer(subArgs)
+    return
+  }
+
+  // Same as `server start`: the server module re-checks setup state itself.
+  if (cmd === 'agentcore') {
+    await cmdAgentcore(subArgs)
     return
   }
 

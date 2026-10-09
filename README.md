@@ -86,7 +86,7 @@ And when you'd rather have ambience than logs: [Halo City](#halo-city) renders t
 
 ## Recent highlights
 
-- ☁️ **AgentCore runtime mode** — run the same server as an Amazon Bedrock AgentCore Runtime container (`HALO_RUNTIME_MODE=agentcore`), with per-user EFS-backed workspaces.
+- ☁️ **AgentCore runtime mode** — run Halo as an Amazon Bedrock AgentCore Runtime (A2A protocol) with `halo agentcore`, on an EFS-backed workspace.
 - 🎨 **Four UI themes** — dark, light, midnight, warm; synced server-side so every browser gets your pick.
 - ⌨️ **TUI overhaul** — reworked input, verbose mode, and persistent history in the standalone terminal client.
 - ✂️ **Graceful interrupts, fully surfaced** — interrupted tool calls are repaired and shown in the session UI instead of vanishing.
@@ -175,7 +175,7 @@ Lives at [`halo-city/`](halo-city/) (plain static files, no build) — see the [
 
 ## Tech Stack
 
-- **Monorepo**: pnpm workspace (`core`, `server`, `admin`, `cli`, `desktop`, `acp-adapter`, `web-demo`, `agentcore-demo`)
+- **Monorepo**: pnpm workspace (`core`, `server`, `admin`, `cli`, `desktop`, `acp-adapter`)
 - **Backend**: Hono + WebSocket, single Node.js process on port 9527
 - **Frontend**: Next.js 15 static export, served directly by Hono
 - **Agent**: custom orchestration loop, provider-agnostic `ModelRuntime` interface

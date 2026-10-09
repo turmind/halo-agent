@@ -50,6 +50,16 @@ function isInternalAgent(agentId: string, workspaceRoot: string): boolean {
   }
 }
 
+/** Per workspace, while its sweep's nudges are in flight: settles once each
+ *  has reached its session (running or queued — sendUserMessage restores the
+ *  session first, a few ticks later). The server boot doesn't wait; AgentCore
+ *  mode does, so the request that triggered the sweep never sees a resumed
+ *  root as idle (a2a/agentcore.ts). */
+const inFlightNudges = new Map<string, Promise<void>>()
+export function nudgesSettled(workspaceRoot: string): Promise<void> {
+  return inFlightNudges.get(workspaceRoot) ?? Promise.resolve()
+}
+
 /**
  * Nudge every root session that was mid-run when the previous server process
  * died. Skips (per root): row gone / archived; a goal session (`goal` column
@@ -73,7 +83,7 @@ export function sweepInterruptedRuns(host: RunLedgerHost): void {
   const db = host.getDb()
   const roots = new Set(ids.map((id) => id.split('>')[0]))
   const restartedAt = new Date().toISOString()
-  let nudged = 0
+  const sends: Promise<unknown>[] = []
   for (const rootId of roots) {
     if (rootId.startsWith('cron-')) continue
     const row = db.select({ agentId: agentSessions.agentId, archivedAt: agentSessions.archivedAt, goal: agentSessions.goal, goalSessionId: agentSessions.goalSessionId })
@@ -87,10 +97,14 @@ export function sweepInterruptedRuns(host: RunLedgerHost): void {
     // writes the nudge to the UI transcript (see sweepActiveGoals).
     const nudge = `[System] The server restarted at ${restartedAt} while you were mid-turn. Your conversation history up to your last completed tool call is intact; the tool call that was in flight when the process died was cut off, and its result may or may not have landed on disk — check before repeating anything with side effects. Look at what you were doing right before this message and continue the task from there; do not start over or wait for more input. If you had sub-agents running, they were cut off too (marked stopped, no further reports will arrive) — re-dispatch with query_session("<id>", ...) to revive one with its context intact.`
     host.appendUserMessage(rootId, nudge)
-    host.sendUserMessage(rootId, nudge).catch((err) => {
+    sends.push(host.sendUserMessage(rootId, nudge).catch((err) => {
       console.error(`[RunLedger] Restart nudge failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
-    })
-    nudged++
+    }))
   }
-  console.log(`[RunLedger] Boot sweep (${host.workspaceRoot}): nudged ${nudged} interrupted root(s)`)
+  console.log(`[RunLedger] Boot sweep (${host.workspaceRoot}): nudged ${sends.length} interrupted root(s)`)
+  if (sends.length === 0) return
+  const settled = Promise.all(sends).then(() => {
+    if (inFlightNudges.get(host.workspaceRoot) === settled) inFlightNudges.delete(host.workspaceRoot)
+  })
+  inFlightNudges.set(host.workspaceRoot, settled)
 }
