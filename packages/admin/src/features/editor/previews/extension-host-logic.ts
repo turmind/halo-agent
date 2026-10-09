@@ -1,6 +1,6 @@
 import type {
-  ExtensionCapability, ExtensionClientFrame, ExtensionFsEntry, ExtensionFsErrorCode, ExtensionFsOp,
-  ExtensionHostFrame, ExtensionLang, ExtensionPlatform, ExtensionTheme, ExtensionThemeVars,
+  ExtensionCapability, ExtensionClientFrame, ExtensionFsEntry, ExtensionFsErrorCode, ExtensionFsOp, ExtensionFsScope,
+  ExtensionHostFrame, ExtensionLang, ExtensionPickErrorCode, ExtensionPlatform, ExtensionTheme, ExtensionThemeVars,
 } from '@turmind/halo-core/protocol'
 import { EXTENSION_PROTOCOL_VERSION } from '@turmind/halo-core/protocol'
 
@@ -60,9 +60,14 @@ export type HostEffect =
   | { type: 'confirm-conflict'; buffer: ArrayBuffer; diskMtime: number }
   /** Extension-author mistake, not the user's: console only. */
   | { type: 'warn'; message: string }
-  /** Run a validated bundle `fs` request (path is bundle-relative); feed the
-   *  outcome to `onFsResult`. write / append to one path run in request order. */
-  | { type: 'fs'; id: number; op: ExtensionFsOp; path: string; buffer?: ArrayBuffer }
+  /** Run a validated `fs` request (path is bundle-relative; workspace-relative
+   *  with `scope: 'workspace'`; absolute with `scope: 'system'` — scoped =
+   *  read / stat / list only); feed the outcome to `onFsResult`. write /
+   *  append to one path run in request order. */
+  | { type: 'fs'; id: number; op: ExtensionFsOp; path: string; scope?: ExtensionFsScope; buffer?: ArrayBuffer }
+  /** Open the file picker (`fs-read`); answer with exactly one `pick-result`
+   *  (see `pickResult`). `start` = workspace-relative or absolute dir, or undefined. */
+  | { type: 'pick'; id: number; accept: string[]; start?: string }
   /** Write a validated `export` next to the open file (`name` is a plain
    *  file name); answer with exactly one `exported` / `export-error`. */
   | { type: 'export'; name: string; buffer: ArrayBuffer }
@@ -86,6 +91,10 @@ function canSave(state: HostState): boolean {
   return state.capabilities.includes('save')
 }
 
+function canReadFs(state: HostState): boolean {
+  return state.capabilities.includes('fs-read')
+}
+
 const FS_OPS: ReadonlySet<string> = new Set<ExtensionFsOp>(['read', 'write', 'append', 'list', 'stat'])
 
 /** Bundle-relative POSIX path: no leading `/`, no `\`, no NUL, no empty / `.`
@@ -95,6 +104,16 @@ export function isBundlePath(p: unknown, allowRoot: boolean): boolean {
   if (p === '') return allowRoot
   if (p.includes('\\') || p.includes('\0')) return false
   return p.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..')
+}
+
+/** `scope: 'system'` path: absolute (POSIX `/…`, Windows `C:/…`), forward
+ *  slashes only, normalized — no NUL, no empty / `.` / `..` segment past the root. */
+export function isSystemPath(p: unknown): p is string {
+  if (typeof p !== 'string' || p.includes('\\') || p.includes('\0')) return false
+  const root = /^(\/|[A-Za-z]:\/)/.exec(p)?.[0]
+  if (!root) return false
+  const rest = p.slice(root.length)
+  return rest === '' || rest.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..')
 }
 
 function isArrayBuffer(v: unknown): v is ArrayBuffer {
@@ -131,6 +150,19 @@ function fsError(id: number, code: ExtensionFsErrorCode, error: string): HostEff
 function onFsFrame(state: HostState, frame: Extract<ExtensionClientFrame, { type: 'fs' }>): Step {
   const { id } = frame
   if (typeof id !== 'number' || !Number.isFinite(id)) return { state, effects: [{ type: 'warn', message: 'fs frame without a numeric id ignored' }] }
+  if (frame.scope !== undefined) {
+    const { scope } = frame
+    if (scope !== 'workspace' && scope !== 'system') return { state, effects: [fsError(id, 'denied', `unknown fs scope: ${String(scope)}`)] }
+    if (!canReadFs(state)) {
+      return { state, effects: [fsError(id, 'denied', `${scope} fs needs the fs-read capability`), { type: 'warn', message: `${scope} fs without fs-read denied` }] }
+    }
+    if (!FS_OPS.has(frame.op)) return { state, effects: [fsError(id, 'denied', `unknown fs op: ${String(frame.op)}`)] }
+    if (frame.op === 'write' || frame.op === 'append') return { state, effects: [fsError(id, 'denied', `${scope} scope is read-only`)] }
+    if (scope === 'system' ? !isSystemPath(frame.path) : !isBundlePath(frame.path, frame.op === 'list')) {
+      return { state, effects: [fsError(id, 'invalid-path', `invalid ${scope} path: ${JSON.stringify(frame.path)}`)] }
+    }
+    return { state, effects: [{ type: 'fs', id, op: frame.op, path: frame.path, scope }] }
+  }
   if (!state.bundle) {
     return { state, effects: [fsError(id, 'denied', 'fs is only available to bundle extensions'), { type: 'warn', message: 'fs from a non-bundle extension denied' }] }
   }
@@ -143,6 +175,25 @@ function onFsFrame(state: HostState, frame: Extract<ExtensionClientFrame, { type
     return { state, effects: [{ type: 'fs', id, op: frame.op, path: frame.path, buffer: frame.buffer }] }
   }
   return { state, effects: [{ type: 'fs', id, op: frame.op, path: frame.path }] }
+}
+
+export function pickResult(id: number, outcome: { ok: true; path: string; name: string; size: number } | { ok: false; code: ExtensionPickErrorCode; error: string }): HostEffect {
+  return { type: 'post', frame: { haloExt: 1, type: 'pick-result', id, ...outcome } }
+}
+
+/** Validate one `pick`: a `denied` reply here, or a `pick` effect whose
+ *  picker answers through `pickResult` exactly once. */
+function onPickFrame(state: HostState, frame: Extract<ExtensionClientFrame, { type: 'pick' }>): Step {
+  const { id } = frame
+  if (typeof id !== 'number' || !Number.isFinite(id)) return { state, effects: [{ type: 'warn', message: 'pick frame without a numeric id ignored' }] }
+  if (!canReadFs(state)) {
+    return { state, effects: [pickResult(id, { ok: false, code: 'denied', error: 'pick needs the fs-read capability' }), { type: 'warn', message: 'pick without fs-read denied' }] }
+  }
+  const accept = Array.isArray(frame.accept)
+    ? frame.accept.filter((a): a is string => typeof a === 'string' && a !== '').map((a) => a.toLowerCase())
+    : []
+  const start = isBundlePath(frame.start, true) || isSystemPath(frame.start) ? frame.start : undefined
+  return { state, effects: [{ type: 'pick', id, accept, ...(start !== undefined ? { start } : {}) }] }
 }
 
 /** Outcome of one executed `fs` effect. Failures carry the HTTP status (0 = network). */
@@ -181,7 +232,9 @@ export function createKeyedQueue() {
 export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx: HostContext): Step {
   switch (frame.type) {
     case 'ready': {
-      if (state.ready) return { state, effects: [{ type: 'warn', message: 'duplicate ready frame ignored' }] }
+      // A second `ready` = the extension reloaded itself (`location.reload()`):
+      // it holds nothing, so it gets init (+ load) again and loses its dirty flag.
+      const reset: HostEffect[] = state.dirty ? [{ type: 'set-modified', modified: false }] : []
       const init: HostEffect = {
         type: 'post',
         frame: {
@@ -191,7 +244,7 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
         },
       }
       // A bundle never gets `load` — it reads what it needs through `fs`.
-      return { state: { ...state, ready: true }, effects: state.bundle ? [init] : [init, { type: 'load' }] }
+      return { state: { ...state, ready: true, dirty: false }, effects: state.bundle ? [...reset, init] : [...reset, init, { type: 'load' }] }
     }
     case 'dirty': {
       if (!state.ready) return { state, effects: [{ type: 'warn', message: 'dirty before ready ignored' }] }
@@ -220,6 +273,8 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
       return onFsFrame(state, frame)
     case 'export':
       return onExportFrame(state, frame, ctx)
+    case 'pick':
+      return onPickFrame(state, frame)
   }
 }
 

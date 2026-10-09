@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { imageMimeFromExt, type FileTreeNode } from '@turmind/halo-core'
 import { isInTempDir } from '../channels/shared/media.js'
 import { resolveProjectPath, validatePath } from './workspace-path.js'
+import { isHiddenHostPath } from '../tools/sandbox.js'
 
 /** Guard shared by the single-path handlers: projectId → workspace root,
  *  then `filePath` must resolve inside it. */
@@ -681,12 +682,37 @@ export function createFileRoutes() {
   // terminal). It lists directory NAMES only (no file contents), and the
   // write-capable endpoint it feeds (/fs/workspace/resolve above) carries its
   // own directory/non-root guard.
+  //
+  // `files=1` (the extension file picker, capability fs-read): files too, each
+  // entry with `type`, dot-entries shown and the tree's noise skipped (same
+  // listing as /files/tree); `sizes=1` adds file `size`. Default unchanged.
   app.get('/fs/browse', async (c) => {
     const target = c.req.query('path') ?? homedir()
     if (!path.isAbsolute(target)) return c.json({ error: 'absolute path required' }, 400)
     try {
       const resolved = path.resolve(target)
       const entries = await fs.readdir(resolved, { withFileTypes: true })
+      if (c.req.query('files') === '1') {
+        const realDir = await fs.realpath(resolved)
+        if (isHiddenHostPath(realDir)) throw hiddenAsMissing('scandir', resolved)
+        const withSizes = c.req.query('sizes') === '1'
+        const list: Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }> = []
+        for (const e of entries) {
+          if (isSkippedName(e.name)) continue
+          const full = path.join(resolved, e.name)
+          // Symlinks count as what they point at (a ROM dir linked into home).
+          const st = e.isSymbolicLink() ? await fs.stat(full).catch(() => null) : null
+          const isDir = st ? st.isDirectory() : e.isDirectory()
+          const isFile = st ? st.isFile() : e.isFile()
+          if (!isDir && !isFile) continue
+          const real = st ? await fs.realpath(full).catch(() => full) : path.join(realDir, e.name)
+          if (isHiddenHostPath(real)) continue
+          const size = isFile && withSizes ? (st ?? await fs.stat(full).catch(() => null))?.size : undefined
+          list.push({ name: e.name, path: full, type: isDir ? 'directory' : 'file', ...(size !== undefined ? { size } : {}) })
+        }
+        list.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'directory' ? -1 : 1))
+        return c.json({ path: resolved, parent: path.dirname(resolved), entries: list })
+      }
       const dirs = entries
         .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
         .map((e) => ({ name: e.name, path: path.join(resolved, e.name) }))
@@ -694,6 +720,60 @@ export function createFileRoutes() {
       return c.json({ path: resolved, parent: path.dirname(resolved), entries: dirs })
     } catch (err) {
       return c.json({ error: (err as Error).message }, 404)
+    }
+  })
+
+  // ── Read-only file access by absolute path (extension capability fs-read,
+  // `scope: 'system'`). Same admin-cookie trust as /fs/browse and the
+  // terminal; never a PUBLIC_PATHS entry. Absolute only, no `..` segment.
+  function systemPath(target: string | undefined): string | null {
+    if (!target || !path.isAbsolute(target) || target.split(/[\\/]/).includes('..')) return null
+    return path.resolve(target)
+  }
+  const fsErrorStatus = (err: unknown) => {
+    const code = (err as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 404 : code === 'EACCES' || code === 'EPERM' ? 403 : 500
+  }
+  // Halo's own secrets (the sandbox hidden lists: ~/.halo/secrets, ~/.ssh,
+  // .git-credentials, the global dbs …) are judged by realpath — so a symlink
+  // can't reach them — and answer exactly like a missing file.
+  function hiddenAsMissing(syscall: string, target: string): NodeJS.ErrnoException {
+    return Object.assign(new Error(`ENOENT: no such file or directory, ${syscall} '${target}'`), { code: 'ENOENT' })
+  }
+  async function readableRealPath(target: string): Promise<string> {
+    const real = await fs.realpath(target)
+    if (isHiddenHostPath(real)) throw hiddenAsMissing('realpath', target)
+    return real
+  }
+
+  // GET /fs/stat?path=/abs → { path, realPath, size, modifiedAt, isDirectory }
+  app.get('/fs/stat', async (c) => {
+    const target = systemPath(c.req.query('path'))
+    if (!target) return c.json({ error: 'absolute path without .. required' }, 400)
+    try {
+      const realPath = await readableRealPath(target)
+      const stat = await fs.stat(realPath)
+      return c.json({ path: target, realPath, size: stat.size, modifiedAt: stat.mtimeMs, isDirectory: stat.isDirectory() })
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, fsErrorStatus(err))
+    }
+  })
+
+  // GET /fs/raw?path=/abs — the file's bytes, streamed (ROMs run to MBs)
+  app.get('/fs/raw', async (c) => {
+    const target = systemPath(c.req.query('path'))
+    if (!target) return c.json({ error: 'absolute path without .. required' }, 400)
+    try {
+      const real = await readableRealPath(target)
+      const stat = await fs.stat(real)
+      if (!stat.isFile()) return c.json({ error: 'not a file' }, 400)
+      const nodeStream = stat.size === 0 ? Readable.from([]) : createReadStream(real)
+      c.req.raw.signal?.addEventListener('abort', () => nodeStream.destroy(), { once: true })
+      return new Response(Readable.toWeb(nodeStream) as ReadableStream, {
+        headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(stat.size) },
+      })
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, fsErrorStatus(err))
     }
   })
 

@@ -121,6 +121,12 @@ describe('parseManifest', () => {
     expect(parse({ capabilities: ['media', 'transcribe'] })).toMatchObject({ capabilities: ['media', 'transcribe'] })
   })
 
+  it('capability fs-read is accepted for bundle and non-bundle extensions', () => {
+    expect(parse({ bundle: true, capabilities: ['fs-read'] })).toMatchObject({ bundle: true, capabilities: ['fs-read'] })
+    expect(parse({ capabilities: ['fs-read', 'fs-read'] })).toMatchObject({ bundle: false, capabilities: ['fs-read'] })
+    expect(errorOf(parse({ capabilities: ['workspace-write'] }))).toMatch(/unknown capability: workspace-write/)
+  })
+
   it('settings: declarations parsed (values never), scalar defaults stringified, empty = absent', () => {
     const r = parse({
       settings: {

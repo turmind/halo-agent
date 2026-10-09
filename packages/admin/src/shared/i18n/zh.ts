@@ -368,6 +368,7 @@ export const zh: Record<string, string> = {
   'settings.extensions.canSave': '可保存',
   'settings.extensions.bundle': '打开文件夹',
   'settings.extensions.media': '麦克风 / 屏幕',
+  'settings.extensions.fsRead': '读取本机文件',
   'settings.extensions.unsupportedHere': '当前设备不支持',
   'extensions.platform.web': '浏览器',
   'extensions.platform.desktop-mac': 'Mac 客户端',
@@ -548,6 +549,14 @@ export const zh: Record<string, string> = {
   'editor.immersive.replied': 'Agent 已回复 · {title}',
   'editor.immersive.repliedMany': '{count} 个会话已回复',
   'editor.immersive.backToChat': '回到对话',
+  'picker.title': '选择文件',
+  'picker.workspace': '工作区',
+  'picker.home': '主目录',
+  'picker.pathBox': '路径',
+  'picker.loading': '加载中…',
+  'picker.cancel': '取消',
+  'picker.empty': '此文件夹没有文件',
+  'picker.emptyAccept': '没有匹配的文件（{accept}）',
 
   // ── Cron jobs ──
   'cron.title': '定时任务',

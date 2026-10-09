@@ -37,12 +37,18 @@ export type ExtensionThemeToken = (typeof EXTENSION_THEME_TOKENS)[number]
 /** token → CSS color string; a token the admin theme leaves empty is omitted. */
 export type ExtensionThemeVars = Partial<Record<ExtensionThemeToken, string>>
 
-/** Bundle extensions only: scoped file access inside the bundle directory.
- *  Paths are bundle-relative POSIX (no leading `/`, no `.`/`..`/empty
- *  segments); `list` also accepts `''` = the bundle root. */
+/** Scoped file access. Without `scope`: bundle extensions only, inside the
+ *  bundle directory, every op. With a scope (capability `fs-read`, bundle or
+ *  not): `read` / `stat` / `list` only — `write` / `append` → `denied`.
+ *  Paths: no scope / `'workspace'` = POSIX relative to the bundle dir /
+ *  workspace root — no leading `/`, no `.`/`..`/empty segments, `list` also
+ *  accepts `''` = that root. `'system'` = an absolute, normalized path on the
+ *  server machine (POSIX `/…`, Windows `C:/…` with forward slashes), no `..`. */
 export type ExtensionFsOp = 'read' | 'write' | 'append' | 'list' | 'stat'
+export type ExtensionFsScope = 'workspace' | 'system'
 export type ExtensionFsErrorCode = 'not-found' | 'invalid-path' | 'denied' | 'io'
 export interface ExtensionFsEntry { name: string; type: 'file' | 'directory' }
+export type ExtensionPickErrorCode = 'cancelled' | 'denied'
 
 // ── Host → Extension ─────────────────────────────────────────────────
 
@@ -83,6 +89,12 @@ export type ExtensionHostFrame =
       mtime?: number
     })
   | (ExtensionFrameBase & { type: 'fs-result'; id: number; ok: false; code: ExtensionFsErrorCode; error: string })
+  // exactly one reply per `pick`, same `id`; `path` = workspace-relative POSIX
+  // when the file is inside the workspace (realpath-compared), else absolute
+  // (read it with `scope: 'system'`)
+  | (ExtensionFrameBase & { type: 'pick-result'; id: number; ok: true; path: string; name: string; size: number })
+  // `cancelled` = the user closed the picker; `denied` = no `fs-read`
+  | (ExtensionFrameBase & { type: 'pick-result'; id: number; ok: false; code: ExtensionPickErrorCode; error: string })
   // user pressed save; extension answers with `save` or `error`
   | (ExtensionFrameBase & { type: 'save-request' })
   | (ExtensionFrameBase & { type: 'saved'; mtime: number })
@@ -108,8 +120,14 @@ export type ExtensionClientFrame =
   // init.export hosts only: write `buffer` (transferred) next to the open
   // file as `name` (a plain file name, not the open file's own)
   | (ExtensionFrameBase & { type: 'export'; name: string; buffer: ArrayBuffer })
-  // bundle extensions only; `buffer` for write / append
-  | (ExtensionFrameBase & { type: 'fs'; id: number; op: ExtensionFsOp; path: string; buffer?: ArrayBuffer })
+  // bundle extensions, or a `scope` with `fs-read` (see ExtensionFsOp);
+  // `buffer` for write / append
+  | (ExtensionFrameBase & { type: 'fs'; id: number; op: ExtensionFsOp; path: string; scope?: ExtensionFsScope; buffer?: ArrayBuffer })
+  // `fs-read` only: open the host's file picker (whole machine). `accept` =
+  // lower-case suffixes with the dot (`['.zip', '.7z']`), `[]` = any file;
+  // `start` = dir to open at, workspace-relative or absolute (default: the
+  // bundle dir for a bundle, else the open file's dir)
+  | (ExtensionFrameBase & { type: 'pick'; id: number; accept: string[]; start?: string })
 
 export type ExtensionHostFrameType = ExtensionHostFrame['type']
 export type ExtensionClientFrameType = ExtensionClientFrame['type']

@@ -35,6 +35,18 @@ export const api = {
         `/fs/browse?path=${encodeURIComponent(path)}`,
       )
     },
+    /** Files too, with `type` + `size`, dot-entries shown (extension file picker). */
+    browseFiles(path: string) {
+      return request<{ path: string; parent: string; entries: Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }> }>(
+        `/fs/browse?path=${encodeURIComponent(path)}&files=1&sizes=1`,
+      )
+    },
+    /** Absolute-path stat; `realPath` resolves symlinks. */
+    stat(path: string) {
+      return request<{ path: string; realPath: string; size: number; modifiedAt: number; isDirectory: boolean }>(
+        `/fs/stat?path=${encodeURIComponent(path)}`,
+      )
+    },
     resolveWorkspace(path: string) {
       return request<{ id: string; path: string }>('/fs/workspace/resolve', {
         method: 'POST',

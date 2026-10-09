@@ -558,8 +558,9 @@ export function assertPathAllowed(filePath: string, opts: SandboxOptions, write 
 }
 
 /** True when a path hits the configured (global) hidden lists — the in-process
- *  counterpart of the bwrap tmpfs / empty-file masks. */
-function isHiddenHostPath(resolved: string): boolean {
+ *  counterpart of the bwrap tmpfs / empty-file masks. Also gates the admin's
+ *  absolute-path read routes (routes/files.ts /fs/raw · /fs/stat · /fs/browse). */
+export function isHiddenHostPath(resolved: string): boolean {
   const { hiddenDirs, hiddenFiles } = resolvedLists()
   return hiddenFiles.includes(resolved) || hiddenDirs.some((d) => isUnder(resolved, d))
 }

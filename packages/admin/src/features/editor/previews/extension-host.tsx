@@ -8,13 +8,14 @@ import { useTheme } from '@/shared/theme'
 import { readHostTheme } from '@/shared/theme/palette'
 import { useI18n } from '@/shared/i18n'
 import { cn, confirmAction } from '@/shared/utils'
+import { FilePicker, type PickedFile } from '@/shared/components/file-picker'
 import { PreviewShell, ToolbarButton } from './ui/preview-shell'
 import { extensionEntryUrl, getExtensionToken } from './extension-token'
 import { currentPlatform, isImmersiveViewer } from './registry'
 import { ImmersivePane, claimImmersive, createExitPill, exitImmersive, takeFullscreenArm, takeRefocus } from '../immersive'
 import {
   createKeyedQueue, exportError, initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onFsResult, onLoaded,
-  onLangChange, onPutResult, onSaveRequest, onThemeChange, registerExtensionHost,
+  isSystemPath, onLangChange, onPutResult, onSaveRequest, onThemeChange, pickResult, registerExtensionHost,
   type FsOutcome, type HostContext, type HostEffect, type HostState, type Step,
 } from './extension-host-logic'
 import type { PreviewProps } from './types'
@@ -24,15 +25,51 @@ const SAVE_TIMEOUT_MS = 5_000
 /** `media` capability: mic + screen capture (+ copy). Everyone else gets nothing. */
 const MEDIA_ALLOW = 'microphone; display-capture; clipboard-write'
 
+/** Absolute paths on the wire use forward slashes (Windows `C:/…`). */
+const toSlash = (p: string) => p.replace(/\\/g, '/')
+
 async function httpFailure(res: Response): Promise<FsOutcome> {
   const body = await res.json().catch(() => ({})) as { error?: string }
   return { ok: false, status: res.status, message: body.error ?? res.statusText }
 }
 
-/** Run one validated bundle `fs` request (protocol §3) against the files API;
- *  `eff.path` is bundle-relative, '' = the bundle root (list only). */
-async function execBundleFs(projectId: string, bundlePath: string, eff: Extract<HostEffect, { type: 'fs' }>): Promise<FsOutcome> {
-  const full = eff.path ? `${bundlePath}/${eff.path}` : bundlePath
+/** `scope: 'system'` (absolute path, read / stat / list) against the
+ *  admin-cookie `/fs/*` routes. */
+async function execSystemFs(eff: Extract<HostEffect, { type: 'fs' }>): Promise<FsOutcome> {
+  const q = encodeURIComponent(eff.path)
+  switch (eff.op) {
+    case 'read': {
+      const res = await fetch(`/api/fs/raw?path=${q}`)
+      return res.ok ? { ok: true, buffer: await res.arrayBuffer() } : await httpFailure(res)
+    }
+    case 'list': {
+      const res = await fetch(`/api/fs/browse?path=${q}&files=1`)
+      if (!res.ok) return await httpFailure(res)
+      const body = await res.json() as { entries: Array<{ name: string; type: 'file' | 'directory' }> }
+      return { ok: true, entries: body.entries.map(({ name, type }) => ({ name, type })) }
+    }
+    case 'stat': {
+      const res = await fetch(`/api/fs/stat?path=${q}`)
+      if (!res.ok) return await httpFailure(res)
+      const body = await res.json() as { size: number; modifiedAt: number }
+      return { ok: true, size: body.size, mtime: body.modifiedAt }
+    }
+    default:
+      return { ok: false, status: 403, message: 'system scope is read-only' }
+  }
+}
+
+/** Run one validated `fs` request (protocol §3) against the files API;
+ *  `eff.path` is bundle-relative, workspace-relative with `scope:
+ *  'workspace'`, or absolute with `scope: 'system'` (scoped = read / stat /
+ *  list only); '' = that root (list only). */
+async function execFs(projectId: string, bundlePath: string, eff: Extract<HostEffect, { type: 'fs' }>): Promise<FsOutcome> {
+  if (eff.scope === 'system') {
+    try { return await execSystemFs(eff) } catch (err) {
+      return { ok: false, status: 0, message: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  const full = eff.scope === 'workspace' ? eff.path : eff.path ? `${bundlePath}/${eff.path}` : bundlePath
   const query = new URLSearchParams({ path: full, projectId })
   try {
     switch (eff.op) {
@@ -112,6 +149,13 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   // Last successful export: workspace-relative path + its download URL.
   const [exported, setExported] = useState<{ path: string; url: string } | null>(null)
   const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null)
+  // Open file picker (`pick`, fs-read): one at a time, tied to the
+  // iframe attempt that asked.
+  // The ref is the truth (two picks in one tick), the state drives the render.
+  type Picking = { id: number; accept: string[]; start: string; attempt: number }
+  const pickingRef = useRef<Picking | null>(null)
+  const [picking, setPickingState] = useState<Picking | null>(null)
+  const setPicking = (p: Picking | null) => { pickingRef.current = p; setPickingState(p) }
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const readyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Version this iframe was mounted with; a differing `info.version` → §9.3.
@@ -195,7 +239,7 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
           return
         }
         const issuedFor = attemptRef.current
-        const exec = () => execBundleFs(projectId, path, eff)
+        const exec = () => execFs(projectId, path, eff)
         const pending = eff.op === 'write' || eff.op === 'append'
           ? fsQueueRef.current.run(eff.path, exec)
           : exec()
@@ -233,6 +277,45 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
         })()
         return
       }
+      case 'pick': {
+        if (!projectId || pickingRef.current) {
+          run({ state: stateRef.current, effects: [pickResult(eff.id, { ok: false, code: 'cancelled', error: projectId ? 'a picker is already open' : 'no workspace' })] })
+          return
+        }
+        // The viewer's own fullscreen (the iframe is this document's
+        // fullscreen element) would cover the picker: drop back one level —
+        // to our immersive <html> fullscreen, or to none.
+        const fs = document.fullscreenElement
+        if (fs && fs !== document.documentElement) void document.exitFullscreen().catch(() => { /* already left */ })
+        // The picker speaks absolute paths; `start` may be workspace-relative.
+        const ws = toSlash(projectId).replace(/(.)\/$/, '$1')
+        const rel = eff.start ?? (info.bundle ? path : path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '')
+        const start = isSystemPath(rel) ? rel : rel ? `${ws}/${rel}` : ws
+        setPicking({ id: eff.id, accept: eff.accept, start, attempt: attemptRef.current })
+        return
+      }
+    }
+  }
+
+  const onPicked = async (file: PickedFile | null) => {
+    const p = pickingRef.current
+    setPicking(null)
+    // A reply for a since-remounted iframe means nothing to the new document.
+    const reply = (outcome: Parameters<typeof pickResult>[1]) => {
+      if (!p || p.attempt !== attemptRef.current) return
+      run({ state: stateRef.current, effects: [pickResult(p.id, outcome)] })
+      focusFrame()
+    }
+    if (!file || !projectId) { reply({ ok: false, code: 'cancelled', error: 'picker closed' }); return }
+    // Inside the workspace (realpath-compared, so a symlinked workspace or ROM
+    // dir lands on the right side) → workspace-relative; else absolute.
+    try {
+      const [real, wsReal] = await Promise.all([api.fs.stat(file.path), api.fs.stat(projectId)])
+      const r = toSlash(real.realPath), w = toSlash(wsReal.realPath).replace(/(.)\/$/, '$1')
+      const inside = r.startsWith(w.endsWith('/') ? w : `${w}/`)
+      reply({ ok: true, path: inside ? r.slice(w.length).replace(/^\//, '') : file.path, name: file.name, size: real.size })
+    } catch (err) {
+      reply({ ok: false, code: 'cancelled', error: `could not stat the picked file: ${err instanceof Error ? err.message : String(err)}` })
     }
   }
   useEffect(() => {
@@ -527,6 +610,9 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
               </div>
             )}
           </div>
+        )}
+        {picking && projectId && (
+          <FilePicker workspace={toSlash(projectId)} accept={picking.accept} start={picking.start} onDone={(f) => { void onPicked(f) }} />
         )}
         {immersive && (
           // Mouse: top-center, only while the pointer is near the top (no

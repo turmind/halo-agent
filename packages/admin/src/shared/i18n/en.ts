@@ -368,6 +368,7 @@ export const en: Record<string, string> = {
   'settings.extensions.canSave': 'can save',
   'settings.extensions.bundle': 'opens folders',
   'settings.extensions.media': 'microphone / screen',
+  'settings.extensions.fsRead': 'Reads files on this machine',
   'settings.extensions.unsupportedHere': 'not supported here',
   'extensions.platform.web': 'Browser',
   'extensions.platform.desktop-mac': 'Mac app',
@@ -548,6 +549,14 @@ export const en: Record<string, string> = {
   'editor.immersive.replied': 'Agent replied · {title}',
   'editor.immersive.repliedMany': '{count} sessions replied',
   'editor.immersive.backToChat': 'Back to chat',
+  'picker.title': 'Choose a file',
+  'picker.workspace': 'Workspace',
+  'picker.home': 'Home',
+  'picker.pathBox': 'Path',
+  'picker.loading': 'Loading…',
+  'picker.cancel': 'Cancel',
+  'picker.empty': 'No files in this folder',
+  'picker.emptyAccept': 'No matching files ({accept})',
 
   // ── Cron jobs ──
   'cron.title': 'Cron Jobs',

@@ -133,6 +133,7 @@ describe('isReadOnlyViewer (heavy)', () => {
 describe('isImmersiveViewer (immersive maximize)', () => {
   it('any extension without save qualifies, bundles included', () => {
     expect(isImmersiveViewer(ext('glb'))).toBe(true)
+    expect(isImmersiveViewer(ext('md', { bundle: true, capabilities: ['fs-read'] }))).toBe(true)
     expect(isImmersiveViewer(ext('htrans', { bundle: true, capabilities: ['media', 'transcribe'] }))).toBe(true)
     expect(isImmersiveViewer(ext('drawio', { capabilities: ['save'] }))).toBe(false)
   })

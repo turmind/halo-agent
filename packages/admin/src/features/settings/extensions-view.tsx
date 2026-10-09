@@ -106,6 +106,7 @@ export function ExtensionsView() {
                   {ext.bundle && ` · ${t('settings.extensions.bundle')}`}
                   {ext.capabilities.includes('save') && ` · ${t('settings.extensions.canSave')}`}
                   {ext.capabilities.includes('media') && ` · ${t('settings.extensions.media')}`}
+                  {ext.capabilities.includes('fs-read') && ` · ${t('settings.extensions.fsRead')}`}
                   {ext.description && ` — ${ext.description}`}
                 </p>
               </div>

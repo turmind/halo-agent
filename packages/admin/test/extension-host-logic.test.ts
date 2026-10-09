@@ -3,7 +3,7 @@ import type { ExtensionCapability, ExtensionClientFrame, ExtensionTheme } from '
 import {
   initialHostState, isClientFrame, onClientFrame, onLoaded, onPutResult, onConflictChoice,
   onFileChanged, onLangChange, onSaveRequest, onThemeChange, registerExtensionHost, getExtensionHost,
-  onFsResult, isBundlePath, createKeyedQueue,
+  onFsResult, isBundlePath, isSystemPath, createKeyedQueue,
   type HostState, type HostEffect, type HostContext,
 } from '../src/features/editor/previews/extension-host-logic'
 import { readThemeVars, schemeFromRgb } from '../src/shared/theme/palette'
@@ -38,7 +38,7 @@ describe('isClientFrame', () => {
 })
 
 describe('ready handshake', () => {
-  it('ready → init (with capabilities + theme) then load; duplicate ready only warns', () => {
+  it('ready → init (with capabilities + theme) then load; a second ready (self-reload) gets init + load again', () => {
     const s0 = initialHostState(['save'])
     const step = onClientFrame(s0, frame({ type: 'ready', protocol: 1 }), ctx)
     expect(step.state.ready).toBe(true)
@@ -48,7 +48,14 @@ describe('ready handshake', () => {
     expect(init.type === 'post' && init.frame.type === 'init' && init.frame.theme).toBe('dark')
     expect(init.type === 'post' && init.frame.type === 'init' && init.frame.themeVars).toEqual(darkVars)
     const again = onClientFrame(step.state, frame({ type: 'ready', protocol: 1 }), ctx)
-    expect(types(again.effects)).toEqual(['warn'])
+    expect(types(again.effects)).toEqual(['post', 'load'])
+    expect(posted(again.effects)).toEqual(['init'])
+  })
+
+  it('a reload while dirty clears the tab dot before the new init', () => {
+    const step = onClientFrame({ ...ready(), dirty: true }, frame({ type: 'ready', protocol: 1 }), ctx)
+    expect(step.state.dirty).toBe(false)
+    expect(types(step.effects)).toEqual(['set-modified', 'post', 'load'])
   })
 
   it('nothing is posted before ready: theme change and save request are no-ops', () => {
@@ -323,6 +330,95 @@ describe('bundle extensions', () => {
     expect(fsReply(onFsResult(readyBundle(), 5, { ok: false, status: 404, message: 'File not found' }).effects)).toMatchObject({ id: 5, code: 'not-found', error: 'File not found' })
     expect(fsReply(onFsResult(readyBundle(), 5, { ok: false, status: 403, message: 'x' }).effects)).toMatchObject({ code: 'denied' })
     expect(fsReply(onFsResult(readyBundle(), 5, { ok: false, status: 0, message: 'net' }).effects)).toMatchObject({ code: 'io' })
+  })
+})
+
+/**
+ * Contract (fs-read): scoped fs frames (`'workspace'`, `'system'`) and `pick`
+ * need the capability (bundle or not); scopes are read / stat / list only;
+ * workspace = the bundle path rules, system = absolute + normalized; `pick`
+ * is answered exactly once.
+ */
+describe('fs-read', () => {
+  const wsFrame = (op: string, path: unknown, extra: Record<string, unknown> = {}) =>
+    ({ haloExt: 1, type: 'fs', id: 9, op, path, scope: 'workspace', ...extra } as unknown as ExtensionClientFrame)
+  const pickFrame = (extra: Record<string, unknown> = {}) =>
+    ({ haloExt: 1, type: 'pick', id: 4, accept: ['.zip'], ...extra } as unknown as ExtensionClientFrame)
+  const reply = (effects: HostEffect[]) => {
+    const e = effects.find((x) => x.type === 'post')
+    return e?.type === 'post' ? e.frame : null
+  }
+  const reader = (bundle = false): HostState => ({ ...initialHostState(['fs-read'], bundle), ready: true })
+
+  it('scoped reads become fs effects for bundle and non-bundle extensions alike', () => {
+    expect(onClientFrame(reader(), wsFrame('read', 'roms/a.zip'), ctx).effects)
+      .toEqual([{ type: 'fs', id: 9, op: 'read', path: 'roms/a.zip', scope: 'workspace' }])
+    expect(onClientFrame(reader(true), wsFrame('list', ''), ctx).effects)
+      .toEqual([{ type: 'fs', id: 9, op: 'list', path: '', scope: 'workspace' }])
+    expect(onClientFrame(reader(), wsFrame('stat', 'a'), ctx).effects)
+      .toEqual([{ type: 'fs', id: 9, op: 'stat', path: 'a', scope: 'workspace' }])
+  })
+
+  it('without the capability the scope is denied (bundle too), with a warn', () => {
+    for (const s of [ready(['save']), { ...initialHostState(['media'], true), ready: true }]) {
+      const step = onClientFrame(s, wsFrame('read', 'a'), ctx)
+      expect(types(step.effects)).toEqual(['post', 'warn'])
+      expect(reply(step.effects)).toMatchObject({ type: 'fs-result', id: 9, ok: false, code: 'denied' })
+    }
+  })
+
+  it('write / append / unknown scope are denied; bad paths are invalid-path', () => {
+    expect(reply(onClientFrame(reader(true), wsFrame('write', 'a', { buffer: buf() }), ctx).effects)).toMatchObject({ code: 'denied' })
+    expect(reply(onClientFrame(reader(), wsFrame('append', 'a', { buffer: buf() }), ctx).effects)).toMatchObject({ code: 'denied' })
+    expect(reply(onClientFrame(reader(), wsFrame('read', 'a', { scope: 'home' }), ctx).effects)).toMatchObject({ code: 'denied' })
+    for (const p of ['../x', '/etc', 'a//b', '']) {
+      expect(reply(onClientFrame(reader(), wsFrame('read', p), ctx).effects)).toMatchObject({ code: 'invalid-path' })
+    }
+  })
+
+  it('the unscoped bundle rule is unchanged: a non-bundle reader still cannot use bundle fs', () => {
+    const step = onClientFrame(reader(), { haloExt: 1, type: 'fs', id: 2, op: 'read', path: 'a' } as ExtensionClientFrame, ctx)
+    expect(reply(step.effects)).toMatchObject({ type: 'fs-result', ok: false, code: 'denied' })
+  })
+
+  it('system scope: absolute normalized paths become fs effects; relative / .. / backslash are invalid-path', () => {
+    expect(onClientFrame(reader(), wsFrame('read', '/home/u/roms/a.zip', { scope: 'system' }), ctx).effects)
+      .toEqual([{ type: 'fs', id: 9, op: 'read', path: '/home/u/roms/a.zip', scope: 'system' }])
+    expect(onClientFrame(reader(true), wsFrame('list', 'C:/Games', { scope: 'system' }), ctx).effects)
+      .toEqual([{ type: 'fs', id: 9, op: 'list', path: 'C:/Games', scope: 'system' }])
+    expect(onClientFrame(reader(), wsFrame('list', '/', { scope: 'system' }), ctx).effects)
+      .toEqual([{ type: 'fs', id: 9, op: 'list', path: '/', scope: 'system' }])
+    for (const p of ['roms/a.zip', '/a/../etc', '/a//b', '/a/./b', '/a/', 'C:\\Games', 'C:', '', 3]) {
+      expect(reply(onClientFrame(reader(), wsFrame('read', p, { scope: 'system' }), ctx).effects)).toMatchObject({ code: 'invalid-path' })
+    }
+    expect(reply(onClientFrame(reader(), wsFrame('write', '/tmp/x', { scope: 'system', buffer: buf() }), ctx).effects)).toMatchObject({ code: 'denied' })
+    const noCap = onClientFrame(ready(['save']), wsFrame('read', '/tmp/x', { scope: 'system' }), ctx)
+    expect(types(noCap.effects)).toEqual(['post', 'warn'])
+    expect(reply(noCap.effects)).toMatchObject({ code: 'denied' })
+  })
+
+  it('isSystemPath: POSIX and Windows-with-forward-slash roots', () => {
+    expect(isSystemPath('/')).toBe(true)
+    expect(isSystemPath('/home/ubuntu/halo-a2a-roms/gridlee.zip')).toBe(true)
+    expect(isSystemPath('D:/')).toBe(true)
+    expect(isSystemPath('d:/roms/x.zip')).toBe(true)
+    expect(isSystemPath('//server/share')).toBe(false)
+    expect(isSystemPath('/a/..')).toBe(false)
+  })
+
+  it('pick → one pick effect with lower-cased accept and a valid start only', () => {
+    expect(onClientFrame(reader(), pickFrame({ accept: ['.ZIP', '.7z', 3], start: 'roms' }), ctx).effects)
+      .toEqual([{ type: 'pick', id: 4, accept: ['.zip', '.7z'], start: 'roms' }])
+    expect(onClientFrame(reader(), pickFrame({ accept: undefined, start: '../up' }), ctx).effects)
+      .toEqual([{ type: 'pick', id: 4, accept: [] }])
+    expect(onClientFrame(reader(), pickFrame({ start: '/home/u/roms' }), ctx).effects)
+      .toEqual([{ type: 'pick', id: 4, accept: ['.zip'], start: '/home/u/roms' }])
+  })
+
+  it('pick without the capability → pick-result denied; without a numeric id → warn only', () => {
+    const step = onClientFrame(ready(['save']), pickFrame(), ctx)
+    expect(reply(step.effects)).toEqual({ haloExt: 1, type: 'pick-result', id: 4, ok: false, code: 'denied', error: expect.any(String) })
+    expect(types(onClientFrame(reader(), pickFrame({ id: 'x' }), ctx).effects)).toEqual(['warn'])
   })
 })
 
