@@ -297,7 +297,11 @@ async function buildHarnessFromFlags(flags: HarnessFlags): Promise<Harness> {
   })
 }
 
-function attachSignalHandlers(harness: Harness): void {
+async function attachSignalHandlers(harness: Harness): Promise<void> {
+  // exitAfterFlush: flush buffered OTel telemetry (capped 3s, instant when
+  // observability is off) before exiting — harness.stop() runs first and ends
+  // the turn, so the turn's spans are closed and in the batch by then.
+  const { exitAfterFlush } = await import('./harness.js')
   // SIGINT — first hit: graceful stop + destroy; second hit: hard exit.
   let sigintCount = 0
   process.on('SIGINT', () => {
@@ -308,7 +312,7 @@ function attachSignalHandlers(harness: Harness): void {
     }
     harness.stop().finally(() => {
       harness.destroy()
-      process.exit(130)
+      void exitAfterFlush(130)
     })
   })
   // SIGTERM (e.g. the cron runner's timeout) — same graceful shape as the
@@ -318,11 +322,12 @@ function attachSignalHandlers(harness: Harness): void {
   // we don't exit within its grace window. Exit 143 = 128+15 (SIGTERM
   // convention). Windows note: child.kill('SIGTERM') there terminates the
   // process without delivering a catchable signal, so this handler simply
-  // never runs on Windows — acceptable, no workaround.
+  // never runs on Windows — acceptable, no workaround. The flush's 3s cap
+  // sits inside the cron runner's 30s / evo wrapper's 10s SIGKILL grace.
   process.on('SIGTERM', () => {
     harness.stop().finally(() => {
       harness.destroy()
-      process.exit(143)
+      void exitAfterFlush(143)
     })
   })
 }
@@ -968,9 +973,9 @@ async function cmdTui(flags: HarnessFlags): Promise<void> {
   }
 
   try {
-    await initRuntime()
+    await initRuntime('tui')
     const harness = await buildHarnessFromFlags(flags)
-    attachSignalHandlers(harness)
+    await attachSignalHandlers(harness)
     try {
       const tuiDone = runTui(harness, { verbose: flags.verbose })
       void forwardEarlyInput()
@@ -990,7 +995,7 @@ async function cmdTui(flags: HarnessFlags): Promise<void> {
 async function cmdCli(flags: HarnessFlags): Promise<void> {
   const { initRuntime } = await import('./harness.js')
   const { runCli } = await import('./cli.js')
-  await initRuntime()
+  await initRuntime('cli')
 
   // Combine positional args + stdin into the prompt.
   let message = flags.positionals.join(' ')
@@ -1012,7 +1017,7 @@ async function cmdCli(flags: HarnessFlags): Promise<void> {
   }
 
   const harness = await buildHarnessFromFlags(flags)
-  attachSignalHandlers(harness)
+  await attachSignalHandlers(harness)
   try {
     const exitCode = await runCli(harness, message, { format: flags.format, verbose: flags.verbose })
     process.exitCode = exitCode

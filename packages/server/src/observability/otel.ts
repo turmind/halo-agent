@@ -3,8 +3,8 @@
  * logger.ts) talks only to the `@opentelemetry/api` / `@opentelemetry/api-logs`
  * proxies, which stay no-op until a provider is registered here. The SDK +
  * OTLP exporters live in otel-sdk.ts and are dynamically imported only when an
- * endpoint is configured — an unconfigured server (or the CLI, which shares
- * logger.ts) never loads them.
+ * endpoint is configured — an unconfigured process (server, `halo cli`,
+ * `halo tui`) never loads them.
  *
  * Vendor-neutral by design: the three signals leave over OTLP http/protobuf to
  * whatever collector `general.observability.endpoint` points at. Config keys are
@@ -17,6 +17,18 @@ import { config } from '../config.js'
 import type { Provider } from './otel-sdk.js'
 
 const SCOPE = 'opentelemetry.instrumentation.halo'
+
+/** Which halo process is exporting — the `halo.process` resource attribute.
+ *  Cron / evolution children are spawned `halo cli` runs, so they report `cli`
+ *  (their `session.id` — `cron-<jobId>`, or the `__evo_agent__`-style agent
+ *  name — tells them apart from a hand-run cli). */
+export type HaloProcess = 'server' | 'cli' | 'tui'
+
+/** Cap on the exit-time flush. A healthy collector acks an OTLP POST in tens
+ *  of ms; 3s leaves room for the metrics provider's two sequential exports
+ *  (forceFlush + shutdown) plus one ~1s exporter retry, and stays well inside
+ *  the cron runner's 30s / evo wrapper's 10s SIGTERM→SIGKILL grace. */
+const SHUTDOWN_CAP_MS = 3_000
 
 /** True once initObservability() found an endpoint (ours or an external
  *  SDK's). The hot-path hooks gate on this single boolean so an unconfigured
@@ -55,7 +67,7 @@ function externalSdkRegistered(): boolean {
  * an endpoint is configured. Resolves to whether export is active. Call once,
  * before initLogger() so the logger interceptors can read `enabled`.
  */
-export async function initObservability(): Promise<boolean> {
+export async function initObservability(haloProcess: HaloProcess = 'server'): Promise<boolean> {
   const { endpoint, serviceName, headers } = config.observability
   if (endpoint) process.env.OTEL_EXPORTER_OTLP_ENDPOINT ??= endpoint
   if (headers) process.env.OTEL_EXPORTER_OTLP_HEADERS ??= headers
@@ -74,18 +86,31 @@ export async function initObservability(): Promise<boolean> {
   }
 
   const { registerSdk } = await import('./otel-sdk.js')
-  providers = registerSdk(process.env.OTEL_SERVICE_NAME, process.env.HALO_VERSION ?? 'dev')
-  console.log(`[Observability] OTLP export → ${process.env.OTEL_EXPORTER_OTLP_ENDPOINT} (service.name=${process.env.OTEL_SERVICE_NAME}, capture_content=${config.observability.captureContent})`)
+  providers = await registerSdk(process.env.OTEL_SERVICE_NAME, process.env.HALO_VERSION ?? 'dev', haloProcess)
+  console.log(`[Observability] OTLP export → ${process.env.OTEL_EXPORTER_OTLP_ENDPOINT} (service.name=${process.env.OTEL_SERVICE_NAME}, halo.process=${haloProcess}, capture_content=${config.observability.captureContent})`)
   return true
 }
 
-/** Flush + shut down the providers we registered, bounded to 3s total so a
- *  dead collector can't hold up process exit. */
-export async function shutdownObservability(): Promise<void> {
-  if (providers.length === 0) return
-  const all = Promise.all(providers.map(async (p) => {
-    try { await p.forceFlush() } catch { /* ok */ }
-    try { await p.shutdown() } catch { /* ok */ }
-  }))
-  await Promise.race([all, new Promise<void>((resolve) => setTimeout(resolve, 3_000))])
+let shutdown: Promise<boolean> | null = null
+
+/** Flush + shut down the providers we registered, capped at SHUTDOWN_CAP_MS so
+ *  a dead collector can't hold up process exit. Idempotent (a signal can land
+ *  while the end-of-run flush is in flight). Resolves false when the cap fired:
+ *  the exporters' own retry / timeout timers (10s OTLP timeout, 30s batch
+ *  export timeout) are then still pending and keep the event loop alive, so a
+ *  caller relying on a natural exit must process.exit() itself. */
+export function shutdownObservability(): Promise<boolean> {
+  if (providers.length === 0) return Promise.resolve(true)
+  shutdown ??= (async () => {
+    const all = Promise.all(providers.map(async (p) => {
+      try { await p.forceFlush() } catch { /* ok */ }
+      try { await p.shutdown() } catch { /* ok */ }
+    })).then(() => true)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const cap = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), SHUTDOWN_CAP_MS) })
+    // Cleared either way: a pending cap timer would itself hold a cli that
+    // finished flushing in 50ms open for the full 3s.
+    try { return await Promise.race([all, cap]) } finally { clearTimeout(timer) }
+  })()
+  return shutdown
 }

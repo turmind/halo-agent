@@ -9,6 +9,7 @@ import { config, HALO_HOME, modelSupportsImage, resolveSandboxPaths } from '@tur
 import { getDisabledSet } from '@turmind/halo-server/db/index'
 import { initBwrapCheck, setSandboxHiddenPaths } from '@turmind/halo-server/tools/sandbox'
 import { initLogger } from '@turmind/halo-server/logger'
+import { initObservability, shutdownObservability } from '@turmind/halo-server/observability/otel'
 import { findActiveSessionId, dispatchCommand, type CommandContext, type CommandResult } from '@turmind/halo-server/channels/shared/commands'
 import type { Lang } from '@turmind/halo-server/channels/shared/i18n'
 import { commandRegistry } from '@turmind/halo-server/commands/index'
@@ -101,7 +102,12 @@ export interface Harness {
 const SESSION_PREFIX = 'cli_'
 const USER_ID = 'cli'
 
-export async function initRuntime(): Promise<void> {
+/**
+ * `observe` = this process runs the agent loop (`halo cli` / `halo tui`, incl.
+ * the cron / evo children, which are spawned `halo cli`): export OTel like the
+ * server does. The list-only commands (agents / sessions) pass nothing.
+ */
+export async function initRuntime(observe?: 'cli' | 'tui'): Promise<void> {
   // Redirect console.log to stderr so stdout stays clean for agent output only.
   // initLogger() captures this as origLog, so all subsequent console output goes to stderr.
   console.log = (...args: unknown[]) => process.stderr.write(args.map(String).join(' ') + '\n')
@@ -110,10 +116,30 @@ export async function initRuntime(): Promise<void> {
   // before anything reads the models registry. Before initLogger, like the
   // server, so the notice isn't filtered by the log level.
   refreshTemplatesIfOutdated(HALO_HOME, 'CLI')
+  // Same order as the server: OTel providers, then the logger interceptors.
+  if (observe && await initObservability(observe)) {
+    // Natural end — one-shot run done, TUI quit, a thrown error (main() has
+    // set exitCode by now): flush before the process goes. beforeExit never
+    // fires on process.exit(); the signal paths use exitAfterFlush instead.
+    // A capped (dead-collector) flush leaves exporter timers holding the loop
+    // open, hence the explicit exit — stdout has drained, the loop was empty.
+    process.once('beforeExit', () => {
+      void shutdownObservability().then((flushed) => { if (!flushed) process.exit() })
+    })
+  }
   initLogger()
   await initBwrapCheck()
   const { hiddenDirs, hiddenFiles } = resolveSandboxPaths()
   setSandboxHiddenPaths(hiddenDirs, hiddenFiles)
+}
+
+/** Exit after flushing buffered OTel spans / metrics / logs — capped at 3s
+ *  (shutdownObservability), so a dead collector delays exit but never hangs
+ *  it; instant when observability is off. For the explicit exits (SIGINT /
+ *  SIGTERM); the natural end flushes via initRuntime's beforeExit hook. */
+export async function exitAfterFlush(code: number): Promise<never> {
+  await shutdownObservability()
+  process.exit(code)
 }
 
 export async function listAgents(workspace: string): Promise<{ id: string; description?: string; scope: string }[]> {
