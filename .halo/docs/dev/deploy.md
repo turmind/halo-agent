@@ -63,7 +63,7 @@ pnpm --filter @turmind/halo-admin build   # next build + copy-monaco; never a ba
 
 ## 2. Runtime data locations
 
-No directory needs to be created by hand. SQLite databases are created automatically on first use: per-workspace state at `<workspace>/.halo/halo.db`, plus global queues at `~/.halo/global/evo.db`, `~/.halo/global/cron.db` and `~/.halo/global/runs.db`, and channel accounts at `~/.halo/secrets/channels/channels.db`.
+No directory needs to be created by hand. SQLite databases are created automatically on first use: per-workspace state at `<workspace>/.halo/halo.db`, plus global queues at `~/.halo/global/evo.db`, `~/.halo/global/cron.db`, `~/.halo/global/runs.db` and `~/.halo/global/a2a.db`, and channel accounts at `~/.halo/secrets/channels/channels.db`.
 
 ## 3. Run `halo setup`
 
@@ -220,6 +220,7 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 | `halo cli "<prompt>"` | One-shot prompt → reply, exit |
 | `halo agents` / `halo sessions` | List agents / sessions |
 | `halo acp` | Stdio bridge that lets an ACP client (e.g. Zed / JetBrains) drive a halo server — see [acp-adapter.md](acp-adapter.md) |
+| `halo agentcore --workspace <path>` | Foreground A2A server for an Amazon Bedrock AgentCore Runtime container — see [design/agentcore.md](../design/agentcore.md) |
 
 ### Upgrade flow
 

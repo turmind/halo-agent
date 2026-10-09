@@ -210,6 +210,16 @@ Attach files or images to your message with `@file` and `@image`, or pull a dire
 - **Images**: skipped if larger than 5MB
 - If the current model does not support vision, a warning is shown and images are ignored
 
+## OpenTelemetry export
+
+`halo cli` and `halo tui` export traces, metrics and logs the same way the server does: when the global `general.observability.endpoint` setting is non-empty, each run registers the OTLP exporters at start and the agent loop emits the same GenAI spans (`invoke_agent` / `chat` / `execute_tool`). With no endpoint nothing is loaded and startup is unaffected. The scheduled runs of [Cron Tasks](../design/cron.md) and the evolution pipeline are spawned `halo cli` children, so they show up in the collector too (`session.id` `cron-<jobId>` or the internal agent's name).
+
+- **Telling processes apart**: they all share `service.name`; the `halo.process` resource attribute is `server`, `cli` or `tui`, and cron / evolution runs report `cli`.
+- **Flushed on exit**: the batched telemetry is sent before the process ends — on normal completion, TUI quit, an error, and on SIGINT / SIGTERM (after the graceful stop, still exiting 130 / 143). The flush is capped at 3 s, so an unreachable collector delays the exit by at most that and never hangs it.
+- `halo agents` and `halo sessions` only list and don't export.
+
+Settings and the span / metric model: [design/observability.md](../design/observability.md).
+
 ## Model provider configs (`halo models`)
 
 ```bash
@@ -230,6 +240,31 @@ most 5 times per 5 minutes with a 2s pause, logging each decision as
 recognized as intentional and never respawns; `halo server stop|restart|status`
 still target the server's own pid. Full policy in
 [dev/deploy.md](../dev/deploy.md#crash-semantics--why-restarton-failure-is-load-bearing).
+
+## AgentCore runtime (`halo agentcore`)
+
+```bash
+halo agentcore --workspace /mnt/efs/halo [-p 9000]
+```
+
+Runs the server in the foreground as an Amazon Bedrock AgentCore Runtime
+container speaking the A2A protocol (`HALO_RUNTIME_MODE=agentcore-a2a`): `GET
+/ping`, `POST /` (A2A JSON-RPC) and `GET /.well-known/agent-card.json` on one
+fixed workspace. No admin UI, password, channels, cron or evolution — AgentCore
+verifies the caller's signed request before it reaches the container. It always
+runs in the foreground (no `-d`) — meant as the container's entry command.
+
+| Flag / env | Meaning |
+|---|---|
+| `-w, --workspace <path>` / `HALO_WORKSPACE` | Workspace to serve — required, must exist. Seeded with `.halo/agent-card.json` if missing. |
+| `-p, --port <n>` | Listen port, default `9000` (the AgentCore contract) |
+| `HALO_A2A_PUBLIC_URL` | Interface URL advertised in the card — the runtime's invoke URL (`…/runtimes/<escaped ARN>/invocations`) |
+| `HALO_A2A_ACCESS` | Session access level: `workspace` (default) \| `full` \| `readonly` |
+
+One runtime session id owns the workspace at a time (`.halo/agentcore.lease`);
+requests on another id are refused until the holder has been gone ~45 s. Design,
+the caller-side `auth: sigv4` remote and ops notes:
+[design/agentcore.md](../design/agentcore.md).
 
 ## Architecture
 
@@ -260,7 +295,8 @@ Session prefix: `cli_`. Sessions are persisted to `<workspace>/.halo/sessions/` 
 
 `tui` / `cli` / `agents` / `sessions` refuse to run ("~/.halo/global/ not initialized. Run halo setup first.") until `halo setup` has seeded `~/.halo/global/`. Then the CLI replicates the server's init sequence (`initRuntime()` in `harness.ts`):
 1. `refreshTemplatesIfOutdated()` — the server's template startup check: when `~/.halo/global/.template-version` is behind the bundled `TEMPLATE_VERSION` (typically right after `halo upgrade`), re-seed `~/.halo/global/` before anything reads the models registry; logs `[CLI] Templates outdated (vX → vY), refreshing ~/.halo/global/` to stderr. Runs once per upgrade — afterwards the stamp matches and it's a single file read
-2. `initLogger()` — redirect console to stderr + file logger
-3. `initBwrapCheck()` — probe sandbox availability
-4. `setSandboxHiddenPaths()` — configure sandbox paths
-5. `new SessionManager(workspace)` — create agent session manager (the workspace's `.halo/` is seeded via `ensureWorkspaceHalo`)
+2. `initObservability()` — `tui` / `cli` only (the list-only `agents` / `sessions` skip it): when `general.observability.endpoint` is set, register OTel providers so this run's traces, metrics and logs reach the collector, tagged `halo.process=cli` or `tui`; a no-op otherwise. Cron jobs and evolution runs are spawned `halo cli` children, so they export too. See [OpenTelemetry export](#opentelemetry-export)
+3. `initLogger()` — redirect console to stderr + file logger
+4. `initBwrapCheck()` — probe sandbox availability
+5. `setSandboxHiddenPaths()` — configure sandbox paths
+6. `new SessionManager(workspace)` — create agent session manager (the workspace's `.halo/` is seeded via `ensureWorkspaceHalo`)

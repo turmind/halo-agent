@@ -103,7 +103,7 @@ Extra rules:
 - A readonly `shell_exec` gets no secret substitution — `{{…params…}}` / `<<ENV>>` placeholders stay literal.
 - `view_image` also needs a vision-capable model.
 - A skill with `requiresAccess` above the session level is hidden (no metadata, no `activate_skill`).
-- Relay tools are only built for `full` sessions.
+- Relay tools are only built for `full` sessions. A2A tools (`a2a_send` in `tools:`) are built at every level except the A2A read-only profile; a non-full session's `files` must sit in the workspace or the temp dir ([dev/tools.md → A2A tools](../dev/tools.md#a2a-tools)).
 - Hidden from `workspace` / `readonly` sessions only (Full sessions, the admin file explorer and the terminal see everything): a built-in list that is always included (`~/.halo/secrets`, `~/.aws`, `~/.ssh`, `~/.gnupg`, `~/.docker`, `~/.config/gh`, `~/.gitconfig`, `~/.git-credentials`, `~/.npmrc`, `~/.netrc`, the global evo/cron/runs databases, internal-session transcripts, logs, …), any extra paths added in `general.sandbox.hidden_dirs` / `hidden_files` (they add to the built-in list, never replace it), plus the workspace's own `.halo/sessions`, `.halo/logs`, `.halo/evo`, `.halo/halo.db*` (fixed in code). The rest of `.halo/` stays readable.
 
 ### Where a session's level comes from
@@ -117,7 +117,8 @@ Extra rules:
 | Cron job | Full (the `halo cli` default) | Keeps its stored level (passed through as `--access`) |
 | `halo cli` / TUI | `--access`, default `full` | `--access` value (a different level is persisted) |
 | `relay_send` into another workspace | Full | Keeps its stored level |
-| AgentCore runtime | Full | — |
+| A2A inbound (`/a2a/<path>`, a web-channel token bound to that workspace) | The token's `accessLevel`, mapped like a channel account. A `readonly` / `observer` token gets the fixed A2A read-only profile: `file_read` / `view_image` / `file_list` / `grep` / `glob` + `continue_task`, even with an OS sandbox — no shell, write or fetch, no delegation, no relay / a2a tools | Re-applied on every inbound message |
+| AgentCore runtime (`halo agentcore`) | `HALO_A2A_ACCESS`: `workspace` (default) \| `full` \| `readonly` — every A2A session gets it | Re-applied on every inbound message |
 
 Consequences:
 - A sub-agent can never have more access than its parent had when it was spawned. A readonly channel user can't escalate by delegating.

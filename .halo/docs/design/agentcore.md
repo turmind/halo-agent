@@ -1,135 +1,180 @@
 # AgentCore Runtime Mode
 
-Halo server as an **Amazon Bedrock AgentCore Runtime** container — a fourth
-way to run halo (server / CLI / desktop / AgentCore). One env var flips it:
-`HALO_RUNTIME_MODE=agentcore`. Demo package: `packages/agentcore-demo/`
-(Dockerfile, chat frontend, CDK stack, auth Lambdas — its README carries the
-operational gotchas; this doc covers how the mode works inside the server).
+Halo server as an **Amazon Bedrock AgentCore Runtime** container speaking the
+**A2A protocol** (AgentCore `serverProtocol: A2A`) — a fourth way to run halo
+(server / CLI / desktop / AgentCore). `halo agentcore --workspace <path>` sets
+`HALO_RUNTIME_MODE=agentcore-a2a` and runs the server in the foreground; the
+implementation is `packages/server/src/a2a/agentcore.ts`. The repo ships no
+deploy package (Dockerfile / IaC): you build the image and create the runtime
+yourself. The former HTTP-protocol mode (`/invocations`, WS `/ws`, per-user
+workspaces) and its demo package were removed 2026-10-09 (git history `7e98369`).
 
 ```
-Browser (static frontend, S3 + CloudFront)
-   │  /api/login, /api/verify  → CloudFront /api/* behavior → API GW → auth Lambda (DDB users, JWT)
-   │  /api/ws-presign          → presign Lambda (SigV4-signs the AgentCore WS URL)
-   │  wss (presigned URL, 5-min TTL)
+Caller (any halo server, or any A2A client that SigV4-signs)
+   │  POST …/runtimes/<escaped ARN>/invocations/   (A2A JSON-RPC, SigV4)
+   │  GET  …/invocations/.well-known/agent-card.json
+   │  X-Amzn-Bedrock-AgentCore-Runtime-Session-Id = fixed id
    ▼
-AgentCore Runtime (per-session microVM, auth terminated here)
-   │  X-Amzn-Bedrock-AgentCore-Runtime-Session-Id = user UUID
+AgentCore Runtime (per-session microVM, verifies the signed request)
    ▼
-halo server :8080  (HALO_RUNTIME_MODE=agentcore)
-   ├── GET  /ping          Healthy | HealthyBusy (any running agent session)
-   ├── POST /invocations   {"input":{"prompt"}} → full assistant message
-   └── WS   /ws            streaming frames (primary path)
+halo agentcore :9000  (HALO_RUNTIME_MODE=agentcore-a2a)
+   ├── GET  /ping                          Healthy | HealthyBusy
+   ├── POST /                              A2A JSON-RPC
+   └── GET  /.well-known/agent-card.json   card (no securitySchemes)
+        one fixed workspace (EFS) — <ws>/.halo/{a2a.db, runs.db, agentcore.lease}
 ```
+
+## Running it
+
+`halo agentcore [-w <path>] [-p N]`; the workspace is required and must exist.
+
+`HALO_HOME` must be initialized first: run `halo setup --non-interactive` in
+the image build (seeds `~/.halo/global` — agents, skills, models). `halo
+agentcore` skips the CLI's setup gate, but the server still exits at boot with
+"~/.halo/global/ not initialized" without it. Edits to the seeded files (e.g.
+pointing the agents' Bedrock endpoint at the runtime's region) go after it.
+
+| Setting | Meaning |
+|---|---|
+| `-w, --workspace` / `HALO_WORKSPACE` | The one workspace served — an EFS mount in practice. |
+| `-p, --port` | Listen port, default `9000` (the AgentCore contract). Always overrides `HALO_PORT`. |
+| `HALO_A2A_PUBLIC_URL` | The runtime's invoke URL (`…/runtimes/<escaped ARN>/invocations`); becomes the card's interface URL (`<url>/`). Unset → warning, and the card advertises the container's own origin. |
+| `HALO_A2A_ACCESS` | Access level of every session: `workspace` (default) \| `full` \| `readonly`. Anything else is a boot error. |
+| `HALO_LOG_LEVEL=info` | Needed for CloudWatch — see the ops notes. |
 
 ## What the mode changes (packages/server/src/index.ts)
 
-`config.server.runtimeMode === 'agentcore'` (env `HALO_RUNTIME_MODE`) skips:
+`config.server.runtimeMode === 'agentcore-a2a'` skips:
 
-- **Password/JWT gate** — no admin password needed at startup, `/ws` skips the
-  cookie check. AgentCore terminates auth upstream (SigV4 presign / OAuth);
-  the container is only reachable through the runtime.
-- **Single-instance lock** — one microVM per session; many server processes
-  coexist by design.
-- **Channels, cron, evolution, archive daemon, extensions watcher** —
-  meaningless in an ephemeral per-session microVM; sessions are driven only
-  through the AgentCore surface.
+- **Password/JWT gate** and the **single-instance lock** — AgentCore verifies
+  the signed request before forwarding; many microVMs coexist by design.
+- **Channels, cron, evolution, archive daemon, extensions watcher, admin WS
+  and transcribe proxy** (every WS upgrade gets the router's 400).
+- **The whole `/api/*` surface** (auth middleware included) **and the admin
+  static bundle / SPA fallback.** The container answers only `/ping`, `POST /`
+  and the card (the only paths AgentCore passes through); everything else is a
+  plain JSON 404, no HTML.
+- The normal `/a2a/<path>` mount and the `/a2a-push` receiver. There is no
+  outbound A2A from inside the container (`a2a_send` reports itself
+  unavailable): a remote's webhook can't reach a microVM.
 
-Everything else (agent loop, tools, skills, sqlite persistence) is the normal
-server. The adapter itself is `packages/server/src/routes/agentcore.ts`,
-mounted at the root (the AgentCore contract paths live outside `/api`).
+Everything else (agent loop, tools, skills, sqlite) is the normal server. The
+card is `<ws>/.halo/agent-card.json`, seeded (name `Halo`, `skills: []`) if
+missing, never overwritten — edit it to describe the agent.
 
-## Per-user workspace isolation
+## Workspace and lease
 
-`userWorkspace(base, runtimeSessionId)` maps each runtime session id to
-`<HALO_WORKSPACE>/users/<sanitized-id>/` — an isolated workspace with its own
-`.halo/` (sqlite + session files). The id chain:
+Sessions live in the workspace's `.halo/` and A2A task state in
+`<ws>/.halo/a2a.db`, so tasks survive microVM recycling. `a2a.db` holds push
+tokens, so it (and `-wal` / `-shm`) is hidden from non-full sessions
+(`tools/sandbox.ts`).
 
-DDB `agentcore-demo-users` UUID → login response → frontend uses it as
-sessionId → presign Lambda signs it into
-`X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` → adapter routes the workspace.
+Each runtime session id gets its own microVM, all mounting the same EFS, so a
+single-writer lease guards it — `<ws>/.halo/agentcore.lease`, plain NFSv4 file
+ops only:
 
-So **1 user = 1 runtime session id = 1 workspace**: users never see each
-other's history; reconnecting with the same id resumes the same conversation.
-`HALO_WORKSPACE` points at an EFS mount (`/mnt/workspace` in the CDK stack,
-`/mnt/efs` by the Dockerfile default) — microVMs are ephemeral, EFS makes
-the workspaces survive session termination and image rollouts.
-`~/.halo/global/runs.db` (the [run ledger](session.md#run-ledger--restart-nudge-for-interrupted-roots-halo-globalrunsdb)) lives under the container's `HALO_HOME`, which is **not** on EFS — it dies with the microVM, so the restart nudge doesn't apply in agentcore mode (the writes themselves are harmless, just moot).
+- **Activation is lazy.** AgentCore boots microVMs ahead of time (a warm pool)
+  and mounts the filesystem only when a session is assigned, at its first
+  invocation — at boot `HALO_WORKSPACE` is still the image's empty dir. So
+  nothing touches the workspace at boot: the first request other than `/ping`
+  creates `.halo/` and seeds the card.
+- **Acquire on request.** Each `POST /` makes one acquisition attempt unless the
+  lease is held (concurrent POSTs share one attempt). There is no background
+  retry: a refused microVM never polls, so only the microVM callers are actually
+  talking to competes. AgentCore can leave microVMs it no longer routes to
+  (see gotchas), and a polling one would take the workspace away from the
+  fixed session id.
+- The holder rewrites a heartbeat every **10 s**; a lease older than **45 s**
+  is stale and taken over by the next request (rename, then a 2 s inline
+  recheck that it still names us). The owner is a per-process random id, so a
+  successor takes over after release or staleness, whatever its session id.
+- `a2a.db`, the SessionManager and the push sender start only once the lease
+  is held; `runtime.lock` is then deleted (its pid probe can't see other microVMs).
+- Without the lease: `POST /` answers JSON-RPC `-32603` "workspace is in use by
+  another runtime session — call with the fixed runtime session id", and
+  `/ping` reports `Healthy` (never busy) so AgentCore can reap that microVM.
+- **Handoff takes ~45 s in practice, not a graceful release.** Graceful stop
+  does try to delete the lease, but on AgentCore the EFS mount is usually
+  already detached when SIGTERM arrives (`StopRuntimeSession`, idle reap). The
+  next session — the same id too, which comes back on a fresh microVM — waits
+  out the stale window and gets `-32603` meanwhile. Measured: 42–47 s
+  typically, 1.6 s once when the release did land.
+- On **losing** the lease (heartbeat stalled past the stale window and someone
+  took over) the process exits immediately, skipping the graceful flush that
+  would write into the new holder's workspace.
 
-## WS protocol quirks (why /init exists)
+### Resume after a mid-task kill
 
-The AgentCore WS proxy only forwards **client frames containing `inputText`**
-and cannot push server frames on connect. Hence:
+The [run ledger](session.md#run-ledger--restart-nudge-for-interrupted-roots-haloglobalrunsdb) lives on the workspace in this mode — `<ws>/.halo/runs.db` (hidden from non-full sessions, like `a2a.db`), not the container's `HALO_HOME`, which dies with the microVM. So a task cut off mid-run (the 8 h `maxLifetime`, a crash, a recycle) resumes on the next microVM:
 
-- Frontend sends `{"inputText":"/init"}` after open; the server special-cases
-  it (also accepts `{"type":"init"}`) and replies with a `history` frame —
-  a full snapshot, which the frontend renders by rebuild-from-scratch (not
-  append), keyed by a signature so identical snapshots skip re-rendering.
-- Frames with no `inputText` text and no `imageRefs` are silently ignored
-  server-side — the frontend uses `{type:'ping'}` every 30s purely to keep
-  the proxy from cutting the socket.
-- `/session switch` sends a `{type:'switch'}` frame → frontend clears, then
-  the follow-up history frame rebuilds.
+- `onAcquired` opens the ledger (`setRunsDb(createRunsDb(<ws>/.halo))`) **before** `registry.getOrCreate`; `index.ts` opens none in this mode. The SessionManager constructor then runs the server's boot chain — claim `runtime.lock`, orphan reconcile, goal sweep, run-ledger sweep — which drains the rows the dead microVM left and nudges each interrupted root.
+- The `POST /` that acquired the lease waits for those nudges to reach their sessions (`nudgesSettled`) before it is handled, so a GetTask on the interrupted task sees its root running → `WORKING`, not idle.
+- Nothing wakes a new microVM by itself: the resume happens on the **next invocation** — the caller's `a2a_read` / GetTask, or a new send. No caller-side polling.
+- `ownsRuntimes` stays `false`, so the lazy FAILED in `routes.ts` `reconcileStale` remains the fallback for a task the sweep didn't resume (root idle, quiet subtree): "Interrupted by a server restart on the remote. Send again on the same context to resume."
+- Verified locally: `kill -9` mid-task (2 of 6 `sleep 30` calls done) → new process refused for ~45 s, then the first accepted GetTask read `WORKING` and the task completed with all six results.
 
-Slash commands run through the shared `dispatchCommand` with a module-level
-`activeOverrides` map keyed by **`runtimeSessionId`** (one entry per runtime
-session, holding "which halo session is this socket's current one"). The entry
-lives only as long as the socket: `ws.on('close')` deletes it alongside the event
-listener, since a reconnect re-resolves from the session id anyway — without the
-delete the map grew one permanent entry per runtime session for the container's
-whole lifetime (audit B-L3). Every command is `accessLevel: 'full'` by design:
-auth terminated upstream at AgentCore, so whoever reached this socket already
-owns the isolated per-user workspace behind it.
+## Access model
 
-## WS image upload protocol (chunking)
+"Upstream" strategy: AgentCore verifies the caller's SigV4 before forwarding,
+so the container does no token auth and the card carries no `securitySchemes`.
+Every call is one fixed caller (`accountId: agentcore`) on the fixed workspace,
+mounted at `/` (any sub-path is 404), with the session level from
+`HALO_A2A_ACCESS` — default `workspace`, not `full`. See
+[guide/delegation-and-access.md](../guide/delegation-and-access.md).
 
-The AgentCore WS proxy hard-caps a single frame at **64KB** — send more and
-the connection is cut with close code 1009 ("Policy violated: message size
-limit of 64 KB for a message frame is exceeded", verified against the Tokyo
-prod runtime). An inline base64 image blows past that instantly, so images
-ride as chunked `image_chunk` frames, assembled server-side, then referenced
-by id from the actual message frame:
+## Caller side (any halo server)
 
-```jsonc
-// 1..N chunk frames per image (inputText empty string is required — the
-// proxy only forwards client frames that carry an inputText key at all)
-{"inputText":"", "type":"image_chunk", "uploadId":"u1", "seq":0, "total":8,
- "mimeType":"image/jpeg", "data":"<base64 slice, ≤48KB>"}
+In the caller server's `~/.halo/secrets/a2a-remotes.yaml` (server-wide, full-only):
 
-// message frame referencing the finished upload(s)
-{"inputText":"describe this", "imageRefs":["u1"]}
+```yaml
+remotes:
+  agentcore:
+    card: https://bedrock-agentcore.ap-northeast-1.amazonaws.com/runtimes/<escaped ARN>/invocations/.well-known/agent-card.json
+    auth: sigv4
+    push_base: http://<caller's VPC-reachable host>:<port>
 ```
 
-Limits (all enforced in `acceptChunk` / `claimImageRefs`): ≤4 images per
-message, ≤8MB of base64 per image, ≤4 concurrent pending uploads per
-connection, ≤256 chunks per upload. Assembly state (`Map<uploadId,
-PendingUpload>`) is **per-connection, in-memory only** — a dropped socket
-discards any partial uploads and the client just re-sends; there is no
-cross-reconnect persistence by design. The server doesn't ack individual
-chunks (that'd add N round-trips for no benefit since the proxy forwards
-mid-stream frames fine) — it only replies with an `error` frame when a chunk
-or `imageRefs` fails validation.
+- `auth: sigv4` signs the card GET and every RPC (service `bedrock-agentcore`,
+  region from the host name, SDK default credential chain) — `a2a/outbound.ts`.
+- It sends a fixed `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` =
+  `halo-` + sha256(caller workspace realpath + remote name), 69 chars: the same
+  (workspace, remote) always lands on the same microVM, so card, RPCs and
+  follow-ups share it.
+- A `-32054` "retry" error (AgentCore's RetryableConflict — the session's
+  microVM is being provisioned or torn down) is retried with backoff
+  0.5 → 1 → 2 → 4 → 8 s, re-signed each time; the plain ConflictException
+  shares the code but isn't retried.
+- `push_base` is where the container posts task results (the webhook is
+  `<push_base>/a2a-push/<id>`); default is the caller's own public URL, which
+  must be reachable from the runtime's network. A failed push is retried with
+  backoff and given up after 10 attempts or **1 h** of age, whichever comes
+  first (the age cap is 24 h elsewhere), because pending pushes keep `/ping`
+  busy.
+- The container checks the push URL against `general.a2a.url_allowlist` in its
+  own settings.yaml (default `100.64.0.0/10,*.ts.net`): a private-IP or
+  plain-http `push_base` is refused unless listed there.
+- Only `halo server` calls out: `a2a_send` is available at every access level
+  except the A2A read-only profile, and unavailable inside the AgentCore
+  container itself and in CLI/TUI.
 
-On a completed reference, the image is decoded and persisted via
-`saveInboundMedia` into the user's workspace — the same storage path
-telegram uses — and the message text gets a `[图片已保存: <path>]` marker
-appended so history replay can show the image was there without re-sending
-the bytes.
+## Session lifecycle
 
-## Session lifecycle (the part everyone gets wrong)
-
-- Idle timeout (`idleRuntimeSessionTimeout`) terminates a session whose
-  `/ping` reports `Healthy`; `maxLifetime` (8h) force-terminates even busy
-  ones; failed health checks kill immediately.
-- **An open WebSocket = an in-flight invocation** — the session never counts
-  as idle while a socket is open. The 30s frontend keepalive therefore keeps
-  the whole session warm; effective idle timeout ≈ "after the tab closes".
-- `/ping` returns `HealthyBusy` whenever any agent session is running
-  (`registry.list().some(({ sm }) => sm.hasRunningSessions())`) — the official
-  keep-alive for long tool chains with no open connection.
-- Termination is cheap: data is on EFS, next connect cold-starts (~3s) and
-  history reloads. `stop-runtime-session` kills one session on demand; there
-  is **no list/get-runtime-sessions API** (observe via CloudWatch `Sessions`
-  metric + runtime log filtering).
+- `/ping` returns `HealthyBusy` while the lease is held and an agent session is
+  running (`hasRunningSessions()`) or a push is pending — the keep-alive for
+  long tool chains with no open request.
+- Idle timeout (`idleRuntimeSessionTimeout`, **60 s**) terminates a session
+  whose `/ping` reports `Healthy` — the microVM exits on its own once idle (no
+  self-stop, no extra IAM). So the 8 h `maxLifetime`, which force-terminates
+  even busy ones, bounds one busy stretch rather than accumulating across
+  tasks; a task cut off by it resumes (see above). Failed health checks kill
+  immediately.
+- Termination is cheap: state is on EFS; the next call cold-starts a microVM
+  and takes the lease once the old one is stale (~45 s, see above). A call in
+  that gap gets the lease-busy `-32603`; the caller side (`a2a/outbound.ts`)
+  retries it at 5 / 10 / 15 / 20 s, matched on the code plus the `LEASE_BUSY`
+  message prefix — keep that text stable.
+  There is **no list/get-runtime-sessions API** (observe via the CloudWatch
+  `Sessions` metric + runtime log filtering).
 
 ## Ops crib sheet
 
@@ -142,8 +187,35 @@ the bytes.
   newer runtimes).
 - VPC mode has no public IP: private subnets need `0.0.0.0/0 → NAT` or all
   egress (Bedrock included) hangs → opaque 502s.
-- Full operational detail + deploy walkthrough:
-  `packages/agentcore-demo/README.md`.
+
+## Gotchas
+
+Found deploying `halo_a2a` (ap-northeast-1, 2026-10-09):
+
+- **EFS is mounted only at a session's first invocation**, not at microVM
+  boot (warm pool) — hence lazy activation. Anything touching the workspace
+  at startup writes into the image's empty dir (first card fetch: 500, ENOENT).
+- **StopRuntimeSession stops one microVM.** Concurrent first calls on a new
+  session id can land on several; the others linger until the idle timeout (60 s).
+  Harmless now that refused microVMs don't poll the lease.
+- **EFS is gone by SIGTERM** — graceful lease release usually can't land
+  (`missing` / `Unknown system error -512`); handoff = stale window.
+- **curl `--aws-sigv4` can't sign the ARN-form invoke URL** (curl 8.5 doesn't
+  double-encode the escaped `%3A` / `%2F` in the canonical path → 403). Use
+  the id form `…/runtimes/<runtime-id>/invocations?accountId=<acct>` for
+  JSON-RPC (`accountId` required). The card is served only on the ARN form,
+  so sign that with botocore or the server's own `sigv4Headers` (smithy), which
+  both get it right.
+- **aws-cli `create-agent-runtime` has no `metadataConfiguration`** (2.36);
+  only `update-agent-runtime` takes `requireMMDSV2` — create, then update.
+- **`pnpm deploy --prod` rewrites the repo's
+  `node_modules/.pnpm-workspace-state-v1.json`** as a prod-only install; the
+  next `pnpm <script>` in that checkout then tries `install --production` and
+  aborts without a TTY. Back the file up around `pnpm deploy` (or run builds
+  with `pnpm_config_verify_deps_before_run=warn` — `pnpm_config_*`, not
+  `npm_config_*`).
+- `-32054` RetryableConflict never showed up in practice (concurrent cold
+  first calls, bursts after a stop); the caller retry stays as cheap insurance.
 
 ## Observability
 

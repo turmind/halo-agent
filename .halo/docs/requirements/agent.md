@@ -55,7 +55,7 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 
 ### Tool selection
 - **Session tools**: `start_session` / `session_list` / `query_session` / `interrupt_session` / `stop_session` / `archive_session` / `get_session_output` / `query_agent` — **not** selected by name; the whole bundle is granted automatically by a non-empty `team` (see below). Listing them under `agent.yaml tools` has no effect.
-- **Workspace tools**: `file_read` / `view_image` / `file_write` / `file_edit` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`, plus the single `relay_send` chip (grants the whole cross-workspace relay set, full-access sessions only), returned by `GET /api/agent-configs/tools`. `view_image` is dropped at runtime when the model can't take images (the form dims it)
+- **Workspace tools**: `file_read` / `view_image` / `file_write` / `file_edit` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`, plus the single `relay_send` chip (grants the whole cross-workspace relay set, full-access sessions only) and the single `a2a_send` chip (grants the cross-server A2A set — `a2a_send` / `a2a_stop` / `a2a_read` / `a2a_list` — at every access level except the A2A read-only profile), returned by `GET /api/agent-configs/tools`. `view_image` is dropped at runtime when the model can't take images (the form dims it)
 - **`activate_skill`**: auto-injected when the YAML lists at least one usable skill (not disabled, allowed at the session's access level); loads the full SKILL.md on demand
 
 ### Team (delegation switch + whitelist)

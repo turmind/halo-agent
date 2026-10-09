@@ -2,7 +2,7 @@
 
 ## Overview
 
-A vendor-neutral observability layer built on the official OpenTelemetry JS SDK. One setting, `general.observability.endpoint`, turns on OTLP http/protobuf export of traces, metrics and logs to whatever collector the operator points at — empty means fully off. Principle: zero AWS (or any vendor) code in the server — SigV4 signing, backend endpoints, and resource enrichment all live in the collector, not in halo.
+A vendor-neutral observability layer built on the official OpenTelemetry JS SDK. One setting, `general.observability.endpoint`, turns on OTLP http/protobuf export of traces, metrics and logs to whatever collector the operator points at — empty means fully off. It applies to every process that runs the agent loop: the server, `halo cli` and `halo tui` — and so the cron jobs and evolution runs, which are spawned `halo cli` children. Principle: zero AWS (or any vendor) code in the server — SigV4 signing, backend endpoints, and resource enrichment all live in the collector, not in halo.
 
 ## Configuration
 
@@ -13,7 +13,9 @@ A vendor-neutral observability layer built on the official OpenTelemetry JS SDK.
 | `general.observability.headers` | string, **secret** | `''` | Extra headers for every OTLP request, comma-separated `k=v` (e.g. `authorization=Bearer …`). Restart required. |
 | `general.observability.capture_content` | boolean | `false` | Put prompt / completion / tool argument+result text on spans (`gen_ai.*.messages` etc.). Off = metadata only (model, tokens, latency, tool names). Restart required. |
 
-All four keys are `globalOnly` and take effect on server restart — `otel.ts` reads them once at boot, before anything else touches the OTel API.
+All four keys are `globalOnly` and take effect on server restart — `otel.ts` reads them once at boot, before anything else touches the OTel API. A `halo cli` / `halo tui` process reads them the same way at its own start, so a change reaches the next run.
+
+**Which process exported.** Every process shares `service.name`, so the resource also carries `halo.process` = `server` \| `cli` \| `tui` (`HaloProcess` in `otel.ts`; `initObservability()` defaults to `server`). Cron and evolution children are `halo cli` runs, so they report `cli`; their `session.id` (`cron-<jobId>`, or the `__evo_agent__`-style agent name) tells them apart from a hand-run cli. The startup log line names it: `[Observability] OTLP export → … (service.name=…, halo.process=cli, …)`.
 
 **Env-var mapping.** `initObservability()` maps settings onto the standard `OTEL_*` env vars with `??=`, so an operator who already exports them (or `--require`s an external distro) wins:
 
@@ -35,17 +37,23 @@ No `OTEL_EXPORTER_OTLP_ENDPOINT` after the mapping → `enabled=false`, `initObs
 | module | role |
 |---|---|
 | `packages/server/src/observability/otel.ts` | Bootstrap. `initObservability()` / `shutdownObservability()`, the `enabled` gate, `tracer` / `getMeter()` / `otelLogger` / `captureContent()` exports. |
-| `packages/server/src/observability/otel-sdk.ts` | The ONE module that imports the SDK packages and OTLP exporters. |
+| `packages/server/src/observability/otel-sdk.ts` | The ONE module that loads the SDK packages and OTLP exporters (`import()`ed inside `registerSdk`, see below). |
 | `packages/server/src/observability/genai-spans.ts` | The span model: `beginTurn` / `onAgentEvent` / `recordRetry` / `endTurn`. |
 | `packages/server/src/agents/session-manager.ts` | Calls the four hooks above from the turn loop (see below). |
 | `packages/server/src/logger.ts` | Bridges every `logger.*` call into an OTel LogRecord when `enabled`. |
 | `packages/server/src/index.ts` | `await initObservability()` (before `initLogger()`) and `await shutdownObservability()` (in `gracefulShutdown`). |
+| `packages/cli/src/harness.ts` · `index.ts` | `initRuntime('cli' \| 'tui')` calls `initObservability(<process>)` before `initLogger()` (the list-only `agents` / `sessions` commands pass nothing, so stay off); the exit flushes below. The server package exports `./observability/otel` for this. |
 
 **Hook call sites in `session-manager.ts`** (all in `runAgentTurn`): `beginTurn(session, message)` at the start, `onAgentEvent(session, event)` inside the agent event loop (one call per `AgentEvent`), `recordRetry(kind)` at the 7 retry catch sites, `endTurn(session, {error?})` once after the retry loop (the turn's single exit point, success or failure).
 
 **The `enabled` gate.** `otel.ts` exports a single `enabled: boolean`, set once by `initObservability()`. Every hook in `genai-spans.ts` and the `logger.ts` bridge checks it first — an unconfigured server pays nothing beyond one boolean read per hook call.
 
-**Why `otel-sdk.ts` is a dynamic import.** `logger.ts` is shared with the CLI (`halo cli`), which never wants observability. Eagerly importing the SDK module graph would cost ~100ms on every `halo cli` start. `otel.ts` only `import()`s `otel-sdk.ts` after confirming an endpoint is configured, so the unconfigured path (server or CLI) never loads it.
+**Why the SDK is loaded by dynamic import.** The SDK module graph costs ~120ms, which every unconfigured `halo` start (`--version` included) would otherwise pay. `otel.ts` only `import()`s `otel-sdk.ts` after confirming an endpoint is configured, and `otel-sdk.ts` itself `import()`s the SDK / exporter packages inside `registerSdk` rather than at the top: the npm bundle (esbuild) inlines `otel-sdk.ts`, which would hoist top-level imports of those external packages into the bundle's static imports and load them on every start. So the unconfigured path (server, `halo cli`, `halo tui`) never loads the SDK.
+
+**Flush on exit (cli / tui).** A short-lived process must push its batched spans / metrics / logs before it goes. `shutdownObservability()` force-flushes and shuts down every provider, is idempotent (a signal can land while the end-of-run flush is in flight), and is **capped at 3 s** (`SHUTDOWN_CAP_MS`) so a dead collector delays an exit but never hangs it; it resolves `false` when the cap fired, and is instant when observability is off. The 3 s sits inside the cron runner's 30 s and the evolution wrapper's 10 s SIGTERM→SIGKILL grace. Three exit paths:
+- **natural end** (one-shot run done, TUI quit, a thrown error): a `beforeExit` hook registered by `initRuntime` flushes; when the cap fired the exporters' retry timers still hold the event loop, so the hook then calls `process.exit()` itself (stdout has drained by then). `beforeExit` never fires on `process.exit()`.
+- **SIGINT / SIGTERM**: the handlers stop the harness first (ending the turn, so its spans are closed and in the batch), then `exitAfterFlush(130 | 143)` (`harness.ts`) flushes and exits. A second SIGINT still hard-exits at once.
+- Any other `process.exit()` skips the flush. On Windows `child.kill('SIGTERM')` delivers no catchable signal, so a timed-out cron run there loses its last batch.
 
 **Why the meter is lazy.** The `@opentelemetry/api` tracer and logger are proxies — they stay no-op until a real provider is registered, then transparently start forwarding, so `tracer` / `otelLogger` can be module-level consts. The metrics API has **no proxy**: a `Meter` fetched via `metrics.getMeter()` before `setGlobalMeterProvider()` runs is a permanent no-op forever after, even once a provider registers later. `getMeter()` in `otel.ts` is therefore a function, not a const, and `genai-spans.ts` calls it lazily on first metric emission (`instruments()`, cached after).
 

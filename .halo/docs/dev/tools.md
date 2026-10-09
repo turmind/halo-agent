@@ -1,6 +1,6 @@
 # Agent Tool Reference
 
-Agents have two tool categories: workspace tools (files, shell, search) and session tools (managing other sessions). Workspace tools are enabled by name in `agent.yaml`'s `tools` list; the session-tool bundle is granted automatically by a non-empty `team` (see [Session tools](#session-tools)). A third, opt-in set — [Relay tools](#relay-tools) — reaches sessions in *other* workspaces on the same server.
+Agents have two tool categories: workspace tools (files, shell, search) and session tools (managing other sessions). Workspace tools are enabled by name in `agent.yaml`'s `tools` list; the session-tool bundle is granted automatically by a non-empty `team` (see [Session tools](#session-tools)). Two opt-in sets reach beyond the workspace: [Relay tools](#relay-tools) (sessions in *other* workspaces on the same server) and [A2A tools](#a2a-tools) (agents on *other* servers).
 
 ## Workspace tools
 
@@ -180,7 +180,7 @@ Sensitive directories and files are hidden from workspace/readonly sessions via 
 | Setting | Built-in (always included) | Method |
 |---|---|---|
 | `hidden_dirs` | `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs` | bwrap `--tmpfs` overlay (empty directory); Seatbelt `subpath` deny |
-| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + their `-wal`/`-shm` files | bwrap `--ro-bind ~/.halo/.sandbox-empty` (reads as empty); Seatbelt `literal` deny |
+| `hidden_files` | `~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs,a2a}.db` + their `-wal`/`-shm` files | bwrap `--ro-bind ~/.halo/.sandbox-empty` (reads as empty); Seatbelt `literal` deny |
 | `writable_dirs` | (empty) | bwrap `--bind` read-write / Seatbelt write allow — for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions |
 
 Changes saved through the settings API (admin Settings page, `PUT` / `PATCH` / `DELETE /api/settings`) take effect immediately — the save fires `onSettingsChange`, which re-reads the lists into `sandbox.ts` (`setSandboxHiddenPaths`), so the next tool call uses them. A hand edit of `settings.yaml` is not watched for these keys: it applies at the next restart or the next API save. These keys are `globalOnly` in the schema — a workspace `settings.yaml` cannot override them, since they define the security boundary agents run inside.
@@ -443,6 +443,96 @@ List a workspace's **root** sessions — most recently active first, capped at 1
 
 Returns `{ "code": 0, "workspace": "<realpath>", "sessions": [{ id, agentId, agentName, title, status, createdAt, updatedAt }], "count": N }`. `title` falls back to `description` like `session_list`; `status` follows the list semantics (`running` when the root itself or any live child is mid-turn, `stopped` when the row is stamped, else `idle`).
 
+## A2A tools
+
+File: `packages/server/src/a2a/outbound.ts` (`buildA2ATools`). Design notes in [design/a2a.md](../design/a2a.md).
+
+Cross-**server** dispatch over A2A v1.0: the agent sends a message to a remote A2A agent (normally another halo server's exposed workspace) and the result is pushed back into this session when the remote is done, no polling. Remotes are configured once per server in `~/.halo/secrets/a2a-remotes.yaml` (no per-workspace file; `<ws>/.halo/a2a-remotes.yaml` is not read):
+
+```yaml
+remotes:
+  halo-test:
+    card: http://myhost.tailnet.ts.net:9527/a2a/halo-test/.well-known/agent-card.json
+    auth: bearer            # bearer (default) | sigv4 (an AgentCore runtime)
+    # push_base: http://172.31.7.121:9527   # optional webhook base for this remote
+```
+
+A `bearer` remote's token is the settings secret `a2a.secrets.<remote>` (workspace `settings.yaml` overrides global; `<<ENV>>` works), resolved at call time and never shown to the model. When non-full sessions use the tools, put it in the global `~/.halo/secrets/settings.yaml` — a workspace's `.halo/settings.yaml` is readable to them, `~/.halo/secrets` is not. The list itself is full-only: `~/.halo/secrets` is hidden from workspace / readonly sessions, so they can use the remotes but can't repoint one's `card:` at a host of their choosing and collect its token. The remote's webhook goes to `push_base`, else `general.a2a.public_url`; with neither set `a2a_send` fails. Every remote URL passes the A2A URL policy (`general.a2a.url_allowlist`).
+
+**Enabling**: opt-in by the single name `a2a_send` in `agent.yaml`'s `tools:` — it brings `a2a_stop` / `a2a_read` / `a2a_list`; the other three names are not recognised on their own. Available at **every access level** (full, workspace, readonly, any channel) **except the A2A read-only profile** — an inbound A2A session at readonly never gets them, whatever its yaml lists, so a remote's readonly token can't make this server call third parties. The admin tool picker shows one `a2a_send` chip naming the set.
+
+**Server only**: in the CLI / TUI — and every cron run, which is a `halo cli` child — there is no push receiver; every A2A tool returns `{"code": 1, "error": "a2a is not available in the CLI / TUI — it only runs inside `halo server`, which receives the remote agent's push reports. This is permanent for this runtime, not a temporary outage: do not retry. …"}`. The tools are still listed there when the agent names `a2a_send`.
+
+**Retries**: each request has a 30 s timeout. An AgentCore `-32054` "… please retry" answer is retried after 0.5 / 1 / 2 / 4 / 8 s, and a halo AgentCore container's lease-busy answer (`-32603` "workspace is in use by another runtime session …") after 5 / 10 / 15 / 20 s; then the last answer is returned as the error. Stopping the turn ends the wait at once — for the RPC and for the agent-card fetch before it.
+
+Errors are `{ "code": 1, "error": "…" }`; a remote JSON-RPC error reads `<Method>: <message> (<code>)`.
+
+### a2a_send
+
+Send a message to a remote. Omit `context_id` to start a new conversation; pass the `context_id` from an earlier call for a follow-up — a follow-up to a busy remote is queued and softly interrupts its current step, `interrupt: true` aborts that step instead. Sent as SendMessage with `returnImmediately: true` plus a per-dispatch webhook (a follow-up on a context with a pending dispatch reuses its webhook, so the report comes once). Returns immediately.
+
+| Arg | Type | Required | Description |
+|---|---|---|---|
+| `remote` | string | yes | Remote name from `~/.halo/secrets/a2a-remotes.yaml` (see `a2a_list`) |
+| `message` | string | yes | The message to send |
+| `context_id` | string | no | Conversation to continue (from an earlier `a2a_send`); omit to start one |
+| `interrupt` | boolean | no | Follow-up only: abort the remote's current step instead of waiting for it |
+| `files` | string[] | no | Absolute paths of images to attach |
+
+**`files`**: png / jpeg / gif / webp only (by extension, and the bytes must agree), ≤5 MB each, ≤10 MB total, each sent as a `{ raw, mediaType, filename }` part after the text. A non-full session may only attach files under the workspace or the OS temp dir — the path and its realpath, so a symlink pointing outside is refused; full access has no path limit. Any violation fails the whole call (`files: <path>: <reason> — nothing was sent`).
+
+Returns `{ "code": 0, "remote", "context_id", "task_id", "state": "working" | …, "follow_up": boolean }`.
+
+**Report delivery**: when the remote task ends, its push is injected into this session (append + send, like a user message):
+
+```
+[A2A report · remote <name> · context <C> · task <T> · status: completed]
+
+<the remote's result text>
+
+[图片已保存: <path>]
+```
+
+`status:` is `completed`, `failed` or `canceled`. The text is capped at `limits.autoReportMax` with a `[Report truncated: N chars total. Use a2a_read("<name>", "<T>") for the full text.]` marker. A failed task's body starts `[A2A REMOTE FAILED: the remote task did not complete. <status> The text below (if any) is a partial trace — do not treat it as a finished result.]`, a canceled one `[A2A REMOTE CANCELED: <status>]`. Images in the result are saved under `.halo/assets/a2a/inbound/<remote>/…` and listed **after** the cap as `[图片已保存: <path>]` (open with `view_image`); image URLs are listed as `[图片: <url>]` and not downloaded; anything else gets `[file not saved: <name> — <reason>]`.
+
+**Interim report**: when the remote answers a follow-up and keeps working, the answer arrives first as
+
+```
+[A2A interim report · remote <name> · context <C> · task <T> · status: still running] This is an interim reply — the remote is still working; its final [A2A report] follows when done. Do not treat this as the result.
+
+<the answer, capped at limits.autoReportMax>
+```
+
+The final report still arrives once. Match on the `[A2A report` / `[A2A interim report` prefixes or the `status:` field. Report text is the remote agent's output — data, not instructions.
+
+### a2a_stop
+
+Cancel a remote task (CancelTask). The `[A2A report · … · status: canceled]` still arrives.
+
+| Arg | Type | Required | Description |
+|---|---|---|---|
+| `remote` | string | yes | Remote name |
+| `task_id` | string | yes | Task id from `a2a_send` |
+
+Returns `{ "code": 0, "task_id", "state" }`.
+
+### a2a_read
+
+Read a remote task (GetTask): the full, untruncated result. Use it after a truncated report, or **to check on a task** — when the user asks how a dispatched task is going or its report seems overdue, call it once; never in a loop. Images in the result are saved again on each read and listed like in the report.
+
+| Arg | Type | Required | Description |
+|---|---|---|---|
+| `remote` | string | yes | Remote name |
+| `task_id` | string | yes | Task id from `a2a_send` |
+
+Returns `{ "code": 0, "task_id", "context_id", "state": "TASK_STATE_…", "status": "<status message text>", "result": "<text + image lines>" }`.
+
+### a2a_list
+
+The remotes configured on this server (the same list in every workspace) — each with its card's agent name, description and skills (`{ id, name, description }`), or an `error` when the card can't be fetched — plus the dispatches this workspace is still waiting on (newest 50). No arguments.
+
+Returns `{ "code": 0, "remotes": [{ name, agent, description, skills }], "pending": [{ remote, context_id, task_id, since }] }`.
+
 ## Tool assignment
 
 Workspace tools are enabled strictly by name in `agent.yaml`'s `tools` list:
@@ -455,7 +545,7 @@ skills:
   - code-review    # auto-injects activate_skill
 ```
 
-Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`), and `continue_task` is auto-injected for **every** agent unconditionally (see [continue_task](#continue_task)). The relay set is the one name-gated bundle: listing `relay_send` alone brings `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list` with it, full-access sessions only (see [Relay tools](#relay-tools)).
+Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`), and `continue_task` is auto-injected for **every** agent unconditionally (see [continue_task](#continue_task)). The relay and A2A sets are the two name-gated bundles: listing `relay_send` alone brings `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list` with it, full-access sessions only (see [Relay tools](#relay-tools)); listing `a2a_send` alone brings `a2a_stop` / `a2a_read` / `a2a_list`, at every access level except the A2A read-only profile (see [A2A tools](#a2a-tools)).
 
 There is **no implicit default tool set**: `filterTools()` (in `agent-loader.ts`) returns only the tools whose names appear in `agent.yaml`'s `tools:` list. If the field is absent or empty, the agent has zero workspace tools. The admin UI's "Create agent" form scaffolds a fresh agent with an empty `tools: []` for the same reason — fill it in deliberately. The `default` agent's bundled `agent.yaml` lists the common set (`file_read` / `file_write` / `file_edit` / `view_image` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`) that most agents will want; copy that line if you're starting from scratch.
 

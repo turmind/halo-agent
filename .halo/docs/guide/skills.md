@@ -154,7 +154,7 @@ Halo seeds these skills on every startup (the ids in `BUILTIN_SKILL_IDS`, `packa
 | skill | Create / update skills — backs the `create` / `update` verbs of `/skill` |
 | workspace | Workspace maintenance — backs `/workspace setup` / `tidy` (init / reorganize `.halo/` INDEX.md / INSTRUCTIONS.md / memory/) and `/workspace share` (export a shareable bundle) |
 | cron | Create / list / update / enable / disable / delete scheduled agent runs — backs `/cron` |
-| send-file | Deliver an image/video/file as a channel attachment by emitting `MEDIA:<absolute_path>` — works on Web / WeChat / Telegram / Slack / Feishu (no command; model-activated, workspace access) |
+| send-file | Deliver an image/video/file as a channel attachment by emitting `MEDIA:<absolute_path>` — works on Web / WeChat / Telegram / Slack / Feishu / WeCom / A2A (no command; model-activated, workspace access) |
 | self | The agent's own visual space (`.halo/canvas/self.html`) for self-expression (no command; model-activated, full access) |
 | aws-knowledge | Query the official AWS Knowledge MCP server for up-to-date AWS docs (no command, `user-invocable: false`; model auto-activates) |
 | web-search | Real-time web search on AWS Bedrock (needs the machine's AWS credentials with Bedrock access) in two gears: fast (Amazon Nova grounding, default; US regions only) and deep (`--deep`, GPT-5.6 `web_search` via Bedrock Mantle, slower and token-expensive); regions set via its `fast_region` / `deep_region` params (Settings → Skills) (no command, `user-invocable: false`; model auto-activates) |

@@ -113,4 +113,4 @@ Brief contents:
 ## Git Commits
 
 - When **you (halo) make a commit on the user's behalf**, append a co-author trailer as the last line: `Co-Authored-By: halo <halo@turmind.com>`. This only applies to agent-authored commits — commits the user writes by hand are not subject to this rule
-- Match the repo's existing commit style: a `type(scope): summary` subject line (e.g. `fix(web-demo):`, `docs(cli):`) plus a body explaining the why, mirroring recent history
+- Match the repo's existing commit style: a `type(scope): summary` subject line (e.g. `fix(admin):`, `docs(cli):`) plus a body explaining the why, mirroring recent history

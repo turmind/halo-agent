@@ -44,6 +44,12 @@ The Source Control entry is hidden in workspaces that are not git repos.
 
 Below Settings sits the quick-toggles entry (network status, finish notification, and on desktop pin / keep-screen-awake) — see [explorer.md → Desktop windows](explorer.md#desktop-windows-multi-window).
 
+### Hover drawer
+The bar is icon-only (48px) at rest. Resting the **mouse** on it for 300 ms widens it into a 240px drawer that shows each view's name plus a one-line description (the quick-toggles entry too); leaving closes it after a 200 ms grace, and moving back in within that grace keeps it open. The view icons no longer carry native tooltips.
+- **No reflow**: the bar is an absolute layer over a fixed 48px slot, so the drawer overlays the sidebar / main area instead of pushing them.
+- **Mouse only**: touch and pen never open it, and neither do touch-primary devices — a tap still just switches view.
+- **Stays open** while the quick-toggles panel (anchored to the drawer's right edge) is up. **Esc** or picking a view closes it.
+
 ## Resizable panels
 - **Sidebar width**: drag between sidebar and main content
 - **Bottom panel height**: drag between main content and bottom panel

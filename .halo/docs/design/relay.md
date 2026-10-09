@@ -61,7 +61,7 @@ No quiet gate (the session is by definition not done) and **`reply_to` is kept**
 
 ## What it deliberately doesn't do
 
-- **No cross-server reach.** Same `SessionManagerRegistry`, same process. Different server → not supported yet (A2A is planned).
+- **No cross-server reach.** Same `SessionManagerRegistry`, same process. Different server → [A2A](a2a.md), which reuses the same `reply_to` column (`{ a2a: taskId }`), quiet gate and interim doors.
 - **No session discovery beyond a flat root list.** `relay_list` returns a workspace's root sessions (id / agent / title / status, newest 100) so the secretary can reuse an existing conversation; it doesn't walk trees or search transcripts — that's the admin's job.
 - **No broadcast / fan-out helper.** The secretary calls `relay_send` once per department; the reports come back individually with the workspace + session id in the header, so it can tell them apart without extra bookkeeping.
 - **No ACL beyond full access.** A full-access secretary can reach every workspace on the box — that's the deployment's trust boundary already (it can `shell_exec` into them anyway).

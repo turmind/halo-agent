@@ -28,6 +28,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── evo.db                         # Cross-workspace evolution queue (evolution_runs + evolution_applies)
 │   ├── cron.db                        # Cross-workspace cron jobs + run history (cron_jobs + cron_runs)
 │   ├── runs.db                        # Run ledger: (workspace, session_id) rows for server-driven runs in flight; steady state empty (running_sessions)
+│   ├── a2a.db                         # A2A: inbound tasks, push configs + outbox, outbound dispatches (see design/a2a.md)
 │   ├── extensions/<id>/               # Installed Canvas preview extensions (halo-extension.json + bundle)
 │   ├── logs/                          # Runtime logs (server.log)
 │   │   ├── evo/                       # Per-evo-run wrapper logs
@@ -37,6 +38,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 ├── secrets/                           # Sensitive files (not mounted into sandbox)
 │   ├── settings.yaml                  # Global settings (API keys, credentials)
 │   ├── config.yaml                    # System config (admin password, server settings)
+│   ├── a2a-remotes.yaml               # A2A remote list (server-wide, full-only; see design/a2a.md)
 │   └── channels/
 │       └── channels.db                # Channel accounts DB
 
@@ -66,6 +68,9 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 ├── assets/<channel>/inbound/<accountId>/<date>/  # Inbound media per channel (image/voice/video/file)
 ├── runtime.lock                       # Workspace runtime ownership marker (pid) — see below
 ├── halo.db                           # Per-workspace sqlite (sessions metadata, disabled-items)
+├── a2a.db                            # AgentCore mode only: A2A tasks + push outbox (instead of ~/.halo/global/a2a.db) — design/agentcore.md
+├── runs.db                           # AgentCore mode only: the run ledger (instead of ~/.halo/global/runs.db)
+├── agentcore.lease                   # AgentCore mode only: single-writer heartbeat lease file
 └── docs/                               # Project docs (requirements/design/dev/test/plans)
 ```
 
@@ -402,8 +407,10 @@ A value of the form `<<ENV_NAME>>` is replaced at read time with `process.env.EN
 | `general.limits.tool_result_ui_chars` | 65536 | Per-tool-result cap on the content **stored for UI display** (admin/web chat panel). Far larger than the LLM cap so a normal command's full output stays visible, but bounded so a multi-MB `cat` can't bloat the session file / WS payload / browser render; excess truncated with a marker pointing at `file_read` |
 | `general.limits.terminal_scrollback_bytes` | 50000 | Off-screen scrollback bytes retained per detached persistent terminal |
 | `general.sandbox.hidden_dirs` | `''` | Extra dirs hidden from workspace/readonly sessions — bwrap tmpfs overlay (Linux) / Seatbelt deny (macOS). **Appended** to the built-in `DEFAULT_HIDDEN_DIRS` (`tools/sandbox.ts`: `~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker,~/.config/gh,~/.halo/global/internal-sessions,~/.halo/global/logs`), which are always included. Full sessions, the admin file explorer and the terminal are not affected |
-| `general.sandbox.hidden_files` | `''` | Extra files hidden from workspace/readonly sessions — bwrap bind of the empty `~/.halo/.sandbox-empty`, reads as empty (Linux) / Seatbelt deny (macOS). **Appended** to the built-in `DEFAULT_HIDDEN_FILES` (`~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs}.db` + `-wal` / `-shm`), which are always included. Full sessions, the admin file explorer and the terminal are not affected |
+| `general.sandbox.hidden_files` | `''` | Extra files hidden from workspace/readonly sessions — bwrap bind of the empty `~/.halo/.sandbox-empty`, reads as empty (Linux) / Seatbelt deny (macOS). **Appended** to the built-in `DEFAULT_HIDDEN_FILES` (`~/.npmrc,~/.bash_history,~/.gitconfig,~/.git-credentials,~/.netrc,~/.halo/global/{evo,cron,runs,a2a}.db` + `-wal` / `-shm`), which are always included. Full sessions, the admin file explorer and the terminal are not affected |
 | `general.logging.level` | warn | `debug` / `info` / `warn` / `error`. Restart required |
+| `general.a2a.public_url` | `''` | Global-only. Origin peers use to reach this server for A2A (no trailing slash): the agent card's interface URL and the default push-webhook base for `a2a_send`. Empty = derived from the request host (no outbound dispatch without it or a remote's `push_base`). Env `HALO_A2A_PUBLIC_URL` overrides. See [a2a.md](a2a.md) |
+| `general.a2a.url_allowlist` | `100.64.0.0/10,*.ts.net` | Global-only. CIDRs / host patterns A2A egress may reach besides public https (push webhooks, remote cards and RPC, inbound image URLs). Private / loopback only when listed; plain http only to listed hosts / ranges; link-local always refused. See [a2a.md](a2a.md#push-delivery-and-url-policy) |
 | `general.observability.endpoint` | `''` | OTLP base URL of an OpenTelemetry collector (e.g. `http://localhost:4318`); empty = off. Restart required. See [observability.md](observability.md) |
 | `general.observability.service_name` | `halo` | OTel resource `service.name`. Restart required |
 | `general.observability.headers` | `''` | **Secret.** Extra OTLP request headers, comma-separated `k=v`. Restart required |
@@ -634,7 +641,7 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 ### Schema change rules
 
 - `schema.sql` / each db's `CREATE_SQL` always describes the FULL current shape, so a fresh db is complete after the CREATEs alone
-- Every change to an already-existing db gets a numbered slot in that file's ordered migration list — `HALO_MIGRATIONS` (`db/index.ts`), `CRON_MIGRATIONS` (`db/cron-db.ts`); `channel-db.ts` / `evo-db.ts` / `runs-db.ts` currently pass an empty list. `runMigrations(sqlite, list)` (`db/migrate.ts`) runs `list[user_version..]` in order, each in its own transaction, stamping `PRAGMA user_version = i + 1` after each
+- Every change to an already-existing db gets a numbered slot in that file's ordered migration list — `HALO_MIGRATIONS` (`db/index.ts`), `CRON_MIGRATIONS` (`db/cron-db.ts`), `A2A_MIGRATIONS` (`db/a2a-db.ts`); `channel-db.ts` / `evo-db.ts` / `runs-db.ts` currently pass an empty list. `runMigrations(sqlite, list)` (`db/migrate.ts`) runs `list[user_version..]` in order, each in its own transaction, stamping `PRAGMA user_version = i + 1` after each
 - A fresh db is also at `user_version 0` and runs the whole list, so every slot must be a no-op against the current shape (`addColumnIfMissing`, `CREATE … IF NOT EXISTS`)
 - Append only — never reorder or edit a shipped slot. A db opened by a newer halo (user_version > list length) logs a warning and continues
 - Do not drop or rename existing columns

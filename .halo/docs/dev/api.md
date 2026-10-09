@@ -54,10 +54,12 @@ All file operations validate the path stays inside the project root (prevents pa
 |---|---|---|
 | GET | `/api/fs/home` | Returns server `homedir()` — fallback when the frontend has no `?folder=` URL param. Returns `{ home }`. |
 | GET | `/api/fs/exists?path=/abs` | Validates an absolute path exists and whether it's a directory. Returns `{exists, isDirectory?}`. |
-| GET | `/api/fs/browse?path=/abs` | Lists immediate directory children (hidden ones dropped). Returns `{path, parent, entries: [{name, path}]}`. |
+| GET | `/api/fs/browse?path=/abs` | Lists immediate directory children (hidden ones dropped). Returns `{path, parent, entries: [{name, path}]}`. With `files=1` (the extension file picker, capability `fs-read`): files too — `entries: [{name, path, type: 'file'\|'directory', size?}]`, directories first, dot-entries shown, only the file tree's noise (`.git`, `.DS_Store`, `node_modules`, `__pycache__`) skipped, symlinks counted as what they point at; `sizes=1` adds each file's `size`. A directory on the sandbox hidden lists answers 404 like a missing one, and hidden entries are left out of the listing. |
+| GET | `/api/fs/stat?path=/abs` | `fs-read` `scope: 'system'` stat. Returns `{path, realPath, size, modifiedAt, isDirectory}` (`realPath` resolves symlinks). 400 `absolute path without .. required`; 404 for a missing path **and** for one on the sandbox hidden lists (same message); 403 on `EACCES` / `EPERM`. |
+| GET | `/api/fs/raw?path=/abs` | `fs-read` `scope: 'system'` read: the file's bytes, streamed (`application/octet-stream` + `Content-Length`; the stream is destroyed if the client aborts). Same path rules and error shapes as `/api/fs/stat`; 400 `not a file` for a directory. |
 | POST | `/api/fs/workspace/resolve` | Resolve `{path}` to an absolute path and run `ensureWorkspaceHalo()`. Returns `{id, path}`. Used by the workspace-picker on switch. 404 `path not found` when it doesn't exist; 400 `not a directory` for a file; 400 `filesystem root cannot be a workspace` for `/` (or a drive root) — `ensureWorkspaceHalo()` writes a whole `.halo/` scaffold, so those two shapes are refused before the write. Deeper system trees (`/usr`, `/etc`) are deliberately **not** banned. |
 
-Absolute paths only. Purpose: Explorer's workspace picker and switching validation. `/api/fs/browse` is intentionally unrestricted (it's a read-only picker over the server's filesystem — same trust boundary as the admin cookie). Reading/writing files still goes through `/api/files/*` and remains project-sandboxed.
+Absolute paths only. Purpose: Explorer's workspace picker and switching validation. `/api/fs/browse` is intentionally unrestricted (it's a read-only picker over the server's filesystem — same trust boundary as the admin cookie). Reading/writing files still goes through `/api/files/*` and remains project-sandboxed. The one exception is the read-only `/api/fs/stat` + `/api/fs/raw` + `/api/fs/browse?files=1` trio behind the `fs-read` extension capability: they take absolute paths (no `..` segment) and refuse the sandbox hidden lists (`~/.halo/secrets`, `~/.ssh`, `.git-credentials`, the global dbs … — `isHiddenHostPath` in `tools/sandbox.ts`, the same lists the agent sandbox masks) by **realpath**, so a symlink can't reach them. They are admin-cookie routes, never in `PUBLIC_PATHS`; `fs-read` itself is host-side UX gating (the extension iframe is same-origin and could call them directly), which is why the guard lives on the routes.
 
 ## Data Preview
 
@@ -93,6 +95,8 @@ Installed extensions are directories under `~/.halo/global/extensions/<id>/` wit
 | DELETE | `/api/extensions/:id` | cookie | Remove the directory. 400 for an invalid id shape, 404 if not installed. Returns `{ok, id}` |
 | GET | `/api/extensions/:id/:version/:token/<asset>` | **path token, no cookie** | Static file from the extension directory. 401 unless `verifyScopedToken(token,'ext')`; 404 if `version` ≠ installed version or the asset escapes the directory. Response headers: `Access-Control-Allow-Origin: *`, `Referrer-Policy: no-referrer`, `Cache-Control: public, max-age=31536000, immutable` (the version segment is the cache key) |
 | WS | `/api/transcribe/stream?ext=<id>&lang=<auto\|xx-XX>` | cookie | Streaming transcription proxy to Amazon Transcribe (`routes/transcribe-ws.ts`; not mounted in AgentCore mode). Handshake 401 without the login cookie, 403 unless `ext` is installed and declares capability `transcribe`. Client → binary PCM s16le mono 16 kHz, text `{"type":"end"}` (flush, server closes 1000). Server → `{"type":"ready"}` (on connect; stream audio right after it), `{"type":"partial"\|"final",start,end,text,lang}` (seconds from the stream's first audio byte), `{"type":"error",code,message}` then close; `code` ∈ `credentials` \| `denied` \| `limit` \| `bad-request` \| `io`. Region / languages / credentials from the extension's `ext-<id>` settings (default chain when no keys) — see [design](../design/canvas-extensions.md#streaming-transcription-proxy) |
+
+Extension capabilities the host understands (`ExtensionCapability`): `save`, `media`, `transcribe`, `fs-read`; an unknown value makes the manifest an error. `fs-read` adds no extension-specific route: the host serves the extension's scoped `fs` frames and `pick` file picker from the [Filesystem browse](#filesystem-browse-not-project-scoped--for-the-workspace-picker) routes above (`scope: 'system'`) and the ordinary `/api/files/*` routes (`scope: 'workspace'`) — see [design/canvas-extensions.md](../design/canvas-extensions.md#scoped-file-access-and-the-picker-fs-read).
 
 **Why the asset route isn't cookie-authed.** The admin first hosted extensions in `<iframe sandbox="allow-scripts">` without `allow-same-origin` — an opaque origin. The document navigation still carries the cookie, but every subresource it loads (classic/module scripts, img, css, fetch, wasm, dynamic import, Worker) is a cross-site request with **no cookie**, and module/fetch/wasm need `Access-Control-Allow-Origin` too. A `?token=` query would be dropped when the document resolves `./viewer.js`-style relative URLs, so the token is a **path segment** that every relative URL inherits. The host now grants `allow-same-origin` (a cookie-auth proxy in front of halo — CloudFront + midway, oauth2-proxy — needs its *own* cookie on those requests, which only a same-origin iframe sends; see [design/canvas-extensions.md](../design/canvas-extensions.md#asset-serving-and-the-scoped-token)), so the admin cookie does travel again, but the route keeps the path token as its single auth path. `authMiddleware` lets exactly that path shape (`EXTENSION_ASSET_PATH = /^\/api\/extensions\/[^/]+\/[^/]+\/[^/]+\/./`) through without a cookie and the route verifies the token itself. The token is good for nothing else: `validateToken` (admin cookie / WS upgrade) refuses any JWT payload that carries a `scope`, so an asset token replayed as `halo_token` is a 401.
 
@@ -315,6 +319,60 @@ SSE responses (`/api/web/chat`, `/api/web/subscribe`) carry an SSE comment line 
 
 See [design/web.md](../design/web.md).
 
+## A2A (Agent-to-Agent)
+
+Files: `packages/server/src/a2a/routes.ts` (JSON-RPC handler), `exposure.ts` (path resolution, auth, card), `outbound.ts` (push receiver). A2A v1.0, JSON-RPC binding only. Mounted in normal server mode outside `/api/*` (no admin cookie) and before the static frontend; not in the CLI / TUI. AgentCore mode serves the same handler at `/` instead — see [AgentCore runtime container](#agentcore-runtime-container-halo-agentcore-only). Design: [design/a2a.md](../design/a2a.md).
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/a2a/<rel>` (trailing `/` ok) | JSON-RPC 2.0 for the workspace `<A2A base>/<rel>` |
+| GET | `/a2a/<rel>/.well-known/agent-card.json` | The agent card. `Cache-Control: private, max-age=300` + `ETag` (304 on `If-None-Match`); invalid `.halo/agent-card.json` → 500 |
+| POST | `/a2a-push/:pushId` | Webhook receiver for remotes this server dispatched to (`a2a_send`) |
+
+**Exposure**: `<rel>` is the workspace path relative to the base dir (`HALO_A2A_ROOT`, default the user's home), each segment percent-encoded. Only a workspace containing `.halo/agent-card.json` is served; empty / `.` / `..` segments, separators inside a segment, and symlinks leaving the base are refused. The card's interface URL is `general.a2a.public_url` (env `HALO_A2A_PUBLIC_URL`) + `/a2a/<rel>/`, else derived from the request host.
+
+**Auth** (RPC and card alike): a web-channel token in `Authorization: Bearer <t>` or `x-token: <t>` — headers only, `?token=` is ignored. Same `resolveTokenAuth` core and `web-token` lockout bucket as the [Web channel](#public-endpoints-token-auth-via-x-token-header-or-token-query). Missing token → 401 `{error: "token required"}` (before any path lookup); invalid token, unknown / unexposed path, or a token bound to another workspace → the same 404 `{error: "not found"}`; lockout → 429. The token's access level becomes the session's (`readonly` / `observer` → the A2A read-only profile). A token never reaches another workspace. A GET of anything but the card path → 404.
+
+**JSON-RPC**: header `A2A-Version: 1.0` required (missing → treated as 0.3 → `-32009`). Body ≤16 MB; batches refused. Answered HTTP 200 with a JSON-RPC body — errors included; only the auth failures above use HTTP statuses.
+
+| Method | Params (main) | Result |
+|---|---|---|
+| `SendMessage` | `message { role: "ROLE_USER", parts, messageId?, contextId?, taskId?, metadata?["halo/interrupt"] }`, `configuration { returnImmediately?, taskPushNotificationConfig? }` | `{ task }`. Blocks until terminal (≤10 min, then the WORKING task) unless `returnImmediately: true` |
+| `SendStreamingMessage` | as SendMessage | SSE: `{task}` snapshot → `statusUpdate` (interims) / `artifactUpdate` (`progress` live text) → terminal `{task}`, then close; `: keepalive` every 15 s |
+| `GetTask` | `id`, `historyLength?` (ignored) | Task: `{ id, contextId, status { state, message?, timestamp }, artifacts, metadata?["halo/errorKind"] }` |
+| `ListTasks` | `contextId?`, `status?`, `statusTimestampAfter?` (ISO-8601), `pageSize?` (1–100, default 50), `pageToken?`, `includeArtifacts?` | `{ tasks, nextPageToken, pageSize, totalSize }`, newest `updated_at` first; `nextPageToken` `""` on the last page; artifacts only with `includeArtifacts`, file bytes never (counted in `metadata["halo/omittedFiles"]`) |
+| `CancelTask` | `id` | The CANCELED task (already canceled → returned as is) |
+| `SubscribeToTask` | `id` | SSE as above, for a live task |
+| `CreateTaskPushNotificationConfig` | `taskId`, `url`, `id?`, `token?`, `authentication? { scheme, credentials }` | The config. URL policy applies |
+| `GetTaskPushNotificationConfig` | `taskId`, `id` | The config |
+| `ListTaskPushNotificationConfigs` | `taskId` | `{ configs, nextPageToken: "" }` |
+| `DeleteTaskPushNotificationConfig` | `taskId`, `id` | `null` (idempotent) |
+| `GetExtendedAgentCard` | — | `-32004` |
+
+Parts: `{ text }`, and images `{ raw: <base64>, mediaType, filename? }` / `{ url, mediaType? }` — png / jpeg / gif / webp, ≤5 MB each, ≤10 MB per message. States: `TASK_STATE_WORKING` → `TASK_STATE_COMPLETED` (artifact `result`) / `TASK_STATE_FAILED` / `TASK_STATE_CANCELED` (artifact `partial` when there is output). A `contextId` is always server-minted (`a2a_<accountId>_…`, from an earlier response).
+
+| Code | When |
+|---|---|
+| `-32700` | Body is not JSON |
+| `-32600` | Not a JSON-RPC 2.0 request, a batch array, or a body over 16 MB |
+| `-32601` | Unknown method |
+| `-32602` | Invalid params: empty message, bad `role`, unknown or foreign `contextId`, `taskId` not in `contextId`, image fetch / limit failure, refused push URL (`push url not allowed: <reason>`), bad `pageSize` / `pageToken` / `status` / timestamp |
+| `-32603` | Internal error; the workspace couldn't be opened |
+| `-32001` | Task (or push config) not found — includes another account's task |
+| `-32002` | CancelTask on a COMPLETED / FAILED task |
+| `-32004` | Unsupported: `taskId` of a terminal task, SubscribeToTask / push-config create on a terminal task, `GetExtendedAgentCard` |
+| `-32005` | A part that is neither text nor a supported image (incl. `data` parts) |
+| `-32009` | `A2A-Version` missing or not `1.0` |
+
+**Push delivery** (to a caller's webhook): `POST <url>` with `Content-Type: application/a2a+json`, `A2A-Version: 1.0`, `X-A2A-Notification-Token: <token>` when the config has one, `Authorization: <scheme> <credentials>` when it has `authentication`. Body `{ task }` on a terminal state, `{ statusUpdate }` for an interim. The pushed task carries no file bytes: text and status stay, file parts are counted in `metadata['halo/omittedFiles']`, and GetTask returns them. Each event is sent once per config; non-2xx retries with backoff (4xx other than 408 / 429 gives up at once). The URL must pass `general.a2a.url_allowlist`.
+
+**`POST /a2a-push/:pushId`** (receiver): token in `X-A2A-Notification-Token` (or `Authorization: Bearer`), compared constant-time with the dispatch's; unknown id or wrong token → 404 `{error: "not found"}`. Body `{ task }` or `{ statusUpdate }` whose task id must belong to that dispatch (else 404 `{error: "unknown task"}`); invalid JSON → 400.
+
+The push is a doorbell: only the task id is read from the body. The receiver then runs its own authed GetTask on the remote, with a 10 s deadline:
+- **GetTask succeeds:** answers `{ ok: true }` and injects the fetched Task into the calling session asynchronously — the report when it is terminal, an interim when it is WORKING with a status message.
+- **GetTask fails** (network, timeout, HTTP or JSON-RPC error): answers **503** `{error: "task fetch failed, retry later"}` and delivers nothing, so the sender retries.
+- **Dispatch already reported:** answers `{ ok: true }` without a fetch.
+
 ## Show (world snapshot)
 
 File: `packages/server/src/routes/halo-city.ts`. Token auth (same `x-token` as
@@ -427,9 +485,17 @@ File: `packages/server/src/routes/evolution.ts`. Surfaces the global `evolution_
 | DELETE | `/api/evolution/runs/:id` | Delete a finished run: its on-disk artifacts (run dir + archive zip + wrapper log) **and** the DB row, plus every apply that references it (artifacts + row, `evolution:apply_changed` `kind:'deleted'`). Rejected with 409 for in-flight states (`pending` / `running` / `approved`) so a live wrapper / queued apply isn't pulled out from under. Broadcasts `evolution:run_changed` with `kind:'deleted'`. |
 | GET | `/api/evolution/applies` | List in-flight apply rows (`pending` / `running` / `syncing`, newest 200; used for status badges). Returns `{applies}`. |
 
-## AgentCore adapter (runtime-mode only)
+## AgentCore runtime container (`halo agentcore` only)
 
-File: `packages/server/src/routes/agentcore.ts`. Mounted **only** when `HALO_RUNTIME_MODE=agentcore` (see [design/agentcore.md](../design/agentcore.md)): `GET /ping` (health, `HealthyBusy` while any agent session runs), `POST /invocations` (prompt in / reply out), and streaming `WS /ws`. Not present in normal server mode.
+File: `packages/server/src/a2a/agentcore.ts`. Served **only** when `HALO_RUNTIME_MODE=agentcore-a2a` (set by `halo agentcore`; see [design/agentcore.md](../design/agentcore.md)), on port 9000, with no cookie / token auth — AgentCore verifies the caller's signed request before forwarding. Not present in normal server mode.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/ping` | `{"status":"HealthyBusy"}` while the workspace lease is held and a session is running or a push is pending, else `{"status":"Healthy"}` |
+| POST | `/` | A2A JSON-RPC. Without the workspace lease: error `-32603` "workspace is in use by another runtime session…" |
+| GET | `/.well-known/agent-card.json` | The agent card (`<ws>/.halo/agent-card.json`, seeded if missing); interface URL = `HALO_A2A_PUBLIC_URL` + `/`; no `securitySchemes` |
+
+Any other path is 404. The former HTTP-protocol routes (`POST /invocations`, WS `/ws`) were removed 2026-10-09.
 
 ---
 
