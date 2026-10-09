@@ -1,6 +1,6 @@
 id: aws-bedrock-claude-invoke
 runtime: bedrock-invoke
-revision: 2026100501
+revision: 2026100801
 displayName: AWS Bedrock Claude (Invoke API)
 displayName_zh: AWS Bedrock Claude（Invoke API）
 description: Invokes Bedrock via InvokeModel (non-streaming), sends raw Anthropic Messages API format
@@ -330,4 +330,43 @@ models:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
+          - { value: max, label: Max }
+
+  - id: global.anthropic.claude-haiku-5-5
+    displayName: Claude Haiku 5.5
+    maxOutputTokens: 64000
+    contextWindow: 272000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        # Haiku 5.5 (Bedrock launch 2026-10-07; global. / us. / eu. / jp. / au.
+        # profiles, no in-Region id) — fastest model of the 5.5 family, first
+        # Haiku with effort controls. Live-probed 2026-10-08 on invoke:
+        # invalid-value probe lists low / medium / high / xhigh / max (all five
+        # return 200); manual `thinking.type: enabled` + budget_tokens → 400
+        # ("not supported for this model, use adaptive"), so adaptive only —
+        # unlike Haiku 4.5. `type: disabled` is accepted, but an omitted
+        # thinking field (what Thinking-off sends) still thinks at the model
+        # default (medium). max_tokens ceiling 128000 (128001 → 400);
+        # maxOutputTokens kept at Haiku 4.5's 64000, same call as Sonnet 5.5.
+        # Image input ("Red"), tool_use, 5m + 1h cache_control all verified;
+        # global id answers from all four endpoint presets.
+        # Model card: 1M context. Global pricing $0.10 / $0.50 per 1M
+        # (cache read $0.01, cache write 5m $0.125 / 1h $0.20); US Geo
+        # $0.11 / $0.55; long-context requests bill 5x.
+        mode: adaptive
+        defaultEnabled: true
+        default: medium     # the model card's default effort
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
           - { value: max, label: Max }

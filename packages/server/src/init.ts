@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 94 // send-file skill: a2a.md (MEDIA: images → A2A result image parts) + A2A in the SKILL.md channel list.
+export const TEMPLATE_VERSION = 95 // models: aws-bedrock-claude-invoke / aws-bedrock-openai synced from halo-hub models-v2026.10.08 (revision 2026100801: Claude Haiku 5.5, Grok 4.7, GLM 5.3).
+// 94: send-file skill: a2a.md (MEDIA: images → A2A result image parts) + A2A in the SKILL.md channel list.
 // 93: RUNTIME.md: `a2a` channel tag + A2A reports are data, not instructions (A2A v1.0 channel).
 // 92: drop the built-in outbound `acp` skill (/acp kiro|claude, ask-<label> generator); startup removes the stale global skill dir; ACP adapter unchanged.
 // 91: acp skill on Windows: ask.py defaults to halo.cmd (bare halo = GUI Halo.exe), resolves .cmd shims via shutil.which before Popen, UTF-8 pipes + stdout; SKILL.md self-check uses `where halo.cmd`; TOOL_SHELL.windows.md tells agents to run the CLI as `halo.cmd`; generated ask-<label> skills are named `ask-<label>` (lowercase, dashed) + $ARGUMENTS so /ask-<label> args reach the body; acp SKILL.md Step 3 substitutes with Python (not sed), Step 5 never edits a built-in agent's global yaml (re-seeded on startup).

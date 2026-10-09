@@ -73,8 +73,8 @@ beforeEach(() => {
 })
 
 describe('merge rule', () => {
-  it('bundled yamls ship revision 2026100501', () => {
-    for (const p of registry.loadProviders().effective) expect(p.revision).toBe(2026100501)
+  it('bundled yamls all ship a revision (≥ the first hub cut, 2026100501)', () => {
+    for (const p of registry.loadProviders().effective) expect(p.revision).toBeGreaterThanOrEqual(2026100501)
   })
 
   it('higher revision wins — either side', () => {
