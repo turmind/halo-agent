@@ -633,7 +633,7 @@ export function AgentSessionsSidebar() {
     <div className="flex h-full flex-col bg-[var(--background)]">
       {/* Header */}
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--border)] px-3">
-        <Bot className="h-4 w-4 text-[var(--muted-foreground)]" />
+        <MessageSquare className="h-4 w-4 text-[var(--muted-foreground)]" />
         <span className="text-sm font-medium text-[var(--foreground)]">Sessions</span>
         {totalSessions > 0 && (
           <span className="text-[10px] text-[var(--muted-foreground)]">

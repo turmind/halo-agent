@@ -325,7 +325,8 @@ export function AgentManagementMain() {
     <PanelGroup direction="horizontal" autoSaveId="halo-agent-mgmt" className="h-full">
       <Panel defaultSize={22} minSize={12} maxSize={40}>
         <div className="h-full flex flex-col bg-[var(--background)]">
-          <div className="flex h-10 items-center border-b border-[var(--border)] px-3">
+          <div className="flex h-10 items-center gap-2 border-b border-[var(--border)] px-3">
+            <Bot className="h-4 w-4 text-[var(--muted-foreground)]" />
             <span className="text-sm font-medium text-[var(--foreground)]">{t('agent.agents')}</span>
             <div className="flex-1" />
             <button
