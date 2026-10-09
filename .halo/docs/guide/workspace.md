@@ -124,7 +124,7 @@ Common settings:
 - `general.session.max_nesting_depth` — max session nesting depth
 - `general.compact.keep_messages` — recent messages kept intact during compaction
 - `general.logging.level` — `debug` / `info` / `warn` / `error`
-- `general.observability.endpoint` — OTLP collector URL; leave empty to keep observability off (see [design/observability.md](../design/observability.md))
+- `general.observability.endpoint` — OTLP collector URL; leave empty to keep observability off. The server and every `halo cli` / `halo tui` run (cron and evolution runs included) export to it (see [design/observability.md](../design/observability.md))
 - `<provider-id>.secrets.api_key` — provider credentials (Kimi / DeepSeek bearer token)
 - `<provider-id>.secrets.access_key_id` / `.secret_access_key` — AWS Bedrock
 - `<skill-id>.params.<key>` — values an agent can inject into its own `shell_exec` via `{{<skill-id>.params.<key>}}`

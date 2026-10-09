@@ -14,6 +14,7 @@ For this host's `/usr` installation and `ubuntu` service user, after authorizati
 (
 set -e
 version='x.y.z'  # exact requested version
+curl -sfI "https://registry.npmjs.org/@turmind/halo/-/halo-$version.tgz" >/dev/null  # tarball replicated? (a fresh publish can 404 for ~15 min)
 sudo sh -c 'umask 022; npm install -g --prefix /usr --no-audit --no-fund "@turmind/halo@$1"' sh "$version"
 installed=$(sudo -u ubuntu env HOME=/home/ubuntu /usr/bin/halo --version 2>&1)
 test "$installed" = "halo $version"  # CLI writes to stderr; mismatch or launch failure stops before restart
@@ -22,6 +23,8 @@ curl --fail --retry 10 --retry-connrefused --retry-delay 1 --max-time 3 http://1
 sudo journalctl -u halo.service --since '2 minutes ago' -n 40 --no-pager
 )
 ```
+
+**Fresh-publish gate:** right after `npm publish`, `npm view` may already show the version while the tarball still 404s for several minutes (1.6.0: ~15 min, the first prod install failed `E404` before restart). The `curl -sfI` line stops the sequence before install; wait and rerun, never republish.
 
 **Permission gate:** root npm installs must use `umask 022`, then pass `halo --version` as the actual service user. Secrets/logs can use 077, but it must not leak into public package installation: the 1.5.0-alpha install inherited 077, made root-only package directories and left the ubuntu service failing with 203/EXEC.
 
