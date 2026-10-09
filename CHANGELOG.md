@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-09
+
+### Breaking
+
+- AgentCore: the HTTP-protocol runtime mode (`HALO_RUNTIME_MODE=agentcore`, `/invocations`, WS `/ws`, per-user workspaces) is removed. Its replacement is `halo agentcore`, which speaks A2A (see Added).
+- The `packages/agentcore-demo` and `packages/web-demo` sample packages are removed. Custom frontends use the Web channel's HTTP + SSE API directly.
+
+### Added
+
+- A2A v1.0 between Halo servers (JSON-RPC binding).
+  - **Inbound:** any workspace under the base dir with a `.halo/agent-card.json` is served at `/a2a/<path>`, authed by a web-channel token bound to that workspace. A readonly / observer token gets a fixed read-only profile. Results go back by webhook push (persisted outbox), blocking `SendMessage` (≤10 min) or SSE.
+  - **Outbound:** `tools: [a2a_send]` brings `a2a_send` / `a2a_stop` / `a2a_read` / `a2a_list` at every access level except that read-only profile. Remotes live in the server-wide, full-only `~/.halo/secrets/a2a-remotes.yaml`; tokens live in `a2a.secrets.<remote>`.
+  - **Results:** the remote's result arrives as one `[A2A report · …]` message per dispatch, with `[A2A interim report · …]` for answered follow-ups. An incoming push is only a doorbell: the content is always fetched back with `GetTask`.
+  - **Images:** text and image parts, up to 5 MB per image and 10 MB per message or result. `MEDIA:` images in a result come back to the caller.
+  - **Egress:** every outbound URL passes `general.a2a.url_allowlist` (default: tailnet only; link-local is always refused).
+- AgentCore: `halo agentcore --workspace <path>` runs the server as an Amazon Bedrock AgentCore Runtime container speaking A2A.
+  - It serves `GET /ping` (HealthyBusy while work is running), `POST /` (streaming included) and the agent card. One fixed workspace on EFS holds the state.
+  - A heartbeat lease lets only one microVM in at a time.
+  - A task cut off mid-run resumes on the next invocation.
+  - On the caller side, a remote with `auth: sigv4` signs its requests and retries the brief lease-busy window.
+- Extensions: an `fs-read` capability (scoped workspace / system read, stat and list) and a host file picker. The admin's `/fs/stat`, `/fs/raw` and `/fs/browse?files=1` routes refuse the sandbox hidden paths.
+- Extensions: maximizing a viewer extension (one without `save`) goes immersive: no chrome, real fullscreen, exit with Esc or the top pill, and a "Back to chat" toast when a reply finishes.
+- Admin: the activity bar expands on hover to show each view's name and description; a collapsed session list peeks open on hover.
+- Chat: streaming thinking shows as a live panel that tails its own text, then folds to a one-line header.
+- Observability: `halo cli` / `halo tui`, and so cron and evolution runs, export OTel too. A `halo.process` attribute tells them apart.
+- Models: the bundled provider list adds Claude Haiku 5.5, Grok 4.7 and GLM 5.3, synced with halo-hub `models-v2026.10.08` (templates v95).
+
+### Changed
+
+- Chat: the view follows the bottom by intent. Any upward wheel, touch, key or scrollbar grab detaches it at once, and coming back within 80 px of the end re-attaches it, so scrolling up during a fast stream works.
+- Editor: cached previews keep a stable order, so switching tabs no longer reloads a running viewer. Explorer New File with a bundle suffix (`x.htrans`) creates and opens the bundle.
+
+### Fixed
+
+- Agents: a provider error that arrives mid-stream is classified by its code, so a transient one (5xx, overload) retries instead of ending the turn.
+- Admin: the Sessions tab header shows the sessions icon (it showed the agent icon), and the Agents tab header has its icon.
+- A2A: stopping a turn also ends an outbound agent-card fetch that is still retrying; push payloads no longer copy result image bytes into the outbox (receivers fetch them with `GetTask`).
+
 ## [1.5.11] - 2026-10-08
 
 ### Added
@@ -839,7 +877,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.5.11...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/turmind/halo-agent/compare/v1.5.11...v1.6.0
 [1.5.11]: https://github.com/turmind/halo-agent/compare/v1.5.10...v1.5.11
 [1.5.10]: https://github.com/turmind/halo-agent/compare/v1.5.9...v1.5.10
 [1.5.9]: https://github.com/turmind/halo-agent/compare/v1.5.8...v1.5.9
