@@ -104,6 +104,11 @@ export interface SchemaSection {
 
 /** Built-in hidden files for the hidden_files description — SQLite -wal/-shm
  *  sidecars folded into one "plus sidecars" note to keep the text readable. */
+/** A2A egress allowlist default (general.a2a.url_allowlist) — the one copy.
+ *  Lives here, not in config.ts: config.ts imports this module (a reverse
+ *  import is a load-order cycle); config.ts re-exports it for a2a/url-policy. */
+export const DEFAULT_A2A_URL_ALLOWLIST = '100.64.0.0/10,*.ts.net'
+
 const DEFAULT_FILES_SUMMARY = DEFAULT_HIDDEN_FILES.filter((f) => !/-(wal|shm)$/.test(f)).join(', ')
 
 /** General settings — built-in declarations for the server's own knobs. */
@@ -153,6 +158,10 @@ function generalSection(): SchemaSection {
       { key: 'observability.service_name', type: 'string', globalOnly: true, restartRequired: true, description: 'OTel resource service.name reported for this server. Takes effect on restart.', description_zh: '本服务在 OTel 中上报的 service.name。重启后生效。', default: 'halo' },
       { key: 'observability.headers', type: 'string', secret: true, globalOnly: true, restartRequired: true, description: 'Extra headers for every OTLP request, comma-separated k=v (e.g. authorization=Bearer …). Takes effect on restart.', description_zh: '附加到每个 OTLP 请求的 header，逗号分隔的 k=v（如 authorization=Bearer …）。重启后生效。', default: '' },
       { key: 'observability.capture_content', type: 'boolean', globalOnly: true, restartRequired: true, description: 'Put prompt / completion / tool argument and result text on spans (gen_ai.*.messages etc.). Off = only metadata (model, tokens, latency, tool names). Takes effect on restart.', description_zh: '是否把提示词 / 模型输出 / 工具参数与结果正文写到 span 上（gen_ai.*.messages 等）。关 = 只上报元数据（模型、token、耗时、工具名）。重启后生效。', default: 'false' },
+      // A2A (plans/a2a.md). Global-only: the URL allowlist is an egress boundary
+      // a workspace must not widen; public_url names this server to peers.
+      { key: 'a2a.public_url', type: 'string', globalOnly: true, description: 'Origin peers use to reach this server for A2A (e.g. http://myhost.tailnet.ts.net:9527): the agent card\'s interface URL and the webhook URL given to remotes. Empty = derived from the request Host. Env HALO_A2A_PUBLIC_URL overrides.', description_zh: '对端访问本服务的 A2A 源地址（如 http://myhost.tailnet.ts.net:9527）：用于 agent card 的接口 URL 和交给远端的 webhook URL。留空则按请求 Host 推导。环境变量 HALO_A2A_PUBLIC_URL 优先。', default: '' },
+      { key: 'a2a.url_allowlist', type: 'string', globalOnly: true, description: 'Comma-separated CIDRs / host patterns A2A may reach besides public https (push webhooks, remote cards and RPC). Private / loopback ranges are refused unless listed; plain http is allowed only to listed hosts / ranges. Link-local (169.254.0.0/16, fe80::/10) is always refused.', description_zh: 'A2A 除公网 https 之外允许访问的 CIDR / 主机模式（逗号分隔，用于 push webhook、远端 card 和 RPC）。私网 / 回环地址必须列出才允许；明文 http 只允许列出的主机 / 网段。链路本地地址（169.254.0.0/16、fe80::/10）始终拒绝。', default: DEFAULT_A2A_URL_ALLOWLIST },
       // self-evolution (see plans/self-evolution.md). All evo settings are
       // global-only — the worker / ticker live in the server process and
       // would have to reload mid-flight if a workspace could override them.

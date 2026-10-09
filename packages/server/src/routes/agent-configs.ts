@@ -13,6 +13,7 @@ import { hasWorkspaceHalo } from '../init.js'
 import { modelBlockFromProvider } from '../setup-providers.js'
 import { isSafeIdSegment } from './workspace-path.js'
 import { createMtimeCache } from './mtime-cache.js'
+import { buildA2ATools } from '../a2a/outbound.js'
 
 /** List available tools with name + description */
 let _cachedTools: Array<{ name: string; description: string }> | null = null
@@ -29,7 +30,12 @@ function getAvailableTools(): Array<{ name: string; description: string }> {
     name: 'relay_send',
     description: `Cross-workspace relay (one toggle, grants the whole set; full-access sessions only): ${relay.map((t) => t.name).join(', ')}.\n\n${relay[0].description}`,
   }
-  _cachedTools = tools.map((t) => ({ name: t.name, description: t.description })).concat(relayChip)
+  const a2a = buildA2ATools('/tmp', '')
+  const a2aChip = {
+    name: 'a2a_send',
+    description: `Cross-server A2A (one toggle, grants the whole set; full-access sessions only): ${a2a.map((t) => t.name).join(', ')}.\n\n${a2a[0].description}`,
+  }
+  _cachedTools = tools.map((t) => ({ name: t.name, description: t.description })).concat(relayChip, a2aChip)
   return _cachedTools
 }
 

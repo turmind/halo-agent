@@ -20,6 +20,8 @@ import type { ModelErrorKind } from './model-error.js'
 import { config } from '../config.js'
 import { resolveDefaultAgentId } from '../channels/shared/commands.js'
 import { isSelfOrAncestor, selfOrAncestorRefusal } from './session-tools.js'
+import { getA2ADb } from '../db/a2a-db.js'
+import { completeTask, getTask, interim, transition } from '../a2a/tasks.js'
 
 /** What relay needs from a SessionManager — its own or a foreign workspace's.
  *  Structural — the manager satisfies it with `this`; tests pass a stub. */
@@ -36,10 +38,15 @@ export interface RelayTarget {
   listSessions(opts: { rootOnly: boolean; limit: number }): { sessions: Array<{ id: string; agentId: string; agentName: string; description: string; title: string | null; status: 'running' | 'idle' | 'stopped'; createdAt: number; updatedAt: number }> }
 }
 export interface RelayRegistry { getOrCreate(workspacePath: string): RelayTarget }
-export interface ReplyTo { workspace: string; sessionId: string }
+/** `reply_to` = who this root owes its wrap-up: a relay caller session on this
+ *  server, or an inbound A2A task (plans/a2a.md §2) — same quiet gate, same
+ *  interim doors, one column. */
+export type ReplyTo = { workspace: string; sessionId: string } | { a2a: string }
 /** Prefix relay_send stamps on the model-bound text. SessionManager.drainQueue
  *  matches it to tell a relay message (owed an interim report) from local chat. */
 export const RELAY_CHANNEL_PREFIX = '[channel: relay | from: '
+/** Same role for inbound A2A messages (a2a/routes.ts stamps it). */
+export const A2A_CHANNEL_PREFIX = '[channel: a2a | '
 
 // ── Registry singleton ───────────────────────────────────────────────
 
@@ -95,6 +102,30 @@ export function listActiveChildren(db: HaloDb, sessionId: string): Array<{ agent
     .all()
 }
 
+/** Cap a report body at `limits.autoReportMax`, pointing at the tool call
+ *  that fetches the full text — shared by relay and A2A reports. */
+export function capReport(report: string, fullTextCall: string): string {
+  const cap = config.limits.autoReportMax
+  return report.length > cap
+    ? report.slice(0, cap) + `\n\n[Report truncated: ${report.length} chars total. Use ${fullTextCall} for the full text.]`
+    : report
+}
+
+/** Local end of a session's work (stop / delete / archive) while it owes an
+ *  inbound A2A task: the task is CANCELED, not COMPLETED — stopSession's abort
+ *  path never sets turnError, so the turn-end hook alone would report the
+ *  partial output as a success. Interrupts never come here (they resume). */
+export function cancelA2AForSession(db: HaloDb, sessionId: string, reason: string): void {
+  if (!getA2ADb()) return
+  const to = readReplyTo(db, sessionId)
+  if (!to || !('a2a' in to)) return
+  // The pointer may name a task in ANOTHER server's a2a.db (dev shares prod's
+  // workspace sqlite but not its a2a.db): not ours to end — leave it intact.
+  if (!getTask(to.a2a)) return
+  transition(to.a2a, 'canceled', { statusText: reason })
+  clearReplyTo(db, sessionId)
+}
+
 // ── Delivery point ───────────────────────────────────────────────────
 
 /**
@@ -116,6 +147,19 @@ export async function deliverRelayReport(
   // children or a queued message mean another turn follows — not the end.
   if (listActiveChildren(db, session.id).length > 0 || session.messageQueue.length > 0) return
 
+  if ('a2a' in to) {
+    // Inbound A2A task: the terminal row (+ its push) first, then the
+    // back-pointer — a crash in between re-fires here and the guarded
+    // transition is a no-op. No a2a db = CLI / TUI: leave it for the server.
+    if (!getA2ADb()) { console.warn(`[A2A] no a2a db — cannot complete task ${to.a2a} for ${session.id}`); return }
+    // Unknown here = owned by another server sharing this workspace (dev vs
+    // prod): clearing would strand that server's task WORKING forever.
+    if (!getTask(to.a2a)) { console.warn(`[A2A] task ${to.a2a} for ${session.id} is not in this server's a2a.db — left for its owner`); return }
+    completeTask(to.a2a, session)
+    clearReplyTo(db, session.id)
+    return
+  }
+
   const registry = getRelayRegistry()
   if (!registry) { console.warn(`[Relay] no registry — cannot deliver report for ${session.id} to ${to.workspace}`); return }
 
@@ -131,10 +175,7 @@ export async function deliverRelayReport(
       : 'Re-send with relay_send to let it resume.'
     report = `[RELAY TARGET ABORTED: the last turn was terminated by an unrecoverable error, NOT completed. Error: ${session.turnError}. The text below is a partial trace — do not treat it as a finished result. ${next}]\n\n${report}`
   }
-  const cap = config.limits.autoReportMax
-  const body = report.length > cap
-    ? report.slice(0, cap) + `\n\n[Report truncated: ${report.length} chars total. Use relay_read("${host.workspaceRoot}", "${session.id}") for the full text.]`
-    : report
+  const body = capReport(report, `relay_read("${host.workspaceRoot}", "${session.id}")`)
   const header = `[Relay report · workspace ${host.workspaceRoot} · session ${session.id} · status: ${session.turnError ? 'aborted' : 'completed'}]`
   const text = `${header}\n\n${body}`
 
@@ -165,6 +206,10 @@ export async function deliverRelayReport(
 export async function deliverRelayInterim(host: RelayTarget, sessionId: string, body: string): Promise<void> {
   const to = readReplyTo(host.getDb(), sessionId)
   if (!to) return
+  if ('a2a' in to) {
+    if (getA2ADb()) interim(to.a2a, body)
+    return
+  }
   const registry = getRelayRegistry()
   if (!registry) { console.warn(`[Relay] no registry — cannot deliver interim report for ${sessionId} to ${to.workspace}`); return }
   let caller: RelayTarget

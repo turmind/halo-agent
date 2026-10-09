@@ -7,9 +7,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
-import { loadSettingsSchema } from './settings-schema.js'
+import { loadSettingsSchema, DEFAULT_A2A_URL_ALLOWLIST } from './settings-schema.js'
 import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
 import { loadProviders } from './models/registry.js'
+
+export { DEFAULT_A2A_URL_ALLOWLIST }
 
 export const HALO_HOME = path.join(homedir(), '.halo')
 export const HALO_GLOBAL_DIR = path.join(HALO_HOME, 'global')
@@ -434,6 +436,21 @@ export const config = {
     serviceName: settingsStr('general.observability.service_name', 'halo'),
     headers: settingsStr('general.observability.headers', ''),
     captureContent: settingsBool('general.observability.capture_content', false),
+  },
+
+  // A2A (see plans/a2a.md). Getters: read live from settings.yaml.
+  a2a: {
+    /** Base dir workspaces are exposed relative to: env HALO_A2A_ROOT, else the user's home. */
+    get root(): string {
+      return process.env.HALO_A2A_ROOT?.trim() || homedir()
+    },
+    /** Server origin as peers see it (no trailing slash); '' = derive from the request. */
+    get publicUrl(): string {
+      return (process.env.HALO_A2A_PUBLIC_URL?.trim() || settingsStr('general.a2a.public_url', '')).replace(/\/+$/, '')
+    },
+    get urlAllowlist(): string {
+      return settingsStr('general.a2a.url_allowlist', DEFAULT_A2A_URL_ALLOWLIST)
+    },
   },
 
   // Self-evolution (see plans/self-evolution.md). Getter-based so user edits

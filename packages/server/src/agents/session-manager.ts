@@ -26,7 +26,7 @@ import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools, buildContinueTaskTool } from './session-tools.js'
 import { GOAL_AGENT_ID, deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
-import { deliverRelayReport, deliverRelayInterim, readReplyTo, listActiveChildren, buildRelayTools, RELAY_CHANNEL_PREFIX } from './relay.js'
+import { deliverRelayReport, deliverRelayInterim, readReplyTo, listActiveChildren, buildRelayTools, RELAY_CHANNEL_PREFIX, A2A_CHANNEL_PREFIX, cancelA2AForSession } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
@@ -365,7 +365,8 @@ function generateSessionId(): string {
 function interimDoor(parentId: string | null, batch: QueuedMessage[]): 'parent' | 'relay' | null {
   if (parentId !== null) return batch.some((q) => q.sourceSessionId === parentId) ? 'parent' : null
   // includes, not startsWith: an `@scope` marker prepends INSTRUCTIONS blocks.
-  return batch.some((q) => q.sourceSessionId === undefined && q.text.includes(RELAY_CHANNEL_PREFIX)) ? 'relay' : null
+  // An inbound A2A message is the same door (relay.ts routes on reply_to's kind).
+  return batch.some((q) => q.sourceSessionId === undefined && (q.text.includes(RELAY_CHANNEL_PREFIX) || q.text.includes(A2A_CHANNEL_PREFIX))) ? 'relay' : null
 }
 
 // ── SessionManager ──────────────────────────────────────────────────
@@ -2159,6 +2160,9 @@ export class SessionManager implements SessionManagerInternals {
   }
 
   async stopSession(sessionId: string): Promise<void> {
+    // An owed inbound A2A task ends CANCELED, before the abort's turn-end hook
+    // could report the partial output as completed.
+    cancelA2AForSession(this.db, sessionId, 'Stopped on the remote side.')
     // Collect the full descendant tree so stop cascades — otherwise sub-agents
     // started via start_session keep burning tokens after the parent is stopped.
     const allIds: string[] = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
@@ -3118,6 +3122,7 @@ export class SessionManager implements SessionManagerInternals {
    * Order: delete_log first (needs SQLite to find children), then deleteSession.
    */
   async deleteSession(sessionId: string): Promise<string[]> {
+    cancelA2AForSession(this.db, sessionId, 'Session deleted on the remote side.')
     // Stop if running
     const session = this.sessions.get(sessionId)
     if (session) {
@@ -3204,6 +3209,7 @@ export class SessionManager implements SessionManagerInternals {
    * SQLite records and log files are preserved — archivedAt is set by the caller.
    */
   async archiveSession(sessionId: string): Promise<void> {
+    cancelA2AForSession(this.db, sessionId, 'Session archived on the remote side.')
     const session = this.sessions.get(sessionId)
     if (session) {
       if (session.abortController) {
@@ -3334,6 +3340,8 @@ export class SessionManager implements SessionManagerInternals {
    *  on the next wake-up. Mirrors stopSession's fold — a stop parks the work, it
    *  doesn't discard it. */
   stopUserSession(sessionId: string): void {
+    // The admin Stop button: same A2A outcome as stopSession (CANCELED).
+    cancelA2AForSession(this.db, sessionId, 'Stopped on the remote side.')
     const session = this.sessions.get(sessionId)
     if (!session) return
     const queued = session.messageQueue.map((q) =>

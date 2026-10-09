@@ -370,6 +370,10 @@ export const DEFAULT_HIDDEN_FILES = [
   '~/.halo/global/runs.db',
   '~/.halo/global/runs.db-wal',
   '~/.halo/global/runs.db-shm',
+  // A2A tasks / push configs carry peers' webhook tokens.
+  '~/.halo/global/a2a.db',
+  '~/.halo/global/a2a.db-wal',
+  '~/.halo/global/a2a.db-shm',
 ]
 
 // Workspace-relative runtime state hidden from workspace/readonly sessions.

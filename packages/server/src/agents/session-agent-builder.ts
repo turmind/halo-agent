@@ -1,7 +1,7 @@
 import path from 'node:path'
 import type { ToolDef } from './bedrock-agent.js'
 import { createModelRuntime, resolveProviderRuntime, type ModelRuntime } from './model-runtime.js'
-import { createWorkspaceTools } from '../tools/workspace-tools.js'
+import { createWorkspaceTools, READ_ONLY_TOOL_NAMES } from '../tools/workspace-tools.js'
 import { loadSystemPrompts } from '../prompts/system-prompts.js'
 import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } from '../prompts/md-loader.js'
 import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveContextWindow, resolveThinkingMode, resolveVerbosity } from '../config.js'
@@ -12,6 +12,30 @@ import {
 } from './agent-loader.js'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
 import { GOAL_AGENT_ID } from './goal-mode.js'
+import { buildA2ATools } from '../a2a/outbound.js'
+import { sessionPrefix } from '../channels/shared/session-prefix.js'
+
+/** The A2A channel's session-id stem (`a2a_<accountId>_…`, routes.ts). */
+const A2A_SESSION_STEM = sessionPrefix('a2a', '').slice(0, -1)
+
+/**
+ * A2A read-only profile: an inbound A2A session opened by a readonly /
+ * observer token. Derived from the two PERSISTENT facts — the session id
+ * (channel prefix) and its stored access level — so it holds on every turn,
+ * after a restore and after an access re-build, never from in-memory state.
+ * The caller may make the agent read and answer, nothing else: no write /
+ * shell / fetch tools even when an OS sandbox exists, no delegation.
+ */
+export function isA2AReadOnlySession(sessionId: string, accessLevel: 'readonly' | 'workspace' | null): boolean {
+  return accessLevel === 'readonly' && sessionId.startsWith(A2A_SESSION_STEM)
+}
+
+/** "May this session delegate?" — the ONE predicate behind both the session-
+ *  tool bundle (resolveBaseToolSet) and the roster (composeSystemPrompt), so
+ *  the two can never drift. */
+function sessionMayDelegate(yamlConfig: AgentYamlConfig | null, sessionId: string, accessLevel: 'readonly' | 'workspace' | null): boolean {
+  return canDelegate(yamlConfig) && !isA2AReadOnlySession(sessionId, accessLevel)
+}
 
 /** Agent metadata snapshot captured at build time — used by /context command. */
 export interface AgentMeta {
@@ -90,7 +114,7 @@ export class SessionAgentBuilder {
     // manifest used by /context. All MD/prompt loading is encapsulated
     // here so the orchestrator just consumes the result.
     const promptResult = await this.composeSystemPrompt({
-      agentId, isRoot, workingDir, yamlConfig, accessLevel,
+      agentId, sessionId, isRoot, workingDir, yamlConfig, accessLevel,
       workspaceToolNames: workspaceTools.map((t) => t.name),
       sessionToolNames: sessionTools.map((t) => t.name),
     })
@@ -175,7 +199,10 @@ export class SessionAgentBuilder {
       allowedNamespaces,
       supportsVision: modelSupportsImage(modelId, imageOverride),
     })
-    const workspaceTools = filterTools(allTools, yamlConfig?.tools)
+    // A2A read-only: the side-effect-free set regardless of sandbox backend
+    // (a bwrap-contained shell_exec is still a side effect the caller didn't earn).
+    const a2aReadOnly = isA2AReadOnlySession(sessionId, accessLevel)
+    const workspaceTools = filterTools(a2aReadOnly ? allTools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name)) : allTools, yamlConfig?.tools)
 
     // Session tools are an all-or-nothing bundle gated on delegation, NOT the
     // yaml `tools:` list — an agent gets the whole set (start_session,
@@ -187,13 +214,13 @@ export class SessionAgentBuilder {
     // no way to inspect or clean up what it spawned. Internal agents
     // (evo/score/apply) never delegate.
     const nameSet = new Set(yamlConfig?.tools ?? [])
-    const delegates = canDelegate(yamlConfig)
+    const delegates = sessionMayDelegate(yamlConfig, sessionId, accessLevel)
     // The goal agent (internal, no team → never delegates) gets its own tool
     // set instead: goal_context/attach/decide/finish + a goal-scoped
     // query_session / get_session_output lateral edge. See goal-mode.ts.
     const sessionTools = delegates
       ? this.host.createSessionTools(sessionId)
-      : agentId === GOAL_AGENT_ID ? this.host.createGoalTools(sessionId) : []
+      : agentId === GOAL_AGENT_ID && !a2aReadOnly ? this.host.createGoalTools(sessionId) : []
 
     // continue_task is the one truly unconditional tool (`activate_skill` is
     // gated on `skills`, session tools on `team`): it's part of the turn loop
@@ -204,6 +231,11 @@ export class SessionAgentBuilder {
     // OTHER workspaces, so a readonly/workspace-scoped token must never get them.
     if (nameSet.has('relay_send') && accessLevel === null) {
       sessionTools.push(...this.host.createRelayTools(sessionId))
+    }
+    // A2A outbound (a2a_send brings a2a_stop / a2a_read / a2a_list): same
+    // opt-in-by-name + full-access-only gate as relay — it reaches other servers.
+    if (nameSet.has('a2a_send') && accessLevel === null) {
+      sessionTools.push(...buildA2ATools(this.host.workspaceRoot, sessionId))
     }
 
     return { workspaceTools, sessionTools, allowedNamespaces }
@@ -217,6 +249,7 @@ export class SessionAgentBuilder {
    */
   private async composeSystemPrompt(args: {
     agentId: string
+    sessionId: string
     isRoot: boolean
     workingDir: string | undefined
     yamlConfig: AgentYamlConfig | null
@@ -229,7 +262,7 @@ export class SessionAgentBuilder {
     mdContents: Awaited<ReturnType<typeof loadAllMdContents>>
     systemPrompts: Awaited<ReturnType<typeof loadSystemPrompts>>
   }> {
-    const { agentId, isRoot, workingDir, yamlConfig, accessLevel, workspaceToolNames, sessionToolNames } = args
+    const { agentId, sessionId, isRoot, workingDir, yamlConfig, accessLevel, workspaceToolNames, sessionToolNames } = args
 
     const [mdContents, systemPrompts] = await Promise.all([
       loadAllMdContents(agentId, this.host.workspaceRoot),
@@ -274,15 +307,16 @@ export class SessionAgentBuilder {
       mdContents.agentMd = renderMdBody(mdContents.agentMd, renderCtx)
     }
 
-    // Live roster of delegatable agents. Gated on `canDelegate` — a non-empty
-    // `team` (internal agents excluded), the same switch that grants the
-    // session-tool bundle in resolveBaseToolSet. The two share one predicate so
+    // Live roster of delegatable agents. Gated on `sessionMayDelegate` — a
+    // non-empty `team` (internal agents excluded) outside the A2A read-only
+    // profile, the same switch that grants the session-tool bundle in
+    // resolveBaseToolSet. The two share one predicate so
     // the roster can never appear without the tools or vice versa. The team
     // list also scopes WHO the roster lists (via buildAgentRoster →
     // isTeamMember). Root and sub-agents follow the same rule: a sub-agent with
     // a non-empty team gets a roster too; runaway re-subcontracting is bounded
     // by the team whitelist + maxNestingDepth, not a blanket "root only" ban.
-    const roster = canDelegate(yamlConfig) ? await this.buildAgentRoster(agentId, yamlConfig?.team) : ''
+    const roster = sessionMayDelegate(yamlConfig, sessionId, accessLevel) ? await this.buildAgentRoster(agentId, yamlConfig?.team) : ''
     // A sub-agent's working_dir is persistent session identity (stored in the
     // DB, restored on resume), so its directory-chain INSTRUCTIONS.md ride in
     // the system prompt every turn (composeMdPrompt folds them into the

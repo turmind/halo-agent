@@ -19,7 +19,7 @@
  * audit" tool only has one place to enumerate.
  */
 
-export type ChannelKind = 'tg' | 'wx' | 'web' | 'slack' | 'feishu' | 'wecom'
+export type ChannelKind = 'tg' | 'wx' | 'web' | 'slack' | 'feishu' | 'wecom' | 'a2a'
 
 /** Build the prefix that every session id created for `(channel, user)`
  *  begins with. Append `${Date.now().toString(36)}` (or any random

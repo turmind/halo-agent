@@ -45,10 +45,14 @@ export const TOKEN_AUTH_STATUS: Record<TokenAuthFailure, 401 | 429> = {
  * constructed with an injected ChannelDb, show/metrics read the boot-time
  * singleton.
  */
-export function resolveTokenAuth(c: Context, db: ChannelDb): TokenAuthResult {
+export function resolveTokenAuth(c: Context, db: ChannelDb, opts?: { headerOnly?: boolean }): TokenAuthResult {
   const ip = getClientIp(c)
   if (isLockedOut(TOKEN_BUCKET, ip)) return { ok: false, reason: 'locked_out' }
-  const token = c.req.header('x-token') || c.req.query('token')
+  // headerOnly (A2A): `Authorization: Bearer` or `x-token`, never `?token=` —
+  // a token in a URL lands in proxy / access logs.
+  const token = opts?.headerOnly
+    ? (/^Bearer\s+(.+)$/i.exec(c.req.header('authorization') ?? '')?.[1]?.trim() || c.req.header('x-token'))
+    : (c.req.header('x-token') || c.req.query('token'))
   if (!token) {
     // Don't count "no token" as a strike — a misconfigured curl shouldn't lock
     // out a whole NAT IP; only actual bad tokens count.

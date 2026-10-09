@@ -38,6 +38,10 @@ import { setRelayRegistry } from './agents/relay.js'
 import { createChannelDb, setChannelDb } from './db/channel-db.js'
 import { createCronDb, setCronDb } from './db/cron-db.js'
 import { createRunsDb, setRunsDb, listRunningWorkspaces } from './db/runs-db.js'
+import { createA2ADb, setA2ADb } from './db/a2a-db.js'
+import { createA2ARoutes } from './a2a/routes.js'
+import { createA2APushRoutes, reconcileOpenDispatches, setA2AOutboundRegistry } from './a2a/outbound.js'
+import { startPushSender, stopPushSender } from './a2a/push.js'
 import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
 import { createExtensionRoutes } from './routes/extensions.js'
@@ -479,6 +483,20 @@ if (!AGENTCORE) {
   console.log(`[Server] AgentCore runtime mode — workspace: ${config.server.agentcoreWorkspace}`)
 }
 
+// A2A v1.0 (plans/a2a.md): inbound JSON-RPC under /a2a/<home-relative ws path>
+// + the outbound push receiver /a2a-push/:id. Both outside /api/* (own token
+// auth, no admin cookie) and BEFORE serveStatic / the SPA fallback. Not in
+// AgentCore mode this round. The outbox + boot reconcile run on every server
+// (incl. dev) — a2a.db is this process's own, not a shared workspace runtime.
+if (!AGENTCORE) {
+  setA2ADb(createA2ADb(path.join(HALO_HOME, 'global')))
+  setA2AOutboundRegistry(registry)
+  app.route('/a2a', createA2ARoutes({ registry, ownsRuntimes: OWNS_RUNTIMES }))
+  app.route('/', createA2APushRoutes())
+  startPushSender()
+  reconcileOpenDispatches()
+}
+
 // ------------------------------------------------------------------
 // Serve static frontend (Next.js static export)
 // ------------------------------------------------------------------
@@ -587,6 +605,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Before channels drain: the 10s reconcile poll would otherwise rebuild
   // schedules (and fire new runs) while we're mid-shutdown.
   stopCronDaemon()
+  // No new A2A push attempts once shutdown starts; unsent rows stay in the
+  // outbox (their lease expires) and the next boot sends them.
+  stopPushSender()
 
   // Drain every booted channel via its descriptor's optional `shutdown`.
   // Errors are logged per-channel inside shutdownChannels — never thrown.

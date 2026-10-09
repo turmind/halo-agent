@@ -934,10 +934,14 @@ export function createWorkspaceTools(
   const visionTools = supportsVision ? [viewImage] : []
   const allTools = [fileRead, ...visionTools, fileWrite, fileEdit, fileList, shellExec, grepTool, globTool, webFetch]
   if (accessLevel === 'readonly' && getSandboxBackend() === null) {
-    return [fileRead, ...visionTools, fileList, grepTool, globTool]
+    return allTools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name))
   }
   return allTools
 }
+
+/** The side-effect-free workspace tools — what a readonly session gets when no
+ *  OS sandbox can contain shell_exec (and the A2A read-only profile always). */
+export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set(['file_read', 'view_image', 'file_list', 'grep', 'glob'])
 
 /**
  * Read an image's pixel dimensions straight from its header — no full decode,
