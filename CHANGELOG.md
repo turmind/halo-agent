@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-10
+
 ### Added
 
 - Extensions: notebook execution for the ipynb viewer (2.0.0+). Halo starts a local `jupyter server` on demand and proxies a fixed whitelist of it: `/api/jupyter/status`, `kernelspecs`, kernel start / interrupt / restart / shutdown and WS `/api/jupyter/channels`.
@@ -931,7 +933,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/turmind/halo-agent/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/turmind/halo-agent/compare/v1.5.11...v1.6.0
 [1.5.11]: https://github.com/turmind/halo-agent/compare/v1.5.10...v1.5.11
 [1.5.10]: https://github.com/turmind/halo-agent/compare/v1.5.9...v1.5.10
