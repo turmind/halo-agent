@@ -1,9 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, copyFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createHarness, type Harness } from '../src/harness.js'
-import { SessionManager } from '@turmind/halo-server/agents/session-manager'
+import { join, resolve } from 'node:path'
+import type { Harness } from '../src/harness.js'
 import { agentSessions } from '@turmind/halo-server/db/schema'
 
 /**
@@ -15,10 +14,34 @@ import { agentSessions } from '@turmind/halo-server/db/schema'
  *   - `--dir` re-points a resumed session in place; `--dir .` resets it to
  *     the workspace root (null); omitting it keeps the stored value.
  * No turn runs — createSession only builds the agent from workspace yamls.
+ *
+ * Building the agent resolves its provider from the models registry under
+ * os.homedir() → temp HOME seeded with the bundled anthropic.yaml, set
+ * before the dynamic imports (CI runners have no ~/.halo).
  */
 
 let ws: string
+let tmpHome: string
+let realHome: string | undefined
+let createHarness: typeof import('../src/harness.js')['createHarness']
+let SessionManager: typeof import('@turmind/halo-server/agents/session-manager')['SessionManager']
 const harnesses: Harness[] = []
+
+beforeAll(async () => {
+  realHome = process.env.HOME
+  tmpHome = mkdtempSync(join(tmpdir(), 'halo-cli-dir-home-'))
+  process.env.HOME = tmpHome
+  const modelsDir = join(tmpHome, '.halo', 'global', 'models')
+  mkdirSync(modelsDir, { recursive: true })
+  copyFileSync(resolve(import.meta.dirname, '..', '..', 'server', 'templates', 'models', 'anthropic.yaml'), join(modelsDir, 'anthropic.yaml'))
+  createHarness = (await import('../src/harness.js')).createHarness
+  SessionManager = (await import('@turmind/halo-server/agents/session-manager')).SessionManager
+})
+
+afterAll(() => {
+  process.env.HOME = realHome
+  rmSync(tmpHome, { recursive: true, force: true })
+})
 
 function writeAgent(id: string): void {
   const dir = join(ws, '.halo', 'agents', id)
