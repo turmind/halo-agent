@@ -3,7 +3,7 @@ import path from 'node:path'
 import type { CommandDescriptor } from './types.js'
 import { commandRegistry } from './index.js'
 import { ACCESS_RANK, loadAgentYaml, parseSkillFrontmatter, type SkillVerb } from '../agents/agent-loader.js'
-import { listSkillDirs, type SkillDir } from '../agents/skill-sources.js'
+import { isSkillDisabled, listSkillDirs, type SkillDir } from '../agents/skill-sources.js'
 import { buildRenderContext, renderMdBody } from '../prompts/md-vars.js'
 import { getDisabledSet } from '../db/index.js'
 import { t, type Lang } from '../channels/shared/i18n.js'
@@ -170,7 +170,7 @@ export async function execSkillCommand(
     return t('skill.not_allowed', lang, { cmd: `/${cmdName}`, agent: sessionInfo.agentName, id: entry.id })
   }
   const disabledSet = getDisabledSet(sm.getDb(), 'skill')
-  if (disabledSet.has(entry.id)) {
+  if (isSkillDisabled(disabledSet, entry.id)) {
     return t('skill.disabled', lang, { cmd: `/${cmdName}` })
   }
 

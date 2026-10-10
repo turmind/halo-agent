@@ -11,7 +11,7 @@ import fsSync from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
-import { skillSourceDir } from './skill-sources.js'
+import { isSkillDisabled, skillSourceDir } from './skill-sources.js'
 
 export const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
 // Skill source resolution (workspace > global > extension) lives in
@@ -273,7 +273,7 @@ export async function loadSkillMetadata(
   const sessionRank = accessLevel ? ACCESS_RANK[accessLevel] : ACCESS_RANK.full
   const result: SkillMeta[] = []
   for (const skillId of skillIds) {
-    if (disabledSet?.has(`global:${skillId}`) || disabledSet?.has(`workspace:${skillId}`) || disabledSet?.has(`extension:${skillId}`)) continue
+    if (disabledSet && isSkillDisabled(disabledSet, skillId)) continue
     const mdPath = resolveSkillPath(skillId, workspaceRoot)
     if (!mdPath) continue
     try {

@@ -586,7 +586,7 @@ interface SkillMeta {
 }
 ```
 
-Load precedence matches agents: workspace > global, **whole-folder override**. A workspace `skills/<id>/` folder replaces the global skill wholesale — SKILL.md plus every sibling resource file — with no per-file fallback to global.
+Load precedence: workspace > global > extension, **whole-folder override** (the agent rule, plus a third, read-only source: `~/.halo/global/extensions/<extId>/skills/<id>/`, see [canvas-extensions.md → Extension skills](canvas-extensions.md#extension-skills)). A higher `skills/<id>/` folder replaces the lower skill wholesale — SKILL.md plus every sibling resource file — with no per-file fallback.
 
 ## SQLite databases
 

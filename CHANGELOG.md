@@ -47,6 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Models: turning Hunyuan thinking off now sends `reasoning_effort: "none"` (before, hy3 kept thinking).
 - Models: Doubao's max output is 131072, and the 2.0 lite / mini context is 229376 (their real limits).
 - Cron: a session-lookup read error fails the run without spawning, instead of running it with no access level.
+- Skills: a disabled skill's slash command is gone from the popup and `/help` and refuses to run (before, only the model's skill list honoured the disable).
+- Workspace share: a skill that lives only in an extension is listed as extension-provided instead of missing, and disabling an extension skill no longer drops a same-id workspace skill from the bundle.
 
 ### Upgrade notes
 

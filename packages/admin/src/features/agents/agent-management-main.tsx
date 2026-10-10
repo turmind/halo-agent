@@ -5,7 +5,6 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSkillStore } from '@/features/skills/skills-sidebar'
-import type { Skill } from '@/shared/types'
 import { Bot, Plus, Trash2, Crown, Globe, FolderOpen, ChevronRight, Play, Pencil, ArrowLeft, RefreshCw, Cog, ToggleLeft, ToggleRight } from 'lucide-react'
 import { cn, promptInput, confirmAction } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
@@ -139,7 +138,7 @@ export function AgentManagementMain() {
     if (existingSkills.length > 0 && skillBusSeen.current === skillBusVersion) return
     skillBusSeen.current = skillBusVersion
     api.skills.list(activeProject?.path).then((res) => {
-      setSkills(res.skills as Skill[])
+      setSkills(res.skills)
     }).catch(() => {})
   }, [activeProject?.path, existingSkills.length, setSkills, skillBusVersion])
 

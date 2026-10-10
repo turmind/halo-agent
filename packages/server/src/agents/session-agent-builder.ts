@@ -11,6 +11,7 @@ import {
   type AgentYamlConfig, type ScannedAgent,
 } from './agent-loader.js'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
+import { isSkillDisabled } from './skill-sources.js'
 import { GOAL_AGENT_ID } from './goal-mode.js'
 import { buildA2ATools } from '../a2a/outbound.js'
 import { sessionPrefix } from '../channels/shared/session-prefix.js'
@@ -188,9 +189,7 @@ export class SessionAgentBuilder {
     //   - every skill id the agent declares — but only those still active
     //     after the workspace's disabled-skills filter.
     const skillDisabled = getDisabledSet(this.db, 'skill')
-    const declaredSkills = (yamlConfig?.skills ?? []).filter(
-      (id) => !skillDisabled.has(`global:${id}`) && !skillDisabled.has(`workspace:${id}`),
-    )
+    const declaredSkills = (yamlConfig?.skills ?? []).filter((id) => !isSkillDisabled(skillDisabled, id))
     const allowedNamespaces = new Set<string>([agentId, ...declaredSkills])
 
     const imageOverride = (yamlConfig?.model as Record<string, unknown> | undefined)?.image as boolean | undefined

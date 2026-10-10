@@ -291,7 +291,7 @@ export function AgentForm({
   data, availableSkills, availableTools, allAgents, selfId, modelsRegistry, onUpdate, onUpdateNested, onToggleArrayItem,
 }: {
   data: Record<string, unknown>
-  availableSkills: Array<{ id: string; name: string; description: string; scope: string; disabled?: boolean }>
+  availableSkills: Array<{ id: string; name: string; description: string; scope: string; disabled?: boolean; overridden?: boolean }>
   availableTools: Array<{ name: string; description: string }>
   /** All delegatable agents in the workspace — feeds the Team whitelist picker.
    *  Excludes internal agents (they're never delegation targets). */
@@ -818,7 +818,8 @@ export function AgentForm({
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Skills</h3>
         {(() => {
-          const enabledSkills = availableSkills.filter((s) => !s.disabled)
+          // Shadowed copies (same id, lower precedence) are not separate skills.
+          const enabledSkills = availableSkills.filter((s) => !s.disabled && !s.overridden)
           const availableIds = new Set(enabledSkills.map((s) => s.id))
           const missingSkills = skills.filter((id) => !availableIds.has(id))
           if (enabledSkills.length === 0 && missingSkills.length === 0) {

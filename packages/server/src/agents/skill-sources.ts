@@ -36,6 +36,16 @@ export const SKILL_ID_RE = /^[\w-]+$/
 
 export type SkillScope = 'workspace' | 'global' | 'extension'
 
+const SKILL_SCOPES: readonly SkillScope[] = ['workspace', 'global', 'extension']
+
+/** Is skill `id` disabled in this workspace? `disabledSet` is
+ *  getDisabledSet(db, 'skill'), keyed `scope:id`; a row in any scope turns the
+ *  id off (the rule loadSkillMetadata applies). Every disabled check goes
+ *  through here — a bare-id `.has(id)` never matches. */
+export function isSkillDisabled(disabledSet: Set<string>, id: string): boolean {
+  return SKILL_SCOPES.some((scope) => disabledSet.has(`${scope}:${id}`))
+}
+
 export interface SkillDir {
   id: string
   /** The skill folder: SKILL.md + resource files (+ optional config.yaml). */
@@ -67,7 +77,8 @@ const _warned = new Set<string>()
 /**
  * Skill folders shipped by installed extensions, extension ids in sorted order.
  * An extension counts only when its manifest passes the registry's own
- * validator (readExtensionDir). A skill id must be a SKILL_ID_RE id equal to
+ * validator (readExtensionDir); a folder counts only with a SKILL.md (others
+ * are skipped silently). A skill id must be a SKILL_ID_RE id equal to
  * `<extId>` or starting with `<extId>-`; anything else is ignored with one
  * `[Skills]` warning. Two extensions can still claim one id (`foo`'s `foo-bar`
  * vs extension `foo-bar`'s `foo-bar`) — the lower extension id keeps it.
@@ -94,12 +105,16 @@ export function extensionSkillDirs(): Array<Omit<SkillDir, 'overridden'>> {
     if (!ok) continue
     const ignored: string[] = []
     for (const id of ids.sort()) {
+      const dir = path.join(extDir, 'skills', id)
+      // No SKILL.md = not a skill (it would claim the id, list, and never
+      // load; a lone config.yaml would still grow a Settings section).
+      if (!fs.existsSync(path.join(dir, 'SKILL.md'))) continue
       if (!SKILL_ID_RE.test(id) || (id !== extId && !id.startsWith(`${extId}-`)) || taken.has(id)) {
         ignored.push(id)
         continue
       }
       taken.add(id)
-      out.push({ id, dir: path.join(extDir, 'skills', id), scope: 'extension', extId })
+      out.push({ id, dir, scope: 'extension', extId })
     }
     const warnKey = `${manifest}@${mtimeMs}`
     if (ignored.length > 0 && !_warned.has(warnKey)) {

@@ -83,7 +83,7 @@ export function SkillsSidebar() {
     setRefreshing(true)
     api.skills
       .list(projectId)
-      .then((res) => setSkills(res.skills as Skill[]))
+      .then((res) => setSkills(res.skills))
       .catch(() => {})
       .finally(() => setRefreshing(false))
   }, [projectId, busVersion, setSkills])
@@ -131,12 +131,14 @@ export function SkillsSidebar() {
     const name = await promptInput(`New ${scope} skill name:`)
     if (!name?.trim()) return
     const generatedId = name.trim().toLowerCase().replace(/[^a-z0-9一-鿿]+/g, '-').replace(/^-|-$/g, '')
-    const otherScope = scope === 'workspace' ? 'global' : 'workspace'
-    const conflict = skills.find((s) => s.id === generatedId && s.scope === otherScope)
+    // Same id in another scope: precedence is workspace > global > extension.
+    const conflict = skills.find((s) => s.id === generatedId && s.scope !== scope)
     if (conflict) {
-      const msg = scope === 'workspace'
-        ? `Global skill "${conflict.name}" has the same ID.\nWorkspace version will override it at runtime.\n\nContinue?`
-        : `Workspace skill "${conflict.name}" has the same ID.\nIt will override this global skill in that project.\n\nContinue?`
+      const msg = conflict.scope === 'workspace'
+        ? `Workspace skill "${conflict.name}" has the same ID.\nIt will override this global skill in that project.\n\nContinue?`
+        : conflict.scope === 'extension'
+          ? `Skill "${conflict.name}" from extension ${conflict.extId ?? ''} has the same ID.\nThe new ${scope} skill will override it at runtime.\n\nContinue?`
+          : `Global skill "${conflict.name}" has the same ID.\nWorkspace version will override it at runtime.\n\nContinue?`
       if (!(await confirmAction(msg))) return
     }
     try {
@@ -145,10 +147,12 @@ export function SkillsSidebar() {
         scope,
         projectId: scope === 'workspace' ? projectId : undefined,
       })
-      const skill = res.skill as Skill
-      // If we just added a workspace skill that shadows a global one, mark the global as overridden
-      if (scope === 'workspace' && conflict) {
-        setSkills(skills.map((s) => s.id === skill.id && s.scope === 'global' ? { ...s, overridden: true } : s).concat(skill))
+      const skill = res.skill
+      // Dim the same-id copies the new skill shadows (workspace shadows global +
+      // extension, global shadows extension); the bus bump below refetches anyway.
+      if (conflict) {
+        const shadowed = (s: Skill) => s.id === skill.id && (scope === 'workspace' ? s.scope !== 'workspace' : s.scope === 'extension')
+        setSkills(skills.map((s) => shadowed(s) ? { ...s, overridden: true } : s).concat(skill))
       } else {
         addSkill(skill)
       }

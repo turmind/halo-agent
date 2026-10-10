@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { loadAgentYaml, ACCESS_RANK } from './agent-loader.js'
+import { isSkillDisabled } from './skill-sources.js'
 import { scanSkillDescriptors } from '../commands/skill-command.js'
 import type { CommandDescriptor } from '../commands/types.js'
 
@@ -97,7 +98,7 @@ export class SessionSkillCommands {
     return all.filter((d) => {
       const skillId = d.skillId ?? d.name
       if (!allowed.has(skillId)) return false
-      if (disabledSet.has(skillId)) return false
+      if (isSkillDisabled(disabledSet, skillId)) return false
       // Visibility threshold = the lowest gate among the command's verbs (each
       // verb's own requiresAccess, else the object-level one). A command with
       // no verbs just uses its object-level requiresAccess. Show it if the user

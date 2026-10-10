@@ -81,27 +81,46 @@ BUILTIN_SKILL_IDS = {
 
 def load_disabled(db_path: Path):
     """Return disabled items from the workspace DB, split by scope:
-    (global_agents, global_skills, ws_agents, ws_skills).
+    (global_agents, global_skills, ws_agents, ws_skills, ext_skills).
 
     A disabled item never ships in the bundle (share == "don't take it
-    along"). We track global and workspace scopes separately because the two
-    take different code paths below — workspace agents are staged from one
-    loop, un-overridden globals from another."""
+    along"). We track the scopes separately because they take different code
+    paths below — workspace agents are staged from one loop, un-overridden
+    globals from another, extension skills are only reported. Only a
+    `workspace` row affects a workspace item."""
     if not db_path.exists():
-        return set(), set(), set(), set()
+        return set(), set(), set(), set(), set()
     try:
         conn = sqlite3.connect(db_path)
         cur = conn.execute("SELECT item_type, item_id, scope FROM disabled_items")
-        g_agents, g_skills, w_agents, w_skills = set(), set(), set(), set()
+        g_agents, g_skills, w_agents, w_skills, x_skills = set(), set(), set(), set(), set()
         for item_type, item_id, scope in cur:
             if scope == "global":
                 (g_agents if item_type == "agent" else g_skills).add(item_id)
-            else:
+            elif scope == "workspace":
                 (w_agents if item_type == "agent" else w_skills).add(item_id)
+            elif scope == "extension" and item_type == "skill":
+                x_skills.add(item_id)
         conn.close()
-        return g_agents, g_skills, w_agents, w_skills
+        return g_agents, g_skills, w_agents, w_skills, x_skills
     except sqlite3.DatabaseError:
-        return set(), set(), set(), set()
+        return set(), set(), set(), set(), set()
+
+
+def extension_skill_owner(extensions_dir: Path, sid: str):
+    """Id of the installed extension shipping skill `sid`
+    (`<ext>/skills/<sid>/SKILL.md`, sid == ext or starts with `ext-`), else
+    None. Lower extension id wins, like the server (skill-sources.ts); the
+    manifest is only checked for presence, not fully validated."""
+    if not extensions_dir.is_dir():
+        return None
+    for ext in sorted(d.name for d in extensions_dir.iterdir() if d.is_dir() and not d.name.startswith(".")):
+        if sid != ext and not sid.startswith(f"{ext}-"):
+            continue
+        ext_dir = extensions_dir / ext
+        if (ext_dir / "halo-extension.json").is_file() and (ext_dir / "skills" / sid / "SKILL.md").is_file():
+            return ext
+    return None
 
 
 def load_yaml(path: Path):
@@ -278,13 +297,14 @@ def main():
             "memory_count": 0,
             "assets_count": 0,
             "missing_skills": [],
+            "extension_skills": [],
             "settings_skipped": None,
             "always_excluded": ALWAYS_EXCLUDED,
         },
         "redactions": {"yaml_params": [], "settings": [], "markdown_auto": [], "markdown_suspicious": []},
     }
 
-    disabled_agents, disabled_skills, ws_disabled_agents, ws_disabled_skills = load_disabled(ws_halo / "halo.db")
+    disabled_agents, disabled_skills, ws_disabled_agents, ws_disabled_skills, ext_disabled_skills = load_disabled(ws_halo / "halo.db")
 
     # --- INSTRUCTIONS.md (root + sub-dir chain), with global fallback if no root ws version
     ws_root_instr = ws_halo / "INSTRUCTIONS.md"
@@ -453,12 +473,21 @@ def main():
     for sid in sorted(ws_skill_ids):
         stage_skill(ws_skills_dir / sid, "workspace")
 
-    # 2. agent-referenced skills missing from the workspace → global fallback
+    # 2. agent-referenced skills missing from the workspace → global fallback,
+    #    else an installed extension's copy: read-only and owned by the
+    #    extension, so it isn't bundled — the receiver installs the extension.
     for sid in sorted(referenced_skills - ws_skill_ids):
         if sid in BUILTIN_SKILL_IDS:
             continue            # receiver's server seeds these itself
-        if (global_skills_dir / sid / "SKILL.md").exists() and sid not in disabled_skills:
-            stage_skill(global_skills_dir / sid, "global")
+        if (global_skills_dir / sid / "SKILL.md").exists():
+            if sid not in disabled_skills:
+                stage_skill(global_skills_dir / sid, "global")
+            else:
+                manifest["excluded"]["missing_skills"].append(sid)
+            continue
+        ext = extension_skill_owner(home_global / "extensions", sid)
+        if ext and sid not in ext_disabled_skills:
+            manifest["excluded"]["extension_skills"].append({"id": sid, "extension": ext})
         else:
             manifest["excluded"]["missing_skills"].append(sid)
 
@@ -506,6 +535,12 @@ def main():
         f"- `.halo/settings.yaml` ({len(manifest['redactions']['settings'])} secret value(s) cleared)\n"
         if manifest["included"]["settings"] else ""
     )
+    ext_skills = manifest["excluded"]["extension_skills"]
+    ext_line = (
+        "- Skills shipped by canvas extensions (not bundled — install the extension to get them): "
+        + ", ".join(f"`{s['id']}` (extension `{s['extension']}`)" for s in ext_skills) + "\n"
+        if ext_skills else ""
+    )
     readme = (
         "# Shared Halo Workspace\n\n"
         "This bundle contains a Halo workspace's `.halo/` configuration: agents, skills,\n"
@@ -528,7 +563,8 @@ def main():
         "- `USER.md` (personal profile, all scopes)\n"
         "- `memory/`, `assets/` (workspace-specific)\n"
         "- `sessions/`, `logs/`, `tmp/`, `*.db*`\n"
-        "- `~/.halo/secrets/settings.yaml` (global settings, never included)\n\n"
+        "- `~/.halo/secrets/settings.yaml` (global settings, never included)\n"
+        f"{ext_line}\n"
         "## Auto-redactions\n\n"
         f"Markdown files were scanned. {len(manifest['redactions']['markdown_auto'])} unambiguous "
         f"leak(s) were auto-redacted to `[REDACTED:<type>]`. "
@@ -559,6 +595,7 @@ def main():
             "excluded_memory_files": manifest["excluded"]["memory_count"],
             "excluded_asset_files": manifest["excluded"]["assets_count"],
             "missing_skills": manifest["excluded"]["missing_skills"],
+            "extension_skills": [f"{s['id']} (extension {s['extension']})" for s in manifest["excluded"]["extension_skills"]],
         },
     }, indent=2, ensure_ascii=False))
 

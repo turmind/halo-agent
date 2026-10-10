@@ -31,20 +31,30 @@ natural language, infer it from the request.
 
 - `<workspace>/.halo/skills/<skill-id>/` — workspace-scoped
 - `~/.halo/global/skills/<skill-id>/` — shared across all workspaces
+- `~/.halo/global/extensions/<ext-id>/skills/<skill-id>/` — shipped by an
+  installed canvas extension. **Read-only**: replaced when the extension is
+  reinstalled, gone when it is uninstalled.
 
-A workspace skill **wholly overrides** a global one with the same id — the
-whole folder, SKILL.md plus every resource file. There is NO per-file fallback:
-if the workspace copy lacks a resource file the global one has, that file is
-simply absent. Consequences you must apply:
+Precedence is workspace > global > extension: a higher folder **wholly
+overrides** a lower one with the same id — the whole folder, SKILL.md plus
+every resource file. There is NO per-file fallback: if the overriding copy
+lacks a resource file the lower one has, that file is simply absent.
+Consequences you must apply:
 
 - **Create**: ask (or infer) which scope. Default to **workspace** unless the
-  user says "global" / "all workspaces". If the id already exists globally,
-  say so — the new workspace folder will shadow the global one here entirely.
+  user says "global" / "all workspaces". If the id already exists globally or
+  in an extension, say so — the new folder will shadow that one entirely.
 - **Update**: resolve which folder is actually in effect FIRST — workspace
-  path if it exists, else global. Edit the live one; never edit global to fix
-  behavior in a workspace where a workspace copy shadows it. To customize a
-  global skill for one workspace, copy the WHOLE folder to workspace scope
-  (including resource files — remember: no per-file fallback), then edit.
+  path if it exists, else global, else the extension's. Edit the live one;
+  never edit global to fix behavior in a workspace where a workspace copy
+  shadows it. To customize a global skill for one workspace, copy the WHOLE
+  folder to workspace scope (including resource files — remember: no per-file
+  fallback), then edit.
+- **Extension skills**: never edit anything under `~/.halo/global/extensions/`
+  (lost on the next reinstall). If the live folder is an extension's, copy the
+  WHOLE folder to global or workspace scope first (resource files included —
+  a copy holding only SKILL.md shadows the extension's folder and drops its
+  resources), then edit the copy.
 - **Built-in skills** (`agent`, `skill`, `workspace`, `cron`, `send-file`,
   `self`, `aws-knowledge`, `web-search`): their global copies are force re-seeded on every server
   start — direct edits to those global files are lost. Customize at workspace
@@ -99,7 +109,8 @@ If the user doesn't say which agent, add it to `default`.
 
 ## Update
 
-`file_read` the live SKILL.md (workspace first — see override rules), change
+`file_read` the live SKILL.md (workspace, then global, then extension — see
+override rules; an extension's is copied out before any edit), change
 only what's requested, write back. Don't rewrite untouched sections. If the
 skill declares `verbs`, keep the frontmatter list and any builtin handlers in
 sync (builtin verbs are platform code; only their desc text lives here).

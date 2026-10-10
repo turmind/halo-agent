@@ -75,7 +75,9 @@ Excluded:
 
 Lead with the most important callouts: anything in the **redactions** section, anything in
 **missing_skills**, and anything that looks wrong (unexpected agent included, expected one
-missing).
+missing). **extension_skills** lists referenced skills that come from an installed canvas
+extension: they are not bundled (read-only, owned by the extension) — tell the user the
+receiver needs to install that extension.
 
 ### 4. Walk through suspicious markdown findings
 
@@ -147,7 +149,8 @@ To share: send the zip. Receiver unzips into their project root, then fills in a
   workspace agent of the same id**. Those get copied into the bundle's `agents/` so the receiver
   doesn't depend on having identical globals.
 - Skills that are **referenced by an included agent's `skills:` list**. Workspace skill wins;
-  otherwise global skill (if not disabled).
+  otherwise global skill (if not disabled). A skill only an installed extension ships is not
+  bundled; it is listed under `extension_skills` instead.
 - `prompts/{bootstrap,all,root}/` — workspace dir if it exists, else global fallback.
 - `<ws>/.halo/settings.yaml` (if present) — values under any `secrets` map or a secret-named
   key (`api_key`, `token`, …) are cleared to `""`; `<<ENV>>` placeholders stay. The receiver

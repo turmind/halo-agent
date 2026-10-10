@@ -1,4 +1,4 @@
-import type { ChatMessage } from '@/shared/types'
+import type { ChatMessage, Skill } from '@/shared/types'
 import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 
 const API_BASE = '/api'
@@ -638,10 +638,11 @@ export const api = {
   skills: {
     list(projectId?: string) {
       const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
-      return request<{ skills: Array<{ id: string; name: string; description: string; path: string; scope: 'global' | 'workspace' }> }>(`/skills${qs}`)
+      return request<{ skills: Skill[] }>(`/skills${qs}`)
     },
+    // Extension skills are read-only — the server 403s scope 'extension'.
     create(data: { name: string; description?: string; scope?: 'global' | 'workspace'; projectId?: string }) {
-      return request<{ skill: { id: string; name: string; description: string; path: string; scope: 'global' | 'workspace' } }>('/skills', { method: 'POST', body: JSON.stringify(data) })
+      return request<{ skill: Skill }>('/skills', { method: 'POST', body: JSON.stringify(data) })
     },
     remove(id: string, opts?: { scope?: 'workspace'; projectId?: string }) {
       const params = new URLSearchParams()

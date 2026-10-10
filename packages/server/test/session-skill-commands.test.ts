@@ -5,6 +5,9 @@ import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
 import { execSkillCommand } from '../src/commands/skill-command.js'
+import { GLOBAL_SKILLS_DIR } from '../src/agents/skill-sources.js'
+import { extensionsRoot } from '../src/extensions/registry.js'
+import { toggleDisabled } from '../src/db/index.js'
 
 /**
  * INTEGRATION coverage for SessionSkillCommands (fourth knife). The interesting,
@@ -32,9 +35,10 @@ function writeAgent(agentId: string, skills: string[]): void {
   ].join('\n'))
 }
 
-/** Write a workspace skill with a slash command + optional access gate. */
-function writeSkill(skillId: string, command: string, requiresAccess?: 'full' | 'workspace' | 'readonly'): void {
-  const dir = join(ws, '.halo', 'skills', skillId)
+/** Write a workspace skill with a slash command + optional access gate
+ *  (`parent` = another skills dir: global, or an extension's `skills/`). */
+function writeSkill(skillId: string, command: string, requiresAccess?: 'full' | 'workspace' | 'readonly', parent = join(ws, '.halo', 'skills')): void {
+  const dir = join(parent, skillId)
   mkdirSync(dir, { recursive: true })
   const fm = [
     '---',
@@ -122,6 +126,41 @@ describe('access gate — requiresAccess vs session access level', () => {
     expect(result).not.toBe('not_found')
     expect(result).toContain('requires full access')
     expect(result).toContain('observer')
+  })
+})
+
+// disabled_items rows are keyed `scope:id`; the slash-command gates used to
+// test the bare id, so a disabled skill kept its /command in the popup, /help
+// and on execution. One case per scope a skill can be disabled in.
+describe('disabled skill — slash command hidden and refused', () => {
+  const extDir = join(extensionsRoot(), 'toolx')
+
+  beforeEach(() => {
+    mkdirSync(extDir, { recursive: true })
+    writeFileSync(join(extDir, 'index.html'), '')
+    writeFileSync(join(extDir, 'halo-extension.json'), JSON.stringify({ id: 'toolx', name: 'toolx', version: '1.0.0', extensions: ['.tx'], entry: 'index.html' }))
+  })
+
+  afterEach(() => {
+    rmSync(extDir, { recursive: true, force: true })
+    rmSync(join(GLOBAL_SKILLS_DIR, 'g_skill'), { recursive: true, force: true })
+  })
+
+  it.each([
+    ['workspace', 'w_skill', () => writeSkill('w_skill', '/wcmd')],
+    ['global', 'g_skill', () => writeSkill('g_skill', '/gcmd', undefined, GLOBAL_SKILLS_DIR)],
+    ['extension', 'toolx', () => writeSkill('toolx', '/xcmd', undefined, join(extDir, 'skills'))],
+  ] as const)('%s scope', async (scope, id, write) => {
+    write()
+    writeAgent('a1', [id])
+    const sm = new SessionManager(ws)
+    seed(sm, 's1', 'a1')
+    const cmd = (await sm.listAvailableSkillCommandsForAgent('a1')).find((c) => c.skillId === id)
+    expect(cmd, 'listed while enabled').toBeDefined()
+
+    toggleDisabled(sm.getDb(), 'skill', id, scope)
+    expect((await sm.listAvailableSkillCommandsForAgent('a1')).map((c) => c.skillId)).not.toContain(id)
+    expect(await execSkillCommand(cmd!.slashName, '', sm, 's1', ws)).toContain('is disabled')
   })
 })
 

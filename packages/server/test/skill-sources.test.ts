@@ -101,6 +101,19 @@ describe('skill sources', () => {
     }
   })
 
+  it('a folder without SKILL.md is not a skill — no id claimed, no Settings section', () => {
+    const empty = path.join(extRoot, 'tool', 'skills', 'tool-empty')
+    fs.mkdirSync(empty, { recursive: true })
+    fs.writeFileSync(path.join(empty, 'config.yaml'), 'params:\n  - key: orphan\n')
+    try {
+      expect(sources.extensionSkillDirs().map((s) => s.id)).not.toContain('tool-empty')
+      expect(sources.skillSourceDir('tool-empty')).toBe(path.join(globalSkills, 'tool-empty'))
+      expect(schema.loadSettingsSchema().find((s) => s.namespaceId === 'tool-empty')).toBeUndefined()
+    } finally {
+      fs.rmSync(empty, { recursive: true, force: true })
+    }
+  })
+
   it('two extensions claiming one id → the lower extension id keeps it', () => {
     const toolExtra = writeExtension('tool-extra')
     writeSkill(path.join(toolExtra, 'skills', 'tool-extra'), 'Dup')

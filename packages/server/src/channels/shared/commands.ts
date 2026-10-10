@@ -4,7 +4,7 @@ import os from 'node:os'
 import YAML from 'yaml'
 import type { SessionManager } from '../../agents/session-manager.js'
 import { scanAvailableAgents, GLOBAL_AGENTS_DIR, GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter, ACCESS_RANK } from '../../agents/agent-loader.js'
-import { listSkillDirs, type SkillScope } from '../../agents/skill-sources.js'
+import { isSkillDisabled, listSkillDirs, type SkillScope } from '../../agents/skill-sources.js'
 import { resolveWorkingDir } from '../../agents/working-dir.js'
 import { ensureWorkspaceHalo } from '../../init.js'
 import { getDisabledSet, toggleDisabled } from '../../db/index.js'
@@ -865,7 +865,7 @@ async function skillCommandAvailable(ctx: CommandContext, command: string): Prom
   const agentId = (active && ctx.sm.getSessionById(active)?.agentId) || 'default'
   const yamlConfig = await loadAgentYaml(agentId, ctx.workspacePath)
   if (!yamlConfig?.skills?.includes(skillId)) return false
-  if (getDisabledSet(ctx.sm.getDb(), 'skill').has(skillId)) return false
+  if (isSkillDisabled(getDisabledSet(ctx.sm.getDb(), 'skill'), skillId)) return false
   return true
 }
 
