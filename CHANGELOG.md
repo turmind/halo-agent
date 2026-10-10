@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Chat (debug mode): a usage badge stays with its tool call when a message arrives mid-turn. Before, the call moved below the new message while its badge stayed above, attached to the previous call.
+- Chat: an error that arrives mid-turn is saved where it showed live, after the tools that had already run. Before, a refresh moved it above them.
+
 ## [1.6.1] - 2026-10-10
 
 ### Added

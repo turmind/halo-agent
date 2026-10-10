@@ -86,7 +86,7 @@ See [requirements/command.md](command.md) for the full command surface.
 ### Graceful interrupt
 Sending a new message while the agent is generating **does not** abort — the message goes to the server queue, the agent finishes the current turn at the next safe checkpoint (after a tool call), and then runs the queued message. Queueing multiple messages is supported; they run in order.
 
-**Live placement.** When a main user message or notification lands while the main bubble is still streaming, the live view lays it out the way the server persists it, so it matches what a reload shows. Before logging such a row the server runs `flushCompletedAssistantMessage`: the streaming content up to its first pending tool call settles **above** the row, and the rest (or a fresh empty streaming slot) continues streaming **below** it (`placeAroundStreaming` in `chat-store.ts`).
+**Live placement.** When a main user message or notification (an error row included) lands while the main bubble is still streaming, the live view lays it out the way the server persists it, so it matches what a reload shows. Before logging such a row the server runs `flushCompletedAssistantMessage`: the streaming content up to its first pending tool call settles **above** the row, and the rest (or a fresh empty streaming slot) continues streaming **below** it (`placeAroundStreaming` in `chat-store.ts`).
 
 ### Stop
 The Stop button hard-aborts — the server receives `chat:stop`, AbortController fires, queue clears, buffers flush.

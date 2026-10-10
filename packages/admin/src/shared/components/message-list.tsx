@@ -91,6 +91,20 @@ interface Exchange {
 function buildExchanges(messages: ChatMessage[]): Exchange[] {
   const exchanges: Exchange[] = []
   let current: Exchange | null = null
+  // A usage row is logged when its model call returns, before that call's
+  // tools run — a user row landing mid-turn can then split the call's pending
+  // tool_calls below it (server flushCompletedAssistantMessage / live
+  // placeAroundStreaming). The badge joins the exchange of the last assistant
+  // message holding its turnId. Only debug mode keeps usage rows.
+  const owners = new Map<string, ChatMessage>()
+  if (messages.some((m) => inferMessageType(m) === 'usage')) {
+    for (const m of messages) {
+      if (inferMessageType(m) !== 'assistant') continue
+      for (const b of m.contentBlocks ?? []) if (b.turnId) owners.set(b.turnId, m)
+    }
+  }
+  const homeOf = new Map<ChatMessage, Exchange>()
+  const deferred: Array<[usage: ChatMessage, fallback: Exchange]> = []
 
   for (const msg of messages) {
     // The system-prompt `context` row never renders inline (Prompt button) —
@@ -101,12 +115,20 @@ function buildExchanges(messages: ChatMessage[]): Exchange[] {
       if (current) exchanges.push(current)
       current = { user: msg, responses: [] }
     } else if (current) {
-      current.responses.push(msg)
+      if (msg.turnId && owners.has(msg.turnId) && inferMessageType(msg) === 'usage') {
+        deferred.push([msg, current])
+      } else {
+        current.responses.push(msg)
+        if (owners.size > 0) homeOf.set(msg, current)
+      }
     } else {
       exchanges.push({ user: msg, responses: [] })
     }
   }
   if (current) exchanges.push(current)
+  for (const [usage, fallback] of deferred) {
+    (homeOf.get(owners.get(usage.turnId!)!) ?? fallback).responses.push(usage)
+  }
   return exchanges
 }
 

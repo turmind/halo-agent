@@ -499,6 +499,10 @@ export function applyEvent(
     }
 
     case 'error':
+      // Same split as a user / system row, on the root log the row lands in —
+      // the admin adds the error frame with no taskId, so placeAroundStreaming
+      // splits the ROOT bubble for a sub-session's error too.
+      flushCompletedAssistantMessage(state)
       state.messageLog.push({
         id: genId(), type: 'notification', role: 'system',
         content: `Error: ${event.error}`, timestamp: Date.now(), agentName, taskId,

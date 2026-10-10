@@ -157,6 +157,46 @@ describe('sub-session usage keeps each model call in one assistant message', () 
   })
 })
 
+describe('a mid-turn error row splits the bubble like a user row', () => {
+  // The admin adds the `error` frame as a main notification (no taskId), and
+  // placeAroundStreaming splits the root's streaming bubble around it: the
+  // completed head stays above, the pending tail below. The log must match,
+  // or the live layout and a reload disagree.
+  it('completed head above the error, pending tail below it', () => {
+    const state = createEmptyUIState()
+    applyEvent(state, ev({ type: 'tool_call', toolName: 'shell_exec', toolInput: { command: 'a' }, toolUseId: 'tu_a', agentName: 'default' }))
+    applyEvent(state, ev({ type: 'tool_result', toolName: 'shell_exec', toolResult: 'A', toolUseId: 'tu_a', agentName: 'default' }))
+    applyEvent(state, ev({ type: 'tool_call', toolName: 'shell_exec', toolInput: { command: 'b' }, toolUseId: 'tu_b', agentName: 'default' }))
+
+    applyEvent(state, ev({ type: 'error', error: 'boom', agentName: 'default' }))
+    applyEvent(state, ev({ type: 'tool_result', toolName: 'shell_exec', toolResult: 'B', toolUseId: 'tu_b', agentName: 'default' }))
+    applyEvent(state, ev({ type: 'complete' }))
+
+    const rows = state.messageLog.filter((m) => m.role === 'assistant' || m.content === 'Error: boom')
+    expect(rows.map((m) => m.role === 'assistant' ? messageToolCalls(m).map((tc) => tc.output) : m.content))
+      .toEqual([['A'], 'Error: boom', ['B']])
+  })
+
+  it("a sub-session's error splits the ROOT bubble (the log it lands in), not the sub's", () => {
+    const state = createEmptyUIState()
+    const sub = { agentName: 'worker', taskId: 'sub-1' }
+    applyEvent(state, ev({ type: 'agent_start', text: 'go', agentId: 'worker', ...sub }))
+    applyEvent(state, ev({ type: 'tool_call', toolName: 'file_read', toolInput: { path: '/s' }, toolUseId: 'tu_s', ...sub }))
+    applyEvent(state, ev({ type: 'stream', text: 'root text', agentName: 'default' }))
+    applyEvent(state, ev({ type: 'tool_call', toolName: 'shell_exec', toolInput: { command: 'r' }, toolUseId: 'tu_r', agentName: 'default' }))
+
+    applyEvent(state, ev({ type: 'error', error: 'sub failed', ...sub }))
+
+    const root = state.messageLog
+    expect(root.at(-1)).toMatchObject({ type: 'notification', content: 'Error: sub failed' })
+    // Root: no completed tool yet, but streamed text → the text settles above.
+    expect(assistantMessages(root).map((m) => m.content)).toEqual(['root text'])
+    expect(state.turnToolCalls.map((tc) => tc.toolUseId)).toEqual(['tu_r'])
+    // The sub's buffer is untouched.
+    expect(state.subSessionLogs.get('sub-1')!.turnToolCalls.map((tc) => tc.toolUseId)).toEqual(['tu_s'])
+  })
+})
+
 describe('messageToolCalls reads both new and legacy shapes', () => {
   const base = { id: 'm1', role: 'assistant' as const, content: 'x', timestamp: 1 }
 

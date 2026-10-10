@@ -62,11 +62,11 @@ const legacyFormat: ChatMessage = {
   toolCalls: [TOOL, TOOL2],
 }
 
-function render(messages: ChatMessage[]): HTMLElement {
+function render(messages: ChatMessage[], debugMode?: boolean): HTMLElement {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-  act(() => root.render(createElement(MessageList, { messages })))
+  act(() => root.render(createElement(MessageList, { messages, debugMode })))
   return container
 }
 
@@ -162,5 +162,99 @@ describe('assistant tool-call rendering across persisted formats', () => {
     const rows = [...container.querySelectorAll('.px-3.py-2 > *')]
     expect(rows).toHaveLength(2)
     expect(rows[1].textContent).toContain('Thinking...')
+  })
+})
+
+describe('debug usage badges follow their tool call across a mid-turn user row', () => {
+  // A usage row reaches the log when its model call returns, BEFORE that
+  // call's tools run. A user message sent while a tool runs splits the bubble:
+  // the completed head stays above the row, the pending tool_call moves below
+  // it. The badge for that call must move down with it — live and reloaded.
+  const call = (input: string, turnId: string, output?: string) => ({
+    type: 'tool_call' as const, toolCall: { name: 'shell_exec', input, toolUseId: input, ...(output ? { output } : {}) }, turnId,
+  })
+  const usage = (id: string, turnId: string, ts: number): ChatMessage => ({
+    id, type: 'usage', role: 'system', content: '[Usage]', timestamp: ts, turnId, modelId: 'model-x',
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cacheReadInputTokens: 0 },
+  })
+  const prompt: ChatMessage = { id: 'u0', role: 'user', content: 'start the job', timestamp: 0 }
+  const midTurn: ChatMessage = { id: 'u1', role: 'user', content: 'sent mid-turn', timestamp: 50 }
+  // Badge timestamps differ per turn: 01:00:01 / 01:00:02 / 01:00:03 (+ orphan 01:00:09).
+  const at = (s: number) => new Date(2026, 0, 1, 1, 0, s).getTime()
+
+  /** Document-order outline: `user:<text>`, `tool:<input>`, `badge:<hh:mm:ss>`. */
+  function outline(container: HTMLElement): string[] {
+    const out: string[] = []
+    for (const el of container.querySelectorAll('*')) {
+      const cls = typeof el.className === 'string' ? el.className : ''
+      if (cls.includes('sticky') && cls.includes('bg-[var(--accent)]')) {
+        out.push(`user:${el.textContent!.match(/sent mid-turn|start the job/)![0]}`)
+      } else if (el.tagName === 'SPAN' && cls.includes('font-semibold') && el.closest('button')) {
+        out.push(`tool:${el.closest('button')!.textContent!.match(/step \w+/)![0]}`)
+      } else if (cls.includes('font-mono') && cls.includes('flex-wrap') && cls.includes('text-[10px]')) {
+        out.push(`badge:${el.firstElementChild!.textContent!.slice(-8)}`)
+      }
+    }
+    return out
+  }
+
+  const expected = [
+    'user:start the job',
+    'tool:step one', 'badge:01:00:01',
+    'tool:step two', 'badge:01:00:02',
+    'user:sent mid-turn',
+    'tool:step three', 'badge:01:00:03',
+  ]
+
+  it('saved-log shape: badges logged ahead of one completed bubble, then the user row, then the moved call', () => {
+    // What ui-log-builder writes: every usage row as its call returns, the
+    // completed head flushed at the user row, the pending tail at the next flush.
+    const log: ChatMessage[] = [
+      prompt,
+      usage('g1', 't1', at(1)),
+      usage('g2', 't2', at(2)),
+      usage('g3', 't3', at(3)),
+      { ...base, id: 'head', content: '', contentBlocks: [call('step one', 't1', 'ok'), call('step two', 't2', 'ok')] },
+      midTurn,
+      { ...base, id: 'tail', content: '', contentBlocks: [call('step three', 't3', 'ok')] },
+    ]
+    expect(outline(render(log, true))).toEqual(expected)
+  })
+
+  it('live-store shape: one bubble per turnId, each badge appended after its bubble', () => {
+    // What chat-store holds: a turnId split per model call, chat:usage rows
+    // appended in arrival order, placeAroundStreaming moving the pending
+    // bubble below the user row while its badge stays above. The store mirrors
+    // `toolCalls` from the blocks on the still-streaming tail.
+    const tail = call('step three', 't3', 'ok')
+    const live: ChatMessage[] = [
+      prompt,
+      { ...base, id: 'a1', content: '', contentBlocks: [call('step one', 't1', 'ok')] },
+      usage('g1', 't1', at(1)),
+      { ...base, id: 'a2', content: '', contentBlocks: [call('step two', 't2', 'ok')] },
+      usage('g2', 't2', at(2)),
+      usage('g3', 't3', at(3)),
+      midTurn,
+      { ...base, id: 'a3', content: '', streaming: true, toolCalls: [tail.toolCall], contentBlocks: [tail] },
+    ]
+    expect(outline(render(live, true))).toEqual(expected)
+  })
+
+  it('a badge with no matching tool call anywhere still lands at the end of its own exchange', () => {
+    const log: ChatMessage[] = [
+      prompt,
+      { ...base, id: 'a1', content: '', contentBlocks: [call('step one', 't1', 'ok')] },
+      usage('g1', 't1', at(1)),
+      usage('g9', 'gone', at(9)),
+      midTurn,
+      { ...base, id: 'a3', content: '', contentBlocks: [call('step three', 't3', 'ok')] },
+      usage('g3', 't3', at(3)),
+    ]
+    expect(outline(render(log, true))).toEqual([
+      'user:start the job',
+      'tool:step one', 'badge:01:00:01', 'badge:01:00:09',
+      'user:sent mid-turn',
+      'tool:step three', 'badge:01:00:03',
+    ])
   })
 })
