@@ -71,6 +71,7 @@ describe('tool_result images reach OpenAI-format runtimes', () => {
     ['DeepSeek', () => new DeepSeekAgent(base)],
     ['OpenAI', () => new OpenAIAgent(base)],
     ['Zhipu', () => new ZhipuAgent(base)],
+    ['Doubao', () => new DoubaoAgent(base)],
   ]
   for (const [name, make] of chatRuntimes) {
     it(`${name} (Chat Completions) follows the tool message with a user image message`, async () => {
@@ -88,7 +89,6 @@ describe('tool_result images reach OpenAI-format runtimes', () => {
   }
 
   const textOnlyRuntimes: Array<[string, () => AgentLoop]> = [
-    ['Doubao', () => new DoubaoAgent(base)],
     ['Hunyuan', () => new HunyuanAgent(base)],
   ]
   for (const [name, make] of textOnlyRuntimes) {

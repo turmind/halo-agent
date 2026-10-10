@@ -4,6 +4,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
+import { listSkillDirs, type SkillDir, type SkillScope } from '../agents/skill-sources.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
 import { isSafeIdSegment } from './workspace-path.js'
 import { createMtimeCache } from './mtime-cache.js'
@@ -73,9 +74,11 @@ interface SkillMeta {
   name: string
   description: string
   path: string
-  scope: 'global' | 'workspace'
+  scope: SkillScope
+  /** Owning extension id (scope 'extension' — read-only, shipped by that extension). */
+  extId?: string
   command?: string
-  /** True when a workspace skill with the same id exists and shadows this one at runtime */
+  /** True when a higher-precedence skill with the same id shadows this one at runtime */
   overridden?: boolean
   disabled?: boolean
 }
@@ -94,24 +97,12 @@ function toSkillMd(name: string, description: string): string {
  *  is missing, i.e. off the hot path. */
 const _skillMdCache = createMtimeCache<{ name: string; description: string; command?: string }>()
 
-/** Scan a skills directory and return skill metadata. Each SKILL.md is
- *  parsed at most once per mtime change. */
-async function scanSkillsDir(dir: string, scope: 'global' | 'workspace'): Promise<SkillMeta[]> {
+/** Read each skill folder's metadata. Each SKILL.md is parsed at most once
+ *  per mtime change. */
+async function readSkillMetas(dirs: SkillDir[]): Promise<SkillMeta[]> {
   const skills: SkillMeta[] = []
-  let names: string[]
-  try {
-    names = await fs.readdir(dir)
-  } catch {
-    return skills // directory doesn't exist
-  }
-
-  for (const entryName of names) {
-    const skillDir = path.join(dir, entryName)
-    try {
-      const stat = await fs.stat(skillDir)
-      if (!stat.isDirectory()) continue
-    } catch { continue }
-
+  for (const { id: entryName, dir: skillDir, scope, extId, overridden } of dirs) {
+    const base = { path: skillDir, scope, ...(extId ? { extId } : {}), ...(overridden ? { overridden } : {}) }
     const skillMdPath = path.join(skillDir, 'SKILL.md')
     try {
       const mdStat = await fs.stat(skillMdPath)
@@ -120,7 +111,7 @@ async function scanSkillsDir(dir: string, scope: 'global' | 'workspace'): Promis
         const { name, description, command } = parseSkillFrontmatter(await fs.readFile(skillMdPath, 'utf-8'))
         meta = _skillMdCache.set(skillMdPath, mdStat.mtimeMs, { name: name || entryName, description: description ?? '', command })
       }
-      skills.push({ id: entryName, name: meta.name, description: meta.description, path: skillDir, scope, command: meta.command })
+      skills.push({ id: entryName, name: meta.name, description: meta.description, ...base, command: meta.command })
     } catch {
       // Fallback: try legacy skill.yaml. Cold path — not cached.
       const yamlPath = path.join(skillDir, 'skill.yaml')
@@ -128,40 +119,35 @@ async function scanSkillsDir(dir: string, scope: 'global' | 'workspace'): Promis
         const yamlContent = await fs.readFile(yamlPath, 'utf-8')
         const m = yamlContent.match(/^name:\s*(.+)$/m)
         const d = yamlContent.match(/^description:\s*(.+)$/m)
-        skills.push({ id: entryName, name: m?.[1]?.trim() || entryName, description: d?.[1]?.trim() || '', path: skillDir, scope })
+        skills.push({ id: entryName, name: m?.[1]?.trim() || entryName, description: d?.[1]?.trim() || '', ...base })
       } catch {
-        skills.push({ id: entryName, name: entryName, description: '', path: skillDir, scope })
+        skills.push({ id: entryName, name: entryName, description: '', ...base })
       }
     }
   }
   return skills
 }
 
+/** Extension skills are read-only (shipped by the extension, replaced on its
+ *  reinstall) — every write route refuses this scope instead of falling
+ *  through to the global branch. */
+const EXTENSION_READ_ONLY = 'Extension skills are read-only — copy the folder into global or workspace skills to customise it'
+
 export function createSkillRoutes() {
   const app = new Hono()
 
-  // GET /skills?projectId=xxx — list skills. Returns BOTH global and workspace
-  // (no merge) so the UI can show them as separate sections. When a workspace
-  // skill shadows a global one at runtime, the global entry is marked
-  // `overridden: true` (the agent-loader applies the same override in-memory).
+  // GET /skills?projectId=xxx — list skills. Returns workspace, global AND
+  // extension skills (no merge) so the UI can show them as separate sections.
+  // A skill shadowed at runtime by a higher-precedence one (workspace >
+  // global > extension, skill-sources.ts) is marked `overridden: true`.
   app.get('/skills', async (c) => {
     await ensureDir(GLOBAL_SKILLS_DIR)
 
-    const globalSkills = await scanSkillsDir(GLOBAL_SKILLS_DIR, 'global')
-
     const projectId = c.req.query('projectId')
-    let workspaceSkills: SkillMeta[] = []
-    if (projectId) {
-      const wsSkillsDir = path.join(projectId, '.halo', 'skills')
-      workspaceSkills = await scanSkillsDir(wsSkillsDir, 'workspace')
-    }
-
-    const wsIds = new Set(workspaceSkills.map((s) => s.id))
-    const globalWithFlag = globalSkills.map((s) => wsIds.has(s.id) ? { ...s, overridden: true } : s)
+    const allSkills = await readSkillMetas(listSkillDirs(projectId || undefined))
 
     // Merge disabled state from workspace DB
     const disabledSet = projectId ? getDisabledSet(getWorkspaceDb(projectId).db, 'skill') : new Set<string>()
-    const allSkills = [...globalWithFlag, ...workspaceSkills]
     for (const s of allSkills) {
       s.disabled = disabledSet.has(`${s.scope}:${s.id}`)
     }
@@ -173,7 +159,8 @@ export function createSkillRoutes() {
   // POST /skills — create a new skill folder
   // body.scope: 'global' | 'workspace', body.projectId required if workspace
   app.post('/skills', async (c) => {
-    const body = await c.req.json<{ name: string; description?: string; scope?: 'global' | 'workspace'; projectId?: string }>()
+    const body = await c.req.json<{ name: string; description?: string; scope?: SkillScope; projectId?: string }>()
+    if (body.scope === 'extension') return c.json({ error: EXTENSION_READ_ONLY }, 403)
     const id = body.name
       .toLowerCase()
       .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-')
@@ -221,6 +208,9 @@ export function createSkillRoutes() {
     if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid skill id' }, 400)
     const scope = c.req.query('scope') ?? 'global'
     const projectId = c.req.query('projectId')
+    // Without this an extension-scoped delete fell through to the global
+    // branch and removed a same-id global skill instead.
+    if (scope === 'extension') return c.json({ error: EXTENSION_READ_ONLY }, 403)
 
     let skillDir: string
     if (scope === 'workspace' && projectId) {
@@ -250,9 +240,11 @@ export function createSkillRoutes() {
   })
 
   // PATCH /skills/:id/toggle — toggle disabled state in workspace DB
+  // (scope extension too: disabling is a workspace setting, not a write
+  // into the extension's folder).
   app.patch('/skills/:id/toggle', async (c) => {
     const id = c.req.param('id')
-    const scope = (c.req.query('scope') ?? 'global') as 'global' | 'workspace'
+    const scope = (c.req.query('scope') ?? 'global') as SkillScope
     const projectId = c.req.query('projectId')
     if (!projectId) return c.json({ error: 'projectId required' }, 400)
     const { db } = getWorkspaceDb(projectId)

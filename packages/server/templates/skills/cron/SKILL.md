@@ -61,6 +61,8 @@ Sensible defaults if user didn't say:
 | label      | summarize from prompt + schedule                              |
 | timeout    | leave unset (3600s) — see `--timeout-sec` below               |
 | session    | leave unset (the job's own session) — see `--session` below   |
+| folder     | leave unset (workspace root) — see `--dir` below               |
+| stateless  | off (one session that accumulates) — see `--stateless` below   |
 | prompt     | pass the user's task as-is — the runner prepends an "unattended run, don't ask questions" notice to every fire, so don't add one yourself |
 
 ### 2. Translate the schedule
@@ -100,8 +102,8 @@ job accumulates its own session (same id as the job; older jobs keep the
 Pass `--session <rootSessionId>`
 only when the user wants the runs to continue a specific conversation (the
 agent then sees that session's history). Rules the user should hear once:
-- the session keeps **its own agent and access level** — `--agent` only
-  applies if the session doesn't exist yet;
+- the session keeps **its own agent and access level** — `--agent` must
+  match an existing session's agent (the helper refuses otherwise);
 - a fire is **skipped** while a turn is already running in that session;
 - if the user chats in that session while a run is in flight, one of the two
   turns may be missing from its history afterwards.
@@ -111,6 +113,29 @@ yourself — ask the user (admin → Sessions) rather than guessing. On `update`
 pass `--session ""` to go back to the job's own session (for an older job
 pinned to `cron-cron-…` that starts a fresh session — leave it alone unless
 the user asks).
+
+**Agent of a stateful job** — once the job's session exists (after its
+first run, or a picked existing session), the job's agent is fixed to that
+session's: `update --agent` to a different one is refused with
+`session <id> already runs agent <A>; …`. To change it, either delete that
+session (admin → Sessions) or switch the job to `--stateless on`. Tell the
+user which; don't pick for them.
+
+**Stateless (`--stateless`, optional)** — a **new session every run**
+(`cron-<id>-<suffix>`), so nothing carries over between runs. Use it for
+tasks that don't need memory ("每天抓一次行情发给我", a fixed report).
+Excludes `--session`. On `update`: `--stateless on` / `--stateless off`
+(clear `--session ""` first if one is set). Old per-run sessions are kept and
+stay reviewable in the Sessions tab. `get` / `list` show
+`effective_session_id: null` for a stateless job.
+
+**Folder (`--dir`, optional)** — the run focuses on a workspace sub-folder:
+its `.halo/INSTRUCTIONS.md` chain joins the prompt and the prompt names the
+working directory (file / shell paths still start at the workspace root).
+Relative to the workspace or absolute; must be an existing directory inside
+it. Applies on every run, including runs that resume the job's session. On
+`update`, `--dir ""` goes back to the workspace root. A folder deleted later
+makes each run fail with `folder not found: …`.
 
 **Active window (`--active-from` / `--active-until`, optional, recurring
 jobs only)** — the schedule fires only inside `[from, until)`; fires outside
@@ -218,6 +243,17 @@ shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
 ```bash
 shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py update <id> \
   --schedule "0 10 * * 1"
+```
+
+**Stateless job focused on a sub-folder:**
+```bash
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
+  --label "Daily market snapshot" \
+  --workspace /home/ubuntu/sa-agent \
+  --dir reports/market \
+  --stateless \
+  --prompt "Fetch today's index closes and write the summary." \
+  --schedule "0 16 * * 1-5"
 ```
 
 **Pause / unpause (no end date in mind):**

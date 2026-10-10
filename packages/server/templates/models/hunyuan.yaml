@@ -1,17 +1,17 @@
 id: hunyuan
 runtime: hunyuan
-revision: 2026100501
+revision: 2026101003
 displayName: Hunyuan (Tencent)
 displayName_zh: 混元（腾讯）
-description: Tencent Hunyuan Hy3 preview — 295B/21B MoE, agent-oriented with no_think / think_low / think_high modes
-description_zh: 腾讯混元 Hy3 preview，295B/21B 激活 MoE，面向 Agent 工作负载，支持 no_think / think_low / think_high 三档思考
+description: Tencent Hunyuan Hy4 preview / Hy3 on TokenHub — agent-oriented MoE with no_think / think_low / think_high modes
+description_zh: 腾讯混元 Hy4 preview / Hy3（TokenHub），面向 Agent 的 MoE 模型，支持 no_think / think_low / think_high 三档思考
 defaultEndpoint: https://tokenhub.tencentmaas.com/v1
-defaultModelId: hy3-preview
+defaultModelId: hy3
 
 secrets:
   - key: api_key
-    description: Tencent Hunyuan Hy3 API Key. Format starts with sk-.
-    description_zh: 腾讯混元 Hy3 API Key，sk- 开头
+    description: Tencent Hunyuan (TokenHub) API Key. Format starts with sk-.
+    description_zh: 腾讯混元（TokenHub）API Key，sk- 开头
     default: <<HUNYUAN_API_KEY>>
     secret: true
 
@@ -22,20 +22,37 @@ secrets:
 #     system prompt across turns shows usage.prompt_tokens_details
 #     .cached_tokens > 0 from turn 2 onward.
 #   - Thinking modes per Hy3 product naming → `reasoning_effort`:
-#       no_think    → omit reasoning_effort (zero reasoning_tokens)
+#       no_think    → reasoning_effort: 'none' (zero reasoning_tokens)
 #       think_low   → reasoning_effort: 'low'
 #       think_high  → reasoning_effort: 'high'
-#     hunyuan-agent.ts maps thinking.enabled=false → no_think (no field),
+#     hunyuan-agent.ts maps thinking.enabled=false → 'none',
 #     thinking.enabled=true + effort=low|medium|high → reasoning_effort.
 #   - Image input: gateway accepts image_url blocks but model says "I don't
 #     see an image" — image:false.
-#   - 256K context per product description (not enforced here; model just
-#     accepts long inputs).
+# 2026-10-10 census (TokenHub `GET /v1/models` + live probes):
+#   - Lineup: Hy4 preview (2026-08-28, 770B/49B MoE, 1M context — official
+#     release https://www.tencent.com/tencent-releases-and-open-sources-tencent-hy4-preview/,
+#     HF config max_position_embeddings 1048576) and Hy3 GA (2026-07-06,
+#     "building on Hy3 preview", 256K — https://www.tencent.com/en-us/tencent-hunyuan-officially-releases-hy3-advancing-agent-capabilities-and-deeper-product-integration/,
+#     HF config 262144). Both listed `online`; hy3-preview is no longer listed
+#     but still answers — no retirement date published, kept at the tail.
+#   - hy3 / hy4-preview think by DEFAULT when reasoning_effort is omitted
+#     (reasoning_tokens > 0; hy3-preview still doesn't), so "off" must send
+#     reasoning_effort:'none' — verified 0 reasoning tokens on all three.
+#   - Caching re-verified on hy3 / hy4-preview (turn 2 cached_tokens ≈ prompt).
+#   - Tool calls verified on hy3 / hy4-preview. Image: hy3 / hy4-preview both
+#     answered wrongly about a solid red PNG — keep image:false.
+#   - Max output: no official per-model number found (search-only claims of
+#     64K, unconfirmed: https://www.tencentcloud.com/techpedia/147980); the
+#     gateway accepted max_tokens 2,000,000 without error, so it isn't a hard
+#     check either — maxOutputTokens stays at the conservative 16384.
 models:
-  - id: hy3-preview
-    displayName: Hunyuan Hy3 Preview
+  - id: hy3
+    displayName: Hunyuan Hy3
     maxOutputTokens: 16384
-    contextWindow: 256000
+    contextWindow: 262144
+    maxContextWindow: 262144
+    compressAt: 0.9
     capabilities:
       image: false
       video: false
@@ -53,7 +70,50 @@ models:
         # we expose Off / Low / High since "Off" is the natural opposite of
         # an enable toggle.
         defaultEnabled: true
-        default: low
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: high, label: High }
+
+  - id: hy4-preview
+    displayName: Hunyuan Hy4 Preview
+    maxOutputTokens: 16384
+    contextWindow: 272000
+    maxContextWindow: 1048576
+    compressAt: 0.9
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: high, label: High }
+
+  # --- superseded by hy3 (GA); dropped from /v1/models, no retirement date published ---
+  - id: hy3-preview
+    displayName: Hunyuan Hy3 Preview
+    maxOutputTokens: 16384
+    contextWindow: 262144
+    maxContextWindow: 262144
+    compressAt: 0.9
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: high
         effortPresets:
           - { value: low, label: Low }
           - { value: high, label: High }

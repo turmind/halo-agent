@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { eq } from 'drizzle-orm'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { dispatchCommand, type CommandContext } from '../src/channels/shared/commands.js'
 import { agentSessions } from '../src/db/schema.js'
@@ -78,6 +79,61 @@ describe('/session', () => {
     const res = await dispatchCommand(ctxFor(sm, 'full'), '/session', 'new')
     expect(res?.switchTo).toBeTruthy()
     expect(sm.getSessionById(res!.switchTo!)).toBeTruthy()
+  })
+
+  describe('/session new keeps the folder of the root it was issued in (`halo tui --dir sub`, then /new)', () => {
+    const dirOf = (sm: SessionManager, id: string) => sm.getSessionById(id)?.workingDir
+    function seedWithDir(sm: SessionManager, id: string, workingDir: string | null, parentId: string | null = null): void {
+      seedSession(sm, id)
+      sm.getDb().update(agentSessions).set({ workingDir, parentId }).where(eq(agentSessions.id, id)).run()
+    }
+    beforeEach(() => { mkdirSync(join(ws, 'sub'), { recursive: true }) })
+
+    it('inherits the current root session\'s folder; a root at the workspace root stays there', async () => {
+      const sm = new SessionManager(ws)
+      seedWithDir(sm, 'web_cur', 'sub')
+      const ctx = ctxFor(sm, 'full')
+      ctx.activeOverrides.set('u1', 'web_cur')
+      const res = await dispatchCommand(ctx, '/session', 'new')
+      expect(res?.switchTo).not.toBe('web_cur')
+      expect(dirOf(sm, res!.switchTo!)).toBe('sub')
+      seedWithDir(sm, 'web_root', null)
+      ctx.activeOverrides.set('u1', 'web_root')
+      const again = await dispatchCommand(ctx, '/session', 'new')
+      expect(dirOf(sm, again!.switchTo!)).toBeNull()
+    })
+
+    it('ctx.sessionId (the harness\'s bound session) wins over the latest-in-prefix fallback', async () => {
+      const sm = new SessionManager(ws)
+      seedWithDir(sm, 'web_bound', 'sub')
+      seedWithDir(sm, 'web_latest', null)
+      sm.getDb().update(agentSessions).set({ createdAt: Date.now() + 1000, updatedAt: Date.now() + 1000 }).where(eq(agentSessions.id, 'web_latest')).run()
+      // readonly: no override → findActiveSessionId would return the latest `web_` row.
+      const ctx = { ...ctxFor(sm, 'readonly'), sessionId: 'web_bound' }
+      const res = await dispatchCommand(ctx, '/session', 'new')
+      expect(dirOf(sm, res!.switchTo!)).toBe('sub')
+    })
+
+    it('from a sub-agent session, inherits its ROOT\'s folder (not the sub-agent\'s own)', async () => {
+      mkdirSync(join(ws, 'other'), { recursive: true })
+      const sm = new SessionManager(ws)
+      seedWithDir(sm, 'web_r', 'sub')
+      seedWithDir(sm, 'web_r>child', 'other', 'web_r')
+      const res = await dispatchCommand({ ...ctxFor(sm, 'full'), sessionId: 'web_r>child' }, '/session', 'new')
+      expect(dirOf(sm, res!.switchTo!)).toBe('sub')
+    })
+
+    it('a folder that no longer exists → the new session starts at the workspace root (no failure)', async () => {
+      const sm = new SessionManager(ws)
+      seedWithDir(sm, 'web_gone', 'vanished')
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        const res = await dispatchCommand({ ...ctxFor(sm, 'full'), sessionId: 'web_gone' }, '/session', 'new')
+        expect(res?.switchTo).toBeTruthy()
+        expect(dirOf(sm, res!.switchTo!)).toBeNull()
+        expect(log.mock.calls.some((c) => String(c[0]).startsWith('[Commands] /new: folder of web_gone not kept'))).toBe(true)
+      } finally { log.mockRestore() }
+    })
   })
 
   it('readonly cannot reach someone else session — foreign sessions are not even listed', async () => {

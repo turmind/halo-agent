@@ -584,6 +584,10 @@ ipcMain.handle('halo:notify', (e, payload) => {
     const notification = new Notification({ title: title || 'Halo', body: body || '' })
     // Clicking the banner brings the (possibly minimized/background) window front.
     notification.on('click', () => { win.show(); win.focus() })
+    // Electron 42+ posts through macOS UNNotification, which only works for a
+    // code-signed app. The unsigned dmg (mac.identity: null) gets 'failed' and
+    // no banner; the Dock bounce below still fires. Log it so it's visible.
+    notification.on('failed', (_e, err) => logDesktop(`notification failed: ${err}`))
     notification.show()
   }
 
@@ -641,19 +645,13 @@ function toCaptureListItem(s) {
 // window, then hand the chosen DesktopCapturerSource back. Only mac/win; on
 // Linux Electron's default behaviour stays.
 //
-// macOS system audio: Chromium's loopback capture on macOS is behind these
-// features (macOS 13+ only). This is the same switch `electron-audio-loopback`
-// sets for Electron 31–38. On macOS 14.2+ the app additionally needs
-// NSAudioCaptureUsageDescription in Info.plist (electron-builder.yml mac.extendInfo).
-// Must run before app 'ready'; merge with any existing --enable-features value.
-if (process.platform === 'darwin') {
-  const features = app.commandLine.getSwitchValue('enable-features').split(',').filter(Boolean)
-  for (const f of ['MacLoopbackAudioForScreenShare', 'MacSckSystemAudioLoopbackOverride']) {
-    if (!features.includes(f)) features.push(f)
-  }
-  app.commandLine.removeSwitch('enable-features')
-  app.commandLine.appendSwitch('enable-features', features.join(','))
-}
+// macOS system audio needs no Chromium switch since Electron 39: loopback runs
+// on the CoreAudio Tap path on macOS 14.2+ (MacCatapLoopbackAudioForScreenShare,
+// on by default) and on ScreenCaptureKit below that. The switches Electron
+// 31–38 needed (MacLoopbackAudioForScreenShare, MacSckSystemAudioLoopbackOverride)
+// are not in Electron 44's framework binary, so they'd be no-ops. The app still needs
+// NSAudioCaptureUsageDescription in Info.plist (electron-builder.yml
+// mac.extendInfo); without it the audio track is silently dead.
 
 // In-flight picker requests, reqId → { sender, finish }. A reply from any
 // webContents other than the one we asked is ignored.
@@ -715,9 +713,8 @@ const LOOPBACK_AUDIO_SUPPORTED =
 function installDisplayMediaHandler() {
   if (!CAPTURE_SUPPORTED) return
   session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
-    // Electron 33's callback has no "reject" form in its typings, but at
-    // runtime null/undefined resolves the request as CAPTURE_FAILURE (the page's
-    // getDisplayMedia() rejects) without throwing. `callback({})` must NOT be
+    // callback(null) is the documented deny: the page's getDisplayMedia()
+    // rejects (AbortError) without throwing. `callback({})` must NOT be
     // used: with video requested it throws "Video was requested, but no video
     // stream was provided" in the main process.
     // Answer exactly once: if callback() itself throws (bad streams object),

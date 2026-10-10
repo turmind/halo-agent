@@ -166,11 +166,13 @@ Note: there is no `model.defaultModelId` — model ID must be specified per-agen
 
 ### Context window resolution
 
-A session's context budget (`contextConfig.maxTokens`, drives compaction thresholds and the token ring) resolves through three tiers:
+A session's context budget (`contextConfig.maxTokens` / `compressAt`, drives compaction thresholds and the token ring) resolves through `resolveEffectiveContext(modelId, yaml.context)` (config.ts):
 
-1. agent.yaml `context.maxTokens` — explicit per-agent override
-2. model registry `contextWindow` — the model entry's official window in `models/<provider>.yaml`, via `resolveContextWindow(modelId)` (config.ts)
-3. `config.model.maxContextTokens` — global default 272K
+1. agent.yaml `context.maxTokens` / `context.compressAt` — the agent's own values
+2. else the global defaults — `config.model.maxContextTokens` (272K) capped at the model's max, and `general.compact.compress_at` (0.9)
+3. then `maxTokens` is clamped to the model's max (registry `maxContextWindow`, else `contextWindow`; `resolveModelContext`), with a `[SessionAgentBuilder] … clamped` warning
+
+The registry's recommended `contextWindow` / `compressAt` are not read here — they're written into agent.yaml when the agent is created (scaffold; compressAt = explicit global `compress_at` > model `compressAt` > 0.9) or the form switches model, so a registry update never moves an existing agent. Verbosity likewise: agent.yaml `model.verbosity` only, absent → `low`. See [storage.md](storage.md#model-registry-format).
 
 Two consumers apply the same chain: `buildModelRuntime` (session-agent-builder.ts) when a session is built, and the cold-session `getContextConfig()` path (session-manager.ts) for sessions not in memory — so what the UI displays for a cold session matches what actually takes effect on resume.
 

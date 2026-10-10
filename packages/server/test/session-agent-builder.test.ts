@@ -144,6 +144,20 @@ describe('composeSystemPrompt — working_dir directory-scoped INSTRUCTIONS', ()
     expect(prompt).not.toContain('Always say MARMOT before answering.')
     expect(prompt).not.toContain('<workspace-instructions')
   })
+
+  it('a ROOT session with working_dir (`halo cli --dir`, cron folder) gets the same block + the Working directory line', async () => {
+    writeAgent('rooty', ['name: Rooty', ...ANTHROPIC_MODEL, 'tools: [file_read]'], 'I am a root agent.')
+    mkdirSync(join(ws, 'sub', '.halo'), { recursive: true })
+    writeFileSync(join(ws, 'sub', '.halo', 'INSTRUCTIONS.md'), 'Always say MARMOT before answering.')
+    const sm = new SessionManager(ws)
+    seedSession(sm, 'root1', 'rooty', null, 'sub')
+    await sm.getSessionContext('root1')
+    const prompt = sm.getSessionSystemPrompt('root1') ?? ''
+    expect(prompt).toContain('### sub')
+    expect(prompt).toContain('Always say MARMOT before answering.')
+    expect(prompt).toContain(`Working directory: ${join(ws, 'sub')}`)
+    expect(prompt.indexOf('MARMOT')).toBeLessThan(prompt.indexOf('Working directory:'))
+  })
 })
 
 describe('delegation — the session-tool bundle is gated on a non-empty team', () => {

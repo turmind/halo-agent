@@ -146,7 +146,7 @@ export type WsServerMessage =
   // server-global broadcasts
   | { type: 'goal:changed'; goalSessionId: string; workerSessionId: string; status: 'intake' | 'running' | 'paused' | 'halted' | 'done' | 'cleared'; round: number; maxRounds: number }
   | { type: 'cron:run_changed'; jobId: string; runId: string; status: string }
-  | { type: 'cron:job_changed'; jobId: string; kind?: string; lastRunStatus?: string; lastRunAt?: number }
+  | { type: 'cron:job_changed'; jobId: string; kind?: string; lastRunStatus?: string; lastRunAt?: number; workingDir?: string | null; stateless?: boolean; sessionAgentId?: string | null }
   | { type: 'evolution:run_changed'; id: string; status?: string; kind?: 'deleted' }
   | { type: 'evolution:apply_changed'; id: string; status?: string; kind?: 'deleted' }
   // ~/.halo/global/extensions/ changed (install / upgrade / uninstall) — full snapshot, not a diff

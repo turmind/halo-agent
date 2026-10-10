@@ -19,14 +19,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { Cron } from 'croner'
+import Database from 'better-sqlite3'
 import { eq, lt } from 'drizzle-orm'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
 import { rawSqlite } from '../db/raw-sqlite.js'
-import { getWorkspaceDb } from '../db/index.js'
-import { agentSessions } from '../db/schema.js'
 import { dispatchToTargets, type CronTarget, type DispatchResult } from './dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
 import { cleanChildEnv } from '../child-env.js'
+import { resolveWorkingDir } from '../agents/working-dir.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -165,6 +165,47 @@ export function effectiveSessionId(job: { id: string; sessionId: string | null }
   return job.sessionId ?? (job.id.startsWith('cron-') ? job.id : `cron-${job.id}`)
 }
 
+/** A stateless job's session for one fire: the job's own id (same no-double-
+ *  prefix rule) plus a base36 ms suffix — a fresh root session every run. */
+export function perRunSessionId(job: { id: string }, now = Date.now()): string {
+  return `${effectiveSessionId({ id: job.id, sessionId: null })}-${now.toString(36)}`
+}
+
+/** The agent of a stateful job's effective session when that session already
+ *  exists, else null (stateless job, or the session isn't created yet). The
+ *  admin locks the job's agent on it; the write points enforce it. For
+ *  display (list GET, `cron:job_changed`): a read error reads as unknown
+ *  (null) — the write points and the fire re-read and refuse. */
+export function sessionAgentIdFor(job: { id: string; sessionId: string | null; workspacePath: string; stateless: number }): string | null {
+  if (job.stateless) return null
+  try {
+    return readSessionRow(job.workspacePath, effectiveSessionId(job))?.agentId ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Write-point rule: a stateful job's agent is fixed once its session exists.
+ *  Returns the 400 message, or null when the job is fine. A session that
+ *  can't be read is a 400 too (its agent is unknown, so is the rule). */
+export function sessionAgentConflict(job: { id: string; sessionId: string | null; workspacePath: string; stateless: number; agentId: string }): string | null {
+  if (job.stateless) return null
+  let sessionAgent: string | null
+  try {
+    sessionAgent = readSessionRow(job.workspacePath, effectiveSessionId(job))?.agentId ?? null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+  if (sessionAgent === null || sessionAgent === job.agentId) return null
+  return `session ${effectiveSessionId(job)} already runs agent ${sessionAgent}; delete that session or turn on "new session every run" to change the agent`
+}
+
+/** Fields `cron:job_changed` carries beyond the id, so a listener sees the
+ *  job's folder / mode and its session's agent without a refetch. */
+export function jobChangedFields(job: typeof cronJobs.$inferSelect): { workingDir: string | null; stateless: boolean; sessionAgentId: string | null } {
+  return { workingDir: job.workingDir, stateless: job.stateless === 1, sessionAgentId: sessionAgentIdFor(job) }
+}
+
 /** `_inflightSessions` key. Realpath so two spellings of one workspace
  *  collide; a missing workspace falls back to the resolved path (its run
  *  fails on the existence check anyway). */
@@ -281,12 +322,13 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
   const now = Date.now()
   for (const row of rows) {
     const { id: runId, jobId, pid } = row
-    // The session the orphan was spawned on, read from the job row (a job
-    // deleted since falls back to its default). If the job's session was
-    // re-pointed after that spawn, the fingerprint below won't match and the
-    // orphan is left alone — the safe direction.
+    // The session the orphan was spawned on: recorded on the run row (the
+    // only source for a stateless job's per-run id). Rows from before that
+    // column fall back to the job row (a job deleted since: its default); if
+    // that job's session was re-pointed after the spawn, the fingerprint
+    // below won't match and the orphan is left alone — the safe direction.
     const job = db.select().from(cronJobs).where(eq(cronJobs.id, jobId)).get()
-    const sessionId = effectiveSessionId(job ?? { id: jobId, sessionId: null })
+    const sessionId = row.sessionId ?? effectiveSessionId(job ?? { id: jobId, sessionId: null })
     const sessionKey = job ? sessionKeyFor(job.workspacePath, sessionId) : null
     // (a) Block new fires for this job — and any other job on its session —
     // while its orphan may still be alive.
@@ -413,9 +455,11 @@ export function reloadAll(): void {
 /** Per-row fingerprint used by `reconcileFromDb` and `scheduleJob` to
  *  detect "did anything change that requires re-instantiating croner?".
  *  Includes runAt so flipping a job from recurring → one-shot is noticed,
- *  and the active window so a skill-side "pause until X" reschedules. */
+ *  and the active window so a skill-side "pause until X" reschedules.
+ *  Agent / prompt / folder / mode don't touch croner, but a skill-side edit
+ *  of them still has to reach the admin as a `reconciled` push. */
 function jobFingerprint(j: typeof cronJobs.$inferSelect): string {
-  return `${j.enabled}|${j.schedule}|${j.runAt ?? ''}|${j.timezone ?? ''}|${j.activeFrom ?? ''}|${j.activeUntil ?? ''}`
+  return JSON.stringify([j.enabled, j.schedule, j.runAt, j.timezone, j.activeFrom, j.activeUntil, j.agentId, j.userPrompt, j.workingDir, j.stateless])
 }
 
 /** Recurring job past its `activeUntil` — enabled but never scheduled. */
@@ -595,12 +639,14 @@ export function reconcileFromDb(): void {
     if (!liveIds.has(id)) { _fingerprint.delete(id); _expired.delete(id) }
   }
 
+  const rowById = new Map(rows.map((r) => [r.id, r]))
   for (const id of changedIds) {
-    const stillLive = liveIds.has(id)
+    const row = rowById.get(id)
     broadcast({
       type: 'cron:job_changed',
       jobId: id,
-      kind: stillLive ? 'reconciled' : 'deleted',
+      kind: row ? 'reconciled' : 'deleted',
+      ...(row ? jobChangedFields(row) : {}),
     })
   }
 }
@@ -622,7 +668,9 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   const logPath = logPathFor(runId)
   fs.mkdirSync(logsDir(), { recursive: true })
 
-  const sessionId = effectiveSessionId(job)
+  // Stateless: a fresh session per fire (never shared, so the session-level
+  // guards below can't hit; the job-level `_inflight` still serializes).
+  const sessionId = job.stateless ? perRunSessionId(job, startedAt) : effectiveSessionId(job)
   const sessionKey = sessionKeyFor(job.workspacePath, sessionId)
   // The server's live manager for this workspace, if it has one. peek only
   // — building a manager here would run its boot reconcile as a side effect.
@@ -674,6 +722,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     failureReason: null,
     logPath,
     dispatchResults: null,
+    sessionId,
   }).run()
   broadcast({ type: 'cron:run_changed', jobId, runId, status: 'running' })
 
@@ -692,25 +741,58 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     })
     return runId
   }
+  // Same for the job folder: moved / deleted since the job was saved.
+  if (job.workingDir) {
+    try {
+      await resolveWorkingDir(job.workspacePath, job.workingDir)
+    } catch (err) {
+      finalize(runId, jobId, {
+        status: 'failed',
+        output: null,
+        exitCode: null,
+        failureReason: `folder not found: ${err instanceof Error ? err.message : String(err)}`,
+        dispatchResults: [],
+      })
+      return runId
+    }
+  }
 
   // Spawn the cli under a Node-timer timeout (job's timeout_sec, default
   // 3600s) so a runaway model can't burn forever. tee stdout AND stderr
   // into the per-run log; stdout is also captured to memory because we
   // feed it into the channel dispatcher.
   //
-  // Session strategy: every job runs in one stable session — its own
+  // Session strategy: a stateful job runs in one stable session — its own
   // (effectiveSessionId) unless the job picked an existing root session. First
   // fire creates it (cli's `-s` is create-on-missing, with the job's agent);
-  // subsequent fires resume it (with the session's own agent), so the
-  // conversation accumulates and the user can review it in the Sessions tab.
+  // subsequent fires resume it, so the conversation accumulates and the user
+  // can review it in the Sessions tab. The write points keep the job's agent
+  // equal to an existing session's; a hand-edited mismatch makes the cli
+  // refuse (its stderr lands in failureReason). A stateless job gets a new
+  // session every fire. `--dir` always passes the job folder ('.' = root),
+  // so the cli applies it in place on a resumed session too. One `--dir=`
+  // token: a folder starting with `-` would read as a flag otherwise.
   const cli = resolveHaloCli()
   // Prompt goes on stdin (not argv) so a long cron prompt can't overflow the
   // Windows command-line limit; the cli reads stdin when it's not a TTY.
-  const args = ['cli', '-a', job.agentId, '-s', sessionId, '-w', job.workspacePath]
+  const args = ['cli', '-a', job.agentId, '-s', sessionId, '-w', job.workspacePath, `--dir=${job.workingDir ?? '.'}`]
   // Keep an existing session's access level. The cli defaults to full, and
   // sendUserMessage persists any level that differs from the session's — so
-  // without this a cron run would silently promote a restricted session.
-  const accessLevel = readSessionAccessLevel(job.workspacePath, sessionId)
+  // without this a cron run would silently promote a restricted session. A
+  // read error therefore fails the run instead of spawning at full.
+  let accessLevel: ReturnType<typeof readSessionAccessLevel>
+  try {
+    accessLevel = readSessionAccessLevel(job.workspacePath, sessionId)
+  } catch (err) {
+    finalize(runId, jobId, {
+      status: 'failed',
+      output: null,
+      exitCode: null,
+      failureReason: err instanceof Error ? err.message : String(err),
+      dispatchResults: [],
+    })
+    return runId
+  }
   if (accessLevel) args.push('--access', accessLevel)
   // Windows can't spawn a `.cmd` directly (Node ≥21.7 → EINVAL). Route through
   // `cmd.exe /c`, which Node docs recommend for batch files and quotes
@@ -727,7 +809,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   // before the cli's own output starts.
   const teeStream = fs.createWriteStream(logPath, { flags: 'a' })
   teeStream.write(`=== ${new Date().toISOString()} cron run ${runId} job=${jobId} trigger=${triggerKind} ===\n`)
-  teeStream.write(`agent=${job.agentId} session=${sessionId}${accessLevel ? ` access=${accessLevel}` : ''} workspace=${job.workspacePath} schedule=${job.schedule}\n`)
+  teeStream.write(`agent=${job.agentId} session=${sessionId}${job.stateless ? ' (stateless)' : ''}${accessLevel ? ` access=${accessLevel}` : ''} workspace=${job.workspacePath} dir=${job.workingDir ?? '.'} schedule=${job.schedule}\n`)
   teeStream.write(`prompt: ${job.userPrompt}\n\n`)
 
   let stdout = ''
@@ -874,19 +956,55 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
 
 /** Access level stored on an existing session's row, for the cli's
  *  `--access` (null column = full). Null when there's nothing to preserve:
- *  the session doesn't exist yet (the cli creates it at its full default,
- *  as before) or the workspace db can't be opened. */
+ *  the session (or the workspace db) doesn't exist yet — the cli creates it at
+ *  its full default, as before. Throws on a read error: a restricted session
+ *  must never fall back to full. */
 function readSessionAccessLevel(workspacePath: string, sessionId: string): 'full' | 'workspace' | 'readonly' | null {
+  const row = readSessionRow(workspacePath, sessionId)
+  if (!row) return null
+  return row.accessLevel === 'workspace' || row.accessLevel === 'readonly' ? row.accessLevel : 'full'
+}
+
+type SessionRow = { agentId: string; accessLevel: string | null }
+/** Per workspace path: a read-only handle on its `.halo/halo.db`, the
+ *  `data_version` the cached rows were read at, and the rows (null = no such
+ *  session). This runs per job on every list GET / `cron:job_changed` push,
+ *  so it never goes through getWorkspaceDb (realpath + ensureWorkspaceHalo:
+ *  ~10 mkdirs and a template compare per call, and a GET must not scaffold).
+ *  The handle is never the writer, so `data_version` moves on every commit
+ *  anyone makes — a cli child creating the session (finalize reads it right
+ *  after), a Sessions-tab delete, another process — and a moved version
+ *  drops the workspace's rows. */
+const _sessionRows = new Map<string, { db: Database.Database; version: number; rows: Map<string, SessionRow | null> }>()
+
+/** An existing session's agent + access level; null when the session, the
+ *  workspace or its `.halo/halo.db` doesn't exist. Any other failure (corrupt
+ *  / locked / unreadable db) throws `could not read session <id> from <ws>: …`
+ *  — "absent" and "unreadable" mean different things to the callers. */
+function readSessionRow(workspacePath: string, sessionId: string): SessionRow | null {
   try {
-    const row = getWorkspaceDb(workspacePath).db
-      .select({ accessLevel: agentSessions.accessLevel })
-      .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
-    if (!row) return null
-    return row.accessLevel === 'workspace' || row.accessLevel === 'readonly' ? row.accessLevel : 'full'
-  } catch {
-    return null
+    let entry = _sessionRows.get(workspacePath)
+    if (!entry) {
+      const file = path.join(workspacePath, '.halo', 'halo.db')
+      if (!fs.existsSync(file)) return null
+      entry = { db: new Database(file, { readonly: true, fileMustExist: true }), version: -1, rows: new Map() }
+      _sessionRows.set(workspacePath, entry)
+    }
+    const version = entry.db.pragma('data_version', { simple: true }) as number
+    if (version !== entry.version) { entry.rows.clear(); entry.version = version }
+    const cached = entry.rows.get(sessionId)
+    if (cached !== undefined) return cached
+    const row = (entry.db.prepare('SELECT agent_id AS agentId, access_level AS accessLevel FROM agent_sessions WHERE id = ?')
+      .get(sessionId) as SessionRow | undefined) ?? null
+    entry.rows.set(sessionId, row)
+    return row
+  } catch (err) {
+    throw new Error(`could not read session ${sessionId} from ${workspacePath}: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
+
+/** Test hook: the session-row cache (inspect / reset between tests). */
+export const _sessionRowCache = _sessionRows
 
 interface FinalizeArgs {
   status: 'succeeded' | 'failed' | 'timeout'
@@ -924,7 +1042,9 @@ function finalize(runId: string, jobId: string, a: FinalizeArgs): void {
   if (job?.runAt) patch.enabled = 0
   db.update(cronJobs).set(patch).where(eq(cronJobs.id, jobId)).run()
   broadcast({ type: 'cron:run_changed', jobId, runId, status: a.status })
-  broadcast({ type: 'cron:job_changed', jobId, lastRunStatus: a.status, lastRunAt: completedAt })
+  // sessionAgentId is read after the run, so a first fire's push already
+  // carries the agent of the session it just created.
+  broadcast({ type: 'cron:job_changed', jobId, lastRunStatus: a.status, lastRunAt: completedAt, ...(job ? jobChangedFields(job) : {}) })
 }
 
 function parseTargets(raw: string): CronTarget[] {

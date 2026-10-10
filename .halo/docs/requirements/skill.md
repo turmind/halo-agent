@@ -20,17 +20,20 @@ button is hidden in this mode (`showMaximize={false}`).
 
 | Operation | API |
 |---|---|
-| List | `GET /api/skills?projectId=xxx` — returns BOTH global and workspace skills as separate entries (no merge); global entries shadowed by a same-id workspace skill are flagged `overridden: true` |
-| Create | `POST /api/skills` (body: name, description, scope, projectId) |
-| Delete | `DELETE /api/skills/:id?scope=...&projectId=...` |
-| Toggle disabled | `PATCH /api/skills/:id/toggle?scope=...&projectId=...` → `{ ok, disabled }` |
+| List | `GET /api/skills?projectId=xxx` — returns workspace, global AND extension skills as separate entries (no merge); entries shadowed by a higher-precedence same-id skill are flagged `overridden: true`; extension entries carry `extId` |
+| Create | `POST /api/skills` (body: name, description, scope, projectId) — `scope: 'extension'` → 403 |
+| Delete | `DELETE /api/skills/:id?scope=...&projectId=...` — `scope=extension` → 403 |
+| Toggle disabled | `PATCH /api/skills/:id/toggle?scope=...&projectId=...` → `{ ok, disabled }` (all three scopes) |
 
-### Scope (Global / Workspace)
+### Scope (Global / Workspace / Extension)
+
+Runtime precedence for one id: workspace > global > extension. The higher folder wins wholly.
 
 | Scope | Path | Notes |
 |---|---|---|
-| Global | `~/.halo/global/skills/<id>/` | Shared across projects |
-| Workspace | `<project>/.halo/skills/<id>/` | Wins over a same-id global skill at runtime |
+| Global | `~/.halo/global/skills/<id>/` | Shared across projects; wins over a same-id extension skill |
+| Workspace | `<project>/.halo/skills/<id>/` | Wins over a same-id global or extension skill at runtime |
+| Extension | `~/.halo/global/extensions/<extId>/skills/<id>/` | Shipped by an installed extension (valid manifest; id `<extId>` or `<extId>-*`). Read-only; removed with the extension. See [design/canvas-extensions.md → Extension skills](../design/canvas-extensions.md#extension-skills) |
 
 ### Management UI
 
@@ -38,8 +41,9 @@ The Skills sidebar mirrors the Agents sidebar layout:
 - Two collapsible sections — **Global** (globe icon) and **Workspace** (folder icon, shown only while a workspace is open). Expanded state persists in `halo_skills_expandedScopes` (localStorage)
 - Each section header has its own **+ button** — scope is implicit from which button is clicked, no pop-up picker
 - Creating a name that collides with the other scope prompts a one-time confirmation explaining the runtime override
-- Items overridden by a workspace skill are rendered dimmed with "overridden" subtitle
-- Each row has a toggle switch (shown on hover while enabled, always visible once disabled) and a hover trash button. Disabled skills are rendered dimmed with "disabled" subtitle. Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md frontmatter). Both global and workspace skills can be independently toggled per workspace. Disabled skills are excluded from system prompt injection, activate_skill tool, agent form skill picker, and `/workspace share` export.
+- Items overridden by a higher-precedence skill are rendered dimmed with "overridden" subtitle
+- A third section, **Extensions** (puzzle icon), is shown only when an installed extension ships skills. It has no + button and no trash button; the toggle stays. The subtitle reads "from extension X". Clicking one opens a read-only file view (badge "from extension · read-only" and a hint to copy the folder into global / workspace) instead of the mini workspace editor
+- Each row has a toggle switch (shown on hover while enabled, always visible once disabled) and a hover trash button. Disabled skills are rendered dimmed with "disabled" subtitle. Disabled state is stored per workspace in the `disabled_items` table of `halo.db` (not in SKILL.md frontmatter). Global, workspace and extension skills can each be toggled per workspace (rows keyed `scope:id`, e.g. `extension:<id>`). Disabled skills are excluded from system prompt injection, activate_skill tool, agent form skill picker, and `/workspace share` export.
 - Selection uses a composite `id:scope` key (localStorage `halo_skills_selectedKey`) so the same id in different scopes can coexist
 
 ### Auto-sync behaviour (workspace vs. global)
@@ -53,6 +57,8 @@ The Skills sidebar and any open mini-workspace editor stay in sync with the file
 | Edit from external CLI / SSH | Same as above | Same as above |
 
 So when an agent (or the `skill` skill) creates a **global** skill, the Skills sidebar won't reflect it until the user refocuses the browser window. The `skill` skill documents this so agents can warn the user.
+
+Extension skills follow the extension, not a file watcher. Installing or uninstalling an extension broadcasts `extension:changed`, which bumps `skill-bus`, so the sidebar and the agent form's skill picker refetch live. Edits inside an installed extension's `skills/` push nothing (show on focus refresh); reinstalling the extension is how a change ships.
 
 ### SKILL.md protocol
 

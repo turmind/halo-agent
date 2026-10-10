@@ -43,8 +43,8 @@ import YAML from 'yaml'
 import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
 import { loadProviders } from './models/registry.js'
 import { getSnapshot as getExtensionsSnapshot } from './extensions/registry.js'
+import { listSkillDirs } from './agents/skill-sources.js'
 
-const GLOBAL_SKILLS_DIR = path.join(homedir(), '.halo', 'global', 'skills')
 const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
 
 export type FieldKind = 'param' | 'secret'
@@ -158,6 +158,10 @@ function generalSection(): SchemaSection {
       { key: 'observability.service_name', type: 'string', globalOnly: true, restartRequired: true, description: 'OTel resource service.name reported for this server. Takes effect on restart.', description_zh: '本服务在 OTel 中上报的 service.name。重启后生效。', default: 'halo' },
       { key: 'observability.headers', type: 'string', secret: true, globalOnly: true, restartRequired: true, description: 'Extra headers for every OTLP request, comma-separated k=v (e.g. authorization=Bearer …). Takes effect on restart.', description_zh: '附加到每个 OTLP 请求的 header，逗号分隔的 k=v（如 authorization=Bearer …）。重启后生效。', default: '' },
       { key: 'observability.capture_content', type: 'boolean', globalOnly: true, restartRequired: true, description: 'Put prompt / completion / tool argument and result text on spans (gen_ai.*.messages etc.). Off = only metadata (model, tokens, latency, tool names). Takes effect on restart.', description_zh: '是否把提示词 / 模型输出 / 工具参数与结果正文写到 span 上（gen_ai.*.messages 等）。关 = 只上报元数据（模型、token、耗时、工具名）。重启后生效。', default: 'false' },
+      // Notebook kernels (jupyter/manager.ts). Global-only: kernels run
+      // unsandboxed as the service user, like the terminal. Read per spawn.
+      { key: 'jupyter.enabled', type: 'boolean', globalOnly: true, description: 'Allow notebook execution: the ipynb viewer can start kernels through a local Jupyter server (runs as the Halo service user, unsandboxed, like the terminal).', description_zh: '允许运行 notebook：ipynb 查看器可通过本机 Jupyter server 启动内核（以 Halo 服务用户身份运行、不进沙箱，与终端相同）。', default: 'true' },
+      { key: 'jupyter.path', type: 'string', globalOnly: true, description: 'Full path to the `jupyter` executable (e.g. /home/me/.venvs/jupyter/bin/jupyter). Empty = find `jupyter` on PATH. Needs jupyter_server + ipykernel (pip install jupyter_server ipykernel). Applies the next time the Jupyter server starts.', description_zh: '`jupyter` 可执行文件的完整路径（如 /home/me/.venvs/jupyter/bin/jupyter）。留空 = 在 PATH 上查找 `jupyter`。需要 jupyter_server + ipykernel（pip install jupyter_server ipykernel）。下次启动 Jupyter server 时生效。', default: '' },
       // A2A (plans/a2a.md). Global-only: the URL allowlist is an egress boundary
       // a workspace must not widen; public_url names this server to peers.
       { key: 'a2a.public_url', type: 'string', globalOnly: true, description: 'Origin peers use to reach this server for A2A (e.g. http://myhost.tailnet.ts.net:9527): the agent card\'s interface URL and the webhook URL given to remotes. Empty = derived from the request Host. Env HALO_A2A_PUBLIC_URL overrides.', description_zh: '对端访问本服务的 A2A 源地址（如 http://myhost.tailnet.ts.net:9527）：用于 agent card 的接口 URL 和交给远端的 webhook URL。留空则按请求 Host 推导。环境变量 HALO_A2A_PUBLIC_URL 优先。', default: '' },
@@ -304,20 +308,16 @@ function buildSkillSection(skillsDir: string, skillId: string): SchemaSection | 
  * users can configure host/port/token in the admin UI rather than
  * hand-editing settings.yaml. Without this merge, only globally-deployed
  * skills surfaced their declarations and workspace skills were
- * config-invisible.
+ * config-invisible. Skills shipped by installed extensions are walked too
+ * (lowest precedence) — same `<skill-id>.params.*` namespace.
  */
 function skillSections(workspaceRoot?: string): SchemaSection[] {
   const byId = new Map<string, SchemaSection>()
-  // Global first, workspace overlays.
-  for (const dir of [GLOBAL_SKILLS_DIR, workspaceRoot ? path.join(workspaceRoot, '.halo', 'skills') : null]) {
-    if (!dir) continue
-    let entries: fs.Dirent[] = []
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { continue }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      const section = buildSkillSection(dir, entry.name)
-      if (section) byId.set(section.namespaceId, section)
-    }
+  // Lowest precedence first so higher sources overlay: extension skills
+  // (skill-sources.ts), then global, then workspace.
+  for (const { id, dir } of listSkillDirs(workspaceRoot).reverse()) {
+    const section = buildSkillSection(path.dirname(dir), id)
+    if (section) byId.set(section.namespaceId, section)
   }
   return [...byId.values()]
 }

@@ -12,7 +12,7 @@ import path from 'node:path'
 import type { AgentEvent, AnthropicMessage, ContentBlock, ToolDef } from './bedrock-agent.js'
 import type { ModelRuntime } from './model-runtime.js'
 import { loadScopeInstructions } from '../prompts/md-loader.js'
-import { config, modelSupportsImage, resolveContextWindow } from '../config.js'
+import { config, modelSupportsImage, resolveEffectiveContext } from '../config.js'
 import { repairConversationMessages } from './conversation-repair.js'
 import { classifyModelError, type ModelErrorKind } from './model-error.js'
 import { compactCut, localCompactMessages } from './compact.js'
@@ -28,6 +28,7 @@ import { buildSessionTools, buildContinueTaskTool } from './session-tools.js'
 import { GOAL_AGENT_ID, deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
 import { deliverRelayReport, deliverRelayInterim, readReplyTo, listActiveChildren, buildRelayTools, RELAY_CHANNEL_PREFIX, A2A_CHANNEL_PREFIX, cancelA2AForSession } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
+import { resolveWorkingDir as resolveWorkingDirIn } from './working-dir.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
@@ -260,6 +261,8 @@ export interface SessionInfo {
   /** Persisted access level for this session — used by skill-command's
    *  permission gate. `null` means "no gate" (CLI / pre-channel sessions). */
   accessLevel: 'readonly' | 'workspace' | 'full' | null
+  /** Persisted working dir, workspace-relative (null = the workspace root). */
+  workingDir: string | null
   /** Goal-mode back-pointer: non-null while this session is the bound worker
    *  of an active goal (see goal-mode.ts). Surfaced so session lists can
    *  badge goal-bound sessions. */
@@ -603,21 +606,32 @@ export class SessionManager implements SessionManagerInternals {
    */
   /** @internal */
   async resolveWorkingDir(input: string): Promise<string> {
-    const resolved = path.isAbsolute(input)
-      ? path.resolve(input)
-      : path.resolve(this.workspaceRoot, input)
-    const wsRoot = path.resolve(this.workspaceRoot)
-    if (resolved !== wsRoot && !resolved.startsWith(wsRoot + path.sep)) {
-      throw new Error(`working_dir "${input}" is outside the workspace`)
+    return resolveWorkingDirIn(this.workspaceRoot, input)
+  }
+
+  /** Re-point a root session's persisted working_dir — `halo cli --dir` on a
+   *  resumed session. `workingDir` is absolute (from resolveWorkingDir) or null
+   *  = the workspace root. Returns the stored workspace-relative value before /
+   *  after, or null when it's already the target (no write). The row is the
+   *  truth: an idle in-memory copy is released so the next ensureSession
+   *  rebuilds the prompt with the new dir; a running one refuses. */
+  setWorkingDir(sessionId: string, workingDir: string | null): { from: string | null; to: string | null } | null {
+    const row = this.db.select({ workingDir: agentSessions.workingDir }).from(agentSessions)
+      .where(eq(agentSessions.id, sessionId)).get()
+    const to = (workingDir && path.relative(this.workspaceRoot, workingDir)) || null
+    // No row = an internal-agent session (lives outside the workspace db):
+    // always at the root, so only a real folder is an error.
+    if (!row) {
+      if (to === null) return null
+      throw new Error(`Session ${sessionId} has no workspace row; it can't take a working dir`)
     }
-    try {
-      const stat = await (await import('node:fs/promises')).stat(resolved)
-      if (!stat.isDirectory()) throw new Error(`working_dir "${input}" is not a directory`)
-    } catch (err) {
-      if (err instanceof Error && err.message.startsWith('working_dir')) throw err
-      throw new Error(`working_dir "${input}" does not exist`)
-    }
-    return resolved
+    const from = row.workingDir || null
+    if (from === to) return null
+    const inMem = this.sessions.get(sessionId)
+    if (inMem?.promise) throw new Error(`Session ${sessionId} is running; its working dir can't change mid-turn`)
+    if (inMem) this.releaseSession(sessionId)
+    this.db.update(agentSessions).set({ workingDir: to }).where(eq(agentSessions.id, sessionId)).run()
+    return { from, to }
   }
 
   /**
@@ -2676,15 +2690,11 @@ export class SessionManager implements SessionManagerInternals {
     const row = this.db.select().from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
     if (!row) return { maxTokens: config.model.maxContextTokens, compressAt: config.model.compressAt as number }
     const yamlConfig = await loadAgentYaml(row.agentId, this.workspaceRoot)
-    return {
-      // Same priority as buildModelRuntime: agent.yaml > model registry
-      // contextWindow > global default — keeps the cold-session display in
-      // sync with what actually takes effect on resume.
-      maxTokens: yamlConfig?.context?.maxTokens
-        ?? (yamlConfig?.model?.id ? resolveContextWindow(yamlConfig.model.id) : undefined)
-        ?? config.model.maxContextTokens,
-      compressAt: yamlConfig?.context?.compressAt ?? (config.model.compressAt as number),
-    }
+    // Same resolution as buildModelRuntime (agent.yaml > global, clamped to
+    // the model max) — keeps the cold-session display in
+    // sync with what actually takes effect on resume.
+    const { maxTokens, compressAt } = resolveEffectiveContext(yamlConfig?.model?.id, yamlConfig?.context)
+    return { maxTokens, compressAt }
   }
 
   /** Begin compact for a session. Returns AbortController for cancellation. */

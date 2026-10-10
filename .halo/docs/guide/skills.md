@@ -26,9 +26,15 @@ Putting those in AGENT.md would bloat the system prompt. Skills use **progressiv
   deploy-check/
     SKILL.md
     scripts/verify.sh
+
+~/.halo/global/extensions/<ext>/skills/   # Shipped by an installed extension (read-only)
+  <ext>-helper/
+    SKILL.md
 ```
 
-Workspace overrides global (same id).
+Precedence for the same id: workspace > global > extension. The higher folder wins wholly.
+
+**Extension skills** come with an installed canvas extension (see [Canvas preview extensions](../design/canvas-extensions.md#extension-skills)). They appear in the Skills panel under **Extensions** ("from extension X"), read-only: no edit, no delete. They are not enabled automatically: tick them for an agent like any other skill. Uninstalling the extension removes them. To customise one, copy its folder into `~/.halo/global/skills/<id>/` or `<project>/.halo/skills/<id>/` and edit the copy, which then takes precedence.
 
 **Built-in skills** (`agent`, `skill`, `workspace`, `cron`, `send-file`, `self`, `aws-knowledge`, `web-search`, `halo`, `extension`) are server-shipped and **force-overwritten on every server startup**. Local edits to these directories under `~/.halo/global/skills/` will be lost. To customize one, copy it into `<project>/.halo/skills/<id>/` (workspace replaces global) and edit there. Other skills under `~/.halo/global/skills/` — including any the user created via the admin UI — are untouched by the seeder.
 
@@ -75,7 +81,7 @@ You can edit SKILL.md, add scripts, templates, example docs.
 
 Click the `+` on the **Global** or **Workspace** group header in the sidebar (the group you click decides the scope) and type a name.
 
-Delete: hover a skill and click its trash icon (after a confirmation). The toggle next to it disables / enables the skill.
+Delete: hover a skill and click its trash icon (after a confirmation). The toggle next to it disables / enables the skill. The **Extensions** group has no `+` and no trash. Its skills go away when the extension is uninstalled, but the toggle works.
 
 ## Letting an agent use a skill
 
@@ -113,10 +119,10 @@ The agent follows the skill's instructions.
 
 ## Resource files
 
-Files in the same directory as SKILL.md are listed at the end of `activate_skill`'s return:
+Files in the same directory as SKILL.md are listed at the end of `activate_skill`'s return, under the skill directory's absolute path:
 
 ```
-Resource files in skill directory:
+Resource files in skill directory (/home/me/.halo/global/skills/code-review):
 - checklist.md
 - examples/review-sample.md
 ```
@@ -161,7 +167,7 @@ Halo seeds these skills on every startup (the ids in `BUILTIN_SKILL_IDS`, `packa
 | halo | Platform self-knowledge — config directories, MD scopes, which bundled doc answers what (no command, `user-invocable: false`; model auto-activates) |
 | extension | Install / list / remove canvas preview extensions — backs `/extension` (full access); its `hub_repo` param (Settings → Skills) picks the hub `install <id>` pulls from (default turmind/halo-hub) |
 
-All live under `~/.halo/global/skills/` and are force-overwritten on startup. To customize one, copy it into `<project>/.halo/skills/<id>/` and edit there (workspace overrides global). `tavily-web-search` remains an optional (non-seeded) skill.
+All live under `~/.halo/global/skills/` and are force-overwritten on startup. To customize one, copy it into `<project>/.halo/skills/<id>/` and edit there (workspace > global > extension). `tavily-web-search` remains an optional (non-seeded) skill.
 
 ## SKILL.md field reference
 
@@ -206,7 +212,7 @@ user-invocable: false                # optional (standard), never becomes a slas
 
 {body}
 
-Resource files in skill directory:
+Resource files in skill directory (<absolute skill dir>):
 - checklist.md
 - examples/review.md
 ...

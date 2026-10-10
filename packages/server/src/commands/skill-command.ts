@@ -2,7 +2,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { CommandDescriptor } from './types.js'
 import { commandRegistry } from './index.js'
-import { ACCESS_RANK, GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter, type SkillVerb } from '../agents/agent-loader.js'
+import { ACCESS_RANK, loadAgentYaml, parseSkillFrontmatter, type SkillVerb } from '../agents/agent-loader.js'
+import { listSkillDirs, type SkillDir } from '../agents/skill-sources.js'
 import { buildRenderContext, renderMdBody } from '../prompts/md-vars.js'
 import { getDisabledSet } from '../db/index.js'
 import { t, type Lang } from '../channels/shared/i18n.js'
@@ -18,20 +19,9 @@ interface SkillCommandEntry {
   verbs?: SkillVerb[]
 }
 
-async function scanDir(dir: string): Promise<SkillCommandEntry[]> {
+async function readEntries(dirs: SkillDir[]): Promise<SkillCommandEntry[]> {
   const entries: SkillCommandEntry[] = []
-  let names: string[]
-  try {
-    names = await fs.readdir(dir)
-  } catch {
-    return entries
-  }
-  for (const entryName of names) {
-    const skillDir = path.join(dir, entryName)
-    try {
-      const stat = await fs.stat(skillDir)
-      if (!stat.isDirectory()) continue
-    } catch { continue }
+  for (const { id: entryName, dir: skillDir } of dirs) {
     const skillMdPath = path.join(skillDir, 'SKILL.md')
     try {
       const content = await fs.readFile(skillMdPath, 'utf-8')
@@ -52,21 +42,17 @@ async function scanDir(dir: string): Promise<SkillCommandEntry[]> {
   return entries
 }
 
-/** Global + workspace skill entries merged (workspace wins on id clash).
- *  Returned, not cached: a module-level variable rebuilt per call raced
- *  across workspaces (two concurrent scans interleave, the second caller
- *  reads the first's list). Rescanning ~10 small SKILL.md files per slash
- *  command is negligible. */
+/** Effective skill entries — workspace > global > extension, one per id
+ *  (skill-sources.ts). Listed in the old global-then-workspace-only order,
+ *  extensions last, so skill-vs-skill command claims stay first-come as
+ *  before. Returned, not cached: a module-level variable rebuilt per call
+ *  raced across workspaces (two concurrent scans interleave, the second
+ *  caller reads the first's list). Rescanning ~10 small SKILL.md files per
+ *  slash command is negligible. */
 async function scanSkillEntries(workspaceRoot?: string): Promise<SkillCommandEntry[]> {
-  const globalEntries = await scanDir(GLOBAL_SKILLS_DIR)
-  let wsEntries: SkillCommandEntry[] = []
-  if (workspaceRoot) {
-    wsEntries = await scanDir(path.join(workspaceRoot, '.halo', 'skills'))
-  }
-  const merged = new Map<string, SkillCommandEntry>()
-  for (const e of globalEntries) merged.set(e.id, e)
-  for (const e of wsEntries) merged.set(e.id, e)
-  return Array.from(merged.values())
+  const live = listSkillDirs(workspaceRoot).filter((s) => !s.overridden)
+  const order = (s: SkillDir): number => (s.scope === 'extension' ? 2 : s.scope === 'workspace' ? 1 : 0)
+  return readEntries(live.sort((a, b) => order(a) - order(b)))
 }
 
 /** Verbs + object-level access of the skill behind an object command, even

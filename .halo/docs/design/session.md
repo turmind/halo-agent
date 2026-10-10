@@ -83,6 +83,7 @@ Manages every agent session's lifecycle (root + sub-agent). Each session is 1:1 
 | Method | Purpose |
 |---|---|
 | `createSession(agentId, parentId, description, agentName?, explicitId?, workingDir?, accessLevel?, title?)` | Create a session (SQLite + memory). `workingDir` = absolute path at runtime, stored as workspace-relative in DB; null = project root. `accessLevel` = `'readonly'`, `'workspace'`, or `null` (full). |
+| `setWorkingDir(sessionId, workingDir)` | Re-point a session's persisted `working_dir` (`--dir` on a resumed root session). `workingDir` absolute or null = root; returns `{from, to}` (workspace-relative) or null when it's already the target (no write). Refuses while the session is running; an idle in-memory copy is released so the next `ensureSession` rebuilds the prompt with the new folder |
 | `sendUserMessage(sessionId, text, images?, accessLevel?)` | Send a message — run immediately if idle, queue if busy; returns `'running'` or `'queued'` |
 | `compactSession(sessionId, opts?)` | LLM-summary compact (`opts.onProgress` for UI progress) |
 | `interruptSession(sessionId)` | Abort the in-flight turn now (fire-and-forget); `interruptRequested` is set so the unwind repairs rather than errors, then the queued message drains. Shared by esc and the `interrupt_session` tool |
@@ -282,7 +283,7 @@ Table `agent_sessions` holds metadata only (no runtime state):
 | agent_id | TEXT | Agent YAML ID |
 | agent_name | TEXT | Display name |
 | description | TEXT | Task description |
-| working_dir | TEXT | Workspace-relative path; null = project root |
+| working_dir | TEXT | Workspace-relative path; null = project root. A sub-agent's `working_dir` from `start_session`, or a root session's folder (`halo cli` / `halo tui --dir`, a cron job's folder) — set on create, re-pointed in place on resume by `setWorkingDir` |
 | access_level | TEXT | `'readonly'`, `'workspace'`, or null; null = full access |
 | created_at / updated_at | INTEGER | Epoch ms |
 | stopped_at | INTEGER | null = active |
@@ -350,6 +351,8 @@ In the admin, `/session new` (also `/clear`, "+ New Session") does not touch the
 5. Switching back shows the old tab's store as it is. A tab released by a reconnect subscribes again and loads from the UIState / file
 
 Before 1.5.3-alpha this was the WS `session:clear` frame (save, release the listener, unbind the connection); it was removed when one connection started carrying every open tab. Other channels' `/session new` still creates the session server-side and returns `switchTo`.
+
+That server-side `execNew` (`channels/shared/commands.ts`) keeps the folder: the new session inherits the `working_dir` of the **root** of the session the command was issued in — `ctx.sessionId` when the caller passes it (the TUI harness does, so a sub-agent tab resolves to its root), else the channel's active session (`findActiveSessionId`). The folder is re-validated with `resolveWorkingDir`; one that no longer exists starts the new session at the workspace root, with a `[Commands] /new: folder of <root> not kept, …` log line.
 
 See [background-dispatch.md](background-dispatch.md).
 

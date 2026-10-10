@@ -1,51 +1,154 @@
 id: openai
 runtime: openai-chat
-revision: 2026100501
+revision: 2026101005
 displayName: OpenAI (Generic)
 displayName_zh: OpenAI（通用）
 description: Generic OpenAI-compatible chat completions. Use for native OpenAI or any third-party OpenAI-compatible gateway. Capabilities are exposed openly — the user is expected to know what their endpoint supports.
 description_zh: 通用 OpenAI 兼容协议。可用于原生 OpenAI 或任何第三方 OpenAI 兼容网关。能力字段开放给用户自选——由用户对端点能力自行负责。
-defaultEndpoint: https://api.openai.com/v1
-defaultModelId: gpt-4o
+defaultEndpoint: https://bedrock-mantle.us-east-1.api.aws/openai/v1
+defaultModelId: openai.gpt-5.5
 endpointPresets:
+  - https://bedrock-mantle.us-east-1.api.aws/openai/v1
+  - https://bedrock-mantle.us-west-2.api.aws/openai/v1
   - https://api.openai.com/v1
 
 secrets:
   - key: api_key
-    description: API key for the chosen OpenAI-compatible endpoint. Format depends on provider (sk-... for OpenAI, ark-... for Volcengine, etc.)
-    description_zh: 所选 OpenAI 兼容端点的 API Key。前缀格式因厂商而异（OpenAI 是 sk-、火山方舟是 ark- 等）
+    description: API key of the chosen endpoint, sent as a Bearer token — e.g. a Bedrock API key for the Bedrock Mantle presets, or the key your OpenAI-compatible gateway issued (sk-... for OpenAI, ark-... for Volcengine, etc.).
+    description_zh: 所选端点的 API Key（以 Bearer 令牌发送）——例如 Bedrock Mantle 端点用 Bedrock API Key，其他 OpenAI 兼容网关用该网关签发的 Key（OpenAI 是 sk-、火山方舟是 ark- 等）。
     default: <<OPENAI_API_KEY>>
     secret: true
 
-# This provider is a "user-fills-everything" placeholder. The single
-# placeholder model below exists so the registry has something to render
-# in the form's model dropdown — replace its id/endpoint with whatever
-# you actually want to call. capabilities here are deliberately
-# permissive (image/video/audio all true, full thinking + caching
-# presets) so the form doesn't lock anything; if your real endpoint
-# doesn't support, e.g., audio, just don't send audio.
+# Placeholder provider — point it at any OpenAI-compatible endpoint and type
+# the model id that endpoint serves. Custom model ids (anything not listed
+# under `models:`) are treated as fully-permissive in the admin form — the
+# user can flip image/video/audio toggles, pick caching TTL, and set thinking
+# effort or budget. The models census skips this provider; new GPT models are
+# tracked through the aws-bedrock-* providers.
 #
-# Custom model ids (anything not listed under `models:`) are treated as
-# fully-permissive in the admin form — the user can flip image/video/
-# audio toggles, pick caching TTL, and set thinking effort or budget.
+# The listed models (bar the legacy placeholder at the end) are callable out of
+# the box with a Bedrock API key — the default endpoint is Mantle us-east-1:
+# Amazon Bedrock's bedrock-mantle endpoint serves Chat Completions (Bearer
+# auth — what OpenAIAgent sends; the runtime appends /chat/completions).
+# The path prefix is per model: GPT-5.x lives under /openai/v1, gpt-oss under
+# /v1; the wrong one 400s "model ... isn't supported on this route".
+# Source: docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+# and each model card's Programmatic Access table.
+#
+# GPT on Mantle Chat Completions /openai/v1, in-Region (live GET /v1/models
+# 2026-10-10, matches the models-region-compatibility.html bedrock-mantle
+# column), probed through OpenAIAgent 2026-10-10:
+#
+#                    us-east-1   us-west-2   via OpenAIAgent
+#   gpt-6.1-sol          ✓           -       400 (max_tokens)
+#   gpt-6-sol / luna     ✓           -       400 (max_tokens)
+#   gpt-6-astra          ✓           ✓       400 (max_tokens)
+#   gpt-5.6-sol          ✓           -       400 (max_tokens)
+#   gpt-5.6-terra/luna   ✓           ✓       400 (max_tokens)
+#   gpt-5.5              ✓           -       OK
+#   gpt-5.4              ✓           ✓       OK
+#
+# GPT-6.x / 5.6 reject `max_tokens` ("Unsupported parameter ... not supported
+# with this model"; they take max_completion_tokens), which OpenAIAgent always
+# sends — use them through aws-bedrock-mantle / aws-bedrock-openai (Responses
+# API) instead. Each model below carries its own `endpoints:`.
+#
+# Capability notes (Mantle Chat Completions):
+#   - promptCaching: automatic (cached_tokens come back, nothing to send, TTL
+#     undisclosed) — the single 5m preset is a form hint only.
+#   - thinking: reasoning_effort. The validation error lists none / minimal /
+#     low / medium / high / xhigh / max, but `max` 400s "not supported with
+#     this model" on both models, so the presets stop at xhigh. Reasoning
+#     tokens are counted (xhigh 1.4–2x low on the same prompt) but the reply
+#     carries no reasoning text, so no thinking is shown in the UI.
+#   - verbosity: not declared — OpenAIAgent doesn't send it.
 models:
+  # Live-probed 2026-10-10 through OpenAIAgent on us-east-1: tool call →
+  # result → reply OK; us-west-2 → 404 "does not exist". Red PNG → "Red".
+  # Model card: 1,050,000 context / 128,000 output (max_tokens 128001 is
+  # accepted too, so the cap is the card's figure, not a probe). Long-context
+  # rates apply to the whole request past 272K input — hence contextWindow
+  # 272000; maxContextWindow is the real limit.
+  - id: openai.gpt-5.5
+    displayName: GPT-5.5 (Bedrock Mantle)
+    endpoints:
+      - https://bedrock-mantle.us-east-1.api.aws/openai/v1
+    maxOutputTokens: 128000
+    contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: xhigh
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+
+  # Same surface as GPT-5.5 (probe and model card: 1,050,000 / 128,000), and
+  # the only GPT-5 that OpenAIAgent can drive on us-west-2 — tool round-trip
+  # OK on both regions 2026-10-10.
+  - id: openai.gpt-5.4
+    displayName: GPT-5.4 (Bedrock Mantle)
+    endpoints:
+      - https://bedrock-mantle.us-east-1.api.aws/openai/v1
+      - https://bedrock-mantle.us-west-2.api.aws/openai/v1
+    maxOutputTokens: 128000
+    contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: xhigh
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+
+  # Legacy placeholder (pre-1.6.1): the default model before the Bedrock Mantle
+  # entries above, kept so agents created on it still resolve their caps and
+  # context. Official API only.
   - id: gpt-4o
     displayName: GPT-4o (placeholder)
+    endpoints:
+      - https://api.openai.com/v1
     maxOutputTokens: 16384
     contextWindow: 128000
+    maxContextWindow: 128000
+    compressAt: 0.9
     capabilities:
       image: true
       video: true
       audio: true
       promptCaching:
-        default: 5m
+        default: 1h
         ttlPresets:
           - { value: 5m, label: 5min }
           - { value: 1h, label: 1hour }
       thinking:
         mode: manual
         defaultEnabled: false
-        default: medium
+        default: high
         defaultBudgetTokens: 8192
         effortPresets:
           - { value: low, label: Low }

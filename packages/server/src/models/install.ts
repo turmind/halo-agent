@@ -10,9 +10,11 @@
  * — credential values never ride in a hub yaml. The rest are planned against
  * the merged view currently in effect (models/registry.ts): an older revision
  * is skipped, an identical copy is up to date, anything else is installed. If
- * an installed provider is new or its `defaultEndpoint` / `endpointPresets`
- * differ from the copy in effect, the whole run stops before writing and needs
- * `--yes` (the agent asks the user first). Writes go to `models.d/<id>.yaml`
+ * an installed provider is new, its `defaultEndpoint` / `endpointPresets`
+ * differ from the copy in effect, or a model's `endpoints:` list gains a URL
+ * the provider didn't use anywhere yet, the whole run stops before writing and needs `--yes` (the agent asks the
+ * user first) — an auto-update must never point requests (and credentials) at
+ * a new host on its own. Writes go to `models.d/<id>.yaml`
  * via tmp + rename; the server's models.d watcher picks them up live.
  */
 import fs from 'node:fs'
@@ -39,6 +41,8 @@ export interface PlanEntry {
   current?: { source: ProviderSource; revision: number }
   /** Human-readable endpoint differences vs. the copy in effect (install only). */
   endpointChanges: string[]
+  /** Some of `endpointChanges` adds a URL, so installing needs `--yes`. */
+  needsConfirm?: boolean
   raw?: string
 }
 
@@ -57,19 +61,63 @@ function endpointOf(data: Record<string, unknown> | undefined): string {
   return typeof data?.defaultEndpoint === 'string' ? data.defaultEndpoint : ''
 }
 
-function endpointDiff(cur: Record<string, unknown> | undefined, next: Record<string, unknown>): string[] {
-  if (!cur) {
-    return [`new provider — defaultEndpoint: ${endpointOf(next) || '(none)'}; endpointPresets: ${presets(next).join(', ') || '(none)'}`]
-  }
-  const out: string[] = []
-  if (endpointOf(cur) !== endpointOf(next)) out.push(`defaultEndpoint: ${endpointOf(cur) || '(none)'} → ${endpointOf(next) || '(none)'}`)
-  const before = presets(cur), after = presets(next)
-  const added = after.filter((u) => !before.includes(u))
-  const removed = before.filter((u) => !after.includes(u))
-  if (added.length || removed.length) {
-    out.push(`endpointPresets: ${[...added.map((u) => `+ ${u}`), ...removed.map((u) => `- ${u}`)].join(', ')}`)
+/** Per-model `endpoints:` lists by model id (only models that declare one). */
+function modelEndpoints(data: Record<string, unknown> | undefined): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const m of Array.isArray(data?.models) ? data.models as Array<Record<string, unknown> | null> : []) {
+    if (typeof m?.id === 'string' && Array.isArray(m.endpoints) && m.endpoints.length) out.set(m.id, m.endpoints.map(String))
   }
   return out
+}
+
+/** Every URL a provider yaml can send requests to: defaultEndpoint, presets
+ *  and each model's `endpoints:`. */
+function providerUrls(data: Record<string, unknown>): Set<string> {
+  const urls = new Set(presets(data))
+  if (endpointOf(data)) urls.add(endpointOf(data))
+  for (const list of modelEndpoints(data).values()) for (const u of list) urls.add(u)
+  return urls
+}
+
+const listDiff = (before: string[], after: string[]) => ({
+  added: after.filter((u) => !before.includes(u)),
+  removed: before.filter((u) => !after.includes(u)),
+})
+const diffText = ({ added, removed }: { added: string[]; removed: string[] }) =>
+  [...added.map((u) => `+ ${u}`), ...removed.map((u) => `- ${u}`)].join(', ')
+
+/** Endpoint differences vs. the copy in effect. `needsConfirm` = some URL the
+ *  server may now send requests (and credentials) to that it wouldn't before:
+ *  a new provider, a changed defaultEndpoint / endpointPresets, or a URL added
+ *  to a model's `endpoints` that the provider didn't use anywhere yet. A model
+ *  list that only loses URLs, or gains one the provider already had, is listed
+ *  but needs no consent. */
+function endpointDiff(cur: Record<string, unknown> | undefined, next: Record<string, unknown>): { lines: string[]; needsConfirm: boolean } {
+  const out: string[] = []
+  let needsConfirm = false
+  if (!cur) {
+    out.push(`new provider — defaultEndpoint: ${endpointOf(next) || '(none)'}; endpointPresets: ${presets(next).join(', ') || '(none)'}`)
+    needsConfirm = true
+  } else {
+    if (endpointOf(cur) !== endpointOf(next)) {
+      out.push(`defaultEndpoint: ${endpointOf(cur) || '(none)'} → ${endpointOf(next) || '(none)'}`)
+      needsConfirm = true
+    }
+    const d = listDiff(presets(cur), presets(next))
+    if (d.added.length || d.removed.length) {
+      out.push(`endpointPresets: ${diffText(d)}`)
+      needsConfirm = true
+    }
+  }
+  const before = modelEndpoints(cur), after = modelEndpoints(next)
+  const known = cur ? providerUrls(cur) : new Set<string>()
+  for (const id of new Set([...before.keys(), ...after.keys()])) {
+    const d = listDiff(before.get(id) ?? [], after.get(id) ?? [])
+    if (!d.added.length && !d.removed.length) continue
+    out.push(`model ${id} endpoints: ${diffText(d)}`)
+    if (d.added.some((u) => !known.has(u))) needsConfirm = true
+  }
+  return { lines: out, needsConfirm }
 }
 
 /** Why `data` can't be installed from a hub, or undefined when it can. */
@@ -81,6 +129,14 @@ function refusal(data: Record<string, unknown>): string | undefined {
     if (def == null || def === '' || (typeof def === 'string' && ENV_PLACEHOLDER_RE.test(def.trim()))) continue
     const key = (s as Record<string, unknown>).key
     return `secrets.${String(key)}.default holds a value — a hub yaml may only use a <<ENV_NAME>> placeholder`
+  }
+  for (const m of Array.isArray(data.models) ? data.models as Array<Record<string, unknown> | null> : []) {
+    const { id, contextWindow: cw, maxContextWindow: max, compressAt, endpoints } = m ?? {}
+    if (cw !== undefined && (!Number.isInteger(cw) || (cw as number) <= 0)) return `models.${String(id)}.contextWindow must be a positive integer`
+    if (max !== undefined && (!Number.isInteger(max) || (max as number) <= 0)) return `models.${String(id)}.maxContextWindow must be a positive integer`
+    if (typeof cw === 'number' && typeof max === 'number' && cw > max) return `models.${String(id)}.contextWindow ${cw} exceeds maxContextWindow ${max}`
+    if (compressAt !== undefined && (typeof compressAt !== 'number' || compressAt <= 0 || compressAt > 1)) return `models.${String(id)}.compressAt must be a number in (0, 1]`
+    if (endpoints !== undefined && (!Array.isArray(endpoints) || endpoints.some((u) => typeof u !== 'string' || !u.startsWith('https://')))) return `models.${String(id)}.endpoints must be a list of https:// URLs`
   }
   return undefined
 }
@@ -125,9 +181,10 @@ export function planModelsInstall(srcDir: string, dirs: { bundledDir?: string; h
     if (cur && revision === cur.revision && isDeepStrictEqual(data, cur.data)) {
       return { file, id, action: 'up-to-date', revision, current, endpointChanges: [] }
     }
-    return { file, id, action: 'install', revision, current, endpointChanges: endpointDiff(cur?.data, data), raw }
+    const diff = endpointDiff(cur?.data, data)
+    return { file, id, action: 'install', revision, current, endpointChanges: diff.lines, needsConfirm: diff.needsConfirm, raw }
   })
-  return { hubDir, entries, needsConfirm: entries.some((e) => e.action === 'install' && e.endpointChanges.length > 0) }
+  return { hubDir, entries, needsConfirm: entries.some((e) => e.action === 'install' && e.needsConfirm) }
 }
 
 /** Write every `install` entry to `<hubDir>/<id>.yaml` (tmp + rename, so the
@@ -164,7 +221,7 @@ export function formatPlan(plan: InstallPlan): string[] {
 /** The CLI's last line. */
 export function summaryLine(plan: InstallPlan, written: string[] | null): string {
   if (written == null) {
-    const ids = plan.entries.filter((e) => e.action === 'install' && e.endpointChanges.length > 0).map((e) => e.id)
+    const ids = plan.entries.filter((e) => e.action === 'install' && e.needsConfirm).map((e) => e.id)
     return `endpoint changes in ${ids.length} provider(s) (${ids.join(', ')}) — nothing written; re-run with --yes to apply`
   }
   const count = (a: PlanEntry['action']) => plan.entries.filter((e) => e.action === a).length

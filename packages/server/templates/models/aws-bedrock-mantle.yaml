@@ -1,6 +1,6 @@
 id: aws-bedrock-mantle
 runtime: bedrock-mantle
-revision: 2026100501
+revision: 2026101005
 displayName: AWS Bedrock Mantle (OpenAI GPT-6.1 / 6 / 5.6)
 displayName_zh: AWS Bedrock Mantle（OpenAI GPT-6.1 / 6 / 5.6）
 description: OpenAI GPT-6.1 Sol, GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna) on Amazon Bedrock via the bedrock-mantle endpoint (OpenAI Responses API only — not Converse/InvokeModel). Region-split — GPT-6.1 Sol and GPT-6 Sol / Luna are on us-east-1 only, Astra on us-west-2 only.
@@ -18,9 +18,15 @@ description_zh: 通过 Bedrock Mantle 端点调用 OpenAI GPT-6.1 Sol、GPT-6（
 #   gpt-5.6-terra    ✓           ✓           ✓
 #   gpt-5.6-luna     ✓           ✓           ✓
 #
+# The matrix is machine-readable: each region-limited model carries its own
+# `endpoints:` list (authoritative for that model — the agent form offers only
+# those and switches the endpoint when a model isn't served on the current
+# one); a model with no `endpoints:` (5.6 Terra / Luna) is served on every
+# entry of `endpointPresets`. Keep the table and the lists in step.
+#
 # us-east-1 serves everything but Astra, so it is the default; existing
-# us-east-2 configs (5.6-era) keep working; Astra users pick us-west-2 in the
-# agent form. The endpoint is a per-agent pick.
+# us-east-2 configs (5.6-era) keep working; picking Astra moves the agent to
+# us-west-2. The endpoint is a per-agent pick.
 #
 # The same seven models are also in aws-bedrock-openai.yaml (bedrock-runtime
 # host, `global.openai.*` ids, no region split) — AWS's recommended endpoint
@@ -29,8 +35,8 @@ description_zh: 通过 Bedrock Mantle 端点调用 OpenAI GPT-6.1 Sol、GPT-6（
 defaultEndpoint: https://bedrock-mantle.us-east-1.api.aws/openai/v1
 endpointPresets:
   - https://bedrock-mantle.us-east-1.api.aws/openai/v1
-  - https://bedrock-mantle.us-east-2.api.aws/openai/v1
   - https://bedrock-mantle.us-west-2.api.aws/openai/v1
+  - https://bedrock-mantle.us-east-2.api.aws/openai/v1
 
 defaultModelId: openai.gpt-6-sol
 
@@ -72,12 +78,16 @@ models:
   # high/xhigh/max (`max` now on the official list, unlike 5.6), text.verbosity
   # accepts low/medium/high — same surface as 5.6, so MantleAgent needs no
   # change. Pricing note: input beyond 272K tokens bills at 2x, so the huge
-  # window is a ceiling, not a free lunch — leave context.maxTokens unset in
-  # agent.yaml only if you accept that.
+  # window is a ceiling, not a free lunch — contextWindow (the new-agent
+  # default) stays at 272000; maxContextWindow is the real limit.
   - id: openai.gpt-6-astra
     displayName: GPT-6 Astra
+    endpoints:
+      - https://bedrock-mantle.us-west-2.api.aws/openai/v1
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -89,16 +99,16 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
-      # See GPT-5.6 Sol below — final-answer length, default low, per-agent overridable.
+      # See GPT-5.6 Sol below — final-answer length; new agents get the default, a yaml without it sends low.
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -114,8 +124,12 @@ models:
   # input-price step noted on Astra applies here too.
   - id: openai.gpt-6-sol
     displayName: GPT-6 Sol
+    endpoints:
+      - https://bedrock-mantle.us-east-1.api.aws/openai/v1
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -127,7 +141,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -135,7 +149,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -144,12 +158,16 @@ models:
   # GPT-6.1 Sol (Bedrock GA 2026-09-29) — us-east-1 endpoint ONLY (404 on
   # us-east-2 / us-west-2, live-probed 2026-09-30). reasoning.effort accepts
   # low/medium/high/xhigh/max — `none` 400s, unlike GPT-6 Sol, so no "none"
-  # preset; text.verbosity low/medium/high; image input OK; 1,050,000 /
-  # 128,000 per the OpenAI model page.
+  # preset; text.verbosity low/medium/high; image input OK; 1M context /
+  # 131,072 output per the Bedrock model card.
   - id: openai.gpt-6.1-sol
     displayName: GPT-6.1 Sol
-    maxOutputTokens: 128000
+    endpoints:
+      - https://bedrock-mantle.us-east-1.api.aws/openai/v1
+    maxOutputTokens: 131072
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -161,7 +179,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -169,7 +187,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -177,8 +195,12 @@ models:
 
   - id: openai.gpt-6-luna
     displayName: GPT-6 Luna
+    endpoints:
+      - https://bedrock-mantle.us-east-1.api.aws/openai/v1
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -190,7 +212,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -198,7 +220,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -207,8 +229,13 @@ models:
   # GPT-5.6 flagship.
   - id: openai.gpt-5.6-sol
     displayName: GPT-5.6 Sol
+    endpoints:
+      - https://bedrock-mantle.us-east-1.api.aws/openai/v1
+      - https://bedrock-mantle.us-east-2.api.aws/openai/v1
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -220,7 +247,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -228,10 +255,11 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       # Output length of the final answer (Responses API `text.verbosity`),
-      # separate from reasoning effort. Default low = terse + cheaper, best for
-      # tool-driven agent turns. Override per-agent via agent.yaml model.verbosity.
+      # separate from reasoning effort. `default` is what a new agent's
+      # model.verbosity gets (scaffold / form); an agent.yaml without the
+      # field sends low (MantleAgent's fallback — terse, best for tool turns).
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -242,6 +270,8 @@ models:
     displayName: GPT-5.6 Terra
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -253,16 +283,16 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
-      # See GPT-5.6 Sol above — final-answer length, default low, per-agent overridable.
+      # See GPT-5.6 Sol above — final-answer length; new agents get the default, a yaml without it sends low.
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -273,6 +303,8 @@ models:
     displayName: GPT-5.6 Luna
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -284,16 +316,16 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
-      # See GPT-5.6 Sol above — final-answer length, default low, per-agent overridable.
+      # See GPT-5.6 Sol above — final-answer length; new agents get the default, a yaml without it sends low.
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }

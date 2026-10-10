@@ -252,6 +252,9 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
         // Goal-mode: non-null while this session is the bound worker of an
         // active goal — session lists render a 🎯 badge off this.
         goalSessionId: s.goalSessionId,
+        // Persisted working dir (workspace-relative; null = root) — the cron
+        // form prefills a picked session's folder from it.
+        workingDir: s.workingDir,
         // Running flag for an Explorer chat tab that hasn't loaded yet (a
         // loaded tab tracks its own stream). A root with a running sub-session
         // counts as running.

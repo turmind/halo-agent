@@ -25,6 +25,10 @@ The rest are noun-verb **object commands**: `/<obj> <verb> [args]`. Some verbs a
 
 Session lifecycle actions (`subscribe` / `unsubscribe`, `session:delete`) are handled inline by the WS handler, not as slash commands. In the admin, a bare `/session new` (and `/clear`) is handled client-side: it opens a new draft chat tab and sends nothing; `/session new <args>` still goes to the server. The WS `session:clear` frame was removed in 1.5.3-alpha.
 
+### `/session new`
+
+Built-in verb, all users. Creates a new root session with the workspace's entry agent and switches the caller to it. The new session **keeps the current session's folder** (its `working_dir`, e.g. from `halo tui --dir sub`): from a sub-agent, its root's folder. The folder is re-checked; if it no longer exists, the new session starts at the workspace root.
+
 ### `/session info`
 
 Built-in verb (no access gate beyond ownership). Prints the **session tree** for the caller's current root session — the root plus every descendant sub-agent, so the user can see the whole delegation fan-out at a glance:

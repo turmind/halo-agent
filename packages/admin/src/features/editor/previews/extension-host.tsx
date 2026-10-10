@@ -170,6 +170,7 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
     themeVars: hostTheme.themeVars,
     platform: currentPlatform(),
     lang,
+    projectId,
   }
   const ctxRef = useRef(ctx)
   const applyEffectRef = useRef<(eff: HostEffect) => void>(() => {})

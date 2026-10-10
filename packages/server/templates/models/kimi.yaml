@@ -1,10 +1,10 @@
 id: kimi
 runtime: kimi
-revision: 2026100501
+revision: 2026101004
 displayName: Kimi (Moonshot AI)
 displayName_zh: Kimi（月之暗面）
-description: Kimi K3 / K2.6 via OpenAI-compatible chat completions API
-description_zh: Kimi K3 / K2.6，通过 OpenAI 兼容的 chat completions API 调用
+description: Kimi K3 / K2.7 Code / K2.6 via OpenAI-compatible chat completions API
+description_zh: Kimi K3 / K2.7 Code / K2.6，通过 OpenAI 兼容的 chat completions API 调用
 defaultEndpoint: https://api.moonshot.cn/v1
 
 secrets:
@@ -30,6 +30,8 @@ models:
     # Official default output cap; the model can go up to 1M but we don't max out.
     maxOutputTokens: 131072
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       # K3 itself also supports video input, but Halo has no video upload
       # path yet — keep video:false until one exists. Image input is
@@ -53,10 +55,68 @@ models:
         effortPresets:
           - { value: max, label: Max }
 
+  - id: kimi-k2.7-code
+    displayName: Kimi K2.7 Code
+    # Official quickstart: 256K context, max_tokens default 32768.
+    maxOutputTokens: 32768
+    contextWindow: 262144
+    maxContextWindow: 262144
+    compressAt: 0.9
+    capabilities:
+      # Live probe 2026-10-10: named a red 64×64 PNG correctly (base64 data URL).
+      # Video input exists upstream but Halo has no video path (see K3).
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        # Automatic (prompt_cache_key hint) — probe: turn 2 cached 5376/5622.
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # Thinking is MANDATORY: thinking:{type:'disabled'} → 400 "only
+        # type=enabled is allowed for this model". kimi-agent's K2.x branch only
+        # sends `disabled` for effort 'disabled', so toggling Off in the form
+        # just omits the field and the model still thinks.
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: medium, label: On }
+
+  - id: kimi-k2.7-code-highspeed
+    displayName: Kimi K2.7 Code (highspeed)
+    # Same model as kimi-k2.7-code at ~5-6x output speed (official quickstart:
+    # "与 Kimi K2.7 Code 是同一个模型", 256K context, no non-thinking mode;
+    # capacity "偶有波动"). /v1/models: context_length 262144, image in.
+    maxOutputTokens: 32768
+    contextWindow: 262144
+    maxContextWindow: 262144
+    compressAt: 0.9
+    capabilities:
+      # Live probe 2026-10-10: red 64×64 PNG → "Red"; tool call → tool_calls;
+      # max_tokens 32768 OK. Video: no Halo path (see K3).
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        # Automatic (prompt_cache_key hint) — probe: turn 2 cached 7016/7016.
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # MANDATORY, as on kimi-k2.7-code: thinking:{type:'disabled'} → 400
+        # "only type=enabled is allowed for this model".
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: medium, label: On }
+
   - id: kimi-k2.6
     displayName: Kimi K2.6
     maxOutputTokens: 32768
     contextWindow: 262144
+    maxContextWindow: 262144
+    compressAt: 0.9
     capabilities:
       # Verified 2026-05-27 via live probes: kimi-k2.6 returns "prepare
       # image failed" on image_url blocks despite past docs claiming

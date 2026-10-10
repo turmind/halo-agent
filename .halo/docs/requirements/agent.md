@@ -22,6 +22,11 @@ Left sidebar has two collapsible groups (Global / Workspace — the latter only 
 
 ### Form / Edit dual view
 - **Form view** (default): data-driven form derived from the YAML fields (name / description / priority / model incl. thinking and capabilities / system_prompt / team / tools / skills). Edits auto-save to `agent.yaml` (debounced 500 ms). If `agent.yaml` fails to load or parse, the form is replaced by an error with a Retry button and nothing is auto-saved (an unparsable file is fixed in Edit view); below the form, a read-only preview of `AGENT.md` is shown when it has content
+- **Model / context fields** in the form:
+  - **Endpoint list**: the dropdown offers the model's own `endpoints:` when the registry declares them, else the provider's `endpointPresets`; free text stays allowed.
+  - **Auto-switch on model change**: switching to a model with its own list moves the endpoint to that model's default when the current one (or, left empty, the provider default) isn't on the list, with a one-line note naming the new endpoint; a model without a list leaves the endpoint alone. Switching provider sets the new model's default endpoint.
+  - **Off-list warning**: a saved / typed endpoint outside the model's own list shows an amber "not listed on this endpoint — requests may fail" hint (not blocked).
+  - **Context**: switching model moves `context.maxTokens` / `compressAt` to the new model's recommended values when the old ones were the old model's untouched recommendation (or the window exceeds the new model's max); hand-set values that still fit are kept. The `context.maxTokens` input shows "Model max N" (the registry `maxContextWindow`); an over-max draft turns red ("Exceeds model max N — not saved") and is never auto-saved, and the server refuses it too (400), except a value already on disk for the same model. An empty or non-positive draft is ignored — the saved value stays.
 - **Edit view**: the **Edit** button opens a mini workspace (file tree + editor) rooted at the agent's folder, for editing `agent.yaml` / `AGENT.md` directly; **Back** returns to the form, which reloads from disk
 - The chosen view is remembered per agent in `localStorage`
 

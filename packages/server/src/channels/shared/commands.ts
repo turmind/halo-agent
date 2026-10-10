@@ -4,6 +4,8 @@ import os from 'node:os'
 import YAML from 'yaml'
 import type { SessionManager } from '../../agents/session-manager.js'
 import { scanAvailableAgents, GLOBAL_AGENTS_DIR, GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter, ACCESS_RANK } from '../../agents/agent-loader.js'
+import { listSkillDirs, type SkillScope } from '../../agents/skill-sources.js'
+import { resolveWorkingDir } from '../../agents/working-dir.js'
 import { ensureWorkspaceHalo } from '../../init.js'
 import { getDisabledSet, toggleDisabled } from '../../db/index.js'
 import { t, type Lang } from './i18n.js'
@@ -79,6 +81,9 @@ export interface CommandContext {
    *  invoked from inside this chat, default targets/recipients accordingly".
    *  Absent for admin / WS / CLI invocations. */
   channel?: ChannelContext
+  /** The session the command was issued in, when the caller knows it (the
+   *  cli / tui harness). Absent → findActiveSessionId. Read by /new only. */
+  sessionId?: string
 }
 
 export interface ChannelContext {
@@ -302,8 +307,22 @@ export async function execNew(ctx: CommandContext): Promise<CommandResult> {
   const agentId = await resolveDefaultAgentId(ctx.sm, ctx.workspacePath)
   const newId = `${ctx.sessionPrefix}${Date.now().toString(36)}`
   const accessLevel = sessionAccess(ctx.accessLevel)
+  // The new session keeps the folder of the root session the command was
+  // issued in (`halo tui --dir sub`, then /new, stays in sub); from a
+  // sub-agent, its root's. A folder gone since then → the workspace root.
+  const current = ctx.sessionId ?? findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
+  const rootId = current?.split('>')[0]
+  const folder = rootId ? ctx.sm.getSessionById(rootId)?.workingDir : null
+  let workingDir: string | undefined
+  if (folder) {
+    try {
+      workingDir = await resolveWorkingDir(ctx.sm.workspaceRoot, folder)
+    } catch (err) {
+      console.log(`[Commands] /new: folder of ${rootId} not kept, starting at the workspace root: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
   try {
-    await ctx.sm.createSession(agentId, null, ctx.channelLabel, undefined, newId, undefined, accessLevel)
+    await ctx.sm.createSession(agentId, null, ctx.channelLabel, undefined, newId, workingDir, accessLevel)
     ctx.activeOverrides.set(ctx.userId, newId)
     return { text: t('new.done', ctx.lang), switchTo: newId }
   } catch (err) {
@@ -947,45 +966,50 @@ interface ScannedSkill {
   id: string
   name: string
   description: string
-  scope: 'global' | 'workspace'
+  scope: SkillScope
+  extId?: string
   disabled: boolean
   overridden: boolean
 }
 
-/** Scan global + workspace skills. Workspace wholly overrides a same-id global
- *  (the global row is kept but flagged `overridden`). `disabled` comes from the
- *  workspace DB (disabled_items), keyed `scope:id`. */
+/** List order of /skill list (and so the 1-based index) — unchanged from
+ *  before extension skills: global, then workspace, extensions last. */
+const SKILL_LIST_ORDER: SkillScope[] = ['global', 'workspace', 'extension']
+
+/** Scan workspace + global + extension skills (skill-sources.ts). A higher
+ *  source wholly overrides a same-id lower one (that row is kept but flagged
+ *  `overridden`). `disabled` comes from the workspace DB (disabled_items),
+ *  keyed `scope:id`. */
 function scanSkills(ctx: CommandContext): ScannedSkill[] {
   const disabledSet = getDisabledSet(ctx.sm.getDb(), 'skill')
   const out: ScannedSkill[] = []
-  const scanOne = (dir: string, scope: 'global' | 'workspace') => {
-    let names: string[]
-    try { names = fs.readdirSync(dir) } catch { return }
-    for (const id of names) {
-      const mdPath = path.join(dir, id, 'SKILL.md')
-      if (!fs.existsSync(mdPath)) continue
-      try {
-        const { name, description } = parseSkillFrontmatter(fs.readFileSync(mdPath, 'utf-8'))
-        out.push({
-          id, name: name || id, description: description ?? '', scope,
-          disabled: disabledSet.has(`${scope}:${id}`), overridden: false,
-        })
-      } catch { /* skip unparsable */ }
-    }
+  for (const { id, dir, scope, extId, overridden } of listSkillDirs(ctx.workspacePath)) {
+    const mdPath = path.join(dir, 'SKILL.md')
+    if (!fs.existsSync(mdPath)) continue
+    try {
+      const { name, description } = parseSkillFrontmatter(fs.readFileSync(mdPath, 'utf-8'))
+      out.push({
+        id, name: name || id, description: description ?? '', scope, ...(extId ? { extId } : {}),
+        disabled: disabledSet.has(`${scope}:${id}`), overridden,
+      })
+    } catch { /* skip unparsable */ }
   }
-  scanOne(GLOBAL_SKILLS_DIR, 'global')
-  scanOne(path.join(ctx.workspacePath, '.halo', 'skills'), 'workspace')
-  const wsIds = new Set(out.filter((s) => s.scope === 'workspace').map((s) => s.id))
-  for (const s of out) if (s.scope === 'global' && wsIds.has(s.id)) s.overridden = true
-  return out
+  return out.sort((a, b) => SKILL_LIST_ORDER.indexOf(a.scope) - SKILL_LIST_ORDER.indexOf(b.scope))
+}
+
+/** `[ws]` / `[global]` / `[ext:<id>]` tag for /skill list + desc. */
+function skillScopeTag(s: ScannedSkill, lang: Lang): string {
+  if (s.scope === 'workspace') return '[ws]'
+  if (s.scope === 'extension') return `[ext:${s.extId}]`
+  return lang === 'zh' ? '[全局]' : '[global]'
 }
 
 /** Resolve a skill by 1-based index (against the list order) or by id. */
 function resolveSkill(skills: ScannedSkill[], arg: string): ScannedSkill | undefined {
   const idx = parseInt(arg, 10)
   if (Number.isInteger(idx) && idx >= 1 && idx <= skills.length) return skills[idx - 1]
-  // Prefer the workspace copy when both scopes have the id (it's the live one).
-  return skills.find((s) => s.id === arg && s.scope === 'workspace') ?? skills.find((s) => s.id === arg)
+  // Prefer the live copy when several scopes have the id.
+  return skills.find((s) => s.id === arg && !s.overridden) ?? skills.find((s) => s.id === arg)
 }
 
 export function execSkillList(ctx: CommandContext): CommandResult {
@@ -993,7 +1017,7 @@ export function execSkillList(ctx: CommandContext): CommandResult {
   if (skills.length === 0) return { text: t('skills.empty', ctx.lang) }
   const lines = [t('skills.title', ctx.lang)]
   skills.forEach((s, i) => {
-    const scope = s.scope === 'workspace' ? '[ws]' : (ctx.lang === 'zh' ? '[全局]' : '[global]')
+    const scope = skillScopeTag(s, ctx.lang)
     const flags = [
       s.disabled ? (ctx.lang === 'zh' ? '已禁用' : 'disabled') : '',
       s.overridden ? (ctx.lang === 'zh' ? '被覆盖' : 'overridden') : '',
@@ -1010,10 +1034,11 @@ export function execSkillDesc(ctx: CommandContext, arg: string): CommandResult {
   const skill = resolveSkill(skills, arg)
   if (!skill) return { text: t('skill.not_found', ctx.lang, { name: arg }) }
   const lines = [
-    `**${skill.name}** (${skill.id}) ${skill.scope === 'workspace' ? '[ws]' : '[global]'}`,
+    `**${skill.name}** (${skill.id}) ${skill.scope === 'global' ? '[global]' : skillScopeTag(skill, ctx.lang)}`,
     skill.description ? `\n${skill.description}` : '',
     skill.disabled ? `\n⚠ ${ctx.lang === 'zh' ? '此 skill 已在本 workspace 禁用' : 'Disabled in this workspace'}` : '',
-    skill.overridden ? `\n⚠ ${ctx.lang === 'zh' ? '被同名 workspace skill 覆盖' : 'Overridden by a same-id workspace skill'}` : '',
+    skill.overridden && skill.scope === 'extension' ? `\n⚠ ${ctx.lang === 'zh' ? '被同名 workspace / 全局 skill 覆盖' : 'Overridden by a same-id workspace / global skill'}` : '',
+    skill.overridden && skill.scope !== 'extension' ? `\n⚠ ${ctx.lang === 'zh' ? '被同名 workspace skill 覆盖' : 'Overridden by a same-id workspace skill'}` : '',
   ].filter(Boolean)
   return { text: lines.join('\n') }
 }
@@ -1037,6 +1062,8 @@ export function execSkillDelete(ctx: CommandContext, arg: string): CommandResult
   const skills = scanSkills(ctx)
   const skill = resolveSkill(skills, arg)
   if (!skill) return { text: t('skill.not_found', ctx.lang, { name: arg }) }
+  // Extension skills are read-only — they go away with the extension.
+  if (skill.scope === 'extension') return { text: t('skill.delete_extension', ctx.lang, { name: skill.id, ext: skill.extId ?? '' }) }
   // Built-in skills are re-seeded on restart — deleting won't stick (same as agents).
   const dir = skill.scope === 'workspace'
     ? path.join(ctx.workspacePath, '.halo', 'skills', skill.id)

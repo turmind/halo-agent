@@ -39,6 +39,9 @@ export interface PreviewProps {
   tooLarge?: boolean
   /** On-disk size in bytes (from stat) — shown by the too-large placeholder. */
   size?: number
+  /** On-disk mtime the buffer knows. A newer one remounts a built-in preview
+   *  with a cache-busted `viewUrl` (live refresh). */
+  mtime?: number
   /** `path` is a bundle DIRECTORY: only bundle extensions are candidates. */
   bundle?: boolean
 }

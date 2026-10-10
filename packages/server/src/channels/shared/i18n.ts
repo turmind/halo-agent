@@ -58,6 +58,7 @@ const messages: Record<string, Record<Lang, string>> = {
   'skill.enabled_done': { zh: '▶ 已启用 skill "{name}"（本 workspace）', en: '▶ Skill "{name}" enabled (this workspace)' },
   'skill.delete_done': { zh: '🗑 已删除 skill "{name}"（{scope}）', en: '🗑 Deleted skill "{name}" ({scope})' },
   'skill.delete_failed': { zh: '删除失败: {error}', en: 'Delete failed: {error}' },
+  'skill.delete_extension': { zh: 'skill "{name}" 来自扩展 {ext}，只读，卸载扩展时一并移除；可用 /skill disable 在本 workspace 禁用', en: 'Skill "{name}" comes from extension {ext} and is read-only — it goes away when the extension is uninstalled; use /skill disable to turn it off here' },
 
   // Channel-specific (currently WeChat-only)
   'cmd.qr':      { zh: '生成邀请二维码（仅管理员）', en: 'Generate invite QR (admin only)' },

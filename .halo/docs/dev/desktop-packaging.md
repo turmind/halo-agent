@@ -405,17 +405,23 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   confirm does nothing, because `if (!confirm(...)) return` always returns). In
   a plain browser the helpers fall back to the native sync dialogs.
 
+- **macOS notifications need a code-signed app (Electron 42+).** Electron moved
+  to `UNNotification`, which shows nothing for an unsigned app; our dmg is
+  ad-hoc (`identity: null`), so `Notification` emits `failed` (logged as
+  `notification failed: …` in `desktop.log`) and only the Dock bounce remains.
+  The fix is a Developer ID signature, not code.
+
 - **Media capture for extensions (`media` capability, e.g. htrans) —
   ⚠ not yet verified on a real Mac.** Three pieces, all needed:
   - **Info.plist usage strings** (`electron-builder.yml` → `mac.extendInfo`):
     `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`, and
     `NSAudioCaptureUsageDescription` (system-audio capture; required on macOS
     14.2+). Missing ones make macOS deny / kill the request silently.
-  - **`--enable-features=MacLoopbackAudioForScreenShare,MacSckSystemAudioLoopbackOverride`**
-    on macOS (`main.cjs`, appended before app `ready`, merged with any existing
-    `enable-features` value) — Chromium's loopback (system-audio) capture is
-    behind these flags; macOS 13+ (Darwin 22+) only, so older macOS never
-    offers or passes `audio:'loopback'`.
+  - **No feature switch for system audio** (Electron 39+): loopback capture is
+    built in (CoreAudio Tap on macOS 14.2+, ScreenCaptureKit below). The old
+    `MacLoopbackAudioForScreenShare` / `MacSckSystemAudioLoopbackOverride`
+    switches were removed with the Electron 44 upgrade; the plist string above
+    is what still matters.
   - **`getDisplayMedia()` picker**: Electron has no built-in one (the call just
     fails), so `session.setDisplayMediaRequestHandler` (mac / win only; Linux
     keeps Electron's default) lists `desktopCapturer` sources and asks the

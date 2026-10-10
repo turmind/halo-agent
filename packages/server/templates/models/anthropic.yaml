@@ -1,35 +1,70 @@
 id: anthropic
 runtime: anthropic-messages
-revision: 2026100501
+revision: 2026101005
 displayName: Anthropic (Generic)
 displayName_zh: Anthropic（通用）
 description: Generic Anthropic Messages API. Use for api.anthropic.com or any Anthropic-compatible third-party gateway.
 description_zh: 通用 Anthropic Messages API。可用于 api.anthropic.com 原生端点或任何 Anthropic 兼容的第三方网关。
-defaultEndpoint: https://api.anthropic.com
-defaultModelId: claude-sonnet-4-6
+defaultEndpoint: https://bedrock-mantle.us-east-1.api.aws/anthropic
+defaultModelId: anthropic.claude-opus-5-5
 endpointPresets:
+  - https://bedrock-mantle.us-east-1.api.aws/anthropic
+  - https://bedrock-mantle.us-west-2.api.aws/anthropic
   - https://api.anthropic.com
 
 secrets:
   - key: api_key
-    description: Anthropic API Key. Format starts with sk-ant-.
-    description_zh: Anthropic API Key，sk-ant- 开头
+    description: API key of the chosen endpoint, sent as x-api-key — e.g. a Bedrock API key for the Bedrock Mantle presets, or the key your Anthropic-compatible gateway issued.
+    description_zh: 所选端点的 API Key（以 x-api-key 发送）——例如 Bedrock Mantle 端点用 Bedrock API Key，其他 Anthropic 兼容网关用该网关签发的 Key。
     default: <<ANTHROPIC_API_KEY>>
     secret: true
 
-# Placeholder model — the user is expected to set the actual model id
-# (claude-sonnet-4-6, claude-opus-4-7, etc.) and the matching endpoint.
-# capabilities are deliberately permissive; flip what your real endpoint
-# doesn't support.
+# Placeholder provider — point it at any Anthropic-compatible endpoint and
+# type the model id that endpoint serves. Custom model ids (anything not
+# listed under `models:`) are treated as fully-permissive in the admin form —
+# image/video/audio toggles, caching TTL, thinking effort/budget all editable.
+# The models census skips this provider; new Claude models are tracked through
+# the aws-bedrock-* providers.
 #
-# Custom model ids (anything not listed under `models:`) are treated as
-# fully-permissive in the admin form — image/video/audio toggles,
-# caching TTL, thinking effort/budget all become editable.
+# The listed models (bar the legacy placeholder at the end) are callable out of
+# the box with a Bedrock API key — the default endpoint is Mantle us-east-1: Amazon
+# Bedrock's bedrock-mantle endpoint serves the Anthropic Messages API at
+# https://bedrock-mantle.<region>.api.aws/anthropic/v1/messages (x-api-key +
+# anthropic-version: 2023-06-01 — exactly what AnthropicAgent sends; the
+# runtime appends /v1/messages, so the preset ends at /anthropic). Ids are the
+# bare `anthropic.*` foundation-model ids, not `global.*` profiles.
+# Source: docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+#
+# Claude on Mantle's Messages API, in-Region (live GET /v1/models 2026-10-10,
+# matches the models-region-compatibility.html bedrock-mantle column):
+#
+#                      us-east-1   us-west-2
+#   claude-opus-5-5        ✓           -
+#   claude-opus-5          ✓           -
+#   claude-sonnet-5        ✓           -
+#   claude-opus-4-8        ✓           -
+#   claude-opus-4-7        ✓           -
+#   claude-fable-5      listed, status "unavailable"
+#   claude-haiku-4-5       ✓           ✓
+#
+# Wrong region → 404 "The model ... does not exist". Each model below carries
+# its own `endpoints:`; keep them in step with the table.
 models:
-  - id: claude-sonnet-4-6
-    displayName: Claude Sonnet 4.6 (placeholder)
-    maxOutputTokens: 64000
+  # Live-probed 2026-10-10 through AnthropicAgent on us-east-1: tool call →
+  # result → reply, adaptive thinking with display:summarized returns thinking
+  # blocks, output_config.effort accepts low/medium/high/xhigh/max (anything
+  # else 400s with that list), thinking:{type:disabled} and budget_tokens both
+  # 400 (adaptive only, always on), max_tokens 128000 OK / 128001 → 400, red
+  # PNG answered "Red", ttl:1h lands in usage.cache_creation.ephemeral_1h and
+  # turn 2 reads the cache. Model card: 1M context, 128K output.
+  - id: anthropic.claude-opus-5-5
+    displayName: Claude Opus 5.5 (Bedrock Mantle)
+    endpoints:
+      - https://bedrock-mantle.us-east-1.api.aws/anthropic
+    maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -42,7 +77,68 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+
+  # The only Claude Mantle serves in us-west-2. Live-probed 2026-10-10 through
+  # AnthropicAgent on both regions: tool round-trip OK, budget_tokens thinking
+  # OK, adaptive → 400 "adaptive thinking is not supported on this model" (so
+  # manual mode, no effort presets — AnthropicAgent sends adaptive for an
+  # effort label), max_tokens 64000 OK / 64001 → 400, red PNG → "Red", ttl:1h
+  # honoured (ephemeral_1h bucket); caching needs a ≥4096-token prefix. Model
+  # card: 200K context, 64K output; EOL no sooner than 2026-10-16.
+  - id: anthropic.claude-haiku-4-5
+    displayName: Claude Haiku 4.5 (Bedrock Mantle)
+    endpoints:
+      - https://bedrock-mantle.us-east-1.api.aws/anthropic
+      - https://bedrock-mantle.us-west-2.api.aws/anthropic
+    maxOutputTokens: 64000
+    contextWindow: 200000
+    maxContextWindow: 200000
+    compressAt: 0.9
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: manual
+        defaultEnabled: false
+        defaultBudgetTokens: 4000
+
+  # Legacy placeholder (pre-1.6.1): the default model before the Bedrock Mantle
+  # entries above, kept so agents created on it still resolve their caps and
+  # context. Official API only.
+  - id: claude-sonnet-4-6
+    displayName: Claude Sonnet 4.6 (placeholder)
+    endpoints:
+      - https://api.anthropic.com
+    maxOutputTokens: 64000
+    contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: high
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }

@@ -9,7 +9,7 @@ import { wsClient } from '@/shared/ws-client'
 import { onWsReconnect } from '@/shared/ws-reconnect'
 import { cn, promptInput, confirmAction } from '@/shared/utils'
 import type { Skill } from '@/shared/types'
-import { Zap, Plus, Trash2, Globe, FolderOpen, ChevronRight, ToggleLeft, ToggleRight, RefreshCw } from 'lucide-react'
+import { Zap, Plus, Trash2, Globe, FolderOpen, Puzzle, ChevronRight, ToggleLeft, ToggleRight, RefreshCw } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
 /** Composite key for unique skill selection (handles same id in different scopes) */
@@ -30,12 +30,12 @@ const SKILL_SELECTED_KEY = 'halo_skills_selectedKey'
 const SKILL_EXPANDED_KEY = 'halo_skills_expandedScopes'
 
 function loadExpandedScopes(): Set<string> {
-  if (typeof window === 'undefined') return new Set(['global', 'workspace'])
+  if (typeof window === 'undefined') return new Set(['global', 'workspace', 'extension'])
   try {
     const raw = localStorage.getItem(SKILL_EXPANDED_KEY)
     if (raw) return new Set(JSON.parse(raw))
   } catch { /* corrupt localStorage → default */ }
-  return new Set(['global', 'workspace'])
+  return new Set(['global', 'workspace', 'extension'])
 }
 
 export const useSkillStore = create<SkillStore>((set) => ({
@@ -193,10 +193,14 @@ export function SkillsSidebar() {
 
   const globalSkills = skills.filter((s) => s.scope === 'global')
   const workspaceSkills = skills.filter((s) => s.scope === 'workspace')
+  const extensionSkills = skills.filter((s) => s.scope === 'extension')
 
-  const renderSection = (scope: 'global' | 'workspace', icon: React.ElementType, label: string, items: Skill[]) => {
+  const renderSection = (scope: Skill['scope'], icon: React.ElementType, label: string, items: Skill[]) => {
     const Icon = icon
     const expanded = expandedScopes.has(scope)
+    // Extension skills are read-only: no create, no delete (toggle stays —
+    // disabling is a workspace setting, not a write into the extension).
+    const readOnly = scope === 'extension'
     return (
       <div key={scope}>
         <div className="flex items-center h-8 px-2 hover:bg-[var(--secondary)]/50 transition-colors">
@@ -206,13 +210,15 @@ export function SkillsSidebar() {
             <span className="text-[11px] font-medium text-[var(--foreground)] truncate">{label}</span>
             <span className="text-[10px] text-[var(--muted-foreground)] ml-auto">{items.length}</span>
           </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); handleCreate(scope) }}
-            title={`New ${scope} skill`}
-            className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]"
-          >
-            <Plus className="h-3 w-3" />
-          </button>
+          {!readOnly && (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleCreate(scope) }}
+              title={`New ${scope} skill`}
+              className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]"
+            >
+              <Plus className="h-3 w-3" />
+            </button>
+          )}
         </div>
         {expanded && items.map((skill) => {
           const key = skillKey(skill)
@@ -227,11 +233,11 @@ export function SkillsSidebar() {
               )}
             >
               <Zap className="h-3 w-3 shrink-0 text-amber-500" />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1" title={readOnly ? skill.description : undefined}>
                 <p className="text-[11px] font-medium text-[var(--foreground)] truncate">{skill.name}</p>
-                {(skill.disabled || skill.overridden || skill.description) && (
+                {(skill.disabled || skill.overridden || skill.description || readOnly) && (
                   <p className="text-[10px] text-[var(--muted-foreground)] truncate">
-                    {skill.disabled ? 'disabled' : skill.overridden ? 'overridden' : skill.description}
+                    {skill.disabled ? 'disabled' : skill.overridden ? 'overridden' : readOnly ? t('skill.fromExtension', { ext: skill.extId ?? '' }) : skill.description}
                   </p>
                 )}
               </div>
@@ -245,13 +251,15 @@ export function SkillsSidebar() {
               >
                 {skill.disabled ? <ToggleLeft className="h-4.5 w-4.5" /> : <ToggleRight className="h-4.5 w-4.5 text-blue-500" />}
               </button>
-              <button
-                onClick={(e) => handleDelete(e, skill)}
-                className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-400"
-                title="Delete skill"
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
+              {!readOnly && (
+                <button
+                  onClick={(e) => handleDelete(e, skill)}
+                  className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-400"
+                  title="Delete skill"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              )}
             </div>
           )
         })}
@@ -277,6 +285,7 @@ export function SkillsSidebar() {
       <div className="flex-1 overflow-y-auto py-1">
         {renderSection('global', Globe, t('common.global'), globalSkills)}
         {projectId && renderSection('workspace', FolderOpen, t('common.workspace'), workspaceSkills)}
+        {extensionSkills.length > 0 && renderSection('extension', Puzzle, t('skill.section.extension'), extensionSkills)}
         {skills.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-2 p-6 text-center">
             <Zap className="h-8 w-8 text-[var(--muted-foreground)]" />

@@ -1,6 +1,6 @@
 id: aws-bedrock-claude-invoke
 runtime: bedrock-invoke
-revision: 2026100801
+revision: 2026101005
 displayName: AWS Bedrock Claude (Invoke API)
 displayName_zh: AWS Bedrock Claude（Invoke API）
 description: Invokes Bedrock via InvokeModel (non-streaming), sends raw Anthropic Messages API format
@@ -41,6 +41,8 @@ models:
     displayName: Claude Fable 5.1
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -57,7 +59,7 @@ models:
         # 128K output. Smoke-tested on invoke (xhigh).
         mode: adaptive
         defaultEnabled: true
-        default: high       # flagship-of-flagships — high by default; xhigh/max on demand
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -69,6 +71,8 @@ models:
     displayName: Claude Fable 5
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -85,7 +89,7 @@ models:
         # (Web sources claiming only low/medium/high are wrong.) 1M context, 128K output.
         mode: adaptive
         defaultEnabled: true
-        default: high       # flagship-of-flagships — high by default; xhigh/max on demand
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -97,6 +101,8 @@ models:
     displayName: Claude Sonnet 4.6
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -113,7 +119,7 @@ models:
         # See bedrock-agent.ts for the effort→budget table used in manual mode.
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: high
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -124,6 +130,8 @@ models:
     displayName: Claude Sonnet 5
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -139,7 +147,7 @@ models:
         # low / medium / high / xhigh / max. 1M context, 128K output ceiling.
         mode: adaptive
         defaultEnabled: true
-        default: high
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -151,6 +159,8 @@ models:
     displayName: Claude Sonnet 5.5
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -170,7 +180,7 @@ models:
         # verified. Model card: 1M context.
         mode: adaptive
         defaultEnabled: true
-        default: high
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -182,6 +192,8 @@ models:
     displayName: Claude Opus 4.6
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -194,7 +206,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: high
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -205,6 +217,8 @@ models:
     displayName: Claude Opus 4.7
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -217,7 +231,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: high       # Opus 4.7 is the heavy-thinking model — high pays off
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -229,6 +243,8 @@ models:
     displayName: Claude Opus 4.8
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -243,7 +259,7 @@ models:
         # invalid-value probe): low / medium / high / xhigh / max.
         mode: adaptive
         defaultEnabled: true
-        default: high       # Opus 4.8 is the latest flagship — high by default; xhigh/max on demand
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -255,6 +271,8 @@ models:
     displayName: Claude Opus 5
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -270,7 +288,7 @@ models:
         # Same probe run confirmed max_tokens ceiling 128000 and 1M context.
         mode: adaptive
         defaultEnabled: true
-        default: high       # Opus 5 is the latest flagship — high by default; xhigh/max on demand
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -282,6 +300,8 @@ models:
     displayName: Claude Opus 5.5
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -299,7 +319,7 @@ models:
         # disabled), image input.
         mode: adaptive
         defaultEnabled: true
-        default: high       # flagship — high by default; xhigh/max on demand
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -307,10 +327,13 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
 
+  # Model card: 200K context, 64K output; EOL no sooner than 2026-10-16.
   - id: global.anthropic.claude-haiku-4-5-20251001-v1:0
     displayName: Claude Haiku 4.5
     maxOutputTokens: 64000
     contextWindow: 200000
+    maxContextWindow: 200000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -335,7 +358,10 @@ models:
   - id: global.anthropic.claude-haiku-5-5
     displayName: Claude Haiku 5.5
     maxOutputTokens: 64000
-    contextWindow: 272000
+    # 100K by default (not 272K): long-context requests bill 5x on Haiku 5.5.
+    contextWindow: 100000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -363,7 +389,7 @@ models:
         # $0.11 / $0.55; long-context requests bill 5x.
         mode: adaptive
         defaultEnabled: true
-        default: medium     # the model card's default effort
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }

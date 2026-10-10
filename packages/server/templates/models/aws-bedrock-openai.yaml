@@ -1,6 +1,6 @@
 id: aws-bedrock-openai
 runtime: bedrock-mantle
-revision: 2026100801
+revision: 2026101005
 displayName: AWS Bedrock OpenAI-compatible (GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3 · GLM 5.3)
 displayName_zh: AWS Bedrock OpenAI 兼容接口（GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3 · GLM 5.3）
 description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6.1 Sol, GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.7 / 4.6, Moonshot Kimi K3, Z.AI GLM 5.3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).
@@ -61,8 +61,9 @@ secrets:
 models:
   # OpenAI GPT-6.1 / GPT-6 / GPT-5.6 — the same seven models as
   # aws-bedrock-mantle.yaml (see that file for the per-model background:
-  # 1,050,000 / 128,000 for GPT-6, 272,000 / 64,000 for 5.6, 2x input price
-  # past 272K). Live-probed 2026-09-24 on this host with invalid-value
+  # 1,050,000 context for GPT-6 and 5.6 per the Bedrock model cards, 128,000 /
+  # 64,000 max output, 2x input price past 272K — hence contextWindow 272000
+  # as the new-agent default, maxContextWindow the real limit). Live-probed 2026-09-24 on this host with invalid-value
   # requests: every one (except GPT-6.1 Sol, below) lists reasoning.effort
   # none/low/medium/high/xhigh/max in its own validation error and accepts
   # text.verbosity low/medium/high — identical surface, so presets are copied
@@ -72,6 +73,8 @@ models:
     displayName: GPT-6 Sol
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -83,7 +86,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -91,7 +94,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -101,11 +104,13 @@ models:
   # with SigV4: 200 from all four endpoint presets like the other global.* ids.
   # reasoning.effort accepts low/medium/high/xhigh/max — `none` 400s, unlike
   # GPT-6 Sol, so no "none" preset; text.verbosity low/medium/high; image input
-  # OK; 1,050,000 / 128,000 per the OpenAI model page.
+  # OK; 1M context / 131,072 output per the Bedrock model card.
   - id: global.openai.gpt-6.1-sol
     displayName: GPT-6.1 Sol
-    maxOutputTokens: 128000
+    maxOutputTokens: 131072
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -117,7 +122,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -125,7 +130,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -135,6 +140,8 @@ models:
     displayName: GPT-6 Astra
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -146,7 +153,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -154,7 +161,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -164,6 +171,8 @@ models:
     displayName: GPT-6 Luna
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -175,7 +184,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -183,7 +192,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -193,6 +202,8 @@ models:
     displayName: GPT-5.6 Sol
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -204,7 +215,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -212,7 +223,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -222,6 +233,8 @@ models:
     displayName: GPT-5.6 Terra
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -233,7 +246,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -241,7 +254,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -251,6 +264,8 @@ models:
     displayName: GPT-5.6 Luna
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 1050000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -262,7 +277,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -270,7 +285,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -297,6 +312,8 @@ models:
     displayName: Grok 4.7
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 500000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -308,22 +325,22 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: xhigh, label: XHigh }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
 
   # Grok 4.6 (Bedrock launch 2026-08-18). 500K context per the Bedrock model
-  # card and xAI's model page (input beyond 200K bills at 2x — cap
-  # context.maxTokens in agent.yaml unless that's intended). Max output isn't
+  # card and xAI's model page (input beyond 200K bills at 2x — lower
+  # context.maxTokens in agent.yaml if that matters). Max output isn't
   # disclosed by either (the endpoint accepts any max_output_tokens without
   # validation) — 64000 is the same conservative carry-over used for GPT-5.6.
   # Live-probed 2026-09-24: reasoning.effort accepts ONLY low/medium/high/xhigh
@@ -334,6 +351,8 @@ models:
     displayName: Grok 4.6
     maxOutputTokens: 64000
     contextWindow: 272000
+    maxContextWindow: 500000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -345,14 +364,14 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: xhigh, label: XHigh }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -371,6 +390,8 @@ models:
     displayName: Kimi K3
     maxOutputTokens: 131072
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -382,7 +403,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -390,7 +411,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -419,6 +440,8 @@ models:
     displayName: GLM 5.3
     maxOutputTokens: 128000
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: false
       video: false
@@ -430,7 +453,7 @@ models:
       thinking:
         mode: adaptive
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -438,7 +461,7 @@ models:
           - { value: xhigh, label: XHigh }
           - { value: max, label: Max }
       verbosity:
-        default: low
+        default: medium
         presets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }

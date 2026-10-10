@@ -18,6 +18,7 @@ import { wsClient } from '@/shared/ws-client'
 import { onWsReconnect } from '@/shared/ws-reconnect'
 import { useAgentBus, bumpAgentBus } from '@/shared/agent-bus'
 import { useModelsBus } from '@/shared/models-bus'
+import { useSkillBus } from '@/shared/skill-bus'
 
 interface AgentMeta {
   id: string
@@ -129,12 +130,18 @@ export function AgentManagementMain() {
     return () => window.removeEventListener('focus', onFocus)
   }, [])
 
+  // Re-fetch on the skill bus too: an `extension:changed` frame bumps it
+  // (extensions ship skills), and the Skills sidebar — the other fetcher —
+  // isn't mounted while this tab is open.
+  const skillBusVersion = useSkillBus((s) => s.version)
+  const skillBusSeen = useRef(skillBusVersion)
   useEffect(() => {
-    if (existingSkills.length > 0) return
+    if (existingSkills.length > 0 && skillBusSeen.current === skillBusVersion) return
+    skillBusSeen.current = skillBusVersion
     api.skills.list(activeProject?.path).then((res) => {
       setSkills(res.skills as Skill[])
     }).catch(() => {})
-  }, [activeProject?.path, existingSkills.length, setSkills])
+  }, [activeProject?.path, existingSkills.length, setSkills, skillBusVersion])
 
   const selected = agents.find((a) => agentKey(a) === selectedKey) ?? null
 

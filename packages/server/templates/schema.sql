@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 CREATE TABLE IF NOT EXISTS disabled_items (
   item_type TEXT NOT NULL CHECK(item_type IN ('agent', 'skill')),
   item_id TEXT NOT NULL,
-  scope TEXT NOT NULL CHECK(scope IN ('global', 'workspace')),
+  scope TEXT NOT NULL CHECK(scope IN ('global', 'workspace', 'extension')),
   disabled_at INTEGER NOT NULL,
   PRIMARY KEY (item_type, item_id, scope)
 );

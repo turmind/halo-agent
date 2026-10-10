@@ -114,6 +114,16 @@ function settingsValue(dotPath: string): string | undefined {
   return v == null ? undefined : (typeof v === 'string' ? v : String(v))
 }
 
+/** `general.compact.compress_at` when the user set a valid value in
+ *  settings.yaml, else undefined (settings.yaml only holds keys someone
+ *  wrote — the admin PATCHes per key — so absent = never set). */
+export function explicitCompressAt(): number | undefined {
+  const raw = settingsValue('general.compact.compress_at')
+  if (raw === undefined) return undefined
+  const n = parseFloat(raw)
+  return Number.isFinite(n) && n > 0 && n <= 1 ? n : undefined
+}
+
 /** Read from config.yaml (server, timeout, logging.max_*). Raw type preserved (number/string/array). */
 function configValue(dotPath: string): unknown {
   return readYamlValue(getSystemConfig(), dotPath)
@@ -346,12 +356,7 @@ export const config = {
   model: {
     maxContextTokens: envInt('HALO_MAX_CONTEXT_TOKENS', 272_000),
     get compressAt(): number {
-      const raw = settingsValue('general.compact.compress_at')
-      if (raw !== undefined) {
-        const n = parseFloat(raw)
-        if (Number.isFinite(n) && n > 0 && n <= 1) return n
-      }
-      return 0.9
+      return explicitCompressAt() ?? 0.9
     },
   },
 
@@ -439,6 +444,12 @@ export const config = {
     captureContent: settingsBool('general.observability.capture_content', false),
   },
 
+  // Notebook kernels (jupyter/manager.ts). Getters: read at each spawn.
+  jupyter: {
+    get enabled(): boolean { return settingsBool('general.jupyter.enabled', true) },
+    get path(): string { return settingsStr('general.jupyter.path', '').trim() },
+  },
+
   // A2A (see plans/a2a.md). Getters: read live from settings.yaml.
   a2a: {
     /** Base dir workspaces are exposed relative to: env HALO_A2A_ROOT, else the user's home. */
@@ -509,7 +520,7 @@ export function resolveSandboxPaths(): SandboxPaths {
 }
 
 /** Look up a model entry from the registry by ID */
-function findModelEntry(modelId: string): { id: string; maxOutputTokens?: number; contextWindow?: number; capabilities?: Record<string, unknown> } | undefined {
+function findModelEntry(modelId: string): { id: string; maxOutputTokens?: number; contextWindow?: number; maxContextWindow?: number; compressAt?: number; capabilities?: Record<string, unknown> } | undefined {
   try {
     const providers = (modelsRegistry() as { providers?: Array<{ models?: Array<Record<string, unknown>> }> }).providers
     if (providers) {
@@ -533,13 +544,31 @@ export function resolveMaxOutputTokens(modelId: string): number {
 }
 
 /**
- * Resolve a model's context window from models.yaml.
- * Returns undefined when the entry doesn't declare one — the caller picks
- * its own fallback (e.g. config.model.maxContextTokens).
+ * A model's context defaults from the registry: `recommended` is
+ * `contextWindow` (what a new agent gets), `max` is `maxContextWindow`
+ * (the model's true limit; absent → contextWindow), `compressAt` is the
+ * model's own compaction ratio (absent → undefined, caller uses global).
  */
-export function resolveContextWindow(modelId: string): number | undefined {
+export function resolveModelContext(modelId: string): { recommended?: number; max?: number; compressAt?: number } {
   const entry = findModelEntry(modelId)
-  return entry?.contextWindow
+  return { recommended: entry?.contextWindow, max: entry?.maxContextWindow ?? entry?.contextWindow, compressAt: entry?.compressAt }
+}
+
+/**
+ * Effective context config for a session: agent.yaml, else the global
+ * defaults (maxTokens capped at the model's max), then maxTokens clamped to
+ * the model's max. The registry's recommended window / compressAt are
+ * scaffold-only (routes/agent-configs.ts `scaffoldContext`) — an agent.yaml
+ * without `context:` keeps the global values, so a registry update never
+ * shifts a running agent. `clampedFrom` is the yaml value when the clamp
+ * kicked in, so the caller can warn.
+ */
+export function resolveEffectiveContext(modelId: string | undefined, yamlContext?: { maxTokens?: number; compressAt?: number }): { maxTokens: number; compressAt: number; clampedFrom?: number } {
+  const model = modelId ? resolveModelContext(modelId) : {}
+  const maxTokens = yamlContext?.maxTokens ?? Math.min(config.model.maxContextTokens, model.max ?? Infinity)
+  const compressAt = yamlContext?.compressAt ?? (config.model.compressAt as number)
+  if (model.max !== undefined && maxTokens > model.max) return { maxTokens: model.max, compressAt, clampedFrom: maxTokens }
+  return { maxTokens, compressAt }
 }
 
 /**
@@ -592,16 +621,13 @@ export function resolveThinkingMode(modelId: string): 'adaptive' | 'manual' | un
   return undefined
 }
 
-/** Output verbosity for the OpenAI Responses API (`text.verbosity`). Resolves
- *  the model registry's `capabilities.verbosity.default`. Returns undefined when
- *  the model doesn't declare it — the agent's own fallback applies. An optional
- *  `override` (agent.yaml `model.verbosity`) wins, mirroring modelSupportsImage. */
-export function resolveVerbosity(modelId: string, override?: string): 'low' | 'medium' | 'high' | undefined {
+/** Output verbosity for the OpenAI Responses API (`text.verbosity`): agent.yaml
+ *  `model.verbosity` when valid, else undefined — the agent's own fallback
+ *  applies (MantleAgent: low). The registry's `capabilities.verbosity.default`
+ *  is scaffold-only (setup-providers `modelBlockFromProvider`, the admin form),
+ *  so a registry update never shifts a running agent. */
+export function resolveVerbosity(override?: string): 'low' | 'medium' | 'high' | undefined {
   if (override === 'low' || override === 'medium' || override === 'high') return override
-  const entry = findModelEntry(modelId)
-  const v = (entry?.capabilities as Record<string, unknown> | undefined)?.verbosity
-  const def = (v as { default?: unknown } | undefined)?.default
-  if (def === 'low' || def === 'medium' || def === 'high') return def
   return undefined
 }
 

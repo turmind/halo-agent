@@ -1,6 +1,6 @@
 id: deepseek
 runtime: deepseek
-revision: 2026100501
+revision: 2026101002
 displayName: DeepSeek
 displayName_zh: DeepSeek
 description: DeepSeek V4 via OpenAI-compatible chat completions API
@@ -30,6 +30,8 @@ models:
     displayName: DeepSeek V4 Pro
     maxOutputTokens: 65536
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: false
       video: false
@@ -40,7 +42,7 @@ models:
           - { value: 5m, label: 5min }
       thinking:
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }
@@ -56,6 +58,8 @@ models:
     displayName: DeepSeek Flash
     maxOutputTokens: 65536
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -66,7 +70,7 @@ models:
           - { value: 5m, label: 5min }
       thinking:
         defaultEnabled: true
-        default: medium
+        default: xhigh
         effortPresets:
           - { value: low, label: Low }
           - { value: medium, label: Medium }

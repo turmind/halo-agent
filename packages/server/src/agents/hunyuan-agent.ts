@@ -8,7 +8,8 @@
  * Hy3 is a "no_think / think_low / think_high" agent-oriented model.
  * The vendor's UI naming maps to the OpenAI-style `reasoning_effort`
  * parameter:
- *   - no_think    → omit reasoning_effort entirely (zero reasoning_tokens)
+ *   - no_think    → reasoning_effort: "none" (zero reasoning_tokens; omitting
+ *                   the field thinks by default since Hy3 GA)
  *   - think_low   → reasoning_effort: "low"
  *   - think_high  → reasoning_effort: "high"
  *
@@ -42,7 +43,7 @@ export interface HunyuanAgentConfig {
   tools: ToolDef[]
   maxTokens?: number
   /** thinking.effort = 'low' | 'medium' | 'high' → reasoning_effort.
-   *  thinking.enabled = false → omit reasoning_effort (no_think mode). */
+   *  thinking off → reasoning_effort: 'none' (no_think mode). */
   thinking?: { enabled: boolean; effort?: string }
 }
 
@@ -69,10 +70,12 @@ export class HunyuanAgent extends AgentLoop {
       ...(tools.length > 0 ? { tools } : {}),
     }
 
-    // Hy3 thinking modes: no_think (omit), think_low/think_high (reasoning_effort).
-    if (this.config.thinking?.enabled && this.config.thinking.effort) {
-      body.reasoning_effort = this.config.thinking.effort
-    }
+    // Hy thinking modes: no_think ('none'), think_low/think_high (reasoning_effort).
+    // Omitting the field is NOT no_think — since Hy3 GA the gateway thinks by
+    // default (live probe 2026-10-10), so "off" must say 'none' explicitly.
+    body.reasoning_effort = this.config.thinking?.enabled && this.config.thinking.effort
+      ? this.config.thinking.effort
+      : 'none'
 
     const folded = await fetchChatCompletionStream({
       url, headers: { 'Authorization': `Bearer ${this.config.apiKey}` }, body, signal, onDelta, tag: 'HunyuanAgent',

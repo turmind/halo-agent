@@ -9,6 +9,7 @@ import { onWsReconnect } from '@/shared/ws-reconnect'
 import { api } from '@/shared/api-client'
 import { setExtensions } from '@/features/editor/previews/registry'
 import { bumpModelsBus } from '@/shared/models-bus'
+import { bumpSkillBus } from '@/shared/skill-bus'
 
 export function registerStateHandlers(wsClient: WsClient): () => void {
   const unsubs: Array<() => void> = []
@@ -146,8 +147,10 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
   // watcher pushes the full snapshot; the preview registry re-resolves every
   // open tab from it. A frame lost while the socket was down is reconciled
   // by re-fetching on reconnect (initial pull lives in workspace-layout).
+  // Extensions can ship skills (`<ext>/skills/<id>/`), so every skill list —
+  // Skills page, agent-form picker — re-fetches too.
   unsubs.push(
-    wsClient.on('extension:changed', ({ extensions, errors }) => setExtensions({ extensions, errors })),
+    wsClient.on('extension:changed', ({ extensions, errors }) => { setExtensions({ extensions, errors }); bumpSkillBus() }),
   )
   unsubs.push(onWsReconnect(wsClient, () => { api.extensions.list().then(setExtensions).catch(() => {}) }))
 

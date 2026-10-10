@@ -14,9 +14,11 @@
 import { Hono } from 'hono'
 import { eq, desc, lt, and } from 'drizzle-orm'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { Cron } from 'croner'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
-import { reloadAll, scheduleJob, unscheduleJob, runJob, activeWindowOptions, effectiveSessionId } from '../cron/runner.js'
+import { reloadAll, scheduleJob, unscheduleJob, runJob, activeWindowOptions, effectiveSessionId, sessionAgentIdFor, sessionAgentConflict, jobChangedFields } from '../cron/runner.js'
+import { resolveWorkingDir } from '../agents/working-dir.js'
 import { listAllCronTargets } from '../cron/dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
 
@@ -42,6 +44,11 @@ interface CreateBody {
    *  the schedule fires only inside `[activeFrom, activeUntil)`. */
   activeFrom?: number | null
   activeUntil?: number | null
+  /** Folder the run focuses on (`halo cli --dir`): workspace-relative or
+   *  absolute, inside the workspace, existing. Unset/null/'' = the root. */
+  workingDir?: string | null
+  /** Fresh session every run. Mutually exclusive with `sessionId`. */
+  stateless?: boolean
   /** Per-target `chatId` is optional. When set, dispatch only sends to that
    *  chat (pinning the schedule to where it was created). When unset,
    *  telegram fans out to every numeric id in `allowedUsers`. */
@@ -52,7 +59,8 @@ interface CreateBody {
 /** PUT body — same fields as create, all optional. `runAt: null` explicitly
  *  clears the one-shot fire time (the admin form sends it when switching a
  *  job back to recurring); `timeoutSec: null` clears back to the default;
- *  `sessionId: null` (or '') clears back to the job's own session. */
+ *  `sessionId: null` (or '') clears back to the job's own session;
+ *  `workingDir: null` (or '') clears back to the workspace root. */
 type UpdateBody = Partial<Omit<CreateBody, 'runAt' | 'timeoutSec' | 'sessionId'>> & { runAt?: number | null; timeoutSec?: number | null; sessionId?: string | null }
 
 function newJobId(): string {
@@ -105,6 +113,25 @@ function parseSessionId(v: unknown): { sessionId: string | null } | { error: str
   }
   return { sessionId: s }
 }
+
+/** Normalize a `workingDir` body value against the job's workspace:
+ *  null/undefined/blank → null (= the workspace root), else the
+ *  workspace-relative path of an existing directory inside it (the
+ *  sub-agent working_dir rule; the workspace root itself → null). */
+async function parseWorkingDir(workspacePath: string, v: unknown): Promise<{ workingDir: string | null } | { error: string }> {
+  if (v === undefined || v === null) return { workingDir: null }
+  if (typeof v !== 'string') return { error: 'workingDir must be a string or null' }
+  const s = v.trim()
+  if (s.length === 0) return { workingDir: null }
+  try {
+    const abs = await resolveWorkingDir(workspacePath, s)
+    return { workingDir: path.relative(path.resolve(workspacePath), abs) || null }
+  } catch (err) {
+    return { error: `workingDir: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+const STATELESS_SESSION_ERR = 'stateless (new session every run) and sessionId are mutually exclusive'
 
 /** Type-check one active-window body value: epoch-ms number, null, or
  *  undefined (= not supplied). */
@@ -161,6 +188,10 @@ export function createCronRoutes(): Hono {
       // The session the cli actually runs in (picked or the job's own) —
       // the runner's rule, so the admin never re-derives it.
       effectiveSessionId: effectiveSessionId(r),
+      // Agent of that session once it exists (null: stateless / not yet
+      // created) — the admin locks the job's agent field on it.
+      sessionAgentId: sessionAgentIdFor(r),
+      stateless: r.stateless === 1,
     }))
     const nextCursor = hasMore ? trimmed[trimmed.length - 1]!.createdAt : null
     return c.json({ jobs: items, hasMore, nextCursor })
@@ -192,6 +223,11 @@ export function createCronRoutes(): Hono {
     }
     const session = parseSessionId(body.sessionId)
     if ('error' in session) return c.json({ error: session.error }, 400)
+    if (body.stateless !== undefined && typeof body.stateless !== 'boolean') return c.json({ error: 'stateless must be a boolean' }, 400)
+    const stateless = body.stateless === true
+    if (stateless && session.sessionId) return c.json({ error: STATELESS_SESSION_ERR }, 400)
+    const folder = await parseWorkingDir(body.workspacePath, body.workingDir)
+    if ('error' in folder) return c.json({ error: folder.error }, 400)
     for (const k of ['activeFrom', 'activeUntil'] as const) {
       const err = validateActiveBound(k, body[k])
       if (err) return c.json({ error: err }, 400)
@@ -205,6 +241,8 @@ export function createCronRoutes(): Hono {
     if (windowErr) return c.json({ error: windowErr }, 400)
 
     const id = newJobId()
+    const agentErr = sessionAgentConflict({ id, sessionId: session.sessionId, workspacePath: body.workspacePath, stateless: stateless ? 1 : 0, agentId: body.agentId })
+    if (agentErr) return c.json({ error: agentErr }, 400)
     const now = Date.now()
     getCronDb().insert(cronJobs).values({
       id,
@@ -217,6 +255,8 @@ export function createCronRoutes(): Hono {
       timezone: body.timezone ?? null,
       timeoutSec: body.timeoutSec ?? null,
       sessionId: session.sessionId,
+      workingDir: folder.workingDir,
+      stateless: stateless ? 1 : 0,
       activeFrom,
       activeUntil,
       targets: JSON.stringify(body.targets ?? []),
@@ -229,7 +269,8 @@ export function createCronRoutes(): Hono {
     }).run()
 
     scheduleJob(id)
-    broadcast({ type: 'cron:job_changed', jobId: id, kind: 'created' })
+    const created = getCronDb().select().from(cronJobs).where(eq(cronJobs.id, id)).get()
+    broadcast({ type: 'cron:job_changed', jobId: id, kind: 'created', ...(created ? jobChangedFields(created) : {}) })
     return c.json({ ok: true, id })
   })
 
@@ -271,6 +312,30 @@ export function createCronRoutes(): Hono {
     // null / '' = clear back to the job's own session.
     const session = parseSessionId(body.sessionId)
     if ('error' in session) return c.json({ error: session.error }, 400)
+    if (body.stateless !== undefined && typeof body.stateless !== 'boolean') return c.json({ error: 'stateless must be a boolean' }, 400)
+    // Session-related rules run on the MERGED row: stateless ⟂ sessionId,
+    // the folder against the (possibly new) workspace, and the agent of an
+    // existing stateful session. The agent rule only when this body changes
+    // one of its inputs: a job saved before the rule (session on another
+    // agent, every run now refused by the cli) must still take an
+    // unrelated edit such as `{enabled:false}`.
+    const merged = {
+      id,
+      workspacePath: body.workspacePath ?? existing.workspacePath,
+      agentId: body.agentId ?? existing.agentId,
+      sessionId: body.sessionId !== undefined ? session.sessionId : existing.sessionId,
+      stateless: body.stateless !== undefined ? (body.stateless ? 1 : 0) : existing.stateless,
+    }
+    if (merged.stateless && merged.sessionId) return c.json({ error: STATELESS_SESSION_ERR }, 400)
+    // Re-check a stored folder when the workspace moves, else only a supplied one.
+    const folderChanged = body.workingDir !== undefined || (body.workspacePath !== undefined && existing.workingDir !== null)
+    const folder = folderChanged ? await parseWorkingDir(merged.workspacePath, body.workingDir !== undefined ? body.workingDir : existing.workingDir) : null
+    if (folder && 'error' in folder) return c.json({ error: folder.error }, 400)
+    // "Touches" = changes the stored value: the admin form resends every field.
+    const touchesAgentRule = merged.agentId !== existing.agentId || merged.sessionId !== existing.sessionId
+      || merged.stateless !== existing.stateless || merged.workspacePath !== existing.workspacePath
+    const agentErr = touchesAgentRule ? sessionAgentConflict(merged) : null
+    if (agentErr) return c.json({ error: agentErr }, 400)
 
     // Recurring vs at-mode exclusivity on the MERGED row (db contract:
     // exactly one of schedule/runAt is set per job — see cron-db.ts).
@@ -322,6 +387,8 @@ export function createCronRoutes(): Hono {
     if (body.timezone !== undefined) patch.timezone = body.timezone || null
     if (body.timeoutSec !== undefined) patch.timeoutSec = body.timeoutSec
     if (body.sessionId !== undefined) patch.sessionId = session.sessionId
+    if (folder) patch.workingDir = folder.workingDir
+    if (body.stateless !== undefined) patch.stateless = merged.stateless
     if (body.activeFrom !== undefined) patch.activeFrom = body.activeFrom
     if (body.activeUntil !== undefined) patch.activeUntil = body.activeUntil
     if (body.targets !== undefined) patch.targets = JSON.stringify(body.targets)
@@ -334,7 +401,7 @@ export function createCronRoutes(): Hono {
     if (updated && updated.enabled === 1) scheduleJob(id)
     else unscheduleJob(id)
 
-    broadcast({ type: 'cron:job_changed', jobId: id, kind: 'updated' })
+    broadcast({ type: 'cron:job_changed', jobId: id, kind: 'updated', ...(updated ? jobChangedFields(updated) : {}) })
     return c.json({ ok: true })
   })
 

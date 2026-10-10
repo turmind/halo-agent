@@ -4,7 +4,7 @@ import { createModelRuntime, resolveProviderRuntime, type ModelRuntime } from '.
 import { createWorkspaceTools, READ_ONLY_TOOL_NAMES } from '../tools/workspace-tools.js'
 import { loadSystemPrompts } from '../prompts/system-prompts.js'
 import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } from '../prompts/md-loader.js'
-import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveContextWindow, resolveThinkingMode, resolveVerbosity } from '../config.js'
+import { modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveEffectiveContext, resolveThinkingMode, resolveVerbosity } from '../config.js'
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
   scanAvailableAgents, isTeamMember, canDelegate, agentSourceDir,
@@ -467,11 +467,10 @@ ${roster}`
   }): { agent: ModelRuntime; thinkingEffort: string; contextConfig: { maxTokens: number; compressAt: number } } {
     const { yamlConfig, modelId, endpoint, providerId, sessionId, systemPrompt, tools } = args
 
-    const contextConfig = {
-      // Priority: explicit agent.yaml config > model registry contextWindow > global default (272K).
-      maxTokens: yamlConfig?.context?.maxTokens ?? resolveContextWindow(modelId) ?? config.model.maxContextTokens,
-      compressAt: yamlConfig?.context?.compressAt ?? (config.model.compressAt as number),
-    }
+    // Priority: explicit agent.yaml config > global default (window capped at
+    // the model max), clamped to the model's maxContextWindow.
+    const { clampedFrom, ...contextConfig } = resolveEffectiveContext(modelId, yamlConfig?.context)
+    if (clampedFrom !== undefined) console.warn(`[SessionAgentBuilder] ${sessionId}: context.maxTokens ${clampedFrom} exceeds ${modelId} max ${contextConfig.maxTokens}, clamped`)
     const rawCaching = yamlConfig?.model?.promptCaching
     const promptCaching: boolean | '5m' | '1h' | undefined = rawCaching === '1h' ? '1h' : rawCaching === '5m' ? '5m' : rawCaching ? true : undefined
     const thinkingConfig = yamlConfig?.model?.thinking as {
@@ -508,9 +507,9 @@ ${roster}`
       thinkingBudgetTokens: thinkingConfig?.enabled ? thinkingConfig.budget_tokens : undefined,
       thinkingMode,
       // Output length (OpenAI Responses `text.verbosity`): agent.yaml
-      // `model.verbosity` overrides the model registry's capability default.
-      // Only the Mantle provider consumes it.
-      verbosity: resolveVerbosity(modelId, yamlConfig?.model?.verbosity as string | undefined),
+      // `model.verbosity`, else the agent's own fallback (registry default is
+      // scaffold-only). Only the Mantle provider consumes it.
+      verbosity: resolveVerbosity(yamlConfig?.model?.verbosity as string | undefined),
       credentials: awsCreds,
       apiKey,
       sessionId,

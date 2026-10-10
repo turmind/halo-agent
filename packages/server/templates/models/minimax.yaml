@@ -1,6 +1,6 @@
 id: minimax
 runtime: minimax
-revision: 2026100501
+revision: 2026101002
 displayName: MiniMax
 displayName_zh: MiniMax
 description: MiniMax M3 / M2.7 family via the Anthropic-compatible Messages API
@@ -43,6 +43,8 @@ models:
     # Official recommended value; hard cap is 524288 but we don't max out.
     maxOutputTokens: 131072
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       # M3 also supports video input, but Halo has no video upload path yet —
       # keep video:false until one exists. Image rides the Anthropic-compatible
@@ -71,6 +73,8 @@ models:
     displayName: MiniMax M2.7
     maxOutputTokens: 16384
     contextWindow: 204800
+    maxContextWindow: 204800
+    compressAt: 0.9
     capabilities:
       image: false
       video: false
@@ -86,7 +90,7 @@ models:
         # minimax-agent.ts maps them via effortToBudget() before sending.
         mode: manual
         defaultEnabled: true
-        default: medium
+        default: high
         defaultBudgetTokens: 8192
         effortPresets:
           - { value: medium, label: Medium }
@@ -96,6 +100,8 @@ models:
     displayName: MiniMax M2.7 Highspeed
     maxOutputTokens: 16384
     contextWindow: 204800
+    maxContextWindow: 204800
+    compressAt: 0.9
     capabilities:
       image: false
       video: false
@@ -107,7 +113,7 @@ models:
       thinking:
         mode: manual
         defaultEnabled: true
-        default: medium
+        default: high
         defaultBudgetTokens: 8192
         effortPresets:
           - { value: medium, label: Medium }

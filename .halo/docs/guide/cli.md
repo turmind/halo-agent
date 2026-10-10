@@ -64,8 +64,9 @@ To list agents or sessions without running a prompt, use the dedicated subcomman
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--workspace` | `-w` | cwd | Workspace path |
-| `--agent` | `-a` | `default` | Agent ID |
-| `--session` | `-s` | auto | Resume session by ID |
+| `--dir` | | root | Focus the session on a workspace sub-folder — same as a sub-agent's `working_dir`: the folder's `.halo/INSTRUCTIONS.md` chain joins the system prompt, plus a `Working directory:` line. Workspace-relative or absolute; must exist inside the workspace. On a resumed session it re-points the stored folder in place (one `[cli] session <id>: dir <from> → <to>` line on stderr); `--dir .` moves it back to the root |
+| `--agent` | `-a` | `default` | Agent ID. A session's agent never changes: `-s <existing>` with a different `-a` is refused (`session <id> runs agent <x>; omit -a to resume it, or use -n …`); without `-s`, the latest cli session is only resumed when it runs the `-a` agent — otherwise a new session starts |
+| `--session` | `-s` | auto | Resume session by ID; created with that id when it doesn't exist |
 | `--new` | `-n` | off | Always start a new session |
 | `--format` | `-f` | `text` | Output format: `text` or `json` |
 | `--verbose` | `-v` | off | Show thinking, tool calls, usage on stderr |
@@ -129,7 +130,7 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | Command | Description |
 |---|---|
 | `/help` | Show available commands |
-| `/session new` | Start a new session |
+| `/session new` | Start a new session — it keeps the current session's folder (`--dir`; from a sub-agent, its root's), or starts at the root if that folder is gone |
 | `/session list` | List recent sessions |
 | `/session switch <n>` | Switch to session by number |
 | `/session stop` | Stop current agent task (ends the turn, no re-run) |
@@ -227,7 +228,7 @@ halo models install <dir> [--yes]   # install <dir>/*.yaml into ~/.halo/global/m
 halo models list                    # id · copy in effect (bundled | hub) · revision · runtime
 ```
 
-Normally run for you by `/extension models`, which downloads the hub's newest `models-v*` release (https GitHub / Gitea / Forgejo / GitLab only) and passes the unpacked directory to `halo models install`. Per provider id the copy with the higher `revision` is in effect (tie → the `models.d` copy); an older one is skipped, an identical one reported up to date. Refused per provider: a `runtime:` this halo doesn't know (needs a newer halo), no `revision`, a `secrets[].default` that isn't empty or `<<ENV_NAME>>`. If any provider is new or changes `defaultEndpoint` / `endpointPresets`, the changes are listed, **nothing is written**, and the exit code is `3` — re-run with `--yes` to apply. Writes are atomic (tmp + rename); a running server reloads its registry from `models.d/` without a restart and pushes the change to open admin pages. Existing agents keep the model / endpoint in their own `agent.yaml`. Exit codes: `0` ok (refusals listed in the summary line), `1` error, `3` needs `--yes`. To undo, delete the file from `~/.halo/global/models.d/`.
+Normally run for you by `/extension models`, which downloads the hub's newest `models-v*` release (https GitHub / Gitea / Forgejo / GitLab only) and passes the unpacked directory to `halo models install`. Per provider id the copy with the higher `revision` is in effect (tie → the `models.d` copy); an older one is skipped, an identical one reported up to date. Refused per provider: a `runtime:` this halo doesn't know (needs a newer halo), no `revision`, a `secrets[].default` that isn't empty or `<<ENV_NAME>>`. Endpoint changes against the copy in effect are always listed. Consent is needed for any URL the server would now send requests (and credentials) to that it didn't before: a new provider, a changed `defaultEndpoint` / `endpointPresets`, or a URL added to a model's `endpoints:` list that the provider doesn't already use anywhere. A model list that only loses URLs, or gains one already used elsewhere in the provider, is listed but needs no consent; a reorder alone is not a change. When consent is needed, **nothing is written** and the exit code is `3` — re-run with `--yes` to apply. Writes are atomic (tmp + rename); a running server reloads its registry from `models.d/` without a restart and pushes the change to open admin pages. Existing agents keep the model / endpoint in their own `agent.yaml`. Exit codes: `0` ok (refusals listed in the summary line), `1` error, `3` needs `--yes`. To undo, delete the file from `~/.halo/global/models.d/`.
 
 ## Server Mode (background daemon)
 

@@ -1008,6 +1008,25 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     })
   }, [t])
 
+  // Canvas image annotator's "Send to chat": attach through addFiles (same
+  // sizing / re-encode as any attachment) and land the caret here. A text-only
+  // model gets a notice instead — the image would only be dropped server-side.
+  useEffect(() => {
+    const attach = (e: Event) => {
+      const file = (e as CustomEvent<{ file?: File }>).detail?.file
+      if (!file) return
+      if (modelSupportsImage) addFiles([file])
+      else setAttachNotice(t('chat.attachNoVision', { name: file.name }))
+      // The chat may be behind a maximized canvas or the Terminal tab.
+      const editor = useEditorStore.getState()
+      editor.setBottomTab('chat')
+      if (editor.maximized) editor.setMaximized(false)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    }
+    window.addEventListener('halo:attach-image', attach)
+    return () => window.removeEventListener('halo:attach-image', attach)
+  }, [addFiles, modelSupportsImage, t])
+
   const removeFile = useCallback((index: number) => {
     setPendingFiles((prev) => {
       const removed = prev[index]

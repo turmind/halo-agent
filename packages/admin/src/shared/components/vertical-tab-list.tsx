@@ -29,18 +29,20 @@ interface VerticalTabRowProps {
   badge?: ReactNode
   /** Overlay along the row's bottom edge — absolutely positioned by the caller (row is `relative`; `group-hover:` works on it). */
   statusBar?: ReactNode
-  /** Hover-only buttons before ✕ (they stop their own click propagation). */
-  actions?: ReactNode
   /** ✕ — shown on hover only, active row included. Omit for none. */
   onClose?: (e: React.MouseEvent) => void
   closeLabel?: string
-  /** Glyph of the close button; defaults to ✕. */
-  closeIcon?: ReactNode
+  /** Handlers that open a row menu (right-click / long-press), spread on the row. */
+  menuGestures?: RowMenuGestures
 }
 
-export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge, statusBar, actions, onClose, closeLabel, closeIcon }: VerticalTabRowProps) {
+export type RowMenuGestures = Pick<React.DOMAttributes<HTMLDivElement>,
+  'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel' | 'onContextMenu' | 'onClickCapture'>
+
+export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge, statusBar, onClose, closeLabel, menuGestures }: VerticalTabRowProps) {
   return (
     <div
+      {...menuGestures}
       onClick={onActivate}
       title={tooltip}
       aria-selected={active}
@@ -52,7 +54,6 @@ export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge
       {icon && <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">{icon}</span>}
       <div className="min-w-0 flex-1 truncate">{label}</div>
       {badge}
-      {actions && <span className="flex shrink-0 items-center opacity-0 group-hover:opacity-100">{actions}</span>}
       {onClose && (
         <button
           onClick={(e) => { e.stopPropagation(); onClose(e) }}
@@ -60,7 +61,7 @@ export function VerticalTabRow({ icon, label, tooltip, active, onActivate, badge
           aria-label={closeLabel}
           className="shrink-0 rounded p-0.5 opacity-0 hover:bg-[var(--accent)] group-hover:opacity-100"
         >
-          {closeIcon ?? <X className="h-3 w-3" />}
+          <X className="h-3 w-3" />
         </button>
       )}
       {statusBar}

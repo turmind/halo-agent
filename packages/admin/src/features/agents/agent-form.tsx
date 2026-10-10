@@ -1,8 +1,10 @@
 'use client'
 
+import { useState } from 'react'
 import { cn } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import { Combobox } from '@/shared/components/combobox'
+import { resolveModelEndpoints } from './model-endpoints'
 
 const DEFAULT_CAPABILITIES: ModelEntry['capabilities'] = {
   // image/video/audio are intentionally undefined here (not false). The
@@ -114,6 +116,68 @@ function buildCapabilityDefaults(
   return result
 }
 
+/** A model's true context limit: `maxContextWindow`, else `contextWindow`. */
+function modelMaxContext(m: ModelEntry | undefined): number | undefined {
+  return m?.maxContextWindow ?? m?.contextWindow
+}
+
+/**
+ * `context` after a model switch. maxTokens moves to the new model's
+ * recommended `contextWindow` when the old value was the old model's
+ * recommendation (untouched) or exceeds the new model's max; a hand-set value
+ * that still fits is kept. compressAt follows the same untouched rule.
+ * Returns undefined when nothing changes (no write).
+ */
+function migrateContext(
+  prevModel: ModelEntry | undefined,
+  nextModel: ModelEntry | undefined,
+  context: Record<string, string | number>,
+): Record<string, string | number> | undefined {
+  if (!nextModel || Object.keys(context).length === 0) return undefined
+  const next = { ...context }
+  const oldTokens = typeof context.maxTokens === 'number' ? context.maxTokens : undefined
+  const max = modelMaxContext(nextModel)
+  if (nextModel.contextWindow !== undefined && (oldTokens === undefined || oldTokens === prevModel?.contextWindow || (max !== undefined && oldTokens > max))) {
+    next.maxTokens = Math.min(nextModel.contextWindow, max ?? nextModel.contextWindow)
+  }
+  const oldRatio = typeof context.compressAt === 'number' ? context.compressAt : undefined
+  if (nextModel.compressAt !== undefined && (oldRatio === undefined || oldRatio === prevModel?.compressAt)) {
+    next.compressAt = nextModel.compressAt
+  }
+  return next.maxTokens === context.maxTokens && next.compressAt === context.compressAt ? undefined : next
+}
+
+/** context.maxTokens input: shows the model max and only commits positive
+ *  integers within it — an over-max draft stays local with an error, an empty
+ *  one silently, so autosave never sees it (the server would 400 an over-max). */
+function ContextTokensInput({ value, max, onCommit }: { value: number; max?: number; onCommit: (v: number) => void }) {
+  const t = useT()
+  const [draft, setDraft] = useState(String(value))
+  const [prevValue, setPrevValue] = useState(value)
+  if (value !== prevValue) { setPrevValue(value); setDraft(String(value)) }
+  const over = max !== undefined && Number(draft) > max
+  return (
+    <>
+      <input
+        type="number"
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          const n = Number(e.target.value)
+          // An empty / non-positive draft isn't a window — keep the saved value.
+          if (Number.isInteger(n) && n > 0 && (max === undefined || n <= max)) onCommit(n)
+        }}
+        className={cn(INPUT_CLS, 'mt-1', over && 'border-red-500 focus:border-red-500')}
+      />
+      {max !== undefined && (
+        <p className={cn(DESC_CLS, 'mt-0.5', over && 'text-red-500')}>
+          {t(over ? 'agent.contextOverMax' : 'agent.contextMax', { max: max.toLocaleString() })}
+        </p>
+      )}
+    </>
+  )
+}
+
 const INPUT_CLS = 'h-7 w-full rounded border border-[var(--border)] bg-[var(--card)] px-2 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]'
 const SELECT_CLS = 'h-7 w-full rounded border border-[var(--border)] bg-[var(--card)] px-2 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)] appearance-none cursor-pointer'
 const LABEL_CLS = 'text-[11px] font-medium text-[var(--foreground)]'
@@ -168,6 +232,15 @@ type ModelEntry = {
   id: string
   displayName?: string
   maxOutputTokens?: number
+  /** Endpoints this model is served on — when non-empty, replaces the
+   *  provider's `endpointPresets` for it (see model-endpoints.ts). */
+  endpoints?: string[]
+  /** Recommended context for new agents (≤ maxContextWindow). */
+  contextWindow?: number
+  /** The model's true context limit; absent → contextWindow. */
+  maxContextWindow?: number
+  /** Model's compaction ratio; absent → global default. */
+  compressAt?: number
   capabilities?: {
     image?: boolean
     video?: boolean
@@ -247,6 +320,9 @@ export function AgentForm({
   const allModels: ModelEntry[] = modelsRegistry?.providers?.flatMap((p) => p.models) ?? []
   const selectedModelId = String(model.id ?? '')
   const selectedModel = allModels.find((m) => m.id === selectedModelId)
+  // Shown under the endpoint after a model switch moved it off an endpoint the
+  // new model isn't served on; cleared by the next model / endpoint edit.
+  const [endpointNote, setEndpointNote] = useState<string | null>(null)
 
   return (
     <div className="h-full overflow-y-auto p-5 space-y-5">
@@ -298,13 +374,16 @@ export function AgentForm({
                     ?? (idStillValid ? newProvider!.models.find((m) => m.id === oldId) : undefined)
                     ?? newProvider?.models[0]
 
+                  setEndpointNote(null)
                   onUpdate('model', {
                     ...model,
                     provider: e.target.value,
                     id: newModel?.id ?? '',
-                    endpoint: newProvider?.defaultEndpoint ?? '',
+                    endpoint: resolveModelEndpoints(newProvider, newModel).defaultEndpoint,
                     ...buildCapabilityDefaults(newModel, model),
                   })
+                  const nextContext = migrateContext(selectedModel, newModel, context)
+                  if (nextContext) onUpdate('context', nextContext)
                 }}
                 className={cn(SELECT_CLS, 'mt-1')}
               >
@@ -327,15 +406,32 @@ export function AgentForm({
             <label className={LABEL_CLS}>{t('agent.modelId')}</label>
             {(() => {
               const selectedProviderId = String(model.provider ?? (modelsRegistry?.providers[0]?.id ?? ''))
-              const providerModels = modelsRegistry?.providers.find((p) => p.id === selectedProviderId)?.models ?? []
+              const provider = modelsRegistry?.providers.find((p) => p.id === selectedProviderId)
+              const providerModels = provider?.models ?? []
               // When switching models within the same provider, run the same
               // capability migration as the provider switch — keeps the
               // thinking effort / caching ttl valid for the new model and
               // applies the new model's yaml defaults if previous values
               // don't fit.
+              // A model with its own `endpoints:` also moves the endpoint when
+              // the current one (or, left empty, the provider default) isn't
+              // on its list; a model without one leaves the endpoint alone.
               function changeModelId(nextId: string) {
                 const nextEntry = providerModels.find((m) => m.id === nextId)
-                onUpdate('model', { ...model, id: nextId, ...buildCapabilityDefaults(nextEntry, model) })
+                const ep = resolveModelEndpoints(provider, nextEntry)
+                const current = String(model.endpoint ?? '') || (provider?.defaultEndpoint ?? '')
+                const switchTo = ep.modelScoped && !ep.presets.includes(current) ? ep.defaultEndpoint : undefined
+                setEndpointNote(switchTo
+                  ? t('agent.endpointSwitched', { endpoint: switchTo, model: nextEntry?.displayName ?? nextId })
+                  : null)
+                onUpdate('model', {
+                  ...model,
+                  id: nextId,
+                  ...(switchTo ? { endpoint: switchTo } : {}),
+                  ...buildCapabilityDefaults(nextEntry, model),
+                })
+                const nextContext = migrateContext(selectedModel, nextEntry, context)
+                if (nextContext) onUpdate('context', nextContext)
               }
               return (
                 <Combobox
@@ -352,20 +448,32 @@ export function AgentForm({
           {(() => {
             const selectedProviderId2 = String(model.provider ?? (modelsRegistry?.providers[0]?.id ?? ''))
             const selectedProvider = modelsRegistry?.providers.find((p) => p.id === selectedProviderId2)
-            const defaultEp = selectedProvider?.defaultEndpoint ?? ''
-            const epPresets = selectedProvider?.endpointPresets
+            const entry = selectedProvider?.models.find((m) => m.id === selectedModelId)
+            const { presets: epPresets, defaultEndpoint: defaultEp, modelScoped } = resolveModelEndpoints(selectedProvider, entry)
+            const endpoint = String(model.endpoint ?? '')
+            // Free text stays allowed — only a hint when the model's own list
+            // doesn't include what's typed / saved.
+            const offList = modelScoped && endpoint !== '' && !epPresets.includes(endpoint)
             return (
               <div>
                 <label className={LABEL_CLS}>{t('agent.endpoint')}</label>
                 <Combobox
-                  value={String(model.endpoint ?? '')}
-                  presets={(epPresets ?? []).map((ep) => ({ id: ep, label: ep }))}
+                  value={endpoint}
+                  presets={epPresets.map((ep) => ({ id: ep, label: ep }))}
                   placeholder={defaultEp || 'https://...'}
-                  onCommit={(next) => onUpdateNested('model', 'endpoint', next)}
+                  onCommit={(next) => { setEndpointNote(null); onUpdateNested('model', 'endpoint', next) }}
                   className="mt-1"
                 />
                 {defaultEp && !model.endpoint && (
                   <p className={cn(DESC_CLS, 'mt-0.5')}>Default: {defaultEp}</p>
+                )}
+                {endpointNote && (
+                  <p className={cn(DESC_CLS, 'mt-0.5')}>{endpointNote}</p>
+                )}
+                {offList && (
+                  <p className={cn(DESC_CLS, 'mt-0.5 text-amber-500')}>
+                    {t('agent.endpointOffList', { model: entry?.displayName ?? selectedModelId })}
+                  </p>
                 )}
               </div>
             )
@@ -563,13 +671,17 @@ export function AgentForm({
             {Object.entries(context).map(([key, val]) => (
               <div key={key}>
                 <label className={LABEL_CLS}>{`context.${key}`}</label>
-                <input
-                  type={typeof val === 'number' ? 'number' : 'text'}
-                  step={typeof val === 'number' && val < 1 ? '0.1' : undefined}
-                  value={String(val ?? '')}
-                  onChange={(e) => onUpdateNested('context', key, typeof val === 'number' ? Number(e.target.value) : e.target.value)}
-                  className={cn(INPUT_CLS, 'mt-1')}
-                />
+                {key === 'maxTokens' && typeof val === 'number' ? (
+                  <ContextTokensInput value={val} max={modelMaxContext(selectedModel)} onCommit={(n) => onUpdateNested('context', key, n)} />
+                ) : (
+                  <input
+                    type={typeof val === 'number' ? 'number' : 'text'}
+                    step={typeof val === 'number' && val < 1 ? '0.1' : undefined}
+                    value={String(val ?? '')}
+                    onChange={(e) => onUpdateNested('context', key, typeof val === 'number' ? Number(e.target.value) : e.target.value)}
+                    className={cn(INPUT_CLS, 'mt-1')}
+                  />
+                )}
               </div>
             ))}
           </div>

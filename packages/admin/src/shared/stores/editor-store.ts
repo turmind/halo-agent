@@ -189,6 +189,9 @@ interface EditorStore {
   insertFileNode(relativePath: string, nodeType?: 'file' | 'directory'): void
   removeFileNode(relativePath: string): void
   checkAndRefresh(path: string, diskMtime: number, fetchContent: () => Promise<{ content: string; modifiedAt: number }>): Promise<boolean>
+  /** Preview buffers carry no content. When the disk copy is newer, bump
+   *  mtime / size; the built-in preview remounts on the new mtime. */
+  refreshPreview(path: string, diskMtime: number, size: number): void
 }
 
 /** Reorder helper for tab drag (within a single pane). */
@@ -727,6 +730,15 @@ export function createEditorStore() {
           return { buffers, ...deriveActiveView(next) }
         })
         return true
+      },
+
+      refreshPreview(path, diskMtime, size) {
+        set((state) => {
+          const cur = state.buffers[path]
+          if (!cur?.preview || (cur.mtime && diskMtime <= cur.mtime)) return state
+          const buffers = { ...state.buffers, [path]: { ...cur, mtime: diskMtime, size } }
+          return { buffers, ...deriveActiveView({ ...state, buffers }) }
+        })
       },
     }
   })

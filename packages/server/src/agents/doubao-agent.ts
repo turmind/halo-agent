@@ -57,8 +57,10 @@ export class DoubaoAgent extends AgentLoop {
     const url = this.config.endpoint.replace(/\/+$/, '') + '/chat/completions'
     const startTime = Date.now()
 
-    // No vision: user turns are text-only, tool-result images are not forwarded.
-    const messages = toChatMessages(this.config.systemPrompt, this.messages, 'drop')
+    // Vision as content parts (Seed 2.1 Pro, live-probed 2026-10-10). Models
+    // registered image:false never get images: session-manager's buildInput
+    // swaps them for a notice and view_image isn't offered.
+    const messages = toChatMessages(this.config.systemPrompt, this.messages, 'parts')
     const tools = toChatTools(this.config.tools)
 
     const body: Record<string, unknown> = {

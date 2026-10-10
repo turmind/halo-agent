@@ -57,7 +57,7 @@ export class OpenAIAgent extends AgentLoop {
     const startTime = Date.now()
 
     // Text-only stays a plain string (widest OpenAI-compatible support); images
-    // need content parts — gpt-4o is registered image-capable.
+    // need content parts — the registered models are image-capable.
     const messages = toChatMessages(this.config.systemPrompt, this.messages, 'if-image')
     const tools = toChatTools(this.config.tools)
 

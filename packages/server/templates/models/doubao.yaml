@@ -1,12 +1,12 @@
 id: doubao
 runtime: doubao
-revision: 2026100501
+revision: 2026101005
 displayName: Doubao (Volcengine)
 displayName_zh: 豆包（火山方舟）
-description: ByteDance Doubao Seed-2.0 family on Volcengine Ark — pro / lite / mini / code, OpenAI-compatible
-description_zh: 字节豆包 Seed-2.0 系列（火山方舟），OpenAI 兼容协议
+description: ByteDance Doubao Seed-2.1 / 2.0 family on Volcengine Ark — pro / lite / mini / code, OpenAI-compatible
+description_zh: 字节豆包 Seed-2.1 / 2.0 系列（火山方舟），OpenAI 兼容协议
 defaultEndpoint: https://ark.cn-beijing.volces.com/api/v3
-defaultModelId: doubao-seed-2-0-pro-260215
+defaultModelId: doubao-seed-2-1-pro-260628
 
 secrets:
   - key: api_key
@@ -32,19 +32,34 @@ secrets:
 #         N+1 misses, turn N+2 hits again) — not stable steady-state.
 #     Treat the cache as opportunistic; UI badges are accurate when shown.
 #   - Tool calls return standard OpenAI tool_calls shape.
-#   - Image: pro/lite/mini all accepted image_url blocks; in our smoke
-#     test all four answered "Black" for what was actually a red 64×64 PNG,
-#     so reliability is uncertain. We default image:false; user can flip
-#     after their own verification.
+#   - Image: the 2.0 models accepted image_url blocks, but all four answered
+#     "Black" for a red 64×64 PNG, so they stay image:false (halo then
+#     drops user images with a notice and doesn't offer view_image). Only
+#     2.1-pro-260628 is image:true — doubao-agent sends images as content
+#     parts (halo 1.6.1+; earlier versions dropped them).
 #   - Doubao 2.0 docs aren't fully published; model id strings sourced
 #     from the Volcengine Ark console (the activated-model list).
+# 2026-10-10 census: limits are the Ark `GET /api/v3/models` token_limits
+# (== the official model list, docs/82379/1330310): 2.1-pro-260628 and the
+# 2.0 pro / code 260215 → 262144 ctx; 2.0 lite / mini 260428 → 262144 ctx but
+# 229376 max input, so contextWindow = 229376; every 2.x model takes up to
+# 131072 output (max_tokens 131073 → 400) and Ark trims the reply to the
+# remaining quota instead of erroring. 2.1-pro-260628 live-probed: thinking
+# enabled/disabled, tool calls, image. Not carried: 2.1-pro / lite-260915 and
+# doubao-seed-evolving (1M ctx) return ModelNotOpen on our account — add them
+# after a live probe on an account that has them activated; 2.1-turbo-260628
+# likewise. Ark's newer `reasoning_effort` knob (deep-thinking doc) is not
+# wired — doubao-agent still sends only thinking:{type}.
 models:
-  - id: doubao-seed-2-0-pro-260215
-    displayName: Doubao Seed 2.0 Pro
-    maxOutputTokens: 16384
-    contextWindow: 256000
+  - id: doubao-seed-2-1-pro-260628
+    displayName: Doubao Seed 2.1 Pro
+    maxOutputTokens: 131072
+    contextWindow: 262144
+    maxContextWindow: 262144
+    compressAt: 0.9
     capabilities:
-      image: false
+      # Live probe 2026-10-10: named the red 64×64 PNG correctly.
+      image: true
       video: false
       audio: false
       promptCaching:
@@ -69,8 +84,10 @@ models:
 
   - id: doubao-seed-2-0-lite-260428
     displayName: Doubao Seed 2.0 Lite
-    maxOutputTokens: 16384
-    contextWindow: 256000
+    maxOutputTokens: 131072
+    contextWindow: 229376
+    maxContextWindow: 229376
+    compressAt: 0.9
     capabilities:
       image: false
       video: false
@@ -94,8 +111,10 @@ models:
 
   - id: doubao-seed-2-0-mini-260428
     displayName: Doubao Seed 2.0 Mini
-    maxOutputTokens: 16384
-    contextWindow: 256000
+    maxOutputTokens: 131072
+    contextWindow: 229376
+    maxContextWindow: 229376
+    compressAt: 0.9
     capabilities:
       image: false
       video: false
@@ -117,10 +136,43 @@ models:
         effortPresets:
           - { value: medium, label: On }
 
+  # --- deprecated: retires 2026-11-24 14:00 CST (https://www.volcengine.com/docs/82379/1350667) — remove after cutoff ---
+  - id: doubao-seed-2-0-pro-260215
+    displayName: Doubao Seed 2.0 Pro (deprecated 2026-11-24)
+    maxOutputTokens: 131072
+    contextWindow: 262144
+    maxContextWindow: 262144
+    compressAt: 0.9
+    capabilities:
+      image: false
+      video: false
+      audio: false
+      promptCaching:
+        # Doubao caches automatically (no cache_control parameter needed
+        # in the request). The badge is just a visibility hint — UI shows
+        # the read/write counts so users see when cache is helping.
+        # Doc says default TTL is the platform default; observed empirically
+        # to behave like ~5min ephemeral. Cache only kicks in for prompts
+        # above ~4096 tokens; first 1-3 turns of a fresh prompt commonly
+        # miss while the cache is warming up.
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        defaultEnabled: true
+        default: medium
+        # effort label is Halo-side only — Doubao only sees enabled/disabled.
+        # We still expose Off/On as toggles by mapping both options to the
+        # same flag (keeps the form consistent across providers).
+        effortPresets:
+          - { value: medium, label: On }
+
   - id: doubao-seed-2-0-code-preview-260215
-    displayName: Doubao Seed 2.0 Code Preview
-    maxOutputTokens: 16384
-    contextWindow: 256000
+    displayName: Doubao Seed 2.0 Code Preview (deprecated 2026-11-24)
+    maxOutputTokens: 131072
+    contextWindow: 262144
+    maxContextWindow: 262144
+    compressAt: 0.9
     capabilities:
       image: false
       video: false

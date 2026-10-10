@@ -43,6 +43,8 @@ export interface HostContext {
   themeVars: ExtensionThemeVars
   platform: ExtensionPlatform
   lang: ExtensionLang
+  /** Workspace of the open file; undefined outside a workspace panel. */
+  projectId?: string
 }
 
 export type HostEffect =
@@ -241,6 +243,7 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
           haloExt: 1, type: 'init', protocol: EXTENSION_PROTOCOL_VERSION, file: ctx.file, capabilities: state.capabilities,
           theme: ctx.theme, themeVars: ctx.themeVars, bundle: state.bundle, platform: ctx.platform, lang: ctx.lang,
           export: canSave(state) && !state.bundle,
+          ...(ctx.projectId && !state.bundle ? { jupyter: { projectId: ctx.projectId } } : {}),
         },
       }
       // A bundle never gets `load` — it reads what it needs through `fs`.

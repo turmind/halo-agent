@@ -63,18 +63,6 @@ describe('VerticalTabRow', () => {
     }
   })
 
-  it('renders closeIcon in the close button when given, ✕ otherwise', () => {
-    render(createElement('div', null,
-      createElement(VerticalTabRow, { key: 'a', icon: 'I', label: 'sess', active: false, onActivate: () => {}, onClose: () => {}, closeLabel: 'Delete', closeIcon: createElement('span', { 'data-testid': 'trash' }) }),
-      createElement(VerticalTabRow, { key: 'b', icon: 'I', label: 'term', active: false, onActivate: () => {}, onClose: () => {}, closeLabel: 'Close' }),
-    ))
-    const del = container.querySelector<HTMLButtonElement>('button[aria-label="Delete"]')!
-    expect(del.querySelector('[data-testid="trash"]')).not.toBeNull()
-    expect(del.querySelector('svg')).toBeNull()
-    const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!
-    expect(close.querySelector('svg')).not.toBeNull()
-  })
-
   it('without icon no icon cell is reserved; with icon (terminal usage) the cell stays first', () => {
     render(createElement('div', null,
       createElement(VerticalTabRow, { key: 'a', label: 'bare', active: false, onActivate: () => {} }),

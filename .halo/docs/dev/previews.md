@@ -25,6 +25,8 @@ previews/
 │   │                         for previews that parse server-side instead of raw bytes
 │   ├── data-table.tsx        Shared table renderer (headers + rows + prev/next pager) for
 │   │                         server-parsed previews (parquet / sqlite / csv)
+│   ├── image-annotator.tsx   ImageAnnotator: drawing board over an image → `halo:attach-image`
+│   ├── annotate.ts           Its pure parts: coordinate mapping, strokes reducer, composite
 │   └── print.ts              Pop-up print helper
 ├── workers/                  Parse workers (one per heavy format)
 │   ├── worker-client.ts      Generic WorkerClient<T> class — id-routed postMessage
@@ -68,8 +70,14 @@ interface PreviewProps {
   onOpenAsText?: () => void  // set when the file can also be force-opened as text
   tooLarge?: boolean   // file over the editor's 10MB read cap; FilePreview shows a placeholder instead of the plugin
   size?: number        // on-disk size in bytes, shown by that placeholder
+  mtime?: number       // on-disk mtime the buffer knows — see Live refresh below
+  bundle?: boolean     // `path` is a bundle directory: only bundle extensions are candidates
 }
 ```
+
+### Live refresh
+
+When the open file changes on disk (mtime strictly newer than the buffer's), `FilePreview` remounts a built-in plugin — `key={mtime}`, with `viewUrl` cache-busted (`&v=<mtime>`, `versionedUrl()` in `features/editor/file-refresh.ts`). A plugin needs no code for this, but **all its state resets**: fetched data, zoom, page, selection. Keep anything that must survive outside the component. Extensions aren't remounted — the host re-fetches the file and hands it to the running iframe (skipped while the document is dirty); bundles are left alone.
 
 ## Adding a new file type
 
@@ -170,6 +178,24 @@ Plugin-specific buttons use the shared `<ToolbarButton>`:
   <span>Print</span>
 </ToolbarButton>
 ```
+
+## Reusable: `ImageAnnotator` + `halo:attach-image`
+
+`ui/image-annotator.tsx` is the board behind the image preview's **Annotate** button (media-view is the only user today); any preview that shows a picture can mount it.
+
+```tsx
+<ImageAnnotator
+  src={viewUrl}                 // same URL as the <img>
+  name={name}                   // → `<name>-annotated.png`
+  viewStyle={{ transform }}     // the picture's own zoom / pan transform, so marks line up
+  panning={dragging}            // optional: grabbing cursor while the host pans
+  onClose={stopAnnotating}      // Esc, ✕, and after a successful Send
+/>
+```
+
+- Strokes are kept in natural image pixels, mapped through the board's `getBoundingClientRect()`, so any CSS transform on `viewStyle` works. Left / touch drag draws (and swallows the event); everything else — wheel, middle-drag — is left to the host.
+- Send composites image + marks on a canvas (long edge ≤ 4096, `COMPOSITE_MAX_EDGE` in `ui/annotate.ts`) and fires `window.dispatchEvent(new CustomEvent('halo:attach-image', { detail: { file: File } }))`. The chat input (`features/chat/message-input.tsx`) listens: vision model → normal attachment path; text-only → the `chat.attachNoVision` notice; then it shows the chat and focuses the input. Any other feature can hand an image to chat through the same event.
+- Mount it only where the chat is reachable: media-view gates it to the main editor store (Skills / Agents editors scope their own and hide the chat) and skips SVG.
 
 ## Workers — parsing off the main thread
 

@@ -51,8 +51,9 @@ export interface MantleAgentConfig {
    *  thinking.enabled=false → omit reasoning (model picks its own minimal). */
   thinking?: { enabled: boolean; effort?: string }
   /** Output length for the final answer (Responses API `text.verbosity`).
-   *  Configured via the model registry / agent.yaml `model.verbosity`; falls
-   *  back to 'low' (terse, cheaper — best for tool-driven agent turns). */
+   *  From agent.yaml `model.verbosity` only (the registry default is written
+   *  there at scaffold time); absent → 'low' (terse, cheaper — best for
+   *  tool-driven agent turns). */
   verbosity?: 'low' | 'medium' | 'high'
   /** Explicit AWS credentials for SigV4 (when no bearer token). Empty → SDK
    *  credential chain (IAM role / env / ~/.aws). */

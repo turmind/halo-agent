@@ -71,6 +71,11 @@ export type ExtensionHostFrame =
       /** true = this host accepts `export` frames (save-capable, non-bundle
        *  extension); older hosts omit it — show export UI only when true. */
       export: boolean
+      /** Present = this host serves the notebook kernel proxy
+       *  (`/api/jupyter/*`, same-origin, cookie-authed) for this workspace;
+       *  sent to every non-bundle extension. Older hosts omit it — hide
+       *  kernel UI then. Whether Jupyter is usable: `GET /api/jupyter/status`. */
+      jupyter?: { projectId: string }
     })
   // file bytes; after `init`, and again on external change while not dirty
   // (never sent to bundle extensions)

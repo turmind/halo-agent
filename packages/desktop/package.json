@@ -24,7 +24,7 @@
     "clean": "rm -rf resources/server-runtime resources/admin-out resources/icon.icns resources/icon.ico resources/icon.png resources/node resources/node.exe dist"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
+    "electron": "^44.7.0",
     "electron-builder": "^25.1.8",
     "png-to-ico": "^2.1.8",
     "sharp": "^0.34.5"

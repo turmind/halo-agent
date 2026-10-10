@@ -37,6 +37,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { wsEvoRunDir } from '../paths.js'
+import { listSkillDirs } from '../agents/skill-sources.js'
 import type { SessionManager } from '../agents/session-manager.js'
 
 export type EvoTrigger = 'note' | 'pre-compact'
@@ -211,10 +212,12 @@ function listAgentsAndSkills(workspacePath: string): Pick<EvoContext, 'agents' |
     ...listDir(wsHalo, 'agent', 'workspace'),
     ...listDir(globalHalo, 'agent', 'global'),
   ]
-  const skills = [
-    ...listDir(wsHalo, 'skill', 'workspace'),
-    ...listDir(globalHalo, 'skill', 'global'),
-  ]
+  // Effective skills via the shared resolver (workspace wins over global).
+  // Extension-shipped skills are left out on purpose: they are read-only
+  // and never an evo patch target (evo-wrapper's brief says so).
+  const skills: EvoContext['skills'] = listSkillDirs(workspacePath)
+    .filter((s) => !s.overridden && s.scope !== 'extension' && fs.existsSync(path.join(s.dir, 'SKILL.md')))
+    .map((s) => ({ id: s.id, scope: s.id.startsWith('__') && s.id.endsWith('__') ? 'builtin' : s.scope as 'workspace' | 'global' }))
   // Dedup by id — workspace wins over global (consistent with runtime).
   function dedup(arr: EvoContext['agents']): EvoContext['agents'] {
     const seen = new Set<string>()

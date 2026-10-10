@@ -26,6 +26,8 @@ import { createShowRoutes } from './routes/halo-city.js'
 import { createMetricsRoutes } from './routes/metrics.js'
 import { createCommandRoutes } from './routes/commands.js'
 import { createTranscribeProxy, TRANSCRIBE_PATH } from './routes/transcribe-ws.js'
+import { createJupyterChannels, createJupyterRoutes, JUPYTER_CHANNELS_PATH } from './routes/jupyter.js'
+import { createJupyterManager } from './jupyter/manager.js'
 import { createUpgradeRouter, type UpgradeHandler } from './ws/upgrade-router.js'
 import { commandRegistry } from './commands/index.js'
 import { DISPATCH_COMMANDS } from './channels/shared/commands.js'
@@ -309,6 +311,10 @@ app.use('/*', cors({
 // (also skipped). Responses under 1 KiB pass through uncompressed.
 app.use('/*', compress({ threshold: 1024 }))
 
+// Notebook kernels for the ipynb extension (local jupyter server, started on
+// demand). Admin-only like the terminal, so not in AgentCore mode.
+const jupyter = AGENTCORE ? null : createJupyterManager()
+
 // AgentCore A2A mode serves only its three contract paths (mounted below):
 // no /api surface, no auth middleware, no admin frontend — anything else 404s.
 if (!AGENTCORE) {
@@ -374,6 +380,8 @@ if (!AGENTCORE) {
   const extensionRoutes = createExtensionRoutes()
   app.route('/api', extensionRoutes)
   startExtensionsWatcher()
+
+  app.route('/api', createJupyterRoutes(jupyter!))
 }
 // Hub-installed provider yamls (~/.halo/global/models.d/): drop the registry
 // cache + push `models:changed` on change, so `/extension models` applies live.
@@ -597,12 +605,14 @@ if (!AGENTCORE) {
 // Extension transcription proxy — needs installed extensions + per-extension
 // settings, neither of which exists in AgentCore mode.
 const transcribe = AGENTCORE ? null : createTranscribeProxy()
+const jupyterChannels = jupyter ? createJupyterChannels(jupyter) : null
 
 // AgentCore mode has no WS surface: every upgrade gets the router's 400.
 const upgradeRoutes = new Map<string, UpgradeHandler>(AGENTCORE ? [] : [
   ['/ws', (req, socket, head) => wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))],
 ])
 if (transcribe) upgradeRoutes.set(TRANSCRIBE_PATH, transcribe.handleUpgrade)
+if (jupyterChannels) upgradeRoutes.set(JUPYTER_CHANNELS_PATH, jupyterChannels.handleUpgrade)
 ;(server as import('node:http').Server).on('upgrade', createUpgradeRouter(upgradeRoutes))
 
 if (!AGENTCORE) console.log(`[Server] WebSocket server ready on ws://localhost:${PORT}/ws`)
@@ -634,6 +644,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
   })
   wss.close()
   transcribe?.close()
+  // Stops the jupyter server and with it every kernel (bounded to 5s).
+  jupyterChannels?.close()
+  await jupyter?.stop()
 
   if (server && typeof (server as import('node:http').Server).close === 'function') {
     (server as import('node:http').Server).close()

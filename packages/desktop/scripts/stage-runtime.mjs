@@ -555,7 +555,7 @@ fs.cpSync(path.join(REPO_ROOT, 'packages', 'admin', 'out'), ADMIN_OUT_DST, { rec
 assertMonacoStaged(ADMIN_OUT_DST)
 
 // 4. node binary (for the server child process). We bundle it because
-//    Electron's own ELECTRON_RUN_AS_NODE uses the embedded node 20, but
+//    Electron's own ELECTRON_RUN_AS_NODE uses the embedded node 24, but
 //    the native modules in server-runtime were built for node 22.
 //    Always re-stage so a previous arch/platform binary doesn't carry over.
 //

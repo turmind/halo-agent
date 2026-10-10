@@ -21,6 +21,7 @@ import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { formatFileSize, confirmAction } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import { api } from '@/shared/api-client'
+import { versionedUrl } from '../file-refresh'
 
 const HALO_HUB_URL = 'https://github.com/turmind/halo-hub'
 
@@ -112,9 +113,11 @@ function Dispatch({ candidates, useEditorStore, ...props }: PreviewProps & {
     body = <ExtensionHostPreview key={current.info.id} {...props} info={current.info} uninstalled={uninstalled} />
   } else if (current.kind === 'builtin') {
     const { Component } = current.plugin
+    // Live refresh: a newer disk mtime remounts the viewer (fresh fetch /
+    // parse), and the versioned URL keeps iframes / <img> off the stale copy.
     body = (
       <Suspense fallback={<PreviewFallback />}>
-        <Component {...props} />
+        <Component key={props.mtime} {...props} viewUrl={versionedUrl(props.viewUrl, props.mtime)} />
       </Suspense>
     )
   } else {

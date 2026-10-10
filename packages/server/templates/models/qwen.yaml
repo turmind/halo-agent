@@ -1,12 +1,12 @@
 id: qwen
 runtime: qwen
-revision: 2026100501
+revision: 2026101003
 displayName: Qwen (Aliyun)
 displayName_zh: 通义千问（阿里云）
 description: Qwen3 family on Aliyun Bailian via the Anthropic-compatible Messages API
 description_zh: 阿里云百炼通义千问，通过 Anthropic 兼容的 Messages API 调用
 defaultEndpoint: https://dashscope.aliyuncs.com/apps/anthropic
-defaultModelId: qwen3.7-max
+defaultModelId: qwen3.8-max
 endpointPresets:
   - https://dashscope.aliyuncs.com/apps/anthropic         # Beijing
   - https://dashscope-intl.aliyuncs.com/apps/anthropic    # Singapore
@@ -36,11 +36,95 @@ secrets:
 #     table as bedrock-agent.ts via qwen-agent.ts's effortToBudget().
 #   - temperature range: doc says [0, 2) instead of Anthropic's [0, 1] —
 #     doesn't affect Halo since we don't expose temperature in the form.
+# 2026-10-10 census (help.aliyun.com/zh/model-studio/anthropic-api-messages +
+# the text-generation model guide, both list 3.8-max / 3.8-flash / 3.7-plus as
+# current, 1M context): live-probed on the Anthropic endpoint — manual
+# thinking.budget_tokens still accepted (the doc marks it "即将废弃" in favour
+# of output_config.effort; qwen-agent still sends budget_tokens), thinking
+# disabled honored, tool_use OK, image OK, cache_control ephemeral hit on
+# turn 2. `ttl: '1h'` is accepted but the entry is still written as
+# ephemeral_5m, so 5m stays the only TTL preset. Max output isn't published
+# per model on these pages — maxOutputTokens stays 16384. 3.7-max / 3.6-plus
+# are not on the deprecation page, kept below the new generation.
 models:
+  - id: qwen3.8-max
+    displayName: Qwen3.8 Max
+    maxOutputTokens: 16384
+    contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
+    capabilities:
+      # Live probe 2026-10-10: named a red 64×64 PNG correctly (3.7-max could not).
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: manual
+        defaultEnabled: true
+        default: high
+        defaultBudgetTokens: 8192
+        effortPresets:
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: qwen3.7-plus
+    displayName: Qwen3.7 Plus
+    maxOutputTokens: 16384
+    contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
+    capabilities:
+      # Live probe 2026-10-10: named a red 64×64 PNG correctly.
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: manual
+        defaultEnabled: true
+        default: high
+        defaultBudgetTokens: 8192
+        effortPresets:
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  - id: qwen3.8-flash
+    displayName: Qwen3.8 Flash
+    maxOutputTokens: 16384
+    contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
+    capabilities:
+      # Live probe 2026-10-10: named a red 64×64 PNG correctly.
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: manual
+        defaultEnabled: true
+        default: high
+        defaultBudgetTokens: 8192
+        effortPresets:
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
   - id: qwen3.7-max
     displayName: Qwen3.7 Max
     maxOutputTokens: 16384
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: false
       video: false
@@ -54,7 +138,7 @@ models:
         # qwen-agent.ts maps effort labels via effortToBudget().
         mode: manual
         defaultEnabled: true
-        default: medium
+        default: high
         defaultBudgetTokens: 8192
         effortPresets:
           - { value: medium, label: Medium }
@@ -64,6 +148,8 @@ models:
     displayName: Qwen3.6 Plus
     maxOutputTokens: 16384
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -75,7 +161,7 @@ models:
       thinking:
         mode: manual
         defaultEnabled: true
-        default: medium
+        default: high
         defaultBudgetTokens: 8192
         effortPresets:
           - { value: medium, label: Medium }

@@ -476,6 +476,10 @@ export const api = {
             id: string
             displayName?: string
             maxOutputTokens?: number
+            endpoints?: string[]
+            contextWindow?: number
+            maxContextWindow?: number
+            compressAt?: number
             capabilities?: {
               image?: boolean
               video?: boolean
@@ -575,7 +579,7 @@ export const api = {
       if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
       const qs = params.toString() ? `?${params}` : ''
       return request<{
-        sessions: Array<{ id: string; agentId: string; agentName: string; title: string; createdAt: number; updatedAt: number; exchangeCount: number; parentSessionId?: string; stoppedAt?: number | null; archivedAt?: number | null; contextTokens?: number; totalOutputTokens?: number; goalSessionId?: string | null }>
+        sessions: Array<{ id: string; agentId: string; agentName: string; title: string; createdAt: number; updatedAt: number; exchangeCount: number; parentSessionId?: string; stoppedAt?: number | null; archivedAt?: number | null; contextTokens?: number; totalOutputTokens?: number; goalSessionId?: string | null; workingDir?: string | null }>
         nextCursor: number | null
       }>(`/sessions/logs${qs}`)
     },
@@ -1119,8 +1123,14 @@ export const api = {
           createdAt: number
           updatedAt: number
           nextRunAt: number | null
-          /** Session the cli runs in — `sessionId`, else the job's own. */
+          /** Session the cli runs in — `sessionId`, else the job's own (a stateless job: a new one each run). */
           effectiveSessionId: string
+          /** Folder the run focuses on (workspace-relative), null = the root. */
+          workingDir: string | null
+          /** New session every run. */
+          stateless: boolean
+          /** Agent of the job's existing session (null: stateless / not created yet) — locks the agent field. */
+          sessionAgentId: string | null
         }>
         hasMore: boolean
         nextCursor: number | null
@@ -1137,6 +1147,8 @@ export const api = {
       timezone?: string
       timeoutSec?: number
       sessionId?: string
+      workingDir?: string
+      stateless?: boolean
       activeFrom?: number | null
       activeUntil?: number | null
       targets?: Array<{ channelType: string; accountId: string; chatId?: string }>
@@ -1158,6 +1170,8 @@ export const api = {
       timezone: string
       timeoutSec: number | null
       sessionId: string | null
+      workingDir: string | null
+      stateless: boolean
       activeFrom: number | null
       activeUntil: number | null
       targets: Array<{ channelType: string; accountId: string; chatId?: string }>
@@ -1198,6 +1212,8 @@ export const api = {
           failureReason: string | null
           logPath: string | null
           dispatchResults: Array<{ channelType: string; accountId: string; chatId?: string; ok: boolean; error?: string }> | null
+          /** Session this run's cli used (null: skipped / before the column). */
+          sessionId: string | null
         }>
         hasMore: boolean
         nextCursor: string | null

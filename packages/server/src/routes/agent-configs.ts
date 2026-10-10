@@ -7,7 +7,7 @@ import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { buildRelayTools, type RelayTarget } from '../agents/relay.js'
 import { GOAL_AGENT_ID } from '../agents/goal-mode.js'
 import { resolveMdFilePath, writeMdFile } from '../prompts/md-loader.js'
-import { config, getModelsRegistry } from '../config.js'
+import { config, explicitCompressAt, getModelsRegistry, resolveEffectiveContext, resolveModelContext } from '../config.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
 import { hasWorkspaceHalo } from '../init.js'
 import { modelBlockFromProvider } from '../setup-providers.js'
@@ -87,10 +87,7 @@ function parseAgentYaml(content: string): { name: string; description: string; m
       priority: typeof data?.priority === 'number' ? data.priority : 0,
       tools: Array.isArray(data?.tools) ? data.tools : undefined,
       skills: Array.isArray(data?.skills) ? data.skills : undefined,
-      context: data?.context ? {
-        maxTokens: data.context.maxTokens ?? config.model.maxContextTokens,
-        compressAt: data.context.compressAt ?? config.model.compressAt,
-      } : undefined,
+      context: data?.context ? (({ maxTokens, compressAt }) => ({ maxTokens, compressAt }))(resolveEffectiveContext(modelId, data.context)) : undefined,
       internal: data?.internal === true ? true : undefined,
     }
   } catch {
@@ -135,6 +132,18 @@ async function scaffoldModelBlock(scope: 'global' | 'workspace', projectId: stri
   return registryModelBlock()
 }
 
+/** `context:` for a new agent: the scaffold model's recommended window, else
+ *  the runtime default; compressAt = the user's explicit global
+ *  `compact.compress_at` > the model's > the built-in default. Written into
+ *  the yaml, so later registry updates don't move it (the runtime ignores the
+ *  registry's recommendation — config.resolveEffectiveContext). */
+function scaffoldContext(model: Record<string, unknown>): { maxTokens: number; compressAt: number } {
+  const modelId = typeof model.id === 'string' ? model.id : undefined
+  const recommended = modelId ? resolveModelContext(modelId) : {}
+  const fallback = resolveEffectiveContext(modelId)
+  return { maxTokens: recommended.recommended ?? fallback.maxTokens, compressAt: explicitCompressAt() ?? recommended.compressAt ?? fallback.compressAt }
+}
+
 /** Create default agent.yaml content for new agents */
 function defaultAgentYaml(name: string, description: string, model: Record<string, unknown>): string {
   return YAML.stringify({
@@ -142,10 +151,7 @@ function defaultAgentYaml(name: string, description: string, model: Record<strin
     description,
     model,
     system_prompt: `You are ${name}. ${description}\n`,
-    context: {
-      maxTokens: config.model.maxContextTokens,
-      compressAt: config.model.compressAt,
-    },
+    context: scaffoldContext(model),
     tools: [],
     skills: [],
   }, { lineWidth: 120 })
@@ -153,17 +159,15 @@ function defaultAgentYaml(name: string, description: string, model: Record<strin
 
 /** Create default agent yaml (priority 99 — seeds at top of the list) */
 function defaultAgentYamlTemplate(): string {
+  const model = registryModelBlock()
   return YAML.stringify({
     name: 'Default',
     description: 'Default agent — handles tasks directly and delegates to sub-agents',
     priority: 99,
     // Can't copy from itself — always the registry pick.
-    model: registryModelBlock(),
+    model,
     system_prompt: 'You are the Default agent of Halo. You understand user intent, break down tasks, create and coordinate sub-agents, and deliver results.\n',
-    context: {
-      maxTokens: config.model.maxContextTokens,
-      compressAt: config.model.compressAt,
-    },
+    context: scaffoldContext(model),
     tools: [],
     skills: [],
   }, { lineWidth: 120 })
@@ -387,12 +391,12 @@ export function createAgentConfigRoutes() {
     }>()
 
     // Validate YAML
+    let parsed: { model?: { id?: unknown } | string; context?: { maxTokens?: unknown } } | null
     try {
-      YAML.parse(body.yaml)
+      parsed = YAML.parse(body.yaml)
     } catch (err) {
       return c.json({ error: `Invalid YAML: ${(err as Error).message}` }, 400)
     }
-
     const scope = body.scope ?? 'global'
     const resolved = resolveAgentDir(id, scope, body.projectId)
     if ('error' in resolved) return c.json({ error: resolved.error }, 400)
@@ -402,6 +406,24 @@ export function createAgentConfigRoutes() {
       await fs.access(agentDir)
     } catch {
       return c.json({ error: 'Agent not found' }, 404)
+    }
+
+    // A window above the model's true max can't take effect (the runtime
+    // clamps it), so refuse a new one rather than save a misleading value.
+    // The same model + window already on disk passes: older scaffolds wrote
+    // 272000 for every model, and those agents must stay editable.
+    const ctxKey = (doc: typeof parsed) => {
+      const modelId = typeof doc?.model === 'string' ? doc.model : doc?.model?.id
+      return { modelId: typeof modelId === 'string' ? modelId : undefined, maxTokens: doc?.context?.maxTokens }
+    }
+    const next = ctxKey(parsed)
+    const modelMax = next.modelId ? resolveModelContext(next.modelId).max : undefined
+    if (typeof next.maxTokens === 'number' && modelMax !== undefined && next.maxTokens > modelMax) {
+      let prev: ReturnType<typeof ctxKey> | undefined
+      try { prev = ctxKey(YAML.parse(await fs.readFile(yamlPath, 'utf-8'))) } catch { prev = undefined }
+      if (prev?.modelId !== next.modelId || prev?.maxTokens !== next.maxTokens) {
+        return c.json({ error: `context.maxTokens ${next.maxTokens} exceeds the max context of ${next.modelId} (${modelMax})` }, 400)
+      }
     }
 
     await writeFileAtomic(yamlPath, body.yaml)

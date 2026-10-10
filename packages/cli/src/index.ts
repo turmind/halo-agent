@@ -91,7 +91,11 @@ slash commands (/help inside the TUI for the full list).
 
 Options:
   -w, --workspace <path>     Workspace path (default: cwd)
-  -a, --agent <id>           Agent ID (default: default)
+  --dir <path>               Focus the session on a workspace sub-folder (its
+                             .halo/INSTRUCTIONS.md chain joins the prompt);
+                             re-points a resumed session, "." = the root
+  -a, --agent <id>           Agent ID (default: default; resuming a session
+                             of another agent is refused)
   -s, --session <id>         Resume session by ID
   -n, --new                  Always start a new session
   --access <level>           full | workspace | readonly (default: full)
@@ -114,7 +118,11 @@ the message; stdin is appended after positional text.
 
 Options:
   -w, --workspace <path>     Workspace path (default: cwd)
-  -a, --agent <id>           Agent ID (default: default)
+  --dir <path>               Focus the session on a workspace sub-folder (its
+                             .halo/INSTRUCTIONS.md chain joins the prompt);
+                             re-points a resumed session, "." = the root
+  -a, --agent <id>           Agent ID (default: default; resuming a session
+                             of another agent is refused)
   -s, --session <id>         Resume session by ID
   -n, --new                  Always start a new session
   --access <level>           full | workspace | readonly (default: full)
@@ -246,9 +254,10 @@ Model provider configs from a hub (normally run by the extension skill's
                   the models.d copy); an older one is skipped. Refused: an
                   unknown \`runtime:\` (needs a newer halo), no \`revision\`, a
                   \`secrets[].default\` that isn't empty or <<ENV_NAME>>.
-                  A new provider or a changed defaultEndpoint / endpointPresets
-                  stops the run before anything is written: the changes are
-                  listed and the exit code is 3 — re-run with --yes to apply.
+                  A new provider, a changed defaultEndpoint / endpointPresets,
+                  or a URL added to a model's \`endpoints\` list stops the run
+                  before anything is written: the changes are listed and the
+                  exit code is 3 — re-run with --yes to apply.
                   A running server picks the files up without a restart.
   list            Each provider id, the copy in effect (bundled | hub), its
                   revision and runtime, and any copy it shadows.
@@ -280,6 +289,7 @@ interface HarnessFlags {
   agent?: string
   session?: string
   new?: boolean
+  dir?: string
   access: 'full' | 'workspace' | 'readonly'
   lang: Lang
   positionals: string[]
@@ -297,6 +307,7 @@ function parseHarnessFlags(argv: string[]): HarnessFlags {
       agent: { type: 'string', short: 'a' },
       session: { type: 'string', short: 's' },
       new: { type: 'boolean', short: 'n', default: false },
+      dir: { type: 'string' },
       format: { type: 'string', short: 'f', default: 'text' },
       verbose: { type: 'boolean', short: 'v', default: false },
       access: { type: 'string', default: 'full' },
@@ -308,6 +319,7 @@ function parseHarnessFlags(argv: string[]): HarnessFlags {
     agent: values.agent,
     session: values.session,
     new: values.new,
+    dir: values.dir,
     access: (values.access as 'full' | 'workspace' | 'readonly') ?? 'full',
     lang: (values.lang as Lang) ?? 'en',
     positionals,
@@ -323,6 +335,7 @@ async function buildHarnessFromFlags(flags: HarnessFlags): Promise<Harness> {
     agentId: flags.agent,
     sessionId: flags.session,
     newSession: flags.new,
+    dir: flags.dir,
     accessLevel: flags.access,
     lang: flags.lang,
   })

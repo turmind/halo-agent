@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } from 'react'
-import { Pencil, Loader2, MessageSquare, Trash2 } from 'lucide-react'
+import { Loader2, MessageSquare } from 'lucide-react'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionList } from '@/shared/use-session-list'
 import type { SessionMeta } from '@/shared/components/session-list-dropdown'
@@ -15,6 +15,7 @@ import { useHoverIntent } from '@/shared/use-hover-intent'
 import { useGoalStore } from './goal-store'
 import { useChatTabs } from './chat-tabs'
 import type { ChatStoreApi } from './chat-store'
+import { SessionContextMenu, useContextMenuGesture, type OpenMenu } from './session-context-menu'
 
 /**
  * Hook: manages explorer session list for the main chat.
@@ -52,8 +53,9 @@ const SIDEBAR_WIDTH_KEY = 'halo_session_sidebar_width'
 
 /**
  * Right sidebar of the explorer chat panel: the workspace's root sessions as
- * Chrome-style vertical tabs — every session is open, a click shows it, ✕
- * deletes it (there is no close). One line per row (🎯 + title; count / time /
+ * Chrome-style vertical tabs — every session is open, a click shows it, and
+ * a right-click (long-press on touch) opens Rename / Delete; rows carry no
+ * hover buttons (there is no close). One line per row (🎯 + title; count / time /
  * model in the tooltip), a "New session" row on top while a draft is on
  * screen, and a column of initials when collapsed. Collapse / resize via
  * ResizableSidebar (shared with the terminal list). Inline rename interaction
@@ -119,12 +121,18 @@ export function SessionSidebar({
     bumpSessionBus()
   }
 
+  // Row menu (right-click / long-press): the session it acts on + where it opened.
+  const [menu, setMenu] = useState<{ session: SessionMeta; x: number; y: number; returnFocus: HTMLElement | null } | null>(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
+
   // Collapsed-list hover peek. Held open while an interaction started in it
-  // is in progress: the rename input, or the delete confirm — a native /
-  // desktop-overlay dialog outside this subtree, so moving onto it reads as
-  // a leave and would otherwise unmount the row mid-confirm.
+  // is in progress: the row menu, the rename input, or the delete confirm —
+  // the menu (portalled to body) and the native / desktop-overlay dialog sit
+  // outside this subtree, so moving onto them reads as a leave and would
+  // otherwise unmount the row mid-interaction. A menu item closes the menu and
+  // starts its rename / delete in the same handler, so the hold never gaps.
   const [deleting, setDeleting] = useState(false)
-  const peek = useHoverIntent(editingId !== null || deleting)
+  const peek = useHoverIntent(menu !== null || editingId !== null || deleting)
   const select = (id: string) => {
     peek.close()
     onSelect(id)
@@ -235,6 +243,8 @@ export function SessionSidebar({
                 tooltip={`${titleOf(s)}\n${s.exchangeCount} msgs · ${formatRelativeTime(s.updatedAt, t)}${model}`}
                 active={currentSessionId === s.id}
                 onActivate={() => select(s.id)}
+                // None while editing: right-click in the input keeps its native edit menu.
+                onMenu={editing ? undefined : (x, y, returnFocus) => setMenu({ session: s, x, y, returnFocus })}
                 label={editing ? (
                   <input
                     autoFocus
@@ -254,19 +264,6 @@ export function SessionSidebar({
                     {titleOf(s)}
                   </>
                 )}
-                actions={editing ? undefined : (
-                  <button
-                    onClick={(e) => startRename(e, s)}
-                    title={t('chat.sessions.rename')}
-                    aria-label={t('chat.sessions.rename')}
-                    className="rounded p-0.5 text-[var(--muted-foreground)] hover:text-blue-400"
-                  >
-                    <Pencil className="h-3 w-3" />
-                  </button>
-                )}
-                onClose={editing ? undefined : (e) => { void remove(s.id, e) }}
-                closeLabel={t('chat.sessions.delete')}
-                closeIcon={<Trash2 className="h-3 w-3" />}
               />
             )
           })
@@ -282,6 +279,16 @@ export function SessionSidebar({
         )}
       </div>
       {onNew && <VerticalTabAdd onClick={() => { peek.close(); onNew() }} label={t('chat.sessions.new')} />}
+      {menu && (
+        <SessionContextMenu
+          x={menu.x}
+          y={menu.y}
+          returnFocus={menu.returnFocus}
+          onRename={(e) => startRename(e, menu.session)}
+          onDelete={(e) => { void remove(menu.session.id, e) }}
+          onClose={closeMenu}
+        />
+      )}
     </ResizableSidebar>
   )
 }
@@ -326,15 +333,19 @@ function SessionStatusBar({ status, active, className }: { status: SessionStatus
 /** A session row: VerticalTabRow plus the bottom status bar, with the state
  *  text appended to the tooltip's second line. A component of its own because
  *  each row subscribes to its own tab's store. */
-function SessionRow({ store, unread, tooltip, ...row }: Omit<React.ComponentProps<typeof VerticalTabRow>, 'statusBar'> & {
+function SessionRow({ store, unread, tooltip, onMenu, ...row }: Omit<React.ComponentProps<typeof VerticalTabRow>, 'statusBar' | 'menuGestures'> & {
   store?: ChatStoreApi
   unread: boolean
+  /** Right-click / long-press opens the row menu at the pointer; omit for none. */
+  onMenu?: OpenMenu
 }) {
   const t = useT()
   const status = useSessionStatus(store, unread)
+  const menuGestures = useContextMenuGesture((x, y, returnFocus) => onMenu?.(x, y, returnFocus))
   return (
     <VerticalTabRow
       {...row}
+      menuGestures={onMenu && menuGestures}
       tooltip={`${tooltip} · ${t(STATUS_LABEL_KEY[status])}`}
       statusBar={<SessionStatusBar status={status} active={row.active} className="inset-x-1.5" />}
     />

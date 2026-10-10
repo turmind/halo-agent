@@ -494,3 +494,26 @@ describe('createKeyedQueue (per-path append ordering)', () => {
     expect(log).toEqual(['o1', 'a1', 'a2', 'a3'])
   })
 })
+
+/**
+ * Contract (notebook kernels): init.jupyter = { projectId } tells a non-bundle
+ * extension this host serves /api/jupyter/* for that workspace. Bundles and
+ * panels without a workspace get no `jupyter` key at all (older-host shape).
+ */
+describe('init.jupyter', () => {
+  const initOf = (s: HostState, c: HostContext) => {
+    const init = onClientFrame(s, frame({ type: 'ready', protocol: 1 }), c).effects[0]
+    return init.type === 'post' && init.frame.type === 'init' ? init.frame : null
+  }
+  const wsCtx: HostContext = { ...ctx, projectId: '/home/u/ws' }
+
+  it('carries the projectId for every non-bundle extension, save-capable or not', () => {
+    expect(initOf(initialHostState(['save']), wsCtx)?.jupyter).toEqual({ projectId: '/home/u/ws' })
+    expect(initOf(initialHostState([]), wsCtx)?.jupyter).toEqual({ projectId: '/home/u/ws' })
+  })
+
+  it('is omitted for a bundle and when there is no workspace', () => {
+    expect(initOf(initialHostState(['media'], true), wsCtx)).not.toHaveProperty('jupyter')
+    expect(initOf(initialHostState(['save']), ctx)).not.toHaveProperty('jupyter')
+  })
+})

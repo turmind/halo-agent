@@ -14,6 +14,7 @@ import { DiffViewer } from './diff-viewer'
 import { TabBar } from './tab-bar'
 import { FilePreview, canPreview, isBundleName, isHeavyPreview, loadExtensions, useRegistryVersion } from './previews/FilePreview'
 import { getExtensionHost } from './previews/extension-host-logic'
+import { isContentChange, tabRefresh, versionedUrl } from './file-refresh'
 import { ImmersivePane, armImmersiveFullscreen, useImmersive } from './immersive'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
@@ -406,57 +407,55 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
 
   const activeFile = tabs.find((t) => t.path === activeTab)
 
+  // Bring one open tab up to date with disk: stat, then refetch (text) or
+  // remount (built-in preview) only if the disk mtime is newer. `event` = a
+  // `file:changed` for this path; only then is an extension host told, and it
+  // stats and decides for itself (it ignores its own saves and dirty state).
+  const refreshTab = useCallback((path: string, event: boolean) => {
+    if (!projectId) return
+    const store = useEditorStore.getState()
+    const host = getExtensionHost(projectId, path)
+    const kind = tabRefresh(store.buffers[path], { pinned: path === store.pinnedTab, hasHost: !!host })
+    if (kind === 'none') return
+    if (kind === 'host') { if (event) host!.fileChanged(); return }
+    api.files.stat(path, projectId).then((stat) => {
+      const s = useEditorStore.getState()
+      if (kind === 'preview') s.refreshPreview(path, stat.modifiedAt, stat.size)
+      else s.checkAndRefresh(path, stat.modifiedAt, () => api.files.read(path, projectId))
+    }).catch(() => {})
+  }, [projectId, useEditorStore])
+
   // Auto-refresh: stat mtime when switching tabs or window regains focus, only fetch content if changed
   const refreshActiveTab = useCallback(() => {
     const current = useEditorStore.getState().activeTab
-    if (!current || !projectId) return
-    const tab = useEditorStore.getState().tabs.find((t) => t.path === current)
-    if (!tab || tab.preview) return
-    api.files.stat(current, projectId).then((stat) => {
-      useEditorStore.getState().checkAndRefresh(current, stat.modifiedAt, () =>
-        api.files.read(current, projectId),
-      )
-    }).catch(() => {})
-  }, [projectId])
+    if (current) refreshTab(current, false)
+  }, [refreshTab, useEditorStore])
 
   useEffect(() => { if (tabsRestored) refreshActiveTab() }, [activeTab, refreshActiveTab, tabsRestored])
 
-  // Auto-refresh open tabs when their underlying file changes on disk (e.g. agent
-  // uses file_edit / file_write). Server emits `file:changed` with paths relative
+  // Auto-refresh open tabs when their underlying file changes on disk (agent
+  // file tools, shell commands, scripts). Server emits `file:changed` with paths relative
   // to the workspace root. We translate that into this EditorPanel's own relative
   // path by subtracting the panel's `projectId` (absolute) from the absolute file
-  // path, and match against tab.path. Works for both the main Explorer (workspace
+  // path, and match against the open buffers (every pane). Works for both the main Explorer (workspace
   // root == projectId) and nested EditorPanels like Skills (projectId is a subdir).
+  // Tree-only skips it: it shares the store of the editor-only panel beside it,
+  // which already listens — two listeners meant two stats per event.
   const workspaceRoot = useProjectStore((s) => s.activeProject?.path)
   useEffect(() => {
-    if (!projectId || !workspaceRoot) return
+    if (!projectId || !workspaceRoot || mode === 'tree-only') return
     const unsub = wsClient.on('file:changed', (data) => {
       const msg = data as { path: string; action: string }
-      if (msg.action !== 'change') return
+      if (!isContentChange(msg.action)) return
       const absPath = `${workspaceRoot}/${msg.path}`
       const panelPrefix = projectId.endsWith('/') ? projectId : `${projectId}/`
       if (!absPath.startsWith(panelPrefix)) return
       const relForTab = absPath.slice(panelPrefix.length)
-      const tab = useEditorStore.getState().tabs.find((t) => t.path === relForTab)
-      if (!tab) return
-      if (tab.preview) {
-        // Extension previews own their content — the host decides whether to
-        // reload (it ignores its own saves and dirty state). Built-in previews
-        // have no host and keep the old "don't touch" behaviour.
-        getExtensionHost(projectId, relForTab)?.fileChanged()
-        return
-      }
-      if (tab.modified) return
-      api.files.read(relForTab, projectId).then((res) => {
-        useEditorStore.getState().checkAndRefresh(
-          relForTab,
-          res.modifiedAt,
-          async () => ({ content: res.content, modifiedAt: res.modifiedAt }),
-        )
-      }).catch(() => {})
+      if (!useEditorStore.getState().buffers[relForTab]) return
+      refreshTab(relForTab, true)
     })
     return unsub
-  }, [projectId, workspaceRoot, useEditorStore])
+  }, [projectId, workspaceRoot, mode, refreshTab, useEditorStore])
 
   // Skipped in tree-only: Explorer mounts it beside an editor-only panel on the
   // same store, which already refreshes — two listeners meant two stats.
@@ -1252,6 +1251,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                               tooLarge={t.preview!.tooLarge}
                               bundle={t.preview!.bundle}
                               size={t.size}
+                              mtime={t.mtime}
                               onOpenAsText={() => handleOpenAsText(t.path)}
                             />
                           </div>
@@ -1274,6 +1274,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                             tooLarge={paneFile.preview.tooLarge}
                             bundle={paneFile.preview.bundle}
                             size={paneFile.size}
+                            mtime={paneFile.mtime}
                             onOpenAsText={() => handleOpenAsText(paneFile.path)}
                           />
                         </div>
@@ -1318,7 +1319,9 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                                 <MarkdownPreview content={paneFile.content} filePath={paneFile.path} projectId={projectId} />
                               )}
                               {htmlPreview && (
-                                <HtmlPreview url={api.files.viewUrl(paneFile.path, projectId!)} name={paneFile.path.split('/').pop() ?? ''} face={paneFile.path === FACE_PATH} />
+                                // Versioned by the buffer mtime so a disk change reloads the page —
+                                // except the face, whose live state a reload would reset.
+                                <HtmlPreview url={paneFile.path === FACE_PATH ? api.files.viewUrl(paneFile.path, projectId!) : versionedUrl(api.files.viewUrl(paneFile.path, projectId!), paneFile.mtime)} name={paneFile.path.split('/').pop() ?? ''} face={paneFile.path === FACE_PATH} />
                               )}
                               <div className={cn('h-full', (mdPreview || htmlPreview) && 'hidden')}>
                                 <CodeEditor

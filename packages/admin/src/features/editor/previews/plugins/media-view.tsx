@@ -7,13 +7,15 @@
  * and `zoom.scale`/`zoom.translate` (state, not refs). All false positives here. */
 
 import { useRef, useState, useCallback, useEffect, type WheelEvent as ReactWheelEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { Printer, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
+import { Printer, ZoomIn, ZoomOut, RotateCcw, Highlighter } from 'lucide-react'
 import type { PreviewProps } from '../types'
 import { PreviewShell, ToolbarButton } from '../ui/preview-shell'
 import { printHtml } from '../ui/print'
+import { ImageAnnotator } from '../ui/image-annotator'
 import { IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS } from './media'
 import { useT } from '@/shared/i18n'
 import { SafeImage } from '@/shared/components/safe-image'
+import { useScopedEditorStore, useEditorStore as useMainEditorStore } from '@/shared/stores/editor-store'
 
 function kindOf(name: string): 'image' | 'video' | 'audio' | null {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
@@ -65,7 +67,8 @@ function useImageZoom() {
   }, [zoomAt])
 
   const onPointerDown = useCallback((e: ReactPointerEvent) => {
-    if (e.button !== 0) return
+    // Middle-drag pans too — the only pan while annotating (left-drag draws).
+    if (e.button !== 0 && e.button !== 1) return
     e.preventDefault()
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
     dragRef.current = { startX: e.clientX, startY: e.clientY, origX: translate.x, origY: translate.y }
@@ -97,13 +100,34 @@ function useImageZoom() {
 }
 
 export function MediaPreview(props: PreviewProps) {
-  const { name, viewUrl, downloadUrl, onOpenAsText } = props
+  const { name, path, viewUrl, downloadUrl, onOpenAsText } = props
   const t = useT()
   const kind = kindOf(name)
   const zoom = useImageZoom()
+  const useEditorStore = useScopedEditorStore()
+  // Decoded by the browser — Annotate is offered only then (a failed / undecodable
+  // image has nothing to draw on). A disk change remounts this whole view (keyed
+  // on mtime in FilePreview), which also drops any marks.
+  const [imageOk, setImageOk] = useState(false)
+  // Annotate only where Send lands somewhere visible: the main editor (the
+  // Skills / Agents tabs scope their own store and hide the chat), and not svg —
+  // a viewBox-only / percent-sized svg has no intrinsic box to draw on.
+  const canAnnotate = imageOk && useEditorStore === useMainEditorStore && !/\.svg$/i.test(name)
+  const [annotating, setAnnotating] = useState(false)
+  // Marks are throwaway: switching this pane to another tab ends annotating
+  // (the MRU cache only hides this view, so it wouldn't unmount on its own).
+  const shown = useEditorStore((s) => s.groups.some((g) => g.activeTab === path))
+  if (annotating && !shown) setAnnotating(false)
+  const stopAnnotating = useCallback(() => setAnnotating(false), [])
 
   const imageToolbar = kind === 'image' ? (
     <>
+      {canAnnotate && (
+        <ToolbarButton onClick={() => setAnnotating((a) => !a)} title={t(annotating ? 'editor.annotate.exit' : 'editor.annotate.hint')}>
+          <Highlighter className={annotating ? 'h-3 w-3 text-[var(--primary)]' : 'h-3 w-3'} />
+          <span className={annotating ? 'text-[var(--primary)]' : undefined}>{t('editor.annotate')}</span>
+        </ToolbarButton>
+      )}
       <ToolbarButton onClick={() => zoom.zoomCenter(1 / ZOOM_STEP)} title={t('editor.zoomOut')}>
         <ZoomOut className="h-3 w-3" />
       </ToolbarButton>
@@ -150,11 +174,27 @@ export function MediaPreview(props: PreviewProps) {
             alt={name}
             draggable={false}
             placeholderClassName="h-full w-full rounded-none bg-white/5 text-white/60"
+            // Hidden, not unmounted, while annotating: no reload / placeholder flash on exit.
+            className={annotating ? 'hidden' : undefined}
+            onLoad={(e) => setImageOk(e.currentTarget.naturalWidth > 0)}
+            onError={() => setImageOk(false)}
             style={{
               transformOrigin: '0 0',
               transform: `translate(${zoom.translate.x}px, ${zoom.translate.y}px) scale(${zoom.scale})`,
             }}
           />
+          {/* Zoom / pan stay live while annotating: wheel and the toolbar zoom,
+              middle-drag pans (left / touch drag draws). Same transform as the
+              img, so the picture doesn't move on entering. */}
+          {annotating && (
+            <ImageAnnotator
+              src={viewUrl}
+              name={name}
+              viewStyle={{ transform: `translate(${zoom.translate.x}px, ${zoom.translate.y}px) scale(${zoom.scale})` }}
+              panning={zoom.dragging}
+              onClose={stopAnnotating}
+            />
+          )}
         </div>
       )}
       {kind === 'video' && (

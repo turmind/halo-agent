@@ -89,6 +89,35 @@ describe('halo.db migrations', () => {
       }
     })
   })
+
+  it("v1-stamped db: disabled_items is rebuilt to admit scope 'extension', rows kept", () => {
+    withTmpDir('halo-db-disabled-', (dir) => {
+      const old = new Database(path.join(dir, 'halo.db'))
+      old.exec(`
+        CREATE TABLE disabled_items (
+          item_type TEXT NOT NULL CHECK(item_type IN ('agent', 'skill')),
+          item_id TEXT NOT NULL,
+          scope TEXT NOT NULL CHECK(scope IN ('global', 'workspace')),
+          disabled_at INTEGER NOT NULL,
+          PRIMARY KEY (item_type, item_id, scope)
+        );
+        INSERT INTO disabled_items VALUES ('skill', 'foo', 'global', 1);
+      `)
+      old.pragma('user_version = 1')
+      old.close()
+
+      const raw = rawSqlite(createDb(dir))
+      try {
+        expect(userVersion(raw)).toBe(HALO_MIGRATIONS.length)
+        raw.prepare(`INSERT INTO disabled_items VALUES ('skill', 'bar', 'extension', 2)`).run()
+        const rows = raw.prepare(`SELECT item_id, scope FROM disabled_items ORDER BY item_id`).all()
+        expect(rows).toEqual([{ item_id: 'bar', scope: 'extension' }, { item_id: 'foo', scope: 'global' }])
+        expect(() => raw.prepare(`INSERT INTO disabled_items VALUES ('skill', 'baz', 'nope', 3)`).run()).toThrow(/CHECK/)
+      } finally {
+        raw.close()
+      }
+    })
+  })
 })
 
 describe('runMigrations', () => {

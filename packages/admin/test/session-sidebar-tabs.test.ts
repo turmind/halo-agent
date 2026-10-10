@@ -8,7 +8,7 @@ import type { SessionMeta } from '../src/shared/components/session-list-dropdown
 
 /**
  * Contract: the Explorer session list is the tab list. A row click selects
- * (opens) the session, ✕ goes to the delete callback, a draft on screen gets
+ * (opens) the session (rename / delete: the row menu), a draft on screen gets
  * a highlighted "New session" row on top. Every session carries a 2px status
  * bar along its bottom edge (absolutely positioned — no spinner, no reflow):
  * amber + breathing while a loaded tab's store streams, blue when a loaded
@@ -63,17 +63,15 @@ afterEach(() => {
 })
 
 describe('Explorer session list as vertical tabs', () => {
-  it('a click opens the session; ✕ deletes it', () => {
+  it('a click opens the session (delete lives in the row menu — session-row-menu.test)', () => {
     render([meta('a', 'idle'), meta('b', 'idle')], 'a')
     expect(rowOf('a').getAttribute('aria-selected')).toBe('true')
     expect(rowOf('a').title).toContain('3 msgs')
 
     act(() => rowOf('b').click())
     expect(onSelect).toHaveBeenCalledWith('b')
-
-    act(() => rowOf('b').querySelector<HTMLButtonElement>('button[aria-label="chat.sessions.delete"]')!.click())
-    expect(onDelete).toHaveBeenCalledWith('b', expect.anything())
     expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onDelete).not.toHaveBeenCalled()
   })
 
   it('shows a highlighted "New session" row on top while a draft is on screen', () => {

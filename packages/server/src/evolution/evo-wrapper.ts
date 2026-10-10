@@ -686,6 +686,8 @@ function renderEvoContextSections(ctx: EvoContext | null): string[] {
     lines.push('A [global]/[builtin] skill is NOT inside your sandbox — read it')
     lines.push(`from ${globalSkillsDir} directly; don't glob the sandbox for it.`)
     lines.push('Sibling resource files live next to SKILL.md in that same dir.')
+    lines.push('Skills shipped by canvas extensions (~/.halo/global/extensions/*/skills/)')
+    lines.push('are read-only and never a patch target — they are left out of this list.')
     lines.push('')
   }
 

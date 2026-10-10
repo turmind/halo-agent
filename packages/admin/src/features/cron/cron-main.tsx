@@ -90,7 +90,9 @@ export function CronMain() {
       <CronDetail
         key={job.id}
         job={job}
-        onEdit={() => useCronStore.getState().openEdit()}
+        // Refetch before opening the form: `sessionAgentId` (the agent lock)
+        // can go stale when the session is deleted in the Sessions tab — no push for that.
+        onEdit={() => { void refreshJob().then(() => useCronStore.getState().openEdit()) }}
         onDelete={() => onDelete(job.id)}
         onRunNow={() => onRunNow(job.id)}
       />
@@ -207,7 +209,8 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
           {job.activeFrom != null && <div><span className="text-[var(--foreground)]">{t('cron.field.activeFrom')}</span> <span className="font-mono">{new Date(job.activeFrom).toLocaleString()}</span></div>}
           {job.activeUntil != null && <div><span className="text-[var(--foreground)]">{t('cron.field.activeUntil')}</span> <span className="font-mono">{new Date(job.activeUntil).toLocaleString()}</span></div>}
           <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.workspace')}</span> {job.workspacePath}</div>
-          <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.session')}</span> <span className="font-mono">{job.sessionId ?? t('cron.field.sessionDefault', { id: job.effectiveSessionId })}</span></div>
+          <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.folder')}</span> <span className="font-mono">{job.workingDir ?? t('cron.field.folderRoot')}</span></div>
+          <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.session')}</span> <span className="font-mono">{job.stateless ? t('cron.field.sessionStateless') : (job.sessionId ?? t('cron.field.sessionDefault', { id: job.effectiveSessionId }))}</span></div>
           <div className="col-span-2"><span className="text-[var(--foreground)]">{t('cron.field.targets')}</span> {job.targets.length === 0
             ? t('cron.field.targetsLogOnly')
             : job.targets.map((tg) => `${tg.channelType}:${tg.accountId}${tg.chatId ? '/' + tg.chatId : ''}`).join(', ')}</div>
@@ -239,6 +242,7 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
                       <span className="text-[var(--muted-foreground)]">{new Date(r.startedAt).toLocaleString()}</span>
                       <span className="text-[var(--muted-foreground)]">·</span>
                       <span className="text-[var(--muted-foreground)]">{r.triggerKind}</span>
+                      {r.sessionId && <span className="truncate font-mono text-[10px] text-[var(--muted-foreground)]" title={t('cron.run.session')}>{r.sessionId}</span>}
                     </div>
                     <button onClick={() => { void onShowLog(r.id) }} className="rounded bg-[var(--accent)] px-2 py-0.5 text-[10px] hover:opacity-90">Log</button>
                   </div>
@@ -336,7 +340,24 @@ function CronForm({ initial, onClose, onSaved }: {
   const [agentOptions, setAgentOptions] = useState<Array<{ id: string; name: string }>>([])
   // Empty string = the job's own session (server stores null).
   const [sessionId, setSessionId] = useState(initial?.sessionId ?? '')
-  const [sessionOptions, setSessionOptions] = useState<Array<{ id: string; label: string }>>([])
+  const [sessionOptions, setSessionOptions] = useState<Array<{ id: string; label: string; agentId: string; workingDir: string | null }>>([])
+  // Empty string = the workspace root (server stores null).
+  const [workingDir, setWorkingDir] = useState(initial?.workingDir ?? '')
+  const [stateless, setStateless] = useState(initial?.stateless ?? false)
+  // A stateful job's agent is fixed once its session exists (the write points
+  // enforce it; this only mirrors it). The saved session's agent comes from
+  // the server (`sessionAgentId`, refetched when the form opens); a newly
+  // picked one from the session list (applied in the picker's onCommit).
+  // Stale until refetch is acceptable.
+  const savedSessionId = initial ? (initial.sessionId ?? '') : null
+  const lockedAgent = stateless ? null
+    : sessionId === savedSessionId && !initial?.stateless && committedPath === initial?.workspacePath ? (initial?.sessionAgentId ?? null)
+    : sessionId ? (sessionOptions.find((o) => o.id === sessionId)?.agentId ?? null)
+    : null
+  const lockedSessionId = sessionId || initial?.effectiveSessionId || ''
+  // A job saved before the rule can hold a session on another agent: never
+  // switch the field silently — say so, the user picks the fix.
+  const agentMismatch = lockedAgent !== null && lockedAgent !== agentId
   // Trigger mode: cron expression vs. one-shot (at-mode). For an existing
   // job, infer from runAt presence; new jobs default to recurring.
   const [mode, setMode] = useState<'recurring' | 'oneShot'>(initial?.runAt ? 'oneShot' : 'recurring')
@@ -453,7 +474,7 @@ function CronForm({ initial, onClose, onSaved }: {
     api.sessionLogs.list(committedPath, { rootOnly: true, limit: 50 })
       .then(({ sessions }) => {
         if (!alive) return
-        setSessionOptions(sessions.map((s) => ({ id: s.id, label: `${s.title || s.id} · ${s.agentName || s.agentId}` })))
+        setSessionOptions(sessions.map((s) => ({ id: s.id, label: `${s.title || s.id} · ${s.agentName || s.agentId}`, agentId: s.agentId, workingDir: s.workingDir ?? null })))
       })
       .catch((err) => { if (alive) setSessionOptions([]); console.error('sessionLogs.list', err) })
     return () => { alive = false }
@@ -603,7 +624,10 @@ function CronForm({ initial, onClose, onSaved }: {
           // null explicitly clears a previously-set timeout back to default.
           timeoutSec: timeoutSec ?? null,
           // '' = default session; null clears a previously-picked one.
-          sessionId: sessionId || null,
+          // Stateless excludes a picked session (server rejects both).
+          sessionId: stateless ? null : (sessionId || null),
+          workingDir: workingDir.trim() || null,
+          stateless,
           // Untouched bounds are left out (server keeps them); one-shot
           // mode always clears them (server rejects a window with runAt).
           ...(mode === 'oneShot' || activeFromLocal !== null ? { activeFrom } : {}),
@@ -615,7 +639,9 @@ function CronForm({ initial, onClose, onSaved }: {
           schedule: mode === 'recurring' ? schedule : '',
           runAt: mode === 'oneShot' ? runAtMs : undefined,
           timeoutSec,
-          sessionId: sessionId || undefined,
+          sessionId: stateless ? undefined : (sessionId || undefined),
+          workingDir: workingDir.trim() || undefined,
+          stateless,
           activeFrom: activeFrom ?? undefined,
           activeUntil: activeUntil ?? undefined,
         })
@@ -626,7 +652,7 @@ function CronForm({ initial, onClose, onSaved }: {
     } finally {
       setSubmitting(false)
     }
-  }, [initial, label, workspacePath, agentId, sessionId, userPrompt, mode, schedule, runAtLocal, timezone, hostTz, computeRunAtMs, timeoutSecInput, activeFromLocal, activeUntilLocal, pickedTargets, chatIdInputs, enabled, onSaved, t])
+  }, [initial, label, workspacePath, agentId, sessionId, workingDir, stateless, userPrompt, mode, schedule, runAtLocal, timezone, hostTz, computeRunAtMs, timeoutSecInput, activeFromLocal, activeUntilLocal, pickedTargets, chatIdInputs, enabled, onSaved, t])
 
   return (
     <div className="flex h-full flex-col">
@@ -645,23 +671,50 @@ function CronForm({ initial, onClose, onSaved }: {
         </Field>
 
         <Field label={t('cron.form.agent')}>
-          <select value={agentId} onChange={(e) => setAgentId(e.target.value)} className="input-base">
+          {/* A mismatch stays editable so the session's agent can be picked. */}
+          <select value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={lockedAgent !== null && !agentMismatch} className="input-base disabled:opacity-60">
             {agentOptions.length === 0 && <option value="default">default</option>}
+            {lockedAgent && !agentOptions.some((a) => a.id === lockedAgent) && <option value={lockedAgent}>{lockedAgent}</option>}
             {agentOptions.map((a) => (
               <option key={a.id} value={a.id}>{a.name} ({a.id})</option>
             ))}
           </select>
+          {agentMismatch
+            ? <div className="mt-1 text-[10px] text-amber-600">{t('cron.form.agent.mismatch', { id: lockedSessionId, agent: lockedAgent })}</div>
+            : lockedAgent && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.agent.locked', { id: lockedSessionId, agent: lockedAgent })}</div>}
+        </Field>
+
+        <Field label={t('cron.form.stateless')}>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={stateless} onChange={(e) => setStateless(e.target.checked)} />
+            <span>{t('cron.form.stateless.label')}</span>
+          </label>
+          <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.stateless.hint')}</div>
         </Field>
 
         <Field label={t('cron.form.session')}>
           <Combobox
-            value={sessionId}
-            placeholder={t('cron.form.session.placeholder')}
+            value={stateless ? '' : sessionId}
+            disabled={stateless}
+            placeholder={stateless ? t('cron.form.session.stateless') : t('cron.form.session.placeholder')}
             presets={committedPath ? sessionOptions : []}
-            onCommit={(next) => setSessionId(next.trim())}
+            onCommit={(next) => {
+              const id = next.trim()
+              setSessionId(id)
+              // Picking an existing session takes its agent (then locked) and
+              // prefills its folder (editable — the job's folder is applied
+              // to the session on every run).
+              const picked = sessionOptions.find((o) => o.id === id)
+              if (picked) { setAgentId(picked.agentId); setWorkingDir(picked.workingDir ?? '') }
+            }}
             minWidth={280}
           />
           <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>
+        </Field>
+
+        <Field label={t('cron.form.folder')}>
+          <input value={workingDir} onChange={(e) => setWorkingDir(e.target.value)} className="input-base font-mono" placeholder={t('cron.form.folder.placeholder')} />
+          <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.folder.hint')}</div>
         </Field>
 
         <Field label={t('cron.form.mode')}>

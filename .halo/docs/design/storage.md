@@ -26,7 +26,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   │                                  #   — global so they don't pollute any workspace's halo.db
 │   │   └── <sessionId>.json
 │   ├── evo.db                         # Cross-workspace evolution queue (evolution_runs + evolution_applies)
-│   ├── cron.db                        # Cross-workspace cron jobs + run history (cron_jobs + cron_runs)
+│   ├── cron.db                        # Cross-workspace cron jobs + run history (cron_jobs + cron_runs; schema in design/cron.md, migrations below)
 │   ├── runs.db                        # Run ledger: (workspace, session_id) rows for server-driven runs in flight; steady state empty (running_sessions)
 │   ├── a2a.db                         # A2A: inbound tasks, push configs + outbox, outbound dispatches (see design/a2a.md)
 │   ├── extensions/<id>/               # Installed Canvas preview extensions (halo-extension.json + bundle)
@@ -434,6 +434,8 @@ Paths: `~/.halo/global/models/<providerId>.yaml` (bundled, seeded from `template
 
 **Merge rule** (one implementation, `packages/server/src/models/registry.ts` `loadProviders`, behind the server registry, the Settings secrets forms, `halo setup` and the hub installer): per provider `id` the copy with the higher `revision` wins; on a tie the `models.d` copy wins; a yaml without `revision` counts as 0 (users' own custom yamls in `models/`). A `models.d` copy whose `runtime:` this build doesn't know is skipped with a `[Config]` log, so the bundled copy stays in effect. `halo setup` merges the package's `templates/models/` with `models.d/` the same way.
 
+**Hub install** (`halo models install <dir> [--yes]`, `models/install.ts`): plan, then write `models.d/<id>.yaml` via tmp + rename. A yaml is refused (others still go ahead) for an unknown `runtime:` ("needs a newer halo"), a missing / non-integer `revision`, a `secrets[].default` other than empty / `<<ENV_NAME>>`, or bad model fields — `contextWindow` / `maxContextWindow` not positive integers, `contextWindow` > `maxContextWindow`, `compressAt` outside (0, 1], `endpoints` not a list of `https://` URLs (reason shaped `models.<id>.<field> …`). An older revision than the copy in effect is skipped, an identical one is up to date. **Consent**: the whole run writes nothing and needs `--yes` (exit 3) when an installed provider is new, its `defaultEndpoint` / `endpointPresets` change, or a model's `endpoints:` gains a URL the provider didn't use anywhere before (not in its old `defaultEndpoint`, presets or any model's list). Removed URLs, and added ones the provider already used, are listed but need no consent.
+
 **Live reload**: `models/watcher.ts` watches `models.d/` (non-recursive, 300 ms debounce; created at boot), drops the registry cache and broadcasts `models:changed` when the merged view changed; admin pages re-fetch `/agent-configs/models` and the settings schema. `models/` isn't watched — only template refresh writes it, before the registry is first read.
 
 ```yaml
@@ -445,11 +447,11 @@ displayName: AWS Bedrock Claude (Invoke API)   # shown in UI
 displayName_zh: AWS Bedrock Claude（Invoke API） # optional zh override
 description: Invokes Bedrock via InvokeModel (non-streaming)
 description_zh: 通过 Bedrock InvokeModel（非流式）调用
-defaultEndpoint: https://bedrock-runtime.us-west-2.amazonaws.com
+defaultEndpoint: https://bedrock-runtime.us-east-1.amazonaws.com
 defaultModelId: global.anthropic.claude-sonnet-4-6   # picked when user switches to this provider
-endpointPresets:
-  - https://bedrock-runtime.us-west-2.amazonaws.com
+endpointPresets:                               # endpoint dropdown for models without their own `endpoints:`
   - https://bedrock-runtime.us-east-1.amazonaws.com
+  - https://bedrock-runtime.us-west-2.amazonaws.com
 
 # Server-side credentials. Stored at <provider-id>.secrets.<key> in
 # settings.yaml; never injected into agent prompts or shell_exec.
@@ -466,7 +468,11 @@ secrets:
 models:
   - id: global.anthropic.claude-sonnet-4-6
     displayName: Claude Sonnet 4.6
+    # endpoints: [https://…us-east-1…]         # optional — only when the model is served on a subset; narrows endpointPresets
     maxOutputTokens: 64000
+    contextWindow: 272000                      # recommended window for a new agent (≤ 272000, ≤ maxContextWindow)
+    maxContextWindow: 1000000                  # the model's true limit; absent → contextWindow
+    compressAt: 0.9                            # compaction ratio for a new agent, (0, 1]
     capabilities:
       image: true                              # supports image input
       video: false
@@ -486,18 +492,33 @@ models:
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: max, label: Max }
+      verbosity:                                # Responses-API providers only (bedrock-mantle runtime)
+        default: medium
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
 ```
+
+**Per-model `endpoints:`** — `resolveModelEndpoints(provider, model)` (`models/model-endpoints.ts`; the admin form keeps a byte-identical copy in `features/agents/model-endpoints.ts`, pinned by `test/model-endpoints.test.ts`): a non-empty list is authoritative for that model — it replaces `endpointPresets` in the dropdown, and the model's default endpoint is `defaultEndpoint` when the list contains it, else the list's first entry. No list → provider presets and `defaultEndpoint`. Used by scaffolding / `halo setup` (`modelBlockFromProvider`) and the agent form. Runtime never falls back: a session needs `model.endpoint` in agent.yaml.
+
+**Context fields** (`resolveModelContext` / `resolveEffectiveContext`, `config.ts`): `contextWindow` is the *recommended* window, kept ≤ 272000 even for 1M-class models (input past 272K bills at long-context rates on most of them); `maxContextWindow` is the true limit (absent → `contextWindow`); `compressAt` is the model's compaction ratio. At runtime a session's budget is agent.yaml `context.maxTokens` / `compressAt`, else the global defaults — `config.model.maxContextTokens` (272000) capped at the model's max, and `general.compact.compress_at` (0.9) — then `maxTokens` is clamped to the model's max (warned, `[SessionAgentBuilder] … clamped`). Same resolution for live sessions (`buildModelRuntime`) and cold ones (`getContextConfig`). `PUT /agent-configs/:id/yaml` refuses a new `context.maxTokens` above the model's max (400); an over-max value already on disk for the same model stays editable.
+
+**Scaffold-only defaults** — the registry's recommended `contextWindow` / `compressAt` and `capabilities.verbosity.default` are written into agent.yaml when an agent is created (new-agent scaffold, `halo setup` rebind, the form's model / provider switch); runtime never reads them for an existing agent, so a registry update can't move a running agent. A new agent's `context:` = `contextWindow` (else the runtime default) and compressAt = explicitly set global `compact.compress_at` > model `compressAt` > 0.9 (`explicitCompressAt()`, `agent-configs.ts` `scaffoldContext`; settings.yaml only holds keys a user wrote, so absent = never set). Verbosity at runtime comes only from agent.yaml `model.verbosity`; absent → MantleAgent sends `low`.
 
 ### Capability defaults — what each `default*` field controls
 
 | Path | Used when | Fallback |
 |---|---|---|
 | `<provider>.defaultModelId` | User switches provider; form picks this model | `models[0].id` |
-| `<provider>.defaultEndpoint` | Same; endpoint input | `''` |
+| `<provider>.defaultEndpoint` | Same; endpoint input (narrowed by the model's `endpoints:`, see above) | `''` |
+| `models[].contextWindow` | New agent / model switch with an untouched or over-max window → `context.maxTokens` | runtime default (272000 capped at max) |
+| `models[].compressAt` | New agent (unless the global `compress_at` is set) / model switch with an untouched ratio → `context.compressAt` | global `compress_at`, 0.9 |
 | `capabilities.promptCaching.default` | Toggle on / provider switch into a caching-capable model | `ttlPresets[0].value` |
 | `capabilities.thinking.defaultEnabled` | New agent or provider switch with no prior thinking config | `false` |
 | `capabilities.thinking.default` | Thinking toggled on, adaptive mode | `effortPresets[0].value` |
 | `capabilities.thinking.defaultBudgetTokens` | Thinking toggled on, manual mode | `8192` |
+| `capabilities.verbosity.default` | New agent / provider or model switch with no valid prior value → `model.verbosity` | none written; runtime `low` |
 
 Existing agent yaml values always win over these defaults — switching providers carries the user's effort/ttl over when valid for the new model. The defaults only fire when there's nothing to carry, or the carry-over isn't valid in the new vocabulary (e.g. Bedrock `medium` → Kimi `enabled/disabled` mismatch resets to the new provider's `default`).
 
@@ -607,7 +628,7 @@ The last four are a **read cache for the session list** — `GET /api/sessions/l
 |---|---|---|
 | item_type | TEXT NOT NULL | `'agent'` or `'skill'` |
 | item_id | TEXT NOT NULL | Agent/skill ID |
-| scope | TEXT NOT NULL | `'global'` or `'workspace'` — which source the item comes from |
+| scope | TEXT NOT NULL | `'global'`, `'workspace'` or `'extension'` (a skill shipped by an installed extension, `agents/skill-sources.ts`) — which source the item comes from. `'extension'` added by `HALO_MIGRATIONS` v2 (table rebuild, rows kept) |
 | disabled_at | INTEGER NOT NULL | Unix ms |
 | | | **PK**: `(item_type, item_id, scope)` |
 
@@ -642,7 +663,8 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 
 - `schema.sql` / each db's `CREATE_SQL` always describes the FULL current shape, so a fresh db is complete after the CREATEs alone
 - Every change to an already-existing db gets a numbered slot in that file's ordered migration list — `HALO_MIGRATIONS` (`db/index.ts`), `CRON_MIGRATIONS` (`db/cron-db.ts`), `A2A_MIGRATIONS` (`db/a2a-db.ts`); `channel-db.ts` / `evo-db.ts` / `runs-db.ts` currently pass an empty list. `runMigrations(sqlite, list)` (`db/migrate.ts`) runs `list[user_version..]` in order, each in its own transaction, stamping `PRAGMA user_version = i + 1` after each
-- A fresh db is also at `user_version 0` and runs the whole list, so every slot must be a no-op against the current shape (`addColumnIfMissing`, `CREATE … IF NOT EXISTS`)
+- A fresh db is also at `user_version 0` and runs the whole list, so every slot must be a no-op against the current shape (`addColumnIfMissing`, `CREATE … IF NOT EXISTS`). A CHECK constraint can't be altered in SQLite: the slot rebuilds the table (create `_v2`, copy rows, drop, rename) and skips when `sqlite_master` already shows the new constraint — `HALO_MIGRATIONS` v2 (`disabled_items.scope` admits `'extension'`) is the pattern
+- Current slots worth knowing: `HALO_MIGRATIONS` v2 — the `disabled_items` rebuild above (rows kept). `CRON_MIGRATIONS` v5 — `cron_jobs.working_dir TEXT NULL` (job folder → `halo cli --dir`), `cron_jobs.stateless INTEGER NOT NULL DEFAULT 0` (1 = fresh session every run), `cron_runs.session_id TEXT NULL` (the session that run used); column semantics in [cron.md](cron.md)
 - Append only — never reorder or edit a shipped slot. A db opened by a newer halo (user_version > list length) logs a warning and continues
 - Do not drop or rename existing columns
 - New channel types: add rows with a new `channel_type` value + define config shape in the channel's `accounts.ts` adapter
@@ -660,3 +682,4 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 | v1+ | 2026-08-08 | Session file slimming (no version bump — additive + reader-compatible): assistant `toolCalls` no longer written (`contentBlocks` is the single copy, `toolCalls` stays read-only legacy); files written as compact JSON; UI-log archiving adds header fields `archiveCount` / `archivedUserCount` plus `{sessionId}.arch.{N}.json.gz` segment files; `agent_sessions` gains mirrored `title` / `exchange_count` / `context_tokens` / `total_output_tokens` columns so listing doesn't parse every file. |
 | v1+ | 2026-09-18 | Relay + liveness (additive, no version bump): `agent_sessions.reply_to` column (idempotent ALTER); session file gains `lastActivityAt` beside `output`, read back by `get_session_output` for released sessions. |
 | v1+ | 2026-09-20 | Schema migrations moved from ad-hoc boot-time ALTERs to `PRAGMA user_version` + ordered per-db migration lists (`db/migrate.ts`); existing dbs pick up at slot 0 and every slot is idempotent. Session-message + WS frame types moved to `@turmind/halo-core/protocol` (re-exported from their old server paths; no wire change). |
+| v1+ | 2026-10-10 | Model registry (additive): per-model `endpoints:`, `maxContextWindow`, `compressAt`; recommended `contextWindow` ≤ 272000; registry context / compressAt / verbosity defaults are scaffold-only; installer validates model fields and asks consent for URLs new to a provider. `HALO_MIGRATIONS` v2: `disabled_items.scope` admits `'extension'`. `CRON_MIGRATIONS` v5: `cron_jobs.working_dir`, `cron_jobs.stateless`, `cron_runs.session_id`. |

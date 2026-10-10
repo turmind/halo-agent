@@ -17,9 +17,14 @@ import type { CommandDescriptor } from '@turmind/halo-server/commands/types'
 
 export interface HarnessOptions {
   workspace: string
+  /** Undefined = `-a` not given (resume keeps the stored agent). */
   agentId?: string
   sessionId?: string
   newSession?: boolean
+  /** `--dir`: workspace-relative or absolute sub-folder the root session
+   *  focuses on (sub-agent working_dir semantics). Applied on create and,
+   *  in place, on resume; '.' = the workspace root. */
+  dir?: string
   accessLevel?: 'full' | 'workspace' | 'readonly'
   lang?: Lang
 }
@@ -200,32 +205,48 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const activeOverrides = new Map<string, string>()
 
   // Helper: build a Binding for the given workspace + opts. Used both for
-  // initial creation and for /ws hot-switch.
-  async function bindWorkspace(workspace: string, requestedSessionId?: string, newSession = false): Promise<Binding> {
+  // initial creation and for /ws hot-switch. `flags` (explicit `-a`, `--dir`)
+  // only on the initial bind — the dir belongs to the original workspace.
+  async function bindWorkspace(workspace: string, requestedSessionId?: string, newSession = false, flags?: { agent?: string; dir?: string }): Promise<Binding> {
     const sm = registry.getOrCreate(workspace)
+    // `--dir` → absolute (null = the workspace root), same checks/errors as a
+    // sub-agent's working_dir.
+    let workingDir: string | null = null
+    if (flags?.dir !== undefined) {
+      const abs = await sm.resolveWorkingDir(flags.dir)
+      workingDir = abs === path.resolve(sm.workspaceRoot) ? null : abs
+    }
+    const create = async (id: string) => {
+      await sm.createSession(agentId, null, 'CLI', agentId, id, workingDir, accessLevel)
+      return id
+    }
     let sessionId: string
     if (requestedSessionId) {
       // `-s <id>` semantics: resume if it exists, else create with that id.
       // Lets external schedulers (cron jobs, automation) hand the cli a
       // stable session id without worrying about a "first-run" bootstrap
       // step — if the row's missing we just fill it in.
-      sessionId = requestedSessionId
-      if (!sm.getSessionById(sessionId)) {
-        await sm.createSession(agentId, null, 'CLI', agentId, sessionId, undefined, accessLevel)
+      const row = sm.getSessionById(requestedSessionId)
+      // A session's agent never changes: an explicit, different `-a` is an
+      // error, never a silent resume with the stored agent.
+      if (row && flags?.agent !== undefined && row.agentId !== flags.agent) {
+        throw new Error(`session ${requestedSessionId} runs agent ${row.agentId}; omit -a to resume it, or use -n for a new session with ${flags.agent}`)
       }
+      sessionId = row ? requestedSessionId : await create(requestedSessionId)
     } else if (newSession) {
-      const newId = `${SESSION_PREFIX}${Date.now().toString(36)}`
-      await sm.createSession(agentId, null, 'CLI', agentId, newId, undefined, accessLevel)
-      sessionId = newId
+      sessionId = await create(`${SESSION_PREFIX}${Date.now().toString(36)}`)
     } else {
+      // Fallback resume of the latest cli session — unless an explicit `-a`
+      // names a different agent than it runs: then that's a new session.
       const existing = findActiveSessionId(sm, USER_ID, SESSION_PREFIX, activeOverrides, opts.accessLevel ?? 'full')
-      if (existing) {
-        sessionId = existing
-      } else {
-        const newId = `${SESSION_PREFIX}${Date.now().toString(36)}`
-        await sm.createSession(agentId, null, 'CLI', agentId, newId, undefined, accessLevel)
-        sessionId = newId
-      }
+      const keep = existing && (flags?.agent === undefined || sm.getSessionById(existing)?.agentId === flags.agent)
+      sessionId = keep ? existing : await create(`${SESSION_PREFIX}${Date.now().toString(36)}`)
+    }
+    // Resumed session + explicit `--dir`: re-point its stored working_dir in
+    // place (a just-created one already has it; setWorkingDir no-ops then).
+    if (flags?.dir !== undefined) {
+      const changed = sm.setWorkingDir(sessionId, workingDir)
+      if (changed) process.stderr.write(`[cli] session ${sessionId}: dir ${changed.from ?? '.'} → ${changed.to ?? '.'}\n`)
     }
     activeOverrides.set(USER_ID, sessionId)
     const sessionAgentId = sm.getSessionById(sessionId)?.agentId ?? agentId
@@ -239,7 +260,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
 
   // Initial bind
-  let state: Binding = await bindWorkspace(initialPath, opts.sessionId, opts.newSession ?? false)
+  let state: Binding = await bindWorkspace(initialPath, opts.sessionId, opts.newSession ?? false, { agent: opts.agentId, dir: opts.dir })
 
   async function send(message: string, images?: Array<{ data: string; mimeType: string }>): Promise<'running' | 'queued'> {
     state.sm.appendUserMessage(state.sessionId, message)
@@ -259,6 +280,9 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       activeOverrides,
       workspacePath: state.workspace,
       lang,
+      // The bound session, exact even when a non-full user's latest `cli_`
+      // session is another one (findActiveSessionId's fallback).
+      sessionId: state.sessionId,
     }
   }
 

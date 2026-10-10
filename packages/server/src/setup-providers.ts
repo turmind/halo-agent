@@ -11,6 +11,7 @@ import YAML from 'yaml'
 import { TEMPLATES_DIR } from './init.js'
 import { readSetting } from './setup-settings.js'
 import { loadProviders } from './models/registry.js'
+import { resolveModelEndpoints } from './models/model-endpoints.js'
 
 export interface SecretSpec {
   /** Setting-leaf key e.g. `api_key`. The full path is `<id>.<bucket>.<key>`. */
@@ -185,7 +186,7 @@ export function readDefaultAgentProvider(): string | undefined {
 }
 
 /** Derive an agent.yaml `model:` block (id / endpoint / promptCaching /
- *  thinking) from one provider's models YAML. Shared by setup (bundled
+ *  verbosity / thinking) from one provider's models YAML. Shared by setup (bundled
  *  templates, below) and routes/agent-configs.ts (seeded registry) — this
  *  module stays free of the routes/tools chain so the CLI setup path can
  *  import it. */
@@ -193,18 +194,22 @@ export function modelBlockFromProvider(providerId: string, data: Record<string, 
   const models = Array.isArray(data.models) ? data.models as Array<Record<string, unknown>> : []
   const modelId = (typeof data.defaultModelId === 'string' ? data.defaultModelId : undefined)
     ?? (models[0] ? models[0].id as string | undefined : undefined)
-  const endpoint = typeof data.defaultEndpoint === 'string' ? data.defaultEndpoint : undefined
   const model = models.find((m) => m.id === modelId)
+  const endpoint = resolveModelEndpoints(data, model).defaultEndpoint
   const caps = (model?.capabilities as Record<string, unknown> | undefined) ?? {}
   const promptCaching = (caps.promptCaching as { default?: string } | undefined)?.default
   const thinkingCap = caps.thinking as
     | { defaultEnabled?: boolean; default?: string; defaultBudgetTokens?: number }
     | undefined
+  // Written into the yaml: the runtime ignores the registry default
+  // (config.resolveVerbosity), so scaffolding is where it takes effect.
+  const verbosity = (caps.verbosity as { default?: string } | undefined)?.default
 
   const block: Record<string, unknown> = { provider: providerId }
   if (modelId) block.id = modelId
   if (endpoint) block.endpoint = endpoint
   if (promptCaching) block.promptCaching = promptCaching
+  if (verbosity) block.verbosity = verbosity
   if (thinkingCap?.defaultEnabled) {
     const thinking: Record<string, unknown> = { enabled: true }
     if (thinkingCap.default) thinking.effort = thinkingCap.default

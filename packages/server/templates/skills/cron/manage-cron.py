@@ -142,6 +142,70 @@ def parse_session(raw: str | None) -> str | None:
     return v
 
 
+def parse_dir(workspace: str, raw: str | None) -> str | None:
+    """Validate --dir against the job's workspace (same rule as the admin REST
+    routes / `halo cli --dir`): workspace-relative or absolute, inside the
+    workspace, an existing directory. Returns the workspace-relative path;
+    empty / the workspace root = None (= the root)."""
+    if raw is None or not raw.strip():
+        return None
+    v = raw.strip()
+    root = os.path.abspath(workspace)
+    resolved = os.path.abspath(v if os.path.isabs(v) else os.path.join(root, v))
+    if resolved != root and not resolved.startswith(root + os.sep):
+        die(f'invalid --dir "{raw}": outside the workspace {root}')
+    if not os.path.exists(resolved):
+        die(f'invalid --dir "{raw}": does not exist')
+    if not os.path.isdir(resolved):
+        die(f'invalid --dir "{raw}": not a directory')
+    rel = os.path.relpath(resolved, root)
+    return None if rel == '.' else rel
+
+
+def effective_session_id(job_id: str, session_id: str | None) -> str:
+    """runner.ts effectiveSessionId: the picked session, else the job's own
+    (the job id; `cron-<id>` for an id without that prefix)."""
+    return session_id or (job_id if job_id.startswith('cron-') else f'cron-{job_id}')
+
+
+def session_agent(workspace: str, session_id: str) -> str | None:
+    """Agent of an existing session in the workspace db, else None."""
+    db = Path(workspace) / '.halo' / 'halo.db'
+    if not db.exists():
+        return None
+    try:
+        # as_uri() percent-encodes `?` / `#` / `%` in the path.
+        conn = sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True)
+        row = conn.execute('SELECT agent_id FROM agent_sessions WHERE id = ?', (session_id,)).fetchone()
+        conn.close()
+    except sqlite3.Error:
+        return None
+    return row[0] if row else None
+
+
+def check_session_rules(job: dict):
+    """Write-point rules on the job's final state (same as the REST routes):
+    stateless excludes a picked session, and a stateful job's agent is fixed
+    once its session exists."""
+    if job.get('stateless') and job.get('session_id'):
+        die('--stateless (new session every run) and --session are mutually exclusive')
+    if job.get('stateless'):
+        return
+    sid = effective_session_id(job['id'], job.get('session_id'))
+    agent = session_agent(job['workspace_path'], sid)
+    if agent is not None and agent != job['agent_id']:
+        die(f'session {sid} already runs agent {agent}; delete that session or turn on '
+            f'"new session every run" (--stateless) to change the agent')
+
+
+def require_v5_columns(conn: sqlite3.Connection):
+    """cron.db gains working_dir/stateless via the server's boot migration."""
+    cols = {r[1] for r in conn.execute('PRAGMA table_info(cron_jobs)').fetchall()}
+    if 'working_dir' not in cols or 'stateless' not in cols:
+        die('cron.db has no working_dir/stateless columns yet — restart the halo server '
+            'once so it migrates cron.db, then retry')
+
+
 def parse_run_at(raw: str | None) -> int | None:
     """Accepts ISO-8601 (`2026-05-24T09:00:00`) or a unix-ms integer; returns
     epoch ms or None. Local time without offset is parsed as host TZ —
@@ -254,6 +318,11 @@ def row_to_job(row: sqlite3.Row) -> dict:
     except Exception:
         j['targets'] = []
     j['enabled'] = bool(j['enabled'])
+    # Folder + stateless (pre-migration dbs: unset) and the session this job
+    # runs in — `null` for stateless (a new one every run).
+    j.setdefault('working_dir', None)
+    j['stateless'] = bool(j.get('stateless') or 0)
+    j['effective_session_id'] = None if j['stateless'] else effective_session_id(j['id'], j.get('session_id'))
     # Active window: ms (as stored) + ISO in the job's timezone. Pre-migration
     # dbs have no columns — report them as unset.
     for k in ('active_from', 'active_until'):
@@ -293,9 +362,11 @@ def cmd_get(args):
     if not row:
         die(f'job {args.id} not found', 2)
     job = row_to_job(row)
+    run_cols = {r[1] for r in conn.execute('PRAGMA table_info(cron_runs)').fetchall()}
     runs = conn.execute(
-        'SELECT id, status, started_at, completed_at, exit_code, failure_reason '
-        'FROM cron_runs WHERE job_id = ? ORDER BY id DESC LIMIT 5',
+        'SELECT id, status, started_at, completed_at, exit_code, failure_reason'
+        + (', session_id' if 'session_id' in run_cols else '') +
+        ' FROM cron_runs WHERE job_id = ? ORDER BY id DESC LIMIT 5',
         (args.id,),
     ).fetchall()
     job['recentRuns'] = [dict(r) for r in runs]
@@ -317,11 +388,16 @@ def cmd_create(args):
         die('--run-at must be in the future')
     timeout_sec = parse_timeout_sec(args.timeout_sec)
     session_id = parse_session(args.session)
+    working_dir = parse_dir(args.workspace, args.dir)
     active_from = parse_active_bound('--active-from', args.active_from or '', args.timezone)
     active_until = parse_active_bound('--active-until', args.active_until or '', args.timezone)
     validate_active_window(run_at_ms, active_from, active_until, new_until=True)
 
     job_id = args.id or gen_job_id()
+    check_session_rules({
+        'id': job_id, 'workspace_path': args.workspace, 'agent_id': args.agent or 'default',
+        'session_id': session_id, 'stateless': args.stateless,
+    })
     now = now_ms()
     targets = parse_targets(args.targets) if args.targets else []
 
@@ -346,8 +422,12 @@ def cmd_create(args):
         'created_at': now,
         'updated_at': now,
     }
-    # Only name the window columns when used, so jobs without a window can
-    # still be created on a cron.db the server hasn't migrated yet.
+    # Only name the newer columns when used, so plain jobs can still be
+    # created on a cron.db the server hasn't migrated yet.
+    if working_dir is not None or args.stateless:
+        require_v5_columns(conn)
+        values['working_dir'] = working_dir
+        values['stateless'] = 1 if args.stateless else 0
     if active_from is not None or active_until is not None:
         require_active_columns(conn)
         values['active_from'] = active_from
@@ -388,6 +468,24 @@ def cmd_update(args):
     if args.targets is not None:
         sets.append(('targets', json.dumps(parse_targets(args.targets), ensure_ascii=False)))
     cur = dict(row)
+    if args.dir is not None or args.stateless is not None:
+        require_v5_columns(conn)
+    workspace = args.workspace if args.workspace is not None else cur['workspace_path']
+    if args.dir is not None:
+        # `--dir ""` clears back to the workspace root.
+        sets.append(('working_dir', parse_dir(workspace, args.dir)))
+    elif args.workspace is not None and cur.get('working_dir'):
+        # The stored folder must still exist under the new workspace.
+        parse_dir(workspace, cur['working_dir'])
+    if args.stateless is not None:
+        sets.append(('stateless', 1 if args.stateless == 'on' else 0))
+    merged = {**cur, **dict(sets)}
+    # The agent rule only when this update changes one of its inputs: a job
+    # saved before the rule (its session on another agent) must still take an
+    # unrelated edit (prompt, schedule, targets, …).
+    rule_keys = ('agent_id', 'session_id', 'stateless', 'workspace_path')
+    if any(merged.get(k) != cur.get(k) for k in rule_keys):
+        check_session_rules(merged)
     if args.active_from is not None or args.active_until is not None:
         require_active_columns(conn)
         # Bare dates / offset-less times read in the job's timezone after
@@ -405,7 +503,7 @@ def cmd_update(args):
         new_until=bool(args.active_until and args.active_until.strip()),
     )
     if not sets:
-        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--timezone/--timeout-sec/--session/--targets/--active-from/--active-until')
+        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--timezone/--timeout-sec/--session/--dir/--stateless/--targets/--active-from/--active-until')
     sets.append(('updated_at', now_ms()))
 
     placeholders = ', '.join(f'{k} = ?' for k, _ in sets)
@@ -492,10 +590,12 @@ def cmd_channels(_):
 
 def cmd_runs(args):
     conn = open_db()
+    run_cols = {r[1] for r in conn.execute('PRAGMA table_info(cron_runs)').fetchall()}
     sql = (
         'SELECT id, job_id, trigger_kind, status, started_at, completed_at, '
-        'exit_code, failure_reason, output, dispatch_results '
-        'FROM cron_runs WHERE job_id = ?'
+        'exit_code, failure_reason, output, dispatch_results'
+        + (', session_id' if 'session_id' in run_cols else '') +
+        ' FROM cron_runs WHERE job_id = ?'
     )
     params: list[object] = [args.job_id]
     if args.before:
@@ -554,6 +654,11 @@ def main():
                    help='max run time in seconds, 60–21600 (default: unset = 3600)')
     c.add_argument('--session',
                    help="run in this existing root session id (default: the job's own session, same id as the job)")
+    c.add_argument('--dir',
+                   help='workspace sub-folder the run focuses on (relative or absolute, must exist inside the '
+                        'workspace; its .halo/INSTRUCTIONS.md chain joins the prompt). Default: the workspace root')
+    c.add_argument('--stateless', action='store_true',
+                   help='start a new session every run (no memory between runs); excludes --session')
     c.add_argument('--targets',
                    help='comma-separated channelType:accountId[:chatId] list, or JSON array. '
                         'chatId pins delivery to a specific chat (e.g. when scheduling from inside a chat).')
@@ -580,6 +685,9 @@ def main():
     u.add_argument('--session',
                    help='root session id to run in; pass "" to clear back to the job\'s own session '
                         '(same id as the job — an older job pinned to cron-cron-… then starts a fresh one)')
+    u.add_argument('--dir', help='workspace sub-folder the run focuses on; pass "" to clear back to the workspace root')
+    u.add_argument('--stateless', choices=['on', 'off'],
+                   help='on = a new session every run (clear --session first); off = one stable session again')
     u.add_argument('--targets')
     u.add_argument('--active-from', dest='active_from',
                    help='recurring only: YYYY-MM-DD (= that day 00:00), ISO-8601 or unix ms, in the job timezone; '

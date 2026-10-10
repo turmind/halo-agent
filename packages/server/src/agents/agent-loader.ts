@@ -11,9 +11,12 @@ import fsSync from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
+import { skillSourceDir } from './skill-sources.js'
 
 export const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
-export const GLOBAL_SKILLS_DIR = path.join(homedir(), '.halo', 'global', 'skills')
+// Skill source resolution (workspace > global > extension) lives in
+// skill-sources.ts; re-exported so existing importers keep one entry point.
+export { GLOBAL_SKILLS_DIR, skillSourceDir } from './skill-sources.js'
 
 /** Parsed agent YAML config */
 export interface AgentYamlConfig {
@@ -215,28 +218,10 @@ export function parseSkillFrontmatter(raw: string): {
   return { name, description, command, requiresAccess, verbs, disableModelInvocation, userInvocable, body }
 }
 
-/** A skill id must be a single path segment — same shape as the `{{<id>.params}}`
- *  namespace convention. Reject anything with `.`, `/`, `\` so a malformed
- *  `agent.yaml` skills entry can't `..`-traverse out of the skills dir. */
-const SKILL_ID_RE = /^[\w-]+$/
-
-/** Source dir for a skill — workspace skill folder wholly overrides the
- *  global one (same whole-folder rule as agents; see agentSourceDir).
- *  A workspace `skills/<id>/` dir means that skill is served entirely from
- *  the workspace — SKILL.md plus all sibling resource files — with no
- *  per-file fallback to the global skill's resources. */
-export function skillSourceDir(skillId: string, workspaceRoot?: string): string | null {
-  if (!SKILL_ID_RE.test(skillId)) return null
-  if (workspaceRoot) {
-    const wsDir = path.join(workspaceRoot, '.halo', 'skills', skillId)
-    if (fsSync.existsSync(wsDir)) return wsDir
-  }
-  return path.join(GLOBAL_SKILLS_DIR, skillId)
-}
-
-/** Resolve SKILL.md path for a skill ID (workspace skill folder wholly
- *  overrides global — see skillSourceDir). Returns null when the id is
- *  malformed or no SKILL.md exists in the resolved source dir. */
+/** Resolve SKILL.md path for a skill ID (workspace > global > extension, a
+ *  higher folder wholly overriding — see skill-sources.ts skillSourceDir).
+ *  Returns null when the id is malformed or no SKILL.md exists in the
+ *  resolved source dir. */
 export function resolveSkillPath(skillId: string, workspaceRoot?: string): string | null {
   const dir = skillSourceDir(skillId, workspaceRoot)
   if (!dir) return null
@@ -288,7 +273,7 @@ export async function loadSkillMetadata(
   const sessionRank = accessLevel ? ACCESS_RANK[accessLevel] : ACCESS_RANK.full
   const result: SkillMeta[] = []
   for (const skillId of skillIds) {
-    if (disabledSet?.has(`global:${skillId}`) || disabledSet?.has(`workspace:${skillId}`)) continue
+    if (disabledSet?.has(`global:${skillId}`) || disabledSet?.has(`workspace:${skillId}`) || disabledSet?.has(`extension:${skillId}`)) continue
     const mdPath = resolveSkillPath(skillId, workspaceRoot)
     if (!mdPath) continue
     try {
@@ -386,7 +371,9 @@ export function createSkillTool(skills: SkillMeta[], ctx: SkillToolContext = {})
             const rel = e.parentPath ? path.relative(skillDir, path.join(e.parentPath, e.name)) : e.name
             return rel
           })
-          if (files.length > 0) resources = `\n\nResource files in skill directory:\n${files.map((f) => `- ${f}`).join('\n')}`
+          // Absolute dir in the header: the folder may be workspace, global or
+          // an extension's (skill-sources.ts) — the model can't guess which.
+          if (files.length > 0) resources = `\n\nResource files in skill directory (${skillDir}):\n${files.map((f) => `- ${f}`).join('\n')}`
         } catch { /* no subdirs */ }
         return `# Skill: ${meta.name}\n\n${renderedBody}${resources}`
       } catch (err) {

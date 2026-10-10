@@ -46,9 +46,20 @@ export const cronJobs = sqliteTable('cron_jobs', {
    *  enforced at the write points (REST routes / skill helper). */
   timeoutSec: integer('timeout_sec'),
   /** Root session id the cli runs in. NULL = the job's own session (id =
-   *  the job id; `cron-<id>` for a custom id without that prefix). When it names an existing session the cli resumes it with that
-   *  session's own agent (`agentId` only applies when the session is new). */
+   *  the job id; `cron-<id>` for a custom id without that prefix). A
+   *  stateful job's agent is fixed once its session exists; to change it,
+   *  delete that session or switch the job to a new session every run
+   *  (`stateless`) — enforced at the write points. */
   sessionId: text('session_id'),
+  /** Folder the run focuses on (workspace-relative, NULL = workspace root),
+   *  passed as `halo cli --dir` on every run — same semantics as a
+   *  sub-agent's working_dir. Validated (inside the workspace, existing
+   *  directory) at the write points and again at fire time. */
+  workingDir: text('working_dir'),
+  /** 1 = a fresh root session every run (`cron-<id>-<base36 ms>`, recorded on
+   *  the run row); 0 = one stable session. Mutually exclusive with
+   *  `sessionId` at the write points. */
+  stateless: integer('stateless').notNull().default(0),
   /** Active window (epoch ms, null = unbounded) — recurring jobs only.
    *  The schedule fires only inside `[activeFrom, activeUntil)`; fires
    *  outside it are skipped silently (no cron_runs row). "Pause until X"
@@ -96,6 +107,10 @@ export const cronRuns = sqliteTable('cron_runs', {
    *  re-verified against the process command line before any kill, so a
    *  reused pid is never killed by mistake. */
   pid: integer('pid'),
+  /** Session this run's cli was spawned on (`-s`). The orphan sweep's
+   *  fingerprint — a stateless job's per-run id can't be re-derived from
+   *  the job row. NULL on skipped rows and rows from before the column. */
+  sessionId: text('session_id'),
 })
 
 const CREATE_SQL = `
@@ -110,6 +125,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   timezone        TEXT,
   timeout_sec     INTEGER,
   session_id      TEXT,
+  working_dir     TEXT,
+  stateless       INTEGER NOT NULL DEFAULT 0,
   active_from     INTEGER,
   active_until    INTEGER,
   targets         TEXT NOT NULL DEFAULT '[]',
@@ -135,7 +152,8 @@ CREATE TABLE IF NOT EXISTS cron_runs (
   failure_reason   TEXT,
   log_path         TEXT,
   dispatch_results TEXT,
-  pid              INTEGER
+  pid              INTEGER,
+  session_id       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_cron_runs_status ON cron_runs(status);
@@ -173,6 +191,13 @@ export const CRON_MIGRATIONS: Migration[] = [
       AND (last_run_id IS NOT NULL
         OR EXISTS (SELECT 1 FROM cron_runs WHERE cron_runs.job_id = cron_jobs.id AND cron_runs.status != 'skipped'))
   `),
+  // v5: `working_dir` (job folder → `halo cli --dir`), `stateless` (fresh
+  // session every run), `cron_runs.session_id` (the session a run used).
+  (s) => {
+    addColumnIfMissing(s, 'cron_jobs', 'working_dir', 'TEXT')
+    addColumnIfMissing(s, 'cron_jobs', 'stateless', 'INTEGER NOT NULL DEFAULT 0')
+    addColumnIfMissing(s, 'cron_runs', 'session_id', 'TEXT')
+  },
 ]
 
 export function createCronDb(globalDir: string) {

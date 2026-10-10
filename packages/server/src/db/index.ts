@@ -38,6 +38,26 @@ export const HALO_MIGRATIONS: Migration[] = [
     s.exec(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at ON agent_sessions(updated_at DESC)`)
     s.exec(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_parent_id ON agent_sessions(parent_id)`)
   },
+  // v2: disabled_items.scope admits 'extension' (extension-shipped skills,
+  // agents/skill-sources.ts). SQLite can't alter a CHECK, so rebuild the
+  // table; a db created from the current schema.sql already has it → no-op.
+  (s) => {
+    const row = s.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='disabled_items'`).get() as { sql: string } | undefined
+    if (!row || row.sql.includes(`'extension'`)) return
+    s.exec(`
+      CREATE TABLE disabled_items_v2 (
+        item_type TEXT NOT NULL CHECK(item_type IN ('agent', 'skill')),
+        item_id TEXT NOT NULL,
+        scope TEXT NOT NULL CHECK(scope IN ('global', 'workspace', 'extension')),
+        disabled_at INTEGER NOT NULL,
+        PRIMARY KEY (item_type, item_id, scope)
+      );
+      INSERT INTO disabled_items_v2 (item_type, item_id, scope, disabled_at)
+        SELECT item_type, item_id, scope, disabled_at FROM disabled_items;
+      DROP TABLE disabled_items;
+      ALTER TABLE disabled_items_v2 RENAME TO disabled_items;
+    `)
+  },
 ]
 
 export function createDb(dataDir: string) {
@@ -117,7 +137,7 @@ export function getDisabledSet(db: HaloDb, itemType: DisabledItemType): Set<stri
   return new Set(rows.map((r) => `${r.scope}:${r.itemId}`))
 }
 
-export function toggleDisabled(db: HaloDb, itemType: DisabledItemType, itemId: string, scope: 'global' | 'workspace'): boolean {
+export function toggleDisabled(db: HaloDb, itemType: DisabledItemType, itemId: string, scope: 'global' | 'workspace' | 'extension'): boolean {
   const key = { itemType, itemId, scope }
   const existing = db.select({ itemId: schema.disabledItems.itemId })
     .from(schema.disabledItems)

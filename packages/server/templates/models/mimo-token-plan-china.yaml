@@ -1,6 +1,6 @@
 id: mimo-token-plan-china
 runtime: anthropic-messages
-revision: 2026100501
+revision: 2026101002
 displayName: Xiaomi MiMo
 displayName_zh: 小米 MiMo
 description: Xiaomi MiMo via its Anthropic-compatible gateway — Token Plan (China / Singapore / Europe clusters) or pay-as-you-go. Supports 1M context window.
@@ -40,6 +40,8 @@ models:
     displayName: MiMo v2.6 Pro
     maxOutputTokens: 131072
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -63,6 +65,8 @@ models:
     displayName: MiMo v2.6 Flash
     maxOutputTokens: 131072
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false
@@ -87,6 +91,8 @@ models:
     displayName: MiMo v2.5 Pro (deprecated 2026-10-21)
     maxOutputTokens: 131072
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: false
       video: false
@@ -110,6 +116,8 @@ models:
     displayName: MiMo v2.5 (deprecated 2026-10-21)
     maxOutputTokens: 131072
     contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
     capabilities:
       image: true
       video: false

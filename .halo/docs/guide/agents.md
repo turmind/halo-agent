@@ -44,7 +44,7 @@ Data-driven form for name / description / model / tools / skills / thinking. Cha
 **Model section** has four fields:
 - `provider` — dropdown populated from `~/.halo/global/models/*.yaml` plus hub-installed `~/.halo/global/models.d/*.yaml` (`/extension models`; updates the list live)
 - `id` — combobox (input + datalist); preset options filtered by current provider, also accepts manual input of any model ID
-- `endpoint` — combobox (input + datalist); full endpoint URL (e.g. `https://bedrock-runtime.ap-northeast-1.amazonaws.com`), supports custom proxy URLs
+- `endpoint` — combobox (input + datalist); full endpoint URL (e.g. `https://bedrock-runtime.ap-northeast-1.amazonaws.com`), supports custom proxy URLs. When a model is only served in some regions the list narrows to those, switching to it moves the endpoint there, and an endpoint off its list shows a warning
 - `maxTokens` — optional; defaults to `maxOutputTokens` in the provider yaml
 
 Switching provider resets the model id to the new provider's default model (its `defaultModelId`), keeping the current id when the new provider lists it too.
@@ -141,8 +141,8 @@ priority: 0
 
 model:
   provider: aws-bedrock-claude-invoke       # required, matches ~/.halo/global/models/<provider>.yaml
-  id: global.anthropic.claude-sonnet-4-6   # the provider yaml's defaultModelId
-  endpoint: https://bedrock-runtime.us-west-2.amazonaws.com  # full endpoint URL; supports custom proxy
+  id: global.anthropic.claude-opus-5-5     # any model id the provider lists (or a custom one)
+  endpoint: https://bedrock-runtime.us-east-1.amazonaws.com  # full endpoint URL; supports custom proxy
   maxTokens: 16384                   # optional, max output tokens (default from provider yaml)
 
   # Prompt caching — lower cost on repeated system prompts
@@ -161,8 +161,8 @@ system_prompt: |
 
 # Context window
 context:
-  maxTokens: 272000                  # max context (default 272000)
-  compressAt: 0.9                    # auto-compact trigger (0.9 = compact when 90% full)
+  maxTokens: 272000                  # context budget — new agents get the model's recommended window; can't exceed the model's max
+  compressAt: 0.9                    # auto-compact trigger (0.9 = compact when 90% full); new agents get your global setting, else the model's
 
 # Tool allowlist (strict by name; unlisted tools are not injected).
 # Session/delegation tools are NOT listed here — see `team` below.
@@ -191,7 +191,7 @@ team:
 **Full tool list**: see [dev/tools.md](../dev/tools.md).
 
 **Common edits**:
-- Agent handling long tasks → `context.maxTokens: 500000` + `context.compressAt: 0.85`
+- Agent handling long tasks → raise `context.maxTokens` up to the model's max (the form shows it, e.g. 1M for Opus 5.5) + `context.compressAt: 0.85` — on most 1M-class models input past 272K bills at long-context rates
 - Save cost → `model.promptCaching: '1h'`
 - Complex reasoning → `thinking.enabled: true` + `thinking.effort: high`
 - Read-only agent → keep only `file_read` / `file_list` / `grep` / `glob` in `tools`

@@ -5,8 +5,11 @@ export interface Skill {
   name: string
   description: string
   path: string
-  scope: 'global' | 'workspace'
-  /** True when a workspace skill with the same id shadows this one at runtime */
+  /** `extension` = shipped by an installed canvas extension (read-only). */
+  scope: 'global' | 'workspace' | 'extension'
+  /** Owning extension id when scope is `extension`. */
+  extId?: string
+  /** True when a higher-precedence skill (workspace > global > extension) with the same id shadows this one at runtime */
   overridden?: boolean
   disabled?: boolean
 }

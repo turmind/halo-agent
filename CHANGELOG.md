@@ -6,6 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Extensions: notebook execution for the ipynb viewer (2.0.0+). Halo starts a local `jupyter server` on demand and proxies a fixed whitelist of it: `/api/jupyter/status`, `kernelspecs`, kernel start / interrupt / restart / shutdown and WS `/api/jupyter/channels`.
+  - Kernels are real kernels on the Halo machine (any installed kernelspec), started in the notebook's folder. Jupyter is not bundled (`pip install jupyter_server ipykernel`).
+  - Same trust as the terminal: unsandboxed as the service user, admin cookie only, not in AgentCore mode, child env without Halo secrets.
+  - Closing the tab shuts the kernel down after a 60 s grace; idle kernels are culled after 1 h; Halo exit stops everything.
+  - Settings `general.jupyter.enabled` (default on) and `general.jupyter.path` (empty = PATH), no restart needed. The host signals support with `init.jupyter: { projectId }`.
+- Canvas: **Annotate** on image previews (not SVG; main editor only).
+  - Tools: pen, rectangle and arrow in red / yellow / green / blue, with undo (also Ctrl/Cmd+Z) and clear.
+  - **Send to chat** attaches `<name>-annotated.png` at full resolution (long edge capped at 4096) and closes the board.
+  - Zoom and pan stay live (middle-drag pans), a second finger is ignored, and Esc exits.
+  - Marks are never saved: exiting, switching tabs or a change on disk discards them.
+  - A text-only model gets a notice instead of an attachment; a render failure shows an inline error.
+- Extensions can ship skills (`<ext>/skills/<id>/`, id `<ext>` or `<ext>-*`).
+  - They are listed read-only under Skills → Extensions and enabled per agent like any skill.
+  - A same-id workspace or global skill overrides them (precedence workspace > global > extension).
+  - They disappear as soon as the extension is uninstalled.
+- CLI: `halo cli` / `halo tui --dir <path>` focuses a session on a workspace sub-folder, whose `.halo/INSTRUCTIONS.md` chain joins the system prompt.
+  - It re-points a resumed session in place, and `--dir .` returns to the root.
+  - `/new` keeps the folder.
+- Cron: a per-job folder, and a "new session every run" (stateless) mode whose per-run sessions stay in the Sessions tab.
+- Models: per-model `endpoints:` narrow a provider's endpoint list to the regions that serve the model; the agent form switches endpoint on a model change and warns about off-list ones.
+- Models: per-model `maxContextWindow` (the real limit: input clamp and the form's max hint) and `compressAt`. `contextWindow` is now the recommended window (≤ 272K).
+- Models: Doubao Seed 2.1 Pro (default, image input), Hunyuan hy3 (default) and hy4-preview, Kimi k2.7-code and k2.7-code-highspeed, and Qwen 3.8 Max (default), 3.7 Plus and 3.8 Flash.
+- Models: the generic Anthropic / OpenAI providers list callable Bedrock Mantle models and default to Mantle us-east-1 (Opus 5.5 / Haiku 4.5, GPT-5.5 / 5.4). The legacy Sonnet 4.6 / GPT-4o placeholders are kept at the end of the list.
+
+### Changed
+
+- Editor: open tabs follow the disk. A `change` or `add` (a rename over the file) refreshes every open buffer of that path in all panes, built-in previews remount when the file is newer on disk, and the HTML preview reloads when its `.html` changes.
+- Chat: rename and delete moved off the session rows into a right-click menu (long-press on touch), so moving across the list no longer brushes a delete button.
+- Models: the registry's recommended context window, compressAt, verbosity, effort and cache TTL are written into an agent only when it is created. An explicitly set global `compact.compress_at` still wins. Existing agents keep their effective settings.
+- Models: `halo models install` asks consent only for a new provider or for URLs the provider doesn't already use (a model's `endpoints:` included). It also refuses malformed context fields and non-https endpoint URLs.
+- CLI: `-s <id>` with a different `-a` is refused (exit non-zero, session untouched); a fallback resume with a different `-a` starts a new session.
+- Cron: a stateful job's agent is fixed once its session exists. A change is refused only when the edit alters agent, session, mode or workspace; enabling and disabling always work.
+- Desktop: Electron 33 → 44.7.0 (Chromium 152, macOS 13+). On macOS, Xbox / PlayStation controllers now go through Apple's GameController framework; the obsolete system-audio loopback switches are dropped (built in since Electron 39).
+
+### Fixed
+
+- Models: turning Hunyuan thinking off now sends `reasoning_effort: "none"` (before, hy3 kept thinking).
+- Models: Doubao's max output is 131072, and the 2.0 lite / mini context is 229376 (their real limits).
+- Cron: a session-lookup read error fails the run without spawning, instead of running it with no access level.
+
+### Upgrade notes
+
+- Cron: a job whose saved session runs a different agent (allowed before 1.6.1, where `-a` was silently ignored) now fails its runs. Disable it, or pick that agent, a new session or stateless.
+- Models: agents with no `context:` block shift to the model's real maximum only for the four Doubao 2.0 models (lite / mini 256000 → 229376, pro / code 256000 → 262144) and hy3-preview (256000 → 262144). Windows above a model's maximum are clamped: Haiku 4.5 (invoke) → 200000, kimi-k2.6 → 262144, MiniMax → 204800, gpt-4o → 128000.
+- Models: Doubao 2.0 Pro and 2.0 Code Preview retire on 2026-11-24 (kept, marked).
+- The halo-hub models zip of this release needs Halo ≥ 1.6.1. On 1.6.0 it moves Mantle agents with no `model.verbosity` from low to medium, gives Haiku 5.5 agents with no `context:` block 100K, drops Doubao images and leaves Hunyuan thinking on.
+- Workspace sqlite migration v2 rebuilds `disabled_items` so it accepts extension scope. An older Halo opening the same workspace logs one "newer halo" warning and carries on.
+- Desktop (macOS): Electron 42+ shows notifications only for a code-signed app. The ad-hoc signed dmg logs `notification failed` and only bounces the Dock icon.
+- Templates v97: the cron skill learns `--dir` / `--stateless` and the agent lock; the model providers move to revision 2026101005.
+
 ## [1.6.0] - 2026-10-09
 
 ### Breaking
