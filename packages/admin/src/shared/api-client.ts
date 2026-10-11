@@ -226,6 +226,29 @@ export const api = {
     viewUrl(path: string, projectId: string) {
       return `/api/files/download?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}&inline=1`
     },
+
+    /** Folder → zip, streamed. `path` '' = workspace root. */
+    downloadFolderUrl(path: string, projectId: string, includeExcluded: boolean) {
+      return `/api/files/download-folder?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}${includeExcluded ? '&include=excluded' : ''}`
+    },
+
+    /** Walk-only estimate for the download-folder confirm. Resolves instead of
+     *  throwing on 413 (too many files / too slow to scan) — the dialog shows
+     *  the server's message in place of the numbers. A 200 whose body isn't
+     *  the estimate JSON throws (the dialog shows it as an error). */
+    async downloadFolderEstimate(path: string, projectId: string, includeExcluded: boolean, signal?: AbortSignal): Promise<
+      | { ok: true; files: number; bytes: number; excluded: Record<string, number>; ignoredNames: Record<string, number> }
+      | { ok: false; status: number; message: string }
+    > {
+      const res = await fetch(`${api.files.downloadFolderUrl(path, projectId, includeExcluded)}&estimate=1`, { signal })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        return { ok: false, status: res.status, message: body.error ?? res.statusText }
+      }
+      const body = await res.json() as { files: number; bytes: number; excluded: Record<string, number>; ignoredNames: Record<string, number> }
+      if (typeof body?.files !== 'number' || typeof body.bytes !== 'number') throw new Error('Unexpected estimate response')
+      return { ok: true, files: body.files, bytes: body.bytes, excluded: body.excluded ?? {}, ignoredNames: body.ignoredNames ?? {} }
+    },
   },
 
   // Server-side tabular previews (parquet / sqlite) — schema + one page of rows.

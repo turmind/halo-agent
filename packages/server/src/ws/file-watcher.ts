@@ -24,8 +24,10 @@ import path from 'node:path'
  * front-end drops `change` events for files not open in the editor and the
  * 300ms dedup below collapses rapid writes, so the cost is a few small WS
  * frames per second and the Explorer stays in sync as sessions come and go.
+ *
+ * Also the folder-download default exclusion list (routes/folder-zip.ts).
  */
-const IGNORED_SEGMENTS = [
+export const IGNORED_SEGMENTS = [
   // VCS
   '.git', '.hg', '.svn',
   // JS / web deps & build output & caches

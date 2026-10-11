@@ -64,6 +64,8 @@ VS Code style:
 
 Right-click menu: New File / New Folder / Open in Integrated Terminal / Reveal in File Manager (desktop app only) / Open to the Side / Download / Rename / Delete / Open as Workspace (folders).
 
+**Download a folder**: right-click a folder (or the empty area for the whole workspace) → Download. A confirm shows the approximate size and file count; `node_modules`, `.git` and other build/cache folders are left out unless you tick the checkbox, and `.env` files, secrets (plus common credential stores: ~/.kube, cloud CLI configs, shell histories) and Halo's session data are always left out. You get one `<folder>.zip`; anything left out is listed in `_halo-excluded.txt` inside it. Folders with more than 200,000 files can't be downloaded in one go — pick a subfolder.
+
 **Quick Open**: `Cmd/Ctrl+P` opens fuzzy file search — server-side, full-project, independent of expansion state.
 
 ### Skipped directories

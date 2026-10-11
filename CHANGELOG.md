@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Explorer: Download works on folders and the whole workspace. A confirm shows the approximate size and file count first, and you get one zip that the server streams as it builds; `node_modules`, `.git` and other build/cache folders are left out unless you tick the checkbox, `.env` files, secrets and Halo session data always are, and `_halo-excluded.txt` in the zip lists what was left out.
+
 ## [1.6.3] - 2026-10-11
 
 ### Fixed

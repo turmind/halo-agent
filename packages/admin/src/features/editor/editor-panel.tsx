@@ -5,6 +5,7 @@ import { useScopedEditorStore, useEditorStore as useGlobalEditorStore, disposeMo
 import { useFileTree, loadFileTree } from '@/features/explorer/use-file-tree'
 import { FileTree, setPathExpanded, isPathExpanded, collectVisiblePaths, type FileContextInfo } from '@/features/explorer/file-tree'
 import { FileContextMenu, type ContextMenuAction } from '@/features/explorer/file-context-menu'
+import { DownloadFolderDialog } from '@/features/explorer/download-folder-dialog'
 import { CodeEditor } from './code-editor'
 import { MarkdownPreview } from './markdown-preview'
 import { HtmlPreview } from './html-preview'
@@ -130,6 +131,8 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     return renderModeByGroup[groupId] ?? true
   }
   const [ctxMenu, setCtxMenu] = useState<FileContextInfo | null>(null)
+  /** Folder whose Download confirm is open ('' = workspace root). */
+  const [downloadFolder, setDownloadFolder] = useState<string | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [lastAnchor, setLastAnchor] = useState<string | null>(null)
   // VSCode-style inline create/rename. When set, FileTree renders an input
@@ -786,6 +789,12 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       }
 
       if (action.type === 'download') {
+        // A folder (incl. the workspace root) goes through the estimate +
+        // confirm dialog, which then starts the zip download itself.
+        if (action.isDir) {
+          setDownloadFolder(action.path)
+          return
+        }
         const url = api.files.downloadUrl(action.path, projectId)
         const a = document.createElement('a')
         a.href = url
@@ -1093,6 +1102,9 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
             onClose={() => setCtxMenu(null)}
           />
         )}
+        {downloadFolder !== null && projectId && (
+          <DownloadFolderDialog path={downloadFolder} projectId={projectId} onClose={() => setDownloadFolder(null)} />
+        )}
       </div>
     )
   }
@@ -1372,6 +1384,9 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
           onAction={handleContextAction}
           onClose={() => setCtxMenu(null)}
         />
+      )}
+      {downloadFolder !== null && projectId && (
+        <DownloadFolderDialog path={downloadFolder} projectId={projectId} onClose={() => setDownloadFolder(null)} />
       )}
     </div>
   )

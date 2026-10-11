@@ -90,8 +90,9 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
     )
   }
 
-  // Single-item mode. Workspace root (path === '' + isDir) gets only the
-  // "create" actions — rename / delete / download don't apply at that scope.
+  // Single-item mode. Workspace root (path === '' + isDir) gets the "create"
+  // actions plus Download (the whole workspace as a zip) — rename / delete
+  // don't apply at that scope.
   const isRoot = path === '' && isDir
   // Desktop-shell only: the reveal-in-file-manager item needs the native shell,
   // exposed by preload as `window.haloReveal`. Undefined in a plain browser →
@@ -103,6 +104,7 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
         { icon: FolderPlus, label: 'New Folder...', type: 'new-folder' },
         { icon: Terminal, label: 'Open in Integrated Terminal', type: 'open-terminal' },
         ...(showReveal ? [{ icon: FolderSearch, label: 'Reveal in File Manager', type: 'reveal-in-file-manager' as const }] : []),
+        { icon: Download, label: 'Download', type: 'download' },
       ]
     : [
         { icon: FilePlus, label: 'New File...', type: 'new-file', separatorAfter: false },
@@ -115,9 +117,11 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
               { icon: Download, label: 'Download', type: 'download' as const },
             ]
           // A bundle directory opens like a file, so it can open to the side too.
-          : isBundleName(name)
-            ? [{ icon: SplitSquareHorizontal, label: 'Open to the Side', type: 'open-to-side' as const }]
-            : []),
+          // Every folder downloads as a zip (estimate + confirm first).
+          : [
+              ...(isBundleName(name) ? [{ icon: SplitSquareHorizontal, label: 'Open to the Side', type: 'open-to-side' as const }] : []),
+              { icon: Download, label: 'Download', type: 'download' as const },
+            ]),
         { icon: Pencil, label: 'Rename', type: 'rename' },
         { icon: Trash2, label: 'Delete', type: 'delete', danger: true, separatorAfter: isDir },
         ...(isDir

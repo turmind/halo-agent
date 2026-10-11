@@ -8,6 +8,7 @@ import { imageMimeFromExt, type FileTreeNode } from '@turmind/halo-core'
 import { isInTempDir } from '../channels/shared/media.js'
 import { resolveProjectPath, validatePath } from './workspace-path.js'
 import { isHiddenHostPath } from '../tools/sandbox.js'
+import { DEFAULT_FOLDER_ZIP_LIMITS, FolderZipError, planFolderZip, planSummary, streamFolderZip, type FolderZipLimits } from './folder-zip.js'
 
 /** Guard shared by the single-path handlers: projectId → workspace root,
  *  then `filePath` must resolve inside it. */
@@ -18,8 +19,10 @@ async function resolveProjectFile(projectId: string, filePath: string): Promise<
   return { projectPath, absolutePath: path.resolve(projectPath, filePath) }
 }
 
-export function createFileRoutes() {
+/** `folderZipLimits` is injectable for tests (the 200k-file cap). */
+export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {}) {
   const app = new Hono()
+  const folderZipLimits = opts.folderZipLimits ?? DEFAULT_FOLDER_ZIP_LIMITS
 
   function isSkippedName(name: string): boolean {
     // Modern IDE convention (VS Code / Cursor / JetBrains): show every
@@ -562,6 +565,61 @@ export function createFileRoutes() {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return c.json({ error: 'File not found' }, 404)
       const errorMessage = err instanceof Error ? err.message : String(err)
       console.log(`[Files] Error downloading: ${errorMessage}`)
+      return c.json({ error: errorMessage }, 500)
+    }
+  })
+
+  // GET /files/download-folder?path=&projectId=[&include=excluded][&estimate=1]
+  // Folder → one zip streamed as it is built (routes/folder-zip.ts). The walk
+  // (and its 413 limits) runs before any header goes out; `estimate=1` returns
+  // just the walk's counts. Unlike /files/download: no /tmp exception — the
+  // path must be a directory inside the project ('' = workspace root).
+  app.get('/files/download-folder', async (c) => {
+    const relPath = c.req.query('path') ?? ''
+    const projectId = c.req.query('projectId')
+    if (!projectId) return c.json({ error: 'projectId is required' }, 400)
+    const signal = c.req.raw.signal
+    try {
+      const resolved = await resolveProjectFile(projectId, relPath)
+      if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+      const { projectPath, absolutePath } = resolved
+      if (!(await fs.stat(absolutePath)).isDirectory()) return c.json({ error: 'Not a directory' }, 400)
+
+      const plan = await planFolderZip(absolutePath, projectPath, {
+        includeIgnored: c.req.query('include') === 'excluded',
+        limits: folderZipLimits,
+        signal,
+      })
+      if (c.req.query('estimate') === '1') return c.json(planSummary(plan))
+
+      const folderName = path.basename(absolutePath) || 'workspace'
+      const fileName = `${folderName}.zip`
+      const asciiName = fileName.replace(/[^\x20-\x7e]|["\\]/g, '_')
+      const encodedName = encodeURIComponent(fileName).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)
+      const zipStream = streamFolderZip(plan, folderName, signal)
+      // Keep the Request reachable until the zip closes. Under a real server
+      // node-server's own close handler already holds it; this matters for a
+      // plain undici Request (tests' app.request()), whose signal follows the
+      // caller's through a WeakRef — once nothing holds the Request, GC cuts the abort.
+      const req = c.req.raw
+      zipStream.once('close', () => void req)
+      const body = Readable.toWeb(zipStream) as ReadableStream
+      return new Response(body, {
+        headers: {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
+          'Cache-Control': 'no-store',
+        },
+      })
+    } catch (err) {
+      if (err instanceof FolderZipError) return c.json({ error: err.message }, err.status)
+      if (signal.aborted) {
+        console.log(`[Files] Folder download aborted during scan: ${relPath || '/'}`)
+        return new Response(null, { status: 499 })
+      }
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return c.json({ error: 'Folder not found' }, 404)
+      const errorMessage = err instanceof Error ? err.message : String(err)
+      console.log(`[Files] Error downloading folder: ${errorMessage}`)
       return c.json({ error: errorMessage }, 500)
     }
   })

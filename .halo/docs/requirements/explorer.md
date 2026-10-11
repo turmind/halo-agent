@@ -66,7 +66,7 @@ VS Code-style highlight selection (no checkboxes):
 
 ### Right-click menu
 
-Items shown depend on the click target. With several items selected the menu offers only Delete; on the workspace root row only New File / New Folder / Open in Integrated Terminal / Reveal in File Manager apply:
+Items shown depend on the click target. With several items selected the menu offers only Delete; on the workspace root row only New File / New Folder / Open in Integrated Terminal / Reveal in File Manager / Download apply:
 
 | Action | Shown when | API / behavior |
 |---|---|---|
@@ -74,12 +74,24 @@ Items shown depend on the click target. With several items selected the menu off
 | Open in Integrated Terminal | Always | Spawns a terminal at the target dir (or file's parent) |
 | Reveal in File Manager | Desktop app only | Opens the OS file manager (Finder / Explorer / Linux FM) at the target — a folder opens itself, a file is highlighted in its parent dir. Hidden in a plain browser (gated on the `window.haloReveal` IPC bridge exposed by the desktop preload) |
 | Open to the Side | File or bundle directory | Splits the editor and opens the file (or bundle) in the right pane |
-| Download | File only | `GET /api/files/download?path=...` |
+| Download | File, folder, workspace root | File: `GET /api/files/download?path=...`. Folder / root: estimate + confirm, then one streamed zip — see [Folder download](#folder-download) |
 | Rename | Single file/folder | `POST /api/files/rename` |
 | Delete | Single or multi-select | `DELETE /api/files?path=...` (with confirm) |
 | Open as Workspace | Folder only | Switches the active workspace to that folder, reusing the path-input switch flow (validate → persist → reload). Shown at the bottom of the menu |
 
 The menu auto-clamps to the viewport, so right-clicking near the window edge does not clip the bottom items.
+
+### Folder download
+Download on a folder (or the workspace root) zips it on the server while it streams — nothing is staged on disk or in memory (`GET /api/files/download-folder`, see [dev/api.md](../dev/api.md#files)).
+- Clicking Download first fetches an estimate (`estimate=1`, a walk without reading contents) and opens a confirm: `≈ <size> · <n> files`, what is excluded by default with counts (node_modules / .git by name, the rest as "other build/cache folders"), how many items are always excluded or skipped
+- Checkbox "Include node_modules, .git and other build/cache folders" (`include=excluded`) re-fetches the estimate when toggled
+- More than 200,000 files, or a scan longer than 10 s → the dialog shows the server's 413 message ("download a subfolder instead") and Download stays disabled
+- Confirm → a plain `<a href>` download of `<folder name>.zip` (workspace root: the workspace dir name); the browser / desktop default save flow takes it from there
+- **Excluded by default**: any folder whose name is in the file watcher's ignore list (`IGNORED_SEGMENTS`: `.git`, `node_modules`, `dist`, `.venv`, `__pycache__`, caches …)
+- **Always excluded**, checkbox or not: the sandbox hidden host paths (`~/.halo/secrets`, `~/.ssh`, `~/.aws` … — a home dir can be a workspace), workspace runtime state (`.halo/sessions`, logs, evo, the dbs — also in a nested workspace's `.halo/`), `.halo/settings.yaml`, any `.env` / `.env.*` file, plus common credential stores (~/.kube, cloud CLI configs, shell histories)
+- **Names a zip can't hold** (containing `\`, or a top-level `C:`-style prefix) are skipped and listed as unreadable
+- **Symlinks**: folder links are never followed; a file link is included only when its target stays inside the workspace and is not excluded
+- When anything was left out, the zip carries `_halo-excluded.txt` at its root: excluded paths grouped by reason (a pruned folder is listed once, not its contents; capped at 1000 per reason plus a count), including unreadable files and skipped links
 
 ### Modification indicator
 Files with unsaved editor edits show a coloured dot in the tree (synced from `editorStore.modifiedPaths`).
