@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-10-11
+
 ### Fixed
 
 - Chat (debug mode): a usage badge stays with its tool call when a message arrives mid-turn. Before, the call moved below the new message while its badge stayed above, attached to the previous call.
@@ -952,7 +954,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/turmind/halo-agent/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/turmind/halo-agent/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/turmind/halo-agent/compare/v1.5.11...v1.6.0
 [1.5.11]: https://github.com/turmind/halo-agent/compare/v1.5.10...v1.5.11
