@@ -8,7 +8,9 @@
  *   POST   /api/jupyter/kernels/:id/interrupt   → { ok: true }
  *   POST   /api/jupyter/kernels/:id/restart     → { ok: true }
  *   DELETE /api/jupyter/kernels/:id             → { ok: true }
- *   WS     /api/jupyter/channels?kernel=<id>    frames piped to the kernel's channels
+ *   WS     /api/jupyter/channels?kernel=<id>[&session_id=<s>]
+ *                                               frames piped to the kernel's channels;
+ *                                               session_id forwarded (buffered replay)
  *
  * HTTP sits behind authMiddleware's admin cookie (not in PUBLIC_PATHS); the
  * WS handshake checks the same cookie. `:id` / `kernel` must be a kernel Halo
@@ -28,6 +30,8 @@ import { resolveProjectPath, validatePath } from './workspace-path.js'
 
 export const JUPYTER_CHANNELS_PATH = '/api/jupyter/channels'
 const KERNEL_NAME_RE = /^[\w.-]{1,128}$/
+/** Client's jupyter session id (the ipynb extension sends 32 hex chars). */
+const SESSION_ID_RE = /^[\w-]{1,128}$/
 /** Per client frame (execute requests, comm messages); ws's 100 MiB default is
  *  more than one frame should allocate. */
 const MAX_FRAME_BYTES = 64 * 1024 * 1024
@@ -96,10 +100,10 @@ function isFinalShutdown(data: RawData): boolean {
   } catch { return false }
 }
 
-function kernelParam(req: IncomingMessage): string {
+function queryOf(req: IncomingMessage): URLSearchParams {
   const url = req.url ?? ''
   const i = url.indexOf('?')
-  return new URLSearchParams(i < 0 ? '' : url.slice(i + 1)).get('kernel') ?? ''
+  return new URLSearchParams(i < 0 ? '' : url.slice(i + 1))
 }
 
 export function createJupyterChannels(jm: JupyterManager) {
@@ -111,14 +115,17 @@ export function createJupyterChannels(jm: JupyterManager) {
     // Same cookie gate as /ws and the transcribe proxy.
     verifyClient: (info, callback) => {
       if (!isAuthenticated(getTokenFromCookieHeader(info.req.headers.cookie))) return callback(false, 401, 'Unauthorized')
-      if (!jm.hasKernel(kernelParam(info.req))) return callback(false, 404, 'Unknown kernel')
+      const q = queryOf(info.req)
+      if (!jm.hasKernel(q.get('kernel') ?? '')) return callback(false, 404, 'Unknown kernel')
+      if (q.has('session_id') && !SESSION_ID_RE.test(q.get('session_id')!)) return callback(false, 400, 'Bad session_id')
       callback(true)
     },
   })
 
   wss.on('connection', (client: WebSocket, req: IncomingMessage) => {
-    const id = kernelParam(req)
-    const up = jm.connect(id)
+    const q = queryOf(req)
+    const id = q.get('kernel') ?? ''
+    const up = jm.connect(id, q.get('session_id') ?? undefined)
     if (!up) { client.close(1011, 'kernel gone'); return }
     jm.attach(id, client)
     // Client frames sent before the upstream handshake finished.

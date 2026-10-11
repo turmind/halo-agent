@@ -102,7 +102,7 @@ function startFakeServer(child: FakeChild, port: number, token: string): void {
   })
   server.on('upgrade', (req, socket, head) => {
     fake.requests.push(`WS ${req.url}`)
-    const m = req.url?.match(/^\/api\/kernels\/([^/]+)\/channels$/)
+    const m = req.url?.match(/^\/api\/kernels\/([^/?]+)\/channels(?:\?|$)/)
     if (req.headers.authorization !== `token ${token}` || !m || !fake.kernels.has(m[1]) || req.headers['sec-websocket-protocol']) {
       socket.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n')
       return
@@ -401,7 +401,7 @@ describe('kernels', () => {
     const allowed = [
       /^GET \/api\/status$/, /^GET \/api\/kernelspecs$/, /^POST \/api\/kernels$/,
       /^POST \/api\/kernels\/[^/]+\/(interrupt|restart)$/, /^DELETE \/api\/kernels\/[^/]+$/,
-      /^WS \/api\/kernels\/[^/]+\/channels$/, /^POST \/api\/shutdown$/,
+      /^WS \/api\/kernels\/[^/]+\/channels(\?session_id=[\w-]+)?$/, /^POST \/api\/shutdown$/,
     ]
     expect(fake.requests.length).toBeGreaterThan(5)
     for (const r of fake.requests) expect(allowed.some((a) => a.test(r)), r).toBe(true)
@@ -435,6 +435,26 @@ describe('channels', () => {
     expect(fake.received).toEqual([{ data: msg, isBinary: false }, { data: 'bin', isBinary: true }])
     expect(got).toEqual([{ data: `re:${msg}`, isBinary: false }, { data: 're:bin', isBinary: true }])
     expect(client.protocol).toBe('')
+  })
+
+  it('forwards session_id upstream (jupyter replays what it buffered for that session); a malformed one is refused with 400', async () => {
+    const id = await startKernel()
+    const ws = (await openWs(`?kernel=${id}`))
+    await until(() => fake.channels.size === 1)
+    ws.close()
+    await until(() => fake.channels.size === 0)
+    const again = await openWs(`?kernel=${id}&session_id=0123abcd-ef_9`)
+    await until(() => fake.channels.size === 1)
+    again.close()
+    expect(fake.requests.filter((r) => r.startsWith('WS '))).toEqual([
+      `WS /api/kernels/${id}/channels`,
+      `WS /api/kernels/${id}/channels?session_id=0123abcd-ef_9`,
+    ])
+    for (const bad of ['', 'a%20b', 'x'.repeat(129), 'a%26kernel%3Dz']) {
+      await expect(openWs(`?kernel=${id}&session_id=${bad}`)).rejects.toThrow('status 400')
+    }
+    await expect(openWs(`?kernel=nope&session_id=abc`)).rejects.toThrow('status 404')
+    await expect(openWs(`?kernel=${id}&session_id=abc`, false)).rejects.toThrow('status 401')
   })
 
   it('a kernel jupyter shuts down itself (idle cull: iopub shutdown_reply, restart:false) closes the client and leaves the Map; restart:true does not', async () => {

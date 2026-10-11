@@ -298,11 +298,15 @@ export function createJupyterManager(deps: JupyterDeps = {}) {
     /** jupyter no longer has it (culled / died): drop it from the Map. */
     forget,
 
-    /** Upstream channels socket for a kernel Halo started; null when unknown. */
-    connect(id: string): WebSocket | null {
+    /** Upstream channels socket for a kernel Halo started; null when unknown.
+     *  `sessionId` is passed on as jupyter's `session_id`: reconnecting with
+     *  the same one gets the messages jupyter buffered while no socket was
+     *  open (output and replies of a cell that ran through a page reload). */
+    connect(id: string, sessionId?: string): WebSocket | null {
       if (!kernels.has(id) || !upstream) return null
+      const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
       // No subprotocol offered → jupyter speaks the legacy JSON text protocol.
-      return new WebSocket(`ws://127.0.0.1:${upstream.port}/api/kernels/${encodeURIComponent(id)}/channels`, {
+      return new WebSocket(`ws://127.0.0.1:${upstream.port}/api/kernels/${encodeURIComponent(id)}/channels${query}`, {
         headers: { Authorization: `token ${upstream.token}` },
         handshakeTimeout: 10_000,
       })
