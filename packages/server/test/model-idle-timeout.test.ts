@@ -16,7 +16,9 @@ import { config } from '../src/config.js'
 /**
  * The model-call idle timeout (`config.timeout.modelRequest`) end to end:
  * every provider agent driven through AgentLoop.run() over a stubbed
- * transport that paces its frames in real time. Any data the stream delivers
+ * transport that paces its frames on fake timers (setTimeout only, so every
+ * gap is exactly GAP — a loaded CI runner used to stretch a real-time gap past
+ * the 80 ms cap and fail the OpenAIAgent case). Any data the stream delivers
  * re-arms the timer — not only the text / thinking the UI shows, but pings,
  * tool-argument fragments, empty reasoning chunks and SSE comment frames — so
  * a tool call whose arguments take longer than the cap to stream (a large
@@ -43,6 +45,15 @@ const TOOL_INPUT = { a: 'x'.repeat(PHASE - 2) }
 async function collect(gen: AsyncGenerator<AgentEvent>, events: AgentEvent[] = []): Promise<AgentEvent[]> {
   for await (const ev of gen) events.push(ev)
   return events
+}
+
+/** Advance fake time GAP at a time until `p` settles — the frames and the idle timer only move when the clock does. */
+async function drive<T>(p: Promise<T>): Promise<T> {
+  let done = false
+  const settled = p.finally(() => { done = true })
+  settled.catch(() => {}) // the caller awaits the rejection; don't report it as unhandled while we tick
+  while (!done) await vi.advanceTimersByTimeAsync(GAP)
+  return settled
 }
 
 // ── paced transports ──
@@ -205,8 +216,10 @@ let origTimeout: number
 beforeEach(() => {
   origTimeout = timeoutConfig.modelRequest
   timeoutConfig.modelRequest = TIMEOUT
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 })
 afterEach(() => {
+  vi.useRealTimers()
   timeoutConfig.modelRequest = origTimeout
   vi.unstubAllGlobals()
 })
@@ -216,7 +229,7 @@ describe('model-call idle timeout: any stream data re-arms it', () => {
     it(`${name}: a tool round of pings / empty reasoning, argument fragments and comments that outlasts the cap completes`, async () => {
       const fetchMock = stubFetch({ frames: toolRound }, { frames: textReply })
 
-      expectToolRoundThenText(await collect(make().run('go')))
+      expectToolRoundThenText(await drive(collect(make().run('go'))))
       expect(fetchMock).toHaveBeenCalledTimes(2)
     })
   }
@@ -225,7 +238,7 @@ describe('model-call idle timeout: any stream data re-arms it', () => {
     const agent = bedrock()
     const send = stubBedrock(agent, { frames: [...anthropicToolHead, ...anthropicToolTail] }, { frames: anthropicText })
 
-    expectToolRoundThenText(await collect(agent.run('go')))
+    expectToolRoundThenText(await drive(collect(agent.run('go'))))
     expect(send).toHaveBeenCalledTimes(2)
   })
 })
@@ -242,7 +255,7 @@ describe('model-call idle timeout: a silent stream is still cut off', () => {
         const fetchMock = stubFetch({ frames: toolRound.slice(0, n), thenSilent: true })
         const events: AgentEvent[] = []
 
-        await expect(collect(make().run('go'), events)).rejects.toThrow(MODEL_TIMEOUT_ERROR)
+        await expect(drive(collect(make().run('go'), events))).rejects.toThrow(MODEL_TIMEOUT_ERROR)
         expect(events).toEqual([])
         expect(fetchMock).toHaveBeenCalledTimes(1)
       })
@@ -255,7 +268,7 @@ describe('model-call idle timeout: a silent stream is still cut off', () => {
       const send = stubBedrock(agent, { frames: anthropicToolHead.slice(0, n), thenSilent: true })
       const events: AgentEvent[] = []
 
-      await expect(collect(agent.run('go'), events)).rejects.toThrow(MODEL_TIMEOUT_ERROR)
+      await expect(drive(collect(agent.run('go'), events))).rejects.toThrow(MODEL_TIMEOUT_ERROR)
       expect(events).toEqual([])
       expect(send).toHaveBeenCalledTimes(1)
     })
