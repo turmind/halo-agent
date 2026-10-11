@@ -79,7 +79,8 @@ Sensible defaults if user didn't say:
 
 **One-shot (at-mode)** — pass `--run-at` instead of `--schedule`. The job
 fires once at that instant and auto-disables. Useful for "remind me at 3pm
-today" or "send the report next Monday morning".
+today" or "send the report next Monday morning". On `update`, passing one
+of the two switches the job's mode and clears the other; never pass both.
 
 | Spoken                            | Flag                                      |
 |-----------------------------------|-------------------------------------------|

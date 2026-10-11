@@ -96,7 +96,10 @@ def parse_targets(raw: str) -> list[dict]:
     if not raw:
         return []
     if raw.startswith('['):
-        return json.loads(raw)
+        try:
+            return json.loads(raw)
+        except ValueError as err:
+            die(f'invalid --targets JSON: {err}')
     out = []
     for token in raw.split(','):
         token = token.strip()
@@ -127,7 +130,8 @@ def parse_timeout_sec(raw: str | None) -> int | None:
     return v
 
 
-SESSION_ID_RE = re.compile(r'^[A-Za-z0-9_:-]{1,200}$')
+# Always fullmatch: with `$`, re.match also accepts one trailing "\n".
+SESSION_ID_RE = re.compile(r'[A-Za-z0-9_:-]{1,200}')
 
 
 def parse_session(raw: str | None) -> str | None:
@@ -137,7 +141,7 @@ def parse_session(raw: str | None) -> str | None:
     if raw is None or not raw.strip():
         return None
     v = raw.strip()
-    if not SESSION_ID_RE.match(v):
+    if not SESSION_ID_RE.fullmatch(v):
         die(f'invalid --session "{raw}": expected a root session id (letters, digits, _ : - only; no ">" sub-session path)')
     return v
 
@@ -393,6 +397,10 @@ def cmd_create(args):
     active_until = parse_active_bound('--active-until', args.active_until or '', args.timezone)
     validate_active_window(run_at_ms, active_from, active_until, new_until=True)
 
+    # A custom id becomes the job's own session id (`cron-<id>`), so it takes
+    # the session-id charset: a `>` would make it a sub-session path.
+    if args.id and not SESSION_ID_RE.fullmatch(args.id):
+        die(f'invalid --id "{args.id}": letters, digits, _ : - only (it becomes the job\'s session id)')
     job_id = args.id or gen_job_id()
     check_session_rules({
         'id': job_id, 'workspace_path': args.workspace, 'agent_id': args.agent or 'default',
@@ -451,12 +459,19 @@ def cmd_update(args):
     if args.workspace is not None: sets.append(('workspace_path', args.workspace))
     if args.agent is not None: sets.append(('agent_id', args.agent))
     if args.prompt is not None: sets.append(('user_prompt', args.prompt))
+    # Recurring vs one-shot, same as the REST PUT: both in one call is an
+    # error; one side alone is a mode switch that clears the other (else the
+    # runner prefers run_at and its post-fire auto-disable kills the schedule).
+    has_schedule = bool(args.schedule and args.schedule.strip())
+    run_at_ms = parse_run_at(args.run_at) if args.run_at is not None else None
+    if run_at_ms is not None and run_at_ms <= now_ms():
+        die('--run-at must be in the future')
+    if has_schedule and run_at_ms is not None:
+        die('--schedule and --run-at are mutually exclusive')
     if args.schedule is not None: sets.append(('schedule', args.schedule))
-    if args.run_at is not None:
-        run_at_ms = parse_run_at(args.run_at)
-        if run_at_ms is not None and run_at_ms <= now_ms():
-            die('--run-at must be in the future')
-        sets.append(('run_at', run_at_ms))
+    elif run_at_ms is not None: sets.append(('schedule', ''))
+    if args.run_at is not None: sets.append(('run_at', run_at_ms))
+    elif has_schedule: sets.append(('run_at', None))
     if args.timezone is not None: sets.append(('timezone', args.timezone))
     if args.timeout_sec is not None:
         # `--timeout-sec ""` clears back to the runner default (NULL),
@@ -498,6 +513,8 @@ def cmd_update(args):
     # Window rules on the merged row (also catches --run-at on a job that
     # still has a window).
     merged = {**cur, **dict(sets)}
+    if not (merged.get('schedule') or '').strip() and merged.get('run_at') is None:
+        die('--schedule or --run-at required (this update would leave the job with neither)')
     validate_active_window(
         merged.get('run_at'), merged.get('active_from'), merged.get('active_until'),
         new_until=bool(args.active_until and args.active_until.strip()),

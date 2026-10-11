@@ -40,6 +40,8 @@ Exactly **one** of `schedule` / `runAt` is set per job. `runner.ts` `scheduleJob
 - Clearing the active side with nothing to replace it (`schedule: ''` on a recurring job, `runAt: null` on an at-mode job) → `400 schedule or runAt required`. A triggerless job would sit `enabled` and never fire.
 - A non-number, non-null `runAt` is rejected (`400`) *before* the exclusivity check — otherwise garbage types slip past `typeof body.runAt === 'number'` and land in the db as-is.
 
+The skill helper `manage-cron.py update` follows the same rules (`--schedule` / `--run-at` switch the mode, both or neither left is refused); `test/manage-cron-py.test.ts` pins its parity with REST.
+
 ### Hot-reload + out-of-band edits
 
 REST route mutations call `scheduleJob` / `unscheduleJob` directly. But the `cron` skill (and manual ops) edit `cron.db` over a *different* sqlite connection. `reconcileFromDb` (10s timer) catches those:
