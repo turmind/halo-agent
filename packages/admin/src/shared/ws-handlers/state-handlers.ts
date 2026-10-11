@@ -154,6 +154,12 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
   )
   unsubs.push(onWsReconnect(wsClient, () => { api.extensions.list().then(setExtensions).catch(() => {}) }))
 
+  // A skill was created / deleted / toggled (REST, `/skill` in any chat or
+  // channel, another tab) or a workspace skill folder changed on disk. The
+  // server already scopes it — a workspace change only reaches sockets bound
+  // to that workspace — so the frame carries no path to match here.
+  unsubs.push(wsClient.on('skills:changed', () => bumpSkillBus()))
+
   // Hub provider configs installed / removed (`~/.halo/global/models.d/`) —
   // the server already dropped its registry cache; every model-list consumer
   // re-fetches. Reconnect bumps too: a frame lost while down is otherwise gone.

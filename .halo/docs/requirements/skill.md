@@ -48,15 +48,15 @@ The Skills sidebar mirrors the Agents sidebar layout:
 
 ### Auto-sync behaviour (workspace vs. global)
 
-The Skills sidebar and any open mini-workspace editor stay in sync with the file system via `file:changed` WS events — but the server's watcher is scoped to the current workspace, so the guarantees differ by scope:
+Every skill list — the chat's slash-command popup, the Skills sidebar, the agent form's skill picker — refetches on the `skills:changed` WS frame (→ `skill-bus` bump), in every open admin tab. The server sends it after every real mutation: REST create / delete / toggle and `/skill disable|enable|delete` from any chat or channel (a no-op toggle sends nothing). A workspace change reaches only that workspace's tabs; a global one reaches all. File-system edits differ by scope, because the server's watcher covers only the current workspace:
 
 | Change | Workspace skills | Global skills |
 |---|---|---|
-| Create / delete a skill dir | Live (watcher emits add/unlink → `skill-bus` bump → sidebar refetches) | Refreshed opportunistically on **window focus** |
+| Via Skills tab / REST / `/skill` command | Live | Live |
+| Create / delete a skill dir or edit SKILL.md frontmatter on disk (agent `file_write`, CLI / SSH) | Live (watcher → 300 ms debounce → `skills:changed` only when the folder ids / frontmatter changed) | Refreshed opportunistically on **window focus** while the Skills page is open |
 | Edit a file inside a skill while the mini-workspace editor has it open | Live (EditorPanel translates workspace-rel path into its own tab.path and refetches) | Live for the currently-open tab (same code path) — but the file tree change won't show new/removed sibling files until focus refresh |
-| Edit from external CLI / SSH | Same as above | Same as above |
 
-So when an agent (or the `skill` skill) creates a **global** skill, the Skills sidebar won't reflect it until the user refocuses the browser window. The `skill` skill documents this so agents can warn the user.
+So when an agent writes a **global** skill folder directly, the lists won't reflect it until the user refocuses the browser window on the Skills page, or switches session / agent. The `skill` skill documents this so agents can warn the user.
 
 Extension skills follow the extension, not a file watcher. Installing or uninstalling an extension broadcasts `extension:changed`, which bumps `skill-bus`, so the sidebar and the agent form's skill picker refetch live. Edits inside an installed extension's `skills/` push nothing (show on focus refresh); reinstalling the extension is how a change ships.
 

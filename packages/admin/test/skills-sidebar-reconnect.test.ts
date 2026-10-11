@@ -6,9 +6,9 @@ import { useProjectStore } from '../src/shared/stores/project-store'
 import { SkillsSidebar } from '../src/features/skills/skills-sidebar'
 
 /**
- * Contract: the Skills list stays in sync via `.halo/skills/` add/unlink
- * deltas → skill-bus bump → list refetch. A skill created while the socket
- * was down emits no delta, so the list stays stale until the window-focus
+ * Contract: the Skills list stays in sync via the server's `skills:changed`
+ * frame → skill-bus bump → list refetch. A skill created while the socket
+ * was down emits no frame, so the list stays stale until the window-focus
  * fallback — reconnect reconciliation (`onWsReconnect` → bumpSkillBus) closes
  * that hole through the component's existing bus→refetch pipeline.
  *

@@ -8,6 +8,7 @@ import { isSkillDisabled, listSkillDirs, type SkillScope } from '../../agents/sk
 import { resolveWorkingDir } from '../../agents/working-dir.js'
 import { ensureWorkspaceHalo } from '../../init.js'
 import { getDisabledSet, toggleDisabled } from '../../db/index.js'
+import { notifySkillsChanged } from '../../ws/skills-changed.js'
 import { t, type Lang } from './i18n.js'
 import { sessionAccess } from './accounts.js'
 import { execSkillCommand, getCommandSkillInfo } from '../../commands/skill-command.js'
@@ -1054,6 +1055,7 @@ export function execSkillSetDisabled(ctx: CommandContext, arg: string, disable: 
     return { text: t(disable ? 'skill.already_disabled' : 'skill.already_enabled', ctx.lang, { name: skill.id }) }
   }
   toggleDisabled(ctx.sm.getDb(), 'skill', skill.id, skill.scope)
+  notifySkillsChanged(ctx.workspacePath || null)
   return { text: t(disable ? 'skill.disabled_done' : 'skill.enabled_done', ctx.lang, { name: skill.id }) }
 }
 
@@ -1070,6 +1072,7 @@ export function execSkillDelete(ctx: CommandContext, arg: string): CommandResult
     : path.join(GLOBAL_SKILLS_DIR, skill.id)
   try {
     fs.rmSync(dir, { recursive: true, force: true })
+    notifySkillsChanged(skill.scope === 'workspace' ? ctx.workspacePath : null)
     return { text: t('skill.delete_done', ctx.lang, { name: skill.id, scope: skill.scope }) }
   } catch (err) {
     return { text: t('skill.delete_failed', ctx.lang, { error: err instanceof Error ? err.message : String(err) }) }

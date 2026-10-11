@@ -20,11 +20,14 @@ import type { WebSocket } from 'ws'
 import { WorkspaceWatcher } from './file-watcher.js'
 import { GitDirWatcher } from './git-dir-watcher.js'
 import { sendJson } from './event-processor.js'
+import { skillFoldersChanged } from './skills-changed.js'
 
 interface Entry {
   fileWatcher: WorkspaceWatcher
   gitDirWatcher: GitDirWatcher
   sockets: Set<WebSocket>
+  /** Pending `skills:changed` check after `.halo/skills/` events. */
+  skillsTimer: ReturnType<typeof setTimeout> | null
 }
 
 export class WatcherPool {
@@ -39,9 +42,6 @@ export class WatcherPool {
     if (!entry) {
       const sockets = new Set<WebSocket>()
       const fileWatcher = new WorkspaceWatcher()
-      fileWatcher.setCallback((evt) => {
-        for (const s of sockets) sendJson(s, { type: 'file:changed', path: evt.path, action: evt.action })
-      })
       // Command-line git ops (terminal commit/checkout/add) bypass the SC
       // panel's own re-broadcast, and WorkspaceWatcher ignores .git. Mirror
       // the panel's payload (path '.git') so the same debounced refresh fires.
@@ -49,8 +49,22 @@ export class WatcherPool {
       gitDirWatcher.setCallback(() => {
         for (const s of sockets) sendJson(s, { type: 'file:changed', path: '.git', action: 'change' })
       })
-      entry = { fileWatcher, gitDirWatcher, sockets }
+      const created: Entry = { fileWatcher, gitDirWatcher, sockets, skillsTimer: null }
+      fileWatcher.setCallback((evt) => {
+        for (const s of sockets) sendJson(s, { type: 'file:changed', path: evt.path, action: evt.action })
+        // Skill folder written (agent file_write, hand edit): one 300ms-debounced
+        // look, and a `skills:changed` only when the listed view moved — body
+        // edits and the echo of a REST / `/skill` mutation stay silent.
+        if ((evt.path !== '.halo/skills' && !evt.path.startsWith('.halo/skills/')) || created.skillsTimer) return
+        created.skillsTimer = setTimeout(() => {
+          created.skillsTimer = null
+          if (!skillFoldersChanged(root)) return
+          for (const s of sockets) sendJson(s, { type: 'skills:changed' })
+        }, 300)
+      })
+      entry = created
       this.entries.set(root, entry)
+      skillFoldersChanged(root) // seed the key — the first event compares against it
       void fileWatcher.start(root)
       gitDirWatcher.start(root)
     }
@@ -67,6 +81,7 @@ export class WatcherPool {
     entry.sockets.delete(ws)
     if (entry.sockets.size > 0) return
     this.entries.delete(root)
+    if (entry.skillsTimer) clearTimeout(entry.skillsTimer)
     void entry.fileWatcher.stop()
     entry.gitDirWatcher.stop()
   }

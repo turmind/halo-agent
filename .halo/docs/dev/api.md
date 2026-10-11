@@ -434,6 +434,8 @@ File: `packages/server/src/routes/skills.ts`
 | DELETE | `/api/skills/:id?scope=&projectId=` | Delete skill directory + settings entry. `scope=extension` → 403 (read-only) |
 | PATCH | `/api/skills/:id/toggle?scope=&projectId=` | Toggle disabled in workspace DB. `projectId` required; `scope` is `global` / `workspace` / `extension` (an extension skill's disable key is `extension:<id>` — a workspace setting, nothing written into the extension's folder). Returns `{ ok, disabled }`. |
 
+A successful create / delete / toggle pushes the WS frame `skills:changed` (no payload) — to sockets bound to `projectId` for a workspace skill or a toggle, to every socket for a global skill; a refused call (403 / 404 / 409) pushes nothing. `/skill disable|enable|delete` in any chat or channel does the same, and the workspace watcher sends it when a `.halo/skills/` folder's ids or SKILL.md frontmatter change on disk. See [design/ws.md](../design/ws.md#other-server--client-messages).
+
 ## Commands
 
 File: `packages/server/src/routes/commands.ts`
@@ -991,5 +993,6 @@ It does not remove session files. The full delete (rows + JSON + archive segment
 | `chat:queued` | `reason: 'compact'`, `message`, `sessionId` | Message queued behind a compact |
 | `chat:ack` | `clientMsgId` | Chat appended to the session log (or re-acked on resend) |
 | `listener:released` | `sessionId` | Event listener reclaimed — re-send `subscribe` (see above) |
+| `skills:changed` | — | A skill was created / deleted / toggled, or a workspace skill folder changed on disk — re-fetch skill lists and `/api/commands`. Workspace-scoped changes reach only that workspace's sockets (see [Skills](#skills)) |
 
 Events with `taskId` set belong to sub-agent turns (nested sessions); events without are the root agent's. Session-scoped frames carry `sessionId` (the root session they belong to); the admin routes each one to the tab holding that session, and a frame without one goes to the tab on screen. Full list in [design/ws.md](../design/ws.md).

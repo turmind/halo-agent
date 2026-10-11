@@ -153,6 +153,9 @@ export type WsServerMessage =
   | ({ type: 'extension:changed' } & ExtensionsSnapshot)
   // ~/.halo/global/models.d/ changed (hub provider configs installed / removed) — re-fetch /agent-configs/models
   | { type: 'models:changed' }
+  // A skill was created / deleted / toggled, or a workspace skill folder changed on disk — re-fetch
+  // skill lists. Scoped server-side: workspace changes reach only that workspace's sockets, global ones all
+  | { type: 'skills:changed' }
 
 export type WsServerMessageType = WsServerMessage['type']
 

@@ -8,6 +8,7 @@ import { listSkillDirs, type SkillDir, type SkillScope } from '../agents/skill-s
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
 import { isSafeIdSegment } from './workspace-path.js'
 import { createMtimeCache } from './mtime-cache.js'
+import { notifySkillsChanged } from '../ws/skills-changed.js'
 const GLOBAL_SETTINGS_PATH = path.join(homedir(), '.halo', 'secrets', 'settings.yaml')
 
 /** Default settings entry for a newly created skill (self-describing format) */
@@ -194,6 +195,7 @@ export function createSkillRoutes() {
       ? path.join(body.projectId, '.halo', 'settings.yaml')
       : GLOBAL_SETTINGS_PATH
     await addSkillSettings(settingsPath, id)
+    notifySkillsChanged(scope === 'workspace' ? body.projectId! : null)
 
     const skill: SkillMeta = { id, name: body.name, description: body.description ?? '', path: skillDir, scope }
     return c.json({ skill }, 201)
@@ -235,6 +237,7 @@ export function createSkillRoutes() {
       ? path.join(projectId, '.halo', 'settings.yaml')
       : GLOBAL_SETTINGS_PATH
     await removeSkillSettings(settingsPath, id)
+    notifySkillsChanged(scope === 'workspace' && projectId ? projectId : null)
 
     return c.json({ ok: true })
   })
@@ -249,6 +252,8 @@ export function createSkillRoutes() {
     if (!projectId) return c.json({ error: 'projectId required' }, 400)
     const { db } = getWorkspaceDb(projectId)
     const disabled = toggleDisabled(db, 'skill', id, scope)
+    // The flag lives in this workspace's db — only its tabs care.
+    notifySkillsChanged(projectId)
     return c.json({ ok: true, disabled })
   })
 

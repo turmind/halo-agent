@@ -78,7 +78,8 @@ export function SkillsSidebar() {
   }, [expandedScopes])
 
   // Fetch on mount, on project change, and whenever the skill bus bumps
-  // (some other component mutated the list, or the WS file watcher saw a change).
+  // (some other component mutated the list, or a `skills:changed` frame —
+  // state-handlers.ts — reported a mutation / workspace skill folder change).
   useEffect(() => {
     setRefreshing(true)
     api.skills
@@ -88,29 +89,15 @@ export function SkillsSidebar() {
       .finally(() => setRefreshing(false))
   }, [projectId, busVersion, setSkills])
 
-  // Watch the file system for external skill creations/deletions (e.g. agent
-  // chat creating a SKILL.md). Any add/unlink inside .halo/skills/* bumps the
-  // bus; the effect above re-fetches the list.
-  //
-  // Note: the server's file watcher only monitors the current workspace, so
-  // this catches workspace-scope changes. Global skills (~/.halo/global/skills/)
-  // are picked up opportunistically by the window-focus refresh below.
+  // Reconnect reconciliation — a `skills:changed` frame lost while the socket
+  // was down would otherwise leave the list stale. See shared/ws-reconnect.
   useEffect(() => {
     if (!projectId) return
-    const unsub = wsClient.on('file:changed', (data) => {
-      const msg = data as { path: string; action: string }
-      if (msg.action !== 'add' && msg.action !== 'unlink' && msg.action !== 'addDir' && msg.action !== 'unlinkDir') return
-      if (!msg.path.startsWith('.halo/skills/')) return
-      bumpSkillBus()
-    })
-    // Reconnect reconciliation — skill add/unlink events lost while the socket
-    // was down would otherwise leave the list stale. See shared/ws-reconnect.
-    const unsubReconnect = onWsReconnect(wsClient, bumpSkillBus)
-    return () => { unsub(); unsubReconnect() }
+    return onWsReconnect(wsClient, bumpSkillBus)
   }, [projectId])
 
-  // Refresh when the window regains focus — covers global skill changes that
-  // the workspace-scoped file watcher can't see.
+  // Refresh when the window regains focus — covers hand edits under
+  // ~/.halo/global/skills/, which no server watcher sees.
   useEffect(() => {
     const onFocus = () => bumpSkillBus()
     window.addEventListener('focus', onFocus)
@@ -150,6 +137,9 @@ export function SkillsSidebar() {
       const skill = res.skill
       // Dim the same-id copies the new skill shadows (workspace shadows global +
       // extension, global shadows extension); the bus bump below refetches anyway.
+      // The bump stays although the server's `skills:changed` frame also
+      // refetches: that frame can land before this response, and only a bump
+      // after the optimistic write guarantees the last list wins.
       if (conflict) {
         const shadowed = (s: Skill) => s.id === skill.id && (scope === 'workspace' ? s.scope !== 'workspace' : s.scope === 'extension')
         setSkills(skills.map((s) => shadowed(s) ? { ...s, overridden: true } : s).concat(skill))
