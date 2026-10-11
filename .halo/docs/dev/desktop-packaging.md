@@ -508,6 +508,28 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   `find resources/{server,cli}-runtime -type f | awk '{print length($0)}' |
   sort -rn | head -1` — keep the longest relative path well under ~200.
 
+- **The same "Halo cannot be closed" prompt, second cause: an orphaned bundled
+  `node.exe` the installer can't see.** `installer.nsh customCheckAppRunning`
+  runs `taskkill /im Halo.exe /T /F` and then kills any `node.exe` whose image
+  lives under `$INSTDIR` — the second pass exists for orphans whose Halo.exe
+  parent already died (crash, Task Manager, an interrupted `halo.cmd` child),
+  which the tree walk can't reach. That pass used `Get-Process node | Where
+  Path -like '$INSTDIR\*'` and **never matched anything**: the NSIS installer
+  is a 32-bit process, so the `powershell` it spawns is the 32-bit SysWOW64
+  one, and there `Get-Process` returns an empty `.Path` for 64-bit processes.
+  The orphan kept its image lock on `resources\node.exe`, extraction failed
+  five times, and the user got the Retry prompt with no Halo window left to
+  close. Fixed by matching `Get-CimInstance Win32_Process` `.ExecutablePath`,
+  which is readable from either bitness. Rule: **any PowerShell the installer
+  runs is 32-bit** — never filter processes by `Get-Process .Path` /
+  `.MainModule` there. To tell the two causes apart on a user's box, list
+  what still runs from the install dir (64-bit PowerShell): `Get-CimInstance
+  Win32_Process | ? ExecutablePath -like "$env:LOCALAPPDATA\Programs\Halo\*"`
+  — non-empty = this cause (append `| % { Stop-Process -Id $_.ProcessId
+  -Force }` as the workaround, then Retry); empty = look at the MAX_PATH entry
+  above. The fix ships in the new installer, and its check runs before the old
+  version's uninstaller, so upgrades from any older build benefit.
+
 ## Verifying a build
 
 ```bash
