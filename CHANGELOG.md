@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Chat (debug mode): a usage badge stays with its tool call when a message arrives mid-turn. Before, the call moved below the new message while its badge stayed above, attached to the previous call.
 - Chat: an error that arrives mid-turn is saved where it showed live, after the tools that had already run. Before, a refresh moved it above them.
+- Chat (debug mode): thinking streams live in the same panel as with debug off. Before, a thinking-only bubble stayed on the spinner and then jumped straight to the collapsed header.
+- Cron skill (`manage-cron.py`): `update --schedule` / `--run-at` switches the trigger mode like REST PUT. Before, `--run-at` on a recurring job kept both, and the one-shot auto-disable then stopped the schedule too. `create --id` now uses the session-id charset, and bad `--targets` JSON is an `error:` line instead of a traceback.
+- Slash commands follow skill changes made in the Skills tab (toggle, add, remove) and extension install / uninstall without reopening the chat.
+- Models: thinking off now really turns thinking off on DeepSeek and Qwen. Both think by default, and Halo used to send `enabled` (DeepSeek) or nothing (Qwen).
+- Models: DeepSeek sends the chosen effort (`reasoning_effort`). Before, every agent ran at the API default (high).
+
+### Changed
+
+- WS: a sub-agent's thinking and text (`chat:thinking` / `chat:stream` with a `taskId`) are no longer pushed to the admin. No view rendered them; its status, tool and error frames are unchanged, and its log still loads from disk in the Sessions tab.
+- Skills: skill frontmatter, settings sections and extension skill manifests are cached by mtime, so `/help` and the skill list stop re-reading every SKILL.md.
+- Models (revision 2026101101):
+  - DeepSeek effort presets are the API's own low / high / max, default high. An older agent's medium / xhigh still works; the API folds them to high.
+  - Qwen 3.8 Max / Flash use `output_config.effort` (low / medium / xhigh). Agents with an explicit `budget_tokens` keep sending it.
+  - Hunyuan max output follows the TokenHub model list: Hy3 128K, Hy4 preview 64K.
 
 ## [1.6.1] - 2026-10-10
 
