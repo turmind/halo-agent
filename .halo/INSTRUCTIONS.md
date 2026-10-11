@@ -67,7 +67,7 @@ When you catch yourself doing any of these, stop and reconsider:
   - Architecture / data flow / WS protocol / storage format → `.halo/docs/design/`
   - User-visible features (UI behavior, interactions) → `.halo/docs/requirements/`
   - Agent-facing tool descriptions / skills / system prompts → `.halo/docs/dev/tools.md` + `design/prompt-system.md`
-  - New capabilities, subsystems, channels → update `.halo/INDEX.md` index
+  - New capabilities, subsystems, channels → add a short INDEX entry (2–4 sentences + Key state / Code / doc links); details go in design doc — INDEX is injected every turn
   - Architectural decisions or gotchas → write to `.halo/memory/YYYY-MM-DD-topic.md`
 
   Reminder format example: "This change affects the `get_session_output` section in `dev/tools.md` and session output semantics in `design/session.md` — want to update them now?"

@@ -209,6 +209,9 @@ See [guide/cli.md](../guide/cli.md).
 ### Workspace (`core/src/workspace/workspace.ts`)
 Methods: `readFile(path)` / `writeFile(path, content)` / `validatePath(path)`. `validatePath` is the traversal guard both accessors go through: segment-boundary prefix check against the resolved root (so a sibling `/x/myapp-secret` can't pass for `/x/myapp`), then a `realpathSync` re-check so a symlink inside the workspace pointing outside is rejected too (ENOENT — a not-yet-created file — falls back to the lexical check).
 
+### Image MIME table (`core/src/media/mime.ts`)
+The one image ext↔MIME table: `IMAGE_EXTS` (the "photo" set that may reach a vision model or a channel's sendPhoto) / `imageMimeFromExt` / `extFromImageMime`. Server routes, channels and the CLI all import it instead of keeping their own copy (see [dev/api.md](../dev/api.md) "Inline Content-Type").
+
 ### GitManager (`core/src/workspace/git-manager.ts`)
 Constructed from a `Workspace` (no per-call dir argument). Read: `isRepoRoot()` (the nested-repo guard every read/write path goes through) / `getStatus()` / `getLog(count?)` / `getCommitFiles(hash)` / `getIgnoredPaths()` / `getRemotes()` / `getFileDiff(path, staged, from?, commit?)` → `{ original, modified }`. Write: `init()` / `stage(paths)` / `unstage(paths)` / `commit(msg)` / `commitAll(msg)` / `push()` / `pull()` / `addRemote(name, url)`. Backed by simple-git. See [requirements/source-control.md](../requirements/source-control.md).
 
