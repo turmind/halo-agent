@@ -48,9 +48,15 @@
 ; the bundled runtime only — a user's own system node.exe has a different
 ; path). PowerShell is already a dependency of this installer (PATH helper
 ; above). `$$_` is NSIS-escaping for a literal PowerShell `$_`.
+;
+; Match on Win32_Process.ExecutablePath, NOT Get-Process .Path: the NSIS
+; installer is a 32-bit process, so the `powershell` it launches is the 32-bit
+; one (SysWOW64), and there Get-Process can't read a 64-bit process's module
+; path — .Path is empty, the filter matches nothing, and the orphan survives.
+; CIM reads the image path from any bitness.
 !macro customCheckAppRunning
   nsExec::Exec '"$SYSDIR\taskkill.exe" /im "${APP_EXECUTABLE_FILENAME}" /T /F'
-  nsExec::Exec `powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like '$INSTDIR\*' } | Stop-Process -Force"`
+  nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'node.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
   Sleep 500   ; give the OS a moment to release the file locks before we overwrite
 !macroend
 
