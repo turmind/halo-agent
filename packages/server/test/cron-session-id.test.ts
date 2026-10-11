@@ -99,6 +99,7 @@ function stubHost(busy: boolean) {
   const host: CronSessionHost = {
     hasActiveWorkInTree: () => busy,
     forgetExternalWrite: (id) => { forgot.push(id); return !busy },
+    deleteSession: async (id) => [id],
   }
   setCronSessionRegistry({ peek: () => host })
   return forgot

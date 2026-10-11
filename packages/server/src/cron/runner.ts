@@ -20,9 +20,12 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { Cron } from 'croner'
 import Database from 'better-sqlite3'
-import { eq, lt } from 'drizzle-orm'
+import { and, eq, gte, inArray, lt, or } from 'drizzle-orm'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
 import { rawSqlite } from '../db/raw-sqlite.js'
+import { getWorkspaceDb, type HaloDb } from '../db/index.js'
+import { agentSessions } from '../db/schema.js'
+import { findAndDeleteSessionFile } from '../sessions/session-store.js'
 import { dispatchToTargets, type CronTarget, type DispatchResult } from './dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
 import { cleanChildEnv } from '../child-env.js'
@@ -59,6 +62,11 @@ const UNATTENDED_PREAMBLE = '[Unattended cron run — nobody will answer questio
  *  time a new run lands. 100 is plenty to spot a regression pattern
  *  without bloating the global db. */
 const RUNS_PER_JOB_KEEP = 100
+
+/** Same for a stateless job: its pruned rows take their per-run sessions
+ *  with them (deleteRunSessions), so only the newest 10 runs — and sessions
+ *  — stay. */
+const STATELESS_RUNS_PER_JOB_KEEP = 10
 
 /** How old a run-log file (`~/.halo/global/logs/cron/<runId>.log`) has
  *  to be before the daily prune deletes it. The db row is kept (shows up
@@ -221,6 +229,7 @@ function sessionKeyFor(workspacePath: string, sessionId: string): string {
 export interface CronSessionHost {
   hasActiveWorkInTree(rootId: string): boolean
   forgetExternalWrite(rootId: string): boolean
+  deleteSession(rootId: string): Promise<string[]>
 }
 export interface CronSessionRegistry { peek(workspacePath: string): CronSessionHost | undefined }
 
@@ -411,7 +420,9 @@ export function startCronDaemon(): void {
   sweepOrphanRuns()
   reloadAll()
   // Daily log prune. Cheap; keep WAL bloat down.
-  _daemonTimers.push(setInterval(pruneOldLogs, DAY_MS))
+  _daemonTimers.push(setInterval(() => {
+    pruneOldLogs().catch((err) => console.warn(`[Cron] daily prune failed: ${err instanceof Error ? err.message : String(err)}`))
+  }, DAY_MS))
   // Db-poll reconcile: every 10s, scan cron_jobs for adds / removes /
   // updates and patch the in-memory schedule map. Keeps us in sync with
   // out-of-band edits (a skill's `sqlite3 cron.db UPDATE …`, manual
@@ -945,7 +956,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   })
 
   // Per-job retention: keep the most recent N rows.
-  pruneOldRuns(jobId)
+  await pruneOldRuns(jobId)
 
   return runId
   } finally {
@@ -1068,16 +1079,27 @@ function parseTargets(raw: string): CronTarget[] {
   }
 }
 
-/** Drop the oldest `cron_runs` rows for `jobId` past the retention limit.
- *  Single SQL: keep the N newest rows, delete everything else. Uses the
- *  `(job_id, started_at)` index for both halves. Was previously `select
- *  all + slice + N delete round-trips`, which scaled with run count. */
-function pruneOldRuns(jobId: string): void {
+/** What deleting a run row needs to know about it — never `output`, which
+ *  can be large. */
+type DoomedRun = Pick<typeof cronRuns.$inferSelect, 'id' | 'jobId' | 'sessionId' | 'startedAt' | 'completedAt' | 'status'>
+const DOOMED_RUN_COLUMNS = {
+  id: cronRuns.id, jobId: cronRuns.jobId, sessionId: cronRuns.sessionId,
+  startedAt: cronRuns.startedAt, completedAt: cronRuns.completedAt, status: cronRuns.status,
+}
+
+/** Drop the oldest `cron_runs` rows for `jobId` past the retention limit
+ *  (stateless job: 10, else 100). One select of the rows past the N newest,
+ *  over the `(job_id, started_at)` index, then deleteRuns. */
+async function pruneOldRuns(jobId: string): Promise<void> {
   const db = getCronDb()
+  const job = db.select({ stateless: cronJobs.stateless }).from(cronJobs).where(eq(cronJobs.id, jobId)).get()
+  const keep = job?.stateless ? STATELESS_RUNS_PER_JOB_KEEP : RUNS_PER_JOB_KEEP
   // drizzle-orm doesn't have a clean `NOT IN (subquery)` builder; raw
   // sqlite is straightforward and the query is static.
-  rawSqlite(db).prepare(`
-    DELETE FROM cron_runs
+  const doomed = rawSqlite(db).prepare(`
+    SELECT id, job_id AS jobId, session_id AS sessionId, started_at AS startedAt,
+           completed_at AS completedAt, status
+    FROM cron_runs
     WHERE job_id = ?
       AND id NOT IN (
         SELECT id FROM cron_runs
@@ -1085,13 +1107,97 @@ function pruneOldRuns(jobId: string): void {
         ORDER BY started_at DESC
         LIMIT ?
       )
-  `).run(jobId, jobId, RUNS_PER_JOB_KEEP)
+  `).all(jobId, jobId, keep) as DoomedRun[]
+  await deleteRuns(doomed)
+}
+
+/** DELETE /api/cron/jobs/:id: every run row of the job, its stateless runs'
+ *  sessions first. */
+export async function deleteJobRuns(jobId: string): Promise<void> {
+  await deleteRuns(getCronDb().select(DOOMED_RUN_COLUMNS).from(cronRuns).where(eq(cronRuns.jobId, jobId)).all())
+}
+
+/** Delete `cron_runs` rows; a stateless run's session goes with its row.
+ *  Sessions first, rows after: a crash in between leaves the rows, and the
+ *  next prune retries (deleting a gone session is a no-op). A row whose
+ *  session delete threw stays for the same retry. A stateless run is
+ *  recognised by its row alone — `session_id` is exactly
+ *  `perRunSessionId(job, started_at)` (runJob derives both from one
+ *  timestamp) — so a stateful job's own session or a picked one never
+ *  matches, whatever mode the job is in now. */
+async function deleteRuns(runs: DoomedRun[]): Promise<void> {
+  if (runs.length === 0) return
+  const db = getCronDb()
+  const workspaceOf = new Map<string, RunWorkspace | null>()
+  const failed = new Set<string>()
+  let deleted = 0
+  for (const run of runs) {
+    if (run.sessionId !== perRunSessionId({ id: run.jobId }, run.startedAt)) continue
+    try {
+      let ws = workspaceOf.get(run.jobId)
+      if (ws === undefined) {
+        const workspacePath = db.select({ ws: cronJobs.workspacePath }).from(cronJobs).where(eq(cronJobs.id, run.jobId)).get()?.ws
+        // A row whose job is gone can't say which workspace its session is
+        // in; a workspace without a db (gone, or never ran) has no session.
+        ws = workspacePath && fs.existsSync(path.join(workspacePath, '.halo', 'halo.db'))
+          ? { workspacePath, db: getWorkspaceDb(workspacePath).db }
+          : null
+        workspaceOf.set(run.jobId, ws)
+      }
+      if (ws && await deleteRunSession(ws, run as DoomedRun & { sessionId: string })) deleted++
+    } catch (err) {
+      failed.add(run.id)
+      console.warn(`[Cron] run ${run.id}: deleting session ${run.sessionId} failed, run row kept for the next prune: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  const ids = runs.map((r) => r.id).filter((id) => !failed.has(id))
+  if (ids.length > 0) db.delete(cronRuns).where(inArray(cronRuns.id, ids)).run()
+  if (deleted > 0) {
+    console.log(`[Cron] pruned ${ids.length} run row(s), deleted ${deleted} stateless run session(s)`)
+    broadcast({ type: 'session:changed' })
+  }
+}
+
+type RunWorkspace = { workspacePath: string; db: HaloDb }
+
+/** Delete one stateless run's session tree (root + `root>…` sub-agents: db
+ *  rows, session files, UI-log archive segments). Returns false — the
+ *  session stays, only its run row goes — when it is still running, or was
+ *  continued after the run: any row of the tree has `updated_at` past the
+ *  run's `completed_at`. `updated_at` moves only when a turn ends (or a goal
+ *  record is written), never on a view, rename or stop; the cron cli exits
+ *  only once every session of its tree is idle, so sub-agent reports landing
+ *  in the root during the run stay before `completed_at`. */
+async function deleteRunSession({ workspacePath, db }: RunWorkspace, run: DoomedRun & { sessionId: string }): Promise<boolean> {
+  const sid = run.sessionId
+  const keep = (why: string) => {
+    console.log(`[Cron] run ${run.id}: kept session ${sid} (${why}); pruning the run row only`)
+    return false
+  }
+  if (run.status === 'running' || run.completedAt === null) return keep('its run is still in progress')
+  const host = _sessionRegistry?.peek(workspacePath)
+  if (host?.hasActiveWorkInTree(sid)) return keep('a turn is running in it')
+  const tree = db.select({ id: agentSessions.id, updatedAt: agentSessions.updatedAt }).from(agentSessions)
+    .where(or(eq(agentSessions.id, sid), and(gte(agentSessions.id, sid + '>'), lt(agentSessions.id, sid + '>\uffff'))))
+    .all()
+  const completedAt = run.completedAt
+  if (tree.some((r) => r.updatedAt > completedAt)) return keep('continued after the run')
+  // Same path as DELETE /sessions/logs/:id: through the live manager when the
+  // server has one for this workspace (aborts / drops its caches, tombstones
+  // racing saves), else the rows directly; then the files of the tree.
+  let ids = tree.map((r) => r.id)
+  if (host) ids = await host.deleteSession(sid)
+  else if (ids.length > 0) db.delete(agentSessions).where(inArray(agentSessions.id, ids)).run()
+  // The root's file too when its row is gone (a cli that died mid-write).
+  for (const id of new Set([sid, ...ids])) await findAndDeleteSessionFile(id, workspacePath)
+  return tree.length > 0
 }
 
 /** Delete log files older than retention. The matching db rows already
  *  reference a path that no longer exists; the UI just shows "log
- *  unavailable" for those — same pattern as evo's archive policy. */
-function pruneOldLogs(): void {
+ *  unavailable" for those — same pattern as evo's archive policy.
+ *  Exported for tests only. */
+export async function pruneOldLogs(): Promise<void> {
   const dir = logsDir()
   if (!fs.existsSync(dir)) return
   const cutoff = Date.now() - LOG_RETENTION_DAYS * DAY_MS
@@ -1106,5 +1212,5 @@ function pruneOldLogs(): void {
   // is gone anyway. Keeps the global db lean.
   const db = getCronDb()
   const dbCutoff = Date.now() - 2 * LOG_RETENTION_DAYS * DAY_MS
-  db.delete(cronRuns).where(lt(cronRuns.startedAt, dbCutoff)).run()
+  await deleteRuns(db.select(DOOMED_RUN_COLUMNS).from(cronRuns).where(lt(cronRuns.startedAt, dbCutoff)).all())
 }

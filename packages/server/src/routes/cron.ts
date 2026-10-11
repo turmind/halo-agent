@@ -17,7 +17,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Cron } from 'croner'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
-import { reloadAll, scheduleJob, unscheduleJob, runJob, activeWindowOptions, effectiveSessionId, sessionAgentIdFor, sessionAgentConflict, jobChangedFields } from '../cron/runner.js'
+import { reloadAll, scheduleJob, unscheduleJob, runJob, deleteJobRuns, activeWindowOptions, effectiveSessionId, sessionAgentIdFor, sessionAgentConflict, jobChangedFields } from '../cron/runner.js'
 import { resolveWorkingDir } from '../agents/working-dir.js'
 import { listAllCronTargets } from '../cron/dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
@@ -405,14 +405,15 @@ export function createCronRoutes(): Hono {
     return c.json({ ok: true })
   })
 
-  // DELETE /api/cron/jobs/:id — delete a job + every cron_runs for it.
+  // DELETE /api/cron/jobs/:id — delete a job + every cron_runs for it (and
+  // its stateless runs' sessions; needs the job row, so it goes last).
   router.delete('/cron/jobs/:id', async (c) => {
     const id = c.req.param('id')
     const db = getCronDb()
     const existing = db.select().from(cronJobs).where(eq(cronJobs.id, id)).get()
     if (!existing) return c.json({ error: 'not found' }, 404)
     unscheduleJob(id)
-    db.delete(cronRuns).where(eq(cronRuns.jobId, id)).run()
+    await deleteJobRuns(id)
     db.delete(cronJobs).where(eq(cronJobs.id, id)).run()
     broadcast({ type: 'cron:job_changed', jobId: id, kind: 'deleted' })
     return c.json({ ok: true })
