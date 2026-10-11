@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-10-11
+
 ### Fixed
 
 - Skills: the slash-command popup, the Skills page and the agent form's skill picker update live in every open admin tab when a skill is created, deleted, enabled or disabled — from the Skills tab, `/skill disable|enable|delete` in any chat or channel, the REST API, or an agent writing a workspace skill folder (new WS frame `skills:changed`).
@@ -966,7 +968,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.3...HEAD
+[1.6.3]: https://github.com/turmind/halo-agent/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/turmind/halo-agent/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/turmind/halo-agent/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/turmind/halo-agent/compare/v1.5.11...v1.6.0
