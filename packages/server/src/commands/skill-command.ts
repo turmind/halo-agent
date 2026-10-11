@@ -6,6 +6,7 @@ import { ACCESS_RANK, loadAgentYaml, parseSkillFrontmatter, type SkillVerb } fro
 import { isSkillDisabled, listSkillDirs, type SkillDir } from '../agents/skill-sources.js'
 import { buildRenderContext, renderMdBody } from '../prompts/md-vars.js'
 import { getDisabledSet } from '../db/index.js'
+import { createMtimeCache } from '../routes/mtime-cache.js'
 import { t, type Lang } from '../channels/shared/i18n.js'
 import type { SessionManager } from '../agents/session-manager.js'
 
@@ -19,13 +20,24 @@ interface SkillCommandEntry {
   verbs?: SkillVerb[]
 }
 
+/** Per-SKILL.md frontmatter cache — see routes/mtime-cache.ts. A scan runs
+ *  several times per `/help` and once per slash command, so at steady state
+ *  it costs one stat per skill; a SKILL.md is re-read only after it changed. */
+type EntryFrontmatter = Pick<ReturnType<typeof parseSkillFrontmatter>, 'name' | 'description' | 'command' | 'requiresAccess' | 'verbs' | 'userInvocable'>
+const _frontmatterCache = createMtimeCache<EntryFrontmatter>()
+
 async function readEntries(dirs: SkillDir[]): Promise<SkillCommandEntry[]> {
   const entries: SkillCommandEntry[] = []
   for (const { id: entryName, dir: skillDir } of dirs) {
     const skillMdPath = path.join(skillDir, 'SKILL.md')
     try {
-      const content = await fs.readFile(skillMdPath, 'utf-8')
-      const { name, description, command, requiresAccess, verbs, userInvocable } = parseSkillFrontmatter(content)
+      const { mtimeMs } = await fs.stat(skillMdPath)
+      let fm = _frontmatterCache.get(skillMdPath, mtimeMs)
+      if (!fm) {
+        const { name, description, command, requiresAccess, verbs, userInvocable } = parseSkillFrontmatter(await fs.readFile(skillMdPath, 'utf-8'))
+        fm = _frontmatterCache.set(skillMdPath, mtimeMs, { name, description, command, requiresAccess, verbs, userInvocable })
+      }
+      const { name, description, command, requiresAccess, verbs, userInvocable } = fm
       // `user-invocable: false` (standard): never a slash command — skip the
       // command entirely so it can't be listed or dispatched. The model can
       // still activate the skill (loadSkillMetadata doesn't read this flag).
@@ -47,8 +59,8 @@ async function readEntries(dirs: SkillDir[]): Promise<SkillCommandEntry[]> {
  *  extensions last, so skill-vs-skill command claims stay first-come as
  *  before. Returned, not cached: a module-level variable rebuilt per call
  *  raced across workspaces (two concurrent scans interleave, the second
- *  caller reads the first's list). Rescanning ~10 small SKILL.md files per
- *  slash command is negligible. */
+ *  caller reads the first's list). Per call it's one stat per skill; the
+ *  SKILL.md parse is cached per file mtime (readEntries). */
 async function scanSkillEntries(workspaceRoot?: string): Promise<SkillCommandEntry[]> {
   const live = listSkillDirs(workspaceRoot).filter((s) => !s.overridden)
   const order = (s: SkillDir): number => (s.scope === 'extension' ? 2 : s.scope === 'workspace' ? 1 : 0)

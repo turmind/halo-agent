@@ -57,6 +57,10 @@ export interface SkillDir {
   overridden: boolean
 }
 
+function isFile(p: string): boolean {
+  try { return fs.statSync(p).isFile() } catch { return false }
+}
+
 /** Sub-directories of one skills dir, symlinks followed (as every scanner did
  *  before this module). Missing dir = none. */
 function childDirs(parent: string): string[] {
@@ -67,9 +71,11 @@ function childDirs(parent: string): string[] {
   })
 }
 
-/** Manifest verdict per manifest mtime: a scan costs readdir + stat, and a
- *  manifest is only re-validated after a (re)install rewrote it. */
-const _manifestOk = createMtimeCache<boolean>()
+/** Validated manifest per manifest mtime → its entry file's path (null =
+ *  invalid): a scan costs readdir + stats, and a manifest is only re-validated
+ *  after a (re)install rewrote it. The validator also requires the entry file,
+ *  which the manifest mtime doesn't cover — so that one is re-stat'ed per scan. */
+const _manifestEntry = createMtimeCache<string | null>()
 /** Extensions whose ignored folders were already reported, keyed by manifest
  *  mtime — one warning per changed extension, not one per listing. */
 const _warned = new Set<string>()
@@ -100,9 +106,12 @@ export function extensionSkillDirs(): Array<Omit<SkillDir, 'overridden'>> {
     const manifest = path.join(extDir, MANIFEST_FILE)
     let mtimeMs: number
     try { mtimeMs = fs.statSync(manifest).mtimeMs } catch { continue }
-    const ok = _manifestOk.get(manifest, mtimeMs)
-      ?? _manifestOk.set(manifest, mtimeMs, !('error' in readExtensionDir(extDir)))
-    if (!ok) continue
+    let entry = _manifestEntry.get(manifest, mtimeMs)
+    if (entry === undefined) {
+      const ext = readExtensionDir(extDir)
+      entry = _manifestEntry.set(manifest, mtimeMs, 'error' in ext ? null : path.join(extDir, ext.entry))
+    }
+    if (!entry || !isFile(entry)) continue
     const ignored: string[] = []
     for (const id of ids.sort()) {
       const dir = path.join(extDir, 'skills', id)

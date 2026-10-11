@@ -15,6 +15,7 @@ import { Loader2, MessageSquare, Bot, Bug, ChevronDown } from 'lucide-react'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useAgentBus } from '@/shared/agent-bus'
+import { useSkillBus } from '@/shared/skill-bus'
 import { isMainConversationMessage, type ChatMessage } from '@/shared/types'
 import { api } from '@/shared/api-client'
 import { cn, confirmAction } from '@/shared/utils'
@@ -73,10 +74,13 @@ function AgentSelector() {
   // selectedAgentId so the popup matches what they're about to start.
   // Separate effect from the list fetch above: the agent list only varies
   // with path/busVersion, so session/agent switches must not refetch it.
+  // The skill bus too: toggling / adding / removing a skill (or an extension
+  // shipping skills) changes which commands exist.
+  const skillBusVersion = useSkillBus((s) => s.version)
   useEffect(() => {
     if (!activeProject?.path) return
     refreshCommands(activeProject.path, sessionId ?? undefined, selectedAgentId ?? undefined).catch(() => {})
-  }, [activeProject?.path, sessionId, selectedAgentId, busVersion])
+  }, [activeProject?.path, sessionId, selectedAgentId, busVersion, skillBusVersion])
 
   useEffect(() => {
     if (!open) return

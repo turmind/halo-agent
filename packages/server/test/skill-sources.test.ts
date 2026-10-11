@@ -161,6 +161,54 @@ describe('skill sources', () => {
     expect(section()?.displayName).toBe('Global Tool')
     fs.rmSync(path.join(globalSkills, 'tool'), { recursive: true, force: true })
   })
+
+  it('a removed entry file drops the extension skills even with the manifest untouched', () => {
+    const tool = path.join(extRoot, 'tool')
+    const ids = () => sources.extensionSkillDirs().map((s) => s.id)
+    expect(ids()).toEqual(['tool', 'tool-extra']) // manifest verdict now cached
+    fs.renameSync(path.join(tool, 'index.html'), path.join(tool, 'index.html.bak'))
+    expect(ids()).toEqual([])
+    fs.renameSync(path.join(tool, 'index.html.bak'), path.join(tool, 'index.html'))
+    expect(ids()).toEqual(['tool', 'tool-extra'])
+  })
+})
+
+describe('mtime-cached skill reads see in-place edits', () => {
+  // Explicit, distinct mtimes so a rewrite can't land in the same mtime tick.
+  let tick = Math.floor(Date.now() / 1000) + 100
+  function rewrite(file: string, content: string): void {
+    fs.writeFileSync(file, content)
+    tick += 10
+    fs.utimesSync(file, tick, tick)
+  }
+
+  it('SKILL.md edit → next slash-command scan sees it', async () => {
+    const cmd = await import('../src/commands/skill-command.js')
+    const dir = path.join(ws, '.halo', 'skills', 'cache-probe')
+    fs.mkdirSync(dir, { recursive: true })
+    const md = path.join(dir, 'SKILL.md')
+    rewrite(md, '---\nname: probe\ndescription: before\ncommand: /cache-probe\n---\nbody\n')
+    const find = async () => (await cmd.scanSkillDescriptors(ws)).find((d) => d.skillId === 'cache-probe')
+    expect((await find())?.description).toBe('before')
+    expect((await find())?.description).toBe('before') // warm hit
+    rewrite(md, '---\nname: probe\ndescription: after\ncommand: /cache-probe\nverbs:\n  - name: go\n---\nbody\n')
+    expect((await find())?.description).toBe('after')
+    expect((await cmd.getCommandSkillInfo('/cache-probe', ws)).verbs.map((v) => v.name)).toEqual(['go'])
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('config.yaml / SKILL.md edit → next loadSettingsSchema sees it', () => {
+    const dir = path.join(ws, '.halo', 'skills', 'cache-probe')
+    writeSkill(dir, 'Probe One', 'params:\n  - key: one\n')
+    const section = () => schema.loadSettingsSchema(ws).find((s) => s.source === 'skill' && s.namespaceId === 'cache-probe')
+    expect(section()?.fields.map((f) => f.key)).toEqual(['one'])
+    expect(section()?.displayName).toBe('Probe One')
+    rewrite(path.join(dir, 'config.yaml'), 'params:\n  - key: two\n')
+    rewrite(path.join(dir, 'SKILL.md'), '---\nname: Probe Two\ndescription: d\n---\n')
+    expect(section()?.fields.map((f) => f.key)).toEqual(['two'])
+    expect(section()?.displayName).toBe('Probe Two')
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
 })
 
 describe('skills routes — extension scope is read-only', () => {

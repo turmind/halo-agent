@@ -44,6 +44,7 @@ import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
 import { loadProviders } from './models/registry.js'
 import { getSnapshot as getExtensionsSnapshot } from './extensions/registry.js'
 import { listSkillDirs } from './agents/skill-sources.js'
+import { createMtimeCache } from './routes/mtime-cache.js'
 
 const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
 
@@ -196,11 +197,19 @@ function generalSection(): SchemaSection {
   }
 }
 
+// loadSettingsSchema runs once per `{{params}}` render in shell_exec, so the
+// per-skill config.yaml / SKILL.md reads are cached by file mtime (one stat
+// per file when warm). Cached objects are shared — callers only read them.
+const _yamlCache = createMtimeCache<Record<string, unknown> | null>()
+const _skillNameCache = createMtimeCache<string | null>()
+
 function readYamlFile(p: string): Record<string, unknown> | null {
   try {
-    const raw = fs.readFileSync(p, 'utf-8')
-    const parsed = YAML.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    const { mtimeMs } = fs.statSync(p)
+    const hit = _yamlCache.get(p, mtimeMs)
+    if (hit !== undefined) return hit
+    const parsed = YAML.parse(fs.readFileSync(p, 'utf-8'))
+    return _yamlCache.set(p, mtimeMs, parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null)
   } catch {
     return null
   }
@@ -280,12 +289,15 @@ function buildSkillSection(skillsDir: string, skillId: string): SchemaSection | 
   // convention as everywhere else.
   let displayName = skillId
   try {
-    const md = fs.readFileSync(path.join(skillsDir, skillId, 'SKILL.md'), 'utf-8')
-    const m = md.match(/^---\s*\n([\s\S]*?)\n---/)
-    if (m) {
-      const nameMatch = m[1].match(/^name:\s*(.+)$/m)
-      if (nameMatch) displayName = nameMatch[1].trim()
+    const mdPath = path.join(skillsDir, skillId, 'SKILL.md')
+    const { mtimeMs } = fs.statSync(mdPath)
+    let name = _skillNameCache.get(mdPath, mtimeMs)
+    if (name === undefined) {
+      const m = fs.readFileSync(mdPath, 'utf-8').match(/^---\s*\n([\s\S]*?)\n---/)
+      const nameMatch = m?.[1].match(/^name:\s*(.+)$/m)
+      name = _skillNameCache.set(mdPath, mtimeMs, nameMatch ? nameMatch[1].trim() : null)
     }
+    if (name) displayName = name
   } catch { /* skill without SKILL.md still ok */ }
   return {
     namespaceId: skillId,
