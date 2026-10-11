@@ -92,10 +92,10 @@ Source: [event-processor.ts](../../../packages/server/src/ws/event-processor.ts)
 
 | Agent event | WS type | Fields |
 |---|---|---|
-| `thinking_delta` | `chat:thinking` | text, agentName, taskId, turnId, sessionId |
-| `stream_delta` | `chat:stream` | text, agentName, taskId, turnId, sessionId |
-| `thinking` | `chat:thinking` | text, agentName, taskId, turnId, sessionId — **not forwarded** when `streamed: true` |
-| `stream` | `chat:stream` | text, agentName, taskId, turnId, sessionId — **not forwarded** when `streamed: true` |
+| `thinking_delta` (no taskId) | `chat:thinking` | text, agentName, turnId, sessionId |
+| `stream_delta` (no taskId) | `chat:stream` | text, agentName, turnId, sessionId |
+| `thinking` (no taskId) | `chat:thinking` | text, agentName, turnId, sessionId — **not forwarded** when `streamed: true` |
+| `stream` (no taskId) | `chat:stream` | text, agentName, turnId, sessionId — **not forwarded** when `streamed: true` |
 | `agent_start` | `agent:start` | agentName, task, taskId, sessionId |
 | `agent_done` | `agent:done` | agentName, taskId, sessionId |
 | `tool_call` | `agent:tool_call` | tool, toolUseId, input, agentName, taskId, turnId, sessionId |
@@ -109,6 +109,8 @@ Source: [event-processor.ts](../../../packages/server/src/ws/event-processor.ts)
 | `user` (report, no taskId) | `chat:user` | text, sessionId |
 
 Every provider streams (Bedrock, the Anthropic-Messages providers anthropic / mimo / minimax / qwen, the OpenAI-family openai / deepseek / kimi / zhipu / doubao / hunyuan, and Mantle aws-bedrock-mantle / aws-bedrock-openai): they emit `stream_delta` / `thinking_delta` per chunk *during* the model call, and the whole `stream` / `thinking` that follows the call is stamped `streamed: true` — the wire frame is the same `chat:stream` / `chat:thinking` either way (the admin appends by `turnId`), so the whole event is dropped to avoid rendering the text twice. A provider that never calls `onDelta` would still send the whole event only, exactly as before streaming existed.
+
+Sub-agent text is root-tree noise on this wire: the listener is the root's (sub ids normalize to it), every admin view filters `taskId` rows out, and the Sessions tab reads a sub-session's log from disk. So the four text events above go out **root only**. A sub-agent's `stream*` / `thinking*` produce no frame, while its `agent:start` / `agent:done`, tool frames, `agent:context`, `chat:system` and `error` still carry `taskId`. Web SSE (and ACP on top of it), the IM channels and A2A register their own event listeners rather than reading these frames, so they are unaffected. Two harmless side effects in the admin. A text-only sub-agent leaves its empty `agent:start` placeholder in the root store, and after a link drop `convergeStaleStreaming` may mark it interrupted; every view filters that row out anyway. A background tab's unread dot no longer lights for sub-agent text alone, though the sub-agent's tool and `agent:*` frames still light it.
 
 `sessionId` is the session the emitting listener belongs to. A connection holds one listener per subscribed session (`createEventListener(client, sessionId)`), and each listener is bound to its id when it is created. Since 1.5.3-alpha the session-scoped frames sent outside the event mapping carry it too: `compact:started` / `compact:summarizing` / `compact:done`, `session:compacted`, `chat:queued`, `chat:system` / `error` replies to a command or chat, the detached-buffer replays (`agent:start` / `agent:done` / `error` / `chat:followup` from `bufferDetachedNotification`), and `chat:usage` on subscribe.
 

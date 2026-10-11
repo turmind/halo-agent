@@ -104,8 +104,8 @@ export type WsServerMessage =
   // admin routes each frame to that session's tab by this id. A frame without
   // one (connection-level sends) goes to the active tab.
   | { type: 'chat:followup'; agentName: string; replay?: boolean; sessionId?: string | null }
-  | { type: 'chat:thinking'; text: string; agentName: string; taskId?: string; turnId?: string; replay?: boolean; sessionId?: string | null }
-  | { type: 'chat:stream'; text: string; agentName: string; taskId?: string; turnId?: string; replay?: boolean; sessionId?: string | null }
+  | { type: 'chat:thinking'; text: string; agentName: string; turnId?: string; replay?: boolean; sessionId?: string | null }
+  | { type: 'chat:stream'; text: string; agentName: string; turnId?: string; replay?: boolean; sessionId?: string | null }
   | { type: 'chat:system'; text: string; taskId?: string; agentName?: string; sessionId?: string | null }
   | { type: 'chat:user'; text: string; sessionId?: string | null }
   | { type: 'chat:usage'; contextTokens: number; outputTokens: number; turnId?: string; modelId?: string; usage?: WsUsageData; sessionId?: string | null }

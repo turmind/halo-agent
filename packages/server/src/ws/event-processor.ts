@@ -53,20 +53,25 @@ export function sendWsNotification(
     // Streaming chunks ride the same frames as the whole-text events — the
     // admin appends chat:thinking / chat:stream by turnId either way. The whole
     // event that follows a streamed call is stamped `streamed` and dropped so
-    // the client doesn't render the text twice.
+    // the client doesn't render the text twice. Root only: a sub-agent's
+    // (taskId) text never renders in a chat view — the listener is the root
+    // tree's and every view filters taskId rows out — so its deltas were pure
+    // per-token store churn; its log is read from disk (Sessions tab).
     case 'thinking_delta':
-      sendJson(ctx.ws, { type: 'chat:thinking', text: event.text ?? '', agentName, taskId, turnId, sessionId })
+      if (taskId) break
+      sendJson(ctx.ws, { type: 'chat:thinking', text: event.text ?? '', agentName, turnId, sessionId })
       break
     case 'stream_delta':
-      sendJson(ctx.ws, { type: 'chat:stream', text: event.text ?? '', agentName, taskId, turnId, sessionId })
+      if (taskId) break
+      sendJson(ctx.ws, { type: 'chat:stream', text: event.text ?? '', agentName, turnId, sessionId })
       break
     case 'thinking':
-      if (event.streamed) break
-      sendJson(ctx.ws, { type: 'chat:thinking', text: event.text ?? '', agentName, taskId, turnId, sessionId })
+      if (event.streamed || taskId) break
+      sendJson(ctx.ws, { type: 'chat:thinking', text: event.text ?? '', agentName, turnId, sessionId })
       break
     case 'stream':
-      if (event.streamed) break
-      sendJson(ctx.ws, { type: 'chat:stream', text: event.text ?? '', agentName, taskId, turnId, sessionId })
+      if (event.streamed || taskId) break
+      sendJson(ctx.ws, { type: 'chat:stream', text: event.text ?? '', agentName, turnId, sessionId })
       break
     case 'agent_start':
       sendJson(ctx.ws, { type: 'agent:start', agentName, task: event.text, taskId, sessionId })

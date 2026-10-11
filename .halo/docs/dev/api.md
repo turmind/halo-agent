@@ -981,8 +981,8 @@ It does not remove session files. The full delete (rows + JSON + archive segment
 
 | Type | Fields | Purpose |
 |---|---|---|
-| `chat:stream` | `text`, `agentName`, `turnId`, `taskId?` | Text chunk from the agent |
-| `chat:thinking` | `text`, `agentName`, `turnId`, `taskId?` | Thinking chunk |
+| `chat:stream` | `text`, `agentName`, `turnId` | Text chunk from the root agent (a sub-agent's text isn't sent on this wire — see [design/ws.md](../design/ws.md#agent-event--ws-message-mapping)) |
+| `chat:thinking` | `text`, `agentName`, `turnId` | Thinking chunk (root only, as above) |
 | `agent:tool_call` | `tool`, `toolUseId`, `input`, `agentName`, `turnId`, `taskId?` | Tool invocation card |
 | `agent:tool_result` | `result`, `toolUseId`, `agentName`, `durationMs`, `taskId?` | Tool result |
 | `chat:usage` | `contextTokens`, `outputTokens`, `usage`, `modelId`, `turnId` | Token accounting per model call (root only) |

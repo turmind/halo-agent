@@ -25,7 +25,7 @@ Session history viewer: hierarchy tree, message playback, debug mode, system pro
 Top Debug toggle (Bug icon), persisted in `localStorage` as `halo_session_debug`. When on:
 - **Normal mode**: user message + assistant reply (with inline tool-call cards, click to expand IN / OUT); sub-agent notifications hidden
 - **Debug mode**: adds, on top of the normal view:
-  - **Thinking** blocks (purple, expandable, with char count) inside assistant messages
+  - **Thinking** blocks (purple, expandable, with char count) inside assistant messages. While a reply streams, its thinking shows in the same live panel as the normal view
   - **Usage** line after each turn — timestamp, token counts (in / out / ctx, cache read / write / hit ratio), latency (ttft / e2e), thinking effort, model ID
   - Sub-agent start / done markers labelled with the agent name
 

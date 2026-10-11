@@ -231,15 +231,17 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   }, 5_000)
   unsubs.push(() => clearInterval(watchdog))
 
+  // Text frames are root-only on the wire (sub-agent text isn't sent, see
+  // design/ws.md) — hence the root task scope (`undefined`) below.
   unsubs.push(
     wsClient.on('chat:thinking', (msg) => {
-      storeForFrame(msg.sessionId)?.getState().appendThinking(msg.text, msg.agentName, msg.taskId, msg.turnId)
+      storeForFrame(msg.sessionId)?.getState().appendThinking(msg.text, msg.agentName, undefined, msg.turnId)
     }),
   )
 
   unsubs.push(
     wsClient.on('chat:stream', (msg) => {
-      storeForFrame(msg.sessionId)?.getState().updateLastAssistant(msg.text, msg.agentName, msg.taskId, msg.turnId)
+      storeForFrame(msg.sessionId)?.getState().updateLastAssistant(msg.text, msg.agentName, undefined, msg.turnId)
     }),
   )
 

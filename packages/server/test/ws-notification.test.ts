@@ -36,14 +36,14 @@ function notify(event: OrchestratorEvent, sessionId: string | null = 'sess-1') {
 
 describe('sendWsNotification mapping', () => {
   it('thinking → chat:thinking', () => {
-    expect(notify({ type: 'thinking', text: 'hmm', agentName: 'a' })).toEqual([
-      { type: 'chat:thinking', text: 'hmm', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },
+    expect(notify({ type: 'thinking', text: 'hmm', agentName: 'a' })).toStrictEqual([
+      { type: 'chat:thinking', text: 'hmm', agentName: 'a', turnId: 'turn-1', sessionId: 'sess-1' },
     ])
   })
 
   it('stream → chat:stream', () => {
-    expect(notify({ type: 'stream', text: 'tok', agentName: 'a' })).toEqual([
-      { type: 'chat:stream', text: 'tok', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },
+    expect(notify({ type: 'stream', text: 'tok', agentName: 'a' })).toStrictEqual([
+      { type: 'chat:stream', text: 'tok', agentName: 'a', turnId: 'turn-1', sessionId: 'sess-1' },
     ])
   })
 
@@ -51,17 +51,34 @@ describe('sendWsNotification mapping', () => {
   // appends by turnId either way); the whole event that follows a streamed
   // call is stamped `streamed` and must be dropped or the text renders twice.
   it('stream_delta / thinking_delta → chat:stream / chat:thinking', () => {
-    expect(notify({ type: 'stream_delta', text: 'to', agentName: 'a' })).toEqual([
-      { type: 'chat:stream', text: 'to', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },
+    expect(notify({ type: 'stream_delta', text: 'to', agentName: 'a' })).toStrictEqual([
+      { type: 'chat:stream', text: 'to', agentName: 'a', turnId: 'turn-1', sessionId: 'sess-1' },
     ])
-    expect(notify({ type: 'thinking_delta', text: 'hm', agentName: 'a' })).toEqual([
-      { type: 'chat:thinking', text: 'hm', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: 'sess-1' },
+    expect(notify({ type: 'thinking_delta', text: 'hm', agentName: 'a' })).toStrictEqual([
+      { type: 'chat:thinking', text: 'hm', agentName: 'a', turnId: 'turn-1', sessionId: 'sess-1' },
     ])
   })
 
   it('stream / thinking with streamed: true are not forwarded', () => {
     expect(notify({ type: 'stream', text: 'tok', streamed: true, agentName: 'a' })).toEqual([])
     expect(notify({ type: 'thinking', text: 'hmm', streamed: true, agentName: 'a' })).toEqual([])
+  })
+
+  // No chat view renders a sub-agent's text (the admin filters taskId rows out
+  // of every view), so its per-token frames are dropped at the source; its
+  // structural frames still go out.
+  it('sub-agent (taskId set) stream / thinking text is not forwarded, root still is', () => {
+    const taskId = 'root>sid_child'
+    for (const type of ['stream_delta', 'thinking_delta', 'stream', 'thinking'] as const) {
+      expect(notify({ type, text: 'x', agentName: 'sub', taskId })).toEqual([])
+    }
+    expect(notify({ type: 'thinking_delta', text: 'x', agentName: 'a' })).toHaveLength(1)
+    expect(notify({ type: 'agent_start', text: 'task', agentName: 'sub', taskId })).toEqual([
+      { type: 'agent:start', agentName: 'sub', task: 'task', taskId, sessionId: 'sess-1' },
+    ])
+    expect(notify({ type: 'tool_call', toolName: 'shell', toolInput: {}, agentName: 'sub', taskId })).toHaveLength(1)
+    expect(notify({ type: 'tool_result', toolResult: 'ok', agentName: 'sub', taskId })).toHaveLength(1)
+    expect(notify({ type: 'agent_done', agentName: 'sub', taskId })).toHaveLength(1)
   })
 
   it('tool_call → agent:tool_call (tool/input field names)', () => {
@@ -104,8 +121,8 @@ describe('sendWsNotification mapping', () => {
   // known stamps `null`, which the client treats as "no session context" and
   // hands to the active tab.
   it('a null session context stamps sessionId: null (not omitted)', () => {
-    expect(notify({ type: 'stream', text: 'tok', agentName: 'a' }, null)).toEqual([
-      { type: 'chat:stream', text: 'tok', agentName: 'a', taskId: undefined, turnId: 'turn-1', sessionId: null },
+    expect(notify({ type: 'stream', text: 'tok', agentName: 'a' }, null)).toStrictEqual([
+      { type: 'chat:stream', text: 'tok', agentName: 'a', turnId: 'turn-1', sessionId: null },
     ])
   })
 

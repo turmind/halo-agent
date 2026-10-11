@@ -258,3 +258,34 @@ describe('debug usage badges follow their tool call across a mid-turn user row',
     ])
   })
 })
+
+describe('streamed thinking renders as the live panel in both view modes', () => {
+  const prompt: ChatMessage = { id: 'u0', role: 'user', content: 'q', timestamp: 0 }
+  const live = (blocks: ChatMessage['contentBlocks'], extra?: Partial<ChatMessage>): ChatMessage =>
+    ({ ...base, id: 'live', content: '', streaming: true, contentBlocks: blocks, ...extra })
+  const panel = (c: HTMLElement) => c.querySelector('[data-thinking-live]')?.textContent ?? null
+
+  for (const debugMode of [false, true]) {
+    it(`debug=${debugMode}: thinking-only bubble shows the panel, not the bare spinner`, () => {
+      const c = render([prompt, live([{ type: 'thinking', text: 'weighing options', turnId: 't1' }])], debugMode)
+      expect(panel(c)).toContain('weighing options')
+    })
+
+    it(`debug=${debugMode}: thinking after a tool call (and after a mid-turn user row) is live too`, () => {
+      const call = { name: 'shell_exec', input: 'ls', output: 'ok', toolUseId: 'x1' }
+      const c = render([
+        prompt,
+        { ...base, id: 'head', content: '', contentBlocks: [{ type: 'tool_call', toolCall: call, turnId: 't1' }] },
+        { id: 'u1', role: 'user', content: 'mid', timestamp: 3 },
+        live([{ type: 'thinking', text: 'next step', turnId: 't2' }]),
+      ], debugMode)
+      expect(panel(c)).toContain('next step')
+    })
+  }
+
+  it('an empty streaming placeholder still shows the bare spinner', () => {
+    const c = render([prompt, live([])], true)
+    expect(panel(c)).toBeNull()
+    expect(c.textContent).toContain('Thinking...')
+  })
+})

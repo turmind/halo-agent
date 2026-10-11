@@ -489,9 +489,10 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
 
   // Bare spinner only until reasoning text arrives — from then on the live
   // thinking panel below stands in for it (providers that stream no reasoning
-  // text, e.g. Mantle GPT, stay on the spinner). Debug mode keeps the spinner.
+  // text, e.g. Mantle GPT, stay on the spinner). Debug mode too — it adds to
+  // the normal view, never hides from it.
   if (message.streaming && !message.content && !message.toolCalls?.length
-    && (debugMode || !message.contentBlocks?.some((b) => b.type === 'thinking' && b.text.trim()))) {
+    && !message.contentBlocks?.some((b) => b.type === 'thinking' && b.text.trim())) {
     return (
       <div className="flex items-center gap-1.5 py-1">
         <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)]" />
@@ -510,8 +511,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
       if (block.type === 'thinking' && block.text.trim()) {
         // Live while it's the block being streamed; once text / a tool call
         // follows it (or the message settles) it folds to the one-line header.
-        // Debug mode: the collapsed header throughout, as before.
-        elements.push(!debugMode && message.streaming && i === blocks.length - 1
+        elements.push(message.streaming && i === blocks.length - 1
           ? <LiveThinkingBlock key={`b${i}`} text={block.text} />
           : <ThinkingBlock key={`b${i}`} text={block.text} />)
       } else if (block.type === 'text' && block.text.trim()) {
