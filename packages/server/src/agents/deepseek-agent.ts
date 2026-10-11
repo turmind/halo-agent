@@ -51,10 +51,17 @@ export class DeepSeekAgent extends AgentLoop {
       ...(tools.length > 0 ? { tools } : {}),
     }
 
-    if (this.config.thinking?.effort === 'disabled') {
+    // Off must be explicit: the API thinks by default. The effort passes
+    // through as-is: the API accepts none/minimal/low/medium/high/xhigh/ultra/max
+    // and folds them itself onto low/high/max (medium/xhigh → high), so an
+    // older agent.yaml with `medium` / `xhigh` keeps working. `effort:
+    // 'disabled'` is the legacy hand-written off switch.
+    const effort = this.config.thinking?.enabled ? this.config.thinking.effort : undefined
+    if (!this.config.thinking?.enabled || effort === 'disabled') {
       body.thinking = { type: 'disabled' }
     } else {
       body.thinking = { type: 'enabled' }
+      if (effort) body.reasoning_effort = effort
     }
 
     const folded = await fetchChatCompletionStream({

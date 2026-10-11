@@ -33,7 +33,7 @@ export interface ModelRuntimeConfig {
   promptCaching?: boolean | '5m' | '1h'
   thinking?: { enabled: boolean; effort?: string }
   /** Which thinking API the model wants — see `resolveThinkingMode` in
-   *  config.ts. The Bedrock Claude and MiniMax providers branch on it. */
+   *  config.ts. The Bedrock Claude, MiniMax and Qwen providers branch on it. */
   thinkingMode?: 'adaptive' | 'manual'
   /** Output verbosity for the OpenAI Responses API (`text.verbosity`).
    *  Currently only the Mantle provider uses it. */
@@ -152,6 +152,7 @@ export function createModelRuntime(runtime: string, cfg: ModelRuntimeConfig): Mo
         maxTokens: cfg.maxTokens,
         promptCaching: cfg.promptCaching,
         thinking: cfg.thinking,
+        thinkingMode: cfg.thinkingMode,
         thinkingBudgetTokens: cfg.thinkingBudgetTokens,
       })
     case 'hunyuan':

@@ -1,6 +1,6 @@
 id: deepseek
 runtime: deepseek
-revision: 2026101002
+revision: 2026101101
 displayName: DeepSeek
 displayName_zh: DeepSeek
 description: DeepSeek V4 via OpenAI-compatible chat completions API
@@ -15,9 +15,18 @@ secrets:
     secret: true
 
 # Capabilities verified via live probes (2026-05-27, re-probed 2026-09-24).
-# reasoning_effort accepts { low, medium, high, max, xhigh } — bogus values
-# 400 with the full valid list in the error. Caching is automatic;
-# cached_tokens shows up from turn 2.
+# Caching is automatic; cached_tokens shows up from turn 2.
+#
+# Thinking (re-probed 2026-10-11, api-docs.deepseek.com/guides/thinking_mode +
+# GET /models): `thinking:{type:enabled|disabled}` toggles, on by default;
+# `reasoning_effort` grades it. The API's real levels are low / high / max
+# (/models `effort.supported_levels`, default high); it also accepts none /
+# minimal / medium / xhigh / ultra and folds them itself (minimal→low,
+# medium/xhigh→high, ultra→max) — all 200 live, a bogus value 422s with that
+# list. So the presets are the three real levels and deepseek-agent.ts passes
+# the label through unmapped: an older agent.yaml with medium / xhigh keeps
+# working at high. Before 2026-10-11 the runtime sent no reasoning_effort at
+# all (every agent ran at the API default, high).
 #
 # Vision is per model: `image_url` blocks are no longer rejected at the
 # deserialize layer on either id, but only `deepseek-flash` (V4.1-Flash,
@@ -42,13 +51,11 @@ models:
           - { value: 5m, label: 5min }
       thinking:
         defaultEnabled: true
-        default: xhigh
+        default: high
         effortPresets:
           - { value: low, label: Low }
-          - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: max, label: Max }
-          - { value: xhigh, label: XHigh }
 
   # DeepSeek retired the versioned flash ids (deepseek-v4-flash,
   # deepseek-v4-flash-vision-exp) in favour of a rolling `deepseek-flash`
@@ -70,10 +77,8 @@ models:
           - { value: 5m, label: 5min }
       thinking:
         defaultEnabled: true
-        default: xhigh
+        default: high
         effortPresets:
           - { value: low, label: Low }
-          - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: max, label: Max }
-          - { value: xhigh, label: XHigh }

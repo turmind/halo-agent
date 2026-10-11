@@ -1,6 +1,6 @@
 id: hunyuan
 runtime: hunyuan
-revision: 2026101003
+revision: 2026101101
 displayName: Hunyuan (Tencent)
 displayName_zh: 混元（腾讯）
 description: Tencent Hunyuan Hy4 preview / Hy3 on TokenHub — agent-oriented MoE with no_think / think_low / think_high modes
@@ -42,14 +42,18 @@ secrets:
 #   - Caching re-verified on hy3 / hy4-preview (turn 2 cached_tokens ≈ prompt).
 #   - Tool calls verified on hy3 / hy4-preview. Image: hy3 / hy4-preview both
 #     answered wrongly about a solid red PNG — keep image:false.
-#   - Max output: no official per-model number found (search-only claims of
-#     64K, unconfirmed: https://www.tencentcloud.com/techpedia/147980); the
-#     gateway accepted max_tokens 2,000,000 without error, so it isn't a hard
-#     check either — maxOutputTokens stays at the conservative 16384.
+#   - Max output: the gateway accepted max_tokens 2,000,000 without error, so
+#     a rejection probe proves nothing.
+# 2026-10-11: the TokenHub model list (cloud.tencent.com/document/product/1823/130051,
+# updated 2026-09-28, 语言模型 table: 上下文窗口 / 最大输入 / 最大输出) gives
+# Hy4 preview 1M / 960k / 64k and Hy3 256k / 192k / 128k → maxOutputTokens
+# 65536 / 131072. hy3-preview is not on that page → stays at 16384. (One
+# long-output run on hy3 with max_tokens 200000 stopped at 147,389 completion
+# tokens, finish_reason length — above the doc figure; the doc value is used.)
 models:
   - id: hy3
     displayName: Hunyuan Hy3
-    maxOutputTokens: 16384
+    maxOutputTokens: 131072
     contextWindow: 262144
     maxContextWindow: 262144
     compressAt: 0.9
@@ -77,7 +81,7 @@ models:
 
   - id: hy4-preview
     displayName: Hunyuan Hy4 Preview
-    maxOutputTokens: 16384
+    maxOutputTokens: 65536
     contextWindow: 272000
     maxContextWindow: 1048576
     compressAt: 0.9

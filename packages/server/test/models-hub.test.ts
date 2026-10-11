@@ -141,6 +141,17 @@ describe('per-model context (config.resolveEffectiveContext)', () => {
     expect(ctx('global.anthropic.claude-haiku-4-5-20251001-v1:0', { maxTokens: 272000 })).toEqual({ maxTokens: 200000, compressAt: 0.9, clampedFrom: 272000 })
   })
 
+  it('bundled doc-sourced params: Hunyuan max output, Qwen 3.8 adaptive thinking', () => {
+    config.invalidateModelsRegistry()
+    // TokenHub model list (cloud.tencent.com/document/product/1823/130051): Hy3 128k, Hy4 preview 64k.
+    expect(config.resolveMaxOutputTokens('hy3')).toBe(131072)
+    expect(config.resolveMaxOutputTokens('hy4-preview')).toBe(65536)
+    expect(config.resolveMaxOutputTokens('hy3-preview')).toBe(16384)
+    expect(config.resolveThinkingMode('qwen3.8-max')).toBe('adaptive')
+    expect(config.resolveThinkingMode('qwen3.8-flash')).toBe('adaptive')
+    expect(config.resolveThinkingMode('qwen3.7-plus')).toBe('manual')
+  })
+
   it('unknown model / no model → global defaults, no clamp', () => {
     expect(ctx('not-in-registry')).toEqual({ maxTokens: 272000, compressAt: 0.9 })
     expect(ctx(undefined, { maxTokens: 5000000 })).toEqual({ maxTokens: 5000000, compressAt: 0.9 })

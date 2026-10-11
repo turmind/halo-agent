@@ -528,8 +528,8 @@ Existing agent yaml values always win over these defaults — switching provider
 - `image` / `video` / `audio` (boolean) → modality badges in the form; at runtime, unsupported modality inputs are filtered out with a text notice instead of causing API errors
 - `promptCaching.ttlPresets` → Prompt Caching dropdown
 - `thinking.mode`:
-  - `adaptive` → wire format `thinking: {type: 'adaptive'}` + `output_config.effort` (Sonnet 4.6+ / Opus 4.6 and later, incl. Opus 5)
-  - `manual` → wire format `thinking: {type: 'enabled', budget_tokens: N}` (Haiku 4.5 and other legacy thinking models). UI offers a budget number input; runtime translates effort labels via the table in `bedrock-agent.ts` if needed.
+  - `adaptive` → wire format `thinking: {type: 'adaptive'}` + `output_config.effort` (Sonnet 4.6+ / Opus 4.6 and later, incl. Opus 5). Qwen 3.8 Max / Flash use the same `output_config.effort` with `thinking: {type: 'enabled'}`, unless the agent.yaml carries an explicit `budget_tokens`.
+  - `manual` → wire format `thinking: {type: 'enabled', budget_tokens: N}` (Haiku 4.5 and other legacy thinking models). UI offers a budget number input; runtime translates effort labels via `effortToBudget` in `anthropic-request.ts` if needed.
 - `thinking.effortPresets` → Thinking effort dropdown (when `mode: adaptive`)
 - Omit a block → the UI hides that control for this model
 

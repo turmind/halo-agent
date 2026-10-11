@@ -51,6 +51,8 @@ export interface QwenAgentConfig {
   maxTokens?: number
   promptCaching?: boolean | '5m' | '1h'
   thinking?: { enabled: boolean; effort?: string }
+  /** 'adaptive' (qwen3.8-*) → `output_config.effort`; 'manual' / unset → `budget_tokens`. */
+  thinkingMode?: 'adaptive' | 'manual'
   thinkingBudgetTokens?: number
 }
 
@@ -89,11 +91,21 @@ export class QwenAgent extends AgentLoop {
     }
 
     if (this.config.thinking?.enabled && this.config.thinking.effort) {
-      const budget = this.config.thinkingBudgetTokens
-        ?? effortToBudget(this.config.thinking.effort, this.config.maxTokens)
-      body.thinking = { type: 'enabled', budget_tokens: capThinkingBudget(budget, this.config.maxTokens) }
-    } else if (this.config.thinking && !this.config.thinking.enabled) {
-      // Qwen actually honors disabled (unlike MiniMax which forces thinking on).
+      if (this.config.thinkingMode === 'adaptive' && this.config.thinkingBudgetTokens == null) {
+        // qwen3.8-*: `output_config.effort` is the doc's knob (`budget_tokens`
+        // is marked 即将废弃). Labels pass through — the API folds max/high onto xhigh.
+        body.thinking = { type: 'enabled' }
+        body.output_config = { effort: this.config.thinking.effort }
+      } else {
+        // Manual models (3.7 / 3.6 — the doc lists no effort values for them),
+        // or an agent.yaml with an explicit budget_tokens, kept as-is.
+        const budget = this.config.thinkingBudgetTokens
+          ?? effortToBudget(this.config.thinking.effort, this.config.maxTokens)
+        body.thinking = { type: 'enabled', budget_tokens: capThinkingBudget(budget, this.config.maxTokens) }
+      }
+    } else if (!this.config.thinking?.enabled) {
+      // Off must be explicit: the listed Qwen models think by default when the
+      // field is omitted. Qwen honors disabled (unlike MiniMax, which forces it on).
       body.thinking = { type: 'disabled' }
     }
 
