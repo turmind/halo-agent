@@ -195,6 +195,7 @@ Common things to surface:
 - **Stale memory/**: entries older than ~3 months whose topic is no longer relevant (a decision that's been superseded, a pitfall that was fixed). Auto-detecting staleness over-reaches — the dates and titles are evidence, but the call belongs to the user.
 - **Missing index entries**: docs that exist on disk but aren't linked from INDEX.md. List them and ask whether they belong.
 - **Section bloat**: an INSTRUCTIONS.md section that's grown into a wall of mixed-priority bullets. Suggest splitting or distilling.
+- **INDEX bloat**: INDEX.md is injected into every agent's prompt on every turn, so each section should stay a short paragraph (2–4 sentences + key state / code / doc links). Flag sections that carry protocol details, field lists or edge cases, and suggest moving that detail into the linked doc (create one under `docs/` if none exists) — check the detail is really there before cutting it from INDEX.
 - **Conflicting rules**: two bullets in INSTRUCTIONS.md that pull in opposite directions (e.g. "always run tests" + a later "skip tests for one-line fixes").
 - **Generic fluff** in INSTRUCTIONS.md ("write elegant code", "follow best practices") — gently flag, ask if the user wants it gone.
 
