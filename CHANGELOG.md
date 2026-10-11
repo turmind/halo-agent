@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Skills: the slash-command popup, the Skills page and the agent form's skill picker update live in every open admin tab when a skill is created, deleted, enabled or disabled — from the Skills tab, `/skill disable|enable|delete` in any chat or channel, the REST API, or an agent writing a workspace skill folder (new WS frame `skills:changed`).
+- Notebook kernel proxy: the channels socket forwards the client's `session_id` to Jupyter, so a client that reconnects after a page reload gets the output and replies its kernel sent meanwhile (ipynb 2.0.1 rejoins its running kernel after a reload).
+- Desktop (Windows): the installer now closes an orphaned bundled `node.exe` (its Halo window already gone) before upgrading. It looked processes up by a path the 32-bit installer can't read, so the orphan was never found and the installer kept prompting "Halo cannot be closed".
+
+### Changed
+
+- Cron: stateless jobs keep their newest 10 runs, and a pruned or deleted run takes its per-run session with it, unless that session is still running or the user continued it. Stateful jobs still keep 100 runs, and their session is never deleted.
+- INDEX.md (this repo) slimmed to short per-subsystem entries; the detail lives in the design docs. The workspace skill's tidy mode now flags an INDEX section that has grown past a short paragraph, since INDEX is injected into every agent's prompt on every turn.
+- CI: `actions/checkout` / `actions/setup-node` v4 → v7 (Node 24 runtime).
+
 ## [1.6.2] - 2026-10-11
 
 ### Fixed
