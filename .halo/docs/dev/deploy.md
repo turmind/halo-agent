@@ -77,7 +77,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 EOF
 sudo apparmor_parser -r /etc/apparmor.d/bwrap
 halo server restart && curl -s --retry 15 --retry-connrefused --retry-delay 1 localhost:9527/api/health   # "sandbox":"bwrap"
-# under systemd (Option C) restart with `sudo systemctl restart halo` instead
+# a unit-run server is restarted through systemctl (Option C: may need the printed `sudo systemctl restart halo`)
 ```
 
 Alternative: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (persist it in `/etc/sysctl.d/`). That also works, but it lifts the restriction for **every** program, not just bwrap.
@@ -163,7 +163,9 @@ sudo systemctl enable --now halo
 
 ### Option C: systemd for the npm install
 
-With `@turmind/halo` installed via npm (see [§8](#8-install-via-npm-recommended)), the unit runs the `halo` binary itself — no `WorkingDirectory`, and no `HALO_PASSWORD` once `halo setup` has stored the password hash (run setup as the same user):
+With `@turmind/halo` installed via npm (see [§8](#8-install-via-npm-recommended)) on Linux with systemd, the simple path is `halo server start -d`. It writes and enables the user unit `~/.config/systemd/user/halo.service` (`Restart=on-failure`, `RestartSec=5`), turns on linger so it starts at boot, and saves your shell's environment to `~/.halo/secrets/server.env` for it. If linger can't be enabled it still starts, and warns `sudo loginctl enable-linger <user>`.
+
+Write the system unit below when you want a system-level unit instead. If `start -d` already made the user unit, `systemctl --user disable --now halo` first, or both start at boot. Once a unit in `/etc/systemd/system/` runs `halo server start` as you (`User=` you, same HOME), `start -d` starts it instead of creating a user unit. The system unit runs the `halo` binary itself — no `WorkingDirectory`, and no `HALO_PASSWORD` once `halo setup` has stored the password hash (run setup as the same user):
 
 ```bash
 sudo tee /etc/systemd/system/halo.service <<'EOF'
@@ -188,7 +190,9 @@ sudo systemctl enable --now halo
 
 Use `which halo` for the `ExecStart` path (`/usr/bin/halo` with apt / NodeSource Node). Every start logs `[Server] Warning: monorepo root (pnpm-workspace.yaml) not found from /, falling back to cwd` — harmless for the npm install (the monorepo root only matters in a source checkout).
 
-Once the unit owns the server, manage it with `sudo systemctl restart|stop halo`, not `halo server restart|stop`. Those go through `server.lock`, so `stop` ends the unit's server with a clean exit (which `Restart=on-failure` leaves down), and `restart` hands it to a detached `-d` process outside systemd — after which `systemctl start halo` collides on the lock and keeps restarting. Upgrade with `halo upgrade && sudo systemctl restart halo`.
+Under either unit kind, `halo server stop|restart|status` find the unit that owns the server (the lock pid's cgroup) and go through `systemctl` (`--user` for the user unit). A system unit may need sudo: when polkit refuses, the command prints the exact `sudo systemctl restart|stop halo` line to run. Running that directly is equally valid. `stop` only stops the unit; it starts again at boot until you disable it (`systemctl --user disable halo`, or `sudo systemctl disable halo`). Upgrade with `halo upgrade && halo server restart`.
+
+**Known limits**: the user unit pins the Node binary that ran `start -d` (`process.execPath`), so after an nvm Node upgrade run `halo server restart` once to rewrite it.
 
 ### Crash semantics — why `Restart=on-failure` is load-bearing
 
@@ -199,18 +203,22 @@ half-taken locks and half-written files, and since the db is the source of truth
 — every daemon (cron / evo ticker / channels) reconciles from it on boot — a
 restart is a full recovery while a zombie process silently corrupts state.
 
-So the supervisor is what turns a crash into a ~5s blip: the unit above pairs
-`Restart=on-failure` (fires exactly on non-zero exit) with `RestartSec=5`.
-Docker deployments want an equivalent `restart:` policy. Under a bare `nohup
+So the supervisor is what turns a crash into a ~5s blip: the units above — and
+the user unit `halo server start -d` writes — pair `Restart=on-failure` (fires
+exactly on non-zero exit) with `RestartSec=5`. Docker deployments want an
+equivalent `restart:` policy. Under a bare `nohup
 node dist/index.js` / foreground `halo server start` there is still no
 supervisor — a crash is a hard stop, with the stack in
 `~/.halo/global/logs/server.log` for whoever restarts it.
 `unhandledRejection` is only logged, not fatal.
 
-**`halo server start -d` brings its own bounded supervisor.** The detached
-process `-d` spawns is not the server: it re-execs `halo server start`
-(foreground) with `HALO_SUPERVISE=1`, and *that* process supervises the real
-server as its child (`packages/cli/src/server-supervisor.ts`). Policy:
+**Off systemd, `halo server start -d` brings its own bounded supervisor** —
+on macOS, Windows, Linux without systemd, a HOME that isn't your passwd home,
+or a user manager the shell can't reach (on Linux `-d` prints a one-line note
+saying which). The detached process `-d` spawns is not the server: it re-execs
+`halo server start` (foreground) with `HALO_SUPERVISE=1`, and *that* process
+supervises the real server as its child (`packages/cli/src/server-supervisor.ts`).
+Policy:
 
 - **Restarts only on failure** — non-zero exit, or death by any signal other
   than `SIGTERM` / `SIGINT`. `SIGKILL` (OOM killer) and `SIGSEGV` count as
@@ -221,7 +229,9 @@ server as its child (`packages/cli/src/server-supervisor.ts`). Policy:
   server start -d`.
 - **2s pause between attempts**, so an instant-crash loop can't spin the CPU.
 - Every decision lands in the daemon log as `[respawn] …` — the stdout/stderr
-  capture `~/.halo/logs/server.log`, which `halo server logs` tails.
+  capture `~/.halo/logs/server.log`, which `halo server logs` tails. Only this
+  supervisor writes them; under the user unit a crash restart is systemd's
+  `RestartSec=5` (`systemctl --user status halo` shows it).
 
 `halo server stop` (and `--force`) is not mistaken for a crash: it stamps the
 server pid into a marker file `~/.halo/global/server.stop` *before* signalling,
@@ -234,9 +244,11 @@ one's marker.
 
 Pid ownership is unchanged: `~/.halo/global/server.lock` is still written and
 flock'd by the **server** process itself, so `halo server stop|restart|status`
-keep targeting the server exactly as before. The supervisor has no pidfile of
-its own; killing it directly leaves the server running as an orphan (same end
-state as the pre-supervisor `-d`), and `halo server stop` still stops it.
+target the server's own pid (or, for a unit-run server, its unit). The
+supervisor has no pidfile of its own; killing it directly leaves the server
+running as an orphan (same end state as the pre-supervisor `-d`), and `halo
+server stop` still stops it. On a systemd host, `halo server restart` moves a
+supervised `-d` server under the user unit.
 
 ## 6. Verify
 
@@ -279,8 +291,8 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 | `halo setup` | Interactive password / port / model keys / optional skills setup |
 | `halo setup --non-interactive` (alias `-y`) | Skip every prompt — seed templates only, supply password via `HALO_PASSWORD` env. Use in Dockerfiles / CI. |
 | `halo upgrade` | Bump the npm install in place. Compares the bundled version against `npm view @turmind/halo version`; no-op if already latest, otherwise runs `npm install -g @turmind/halo@latest` and prints a server-restart hint. On EACCES, suggests retrying with `sudo`. |
-| `halo server start` | Launch HTTP/WS server (foreground). Add `-d` for daemon. |
-| `halo server stop` / `restart` / `status` / `logs` | Server lifecycle |
+| `halo server start` | Launch HTTP/WS server (foreground). Add `-d` for daemon — on Linux with systemd, a user unit that starts at boot ([Option C](#option-c-systemd-for-the-npm-install)). |
+| `halo server stop` / `restart` / `status` / `logs` | Server lifecycle; a unit-run server goes through `systemctl` |
 | `halo tui` | Interactive TUI client |
 | `halo cli "<prompt>"` | One-shot prompt → reply, exit |
 | `halo agents` / `halo sessions` | List agents / sessions |
@@ -290,7 +302,7 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 ### Upgrade flow
 
 1. `halo upgrade` — bumps the on-disk npm package
-2. `halo server restart` (under systemd: `sudo systemctl restart halo`) — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts (`halo cli` / `halo tui` run the same check on start, so a CLI-only install refreshes without a server). Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
+2. `halo server restart` (under a user or system unit alike; `sudo systemctl restart halo` also works for a system unit) — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts (`halo cli` / `halo tui` run the same check on start, so a CLI-only install refreshes without a server). Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
 
 ### Public release command reference
 
@@ -308,7 +320,7 @@ Use only for a new public release; the retained details here are not extra prepa
 
 The published package contains a single bundled JS entry (~1.4 MB), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint is about 280 MB on disk (`du`; mostly `node_modules`).
 
-Two log files: `~/.halo/logs/server.log` is the stdout/stderr capture of `halo server start -d` (what `halo server logs` tails, including the supervisor's `[respawn]` lines); `~/.halo/global/logs/server.log` is the server's structured, rotated log (level `general.logging.level`, default `warn`).
+Two log files: `~/.halo/logs/server.log` is the stdout/stderr capture of `halo server start -d`, whether the user unit or the off-systemd supervisor runs it (what `halo server logs` tails; the supervisor's `[respawn]` lines appear only off systemd; a system unit logs to the journal instead); `~/.halo/global/logs/server.log` is the server's structured, rotated log (level `general.logging.level`, default `warn`).
 
 ### Non-interactive (Docker / CI) details
 

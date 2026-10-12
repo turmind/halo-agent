@@ -239,13 +239,22 @@ Normally run for you by `/extension models`, which downloads the hub's newest `m
 ## Server Mode (background daemon)
 
 `halo server start|stop|restart|status|logs` manages a local server from the
-same binary. `start -d` runs it in the background **with a bounded respawn
-supervisor**: the detached process supervises the server and brings it back on
-a crash (non-zero exit, or a kill by anything other than SIGTERM/SIGINT), at
-most 5 times per 5 minutes with a 2s pause, logging each decision as
-`[respawn] …` into `~/.halo/logs/server.log`. `halo server stop` is
-recognized as intentional and never respawns; `halo server stop|restart|status`
-still target the server's own pid. Full policy in
+same binary. On Linux with systemd, `start -d` (and `restart`) runs it as the
+user unit `~/.config/systemd/user/halo.service`, written and enabled for you
+with linger on, so it starts at boot and comes back 5s after a crash. Your
+shell's environment is saved to `~/.halo/secrets/server.env` for it. A system
+unit that already runs `halo server start` as you is started instead.
+`stop|restart|status` on a unit-run server go through `systemctl`, and print
+the `sudo systemctl …` line when a system unit needs it. See
+[dev/deploy.md](../dev/deploy.md#option-c-systemd-for-the-npm-install).
+
+Elsewhere (macOS, Windows, Linux without systemd, a redirected HOME, an
+unreachable user manager) `start -d` runs it in the background **with a bounded
+respawn supervisor**: the detached process supervises the server and brings it
+back on a crash (non-zero exit, or a kill by anything other than
+SIGTERM/SIGINT), at most 5 times per 5 minutes with a 2s pause, logging each
+decision as `[respawn] …` into `~/.halo/logs/server.log`. `halo server stop` is
+recognized as intentional and never respawns. Full policy in
 [dev/deploy.md](../dev/deploy.md#crash-semantics--why-restarton-failure-is-load-bearing).
 
 ## AgentCore runtime (`halo agentcore`)
@@ -280,7 +289,8 @@ packages/cli/
   src/
     index.ts        — Entry: subcommand dispatch (tui/cli/agents/sessions/server/setup/upgrade/acp), SIGINT/SIGTERM handling
     harness.ts      — Shared agent harness wrapping SessionManager
-    server-supervisor.ts — Respawn policy for `halo server start -d`
+    server-supervisor.ts — Respawn policy for `halo server start -d` off systemd
+    server-systemd.ts — Linux systemd path: user unit + env snapshot, unit routing for stop/restart/status
     cli.ts          — Non-interactive: stdin/args → agent → stdout → exit
     tui.tsx         — Interactive entry: mounts the ink app
     tui/

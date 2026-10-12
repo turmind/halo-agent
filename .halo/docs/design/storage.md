@@ -39,8 +39,11 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── settings.yaml                  # Global settings (API keys, credentials)
 │   ├── config.yaml                    # System config (admin password, server settings)
 │   ├── a2a-remotes.yaml               # A2A remote list (server-wide, full-only; see design/a2a.md)
+│   ├── server.env                     # Env snapshot for the systemd user unit (600), rewritten by `halo server start -d` / `restart`
 │   └── channels/
 │       └── channels.db                # Channel accounts DB
+
+~/.config/systemd/user/halo.service   # Outside ~/.halo: the user unit `halo server start -d` writes on Linux with systemd
 
 <workspace>/.halo/                    # Workspace-level (overrides same-name global configs)
 ├── USER.md                             # Optional, overrides global
