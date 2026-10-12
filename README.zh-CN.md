@@ -29,14 +29,14 @@ halo setup                     # 交互式：密码 / 端口 / 模型 key / 可�
 halo server start              # → 打开 http://localhost:9527
 ```
 
-任意一家模型 key 就能跑 —— Anthropic、OpenAI（或任何 OpenAI 兼容端点）、DeepSeek、Kimi、Qwen……**不需要** AWS 账号，Bedrock 只是[其中一个 provider](#模型)（而且可以不填 key，直接走 AWS 凭证链）。
+任意一家模型 key 就能跑 —— Anthropic、OpenAI（或任何 OpenAI 兼容端点）、Gemini、DeepSeek、Kimi、Qwen……**不需要** AWS 账号，Bedrock 只是[其中一个 provider](#模型)（而且可以不填 key，直接走 AWS 凭证链）。
 
 - **`sudo`**：系统级 Node（apt / NodeSource 装的）执行 `npm install -g` 要加 `sudo`；用 nvm / fnm 则不用。
 - **`halo setup` 里**：问到 *Configure model provider keys now?* 时选 **Configure…**（默认项）。选好 provider、粘贴 key，再选 **── Done**（列表最后一项，按 ↑ 可以直接绕到它），最后在 *Switch default agent to …* 上回车。
-- **远程主机上**：用 `halo server start -d`（不加 `-d` 会留在前台，SSH 一断就退出），再用 `ssh -L 9527:localhost:9527 user@host` 建隧道，在本机打开 `http://localhost:9527`。不要在安全组里放开 9527 —— 见[现状与局限](#现状与局限)。
-- **Linux 沙箱**：`workspace` / `readonly` 访问级别需要 `sudo apt install bubblewrap`，Ubuntu 23.10+ / 24.04 还要加上 [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)。缺了它，`/api/health` 显示 `sandbox: null`，非 full 会话无法执行 shell。
-- **升级**：`halo upgrade && halo server restart`；用 systemd 托管时改成 `halo upgrade && sudo systemctl restart halo`（见 [deploy.md Option C](.halo/docs/dev/deploy.md#option-c-systemd-for-the-npm-install)）。内置文档、Agent 和技能会在下次启动时自动刷新。
-- **Docker / CI**：`halo setup --non-interactive`。`HALO_PASSWORD` 只是*管理台*密码；`HALO_DEFAULT_PROVIDER=<provider>` 可免提示直接绑定内置 Agent。模型 key 写进 `~/.halo/secrets/settings.yaml`，例如在 `deepseek.secrets` 下写 `api_key: "<<DEEPSEEK_API_KEY>>"`，运行时再设置 `DEEPSEEK_API_KEY`（见 [env.md](.halo/docs/dev/env.md)）。
+- **远程主机上**：用 `halo server start -d`（不加 `-d` 会留在前台，SSH 一断就退出；在带 systemd 的 Linux 上，`-d` 会装成开机自启的用户服务），再用 `ssh -L 9527:localhost:9527 user@host` 建隧道，在本机打开 `http://localhost:9527`。不要在安全组里放开 9527 —— 见[现状与局限](#现状与局限)。
+- **Linux 沙箱**：`workspace` / `readonly` 访问级别需要 `sudo apt install bubblewrap`，Ubuntu 23.10+ / 24.04 还要加上 [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)。缺了它，server 启动时会给出警告和修法，`/api/health` 显示 `sandbox: null`，非 full 会话无法执行 shell。
+- **升级**：`halo upgrade && halo server restart`。由 systemd 托管的 server 会通过 `systemctl` 重启；system unit（见 [deploy.md Option C](.halo/docs/dev/deploy.md#option-c-systemd-for-the-npm-install)）可能需要 `sudo systemctl restart halo`。内置文档、Agent 和技能会在下次启动时自动刷新。
+- **Docker / CI**：`halo setup --non-interactive`，同时设好 `HALO_DEFAULT_PROVIDER=deepseek` 和 `DEEPSEEK_API_KEY`，就会绑定内置 Agent，并把 key 的占位符 `<<DEEPSEEK_API_KEY>>`（不是 key 本身）写进 `~/.halo/secrets/settings.yaml`；server 运行时也要设着这个变量（见 [deploy.md](.halo/docs/dev/deploy.md#non-interactive-docker--ci-details)）。`HALO_PASSWORD` 只是*管理台*密码。
 - **源码构建**：`pnpm install && pnpm build`（pnpm 11）。
 
 **桌面版**：[GitHub releases](https://github.com/turmind/halo-agent/releases) 里有 Windows x64 `.exe` 和 macOS（Apple Silicon）`.dmg`（不一定每个版本都两样齐全），内置 server、管理台和独立的 Node 运行时 —— 不需要 `npm`，`~/.halo/` 数据一致，以后可以随时切换。安装包未签名（macOS 提示「已损坏」→ `sudo xattr -dr com.apple.quarantine /Applications/Halo.app`；Windows 上 SmartScreen 可能会拦一下）。

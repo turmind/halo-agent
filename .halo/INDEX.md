@@ -12,7 +12,7 @@ halo setup                      # interactive: password / port / model keys / op
 halo server start               # launch on :9527 (default)
 ```
 
-Upgrade with `halo upgrade && halo server restart`; startup (server, `halo cli` / `halo tui`) refreshes bundled docs / agents / skills / model providers when the on-disk template version is behind. Docker / CI: `halo setup --non-interactive` + `HALO_PASSWORD`. Full guide: [dev/deploy.md](docs/dev/deploy.md).
+Needs Node.js 22+ (the bin shim refuses older Node). On Linux, `workspace` / `readonly` sessions need bubblewrap, and on Ubuntu 23.10+ / 24.04 an AppArmor profile for it ([deploy.md](docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)). `halo server start -d` on Linux with systemd runs it as a user unit. Upgrade with `halo upgrade && halo server restart`; on startup (server, `halo cli` / `halo tui`), bundled docs / agents / skills / model providers refresh when the on-disk template version is behind. Docker / CI: `halo setup --non-interactive` + `HALO_PASSWORD` (+ `HALO_DEFAULT_PROVIDER` and that provider's key env). Full guide: [dev/deploy.md](docs/dev/deploy.md).
 
 ## Tech Stack
 
@@ -20,7 +20,7 @@ Upgrade with `halo upgrade && halo server restart`; startup (server, `halo cli` 
 - **server**: Hono + WebSocket (API + agent orchestration + static frontend), port 9527
 - **admin**: Next.js 15 static export → `out/`, served by Hono
 - **core**: shared building blocks — `Workspace` / `GitManager`, the image MIME table (`media/mime.ts`), WS / extension protocol types
-- **Agent framework**: custom agent loop + per-provider runtime (Bedrock Claude, Kimi, DeepSeek, MiniMax, Qwen, Hunyuan, Doubao, GLM, generic OpenAI / Anthropic)
+- **Agent framework**: custom agent loop + per-provider runtime (Bedrock Claude, Gemini, Kimi, DeepSeek, MiniMax, Qwen, Hunyuan, Doubao, GLM, generic OpenAI / Anthropic)
 - **Storage**: SQLite + Drizzle ORM · **Runtime**: Node.js 22+, ESM · **UI**: React + Tailwind + shadcn/ui + Monaco + xterm.js
 
 Module map: [design/architecture.md](docs/design/architecture.md). Storage layout: [design/storage.md](docs/design/storage.md).
@@ -108,7 +108,7 @@ Installable static viewers for file types the editor can't preview (3D, draw.io,
 
 A standalone read-only pixel city of a server's runtime (workspaces = buildings, sessions = citizens), pure client-side, zero model tokens; polls `GET /api/show/state` with web-channel token auth.
 
-- Code: [halo-city/](halo-city/) + `packages/server/src/routes/halo-city.ts` · Doc: [design/halo-city.md](docs/design/halo-city.md)
+- Code: [halo-city/](../halo-city/) + `packages/server/src/routes/halo-city.ts` · Doc: [design/halo-city.md](docs/design/halo-city.md)
 
 ## AgentCore Runtime Mode
 

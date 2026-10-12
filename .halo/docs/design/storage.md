@@ -136,7 +136,7 @@ Path: `.halo/sessions/{agentId}/{sessionId}.json`
 }
 ```
 
-Written as **compact JSON** (no indent) by all five writers of this path — nothing reads it by eye. `messageCount` is `messages.length` and has a single writer (`saveSessionToFile`); it *shrinks* when a compact archives history, so the lifetime count for listings is `exchangeCount` (mirrored to sqlite, see [agent_sessions](#agent_sessions)). See [session.md](session.md#session-file-format).
+Written as **compact JSON** (no indent) by all five writers of this path — nothing reads it by eye. `messageCount` is `messages.length` and has a single writer (`saveSessionToFile`); it *shrinks* when a compact archives history, so the lifetime count for listings is `exchangeCount` (mirrored to sqlite, see [`agent_sessions`](#tables)). See [session.md](session.md#session-file-format).
 
 ### Archive segment file (UI-log archiving)
 
