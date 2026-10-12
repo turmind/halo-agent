@@ -40,8 +40,8 @@ const BASE_CFG = { modelId: 'm', endpoint: 'https://example.com', systemPrompt: 
 describe('bundled provider yamls', () => {
   const files = fs.readdirSync(BUNDLED).filter((f) => f.endsWith('.yaml'))
 
-  it('ships the 13 providers', () => {
-    expect(files).toHaveLength(13)
+  it('ships the 14 providers', () => {
+    expect(files).toHaveLength(14)
   })
 
   it.each(files)('%s names a runtime createModelRuntime accepts', (file) => {

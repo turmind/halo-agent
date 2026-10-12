@@ -1,0 +1,93 @@
+id: gemini
+runtime: gemini
+revision: 2026101201
+displayName: Google Gemini
+displayName_zh: Google Gemini
+description: Google Gemini 3.x via the Gemini API's OpenAI-compatible chat completions surface
+description_zh: Google Gemini 3.x，通过 Gemini API 的 OpenAI 兼容 chat completions 接口调用
+defaultEndpoint: https://generativelanguage.googleapis.com/v1beta/openai
+defaultModelId: gemini-3.8-flash
+
+secrets:
+  - key: api_key
+    description: Gemini API Key. Get from https://aistudio.google.com/apikey
+    description_zh: Gemini API Key。从 https://aistudio.google.com/apikey 获取
+    default: <<GEMINI_API_KEY>>
+    secret: true
+
+# Capabilities verified via live probes (2026-10-12) on the OpenAI-compatible
+# endpoint (Bearer auth; the runtime appends /chat/completions). Limits are
+# GET /v1beta/models inputTokenLimit / outputTokenLimit (1048576 / 65536).
+#
+# Why a `gemini` runtime and not plain openai-chat: Gemini 3 puts
+# `extra_content.google.thought_signature` on the first tool call of a reply
+# and 400s a follow-up that replays the call without it; it also ends
+# tool-call replies with finish_reason "stop", which OpenAIAgent reads as
+# end-of-turn (the tool never ran). gemini-agent.ts handles both.
+#
+# Thinking can't be switched off on Gemini 3 (doc + reasoning_effort "none"
+# 400s on 3.5-flash-lite, still thinks on 3.8-flash). Levels per model, from
+# the thinking doc's table and the API's own 400s: xhigh / max are invalid
+# everywhere, `minimal` 400s on 3.8-flash. The runtime sends the level as
+# extra_body.google.thinking_config.thinking_level + include_thoughts (the
+# summary streams inline as <thought>…</thought>, split out into thinking);
+# Off sends nothing — model default level, no summary.
+#
+# Caching is implicit: the same ~9.8K-token prefix sent twice came back with
+# prompt_tokens_details.cached_tokens 6121 on run 2 (3.5-flash-lite). The 5m
+# preset is a form hint only — nothing is sent.
+#
+# Not shipped: gemini-3.1-pro-preview — this key is free-tier and every call
+# 429s with quota limit 0, so the tool round-trip couldn't be probed. Aliases
+# (*-latest), image / tts / live / gemma / deep-research models are left out.
+models:
+  # Tool round-trip OK (signature replayed → 200; without it → 400).
+  # reasoning_effort low / medium / high 200, minimal 400.
+  - id: gemini-3.8-flash
+    displayName: Gemini 3.8 Flash
+    maxOutputTokens: 65536
+    contextWindow: 272000
+    maxContextWindow: 1048576
+    compressAt: 0.9
+    capabilities:
+      # Not probed on this id — its free-tier quota (20 requests/day) ran out
+      # first. The same image_url path read a 64×64 blue PNG on
+      # 3.5-flash-lite, 3.6-flash and gemini-flash-latest; flip after a probe.
+      image: false
+      video: false
+      audio: false
+      # promptCaching: not declared — caching wasn't probed on this id.
+      thinking:
+        # Always on server-side; the doc's default level is medium.
+        defaultEnabled: true
+        default: medium
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  # Tool round-trip OK; 64×64 blue PNG → "Blue"; implicit caching (above).
+  # reasoning_effort minimal / low / medium / high 200, none 400.
+  - id: gemini-3.5-flash-lite
+    displayName: Gemini 3.5 Flash-Lite
+    maxOutputTokens: 65536
+    contextWindow: 272000
+    maxContextWindow: 1048576
+    compressAt: 0.9
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # Always on server-side; the doc's default level is minimal.
+        defaultEnabled: true
+        default: minimal
+        effortPresets:
+          - { value: minimal, label: Minimal }
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }

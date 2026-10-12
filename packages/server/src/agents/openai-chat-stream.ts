@@ -141,6 +141,9 @@ export interface FetchChatCompletionStreamOptions {
   body: Record<string, unknown>
   signal: AbortSignal | undefined
   onDelta?: (delta: ModelDelta) => void
+  /** Each raw frame, before the fold — for vendor fields the accumulator
+   *  drops (Gemini's tool-call `extra_content.google.thought_signature`). */
+  onChunk?: (chunk: ChatCompletionChunk) => void
   /** Agent tag for error messages, e.g. `DeepSeekAgent` → `[DeepSeekAgent] API error 429: …`. */
   tag: string
 }
@@ -180,6 +183,7 @@ export async function fetchChatCompletionStream(opts: FetchChatCompletionStreamO
       // same `<code>: <message>` form as MantleAgent's stream errors.
       throw new Error(`[${tag}] API error in stream: ${streamErrorText(chunk.error)}`)
     }
+    opts.onChunk?.(chunk)
     acc.push(chunk)
   }
   // Same guard as fetchAnthropicStream: a body that ends cleanly at the abort instant must not come back as a completed call.

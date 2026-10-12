@@ -18,6 +18,7 @@ import { QwenAgent } from './qwen-agent.js'
 import { HunyuanAgent } from './hunyuan-agent.js'
 import { DoubaoAgent } from './doubao-agent.js'
 import { ZhipuAgent } from './zhipu-agent.js'
+import { GeminiAgent } from './gemini-agent.js'
 import { OpenAIAgent } from './openai-agent.js'
 import { MantleAgent } from './mantle-agent.js'
 import { AnthropicAgent } from './anthropic-agent.js'
@@ -177,6 +178,16 @@ export function createModelRuntime(runtime: string, cfg: ModelRuntimeConfig): Mo
       })
     case 'zhipu':
       return new ZhipuAgent({
+        modelId: cfg.modelId,
+        endpoint: cfg.endpoint,
+        apiKey: cfg.apiKey ?? '',
+        systemPrompt: cfg.systemPrompt,
+        tools: cfg.tools,
+        maxTokens: cfg.maxTokens,
+        thinking: cfg.thinking,
+      })
+    case 'gemini':
+      return new GeminiAgent({
         modelId: cfg.modelId,
         endpoint: cfg.endpoint,
         apiKey: cfg.apiKey ?? '',

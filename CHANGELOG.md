@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Explorer: Download works on folders and the whole workspace. A confirm shows the approximate size and file count first, and you get one zip that the server streams as it builds; `node_modules`, `.git` and other build/cache folders are left out unless you tick the checkbox, `.env` files, secrets and Halo session data always are, and `_halo-excluded.txt` in the zip lists what was left out.
+- Models: Google Gemini provider (`gemini`, key `GEMINI_API_KEY`) — Gemini 3.8 Flash (default) and 3.5 Flash-Lite over the Gemini API's OpenAI-compatible endpoint, with tool calls, streaming thinking summaries, implicit prompt caching and image input on Flash-Lite. A small `gemini` runtime replays Gemini 3's tool-call thought signatures and fixes its `stop` finish reason on tool-call replies, which plain OpenAI-compatible mode can't do — so the hub copy needs this release.
 
 ### Fixed
 

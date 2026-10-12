@@ -5,10 +5,10 @@
  *   POST <endpoint>/chat/completions
  *   Authorization: Bearer <key>
  *
- * Use this provider for native OpenAI (api.openai.com), Gemini's OpenAI
- * compatibility surface (generativelanguage.googleapis.com/v1beta/openai),
- * and most third-party "OpenAI-compatible" gateways. Brand-specific
- * providers like `kimi` / `deepseek` / `doubao` / `hunyuan` ship their
+ * Use this provider for native OpenAI (api.openai.com) and most third-party
+ * "OpenAI-compatible" gateways. Brand-specific providers like `kimi` /
+ * `deepseek` / `doubao` / `hunyuan` / `gemini` (tool-call thought_signature
+ * round-trip, see gemini-agent.ts) ship their
  * own classes because of subtle quirks (cache field naming, thinking
  * shape, tool call shape) — this class assumes baseline OpenAI behavior
  * and is forgiving about cache field aliases.

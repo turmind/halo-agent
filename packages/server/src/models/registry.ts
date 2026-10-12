@@ -27,7 +27,7 @@ import { globalHubModelsDir, globalModelsDir } from '../paths.js'
  *  subclasses keep their vendor name. */
 export const MODEL_RUNTIME_NAMES = [
   'anthropic-messages', 'openai-chat', 'bedrock-invoke', 'bedrock-mantle',
-  'kimi', 'deepseek', 'minimax', 'qwen', 'hunyuan', 'doubao', 'zhipu',
+  'kimi', 'deepseek', 'minimax', 'qwen', 'hunyuan', 'doubao', 'zhipu', 'gemini',
 ] as const
 
 export type ProviderSource = 'bundled' | 'hub'
