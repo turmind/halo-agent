@@ -122,7 +122,7 @@ my-project/
 | pnpm 11 | 仅源码构建需要 |
 
 - **把 Provider 绑到 Agent 上**：用哪家是 Agent 自己的配置，内置 `default` Agent 出厂指向 AWS Bedrock。你配了别家时，`halo setup` 最后会问要不要把内置的 `default` / `executor` / `deep-executor` 改绑过去（只配了一家且没填 Bedrock key 时，直接回车就是绑）。跳过了？重跑 `halo setup`，或去 **Agents → default → model provider** 切一次。目标模式和 `/evo` 用的是各自的 Agent（`goal`、`__evo_agent__`、`__score__`、`__apply_agent__`），它们仍留在 Bedrock 上 —— 不用 Bedrock 的话，去 **Agents** 里把它们也改绑。
-- **升级**：`halo upgrade && halo server restart`。启动检查会在磁盘模板版本落后时自动刷新内置文档 / Agent / 技能。
+- **升级**：`halo upgrade && halo server restart`（用 systemd 托管时改成 `halo upgrade && sudo systemctl restart halo`，见 [deploy.md Option C](.halo/docs/dev/deploy.md#option-c-systemd-for-the-npm-install)）。启动检查会在磁盘模板版本落后时自动刷新内置文档 / Agent / 技能。
 - **Docker / CI**：`halo setup --non-interactive`；`HALO_PASSWORD` 只是*管理台*密码，`HALO_DEFAULT_PROVIDER=<provider>` 可免提示直接绑定内置 Agent。模型 key 写进 `~/.halo/secrets/settings.yaml` —— 例如在 `deepseek.secrets` 下写 `api_key: "<<DEEPSEEK_API_KEY>>"`，运行时再设置 `DEEPSEEK_API_KEY` 环境变量（见 [env.md](.halo/docs/dev/env.md)）。
 - **源码构建**：`pnpm install && pnpm build`。
 

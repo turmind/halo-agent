@@ -49,7 +49,7 @@ Nginx is **not required**. Use it only for domain routing, SSL termination, or w
 
 ## Prerequisites
 
-- Node.js ≥ 22 — Ubuntu 24.04's apt `nodejs` is 18 and crashes Halo (`Invalid regular expression flags`); use NodeSource (`curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`), `brew install node@22`, or nvm / fnm
+- Node.js ≥ 22 — Ubuntu 24.04's apt `nodejs` is 18 and crashes Halo (`Invalid regular expression flags`); use NodeSource (`curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`), `brew install node@22`, or nvm / fnm. On a just-booted cloud VM the first `apt-get install` can fail on the dpkg lock (`Could not get lock …`, exit 100) while cloud-init / the SSM agent is still installing packages — wait a minute and rerun
 - pnpm 11 — source builds only (pinned by the root `packageManager`; `corepack enable` picks it up)
 - AWS credentials — optional, only for the Bedrock providers (`~/.aws/credentials`, env vars, or an instance role)
 - bubblewrap (Linux) — needed for the `workspace` / `readonly` access levels: `sudo apt install bubblewrap`; on Ubuntu 23.10+ / 24.04 also the [AppArmor profile](#bubblewrap-on-ubuntu-2310-and-2404-apparmor)
@@ -76,7 +76,8 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 }
 EOF
 sudo apparmor_parser -r /etc/apparmor.d/bwrap
-halo server restart && curl -s localhost:9527/api/health   # "sandbox":"bwrap"
+halo server restart && curl -s --retry 15 --retry-connrefused --retry-delay 1 localhost:9527/api/health   # "sandbox":"bwrap"
+# under systemd (Option C) restart with `sudo systemctl restart halo` instead
 ```
 
 Alternative: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (persist it in `/etc/sysctl.d/`). That also works, but it lifts the restriction for **every** program, not just bwrap.
@@ -187,6 +188,8 @@ sudo systemctl enable --now halo
 
 Use `which halo` for the `ExecStart` path (`/usr/bin/halo` with apt / NodeSource Node). Every start logs `[Server] Warning: monorepo root (pnpm-workspace.yaml) not found from /, falling back to cwd` — harmless for the npm install (the monorepo root only matters in a source checkout).
 
+Once the unit owns the server, manage it with `sudo systemctl restart|stop halo`, not `halo server restart|stop`. Those go through `server.lock`, so `stop` ends the unit's server with a clean exit (which `Restart=on-failure` leaves down), and `restart` hands it to a detached `-d` process outside systemd — after which `systemctl start halo` collides on the lock and keeps restarting. Upgrade with `halo upgrade && sudo systemctl restart halo`.
+
 ### Crash semantics — why `Restart=on-failure` is load-bearing
 
 The server **exits 1 on any uncaught exception** (`process.on('uncaughtException')`
@@ -287,7 +290,7 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 ### Upgrade flow
 
 1. `halo upgrade` — bumps the on-disk npm package
-2. `halo server restart` — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts (`halo cli` / `halo tui` run the same check on start, so a CLI-only install refreshes without a server). Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
+2. `halo server restart` (under systemd: `sudo systemctl restart halo`) — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts (`halo cli` / `halo tui` run the same check on start, so a CLI-only install refreshes without a server). Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
 
 ### Public release command reference
 
@@ -325,13 +328,15 @@ deepseek:
     api_key: "<<DEEPSEEK_API_KEY>>"
 ```
 
+The variable must be set wherever the file is read — the server and `halo cli` / `tui` alike; under systemd add `Environment=DEEPSEEK_API_KEY=…` or an `EnvironmentFile=` to the unit. If you create the file yourself (as the Dockerfile below does) instead of editing the one `halo setup` wrote, `chmod 600` it.
+
 Minimal Dockerfile:
 
 ```dockerfile
 FROM node:22-slim
 RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap && rm -rf /var/lib/apt/lists/*
 RUN npm install -g @turmind/halo
-RUN mkdir -p -m 700 /root/.halo/secrets && printf 'deepseek:\n  secrets:\n    api_key: "<<DEEPSEEK_API_KEY>>"\n' > /root/.halo/secrets/settings.yaml   # key comes from `docker run -e DEEPSEEK_API_KEY=…`
+RUN mkdir -p -m 700 /root/.halo/secrets && printf 'deepseek:\n  secrets:\n    api_key: "<<DEEPSEEK_API_KEY>>"\n' > /root/.halo/secrets/settings.yaml && chmod 600 /root/.halo/secrets/settings.yaml   # key comes from `docker run -e DEEPSEEK_API_KEY=…`
 ENV HALO_PASSWORD=changeme HALO_DEFAULT_PROVIDER=deepseek
 ENV HALO_PORT=9527
 EXPOSE 9527

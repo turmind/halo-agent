@@ -122,7 +122,7 @@ Published on npm as [`@turmind/halo`](https://www.npmjs.com/package/@turmind/hal
 | pnpm 11 | source builds only |
 
 - **Bind your provider to the agent**: agents choose providers, and the built-in `default` agent ships pointing at AWS Bedrock. When you configure a different provider, `halo setup` ends by offering to rebind the built-in `default` / `executor` / `deep-executor` agents to it (with a single provider and no Bedrock keys, Enter accepts). Skipped it? Re-run `halo setup`, or switch once in **Agents → default → model provider**. Goal mode and `/evo` run their own agents (`goal`, `__evo_agent__`, `__score__`, `__apply_agent__`), which stay on Bedrock — rebind them under **Agents** if you don't use Bedrock.
-- **Upgrade**: `halo upgrade && halo server restart`. The startup check refreshes bundled docs / agents / skills automatically when the on-disk template version is behind.
+- **Upgrade**: `halo upgrade && halo server restart` (under systemd: `halo upgrade && sudo systemctl restart halo` — see [deploy.md Option C](.halo/docs/dev/deploy.md#option-c-systemd-for-the-npm-install)). The startup check refreshes bundled docs / agents / skills automatically when the on-disk template version is behind.
 - **Docker / CI**: `halo setup --non-interactive`; `HALO_PASSWORD` is the *admin* password only, and `HALO_DEFAULT_PROVIDER=<provider>` binds the built-in agents without a prompt. Model keys go in `~/.halo/secrets/settings.yaml` — e.g. `api_key: "<<DEEPSEEK_API_KEY>>"` under `deepseek.secrets`, with `DEEPSEEK_API_KEY` set at runtime ([env.md](.halo/docs/dev/env.md)).
 - **From source**: `pnpm install && pnpm build`.
 
