@@ -44,7 +44,7 @@ interface Fake {
 }
 let fake: Fake
 /** Spawn calls: `--version` probes and `server` starts. */
-let spawns: { args: string[]; env: NodeJS.ProcessEnv }[]
+let spawns: { args: string[]; env: NodeJS.ProcessEnv; cwd?: string }[]
 let probeResult: { code: number; stdout: string; stderr?: string }
 let startDelayMs: number
 let servers: FakeChild[]
@@ -123,7 +123,7 @@ function startFakeServer(child: FakeChild, port: number, token: string): void {
 }
 
 const fakeSpawn = (_cmd: string, args: string[], opts: SpawnOptions): ChildProcess => {
-  spawns.push({ args, env: opts.env ?? {} })
+  spawns.push({ args, env: opts.env ?? {}, cwd: opts.cwd?.toString() })
   const child = new FakeChild()
   if (args.includes('--version')) {
     setImmediate(() => {
@@ -267,6 +267,7 @@ describe('status', () => {
     await req('/api/jupyter/status')
     expect(spawns.map((s) => s.args)).toEqual([['server', '--version']])
     expect(spawns[0].env.HALO_JWT_SECRET).toBeUndefined()
+    expect(spawns[0].cwd).toBe(os.homedir())
   })
 
   it('disabled → enabled:false, available:false; kernelspecs 503; nothing spawned', async () => {
@@ -304,7 +305,8 @@ describe('server start', () => {
     expect([a.status, b.status, c.status]).toEqual([200, 200, 200])
     expect(await a.json()).toEqual({ default: 'python3', specs: [{ name: 'python3', displayName: 'Python 3 (ipykernel)', language: 'python' }] })
     expect(serverStarts()).toBe(1)
-    const { args, env } = spawns.find((s) => !s.args.includes('--version'))!
+    const { args, env, cwd } = spawns.find((s) => !s.args.includes('--version'))!
+    expect(cwd).toBe(os.homedir())
     expect(args).toEqual(expect.arrayContaining([
       'server', '--no-browser', '--ServerApp.ip=127.0.0.1', '--ServerApp.port_retries=0', '--ServerApp.root_dir=/',
       '--ServerApp.terminals_enabled=False', '--ServerApp.shutdown_no_activity_timeout=600',

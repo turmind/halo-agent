@@ -54,9 +54,15 @@
 ; one (SysWOW64), and there Get-Process can't read a 64-bit process's module
 ; path — .Path is empty, the filter matches nothing, and the orphan survives.
 ; CIM reads the image path from any bitness.
+;
+; $INSTDIR reaches PowerShell through the env (HALO_INSTDIR, inherited by the
+; nsExec child), NOT spliced into the command: inside a PS '...' literal a `'`
+; in the path ends the string, and `-like` reads `[` / `]` as wildcards. The
+; match is a literal case-insensitive prefix test instead.
 !macro customCheckAppRunning
   nsExec::Exec '"$SYSDIR\taskkill.exe" /im "${APP_EXECUTABLE_FILENAME}" /T /F'
-  nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'node.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
+  System::Call 'kernel32::SetEnvironmentVariable(t "HALO_INSTDIR", t "$INSTDIR")'
+  nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'node.exe' -and $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith($$env:HALO_INSTDIR + '\', [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
   Sleep 500   ; give the OS a moment to release the file locks before we overwrite
 !macroend
 

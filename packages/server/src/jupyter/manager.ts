@@ -24,6 +24,7 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:c
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import net, { type AddressInfo } from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 import { WebSocket } from 'ws'
 import { cleanChildEnv } from '../child-env.js'
@@ -100,7 +101,8 @@ export function createJupyterManager(deps: JupyterDeps = {}) {
       let err = ''
       let child: ChildProcess
       try {
-        child = spawnFn(exe, ['server', '--version'], { env: cleanChildEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+        // cwd: homedir, not the inherited server cwd (desktop: inside the install dir, which a live child would hold open).
+        child = spawnFn(exe, ['server', '--version'], { cwd: os.homedir(), env: cleanChildEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
       } catch (e) {
         resolve({ ok: false, error: errMsg(e) })
         return
@@ -181,7 +183,8 @@ export function createJupyterManager(deps: JupyterDeps = {}) {
       // its terminal does too, and kernels match the terminal.
       ...(process.getuid?.() === 0 ? ['--ServerApp.allow_root=True'] : []),
     ]
-    const child = spawnFn(exe, args, { env: { ...cleanChildEnv(), JUPYTER_TOKEN: token }, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
+    // cwd: homedir, not the inherited server cwd (desktop: inside the install dir, which a live jupyter would hold open past the installer's node.exe-only orphan kill).
+    const child = spawnFn(exe, args, { cwd: os.homedir(), env: { ...cleanChildEnv(), JUPYTER_TOKEN: token }, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
     proc = child
     // jupyter logs everything to stderr: drain it (a full pipe blocks the
     // server), keep the tail for a start failure.
