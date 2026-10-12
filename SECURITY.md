@@ -14,4 +14,9 @@ There's no SLA, but security reports get priority over feature work.
 
 ## Known Boundaries
 
-The bubblewrap sandbox isolates the filesystem, not the network — code running inside it can still make outbound connections. See [Status & Limitations](README.md#status--limitations) for the full threat model.
+- The OS sandbox (bubblewrap on Linux, Seatbelt on macOS) limits writes and hides credential paths in `workspace` / `readonly` sessions; it does not isolate the network, and the rest of the host filesystem stays readable.
+- Windows has no sandbox: a `workspace` session is effectively `full`, and `readonly` can read any path the halo process can.
+- The admin is single-tenant and serves plain HTTP on all interfaces; holding the admin cookie means full control of the server. Put it behind a firewall, VPN, SSH tunnel or a TLS reverse proxy.
+- Preview extensions run same-origin with the admin and are trusted like skills — install only ones you trust.
+
+See [Status & Limitations](README.md#status--limitations) for the full threat model.

@@ -4,7 +4,7 @@
  * Used in two places:
  *   - admin password login (auth.ts) — keyed by IP, "wrong password" → record
  *   - public web-channel routes (routes/web.ts) — keyed by IP, "bad token" →
- *     record. The token space is 256 random bits so we're not really
+ *     record. The token space is 192 random bits so we're not really
  *     defending against guessing — we're defending against an attacker
  *     hammering the SSE / chat endpoints with bad tokens to burn server
  *     capacity. 5 strikes in 15 min = lockout is generous enough that

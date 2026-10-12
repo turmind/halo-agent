@@ -16,7 +16,7 @@ assignees: ''
 <!-- e.g. macOS 14, Ubuntu 22.04, Windows 11 -->
 
 **Channel**
-<!-- Admin / Web / Telegram / Slack / Feishu / WeChat / CLI / ACP -->
+<!-- Admin / Web / Telegram / Slack / Feishu / WeCom / WeChat / CLI / TUI / ACP -->
 
 **Steps to reproduce**
 <!-- 1. ... 2. ... 3. ... -->
