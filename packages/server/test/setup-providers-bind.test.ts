@@ -5,8 +5,9 @@ import path from 'node:path'
 
 /**
  * Contract for the default-agent provider binding added for onboarding:
- * `halo setup` can rebind the user-facing built-in agents (default /
- * executor / deep-executor) to a provider whose keys were just configured,
+ * `halo setup` can rebind every built-in agent (default / executor /
+ * deep-executor, plus the internal evolution trio and goal judge) to a
+ * provider whose keys were just configured,
  * deriving model id / endpoint / caching / thinking from the bundled
  * templates/models/<id>.yaml — so "fresh setup → server start → first
  * message" works without touching the Agents panel.
@@ -14,6 +15,8 @@ import path from 'node:path'
  * GLOBAL_AGENTS_DIR / SETTINGS_PATH resolve from os.homedir() at module load
  * → redirect HOME to a temp dir BEFORE the dynamic import.
  */
+
+const ALL_BUILTIN = ['default', 'executor', 'deep-executor', '__evo_agent__', '__score__', '__apply_agent__', 'goal']
 
 let tmpHome: string
 let agentsDir: string
@@ -43,7 +46,7 @@ afterAll(() => {
 
 beforeEach(() => {
   fs.rmSync(path.join(tmpHome, '.halo'), { recursive: true, force: true })
-  for (const id of ['default', 'executor', 'deep-executor']) {
+  for (const id of ALL_BUILTIN) {
     fs.mkdirSync(path.join(agentsDir, id), { recursive: true })
     fs.writeFileSync(path.join(agentsDir, id, 'agent.yaml'), DEFAULT_AGENT_YAML)
   }
@@ -83,10 +86,13 @@ describe('listConfiguredSwitchableProviders', () => {
 })
 
 describe('bindBuiltinAgentsToProvider', () => {
-  it('rebinds all three user-facing agents with the provider template defaults', () => {
+  it('rebinds every built-in agent (user-facing + internal) with the provider template defaults', () => {
     const res = mod.bindBuiltinAgentsToProvider('deepseek')
     expect(res).not.toBeNull()
-    expect(res!.agents.sort()).toEqual(['deep-executor', 'default', 'executor'])
+    expect(res!.agents.sort()).toEqual([...ALL_BUILTIN].sort())
+    for (const id of ALL_BUILTIN) {
+      expect(fs.readFileSync(path.join(agentsDir, id, 'agent.yaml'), 'utf-8')).toContain('provider: deepseek')
+    }
     const raw = fs.readFileSync(path.join(agentsDir, 'default', 'agent.yaml'), 'utf-8')
     expect(raw).toContain('provider: deepseek')
     expect(raw).toContain('id: deepseek-v4-pro') // defaultModelId absent → first model
@@ -117,6 +123,21 @@ describe('bindBuiltinAgentsToProvider', () => {
   it('skips missing agent dirs instead of failing the whole bind', () => {
     fs.rmSync(path.join(agentsDir, 'deep-executor'), { recursive: true, force: true })
     const res = mod.bindBuiltinAgentsToProvider('deepseek')
-    expect(res!.agents.sort()).toEqual(['default', 'executor'])
+    expect(res!.agents.sort()).toEqual(ALL_BUILTIN.filter((id) => id !== 'deep-executor').sort())
+  })
+
+  it('REBIND_USER_AGENT_IDS (named in setup output) is exactly the user-facing three', () => {
+    expect(mod.REBIND_USER_AGENT_IDS).toEqual(['default', 'executor', 'deep-executor'])
+  })
+
+  it('the rebound model block survives a template reseed for every built-in agent', async () => {
+    const { ensureHaloHome } = await import('../src/init.js')
+    mod.bindBuiltinAgentsToProvider('deepseek')
+    ensureHaloHome(path.join(tmpHome, '.halo'))
+    for (const id of ALL_BUILTIN) {
+      const raw = fs.readFileSync(path.join(agentsDir, id, 'agent.yaml'), 'utf-8')
+      expect(raw, id).toContain('provider: deepseek')
+      expect(raw, id).not.toContain('aws-bedrock-claude-invoke')
+    }
   })
 })

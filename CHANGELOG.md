@@ -14,12 +14,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - `halo server` on Linux with systemd: `start -d` and `restart` now run the server as a systemd user service (`~/.config/systemd/user/halo.service`, written and enabled for you, with linger turned on so it starts at boot and comes back 5 s after a crash). Your shell's environment is saved to `~/.halo/secrets/server.env` for it. If a system unit already runs `halo server start` as you, like the `halo.service` in the deploy guide, that unit is started instead. `stop`, `restart` and `status` on a server a systemd unit runs now go through `systemctl` (a system unit may need `sudo`). Before, `restart` started a second server outside the unit, and the unit then kept failing with "another halo server is already running". An existing `-d` server moves under the service on the next `halo server restart`. macOS, Windows and Linux without systemd keep the built-in `-d` supervisor.
+- `halo setup`: the model-key step now defaults to **Configure…** instead of Skip, and binding to a provider rebinds every built-in agent, including the internal `/evo` ones, which used to stay on Bedrock.
+- `halo setup -y` with `HALO_DEFAULT_PROVIDER=<id>`: when that provider's key variable is set (e.g. `DEEPSEEK_API_KEY`), setup writes its `<<NAME>>` placeholder into `settings.yaml`, so a Docker / CI install needs no hand-written settings file. The key itself is never stored; Bedrock is left to the AWS credential chain.
+- `halo --version` prints to stdout, so `$(halo --version)` works. Scripts that used `2>&1` keep working.
 
 ### Fixed
 
 - Observability: a changed or cleared `general.observability.endpoint` (and headers / service name) now reaches cron and evolution runs on their next run. Before, they kept the value the server booted with until the server restarted; the server's own export still switches on restart.
 - Desktop (Windows): the installer's leftover-process cleanup no longer breaks when the install path contains `'`, and treats `[` `]` in it literally.
 - Notebook: the Jupyter server starts in the home folder instead of the Halo server's working directory, so on the desktop app it no longer keeps the install folder open.
+- `halo` on Node.js older than 22 exits with the version it found and how to upgrade, instead of crashing with `Invalid regular expression flags`.
+- `halo cli "<prompt>"` no longer hangs when stdin is open but idle (ssh without `-t`, CI): with a positional prompt, stdin is read only if data arrives within 0.5 s. With no prompt argument it still waits for stdin, and after 1 s prints a hint saying so.
+- Server startup: the server now always prints a line saying it is listening, whatever the log level, so `halo server start` in the foreground no longer looks silent. The line gives the real address. With no host set, the server listens on all network interfaces; the line says so and adds a note on exposure. It used to claim `localhost`. A bundle install no longer prints the "monorepo root not found" warning on every start.
+- OS sandbox warning: when bubblewrap is missing, or AppArmor stops it from creating namespaces, the server warns once at boot with the specific fix (`apt install bubblewrap`, or a link to the AppArmor profile). `halo cli` / `tui` print the same warning only for `--access workspace|readonly`, the cases where shell_exec actually stops working. Before, every CLI command repeated a warning that gave no fix.
 
 ## [1.6.3] - 2026-10-11
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildBindProviderPlan, KEEP_CURRENT, AWS_CHAIN_PROVIDER } from '../src/setup-bind-provider.js'
+import { buildBindProviderPlan, envKeyPlaceholders, KEEP_CURRENT, AWS_CHAIN_PROVIDER } from '../src/setup-bind-provider.js'
 
 /**
  * Contract for the setup step that closes the "provider key configured but
@@ -63,5 +63,72 @@ describe('buildBindProviderPlan', () => {
     const plan = buildBindProviderPlan([deepseek], 'kimi', false)!
     expect(plan.intro.join('\n')).not.toMatch(/credential chain/i)
     expect(plan.options.map((o) => o.value)).toEqual(['deepseek', KEEP_CURRENT])
+  })
+})
+
+/**
+ * `setup -y` + HALO_DEFAULT_PROVIDER: the opt-in env-key wiring. Invariants:
+ * only the placeholder `<<NAME>>` is ever written (never the key itself), only
+ * when NAME is set, and a leaf that already holds it is not rewritten.
+ */
+describe('envKeyPlaceholders', () => {
+  const fields = [{ key: 'api_key', envFallback: 'DEEPSEEK_API_KEY' }, { key: 'region' }]
+  const store = (init: Record<string, string> = {}) => {
+    const data: Record<string, string> = { ...init }
+    const writes: Array<[string, string]> = []
+    return {
+      data,
+      writes,
+      read: (p: string) => data[p],
+      write: (p: string, v: string) => { data[p] = v; writes.push([p, v]) },
+    }
+  }
+
+  it('env var set → writes the <<NAME>> placeholder, never the literal key', () => {
+    const s = store()
+    const lines = envKeyPlaceholders('deepseek', fields, { DEEPSEEK_API_KEY: 'sk-live-123' }, s.read, s.write)
+    expect(s.writes).toEqual([['deepseek.secrets.api_key', '<<DEEPSEEK_API_KEY>>']])
+    expect(JSON.stringify(s.data)).not.toContain('sk-live-123')
+    expect(lines).toEqual([
+      '[setup] deepseek.secrets.api_key → <<DEEPSEEK_API_KEY>> (expanded from env at runtime — set it for the server and halo cli alike)',
+    ])
+  })
+
+  it('overwrites a different existing value (e.g. a literal key) with the placeholder', () => {
+    const s = store({ 'deepseek.secrets.api_key': 'sk-old' })
+    envKeyPlaceholders('deepseek', fields, { DEEPSEEK_API_KEY: 'sk-new' }, s.read, s.write)
+    expect(s.data['deepseek.secrets.api_key']).toBe('<<DEEPSEEK_API_KEY>>')
+  })
+
+  it('already exactly <<NAME>> → no write, no line (idempotent)', () => {
+    const s = store({ 'deepseek.secrets.api_key': '<<DEEPSEEK_API_KEY>>' })
+    expect(envKeyPlaceholders('deepseek', fields, { DEEPSEEK_API_KEY: 'x' }, s.read, s.write)).toEqual([])
+    expect(s.writes).toEqual([])
+  })
+
+  it('env var unset or empty → warning, nothing written', () => {
+    for (const env of [{}, { DEEPSEEK_API_KEY: '' }]) {
+      const s = store()
+      expect(envKeyPlaceholders('deepseek', fields, env, s.read, s.write)).toEqual([
+        '[setup] WARNING: DEEPSEEK_API_KEY not set — deepseek has no key',
+      ])
+      expect(s.writes).toEqual([])
+    }
+  })
+
+  it('fields without an env default are left alone', () => {
+    const s = store()
+    envKeyPlaceholders('deepseek', [{ key: 'region' }], { REGION: 'x' }, s.read, s.write)
+    expect(s.writes).toEqual([])
+  })
+
+  it('Bedrock is skipped — the AWS credential chain reads AWS_* itself', () => {
+    const s = store()
+    const awsFields = [
+      { key: 'access_key_id', envFallback: 'AWS_ACCESS_KEY_ID' },
+      { key: 'secret_access_key', envFallback: 'AWS_SECRET_ACCESS_KEY' },
+    ]
+    expect(envKeyPlaceholders(AWS_CHAIN_PROVIDER, awsFields, { AWS_ACCESS_KEY_ID: 'AKIA', AWS_SECRET_ACCESS_KEY: 's' }, s.read, s.write)).toEqual([])
+    expect(s.writes).toEqual([])
   })
 })

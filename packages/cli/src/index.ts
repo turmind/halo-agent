@@ -118,7 +118,9 @@ const HELP_CLI = `Usage: halo cli [options] "<prompt>"
        echo "<prompt>" | halo cli [options]
 
 Run a one-shot prompt and exit. Combines positional args + stdin into
-the message; stdin is appended after positional text.
+the message; stdin is appended after positional text. With a positional
+prompt, stdin is only read if data arrives within 0.5s (an open but idle
+stdin — ssh without -t, CI — is ignored); without one, stdin is read to EOF.
 
 Options:
   -w, --workspace <path>     Workspace path (default: cwd)
@@ -397,8 +399,9 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
   const {
     listModelProviders, listOptionalSkills, listRequiredSkillsWithSecrets,
     listConfiguredSwitchableProviders, readDefaultAgentProvider, bindBuiltinAgentsToProvider,
+    REBIND_USER_AGENT_IDS,
   } = await import('@turmind/halo-server/setup-providers')
-  const { buildBindProviderPlan, KEEP_CURRENT, AWS_CHAIN_PROVIDER } = await import('./setup-bind-provider.js')
+  const { buildBindProviderPlan, envKeyPlaceholders, KEEP_CURRENT, AWS_CHAIN_PROVIDER } = await import('./setup-bind-provider.js')
   const { promptText, promptPassword, promptSelect, promptMultiSelect } = await import('./setup-prompts.js')
 
   // `--non-interactive` (alias `-y`) — for Dockerfile / CI: skip all prompts,
@@ -435,7 +438,12 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
     if (envProvider && envProvider.length > 0) {
       const bound = bindBuiltinAgentsToProvider(envProvider)
       if (bound) {
-        process.stderr.write(`[setup] built-in agents (${bound.agents.join(', ')}) bound to ${envProvider}${bound.modelId ? ` / ${bound.modelId}` : ''} (HALO_DEFAULT_PROVIDER)\n`)
+        process.stderr.write(`[setup] built-in agents (${describeBoundAgents(bound.agents)}) bound to ${envProvider}${bound.modelId ? ` / ${bound.modelId}` : ''} (HALO_DEFAULT_PROVIDER)\n`)
+        // Same opt-in scope as the bind: only this provider's env-backed keys.
+        const provider = listModelProviders().find((p) => p.id === envProvider)
+        for (const line of envKeyPlaceholders(envProvider, provider?.fields ?? [], process.env, readSetting, writeSetting)) {
+          process.stderr.write(`${line}\n`)
+        }
       } else {
         process.stderr.write(`[setup] WARNING: HALO_DEFAULT_PROVIDER=${envProvider} is not a known provider — agents unchanged\n`)
       }
@@ -490,6 +498,14 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
   }
 
   // ── step impls ─────────────────────────────────────────────────────────
+
+  /** `default, executor, deep-executor + 4 internal` — internal agents are
+   *  counted, never named (goal is not a user-facing surface). */
+  function describeBoundAgents(agents: string[]): string {
+    const named = agents.filter((id) => REBIND_USER_AGENT_IDS.includes(id))
+    const internal = agents.length - named.length
+    return `${named.join(', ')}${internal > 0 ? ` + ${internal} internal` : ''}`
+  }
 
   async function stepPassword(): Promise<void> {
     const passwordSet = configLeafSet('server.password')
@@ -573,10 +589,12 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
     const providers = listModelProviders()
     if (providers.length === 0) return
 
+    // Cursor on Configure: with no key the built-in agents can't answer at
+    // all (unless Bedrock works via the AWS credential chain).
     const enter = await promptSelect('Configure model provider keys now? (you can also re-run `halo setup` later)', [
       { value: 'skip', label: 'Skip' },
       { value: 'go',   label: 'Configure...' },
-    ])
+    ], 1)
     if (enter == null) abort()
     if (enter === 'skip') {
       process.stderr.write('\n')
@@ -626,7 +644,7 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
     }
     const bound = bindBuiltinAgentsToProvider(pick)
     if (bound) {
-      process.stderr.write(`[setup] built-in agents (${bound.agents.join(', ')}) bound to ${pick}${bound.modelId ? ` / ${bound.modelId}` : ''}\n\n`)
+      process.stderr.write(`[setup] built-in agents (${describeBoundAgents(bound.agents)}) bound to ${pick}${bound.modelId ? ` / ${bound.modelId}` : ''}\n\n`)
     } else {
       process.stderr.write(`[setup] could not bind agents to ${pick} — provider template missing; agents unchanged\n\n`)
     }
@@ -1057,11 +1075,8 @@ async function cmdCli(flags: HarnessFlags): Promise<void> {
   // Combine positional args + stdin into the prompt.
   let message = flags.positionals.join(' ')
   if (!process.stdin.isTTY) {
-    const chunks: Buffer[] = []
-    for await (const chunk of process.stdin) {
-      chunks.push(chunk as Buffer)
-    }
-    const stdinContent = Buffer.concat(chunks).toString('utf-8').trim()
+    const { readStdinPrompt } = await import('./read-stdin-prompt.js')
+    const stdinContent = (await readStdinPrompt(process.stdin, { hasPositional: message.length > 0 })).trim()
     if (stdinContent) {
       message = message ? `${message}\n\n${stdinContent}` : stdinContent
     }
@@ -1465,7 +1480,7 @@ async function main(): Promise<void> {
     return
   }
   if (cmd === '--version') {
-    process.stderr.write(`halo ${VERSION}\n`)
+    process.stdout.write(`halo ${VERSION}\n`)
     return
   }
 

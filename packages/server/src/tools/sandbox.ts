@@ -221,6 +221,12 @@ function normalizeOptsForPlatform(opts: SandboxOptions): SandboxOptions {
 
 let _bwrapAvailable: boolean | null = null
 
+/** Why bwrap can't back non-full sessions — set alongside a cached false. */
+export type SandboxUnavailableReason =
+  | { kind: 'not-installed' }
+  | { kind: 'namespaces-blocked'; detail: string }
+let _bwrapUnavailableReason: SandboxUnavailableReason | null = null
+
 async function isBwrapAvailable(): Promise<boolean> {
   if (_bwrapAvailable !== null) return _bwrapAvailable
   try {
@@ -242,15 +248,46 @@ async function isBwrapAvailable(): Promise<boolean> {
     // Transient spawn failures (EAGAIN under fork pressure, ENOMEM) stay
     // uncached (null) so the next call re-probes instead of freezing the
     // weaker app-level fallback in place silently.
+    // No warning here: this runs in every `halo cli` / `tui` process, where a
+    // full-access session never needs it — callers report via
+    // sandboxUnavailableWarning() only where non-full shell_exec is at stake.
     const stderr = String(e.stderr ?? '')
     if (e.code === 'ENOENT') {
       _bwrapAvailable = false
+      _bwrapUnavailableReason = { kind: 'not-installed' }
     } else if (/permission denied|capability|no permission|operation not permitted/i.test(stderr)) {
-      console.warn(`[Sandbox] bwrap installed but cannot create namespaces (${stderr.trim().split('\n')[0]}) — falling back to app-level validation only`)
       _bwrapAvailable = false
+      _bwrapUnavailableReason = { kind: 'namespaces-blocked', detail: stderr.trim().split('\n')[0] }
     }
     return false
   }
+}
+
+/** The cached reason bwrap is unusable, Linux only: Windows promotes every
+ *  level to full, and macOS uses Seatbelt (its probe keeps its own warning),
+ *  even though file tools there still probe bwrap and record ENOENT. */
+export function getSandboxUnavailableReason(): SandboxUnavailableReason | null {
+  return process.platform === 'linux' ? _bwrapUnavailableReason : null
+}
+
+/** Human-readable reason + fix for an unusable bwrap; null when none is known
+ *  (sandbox works, not probed yet, non-Linux, transient probe failure). */
+export function describeSandboxUnavailable(
+  reason: SandboxUnavailableReason | null = getSandboxUnavailableReason(),
+): { reason: string; fix: string } | null {
+  if (!reason) return null
+  if (reason.kind === 'not-installed') return { reason: 'bubblewrap not installed', fix: 'sudo apt install bubblewrap' }
+  return {
+    reason: `bwrap cannot create namespaces: ${reason.detail}`,
+    fix: 'AppArmor (Ubuntu 23.10+/24.04) blocks unprivileged user namespaces — allow bwrap: https://github.com/turmind/halo-agent/blob/main/.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor',
+  }
+}
+
+/** One-line startup warning (`[<tag>] OS sandbox unavailable (…) … Fix: …`),
+ *  or null when there's nothing to fix. Callers print it once per process. */
+export function sandboxUnavailableWarning(tag: string, reason?: SandboxUnavailableReason | null): string | null {
+  const d = describeSandboxUnavailable(reason)
+  return d && `[${tag}] OS sandbox unavailable (${d.reason}) — workspace/readonly sessions get no shell_exec. Fix: ${d.fix}`
 }
 
 export function isBwrapCached(): boolean {
@@ -831,7 +868,14 @@ export function assertRmSafe(command: string, workspaceRoot: string): void {
   }
 }
 
-const NO_SANDBOX_MSG = 'Access denied: shell_exec at workspace/readonly access needs an OS sandbox (bubblewrap on Linux, sandbox-exec on macOS) and none works on this host. Switch the session to Full, or on Linux install bubblewrap (apt install bubblewrap).'
+/** Tool error for non-full shell_exec without a sandbox; a blocked-namespaces
+ *  bwrap gets its AppArmor fix instead of the (useless there) install hint. */
+export function noSandboxMessage(reason: SandboxUnavailableReason | null = getSandboxUnavailableReason()): string {
+  const fix = reason?.kind === 'namespaces-blocked'
+    ? `on Linux bwrap is installed but cannot create namespaces (${reason.detail}): ${describeSandboxUnavailable(reason)!.fix}`
+    : 'on Linux install bubblewrap (apt install bubblewrap)'
+  return `Access denied: shell_exec at workspace/readonly access needs an OS sandbox (bubblewrap on Linux, sandbox-exec on macOS) and none works on this host. Switch the session to Full, or ${fix}.`
+}
 
 export async function sandboxExec(command: string, opts: SandboxOptions): Promise<SandboxResult> {
   opts = normalizeOptsForPlatform(opts)
@@ -869,7 +913,7 @@ export async function sandboxExec(command: string, opts: SandboxOptions): Promis
   }
 
   if (process.platform === 'darwin') {
-    if (!(await isSeatbeltAvailable())) throw new Error(NO_SANDBOX_MSG)
+    if (!(await isSeatbeltAvailable())) throw new Error(noSandboxMessage())
     return spawnGroupExec(command, {
       cwd: opts.workspaceRoot,
       timeout: opts.timeout,
@@ -881,7 +925,7 @@ export async function sandboxExec(command: string, opts: SandboxOptions): Promis
   }
 
   const bwrapOk = await isBwrapAvailable()
-  if (!bwrapOk) throw new Error(NO_SANDBOX_MSG)
+  if (!bwrapOk) throw new Error(noSandboxMessage())
 
   const bwrapArgs = buildBwrapArgs(opts)
   return bwrapExec([...bwrapArgs, '--', ...buildExecScriptArgs(opts.workspaceRoot, command)], {

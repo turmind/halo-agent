@@ -15,7 +15,7 @@
 
 ## 安装
 
-Halo 支持 Linux（x64 / arm64）、macOS 和 Windows，需要 **Node.js 22+**。Ubuntu 24.04 自带的 `nodejs` 是 18，跑不起来（会报 `Invalid regular expression flags` 崩溃），所以先装 22：
+Halo 支持 Linux（x64 / arm64）、macOS 和 Windows，需要 **Node.js 22+**。Ubuntu 24.04 自带的 `nodejs` 是 18，跑不起来（`halo` 会拒绝启动），所以先装 22：
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs   # Ubuntu / Debian
@@ -32,7 +32,7 @@ halo server start              # → 打开 http://localhost:9527
 任意一家模型 key 就能跑 —— Anthropic、OpenAI（或任何 OpenAI 兼容端点）、DeepSeek、Kimi、Qwen……**不需要** AWS 账号，Bedrock 只是[其中一个 provider](#模型)（而且可以不填 key，直接走 AWS 凭证链）。
 
 - **`sudo`**：系统级 Node（apt / NodeSource 装的）执行 `npm install -g` 要加 `sudo`；用 nvm / fnm 则不用。
-- **`halo setup` 里**：问到 *Configure model provider keys now?* 时选 **Configure…**（默认是 Skip）。选好 provider、粘贴 key，再选 **── Done**（列表最后一项，按 ↑ 可以直接绕到它），最后在 *Switch default agent to …* 上回车。
+- **`halo setup` 里**：问到 *Configure model provider keys now?* 时选 **Configure…**（默认项）。选好 provider、粘贴 key，再选 **── Done**（列表最后一项，按 ↑ 可以直接绕到它），最后在 *Switch default agent to …* 上回车。
 - **远程主机上**：用 `halo server start -d`（不加 `-d` 会留在前台，SSH 一断就退出），再用 `ssh -L 9527:localhost:9527 user@host` 建隧道，在本机打开 `http://localhost:9527`。不要在安全组里放开 9527 —— 见[现状与局限](#现状与局限)。
 - **Linux 沙箱**：`workspace` / `readonly` 访问级别需要 `sudo apt install bubblewrap`，Ubuntu 23.10+ / 24.04 还要加上 [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)。缺了它，`/api/health` 显示 `sandbox: null`，非 full 会话无法执行 shell。
 - **升级**：`halo upgrade && halo server restart`；用 systemd 托管时改成 `halo upgrade && sudo systemctl restart halo`（见 [deploy.md Option C](.halo/docs/dev/deploy.md#option-c-systemd-for-the-npm-install)）。内置文档、Agent 和技能会在下次启动时自动刷新。
@@ -42,7 +42,7 @@ halo server start              # → 打开 http://localhost:9527
 **桌面版**：[GitHub releases](https://github.com/turmind/halo-agent/releases) 里有 Windows x64 `.exe` 和 macOS（Apple Silicon）`.dmg`（不一定每个版本都两样齐全），内置 server、管理台和独立的 Node 运行时 —— 不需要 `npm`，`~/.halo/` 数据一致，以后可以随时切换。安装包未签名（macOS 提示「已损坏」→ `sudo xattr -dr com.apple.quarantine /Applications/Halo.app`；Windows 上 SmartScreen 可能会拦一下）。
 
 > [!IMPORTANT]
-> **第一条消息就报 `Could not load credentials from any providers`？** 内置 Agent 出厂指向 AWS Bedrock，而 `halo setup` 里 *"Bind the default agent to a provider you just configured?"* 这一步（它会改绑 `default` / `executor` / `deep-executor`）被跳过了。重跑一次 `halo setup`，或在 **Agents → default** 里把 model provider 切过去。`/evo` 和目标模式用的是各自的 Agent（`__evo_agent__`、`__score__`、`__apply_agent__`、`goal`），它们仍留在 Bedrock 上 —— 不用 Bedrock 的话也要改绑（`/evo` 那几个在 **Agents** 的 **Internal** 分组里）。
+> **第一条消息就报 `Could not load credentials from any providers`？** 内置 Agent 出厂指向 AWS Bedrock，而 `halo setup` 里 *"Bind the default agent to a provider you just configured?"* 这一步被跳过了。重跑一次 `halo setup` —— 它会改绑所有内置 Agent，包括 `/evo` 用的内部 Agent —— 或在 **Agents → default** 里把 model provider 切过去。
 >
 > **在带实例角色的 EC2 / ECS 上不会报错**：没绑定的安装会悄悄改用该 AWS 账号上的 Bedrock Claude。可以看 `halo cli -v "hi"` 输出末尾的模型名，或在 **Agents → default** 里确认。
 

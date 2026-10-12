@@ -15,7 +15,7 @@ A self-hosted AI agent team that works in your project folder. Bring your own mo
 
 ## Install
 
-Halo runs on Linux (x64 / arm64), macOS and Windows, and needs **Node.js 22+**. Ubuntu 24.04's own `nodejs` package is 18 and won't work (Halo crashes with `Invalid regular expression flags`), so get 22 first:
+Halo runs on Linux (x64 / arm64), macOS and Windows, and needs **Node.js 22+**. Ubuntu 24.04's own `nodejs` package is 18 and won't work (`halo` refuses to start on it), so get 22 first:
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs   # Ubuntu / Debian
@@ -32,7 +32,7 @@ halo server start              # → open http://localhost:9527
 Bring any one model key — Anthropic, OpenAI (or any OpenAI-compatible endpoint), DeepSeek, Kimi, Qwen… An AWS account is **not** required; Bedrock is just one of the [providers](#models) (and can use your AWS credential chain instead of a key).
 
 - **`sudo`**: with a system-wide Node (apt / NodeSource), `npm install -g` needs `sudo`; with nvm / fnm it doesn't.
-- **In `halo setup`**: at *Configure model provider keys now?* pick **Configure…** (the default is Skip). Pick your provider and paste the key, choose **── Done** (the last row; ↑ wraps to it), then press Enter on *Switch default agent to …*.
+- **In `halo setup`**: at *Configure model provider keys now?* pick **Configure…** (the default). Pick your provider and paste the key, choose **── Done** (the last row; ↑ wraps to it), then press Enter on *Switch default agent to …*.
 - **On a remote box**: run `halo server start -d` (plain `start` stays in the foreground and dies with your SSH session), tunnel with `ssh -L 9527:localhost:9527 user@host`, and open `http://localhost:9527` on your machine. Don't open 9527 in a security group — see [Status & Limitations](#status--limitations).
 - **Linux sandbox**: the `workspace` / `readonly` access levels need `sudo apt install bubblewrap`, and on Ubuntu 23.10+ / 24.04 also an [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor). Without it `/api/health` shows `sandbox: null` and non-full sessions can't run shell.
 - **Upgrade**: `halo upgrade && halo server restart`, or under systemd `halo upgrade && sudo systemctl restart halo` ([deploy.md Option C](.halo/docs/dev/deploy.md#option-c-systemd-for-the-npm-install)). Bundled docs, agents and skills refresh on the next start.
@@ -42,7 +42,7 @@ Bring any one model key — Anthropic, OpenAI (or any OpenAI-compatible endpoint
 **Desktop app**: [GitHub releases](https://github.com/turmind/halo-agent/releases) carry a Windows x64 `.exe` and a macOS Apple Silicon `.dmg` (not every release has both) that bundle the server, admin and their own Node runtime — no `npm`, same `~/.halo/` data, so you can switch later. They're unsigned (macOS "damaged" → `sudo xattr -dr com.apple.quarantine /Applications/Halo.app`; Windows SmartScreen may warn).
 
 > [!IMPORTANT]
-> **First message fails with `Could not load credentials from any providers`?** The built-in agents ship pointing at AWS Bedrock, and the *"Bind the default agent to a provider you just configured?"* step in `halo setup` (it rebinds `default` / `executor` / `deep-executor`) was skipped. Re-run `halo setup`, or switch the model provider under **Agents → default**. `/evo` and goal mode run their own agents (`__evo_agent__`, `__score__`, `__apply_agent__`, `goal`), which stay on Bedrock — rebind them too if you don't use Bedrock (the `/evo` ones are in the **Internal** group under **Agents**).
+> **First message fails with `Could not load credentials from any providers`?** The built-in agents ship pointing at AWS Bedrock, and the *"Bind the default agent to a provider you just configured?"* step in `halo setup` was skipped. Re-run `halo setup` — it rebinds every built-in agent, the internal `/evo` ones included — or switch the model provider under **Agents → default**.
 >
 > **On EC2 / ECS with an instance role there is no error**: an unbound install quietly uses Bedrock Claude on that AWS account instead. Check which model answers in the footer of `halo cli -v "hi"`, or under **Agents → default**.
 

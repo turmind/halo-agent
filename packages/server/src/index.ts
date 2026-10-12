@@ -56,10 +56,11 @@ import { realEvoSpawner } from './evolution/spawn.js'
 import { bootChannels, shutdownChannels } from './channels/registry.js'
 import { defaultChannelDescriptors } from './channels/descriptors.js'
 import { createAuthRoutes, authMiddleware, getTokenFromCookieHeader, isAuthenticated } from './middleware/auth.js'
-import { initLogger } from './logger.js'
+import { initLogger, logAlways } from './logger.js'
+import { formatListenBanner } from './listen-banner.js'
 import { initObservability, shutdownObservability } from './observability/otel.js'
 import { config, resolveSandboxPaths } from './config.js'
-import { initBwrapCheck, getSandboxBackend, setSandboxHiddenPaths } from './tools/sandbox.js'
+import { initBwrapCheck, getSandboxBackend, sandboxUnavailableWarning, setSandboxHiddenPaths } from './tools/sandbox.js'
 import { refreshTemplatesIfOutdated } from './init.js'
 import { ensureSshAgent } from './git-ssh.js'
 
@@ -83,7 +84,10 @@ function findProjectRoot(): string {
     if (parent === dir) break
     dir = parent
   }
-  console.log(`[Server] Warning: monorepo root (pnpm-workspace.yaml) not found from ${process.cwd()}, falling back to cwd`)
+  // Runs before initLogger, so no level filter applies — print only in a
+  // source run, where a missing root is a real misconfiguration. A published
+  // bundle always lands here; cwd is its normal root.
+  if (HALO_VERSION === 'dev') console.log(`[Server] Warning: monorepo root (pnpm-workspace.yaml) not found from ${process.cwd()}, falling back to cwd`)
   return process.cwd()
 }
 
@@ -245,7 +249,9 @@ function applySandboxPaths(): void {
 }
 applySandboxPaths()
 onSettingsChange(applySandboxPaths)
-console.log(`[Server] OS sandbox: ${getSandboxBackend() ?? 'NOT available (non-full sessions: no shell_exec, file tools path-checked in-process)'}`)
+const sandboxWarning = sandboxUnavailableWarning('Server')
+if (sandboxWarning) console.warn(sandboxWarning)
+else console.log(`[Server] OS sandbox: ${getSandboxBackend() ?? 'NOT available (non-full sessions: no shell_exec, file tools path-checked in-process)'}`)
 
 // Hold one ssh-agent for the process so the built-in terminal and git children
 // (both inherit process.env) share it: the user runs `ssh-add` in the terminal,
@@ -576,7 +582,12 @@ const server = serve({
   fetch: app.fetch,
   port: PORT,
 }, (info) => {
-  console.log(`[Server] Hono server listening on http://localhost:${info.port}`)
+  // Always shown (stderr, whatever the log level): without it a foreground
+  // `halo server start` prints nothing at the default `warn` and the user
+  // can't tell it came up. AgentCore's microVM is only reached through
+  // AgentCore, so the network-exposure advice (2nd line) doesn't apply there.
+  const lines = formatListenBanner(info.address, info.port, HALO_VERSION)
+  for (const line of AGENTCORE ? lines.slice(0, 1) : lines) logAlways(line)
 })
 
 // noServer: handshakes reach it through the `upgrade` router below.
@@ -614,8 +625,6 @@ const upgradeRoutes = new Map<string, UpgradeHandler>(AGENTCORE ? [] : [
 if (transcribe) upgradeRoutes.set(TRANSCRIBE_PATH, transcribe.handleUpgrade)
 if (jupyterChannels) upgradeRoutes.set(JUPYTER_CHANNELS_PATH, jupyterChannels.handleUpgrade)
 ;(server as import('node:http').Server).on('upgrade', createUpgradeRouter(upgradeRoutes))
-
-if (!AGENTCORE) console.log(`[Server] WebSocket server ready on ws://localhost:${PORT}/ws`)
 
 // ------------------------------------------------------------------
 // Graceful shutdown

@@ -132,7 +132,7 @@ Each session carries `accessLevel: 'readonly' | 'workspace' | null` (persisted i
 
 `view_image` is additionally gated on `capabilities.image` (see its section above). Models without vision support get the same lists minus `view_image` — so a non-vision model on `readonly` ends up with 4 tools, not 5.
 
-OS sandbox backend per platform — `getSandboxBackend()` in `sandbox.ts` returns `'bwrap' | 'seatbelt' | null` after the boot probe (`initBwrapCheck()`), logged at startup as `[Server] OS sandbox: …` (`info` level, so hidden at the default `warn`; a bwrap that is installed but fails the probe does print `[Sandbox] bwrap installed but cannot create namespaces (…)` at the default level) and exposed as `sandbox` on `GET /api/health`:
+OS sandbox backend per platform — `getSandboxBackend()` in `sandbox.ts` returns `'bwrap' | 'seatbelt' | null` after the boot probe (`initBwrapCheck()`), logged at startup as `[Server] OS sandbox: …` (`info` level, so hidden at the default `warn`). When the probe found bwrap missing (ENOENT) or unable to create namespaces, the server instead warns once at boot: `[Server] OS sandbox unavailable (<reason>) — workspace/readonly sessions get no shell_exec. Fix: <hint>` (`sudo apt install bubblewrap`, or the AppArmor profile in [deploy.md](deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)). `halo cli` / `tui` print the same line (`[cli]` tag) only for a `--access workspace|readonly` session; the probe itself never prints (`getSandboxUnavailableReason()` / `sandboxUnavailableWarning()` in `sandbox.ts`). Also exposed as `sandbox` on `GET /api/health`:
 
 | Platform | `shell_exec` | File tools | Dependency |
 |---|---|---|---|

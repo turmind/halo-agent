@@ -150,12 +150,19 @@ export function listOptionalSkills(): SkillInfo[] {
  *  no AWS keys were typed — moving off it is always an explicit user choice. */
 export const AWS_CREDENTIAL_CHAIN_PROVIDER = 'aws-bedrock-claude-invoke'
 
-/** User-facing built-in agents whose model gets rebound on an explicit
- *  provider switch. `default` is what answers the first message; executor /
- *  deep-executor are its delegation team — leaving them on Bedrock would
- *  reproduce the same credentials error one delegation later. Internal
- *  (`__*__`) agents are left alone. */
-const REBIND_BUILTIN_AGENT_IDS = ['default', 'executor', 'deep-executor']
+/** User-facing built-in agents rebound on an explicit provider switch.
+ *  `default` is what answers the first message; executor / deep-executor are
+ *  its delegation team — leaving them on Bedrock would reproduce the same
+ *  credentials error one delegation later. Setup names these in its output. */
+export const REBIND_USER_AGENT_IDS = ['default', 'executor', 'deep-executor']
+
+/** Internal built-in agents rebound alongside them: the evolution trio
+ *  (/evo, pre-compact) and the goal judge also ship on Bedrock, so leaving
+ *  them would fail the same way the first time they run. Setup only counts
+ *  these — goal is not a user-facing surface. */
+const REBIND_INTERNAL_AGENT_IDS = ['__evo_agent__', '__score__', '__apply_agent__', 'goal']
+
+const REBIND_BUILTIN_AGENT_IDS = [...REBIND_USER_AGENT_IDS, ...REBIND_INTERNAL_AGENT_IDS]
 
 /** Same location as agent-loader's GLOBAL_AGENTS_DIR — kept local so this
  *  setup-time module doesn't pull the agent-runtime import chain into the CLI. */
@@ -228,7 +235,7 @@ function buildTemplateModelBlock(providerId: string): Record<string, unknown> | 
   return modelBlockFromProvider(providerId, data)
 }
 
-/** Rebind the user-facing built-in agents to `providerId`, deriving model id /
+/** Rebind every built-in agent to `providerId`, deriving model id /
  *  endpoint / promptCaching / thinking from the provider's bundled YAML.
  *  Writes via the yaml Document API so user comments in agent.yaml survive,
  *  and init.ts's mergeAgentYaml preserves the new `model:` block across

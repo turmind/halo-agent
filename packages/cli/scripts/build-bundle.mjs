@@ -246,7 +246,15 @@ console.log('[build-bundle] bundled dist/index.js')
 // the user can do nothing about. Patch emitWarning BEFORE the app's module
 // graph loads; a static `import` is hoisted above this assignment and would
 // load (and warn from) the deps first, so we load the entry via dynamic import.
+// The same dynamic import is what lets the Node-version gate run first: on an
+// old Node the bundle dies mid-parse with an error that never names Node (v18:
+// "Invalid regular expression flags"). The shim itself must stay old-Node
+// parseable. Mirrors bin/halo.js (the source-checkout shim).
 const SHIM = `#!/usr/bin/env node
+if (Number(process.versions.node.split('.')[0]) < 22) {
+  process.stderr.write('halo requires Node.js 22 or newer (found ' + process.version + '). Upgrade: https://nodejs.org/ (or \`nvm install 22\`)\\n')
+  process.exit(1)
+}
 const emit = process.emitWarning.bind(process)
 process.emitWarning = (warning, ...args) => {
   const o = args[0]

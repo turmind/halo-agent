@@ -116,6 +116,17 @@ function emitOtelLog(level: LogLevel, args: unknown[]): void {
   })
 }
 
+/** A line the operator must see whatever the level (startup banner): straight
+ *  to stderr, around the console interceptors; file / OTel get it as an info
+ *  line under the usual gate — routing it through console.log would print it
+ *  twice at info. */
+export function logAlways(message: string): void {
+  process.stderr.write(`${redactSecrets(message)}\n`)
+  if (!shouldLog('info')) return
+  writeToFile(formatLine('info', [message]))
+  emitOtelLog('info', [message])
+}
+
 /** Install console interceptors — call once at server startup */
 export function initLogger(): void {
   const origLog = console.log.bind(console)

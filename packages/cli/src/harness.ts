@@ -7,7 +7,7 @@ import { scanAvailableAgents } from '@turmind/halo-server/agents/agent-loader'
 import { ensureWorkspaceHalo, refreshTemplatesIfOutdated } from '@turmind/halo-server/init'
 import { config, HALO_HOME, modelSupportsImage, resolveSandboxPaths } from '@turmind/halo-server/config'
 import { getDisabledSet } from '@turmind/halo-server/db/index'
-import { initBwrapCheck, setSandboxHiddenPaths } from '@turmind/halo-server/tools/sandbox'
+import { initBwrapCheck, sandboxUnavailableWarning, setSandboxHiddenPaths } from '@turmind/halo-server/tools/sandbox'
 import { initLogger } from '@turmind/halo-server/logger'
 import { initObservability, shutdownObservability } from '@turmind/halo-server/observability/otel'
 import { findActiveSessionId, dispatchCommand, type CommandContext, type CommandResult } from '@turmind/halo-server/channels/shared/commands'
@@ -106,6 +106,7 @@ export interface Harness {
 
 const SESSION_PREFIX = 'cli_'
 const USER_ID = 'cli'
+let sandboxWarned = false
 
 /**
  * `observe` = this process runs the agent loop (`halo cli` / `halo tui`, incl.
@@ -200,6 +201,13 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const agentId = opts.agentId ?? 'default'
   const accessLevel: 'readonly' | 'workspace' | null =
     !opts.accessLevel || opts.accessLevel === 'full' ? null : opts.accessLevel
+  // Only a non-full session loses shell_exec without the OS sandbox; the
+  // default full-access CLI stays quiet about it.
+  if (accessLevel && !sandboxWarned) {
+    sandboxWarned = true
+    const warning = sandboxUnavailableWarning('cli')
+    if (warning) console.warn(warning)
+  }
   // activeOverrides keys by USER_ID — single-user CLI scope. Cleared on /ws so
   // we don't accidentally resume a stale session id in a different workspace.
   const activeOverrides = new Map<string, string>()

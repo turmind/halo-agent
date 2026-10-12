@@ -20,12 +20,23 @@ One file for the whole server: `~/.halo/global/logs/server.log`. A single server
 ## Log format
 
 ```
-time=2026-04-19T10:30:00.000Z level=info [Server] Hono server listening on http://localhost:9527
+time=2026-04-19T10:30:00.000Z level=info [Server] Halo 1.6.3 listening on port 9527 on all network interfaces — local: http://localhost:9527
 time=2026-04-19T10:30:01.234Z level=error [WS] Chat error: ThrottlingException
 time=2026-04-19T10:30:02.567Z level=warn [SessionManager] Context overflow, auto-compacting...
 ```
 
 Every line is logfmt-flavored: `time=<ISO timestamp> level=<debug|info|warn|error> <message>`; the message keeps its `[Module]` prefix.
+
+### Always-shown lines
+
+The startup banner bypasses the level gate: `logAlways()` (`logger.ts`) writes it straight to stderr whatever `general.logging.level` is, so a foreground `halo server start` at the default `warn` still shows that it came up. It is also written to the log file / OTel as an `info` line, but only when `info` passes the gate. The banner names the real bound address (`formatListenBanner()` in `listen-banner.ts`). The server passes no hostname, so it binds every interface, and the banner says so in two lines:
+
+```
+[Server] Halo 1.6.3 listening on port 9527 on all network interfaces — local: http://localhost:9527
+[Server] Reachable from the network: allow the port only from trusted sources, or put a TLS reverse proxy in front
+```
+
+A specific bound address prints one line, `[Server] Halo <version> listening on http://<addr>:<port>` (IPv6 bracketed). AgentCore mode prints only the first line. Lines printed before `initLogger()` (setup / template-refresh notices, the source-run-only `monorepo root … not found` warning) aren't filtered either, and they never reach the log file.
 
 ## Rotation
 

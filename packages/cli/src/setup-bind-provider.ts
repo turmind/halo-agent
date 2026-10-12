@@ -76,3 +76,40 @@ export function buildBindProviderPlan(
     initialIndex,
   }
 }
+
+/**
+ * `setup -y` with HALO_DEFAULT_PROVIDER=<id>: point that provider's env-backed
+ * secret fields at their `<<NAME>>` placeholder when NAME is set in `env` — the
+ * non-interactive twin of the wizard's "Use env" option. Writes the
+ * placeholder, never the literal key (settings.yaml then holds no secret, and
+ * the value is expanded from env at read time). Already exactly `<<NAME>>` →
+ * no write. NAME unset → a warning, nothing written. Returns the log lines.
+ *
+ * Bedrock is skipped: the AWS SDK credential chain already reads AWS_* from
+ * env (or ~/.aws / a machine role), and pinning only the key-id / secret
+ * placeholders would drop AWS_SESSION_TOKEN for temporary credentials.
+ */
+export function envKeyPlaceholders(
+  providerId: string,
+  fields: ReadonlyArray<{ key: string; envFallback?: string }>,
+  env: NodeJS.ProcessEnv,
+  read: (dotPath: string) => string | undefined,
+  write: (dotPath: string, value: string) => void,
+): string[] {
+  if (providerId === AWS_CHAIN_PROVIDER) return []
+  const lines: string[] = []
+  for (const field of fields) {
+    const name = field.envFallback
+    if (!name) continue
+    const dotPath = `${providerId}.secrets.${field.key}`
+    if (!env[name]) {
+      lines.push(`[setup] WARNING: ${name} not set — ${providerId} has no key`)
+      continue
+    }
+    const placeholder = `<<${name}>>`
+    if (read(dotPath) === placeholder) continue
+    write(dotPath, placeholder)
+    lines.push(`[setup] ${dotPath} → ${placeholder} (expanded from env at runtime — set it for the server and halo cli alike)`)
+  }
+  return lines
+}

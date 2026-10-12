@@ -118,7 +118,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_A2A_ROOT` | the user's home | — | Base dir A2A exposes workspaces under: a workspace `<base>/A/B` with `.halo/agent-card.json` is served at `/a2a/A/B` (see [design/a2a.md](../design/a2a.md)); workspaces outside it can't be exposed |
 | `HALO_A2A_PUBLIC_URL` | (none) | `settings.yaml general.a2a.public_url` | This server's A2A origin as peers see it (no trailing slash), used for the agent card's interface URL and as the default push-webhook base. In agentcore-a2a mode: the runtime's invoke URL (`…/runtimes/<escaped ARN>/invocations`) |
 | `HALO_A2A_ACCESS` | `workspace` | — | agentcore-a2a mode only: access level of every A2A session — `workspace` \| `full` \| `readonly`; anything else is a boot error |
-| `HALO_DEFAULT_PROVIDER` | (none) | — | Read by `halo setup --non-interactive`: binds the built-in agents to this provider id (and its default model). An unknown id only prints a warning |
+| `HALO_DEFAULT_PROVIDER` | (none) | — | Read by `halo setup --non-interactive`: binds every built-in agent to this provider id (and its default model) and, for each of its env-backed keys whose variable is set, writes the `<<NAME>>` placeholder into `settings.yaml` (Bedrock excepted). An unknown id only prints a warning |
 | `HALO_CLI` | `halo` (`halo.cmd` on Windows) | — | `halo` cli executable that cron runs and the evolution wrapper spawn — a dev override |
 | `HALO_VERSION` | `dev` | — | Version string reported by `GET /api/health` and the cli; stamped by the bundle / desktop launcher, so normally not set by hand |
 | `HALO_PROMPT` | (none) | — | `plain` makes `halo setup` use numbered-menu prompts instead of the raw-mode TUI |

@@ -110,11 +110,7 @@ git diff HEAD~1 | halo cli -w /path/to/review-ws "review this diff"
 halo cli "check for issues" && echo "OK" || echo "FAILED"
 ```
 
-When stdin is not a TTY, `halo cli` reads it to EOF before running (that's how piped input is appended). In scripts, CI, cron or `ssh host 'halo cli …'` with nothing piped in, stdin is often an open non-TTY that never closes and the run waits forever — pass `</dev/null`:
-
-```bash
-halo cli "summarize today's commits" </dev/null
-```
+When stdin is not a TTY, piped input is appended after the positional prompt. With a positional prompt, stdin is only read if its first data arrives within 0.5 s — then to EOF, however long it takes. Otherwise it's ignored, so an open-but-idle stdin (scripts, CI, cron, `ssh host 'halo cli …'` without `-t`) no longer hangs the run. A producer that takes longer than that to print anything gets ignored too; capture it first (`out=$(slow-cmd); halo cli "summarize" <<<"$out"`). Without a positional prompt, stdin *is* the prompt: `halo cli` waits for EOF, and after 1 s of silence prints one `waiting for the prompt on stdin` hint to stderr.
 
 ## TUI Mode (interactive)
 
