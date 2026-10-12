@@ -14,6 +14,7 @@
 import { trace, metrics, ProxyTracerProvider, type Meter } from '@opentelemetry/api'
 import { logs } from '@opentelemetry/api-logs'
 import { config } from '../config.js'
+import { settingsOtelEnvKeys } from '../child-env.js'
 import type { Provider } from './otel-sdk.js'
 
 const SCOPE = 'opentelemetry.instrumentation.halo'
@@ -62,6 +63,15 @@ function externalSdkRegistered(): boolean {
   return provider.getDelegate() !== new ProxyTracerProvider().getDelegate()
 }
 
+/** `??=` a settings value onto env, recording the key so cleanChildEnv() drops
+ *  it — boot-time settings inherited by children would beat the child's own
+ *  fresh read. An operator-exported key is left alone and still inherited. */
+function setFromSettings(key: string, value: string): void {
+  if (process.env[key] !== undefined) return
+  process.env[key] = value
+  settingsOtelEnvKeys.add(key)
+}
+
 /**
  * Map settings → OTEL_* env, then register trace / metric / log providers when
  * an endpoint is configured. Resolves to whether export is active. Call once,
@@ -69,13 +79,13 @@ function externalSdkRegistered(): boolean {
  */
 export async function initObservability(haloProcess: HaloProcess = 'server'): Promise<boolean> {
   const { endpoint, serviceName, headers } = config.observability
-  if (endpoint) process.env.OTEL_EXPORTER_OTLP_ENDPOINT ??= endpoint
-  if (headers) process.env.OTEL_EXPORTER_OTLP_HEADERS ??= headers
-  process.env.OTEL_SERVICE_NAME ??= serviceName
+  if (endpoint) setFromSettings('OTEL_EXPORTER_OTLP_ENDPOINT', endpoint)
+  if (headers) setFromSettings('OTEL_EXPORTER_OTLP_HEADERS', headers)
+  setFromSettings('OTEL_SERVICE_NAME', serviceName)
   // Declarative only: the *-otlp-proto exporters in otel-sdk.ts are hard-wired
   // to http/protobuf (http:// or https:// by URL scheme; no gRPC). Set so an
   // external SDK loaded via --require picks the same wire protocol.
-  process.env.OTEL_EXPORTER_OTLP_PROTOCOL ??= 'http/protobuf'
+  setFromSettings('OTEL_EXPORTER_OTLP_PROTOCOL', 'http/protobuf')
 
   if (!process.env.OTEL_EXPORTER_OTLP_ENDPOINT) return false
   enabled = true
@@ -86,7 +96,7 @@ export async function initObservability(haloProcess: HaloProcess = 'server'): Pr
   }
 
   const { registerSdk } = await import('./otel-sdk.js')
-  providers = await registerSdk(process.env.OTEL_SERVICE_NAME, process.env.HALO_VERSION ?? 'dev', haloProcess)
+  providers = await registerSdk(process.env.OTEL_SERVICE_NAME!, process.env.HALO_VERSION ?? 'dev', haloProcess)
   console.log(`[Observability] OTLP export → ${process.env.OTEL_EXPORTER_OTLP_ENDPOINT} (service.name=${process.env.OTEL_SERVICE_NAME}, halo.process=${haloProcess}, capture_content=${config.observability.captureContent})`)
   return true
 }
