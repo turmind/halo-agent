@@ -121,6 +121,7 @@ my-project/
 | Hunyuan（腾讯混元） | |
 | Doubao（火山引擎豆包） | |
 | 智谱 AI（GLM） | GLM-5.3 系列，Flash 型号支持图片 |
+| Google Gemini | Gemini API（OpenAI 兼容端点）—— 3.8 Flash、3.5 Flash-Lite |
 
 ![设置页 —— 全部模型 Provider，按 Agent 配置](assets/models.jpg)
 

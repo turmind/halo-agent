@@ -121,6 +121,7 @@ Configured per-agent through one provider-agnostic runtime. AWS Bedrock Claude i
 | Hunyuan (Tencent) | |
 | Doubao (Volcengine) | |
 | Zhipu AI (GLM) | GLM-5.3 family; vision on the Flash models |
+| Google Gemini | Gemini API (OpenAI-compatible endpoint) — 3.8 Flash, 3.5 Flash-Lite |
 
 ![Settings — all model providers, configurable per agent](assets/models.jpg)
 
