@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Explorer: Download works on folders and the whole workspace. A confirm shows the approximate size and file count first, and you get one zip that the server streams as it builds; `node_modules`, `.git` and other build/cache folders are left out unless you tick the checkbox, `.env` files, secrets and Halo session data always are, and `_halo-excluded.txt` in the zip lists what was left out.
 - Models: Google Gemini provider (`gemini`, key `GEMINI_API_KEY`) — Gemini 3.8 Flash (default) and 3.5 Flash-Lite over the Gemini API's OpenAI-compatible endpoint, with tool calls, streaming thinking summaries, implicit prompt caching and image input on Flash-Lite. A small `gemini` runtime replays Gemini 3's tool-call thought signatures and fixes its `stop` finish reason on tool-call replies, which plain OpenAI-compatible mode can't do — so the hub copy needs this release.
 
+### Changed
+
+- `halo server` on Linux with systemd: `start -d` and `restart` now run the server as a systemd user service (`~/.config/systemd/user/halo.service`, written and enabled for you, with linger turned on so it starts at boot and comes back 5 s after a crash). Your shell's environment is saved to `~/.halo/secrets/server.env` for it. If a system unit already runs `halo server start` as you, like the `halo.service` in the deploy guide, that unit is started instead. `stop`, `restart` and `status` on a server a systemd unit runs now go through `systemctl` (a system unit may need `sudo`). Before, `restart` started a second server outside the unit, and the unit then kept failing with "another halo server is already running". An existing `-d` server moves under the service on the next `halo server restart`. macOS, Windows and Linux without systemd keep the built-in `-d` supervisor.
+
 ### Fixed
 
 - Observability: a changed or cleared `general.observability.endpoint` (and headers / service name) now reaches cron and evolution runs on their next run. Before, they kept the value the server booted with until the server restarted; the server's own export still switches on restart.

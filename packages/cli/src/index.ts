@@ -1,11 +1,15 @@
 import './silence-warnings.js' // must be first — patches emitWarning before deps load
 import path from 'node:path'
 import fs from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { parseArgs } from 'node:util'
 import type { Harness } from './harness.js'
 import type { Lang } from '@turmind/halo-server/channels/shared/i18n'
 import { SUPERVISE_ENV, requestStop } from './server-supervisor.js'
+import {
+  USER_UNIT, ctlCommand, describeUnit, installUserUnit, isOwnUserUnit, planServerStart, serverUnitOf,
+  unitCtl, unitEnabled, type OwnedUnit, type ServerUnit,
+} from './server-systemd.js'
 
 // harness.js / cli.js / tui.js statically import the whole @turmind/halo-server
 // world (SessionManager, db, sandbox, file-watching, logger). Keeping them as
@@ -148,7 +152,8 @@ Subcommands:
   start [-d] [-p N]     Start the server. Foreground unless -d (daemon).
   stop [--force]        Stop the running server (SIGTERM, then SIGKILL after 5s).
   restart [-p N]        Stop + start (always daemon).
-  status                Show whether the server is running and on what port.
+  status                Show whether the server is running, on what port, and
+                        which systemd unit runs it.
   logs [-f] [-n N]      Tail the server log file.
 
 Common options:
@@ -161,9 +166,17 @@ Port resolution: --port flag > HALO_PORT env > config.yaml > 9527.
 Daemon logs go to ~/.halo/logs/server.log; pidfile is
 ~/.halo/global/server.lock.
 
-Under -d a crashed server (non-zero exit) is restarted automatically, at
-most 5 times per 5 minutes; past that the daemon gives up and logs why.
-A clean exit — including \`halo server stop\` — never restarts.
+Linux with systemd: -d and restart run the server as the systemd user unit
+~/.config/systemd/user/halo.service (written and enabled for you, with
+linger on so it starts at boot; restarted 5s after a crash). Your current
+environment is saved to ~/.halo/secrets/server.env for it. If a system unit
+in /etc/systemd/system already runs \`halo server start\` as you, that unit
+is started instead. stop / restart / status of a unit-run server go through
+systemctl (sudo for a system unit); stop doesn't disable the unit.
+
+Elsewhere, under -d a crashed server (non-zero exit) is restarted
+automatically, at most 5 times per 5 minutes; past that the daemon gives up
+and logs why. A clean exit — including \`halo server stop\` — never restarts.
 `
 
 const HELP_AGENTCORE = `Usage: halo agentcore --workspace <path> [-p N]
@@ -1111,7 +1124,7 @@ async function cmdServer(argv: string[]): Promise<void> {
   const subArgs = argv.slice(1)
 
   switch (sub) {
-    case 'start':   return cmdServerStart(subArgs, /* daemon */ false)
+    case 'start':   return cmdServerStart(subArgs)
     case 'stop':    return cmdServerStop(subArgs)
     case 'restart': return cmdServerRestart(subArgs)
     case 'status':  return cmdServerStatus()
@@ -1122,7 +1135,9 @@ async function cmdServer(argv: string[]): Promise<void> {
   }
 }
 
-async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
+/** `restart` passes the unit that owns the running server: its own user unit
+ *  is restarted in place instead of refused as "already running". */
+async function cmdServerStart(argv: string[], restart?: { owner: OwnedUnit | null }): Promise<void> {
   const { values } = parseArgs({
     args: argv,
     allowPositionals: false,
@@ -1131,7 +1146,6 @@ async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
       daemon: { type: 'boolean', short: 'd', default: false },
     },
   })
-  void _unused
 
   if (values.port !== undefined) {
     const n = parsePort(values.port)
@@ -1167,20 +1181,45 @@ async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
   // message instead of a 10s pidfile-poll timeout. The child's flock guard is
   // still the real gate, so the stale-PID false positive above is harmless here
   // (worst case the child starts and the duplicate is rejected by flock).
-  const existing = readServerPid()
-  if (existing != null && isAlive(existing)) {
-    process.stderr.write(`Server already running (PID ${existing}).\n`)
+  const pid = readServerPid()
+  const existing = pid != null && isAlive(pid) ? pid : null
+  const owner = restart ? restart.owner : existing != null ? serverUnitOf(existing, SERVER_LOCK_PATH) : null
+  const plan = planServerStart(existing, owner, restart != null)
+  if (plan.action === 'running') {
+    process.stderr.write(`Server already running (PID ${plan.pid}${plan.owner ? `, ${describeUnit(plan.owner)}` : ''}).\n`)
     process.exitCode = 1
     return
   }
+  if (plan.action === 'system-unit') {
+    // A system unit already runs this user's server: a user unit next to it
+    // would start at boot too and lose the lock to it, so drive that one.
+    const unit: ServerUnit = { scope: 'system', name: plan.unit }
+    if (values.port !== undefined) writeDim(`--port ignored: ${plan.unit} sets its own port`)
+    await startViaUnit(unit, 'start', null)
+    return
+  }
+  if (plan.action === 'user-unit') {
+    const res = installUserUnit({ port: values.port !== undefined ? parsePort(values.port)! : undefined, owner })
+    if ('error' in res) {
+      process.stderr.write(`${res.error}\n`)
+      process.exitCode = 1
+      return
+    }
+    if (!res.linger) {
+      process.stderr.write(`Warning: won't start at boot until: sudo loginctl enable-linger ${userInfo().username}\n`)
+    }
+    await startViaUnit({ scope: 'user', name: USER_UNIT }, 'restart', existing, res.linger)
+    return
+  }
+  if (plan.note) writeDim(plan.note)
 
   // Spawn a child process and detach. We re-exec the same `halo`
   // binary with `server start` (no -d) so the child runs foreground inside
   // its own session — with HALO_SUPERVISE set, so that child becomes the
   // bounded respawn supervisor and the *server* is its child (topology and
-  // pid ownership documented in server-supervisor.ts). systemd / Docker
-  // deployments run the server directly and never come through here, so they
-  // keep using their own supervisor.
+  // pid ownership documented in server-supervisor.ts). Only where systemd
+  // can't take it (plan above): systemd / Docker deployments run the server
+  // directly and keep using their own supervisor.
   const { spawn } = await import('node:child_process')
   fs.mkdirSync(path.dirname(SERVER_LOG_PATH), { recursive: true })
   const out = fs.openSync(SERVER_LOG_PATH, 'a')
@@ -1194,25 +1233,55 @@ async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
   })
   child.unref()
 
-  // Poll the pidfile for up to 10s — server startup includes template seeding,
-  // bwrap probe, etc., which can take a few seconds on a cold cache.
+  const started = await waitForServerPid(null, () => child.exitCode != null)
+  if (started != null) {
+    process.stderr.write(`Server started (PID ${started}). Logs: ${SERVER_LOG_PATH}\n`)
+    return
+  }
+  if (child.exitCode != null) {
+    // Child died before writing the lockfile.
+    process.stderr.write(`Failed to start daemon (child exited code ${child.exitCode}) — check logs at ${SERVER_LOG_PATH}\n`)
+  } else {
+    process.stderr.write(`Server didn't write a pidfile within 10s — check logs at ${SERVER_LOG_PATH}\n`)
+  }
+  process.exitCode = 1
+}
+
+/** Poll the pidfile for up to 10s for a live server other than `old` — server
+ *  startup includes template seeding, bwrap probe, etc., which can take a few
+ *  seconds on a cold cache. `failed` ends the wait early. */
+async function waitForServerPid(old: number | null, failed: () => boolean = () => false): Promise<number | null> {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
     const pid = readServerPid()
-    if (pid != null && isAlive(pid) && pid !== process.pid) {
-      process.stderr.write(`Server started (PID ${pid}). Logs: ${SERVER_LOG_PATH}\n`)
-      return
-    }
-    if (child.exitCode != null) {
-      // Child died before writing the lockfile.
-      process.stderr.write(`Failed to start daemon (child exited code ${child.exitCode}) — check logs at ${SERVER_LOG_PATH}\n`)
-      process.exitCode = 1
-      return
-    }
+    if (pid != null && pid !== old && pid !== process.pid && isAlive(pid)) return pid
+    if (failed()) return null
     await new Promise((r) => setTimeout(r, 200))
   }
-  process.stderr.write(`Server didn't write a pidfile within 10s — check logs at ${SERVER_LOG_PATH}\n`)
-  process.exitCode = 1
+  return null
+}
+
+function writeDim(line: string): void {
+  process.stderr.write(`\x1b[2m${line}\x1b[0m\n`)
+}
+
+/** `systemctl <verb>` a unit, then wait for its server (a pid other than `old`). */
+async function startViaUnit(unit: ServerUnit, verb: 'start' | 'restart', old: number | null, atBoot = false): Promise<void> {
+  if (!unitCtl(unit, verb)) {
+    process.stderr.write(`Run: ${ctlCommand(unit, verb)}\n`)
+    process.exitCode = 1
+    return
+  }
+  const pid = await waitForServerPid(old)
+  if (pid == null) {
+    const logs = unit.scope === 'user' ? SERVER_LOG_PATH : `journalctl -u ${unit.name}`
+    process.stderr.write(`Server didn't come up within 10s — check \`${ctlCommand(unit, 'status').replace(/^sudo /, '')}\` and ${logs}\n`)
+    process.exitCode = 1
+    return
+  }
+  const how = unit.scope === 'user' ? `systemd user unit ${unit.name}${atBoot ? ', starts at boot' : ''}` : describeUnit(unit)
+  const logs = unit.scope === 'user' ? ` Logs: ${SERVER_LOG_PATH}` : ''
+  process.stderr.write(`Server ${verb === 'restart' && old != null ? 'restarted' : 'started'} (PID ${pid}) — ${how}.${logs}\n`)
 }
 
 /** `halo agentcore`: env for the AgentCore A2A runtime mode, then the same
@@ -1258,6 +1327,20 @@ async function cmdServerStop(argv: string[]): Promise<void> {
   })
   const pid = readServerPid()
 
+  // A unit-run server is stopped through its unit — a signal would just get it
+  // restarted (Restart=), or leave a stopped unit systemd starts again later.
+  const owner = pid != null && isAlive(pid) ? serverUnitOf(pid, SERVER_LOCK_PATH) : null
+  if (owner) {
+    if (!unitCtl(owner, 'stop')) {
+      process.stderr.write(`Run: ${ctlCommand(owner, 'stop')}\n`)
+      process.exitCode = 1
+      return
+    }
+    process.stderr.write(`Server stopped (PID ${pid}) — ${describeUnit(owner)}.\n`)
+    if (unitEnabled(owner)) writeDim(`it starts again at boot; disable with: ${ctlCommand(owner, 'disable')}`)
+    return
+  }
+
   // Tell a `-d` supervisor this death is intentional, BEFORE the signal — it
   // reacts to the exit, so a marker written afterwards could lose the race and
   // get the server respawned. Also covers "server already dead but its
@@ -1295,8 +1378,20 @@ async function cmdServerStop(argv: string[]): Promise<void> {
 
 async function cmdServerRestart(argv: string[]): Promise<void> {
   // restart accepts -p/--port like start; no -d (always daemon).
-  await cmdServerStop([])
-  await cmdServerStart([...argv, '-d'], false)
+  const pid = readServerPid()
+  const owner = pid != null && isAlive(pid) ? serverUnitOf(pid, SERVER_LOCK_PATH) : null
+  if (owner && !isOwnUserUnit(owner)) {
+    // Some other unit (a system unit, a hand-written user unit) owns it: never
+    // signal + `-d` — that server would end up outside the unit, fighting it
+    // for the lock.
+    if (argv.length) writeDim(`--port ignored: ${owner.name} sets its own port`)
+    await startViaUnit(owner, 'restart', pid)
+    return
+  }
+  // Our own user unit is rewritten and restarted by start; a legacy `-d`
+  // server is stopped first and comes back under systemd where it applies.
+  if (!owner) await cmdServerStop([])
+  await cmdServerStart([...argv, '-d'], { owner })
 }
 
 async function cmdServerStatus(): Promise<void> {
@@ -1312,7 +1407,8 @@ async function cmdServerStatus(): Promise<void> {
     const { config } = await import('@turmind/halo-server/config')
     port = String(config.server.port)
   } catch { /* best-effort */ }
-  process.stderr.write(`running (PID ${pid}${port ? `, port ${port}` : ''})\n`)
+  const owner = serverUnitOf(pid, SERVER_LOCK_PATH)
+  process.stderr.write(`running (PID ${pid}${port ? `, port ${port}` : ''}${owner ? `, ${describeUnit(owner)}` : ''})\n`)
 }
 
 // ---------------------------------------------------------------------------
