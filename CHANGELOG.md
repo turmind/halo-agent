@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-10-12
+
 ### Added
 
 - Explorer: Download works on folders and the whole workspace. A confirm shows the approximate size and file count first, and you get one zip that the server streams as it builds; `node_modules`, `.git` and other build/cache folders are left out unless you tick the checkbox, `.env` files, secrets and Halo session data always are, and `_halo-excluded.txt` in the zip lists what was left out.
@@ -990,7 +992,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.3...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.4...HEAD
+[1.6.4]: https://github.com/turmind/halo-agent/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/turmind/halo-agent/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/turmind/halo-agent/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/turmind/halo-agent/compare/v1.6.0...v1.6.1
