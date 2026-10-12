@@ -49,9 +49,39 @@ Nginx is **not required**. Use it only for domain routing, SSL termination, or w
 
 ## Prerequisites
 
-- Node.js ≥ 22
-- pnpm 11 (pinned by the root `packageManager`; `corepack enable` picks it up)
-- AWS credentials configured (`~/.aws/credentials` or env vars) with Bedrock access
+- Node.js ≥ 22 — Ubuntu 24.04's apt `nodejs` is 18 and crashes Halo (`Invalid regular expression flags`); use NodeSource (`curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`), `brew install node@22`, or nvm / fnm
+- pnpm 11 — source builds only (pinned by the root `packageManager`; `corepack enable` picks it up)
+- AWS credentials — optional, only for the Bedrock providers (`~/.aws/credentials`, env vars, or an instance role)
+- bubblewrap (Linux) — needed for the `workspace` / `readonly` access levels: `sudo apt install bubblewrap`; on Ubuntu 23.10+ / 24.04 also the [AppArmor profile](#bubblewrap-on-ubuntu-2310-and-2404-apparmor)
+
+### bubblewrap on Ubuntu 23.10 and 24.04 (AppArmor)
+
+Ubuntu 23.10+ ships `kernel.apparmor_restrict_unprivileged_userns = 1`, and the `bubblewrap` package brings no AppArmor profile, so `apt install bubblewrap` alone isn't enough. Check with:
+
+```bash
+bwrap --ro-bind / / --die-with-parent -- /bin/true
+# bwrap: setting up uid map: Permission denied   ← blocked by AppArmor
+```
+
+Halo's boot probe sees the same failure, warns `[Sandbox] bwrap installed but cannot create namespaces (bwrap: setting up uid map: Permission denied) — falling back to app-level validation only`, and runs without an OS sandbox. Fix it with a profile that lets only `bwrap` create user namespaces:
+
+```bash
+sudo apt-get install -y bubblewrap
+sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/bwrap
+halo server restart && curl -s localhost:9527/api/health   # "sandbox":"bwrap"
+```
+
+Alternative: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (persist it in `/etc/sysctl.d/`). That also works, but it lifts the restriction for **every** program, not just bwrap.
+
+Check: `GET /api/health` reports `"sandbox":"bwrap"`; `"sandbox":null` means non-full sessions still have no OS sandbox (and no `shell_exec`).
 
 ## 1. Install dependencies and build
 
@@ -78,7 +108,7 @@ halo setup        # interactive — picks up arrow-key UI on TTYs
 
 Re-run any time to change the password, refresh model keys, or toggle optional skills. Built-in agent / skill files are force-overwritten on every run; user-created agents and skills are left alone.
 
-For Docker / CI builds where stdin isn't a TTY, see the **Docker** section below.
+For Docker / CI builds where stdin isn't a TTY, see [Non-interactive (Docker / CI) details](#non-interactive-docker--ci-details) below.
 
 ## 4. Environment variables (optional)
 
@@ -93,7 +123,9 @@ When `HALO_PASSWORD` is set, the password chosen via `halo setup` is ignored at 
 
 ## 5. Start the server
 
-> **单实例锁**：server 启动时会写 `~/.halo/global/server.lock`（有 `flock` 命令时用 flock，没有就回退到 pid 探测），退出时自动清理。如果 lock 里记录的进程还活着，新 server 会拒绝启动并打印 `kill <pid>` 提示。原因是 WeChat 长轮询循环跟 HTTP server 解耦，多个进程并存会导致同一条微信消息被 fan out 到多个 session。陈旧 lock（进程已不在）会被自动识别并清除。要手动重启先 kill 旧的：`kill $(cat ~/.halo/global/server.lock)`。
+> **Single-instance lock**: on start the server writes `~/.halo/global/server.lock` (flock when the `flock` command exists, otherwise a pid probe) and removes it on exit. If the process recorded in the lock is still alive, a new server refuses to start and prints a `kill <pid>` hint. The reason: the WeChat long-poll loop is decoupled from the HTTP server, so several processes side by side would fan the same WeChat message out to several sessions. A stale lock (process gone) is detected and cleared automatically. To restart by hand, kill the old one first: `kill $(cat ~/.halo/global/server.lock)`.
+
+Options A and B below run a **source checkout**; for the npm install see [systemd for the npm install](#option-c-systemd-for-the-npm-install).
 
 ### Option A: quick start
 
@@ -127,6 +159,33 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now halo
 ```
+
+### Option C: systemd for the npm install
+
+With `@turmind/halo` installed via npm (see [§8](#8-install-via-npm-recommended)), the unit runs the `halo` binary itself — no `WorkingDirectory`, and no `HALO_PASSWORD` once `halo setup` has stored the password hash (run setup as the same user):
+
+```bash
+sudo tee /etc/systemd/system/halo.service <<'EOF'
+[Unit]
+Description=Halo Server
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+ExecStart=/usr/bin/halo server start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now halo
+```
+
+Use `which halo` for the `ExecStart` path (`/usr/bin/halo` with apt / NodeSource Node). Every start logs `[Server] Warning: monorepo root (pnpm-workspace.yaml) not found from /, falling back to cwd` — harmless for the npm install (the monorepo root only matters in a source checkout).
 
 ### Crash semantics — why `Restart=on-failure` is load-bearing
 
@@ -196,7 +255,7 @@ cd /path/to/halo
 cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs && cd ../..
 pnpm --filter @turmind/halo-server build
 
-# 用 lock 文件里的 pid 确保旧进程彻底退出（避免孤儿进程继续长轮询）
+# use the pid in the lock file so the old process really exits (an orphan would keep long-polling)
 kill $(cat ~/.halo/global/server.lock) 2>/dev/null
 sleep 2
 cd packages/server && HALO_PASSWORD=your_password nohup node dist/index.js > /tmp/server.log 2>&1 &
@@ -244,7 +303,9 @@ Use only for a new public release; the retained details here are not extra prepa
 
 **npm token gotcha**: `npm publish` on this package needs a granular access token created with **"Bypass 2FA"** checked — scope / permission alone yields `403 Two-factor authentication or granular access token with bypass 2fa enabled is required`. `npm whoami` and `npm token list` succeed with a non-bypass token, so neither is a valid pre-flight; check `GET https://registry.npmjs.org/-/npm/v1/tokens` (with the token as bearer) and look for `"bypass_2fa": true` on the token in use before starting a release.
 
-The published package contains a single bundled JS entry (~1.4 MB), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint ≈ 120 MB after npm dedupes shared deps.
+The published package contains a single bundled JS entry (~1.4 MB), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint is about 280 MB on disk (`du`; mostly `node_modules`).
+
+Two log files: `~/.halo/logs/server.log` is the stdout/stderr capture of `halo server start -d` (what `halo server logs` tails, including the supervisor's `[respawn]` lines); `~/.halo/global/logs/server.log` is the server's structured, rotated log (level `general.logging.level`, default `warn`).
 
 ### Non-interactive (Docker / CI) details
 
@@ -254,6 +315,15 @@ The published package contains a single bundled JS entry (~1.4 MB), all built-in
 - Generates `server.jwt_secret` if missing
 - Binds the built-in agents to the provider named by `HALO_DEFAULT_PROVIDER`, when set (an unknown id only warns)
 - **Does not** set a password — supply one via `HALO_PASSWORD` env
+- **Does not** set any model key — `HALO_PASSWORD` is the admin password only
+
+To supply a model key, write it into `~/.halo/secrets/settings.yaml` as a `<<NAME>>` placeholder and set the env var at runtime (expanded on read — see [env.md](env.md)); e.g. for DeepSeek:
+
+```yaml
+deepseek:
+  secrets:
+    api_key: "<<DEEPSEEK_API_KEY>>"
+```
 
 Minimal Dockerfile:
 
@@ -261,7 +331,8 @@ Minimal Dockerfile:
 FROM node:22-slim
 RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap && rm -rf /var/lib/apt/lists/*
 RUN npm install -g @turmind/halo
-ENV HALO_PASSWORD=changeme
+RUN mkdir -p -m 700 /root/.halo/secrets && printf 'deepseek:\n  secrets:\n    api_key: "<<DEEPSEEK_API_KEY>>"\n' > /root/.halo/secrets/settings.yaml   # key comes from `docker run -e DEEPSEEK_API_KEY=…`
+ENV HALO_PASSWORD=changeme HALO_DEFAULT_PROVIDER=deepseek
 ENV HALO_PORT=9527
 EXPOSE 9527
 CMD halo setup -y && halo server start

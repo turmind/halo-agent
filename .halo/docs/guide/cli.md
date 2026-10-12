@@ -110,6 +110,12 @@ git diff HEAD~1 | halo cli -w /path/to/review-ws "review this diff"
 halo cli "check for issues" && echo "OK" || echo "FAILED"
 ```
 
+When stdin is not a TTY, `halo cli` reads it to EOF before running (that's how piped input is appended). In scripts, CI, cron or `ssh host 'halo cli …'` with nothing piped in, stdin is often an open non-TTY that never closes and the run waits forever — pass `</dev/null`:
+
+```bash
+halo cli "summarize today's commits" </dev/null
+```
+
 ## TUI Mode (interactive)
 
 ```bash

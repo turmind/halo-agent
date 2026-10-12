@@ -96,7 +96,7 @@ loop {
 }
 ```
 
-> **单实例依赖**：长轮询循环跟 HTTP server 解耦 —— 即便 `:9527` 没绑上，只要进程活着，`runAccountLoop` 就继续拉消息。如果有孤儿 server 进程残留，每个进程都会独立收到同一条消息并 fan out 到不同 session（每个进程内存里的 `activeOverrides` 是独立的，`findActiveSessionId` 可能返回不同结果）。因此 `src/index.ts` 在启动时要抢 `~/.halo/global/server.pid` 单实例锁，详见 [dev/deploy.md](../dev/deploy.md#4-start-the-server)。
+> **单实例依赖**：长轮询循环跟 HTTP server 解耦 —— 即便 `:9527` 没绑上，只要进程活着，`runAccountLoop` 就继续拉消息。如果有孤儿 server 进程残留，每个进程都会独立收到同一条消息并 fan out 到不同 session（每个进程内存里的 `activeOverrides` 是独立的，`findActiveSessionId` 可能返回不同结果）。因此 `src/index.ts` 在启动时要抢 `~/.halo/global/server.pid` 单实例锁，详见 [dev/deploy.md](../dev/deploy.md#5-start-the-server)。
 
 `handleInbound(account, msg)` — WeChat-specific head, then the shared tail:
 1. Extract `from_user_id` / text + media items / `context_token`

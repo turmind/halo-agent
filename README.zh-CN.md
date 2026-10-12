@@ -15,11 +15,25 @@ Halo 是一个用自然语言驱动的多 Agent 工作区。主 Agent 理解你�
 
 ## 安装
 
+Halo 需要 **Node.js 22+**。Ubuntu 24.04 自带的 `nodejs` 是 18，跑不起来（会报 `Invalid regular expression flags` 崩溃），所以先装 22：
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs   # Ubuntu / Debian
+brew install node@22           # macOS（keg-only：按 brew 的提示加进 PATH）
+nvm install 22                 # 用 nvm（或：fnm install 22）
+```
+
+然后：
+
 ```bash
 npm install -g @turmind/halo   # 一个二进制，全部子命令
 halo setup                     # 交互式：密码 / 端口 / 模型 key / 可选技能
 halo server start              # → 打开 http://localhost:9527
 ```
+
+- **`sudo`**：系统级 Node（apt / NodeSource 装的）执行 `npm install -g` 要加 `sudo`；用 nvm / fnm 则不用。
+- **`halo setup` 里**：问到 *Configure model provider keys now?* 时选 **Configure…**（默认是 Skip）。选好 provider、粘贴 key，再选 **── Done**（列表最后一项，按 ↑ 可以直接绕到它），最后在 *Switch default agent to …* 上回车。
+- **远程主机上**：用 `halo server start -d`（不加 `-d` 会留在前台，SSH 一断就退出），再用 `ssh -L 9527:localhost:9527 user@host` 建隧道，在本机打开 `http://localhost:9527`。不要在安全组里放开 9527 —— 见[现状与局限](#现状与局限)。
 
 任意一家模型 key 就能跑——Anthropic、OpenAI（或任何 OpenAI 兼容端点）、DeepSeek、Kimi、Qwen……`halo setup` 会问你要并绑到默认 Agent 上。**不需要** AWS 账号，Bedrock 只是其中一个 provider。
 
@@ -27,6 +41,8 @@ halo server start              # → 打开 http://localhost:9527
 
 > [!IMPORTANT]
 > **第一条消息就报 `Could not load credentials from any providers`？** 内置的 `default` Agent 出厂指向 AWS Bedrock，而你在 `halo setup` 里跳过了 *"Bind the default agent to a provider you just configured?"* 这一步。重跑一次 `halo setup`，或去管理台 **Agents → default** 把 model provider 切过去即可。（有可用 AWS 凭证链的 Bedrock 用户不受影响。）详见[快速开始](#快速开始)。
+>
+> **在带实例角色的 EC2 / ECS 上不会报错**：没绑定的安装会悄悄改用该 AWS 账号上的 Bedrock Claude。可以看 `halo cli -v "hi"` 输出末尾的模型名，或在 **Agents → default** 里确认。
 
 ## 为什么是 Halo
 
@@ -76,7 +92,7 @@ my-project/
 
 ## 开箱即有
 
-- **11 家模型 Provider，一套运行时** —— provider 和模型按 Agent 配置：重活给 Bedrock 上的 Claude，例行子任务给便宜的本地区模型，零代码改动。
+- **多家模型 Provider，一套运行时** —— provider 和模型按 Agent 配置：重活给 Bedrock 上的 Claude，例行子任务给便宜的本地区模型，零代码改动。
 - **IDE 级管理台** —— 聊天 + Monaco 编辑器 + 文件树 + Git 面板 + 终端（xterm.js），一个浏览器标签页全搞定。
 - **技能系统** —— Markdown 技能定义按需注入提示词；工作区级或全局，不用写代码。
 - **Cron 定时任务** —— 定时（循环或一次性）跑 Agent，产出自动分发到绑定的聊天渠道。
@@ -99,13 +115,15 @@ my-project/
 
 | 前置条件 | 说明 |
 |---|---|
-| Node.js >= 22 | 唯一的硬性系统要求 |
+| Node.js >= 22 | 必需 —— 安装方法见[安装](#安装)（Ubuntu 24.04 apt 里的 `nodejs` 是 18，跑不起来） |
+| 操作系统 | Linux x64 和 arm64、macOS、Windows |
 | 任一受支持模型 Provider 的 API key | `halo setup` 时填入；AWS Bedrock 用户可以不填 key，走标准凭证链（env / `~/.aws` / 实例角色） |
-| pnpm >= 9 | 仅源码构建需要 |
+| bubblewrap | 仅 Linux，`workspace` / `readonly` 访问级别需要：`sudo apt install bubblewrap`。Ubuntu 23.10+ / 24.04 还要加上 [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)。缺了它，`/api/health` 显示 `sandbox: null`，非 full 会话无法执行 shell |
+| pnpm 11 | 仅源码构建需要 |
 
-- **把 Provider 绑到 Agent 上**：用哪家是 Agent 自己的配置，内置 `default` Agent 出厂指向 AWS Bedrock。你配了别家时，`halo setup` 最后会问要不要把内置 Agent 改绑过去（只配了一家且没填 Bedrock key 时，直接回车就是绑）。跳过了？重跑 `halo setup`，或去 **Agents → default → model provider** 切一次。
+- **把 Provider 绑到 Agent 上**：用哪家是 Agent 自己的配置，内置 `default` Agent 出厂指向 AWS Bedrock。你配了别家时，`halo setup` 最后会问要不要把内置的 `default` / `executor` / `deep-executor` 改绑过去（只配了一家且没填 Bedrock key 时，直接回车就是绑）。跳过了？重跑 `halo setup`，或去 **Agents → default → model provider** 切一次。目标模式和 `/evo` 用的是各自的 Agent（`goal`、`__evo_agent__`、`__score__`、`__apply_agent__`），它们仍留在 Bedrock 上 —— 不用 Bedrock 的话，去 **Agents** 里把它们也改绑。
 - **升级**：`halo upgrade && halo server restart`。启动检查会在磁盘模板版本落后时自动刷新内置文档 / Agent / 技能。
-- **Docker / CI**：`halo setup --non-interactive`，凭证走 `HALO_PASSWORD` 环境变量；`HALO_DEFAULT_PROVIDER=<provider>` 可免提示直接绑定内置 Agent。
+- **Docker / CI**：`halo setup --non-interactive`；`HALO_PASSWORD` 只是*管理台*密码，`HALO_DEFAULT_PROVIDER=<provider>` 可免提示直接绑定内置 Agent。模型 key 写进 `~/.halo/secrets/settings.yaml` —— 例如在 `deepseek.secrets` 下写 `api_key: "<<DEEPSEEK_API_KEY>>"`，运行时再设置 `DEEPSEEK_API_KEY` 环境变量（见 [env.md](.halo/docs/dev/env.md)）。
 - **源码构建**：`pnpm install && pnpm build`。
 
 ### 用 curl 直接对话

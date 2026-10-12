@@ -522,7 +522,19 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   close. Fixed by matching `Get-CimInstance Win32_Process` `.ExecutablePath`,
   which is readable from either bitness. Rule: **any PowerShell the installer
   runs is 32-bit** — never filter processes by `Get-Process .Path` /
-  `.MainModule` there. To tell the two causes apart on a user's box, list
+  `.MainModule` there. The match itself was a second trap: `$INSTDIR` used to
+  be spliced into a single-quoted PS literal with `-like`, so a `'` in the
+  install path ended the string (parse error, nothing killed) and `[` / `]`
+  read as wildcards (could match a sibling dir). The macro now puts `$INSTDIR`
+  in env var `HALO_INSTDIR` (`System::Call
+  'kernel32::SetEnvironmentVariable(…)'`, inherited by the `nsExec` child) and
+  matches `ExecutablePath` with a literal, case-insensitive
+  `.StartsWith($env:HALO_INSTDIR + '\')` — rule: never splice a path into the
+  PS command line. A live `jupyter server` (ipynb kernels) could hold the
+  install dir open too, since it inherited the server's cwd inside it; both
+  jupyter spawns now pass `cwd: os.homedir()` (see
+  [canvas-extensions.md](../design/canvas-extensions.md#notebook-kernels-jupyter-proxy)).
+  To tell the two causes apart on a user's box, list
   what still runs from the install dir (64-bit PowerShell): `Get-CimInstance
   Win32_Process | ? ExecutablePath -like "$env:LOCALAPPDATA\Programs\Halo\*"`
   — non-empty = this cause (append `| % { Stop-Process -Id $_.ProcessId

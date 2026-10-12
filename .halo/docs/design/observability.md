@@ -8,12 +8,12 @@ A vendor-neutral observability layer built on the official OpenTelemetry JS SDK.
 
 | key | type | default | description |
 |---|---|---|---|
-| `general.observability.endpoint` | string | `''` | OTLP base URL of an OpenTelemetry collector (e.g. `http://localhost:4318`). Traces, metrics and logs all exported over OTLP http/protobuf — `http://` or `https://`, on the collector's OTLP/HTTP port (4318 by default); gRPC (4317) not supported. Empty = off. Restart required. |
-| `general.observability.service_name` | string | `halo` | OTel resource `service.name`. Restart required. |
-| `general.observability.headers` | string, **secret** | `''` | Extra headers for every OTLP request, comma-separated `k=v` (e.g. `authorization=Bearer …`). Restart required. |
-| `general.observability.capture_content` | boolean | `false` | Put prompt / completion / tool argument+result text on spans (`gen_ai.*.messages` etc.). Off = metadata only (model, tokens, latency, tool names). Restart required. |
+| `general.observability.endpoint` | string | `''` | OTLP base URL of an OpenTelemetry collector (e.g. `http://localhost:4318`). Traces, metrics and logs all exported over OTLP http/protobuf — `http://` or `https://`, on the collector's OTLP/HTTP port (4318 by default); gRPC (4317) not supported. Empty = off. Server: restart required; cron / evolution runs: next run. |
+| `general.observability.service_name` | string | `halo` | OTel resource `service.name`. Server: restart required; cron / evolution runs: next run. |
+| `general.observability.headers` | string, **secret** | `''` | Extra headers for every OTLP request, comma-separated `k=v` (e.g. `authorization=Bearer …`). Server: restart required; cron / evolution runs: next run. |
+| `general.observability.capture_content` | boolean | `false` | Put prompt / completion / tool argument+result text on spans (`gen_ai.*.messages` etc.). Off = metadata only (model, tokens, latency, tool names). Server: restart required; cron / evolution runs: next run. |
 
-All four keys are `globalOnly` and take effect on server restart — `otel.ts` reads them once at boot, before anything else touches the OTel API. A `halo cli` / `halo tui` process reads them the same way at its own start, so a change reaches the next run.
+All four keys are `globalOnly`. The server's own exporter switches only on restart — `otel.ts` reads them once at boot, before anything else touches the OTel API. A `halo cli` / `halo tui` process reads them the same way at its own start, so a change reaches the next run — including the cron and evolution children the server spawns, which don't inherit the server's boot-time values (see the child-env rule below). A changed or cleared endpoint therefore reaches their next run without a server restart.
 
 **Which process exported.** Every process shares `service.name`, so the resource also carries `halo.process` = `server` \| `cli` \| `tui` (`HaloProcess` in `otel.ts`; `initObservability()` defaults to `server`). Cron and evolution children are `halo cli` runs, so they report `cli`; their `session.id` (`cron-<jobId>`, or the `__evo_agent__`-style agent name) tells them apart from a hand-run cli. The startup log line names it: `[Observability] OTLP export → … (service.name=…, halo.process=cli, …)`.
 
@@ -25,6 +25,8 @@ All four keys are `globalOnly` and take effect on server restart — `otel.ts` r
 - always `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` (declarative — the `*-otlp-proto` exporters are hard-wired to it; this just makes an externally-loaded SDK agree on wire protocol)
 
 No `OTEL_EXPORTER_OTLP_ENDPOINT` after the mapping → `enabled=false`, `initObservability()` returns without registering anything.
+
+**Child env.** Every key the mapping actually set (one that was unset before) is recorded in `settingsOtelEnvKeys` (`child-env.ts`), and `cleanChildEnv()` strips those keys from every child it builds. Inherited, the server's boot-time values would win a cron / evolution `halo cli` child's own `??=`, so a changed endpoint would never arrive and a cleared one would keep exporting until a server restart. Operator-exported `OTEL_*` keys aren't recorded and still pass through ("operator wins" holds in children too). Side effect: terminals, sandbox shells and the Jupyter server — also built from `cleanChildEnv()` — no longer inherit Halo's settings-derived collector config.
 
 **External-SDK detection.** If an external SDK is already registered (e.g. via `node --require` of a vendor distro) — detected by comparing `ProxyTracerProvider.getDelegate()` against a fresh proxy's `NoopTracerProvider` delegate — halo logs `[Observability] external OpenTelemetry SDK already registered — using it, skipping built-in exporters` and skips its own exporters. The `??=` env mapping above still applies first, so the external SDK picks up halo's settings unless it already set its own.
 

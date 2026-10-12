@@ -2,6 +2,8 @@
 
 What to do the first time you open Halo.
 
+Not installed yet? The [README Install section](../../../README.md#install) covers the three things a fresh box trips on: Node 22 first (Ubuntu 24.04's own `nodejs` is 18 and won't work), `sudo npm install -g` with a system-wide Node, and picking **Configure…** in `halo setup` (the key step defaults to Skip) before binding the default agent.
+
 ## Log in
 
 Open `http://localhost:9527` (or your deployment URL) in a browser and enter the password.
@@ -13,6 +15,8 @@ Open `http://localhost:9527` (or your deployment URL) in a browser and enter the
 ## Open a workspace
 
 After login, you land in the workspace. A URL with `?folder=/abs/path` opens that directory directly; without `?folder`, Halo reopens the last workspace you used, or your home directory if there isn't one — everything still works.
+
+`halo cli` / `halo tui` use the current directory as the workspace, so running them in `$HOME` makes `~/.halo` itself a workspace (`halo.db`, `sessions/`, `memory/`, `canvas/` appear next to `global/` and `secrets/`). `cd` into a project, or pass `-w <dir>`, to keep them apart.
 
 The Explorer top bar has two ways to switch workspace:
 - **Type an absolute path** + Enter — invalid paths raise an error
@@ -65,17 +69,21 @@ After `halo setup`:
 ```
 ~/.halo/
 ├── global/                   ← server-managed, see overwrite policy below
+│   ├── .template-version     ← seed version stamp, compared on every start
 │   ├── INSTRUCTIONS.md       ← refreshed on upgrade
 │   ├── prompts/{bootstrap,all,root}/   ← refreshed on upgrade
 │   ├── models/<provider>.yaml          ← refreshed on upgrade
 │   ├── docs/                 ← refreshed on upgrade (bundled platform docs)
 │   ├── agents/               ← built-in ids refreshed; user-added ones untouched
-│   └── skills/               ← built-in ids refreshed; user-added ones untouched
-└── secrets/                  ← never overwritten after first creation
+│   ├── skills/               ← built-in ids refreshed; user-added ones untouched
+│   ├── aliases.yaml          ← command aliases, seeded once, never overwritten
+│   └── extensions/           ← preview extensions, created empty
+└── secrets/                  ← mode 700, files 600; never overwritten after first creation
     ├── config.yaml           ← leaf-merged: new server knobs added, existing values kept
-    ├── settings.yaml         ← created empty if missing; otherwise untouched
-    └── channels/channels.db  ← per-channel account state
+    └── settings.yaml         ← created empty if missing; otherwise untouched
 ```
+
+The first `halo server start` adds the runtime state: `global/{a2a,cron,evo,runs}.db`, `global/logs/`, `global/models.d/`, `global/server.lock`, `global/server.stop` (after a stop), and `secrets/channels/channels.db` (per-channel account state).
 
 **When does "refreshed on upgrade" actually run?** `halo setup` always re-runs the seed; the server's startup check — and the same check at the start of `halo cli` / `halo tui` — also re-runs it automatically when `~/.halo/global/.template-version` is behind the bundled `TEMPLATE_VERSION`. So the routine flow `halo upgrade && halo server restart` is enough — no need to remember `halo setup` — and a CLI-only user just runs `halo cli` / `halo tui` after `halo upgrade`.
 

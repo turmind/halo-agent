@@ -52,8 +52,8 @@ nohup node dist/index.js >> /dev/null 2>&1 &   # HALO_PASSWORD read from env/con
 
 - Node.js ≥ 22 (better-sqlite3 native binding is bound to v22)
 - pnpm 11 (pinned by the root `packageManager`; `corepack enable` picks it up)
-- AWS credentials configured (`~/.aws/credentials` or env vars) with Bedrock access
-- bubblewrap (`sudo apt install bubblewrap`) — OS-level sandbox for non-full access levels on Linux (macOS uses the built-in Seatbelt). Without one, only app-level path validation is active and `shell_exec` is blocked for non-full sessions
+- AWS credentials (`~/.aws/credentials`, env vars or an instance role) — only for the Bedrock providers; any other provider just needs its API key
+- bubblewrap (`sudo apt install bubblewrap`) — OS-level sandbox for non-full access levels on Linux (macOS uses the built-in Seatbelt). Without one, only app-level path validation is active and `shell_exec` is blocked for non-full sessions. On Ubuntu 23.10+ / 24.04 AppArmor blocks it (`bwrap: setting up uid map: Permission denied`) until you add a profile — see [deploy.md](deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)
 
 ### nvm PATH
 

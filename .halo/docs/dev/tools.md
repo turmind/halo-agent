@@ -132,11 +132,11 @@ Each session carries `accessLevel: 'readonly' | 'workspace' | null` (persisted i
 
 `view_image` is additionally gated on `capabilities.image` (see its section above). Models without vision support get the same lists minus `view_image` — so a non-vision model on `readonly` ends up with 4 tools, not 5.
 
-OS sandbox backend per platform — `getSandboxBackend()` in `sandbox.ts` returns `'bwrap' | 'seatbelt' | null` after the boot probe (`initBwrapCheck()`), logged at startup as `[Server] OS sandbox: …` and exposed as `sandbox` on `GET /api/health`:
+OS sandbox backend per platform — `getSandboxBackend()` in `sandbox.ts` returns `'bwrap' | 'seatbelt' | null` after the boot probe (`initBwrapCheck()`), logged at startup as `[Server] OS sandbox: …` (`info` level, so hidden at the default `warn`; a bwrap that is installed but fails the probe does print `[Sandbox] bwrap installed but cannot create namespaces (…)` at the default level) and exposed as `sandbox` on `GET /api/health`:
 
 | Platform | `shell_exec` | File tools | Dependency |
 |---|---|---|---|
-| Linux | bwrap | bwrap | `bubblewrap` (`apt install bubblewrap`); the probe runs a real sandboxed no-op, so an install that can't create namespaces (Ubuntu 24.04 AppArmor userns restriction) counts as unavailable |
+| Linux | bwrap | bwrap | `bubblewrap` (`apt install bubblewrap`); the probe runs a real sandboxed no-op, so an install that can't create namespaces (Ubuntu 23.10+ / 24.04 AppArmor userns restriction: `bwrap: setting up uid map: Permission denied`) counts as unavailable — fix in [deploy.md](deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor) |
 | macOS | Seatbelt (`/usr/bin/sandbox-exec -p <profile>`) | in-process, behind `assertPathAllowed` | none — ships with macOS (Apple marks it deprecated, but it's present on every release). The probe runs `sandbox-exec -p '(version 1)(allow default)' /usr/bin/true` |
 | Windows | none | none | — see below |
 

@@ -15,11 +15,25 @@ Halo is a multi-agent workspace you drive in plain language. A primary agent rea
 
 ## Install
 
+Halo needs **Node.js 22+**. Ubuntu 24.04's own `nodejs` package is 18 and won't work (Halo crashes with `Invalid regular expression flags`), so get 22 first:
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs   # Ubuntu / Debian
+brew install node@22           # macOS (keg-only: add it to PATH as brew prints)
+nvm install 22                 # with nvm (or: fnm install 22)
+```
+
+Then:
+
 ```bash
 npm install -g @turmind/halo   # one binary, all subcommands
 halo setup                     # interactive: password / port / model keys / optional skills
 halo server start              # → open http://localhost:9527
 ```
+
+- **`sudo`**: with a system-wide Node (apt / NodeSource), `npm install -g` needs `sudo`; with nvm / fnm it doesn't.
+- **In `halo setup`**: at *Configure model provider keys now?* pick **Configure…** (the default is Skip). Pick your provider and paste the key, choose **── Done** (the last row; ↑ wraps to it), then press Enter on *Switch default agent to …*.
+- **On a remote box**: run `halo server start -d` (plain `start` stays in the foreground and dies with your SSH session), tunnel with `ssh -L 9527:localhost:9527 user@host`, and open `http://localhost:9527` on your machine. Don't open 9527 in a security group — see [Status & Limitations](#status--limitations).
 
 Bring any one model key — Anthropic, OpenAI (or any OpenAI-compatible endpoint), DeepSeek, Kimi, Qwen… `halo setup` asks for it and binds it to the default agent. An AWS account is **not** required; Bedrock is just one of the providers.
 
@@ -27,6 +41,8 @@ Prefer a desktop app? Each [GitHub release](https://github.com/turmind/halo-agen
 
 > [!IMPORTANT]
 > **First message fails with `Could not load credentials from any providers`?** The built-in `default` agent ships pointing at AWS Bedrock, and you skipped the *"Bind the default agent to a provider you just configured?"* step in `halo setup`. Either re-run `halo setup`, or open **Agents → default** in the admin and switch its model provider. (Bedrock users with a working AWS credential chain are unaffected.) Details in [Quick Start](#quick-start).
+>
+> **On EC2 / ECS with an instance role there is no error**: an unbound install quietly uses Bedrock Claude on that AWS account instead. Check which model answers in the footer of `halo cli -v "hi"`, or under **Agents → default**.
 
 ## Why Halo
 
@@ -76,7 +92,7 @@ And when you'd rather have ambience than logs: [Halo City](#halo-city) renders t
 
 ## Also in the box
 
-- **11 model providers, one runtime** — provider and model set per-agent: Claude on Bedrock for the heavy lifting, a cheap regional model for routine sub-tasks. No code changes.
+- **Many model providers, one runtime** — provider and model set per-agent: Claude on Bedrock for the heavy lifting, a cheap regional model for routine sub-tasks. No code changes.
 - **IDE-grade admin** — chat + Monaco editor + file explorer + git panel + terminal (xterm.js) in one browser tab.
 - **Skills** — markdown skill definitions injected into prompts on demand; workspace-scoped or global, no code required.
 - **Cron tasks** — scheduled agent runs (recurring or one-shot) whose output fans out to your chat channels.
@@ -99,13 +115,15 @@ Published on npm as [`@turmind/halo`](https://www.npmjs.com/package/@turmind/hal
 
 | Prerequisite | Notes |
 |---|---|
-| Node.js >= 22 | the only hard system requirement |
+| Node.js >= 22 | required — how to get it: see [Install](#install) (Ubuntu 24.04's apt `nodejs` is 18 and won't work) |
+| OS | Linux x64 and arm64, macOS, Windows |
 | An API key for any supported model provider | entered during `halo setup`; AWS Bedrock users can leave keys unset and use the standard credential chain (env / `~/.aws` / instance role) instead |
-| pnpm >= 9 | source builds only |
+| bubblewrap | Linux only, needed for the `workspace` / `readonly` access levels: `sudo apt install bubblewrap`. On Ubuntu 23.10+ / 24.04 also add the [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor). Without it `/api/health` shows `sandbox: null` and non-full sessions can't run shell |
+| pnpm 11 | source builds only |
 
-- **Bind your provider to the agent**: agents choose providers, and the built-in `default` agent ships pointing at AWS Bedrock. When you configure a different provider, `halo setup` ends by offering to rebind the built-in agents to it (with a single provider and no Bedrock keys, Enter accepts). Skipped it? Re-run `halo setup`, or switch once in **Agents → default → model provider**.
+- **Bind your provider to the agent**: agents choose providers, and the built-in `default` agent ships pointing at AWS Bedrock. When you configure a different provider, `halo setup` ends by offering to rebind the built-in `default` / `executor` / `deep-executor` agents to it (with a single provider and no Bedrock keys, Enter accepts). Skipped it? Re-run `halo setup`, or switch once in **Agents → default → model provider**. Goal mode and `/evo` run their own agents (`goal`, `__evo_agent__`, `__score__`, `__apply_agent__`), which stay on Bedrock — rebind them under **Agents** if you don't use Bedrock.
 - **Upgrade**: `halo upgrade && halo server restart`. The startup check refreshes bundled docs / agents / skills automatically when the on-disk template version is behind.
-- **Docker / CI**: `halo setup --non-interactive` and supply credentials via the `HALO_PASSWORD` env var; `HALO_DEFAULT_PROVIDER=<provider>` binds the built-in agents without a prompt.
+- **Docker / CI**: `halo setup --non-interactive`; `HALO_PASSWORD` is the *admin* password only, and `HALO_DEFAULT_PROVIDER=<provider>` binds the built-in agents without a prompt. Model keys go in `~/.halo/secrets/settings.yaml` — e.g. `api_key: "<<DEEPSEEK_API_KEY>>"` under `deepseek.secrets`, with `DEEPSEEK_API_KEY` set at runtime ([env.md](.halo/docs/dev/env.md)).
 - **From source**: `pnpm install && pnpm build`.
 
 ### Talk to it from curl

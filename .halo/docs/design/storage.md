@@ -413,16 +413,16 @@ A value of the form `<<ENV_NAME>>` is replaced at read time with `process.env.EN
 | `general.logging.level` | warn | `debug` / `info` / `warn` / `error`. Restart required |
 | `general.a2a.public_url` | `''` | Global-only. Origin peers use to reach this server for A2A (no trailing slash): the agent card's interface URL and the default push-webhook base for `a2a_send`. Empty = derived from the request host (no outbound dispatch without it or a remote's `push_base`). Env `HALO_A2A_PUBLIC_URL` overrides. See [a2a.md](a2a.md) |
 | `general.a2a.url_allowlist` | `100.64.0.0/10,*.ts.net` | Global-only. CIDRs / host patterns A2A egress may reach besides public https (push webhooks, remote cards and RPC, inbound image URLs). Private / loopback only when listed; plain http only to listed hosts / ranges; link-local always refused. See [a2a.md](a2a.md#push-delivery-and-url-policy) |
-| `general.observability.endpoint` | `''` | OTLP base URL of an OpenTelemetry collector (e.g. `http://localhost:4318`); empty = off. Restart required. See [observability.md](observability.md) |
-| `general.observability.service_name` | `halo` | OTel resource `service.name`. Restart required |
-| `general.observability.headers` | `''` | **Secret.** Extra OTLP request headers, comma-separated `k=v`. Restart required |
-| `general.observability.capture_content` | `false` | Put prompt/completion/tool text on spans. Restart required |
+| `general.observability.endpoint` | `''` | OTLP base URL of an OpenTelemetry collector (e.g. `http://localhost:4318`); empty = off. Restart required (server); cron / evolution runs use a new value on their next run. See [observability.md](observability.md) |
+| `general.observability.service_name` | `halo` | OTel resource `service.name`. Restart required (server); cron / evolution: next run |
+| `general.observability.headers` | `''` | **Secret.** Extra OTLP request headers, comma-separated `k=v`. Restart required (server); cron / evolution: next run |
+| `general.observability.capture_content` | `false` | Put prompt/completion/tool text on spans. Restart required (server); cron / evolution: next run |
 
 Schema source: [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`.
 
 ### Caching
 
-`config.ts` reads settings.yaml lazily with mtime-watching: every read stats the file and reparses if mtime changed. UI saves bump mtime, so the server picks up new values on the next read **without a restart** — except the keys marked "Restart required" above plus `general.agent.max_retries`, which `config.ts` reads once into object literals at boot (observability: `initObservability()`); their schema fields carry `restartRequired: true` and the Settings page shows a restart notice after saving one.
+`config.ts` reads settings.yaml lazily with mtime-watching: every read stats the file and reparses if mtime changed. UI saves bump mtime, so the server picks up new values on the next read **without a restart** — except the keys marked "Restart required" above plus `general.agent.max_retries`, which `config.ts` reads once into object literals at boot (observability: `initObservability()`, mapped onto `OTEL_*` env; the cron / evolution `halo cli` children don't inherit those settings-derived vars — `cleanChildEnv()` strips them — so each re-reads settings at its own start); their schema fields carry `restartRequired: true` and the Settings page shows a restart notice after saving one.
 
 ### Orphans
 
