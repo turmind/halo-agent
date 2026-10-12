@@ -21,6 +21,7 @@ import { globalExtensionsDir } from '../paths.js'
 
 export const MANIFEST_FILE = 'halo-extension.json'
 
+// halo-hub/scripts/pack.mjs mirrors these rules; test/extension-manifest-rules-drift.test.ts trips on change
 /** Extension ids are directory names AND URL segments: lowercase slug only —
  *  tighter than routes/workspace-path.ts isSafeIdSegment (which admits `.`,
  *  `:`, `>` for session ids), so `.tmp-*` / `.old-*` staging dirs can never
