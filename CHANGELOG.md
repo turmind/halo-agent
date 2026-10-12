@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Explorer: Download works on folders and the whole workspace. A confirm shows the approximate size and file count first, and you get one zip that the server streams as it builds; `node_modules`, `.git` and other build/cache folders are left out unless you tick the checkbox, `.env` files, secrets and Halo session data always are, and `_halo-excluded.txt` in the zip lists what was left out.
 
+### Fixed
+
+- Observability: a changed or cleared `general.observability.endpoint` (and headers / service name) now reaches cron and evolution runs on their next run. Before, they kept the value the server booted with until the server restarted; the server's own export still switches on restart.
+- Desktop (Windows): the installer's leftover-process cleanup no longer breaks when the install path contains `'`, and treats `[` `]` in it literally.
+- Notebook: the Jupyter server starts in the home folder instead of the Halo server's working directory, so on the desktop app it no longer keeps the install folder open.
+
 ## [1.6.3] - 2026-10-11
 
 ### Fixed
