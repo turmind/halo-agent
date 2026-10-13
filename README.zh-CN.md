@@ -15,7 +15,7 @@
 
 https://github.com/user-attachments/assets/45f86359-2d83-4c61-b937-0747b184340e
 
-<p align="center"><sub>83 秒看完一次真实运行：从一句话到成品页面。</sub></p>
+<p align="center"><sub>83 秒看完一次真实运行：一句话下达任务 → 主 Agent 读需求、做计划，并行拉起四个 executor → Halo City 把同一场运行画成像素小镇 → executor 陆续汇报，主 Agent 组装成页，在 Canvas 里预览。从发出指令到完工，真实耗时 2 小时 06 分；加速和跳过的片段在画面上都有标注。</sub></p>
 
 ## 安装
 
@@ -76,6 +76,8 @@ my-project/
 
 把 `.halo/` 和代码一起提交，克隆的人就拿到同样的 Agent、技能和知识 —— 是真实文件本身，不是导出物（模型 key 由对方自备）；`/workspace share` 则把配置打成 zip，不含会话、记忆和密钥。从 Halo 的源代码管理面板初始化仓库时，会写好一份 `.gitignore`，排除会话、日志、`tmp/` 和数据库；已有的仓库需要自己加上这几项，另外别把真实 key 写进 `.halo/settings.yaml`（用 `<<ENV>>` 占位）。
 
+没有向量数据库：`.halo/INDEX.md` 每一轮都会注入提示词，Agent 需要时再去读它指向的文档。Halo 自己也是这么开发的 —— 本仓库的 `.halo/` 里就放着 dev、release、reviewer 这几个 Agent 和它们依据的文档，大部分提交都是通过 Halo 完成的（带着 `Co-Authored-By: halo` 署名）。
+
 ### 🌐 一个工作区，所有屏幕
 
 在浏览器里开工，地铁上用微信看进度，Telegram 或 Slack 里补一句需求，最后在终端里收尾。所有渠道连的都是*同一个*工作区 —— 渠道只是门，工作区才是房间；full 级账号还能用 `/session switch` 接上在别处开的对话。
@@ -89,17 +91,19 @@ my-project/
 
 ### 👁 看着它思考
 
-主 Agent 的推理、每次工具调用（包括子 Agent 的）、每处文件改动都实时可见；子 Agent 的完整日志在 **Sessions** 标签页里打开。打断是优雅的（对话修复，而非硬杀进程），子 Agent 完工自动汇报。你始终在环内，而不是「跑起来听天由命」。
+主 Agent 的推理、每次工具调用（包括子 Agent 的）、每处文件改动都实时可见；子 Agent 的完整日志在 **Sessions** 标签页里打开，它干活时会持续更新。打断是优雅的（对话修复，而非硬杀进程），子 Agent 完工自动汇报。你始终在环内，而不是「跑起来听天由命」。
 
 ![聊天面板 —— 主 Agent 并行派发三个 executor 子 Agent](assets/orchestration.jpg)
 <p align="center"><sub>主 Agent 并行拉起三个 executor —— 每个 <code>start_session</code>、每次工具调用都即时可见。</sub></p>
 
 ## 开箱即有
 
-- **按 Agent 选模型** —— 每个 Agent 各自选 provider 和模型：重活给 Bedrock 上的 Claude，例行子任务给便宜的模型，零代码改动。
+- **按 Agent 选模型** —— 每个 Agent 各自选 provider 和模型：内置 Agent 出厂时，主 Agent 用 Claude Opus，它派出去的 executor 用 Claude Sonnet；例行子任务也可以交给便宜的模型，零代码改动。
 - **IDE 级管理台** —— 聊天 + Monaco 编辑器 + 文件树 + Git 面板 + 终端（xterm.js），一个浏览器标签页全搞定，四套主题可选。
 - **技能和 Agent 都是文件** —— 技能是按需注入的 Markdown，Agent 是一份人设加一个 `agent.yaml`。工作区级或全局，不用写代码。
-- **预览扩展** —— 给编辑器装的查看器和小应用：3D 模型、draw.io、Excalidraw、Jupyter 笔记本、会议录音等，来自 [halo-hub](https://github.com/turmind/halo-hub)。用 `/extension install <id>` 安装，或在 **Settings → Extensions** 上传 zip（[设计](.halo/docs/design/canvas-extensions.md)）。
+- **扩展** —— 来自 [halo-hub](https://github.com/turmind/halo-hub) 的查看器和小应用：3D 模型、draw.io、Excalidraw、Jupyter 笔记本、会议录音等。除了在编辑器里打开文件，扩展还能在左侧活动栏加一个页面（如 Halo City），或在聊天输入栏加一个按钮（如语音输入）。用 `/extension install <id>` 安装，或在 **Settings → Extensions** 上传 zip（[设计](.halo/docs/design/canvas-extensions.md)）。
+- **语音输入** —— `/extension install voice-input` 之后，聊天输入栏会多一个麦克风：点一下开始录，再点一下停止，文字插到光标处，永远不会自动发送。转写就在你自己的 Halo 服务器上跑（SenseVoice-Small + Silero VAD，基于 sherpa-onnx），支持普通话、英语、粤语、日语和韩语，普通话输出简体。音频不出你的服务器，也不调用任何云端 API；约 240 MB 的模型在安装或第一次使用时由服务器自动下载，只下一次（[设计](.halo/docs/design/stt-local.md)）。
+- **可选的「脸」** —— 点聊天输入栏的 ✨，编辑器里会固定一张由粒子组成的脸（`.halo/canvas/self.html`）；Agent 在回复里用隐藏标记驱动它，配合回复拼出文字、展示图片、做出动作。默认关闭，打开才生效（[设计](.halo/docs/design/express-self.md)）。
 - **Cron 定时任务** —— 定时（循环或一次性）跑 Agent，产出自动分发到绑定的聊天渠道。
 - **访问级别** —— 每个会话 `full` / `workspace` / `readonly` 三级，由 OS 沙箱强制执行（Linux 用 bubblewrap，macOS 用 Seatbelt）；子 Agent 的权限永远不会超过父会话（[级别怎么定](.halo/docs/guide/delegation-and-access.md#5-access-levels)、[局限](#现状与局限)）。
 - **结构化会话** —— 父子层级会话、异步协同、完工自动汇报。
@@ -162,7 +166,7 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
 
 ## Halo City
 
-一座只读的像素之城，实时可视化一台 halo 服务器：每个工作区是一栋楼，每个会话是一只动物市民 —— 干活时伏案敲键盘，闲下来喝咖啡、打街机。点击任意市民，看到的是真实数据：实时会话日志、委派链、最近一次工具调用、token 用量。纯客户端 canvas，只轮询一个接口 —— **零模型 token 消耗**。从 1.6.5 起作为 [halo-hub 扩展](https://github.com/turmind/halo-hub/tree/main/extensions/halo-city)安装：`/extension install halo-city`，装好后活动栏会多一个 Halo City 入口 —— 设计笔记见 [design/halo-city.md](.halo/docs/design/halo-city.md)。
+一座只读的像素之城，实时可视化一台 halo 服务器：每个工作区是一栋楼，每个会话是一只动物市民 —— 干活时伏案敲键盘，闲下来喝咖啡、打街机。点击任意市民，看到的是真实数据：实时会话日志、委派链、最近一次工具调用、token 用量。纯客户端 canvas，只轮询一个接口 —— **零模型 token 消耗**。从 1.6.5 起作为 [halo-hub 扩展](https://github.com/turmind/halo-hub/tree/main/extensions/halo-city)安装：`/extension install halo-city`，装好后活动栏会多一个 Halo City 入口，点开直接进城 —— 用的是管理台登录身份，不用填 token；右上角 ⛶ 可以全屏。设计笔记见 [design/halo-city.md](.halo/docs/design/halo-city.md)。
 
 ![Halo City 街景 —— 子 Agent 市民伏案工作，右侧检查面板已打开](assets/halo-city-street.jpg)
 <p align="center"><sub>街景视角：<code>aurora-cafe</code> 楼里三只子 Agent 市民埋头干活；检查面板里是其中一个 executor 的实时日志和委派链。</sub></p>

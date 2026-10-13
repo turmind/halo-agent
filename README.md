@@ -15,7 +15,7 @@ A self-hosted AI agent team that works in your project folder. Bring your own mo
 
 https://github.com/user-attachments/assets/45f86359-2d83-4c61-b937-0747b184340e
 
-<p align="center"><sub>An 83-second walkthrough of a real run, from the prompt to the finished page.</sub></p>
+<p align="center"><sub>One real run in 83 seconds: one prompt → the primary agent reads the brief, plans and starts four executors in parallel → Halo City shows the same run as a pixel town → the executors report back and the primary agent assembles the page, previewed in Canvas. 2 h 06 min of real time from prompt to done; sped-up and skipped stretches are marked on screen.</sub></p>
 
 ## Install
 
@@ -76,6 +76,8 @@ my-project/
 
 Commit `.halo/` with your code and whoever clones it gets the same agents, skills and knowledge — the real files, not an export (they bring their own model key); `/workspace share` zips the config without sessions, memory or secrets. Initializing the repo from Halo's Source Control panel writes a `.gitignore` for sessions, logs, `tmp/` and databases; in an existing repo, add those yourself, and keep real keys out of `.halo/settings.yaml` (use `<<ENV>>` placeholders).
 
+There's no vector database: `.halo/INDEX.md` is injected into the prompt every turn, and agents open the docs it points to when they need them. Halo is built the same way — this repo's own `.halo/` holds its dev, release and reviewer agents and the docs they work from, and most of its commits were made through Halo itself (they carry the `Co-Authored-By: halo` trailer).
+
 ### 🌐 One workspace, every screen
 
 Kick off a build in the browser, check progress from WeChat on the metro, drop a follow-up in Telegram or Slack, finish in the terminal. Every channel connects to the *same* workspace — channels are doors, the workspace is the room — and a full-access account can `/session switch` to pick up a conversation started elsewhere.
@@ -89,17 +91,19 @@ Kick off a build in the browser, check progress from WeChat on the metro, drop a
 
 ### 👁 Watch it think
 
-The primary agent's reasoning, every tool call (sub-agents' included) and every file change stream in real time; a sub-agent's full log opens from the **Sessions** tab. Interrupts are graceful (conversation repair, not a hard kill), and sub-agents report back when done. You stay in the loop instead of running and praying.
+The primary agent's reasoning, every tool call (sub-agents' included) and every file change stream in real time; a sub-agent's full log opens from the **Sessions** tab and keeps updating while it runs. Interrupts are graceful (conversation repair, not a hard kill), and sub-agents report back when done. You stay in the loop instead of running and praying.
 
 ![Chat panel — the primary agent dispatching three executor sub-agents in parallel](assets/orchestration.jpg)
 <p align="center"><sub>The primary agent fans out three executors in parallel — every <code>start_session</code> and tool call visible as it happens.</sub></p>
 
 ## Also in the box
 
-- **Per-agent models** — each agent picks its own provider and model: Claude on Bedrock for the heavy lifting, a cheap model for routine sub-tasks. No code changes.
+- **Per-agent models** — each agent picks its own provider and model: the built-ins ship with Claude Opus for the primary agent and Claude Sonnet for the executors it fans out, and routine sub-tasks can go to a cheap model. No code changes.
 - **IDE-grade admin** — chat + Monaco editor + file explorer + git panel + terminal (xterm.js) in one browser tab, in four themes.
 - **Skills and agents are files** — a skill is markdown injected on demand; an agent is a persona plus an `agent.yaml`. Workspace-scoped or global, no code required.
-- **Preview extensions** — installable viewers and small apps for the editor: 3D models, draw.io, Excalidraw, Jupyter notebooks, a meeting recorder and more from [halo-hub](https://github.com/turmind/halo-hub). Install with `/extension install <id>` or a zip under **Settings → Extensions** ([design](.halo/docs/design/canvas-extensions.md)).
+- **Extensions** — installable viewers and small apps from [halo-hub](https://github.com/turmind/halo-hub): 3D models, draw.io, Excalidraw, Jupyter notebooks, a meeting recorder and more. Besides opening files in the editor, an extension can add a page to the activity bar (Halo City) or a button to the chat input toolbar (voice input). Install with `/extension install <id>` or a zip under **Settings → Extensions** ([design](.halo/docs/design/canvas-extensions.md)).
+- **Voice input** — `/extension install voice-input` adds a mic to the chat toolbar: click to record, click again to stop, and the text lands at the cursor; it never sends. Speech is transcribed on your own Halo server (SenseVoice-Small + Silero VAD via sherpa-onnx) in Mandarin, English, Cantonese, Japanese or Korean, with Mandarin written in Simplified characters. Audio never leaves your server and no cloud API is involved; the server downloads the ~240 MB model once, when the extension is installed or first used ([design](.halo/docs/design/stt-local.md)).
+- **An optional face** — the ✨ button in the chat toolbar pins a particle face (`.halo/canvas/self.html`) in the editor, and the agent drives it with hidden markers in its replies: words, pictures and gestures alongside what it says. Off until you turn it on ([design](.halo/docs/design/express-self.md)).
 - **Cron tasks** — scheduled agent runs (recurring or one-shot) whose output fans out to your chat channels.
 - **Access levels** — `full` / `workspace` / `readonly` per session, enforced by an OS sandbox (bubblewrap on Linux, Seatbelt on macOS); a sub-agent never gets more access than its parent ([how levels are set](.halo/docs/guide/delegation-and-access.md#5-access-levels), [limits](#status--limitations)).
 - **Structured sessions** — hierarchical parent ↔ child sessions with async coordination and auto-reports on completion.
@@ -162,7 +166,7 @@ The response is SSE frames — `session` / `thinking` / `tool_call` / `stream` /
 
 ## Halo City
 
-A read-only pixel city that visualizes a live halo server: each workspace is a building, each session an animal citizen — at a desk when working, grabbing coffee or hitting the arcade when idle. Click any citizen to inspect the real thing: live session log, delegation chain, last tool call, token usage. Pure client-side canvas on a single polling endpoint — **zero model tokens burned**. Since 1.6.5 it installs as a [halo-hub extension](https://github.com/turmind/halo-hub/tree/main/extensions/halo-city): `/extension install halo-city`, and a Halo City entry appears in the activity bar — see the [design notes](.halo/docs/design/halo-city.md).
+A read-only pixel city that visualizes a live halo server: each workspace is a building, each session an animal citizen — at a desk when working, grabbing coffee or hitting the arcade when idle. Click any citizen to inspect the real thing: live session log, delegation chain, last tool call, token usage. Pure client-side canvas on a single polling endpoint — **zero model tokens burned**. Since 1.6.5 it installs as a [halo-hub extension](https://github.com/turmind/halo-hub/tree/main/extensions/halo-city): `/extension install halo-city` adds a Halo City entry to the activity bar that opens straight into the city on your admin login (no token to paste), and ⛶ at the top right goes fullscreen — see the [design notes](.halo/docs/design/halo-city.md).
 
 ![Halo City street level — sub-agent citizens at work, one inspected](assets/halo-city-street.jpg)
 <p align="center"><sub>Street level: three sub-agent citizens heads-down in the <code>aurora-cafe</code> building; the inspector shows one executor's live log and delegation chain.</sub></p>
