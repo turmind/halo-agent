@@ -24,7 +24,8 @@ import { ExtensionActivityIcon, ExtensionActivityPanel } from '../src/features/w
  *    every file-shaped frame warns and is otherwise ignored;
  *  - the component accepts frames only from its own iframe, and offers Retry
  *    after 10 s without `ready`;
- *  - the bar icon is a CSS mask over the asset URL (puzzle until the token).
+ *  - the bar icon is a CSS mask over the asset URL (blank until the token,
+ *    puzzle only without an icon or when the token request fails).
  * Rendered without I18n / Theme providers: `t()` echoes keys, lang = 'en'.
  */
 
@@ -195,18 +196,26 @@ describe('<ExtensionActivityPanel> / <ExtensionActivityIcon>', () => {
     expect(container.textContent).not.toContain('editor.extension.unresponsive')
   })
 
-  it('icon: puzzle without activity.icon; CSS mask over the asset URL once the token is in', async () => {
+  it('icon: puzzle without activity.icon; blank (no puzzle flash) until the token, then a CSS mask over the asset URL', async () => {
     act(() => root.render(createElement(ExtensionActivityIcon, { info: ext('plain') })))
     await flush()
     expect(container.querySelector('svg.lucide-puzzle')).toBeTruthy()
 
     act(() => root.render(createElement(ExtensionActivityIcon, { info: ext('city', { activity: { order: 1, icon: 'assets/icon.svg' } }) })))
-    expect(container.querySelector('svg.lucide-puzzle')).toBeTruthy() // before the token lands
+    expect(container.querySelector('svg')).toBeNull() // before the token lands: no generic icon
+    expect((container.querySelector('span[aria-hidden]') as HTMLSpanElement).getAttribute('style')).toBeNull()
     await flush()
     const span = container.querySelector('span[aria-hidden]') as HTMLSpanElement
     expect(span).toBeTruthy()
     expect(span.className).toContain('bg-current')
     expect(span.getAttribute('style')).toContain('/api/extensions/city/1.0.0/tok/assets/icon.svg')
     expect(container.querySelector('svg')).toBeNull()
+  })
+
+  it('icon: token request fails → puzzle', async () => {
+    vi.spyOn(api.extensions, 'token').mockRejectedValue(new Error('503'))
+    act(() => root.render(createElement(ExtensionActivityIcon, { info: ext('city', { activity: { order: 1, icon: 'assets/icon.svg' } }) })))
+    await flush()
+    expect(container.querySelector('svg.lucide-puzzle')).toBeTruthy()
   })
 })
