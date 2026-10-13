@@ -99,6 +99,10 @@ const NODE_BIN_DST_FILE = TARGET_PLATFORM === 'win32'
   ? path.join(RES_DIR, 'node.exe')
   : NODE_BIN_DST
 
+// sherpa-onnx's per-platform binary package for the target — Windows is `win`,
+// not `win32`. Used by installSherpaBinary + smokeTestNativeAddons.
+const SHERPA_BIN_PKG = `sherpa-onnx-${TARGET_PLATFORM === 'win32' ? 'win' : 'darwin'}-${TARGET_ARCH}`
+
 // Fast mode: re-sync only the build outputs (server dist + templates +
 // admin-out) into an already-staged resources/, skipping the network/install
 // heavy lifting (cli-runtime npm install, pnpm deploy of node_modules,
@@ -368,6 +372,9 @@ function fetchTargetArchNatives() {
   // so it only needs swapping when the target platform/arch differs from the
   // host. node-pty ships multi-platform prebuilds, no fixup needed.
   if (crossStaging) installParcelWatcherBinary()
+  // sherpa-onnx-node: same per-platform binary split, swapped on every stage
+  // (not gated on crossStaging) — see installSherpaBinary.
+  for (const dir of resolvePkgDirs('sherpa-onnx-node')) installSherpaBinary(dir)
 }
 
 // Ensure the @parcel/watcher native binary for the TARGET platform/arch is
@@ -459,10 +466,46 @@ function fixParcelWatcherIn(parcelScope, watcherPkgDir) {
   // `npm install @parcel/watcher-win32-x64` is SKIPPED by npm on a foreign host
   // (the package declares os/cpu); `npm pack` has no platform gate, so fetch the
   // tarball and extract it ourselves.
-  const tgz = execSync(`npm pack "@parcel/${want}@${version}" --silent`, { cwd: parcelScope }).toString().trim()
-  fs.mkdirSync(target, { recursive: true })
-  execSync(`tar -xzf "${tgz}" -C "${want}" --strip-components=1`, { cwd: parcelScope, stdio: 'inherit' })
-  fs.rmSync(path.join(parcelScope, tgz), { force: true })
+  npmPackExtract(`@parcel/${want}@${version}`, parcelScope, want)
+}
+
+// Fetch `spec`'s tarball with `npm pack` (no os/cpu gate, unlike npm install)
+// and extract it as `parentDir/dirName`. Shared by the @parcel/watcher and
+// sherpa-onnx per-platform binary swaps.
+function npmPackExtract(spec, parentDir, dirName) {
+  const tgz = execSync(`npm pack "${spec}" --silent`, { cwd: parentDir }).toString().trim()
+  fs.mkdirSync(path.join(parentDir, dirName), { recursive: true })
+  execSync(`tar -xzf "${tgz}" -C "${dirName}" --strip-components=1`, { cwd: parentDir, stdio: 'inherit' })
+  fs.rmSync(path.join(parentDir, tgz), { force: true })
+}
+
+// Ensure the sherpa-onnx (local STT) native package for the TARGET sits next to
+// `sherpaPkgDir` (an installed sherpa-onnx-node), and nothing else does.
+// sherpa-onnx-node is pure JS; its N-API binary + onnxruntime libs live in
+// per-platform optionalDependencies `sherpa-onnx-<plat>-<arch>` — Windows is
+// `win`, NOT `win32` — which declare os/cpu, so npm / pnpm on the build host
+// SILENTLY SKIP the target's and install only the host's (on a Linux host
+// building win: only sherpa-onnx-linux-x64 lands). Its loader requires
+// `../sherpa-onnx-<plat>-<arch>/sherpa-onnx.node`, so the binary package must be
+// a sibling in the same node_modules. Same fix as @parcel/watcher: npm pack the
+// target's tarball and drop every other platform's package. Run on every stage,
+// not only when cross-staging: it's idempotent and doesn't lean on the
+// host-platform guess in fetchTargetArchNatives (which reads a Linux host as
+// darwin). Shared by server-runtime (hoisted pnpm) and cli-runtime (flat npm).
+function installSherpaBinary(sherpaPkgDir) {
+  const nodeModules = path.dirname(sherpaPkgDir)
+  // Exact main-package version: the binary packages are published in lockstep
+  // with it, while its optionalDependencies range (^x.y.z) could drift.
+  const { version } = JSON.parse(fs.readFileSync(path.join(sherpaPkgDir, 'package.json'), 'utf-8'))
+  for (const entry of fs.readdirSync(nodeModules)) {
+    if (/^sherpa-onnx-(darwin|linux|win)-/.test(entry) && entry !== SHERPA_BIN_PKG) {
+      fs.rmSync(path.join(nodeModules, entry), { recursive: true, force: true })
+      console.log(`[stage] removed non-target ${entry} from ${nodeModules}`)
+    }
+  }
+  if (fs.existsSync(path.join(nodeModules, SHERPA_BIN_PKG, 'package.json'))) return
+  console.log(`[stage] fetching ${SHERPA_BIN_PKG}@${version} into ${nodeModules}`)
+  npmPackExtract(`${SHERPA_BIN_PKG}@${version}`, nodeModules, SHERPA_BIN_PKG)
 }
 
 // SECURITY: delete any *.local.md from a staged tree. These hold host-local
@@ -547,6 +590,9 @@ function stageCliRuntime() {
   if (fs.existsSync(cliWatcher)) {
     fixParcelWatcherIn(path.join(CLI_RT, 'node_modules', '@parcel'), cliWatcher)
   }
+  // sherpa-onnx binary: same trap — npm installed only the host's package.
+  const cliSherpa = path.join(CLI_RT, 'node_modules', 'sherpa-onnx-node')
+  if (fs.existsSync(cliSherpa)) installSherpaBinary(cliSherpa)
 }
 
 // 3. admin out
@@ -669,6 +715,28 @@ function smokeTestNativeAddons() {
       console.error(`[stage] FATAL: staged better-sqlite3 in ${path.basename(rt)} fails to load on the bundled node — the dmg would crash on launch.`)
       console.error(`[stage]   ${detail.trim()}`)
       console.error(`[stage]   This is an ABI mismatch. Re-run a full stage (HALO_STAGE_FULL=1) so prebuild-install re-fetches the node ${NODE_VERSION_BARE} binary.`)
+      process.exit(1)
+    }
+  }
+  // sherpa-onnx (N-API, so no ABI issue): catches a missing/wrong-platform
+  // binary package or an unresolvable onnxruntime lib. The .node is required
+  // directly first because sherpa's own loader swallows the dlopen error; the
+  // main package then proves its sibling lookup resolves (`.version` is native).
+  for (const rt of [SERVER_RT, CLI_RT]) {
+    const pkg = path.join(rt, 'node_modules', 'sherpa-onnx-node')
+    if (!fs.existsSync(pkg)) continue
+    const addon = path.join(rt, 'node_modules', SHERPA_BIN_PKG, 'sherpa-onnx.node')
+    try {
+      const version = execSync(
+        `"${NODE_BIN_DST_FILE}" -e "require('${addon}'); process.stdout.write(String(require('${pkg}').version))"`,
+        { stdio: 'pipe' },
+      ).toString()
+      console.log(`[stage] ✓ sherpa-onnx ${version} loads on bundled node (${path.basename(rt)})`)
+    } catch (err) {
+      const detail = (err.stderr?.toString() || err.message).split('\n').find((l) => /ERR_DLOPEN|Error:/.test(l)) || err.message
+      console.error(`[stage] FATAL: staged sherpa-onnx-node in ${path.basename(rt)} fails to load on the bundled node — local STT would be dead in the app.`)
+      console.error(`[stage]   ${detail.trim()}`)
+      console.error('[stage]   Re-run a full stage (HALO_STAGE_FULL=1) so installSherpaBinary re-fetches the target binary package.')
       process.exit(1)
     }
   }

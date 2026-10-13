@@ -104,8 +104,8 @@ HALO_STAGE_FULL=1 CI=true pnpm dist:win
 ```
 
 `HALO_STAGE_FULL=1` is **mandatory** here: a cross-stage must re-run the
-per-target native fixups (`@parcel/watcher-win32-x64` swap, `better-sqlite3`
-win prebuild), which the fast path skips. `wine` must be installed (electron-
+per-target native fixups (`@parcel/watcher-win32-x64` swap, `sherpa-onnx-win-x64`
+swap, `better-sqlite3` win prebuild), which the fast path skips. `wine` must be installed (electron-
 builder runs the nsis maker through it).
 
 Verified on the v0.1.9 build (Linux x86_64 host → win-x64):
@@ -114,7 +114,9 @@ Verified on the v0.1.9 build (Linux x86_64 host → win-x64):
   <ver>.exe` + `.exe.blockmap` + `win-unpacked/`. The "discard the stray
   arm64 dmg" gotcha below is mac-host-only.
 - **Native arch check** — every staged `.node` must be PE32+ x86-64, no ELF:
-  `find dist/win-unpacked -path '*watcher-*' -name '*.node' | xargs file` and
+  `find dist/win-unpacked -path '*watcher-*' -name '*.node' | xargs file`,
+  `find dist/win-unpacked -path '*sherpa-onnx-*' \( -name '*.node' -o -name '*.dll' \) | xargs file`
+  (only `sherpa-onnx-win-x64` dirs, one per runtime, no `linux-x64`) and
   `file dist/win-unpacked/resources/node.exe` (should read `PE32+ ... x86-64`).
 - **Two benign warnings**, both expected: `file source doesn't exist
   from=.../resources/node` (win bundles `node.exe`, not the Unix `node` — the
@@ -204,7 +206,9 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
 3. **Native fixup** — re-fetch `better-sqlite3` prebuilds via `prebuild-install
    --target=$NODE_VERSION_BARE` **unconditionally** (pins the ABI to the bundled
    node regardless of the build host's node — see the ABI gotcha below);
-   `@parcel/watcher`'s per-platform binary is swapped only when cross-staging.
+   `@parcel/watcher`'s per-platform binary is swapped only when cross-staging;
+   `sherpa-onnx`'s per-platform package is swapped to the target on every full
+   stage (server-runtime and cli-runtime — see the sherpa gotcha below).
 4. **Trim bloat** — drop non-target `node-pty` prebuilds, `better-sqlite3`'s
    C source, and the server's `src/`/`tests/`.
 5. **Copy `admin-out/`** — the Next.js static export.
@@ -212,9 +216,10 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
    nodejs.org, extract the `node` binary into `resources/`.
 7. **codesign (ad-hoc)** — `codesign --force --sign -` on the node binary for
    Gatekeeper. **We deliberately do NOT `strip`** — see gotcha below.
-8. **Native-addon smoke test** — load the staged better-sqlite3 with the
-   bundled node binary; abort the build if it can't `dlopen` (the ABI backstop,
-   runs on full and fast paths). See the ABI gotcha below.
+8. **Native-addon smoke test** — load the staged better-sqlite3 and
+   sherpa-onnx with the bundled node binary; abort the build if either can't
+   `dlopen` (runs on full and fast paths, skipped when cross-staging). See the
+   ABI gotcha below.
 
 ## Gotchas (learned the hard way)
 
@@ -456,8 +461,8 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   `node_modules` differs from what's on disk, run with `HALO_STAGE_FULL=1`. The
   fast path only re-syncs compiled outputs and **reuses the existing
   `node_modules`**, so it never re-runs the per-target native fixups
-  (`@parcel/watcher` swap, `better-sqlite3` prebuild-install). Symptom of
-  forgetting: the win/x64 dmg still carries the host's arm64 binaries.
+  (`@parcel/watcher` / `sherpa-onnx` swaps, `better-sqlite3` prebuild-install).
+  Symptom of forgetting: the win/x64 dmg still carries the host's arm64 binaries.
 
 - **`@parcel/watcher` binary doesn't cross-stage via `npm install`.** Its
   per-platform binary package (`@parcel/watcher-win32-x64` etc.) declares
@@ -473,6 +478,29 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   should show only PE32 (win) / the target's Mach-O — no foreign arch.
   (`better-sqlite3` and `node-pty` don't hit this — they use `prebuild-install`
   and bundled multi-platform prebuilds respectively.)
+
+- **`sherpa-onnx-node` (local STT) has the same os/cpu trap — and its Windows
+  package is `win-x64`, not `win32-x64`.** The main package is pure JS; the
+  N-API addon + onnxruntime libs ship in `sherpa-onnx-<plat>-<arch>` optional
+  deps (`darwin-arm64`, `win-x64`, `linux-x64`, …), and npm / pnpm install only
+  the host's, so a Linux → win stage ends up with just `sherpa-onnx-linux-x64`.
+  `installSherpaBinary()` `npm pack`s the target's package at the exact
+  installed `sherpa-onnx-node` version, extracts it as a sibling of
+  `sherpa-onnx-node` (its loader requires `../sherpa-onnx-<plat>-<arch>/sherpa-onnx.node`)
+  in both server-runtime and cli-runtime, and deletes every other platform's
+  package. Runs on every full stage, cross or not. The server loads it
+  lazily (`await import`), so a broken binary never blocks boot — it only
+  surfaces as dead transcription; on a native stage `smokeTestNativeAddons()`
+  `require`s it with the bundled node to catch that early.
+  - **Windows: must be loaded by a process named `node.exe`.** The win
+    `sherpa-onnx.node` delay-loads `node.exe` for its N-API imports, so
+    `require`-ing it inside `Halo.exe` (Electron main / `ELECTRON_RUN_AS_NODE`)
+    fails. Fine today: the server and the `halo.cmd` CLI both run under the
+    bundled `resources\node.exe`. Keep it out of the Electron process.
+  - **macOS: minimum OS for the arm64 `.node` is 14.0 (`LC_BUILD_VERSION`
+    minos; the dylibs say 11.0), unverified on older macOS.** Whether 12/13 can
+    load it hasn't been tested on real hardware. Dylibs resolve through
+    `@loader_path` rpath, so no `DYLD_LIBRARY_PATH` is needed.
 
 - **`ENOTEMPTY` / `directory not empty` mid-stage or in electron-builder.** A
   prior stage's `resources/{cli,server}-runtime/node_modules` (or
