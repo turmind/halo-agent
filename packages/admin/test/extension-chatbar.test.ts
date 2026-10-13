@@ -525,6 +525,57 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
       expect(closeRequests()).toBe(0)
     })
 
+    // Chrome leaves a blurred textarea's document selection collapsed at the
+    // textarea (its parent, at the textarea's index), and the next mouse press
+    // anywhere re-applies it — throwing away a caret set by code since
+    // (insert-text: back to 0 once the value was replaced). jsdom moves the
+    // document selection on every focus() / blur() and never re-applies it, so
+    // the stale selection is placed by hand after the blur, focus moves are
+    // left out, and a capture mousedown emulates the re-apply; the real thing
+    // is pinned down by the dev e2e.
+    function emulateChromeMousedown() {
+      const ta = textarea(), s = document.getSelection()!
+      const atTextarea = () => s.rangeCount > 0 && s.anchorNode === ta.parentNode && ta.parentNode!.childNodes[s.anchorOffset] === ta
+      act(() => { ta.blur(); s.collapse(ta.parentNode, [...ta.parentNode!.childNodes].indexOf(ta)) })
+      const onDown = () => { if (atTextarea()) ta.setSelectionRange(0, 0) }
+      document.addEventListener('mousedown', onDown, true)
+      return () => document.removeEventListener('mousedown', onDown, true)
+    }
+    /** A real click: mousedown, then click; the focus move is left out (see above). */
+    function mouseClick(el: HTMLElement) {
+      act(() => { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); el.click() })
+    }
+    for (const path of ['close-request', 'direct unmount'] as const) {
+      it(`insert-text, then a mouse close (${path}): the next insert-text lands right after the last one`, async () => {
+        voice()
+        await renderInput()
+        type('abc', 3)
+        const restore = emulateChromeMousedown()                               // typed, then the toolbar click took focus
+        try {
+          let { win } = await openBusy(path === 'close-request' ? true : null)
+          deliver(win, { haloExt: 1, type: 'insert-text', text: ' one' })
+          expect(textarea().selectionStart).toBe(7)
+          mouseClick(button('Voice')!)                                         // close
+          if (path === 'close-request') {
+            expect(iframe()?.contentWindow).toBe(win)                          // winding down: the last sentence is still coming
+          } else {
+            expect(iframe()).toBeNull()
+            mouseClick(button('Voice')!)                                       // open again, dictate on
+            await flush()
+            win = iframe()!.contentWindow!
+            deliver(win, { haloExt: 1, type: 'ready', protocol: 1 })
+          }
+          expect(textarea().selectionStart).toBe(7)
+          deliver(win, { haloExt: 1, type: 'insert-text', text: ' two' })
+          expect(textarea().value).toBe('abc one two')
+          expect(textarea().selectionStart).toBe(11)
+          expect(document.activeElement).not.toBe(textarea())
+        } finally {
+          restore()
+        }
+      })
+    }
+
     it('a tab switch, a hidden input, an uninstall or another panel unmount a busy / winding-down panel at once', async () => {
       const tabs = useChatTabs.getState()
       act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } }), ext('b', { chatbar: { height: 160, order: 2, title: 'B' } })], errors: [] }))

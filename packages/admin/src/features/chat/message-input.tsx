@@ -954,6 +954,15 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     flushSync(() => { setText(next.value); setCursorPos(next.caret) })
     el.selectionStart = next.caret
     el.selectionEnd = next.caret
+    // The textarea is blurred here, and Chrome keeps the document selection
+    // collapsed at it from its last focus: the next mouse press anywhere (the
+    // toolbar button / × closing this panel) re-applies that stale selection,
+    // dropping the caret just set — to 0 after a value change, so the next
+    // insert lands at the front. Drop it; focus() re-creates it.
+    const sel = document.getSelection()
+    if (sel && sel.rangeCount > 0 && document.activeElement !== el && sel.anchorNode?.childNodes[sel.anchorOffset] === el) {
+      sel.removeAllRanges()
+    }
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 200) + 'px'
   }, [])
