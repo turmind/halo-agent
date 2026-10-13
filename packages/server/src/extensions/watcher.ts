@@ -13,7 +13,9 @@
  * a normal install yields exactly one broadcast).
  */
 import fs, { type FSWatcher } from 'node:fs'
+import type { ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { broadcast } from '../ws/broadcast.js'
+import { sttModels } from '../stt/models.js'
 import { extensionsRoot, getSnapshot, scanExtensions, snapshotKey } from './registry.js'
 
 let watcher: FSWatcher | null = null
@@ -34,10 +36,19 @@ function scheduleFlush(): void {
  *  themselves, the watcher path is the single notifier. */
 export function rescanAndBroadcast(): void {
   const snap = scanExtensions()
+  reconcileSttModels(snap)
   const key = snapshotKey(snap)
   if (key === lastKey) return
   lastKey = key
   broadcast({ type: 'extension:changed', ...snap })
+}
+
+/** An installed `stt-local` extension wants its model files: start the
+ *  download unless they are ready or already coming (no-op otherwise). */
+function reconcileSttModels(snap: ExtensionsSnapshot): void {
+  if (!snap.extensions.some((e) => e.capabilities.includes('stt-local'))) return
+  const { state } = sttModels.status()
+  if (state !== 'ready' && state !== 'downloading') void sttModels.ensure()
 }
 
 function openWatcher(root: string): void {
@@ -76,7 +87,9 @@ export function start(): void {
   } catch (err) {
     console.warn(`[Extensions] cannot create ${root}: ${err instanceof Error ? err.message : String(err)}`)
   }
-  lastKey = snapshotKey(scanExtensions())
+  const snap = scanExtensions()
+  lastKey = snapshotKey(snap)
+  reconcileSttModels(snap)
   openWatcher(root)
   const { extensions, errors } = getSnapshot()
   if (extensions.length > 0 || errors.length > 0) {

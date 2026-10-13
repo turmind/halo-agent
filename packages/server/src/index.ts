@@ -26,6 +26,7 @@ import { createShowRoutes } from './routes/halo-city.js'
 import { createMetricsRoutes } from './routes/metrics.js'
 import { createCommandRoutes } from './routes/commands.js'
 import { createTranscribeProxy, TRANSCRIBE_PATH } from './routes/transcribe-ws.js'
+import { createSttProxy, STT_PATH } from './routes/stt-ws.js'
 import { createJupyterChannels, createJupyterRoutes, JUPYTER_CHANNELS_PATH } from './routes/jupyter.js'
 import { createJupyterManager } from './jupyter/manager.js'
 import { createUpgradeRouter, type UpgradeHandler } from './ws/upgrade-router.js'
@@ -616,6 +617,7 @@ if (!AGENTCORE) {
 // Extension transcription proxy — needs installed extensions + per-extension
 // settings, neither of which exists in AgentCore mode.
 const transcribe = AGENTCORE ? null : createTranscribeProxy()
+const stt = AGENTCORE ? null : createSttProxy()
 const jupyterChannels = jupyter ? createJupyterChannels(jupyter) : null
 
 // AgentCore mode has no WS surface: every upgrade gets the router's 400.
@@ -623,6 +625,7 @@ const upgradeRoutes = new Map<string, UpgradeHandler>(AGENTCORE ? [] : [
   ['/ws', (req, socket, head) => wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))],
 ])
 if (transcribe) upgradeRoutes.set(TRANSCRIBE_PATH, transcribe.handleUpgrade)
+if (stt) upgradeRoutes.set(STT_PATH, stt.handleUpgrade)
 if (jupyterChannels) upgradeRoutes.set(JUPYTER_CHANNELS_PATH, jupyterChannels.handleUpgrade)
 ;(server as import('node:http').Server).on('upgrade', createUpgradeRouter(upgradeRoutes))
 
@@ -653,6 +656,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
   })
   wss.close()
   transcribe?.close()
+  // Also aborts a model download in progress (the .part is resumed next boot).
+  stt?.close()
   // Stops the jupyter server and with it every kernel (bounded to 5s).
   jupyterChannels?.close()
   await jupyter?.stop()
