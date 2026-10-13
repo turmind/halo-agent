@@ -278,6 +278,8 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
       return onExportFrame(state, frame, ctx)
     case 'pick':
       return onPickFrame(state, frame)
+    case 'insert-text':
+      return { state, effects: [{ type: 'warn', message: 'insert-text frame ignored outside a chat-bar panel' }] }
   }
 }
 

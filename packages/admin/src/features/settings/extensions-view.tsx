@@ -99,13 +99,18 @@ export function ExtensionsView() {
                       {t('settings.extensions.activity')}
                     </span>
                   )}
+                  {ext.chatbar && (
+                    <span className="shrink-0 rounded border border-[var(--border)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
+                      {t('settings.extensions.chatbar')}
+                    </span>
+                  )}
                   {!runsHere(ext) && (
                     <span className="shrink-0 rounded bg-[var(--secondary)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
                       {t('settings.extensions.unsupportedHere')}
                     </span>
                   )}
                 </div>
-                {/* An activity-only extension opens no files: no suffix line
+                {/* An activity / chat-bar-only extension opens no files: no suffix line
                     (its description, if any, still shows). */}
                 {ext.extensions.length > 0 ? (
                   <p className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">

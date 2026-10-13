@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
+import { flushSync } from 'react-dom'
 import { Send, Paperclip, X, FileIcon, FileText, Square, MonitorUp, Camera, Scissors, Sparkles, ChevronDown, Check, LockOpen, FolderLock, Eye, type LucideIcon } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { api } from '@/shared/api-client'
@@ -16,6 +17,8 @@ import { CommandPalette } from './command-palette'
 import { FileMentionPicker } from './file-mention-picker'
 import { getScreenBridge, getCameraBridge, getScreenshotBridge, syncWebCapture, WEB_SCREEN_ID, type CaptureSrc, type ScreenshotFrame } from './web-capture'
 import { ScreenshotCrop } from './screenshot-crop'
+import { ExtensionChatbarControl } from './extension-chatbar-control'
+import { insertAtSelection } from './extension-chatbar-logic'
 import { useT } from '@/shared/i18n'
 
 /** Read a File to a base64 string (no data URL prefix), verbatim. */
@@ -925,6 +928,24 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     })
   }, [text, atMention])
 
+  // Extension chat-bar panel (ExtensionChatbarControl): which one is open, and
+  // its `insert-text` — the draft's selection is replaced and the caret lands
+  // after the text, without focusing the textarea (focus stays in the panel's
+  // iframe, which may still be dictating). Draft only: nothing is sent.
+  // flushSync commits before the caret moves, so back-to-back frames each read
+  // the DOM value / selection the previous one left.
+  const [chatbarOpenId, setChatbarOpenId] = useState<string | null>(null)
+  const insertExtensionText = useCallback((ins: string) => {
+    const el = textareaRef.current
+    if (!el) return
+    const next = insertAtSelection(el.value, el.selectionStart, el.selectionEnd, ins)
+    flushSync(() => { setText(next.value); setCursorPos(next.caret) })
+    el.selectionStart = next.caret
+    el.selectionEnd = next.caret
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+  }, [])
+
   // Search directories for @scope completion (debounced). dirsOnly so we only
   // ever suggest directories — @scope targets a dir, not a file.
   const [scopeMatches, setScopeMatches] = useState<string[]>([])
@@ -1138,6 +1159,9 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
         if (e.key === 'Escape') { e.preventDefault(); setText(''); setCmdIndex(0); return }
         if (e.key === 'Tab') { e.preventDefault(); const cmd = matchedCmds[cmdIndex]; if (cmd) setText(cmd.name + ' '); return }
       }
+      // An open extension chat-bar panel is the next popup in line: esc closes
+      // it rather than interrupting the turn below.
+      if (e.key === 'Escape' && chatbarOpenId) { e.preventDefault(); setChatbarOpenId(null); return }
       // esc with no popup open + a turn running + empty composer → interrupt
       // the in-flight turn. Empty-composer guard so esc still clears a draft.
       if (e.key === 'Escape' && isStreaming && !text.trim() && onInterrupt) {
@@ -1145,7 +1169,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
       }
       if (e.key === 'Enter' && !e.nativeEvent.isComposing && !e.shiftKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); handleSend() }
     },
-    [handleSend, matchedCmds, cmdIndex, matchedVerbs, verbIndex, selectVerb, mentionMatches, mentionIndex, selectMention, scopeMatches, scopeIndex, selectScope, isStreaming, text, onInterrupt],
+    [handleSend, matchedCmds, cmdIndex, matchedVerbs, verbIndex, selectVerb, mentionMatches, mentionIndex, selectMention, scopeMatches, scopeIndex, selectScope, isStreaming, text, onInterrupt, chatbarOpenId],
   )
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1240,6 +1264,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
           </button>
           {modelSupportsImage && <ScreenshotControl disabled={disabled} onCapture={(file) => addFiles([file])} onNotice={setAttachNotice} />}
           <CaptureControl modelSupportsImage={modelSupportsImage} />
+          <ExtensionChatbarControl openId={chatbarOpenId} onOpenChange={setChatbarOpenId} onInsert={insertExtensionText} disabled={disabled} />
           {/* FaceControl renders only with a project open. */}
           {(activeProject || debugControl || contextLabel) && <ToolbarDivider />}
           <FaceControl />

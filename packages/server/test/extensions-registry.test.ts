@@ -197,17 +197,58 @@ describe('parseManifest', () => {
     expect(seen).toContain('icon.svg')
   })
 
-  it('extensions: [] allowed only with activity; key still required and must be an array', () => {
+  it('extensions: [] allowed only with activity or chatbar; key still required and must be an array', () => {
+    const arrErr = 'extensions must be an array (empty is fine with activity or chatbar)'
     expect(parse({ extensions: [], activity: {} })).toMatchObject({ extensions: [], activity: { order: 100 } })
+    expect(parse({ extensions: [], chatbar: {} })).toMatchObject({ extensions: [], chatbar: { height: 160, order: 100 } })
     expect(errorOf(parse({ extensions: [] }))).toBe('extensions must be a non-empty array')
-    const noKey: Record<string, unknown> = { ...ok, activity: {} }
-    delete noKey.extensions
-    expect(errorOf(parseManifest(noKey, 'glb', entryYes))).toBe('extensions must be an array (empty is fine with activity)')
-    expect(errorOf(parse({ extensions: '.glb', activity: {} }))).toBe('extensions must be an array (empty is fine with activity)')
-    // entries are still validated when present
-    expect(errorOf(parse({ extensions: ['glb'], activity: {} }))).toMatch(/"glb"/)
-    // activity is checked before extensions (pack.mjs mirrors the order)
+    for (const extra of [{ activity: {} }, { chatbar: {} }]) {
+      const noKey: Record<string, unknown> = { ...ok, ...extra }
+      delete noKey.extensions
+      expect(errorOf(parseManifest(noKey, 'glb', entryYes))).toBe(arrErr)
+      expect(errorOf(parse({ extensions: '.glb', ...extra }))).toBe(arrErr)
+      // entries are still validated when present
+      expect(errorOf(parse({ extensions: ['glb'], ...extra }))).toMatch(/"glb"/)
+    }
+    // activity, then chatbar, are checked before extensions (pack.mjs mirrors the order)
     expect(errorOf(parse({ extensions: [], activity: [] }))).toBe('activity must be an object')
+    expect(errorOf(parse({ extensions: [], chatbar: [] }))).toBe('chatbar must be an object')
+    expect(errorOf(parse({ activity: [], chatbar: [] }))).toBe('activity must be an object')
+  })
+
+  // Chat-bar button: halo-hub pack.mjs mirrors these messages verbatim.
+  it('chatbar: valid fields kept, height 160 / order 100 by default, unknown keys ignored, absent = no field', () => {
+    expect(parse({})).not.toHaveProperty('chatbar')
+    expect((parse({ chatbar: {} }) as { chatbar: object }).chatbar).toEqual({ height: 160, order: 100 })
+    // description is not a chatbar field — ignored like any unknown key
+    expect((parse({ chatbar: { extra: 1, description: 'd' } }) as { chatbar: object }).chatbar).toEqual({ height: 160, order: 100 })
+    const full = { icon: 'assets/mic.svg', title: 'Voice', title_zh: '语音输入', height: 80, order: 0 }
+    expect((parse({ chatbar: full }) as { chatbar: object }).chatbar).toEqual(full)
+    expect(parse({ chatbar: { icon: 'MIC.PNG', height: 480, order: 1000 } })).toMatchObject({ chatbar: { icon: 'MIC.PNG', height: 480, order: 1000 } })
+    // both entry kinds on one extension
+    expect(parse({ activity: {}, chatbar: {} })).toMatchObject({ activity: { order: 100 }, chatbar: { height: 160, order: 100 } })
+  })
+
+  it('chatbar: every malformed field is a manifest error with the exact message', () => {
+    for (const chatbar of [[], null, 'x', 1]) expect(errorOf(parse({ chatbar }))).toBe('chatbar must be an object')
+    const iconErr = 'chatbar.icon must be a relative .svg or .png path inside the extension directory'
+    for (const icon of [1, '', '/mic.svg', '../mic.svg', 'a/../../mic.svg', 'a\\..\\mic.svg', 'mic.gif', 'mic']) {
+      expect(errorOf(parse({ chatbar: { icon } }))).toBe(iconErr)
+    }
+    expect(errorOf(parse({ chatbar: { title: '' } }))).toBe('chatbar.title must be a non-empty string (≤ 64 chars)')
+    expect(errorOf(parse({ chatbar: { title: '  ' } }))).toBe('chatbar.title must be a non-empty string (≤ 64 chars)')
+    expect(errorOf(parse({ chatbar: { title: 'x'.repeat(65) } }))).toBe('chatbar.title must be a non-empty string (≤ 64 chars)')
+    expect(errorOf(parse({ chatbar: { title_zh: 3 } }))).toBe('chatbar.title_zh must be a non-empty string (≤ 64 chars)')
+    for (const height of [79, 481, 160.5, '160', null, 0]) {
+      expect(errorOf(parse({ chatbar: { height } }))).toBe('chatbar.height must be an integer 80–480')
+    }
+    for (const order of [-1, 1001, 1.5, '5', null]) {
+      expect(errorOf(parse({ chatbar: { order } }))).toBe('chatbar.order must be an integer 0–1000')
+    }
+    const seen: string[] = []
+    const onlyEntry = (p: string) => { seen.push(p); return p === 'index.html' }
+    expect(errorOf(parse({ chatbar: { icon: 'mic.svg' } }, 'glb', onlyEntry))).toBe('chatbar icon not found: mic.svg')
+    expect(seen).toContain('mic.svg')
   })
 })
 
@@ -284,6 +325,15 @@ describe('scanExtensions (on-disk)', () => {
     expect(snap.extensions[0]).toMatchObject({ extensions: [], activity: { icon: 'assets/icon.svg', order: 100 } })
     expect(snap.errors.find((e) => e.id === 'noicon')?.error).toBe('activity icon not found: icon.svg')
     expect(snap.errors.find((e) => e.id === 'diricon')?.error).toBe('activity icon not found: d.svg')
+  })
+
+  it('chatbar icon is checked on disk the same way', () => {
+    writeExt('voice', { ...ok, id: 'voice', extensions: [], chatbar: { icon: 'mic.svg', height: 200 } }, { 'index.html': '<html>', 'mic.svg': '<svg/>' })
+    writeExt('nomic', { ...ok, id: 'nomic', extensions: [], chatbar: { icon: 'mic.svg' } })
+    const snap = scanExtensions()
+    expect(snap.extensions.map((e) => e.id)).toEqual(['voice'])
+    expect(snap.extensions[0]).toMatchObject({ extensions: [], chatbar: { icon: 'mic.svg', height: 200, order: 100 } })
+    expect(snap.errors.find((e) => e.id === 'nomic')?.error).toBe('chatbar icon not found: mic.svg')
   })
 
   it('readExtensionDir accepts an explicit id for not-yet-renamed staging dirs', () => {

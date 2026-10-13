@@ -22,6 +22,7 @@ export type {
   ExtensionPlatform,
   ExtensionPriority,
   ExtensionActivity,
+  ExtensionChatbar,
   ExtensionSettingField,
   ExtensionSettings,
   ExtensionInfo,

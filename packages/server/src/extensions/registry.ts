@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ExtensionActivity, ExtensionCapability, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import type { ExtensionActivity, ExtensionCapability, ExtensionChatbar, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { globalExtensionsDir } from '../paths.js'
 
 export const MANIFEST_FILE = 'halo-extension.json'
@@ -29,7 +29,7 @@ export const MANIFEST_FILE = 'halo-extension.json'
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
 const FILE_EXT_RE = /^\.[a-z0-9]+$/
-const CAPABILITIES: ReadonlySet<string> = new Set<ExtensionCapability>(['save', 'media', 'transcribe', 'fs-read'])
+const CAPABILITIES: ReadonlySet<string> = new Set<ExtensionCapability>(['save', 'media', 'transcribe', 'fs-read', 'stt-local'])
 const PLATFORMS: ReadonlySet<string> = new Set<ExtensionPlatform>(['web', 'desktop-mac', 'desktop-win', 'desktop-linux'])
 /** Settings keys become the leaf of `ext-<id>.{params|secrets}.<key>`. */
 const SETTING_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/
@@ -133,10 +133,38 @@ export function parseManifest(
     }
   }
 
-  // The key stays required even for an activity-only extension (`[]`): the
-  // `extension` skill's ext.sh pre-check demands it.
-  if (activity) {
-    if (!Array.isArray(m.extensions)) return { error: 'extensions must be an array (empty is fine with activity)' }
+  let chatbar: ExtensionChatbar | undefined
+  if (m.chatbar !== undefined) {
+    if (typeof m.chatbar !== 'object' || m.chatbar === null || Array.isArray(m.chatbar)) return { error: 'chatbar must be an object' }
+    const c = m.chatbar as Record<string, unknown>
+    chatbar = { height: 160, order: 100 }
+    if (c.icon !== undefined) {
+      if (typeof c.icon !== 'string' || c.icon === '' || c.icon.startsWith('/') || c.icon.split(/[\\/]/).includes('..') || !/\.(svg|png)$/i.test(c.icon)) {
+        return { error: 'chatbar.icon must be a relative .svg or .png path inside the extension directory' }
+      }
+      if (!entryExists(c.icon)) return { error: `chatbar icon not found: ${c.icon}` }
+      chatbar.icon = c.icon
+    }
+    for (const k of ['title', 'title_zh'] as const) {
+      const v = c[k]
+      if (v === undefined) continue
+      if (typeof v !== 'string' || v.trim() === '' || v.length > 64) return { error: `chatbar.${k} must be a non-empty string (≤ 64 chars)` }
+      chatbar[k] = v
+    }
+    if (c.height !== undefined) {
+      if (typeof c.height !== 'number' || !Number.isInteger(c.height) || c.height < 80 || c.height > 480) return { error: 'chatbar.height must be an integer 80–480' }
+      chatbar.height = c.height
+    }
+    if (c.order !== undefined) {
+      if (typeof c.order !== 'number' || !Number.isInteger(c.order) || c.order < 0 || c.order > 1000) return { error: 'chatbar.order must be an integer 0–1000' }
+      chatbar.order = c.order
+    }
+  }
+
+  // The key stays required even for an activity / chatbar-only extension
+  // (`[]`): the `extension` skill's ext.sh pre-check demands it.
+  if (activity || chatbar) {
+    if (!Array.isArray(m.extensions)) return { error: 'extensions must be an array (empty is fine with activity or chatbar)' }
   } else if (!Array.isArray(m.extensions) || m.extensions.length === 0) return { error: 'extensions must be a non-empty array' }
   for (const e of m.extensions) {
     if (typeof e !== 'string' || !FILE_EXT_RE.test(e)) return { error: `extensions entry "${String(e)}" must look like ".glb" (lowercase, with dot)` }
@@ -203,6 +231,7 @@ export function parseManifest(
     ...(platforms ? { platforms } : {}),
     ...(settings ? { settings } : {}),
     ...(activity ? { activity } : {}),
+    ...(chatbar ? { chatbar } : {}),
     ...(m.homepage !== undefined ? { homepage: m.homepage } : {}),
     ...(m.license !== undefined ? { license: m.license } : {}),
   }

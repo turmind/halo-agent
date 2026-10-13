@@ -185,6 +185,15 @@ export function activityEntries(): ExtensionInfo[] {
     .sort((a, b) => a.activity!.order - b.activity!.order || a.id.localeCompare(b.id))
 }
 
+/** Extensions with a chat-input toolbar button that run here, in toolbar
+ *  order: `chatbar.order` ascending, then id. Same subscription rule as
+ *  activityEntries. */
+export function chatbarEntries(): ExtensionInfo[] {
+  return snapshot.extensions
+    .filter((e) => e.chatbar && runsHere(e))
+    .sort((a, b) => a.chatbar!.order - b.chatbar!.order || a.id.localeCompare(b.id))
+}
+
 /** Stable identity for a candidate — what the "open with" menu remembers. */
 export function resolvedKey(r: Resolved): string {
   switch (r.kind) {

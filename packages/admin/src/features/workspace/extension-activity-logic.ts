@@ -40,31 +40,46 @@ export interface ActivityStep {
   effects: ActivityEffect[]
 }
 
+/** Everything a file-less page host (ExtensionPageFrame) carries out: the
+ *  activity effects plus `insert`, which only a chat-bar panel emits
+ *  (extension-chatbar-logic.ts). */
+export type PageEffect = ActivityEffect | { type: 'insert'; text: string }
+
+export interface PageStep {
+  state: ActivityState
+  effects: PageEffect[]
+}
+
 export function initialActivityState(): ActivityState {
   return { ready: false }
 }
 
-/** What the page host grants: `media` (the iframe's `allow`) and `transcribe`
- *  (the server's cookie-gated WS proxy) work without a file; `save` / `fs-read`
- *  need the file host's frames, which this host doesn't answer. */
+/** What the page host grants: `media` (the iframe's `allow`), `transcribe`
+ *  and `stt-local` (the server's cookie-gated WS endpoints) work without a
+ *  file; `save` / `fs-read` need the file host's frames, which this host
+ *  doesn't answer. */
 export function activityCapabilities(declared: readonly ExtensionCapability[]): ExtensionCapability[] {
-  return declared.filter((c) => c === 'media' || c === 'transcribe')
+  return declared.filter((c) => c === 'media' || c === 'transcribe' || c === 'stt-local')
+}
+
+/** `ready` on a file-less page: drop the overlay and send init for `view`.
+ *  A second `ready` = the page reloaded itself; it holds nothing, so it gets
+ *  init again. Shared with the chat-bar panel (extension-chatbar-logic.ts). */
+export function pageReady(state: ActivityState, ctx: ActivityContext, view: 'activity' | 'chatbar'): ActivityStep {
+  const init: ActivityEffect = {
+    type: 'post',
+    frame: {
+      haloExt: 1, type: 'init', view, protocol: EXTENSION_PROTOCOL_VERSION, capabilities: ctx.capabilities,
+      theme: ctx.theme, themeVars: ctx.themeVars, platform: ctx.platform, lang: ctx.lang,
+    },
+  }
+  return { state: { ...state, ready: true }, effects: [{ type: 'ready' }, init] }
 }
 
 export function onActivityFrame(state: ActivityState, frame: ExtensionClientFrame, ctx: ActivityContext): ActivityStep {
   switch (frame.type) {
-    case 'ready': {
-      // A second `ready` = the page reloaded itself; it holds nothing, so it
-      // gets init again.
-      const init: ActivityEffect = {
-        type: 'post',
-        frame: {
-          haloExt: 1, type: 'init', view: 'activity', protocol: EXTENSION_PROTOCOL_VERSION, capabilities: ctx.capabilities,
-          theme: ctx.theme, themeVars: ctx.themeVars, platform: ctx.platform, lang: ctx.lang,
-        },
-      }
-      return { state: { ...state, ready: true }, effects: [{ type: 'ready' }, init] }
-    }
+    case 'ready':
+      return pageReady(state, ctx, 'activity')
     case 'error':
       return { state, effects: [{ type: 'error', message: frame.message }] }
     default:

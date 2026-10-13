@@ -82,11 +82,12 @@ export type ExtensionHostFrame =
        *  kernel UI then. Whether Jupyter is usable: `GET /api/jupyter/status`. */
       jupyter?: { projectId: string }
     })
-  // activity-bar page: also followed by `theme` / `lang`; the host answers
-  // only `ready` / `error` from it (no load / save / fs / pick / export)
+  // activity-bar page / chat-bar panel: also followed by `theme` / `lang`;
+  // the host answers only `ready` / `error` from it (no load / save / fs /
+  // pick / export), plus `insert-text` from a chat-bar panel
   | (ExtensionFrameBase & {
       type: 'init'
-      view: 'activity'
+      view: 'activity' | 'chatbar'
       protocol: typeof EXTENSION_PROTOCOL_VERSION
       capabilities: ExtensionCapability[]
       theme: ExtensionTheme
@@ -150,6 +151,10 @@ export type ExtensionClientFrame =
   // `start` = dir to open at, workspace-relative or absolute (default: the
   // bundle dir for a bundle, else the open file's dir)
   | (ExtensionFrameBase & { type: 'pick'; id: number; accept: string[]; start?: string })
+  // chat-bar panel only: insert `text` verbatim at the chat input's caret
+  // (replacing its selection) — the host adds nothing and never sends;
+  // non-string / empty / over 10 000 chars is ignored
+  | (ExtensionFrameBase & { type: 'insert-text'; text: string })
 
 export type ExtensionHostFrameType = ExtensionHostFrame['type']
 export type ExtensionClientFrameType = ExtensionClientFrame['type']

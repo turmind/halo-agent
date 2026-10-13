@@ -144,6 +144,14 @@ Constraints:
 - Desktop: screen share needs macOS **Screen Recording** permission; the camera prompts for **Camera** permission on first use, with an "Open Settings" path if previously denied. Browser: the page must be served over HTTPS or from localhost (`getDisplayMedia` / `getUserMedia` are absent elsewhere, so the buttons don't render); a denied camera shows a hint pointing at the address bar's site settings.
 - Binding is **in-memory only** and shared by all chat tabs — a page reload or restart requires re-selecting.
 
+### Extension buttons (chat bar)
+An installed extension whose manifest declares `chatbar` (e.g. the hub's voice input) adds one button to the input toolbar, right after the capture buttons; several sort by `chatbar.order`, then id. No such extension installed = toolbar unchanged; install / uninstall shows up without a reload.
+- **Button**: 32×32 like Attach; the extension's icon in the toolbar colour (a microphone when it has none); tooltip = its title (Chinese UI: `title_zh` → `title` → name; English: `title` → name). Primary-coloured while its panel is open.
+- **Panel**: opens above the whole input box (up to 420 px wide, full width on a phone; height from the manifest, default 160 px) with a thin title bar and ×. One panel at a time — another extension's button switches to it. Its own button again, ×, or Esc closes it (Esc in the text box closes the panel first, before the usual "Esc interrupts the turn"). Clicking elsewhere does **not** close it, so the user can keep dictating while editing the draft.
+- **Lifetime**: the extension runs only while its panel is open; closing stops it (the microphone with it). Uninstalling it while open closes the panel. An extension that doesn't answer within 10 s shows "did not respond" with Retry.
+- **Text into the draft**: the extension can insert text at the cursor (replacing a selection), exactly as given; the cursor lands after it and keyboard focus stays in the panel. It works while the agent is replying (it only edits the draft). The extension can **never send** — the user always presses Send.
+- Settings → Extensions labels such an extension "Chat bar". Design: [design/canvas-extensions.md → Chat-bar entries](../design/canvas-extensions.md#chat-bar-entries).
+
 ### The agent's face (`self.html`)
 A second channel beyond text: a visual space the agent drives in real time to express itself. Works everywhere (pure HTML/canvas, no Electron dependency) — desktop **and** plain browser.
 

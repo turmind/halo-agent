@@ -15,8 +15,10 @@
  *  `transcribe` = may open the server's `/api/transcribe/stream` WS proxy;
  *  `fs-read` = read-only `fs` over the workspace (`scope: 'workspace'`) and
  *  the whole machine (`scope: 'system'`) + the host file picker (`pick`),
- *  bundle or not. */
-export type ExtensionCapability = 'save' | 'media' | 'transcribe' | 'fs-read'
+ *  bundle or not;
+ *  `stt-local` = may open the server's `/api/stt/stream` WS (on-device
+ *  SenseVoice speech-to-text, no cloud credentials). */
+export type ExtensionCapability = 'save' | 'media' | 'transcribe' | 'fs-read' | 'stt-local'
 
 /** One declared `settings.params[]` / `settings.secrets[]` entry — same field
  *  format as a skill's `config.yaml`. Declarations only: values live in the
@@ -60,6 +62,20 @@ export interface ExtensionActivity {
   order: number
 }
 
+/** Manifest `chatbar`: one button on the chat input toolbar that opens the
+ *  extension's `entry` in a small panel above the input (`init.view:
+ *  'chatbar'`); the extension may only `insert-text` into the draft at the
+ *  caret — never send. `icon` / `title` / `title_zh` as in `activity` (no
+ *  icon = generic mic). `height` = panel height in px (80–480, default 160).
+ *  Buttons sort by `order` (default 100), then id. */
+export interface ExtensionChatbar {
+  icon?: string
+  title?: string
+  title_zh?: string
+  height: number
+  order: number
+}
+
 export interface ExtensionInfo {
   /** Directory name under `~/.halo/global/extensions/`; must equal manifest.id. */
   id: string
@@ -69,7 +85,7 @@ export interface ExtensionInfo {
   version: string
   description?: string
   /** Lower-case file extensions including the dot, e.g. `['.glb']`. Empty
-   *  only for an `activity` extension that opens no files. */
+   *  only for an `activity` / `chatbar` extension that opens no files. */
   extensions: string[]
   /** HTML entry relative to the extension directory. */
   entry: string
@@ -84,6 +100,8 @@ export interface ExtensionInfo {
   settings?: ExtensionSettings
   /** Activity-bar entry; absent = none (a pure file viewer). */
   activity?: ExtensionActivity
+  /** Chat-input toolbar button; absent = none. */
+  chatbar?: ExtensionChatbar
   homepage?: string
   license?: string
   /** Extension directory mtime (ms). Among several `default` extensions for

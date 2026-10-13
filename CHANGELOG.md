@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Extensions: a manifest can declare `activity` to get its own activity-bar entry — a full-width page that unloads when you switch away, with an svg / png icon drawn as a mask in the bar's color. An extension with `activity` may list `extensions: []`.
+- Extensions: a manifest can declare `chatbar` to add a button to the chat input toolbar. Clicking it opens the extension in a small panel above the input box, and the extension can insert text at the cursor. It can't send the message; you still press Send. The panel stays open when you click elsewhere and unloads when you close it. An extension with `chatbar` may list `extensions: []`.
 
 ### Changed
 
