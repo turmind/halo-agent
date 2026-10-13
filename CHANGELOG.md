@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.6.5] - 2026-10-13
+
 ### Added
 
 - Extensions: a manifest can declare `activity` to get its own activity-bar entry — a full-width page that unloads when you switch away, with an svg / png icon drawn as a mask in the bar's color. An extension with `activity` may list `extensions: []`.
@@ -15,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Halo City moved to halo-hub as the `halo-city` extension, and the `halo-city/` folder is gone from this repo. Install it and Halo City opens from the activity bar: `/api/show/state` and `/api/show/session` now accept the admin login cookie when no token is sent, treated as `full`. A standalone deployment with a web token keeps working as before.
+
+### Fixed
+
+- Cron: a stateless job's per-run sessions are no longer left behind for good. Deleting a job with the cron skill's `manage-cron.py delete` now leaves its runs to the server, which deletes them together with their sessions on its next pass (also right after boot); a job whose workspace was changed still finds the sessions it ran in the old workspace; and a job deleted while a stateless run is in flight cleans up that run's session once it finishes.
 
 ## [1.6.4] - 2026-10-12
 
@@ -1002,7 +1008,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.4...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.5...HEAD
+[1.6.5]: https://github.com/turmind/halo-agent/compare/v1.6.4...v1.6.5
 [1.6.4]: https://github.com/turmind/halo-agent/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/turmind/halo-agent/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/turmind/halo-agent/compare/v1.6.1...v1.6.2
