@@ -7,7 +7,10 @@ import { setExtensions, chatbarEntries } from '../src/features/editor/previews/r
 import { resetExtensionTokenCache } from '../src/features/editor/previews/extension-token'
 import { onClientFrame, initialHostState } from '../src/features/editor/previews/extension-host-logic'
 import { activityCapabilities, onActivityFrame, type ActivityContext } from '../src/features/workspace/extension-activity-logic'
-import { CHATBAR_MIN_FRAME_H, CHATBAR_TITLE_H, MAX_INSERT_TEXT, chatbarPanelBox, chatbarTitle, insertAtSelection, onChatbarFrame } from '../src/features/chat/extension-chatbar-logic'
+import {
+  CHATBAR_CLOSED, CHATBAR_CLOSE_TIMEOUT_MS, CHATBAR_MIN_FRAME_H, CHATBAR_TITLE_H, MAX_INSERT_TEXT,
+  chatbarPanelBox, chatbarReducer, chatbarTitle, insertAtSelection, onChatbarFrame,
+} from '../src/features/chat/extension-chatbar-logic'
 import { MessageInput } from '../src/features/chat/message-input'
 import { useChatStore } from '../src/features/chat/chat-store'
 import { useChatTabs } from '../src/features/chat/chat-tabs'
@@ -38,6 +41,11 @@ const observers: { cb: () => void; targets: Element[] }[] = []
  *  - one panel at a time; its button / × / Esc closes it, an outside click
  *    does not; closed = iframe unmounted; uninstall, a hidden input (0×0) and
  *    a chat-tab switch close it;
+ *  - `busy` (boolean, else warn; reset by every `ready`): a user close (button
+ *    / × / Esc) of a panel whose last busy is true posts `close-request` and
+ *    keeps it mounted — button active, insert-text still landing — until
+ *    `busy: false`, 35 s, or a second user close; tab switch / hidden input /
+ *    uninstall / another panel unmount at once;
  *  - the panel is portaled to <body>, `fixed` over the input's wrapper
  *    (chatbarPanelBox: ≤ 420 px wide, clamped 8 px into the viewport, the
  *    frame squeezed to fit above the input down to 80 px, title bar always
@@ -90,12 +98,12 @@ describe('chatbar logic', () => {
     expect(chatbarTitle(ext('v', { name: 'Voice pkg' }), 'zh')).toBe('Voice pkg')
   })
 
-  it('ready → ready + init(view: chatbar) with the file-less fields; a second ready re-sends it', () => {
+  it('ready → ready + init(view: chatbar) with the file-less fields + busy reset; a second ready re-sends it', () => {
     const first = onChatbarFrame({ ready: false }, frame({ type: 'ready', protocol: 1 }), ctx)
     expect(first.state.ready).toBe(true)
     const init = { type: 'post', frame: { haloExt: 1, type: 'init', view: 'chatbar', protocol: 1, capabilities: ['media', 'stt-local'], theme: 'dark', themeVars: { background: '#000' }, platform: 'web', lang: 'en' } }
-    expect(first.effects).toEqual([{ type: 'ready' }, init])
-    expect(onChatbarFrame(first.state, frame({ type: 'ready', protocol: 1 }), ctx).effects).toEqual([{ type: 'ready' }, init])
+    expect(first.effects).toEqual([{ type: 'ready' }, init, { type: 'busy', busy: false }])
+    expect(onChatbarFrame(first.state, frame({ type: 'ready', protocol: 1 }), ctx).effects).toEqual([{ type: 'ready' }, init, { type: 'busy', busy: false }])
     expect(onChatbarFrame({ ready: true }, frame({ type: 'error', message: 'no mic' }), ctx).effects).toEqual([{ type: 'error', message: 'no mic' }])
   })
 
@@ -122,6 +130,37 @@ describe('chatbar logic', () => {
     expect(onActivityFrame({ ready: true }, frame({ type: 'insert-text', text: 'a' }), ctx).effects).toEqual([{ type: 'warn', message: 'insert-text frame ignored on an activity page' }])
     const host = initialHostState([])
     expect(onClientFrame(host, frame({ type: 'insert-text', text: 'a' }), {} as never).effects.map((e) => e.type)).toEqual(['warn'])
+    expect(onActivityFrame({ ready: true }, frame({ type: 'busy', busy: true }), ctx).effects).toEqual([{ type: 'warn', message: 'busy frame ignored on an activity page' }])
+    expect(onClientFrame(host, frame({ type: 'busy', busy: true }), {} as never).effects).toEqual([{ type: 'warn', message: 'busy frame ignored outside a chat-bar panel' }])
+  })
+
+  it('busy: a boolean → busy effect; anything else warns', () => {
+    for (const busy of [true, false]) {
+      expect(onChatbarFrame({ ready: true }, frame({ type: 'busy', busy }), ctx).effects).toEqual([{ type: 'busy', busy }])
+    }
+    for (const busy of [1, 'true', null, undefined]) {
+      expect(onChatbarFrame({ ready: true }, frame({ type: 'busy', busy }), ctx).effects).toEqual([{ type: 'warn', message: 'busy without a boolean busy ignored' }])
+    }
+  })
+
+  it('panel reducer: a busy panel winds down on the first user close, unmounts on the second / busy:false; unmount is always at once', () => {
+    const open = chatbarReducer(CHATBAR_CLOSED, { type: 'toggle', id: 'v' })
+    expect(open).toEqual({ openId: 'v', busy: false, closing: false })
+    expect(chatbarReducer(open, { type: 'close' })).toBe(CHATBAR_CLOSED)                 // never busy → closes
+    expect(chatbarReducer(open, { type: 'toggle', id: 'v' })).toBe(CHATBAR_CLOSED)
+    const busy = chatbarReducer(open, { type: 'busy', busy: true })
+    const closing = chatbarReducer(busy, { type: 'close' })
+    expect(closing).toEqual({ openId: 'v', busy: true, closing: true })
+    expect(chatbarReducer(busy, { type: 'toggle', id: 'v' })).toEqual(closing)
+    expect(chatbarReducer(closing, { type: 'busy', busy: true })).toBe(closing)          // no-op keeps identity
+    expect(chatbarReducer(closing, { type: 'busy', busy: false })).toBe(CHATBAR_CLOSED)
+    expect(chatbarReducer(closing, { type: 'close' })).toBe(CHATBAR_CLOSED)
+    expect(chatbarReducer(closing, { type: 'toggle', id: 'v' })).toBe(CHATBAR_CLOSED)
+    expect(chatbarReducer(closing, { type: 'toggle', id: 'w' })).toEqual({ openId: 'w', busy: false, closing: false }) // another panel: at once
+    expect(chatbarReducer(busy, { type: 'unmount' })).toBe(CHATBAR_CLOSED)
+    expect(chatbarReducer(chatbarReducer(busy, { type: 'busy', busy: false }), { type: 'close' })).toBe(CHATBAR_CLOSED)
+    expect(chatbarReducer(CHATBAR_CLOSED, { type: 'busy', busy: true })).toBe(CHATBAR_CLOSED)
+    expect(chatbarReducer(CHATBAR_CLOSED, { type: 'close' })).toBe(CHATBAR_CLOSED)
   })
 
   it('capabilities: media / transcribe / stt-local only (shared with the activity page)', () => {
@@ -391,5 +430,131 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     act(() => useChatTabs.setState({ activeTabId: 'another-tab' }))
     expect(iframe()).toBeNull()
     act(() => useChatTabs.setState(tabs, true))
+  })
+
+  describe('busy → close-request', () => {
+    const voice = () => act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    /** Open the panel, answer its ready, report `busy`; returns the iframe's window + its postMessage spy. */
+    async function openBusy(busy: boolean | null = true) {
+      act(() => button('Voice')!.click())
+      await flush()
+      const win = iframe()!.contentWindow!
+      const posted = vi.spyOn(win, 'postMessage')
+      deliver(win, { haloExt: 1, type: 'ready', protocol: 1 })
+      if (busy !== null) deliver(win, { haloExt: 1, type: 'busy', busy })
+      return { win, closeRequests: () => posted.mock.calls.filter((c) => (c[0] as { type: string }).type === 'close-request').length }
+    }
+    const closeBy = {
+      button: () => act(() => button('Voice')!.click()),
+      x: () => act(() => button('chat.chatbar.close')!.click()),
+      'page Esc': () => act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) }),
+      // cancelable like a real keydown: the textarea's preventDefault keeps the page-level Esc from closing a second time
+      'textarea Esc': () => act(() => { textarea().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) }),
+    }
+
+    for (const [how, close] of Object.entries(closeBy)) {
+      it(`busy:true + ${how} → close-request, still mounted and inserting; busy:false unmounts`, async () => {
+        voice()
+        const onInterrupt = vi.fn()
+        await renderInput({ isStreaming: true, onInterrupt })
+        const { win, closeRequests } = await openBusy()
+        close()
+        expect(closeRequests()).toBe(1)
+        expect(iframe()?.contentWindow).toBe(win)
+        expect(button('Voice')!.getAttribute('aria-pressed')).toBe('true')
+        deliver(win, { haloExt: 1, type: 'insert-text', text: 'last words' })  // the tail of the recognition
+        expect(textarea().value).toBe('last words')
+        deliver(win, { haloExt: 1, type: 'busy', busy: true })                  // repeated busy: nothing new
+        expect(closeRequests()).toBe(1)
+        deliver(win, { haloExt: 1, type: 'busy', busy: false })
+        expect(iframe()).toBeNull()
+        expect(button('Voice')!.getAttribute('aria-pressed')).toBe('false')
+        expect(onInterrupt).not.toHaveBeenCalled()
+      })
+    }
+
+    it('closing again while it winds down unmounts at once', async () => {
+      voice()
+      await renderInput()
+      const { closeRequests } = await openBusy()
+      act(() => button('chat.chatbar.close')!.click())
+      expect(iframe()).toBeTruthy()
+      act(() => button('Voice')!.click())
+      expect(iframe()).toBeNull()
+      expect(closeRequests()).toBe(1)
+    })
+
+    it(`no busy:false within ${CHATBAR_CLOSE_TIMEOUT_MS / 1000} s → unmounted anyway`, async () => {
+      voice()
+      await renderInput()
+      const { closeRequests } = await openBusy()
+      vi.useFakeTimers()
+      act(() => button('chat.chatbar.close')!.click())
+      expect(closeRequests()).toBe(1)
+      act(() => { vi.advanceTimersByTime(CHATBAR_CLOSE_TIMEOUT_MS - 1) })
+      expect(iframe()).toBeTruthy()
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(iframe()).toBeNull()
+    })
+
+    it('busy:false last, or never reported → closes at once, no close-request', async () => {
+      voice()
+      await renderInput()
+      for (const busy of [null, false]) {
+        const { closeRequests } = await openBusy(busy)
+        act(() => button('chat.chatbar.close')!.click())
+        expect(iframe()).toBeNull()
+        expect(closeRequests()).toBe(0)
+      }
+      const { win, closeRequests } = await openBusy(true)
+      deliver(win, { haloExt: 1, type: 'busy', busy: false })                   // was busy, isn't any more
+      act(() => button('Voice')!.click())
+      expect(iframe()).toBeNull()
+      expect(closeRequests()).toBe(0)
+    })
+
+    it('a non-boolean busy is warned and ignored (the panel still closes at once)', async () => {
+      voice()
+      await renderInput()
+      const { win, closeRequests } = await openBusy(null)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      deliver(win, { haloExt: 1, type: 'busy', busy: 'yes' })
+      expect(warn).toHaveBeenCalledWith('[ExtensionChatbar] voice: busy without a boolean busy ignored')
+      act(() => button('Voice')!.click())
+      expect(iframe()).toBeNull()
+      expect(closeRequests()).toBe(0)
+    })
+
+    it('a tab switch, a hidden input, an uninstall or another panel unmount a busy / winding-down panel at once', async () => {
+      const tabs = useChatTabs.getState()
+      act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } }), ext('b', { chatbar: { height: 160, order: 2, title: 'B' } })], errors: [] }))
+      await renderInput()
+
+      let probe = await openBusy()
+      act(() => useChatTabs.setState({ activeTabId: 'another-tab' }))
+      expect(iframe()).toBeNull()
+      expect(probe.closeRequests()).toBe(0)
+
+      probe = await openBusy()
+      act(() => button('chat.chatbar.close')!.click())                         // winding down …
+      anchorRect = { top: 0, left: 0, width: 0, height: 0 }                     // … then the chat is hidden
+      act(() => { window.dispatchEvent(new Event('resize')) })
+      await nextFrame()
+      expect(iframe()).toBeNull()
+      anchorRect = { top: 600, left: 100, width: 600, height: 120 }
+
+      probe = await openBusy()
+      act(() => button('B')!.click())
+      await flush()
+      expect(iframe()!.getAttribute('src')).toContain('/api/extensions/b/')
+      expect(probe.closeRequests()).toBe(0)
+      act(() => button('B')!.click())
+
+      probe = await openBusy()
+      act(() => setExtensions({ extensions: [ext('b', { chatbar: { height: 160, order: 2, title: 'B' } })], errors: [] }))
+      expect(iframe()).toBeNull()
+      expect(probe.closeRequests()).toBe(0)
+      act(() => useChatTabs.setState(tabs, true))
+    })
   })
 })

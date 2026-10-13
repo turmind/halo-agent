@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
+import { useState, useRef, useCallback, useMemo, useEffect, useReducer } from 'react'
 import { flushSync } from 'react-dom'
 import { Send, Paperclip, X, FileIcon, FileText, Square, MonitorUp, Camera, Scissors, Sparkles, ChevronDown, Check, LockOpen, FolderLock, Eye, type LucideIcon } from 'lucide-react'
 import { cn } from '@/shared/utils'
@@ -18,7 +18,7 @@ import { FileMentionPicker } from './file-mention-picker'
 import { getScreenBridge, getCameraBridge, getScreenshotBridge, syncWebCapture, WEB_SCREEN_ID, type CaptureSrc, type ScreenshotFrame } from './web-capture'
 import { ScreenshotCrop } from './screenshot-crop'
 import { ExtensionChatbarControl } from './extension-chatbar-control'
-import { insertAtSelection } from './extension-chatbar-logic'
+import { CHATBAR_CLOSED, chatbarReducer, insertAtSelection } from './extension-chatbar-logic'
 import { useChatTabs } from './chat-tabs'
 import { useT } from '@/shared/i18n'
 
@@ -929,21 +929,23 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     })
   }, [text, atMention])
 
-  // Extension chat-bar panel (ExtensionChatbarControl): which one is open, and
-  // its `insert-text` — the draft's selection is replaced and the caret lands
+  // Extension chat-bar panel (ExtensionChatbarControl): which one is open
+  // (and whether it is busy / winding down — chatbarReducer), and its
+  // `insert-text` — the draft's selection is replaced and the caret lands
   // after the text, without focusing the textarea (focus stays in the panel's
   // iframe, which may still be dictating). Draft only: nothing is sent.
   // flushSync commits before the caret moves, so back-to-back frames each read
   // the DOM value / selection the previous one left.
-  const [chatbarOpenId, setChatbarOpenId] = useState<string | null>(null)
+  const [chatbarPanel, chatbarDispatch] = useReducer(chatbarReducer, CHATBAR_CLOSED)
   // The panel is positioned over this component's wrapper (state, not a ref:
   // the panel re-measures when it mounts).
   const [chatbarAnchor, setChatbarAnchor] = useState<HTMLDivElement | null>(null)
   // ChatPanel keeps one MessageInput across tabs, so a tab switch closes the
-  // panel here. activeTabId, not sessionId: a draft tab's first send binds
+  // panel here (at once, busy or not: its text would land in the wrong
+  // draft). activeTabId, not sessionId: a draft tab's first send binds
   // its sessionId and must not close a dictation in progress.
   useEffect(() => useChatTabs.subscribe((s, prev) => {
-    if (s.activeTabId !== prev.activeTabId) setChatbarOpenId(null)
+    if (s.activeTabId !== prev.activeTabId) chatbarDispatch({ type: 'unmount' })
   }), [])
   const insertExtensionText = useCallback((ins: string) => {
     const el = textareaRef.current
@@ -1171,7 +1173,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
       }
       // An open extension chat-bar panel is the next popup in line: esc closes
       // it rather than interrupting the turn below.
-      if (e.key === 'Escape' && chatbarOpenId) { e.preventDefault(); setChatbarOpenId(null); return }
+      if (e.key === 'Escape' && chatbarPanel.openId) { e.preventDefault(); chatbarDispatch({ type: 'close' }); return }
       // esc with no popup open + a turn running + empty composer → interrupt
       // the in-flight turn. Empty-composer guard so esc still clears a draft.
       if (e.key === 'Escape' && isStreaming && !text.trim() && onInterrupt) {
@@ -1179,7 +1181,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
       }
       if (e.key === 'Enter' && !e.nativeEvent.isComposing && !e.shiftKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); handleSend() }
     },
-    [handleSend, matchedCmds, cmdIndex, matchedVerbs, verbIndex, selectVerb, mentionMatches, mentionIndex, selectMention, scopeMatches, scopeIndex, selectScope, isStreaming, text, onInterrupt, chatbarOpenId],
+    [handleSend, matchedCmds, cmdIndex, matchedVerbs, verbIndex, selectVerb, mentionMatches, mentionIndex, selectMention, scopeMatches, scopeIndex, selectScope, isStreaming, text, onInterrupt, chatbarPanel.openId],
   )
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1275,7 +1277,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
           </button>
           {modelSupportsImage && <ScreenshotControl disabled={disabled} onCapture={(file) => addFiles([file])} onNotice={setAttachNotice} />}
           <CaptureControl modelSupportsImage={modelSupportsImage} />
-          <ExtensionChatbarControl openId={chatbarOpenId} onOpenChange={setChatbarOpenId} onInsert={insertExtensionText} anchor={chatbarAnchor} disabled={disabled} />
+          <ExtensionChatbarControl panel={chatbarPanel} dispatch={chatbarDispatch} onInsert={insertExtensionText} anchor={chatbarAnchor} disabled={disabled} />
           {/* FaceControl renders only with a project open. */}
           {(activeProject || debugControl || contextLabel) && <ToolbarDivider />}
           <FaceControl />

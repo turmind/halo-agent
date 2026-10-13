@@ -130,6 +130,10 @@ export type ExtensionHostFrame =
   | (ExtensionFrameBase & { type: 'exported'; name: string; path: string })
   // `cancelled` = the user declined to overwrite an existing file
   | (ExtensionFrameBase & { type: 'export-error'; reason: 'denied' | 'cancelled' | 'invalid' | 'io'; message: string })
+  // chat-bar panel only: the user closed the panel while it last reported
+  // `busy: true`. It stays mounted (and `insert-text` still lands) until the
+  // extension reports `busy: false`, or 35 s pass; closing again unmounts it.
+  | (ExtensionFrameBase & { type: 'close-request' })
 
 // ── Extension → Host ─────────────────────────────────────────────────
 
@@ -155,6 +159,10 @@ export type ExtensionClientFrame =
   // (replacing its selection) — the host adds nothing and never sends;
   // non-string / empty / over 10 000 chars is ignored
   | (ExtensionFrameBase & { type: 'insert-text'; text: string })
+  // chat-bar panel only: closing the panel now would lose work in flight
+  // (recording, a result still pending) — a user close then gets
+  // `close-request` instead of an unmount. Initially false; elsewhere ignored
+  | (ExtensionFrameBase & { type: 'busy'; busy: boolean })
 
 export type ExtensionHostFrameType = ExtensionHostFrame['type']
 export type ExtensionClientFrameType = ExtensionClientFrame['type']

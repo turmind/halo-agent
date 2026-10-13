@@ -9,7 +9,10 @@ import { useI18n } from '@/shared/i18n'
 import { ExtensionMaskIcon } from '@/features/editor/previews/extension-icon'
 import { chatbarEntries, useRegistryVersion } from '@/features/editor/previews/registry'
 import { ExtensionPageFrame } from '@/features/workspace/extension-activity-panel'
-import { CHATBAR_TITLE_H, chatbarPanelBox, chatbarTitle, onChatbarFrame, type ChatbarPanelBox } from './extension-chatbar-logic'
+import {
+  CHATBAR_CLOSE_TIMEOUT_MS, CHATBAR_TITLE_H, chatbarPanelBox, chatbarTitle, onChatbarFrame,
+  type ChatbarAction, type ChatbarPanelBox, type ChatbarPanelState,
+} from './extension-chatbar-logic'
 
 /**
  * Chat-input toolbar buttons of extensions with a manifest `chatbar`, plus
@@ -19,17 +22,21 @@ import { CHATBAR_TITLE_H, chatbarPanelBox, chatbarTitle, onChatbarFrame, type Ch
  * over `anchor` (MessageInput's wrapper), so the chat dock's overflow clip
  * can't cut it — see chatbarPanelBox for the fit rules.
  *
- * The parent owns `openId` (so its textarea Esc can close the panel instead
- * of interrupting a turn). One panel at a time; its button again, ×, or Esc
- * on the host page closes it — a click outside does not (dictating while
- * editing the draft is the point). Closed = unmounted, so the microphone
- * stops with it. The panel can only `insert-text` → `onInsert`; nothing here
- * sends. Entries re-derive on every `extension:changed` push
- * (useRegistryVersion), never polled; uninstalling the open one closes it.
+ * The parent owns the panel state (chatbarReducer — so its textarea Esc
+ * closes the panel instead of interrupting a turn). One panel at a time; its
+ * button again, ×, or Esc on the host page closes it — a click outside does
+ * not (dictating while editing the draft is the point). Closed = unmounted,
+ * so the microphone stops with it. A panel that last reported `busy: true`
+ * isn't unmounted by such a user close: it gets `close-request` and stays
+ * (button still active, `insert-text` still landing) until `busy: false`,
+ * 35 s, or a second close. Tab switch / hidden input / uninstall / another
+ * panel unmount at once. The panel can only `insert-text` → `onInsert`;
+ * nothing here sends. Entries re-derive on every `extension:changed` push
+ * (useRegistryVersion), never polled.
  */
-export function ExtensionChatbarControl({ openId, onOpenChange, onInsert, anchor, disabled }: {
-  openId: string | null
-  onOpenChange: (id: string | null) => void
+export function ExtensionChatbarControl({ panel, dispatch, onInsert, anchor, disabled }: {
+  panel: ChatbarPanelState
+  dispatch: (action: ChatbarAction) => void
   onInsert: (text: string) => void
   anchor: HTMLElement | null
   disabled?: boolean
@@ -38,22 +45,31 @@ export function ExtensionChatbarControl({ openId, onOpenChange, onInsert, anchor
   const registryVersion = useRegistryVersion()
   // eslint-disable-next-line react-hooks/exhaustive-deps -- registryVersion is the snapshot-change signal
   const entries = useMemo(() => chatbarEntries(), [registryVersion])
+  const { openId, closing } = panel
   const open = openId ? entries.find((e) => e.id === openId) : undefined
 
   useEffect(() => {
-    if (openId && !open) onOpenChange(null)
-  }, [openId, open, onOpenChange])
+    if (openId && !open) dispatch({ type: 'unmount' })
+  }, [openId, open, dispatch])
 
   // Esc anywhere on the host page. A handler that already used this Esc
   // (the textarea's popups / its own chatbar close) marked it defaultPrevented.
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) onOpenChange(null)
+      if (e.key === 'Escape' && !e.defaultPrevented) dispatch({ type: 'close' })
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open, onOpenChange])
+  }, [open, dispatch])
+
+  // `close-request` sent: unmount anyway once the extension's own 30 s
+  // wind-down should be long over.
+  useEffect(() => {
+    if (!closing) return
+    const timer = setTimeout(() => dispatch({ type: 'unmount' }), CHATBAR_CLOSE_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [closing, dispatch])
 
   if (entries.length === 0) return null
 
@@ -65,7 +81,7 @@ export function ExtensionChatbarControl({ openId, onOpenChange, onInsert, anchor
         return (
           <button
             key={info.id}
-            onClick={() => onOpenChange(active ? null : info.id)}
+            onClick={() => dispatch({ type: 'toggle', id: info.id })}
             disabled={disabled}
             title={title}
             aria-label={title}
@@ -79,7 +95,13 @@ export function ExtensionChatbarControl({ openId, onOpenChange, onInsert, anchor
           </button>
         )
       })}
-      {open && <ChatbarPanel key={`${open.id}@${open.version}`} info={open} title={chatbarTitle(open, lang)} closeLabel={t('chat.chatbar.close')} anchor={anchor} onClose={() => onOpenChange(null)} onInsert={onInsert} />}
+      {open && (
+        <ChatbarPanel
+          key={`${open.id}@${open.version}`} info={open} title={chatbarTitle(open, lang)} closeLabel={t('chat.chatbar.close')} anchor={anchor}
+          closing={closing} onClose={() => dispatch({ type: 'close' })} onHidden={() => dispatch({ type: 'unmount' })}
+          onBusy={(busy) => dispatch({ type: 'busy', busy })} onInsert={onInsert}
+        />
+      )}
     </>
   )
 }
@@ -126,15 +148,18 @@ function useAnchorBox(anchor: HTMLElement | null, height: number, onHidden: () =
   return box
 }
 
-function ChatbarPanel({ info, title, closeLabel, anchor, onClose, onInsert }: {
+function ChatbarPanel({ info, title, closeLabel, anchor, closing, onClose, onHidden, onBusy, onInsert }: {
   info: ExtensionInfo
   title: string
   closeLabel: string
   anchor: HTMLElement | null
+  closing: boolean
   onClose: () => void
+  onHidden: () => void
+  onBusy: (busy: boolean) => void
   onInsert: (text: string) => void
 }) {
-  const box = useAnchorBox(anchor, info.chatbar?.height ?? 160, onClose)
+  const box = useAnchorBox(anchor, info.chatbar?.height ?? 160, onHidden)
   // Portaled to <body>: the chat dock's Panel clips its overflow, so an
   // in-tree `absolute bottom-full` panel lost its title bar under the editor.
   // z-[55]: above the docked / floating chat (floating bottom panel z-50) and
@@ -158,7 +183,7 @@ function ChatbarPanel({ info, title, closeLabel, anchor, onClose, onInsert }: {
       </div>
       {/* `chatbar.height` (or what fits above the input) is the extension's own viewport; the title bar sits on top. */}
       <div className="min-h-0" style={{ height: box.frameHeight }}>
-        <ExtensionPageFrame info={info} title={title} onFrame={onChatbarFrame} onInsert={onInsert} logTag="ExtensionChatbar" compact />
+        <ExtensionPageFrame info={info} title={title} onFrame={onChatbarFrame} onInsert={onInsert} onBusy={onBusy} closeRequested={closing} logTag="ExtensionChatbar" compact />
       </div>
     </div>,
     document.body,

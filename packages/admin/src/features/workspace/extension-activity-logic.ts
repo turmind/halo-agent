@@ -41,9 +41,9 @@ export interface ActivityStep {
 }
 
 /** Everything a file-less page host (ExtensionPageFrame) carries out: the
- *  activity effects plus `insert`, which only a chat-bar panel emits
+ *  activity effects plus `insert` / `busy`, which only a chat-bar panel emits
  *  (extension-chatbar-logic.ts). */
-export type PageEffect = ActivityEffect | { type: 'insert'; text: string }
+export type PageEffect = ActivityEffect | { type: 'insert'; text: string } | { type: 'busy'; busy: boolean }
 
 export interface PageStep {
   state: ActivityState

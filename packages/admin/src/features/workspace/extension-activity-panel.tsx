@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ExtensionClientFrame, ExtensionInfo } from '@turmind/halo-core/protocol'
+import type { ExtensionClientFrame, ExtensionHostFrame, ExtensionInfo } from '@turmind/halo-core/protocol'
 import { Puzzle } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { useTheme } from '@/shared/theme'
@@ -44,15 +44,19 @@ export function ExtensionActivityPanel({ info }: { info: ExtensionInfo }) {
  * the file host's sandbox / allow / referrer grant (extension-host.tsx — see
  * its header for why `allow-same-origin`), `ready` → init, theme / lang
  * forwarded after ready, Retry after 10 s without `ready`. `onFrame` is the
- * view's frame policy (onActivityFrame / onChatbarFrame); `insert` effects go
- * to `onInsert`. Fills its parent; `compact` = the small chat-bar panel.
+ * view's frame policy (onActivityFrame / onChatbarFrame); `insert` / `busy`
+ * effects go to `onInsert` / `onBusy`, and `closeRequested` turning true posts
+ * `close-request` (chat-bar panel only). Fills its parent; `compact` = the
+ * small chat-bar panel.
  */
-export function ExtensionPageFrame({ info, title, onFrame, onInsert, logTag, compact = false }: {
+export function ExtensionPageFrame({ info, title, onFrame, onInsert, onBusy, closeRequested = false, logTag, compact = false }: {
   info: ExtensionInfo
   /** iframe title. */
   title: string
   onFrame: (state: ActivityState, frame: ExtensionClientFrame, ctx: ActivityContext) => PageStep
   onInsert?: (text: string) => void
+  onBusy?: (busy: boolean) => void
+  closeRequested?: boolean
   /** Console prefix: `[<logTag>] <id>: …`. */
   logTag: string
   compact?: boolean
@@ -83,7 +87,8 @@ export function ExtensionPageFrame({ info, title, onFrame, onInsert, logTag, com
   const ctxRef = useRef(ctx)
   const onFrameRef = useRef(onFrame)
   const onInsertRef = useRef(onInsert)
-  useEffect(() => { ctxRef.current = ctx; onFrameRef.current = onFrame; onInsertRef.current = onInsert })
+  const onBusyRef = useRef(onBusy)
+  useEffect(() => { ctxRef.current = ctx; onFrameRef.current = onFrame; onInsertRef.current = onInsert; onBusyRef.current = onBusy })
 
   const run = useCallback((step: PageStep) => {
     stateRef.current = step.state
@@ -104,6 +109,9 @@ export function ExtensionPageFrame({ info, title, onFrame, onInsert, logTag, com
           break
         case 'insert':
           onInsertRef.current?.(eff.text)
+          break
+        case 'busy':
+          onBusyRef.current?.(eff.busy)
           break
       }
     }
@@ -149,6 +157,12 @@ export function ExtensionPageFrame({ info, title, onFrame, onInsert, logTag, com
   useEffect(() => {
     run(onActivityLangChange(stateRef.current, lang))
   }, [lang, run])
+
+  useEffect(() => {
+    if (!closeRequested) return
+    const frame: ExtensionHostFrame = { haloExt: 1, type: 'close-request' }
+    iframeRef.current?.contentWindow?.postMessage(frame, '*')
+  }, [closeRequested])
 
   const retry = () => {
     setPhase('loading')

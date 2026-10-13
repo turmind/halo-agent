@@ -7,18 +7,27 @@ import { pageReady, type ActivityContext, type ActivityState, type PageStep } fr
  * init it shares: `ready` → `init` (`view: 'chatbar'`, re-sent on every
  * ready), `error` → banner, theme / lang after ready (onActivityThemeChange /
  * onActivityLangChange), plus the one frame only this view accepts:
- * `insert-text` → insert into the chat draft. Nothing here can send a
- * message. Everything file-shaped is ignored with a warning. Capabilities are
- * the same file-less grant as the activity page (activityCapabilities).
+ * `insert-text` → insert into the chat draft, and `busy` → whether a user
+ * close must ask first (`close-request`, see extension-chatbar-control.tsx).
+ * Nothing here can send a message. Everything file-shaped is ignored with a
+ * warning. Capabilities are the same file-less grant as the activity page
+ * (activityCapabilities).
  */
 
 /** Longest `insert-text` the host accepts (chars). */
 export const MAX_INSERT_TEXT = 10_000
+/** After `close-request`, unmount anyway if `busy: false` hasn't come (ms) —
+ *  above the extension's own 30 s wind-down. */
+export const CHATBAR_CLOSE_TIMEOUT_MS = 35_000
 
 export function onChatbarFrame(state: ActivityState, frame: ExtensionClientFrame, ctx: ActivityContext): PageStep {
   switch (frame.type) {
-    case 'ready':
-      return pageReady(state, ctx, 'chatbar')
+    case 'ready': {
+      // A `ready` is a fresh page (first load, Retry, a new version, a self
+      // reload): whatever it was busy with is gone, so busy restarts at false.
+      const step = pageReady(state, ctx, 'chatbar')
+      return { state: step.state, effects: [...step.effects, { type: 'busy', busy: false }] }
+    }
     case 'error':
       return { state, effects: [{ type: 'error', message: frame.message }] }
     case 'insert-text': {
@@ -29,8 +38,54 @@ export function onChatbarFrame(state: ActivityState, frame: ExtensionClientFrame
       if (text.length > MAX_INSERT_TEXT) return { state, effects: [{ type: 'warn', message: `insert-text over ${MAX_INSERT_TEXT} chars ignored (${text.length})` }] }
       return { state, effects: [{ type: 'insert', text }] }
     }
+    case 'busy': {
+      const busy: unknown = frame.busy
+      if (typeof busy !== 'boolean') return { state, effects: [{ type: 'warn', message: 'busy without a boolean busy ignored' }] }
+      return { state, effects: [{ type: 'busy', busy }] }
+    }
     default:
       return { state, effects: [{ type: 'warn', message: `${frame.type} frame ignored on a chat-bar panel` }] }
+  }
+}
+
+/** The one chat-bar panel's lifecycle (MessageInput holds it, so its textarea
+ *  Esc closes the panel the same way × does). */
+export interface ChatbarPanelState {
+  /** Open extension; null = closed, i.e. unmounted. */
+  openId: string | null
+  /** Its last `busy` (false until it reports otherwise). */
+  busy: boolean
+  /** `close-request` sent; still mounted until `busy: false` or the timeout. */
+  closing: boolean
+}
+
+export type ChatbarAction =
+  /** Its toolbar button: open it (unmounting any other at once), or close it. */
+  | { type: 'toggle'; id: string }
+  /** × / Esc: a busy panel gets `close-request` first; closing it again, or a
+   *  panel that isn't busy, unmounts. */
+  | { type: 'close' }
+  /** Unmount now — tab switch, hidden input, uninstalled, close timeout. */
+  | { type: 'unmount' }
+  | { type: 'busy'; busy: boolean }
+
+export const CHATBAR_CLOSED: ChatbarPanelState = { openId: null, busy: false, closing: false }
+
+/** Returns `state` itself when nothing changes (no re-render). */
+export function chatbarReducer(state: ChatbarPanelState, action: ChatbarAction): ChatbarPanelState {
+  switch (action.type) {
+    case 'toggle':
+      if (state.openId !== action.id) return { openId: action.id, busy: false, closing: false }
+      return chatbarReducer(state, { type: 'close' })
+    case 'close':
+      if (!state.openId) return state
+      return state.busy && !state.closing ? { ...state, closing: true } : CHATBAR_CLOSED
+    case 'unmount':
+      return state.openId ? CHATBAR_CLOSED : state
+    case 'busy':
+      if (!state.openId) return state
+      if (!action.busy && state.closing) return CHATBAR_CLOSED
+      return state.busy === action.busy ? state : { ...state, busy: action.busy }
   }
 }
 
