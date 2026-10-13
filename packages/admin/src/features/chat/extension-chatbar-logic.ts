@@ -42,6 +42,42 @@ export function insertAtSelection(value: string, start: number, end: number, tex
   return { value: value.slice(0, s) + text + value.slice(e), caret: s + text.length }
 }
 
+/** Chat-bar panel title bar height (px), on top of the iframe area. */
+export const CHATBAR_TITLE_H = 28
+/** Iframe area never shrinks below the manifest minimum. */
+export const CHATBAR_MIN_FRAME_H = 80
+const PANEL_MAX_W = 420
+const EDGE = 8
+const GAP = 4
+
+export interface ChatbarPanelBox {
+  left: number
+  /** CSS `bottom` for a `position: fixed` panel. */
+  bottom: number
+  width: number
+  /** Iframe area height (title bar excluded). */
+  frameHeight: number
+}
+
+/**
+ * Where the fixed chat-bar panel goes, given the input wrapper's viewport rect
+ * (`anchor`). It sits above the wrapper (4 px gap), `min(420, vw − 16)` wide,
+ * left edge at the wrapper's padding, clamped to 8 px from either side. The
+ * iframe area gets the manifest `height` when there is room above, else it
+ * shrinks to fit (never under 80). When even 80 doesn't fit, the panel slides
+ * down over the input's top edge — the title bar (and its ×) always stays
+ * inside the viewport, 8 px from the top.
+ */
+export function chatbarPanelBox(anchor: { top: number; left: number }, viewport: { width: number; height: number }, height: number): ChatbarPanelBox {
+  const width = Math.min(PANEL_MAX_W, viewport.width - 2 * EDGE)
+  const left = Math.max(EDGE, Math.min(anchor.left + 12, viewport.width - width - EDGE))
+  const room = anchor.top - EDGE - CHATBAR_TITLE_H - GAP
+  const frameHeight = Math.max(CHATBAR_MIN_FRAME_H, Math.min(height, room))
+  // Bottom of the panel: just above the anchor, or lower if the top would leave the viewport.
+  const panelBottomY = Math.max(anchor.top - GAP, EDGE + CHATBAR_TITLE_H + frameHeight)
+  return { left, bottom: viewport.height - panelBottomY, width, frameHeight }
+}
+
 /** Button title / tooltip: zh `title_zh` → `title` → `name`; en `title` → `name`. */
 export function chatbarTitle(info: ExtensionInfo, lang: ExtensionLang): string {
   const c = info.chatbar

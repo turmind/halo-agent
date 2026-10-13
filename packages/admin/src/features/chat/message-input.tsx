@@ -19,6 +19,7 @@ import { getScreenBridge, getCameraBridge, getScreenshotBridge, syncWebCapture, 
 import { ScreenshotCrop } from './screenshot-crop'
 import { ExtensionChatbarControl } from './extension-chatbar-control'
 import { insertAtSelection } from './extension-chatbar-logic'
+import { useChatTabs } from './chat-tabs'
 import { useT } from '@/shared/i18n'
 
 /** Read a File to a base64 string (no data URL prefix), verbatim. */
@@ -935,6 +936,15 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   // flushSync commits before the caret moves, so back-to-back frames each read
   // the DOM value / selection the previous one left.
   const [chatbarOpenId, setChatbarOpenId] = useState<string | null>(null)
+  // The panel is positioned over this component's wrapper (state, not a ref:
+  // the panel re-measures when it mounts).
+  const [chatbarAnchor, setChatbarAnchor] = useState<HTMLDivElement | null>(null)
+  // ChatPanel keeps one MessageInput across tabs, so a tab switch closes the
+  // panel here. activeTabId, not sessionId: a draft tab's first send binds
+  // its sessionId and must not close a dictation in progress.
+  useEffect(() => useChatTabs.subscribe((s, prev) => {
+    if (s.activeTabId !== prev.activeTabId) setChatbarOpenId(null)
+  }), [])
   const insertExtensionText = useCallback((ins: string) => {
     const el = textareaRef.current
     if (!el) return
@@ -1206,6 +1216,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
 
   return (
     <div
+      ref={setChatbarAnchor}
       className={cn('relative px-3 pb-3 pt-1 transition-colors', isDragging && 'bg-[var(--accent)]')}
       onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
     >
@@ -1264,7 +1275,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
           </button>
           {modelSupportsImage && <ScreenshotControl disabled={disabled} onCapture={(file) => addFiles([file])} onNotice={setAttachNotice} />}
           <CaptureControl modelSupportsImage={modelSupportsImage} />
-          <ExtensionChatbarControl openId={chatbarOpenId} onOpenChange={setChatbarOpenId} onInsert={insertExtensionText} disabled={disabled} />
+          <ExtensionChatbarControl openId={chatbarOpenId} onOpenChange={setChatbarOpenId} onInsert={insertExtensionText} anchor={chatbarAnchor} disabled={disabled} />
           {/* FaceControl renders only with a project open. */}
           {(activeProject || debugControl || contextLabel) && <ToolbarDivider />}
           <FaceControl />

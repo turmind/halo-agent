@@ -7,12 +7,23 @@ import { setExtensions, chatbarEntries } from '../src/features/editor/previews/r
 import { resetExtensionTokenCache } from '../src/features/editor/previews/extension-token'
 import { onClientFrame, initialHostState } from '../src/features/editor/previews/extension-host-logic'
 import { activityCapabilities, onActivityFrame, type ActivityContext } from '../src/features/workspace/extension-activity-logic'
-import { MAX_INSERT_TEXT, chatbarTitle, insertAtSelection, onChatbarFrame } from '../src/features/chat/extension-chatbar-logic'
+import { CHATBAR_MIN_FRAME_H, CHATBAR_TITLE_H, MAX_INSERT_TEXT, chatbarPanelBox, chatbarTitle, insertAtSelection, onChatbarFrame } from '../src/features/chat/extension-chatbar-logic'
 import { MessageInput } from '../src/features/chat/message-input'
 import { useChatStore } from '../src/features/chat/chat-store'
+import { useChatTabs } from '../src/features/chat/chat-tabs'
 import { useProjectStore } from '../src/shared/stores/project-store'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+// jsdom has no ResizeObserver; the open panel observes its anchor's chain.
+const observers: { cb: () => void; targets: Element[] }[] = []
+;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+  private o: { cb: () => void; targets: Element[] }
+  constructor(cb: () => void) { this.o = { cb, targets: [] }; observers.push(this.o) }
+  observe(el: Element) { this.o.targets.push(el) }
+  unobserve() {}
+  disconnect() { this.o.targets = [] }
+}
 
 /**
  * Contract: an extension's chat-input toolbar button (manifest `chatbar`).
@@ -25,7 +36,13 @@ import { useProjectStore } from '../src/shared/stores/project-store'
  *    the caret lands after it, the textarea is NOT focused, and nothing is
  *    ever sent (also while a turn runs). `insert-text` anywhere else warns;
  *  - one panel at a time; its button / × / Esc closes it, an outside click
- *    does not; closed = iframe unmounted; uninstall closes it;
+ *    does not; closed = iframe unmounted; uninstall, a hidden input (0×0) and
+ *    a chat-tab switch close it;
+ *  - the panel is portaled to <body>, `fixed` over the input's wrapper
+ *    (chatbarPanelBox: ≤ 420 px wide, clamped 8 px into the viewport, the
+ *    frame squeezed to fit above the input down to 80 px, title bar always
+ *    on screen); it follows the wrapper by restyling — the iframe never
+ *    remounts;
  *  - iframe grant = the activity page's (sandbox, media-only allow, no
  *    referrer), capabilities = manifest ∩ { media, transcribe, stt-local }.
  * Rendered without I18n / Theme providers: `t()` echoes keys, lang = 'en'.
@@ -118,15 +135,44 @@ describe('chatbar logic', () => {
     expect(insertAtSelection('abc', 99, 99, '!')).toEqual({ value: 'abc!', caret: 4 })
     expect(insertAtSelection('abc', 2, 1, '-')).toEqual({ value: 'ab-c', caret: 3 })
   })
+
+  it('panel box: room above → manifest height, 4 px over the input, left = input + 12', () => {
+    expect(chatbarPanelBox({ top: 600, left: 100 }, { width: 1024, height: 768 }, 200))
+      .toEqual({ left: 112, bottom: 172, width: 420, frameHeight: 200 })
+  })
+
+  it('panel box: short on room → frame squeezed to fit; at the 80 px floor it overlaps the input, title bar still on screen', () => {
+    const squeezed = chatbarPanelBox({ top: 200, left: 100 }, { width: 1024, height: 768 }, 200)
+    expect(squeezed.frameHeight).toBe(200 - 8 - CHATBAR_TITLE_H - 4)
+    expect(768 - squeezed.bottom).toBe(196)                                        // still 4 px above the input
+    expect(768 - squeezed.bottom - squeezed.frameHeight - CHATBAR_TITLE_H).toBe(8) // top edge 8 px into the viewport
+    const floor = chatbarPanelBox({ top: 60, left: 100 }, { width: 1024, height: 768 }, 200)
+    expect(floor.frameHeight).toBe(CHATBAR_MIN_FRAME_H)
+    expect(768 - floor.bottom).toBeGreaterThan(60)                                 // overlaps the input's top
+    expect(768 - floor.bottom - floor.frameHeight - CHATBAR_TITLE_H).toBe(8)
+  })
+
+  it('panel box: width = min(420, viewport − 16); left clamped 8 px inside both edges', () => {
+    expect(chatbarPanelBox({ top: 600, left: 0 }, { width: 390, height: 780 }, 160)).toMatchObject({ width: 374, left: 8 })
+    expect(chatbarPanelBox({ top: 600, left: 900 }, { width: 1024, height: 768 }, 160)).toMatchObject({ width: 420, left: 1024 - 420 - 8 })
+  })
 })
 
 describe('<MessageInput> chat-bar buttons and panel', () => {
   let container: HTMLDivElement
   let root: Root
   const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve() })
+  const nextFrame = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+  // jsdom lays nothing out: the input's wrapper (the panel's anchor) gets this rect.
+  let anchorRect = { top: 600, left: 100, width: 600, height: 120 }
 
   beforeEach(() => {
     resetExtensionTokenCache()
+    anchorRect = { top: 600, left: 100, width: 600, height: 120 }
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const r = this === container.firstElementChild ? anchorRect : { top: 0, left: 0, width: 0, height: 0 }
+      return { ...r, x: r.left, y: r.top, right: r.left + r.width, bottom: r.top + r.height, toJSON: () => r } as DOMRect
+    })
     vi.spyOn(api.extensions, 'token').mockResolvedValue({ token: 'tok', expiresAt: Date.now() + 24 * 3600_000 })
     useProjectStore.setState({ activeProject: null, folderPath: '', projects: [] })
     useChatStore.setState({ sessionId: 's1', sandboxAvailable: false, isStreaming: false, usableAgentCount: 1 })
@@ -143,9 +189,11 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     vi.useRealTimers()
   })
 
+  // The panel lives under <body>, outside `container`.
   const textarea = () => container.querySelector('textarea')!
-  const button = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
-  const iframe = () => container.querySelector('iframe')
+  const button = (label: string) => document.body.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
+  const iframe = () => document.body.querySelector('iframe')
+  const dialog = () => document.body.querySelector<HTMLElement>('[role="dialog"]')
   function deliver(source: Window | null, data: unknown) {
     act(() => { window.dispatchEvent(new MessageEvent('message', { data, source })) })
   }
@@ -183,10 +231,13 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     expect(iframe()).toBeNull()
     act(() => button('Voice')!.click())
     await flush()
-    const panel = container.querySelector('[role="dialog"]') as HTMLElement
-    expect(panel.className).toContain('bottom-full')
-    expect(panel.className).toContain('w-[min(420px,calc(100%-1.5rem))]')
-    expect((panel.querySelector('[style*="height"]') as HTMLElement).style.height).toBe('200px')
+    const panel = dialog()!
+    expect(panel.parentElement).toBe(document.body)                  // portaled out of the clipping dock
+    expect(container.contains(panel)).toBe(false)
+    expect(panel.className).toContain('fixed')
+    expect(panel.className).toContain('z-[55]')
+    expect([panel.style.left, panel.style.bottom, panel.style.width]).toEqual(['112px', '172px', '420px']) // jsdom 1024×768
+    expect((panel.lastElementChild as HTMLElement).style.height).toBe('200px')
     const el = iframe()!
     expect(el.getAttribute('src')).toBe('/api/extensions/voice/2.0.0/tok/index.html')
     expect(el.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin')
@@ -222,7 +273,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     await flush()
     act(() => button('B')!.click())
     await flush()
-    expect(container.querySelectorAll('iframe')).toHaveLength(1)
+    expect(document.body.querySelectorAll('iframe')).toHaveLength(1)
     expect(iframe()!.getAttribute('src')).toContain('/api/extensions/b/')
     act(() => { textarea().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
     expect(iframe()).toBeNull()
@@ -286,10 +337,59 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     await flush()
     expect(iframe()).toBeTruthy()
     act(() => { vi.advanceTimersByTime(10_000) })
-    expect(container.textContent).toContain('editor.extension.unresponsive')
-    const retry = [...container.querySelectorAll('button')].find((b) => b.textContent === 'editor.extension.retry')!
+    expect(dialog()!.textContent).toContain('editor.extension.unresponsive')
+    const retry = [...dialog()!.querySelectorAll('button')].find((b) => b.textContent === 'editor.extension.retry')!
     act(() => retry.click())
     await flush()
     expect(iframe()).toBeTruthy()
+  })
+
+  it('follows the input (resize / ancestor resize / pointer move) by restyling only — the iframe is never remounted', async () => {
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 200, order: 1, title: 'Voice' } })], errors: [] }))
+    await renderInput()
+    act(() => button('Voice')!.click())
+    await flush()
+    const el = iframe()!
+    const ro = observers[observers.length - 1]
+    expect(ro.targets).toContain(container.firstElementChild)        // the anchor …
+    expect(ro.targets).toContain(container)                          // … and its ancestors (a dock drag only moves it)
+    expect(ro.targets).not.toContain(document.body)
+
+    anchorRect = { ...anchorRect, top: 400 }                         // dock divider dragged up
+    act(() => ro.cb())
+    await nextFrame()
+    expect(dialog()!.style.bottom).toBe(`${768 - 396}px`)
+    anchorRect = { ...anchorRect, top: 150, left: 700 }               // floating chat window dragged
+    act(() => { window.dispatchEvent(new Event('pointermove')) })
+    await nextFrame()
+    expect(dialog()!.style.left).toBe(`${1024 - 420 - 8}px`)
+    expect((dialog()!.lastElementChild as HTMLElement).style.height).toBe(`${150 - 8 - CHATBAR_TITLE_H - 4}px`)
+    expect(iframe()).toBe(el)
+  })
+
+  it('a hidden input (chat tab on the terminal, dock collapsed → 0×0) closes the panel', async () => {
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    await renderInput()
+    act(() => button('Voice')!.click())
+    await flush()
+    expect(iframe()).toBeTruthy()
+    anchorRect = { top: 0, left: 0, width: 0, height: 0 }
+    act(() => { window.dispatchEvent(new Event('resize')) })
+    await nextFrame()
+    expect(iframe()).toBeNull()
+    expect(button('Voice')!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('switching the chat tab closes the panel; other tab-store changes do not', async () => {
+    const tabs = useChatTabs.getState()
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    await renderInput()
+    act(() => button('Voice')!.click())
+    await flush()
+    act(() => useChatTabs.setState({ tabs: tabs.tabs.map((t) => ({ ...t, sessionId: 's-bound' })) })) // draft's first send
+    expect(iframe()).toBeTruthy()
+    act(() => useChatTabs.setState({ activeTabId: 'another-tab' }))
+    expect(iframe()).toBeNull()
+    act(() => useChatTabs.setState(tabs, true))
   })
 })
