@@ -14,7 +14,7 @@ import { createChannelDb, channelAccounts } from '../src/db/channel-db.js'
 import { createDb, type HaloDb } from '../src/db/index.js'
 import { agentSessions } from '../src/db/schema.js'
 import { rawSqlite } from '../src/db/raw-sqlite.js'
-import { stopCronDaemon, effectiveSessionId, _sessionRowCache } from '../src/cron/runner.js'
+import { stopCronDaemon, effectiveSessionId, perRunSessionId, deleteOrphanRuns, _sessionRowCache } from '../src/cron/runner.js'
 import { createCronRoutes } from '../src/routes/cron.js'
 
 /**
@@ -97,13 +97,12 @@ function fails(args: string[], code = 1): string {
 
 const create = (...a: string[]) => ['create', '--workspace', ws, '--prompt', 'noop', ...a]
 
-function seedSession(workspace: string, id: string, agentId: string): void {
+function seedSession(workspace: string, id: string, agentId: string, now = Date.now()): void {
   let db = wsDbs.get(workspace)
   if (!db) {
     db = createDb(path.join(workspace, '.halo'))
     wsDbs.set(workspace, db)
   }
-  const now = Date.now()
   db.insert(agentSessions).values({ id, agentId, createdAt: now, updatedAt: now }).run()
 }
 
@@ -446,15 +445,35 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       expect(fails(['disable', 'nope'], 2)).toMatch(/not found/)
     })
 
-    it('delete removes the job and its runs only; unknown id → exit 2', () => {
+    it('delete removes the job row only, its runs are left for the server; unknown id → exit 2', () => {
       insertJob('cron-del')
       insertJob('cron-keep')
       insertRun('r1', 'cron-del')
       insertRun('r2', 'cron-keep')
       expect(ok('delete', 'cron-del')).toEqual({ id: 'cron-del', deleted: true })
       expect(job('cron-del')).toBeUndefined()
-      expect(cron.select().from(cronRuns).all().map((r) => r.id)).toEqual(['r2'])
+      expect(job('cron-keep')).toBeDefined()
+      expect(cron.select().from(cronRuns).all().map((r) => r.id).sort()).toEqual(['r1', 'r2'])
       expect(fails(['delete', 'cron-del'], 2)).toMatch(/not found/)
+    })
+
+    it('delete of a stateless job, then the server\'s deleteOrphanRuns: run rows and run session trees are gone', async () => {
+      insertJob('cron-sl', { stateless: 1 })
+      const startedAt = Date.now() - 60_000
+      const sid = perRunSessionId({ id: 'cron-sl' }, startedAt)
+      insertRun('r1', 'cron-sl', { startedAt, completedAt: startedAt + 1000, sessionId: sid, workspacePath: ws })
+      seedSession(ws, sid, 'default', startedAt + 500)
+      seedSession(ws, `${sid}>sid_child`, 'default', startedAt + 400)
+      const files = [sid, 'sid_child'].map((seg) => path.join(ws, '.halo', 'sessions', 'default', `${seg}.json`))
+      fs.mkdirSync(path.dirname(files[0]), { recursive: true })
+      for (const f of files) fs.writeFileSync(f, '{}')
+
+      ok('delete', 'cron-sl')
+      await deleteOrphanRuns()
+      expect(cron.select().from(cronRuns).all()).toHaveLength(0)
+      const left = wsDbs.get(ws)!.select({ id: agentSessions.id }).from(agentSessions).all()
+      expect(left).toEqual([])
+      for (const f of files) expect(fs.existsSync(f)).toBe(false)
     })
   })
 

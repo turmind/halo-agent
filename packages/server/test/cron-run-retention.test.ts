@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,8 +7,9 @@ import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src
 import { getWorkspaceDb } from '../src/db/index.js'
 import { agentSessions } from '../src/db/schema.js'
 import { SessionManager } from '../src/agents/session-manager.js'
+import { rawSqlite } from '../src/db/raw-sqlite.js'
 import {
-  runJob, pruneOldLogs, perRunSessionId, stopCronDaemon, setCronSessionRegistry,
+  runJob, pruneOldLogs, perRunSessionId, stopCronDaemon, setCronSessionRegistry, deleteOrphanRuns, reconcileFromDb,
   _inflight, _inflightSessions, _sessionRowCache,
 } from '../src/cron/runner.js'
 import { createCronRoutes } from '../src/routes/cron.js'
@@ -19,7 +20,12 @@ import { createCronRoutes } from '../src/routes/cron.js'
  *   - a pruned stateless run takes its session tree with it (rows, files,
  *     archive segments, sub-agents) — on the per-run prune, the 60-day prune
  *     and the job DELETE route
- *   - a running or user-continued session survives (only its row goes)
+ *   - a user-continued session survives (only its row goes); a run still in
+ *     progress keeps its row too, so the prune after its finalize takes both
+ *   - the session is looked up in the run's own workspace (cron_runs.
+ *     workspace_path), not the job's current one; a NULL one (rows from
+ *     before the column) falls back to the job's
+ *   - runs whose job is gone (the skill's delete) go via deleteOrphanRuns
  *   - a stateful job's own session and a picked session are never touched
  */
 
@@ -218,6 +224,30 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     expectTreeKept(runs[0].sessionId)
     expectTreeKept(busy)
     expect(deleted).toEqual([runs[2].sessionId])
+    // The still-running row stays (a later prune takes it with its session);
+    // the busy one's row goes.
+    const kept = runRows('cron-rn').map((r) => r.id)
+    expect(kept).toContain(runs[0].runId)
+    expect(kept).not.toContain(runs[1].runId)
+  })
+
+  it('a job moved to another workspace still deletes its pruned sessions in the old one', async () => {
+    insertJob('cron-mv', { stateless: 1 })
+    const base = Date.now() - 60_000
+    const runs = Array.from({ length: 11 }, (_, i) => seedStatelessRun('cron-mv', base + i * 1000, { workspacePath: wsDir }))
+    const ws2 = path.join(tmpHome, 'ws2')
+    fs.mkdirSync(ws2)
+    db.update(cronJobs).set({ workspacePath: ws2 }).where(eq(cronJobs.id, 'cron-mv')).run()
+
+    const runId = await runJob('cron-mv', 'manual')
+    expect(db.select().from(cronRuns).where(eq(cronRuns.id, runId)).get()!.workspacePath).toBe(ws2)
+    const kept = runRows('cron-mv').map((r) => r.id)
+    expect(kept).toHaveLength(10)
+    for (const r of runs.slice(0, 2)) {
+      expect(kept).not.toContain(r.runId)
+      expectTreeGone(r.sessionId)
+    }
+    expectTreeKept(runs[2].sessionId)
   })
 
   it('goes through the live SessionManager when the server has one: rows, files, tombstones', async () => {
@@ -293,5 +323,78 @@ describe('cron run retention — DELETE /cron/jobs/:id', () => {
     expect((await app.request('/cron/jobs/cron-dsf', { method: 'DELETE' })).status).toBe(200)
     expect(runRows('cron-dsf')).toHaveLength(0)
     expect(sessionRow('cron-dsf')).toBeDefined()
+  })
+
+  it.skipIf(process.platform === 'win32')('deleted mid-run: the running row and its session stay, then go with the run\'s finalize', async () => {
+    const gate = path.join(tmpHome, 'gate')
+    const cli = path.join(tmpHome, 'gated-halo')
+    fs.writeFileSync(cli, `#!/bin/sh\nwhile [ ! -f "${gate}" ]; do sleep 0.05; done\necho done\n`, { mode: 0o755 })
+    process.env.HALO_CLI = cli
+    insertJob('cron-mid', { stateless: 1 })
+
+    const pending = runJob('cron-mid', 'manual')
+    const [row] = runRows('cron-mid')
+    expect(row.status).toBe('running')
+    // What the cli would have written by now.
+    seedSession(row.sessionId!, Date.now())
+    seedSession(childOf(row.sessionId!), Date.now())
+
+    expect((await app.request('/cron/jobs/cron-mid', { method: 'DELETE' })).status).toBe(200)
+    expect(db.select().from(cronJobs).where(eq(cronJobs.id, 'cron-mid')).get()).toBeUndefined()
+    expect(runRows('cron-mid').map((r) => r.id)).toEqual([row.id])
+    expectTreeKept(row.sessionId!)
+
+    fs.writeFileSync(gate, '')
+    await pending
+    expect(runRows('cron-mid')).toHaveLength(0)
+    expectTreeGone(row.sessionId!)
+  })
+})
+
+describe('cron run retention — runs of a deleted job', () => {
+  /** A job deleted out-of-band (the skill drops only its row) leaving: a
+   *  stateless run, a continued one, a pre-column row (workspace_path NULL),
+   *  plus a live job's run that must stay. */
+  function seedOrphans() {
+    insertJob('cron-gone', { stateless: 1 })
+    insertJob('cron-live', { stateless: 1 })
+    const base = Date.now() - 60_000
+    const plain = seedStatelessRun('cron-gone', base, { workspacePath: wsDir })
+    const continued = seedStatelessRun('cron-gone', base + 1000, { workspacePath: wsDir })
+    wsDb().update(agentSessions).set({ updatedAt: Date.now() }).where(eq(agentSessions.id, continued.sessionId)).run()
+    const legacy = seedStatelessRun('cron-gone', base + 2000)
+    const live = seedStatelessRun('cron-live', base + 3000, { workspacePath: wsDir })
+    return { plain, continued, legacy, live }
+  }
+
+  it('deleteOrphanRuns: rows go, stateless sessions with them (continued and unlocatable ones stay)', async () => {
+    const { plain, continued, legacy, live } = seedOrphans()
+    db.delete(cronJobs).where(eq(cronJobs.id, 'cron-gone')).run()
+
+    await deleteOrphanRuns()
+    expect(runRows('cron-gone')).toHaveLength(0)
+    expectTreeGone(plain.sessionId)
+    expectTreeKept(continued.sessionId)
+    // NULL workspace_path and no job row: nowhere to look, only the row goes.
+    expectTreeKept(legacy.sessionId)
+    expect(runRows('cron-live').map((r) => r.id)).toEqual([live.runId])
+    expectTreeKept(live.sessionId)
+  })
+
+  it('the reconcile pass after another connection deleted the job runs it', async () => {
+    const { plain, continued, live } = seedOrphans()
+    reconcileFromDb() // prime data_version
+    const skill = rawSqlite(createCronDb(path.join(tmpHome, 'global')))
+    try {
+      skill.exec(`DELETE FROM cron_jobs WHERE id = 'cron-gone'`)
+    } finally { skill.close() }
+
+    reconcileFromDb()
+    await vi.waitFor(() => {
+      expect(runRows('cron-gone')).toHaveLength(0)
+      expectTreeGone(plain.sessionId)
+    })
+    expectTreeKept(continued.sessionId)
+    expect(runRows('cron-live').map((r) => r.id)).toEqual([live.runId])
   })
 })

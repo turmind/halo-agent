@@ -20,7 +20,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { Cron } from 'croner'
 import Database from 'better-sqlite3'
-import { and, eq, gte, inArray, lt, or } from 'drizzle-orm'
+import { and, eq, gte, inArray, lt, notInArray, or } from 'drizzle-orm'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
 import { rawSqlite } from '../db/raw-sqlite.js'
 import { getWorkspaceDb, type HaloDb } from '../db/index.js'
@@ -612,6 +612,10 @@ export function reconcileFromDb(): void {
   if (dv !== null && _lastCronDataVersion === dv) return
   _lastCronDataVersion = dv
 
+  // Runs of a job deleted out-of-band (the skill drops only the job row):
+  // their rows and stateless sessions go here.
+  deleteOrphanRuns().catch((err) => console.warn(`[Cron] deleting runs of deleted jobs failed: ${err instanceof Error ? err.message : String(err)}`))
+
   const db = getCronDb()
   const rows = db.select().from(cronJobs).all()
   const liveIds = new Set<string>()
@@ -712,6 +716,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
       failureReason: skipReason,
       logPath: null,
       dispatchResults: null,
+      workspacePath: job.workspacePath,
     }).run()
     broadcast({ type: 'cron:run_changed', jobId, runId, status: 'skipped' })
     return runId
@@ -734,6 +739,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     logPath,
     dispatchResults: null,
     sessionId,
+    workspacePath: job.workspacePath,
   }).run()
   broadcast({ type: 'cron:run_changed', jobId, runId, status: 'running' })
 
@@ -1081,10 +1087,11 @@ function parseTargets(raw: string): CronTarget[] {
 
 /** What deleting a run row needs to know about it — never `output`, which
  *  can be large. */
-type DoomedRun = Pick<typeof cronRuns.$inferSelect, 'id' | 'jobId' | 'sessionId' | 'startedAt' | 'completedAt' | 'status'>
+type DoomedRun = Pick<typeof cronRuns.$inferSelect, 'id' | 'jobId' | 'sessionId' | 'startedAt' | 'completedAt' | 'status' | 'workspacePath'>
 const DOOMED_RUN_COLUMNS = {
   id: cronRuns.id, jobId: cronRuns.jobId, sessionId: cronRuns.sessionId,
   startedAt: cronRuns.startedAt, completedAt: cronRuns.completedAt, status: cronRuns.status,
+  workspacePath: cronRuns.workspacePath,
 }
 
 /** Drop the oldest `cron_runs` rows for `jobId` past the retention limit
@@ -1093,12 +1100,18 @@ const DOOMED_RUN_COLUMNS = {
 async function pruneOldRuns(jobId: string): Promise<void> {
   const db = getCronDb()
   const job = db.select({ stateless: cronJobs.stateless }).from(cronJobs).where(eq(cronJobs.id, jobId)).get()
-  const keep = job?.stateless ? STATELESS_RUNS_PER_JOB_KEEP : RUNS_PER_JOB_KEEP
+  // Deleted mid-run (REST or the skill): the delete kept this run's row and
+  // session (still in progress, see deleteRuns); now that it's done, both go.
+  if (!job) {
+    await deleteJobRuns(jobId)
+    return
+  }
+  const keep = job.stateless ? STATELESS_RUNS_PER_JOB_KEEP : RUNS_PER_JOB_KEEP
   // drizzle-orm doesn't have a clean `NOT IN (subquery)` builder; raw
   // sqlite is straightforward and the query is static.
   const doomed = rawSqlite(db).prepare(`
     SELECT id, job_id AS jobId, session_id AS sessionId, started_at AS startedAt,
-           completed_at AS completedAt, status
+           completed_at AS completedAt, status, workspace_path AS workspacePath
     FROM cron_runs
     WHERE job_id = ?
       AND id NOT IN (
@@ -1117,40 +1130,63 @@ export async function deleteJobRuns(jobId: string): Promise<void> {
   await deleteRuns(getCronDb().select(DOOMED_RUN_COLUMNS).from(cronRuns).where(eq(cronRuns.jobId, jobId)).all())
 }
 
+/** Every run row whose job is gone, its stateless runs' sessions first. The
+ *  cron skill's `delete` drops only the job row and leaves its runs to this;
+ *  reconcileFromDb's full pass calls it (that pass runs after another
+ *  connection wrote cron.db, and once at boot). */
+export async function deleteOrphanRuns(): Promise<void> {
+  const db = getCronDb()
+  await deleteRuns(db.select(DOOMED_RUN_COLUMNS).from(cronRuns)
+    .where(notInArray(cronRuns.jobId, db.select({ id: cronJobs.id }).from(cronJobs))).all())
+}
+
 /** Delete `cron_runs` rows; a stateless run's session goes with its row.
  *  Sessions first, rows after: a crash in between leaves the rows, and the
  *  next prune retries (deleting a gone session is a no-op). A row whose
- *  session delete threw stays for the same retry. A stateless run is
- *  recognised by its row alone — `session_id` is exactly
- *  `perRunSessionId(job, started_at)` (runJob derives both from one
+ *  session delete threw stays for the same retry, and so does a stateless run
+ *  still in progress — the prune after its finalize takes it with its
+ *  session. A stateless run is recognised by its row alone — `session_id` is
+ *  exactly `perRunSessionId(job, started_at)` (runJob derives both from one
  *  timestamp) — so a stateful job's own session or a picked one never
  *  matches, whatever mode the job is in now. */
 async function deleteRuns(runs: DoomedRun[]): Promise<void> {
   if (runs.length === 0) return
   const db = getCronDb()
   const workspaceOf = new Map<string, RunWorkspace | null>()
-  const failed = new Set<string>()
+  // A workspace without a db (gone, or never ran) has no session.
+  const openWorkspace = (workspacePath: string): RunWorkspace | null => {
+    let ws = workspaceOf.get(workspacePath)
+    if (ws === undefined) {
+      ws = fs.existsSync(path.join(workspacePath, '.halo', 'halo.db'))
+        ? { workspacePath, db: getWorkspaceDb(workspacePath).db }
+        : null
+      workspaceOf.set(workspacePath, ws)
+    }
+    return ws
+  }
+  const keptRows = new Set<string>()
   let deleted = 0
   for (const run of runs) {
     if (run.sessionId !== perRunSessionId({ id: run.jobId }, run.startedAt)) continue
+    if (run.status === 'running' || run.completedAt === null) {
+      keptRows.add(run.id)
+      console.log(`[Cron] run ${run.id}: still in progress, kept with its session ${run.sessionId}`)
+      continue
+    }
     try {
-      let ws = workspaceOf.get(run.jobId)
-      if (ws === undefined) {
-        const workspacePath = db.select({ ws: cronJobs.workspacePath }).from(cronJobs).where(eq(cronJobs.id, run.jobId)).get()?.ws
-        // A row whose job is gone can't say which workspace its session is
-        // in; a workspace without a db (gone, or never ran) has no session.
-        ws = workspacePath && fs.existsSync(path.join(workspacePath, '.halo', 'halo.db'))
-          ? { workspacePath, db: getWorkspaceDb(workspacePath).db }
-          : null
-        workspaceOf.set(run.jobId, ws)
-      }
-      if (ws && await deleteRunSession(ws, run as DoomedRun & { sessionId: string })) deleted++
+      // The session is in the workspace the run fired against; rows from
+      // before cron_runs.workspace_path fall back to the job's current one.
+      // Neither (an old row whose job is gone): nowhere to look.
+      const workspacePath = run.workspacePath
+        ?? db.select({ ws: cronJobs.workspacePath }).from(cronJobs).where(eq(cronJobs.id, run.jobId)).get()?.ws
+      const ws = workspacePath ? openWorkspace(workspacePath) : null
+      if (ws && await deleteRunSession(ws, run as FinishedRun)) deleted++
     } catch (err) {
-      failed.add(run.id)
+      keptRows.add(run.id)
       console.warn(`[Cron] run ${run.id}: deleting session ${run.sessionId} failed, run row kept for the next prune: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
-  const ids = runs.map((r) => r.id).filter((id) => !failed.has(id))
+  const ids = runs.map((r) => r.id).filter((id) => !keptRows.has(id))
   if (ids.length > 0) db.delete(cronRuns).where(inArray(cronRuns.id, ids)).run()
   if (deleted > 0) {
     console.log(`[Cron] pruned ${ids.length} run row(s), deleted ${deleted} stateless run session(s)`)
@@ -1159,22 +1195,23 @@ async function deleteRuns(runs: DoomedRun[]): Promise<void> {
 }
 
 type RunWorkspace = { workspacePath: string; db: HaloDb }
+type FinishedRun = DoomedRun & { sessionId: string; completedAt: number }
 
-/** Delete one stateless run's session tree (root + `root>…` sub-agents: db
- *  rows, session files, UI-log archive segments). Returns false — the
- *  session stays, only its run row goes — when it is still running, or was
- *  continued after the run: any row of the tree has `updated_at` past the
- *  run's `completed_at`. `updated_at` moves only when a turn ends (or a goal
- *  record is written), never on a view, rename or stop; the cron cli exits
- *  only once every session of its tree is idle, so sub-agent reports landing
- *  in the root during the run stay before `completed_at`. */
-async function deleteRunSession({ workspacePath, db }: RunWorkspace, run: DoomedRun & { sessionId: string }): Promise<boolean> {
+/** Delete one finished stateless run's session tree (root + `root>…`
+ *  sub-agents: db rows, session files, UI-log archive segments). Returns
+ *  false — the session stays, only its run row goes — when a turn is running
+ *  in it, or it was continued after the run: any row of the tree has
+ *  `updated_at` past the run's `completed_at`. `updated_at` moves only when a
+ *  turn ends (or a goal record is written), never on a view, rename or stop;
+ *  the cron cli exits only once every session of its tree is idle, so
+ *  sub-agent reports landing in the root during the run stay before
+ *  `completed_at`. */
+async function deleteRunSession({ workspacePath, db }: RunWorkspace, run: FinishedRun): Promise<boolean> {
   const sid = run.sessionId
   const keep = (why: string) => {
     console.log(`[Cron] run ${run.id}: kept session ${sid} (${why}); pruning the run row only`)
     return false
   }
-  if (run.status === 'running' || run.completedAt === null) return keep('its run is still in progress')
   const host = _sessionRegistry?.peek(workspacePath)
   if (host?.hasActiveWorkInTree(sid)) return keep('a turn is running in it')
   const tree = db.select({ id: agentSessions.id, updatedAt: agentSessions.updatedAt }).from(agentSessions)

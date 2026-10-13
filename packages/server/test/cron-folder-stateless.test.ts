@@ -255,6 +255,32 @@ describe('cron migration v5', () => {
   })
 })
 
+describe('cron migration v6', () => {
+  it('adds cron_runs.workspace_path to a v5 db, backfilled from a live job, NULL for a deleted one; idempotent on reopen', () => {
+    const legacyDir = path.join(tmpHome, 'legacy6')
+    const raw = rawSqlite(createCronDb(legacyDir))
+    raw.exec('ALTER TABLE cron_runs DROP COLUMN workspace_path')
+    raw.prepare(`INSERT INTO cron_jobs(id, workspace_path, agent_id, user_prompt, schedule, created_at, updated_at)
+      VALUES ('cron-live', '/w', 'default', 'p', '0 9 * * *', 1, 1)`).run()
+    const run = raw.prepare(`INSERT INTO cron_runs(id, job_id, trigger_kind, status, started_at) VALUES (?, ?, 'scheduled', 'succeeded', 1)`)
+    run.run('r-live', 'cron-live')
+    run.run('r-gone', 'cron-gone')
+    raw.pragma('user_version = 5')
+    raw.close()
+    for (let i = 0; i < 2; i++) {
+      const reopened = rawSqlite(createCronDb(legacyDir))
+      const runCols = (reopened.prepare('PRAGMA table_info(cron_runs)').all() as Array<{ name: string }>).map((c) => c.name)
+      expect(runCols).toContain('workspace_path')
+      expect(reopened.prepare('SELECT id, workspace_path AS ws FROM cron_runs ORDER BY id').all()).toEqual([
+        { id: 'r-gone', ws: null },
+        { id: 'r-live', ws: '/w' },
+      ])
+      expect(reopened.pragma('user_version', { simple: true })).toBe(CRON_MIGRATIONS.length)
+      reopened.close()
+    }
+  })
+})
+
 describe('perRunSessionId', () => {
   it('is the job\'s own session id + a base36 ms suffix, no doubled cron- prefix', () => {
     expect(perRunSessionId({ id: 'cron-abc-12' }, 1_700_000_000_000)).toBe(`cron-abc-12-${(1_700_000_000_000).toString(36)}`)

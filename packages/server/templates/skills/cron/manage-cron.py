@@ -551,11 +551,12 @@ def _toggle_enabled(job_id: str, on: bool):
 
 
 def cmd_delete(args):
+    # Job row only: the server's reconcile pass deletes the job's cron_runs
+    # rows, and with them each stateless run's session (runner.ts deleteOrphanRuns).
     conn = open_db()
     cur = conn.execute('DELETE FROM cron_jobs WHERE id = ?', (args.id,))
     if cur.rowcount == 0:
         die(f'job {args.id} not found', 2)
-    conn.execute('DELETE FROM cron_runs WHERE job_id = ?', (args.id,))
     conn.commit()
     print(json.dumps({'id': args.id, 'deleted': True}, ensure_ascii=False))
 

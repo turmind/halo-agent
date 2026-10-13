@@ -111,6 +111,11 @@ export const cronRuns = sqliteTable('cron_runs', {
    *  fingerprint — a stateless job's per-run id can't be re-derived from
    *  the job row. NULL on skipped rows and rows from before the column. */
   sessionId: text('session_id'),
+  /** Workspace the run fired against (the job's at fire time) — where a
+   *  stateless run's session lives, even after the job moves workspace or is
+   *  deleted. NULL on rows from before the column whose job was already gone
+   *  (deleteRuns falls back to the job row). */
+  workspacePath: text('workspace_path'),
 })
 
 const CREATE_SQL = `
@@ -153,7 +158,8 @@ CREATE TABLE IF NOT EXISTS cron_runs (
   log_path         TEXT,
   dispatch_results TEXT,
   pid              INTEGER,
-  session_id       TEXT
+  session_id       TEXT,
+  workspace_path   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_cron_runs_status ON cron_runs(status);
@@ -197,6 +203,15 @@ export const CRON_MIGRATIONS: Migration[] = [
     addColumnIfMissing(s, 'cron_jobs', 'working_dir', 'TEXT')
     addColumnIfMissing(s, 'cron_jobs', 'stateless', 'INTEGER NOT NULL DEFAULT 0')
     addColumnIfMissing(s, 'cron_runs', 'session_id', 'TEXT')
+  },
+  // v6: `cron_runs.workspace_path` — the workspace a run's session is in.
+  // Backfilled from the job row; runs of an already-deleted job stay NULL.
+  (s) => {
+    addColumnIfMissing(s, 'cron_runs', 'workspace_path', 'TEXT')
+    s.exec(`
+      UPDATE cron_runs SET workspace_path = (SELECT workspace_path FROM cron_jobs WHERE cron_jobs.id = cron_runs.job_id)
+      WHERE workspace_path IS NULL
+    `)
   },
 ]
 

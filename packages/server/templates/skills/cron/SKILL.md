@@ -128,7 +128,8 @@ tasks that don't need memory ("每天抓一次行情发给我", a fixed report).
 Excludes `--session`. On `update`: `--stateless on` / `--stateless off`
 (clear `--session ""` first if one is set). Only the newest 10 runs are kept;
 an older run's session is deleted with it (unless someone continued chatting
-in it). Deleting the job deletes them too. `get` / `list` show
+in it). After `delete`, the server clears the job's run history and these
+sessions within about 10 seconds (a continued session stays). `get` / `list` show
 `effective_session_id: null` for a stateless job.
 
 **Folder (`--dir`, optional)** — the run focuses on a workspace sub-folder:
