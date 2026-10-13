@@ -158,7 +158,7 @@ The response is SSE frames — `session` / `thinking` / `tool_call` / `stream` /
 
 ## Halo City
 
-A read-only pixel city that visualizes a live halo server: each workspace is a building, each session an animal citizen — at a desk when working, grabbing coffee or hitting the arcade when idle. Click any citizen to inspect the real thing: live session log, delegation chain, last tool call, token usage. Pure client-side canvas on a single polling endpoint — **zero model tokens burned**. Plain static files in [`halo-city/`](halo-city/), no build — see the [design notes](.halo/docs/design/halo-city.md).
+A read-only pixel city that visualizes a live halo server: each workspace is a building, each session an animal citizen — at a desk when working, grabbing coffee or hitting the arcade when idle. Click any citizen to inspect the real thing: live session log, delegation chain, last tool call, token usage. Pure client-side canvas on a single polling endpoint — **zero model tokens burned**. Since 1.6.5 it installs as a [halo-hub extension](https://github.com/turmind/halo-hub/tree/main/extensions/halo-city): `/extension install halo-city`, and a Halo City entry appears in the activity bar — see the [design notes](.halo/docs/design/halo-city.md).
 
 ![Halo City street level — sub-agent citizens at work, one inspected](assets/halo-city-street.jpg)
 <p align="center"><sub>Street level: three sub-agent citizens heads-down in the <code>aurora-cafe</code> building; the inspector shows one executor's live log and delegation chain.</sub></p>

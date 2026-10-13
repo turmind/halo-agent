@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ExtensionCapability, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import type { ExtensionActivity, ExtensionCapability, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { globalExtensionsDir } from '../paths.js'
 
 export const MANIFEST_FILE = 'halo-extension.json'
@@ -103,7 +103,41 @@ export function parseManifest(
   if (typeof m.version !== 'string' || !VERSION_RE.test(m.version)) return { error: 'version must be semver (x.y.z[-pre])' }
   if (m.description !== undefined && (typeof m.description !== 'string' || m.description.length > 200)) return { error: 'description must be a string (≤ 200 chars)' }
 
-  if (!Array.isArray(m.extensions) || m.extensions.length === 0) return { error: 'extensions must be a non-empty array' }
+  let activity: ExtensionActivity | undefined
+  if (m.activity !== undefined) {
+    if (typeof m.activity !== 'object' || m.activity === null || Array.isArray(m.activity)) return { error: 'activity must be an object' }
+    const a = m.activity as Record<string, unknown>
+    activity = { order: 100 }
+    if (a.icon !== undefined) {
+      if (typeof a.icon !== 'string' || a.icon === '' || a.icon.startsWith('/') || a.icon.split(/[\\/]/).includes('..') || !/\.(svg|png)$/i.test(a.icon)) {
+        return { error: 'activity.icon must be a relative .svg or .png path inside the extension directory' }
+      }
+      if (!entryExists(a.icon)) return { error: `activity icon not found: ${a.icon}` }
+      activity.icon = a.icon
+    }
+    for (const k of ['title', 'title_zh'] as const) {
+      const v = a[k]
+      if (v === undefined) continue
+      if (typeof v !== 'string' || v.trim() === '' || v.length > 64) return { error: `activity.${k} must be a non-empty string (≤ 64 chars)` }
+      activity[k] = v
+    }
+    for (const k of ['description', 'description_zh'] as const) {
+      const v = a[k]
+      if (v === undefined) continue
+      if (typeof v !== 'string' || v.length > 200) return { error: `activity.${k} must be a string (≤ 200 chars)` }
+      activity[k] = v
+    }
+    if (a.order !== undefined) {
+      if (typeof a.order !== 'number' || !Number.isInteger(a.order) || a.order < 0 || a.order > 1000) return { error: 'activity.order must be an integer 0–1000' }
+      activity.order = a.order
+    }
+  }
+
+  // The key stays required even for an activity-only extension (`[]`): the
+  // `extension` skill's ext.sh pre-check demands it.
+  if (activity) {
+    if (!Array.isArray(m.extensions)) return { error: 'extensions must be an array (empty is fine with activity)' }
+  } else if (!Array.isArray(m.extensions) || m.extensions.length === 0) return { error: 'extensions must be a non-empty array' }
   for (const e of m.extensions) {
     if (typeof e !== 'string' || !FILE_EXT_RE.test(e)) return { error: `extensions entry "${String(e)}" must look like ".glb" (lowercase, with dot)` }
   }
@@ -168,6 +202,7 @@ export function parseManifest(
     bundle,
     ...(platforms ? { platforms } : {}),
     ...(settings ? { settings } : {}),
+    ...(activity ? { activity } : {}),
     ...(m.homepage !== undefined ? { homepage: m.homepage } : {}),
     ...(m.license !== undefined ? { license: m.license } : {}),
   }

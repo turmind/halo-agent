@@ -113,6 +113,3 @@ packages/cli/dist-dev/
 # dir (migration scripts, verify checklists). Not shipped.
 /tmp/
 halo-changelog-*.md
-
-# halo-city .musictest.mjs screenshot output (lands in whatever cwd ran it)
-.musictest.png

@@ -98,7 +98,7 @@ A particle face at `<workspace>/.halo/canvas/self.html` the agent drives with `<
 
 ## Canvas Preview Extensions
 
-Installable static viewers for file types the editor can't preview (3D, draw.io, Excalidraw, notebooks) and folder-backed apps (`htrans` recorder). The directory is the install: the server watches `~/.halo/global/extensions/`, validates `halo-extension.json` and pushes `extension:changed`; the admin hosts each in a sandboxed iframe with a scoped asset token. Capabilities `save` / `media` / `transcribe` / `fs-read`, plus bundles, settings, platforms, shipped skills, the Transcribe streaming proxy and the Jupyter kernel proxy; installed via Settings, the `extension` skill (hub default [turmind/halo-hub](https://github.com/turmind/halo-hub)), or a directory drop. The same skill updates model providers (`~/.halo/global/models.d/`).
+Installable static viewers for file types the editor can't preview (3D, draw.io, Excalidraw, notebooks) and folder-backed apps (`htrans` recorder); a manifest may also declare one activity-bar page (`activity`). The directory is the install: the server watches `~/.halo/global/extensions/`, validates `halo-extension.json` and pushes `extension:changed`; the admin hosts each in a sandboxed iframe with a scoped asset token. Capabilities `save` / `media` / `transcribe` / `fs-read`, plus bundles, settings, platforms, shipped skills, the Transcribe streaming proxy and the Jupyter kernel proxy; installed via Settings, the `extension` skill (hub default [turmind/halo-hub](https://github.com/turmind/halo-hub)), or a directory drop. The same skill updates model providers (`~/.halo/global/models.d/`).
 
 - Key state: `~/.halo/global/extensions/<id>/`
 - Code: `packages/core/src/protocol/extension-*.ts` + `packages/server/src/extensions/` + `routes/{extensions,transcribe-ws,jupyter}.ts` + admin `features/editor/previews/` + `templates/skills/extension/`
@@ -106,9 +106,9 @@ Installable static viewers for file types the editor can't preview (3D, draw.io,
 
 ## Halo City (pixel runtime visualizer)
 
-A standalone read-only pixel city of a server's runtime (workspaces = buildings, sessions = citizens), pure client-side, zero model tokens; polls `GET /api/show/state` with web-channel token auth.
+A read-only pixel city of a server's runtime (workspaces = buildings, sessions = citizens), pure client-side, zero model tokens. Ships as the halo-hub extension `halo-city` (Halo ≥ 1.6.5): installing it adds an activity-bar entry that calls `/api/show/*` with the admin cookie, no token needed. It can also be deployed standalone behind a same-origin reverse proxy, authed by a web-channel token.
 
-- Code: [halo-city/](../halo-city/) + `packages/server/src/routes/halo-city.ts` · Doc: [design/halo-city.md](docs/design/halo-city.md)
+- Code: `packages/server/src/routes/halo-city.ts` (data endpoints) + frontend in [turmind/halo-hub `extensions/halo-city/`](https://github.com/turmind/halo-hub/tree/main/extensions/halo-city) · Doc: [design/halo-city.md](docs/design/halo-city.md)
 
 ## AgentCore Runtime Mode
 

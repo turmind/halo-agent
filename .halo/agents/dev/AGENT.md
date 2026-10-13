@@ -15,7 +15,6 @@ in the report.
 | `packages/admin` | Next.js 15 static export → `out/`, served by Hono. Tailwind 4 + shadcn, Monaco, xterm |
 | `packages/cli` | `halo` CLI + TUI (ink/React, `src/tui/`), embedded agent loop |
 | `packages/desktop` | Electron shell (packaging only — rarely a dev target) |
-| `halo-city/` | Standalone pixel visualizer, plain static vanilla JS, no build |
 | `.halo/docs/` | INDEX.md → guide / requirements / design / dev. Read the module doc BEFORE changing that module |
 
 ## Hard-won gotchas (each from a shipped regression)

@@ -379,6 +379,7 @@ export const zh: Record<string, string> = {
   'settings.extensions.media': '麦克风 / 屏幕',
   'settings.extensions.fsRead': '读取本机文件',
   'settings.extensions.unsupportedHere': '当前设备不支持',
+  'settings.extensions.activity': '活动栏',
   'extensions.platform.web': '浏览器',
   'extensions.platform.desktop-mac': 'Mac 客户端',
   'extensions.platform.desktop-win': 'Windows 客户端',

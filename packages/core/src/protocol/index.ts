@@ -21,6 +21,7 @@ export type {
   ExtensionCapability,
   ExtensionPlatform,
   ExtensionPriority,
+  ExtensionActivity,
   ExtensionSettingField,
   ExtensionSettings,
   ExtensionInfo,

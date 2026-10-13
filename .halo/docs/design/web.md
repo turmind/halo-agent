@@ -62,7 +62,7 @@ File: `packages/server/src/routes/web.ts`
 
 All public endpoints require `x-token` header (or `?token=` query param) with a valid account token. No cookie auth needed.
 
-> These paths are listed in `PUBLIC_PATHS` (`middleware/auth.ts`) so they bypass the admin cookie gate: `/api/web/chat`, `/api/web/sessions` (POST mint + GET list), `/api/web/stop`, `/api/web/history`, `/api/web/subscribe`, `/api/web/file`, and `/api/show/state` (the [halo-city](../../../halo-city/) snapshot — see [dev/api.md](../dev/api.md#show-world-snapshot)). The server CORS allowlist includes the `x-token` header, so browser-based custom frontends (e.g. halo-city) can call these cross-origin.
+> These paths are listed in `PUBLIC_PATHS` (`middleware/auth.ts`) so they bypass the admin cookie gate: `/api/web/chat`, `/api/web/sessions` (POST mint + GET list), `/api/web/stop`, `/api/web/history`, `/api/web/subscribe`, `/api/web/file`, and `/api/show/state` (the [halo-city](https://github.com/turmind/halo-hub/tree/main/extensions/halo-city) snapshot — see [dev/api.md](../dev/api.md#show-world-snapshot)). The server CORS allowlist includes the `x-token` header, so browser-based custom frontends (e.g. halo-city) can call these cross-origin.
 
 ### POST `/api/web/chat`
 

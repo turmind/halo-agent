@@ -195,6 +195,7 @@ describe('GET /api/extensions/:id/:version/:token/*  (static assets)', () => {
       'index.html': '<html>glb</html>',
       'lib/draco.wasm': wasm,
       'lib/viewer.js': 'console.log(1)',
+      'icon.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>',
       '.secret': 'hidden',
     }), cookie)
     fs.mkdirSync(path.join(root, 'broken'))
@@ -216,6 +217,12 @@ describe('GET /api/extensions/:id/:version/:token/*  (static assets)', () => {
     expect(res.headers.get('content-type')).toBe('application/wasm')
     expect(Buffer.from(await res.arrayBuffer())).toEqual(wasm)
     expect((await asset('glb', '1.0.0', 'lib/viewer.js')).headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+  })
+
+  it('serves .svg as image/svg+xml (activity icons are CSS masks, which need the real type)', async () => {
+    const res = await asset('glb', '1.0.0', 'icon.svg')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('image/svg+xml')
   })
 
   it('404 on a version mismatch (stale tab after an upgrade)', async () => {

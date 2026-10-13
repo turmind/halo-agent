@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Extensions: a manifest can declare `activity` to get its own activity-bar entry — a full-width page that unloads when you switch away, with an svg / png icon drawn as a mask in the bar's color. An extension with `activity` may list `extensions: []`.
+
+### Changed
+
+- Halo City moved to halo-hub as the `halo-city` extension, and the `halo-city/` folder is gone from this repo. Install it and Halo City opens from the activity bar: `/api/show/state` and `/api/show/session` now accept the admin login cookie when no token is sent, treated as `full`. A standalone deployment with a web token keeps working as before.
+
 ## [1.6.4] - 2026-10-12
 
 ### Added

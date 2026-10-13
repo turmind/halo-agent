@@ -22,8 +22,9 @@ import type { PreviewProps } from './types'
 
 const READY_TIMEOUT_MS = 10_000
 const SAVE_TIMEOUT_MS = 5_000
-/** `media` capability: mic + screen capture (+ copy). Everyone else gets nothing. */
-const MEDIA_ALLOW = 'microphone; display-capture; clipboard-write'
+/** `media` capability: mic + screen capture (+ copy). Everyone else gets
+ *  nothing. Shared with the activity-bar page host (extension-activity-panel.tsx). */
+export const MEDIA_ALLOW = 'microphone; display-capture; clipboard-write'
 
 /** Absolute paths on the wire use forward slashes (Windows `C:/…`). */
 const toSlash = (p: string) => p.replace(/\\/g, '/')
@@ -651,7 +652,7 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   )
 }
 
-function Banner({ children, onClose }: { children: ReactNode; onClose?: () => void }) {
+export function Banner({ children, onClose }: { children: ReactNode; onClose?: () => void }) {
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs text-[var(--foreground)]">
       <span className="min-w-0 flex-1 truncate">{children}</span>

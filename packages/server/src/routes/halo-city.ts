@@ -1,14 +1,18 @@
 /**
- * Data endpoints for the halo-city pixel visualizer (`halo-city/`) — serves
- * the world snapshot + per-session inspector under `/api/show/*` (route paths
- * kept stable: the halo-city frontend, docs, and PUBLIC_PATHS all point here).
+ * Data endpoints for the halo-city pixel visualizer — serves the world
+ * snapshot + per-session inspector under `/api/show/*`. The frontend now
+ * ships as the halo-hub extension `halo-city` (an activity-bar page in the
+ * admin, authed by the admin cookie); route paths are unchanged, so a
+ * standalone page with a web-channel token keeps working. Both paths stay in
+ * PUBLIC_PATHS: this router does its own auth (see `auth` below).
  */
 import { Hono, type Context } from 'hono'
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { channelAccounts, getChannelDb } from '../db/channel-db.js'
-import { resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
+import { requestToken, resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
+import { getTokenFromCookieHeader, isAuthenticated } from '../middleware/auth.js'
 import { canAddressSession } from '../channels/web/handler.js'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
 import { readSessionFileMeta, loadSessionFileData } from '../sessions/session-store.js'
@@ -393,29 +397,39 @@ export function discoverWorkspaces(registry: SessionManagerRegistry): Map<string
 export function createShowRoutes(registry: SessionManagerRegistry) {
   const app = new Hono()
 
-  /** Token auth over the shared core in middleware/web-token.ts, rendered in
-   *  this surface's JSON error shape (identical to the web channel's — they
-   *  share `tokenAuthJsonError`). */
+  /** Two credentials. A request that carries a token (`x-token` / `?token=`)
+   *  is judged by the token alone — the shared core in middleware/web-token.ts
+   *  (strikes, lockout), rendered in this surface's JSON error shape — even if
+   *  an admin cookie rides along. Without a token, a valid admin cookie (the
+   *  WS-upgrade check; no strike on failure) counts as `full`: that is the
+   *  halo-city extension iframe inside the admin. `scoped` = the token account
+   *  when its level is NOT global; full and observer (a global read-only
+   *  dashboard token) see every workspace and every session. The cookie must
+   *  be present: isAuthenticated passes anything when no password is set
+   *  (auth disabled), which must not turn "no credential" into full access. */
   function auth(c: Context) {
+    const cookie = getTokenFromCookieHeader(c.req.header('cookie'))
+    if (!requestToken(c) && cookie && isAuthenticated(cookie)) {
+      return { ok: true as const, accessLevel: 'full' as const, scoped: null }
+    }
     const a = resolveTokenAuth(c, getChannelDb())
     if (!a.ok) return { ok: false as const, response: tokenAuthJsonError(c, a.reason) }
-    return { ok: true as const, account: a.account }
+    const { account } = a
+    const globalView = account.accessLevel === 'full' || account.accessLevel === 'observer'
+    return { ok: true as const, accessLevel: account.accessLevel, scoped: globalView ? null : account }
   }
 
   // GET /api/show/state — cross-workspace world snapshot for halo-city.
-  //   Full-access token → every known workspace. Otherwise → the account's
-  //   own bound workspace only.
+  //   Global caller (admin cookie, full / observer token) → every known
+  //   workspace. Otherwise → the account's own bound workspace only.
   app.get('/show/state', (c) => {
     const a = auth(c)
     if (!a.ok) return a.response
-    const { account } = a
+    const { scoped } = a
 
-    // observer is read-only but globally-scoped: like full, it sees every
-    // workspace (that's its whole purpose — a global read-only dashboard token).
-    const globalView = account.accessLevel === 'full' || account.accessLevel === 'observer'
-    const targets = globalView
-      ? discoverWorkspaces(registry)
-      : new Map<string, string>([[account.workspacePath, path.basename(account.workspacePath)]])
+    const targets = scoped
+      ? new Map<string, string>([[scoped.workspacePath, path.basename(scoped.workspacePath)]])
+      : discoverWorkspaces(registry)
 
     const workspaces: ShowWorkspace[] = []
     for (const [wsPath, label] of targets) {
@@ -440,7 +454,7 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
     return c.json({
       serverTime: Date.now(),
       uptime: process.uptime(),
-      accessLevel: account.accessLevel,
+      accessLevel: a.accessLevel,
       skills: scanSkills(GLOBAL_SKILLS_DIR),
       workspaces,
     })
@@ -448,24 +462,23 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
 
   // GET /api/show/session?ws=<path>&id=<sessionId> — read-only session detail
   //   for the show's inspector: trimmed message log + real token caps. Scoped
-  //   like /show/state: non-full tokens may only read their own workspace.
+  //   like /show/state: non-global tokens may only read their own workspace.
   app.get('/show/session', async (c) => {
     const a = auth(c)
     if (!a.ok) return a.response
-    const { account } = a
+    const { scoped } = a
 
     const wsPath = c.req.query('ws') ?? ''
     const id = c.req.query('id') ?? ''
     if (!wsPath || !id) return c.json({ error: 'ws and id required' }, 400)
-    // full + observer have global read scope; everyone else is pinned to their
-    // own workspace AND their own `web_<accountId>_` sessions — a workspace
-    // holds every channel's transcripts, so the workspace check alone would
-    // let a readonly token read a colleague's session by id.
-    const globalView = account.accessLevel === 'full' || account.accessLevel === 'observer'
-    if (!globalView) {
+    // Global callers read anything; everyone else is pinned to their own
+    // workspace AND their own `web_<accountId>_` sessions — a workspace holds
+    // every channel's transcripts, so the workspace check alone would let a
+    // readonly token read a colleague's session by id.
+    if (scoped) {
       let allowed = false
-      try { allowed = fs.realpathSync(wsPath) === fs.realpathSync(account.workspacePath) } catch { /* bad path */ }
-      if (!allowed || !canAddressSession(account, id)) return c.json({ error: 'forbidden' }, 403)
+      try { allowed = fs.realpathSync(wsPath) === fs.realpathSync(scoped.workspacePath) } catch { /* bad path */ }
+      if (!allowed || !canAddressSession(scoped, id)) return c.json({ error: 'forbidden' }, 403)
     }
 
     try {

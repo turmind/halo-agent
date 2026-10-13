@@ -160,6 +160,55 @@ describe('parseManifest', () => {
     expect(errorOf(parse({ settings: { params: [{ key: 'k', options: [] }] } }))).toMatch(/settings k.options must be/)
     expect(errorOf(parse({ settings: { params: [{ key: 'k', type: 'enum' }] } }))).toBe('settings k: type enum requires options')
   })
+
+  // Activity-bar entry: halo-hub pack.mjs mirrors these messages verbatim.
+  it('activity: valid fields kept, order defaults to 100, unknown keys ignored, absent = no field', () => {
+    expect(parse({})).not.toHaveProperty('activity')
+    expect(parse({ activity: {} })).toMatchObject({ activity: { order: 100 } })
+    expect((parse({ activity: { extra: 1 } }) as { activity: object }).activity).toEqual({ order: 100 })
+    const full = { icon: 'assets/icon.svg', title: 'City', title_zh: '城市', description: 'd', description_zh: '描述', order: 0 }
+    expect((parse({ activity: full }) as { activity: object }).activity).toEqual(full)
+    expect(parse({ activity: { icon: 'ICON.PNG', order: 1000, description: '' } })).toMatchObject({ activity: { icon: 'ICON.PNG', order: 1000, description: '' } })
+  })
+
+  it('activity: every malformed field is a manifest error with the exact message', () => {
+    expect(errorOf(parse({ activity: [] }))).toBe('activity must be an object')
+    expect(errorOf(parse({ activity: null }))).toBe('activity must be an object')
+    expect(errorOf(parse({ activity: 'x' }))).toBe('activity must be an object')
+    const iconErr = 'activity.icon must be a relative .svg or .png path inside the extension directory'
+    for (const icon of [1, '', '/icon.svg', '../icon.svg', 'a/../../icon.svg', 'a\\..\\icon.svg', 'icon.gif', 'icon']) {
+      expect(errorOf(parse({ activity: { icon } }))).toBe(iconErr)
+    }
+    expect(errorOf(parse({ activity: { title: '' } }))).toBe('activity.title must be a non-empty string (≤ 64 chars)')
+    expect(errorOf(parse({ activity: { title: '  ' } }))).toBe('activity.title must be a non-empty string (≤ 64 chars)')
+    expect(errorOf(parse({ activity: { title: 'x'.repeat(65) } }))).toBe('activity.title must be a non-empty string (≤ 64 chars)')
+    expect(errorOf(parse({ activity: { title_zh: 3 } }))).toBe('activity.title_zh must be a non-empty string (≤ 64 chars)')
+    expect(errorOf(parse({ activity: { description: 'x'.repeat(201) } }))).toBe('activity.description must be a string (≤ 200 chars)')
+    expect(errorOf(parse({ activity: { description_zh: false } }))).toBe('activity.description_zh must be a string (≤ 200 chars)')
+    for (const order of [-1, 1001, 1.5, '5', null]) {
+      expect(errorOf(parse({ activity: { order } }))).toBe('activity.order must be an integer 0–1000')
+    }
+  })
+
+  it('activity: icon must exist inside the extension dir (same check as entry)', () => {
+    const seen: string[] = []
+    const onlyEntry = (p: string) => { seen.push(p); return p === 'index.html' }
+    expect(errorOf(parse({ activity: { icon: 'icon.svg' } }, 'glb', onlyEntry))).toBe('activity icon not found: icon.svg')
+    expect(seen).toContain('icon.svg')
+  })
+
+  it('extensions: [] allowed only with activity; key still required and must be an array', () => {
+    expect(parse({ extensions: [], activity: {} })).toMatchObject({ extensions: [], activity: { order: 100 } })
+    expect(errorOf(parse({ extensions: [] }))).toBe('extensions must be a non-empty array')
+    const noKey: Record<string, unknown> = { ...ok, activity: {} }
+    delete noKey.extensions
+    expect(errorOf(parseManifest(noKey, 'glb', entryYes))).toBe('extensions must be an array (empty is fine with activity)')
+    expect(errorOf(parse({ extensions: '.glb', activity: {} }))).toBe('extensions must be an array (empty is fine with activity)')
+    // entries are still validated when present
+    expect(errorOf(parse({ extensions: ['glb'], activity: {} }))).toMatch(/"glb"/)
+    // activity is checked before extensions (pack.mjs mirrors the order)
+    expect(errorOf(parse({ extensions: [], activity: [] }))).toBe('activity must be an object')
+  })
 })
 
 describe('scanExtensions (on-disk)', () => {
@@ -224,6 +273,17 @@ describe('scanExtensions (on-disk)', () => {
     expect(snapshotKey(scanExtensions())).toBe(k1)
     writeExt('glb', { ...ok, version: '1.1.0' })
     expect(snapshotKey(scanExtensions())).not.toBe(k1)
+  })
+
+  it('activity icon is checked on disk: a file inside the dir passes, missing / a directory fails', () => {
+    writeExt('city', { ...ok, id: 'city', extensions: [], activity: { icon: 'assets/icon.svg' } }, { 'index.html': '<html>', 'assets/icon.svg': '<svg/>' })
+    writeExt('noicon', { ...ok, id: 'noicon', extensions: [], activity: { icon: 'icon.svg' } })
+    writeExt('diricon', { ...ok, id: 'diricon', extensions: [], activity: { icon: 'd.svg' } }, { 'index.html': '<html>', 'd.svg/x': '' })
+    const snap = scanExtensions()
+    expect(snap.extensions.map((e) => e.id)).toEqual(['city'])
+    expect(snap.extensions[0]).toMatchObject({ extensions: [], activity: { icon: 'assets/icon.svg', order: 100 } })
+    expect(snap.errors.find((e) => e.id === 'noicon')?.error).toBe('activity icon not found: icon.svg')
+    expect(snap.errors.find((e) => e.id === 'diricon')?.error).toBe('activity icon not found: d.svg')
   })
 
   it('readExtensionDir accepts an explicit id for not-yet-renamed staging dirs', () => {

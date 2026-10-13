@@ -478,8 +478,8 @@ if (!AGENTCORE) {
   const sessionArchiveRoutes = createSessionArchiveRoutes(registry)
   app.route('/api', sessionArchiveRoutes)
 
-  // halo-city world snapshot — token-authed public endpoint (added to
-  // PUBLIC_PATHS in auth.ts so it bypasses the admin cookie like /api/web/*).
+  // Halo City world snapshot — authed by token or admin cookie, which the
+  // route checks itself, so it's in PUBLIC_PATHS (auth.ts) like /api/web/*.
   const showRoutes = createShowRoutes(registry)
   app.route('/api', showRoutes)
 

@@ -274,6 +274,13 @@ describe('bundle extensions', () => {
     expect(init.type === 'post' && init.frame).toMatchObject({ type: 'init', bundle: false, platform: 'web', lang: 'en' })
   })
 
+  it('init from the file host says view:file (bundle or not)', () => {
+    for (const [state, c] of [[initialHostState(['save']), ctx], [initialHostState([], true), bundleCtx]] as const) {
+      const init = onClientFrame(state, frame({ type: 'ready', protocol: 1 }), c).effects.find((e) => e.type === 'post')
+      expect(init?.type === 'post' && init.frame).toMatchObject({ type: 'init', view: 'file' })
+    }
+  })
+
   it('dirty (busy) is honoured without save; Ctrl+S on a busy bundle forwards nothing', () => {
     const busy = onClientFrame(readyBundle(), frame({ type: 'dirty', dirty: true }), bundleCtx)
     expect(busy.state.dirty).toBe(true)
@@ -436,7 +443,7 @@ describe('export', () => {
   }
   const initExport = (s: HostState) => {
     const init = onClientFrame(s, frame({ type: 'ready', protocol: 1 }), ctx).effects[0]
-    return init.type === 'post' && init.frame.type === 'init' ? init.frame.export : undefined
+    return init.type === 'post' && init.frame.type === 'init' && init.frame.view === 'file' ? init.frame.export : undefined
   }
 
   it('init.export is true only for a save-capable non-bundle extension', () => {
@@ -503,7 +510,7 @@ describe('createKeyedQueue (per-path append ordering)', () => {
 describe('init.jupyter', () => {
   const initOf = (s: HostState, c: HostContext) => {
     const init = onClientFrame(s, frame({ type: 'ready', protocol: 1 }), c).effects[0]
-    return init.type === 'post' && init.frame.type === 'init' ? init.frame : null
+    return init.type === 'post' && init.frame.type === 'init' && init.frame.view === 'file' ? init.frame : null
   }
   const wsCtx: HostContext = { ...ctx, projectId: '/home/u/ws' }
 

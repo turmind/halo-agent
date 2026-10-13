@@ -42,6 +42,10 @@ The Bottom Panel (Chat + Terminal) can also be **floated** into a draggable wind
 
 The Source Control entry is hidden in workspaces that are not git repos.
 
+**Extension entries.** An installed [canvas extension](../design/canvas-extensions.md#activity-bar-entries) whose manifest declares `activity` adds one button after Cron (several sort by the manifest's `order`, then id; the built-in tabs never move). It uses the extension's icon (tinted like the built-in icons; a puzzle piece when it has none) and its title / description in the hover drawer, in the admin's language. Clicking it shows the extension's page full-width in the main area with no sidebar, like Agents / Settings; leaving the tab closes the page (anything it was playing or refreshing stops). The last-used page is restored after a reload; if that extension has been removed, or doesn't run on this device, the workspace opens on Explorer instead. With no such extension installed, the bar is unchanged.
+
+**Short windows.** When the window is too short for every view button, the upper group (built-in views + extension entries) scrolls (no visible scrollbar); Settings and the quick-toggles entry stay pinned at the bottom.
+
 Below Settings sits the quick-toggles entry (network status, finish notification, and on desktop pin / keep-screen-awake) — see [explorer.md → Desktop windows](explorer.md#desktop-windows-multi-window).
 
 ### Hover drawer

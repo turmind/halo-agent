@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle } from 'react-resizable-panels'
 import { EditorPanel } from '@/features/editor/editor-panel'
-import { currentPlatform, loadExtensions } from '@/features/editor/previews/registry'
+import { activityEntries, currentPlatform, loadExtensions, useRegistryVersion } from '@/features/editor/previews/registry'
+import { ExtensionActivityIcon, ExtensionActivityPanel } from '@/features/workspace/extension-activity-panel'
+import { activityDescription, activityTabId, activityTitle, isActivityTabId, type ActivityTabId } from '@/features/workspace/extension-activity-logic'
 import { BottomPanel } from '@/features/workspace/bottom-panel'
 import { FloatingBottomPanel } from '@/features/workspace/floating-bottom-panel'
 import { QuickOpen } from '@/features/explorer/quick-open'
@@ -38,11 +40,12 @@ import { QuickToggles, useQuickToggleItems } from '@/features/workspace/quick-to
 import { ActivityBarLabel } from '@/features/workspace/activity-bar-label'
 import { useHoverIntent } from '@/shared/use-hover-intent'
 import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch } from 'lucide-react'
-import { useT } from '@/shared/i18n'
+import { useI18n } from '@/shared/i18n'
 import { envBadgeTitlePrefix } from '@/shared/env-badge'
 import type { LinkState } from '@/shared/use-websocket'
 
-type SidebarTab = 'explorer' | 'source-control' | 'sessions' | 'management' | 'skills' | 'channels' | 'evolution' | 'cron' | 'settings'
+/** Built-in tabs, plus `ext:<id>` = an extension's activity-bar page (no sidebar). */
+type SidebarTab = 'explorer' | 'source-control' | 'sessions' | 'management' | 'skills' | 'channels' | 'evolution' | 'cron' | 'settings' | ActivityTabId
 
 const TABS_WITH_SIDEBAR: SidebarTab[] = ['explorer', 'source-control', 'sessions', 'skills', 'channels', 'evolution', 'cron']
 
@@ -81,7 +84,7 @@ interface WorkspaceLayoutProps {
 }
 
 export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
-  const t = useT()
+  const { t, lang } = useI18n()
   const activeProject = useProjectStore((s) => s.activeProject)
   const openFolder = useProjectStore((s) => s.openFolder)
   // Busy/idle of the chat tab on screen, for the dynamic window title below.
@@ -239,9 +242,12 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   // page (server-global, not per workspace); `extension:changed` frames keep
   // it current from here on (ws-handlers/state-handlers). Kicked off here so
   // it runs alongside the workspace resolve — the editor's preview/text
-  // routing awaits the same request.
+  // routing awaits the same request. `extensionsLoaded` gates the
+  // extension-tab fallback below (a restored `ext:<id>` must not be dropped
+  // while the list is still in flight).
+  const [extensionsLoaded, setExtensionsLoaded] = useState(false)
   useEffect(() => {
-    void loadExtensions()
+    void loadExtensions().then(() => setExtensionsLoaded(true))
   }, [])
 
   // Warn before closing/refreshing the page — but not for deliberate
@@ -458,7 +464,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     [activeProject],
   )
 
-  const tabs: { id: SidebarTab; icon: typeof FolderTree; label: string; position?: 'bottom' }[] = [
+  const tabs: { id: SidebarTab; icon: ReactNode; label: string; desc: string; position?: 'bottom' }[] = ([
     { id: 'explorer', icon: FolderTree, label: t('nav.explorer') },
     { id: 'sessions', icon: MessageSquare, label: t('nav.sessions') },
     { id: 'source-control', icon: GitBranch, label: t('nav.sourceControl') },
@@ -468,7 +474,20 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     { id: 'evolution', icon: Sparkles, label: 'Evolution' },
     { id: 'cron', icon: Clock, label: 'Cron' },
     { id: 'settings', icon: Settings2, label: t('nav.settings'), position: 'bottom' },
-  ]
+  ] as const).map(({ icon: Icon, ...tab }) => ({ ...tab, icon: <Icon className="h-5 w-5" />, desc: t(`nav.desc.${tab.id}`) }))
+
+  // Extension pages (manifest `activity`): after the built-in top tabs, in
+  // `activityEntries` order. Re-derived on every `extension:changed` push
+  // (useRegistryVersion), never polled.
+  const registryVersion = useRegistryVersion()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- registryVersion is the snapshot-change signal
+  const extensionPages = useMemo(() => activityEntries(), [registryVersion])
+  const extensionTabs = extensionPages.map((info) => ({
+    id: activityTabId(info.id), icon: <ExtensionActivityIcon info={info} />, label: activityTitle(info, lang), desc: activityDescription(info, lang),
+  }))
+  const activeExtension = isActivityTabId(activeTab)
+    ? extensionPages.find((e) => activityTabId(e.id) === activeTab)
+    : undefined
 
   const projectId = activeProject?.id ?? null
   // Keep the Explorer's git status decorations in sync for the active workspace.
@@ -501,6 +520,14 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     if (isRepo === false && activeTab === 'source-control') setActiveTab('explorer')
   }, [isRepo, activeTab])
 
+  // Same for an extension page: a restored `ext:<id>` whose extension isn't
+  // (or is no longer) listed for this platform — uninstalled while open, or
+  // excluded here — falls back to Explorer. Only once the initial list is in
+  // (loadExtensions, 3 s cap), so a restore never bounces the user off it.
+  useEffect(() => {
+    if (extensionsLoaded && isActivityTabId(activeTab) && !activeExtension) setActiveTab('explorer')
+  }, [extensionsLoaded, activeTab, activeExtension])
+
   // Bottom panel single-render: docked / maximized / floating used to each
   // render their own <BottomPanel> at a different React-tree position, so
   // switching mode unmounted one and mounted another. TerminalPanel keeps its
@@ -527,7 +554,6 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   }, [bottomHost, activeBottomSlot])
 
   const renderTabButton = (tab: typeof tabs[number]) => {
-    const Icon = tab.icon
     const isActive = activeTab === tab.id
     return (
       <button
@@ -542,8 +568,8 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         {isActive && (
           <div className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[var(--primary)]" />
         )}
-        <span className="flex w-12 shrink-0 justify-center"><Icon className="h-5 w-5" /></span>
-        <ActivityBarLabel expanded={drawer.open} title={tab.label} desc={t(`nav.desc.${tab.id}`)} />
+        <span className="flex w-12 shrink-0 justify-center">{tab.icon}</span>
+        <ActivityBarLabel expanded={drawer.open} title={tab.label} desc={tab.desc} />
       </button>
     )
   }
@@ -557,7 +583,11 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
           quick-toggles popover). z-[45]: above the editor / file tree / panel
           groups (Monaco's widgets go up to 40), below the floating bottom
           panel (z-50); z-[60] while the quick-toggles panel is open, so the
-          popover keeps sitting above that floating panel as before. */}
+          popover keeps sitting above that floating panel as before. The top
+          group (built-ins + extension pages) is the one part that scrolls,
+          scrollbar hidden, so a short viewport never pushes Settings / quick
+          toggles off-screen; the popover lives in the bottom group, outside
+          it, and the group widens with the drawer, so labels aren't clipped. */}
       <div className={cn('relative w-12 shrink-0', maximized && 'hidden')}>
         <div
           {...drawer.bind}
@@ -567,8 +597,10 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
             quickOpen ? 'z-[60]' : 'z-[45]',
           )}
         >
-          {topTabs.map(renderTabButton)}
-          <div className="flex-1" />
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {topTabs.map(renderTabButton)}
+            {extensionTabs.map(renderTabButton)}
+          </div>
           {bottomTabs.map(renderTabButton)}
           {/* Network segment = the tri-state link light. Green used to mean only
               "last known state was open" — a zombie socket kept it green while
@@ -631,7 +663,9 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
           </PanelGroup>
         ) : (
           <div className="flex-1 min-w-0 overflow-hidden">
-            <NonExplorerMainArea activeTab={activeTab} />
+            {activeExtension
+              ? <ExtensionActivityPanel key={`${activeExtension.id}@${activeExtension.version}`} info={activeExtension} />
+              : <NonExplorerMainArea activeTab={activeTab} />}
           </div>
         )
       )}

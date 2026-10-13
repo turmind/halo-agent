@@ -94,21 +94,32 @@ export function ExtensionsView() {
                       {platformLabels(ext.platforms, t)}
                     </span>
                   )}
+                  {ext.activity && (
+                    <span className="shrink-0 rounded border border-[var(--border)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
+                      {t('settings.extensions.activity')}
+                    </span>
+                  )}
                   {!runsHere(ext) && (
                     <span className="shrink-0 rounded bg-[var(--secondary)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
                       {t('settings.extensions.unsupportedHere')}
                     </span>
                   )}
                 </div>
-                <p className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">
-                  {ext.extensions.join(' ')}
-                  {ext.priority === 'option' && ` · ${t('settings.extensions.optionOnly')}`}
-                  {ext.bundle && ` · ${t('settings.extensions.bundle')}`}
-                  {ext.capabilities.includes('save') && ` · ${t('settings.extensions.canSave')}`}
-                  {ext.capabilities.includes('media') && ` · ${t('settings.extensions.media')}`}
-                  {ext.capabilities.includes('fs-read') && ` · ${t('settings.extensions.fsRead')}`}
-                  {ext.description && ` — ${ext.description}`}
-                </p>
+                {/* An activity-only extension opens no files: no suffix line
+                    (its description, if any, still shows). */}
+                {ext.extensions.length > 0 ? (
+                  <p className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">
+                    {ext.extensions.join(' ')}
+                    {ext.priority === 'option' && ` · ${t('settings.extensions.optionOnly')}`}
+                    {ext.bundle && ` · ${t('settings.extensions.bundle')}`}
+                    {ext.capabilities.includes('save') && ` · ${t('settings.extensions.canSave')}`}
+                    {ext.capabilities.includes('media') && ` · ${t('settings.extensions.media')}`}
+                    {ext.capabilities.includes('fs-read') && ` · ${t('settings.extensions.fsRead')}`}
+                    {ext.description && ` — ${ext.description}`}
+                  </p>
+                ) : ext.description && (
+                  <p className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">{ext.description}</p>
+                )}
               </div>
               <RemoveButton disabled={busy} onClick={() => handleRemove(ext.id, ext.name)} label={t('settings.extensions.remove')} />
             </li>

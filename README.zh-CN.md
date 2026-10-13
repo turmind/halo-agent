@@ -158,7 +158,7 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
 
 ## Halo City
 
-一座只读的像素之城，实时可视化一台 halo 服务器：每个工作区是一栋楼，每个会话是一只动物市民 —— 干活时伏案敲键盘，闲下来喝咖啡、打街机。点击任意市民，看到的是真实数据：实时会话日志、委派链、最近一次工具调用、token 用量。纯客户端 canvas，只轮询一个接口 —— **零模型 token 消耗**。代码在 [`halo-city/`](halo-city/)（纯静态文件，无需构建）—— 设计笔记见 [design/halo-city.md](.halo/docs/design/halo-city.md)。
+一座只读的像素之城，实时可视化一台 halo 服务器：每个工作区是一栋楼，每个会话是一只动物市民 —— 干活时伏案敲键盘，闲下来喝咖啡、打街机。点击任意市民，看到的是真实数据：实时会话日志、委派链、最近一次工具调用、token 用量。纯客户端 canvas，只轮询一个接口 —— **零模型 token 消耗**。从 1.6.5 起作为 [halo-hub 扩展](https://github.com/turmind/halo-hub/tree/main/extensions/halo-city)安装：`/extension install halo-city`，装好后活动栏会多一个 Halo City 入口 —— 设计笔记见 [design/halo-city.md](.halo/docs/design/halo-city.md)。
 
 ![Halo City 街景 —— 子 Agent 市民伏案工作，右侧检查面板已打开](assets/halo-city-street.jpg)
 <p align="center"><sub>街景视角：<code>aurora-cafe</code> 楼里三只子 Agent 市民埋头干活；检查面板里是其中一个 executor 的实时日志和委派链。</sub></p>

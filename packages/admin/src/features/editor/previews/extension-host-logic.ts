@@ -240,7 +240,7 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
       const init: HostEffect = {
         type: 'post',
         frame: {
-          haloExt: 1, type: 'init', protocol: EXTENSION_PROTOCOL_VERSION, file: ctx.file, capabilities: state.capabilities,
+          haloExt: 1, type: 'init', view: 'file', protocol: EXTENSION_PROTOCOL_VERSION, file: ctx.file, capabilities: state.capabilities,
           theme: ctx.theme, themeVars: ctx.themeVars, bundle: state.bundle, platform: ctx.platform, lang: ctx.lang,
           export: canSave(state) && !state.bundle,
           ...(ctx.projectId && !state.bundle ? { jupyter: { projectId: ctx.projectId } } : {}),

@@ -1,6 +1,6 @@
 name: Halo Dev
 description: Halo-codebase specialist — implements features and fixes across this monorepo
-  (core/server/admin/cli/desktop, halo-city, templates) following repo conventions; verifies with scoped tsc/vitest/lint
+  (core/server/admin/cli/desktop, templates) following repo conventions; verifies with scoped tsc/vitest/lint
   before reporting. For code changes in THIS repo, prefer over the generic executor whenever the task touches Halo
   semantics (sessions, channels, WS protocol, agent loop, templates).
 model:

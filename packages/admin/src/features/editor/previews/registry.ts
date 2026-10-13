@@ -176,6 +176,15 @@ export function excludedByPlatform(ext: string, bundle = false): ExtensionInfo[]
   return snapshot.extensions.filter((e) => claims(e, key, bundle) && !runsHere(e))
 }
 
+/** Extensions with an activity-bar entry that run on this platform, in bar
+ *  order: `activity.order` ascending, then id. Scanner errors never get here
+ *  (not in `extensions`). Render-time callers subscribe via useRegistryVersion. */
+export function activityEntries(): ExtensionInfo[] {
+  return snapshot.extensions
+    .filter((e) => e.activity && runsHere(e))
+    .sort((a, b) => a.activity!.order - b.activity!.order || a.id.localeCompare(b.id))
+}
+
 /** Stable identity for a candidate — what the "open with" menu remembers. */
 export function resolvedKey(r: Resolved): string {
   switch (r.kind) {

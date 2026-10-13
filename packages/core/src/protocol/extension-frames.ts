@@ -53,9 +53,14 @@ export type ExtensionPickErrorCode = 'cancelled' | 'denied'
 // ── Host → Extension ─────────────────────────────────────────────────
 
 export type ExtensionHostFrame =
-  // sent once, right after the extension's `ready`
+  // sent once, right after the extension's `ready`. `view` says which host
+  // mounted it: `'file'` = an editor tab with an open file / bundle (the
+  // fields below); `'activity'` = the activity-bar page — no file, so no
+  // file / bundle / export / jupyter. Hosts before `view` existed only ever
+  // sent the file shape and omit the field: absent = `'file'`.
   | (ExtensionFrameBase & {
       type: 'init'
+      view: 'file'
       protocol: typeof EXTENSION_PROTOCOL_VERSION
       /** For a bundle: name / workspace-relative path of the DIRECTORY. */
       file: { name: string; path: string; size: number; ext: string }
@@ -76,6 +81,18 @@ export type ExtensionHostFrame =
        *  sent to every non-bundle extension. Older hosts omit it — hide
        *  kernel UI then. Whether Jupyter is usable: `GET /api/jupyter/status`. */
       jupyter?: { projectId: string }
+    })
+  // activity-bar page: also followed by `theme` / `lang`; the host answers
+  // only `ready` / `error` from it (no load / save / fs / pick / export)
+  | (ExtensionFrameBase & {
+      type: 'init'
+      view: 'activity'
+      protocol: typeof EXTENSION_PROTOCOL_VERSION
+      capabilities: ExtensionCapability[]
+      theme: ExtensionTheme
+      themeVars: ExtensionThemeVars
+      platform: ExtensionPlatform
+      lang: ExtensionLang
     })
   // file bytes; after `init`, and again on external change while not dirty
   // (never sent to bundle extensions)

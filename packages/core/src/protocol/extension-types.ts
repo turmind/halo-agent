@@ -44,6 +44,22 @@ export type ExtensionPlatform = 'web' | 'desktop-mac' | 'desktop-win' | 'desktop
  *  `option` only appears in the "open with" menu. */
 export type ExtensionPriority = 'default' | 'option'
 
+/** Manifest `activity`: one admin activity-bar button that opens the
+ *  extension's `entry` as a full-width page (no file, `init.view: 'activity'`).
+ *  `icon` = relative `.svg` / `.png` inside the extension dir, rendered as a
+ *  CSS mask in the bar's current colour (absent = generic puzzle icon).
+ *  `title` / `description` fall back to the top-level `name` / `description`;
+ *  `_zh` variants are used when the admin UI is Chinese. Buttons sort by
+ *  `order` (default 100), then id. */
+export interface ExtensionActivity {
+  icon?: string
+  title?: string
+  title_zh?: string
+  description?: string
+  description_zh?: string
+  order: number
+}
+
 export interface ExtensionInfo {
   /** Directory name under `~/.halo/global/extensions/`; must equal manifest.id. */
   id: string
@@ -52,7 +68,8 @@ export interface ExtensionInfo {
    *  `/api/extensions/<id>/<version>/…` so a bump busts browser caches. */
   version: string
   description?: string
-  /** Lower-case file extensions including the dot, e.g. `['.glb']`. */
+  /** Lower-case file extensions including the dot, e.g. `['.glb']`. Empty
+   *  only for an `activity` extension that opens no files. */
   extensions: string[]
   /** HTML entry relative to the extension directory. */
   entry: string
@@ -65,6 +82,8 @@ export interface ExtensionInfo {
   platforms?: ExtensionPlatform[]
   /** Declared config fields; absent = none. Rendered as a Settings section. */
   settings?: ExtensionSettings
+  /** Activity-bar entry; absent = none (a pure file viewer). */
+  activity?: ExtensionActivity
   homepage?: string
   license?: string
   /** Extension directory mtime (ms). Among several `default` extensions for

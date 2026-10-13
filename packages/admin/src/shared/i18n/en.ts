@@ -379,6 +379,7 @@ export const en: Record<string, string> = {
   'settings.extensions.media': 'microphone / screen',
   'settings.extensions.fsRead': 'Reads files on this machine',
   'settings.extensions.unsupportedHere': 'not supported here',
+  'settings.extensions.activity': 'Activity bar',
   'extensions.platform.web': 'Browser',
   'extensions.platform.desktop-mac': 'Mac app',
   'extensions.platform.desktop-win': 'Windows app',
