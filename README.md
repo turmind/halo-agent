@@ -13,6 +13,10 @@ A self-hosted AI agent team that works in your project folder. Bring your own mo
 ![Halo admin — a landing page assembled by parallel sub-agents, previewing live in Canvas](assets/workspace-hero.jpg)
 <p align="center"><sub>One prompt — <i>“Build a landing page for our coffee roastery… split the sections across sub-agents in parallel, then assemble.”</i> Executors fan out, report back, and the assembled page previews in Canvas, all in one browser tab.</sub></p>
 
+https://github.com/user-attachments/assets/45f86359-2d83-4c61-b937-0747b184340e
+
+<p align="center"><sub>An 83-second walkthrough of a real run, from the prompt to the finished page.</sub></p>
+
 ## Install
 
 Halo runs on Linux (x64 / arm64), macOS and Windows, and needs **Node.js 22+**. Ubuntu 24.04's own `nodejs` package is 18 and won't work (`halo` refuses to start on it), so get 22 first:

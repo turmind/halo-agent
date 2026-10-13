@@ -13,6 +13,10 @@
 ![Halo 管理台 —— 并行子 Agent 组装出的落地页，正在 Canvas 里实时预览](assets/workspace-hero.jpg)
 <p align="center"><sub>一句话 ——「给我们的咖啡烘焙坊做个落地页……各节拆给子 Agent 并行做，最后组装」。Executor 们并行开工、逐个汇报，拼好的页面直接在 Canvas 里预览，全程一个浏览器标签页。</sub></p>
 
+https://github.com/user-attachments/assets/45f86359-2d83-4c61-b937-0747b184340e
+
+<p align="center"><sub>83 秒看完一次真实运行：从一句话到成品页面。</sub></p>
+
 ## 安装
 
 Halo 支持 Linux（x64 / arm64）、macOS 和 Windows，需要 **Node.js 22+**。Ubuntu 24.04 自带的 `nodejs` 是 18，跑不起来（`halo` 会拒绝启动），所以先装 22：
