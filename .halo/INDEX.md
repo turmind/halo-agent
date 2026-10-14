@@ -12,7 +12,7 @@ halo setup                      # interactive: password / port / model keys / op
 halo server start               # launch on :9527 (default)
 ```
 
-Needs Node.js 22+ (the bin shim refuses older Node). On Linux, `workspace` / `readonly` sessions need bubblewrap, and on Ubuntu 23.10+ / 24.04 an AppArmor profile for it ([deploy.md](docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)). `halo server start -d` on Linux with systemd runs it as a user unit. Upgrade with `halo upgrade && halo server restart`; on startup (server, `halo cli` / `halo tui`), bundled docs / agents / skills / model providers refresh when the on-disk template version is behind. Docker / CI: `halo setup --non-interactive` + `HALO_PASSWORD` (+ `HALO_DEFAULT_PROVIDER` and that provider's key env). Full guide: [dev/deploy.md](docs/dev/deploy.md).
+Needs Node.js 22+. On Linux, `workspace` / `readonly` sessions need bubblewrap (plus an AppArmor profile on Ubuntu 23.10+); `halo server start -d` with systemd runs it as a user unit. Upgrade with `halo upgrade && halo server restart`; bundled docs / agents / skills / model providers refresh on startup when the on-disk template version is behind. Docker / CI and everything else: [dev/deploy.md](docs/dev/deploy.md).
 
 ## Tech Stack
 
@@ -72,7 +72,7 @@ Same-server dispatch from one workspace's agent to a session in another (the "se
 
 ## A2A (cross-server dispatch)
 
-A2A v1.0 (JSON-RPC only). **Inbound**: a workspace with `.halo/agent-card.json` under `HALO_A2A_ROOT` is served at `/a2a/<relative path>`, authed by a web-channel token bound to it; readonly / observer tokens get a fixed read-only profile; results go out by webhook push, blocking call or SSE. **Outbound**: `tools: [a2a_send]` (every level but read-only); remotes in full-only `~/.halo/secrets/a2a-remotes.yaml`, every egress URL checked by `general.a2a.url_allowlist`; results land as `[A2A report · …]`. Server only.
+A2A v1.0 (JSON-RPC only). **Inbound**: a workspace with `.halo/agent-card.json` under `HALO_A2A_ROOT` is served at `/a2a/<relative path>`, authed by a web-channel token bound to it (readonly / observer → read-only profile); results by webhook push, blocking call or SSE. **Outbound**: `tools: [a2a_send]`; remotes in `~/.halo/secrets/a2a-remotes.yaml`, egress checked by `general.a2a.url_allowlist`; results land as `[A2A report · …]`. Server only.
 
 - Key state: `~/.halo/global/a2a.db` (tasks, push configs / outbox, dispatches), `agent_sessions.reply_to`
 - Code: `packages/server/src/a2a/` + `db/a2a-db.ts` + `agents/relay.ts` · Docs: [design/a2a.md](docs/design/a2a.md), [dev/tools.md](docs/dev/tools.md#a2a-tools), [dev/api.md](docs/dev/api.md#a2a-agent-to-agent)
@@ -98,7 +98,7 @@ A particle face at `<workspace>/.halo/canvas/self.html` the agent drives with `<
 
 ## Canvas Preview Extensions
 
-Installable static viewers for file types the editor can't preview (3D, draw.io, Excalidraw, notebooks) and folder-backed apps (`htrans` recorder); a manifest may also declare one activity-bar page (`activity`) and one chat-input toolbar button (`chatbar`, whose panel may insert text into the draft but never send). The directory is the install: the server watches `~/.halo/global/extensions/`, validates `halo-extension.json` and pushes `extension:changed`; the admin hosts each in a sandboxed iframe with a scoped asset token. Capabilities `save` / `media` / `transcribe` / `fs-read`, plus bundles, settings, platforms, shipped skills, the Transcribe streaming proxy and the Jupyter kernel proxy; installed via Settings, the `extension` skill (hub default [turmind/halo-hub](https://github.com/turmind/halo-hub)), or a directory drop. The same skill updates model providers (`~/.halo/global/models.d/`).
+Installable static viewers for file types the editor can't preview (3D, draw.io, Excalidraw, notebooks) and folder-backed apps (`htrans`); a manifest may also add one activity-bar page (`activity`) and one chat-input button (`chatbar`, may insert into the draft, never send). The directory is the install: the server watches `~/.halo/global/extensions/`, validates `halo-extension.json` and pushes `extension:changed`; the admin hosts each in a sandboxed iframe with a scoped asset token. Capabilities, settings, the Transcribe / STT / Jupyter proxies: see the design doc. Installed via Settings, the `extension` skill (hub default [turmind/halo-hub](https://github.com/turmind/halo-hub)) or a directory drop; the same skill updates model providers (`~/.halo/global/models.d/`).
 
 - Key state: `~/.halo/global/extensions/<id>/`
 - Code: `packages/core/src/protocol/extension-*.ts` + `packages/server/src/extensions/` + `routes/{extensions,transcribe-ws,jupyter}.ts` + admin `features/editor/previews/` + `templates/skills/extension/`
