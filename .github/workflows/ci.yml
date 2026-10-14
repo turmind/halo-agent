@@ -39,6 +39,11 @@ jobs:
           pnpm --filter @turmind/halo-cli lint
           pnpm --filter @turmind/halo-admin lint
 
+      # 其余没有 lint 脚本的部分:core / acp-adapter 源码,和所有包的 test/ 目录
+      # (同一套 base 规则,见 eslint.config.js)。
+      - name: Lint (core + acp-adapter + tests)
+        run: pnpm exec eslint packages/core/src packages/acp-adapter/src packages/*/test
+
       # 跟根 package.json 的 build 一致:core→server→acp→cli 依次 tsc 编译。
       # 不含 admin 的 next build(第一版求稳,以后要加再单开 job)。任一包 tsc 报错即红。
       - name: Build (typecheck)

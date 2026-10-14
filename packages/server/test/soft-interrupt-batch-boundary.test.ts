@@ -124,7 +124,6 @@ describe('soft interrupt cuts at the batch boundary', () => {
   it('(a) a message queued during a 3-call batch: all 3 run, the turn unwinds before the next model call, the queue drains as one merged turn', async () => {
     seedRow('s1')
     const runs: string[] = []
-    let session!: ReturnType<typeof fakeSession>
     const tools = ['a', 'b', 'c'].map((n): ToolDef => ({
       name: n, description: '', inputSchema: {},
       callback: async () => {
@@ -142,7 +141,7 @@ describe('soft interrupt cuts at the batch boundary', () => {
       // Model call #2 is the merged drained turn — the interrupted turn never reached its own #2.
       endTurn('answered both'),
     ])
-    session = fakeSession('s1', loop)
+    const session = fakeSession('s1', loop)
     const events = capture('s1')
 
     await sm.runSession('s1', 'archive everything')

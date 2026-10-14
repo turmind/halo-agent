@@ -57,7 +57,7 @@ describe('E-H2 — C0 control chars from tool output never reach the terminal', 
   it('truncateLines (chat block seam) removes CR/BEL and splits redraws into lines', () => {
     const body = truncateLines(PROGRESS, 20, 200)
     expect(body).not.toMatch(/\r/)
-    expect(body).not.toMatch(/\x07/)
+    expect(body).not.toContain('\x07')
     expect(body.split('\n')).toEqual([
       'Collecting halo',
       '  1% |#         |',
@@ -69,7 +69,7 @@ describe('E-H2 — C0 control chars from tool output never reach the terminal', 
   it('the rendered <Static> chat block writes no CR — the │ gutter survives', async () => {
     const out = await renderFrame(h(Messages, { blocks: [toolBlock(truncateLines(PROGRESS, 20, 200))] }))
     expect(out).not.toMatch(/\r/)
-    expect(out).not.toMatch(/\x07/)
+    expect(out).not.toContain('\x07')
     // Every redraw frame is now its own gutter-prefixed row.
     const gutter = stripAnsi(out).split('\n').filter((l) => l.includes('│ '))
     expect(gutter.length).toBe(4)
@@ -80,7 +80,7 @@ describe('E-H2 — C0 control chars from tool output never reach the terminal', 
     const lines = messagesToLogLines([{ toolName: 'shell_exec', toolOutput: PROGRESS, timestamp: 0 }])
     const body = lines.map((l) => l.text).join('\n')
     expect(body).not.toMatch(/\r/)
-    expect(body).not.toMatch(/\x07/)
+    expect(body).not.toContain('\x07')
     expect(body).toContain('100% |##########|')
   })
 
@@ -88,7 +88,7 @@ describe('E-H2 — C0 control chars from tool output never reach the terminal', 
     const lines = messagesToLogLines([{ toolName: 'shell_exec', toolOutput: PROGRESS, timestamp: 0 }])
     const out = await renderFrame(h(LogViewer, { title: 'Log', lines, onClose: () => {} }), 80, 30)
     expect(out).not.toMatch(/\r/)
-    expect(out).not.toMatch(/\x07/)
+    expect(out).not.toContain('\x07')
   })
 
   it('a foreign SGR reset in tool output cannot leak into the frame', async () => {

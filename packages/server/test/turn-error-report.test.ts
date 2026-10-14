@@ -54,7 +54,6 @@ function stubAgent(failures: number, error: () => Error) {
   return {
     state,
     messages: [] as unknown[],
-    // eslint-disable-next-line require-yield
     async *run(): AsyncGenerator<{ type: string; text?: string; final?: boolean }> {
       state.calls++
       if (state.calls <= failures) throw error()

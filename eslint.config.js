@@ -3,7 +3,8 @@
 // OFF (they need per-package tsconfig wiring and are slow); this is a syntax +
 // obvious-mistake pass only.
 //
-// Scope: server (backend), cli (Ink/React TUI), admin (Next.js front-end).
+// Scope: server / core / acp-adapter (backend), cli (Ink/React TUI), admin
+// (Next.js front-end), plus every package's test/ dir under the same base rules.
 import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
@@ -53,9 +54,9 @@ export default tseslint.config(
   {
     ignores: ['**/dist/**', '**/dist-pub/**', '**/out/**', '**/.next/**', '**/node_modules/**', '**/*.cjs', '**/*.mjs'],
   },
-  // server: pure backend, no React.
+  // server / core / acp-adapter: pure backend, no React.
   {
-    files: ['packages/server/src/**/*.ts'],
+    files: ['packages/server/src/**/*.ts', 'packages/core/src/**/*.ts', 'packages/acp-adapter/src/**/*.ts'],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module' },
     rules: baseRules,
@@ -63,6 +64,14 @@ export default tseslint.config(
   // cli + admin: base rules on all source.
   {
     files: ['packages/cli/src/**/*.{ts,tsx}', 'packages/admin/src/**/*.{ts,tsx}'],
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    languageOptions: { ecmaVersion: 2023, sourceType: 'module' },
+    rules: baseRules,
+  },
+  // tests (core / server / cli / admin / acp-adapter): base rules only — the
+  // React files under test are linted via src; vitest test files hold no hooks.
+  {
+    files: ['packages/*/test/**/*.{ts,tsx}'],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module' },
     rules: baseRules,
