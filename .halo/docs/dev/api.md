@@ -334,7 +334,7 @@ Files: `packages/server/src/a2a/routes.ts` (JSON-RPC handler), `exposure.ts` (pa
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/a2a/<rel>` (trailing `/` ok) | JSON-RPC 2.0 for the workspace `<A2A base>/<rel>` |
-| GET | `/a2a/<rel>/.well-known/agent-card.json` | The agent card. `Cache-Control: private, max-age=300` + `ETag` (304 on `If-None-Match`); invalid `.halo/agent-card.json` → 500 |
+| GET | `/a2a/<rel>/.well-known/agent-card.json` | The agent card. `Cache-Control: private, max-age=300` + `ETag` (304 on a weak `If-None-Match` match; a card > 1 KiB is gzipped and its ETag becomes `W/"…"`); invalid `.halo/agent-card.json` → 500 |
 | POST | `/a2a-push/:pushId` | Webhook receiver for remotes this server dispatched to (`a2a_send`) |
 
 **Exposure**: `<rel>` is the workspace path relative to the base dir (`HALO_A2A_ROOT`, default the user's home), each segment percent-encoded. Only a workspace containing `.halo/agent-card.json` is served; empty / `.` / `..` segments, separators inside a segment, and symlinks leaving the base are refused. The card's interface URL is `general.a2a.public_url` (env `HALO_A2A_PUBLIC_URL`) + `/a2a/<rel>/`, else derived from the request host.

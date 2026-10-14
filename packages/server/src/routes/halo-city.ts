@@ -19,6 +19,7 @@ import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader
 import { readSessionFileMeta, loadSessionFileData } from '../sessions/session-store.js'
 import { messageToolCalls } from '../sessions/session-types.js'
 import { createMtimeCache } from './mtime-cache.js'
+import { etagMatches } from './etag.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionManager, SessionInfo } from '../agents/session-manager.js'
 import type { SessionMessage } from '../sessions/session-types.js'
@@ -401,16 +402,6 @@ export function discoverWorkspaces(registry: SessionManagerRegistry): Map<string
 function stateEtag(accessLevel: string, skills: ShowSkill[], workspaces: ShowWorkspace[], uptime: number): string {
   const json = JSON.stringify({ accessLevel, skills, workspaces, uptimeMin: Math.floor(uptime / 60) })
   return `W/"${crypto.createHash('sha1').update(json).digest('base64url')}"`
-}
-
-/** Weak If-None-Match comparison: `*`, or any listed tag equal once `W/` is dropped. */
-function etagMatches(header: string | undefined, etag: string): boolean {
-  if (!header) return false
-  const bare = etag.replace(/^W\//, '')
-  return header.split(',').some((t) => {
-    const tag = t.trim()
-    return tag === '*' || tag.replace(/^W\//, '') === bare
-  })
 }
 
 export function createShowRoutes(registry: SessionManagerRegistry) {

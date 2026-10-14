@@ -19,6 +19,7 @@ import { readReplyTo, writeReplyTo, clearReplyTo, listActiveChildren, A2A_CHANNE
 import { resolveDefaultAgentId } from '../channels/shared/commands.js'
 import { sessionAccess } from '../channels/shared/accounts.js'
 import { sessionPrefix } from '../channels/shared/session-prefix.js'
+import { etagMatches } from '../routes/etag.js'
 import { checkUrl } from './url-policy.js'
 import { parseMessageParts, fetchImageUrls, saveImage } from './files.js'
 import { buildCard, etagOf, homeStrategies, type A2ACaller, type A2AStrategies } from './exposure.js'
@@ -387,8 +388,8 @@ export function createA2ARoutes(deps: A2ARouteDeps): Hono {
     const etag = etagOf(body)
     c.header('Cache-Control', 'private, max-age=300')
     c.header('ETag', etag)
-    if (c.req.header('if-none-match') === etag) return c.body(null, 304)
-    return c.body(body, 200, { 'Content-Type': 'application/json' })
+    if (etagMatches(c.req.header('if-none-match'), etag)) return c.body(null, 304)
+    return c.body(body, 200, { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(body)) })
   })
 
   app.post('/*', async (c) => {
