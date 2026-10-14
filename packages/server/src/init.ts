@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 102 // skills/cron: delete leaves run rows for the server, which deletes stateless run sessions with them.
+export const TEMPLATE_VERSION = 103 // models: mimo-token-plan-china revision 2026101401 — mimo-v2.5-pro / mimo-v2.5 dropped (officially retired 2026-10-21).
+// 102: skills/cron: delete leaves run rows for the server, which deletes stateless run sessions with them.
 // 101: models: new gemini provider (runtime gemini, revision 2026101201) — gemini-3.8-flash (default) + gemini-3.5-flash-lite on the OpenAI-compatible endpoint.
 // 100: skills/cron: a stateless job keeps its newest 10 runs, an older run's session is deleted with it (unless continued), deleting the job deletes them too. skills/workspace: tidy mode flags INDEX bloat (INDEX is injected every turn — short sections, details in docs).
 // 99: skills/cron: manage-cron.py update switches trigger mode like REST PUT (--schedule / --run-at clear the other, both or neither refused), create --id uses the session-id charset, bad --targets JSON is an error line. models: deepseek / qwen / hunyuan revision 2026101101 — deepseek effort presets low / high / max (default high); qwen3.8-* mode adaptive (output_config.effort xhigh / medium / low); hunyuan maxOutputTokens hy3 131072 / hy4-preview 65536 (TokenHub model list).

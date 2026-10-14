@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Halo City: `/api/show/state` now sends an ETag, so while the server is idle the city's poll every 7 s gets an empty 304 instead of the full snapshot, cutting most of that traffic; a full answer comes back at most once a minute. The extension needs no change: the browser revalidates and hands it the cached snapshot.
+- Models: Xiaomi MiMo drops `mimo-v2.5-pro` and `mimo-v2.5` ahead of their official 2026-10-21 retirement; MiMo v2.6 Pro / Flash remain. An agent still pointed at a v2.5 id should be switched to a v2.6 one. The hub's model pack carries the same change.
 - Lint now also covers `core`, `acp-adapter` and every package's tests, in CI too.
 
 ### Fixed
