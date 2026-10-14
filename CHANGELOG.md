@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-10-14
+
 ### Changed
 
 - Halo City: `/api/show/state` now sends an ETag, so while the server is idle the city's poll every 7 s gets an empty 304 instead of the full snapshot, cutting most of that traffic; a full answer comes back at most once a minute. The extension needs no change: the browser revalidates and hands it the cached snapshot.
