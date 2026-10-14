@@ -13,12 +13,12 @@
  */
 import { ChunkedResponder, type ResponderDeps } from '../shared/responder.js'
 
-const HARD_CHARS = 5000
+export const WECOM_TEXT_LIMIT = 5000
 
 export class WecomResponder extends ChunkedResponder {
   constructor(deps: ResponderDeps) {
     // No markdown formatter: WeCom stream content renders CommonMark
     // natively (headings / bold / lists / quotes / links / code / tables).
-    super(deps, { limit: HARD_CHARS, logTag: 'WeCom' })
+    super(deps, { limit: WECOM_TEXT_LIMIT, logTag: 'WeCom' })
   }
 }

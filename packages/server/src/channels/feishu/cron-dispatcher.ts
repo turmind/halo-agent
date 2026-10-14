@@ -26,6 +26,9 @@
 import { getChannelDb } from '../../db/channel-db.js'
 import { getAccount as getFeishuAccount, listAccounts as listFeishuAccounts } from './accounts.js'
 import { sendMessage } from './api.js'
+import { FEISHU_TEXT_LIMIT } from './event-adapter.js'
+import { splitText } from '../shared/chunk.js'
+import { formatForFeishu } from '../shared/markdown.js'
 import { registerCronDispatcher, type CronTargetOption, type DispatchResult } from '../../cron/dispatcher.js'
 
 function parseChatId(raw: string): { chatId: string } {
@@ -42,19 +45,26 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
     throw new Error('feishu cron target requires an explicit chatId (e.g. "oc_abcd1234"). Create the cron from inside a feishu chat to auto-pin, or pass --targets feishu:<accountId>:<chatId>.')
   }
   const { chatId } = parseChatId(explicitChatId)
-  try {
-    await sendMessage({
-      appId: acct.appId, appSecret: acct.appSecret,
-      receiveIdType: 'chat_id', receiveId: chatId,
-      msgType: 'text', content: { text },
-    })
-    return [{ channelType: 'feishu', accountId, chatId: explicitChatId, ok: true }]
-  } catch (err) {
-    return [{
-      channelType: 'feishu', accountId, chatId: explicitChatId,
-      ok: false, error: err instanceof Error ? err.message : String(err),
-    }]
+  // Same pipeline as a chat reply (FeishuResponder): cut the raw text at
+  // FEISHU_TEXT_LIMIT, then strip CommonMark per chunk (the text msg type
+  // shows `**` literally). Chunks go out sequentially; a failed chunk names
+  // its index (chunks before it are delivered) and skips the rest.
+  const chunks = splitText(text, FEISHU_TEXT_LIMIT)
+  for (const [i, chunk] of chunks.entries()) {
+    try {
+      await sendMessage({
+        appId: acct.appId, appSecret: acct.appSecret,
+        receiveIdType: 'chat_id', receiveId: chatId,
+        msgType: 'text', content: { text: formatForFeishu(chunk) },
+      })
+    } catch (err) {
+      return [{
+        channelType: 'feishu', accountId, chatId: explicitChatId,
+        ok: false, error: `chunk ${i + 1}/${chunks.length}: ${err instanceof Error ? err.message : String(err)}`,
+      }]
+    }
   }
+  return [{ channelType: 'feishu', accountId, chatId: explicitChatId, ok: true }]
 }
 
 function listTargets(): CronTargetOption[] {

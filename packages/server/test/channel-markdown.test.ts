@@ -65,6 +65,11 @@ describe('formatForFeishu (plain text)', () => {
   it('drops fence delimiters but keeps fence contents', () => {
     expect(formatForFeishu('```\ncode line\n```')).toBe('code line')
   })
+
+  it('leaves MEDIA: lines verbatim (underscores in paths are not italics)', () => {
+    expect(formatForFeishu('see _this_\nMEDIA: /tmp/daily_report_v2.png'))
+      .toBe('see this\nMEDIA: /tmp/daily_report_v2.png')
+  })
 })
 
 describe('formatForFeishuPost (rich post structure)', () => {

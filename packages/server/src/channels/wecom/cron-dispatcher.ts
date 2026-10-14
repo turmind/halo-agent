@@ -23,6 +23,8 @@
 import { getChannelDb } from '../../db/channel-db.js'
 import { getAccount as getWecomAccount, listAccounts as listWecomAccounts } from './accounts.js'
 import { liveClients } from './handler.js'
+import { WECOM_TEXT_LIMIT } from './event-adapter.js'
+import { splitText } from '../shared/chunk.js'
 import { registerCronDispatcher, type CronTargetOption, type DispatchResult } from '../../cron/dispatcher.js'
 
 async function dispatch(accountId: string, text: string, explicitChatId?: string): Promise<DispatchResult[]> {
@@ -37,15 +39,21 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   if (!client) {
     return [{ channelType: 'wecom', accountId, chatId: explicitChatId, ok: false, error: 'wecom long-connect not active' }]
   }
-  try {
-    await client.sendMessage(explicitChatId, { msgtype: 'markdown', markdown: { content: text } })
-    return [{ channelType: 'wecom', accountId, chatId: explicitChatId, ok: true }]
-  } catch (err) {
-    return [{
-      channelType: 'wecom', accountId, chatId: explicitChatId,
-      ok: false, error: err instanceof Error ? err.message : String(err),
-    }]
+  // Chunked like a chat reply (WecomResponder, no formatter — markdown
+  // renders natively). Chunks go out sequentially; a failed chunk names its
+  // index (chunks before it are delivered) and skips the rest.
+  const chunks = splitText(text, WECOM_TEXT_LIMIT)
+  for (const [i, chunk] of chunks.entries()) {
+    try {
+      await client.sendMessage(explicitChatId, { msgtype: 'markdown', markdown: { content: chunk } })
+    } catch (err) {
+      return [{
+        channelType: 'wecom', accountId, chatId: explicitChatId,
+        ok: false, error: `chunk ${i + 1}/${chunks.length}: ${err instanceof Error ? err.message : String(err)}`,
+      }]
+    }
   }
+  return [{ channelType: 'wecom', accountId, chatId: explicitChatId, ok: true }]
 }
 
 function listTargets(): CronTargetOption[] {

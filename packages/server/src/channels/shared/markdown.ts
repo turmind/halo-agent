@@ -123,7 +123,10 @@ export function formatForFeishu(input: string): string {
       inFence = !inFence
       continue
     }
-    if (inFence) {
+    // `MEDIA:` lines reach here only from the cron dispatcher (no
+    // `supportsMedia` on feishu yet) — keep the path verbatim, or `_x_` in
+    // a file name is read as italic and its underscores vanish.
+    if (inFence || /^MEDIA:/.test(raw)) {
       out.push(raw)
       continue
     }

@@ -13,12 +13,12 @@
 import { formatForFeishu } from '../shared/markdown.js'
 import { ChunkedResponder, type ResponderDeps } from '../shared/responder.js'
 
-const HARD_CHARS = 4500  // mirrored in templates/prompts/all/RUNTIME.md
+export const FEISHU_TEXT_LIMIT = 4500  // mirrored in templates/prompts/all/RUNTIME.md
 
 export class FeishuResponder extends ChunkedResponder {
   constructor(deps: ResponderDeps) {
     // Feishu's text msg type renders markup literally; strip the
     // common-mark markers so users don't see stray `**` / `[link]`.
-    super(deps, { limit: HARD_CHARS, logTag: 'Feishu', format: formatForFeishu })
+    super(deps, { limit: FEISHU_TEXT_LIMIT, logTag: 'Feishu', format: formatForFeishu })
   }
 }

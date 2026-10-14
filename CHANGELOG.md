@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - A2A: revalidating an agent card now gets a 304 when it hasn't changed. Before, it never did: once the card was gzipped its ETag became `W/"…"`, and the server compared `If-None-Match` exactly instead of weakly. The card's ETag is now always weak, so a 200 (gzipped or not) and its 304 carry the same tag.
 - Responses under 1 KiB are no longer gzipped. Small JSON replies such as `/api/health` were compressed anyway, because the 1 KiB threshold only applied to responses that already declared their length. A 304 now also carries `Vary: Accept-Encoding`, like the 200 it stands for.
+- Cron: a long report pushed to Slack, Feishu or WeCom is now split into several messages at the same length as a chat reply (35 000 / 4500 / 5000 characters), as Telegram and WeChat already were, instead of going out as one message the channel could reject. If one part fails, the run row says which (`chunk i/n: …`); the parts before it were delivered. Slack and Feishu pushes are also formatted like chat replies now, so `**bold**` no longer shows up literally; on Feishu a `MEDIA:` path keeps its underscores.
 
 ## [1.6.5] - 2026-10-13
 

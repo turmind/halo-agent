@@ -62,6 +62,8 @@ The feishu cron-dispatcher (`channels/feishu/cron-dispatcher.ts`) requires an ex
 1. **Explicit `chatId` on the target** — set when the cron was created from inside a Feishu chat (e.g. cron created from a group thread auto-pins to that thread). Sends only to that chat (top-level message, not nested in the thread — Feishu's open API v1 doesn't support thread-targeting in sendMessage).
 2. **Admin-UI cron without explicit target** — runs silently if no chatId is provided.
 
+The report goes through the same steps as a chat reply. It is split with `splitText(text, FEISHU_TEXT_LIMIT)` (4500 chars, exported from `event-adapter.ts`), each chunk runs through `formatForFeishu`, and the chunks are sent in order as `text` messages. A failed chunk stops the send and is recorded as `chunk i/n: <error>`; the chunks before it were already delivered. Same contract as the other channels (see [cron.md](cron.md#dispatch-model)).
+
 ## Modules
 
 Files: `packages/server/src/channels/feishu/`

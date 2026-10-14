@@ -161,8 +161,8 @@ Slack cron-dispatcher plugs into the unified cron/dispatcher.ts registry. At fir
 
 1. Retrieve the Slack account (must be enabled)
 2. Parse the target's `chatId` (format: `D…`, `C…`, or `C…:thread_ts`)
-3. Call `postMessage()` with the chatId (and threadTs if present)
-4. Return dispatch result (ok / error)
+3. Split the text with `splitText(text, SLACK_TEXT_LIMIT)` (35 000 chars, exported from `event-adapter.ts`, the same limit as chat replies), run each chunk through `formatForSlack`, and call `postMessage()` for each in order with the chatId (and threadTs if present). A failed chunk stops the text send.
+4. Return dispatch result: one row for the text (`ok`, or `chunk i/n: <error>`), then one row per `MEDIA:` upload. Uploads still run after a text failure.
 
 If no explicit chatId is provided, dispatch fails with a clear message. This prevents silent failures in a shared-bot scenario where the "last messager" might be unrelated to whoever set up the cron.
 

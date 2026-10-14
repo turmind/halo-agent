@@ -15,13 +15,13 @@
 import { formatForSlack } from '../shared/markdown.js'
 import { ChunkedResponder, type ResponderDeps } from '../shared/responder.js'
 
-const HARD_CHARS = 35_000
+export const SLACK_TEXT_LIMIT = 35_000
 
 export class SlackResponder extends ChunkedResponder {
   constructor(deps: ResponderDeps) {
     // Convert CommonMark → mrkdwn before send. Stream chunks, system
     // notices, and slash-command output all flow through here, so
     // bold/italic/links/headers come out right regardless of source.
-    super(deps, { limit: HARD_CHARS, logTag: 'Slack', format: formatForSlack })
+    super(deps, { limit: SLACK_TEXT_LIMIT, logTag: 'Slack', format: formatForSlack })
   }
 }

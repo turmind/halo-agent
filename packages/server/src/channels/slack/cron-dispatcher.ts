@@ -14,6 +14,9 @@
 import { getChannelDb } from '../../db/channel-db.js'
 import { getAccount as getSlackAccount, listAccounts as listSlackAccounts } from './accounts.js'
 import { postMessage, uploadFile } from './api.js'
+import { SLACK_TEXT_LIMIT } from './event-adapter.js'
+import { splitText } from '../shared/chunk.js'
+import { formatForSlack } from '../shared/markdown.js'
 import { isMediaPathAllowed } from '../shared/media.js'
 import { registerCronDispatcher, type CronMedia, type CronTargetOption, type DispatchResult } from '../../cron/dispatcher.js'
 
@@ -57,15 +60,23 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   // Marker-only runs have no text left after MEDIA extraction — skip the
   // empty post, still upload the attachments.
   if (text) {
-    try {
-      await postMessage({ botToken: acct.botToken, channel, threadTs, text })
-      out.push({ channelType: 'slack', accountId, chatId: explicitChatId, ok: true })
-    } catch (err) {
-      out.push({
-        channelType: 'slack', accountId, chatId: explicitChatId,
-        ok: false, error: err instanceof Error ? err.message : String(err),
-      })
+    // Same pipeline as a chat reply (SlackResponder): cut the raw text at
+    // SLACK_TEXT_LIMIT, then mrkdwn-format each chunk. Chunks go out
+    // sequentially; a failed chunk names its index (chunks before it are
+    // delivered) and skips the rest — attachments below still upload.
+    const chunks = splitText(text, SLACK_TEXT_LIMIT)
+    let failed: string | undefined
+    for (const [i, chunk] of chunks.entries()) {
+      try {
+        await postMessage({ botToken: acct.botToken, channel, threadTs, text: formatForSlack(chunk) })
+      } catch (err) {
+        failed = `chunk ${i + 1}/${chunks.length}: ${err instanceof Error ? err.message : String(err)}`
+        break
+      }
     }
+    out.push(failed
+      ? { channelType: 'slack', accountId, chatId: explicitChatId, ok: false, error: failed }
+      : { channelType: 'slack', accountId, chatId: explicitChatId, ok: true })
   }
   for (const filePath of media?.paths ?? []) {
     if (!isMediaPathAllowed(filePath, media!.workspacePath)) {
