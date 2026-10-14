@@ -19,6 +19,10 @@ Halo 服务器运行态的**街景式**像素可视化:每个 **workspace 是一
   hub [README.md](https://github.com/turmind/halo-hub/blob/main/extensions/halo-city/README.md#和-halo-同源)。
 - `/api/show/state` — 无活跃 UIState 的会话(idle/stopped/重启后)token
   从会话文件头读取(按会话 `updatedAt` 缓存,未变化时不随轮询重读),不显示 0;含 `messageCount` 字段
+- `/api/show/state` 带弱 `ETag` + `Cache-Control: private, no-cache`:哈希不含
+  `serverTime`,`uptime` 按分钟计入,所以服务器空闲时 7 秒一次的轮询绝大多数回
+  空 body 的 304,每分钟最多一次 200。浏览器 `fetch` 默认缓存模式自动带
+  `If-None-Match`,扩展不用改;鉴权仍在最前,不同 scope 的调用方 ETag 不同
 
 > **`messageCount` 与 admin 的 `exchangeCount` 是两个语义,不要互相对齐**:
 > 这里读的是会话文件里的 `messageCount`(活跃 UI 日志的长度),城市只把它

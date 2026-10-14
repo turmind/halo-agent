@@ -393,7 +393,7 @@ runtime so the frontend can render rooms (workspaces) + characters (sessions).
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/show/state` | Admin cookie, `full` or `observer` token → every known workspace; otherwise the account's own. Returns `{ serverTime, uptime, accessLevel, skills[], workspaces[] }` |
+| GET | `/api/show/state` | Admin cookie, `full` or `observer` token → every known workspace; otherwise the account's own. Returns `{ serverTime, uptime, accessLevel, skills[], workspaces[] }`. Sends a weak `ETag` (over `accessLevel` / `skills` / `workspaces` plus `uptime` by the minute — never `serverTime`) and `Cache-Control: private, no-cache`; a weakly-matching `If-None-Match` (list or `*`) gets an empty 304 after auth, so an idle server answers 200 at most once a minute. On a 304 the cached copy's `serverTime` / `uptime` are those of the last 200. |
 | GET | `/api/show/session?ws=&id=` | Inspector-panel detail for a single session. Trimmed message log (last 40, content/tool I/O capped) plus `totalMessages` / `contextTokens` / `outputTokens` / `maxContextTokens` / `isRunning`. Tokens other than `full`/`observer` may only read their own workspace, and within it only sessions their own account minted (`web_<accountId>_*`); anything else is 403. The admin cookie reads any workspace. |
 
 `observer` is more than an aggregate-counts role: past `/show/state`, it can also call `/show/session` to read **any workspace's** session transcript (last 40 messages, content truncated to 600 chars, tool input to 200 chars). Mint it knowing it grants cross-workspace transcript read access, not just dashboard counters.

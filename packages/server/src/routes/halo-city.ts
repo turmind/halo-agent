@@ -9,6 +9,7 @@
 import { Hono, type Context } from 'hono'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import Database from 'better-sqlite3'
 import { channelAccounts, getChannelDb } from '../db/channel-db.js'
 import { requestToken, resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
@@ -394,6 +395,24 @@ export function discoverWorkspaces(registry: SessionManagerRegistry): Map<string
   return out
 }
 
+/** /show/state validator. Weak, because one tag covers bodies that differ
+ *  byte-wise: serverTime is left out and uptime is hashed per minute (the HUD
+ *  shows minutes), so an idle server answers 200 at most once a minute. */
+function stateEtag(accessLevel: string, skills: ShowSkill[], workspaces: ShowWorkspace[], uptime: number): string {
+  const json = JSON.stringify({ accessLevel, skills, workspaces, uptimeMin: Math.floor(uptime / 60) })
+  return `W/"${crypto.createHash('sha1').update(json).digest('base64url')}"`
+}
+
+/** Weak If-None-Match comparison: `*`, or any listed tag equal once `W/` is dropped. */
+function etagMatches(header: string | undefined, etag: string): boolean {
+  if (!header) return false
+  const bare = etag.replace(/^W\//, '')
+  return header.split(',').some((t) => {
+    const tag = t.trim()
+    return tag === '*' || tag.replace(/^W\//, '') === bare
+  })
+}
+
 export function createShowRoutes(registry: SessionManagerRegistry) {
   const app = new Hono()
 
@@ -451,11 +470,19 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
     // just because work picked up there.
     workspaces.sort((x, y) => workspaceBirth(x.path) - workspaceBirth(y.path) || x.key.localeCompare(y.key))
 
+    const uptime = process.uptime()
+    const skills = scanSkills(GLOBAL_SKILLS_DIR)
+    const etag = stateEtag(a.accessLevel, skills, workspaces, uptime)
+    // private: authed content, no shared cache; no-cache: revalidate every poll.
+    c.header('ETag', etag)
+    c.header('Cache-Control', 'private, no-cache')
+    if (etagMatches(c.req.header('if-none-match'), etag)) return c.body(null, 304)
+
     return c.json({
       serverTime: Date.now(),
-      uptime: process.uptime(),
+      uptime,
       accessLevel: a.accessLevel,
-      skills: scanSkills(GLOBAL_SKILLS_DIR),
+      skills,
       workspaces,
     })
   })
