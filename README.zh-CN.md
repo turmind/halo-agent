@@ -199,6 +199,7 @@ Halo 还年轻 —— 请把它当早期项目看待：
 - **沙箱守的是写入和凭证，不是网络。** 在 `workspace` / `readonly` 会话里，bubblewrap（Linux）或 Seatbelt（macOS）把写入限制在工作区和临时目录（`readonly` 只剩临时目录），并屏蔽 `~/.halo/secrets`、`~/.ssh`、`~/.aws` 等路径；主机上其余内容仍然可读，对外连接也照常可用。威胁模型是「可信 Agent 的误操作与路径逃逸」—— 不是关住恶意技能或扩展，也拦不住被提示注入的会话把它能读到的东西发出去。
 - **Windows 宿主机上没有沙箱。** 在那里，`workspace` 会话实际等同于 `full`，`readonly` 也能读到 halo 进程可读的任何路径 —— 别在 Windows 宿主机上发放非 `full` 的渠道 token 并指望它有隔离效果（[dev/tools.md](.halo/docs/dev/tools.md)）。
 - **管理台是单租户的，走明文 HTTP，监听所有网卡。** 只有一个密码（同一 IP 连续 5 次登录失败会被锁 15 分钟）；拿到管理台 cookie 的人就控制了整台服务器 —— 所有工作区、以服务用户身份执行 shell、每个渠道的凭证。请把 9527 端口放在防火墙、VPN 或 SSH 隧道后面，或放在带 TLS 的反向代理后面（[deploy.md §10](.halo/docs/dev/deploy.md#10-optional-nginx-reverse-proxy)）；给别人用请开渠道账号、设各自的访问级别，而不是共享管理台登录。
+- **不支持 MCP。** Agent 不能把 MCP 服务器当工具用，Halo 自己也不提供 MCP 服务。要用某个 MCP 服务器，可以把它包成一个技能，由技能里的脚本去调用 —— 内置的 `aws-knowledge` 技能就是这样调用 AWS Knowledge MCP 服务器的。
 - **测试停留在单测/回归层。** 每次 push 和向 `main` 提 PR 时由 CI 跑一遍；还没有端到端或集成测试。
 - **API 和磁盘格式在版本间仍可能变化。** 还在打磨阶段，会有毛边。
 
