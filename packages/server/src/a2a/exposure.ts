@@ -135,6 +135,9 @@ export function buildCard(workspace: string, interfaceUrl: string, caps: CardCap
   }
 }
 
+/** Weak: the gzipped and plain bodies differ byte-wise but share this tag, so
+ *  RFC 9110 §8.8.1 rules out a strong one. Already `W/`, compress leaves it
+ *  as-is, so a 200 (gzipped or not) and its 304 carry the same tag. */
 export function etagOf(body: string): string {
-  return `"${crypto.createHash('sha1').update(body).digest('base64url')}"`
+  return `W/"${crypto.createHash('sha1').update(body).digest('base64url')}"`
 }

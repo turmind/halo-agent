@@ -42,7 +42,7 @@ The URL is the workspace path relative to the base. `/home/u/A/B` becomes:
 - `defaultInputModes` / `defaultOutputModes`: `text/plain` + the four image types.
 - `version`: the user's, else `HALO_VERSION`.
 
-Served with `Cache-Control: private, max-age=300` and an ETag (304 on match). If-None-Match is compared weakly (RFC 9110); a card over 1 KiB is gzipped by the global `compress`, which turns its ETag into `W/"…"`, while a smaller one carries Content-Length, stays uncompressed and keeps the strong tag. An invalid or incomplete card file → 500 to the authenticated caller and `[A2A] invalid agent-card.json …` in the log.
+Served with `Cache-Control: private, max-age=300` and an ETag (304 on match). The ETag is weak (`W/"…"`) because the gzipped and plain bodies share it; a 200 (gzipped or not) and its 304 carry the same tag, and If-None-Match is compared weakly (RFC 9110). An invalid or incomplete card file → 500 to the authenticated caller and `[A2A] invalid agent-card.json …` in the log.
 
 **Interface URL:** `general.a2a.public_url` (env `HALO_A2A_PUBLIC_URL` overrides) + `/a2a/<rel>/`. Unset → derived from the request (`Host`, plus `X-Forwarded-Proto` when `general.server.trust_proxy` is on).
 

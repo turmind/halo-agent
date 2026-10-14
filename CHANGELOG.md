@@ -12,7 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- A2A: revalidating an agent card now gets a 304 when it hasn't changed. Before, it never did: once the card was gzipped its ETag became `W/"…"`, and the server compared `If-None-Match` exactly instead of weakly. Cards under 1 KiB are no longer gzipped, so they keep a strong ETag.
+- A2A: revalidating an agent card now gets a 304 when it hasn't changed. Before, it never did: once the card was gzipped its ETag became `W/"…"`, and the server compared `If-None-Match` exactly instead of weakly. The card's ETag is now always weak, so a 200 (gzipped or not) and its 304 carry the same tag.
+- Responses under 1 KiB are no longer gzipped. Small JSON replies such as `/api/health` were compressed anyway, because the 1 KiB threshold only applied to responses that already declared their length. A 304 now also carries `Vary: Accept-Encoding`, like the 200 it stands for.
 
 ## [1.6.5] - 2026-10-13
 

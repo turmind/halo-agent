@@ -1,6 +1,5 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { compress } from 'hono/compress'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { WebSocketServer } from 'ws'
@@ -57,6 +56,7 @@ import { realEvoSpawner } from './evolution/spawn.js'
 import { bootChannels, shutdownChannels } from './channels/registry.js'
 import { defaultChannelDescriptors } from './channels/descriptors.js'
 import { createAuthRoutes, authMiddleware, getTokenFromCookieHeader, isAuthenticated } from './middleware/auth.js'
+import { compressResponses } from './middleware/compress.js'
 import { initLogger, logAlways } from './logger.js'
 import { formatListenBanner } from './listen-banner.js'
 import { initObservability, shutdownObservability } from './observability/otel.js'
@@ -315,8 +315,11 @@ app.use('/*', cors({
 // Covers /api/* JSON (multi-MB session archive segments) and the serveStatic
 // admin assets below. SSE is safe: hono's compressible content-type regex
 // explicitly excludes text/event-stream, and streamSSE sets Transfer-Encoding
-// (also skipped). Responses under 1 KiB pass through uncompressed.
-app.use('/*', compress({ threshold: 1024 }))
+// (also skipped). Responses under 1 KiB pass through uncompressed. Not hono's
+// compress as-is: its threshold only reads Content-Length, which c.json /
+// c.text never set, so every small JSON got gzipped. compressResponses
+// probes the length first and adds Vary to 304s (middleware/compress.ts).
+app.use('/*', compressResponses(1024))
 
 // Notebook kernels for the ipynb extension (local jupyter server, started on
 // demand). Admin-only like the terminal, so not in AgentCore mode.

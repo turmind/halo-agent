@@ -389,7 +389,7 @@ export function createA2ARoutes(deps: A2ARouteDeps): Hono {
     c.header('Cache-Control', 'private, max-age=300')
     c.header('ETag', etag)
     if (etagMatches(c.req.header('if-none-match'), etag)) return c.body(null, 304)
-    return c.body(body, 200, { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(body)) })
+    return c.body(body, 200, { 'Content-Type': 'application/json' })
   })
 
   app.post('/*', async (c) => {
