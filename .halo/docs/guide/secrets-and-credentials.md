@@ -120,7 +120,7 @@ An unset variable is never replaced with an empty string. The `<<NAME>>` literal
 | Foreground `halo server start` | The terminal you started it in | Restart it from a terminal that has the variable |
 | `halo server start -d` on Linux (systemd user unit) | `~/.halo/secrets/server.env`, a snapshot of your shell's environment written by `start -d` / `halo server restart`. Run inside the server (an agent's shell, the admin terminal), `restart` keeps the existing snapshot | Open a new terminal (so it has the variable) and run `halo server restart`. Or edit `server.env` and restart |
 | System unit (`/etc/systemd/system/*.service`) | Only the unit's `Environment=` / `EnvironmentFile=` lines; `~/.bashrc` is never read | Add the variable there, `sudo systemctl daemon-reload`, then restart the unit |
-| Desktop app (macOS) opened from the Dock / Finder | launchd's environment; `~/.zshrc` is never read | Enter the key in Settings, or launch the app from a terminal that has the variable |
+| Desktop app (macOS) opened from the Dock / Finder | launchd's environment; `~/.zshrc` is never read | Enter the key in Settings, or start the app binary from a terminal that has the variable (`/Applications/Halo.app/Contents/MacOS/Halo`) |
 
 If in doubt, put the key itself in Settings: it works the same under every launcher.
 
