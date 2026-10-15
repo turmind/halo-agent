@@ -4,7 +4,9 @@
  */
 
 export interface AgentSessionEvent {
-  type: 'stream' | 'thinking' | 'stream_delta' | 'thinking_delta' | 'tool_call' | 'tool_result' | 'complete' | 'error' | 'agent_start' | 'agent_done' | 'followup_start' | 'usage' | 'system' | 'context' | 'queued_message' | 'user' | 'compacted'
+  /** `call_discarded`: a failed model call is about to be retried — the text /
+   *  thinking it streamed is dropped (never in the model's history). */
+  type: 'stream' | 'thinking' | 'stream_delta' | 'thinking_delta' | 'tool_call' | 'tool_result' | 'complete' | 'error' | 'agent_start' | 'agent_done' | 'followup_start' | 'usage' | 'system' | 'context' | 'queued_message' | 'user' | 'compacted' | 'call_discarded'
   text?: string
   /** Full (un-truncated) task message for `agent_start` — used to seed the
    *  sub-session UI log's opening user message. `text` stays a 200-char

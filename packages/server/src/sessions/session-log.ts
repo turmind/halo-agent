@@ -126,24 +126,26 @@ function rewriteAndStamp(filePath: string, content: string): FileStamp {
  *  torn append (crash mid-write): dropped and reported, so the caller can force
  *  a full rewrite instead of appending after the torn bytes. A bad line in the
  *  middle (external edit) is skipped. */
-function parseLines(text: string, file: string): { records: unknown[]; torn: boolean } {
+function parseLines(text: string, file: string): { records: unknown[]; torn: boolean; skipped: boolean } {
   const records: unknown[] = []
   let torn = false
+  let skipped = false
   let start = 0
   while (start < text.length) {
     const nl = text.indexOf('\n', start)
     const end = nl === -1 ? text.length : nl
     const line = text.slice(start, end)
     start = end + 1
-    if (!line) continue
+    if (!line) { skipped = true; continue }
     if (nl === -1) { torn = true; break }
     try {
       records.push(JSON.parse(line))
     } catch {
+      skipped = true
       console.warn(`[SessionLog] skipped unparsable line in ${file}`)
     }
   }
-  return { records, torn }
+  return { records, torn, skipped }
 }
 
 // ── UI log ──────────────────────────────────────────────────────────────
@@ -425,6 +427,9 @@ interface RawCache {
    *  last write. Weak: a released session's history (base64 images) must not
    *  stay pinned by this cache. */
   seen: WeakMap<object, RawSeen>
+  /** Byte offset where the last line starts — a change confined to the last
+   *  message rewrites from here (0 when the file is empty). */
+  tailStart: number
 }
 
 const rawCaches = new Map<string, RawCache>()
@@ -444,10 +449,25 @@ function noteRaw(seen: WeakMap<object, RawSeen>, m: unknown, i: number): void {
   }
 }
 
-function rawCacheOf(stamp: FileStamp, messages: unknown[]): RawCache {
+function rawCacheOf(stamp: FileStamp, messages: unknown[], tailStart: number): RawCache {
   const seen = new WeakMap<object, RawSeen>()
   messages.forEach((m, i) => noteRaw(seen, m, i))
-  return { stamp, count: messages.length, seen }
+  return { stamp, count: messages.length, seen, tailStart }
+}
+
+/** JSONL for `messages` plus the byte offset its last line starts at,
+ *  relative to the start of the returned text. */
+function rawLines(messages: unknown[]): { out: string; lastStart: number } {
+  let out = ''
+  let bytes = 0
+  let lastStart = 0
+  for (const m of messages) {
+    const line = JSON.stringify(m) + '\n'
+    lastStart = bytes
+    bytes += Buffer.byteLength(line)
+    out += line
+  }
+  return { out, lastStart }
 }
 
 /** Read a raw log. Null when the file doesn't exist. `prime` = the result
@@ -456,20 +476,28 @@ export function readRawLog(filePath: string, opts?: { prime?: boolean }): unknow
   const file = readLog(filePath)
   if (!file) return null
   const { text, st } = file
-  const { records, torn } = parseLines(text, filePath)
+  const { records, torn, skipped } = parseLines(text, filePath)
   if (opts?.prime) {
-    if (torn || st.size !== Buffer.byteLength(text)) rawCaches.delete(filePath)
-    else rawCaches.set(filePath, rawCacheOf(stampOf(st), records))
+    // A skipped line breaks "last line = last message" (tailStart): no
+    // baseline, so the next write rewrites the file clean.
+    if (torn || skipped || st.size !== Buffer.byteLength(text)) rawCaches.delete(filePath)
+    else {
+      const lastStart = text.length === 0 ? 0 : text.lastIndexOf('\n', text.length - 2) + 1
+      rawCaches.set(filePath, rawCacheOf(stampOf(st), records, st.size - Buffer.byteLength(text.slice(lastStart))))
+    }
   }
   return records
 }
 
 /**
  * Persist the model history. Between rewrites the history only grows, so the
- * common write appends the new messages. Any change to an already written
- * message — compaction (new array), repair, image trim, a merge into the
- * trailing user turn (`content.push`), deleteExchange — is a full atomic
- * rewrite: tmp + rename over `raw.jsonl`, the old content dropped (as 1.x).
+ * common write appends the new messages. A change confined to the LAST
+ * written message — a tool result landing in the batch's results message, a
+ * merge into the trailing user turn (`content.push`) — rewrites that one line
+ * in place and appends the rest (same inode). Any change to an earlier
+ * message — compaction (new array), repair, image trim, deleteExchange — is a
+ * full atomic rewrite: tmp + rename over `raw.jsonl`, the old content dropped
+ * (as 1.x).
  */
 export function writeRawLog(filePath: string, messages: unknown[]): void {
   const cache = rawCaches.get(filePath)
@@ -482,24 +510,49 @@ export function writeRawLog(filePath: string, messages: unknown[]): void {
     if (fd !== null) fsSync.closeSync(fd)
   }
   let full = !valid || messages.length < cache.count
+  let tail = false
   for (let i = 0; !full && i < cache!.count; i++) {
     const m = messages[i]
     const seen = m && typeof m === 'object' ? cache!.seen.get(m) : undefined
     const content = contentOf(m)
-    if (!seen || seen.i !== i || seen.content !== content || seen.len !== lenOf(content)) full = true
+    if (!seen || seen.i !== i || seen.content !== content || seen.len !== lenOf(content)) {
+      if (i === cache!.count - 1) tail = true
+      else full = true
+    }
   }
   if (full) {
-    let out = ''
-    for (const m of messages) out += JSON.stringify(m) + '\n'
+    const { out, lastStart } = rawLines(messages)
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true })
-    rawCaches.set(filePath, rawCacheOf(rewriteAndStamp(filePath, out), messages))
+    rawCaches.set(filePath, rawCacheOf(rewriteAndStamp(filePath, out), messages, lastStart))
     return
   }
   const c = cache!
+  if (tail) {
+    // Overwrite from the old last line's start, then cut whatever is left of
+    // it. Write first: a crash between the two leaves the new lines intact
+    // plus a fragment of the old line (unparsable — skipped by parseLines),
+    // never a file without the tail message.
+    const from = c.count - 1
+    const { out, lastStart } = rawLines(messages.slice(from))
+    const fd = fsSync.openSync(filePath, 'r+')
+    try {
+      const bytes = Buffer.from(out)
+      fsSync.writeSync(fd, bytes, 0, bytes.length, c.tailStart)
+      fsSync.ftruncateSync(fd, c.tailStart + bytes.length)
+      c.stamp = stampOf(fsSync.fstatSync(fd))
+    } finally {
+      fsSync.closeSync(fd)
+    }
+    c.tailStart += lastStart
+    for (let i = from; i < messages.length; i++) noteRaw(c.seen, messages[i], i)
+    c.count = messages.length
+    return
+  }
   if (messages.length === c.count) return
-  let out = ''
-  for (let i = c.count; i < messages.length; i++) out += JSON.stringify(messages[i]) + '\n'
+  const { out, lastStart } = rawLines(messages.slice(c.count))
+  const before = c.stamp.size
   c.stamp = appendAndStamp(filePath, out)
+  c.tailStart = before + lastStart
   for (let i = c.count; i < messages.length; i++) noteRaw(c.seen, messages[i], i)
   c.count = messages.length
 }

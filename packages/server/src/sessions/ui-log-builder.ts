@@ -331,8 +331,12 @@ export interface ApplyResult {
  * Apply an event to the UI state. Mutates `state` in place.
  *
  * Persist rule, identical for root and sub-session logs:
- *  - tool_call, tool_result, usage, context, user, system, error → debounce;
+ *  - context, user, system → debounce;
  *  - turn end (root `complete`, sub `agent_done`) → flush;
+ *  - tool_call, tool_result, usage, error, call_discarded → flush: the points
+ *    where SessionManager writes the raw log too (tool_use, each result, the
+ *    finished call, an abandoned partial), so both files hold the same model
+ *    -visible content at every write (a debounce would leave the UI behind);
  *  - everything else (deltas, thinking, stream, agent_start, followup_start,
  *    queued_message, compacted) → no write; the next write carries it.
  * Interrupts flush through the store (flushSession / flushSubSession).
@@ -425,7 +429,7 @@ export function applyEvent(
         toolName: event.toolName, toolInput: event.toolInput,
       }
       addToolCall(getTarget(state, taskId), entry, msg)
-      result.persist = 'debounce'  // B3 fix: persist on every tool call
+      result.persist = 'flush'
       break
     }
 
@@ -443,7 +447,25 @@ export function applyEvent(
         timestamp: Date.now(), agentName, taskId,
         toolOutput: event.toolResult, durationMs: event.durationMs,
       })
-      result.persist = 'debounce'  // B3 fix: persist on every tool result
+      result.persist = 'flush'
+      break
+    }
+
+    case 'call_discarded': {
+      // A failed model call is being retried: its streamed text / thinking
+      // never reaches the model's history (the retry re-streams from scratch),
+      // so drop it from the turn too. Its blocks carry the current turnId —
+      // the failed call never got the `usage` that rotates it. Text is always
+      // the tail of the stream buffer (the call streamed last).
+      const target = getTarget(state, taskId)
+      let dropped = 0
+      target.turnContentBlocks = target.turnContentBlocks.filter((b) => {
+        if ((b.type !== 'text' && b.type !== 'thinking') || b.turnId !== target.currentTurnId) return true
+        if (b.type === 'text') dropped += b.text.length
+        return false
+      })
+      if (dropped > 0) target.streamBuffer = target.streamBuffer.slice(0, target.streamBuffer.length - dropped)
+      result.persist = 'flush'
       break
     }
 
@@ -472,7 +494,7 @@ export function applyEvent(
           sub.currentTurnId = randomUUID()
         }
       }
-      result.persist = 'debounce'
+      result.persist = 'flush'
       break
     }
 
@@ -539,7 +561,7 @@ export function applyEvent(
       // Lands in the root log even for a sub-session (existing routing), so
       // it's the root's file that changes.
       result.taskId = undefined
-      result.persist = 'debounce'
+      result.persist = 'flush'
       break
 
     case 'compacted':

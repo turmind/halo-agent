@@ -106,6 +106,9 @@ export type WsServerMessage =
   | { type: 'chat:followup'; agentName: string; replay?: boolean; sessionId?: string | null }
   | { type: 'chat:thinking'; text: string; agentName: string; turnId?: string; replay?: boolean; sessionId?: string | null }
   | { type: 'chat:stream'; text: string; agentName: string; turnId?: string; replay?: boolean; sessionId?: string | null }
+  // A failed model call is being retried: drop the text / thinking blocks it
+  // streamed under `turnId` from the live bubble (the server dropped them too).
+  | { type: 'chat:discard'; turnId: string; sessionId?: string | null }
   | { type: 'chat:system'; text: string; taskId?: string; agentName?: string; sessionId?: string | null }
   | { type: 'chat:user'; text: string; sessionId?: string | null }
   | { type: 'chat:usage'; contextTokens: number; outputTokens: number; turnId?: string; modelId?: string; usage?: WsUsageData; sessionId?: string | null }
@@ -116,8 +119,9 @@ export type WsServerMessage =
   | { type: 'agent:tool_call'; tool?: string; toolUseId?: string; input?: unknown; agentName: string; taskId?: string; turnId?: string; replay?: boolean; sessionId?: string | null }
   | { type: 'agent:tool_result'; result?: string; toolUseId?: string; agentName: string; taskId?: string; durationMs?: number; replay?: boolean; sessionId?: string | null }
   // errors — `code` marks an expected refusal phrased for the user (e.g.
-  // `archived` from exchange:delete); `terminalId` scopes terminal failures
-  | { type: 'error'; error?: string; code?: 'archived'; agentName?: string; taskId?: string; terminalId?: string; sessionId?: string | null }
+  // `archived` / `raw_unmatched` from exchange:delete); `terminalId` scopes
+  // terminal failures
+  | { type: 'error'; error?: string; code?: 'archived' | 'raw_unmatched'; agentName?: string; taskId?: string; terminalId?: string; sessionId?: string | null }
   // session state
   | { type: 'state:snapshot'; snapshot: WsStateSnapshot }
   | { type: 'session:deleted'; sessionId: string }

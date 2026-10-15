@@ -472,8 +472,9 @@ describe('sub-session logs — archived into the sub\'s own file', () => {
   it('a debounced sub persist armed before the archive writes the kept tail, not the old log', () => {
     seedTree(fatExchanges(4))
     startSub()
-    // Arms the sub's 500ms debounce timer — it fires AFTER the archive.
-    sm.emitEvent(SUB, { type: 'tool_result', agentName: 'Dev', toolResult: 'ok', durationMs: 1, taskId: SUB })
+    // Arms the sub's 500ms debounce timer — it fires AFTER the archive. (A
+    // `system` row: tool events flush, they don't debounce.)
+    sm.emitEvent(SUB, { type: 'system', text: 'note', taskId: SUB })
     expect(uiStore().archiveOldMessages(SUB)).toBe(6)
     const persist = vi.spyOn(sm, 'persistUILog')
 
@@ -650,12 +651,22 @@ describe('deleteExchange archive anchor', () => {
     expect(loadRawMessages('r1', 'default', ws)).toEqual(rawBefore)
   })
 
+  /** The raw log matching `exchanges(n)` — deleteExchange refuses a turn it
+   *  can't locate in raw. */
+  function seedMatchingRaw(seg: string, n: number): void {
+    replaceRawLog(rawLogPath(sessionDir(), seg), Array.from({ length: n }, (_, i) => [
+      { role: 'user', content: [{ type: 'text', text: `u${i}` }] },
+      { role: 'assistant', content: [{ type: 'text', text: `a${i}` }] },
+    ]).flat())
+  }
+
   /** Two committed segments ahead of a 3-exchange active log. */
   function seedArchived(): void {
     seedRow('r1')
     writeArchiveSegment(sessionDir(), 'r1', 1, exchanges(1, 50))
     writeArchiveSegment(sessionDir(), 'r1', 2, exchanges(1, 60))
     seedFile('r1', exchanges(3))
+    seedMatchingRaw('r1', 3)
   }
 
   it('deletes when the client anchor matches the on-disk count', async () => {
@@ -670,6 +681,7 @@ describe('deleteExchange archive anchor', () => {
   it('still deletes normally when nothing has been archived', async () => {
     seedRow('r1')
     seedFile('r1', exchanges(2))
+    seedMatchingRaw('r1', 2)
     expect(await sm.deleteExchange('r1', 0, 0)).toBe('deleted')
   })
 

@@ -73,6 +73,11 @@ export function sendWsNotification(
       if (event.streamed || taskId) break
       sendJson(ctx.ws, { type: 'chat:stream', text: event.text ?? '', agentName, turnId, sessionId })
       break
+    case 'call_discarded':
+      // Root only, like the text frames it undoes.
+      if (taskId) break
+      sendJson(ctx.ws, { type: 'chat:discard', turnId, sessionId })
+      break
     case 'agent_start':
       sendJson(ctx.ws, { type: 'agent:start', agentName, task: event.text, taskId, sessionId })
       break

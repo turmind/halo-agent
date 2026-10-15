@@ -17,6 +17,7 @@ import { classifyModelError, type ModelErrorKind } from './model-error.js'
 import { compactCut, localCompactMessages } from './compact.js'
 import { microCompactMessages } from './micro-compact.js'
 import { replaceImageBlocks, trimHistoryImages } from './history-images.js'
+import { ERROR_REPLY_MARKER, SHUTDOWN_REPLY_MARKER } from './agent-loop.js'
 import { loadAgentYaml } from './agent-loader.js'
 import type { AgentSessionEvent } from './agent-events.js'
 import { broadcast } from '../ws/broadcast.js'
@@ -107,8 +108,8 @@ function estimateMessageTokens(messages: AnthropicMessage[]): number {
   return Math.ceil(chars / 3.5) + images * 1500
 }
 
-/** Concatenate a raw message's text-block content. Used to match a UI user turn
- *  against its raw (LLM-facing) counterpart when deleting an exchange. */
+/** Concatenate a raw message's text-block content (the opening turn's text for
+ *  the run's lastTurn batch). */
 function rawMessageText(msg: AnthropicMessage): string {
   if (typeof msg.content === 'string') return msg.content
   return msg.content
@@ -132,6 +133,50 @@ function isRawTurnStart(msg: AnthropicMessage): boolean {
  *  (see handler.ts handleChat). */
 function stripImageMarkers(s: string): string {
   return s.replace(/\[图片已保存: [^\]]*\]\n?/g, '').trim()
+}
+
+const KICK_RESET_NOTE = '\n\n[System] The continue_task flag you set last turn was reset by this interrupt. If the interrupted task is still unfinished after you answer, call continue_task again.'
+
+/** A user turn's text with every known rewrite between the UI row and its raw
+ *  copy undone, so deleteExchange can compare the two. Applied to both sides
+ *  (a rewrite one side lacks is a no-op on it): runAgentTurn's arrival stamp;
+ *  the channel tag (`[channel: …]` + newline(s) — IM inbound, web, relay, a2a);
+ *  the `(from: session X)` prefix of an agent message; buildInput's
+ *  `[注意：…]` image notes; drainQueue's continue_task reset note and its
+ *  `[System @ …]` sibling-status suffix (always last); the UI's
+ *  `[图片已保存: …]` markers. `@scope` expansion and skill bodies are not
+ *  undone — those turns stay unmatched and their delete is refused. */
+function normalizeTurnText(s: string): string {
+  s = stripTurnStamp(s)
+    .replace(/^\[channel: [^\]\n]*\]\n+/, '')
+    .replace(/^\(from: session [^)\n]*\)\n/, '')
+    .replace(/\n\n\[注意：[^\]]*\]/g, '')
+    .split(KICK_RESET_NOTE).join('')
+    .replace(/\n\n\[System @ \d{4}-\d{2}-\d{2}T[^\]]*\] [\s\S]*$/, '')
+  return stripImageMarkers(s)
+}
+
+/** The user text a raw turn-start message carries for deleteExchange, or null
+ *  when it holds more than one text block — UI rows merged into one raw turn
+ *  (run()'s merge into a dangling user turn, a Stop's queue fold), so no
+ *  single UI row is all of it. Tool results (a soft interrupt merges the new
+ *  input into the batch's results message) and image placeholders (trim / 4xx
+ *  degrade) are not user text. */
+function rawTurnText(msg: AnthropicMessage): string | null {
+  if (typeof msg.content === 'string') return normalizeTurnText(msg.content)
+  let text: string | null = null
+  for (const b of msg.content) {
+    if (b.type !== 'text' || b.text.startsWith('[image removed: ')) continue
+    if (text !== null) return null
+    text = b.text
+  }
+  return text === null ? null : normalizeTurnText(text)
+}
+
+/** A UI user row carrying a compaction summary (same test as
+ *  session-archive.ts isCompactSummary). */
+function isCompactSummaryRow(m: SessionMessage): boolean {
+  return m.compactSummary === true || m.content.startsWith('[Conversation Summary — ')
 }
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -180,6 +225,12 @@ interface AgentSession {
    *  consumers don't render the reply twice. Reset on `usage` (end of call)
    *  and on a failed call (the retry re-streams). */
   streamedThisCall: boolean
+  /** The text the current model call streamed so far (its `text_delta`s) —
+   *  agent-loop's copy is a local, out of reach here. Reset with
+   *  streamedThisCall. Read when the call is lost without an assistant turn:
+   *  an error that ends the turn (landed + ERROR_REPLY_MARKER) and a server
+   *  shutdown mid-stream (landForShutdown). */
+  callStreamText: string
   /** Only the wrap-up reply (event.final) from the latest turn — the text the
    *  model produced when it was done and stopped calling tools. Fed to the
    *  auto-report to the parent so the parent gets the summary, not the
@@ -413,6 +464,8 @@ export class SessionManager implements SessionManagerInternals {
    * on a long-running process that deletes many sessions.
    */
   private deletedSessionIds: Set<string> = new Set()
+  /** landForShutdown's marked copy of each session's half-streamed reply. */
+  private shutdownPartials = new WeakMap<AgentSession, { text: string; msg: AnthropicMessage }>()
   /** How long a tombstone guards against a racing background save before it's
    *  swept. Must exceed the persist debounce (500ms) with comfortable margin. */
   private static readonly TOMBSTONE_TTL_MS = 60_000
@@ -710,6 +763,7 @@ export class SessionManager implements SessionManagerInternals {
       output: '',
       lastActivityAt: null,
       streamedThisCall: false,
+      callStreamText: '',
       finalOutput: '',
       turnError: null,
       turnErrorKind: null,
@@ -1177,9 +1231,44 @@ export class SessionManager implements SessionManagerInternals {
     return this.uiStore.getUIState(rootSessionId)
   }
 
-  /** Server shutdown: land every loaded tree's unpersisted UI logs. */
-  flushAll(): void {
+  /**
+   * Server shutdown: land both halves of every live session — the UI logs
+   * (flushAll), then the raw logs, in one synchronous slice so the two files
+   * hold the same model-visible content. Doesn't end anything: no abort, no
+   * repair, no release, the run ledger untouched — the runs go on until the
+   * process exits, and the next boot nudges them (ledger) and repairs their
+   * unanswered tool_use on load. The UI's half-streamed reply is landed on
+   * the raw side as a COPY (+ SHUTDOWN_REPLY_MARKER), the live history left
+   * alone. Idempotent: with nothing new since the last call, nothing is
+   * written (writeRawLog / writeUILog skip no-op writes).
+   *
+   * A session mid-compact is skipped: its live history carries the
+   * summarize instruction (selfCompactSession runs it in place); its raw log
+   * on disk is the pre-compact state, which every result / finished call
+   * already reached.
+   */
+  landForShutdown(): void {
     this.uiStore.flushAll()
+    for (const session of this.sessions.values()) {
+      if (session.isCompacting || this.deletedSessionIds.has(session.id)) continue
+      const messages: unknown[] = session.agent.messages
+      let copy = messages
+      if (session.callStreamText) {
+        // Same object while the partial is unchanged, so a repeat call finds
+        // nothing new (writeRawLog compares by reference).
+        let landed = this.shutdownPartials.get(session)
+        if (landed?.text !== session.callStreamText) {
+          landed = { text: session.callStreamText, msg: { role: 'assistant', content: [{ type: 'text', text: session.callStreamText + SHUTDOWN_REPLY_MARKER }] } }
+          this.shutdownPartials.set(session, landed)
+        }
+        copy = [...messages, landed.msg]
+      }
+      try {
+        writeRawLog(rawLogPath(this.sessionDir(session.agentId), fileSegment(session.id)), copy)
+      } catch (err) {
+        console.error(`[SessionManager] landForShutdown failed for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
   }
 
   appendUserMessage(sessionId: string, text: string, opts?: { local?: boolean }): void {
@@ -1262,6 +1351,7 @@ export class SessionManager implements SessionManagerInternals {
       // the whole `text` event below still carries the reply for those.
       case 'text_delta': {
         session.streamedThisCall = true
+        session.callStreamText += event.text ?? ''
         this.emitEvent(session.id, { type: 'stream_delta', text: event.text, agentName, agentId, taskId })
         break
       }
@@ -1309,6 +1399,11 @@ export class SessionManager implements SessionManagerInternals {
 
       case 'tool_result': {
         session.lastActivityAt = new Date().toISOString()
+        // agent-loop lands each result in the history before yielding it;
+        // persist it here, in the same synchronous slice as the UI's flush of
+        // the result row below — a restart / crash mid-batch keeps every
+        // finished result on both sides (a tail rewrite, not a full one).
+        this.saveAgentState(session)
         // UI always receives the full result (toolResultFull). The truncated
         // toolResult is LLM-facing only — already applied in agent-loop.ts
         // before the event was yielded. Don't re-truncate here.
@@ -1319,6 +1414,11 @@ export class SessionManager implements SessionManagerInternals {
 
       case 'usage': {
         const u = event.usage!
+        // The call is done and its assistant turn is in the history: persist
+        // it with the UI's flush of the usage row (same slice). Covers the
+        // reply without tool calls — the final one — which had no save point
+        // until release.
+        this.saveAgentState(session)
         this.emitEvent(session.id, {
           type: 'usage',
           totalTokens: u.totalTokens,
@@ -1337,6 +1437,7 @@ export class SessionManager implements SessionManagerInternals {
         session.lastContextTokens = (u.totalTokens ?? 0) + (u.cacheReadInputTokens ?? 0) + (u.cacheWriteInputTokens ?? 0)
         // usage closes a model call — the next call starts unstreamed.
         session.streamedThisCall = false
+        session.callStreamText = ''
         break
       }
 
@@ -1469,6 +1570,9 @@ export class SessionManager implements SessionManagerInternals {
           this.processSessionEvent(session, event)
         }
 
+        // Every call either reached `usage` or was cut by an abort, whose
+        // partial run() already landed (INTERRUPTED_REPLY_MARKER).
+        session.callStreamText = ''
         session.abortController = null
 
         if (session.interruptRequested) {
@@ -1480,7 +1584,28 @@ export class SessionManager implements SessionManagerInternals {
         session.abortController = null
         // A call that died mid-stream never reached its `usage` event; the
         // retry below re-streams from scratch, so it must start unstreamed.
+        // What it did stream decides the UI side of each exit: a retry drops
+        // it (discardCall — the model never sees it either), giving up keeps
+        // it on both sides (landErrorPartial).
+        const streamedAny = session.streamedThisCall
+        const partial = session.callStreamText
         session.streamedThisCall = false
+        session.callStreamText = ''
+        const taskId = session.parentId ? session.id : undefined
+        // Before the branch's "retrying…" notice: that `system` event settles
+        // the in-flight blocks into an assistant row.
+        const discardCall = (): void => {
+          if (streamedAny) this.emitEvent(session.id, { type: 'call_discarded', agentName: session.agentName, taskId })
+        }
+        // Before the `error` event (whose UI write is a flush): the raw log
+        // gets the half the UI keeps, in the same slice. The last message is
+        // always a user turn here (a failed call pushes nothing), so the
+        // roles still alternate.
+        const landErrorPartial = (): void => {
+          if (!partial) return
+          session.agent.messages.push({ role: 'assistant', content: [{ type: 'text', text: partial + ERROR_REPLY_MARKER }] })
+          this.saveAgentState(session)
+        }
         // Pure classification (branch predicates + msg/errName/httpStatus
         // derivation live in model-error.ts). The abort check below is still
         // evaluated first — it depends on our signal, which is not part of err.
@@ -1505,8 +1630,11 @@ export class SessionManager implements SessionManagerInternals {
         // produce a higher-quality LLM summary if the user continues talking.
         if (kind === 'context_overflow') {
           console.debug(`[SessionManager] Session ${session.id} context overflow (attempt ${attempt + 1}), local-compacting...`)
-          this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} context overflow, compacting locally...` })
+          // Computed (pure) before the notice: whether this retries decides
+          // discardCall, which must precede it.
           const result = localCompactMessages(session.agent.messages)
+          if (result.compacted && attempt + 1 < maxRetries) discardCall()
+          this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} context overflow, compacting locally...` })
           if (result.compacted) {
             session.agent.messages = result.messages
             this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} context compacted (${result.messages.length} messages remaining, local fallback)` })
@@ -1521,7 +1649,8 @@ export class SessionManager implements SessionManagerInternals {
         // don't retry.
         if (kind === 'account') {
           console.error(`[SessionManager] Session ${session.id} account error: ${msg}`)
-          this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
+          landErrorPartial()
+          this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId })
           session.turnError = msg
           session.turnErrorKind = kind
           resultText = `Error: ${msg}`
@@ -1536,6 +1665,7 @@ export class SessionManager implements SessionManagerInternals {
             const delay = Math.min(baseDelay + jitter, 60_000)
             console.debug(`[SessionManager] Session ${session.id} rate limited, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`)
             recordRetry('throttle')
+            discardCall()
             this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} rate limited, retrying in ${Math.round(delay / 1000)}s...` })
             await sleep(delay)
             continue
@@ -1551,6 +1681,7 @@ export class SessionManager implements SessionManagerInternals {
             const delay = Math.min(baseDelay + jitter, 60_000)
             console.debug(`[SessionManager] Session ${session.id} transient server error ${errName || httpStatus}, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`)
             recordRetry('server_error')
+            discardCall()
             this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} hit a transient server error, retrying in ${Math.round(delay / 1000)}s...` })
             await sleep(delay)
             continue
@@ -1568,6 +1699,7 @@ export class SessionManager implements SessionManagerInternals {
             // debug, three back-to-back stalls left zero trace on disk.
             console.warn(`[SessionManager] Session ${session.id} transient network error, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries}): ${msg}`)
             recordRetry('network')
+            discardCall()
             this.emitEvent(session.id, { type: 'system', text: `Network hiccup, retrying in ${Math.round(delay / 1000)}s...` })
             await sleep(delay)
             continue
@@ -1583,6 +1715,7 @@ export class SessionManager implements SessionManagerInternals {
             const delay = 1000 * Math.pow(2, attempt) + Math.random() * 500
             console.debug(`[SessionManager] Session ${session.id} Mantle empty response, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`)
             recordRetry('empty_response')
+            discardCall()
             await sleep(delay)
             continue
           }
@@ -1594,6 +1727,7 @@ export class SessionManager implements SessionManagerInternals {
           session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${session.id}]`)
           if (attempt + 1 < maxRetries) {
             recordRetry('corrupted')
+            discardCall()
             this.emitEvent(session.id, { type: 'system', text: 'Repairing conversation state...' })
             continue
           }
@@ -1622,6 +1756,7 @@ export class SessionManager implements SessionManagerInternals {
             console.warn(`[SessionManager] Session ${session.id} multimodal 4xx — replaced ${replaced} image block(s) with placeholders (attempt ${attempt + 1}/${maxRetries})`)
             if (attempt + 1 < maxRetries) {
               recordRetry('multimodal_4xx')
+              discardCall()
               this.emitEvent(session.id, { type: 'system', text: `Model rejected image data — removed ${replaced} image(s) from history, retrying...` })
               continue
             }
@@ -1631,7 +1766,8 @@ export class SessionManager implements SessionManagerInternals {
         // 5. Unrecoverable
         const errDetail = [errName, httpStatus ? `HTTP ${httpStatus}` : ''].filter(Boolean).join(' ')
         console.error(`[SessionManager] Session ${session.id} error (attempt ${attempt + 1}/${maxRetries})${errDetail ? ` [${errDetail}]` : ''}: ${msg}`)
-        this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
+        landErrorPartial()
+        this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId })
         session.turnError = errName ? `${errName}: ${msg}` : msg
         session.turnErrorKind = kind
         resultText = `Error: ${errName ? `${errName}: ` : ''}${msg}`
@@ -1928,9 +2064,7 @@ export class SessionManager implements SessionManagerInternals {
       if (suffix.ui && session.parentId === null) {
         this.emitEvent(session.id, { type: 'system', text: suffix.ui, agentName: session.agentName })
       }
-      const kickNote = kickFlagReset
-        ? '\n\n[System] The continue_task flag you set last turn was reset by this interrupt. If the interrupted task is still unfinished after you answer, call continue_task again.'
-        : ''
+      const kickNote = kickFlagReset ? KICK_RESET_NOTE : ''
       const input = this.buildInput(merged + suffix.llm + kickNote, images.length > 0 ? images : undefined, session.supportsImage)
 
       lastTurn.batch = batch
@@ -3008,11 +3142,22 @@ export class SessionManager implements SessionManagerInternals {
    *    `deleted: true`. Array length is unchanged (messageCount semantics hold),
    *    so the turn stays visible, greyed out.
    *  - Raw log (`rawMessages`, LLM-facing): PHYSICAL delete of the whole turn —
-   *    located by matching the UI user text against a raw user turn, removed
-   *    from that turn's start to the next user turn start (so tool_use/tool_result
-   *    pairs never split), then `repairConversationMessages` cleans the seam.
-   *    If no raw turn matches (e.g. the turn was already compacted away) the raw
-   *    log is left untouched — the UI soft-delete still lands (silent degrade).
+   *    located by matching the UI user text against a raw user turn (both
+   *    normalized, see normalizeTurnText), removed from that turn's start to
+   *    the next user turn start (so tool_use/tool_result pairs never split),
+   *    then `repairConversationMessages` cleans the seam.
+   *
+   * The two halves move together: a turn after the last compaction must be
+   * located in raw, or the delete is refused (`'raw_unmatched'`, nothing
+   * changes) — a UI-only delete would leave the model with a turn the user
+   * thinks is gone. That covers a raw turn merged from several UI rows (queue
+   * batch, Stop fold, run()'s merge into a dangling turn): one row can't be
+   * cut out of it. A turn BEFORE the last compaction summary is UI-only by
+   * design (raw keeps only the summary) — soft-deleted, `'deleted'`. That line
+   * isn't clean: compactCut keeps the last few raw messages whole and may cut
+   * mid-turn, so the last turn or two before the summary row can still have
+   * (part of) a copy in raw, which stays. A summary row itself is refused
+   * (`'raw_unmatched'`): deleting raw's summary would drop the compacted history.
    *
    * Rejects while the session is running or compacting (raw mutation mid-turn
    * would corrupt the in-flight conversation). Memory + disk stay in sync: a
@@ -3026,7 +3171,7 @@ export class SessionManager implements SessionManagerInternals {
     sessionId: string,
     userOrdinal: number,
     archiveCount: number,
-  ): Promise<'deleted' | 'running' | 'compacting' | 'not_found' | 'no_exchange' | 'archived'> {
+  ): Promise<'deleted' | 'running' | 'compacting' | 'not_found' | 'no_exchange' | 'archived' | 'raw_unmatched'> {
     const rootId = this.findRootSessionId(sessionId)
     if (this.isSessionRunning(rootId)) return 'running'
     if (this.isSessionCompacting(rootId)) return 'compacting'
@@ -3063,14 +3208,13 @@ export class SessionManager implements SessionManagerInternals {
     }
     if (start === -1) return 'no_exchange'
 
-    const target = stripImageMarkers(messageLog[start].content)
-    // Occurrence rank of this content among identical user turns up to the
-    // target — lets duplicate prompts ("hi" sent twice) map to the right raw turn.
-    // Same taskId skip as the ordinal loop, so rank counts on the same subset.
-    let rank = 0
-    for (let i = 0; i <= start; i++) {
+    // Summary rows are refused; the last one splits the log: raw holds only the
+    // turns after it (see the doc comment for why that line isn't exact).
+    if (isCompactSummaryRow(messageLog[start])) return 'raw_unmatched'
+    let summaryAt = -1
+    for (let i = messageLog.length - 1; i >= 0; i--) {
       const m = messageLog[i]
-      if (m.role === 'user' && !m.taskId && stripImageMarkers(m.content) === target) rank++
+      if (m.role === 'user' && !m.taskId && isCompactSummaryRow(m)) { summaryAt = i; break }
     }
 
     // Soft-delete the UI span (new objects so the admin's memoized rows re-render).
@@ -3080,49 +3224,79 @@ export class SessionManager implements SessionManagerInternals {
       newLog[i] = { ...newLog[i], deleted: true }
     }
 
-    // Physical raw delete (best-effort match).
+    if (start < summaryAt) {
+      this.replaceMessageLog(rootId, newLog)
+      console.debug(`[SessionManager] deleteExchange ${rootId}: soft-deleted UI turn #${userOrdinal} (before the last compaction — UI only)`)
+      return 'deleted'
+    }
+
+    const target = normalizeTurnText(messageLog[start].content)
+    // Occurrence of this text among the live (not deleted) user rows after the
+    // summary, counted from both ends — lets duplicate prompts ("hi" sent
+    // twice) map to the right raw turn. Same taskId skip as the ordinal loop.
+    let fromStart = 0
+    let fromEnd = 0
+    for (let i = summaryAt + 1; i < messageLog.length; i++) {
+      const m = messageLog[i]
+      if (m.role !== 'user' || m.taskId || m.deleted || normalizeTurnText(m.content) !== target) continue
+      if (i <= start) fromStart++
+      if (i >= start) fromEnd++
+    }
+
     const live = this.sessions.get(rootId)
     const rawSource = live
       ? (live.agent.messages as AnthropicMessage[])
       : (this.loadAgentState(rootId, info.agentId) as AnthropicMessage[])
-    const newRaw = this.deleteRawTurn(rawSource, target, rank)
+    const newRaw = this.deleteRawTurn(rawSource, target, fromStart, fromEnd)
+    if (!newRaw) {
+      console.debug(`[SessionManager] deleteExchange ${rootId}: UI turn #${userOrdinal} not located in raw — refused`)
+      return 'raw_unmatched'
+    }
 
     // Raw and UI are separate files; each write here is a full atomic rewrite
     // (the raw array shrank, the UI rows were replaced).
-    if (newRaw) {
-      const repaired = repairConversationMessages(newRaw, `[Session:${rootId}]`)
-      if (live) {
-        live.agent.messages = repaired
-        this.saveAgentState(live)
-      } else if (!this.deletedSessionIds.has(rootId)) {
-        writeRawLog(rawLogPath(this.sessionDir(info.agentId), fileSegment(rootId)), repaired)
-      }
+    const repaired = repairConversationMessages(newRaw, `[Session:${rootId}]`)
+    if (live) {
+      live.agent.messages = repaired
+      this.saveAgentState(live)
+    } else if (!this.deletedSessionIds.has(rootId)) {
+      writeRawLog(rawLogPath(this.sessionDir(info.agentId), fileSegment(rootId)), repaired)
     }
 
     this.replaceMessageLog(rootId, newLog)
-    console.debug(`[SessionManager] deleteExchange ${rootId}: soft-deleted UI turn #${userOrdinal}, raw ${newRaw ? `${rawSource.length}→${newRaw.length}` : 'unmatched (UI-only)'}`)
+    console.debug(`[SessionManager] deleteExchange ${rootId}: soft-deleted UI turn #${userOrdinal}, raw ${rawSource.length}→${newRaw.length}`)
     return 'deleted'
   }
 
-  /** Locate the `rank`-th raw user turn whose text matches `target` and remove it
-   *  through to the next user turn start (keeps tool_use/tool_result pairs intact).
-   *  Returns the new array, or null when no matching turn exists. */
-  private deleteRawTurn(raw: AnthropicMessage[], target: string, rank: number): AnthropicMessage[] | null {
-    let seen = 0
-    let start = -1
+  /** Locate the raw user turn whose text matches `target` — the `fromStart`-th
+   *  match counted from the start AND the `fromEnd`-th from the end; the two
+   *  must agree, or the turn can't be told apart (a duplicate prompt with one
+   *  copy merged / compacted on one side) — and remove it through to the next
+   *  user turn start (keeps tool_use/tool_result pairs intact). A turn that
+   *  run() merged into the previous batch's results message (soft interrupt)
+   *  leaves those results behind — they answer the previous turn. Returns the
+   *  new array, or null when no single turn matches. */
+  private deleteRawTurn(raw: AnthropicMessage[], target: string, fromStart: number, fromEnd: number): AnthropicMessage[] | null {
+    const starts: number[] = []
     for (let i = 0; i < raw.length; i++) {
-      if (!isRawTurnStart(raw[i])) continue
-      if (stripImageMarkers(stripTurnStamp(rawMessageText(raw[i]))) === target) {
-        seen++
-        if (seen === rank) { start = i; break }
-      }
+      if (isRawTurnStart(raw[i]) && rawTurnText(raw[i]) === target) starts.push(i)
     }
-    if (start === -1) return null
+    const start = starts[fromStart - 1]
+    if (start === undefined || start !== starts[starts.length - fromEnd]) return null
     let end = raw.length
     for (let i = start + 1; i < raw.length; i++) {
       if (isRawTurnStart(raw[i])) { end = i; break }
     }
-    return [...raw.slice(0, start), ...raw.slice(end)]
+    const opening = raw[start].content
+    const results = Array.isArray(opening) ? opening.filter((b) => b.type === 'tool_result') : []
+    if (results.length === 0) return [...raw.slice(0, start), ...raw.slice(end)]
+    // Right after their assistant, merged into the next turn's opening when
+    // there is one (roles must alternate; tool_result blocks lead).
+    const next = raw[end]
+    if (next && Array.isArray(next.content)) {
+      return [...raw.slice(0, start), { role: 'user', content: [...results, ...next.content] }, ...raw.slice(end + 1)]
+    }
+    return [...raw.slice(0, start), { role: 'user', content: results }, ...raw.slice(end)]
   }
 
   // ── Phase 2: deleteSession (SQLite only) ──────────────────────────

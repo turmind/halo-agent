@@ -9,8 +9,9 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
  * every usage must find its assistant by turnId, viewing the root must not
  * evict the tree's live sub buffers, and writes follow the root's rule: a
  * new sub log starts from the sub's file and is overwritten whole, on a 500ms
- * debounce with immediate flushes at turn end / interrupt — and a sub event
- * writes the sub's file only, never the root's.
+ * debounce with immediate flushes at the raw log's write points (tool_call /
+ * tool_result / usage) and at turn end / interrupt — and a sub event writes
+ * the sub's file only, never the root's.
  */
 
 vi.mock('../src/ws/broadcast.js', () => ({ broadcast: () => {} }))
@@ -77,6 +78,13 @@ function modelCall(store: Store, tools: string[]): void {
   sub(store, { type: 'stream_delta', text: 'let me look' })
   for (const name of tools) sub(store, { type: 'tool_call', toolName: name, toolUseId: `tu-${name}`, toolInput: { path: name } })
   sub(store, { type: 'usage', inputTokens: 10, outputTokens: 5, totalTokens: 15 })
+}
+/** A sub batch waiting on the debounce: a context row (debounced) + streamed
+ *  text (rides no timer) — nothing written yet. */
+function pending(store: Store): void {
+  sub(store, { type: 'context', systemPrompt: 'sp' })
+  sub(store, { type: 'thinking_delta', text: 'hmm' })
+  sub(store, { type: 'stream_delta', text: 'let me look' })
 }
 function toolResult(store: Store, text: string): void {
   sub(store, { type: 'tool_result', toolResult: text, durationMs: 1 })
@@ -219,15 +227,35 @@ describe('sub-session file = whole-log overwrite, like the root', () => {
 })
 
 describe('sub-session write cadence (fix 3)', () => {
-  it('a burst (thinking + stream + 3 tool_calls + usage) is one write', () => {
+  // tool_call / tool_result / usage are the raw log's write points too, so the
+  // UI flushes on each: both files hold the same model-visible content.
+  it('tool_call, tool_result and usage each write immediately; deltas ride the next write', () => {
     const { host, subWrites } = makeHost()
     const store = new SessionUIStore(host)
     start(store)
-    modelCall(store, ['a', 'b', 'c'])
+    sub(store, { type: 'thinking_delta', text: 'hmm' })
+    sub(store, { type: 'stream_delta', text: 'let me look' })
     expect(subWrites()).toBe(0)
-    vi.advanceTimersByTime(500)
+    sub(store, { type: 'tool_call', toolName: 'a', toolUseId: 'tu-a', toolInput: { path: 'a' } })
     expect(subWrites()).toBe(1)
+    expect(JSON.stringify(subFile())).toContain('let me look')
+    sub(store, { type: 'usage', inputTokens: 10, outputTokens: 5, totalTokens: 15 })
+    expect(subWrites()).toBe(2)
+    toolResult(store, 'ra')
+    expect(subWrites()).toBe(3)
     vi.advanceTimersByTime(5000)
+    expect(subWrites()).toBe(3)
+  })
+
+  it('a flush lands the pending debounced batch and cancels its timer', () => {
+    const { host, subWrites } = makeHost()
+    const store = new SessionUIStore(host)
+    start(store)
+    pending(store)
+    sub(store, { type: 'tool_call', toolName: 'a', toolUseId: 'tu-a', toolInput: { path: 'a' } })
+    expect(subWrites()).toBe(1)
+    expect(subFile().some((m) => m.type === 'context')).toBe(true)
+    vi.advanceTimersByTime(1000)
     expect(subWrites()).toBe(1)
   })
 
@@ -240,7 +268,7 @@ describe('sub-session write cadence (fix 3)', () => {
       const { host, subWrites } = makeHost()
       const store = new SessionUIStore(host)
       start(store)
-      modelCall(store, ['a'])
+      pending(store)
       expect(subWrites()).toBe(0)
       trigger(store)
       expect(subWrites()).toBe(1)
@@ -259,7 +287,7 @@ describe('sub-session write cadence (fix 3)', () => {
       const { host, subWrites, rootWrites } = makeHost()
       const store = new SessionUIStore(host)
       start(store)
-      modelCall(store, ['a'])
+      pending(store)
       sub(store, event)
       expect(subWrites()).toBe(0)
       vi.advanceTimersByTime(500)
@@ -268,16 +296,16 @@ describe('sub-session write cadence (fix 3)', () => {
     })
   }
 
-  it('error lands in the root log (existing routing), so it debounces the ROOT file; the sub batch keeps its own timer', () => {
+  it('error lands in the root log (existing routing), so it flushes the ROOT file; the sub batch keeps its own timer', () => {
     const { host, subWrites, rootWrites } = makeHost()
     const store = new SessionUIStore(host)
     start(store)
-    modelCall(store, ['a'])
+    pending(store)
     sub(store, { type: 'error', error: 'boom' })
-    expect(subWrites() + rootWrites()).toBe(0)
-    vi.advanceTimersByTime(500)
     expect(rootWrites()).toBe(1)
+    expect(subWrites()).toBe(0)
     expect(disk.get(ROOT)?.some((m) => m.content === 'Error: boom')).toBe(true)
+    vi.advanceTimersByTime(500)
     expect(subWrites()).toBe(1)
   })
 
@@ -286,7 +314,7 @@ describe('sub-session write cadence (fix 3)', () => {
       const { host, subWrites } = makeHost()
       const store = new SessionUIStore(host)
       start(store)
-      modelCall(store, ['a'])
+      pending(store)
       expect(subWrites()).toBe(0)
       store[name](ROOT)
       expect(subWrites()).toBe(1)
@@ -300,11 +328,11 @@ describe('sub-session write cadence (fix 3)', () => {
     const { host, subWrites, rootWrites } = makeHost()
     const store = new SessionUIStore(host)
     start(store)
-    modelCall(store, ['a'])
+    pending(store)
     vi.advanceTimersByTime(500)
     expect(subWrites()).toBe(1)
     sub(store, { type: 'stream_delta', text: 'tail-since-last-write' })   // rides no timer
-    store.emitEvent(ROOT, { type: 'tool_call', toolName: 'query_session', toolUseId: 'tu-r', toolInput: {} } as AgentSessionEvent)
+    store.emitEvent(ROOT, { type: 'user', text: 'hi' } as AgentSessionEvent)  // root batch pending
     store.flushAll()
     expect(rootWrites()).toBe(1)
     expect(subWrites()).toBe(2)
@@ -319,7 +347,7 @@ describe('sub-session write cadence (fix 3)', () => {
     const { host, subWrites } = makeHost()
     const store = new SessionUIStore(host)
     start(store)
-    modelCall(store, ['a'])
+    pending(store)
     store.purge(ROOT)
     vi.advanceTimersByTime(1000)
     expect(subWrites()).toBe(0)
@@ -342,16 +370,18 @@ describe('sub-session write cadence (fix 3)', () => {
     agentDone(store)
   }
 
-  it('cadence of one tool round, phases spaced like real tool runs (1.5s): context, burst, each result, agent_done', () => {
+  // 2 tool_calls + usage + 2 results + closing usage + agent_done = 7 flushes;
+  // the context row's debounce fires on its own only when nothing flushed first.
+  it('cadence of one tool round, phases spaced like real tool runs (1.5s): context, then one write per raw write point', () => {
     const { host, subWrites } = makeHost()
     round(new SessionUIStore(host), 1500)
-    expect(subWrites()).toBe(5)
+    expect(subWrites()).toBe(8)
   })
 
-  it('cadence of one tool round, phases within the debounce (100ms): agent_done only', () => {
+  it('cadence of one tool round, phases within the debounce (100ms): the context rides the first flush', () => {
     const { host, subWrites } = makeHost()
     round(new SessionUIStore(host), 100)
-    expect(subWrites()).toBe(1)
+    expect(subWrites()).toBe(7)
   })
 })
 
@@ -370,7 +400,7 @@ describe('write amplification: a sub event writes the sub file only', () => {
     store.flushSession(SUB)                 // releaseSession(sub)
     vi.advanceTimersByTime(1000)
 
-    expect(subWrites()).toBe(3)
+    expect(subWrites()).toBe(5)              // tool_call, usage, result, system batch, agent_done
     expect(rootWrites()).toBe(0)
     expect(store.isUIStateDirty(ROOT)).toBe(false)  // nor does the WS detach save rewrite it
   })
@@ -395,13 +425,14 @@ describe('timer key vs eviction (review follow-ups)', () => {
     start(store)
     sub(store, { type: 'context', systemPrompt: 'sp' })
     vi.advanceTimersByTime(500)              // sub file now non-empty → the seed below has content
-    modelCall(store, ['a'])                  // sub batch pending under the SUB timer key
+    modelCall(store, ['a'])                  // tool_call + usage: written now
+    sub(store, { type: 'context', systemPrompt: 'sp2' })  // sub batch pending under the SUB timer key
     store.prepareForView(SUB, false)         // sub-id view seed — same key
     store.dropUIState(SUB)
     vi.advanceTimersByTime(500)
 
     const subSaves = writes.filter((w) => w.sessionId === SUB)
-    expect(subSaves).toHaveLength(2)          // context + the pending batch
+    expect(subSaves).toHaveLength(4)          // context + tool_call + usage + the pending batch
     expect(subSaves.every((w) => w.delegated)).toBe(true)  // never root-style from the seed
     expect(assistants(subFile())[0]?.contentBlocks?.some((b) => b.type === 'tool_call')).toBe(true)
   })

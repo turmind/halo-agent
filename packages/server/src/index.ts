@@ -669,13 +669,17 @@ async function gracefulShutdown(signal: string): Promise<void> {
     (server as import('node:http').Server).close()
   }
 
-  // Land unpersisted UI logs first (pending 500ms debounces would die with
-  // the process), then drop our workspace runtime claims so a later boot
-  // never mistakes a recycled pid for a live holder (only our own pid goes).
-  for (const { workspacePath, sm } of registry.list()) {
-    try { sm.flushAll() } catch (err) { console.error(`[Server] flushAll failed for ${workspacePath}: ${err instanceof Error ? err.message : String(err)}`) }
-    releaseWorkspaceRuntime(workspacePath)
+  // Land unpersisted UI logs and the raw logs with them (pending 500ms
+  // debounces would die with the process; runs are NOT ended — the ledger
+  // nudges them next boot), then drop our workspace runtime claims so a later
+  // boot never mistakes a recycled pid for a live holder (only our own pid goes).
+  const landAll = (): void => {
+    for (const { workspacePath, sm } of registry.list()) {
+      try { sm.landForShutdown() } catch (err) { console.error(`[Server] landForShutdown failed for ${workspacePath}: ${err instanceof Error ? err.message : String(err)}`) }
+    }
   }
+  landAll()
+  for (const { workspacePath } of registry.list()) releaseWorkspaceRuntime(workspacePath)
   // Last workspace write: the next runtime session may take over from here.
   agentcoreLease?.stop()
 
@@ -683,6 +687,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Last: flush buffered spans / metrics / log records (bounded to 3s) so the
   // shutdown line above and any in-flight turn spans reach the collector.
   await shutdownObservability()
+  // Runs kept going through the awaits above (and may still finish a turn,
+  // even run its finally) — land what they wrote since; a no-op when nothing
+  // changed.
+  landAll()
   process.exit(0)
 }
 

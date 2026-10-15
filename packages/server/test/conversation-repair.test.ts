@@ -267,3 +267,41 @@ describe('repairConversationMessages', () => {
     expect(out[0].role).toBe('assistant')
   })
 })
+
+describe('nothing to repair → nothing replaced', () => {
+  // The raw log detects a changed message by its `content` reference / length
+  // (session-log.ts): a pass that swapped in an equal copy made every turn-end
+  // repair rewrite the whole raw log instead of appending.
+  it('keeps every message and content reference when the history is valid', async () => {
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { writeRawLog, rawLogPath } = await import('../src/sessions/session-log.js')
+    const history: AnthropicMessage[] = [
+      { role: 'user', content: [text('do it')] },
+      { role: 'assistant', content: [text('on it'), toolUse('t1'), toolUse('t2')] },
+      { role: 'user', content: [toolResult('t1'), toolResult('t2')] },
+      { role: 'assistant', content: [text('done')] },
+    ]
+    const refs = history.map((m) => [m, m.content] as const)
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-repair-refs-'))
+    try {
+      const p = rawLogPath(dir, 's')
+      writeRawLog(p, history)
+      const ino = fs.statSync(p).ino
+
+      const out = repairConversationMessages(history)
+      expect(out).toHaveLength(history.length)
+      out.forEach((m, i) => {
+        expect(m).toBe(refs[i][0])
+        expect(m.content).toBe(refs[i][1])
+      })
+
+      out.push({ role: 'user', content: [text('next')] })
+      writeRawLog(p, out)
+      expect(fs.statSync(p).ino).toBe(ino)   // appended, not rewritten
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

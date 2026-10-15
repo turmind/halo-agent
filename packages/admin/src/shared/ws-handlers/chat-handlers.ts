@@ -246,6 +246,12 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
   )
 
   unsubs.push(
+    wsClient.on('chat:discard', (msg) => {
+      storeForFrame(msg.sessionId)?.getState().discardTurnText(msg.turnId)
+    }),
+  )
+
+  unsubs.push(
     wsClient.on('chat:complete', (msg) => {
       const tabStore = storeForFrame(msg.sessionId)
       if (!tabStore) return

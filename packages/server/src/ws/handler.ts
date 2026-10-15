@@ -219,6 +219,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     // `code` marks this as an expected refusal, not a failure: the admin renders
     // it as a plain notice instead of an `Error:` bubble (see chat-handlers).
     if (result === 'archived') { sendJson(ws, { type: 'error', code: 'archived', error: 'This session archived history since it was opened — reopen it to delete individual turns.', sessionId: targetSessionId }); return }
+    if (result === 'raw_unmatched') { sendJson(ws, { type: 'error', code: 'raw_unmatched', error: 'This turn can\'t be deleted on its own: it is a compaction summary, or the model\'s copy of it was merged with other messages or can\'t be located. Nothing was deleted.', sessionId: targetSessionId }); return }
     if (result === 'not_found' || result === 'no_exchange') { sendJson(ws, { type: 'error', error: 'Exchange not found', sessionId: targetSessionId }); return }
 
     // Push the refreshed log to the subscribed client (this connection) when one

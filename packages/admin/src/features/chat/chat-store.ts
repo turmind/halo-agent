@@ -359,6 +359,9 @@ export interface ChatStore {
   addMessage(msg: Partial<ChatMessage> & { role: ChatMessage['role']; content: string }): void
   appendThinking(text: string, agentName?: string, taskId?: string, turnId?: string): void
   updateLastAssistant(text: string, agentName?: string, taskId?: string, turnId?: string): void
+  /** `chat:discard`: a failed model call is retried — drop the text /
+   *  thinking it streamed under `turnId` from the main streaming bubble. */
+  discardTurnText(turnId: string): void
   addToolCallToLastAssistant(toolCall: ToolCallInfo, agentName?: string, taskId?: string, turnId?: string): void
   updateLastToolCallResult(result: string, agentName?: string, taskId?: string, toolUseId?: string): void
   completeStreaming(): void
@@ -533,6 +536,19 @@ const chatStoreState = (ix: StoreLocals, settled: () => void): StateCreator<Chat
         contentBlocks: blocks,
       }
       return !taskId ? { messages, isStreaming: true } : { messages }
+    })
+  },
+
+  discardTurnText(turnId: string) {
+    set((state) => {
+      const i = findStreamingIdx(ix, state.messages)
+      if (i === -1) return state
+      const msg = state.messages[i]
+      const blocks = (msg.contentBlocks ?? []).filter((b) => (b.type !== 'text' && b.type !== 'thinking') || b.turnId !== turnId)
+      if (blocks.length === (msg.contentBlocks ?? []).length) return state
+      const messages = [...state.messages]
+      messages[i] = { ...msg, ...fieldsFromBlocks(blocks) }
+      return { messages }
     })
   },
 

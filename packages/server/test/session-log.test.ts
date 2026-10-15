@@ -59,14 +59,50 @@ describe('raw log', () => {
     expect(lines(p)).toHaveLength(3)
   })
 
-  it('an in-place merge into the trailing user turn (content.push) rewrites the file', () => {
+  it('an in-place merge into the trailing message (content.push) rewrites only its line, same inode', () => {
     const p = rawLogPath(dir, 's')
     const last = { role: 'user', content: [{ type: 'text', text: 'q' }] as unknown[] }
     const messages: unknown[] = [raw('assistant', 'a'), last]
     writeRawLog(p, messages)
+    const before = ino(p)
+    const head = fs.readFileSync(p, 'utf-8').split('\n')[0]
     last.content.push({ type: 'text', text: 'more' })
     writeRawLog(p, messages)
-    expect(readRawLog(p)).toEqual([raw('assistant', 'a'), { role: 'user', content: [{ type: 'text', text: 'q' }, { type: 'text', text: 'more' }] }])
+    // And again, with a new message after it — tail rewrite + append.
+    last.content.push({ type: 'text', text: 'ü—多字节' })
+    messages.push(raw('assistant', 'b'))
+    writeRawLog(p, messages)
+    expect(ino(p)).toBe(before)
+    expect(fs.readFileSync(p, 'utf-8').split('\n')[0]).toBe(head)
+    expect(readRawLog(p)).toEqual([raw('assistant', 'a'), { role: 'user', content: [{ type: 'text', text: 'q' }, { type: 'text', text: 'more' }, { type: 'text', text: 'ü—多字节' }] }, raw('assistant', 'b')])
+    // The tail offset follows the append: the new last line is the one rewritten next.
+    ;(messages[2] as { content: unknown[] }).content.push({ type: 'text', text: 'c' })
+    writeRawLog(p, messages)
+    expect(ino(p)).toBe(before)
+    expect(readRawLog(p)).toEqual(messages)
+  })
+
+  it('a tail change on a primed baseline (session reloaded) rewrites the last line in place', () => {
+    const p = rawLogPath(dir, 's')
+    writeRawLog(p, [raw('user', 'q'), raw('assistant', 'å')])
+    const loaded = readRawLog(p, { prime: true })! as Array<{ content: unknown[] }>
+    const before = ino(p)
+    loaded[1].content.push({ type: 'text', text: 'more' })
+    writeRawLog(p, loaded)
+    expect(ino(p)).toBe(before)
+    expect(readRawLog(p)).toEqual(loaded)
+  })
+
+  it('a change to an earlier message rewrites the file whole', () => {
+    const p = rawLogPath(dir, 's')
+    const first = { role: 'user', content: [{ type: 'text', text: 'q' }] as unknown[] }
+    const messages: unknown[] = [first, raw('assistant', 'a')]
+    writeRawLog(p, messages)
+    const before = ino(p)
+    first.content = [{ type: 'text', text: 'q (trimmed)' }]
+    writeRawLog(p, messages)
+    expect(ino(p)).not.toBe(before)
+    expect(readRawLog(p)).toEqual(messages)
   })
 
   it('a torn last line is dropped on read, and the next write does not append after it', () => {

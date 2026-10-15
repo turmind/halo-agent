@@ -36,6 +36,16 @@ export const MODEL_TIMEOUT_ERROR = 'Model request timed out'
  *  model's history had no assistant turn at all. */
 export const INTERRUPTED_REPLY_MARKER = '\n\n[reply interrupted by the user here — the text above is what was shown before the cut]'
 
+/** Same landing for a reply a model error cut off when the turn gives up (no
+ *  retry): SessionManager pushes the streamed text + this marker, so the raw
+ *  history keeps the half the UI showed and kept. */
+export const ERROR_REPLY_MARKER = '\n\n[reply cut off here by an error — the text above is what was shown before the failure]'
+
+/** Same landing for a reply still streaming when the server shut down
+ *  (SessionManager.landForShutdown): only on disk — the live history is left
+ *  alone, the run keeps going until the process exits. */
+export const SHUTDOWN_REPLY_MARKER = '\n\n[reply cut off here by a server restart — the text above is what was shown before it]'
+
 // ── Types ────────────────────────────────────────────────────────────
 
 /** A single block in a tool result. Mirrors Anthropic's tool_result content shape. */
@@ -380,21 +390,40 @@ export abstract class AgentLoop {
       if (toolUseBlocks.length === 0) return
       const inputErrors = new Map(result.toolCalls.filter((tc) => tc.inputError).map((tc) => [tc.id, tc.inputError!]))
 
-      const toolResults: ContentBlock[] = []
+      // The batch's results message: pushed into this.messages with the FIRST
+      // result, each later result appended to it as it completes — so every
+      // finished result is in the history at its `tool_result` yield, where
+      // SessionManager persists it (the UI logs it there too). Before this the
+      // results only landed when the batch ended, so a restart / crash
+      // mid-batch kept the tool_use but lost every finished result, while the
+      // UI log had them.
+      let resultsMsg: AnthropicMessage | null = null
+      const land = (block: ContentBlock): void => {
+        if (!resultsMsg) {
+          resultsMsg = { role: 'user', content: [block] }
+          this.messages.push(resultsMsg)
+          return
+        }
+        // tool_result blocks must lead the message: a Stop mid-batch folds its
+        // queued text into this message (foldIntoAgentMessages), and the
+        // "not run" answers the finally adds land after that.
+        const content = resultsMsg.content as ContentBlock[]
+        const at = content.findIndex((b) => b.type !== 'tool_result')
+        if (at === -1) content.push(block)
+        else content.splice(at, 0, block)
+      }
       let shouldEndTurn = false
       // The call the abort landed on while it ran — its result is dropped (see
       // the post-callback check) and left for conversation-repair's marker.
       let cutId: string | null = null
-      // try/finally so the results that DID land reach this.messages even when
-      // the batch is cut short by a hard interrupt — the cancel checks below,
-      // or the consumer breaking out of its for-await, which finishes this
-      // generator at the `yield` via .return(). (A soft interrupt never cuts a
-      // batch: SessionManager aborts at the batch boundary, beforeCallModel.)
-      // Before this, both exits skipped the push, so an interrupt during a
-      // parallel batch dropped every finished result and conversation-repair
-      // marked ALL of the batch "[interrupted]" — the model then re-ran work
-      // that had already happened (a real hazard for side-effecting calls:
-      // commit, append, send).
+      // try/finally so a batch cut short by a hard interrupt — the cancel
+      // checks below, or the consumer breaking out of its for-await, which
+      // finishes this generator at the `yield` via .return() — still answers
+      // the calls it never started. (A soft interrupt never cuts a batch:
+      // SessionManager aborts at the batch boundary, beforeCallModel.) The
+      // finished results are already in the history (land), so an interrupt
+      // during a parallel batch never re-runs work that already happened (a
+      // real hazard for side-effecting calls: commit, append, send).
       try {
         for (const tu of toolUseBlocks) {
           if (options?.cancelSignal?.aborted) return
@@ -492,7 +521,7 @@ export abstract class AgentLoop {
           }
 
           const durationMs = Date.now() - startTime
-          toolResults.push({
+          land({
             type: 'tool_result',
             tool_use_id: tu.id,
             content: resultContent,   // truncated — LLM-facing only
@@ -509,23 +538,19 @@ export abstract class AgentLoop {
           }
         }
       } finally {
-        // Land whatever finished, whether the loop ran to completion or was cut
-        // short (see the comment above the try). Calls the cut batch never
-        // started are answered "not run" here — safe to re-issue, unlike the
-        // cut call, which repair pairs with its "interrupted — do not retry"
-        // marker. Empty on a completed batch.
-        const answered = new Set(toolResults.map((b) => (b as { tool_use_id: string }).tool_use_id))
+        // Calls a cut batch never started are answered "not run" here — safe
+        // to re-issue, unlike the cut call, which repair pairs with its
+        // "interrupted — do not retry" marker. None on a completed batch.
+        const landed = (resultsMsg as AnthropicMessage | null)?.content
+        const answered = new Set(Array.isArray(landed) ? landed.map((b) => (b as { tool_use_id?: string }).tool_use_id) : [])
         for (const tu of toolUseBlocks) {
           if (answered.has(tu.id) || tu.id === cutId) continue
-          toolResults.push({
+          land({
             type: 'tool_result',
             tool_use_id: tu.id,
             content: `${TOOL_ERROR_MARKER}\nError: tool "${tu.name}" was not run — the turn was interrupted before this call started. Safe to re-issue if still needed.`,
             is_error: true,
           })
-        }
-        if (toolResults.length > 0) {
-          this.messages.push({ role: 'user', content: toolResults })
         }
       }
 

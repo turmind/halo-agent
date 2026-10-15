@@ -173,22 +173,21 @@ describe('deleteExchange — cold session (disk)', () => {
     expect(data.rawMessages.length).toBe(0)  // whole turn removed
   })
 
-  it('UI-only soft delete when the raw turn cannot be matched (e.g. compacted away)', async () => {
+  it('refuses (raw_unmatched) when a turn after the last compaction is not in raw — neither side changes', async () => {
     seedRow('r5')
     seedFile('r5',
       [uiMsg('user', 'ghost turn'), uiMsg('assistant', 'a1')],
-      // raw no longer holds "ghost turn" (compacted) — only a summary.
+      // No summary row in the UI log, yet raw doesn't hold "ghost turn".
       [
-        { role: 'user', content: [{ type: 'text', text: '[Conversation Summary — 4 messages compacted]\n…' }] },
+        { role: 'user', content: [{ type: 'text', text: 'something else' }] },
         { role: 'assistant', content: [{ type: 'text', text: 'a1' }] },
       ],
     )
 
-    const result = await sm.deleteExchange('r5', 0, 0)
-    expect(result).toBe('deleted')  // silent degrade — UI still marked
+    expect(await sm.deleteExchange('r5', 0, 0)).toBe('raw_unmatched')
     const data = readFile('r5')
-    expect(data.messages[0].deleted).toBe(true)
-    expect(data.rawMessages.length).toBe(2)  // raw untouched
+    expect(data.messages.some((m) => m.deleted)).toBe(false)
+    expect(data.rawMessages.length).toBe(2)
   })
 
   it('skips sub-agent (taskId) user messages when counting ordinals — aligns with the admin isMainConversationMessage filter', async () => {

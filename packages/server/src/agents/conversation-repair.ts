@@ -174,13 +174,15 @@ export function repairConversationMessages(raw: AnthropicMessage[], label = '[Re
     }
 
     const content = msg.content as unknown[]
-    const before = content.length
-    ;(msg as unknown as { content: unknown[] }).content = content.filter((b) => {
+    const kept = content.filter((b) => {
       const id = getToolResultId(b)
       return !id || prevToolUseIds.has(id)
     })
-    const stripped = before - (msg.content as unknown[]).length
+    // Reassign only on a real change, as in Phase 1: an unchanged message must
+    // keep its `content` reference or the raw log rewrites whole every turn.
+    const stripped = content.length - kept.length
     if (stripped > 0) {
+      ;(msg as unknown as { content: unknown[] }).content = kept
       console.log(`${label} Stripped ${stripped} orphan toolResult block(s) from user message ${i} (no matching assistant tool_use)`)
     }
   }
