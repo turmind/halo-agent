@@ -34,7 +34,7 @@ Commands:
   server               Start the HTTP/WS server + admin web UI
   agentcore            Run the server as an AgentCore A2A runtime container
   agents               List available agents and exit
-  sessions             List recent sessions and exit
+  sessions             List recent sessions (or \`migrate v1 v2\` the 1.x files)
   models               Install / list hub model provider configs
   acp                  Bridge a halo server to an ACP client (stdio)
   --help, -h           Show this help
@@ -220,8 +220,15 @@ Options:
 `
 
 const HELP_SESSIONS = `Usage: halo sessions [options]
+       halo sessions migrate v1 v2 [options]
 
 List recent sessions persisted in the workspace.
+
+migrate v1 v2 converts every 1.x session file of the workspace (and the
+global internal sessions) to the 2.0 format, then deletes the 1.x files.
+2.0 also converts a session on first open; the command does them all at once
+and finishes conversions interrupted between commit and cleanup. Stop the
+server first. Exits non-zero if any session failed (its 1.x files are kept).
 
 Options:
   -w, --workspace <path>     Workspace path (default: cwd)
@@ -926,6 +933,18 @@ async function cmdAgents(flags: HarnessFlags): Promise<void> {
 }
 
 async function cmdSessions(flags: HarnessFlags): Promise<void> {
+  if (flags.positionals.length > 0) {
+    if (flags.positionals.join(' ') !== 'migrate v1 v2') {
+      const what = flags.positionals[0] === 'migrate'
+        ? 'halo sessions migrate: only `v1 v2` is supported'
+        : `Unknown arguments: ${flags.positionals.join(' ')}`
+      process.stderr.write(`${what}\n\n${HELP_SESSIONS}`)
+      process.exitCode = 1
+      return
+    }
+    await cmdSessionsMigrate(path.resolve(flags.workspace ?? process.cwd()))
+    return
+  }
   const { initRuntime, listSessions } = await import('./harness.js')
   await initRuntime()
   const workspace = path.resolve(flags.workspace ?? process.cwd())
@@ -939,6 +958,21 @@ async function cmdSessions(flags: HarnessFlags): Promise<void> {
     const desc = (s.description || '').slice(0, 40)
     process.stdout.write(`${s.id}  ${ts}  ${desc}\n`)
   }
+}
+
+/** `halo sessions migrate v1 v2` — logic in
+ *  @turmind/halo-server/sessions/legacy-migrate. */
+async function cmdSessionsMigrate(workspace: string): Promise<void> {
+  if (!fs.existsSync(path.join(workspace, '.halo'))) {
+    process.stderr.write(`Not a Halo workspace (no .halo/): ${workspace}\n`)
+    process.exitCode = 1
+    return
+  }
+  const { migrateWorkspaceSessions } = await import('@turmind/halo-server/sessions/legacy-migrate')
+  const summary = migrateWorkspaceSessions(workspace)
+  for (const f of summary.failed) process.stderr.write(`failed  ${f.id}: ${f.reason}\n`)
+  process.stdout.write(`migrated ${summary.migrated}, cleaned ${summary.cleaned}, skipped ${summary.skipped}, failed ${summary.failed.length}\n`)
+  if (summary.failed.length > 0) process.exitCode = 1
 }
 
 /** `halo models install <dir> [--yes]` / `halo models list` — logic in
