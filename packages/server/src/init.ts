@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 105 // docs: guide/secrets-and-credentials.md — unset <<ENV>> model keys fail before the call + Settings warning; where the server reads env vars (foreground / server.env / system unit / desktop).
+export const TEMPLATE_VERSION = 106 // agents/__score__: the dry-run session log is `cli_*.ui.jsonl` (session store 2.0).
+// 105: docs: guide/secrets-and-credentials.md — unset <<ENV>> model keys fail before the call + Settings warning; where the server reads env vars (foreground / server.env / system unit / desktop).
 // 104: skills/halo: point agents at an installed extension's own README.md / DESIGN.md (~/.halo/global/extensions/<id>/).
 // 103: models: mimo-token-plan-china revision 2026101401 — mimo-v2.5-pro / mimo-v2.5 dropped (officially retired 2026-10-21).
 // 102: skills/cron: delete leaves run rows for the server, which deletes stateless run sessions with them.

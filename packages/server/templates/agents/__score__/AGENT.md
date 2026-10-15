@@ -87,7 +87,7 @@ body. Run these three checks before you rate; each one feeds a rule in
    when body and sandbox disagree, the sandbox wins and `notes` says so.
 2. **The dry-run used it.** The wrapper's dry-runs are the only sessions
    under the sandbox's `.halo/sessions/<testScenario.agentId>/`; the
-   newest `cli_*.json` there produced dry-run-output.txt. `grep` it for
+   newest `cli_*.ui.jsonl` there produced dry-run-output.txt. `grep` it for
    `→` — each tool call is logged as `"<agent> → <tool>: <arguments>"`
    (e.g. `activate_skill: {"skill_id":"cron"}`). A skill target is
    used when the session calls `activate_skill` with that skill id or

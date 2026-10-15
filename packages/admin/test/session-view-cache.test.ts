@@ -9,7 +9,7 @@ import type { ChatTab } from '../src/features/chat/chat-tabs'
 import type { ChatMessage } from '../src/shared/types'
 
 const msgs = (...ids: string[]): ChatMessage[] => ids.map((id) => ({ id, role: 'user', content: id, timestamp: 1 }))
-const file = (base: string) => `.halo/sessions/default/${base}.json`
+const file = (base: string) => `.halo/sessions/default/${base}.ui.jsonl`
 
 beforeEach(() => {
   clearSessionViewCache()
@@ -69,7 +69,7 @@ describe('session view cache — stale rules', () => {
     expect(getCachedView('shown')?.stale).toBe(true)
   })
 
-  it('atomic rename-over reports add — same as change', () => {
+  it('atomic rename-over (compaction / archiving) reports add — same as change', () => {
     setSessionViewVisible(true)
     expect(noteSessionFileChanged(file('shown'), 'add')).toBe('shown')
   })
@@ -91,6 +91,10 @@ describe('session view cache — stale rules', () => {
     expect(noteSessionFileChanged(file('shown'), 'unlink')).toBeNull()
     expect(noteSessionFileChanged('src/shown.json', 'change')).toBeNull()
     expect(noteSessionFileChanged('.halo/sessions/default/shown.jsonl', 'change')).toBeNull()
+    // The raw log, a 1.x file and archive segments are not the UI view's source.
+    expect(noteSessionFileChanged('.halo/sessions/default/shown.raw.jsonl', 'change')).toBeNull()
+    expect(noteSessionFileChanged('.halo/sessions/default/shown.json', 'add')).toBeNull()
+    expect(noteSessionFileChanged('.halo/sessions/default/shown.ui.arch.1.ab12.jsonl.gz', 'add')).toBeNull()
     expect(getCachedView('shown')?.stale).toBe(false)
   })
 

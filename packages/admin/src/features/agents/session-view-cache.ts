@@ -115,11 +115,12 @@ function fileBase(sessionId: string): string {
  *  Returns the session to refetch now — the one on screen, while the tab is
  *  — else null (hidden: showing the tab again refetches the stale copy). */
 export function noteSessionFileChanged(path: string, action: string): string | null {
-  // Session files are written atomically (tmp + rename-over-existing), which
-  // the native watcher reports as `create` → action 'add', not 'change'.
+  // The UI log is appended to ('change') and, on compaction or archiving,
+  // rewritten atomically (tmp + rename-over-existing), which the native
+  // watcher reports as `create` → action 'add'.
   if (action !== 'change' && action !== 'add') return null
-  if (!path.startsWith('.halo/sessions/') || !path.endsWith('.json')) return null
-  const base = path.slice(path.lastIndexOf('/') + 1, -'.json'.length)
+  if (!path.startsWith('.halo/sessions/') || !path.endsWith('.ui.jsonl')) return null
+  const base = path.slice(path.lastIndexOf('/') + 1, -'.ui.jsonl'.length)
   for (const [sid, entry] of entries) {
     if (fileBase(sid) === base) entry.stale = true
   }
