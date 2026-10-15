@@ -226,8 +226,9 @@ interface AgentSession {
    *  and on a failed call (the retry re-streams). */
   streamedThisCall: boolean
   /** The text the current model call streamed so far (its `text_delta`s) —
-   *  agent-loop's copy is a local, out of reach here. Reset with
-   *  streamedThisCall. Read when the call is lost without an assistant turn:
+   *  agent-loop's copy is a local, out of reach here. Reset the moment the
+   *  call's assistant turn lands in the history (run()'s onAssistantLanded),
+   *  and with streamedThisCall. Read when the call is lost without an assistant turn:
    *  an error that ends the turn (landed + ERROR_REPLY_MARKER) and a server
    *  shutdown mid-stream (landForShutdown). */
   callStreamText: string
@@ -1243,9 +1244,14 @@ export class SessionManager implements SessionManagerInternals {
   }
 
   /**
-   * Server shutdown: land both halves of every live session — the UI logs
+   * Server shutdown: land both halves of every running session — the UI logs
    * (flushAll), then the raw logs, in one synchronous slice so the two files
-   * hold the same model-visible content. Doesn't end anything: no abort, no
+   * hold the same model-visible content. Running only (`promise !== null`,
+   * subs too): an idle session's history is already on disk (every path that
+   * changes it saves on the spot), and its in-memory copy may be stale — a
+   * cron `halo cli` / TUI run may have written the same session since, and
+   * a write here would replace that run's turns with the old copy (stamp
+   * mismatch → full rewrite). Doesn't end anything: no abort, no
    * repair, no release, the run ledger untouched — the runs go on until the
    * process exits, and the next boot nudges them (ledger) and repairs their
    * unanswered tool_use on load. The UI's half-streamed reply is landed on
@@ -1261,7 +1267,7 @@ export class SessionManager implements SessionManagerInternals {
   landForShutdown(): void {
     this.uiStore.flushAll()
     for (const session of this.sessions.values()) {
-      if (session.isCompacting || this.deletedSessionIds.has(session.id)) continue
+      if (session.promise === null || session.isCompacting || this.deletedSessionIds.has(session.id)) continue
       const messages: unknown[] = session.agent.messages
       let copy = messages
       if (session.callStreamText) {
@@ -1552,6 +1558,9 @@ export class SessionManager implements SessionManagerInternals {
         // flight at the moment of death is lost, and that is acceptable.
         const iter = session.agent.run(input, {
           cancelSignal: signal,
+          // The streamed text is in the history now — no longer a partial
+          // for landForShutdown / landErrorPartial to land a copy of.
+          onAssistantLanded: () => { session.callStreamText = '' },
           beforeCallModel: async () => {
             this.trimImages(session)
             await this.maybeAutoCompact(session)
@@ -2810,6 +2819,9 @@ export class SessionManager implements SessionManagerInternals {
     if (!parked) return
     session.foldAfterCompact = null
     this.foldIntoAgentMessages(session, parked)
+    // After a manual /compact the session sits idle — no turn exit will save
+    // the fold, and landForShutdown skips idle sessions.
+    this.saveAgentState(session)
   }
 
   /** Check if a session is compacting */
@@ -3580,6 +3592,10 @@ export class SessionManager implements SessionManagerInternals {
     // (re-built) array here would break. The turn repairs on exit anyway.
     if (!session.isCompacting) {
       session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${sessionId}]`)
+      // A fold into an idle session (a queue left by enqueueUserMessage's
+      // await racing the turn end) has no turn exit to save it, and
+      // landForShutdown skips idle sessions — land it now.
+      if (queued.length > 0 && session.promise === null) this.saveAgentState(session)
     }
   }
 }

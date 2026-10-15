@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import {
-  AgentLoop, ERROR_REPLY_MARKER, SHUTDOWN_REPLY_MARKER,
+  AgentLoop, ERROR_REPLY_MARKER, INTERRUPTED_REPLY_MARKER, SHUTDOWN_REPLY_MARKER,
   type ModelCallResult, type ModelDelta, type ToolDef,
 } from '../src/agents/agent-loop.js'
 import { agentSessions } from '../src/db/schema.js'
@@ -347,6 +347,113 @@ describe('3. landForShutdown lands raw beside the UI without ending the run', ()
 
     releaseSummary!(endTurn('the summary'))
     await run
+  })
+
+  it('an idle session is not written: another process\'s turns on disk survive; a running one still lands its partial', async () => {
+    // Idle but in memory (loaded by /context, /compact, a query target) with
+    // a copy that went stale: a cron `halo cli` run appended a turn since.
+    seedRow(sm, 'idle')
+    const idle = fakeSession(sm, 'idle', new StepLoop([endTurn('one')]))
+    await sm.runSession('idle', 'first')
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('idle', idle)
+    fs.appendFileSync(rawLogPath(dir(), 'idle'), [
+      { role: 'user', content: [{ type: 'text', text: 'from cron' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'cron reply' }] },
+    ].map((m) => JSON.stringify(m) + '\n').join(''))
+    const before = stat(rawLogPath(dir(), 'idle'))
+
+    seedRow(sm, 'live')
+    const loop = new StreamingLoop()
+    const live = fakeSession(sm, 'live', loop)
+    const run = sm.runSession('live', 'tell me a story')
+    await vi.waitFor(() => expect(loop.push).not.toBeNull())
+    loop.push!('Once upon')
+    await vi.waitFor(() => expect(live.callStreamText).toBe('Once upon'))
+
+    sm.landForShutdown()
+
+    expect(stat(rawLogPath(dir(), 'idle'))).toEqual(before)
+    expect(raw('idle').map((m) => stripTurnStamp(rawText(m)))).toEqual(['first', 'one', 'from cron', 'cron reply'])
+    expect(rawText(raw('live').at(-1)!)).toBe('Once upon' + SHUTDOWN_REPLY_MARKER)
+
+    sm.interruptSession('live')
+    await run
+  })
+
+  it('a fold into an idle session (Stop) lands on disk right away', async () => {
+    seedRow(sm, 'r1')
+    const s = fakeSession(sm, 'r1', new StepLoop([endTurn('one')]))
+    await sm.runSession('r1', 'first')
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('r1', s)
+    // Queued as the turn ended (enqueueUserMessage's await raced it).
+    s.messageQueue.push({ text: 'late message' })
+
+    sm.stopUserSession('r1')
+
+    expect(rawText(raw('r1').at(-1)!)).toBe('late message')
+  })
+})
+
+describe('3b. a reply already in the history has no partial left to land', () => {
+  /** Streams `text`, then completes with it as a normal reply. */
+  class StreamThenReply extends AgentLoop {
+    protected async callModel(_signal: AbortSignal | undefined, onDelta?: (d: ModelDelta) => void): Promise<ModelCallResult> {
+      onDelta?.({ type: 'text_delta', text: 'hello' })
+      await new Promise<void>((r) => setTimeout(r, 0))
+      return endTurn('hello')
+    }
+  }
+  const assistants = (r: RawMsg[]) => r.filter((m) => m.role === 'assistant').map(rawText)
+
+  it('shutdown between the assistant push and its usage: no SHUTDOWN copy beside the real reply', async () => {
+    seedRow(sm, 'r1')
+    fakeSession(sm, 'r1', new StreamThenReply([]))
+    let landed: RawMsg[] | null = null
+    // The `text` event is yielded after the push, before `usage`.
+    sm.registerEventListener('r1', (e) => {
+      if (e.type === 'stream' && landed === null) { sm.landForShutdown(); landed = raw('r1') }
+    })
+
+    await sm.runSession('r1', 'hi')
+
+    expect(assistants(landed!)).toEqual(['hello'])
+  })
+
+  it('shutdown between the interrupted partial\'s push and the turn\'s reset: no SHUTDOWN copy beside it', async () => {
+    seedRow(sm, 'r1')
+    const loop = new StreamingLoop()
+    const session = fakeSession(sm, 'r1', loop)
+    const run = sm.runSession('r1', 'tell me a story')
+    await vi.waitFor(() => expect(loop.push).not.toBeNull())
+    loop.push!('Once upon')
+    await vi.waitFor(() => expect(session.callStreamText).toBe('Once upon'))
+    // The shutdown lands in the microtask gap right after run()'s finally
+    // pushes the partial, before runAgentTurn's catch resets anything.
+    let landed: RawMsg[] | null = null
+    const push = loop.messages.push.bind(loop.messages)
+    loop.messages.push = (...items) => {
+      if (items.some((m) => rawText(m as RawMsg).endsWith(INTERRUPTED_REPLY_MARKER))) {
+        queueMicrotask(() => { sm.landForShutdown(); landed = raw('r1') })
+      }
+      return push(...items)
+    }
+
+    sm.interruptSession('r1')
+    await run
+
+    expect(assistants(landed!)).toEqual(['Once upon' + INTERRUPTED_REPLY_MARKER])
+  })
+
+  it('an error between the assistant push and its usage: no ERROR copy beside the real reply', async () => {
+    seedRow(sm, 'r1')
+    fakeSession(sm, 'r1', new StreamThenReply([]))
+    sm.registerEventListener('r1', (e) => {
+      if (e.type === 'stream') throw new Error('something nobody classifies')
+    })
+
+    await sm.runSession('r1', 'hi')
+
+    expect(assistants(raw('r1'))).toEqual(['hello'])
   })
 })
 

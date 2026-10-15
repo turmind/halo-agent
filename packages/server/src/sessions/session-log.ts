@@ -133,7 +133,9 @@ function statOrNull(p: string): fsSync.Stats | null {
  * disk). Null, with nothing written, when the opened file isn't that baseline
  * any more: another process wrote it between the caller's stat and this open,
  * and the caller rewrites it whole. A short write throws, with the file's
- * cache dropped so the next write rewrites it clean.
+ * cache dropped so the next write rewrites it clean. The `at` write is in
+ * place (no tmp + rename): durable against a process kill, not against a
+ * power loss / kernel crash mid-write (see writeRawLog's tail path).
  */
 function writeOver(caches: Map<string, unknown>, filePath: string, stamp: FileStamp, content: string, at?: number): FileStamp | null {
   let fd: number
@@ -583,8 +585,12 @@ export function writeRawLog(filePath: string, messages: unknown[]): void {
   if (tail) {
     // Overwrite from the old last line's start, then cut whatever is left of
     // it. Write first: a crash between the two leaves the new lines intact
-    // plus a fragment of the old line (unparsable — skipped by parseLines),
-    // never a file without the tail message.
+    // plus a fragment of the old line (unparsable — skipped by parseLines).
+    // That is the whole guarantee. The write itself is in place, not atomic:
+    // a process kill can't tear it (the bytes are in the kernel once
+    // writeSync returns), but a power loss / kernel crash / NFS client crash
+    // mid-write can leave the line half old, half new — unparsable, and the
+    // tail message is lost with every tool_result batched into it.
     const from = c.count - 1
     const { out, lastStart } = rawLines(messages.slice(from))
     const stamp = writeOver(rawCaches, filePath, c.stamp, out, c.tailStart)

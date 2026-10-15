@@ -65,6 +65,8 @@ export interface ModelRuntime {
       /** Pre-model-call hook used by SessionManager to interleave context
        *  management (mid-turn auto-compact) inside the agent loop. */
       beforeCallModel?: () => Promise<void>
+      /** Sync hook right after a call's assistant turn lands in `messages`. */
+      onAssistantLanded?: () => void
     },
   ): AsyncGenerator<AgentEvent>
 }

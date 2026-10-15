@@ -415,6 +415,9 @@ describe('6. stopSession / interruptSession land after a compact in flight', () 
     const texts = agent.messages.map(textOf)
     expect(texts[texts.length - 1]).toContain('sent during compact')
     expect(texts.some((t) => t.includes('Summarize the conversation so far'))).toBe(false)
+    // The session is idle now: the parked fold is on disk, not only in memory.
+    const disk = (loadRawMessages('e3', 'default', ws) as Msg[]).map(textOf)
+    expect(disk[disk.length - 1]).toContain('sent during compact')
   }, 3000)
 })
 

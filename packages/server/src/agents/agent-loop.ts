@@ -210,6 +210,14 @@ export abstract class AgentLoop {
        * fresh on the next callModel.
        */
       beforeCallModel?: () => Promise<void>
+      /**
+       * Called synchronously right after a model call's assistant turn lands
+       * in `messages` (the full reply, or an interrupted call's partial).
+       * SessionManager drops its copy of the call's streamed text here, so a
+       * shutdown / error landing in the gap before the next event never adds
+       * a second copy of a reply the history already holds.
+       */
+      onAssistantLanded?: () => void
     },
   ): AsyncGenerator<AgentEvent> {
     const userContent: ContentBlock[] = typeof input === 'string'
@@ -315,6 +323,7 @@ export abstract class AgentLoop {
         // would duplicate the text.
         if (result === undefined && options?.cancelSignal?.aborted && streamedText.length > 0) {
           this.messages.push({ role: 'assistant', content: [{ type: 'text', text: streamedText + INTERRUPTED_REPLY_MARKER }] })
+          options.onAssistantLanded?.()
         }
       }
 
@@ -332,6 +341,7 @@ export abstract class AgentLoop {
 
       if (result.assistantBlocks.length > 0) {
         this.messages.push({ role: 'assistant', content: result.assistantBlocks })
+        options?.onAssistantLanded?.()
       }
 
       if (result.thinking) {
