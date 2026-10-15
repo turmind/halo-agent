@@ -508,7 +508,7 @@ export function createWebChannel(deps: {
   return { handleMessage, handleStop, getHistory, subscribe, createSession, listSessions }
 }
 
-function sseData(obj: Record<string, unknown>): string {
+export function sseData(obj: Record<string, unknown>): string {
   return `data: ${JSON.stringify(obj)}\n\n`
 }
 

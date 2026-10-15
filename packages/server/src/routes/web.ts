@@ -4,7 +4,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { imageMimeFromExt } from '@turmind/halo-core'
 import type { ChannelDb } from '../db/channel-db.js'
-import { canAddressSession, type WebChannel } from '../channels/web/handler.js'
+import { canAddressSession, sseData, type WebChannel } from '../channels/web/handler.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/web/accounts.js'
@@ -21,13 +21,21 @@ import { isSafeIdSegment } from './workspace-path.js'
 const SSE_KEEPALIVE_MS = 15_000
 
 /** Pipe `chunks` into an SSE response with a keepalive comment every
- *  SSE_KEEPALIVE_MS; the timer dies with the stream. */
+ *  SSE_KEEPALIVE_MS; the timer dies with the stream. A throw out of `chunks`
+ *  (e.g. sendUserMessage on a session whose 1.x conversion failed) ends the
+ *  stream with an `error` event — the channel's own shape — instead of a bare
+ *  close the client can't tell from a finished reply. */
 function streamWithKeepalive(c: Context, chunks: () => AsyncGenerator<string, void, unknown>): Response {
   return streamSSE(c, async (stream) => {
     const timer = setInterval(() => { void stream.write(': keepalive\n\n') }, SSE_KEEPALIVE_MS)
     try {
       for await (const chunk of chunks()) {
         await stream.write(chunk)
+      }
+    } catch (err) {
+      console.error('[WebChannel] SSE stream failed:', err)
+      if (!c.req.raw.signal.aborted) {
+        await stream.write(sseData({ type: 'error', error: err instanceof Error ? err.message : String(err) }))
       }
     } finally {
       clearInterval(timer)

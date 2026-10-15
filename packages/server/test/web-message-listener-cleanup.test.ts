@@ -29,11 +29,13 @@ vi.mock('../src/channels/shared/media-store.js', async (importOriginal) => {
   }
 })
 
-import { createChannelDb, setChannelDb } from '../src/db/channel-db.js'
+import { createChannelDb, getChannelDb, setChannelDb } from '../src/db/channel-db.js'
 import { insertAccount } from '../src/channels/shared/accounts.js'
 import { createWebChannel, type WebChannel } from '../src/channels/web/handler.js'
 import { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
 import type { SessionManager } from '../src/agents/session-manager.js'
+import { createWebRoutes } from '../src/routes/web.js'
+import { LegacyConversionError } from '../src/sessions/legacy-migrate.js'
 
 const TOKEN = 'tok-full'
 const SID = 'web_full1_s1'
@@ -105,6 +107,21 @@ describe('web handleMessage — listener cleanup', () => {
     await expect(drain(channel.handleMessage(TOKEN, 'hi', undefined, { sessionId: SID }))).rejects.toThrow('boom')
 
     expect(listenerCount(SID)).toBe(before)
+  })
+
+  it('POST /web/chat: sendUserMessage throws → the SSE carries an `error` event after `session`', async () => {
+    // e2e P3: a stuck session (failed 1.x conversion) answered 200 with only
+    // the `session` event — the throw ended in a bare stream close.
+    vi.spyOn(sm, 'sendUserMessage').mockRejectedValue(new LegacyConversionError('session sid_x: conversion failed'))
+    const app = createWebRoutes({ db: getChannelDb(), channel })
+
+    const res = await app.request(`/web/chat?token=${TOKEN}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'hi', sessionId: SID }),
+    })
+    const events = (await res.text()).split('\n\n').filter((b) => b.startsWith('data: ')).map((b) => JSON.parse(b.slice(6)) as { type: string; error?: string })
+
+    expect(events.map((e) => e.type)).toEqual(['session', 'error'])
+    expect(events[1].error).toBe('session sid_x: conversion failed')
   })
 
   it('normal turn still streams to complete and leaves no listener behind', async () => {
