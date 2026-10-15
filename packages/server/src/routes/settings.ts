@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { loadSettingsSchema, type SchemaSection, type SchemaField } from '../settings-schema.js'
 import { resolveProjectPath } from './workspace-path.js'
+import { missingEnvRefs } from '../config.js'
 
 const GLOBAL_SETTINGS_PATH = path.join(homedir(), '.halo', 'secrets', 'settings.yaml')
 
@@ -110,6 +111,9 @@ interface ResolvedField {
   source: 'workspace' | 'global' | 'unset'
   /** True when scope=workspace and the displayed value comes from global. */
   inheritedFromGlobal: boolean
+  /** Names of `<<X>>` placeholders in the effective value whose env var is
+   *  unset in the server process (names only, never values). */
+  envMissing: string[]
 }
 
 interface ResolvedSection {
@@ -184,6 +188,7 @@ function fieldFor(
     hasValue: raw !== undefined,
     source,
     inheritedFromGlobal,
+    envMissing: raw === undefined ? [] : missingEnvRefs(raw),
   }
 }
 

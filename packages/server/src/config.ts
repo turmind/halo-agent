@@ -227,17 +227,23 @@ const ENV_PATTERN = /<<([A-Z_][A-Z0-9_]*)>>/g
  * Resolve `<<ENV_NAME>>` placeholders inside a settings.yaml string value.
  *
  * If the env var isn't set, **keep the literal placeholder** rather than
- * silently substituting an empty string. Three reasons:
- *   - A literal `<<DEEPSEEK_API_KEY22>>` reaching the API will fail with a
- *     clear 401, telling the user exactly which env var is missing.
- *   - An empty-string substitution looks "valid" to downstream code (truthy
- *     check passes for `<<X>>` but fails for `''`), causing inconsistent
- *     fallback behaviour between callers.
- *   - Users who type a wrong env-var name discover the typo immediately.
+ * silently substituting an empty string, so the misconfiguration stays
+ * detectable downstream (`missingEnvRefs`). An empty substitution would look
+ * like "not configured" and silently fall back (e.g. AWS creds → the SDK
+ * credential chain). Don't count on the provider to name the variable: a
+ * literal key just gets a generic 401 (MiniMax: "login fail"). Model provider
+ * credentials are therefore checked before the call (session-agent-builder),
+ * and the Settings page flags fields whose variable is unset.
  */
 function expandEnv(raw: string | undefined): string {
   if (!raw) return ''
   return raw.replace(ENV_PATTERN, (m, name: string) => process.env[name] ?? m)
+}
+
+/** Names of the `<<X>>` placeholders in `raw` whose env var is unset in this
+ *  process, i.e. the ones expandEnv leaves literal. Names only, never values. */
+export function missingEnvRefs(raw: string): string[] {
+  return [...new Set([...raw.matchAll(ENV_PATTERN)].map((m) => m[1]))].filter((name) => process.env[name] === undefined)
 }
 
 /** Mtime-cached per-workspace settings (`<ws>/.halo/settings.yaml`) — same

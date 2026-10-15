@@ -830,7 +830,8 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:`, `skills/<id>/confi
           "value": "AK****ST",                     // already masked when secret:true; null = unset
           "hasValue": true,                        // any layer has a non-empty value
           "source": "global",                      // 'workspace' | 'global' | 'unset'
-          "inheritedFromGlobal": false             // true when scope=workspace + value came from global
+          "inheritedFromGlobal": false,            // true when scope=workspace + value came from global
+          "envMissing": []                         // names of <<X>> placeholders in the effective value whose env var is unset in the server process; names only, never values
         }
       ]
     }
@@ -841,7 +842,7 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:`, `skills/<id>/confi
 }
 ```
 
-`<<ENV_NAME>>` references in stored values are returned **as literals** (the browser never sees the resolved env var). Secret values are masked (`AK****ST`); env-var refs pass through unmasked since they're not real secrets.
+`<<ENV_NAME>>` references in stored values are returned **as literals** (the browser never sees the resolved env var). Secret values are masked (`AK****ST`); env-var refs pass through unmasked since they're not real secrets. `envMissing` lists the referenced variables that are unset in the server's `process.env` (empty when all are set or the value has no placeholder); the Settings page shows a warning for them.
 
 ### PATCH `/api/settings`
 

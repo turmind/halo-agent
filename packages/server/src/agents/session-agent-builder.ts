@@ -4,7 +4,8 @@ import { createModelRuntime, resolveProviderRuntime, type ModelRuntime } from '.
 import { createWorkspaceTools, READ_ONLY_TOOL_NAMES } from '../tools/workspace-tools.js'
 import { loadSystemPrompts } from '../prompts/system-prompts.js'
 import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } from '../prompts/md-loader.js'
-import { modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveEffectiveContext, resolveThinkingMode, resolveVerbosity } from '../config.js'
+import { missingEnvRefs, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveEffectiveContext, resolveThinkingMode, resolveVerbosity } from '../config.js'
+import { MissingEnvCredentialError } from './model-error.js'
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
   scanAvailableAgents, isTeamMember, canDelegate, agentSourceDir,
@@ -513,6 +514,26 @@ ${roster}`
       apiKey,
       sessionId,
     })
+
+    // An unset `<<ENV>>` placeholder stays literal (config.ts expandEnv) and
+    // would go out as the key — the provider answers a bare 401 that never
+    // names the variable. Fail each model call instead, before the request,
+    // but keep the build itself working so the session still opens / lists.
+    const unresolved = [
+      ...(apiKey ? [{ key: 'api_key', value: apiKey }] : []),
+      ...(awsCreds ? [{ key: 'access_key_id', value: awsCreds.accessKeyId }, { key: 'secret_access_key', value: awsCreds.secretAccessKey }] : []),
+    ].map((f) => ({ key: f.key, names: missingEnvRefs(f.value) })).filter((f) => f.names.length > 0)
+    if (unresolved.length > 0) {
+      const names = [...new Set(unresolved.flatMap((f) => f.names))]
+      const message = `${providerId} ${unresolved.map((f) => `${f.key} uses ${f.names.map((n) => `<<${n}>>`).join(' ')}`).join(', ')}, `
+        + `but ${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} not set in the Halo server's environment. `
+        + 'Background servers (systemd, `halo server start -d`) and the desktop app opened from the Dock don\'t read ~/.bashrc / ~/.zshrc — '
+        + 'enter the key in Settings, or add the variable to the server\'s environment and restart it (from a new terminal: `halo server restart`).'
+      // Thrown from the loop's pre-call hook: run() has already landed the
+      // turn's input (same history as a failed request), and nothing is sent.
+      const run = agent.run.bind(agent)
+      agent.run = (input, options) => run(input, { ...options, beforeCallModel: () => Promise.reject(new MissingEnvCredentialError(message)) })
+    }
 
     // Display label for /context, usage line, etc. In manual mode (Haiku 4.5)
     // there's no effort label — show the explicit budget_tokens instead so

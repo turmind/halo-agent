@@ -366,6 +366,7 @@ export const en: Record<string, string> = {
   'settings.empty': 'No section selected.',
   'settings.loading': 'Loading…',
   'settings.globalOnlyHint': 'Honored only at the global layer; workspace overrides are ignored',
+  'settings.field.envMissing': 'The Halo server process has no environment variable {names}, so calls using this value will fail. Background servers and the desktop app don\'t read ~/.bashrc / ~/.zshrc: enter the key here directly, or add the variable to the server\'s environment and restart it.',
   'settings.section.advanced': 'Advanced',
   'settings.restartNotice': 'Saved. Restart the Halo server for this to take effect: {keys}',
   'settings.restartNotice.dismiss': 'Dismiss',

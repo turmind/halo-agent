@@ -11,6 +11,13 @@ export type ModelErrorKind =
   | 'context_overflow' | 'account' | 'throttle' | 'server_error'
   | 'network' | 'empty_response' | 'corrupted' | 'multimodal_4xx' | 'fatal'
 
+/** Thrown in place of a model call whose provider credential still holds an
+ *  unset `<<ENV>>` placeholder (session-agent-builder). Account-level: the
+ *  request was never sent, and retrying fails the same way until it's fixed. */
+export class MissingEnvCredentialError extends Error {
+  override name = 'MissingEnvCredentialError'
+}
+
 export interface ClassifiedModelError {
   kind: ModelErrorKind
   msg: string
@@ -57,6 +64,7 @@ function classifyKind(msg: string, errName: string, httpStatus: number | undefin
   // says (a 503 whose body reads "authentication service temporarily
   // unavailable" must fall through to the transient retry below). The
   // keyword list only applies when no status could be recovered.
+  if (errName === 'MissingEnvCredentialError') return 'account'
   const isAccountError = httpStatus !== undefined
     ? httpStatus === 401 || httpStatus === 402 || httpStatus === 403
     : msg.includes('insufficient balance') || msg.includes('suspended') || msg.includes('invalid api key') || msg.includes('Invalid API Key') || msg.includes('Unauthorized') || msg.includes('authentication')

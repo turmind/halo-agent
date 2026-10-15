@@ -550,6 +550,12 @@ function FieldRow({
       <div className={cn('mt-1.5', lockedAsGlobalOnly && 'opacity-60 pointer-events-none')}>
         {renderFieldControl(field, saving || lockedAsGlobalOnly, onSave)}
       </div>
+      {field.envMissing?.length > 0 && (
+        <p className="mt-1 flex items-start gap-1 text-[10px] text-amber-400">
+          <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
+          <span>{t('settings.field.envMissing', { names: field.envMissing.join(', ') })}</span>
+        </p>
+      )}
     </div>
   )
 }

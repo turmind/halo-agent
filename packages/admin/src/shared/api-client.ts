@@ -1001,6 +1001,7 @@ export const api = {
             hasValue: boolean
             source: 'workspace' | 'global' | 'unset'
             inheritedFromGlobal: boolean
+            envMissing: string[]
           }>
         }>
         orphans: Array<{ namespaceId: string; kind: 'param' | 'secret'; key: string }>

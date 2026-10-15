@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Ask an agent about an installed extension and it now reads that extension's own `README.md` (and `DESIGN.md`) from `~/.halo/global/extensions/<id>/` instead of guessing. Extensions add nothing to prompts on their own; agent instructions still come only from an extension skill you enable.
 
+### Fixed
+
+- A model key set to `<<ENV_NAME>>` whose variable isn't set in the server's environment no longer goes out as the literal key and comes back as a 401 that never names the variable. The turn now stops before the request with one error naming the provider, the field and the variable, and saying how to fix it (background servers and the desktop app opened from the Dock don't read `~/.bashrc` / `~/.zshrc`). AWS access keys are checked the same way. The Settings page also warns under any field whose variable is unset.
+- Deleting a session over the WebSocket (`session:delete`) now also removes its session files, archive segments and sub-agent sessions from disk, as the REST delete already did. Before, a client that only used the WebSocket left the files behind.
+
 ## [1.6.6] - 2026-10-14
 
 ### Changed

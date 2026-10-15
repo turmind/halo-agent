@@ -105,12 +105,24 @@ env vars (process.env.X) > workspace settings.yaml > global settings.yaml > sche
 
 ## Missing env var
 
-If `process.env.EXAMPLE_KEY` is unset and the value at `caption-image.params.api_key` is `<<EXAMPLE_KEY>>`:
-- The agent sees the literal `<<EXAMPLE_KEY>>` in the rendered skill body
-- The server logs `[MdVars] Env var "EXAMPLE_KEY" not set — keeping <<EXAMPLE_KEY>> literal`
-- API calls the agent makes will fail with a clear error (usually HTTP 401) and the error message will reveal the literal, so the user can tell what to fix
+An unset variable is never replaced with an empty string. The `<<NAME>>` literal is kept, and Halo reports it where it can:
 
-This is intentional: empty strings hide the misconfiguration; literals make it visible.
+- **Model provider credentials** (`<provider>.secrets.api_key`, `access_key_id` / `secret_access_key`): the request is never sent. Each turn ends at once with one error in the chat (and on channels), with no retries. The error names the provider, the field and the variable, e.g. `minimax api_key uses <<MINIMAX_API_KEY>>, but MINIMAX_API_KEY is not set in the Halo server's environment. …`, and says how to fix it. You can still open the session, list it and read its history. Only calling the model fails.
+- **Settings page**: a field whose value names an unset variable shows an amber warning under the input naming the variable. The check runs against the server process's environment, not your shell's.
+- **Skill / AGENT.md placeholders** (`{{caption-image.params.api_key}}` → `<<EXAMPLE_KEY>>`): the agent sees the literal `<<EXAMPLE_KEY>>` in the rendered body, and the server logs `[MdVars] Env var "EXAMPLE_KEY" not set — keeping <<EXAMPLE_KEY>> literal`. Any request the agent makes with it fails on the far side, and don't count on that error naming the variable. A provider usually just answers 401 (MiniMax: `login fail: Please carry the API secret key…`).
+
+## Where the server reads environment variables
+
+`<<NAME>>` resolves against the **Halo server process's** environment, not your login shell's. An `export` in `~/.bashrc` / `~/.zshrc` only reaches a server started from a shell that read it:
+
+| How the server runs | Where its environment comes from | After adding a variable |
+|---|---|---|
+| Foreground `halo server start` | The terminal you started it in | Restart it from a terminal that has the variable |
+| `halo server start -d` on Linux (systemd user unit) | `~/.halo/secrets/server.env`, a snapshot of your shell's environment written by `start -d` / `halo server restart`. Run inside the server (an agent's shell, the admin terminal), `restart` keeps the existing snapshot | Open a new terminal (so it has the variable) and run `halo server restart`. Or edit `server.env` and restart |
+| System unit (`/etc/systemd/system/*.service`) | Only the unit's `Environment=` / `EnvironmentFile=` lines; `~/.bashrc` is never read | Add the variable there, `sudo systemctl daemon-reload`, then restart the unit |
+| Desktop app (macOS) opened from the Dock / Finder | launchd's environment; `~/.zshrc` is never read | Enter the key in Settings, or launch the app from a terminal that has the variable |
+
+If in doubt, put the key itself in Settings: it works the same under every launcher.
 
 ## Placeholder rules
 

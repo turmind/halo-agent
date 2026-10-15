@@ -366,6 +366,7 @@ export const zh: Record<string, string> = {
   'settings.empty': '未选中分类。',
   'settings.loading': '加载中…',
   'settings.globalOnlyHint': '只在全局生效；workspace 级覆盖会被忽略',
+  'settings.field.envMissing': '服务进程里没有环境变量 {names}，调用会失败。后台服务和桌面版不读 ~/.bashrc / ~/.zshrc：请直接填写 key，或把变量加到服务环境后重启。',
   'settings.section.advanced': '高级',
   'settings.restartNotice': '已保存。需重启 Halo 服务才会生效：{keys}',
   'settings.restartNotice.dismiss': '关闭',
