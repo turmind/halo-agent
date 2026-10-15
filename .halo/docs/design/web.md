@@ -93,6 +93,10 @@ data: {"type":"error","error":"..."}
 
 > **`toolUseId`**: both tool frames carry the provider's tool_use id, so a client can pair a result with its call even when calls interleave (the [ACP adapter](../dev/acp-adapter.md) uses it as the ACP `toolCallId`, and it matches the `toolUseId` in `/web/history`'s assistant `contentBlocks`). Additive — clients that pair by order can ignore it. It can be an empty string (some OpenAI-compatible streams carry no id); treat empty as missing.
 
+#### A failure ends the stream with `error`
+
+A throw out of the stream's source (`handleMessage` / `subscribe` — e.g. `sendUserMessage` refusing a session whose 1.x conversion failed, see [session.md](session.md#session-files)) is caught in `streamWithKeepalive`, logged (`[WebChannel] SSE stream failed`, with the stack), and ends the stream with `data: {"type":"error","error":"<message>"}` — skipped when the client is already gone. The HTTP status stays 200 (the stream had started), so a client must read the `error` frame, not the status. Before 2.0 such a throw closed the stream bare after the `session` frame, indistinguishable from a reply with no text.
+
 #### SSE keepalive
 
 `/web/chat` and `/web/subscribe` write an SSE comment line `: keepalive` every 15 s (`SSE_KEEPALIVE_MS` / `streamWithKeepalive` in `routes/web.ts`; the timer is cleared when the stream ends). A long tool call can otherwise leave the stream silent long enough for an idle reverse proxy / CDN to cut it. Comment lines aren't events — `EventSource` and any spec-following parser drop them; a hand-rolled parser must skip lines that don't start with `data:`.

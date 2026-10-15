@@ -73,7 +73,7 @@ Background state persists in four scenarios:
 1. **SessionUIStore's own persist** — the per-event rule above; this is what keeps a background session's files current
 2. **`unsubscribeSession`** — a session leaves the connection's set (`unsubscribe`, or a workspace switch dropping every subscription); `saveSession` runs before the listener is released. It returns early unless `isUIStateDirty`
 3. **Disconnect** — WS closes (or errors): every subscription without active work in its tree is saved and released (same dirty gate); the rest detach (below)
-4. **Server shutdown** — `flushAll()` (SessionManager → SessionUIStore) lands every loaded tree: a dirty root plus every live sub log, since pending debounce timers would never fire
+4. **Server shutdown** — `landForShutdown()` (SessionManager; its UI half is SessionUIStore `flushAll()`) lands every loaded tree: a dirty root plus every live sub log, since pending debounce timers would never fire
 
 Until 1.5.3-alpha, scenarios 2 and 3 went through `client.backgroundSaves`: the save closures `session:clear` registered, run on the next subscribe to that session or flushed on disconnect.
 
