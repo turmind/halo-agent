@@ -291,7 +291,7 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
 
   // DELETE /sessions/logs/:id?projectId=xxx — permanently delete a session.
   // Cascades to all descendants: removes log files AND SQLite rows.
-  // Use session:delete WS command for archive-only (soft delete).
+  // The WS session:delete command does the same hard delete.
   app.delete('/sessions/logs/:id', async (c) => {
     const id = c.req.param('id')
     if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid session id' }, 400)

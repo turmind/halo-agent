@@ -19,7 +19,7 @@ import { config } from '../config.js'
 import { WatcherPool } from './watcher-pool.js'
 import { saveInboundMedia } from '../channels/shared/media-store.js'
 import { readArchiveCount } from '../sessions/session-archive.js'
-import { getSessionDir, fileSegment } from '../sessions/session-store.js'
+import { getSessionDir, fileSegment, findAndDeleteSessionFile } from '../sessions/session-store.js'
 import { sendJson, sendWsNotification, bufferDetachedNotification } from './event-processor.js'
 import { setClientWorkspaceResolver } from './broadcast.js'
 import { TerminalManager } from './terminal-manager.js'
@@ -203,7 +203,10 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     const projectPath = requestedProjectId ? resolveProjectPath(requestedProjectId) : null
     const sm = projectPath ? getSessionManager(projectPath) : client.sessionManager
     if (!sm) { sendJson(ws, { type: 'error', error: 'No workspace context for delete', sessionId: delSessionId }); return }
-    await sm.deleteSession(delSessionId)
+    // deleteSession is SQLite-only; the files go here, as in the REST and cron delete paths.
+    for (const id of await sm.deleteSession(delSessionId)) {
+      await findAndDeleteSessionFile(id, sm.workspaceRoot)
+    }
     // Release this connection's listener without the save `unsubscribeSession`
     // does — the session is gone.
     client.subscriptions.get(delSessionId)?.()
