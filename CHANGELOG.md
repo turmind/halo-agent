@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.6.7] - 2026-10-15
+
 ### Changed
 
 - Ask an agent about an installed extension and it now reads that extension's own `README.md` (and `DESIGN.md`) from `~/.halo/global/extensions/<id>/` instead of guessing. Extensions add nothing to prompts on their own; agent instructions still come only from an extension skill you enable.
@@ -1031,7 +1033,9 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.5...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.7...HEAD
+[1.6.7]: https://github.com/turmind/halo-agent/compare/v1.6.6...v1.6.7
+[1.6.6]: https://github.com/turmind/halo-agent/compare/v1.6.5...v1.6.6
 [1.6.5]: https://github.com/turmind/halo-agent/compare/v1.6.4...v1.6.5
 [1.6.4]: https://github.com/turmind/halo-agent/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/turmind/halo-agent/compare/v1.6.2...v1.6.3
