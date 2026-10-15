@@ -25,6 +25,12 @@ export interface TurnState {
   turnToolCalls: ToolCallEntry[]
   turnContentBlocks: ContentBlockEntry[]
   currentTurnId: string
+  /** Id of the in-flight assistant (stream buffer + turn blocks), assigned by
+   *  the first snapshot that includes it and kept by the message the buffer is
+   *  finally flushed into — so every disk write, live view and the finalized
+   *  row agree on ONE id (the log file appends in-flight records under it;
+   *  a fresh id per snapshot would leave one ghost assistant per write). */
+  inflight?: { id: string; at: number }
 }
 
 export interface SubSessionLog extends TurnState {
@@ -157,7 +163,7 @@ function setToolResult(target: TurnState, rawResult: unknown, durationMs?: numbe
 export function flushAssistantMessage(state: TurnState, taskId?: string): void {
   if (!state.streamBuffer.trim() && state.turnToolCalls.length === 0) return
   const msg: SessionMessage = {
-    id: genId(), type: 'assistant', role: 'assistant', content: state.streamBuffer,
+    id: takeInflightId(state), type: 'assistant', role: 'assistant', content: state.streamBuffer,
     timestamp: Date.now(), agentName: state.streamingAgent, taskId,
   }
   state.turnToolCalls = []
@@ -195,8 +201,10 @@ export function flushCompletedAssistantMessage(state: TurnState, taskId?: string
 
   if (completed.length === 0 && !state.streamBuffer.trim()) return
 
+  // The completed part takes the in-flight id (it is what the snapshots showed
+  // under it); the pending tail gets a fresh one on its next snapshot.
   const msg: SessionMessage = {
-    id: genId(), type: 'assistant', role: 'assistant', content: state.streamBuffer,
+    id: takeInflightId(state), type: 'assistant', role: 'assistant', content: state.streamBuffer,
     timestamp: Date.now(), agentName: state.streamingAgent, taskId,
   }
   // contentBlocks only — see flushAssistantMessage on why no toolCalls copy.
@@ -214,20 +222,40 @@ export function flushCompletedAssistantMessage(state: TurnState, taskId?: string
   state.currentTurnId = randomUUID()
 }
 
+/** The in-flight id, handed to the message the buffer is flushed into. */
+function takeInflightId(state: TurnState): string {
+  const id = state.inflight?.id ?? genId()
+  state.inflight = undefined
+  return id
+}
+
 /**
- * Build a save snapshot that includes the current in-flight streaming state
- * as a temporary assistant message. This is what gets written to disk so
- * that reload-during-sleep preserves tool calls / partial text.
+ * The in-flight streaming state as a temporary assistant message, or null when
+ * nothing is in flight. Its id and timestamp are `state.inflight` (assigned
+ * here on first use — the one mutation), so repeated snapshots and the
+ * eventual flushed row share the id, and the shell the log file re-appends
+ * only changes when the text does.
  */
-export function createSaveSnapshot(state: TurnState): SessionMessage[] {
-  if (!state.streamBuffer.trim() && state.turnToolCalls.length === 0) return state.messageLog
+export function inflightMessage(state: TurnState): SessionMessage | null {
+  if (!state.streamBuffer.trim() && state.turnToolCalls.length === 0) return null
+  state.inflight ??= { id: genId(), at: Date.now() }
   const tempMsg: SessionMessage = {
-    id: genId(), type: 'assistant', role: 'assistant', content: state.streamBuffer,
-    timestamp: Date.now(), agentName: state.streamingAgent,
+    id: state.inflight.id, type: 'assistant', role: 'assistant', content: state.streamBuffer,
+    timestamp: state.inflight.at, agentName: state.streamingAgent,
   }
   // contentBlocks only — see flushAssistantMessage on why no toolCalls copy.
   if (state.turnContentBlocks.length > 0) tempMsg.contentBlocks = [...state.turnContentBlocks]
-  return [...state.messageLog, tempMsg]
+  return tempMsg
+}
+
+/**
+ * Build a save snapshot that includes the current in-flight streaming state
+ * as a temporary assistant message (see inflightMessage). This is what views
+ * show so that reload-during-sleep preserves tool calls / partial text.
+ */
+export function createSaveSnapshot(state: TurnState): SessionMessage[] {
+  const tempMsg = inflightMessage(state)
+  return tempMsg ? [...state.messageLog, tempMsg] : state.messageLog
 }
 
 // ── Sub-session lifecycle ───────────────────────────────────────────
@@ -452,6 +480,7 @@ export function applyEvent(
       flushAssistantMessage(state)
       state.turnToolCalls = []
       state.turnContentBlocks = []
+      state.inflight = undefined
       state.currentTurnId = randomUUID()
       result.persist = 'flush'
       break
