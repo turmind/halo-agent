@@ -554,6 +554,7 @@ export function applyEvent(
       target.messageLog.push({
         id: genId(), type: 'user', role: 'user',
         content: event.text ?? '', timestamp: Date.now(),
+        ...(event.compactSummary ? { compactSummary: true } : {}),
       })
       result.persist = 'debounce'
       break

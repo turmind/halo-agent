@@ -26,10 +26,11 @@ import { atomicWriteFileSync, readFirstUIRowId, uiLogPath } from './session-log.
  * Active-file size above which a turn end archives. Bytes, not an exchange
  * count: file size is what makes the log slow to read, parse and ship, and
  * exchange size varies by ~three orders of magnitude. Self-limiting: after an
- * archive the file restarts at one exchange, so it must grow another 3MB of
- * real content before the next one fires. No setting: one number, tuned once.
+ * archive the file restarts at one exchange, so it must grow another 5MB of
+ * real content before the next one fires. No setting: one number, tuned once
+ * (largest single turn measured: 3.3MB — a turn is never split).
  */
-export const ARCHIVE_SIZE_THRESHOLD = 3 * 1024 * 1024
+export const ARCHIVE_SIZE_THRESHOLD = 5 * 1024 * 1024
 
 interface SegmentFile {
   n: number
@@ -106,15 +107,24 @@ export function writeArchiveSegment(dir: string, seg: string, n: number, message
   atomicWriteFileSync(path.join(dir, `${seg}.ui.arch.${n}.${firstIdHash(messages[0].id)}.jsonl.gz`), gzipSync(body))
 }
 
+/** A user row carrying a compaction summary — emitted mid-turn, so not the
+ *  start of a turn. Rows written before the flag existed are recognised by the
+ *  text the compactors prefix (session-manager.ts). */
+function isCompactSummary(m: SessionMessage): boolean {
+  return m.compactSummary === true || m.content.startsWith('[Conversation Summary — ')
+}
+
 /**
  * Index to split the UI log at: `messages[0..cut)` is archivable, `[cut..]`
  * stays. 0 = nothing to archive. The split is the start of the newest main
  * user exchange (`role === 'user'` without `taskId` — the subset the admin
- * renders and deleteExchange counts on), so a turn is never cut in half.
+ * renders and deleteExchange counts on — and not a compaction summary), so
+ * the turn that just ended stays whole.
  */
 export function archiveSplitIndex(messages: SessionMessage[]): number {
   for (let i = messages.length - 1; i > 0; i--) {
-    if (messages[i].role === 'user' && !messages[i].taskId) return i
+    const m = messages[i]
+    if (m.role === 'user' && !m.taskId && !isCompactSummary(m)) return i
   }
   return 0
 }

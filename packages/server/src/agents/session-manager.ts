@@ -2618,7 +2618,7 @@ export class SessionManager implements SessionManagerInternals {
         // Sub-agent compactions also route via taskId — go through emitEvent
         // directly with explicit taskId rather than appendUserMessage (which
         // is hardcoded for the root path).
-        this.emitEvent(session.id, { type: 'user', text: `[Conversation Summary — ${result.olderCount} messages compacted]\n${result.summary}`, agentName: 'user', report: true, taskId })
+        this.emitEvent(session.id, { type: 'user', text: `[Conversation Summary — ${result.olderCount} messages compacted]\n${result.summary}`, agentName: 'user', report: true, compactSummary: true, taskId })
         this.emitEvent(session.id, { type: 'compacted', totalTokens: result.estimatedTokens, taskId })
         console.debug(`[SessionManager] Auto-compact ${session.id}: ${result.olderCount} messages compacted`)
       } else {
@@ -2864,19 +2864,6 @@ export class SessionManager implements SessionManagerInternals {
       session.agent.messages = [summaryMsg, ...finalTail]
       rebuilt = true
 
-      // The UI log's only shrink point. rawMessages just collapsed to
-      // [summary, ...recent]; the UI log keeps the full conversation and would
-      // otherwise grow forever (measured: 6.9MB of a 7.4MB session file). Move
-      // it into a gzipped archive segment here — the one moment where "history
-      // moves out of the active file" is already the semantics of the
-      // operation. No-op unless the file is over the size threshold, so most
-      // compacts pay one stat(). Sub-agents too: a sub's log is addressed by
-      // its full `root>…` id inside the root's UIState and written to the
-      // sub's own file, so its compact never truncates the parent's log.
-      // Runs BEFORE the callers emit their compaction notices, so the summary
-      // notice lands in the kept exchange rather than the archived segment.
-      this.uiStore.archiveOldMessages(session.id)
-
       const estimatedTokens = estimateMessageTokens(session.agent.messages) + estimateMessageTokens([{ role: 'user', content: session.systemPrompt }])
       return { summary: summaryText, olderCount, estimatedTokens }
     } finally {
@@ -2962,7 +2949,7 @@ export class SessionManager implements SessionManagerInternals {
       // message carrying the summary text (so it renders as a normal turn).
       const noticeText = `Context compacted: ${result.olderCount} older messages summarized`
       this.emitEvent(sessionId, { type: 'system', text: noticeText, taskId })
-      this.emitEvent(sessionId, { type: 'user', text: `[Conversation Summary — ${result.olderCount} messages compacted]\n${result.summary}`, agentName: 'user', report: true, taskId })
+      this.emitEvent(sessionId, { type: 'user', text: `[Conversation Summary — ${result.olderCount} messages compacted]\n${result.summary}`, agentName: 'user', report: true, compactSummary: true, taskId })
       this.emitEvent(sessionId, { type: 'compacted', totalTokens: result.estimatedTokens, taskId })
       console.debug(`[SessionManager] Compact ${sessionId}: ${result.olderCount} older messages summarized, raw ${rawCount} → ${session.agent.messages.length}`)
 

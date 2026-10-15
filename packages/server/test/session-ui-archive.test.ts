@@ -21,7 +21,9 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
  *     `ARCHIVE_SIZE_THRESHOLD` an archive call is a pure no-op however long the
  *     log is
  *  2. over the threshold exactly ONE main exchange stays behind, and the split
- *     lands on a main-user-exchange boundary, never mid-turn
+ *     lands on a main-user-exchange boundary (never a compaction summary row),
+ *     never mid-turn; it runs at turn end only (root `complete`, sub
+ *     `agent_done`), never from the compact path
  *  3. the active file is rewritten as the kept rows only; the raw log and the
  *     row's lifetime exchange count are untouched
  *  4. the COMMIT is the active-file rewrite: a segment whose first id is still
@@ -180,9 +182,16 @@ describe('archiveSplitIndex — where the log is cut', () => {
     expect(log.slice(cut).filter((m) => m.role === 'user' && !m.taskId)).toHaveLength(1)
   })
 
+  it('never cuts at a compaction summary row (flagged, or a pre-flag row by its prefix)', () => {
+    const flagged = uiMsg('user', '[Conversation Summary — 4 messages compacted]\nx', { compactSummary: true })
+    const unflagged = uiMsg('user', '[Conversation Summary — 6 messages compacted]\ny')
+    const log = [...exchanges(3), uiMsg('user', 'turn'), uiMsg('assistant', 'work'), flagged, uiMsg('assistant', 'more'), unflagged, uiMsg('assistant', 'end')]
+    expect(log[archiveSplitIndex(log)].content).toBe('turn')
+  })
+
   it('keeps the in-flight turn out of the archive (its user msg is the newest)', () => {
-    // A mid-turn compact: last user message has no assistant reply yet. Keeping
-    // the newest exchange means the running turn is the one that stays.
+    // Last user message has no assistant reply yet. Keeping the newest
+    // exchange means the running turn is the one that stays.
     const log = [...exchanges(4), uiMsg('user', 'in-flight')]
     const cut = archiveSplitIndex(log)
     expect(log.slice(cut).map((m) => m.content)).toEqual(['in-flight'])
@@ -497,7 +506,7 @@ describe('sub-session logs — archived into the sub\'s own file', () => {
     expect(readActive('c1', 'dev')[0].content).toBe('u3')
   })
 
-  it('selfCompactSession on a sub archives the sub log (compact-path wiring)', async () => {
+  it('selfCompactSession on a sub archives nothing — a mid-turn compact only adds rows', async () => {
     seedTree(fatExchanges(4))
     const raw: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
     for (let i = 0; i < 6; i++) {
@@ -519,11 +528,63 @@ describe('sub-session logs — archived into the sub\'s own file', () => {
     sm.emitEvent(SUB, { type: 'system', text: 'Compacting context…', taskId: SUB })
 
     expect(await sm.selfCompactSession(SUB)).not.toBeNull()
+    vi.advanceTimersByTime(600)
 
-    expect(segmentShapes('dev')).toEqual(['c1.ui.arch.1.jsonl.gz'])
-    expect(countArchiveSegments(sessionDir('dev'), 'c1')).toBe(1)
-    expect(readActive('c1', 'dev').map((m) => m.content)).toEqual(['u3', 'a3', 'Compacting context…'])
+    expect(segmentNames('dev')).toEqual([])
+    expect(readActive('c1', 'dev').map((m) => m.content).slice(0, 2)).toEqual(['u0', 'a0'])
     expect(segmentNames()).toEqual([])
+  })
+
+  it('the sub\'s agent_done (its turn end) archives the sub log', () => {
+    seedTree(fatExchanges(4))
+    startSub('next brief')
+    sm.emitEvent(SUB, { type: 'stream_delta', text: 'reply', agentName: 'Dev', taskId: SUB })
+
+    sm.emitEvent('r1', { type: 'agent_done', agentName: 'Dev', taskId: SUB, sessionId: SUB })
+
+    // Everything before the brief that opened the finished turn moves out.
+    expect(segmentShapes('dev')).toEqual(['c1.ui.arch.1.jsonl.gz'])
+    expect(readActive('c1', 'dev').map((m) => m.content)).toEqual(['next brief', 'reply'])
+    expect(segmentNames()).toEqual([])
+  })
+})
+
+describe('turn-end trigger (root)', () => {
+  it('root `complete` archives; the kept slice is the turn that just ended', () => {
+    seedRow('r1')
+    seedFile('r1', fatExchanges(4))
+    sm.appendUserMessage('r1', 'new question')
+    sm.emitEvent('r1', { type: 'stream_delta', text: 'answer' })
+
+    sm.emitEvent('r1', { type: 'complete' })
+
+    expect(segmentShapes()).toEqual(['r1.ui.arch.1.jsonl.gz'])
+    expect(readActive('r1').map((m) => m.content)).toEqual(['new question', 'answer'])
+  })
+
+  it('a drain batch boundary `complete` does not archive (the root is still running)', () => {
+    seedRow('r1')
+    seedFile('r1', fatExchanges(4))
+    sm.appendUserMessage('r1', 'new question')
+    sm.emitEvent('r1', { type: 'complete', batchBoundary: true })
+    expect(segmentNames()).toEqual([])
+  })
+
+  it('a compaction summary row mid-turn is not a cut point — the whole turn stays', () => {
+    seedRow('r1')
+    seedFile('r1', fatExchanges(4))
+    sm.appendUserMessage('r1', 'long task')
+    sm.emitEvent('r1', { type: 'tool_call', toolName: 'shell_exec', toolInput: {}, toolUseId: 't1' })
+    sm.emitEvent('r1', { type: 'user', text: '[Conversation Summary — 9 messages compacted]\nsummary', agentName: 'user', report: true, compactSummary: true })
+    sm.emitEvent('r1', { type: 'stream_delta', text: 'done' })
+
+    sm.emitEvent('r1', { type: 'complete' })
+
+    const kept = readActive('r1')
+    expect(kept[0].content).toBe('long task')
+    const summary = kept.find((m) => m.content.startsWith('[Conversation Summary'))!
+    expect(summary.compactSummary).toBe(true)
+    expect(kept.at(-1)!.content).toBe('done')
   })
 })
 

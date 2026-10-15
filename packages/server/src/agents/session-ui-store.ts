@@ -240,6 +240,12 @@ export class SessionUIStore {
       const id = taskId ?? rootId
       if (persist === 'flush') this.flushPersist(id, state)
       else if (persist === 'debounce') this.debouncedPersist(id, state)
+      // Turn end — root `complete` (the terminal one, not a drain batch
+      // boundary), sub `agent_done` — just flushed: the one point where the
+      // log holds no in-flight row, so the archive check runs here.
+      if ((event.type === 'complete' && !taskId && !event.batchBoundary) || (event.type === 'agent_done' && taskId)) {
+        this.archiveOldMessages(id)
+      }
       // The sub's turn ended and its log just landed whole; the next
       // query_session rebuilds the log from that file (loadSubHistory).
       if (taskId && event.type === 'agent_done') state.subSessionLogs.delete(taskId)
@@ -372,8 +378,9 @@ export class SessionUIStore {
 
   /**
    * Move a session's UI log out into a gzipped archive segment, keeping only
-   * the newest main exchange in the active file. Called from the compact
-   * path — the only place that already accepts "history shrinks here".
+   * the newest main exchange in the active file. Called at turn end
+   * (reduceIntoUIState: root `complete`, sub `agent_done`), right after the
+   * flush — never mid-turn, so the turn the user is looking at stays whole.
    *
    * Root and sub-session alike: a sub's log lives in its root's UIState
    * (`subSessionLogs`, keyed by the full `root>…` id) but is written to the
@@ -397,14 +404,9 @@ export class SessionUIStore {
     const rootId = this.findRootSessionId(sessionId)
     const isRoot = sessionId === rootId
     if (this.host.isSessionDeleted(rootId) || this.host.isSessionDeleted(sessionId)) return 0
-    // Root: ensureUIState, not a cache peek — a compact on a session restored
-    // from disk (cold `/compact`) must archive too. Returns the live state when
-    // one is already loaded, which is the normal mid-turn case.
-    // Sub: peek only. Both compact paths emit their "Compacting context…"
-    // notice (carrying the sub's taskId) before getting here, and that event
-    // lazily builds the sub log from the sub's own file — so a missing log
-    // means there is nothing live to archive, not a cold load worth paying the
-    // root's file read for. The NEXT compact retries.
+    // Root: ensureUIState returns the live state (the turn-end event just
+    // reduced into it). Sub: peek only — `agent_done` runs this before it
+    // drops the sub log, so a missing log means nothing live to archive.
     const state = isRoot ? this.ensureUIState(rootId) : this.uiStates.get(rootId)
     // Always the live Map entry, never a copy read from disk: a pending
     // debounced persist resolves the same object when it fires, so it writes

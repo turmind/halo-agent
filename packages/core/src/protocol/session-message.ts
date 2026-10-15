@@ -79,6 +79,11 @@ export interface SessionMessage {
   // paired raw AnthropicMessage(s) are physically removed. Persisted so the
   // "deleted" marker survives reload.
   deleted?: boolean
+
+  // ── Compaction summary ──
+  // A user row carrying a compaction's summary (emitted mid-turn by the
+  // compactors). Not the start of a turn: the UI archive never cuts there.
+  compactSummary?: boolean
 }
 
 /** Infer MessageType from legacy messages that lack the type field */

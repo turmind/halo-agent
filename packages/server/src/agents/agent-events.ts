@@ -50,6 +50,9 @@ export interface AgentSessionEvent {
    *  pushed live so the green "Report from sub-session" bubble appears without
    *  a refresh. Distinct from `localEcho` below. */
   report?: boolean
+  /** Marks a 'user' event carrying a compaction summary — the UI row gets
+   *  `compactSummary`, so the turn-end archive never cuts at it. */
+  compactSummary?: boolean
   /** Marks a 'user' event the frontend ALREADY rendered optimistically (a
    *  local desktop/admin send). Must NOT be echoed back over WS or the user's
    *  message shows up twice. */
