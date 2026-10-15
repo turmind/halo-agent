@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
@@ -11,18 +11,17 @@ import { ARCHIVE_SIZE_THRESHOLD } from '../src/sessions/session-archive.js'
 import type { SessionMessage } from '../src/sessions/session-types.js'
 
 /**
- * List-visible session metadata (title / exchangeCount / token counts) is
- * mirrored from the session file onto its `agent_sessions` row on every write,
- * so `GET /sessions/logs` never opens a file (it used to parse every row's
- * whole multi-MB json per page).
+ * List-visible session metadata (title / exchangeCount / token counts) lives
+ * only on the `agent_sessions` row (2.0 log files carry none); every UI-log
+ * write updates it, so `GET /sessions/logs` never opens a file.
  *
- * The properties pinned here are the ones the mirror has to get right:
+ * The properties pinned here are the ones the row update has to get right:
  *  1. a persist writes the columns, and a persist that changes nothing does NOT
  *     re-UPDATE the row (mid-turn saves fire every 500ms)
  *  2. `exchangeCount` counts MAIN user turns for the session's lifetime — it
- *     must not shrink when a compact moves history into an archive segment
- *  3. rows written before these columns existed (exchange_count IS NULL) are
- *     backfilled by the list route from the file, once
+ *     must not shrink when an archive moves history into a segment
+ *  3. rows of a session still in 1.x form (exchange_count IS NULL) are
+ *     backfilled by the list route via the migration, once
  */
 
 let ws: string
@@ -60,7 +59,7 @@ function row(id: string) {
   return sm.getDb().select().from(agentSessions).where(eq(agentSessions.id, id)).get()!
 }
 
-/** Seed a cold session .json in the shape saveSessionToFile writes. */
+/** Seed a cold 1.x session .json (the shape 1.x saveSessionToFile wrote). */
 function seedFile(id: string, messages: SessionMessage[], extra: Record<string, unknown> = {}): void {
   const dir = join(ws, '.halo', 'sessions', 'default')
   mkdirSync(dir, { recursive: true })
@@ -76,10 +75,9 @@ function uiStore(): { archiveOldMessages: (id: string) => number } {
   return (sm as unknown as { uiStore: { archiveOldMessages: (id: string) => number } }).uiStore
 }
 
-function persist(id: string, messages: SessionMessage[], contextTokens = 0, outputTokens = 0): void {
-  sm.persistSessionFile({
-    sessionId: id, projectPath: ws, messages, contextTokens, outputTokens,
-    agentId: 'default', agentName: 'Default',
+function persist(id: string, messages: SessionMessage[], contextTokens = 0, outputTokens = 0): number | null {
+  return sm.persistUILog(id, 'default', messages, null, {
+    delegated: false, agentName: 'Default', contextTokens, totalOutputTokens: outputTokens,
   })
 }
 
@@ -102,7 +100,7 @@ afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
 })
 
-describe('persist mirrors the file header onto the row', () => {
+describe('persist writes the metadata onto the row', () => {
   it('writes title / exchangeCount / token counts', () => {
     seedRow('r1')
     persist('r1', exchanges(3), 4321, 99)
@@ -140,9 +138,10 @@ describe('persist mirrors the file header onto the row', () => {
     expect(row('r1').contextTokens).toBe(20)
   })
 
-  it('is a no-op for a session with no db row (internal agents)', () => {
-    // No seedRow: internal-agent sessions live outside any workspace db.
-    expect(() => persist('__evo_agent__>x', exchanges(1))).not.toThrow()
+  it('still writes the log for a session with no db row', () => {
+    // No seedRow: the row update is a no-op, the log write is not.
+    expect(persist('norow', exchanges(1))).toBeGreaterThan(0)
+    expect(existsSync(join(ws, '.halo', 'sessions', 'default', 'norow.ui.jsonl'))).toBe(true)
   })
 })
 
@@ -151,7 +150,7 @@ describe('exchangeCount survives compaction', () => {
     const log = fatExchanges(10)
     seedRow('r1')
     seedFile('r1', log)
-    // Bring the seeded file into the mirror first (cold session → row columns).
+    // The first write migrates the 1.x file (backfilling the row) first.
     persist('r1', log)
     expect(row('r1').exchangeCount).toBe(10)
 
@@ -180,7 +179,7 @@ describe('GET /sessions/logs', () => {
     expect(s.totalOutputTokens).toBe(7)
   })
 
-  it('reflects a rename immediately (PATCH writes file + column)', async () => {
+  it('reflects a rename immediately (PATCH writes the column)', async () => {
     seedRow('r1')
     persist('r1', exchanges(2))
     expect((await list())[0].title).toBe('u0')
@@ -197,7 +196,7 @@ describe('GET /sessions/logs', () => {
 
   it('backfills a row that predates the columns, then reads the db', async () => {
     seedRow('r1')
-    seedFile('r1', exchanges(3))   // file only — row columns still NULL
+    seedFile('r1', exchanges(3))   // 1.x file only — row columns still NULL
     expect(row('r1').exchangeCount).toBeNull()
 
     const [first] = await list()
@@ -205,9 +204,12 @@ describe('GET /sessions/logs', () => {
     expect(first.title).toBe('seeded')
     expect(first.contextTokens).toBe(111)
 
-    // Backfilled, so the second page-load doesn't need the file at all.
+    // Migrated (1.x file replaced) and backfilled, so the second page-load
+    // doesn't need any file at all.
+    const dir = join(ws, '.halo', 'sessions', 'default')
     expect(row('r1').exchangeCount).toBe(3)
-    rmSync(join(ws, '.halo', 'sessions', 'default', 'r1.json'))
+    expect(existsSync(join(dir, 'r1.json'))).toBe(false)
+    rmSync(join(dir, 'r1.ui.jsonl'))
     const [second] = await list()
     expect(second.exchangeCount).toBe(3)
     expect(second.title).toBe('seeded')

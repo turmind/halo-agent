@@ -1,22 +1,29 @@
-import fsSync from 'node:fs'
-import path from 'node:path'
 import type { AgentSessionEvent } from './agent-events.js'
 import { broadcast } from '../ws/broadcast.js'
 import type { HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
+import { getSessionDir, loadSessionMessages, fileSegment } from '../sessions/session-store.js'
+import { cachedUILogSize, uiLogPath } from '../sessions/session-log.js'
 import {
-  getSessionDir, loadSessionMessages, fileSegment, countMainUserMessages,
-  type SessionSaveOptions,
-} from '../sessions/session-store.js'
-import {
-  ARCHIVE_SIZE_THRESHOLD, activeFileSize, archiveSplitIndex, readArchiveCount, writeArchiveSegment,
+  ARCHIVE_SIZE_THRESHOLD, archiveSplitIndex, countArchiveSegments, writeArchiveSegment,
 } from '../sessions/session-archive.js'
-import type { SessionMessage, SessionFileData } from '../sessions/session-types.js'
+import type { SessionMessage } from '../sessions/session-types.js'
 import {
-  applyEvent, createEmptyUIState, createSaveSnapshot, genId,
+  applyEvent, createEmptyUIState, genId, inflightMessage,
   type UIState,
 } from '../sessions/ui-log-builder.js'
+
+/** What a UI-log write tells the session row (see SessionManager.persistUILog). */
+export interface UILogMeta {
+  /** Title derivation input: delegated (sub) sessions title from the brief. */
+  delegated: boolean
+  description?: string
+  agentName: string
+  /** Root only — subs keep no token counts. */
+  contextTokens?: number
+  totalOutputTokens?: number
+}
 
 /**
  * Surface that SessionUIStore needs from SessionManager. SessionManager already
@@ -29,12 +36,17 @@ export interface SessionUIStoreHost {
   readonly workspaceRoot: string
   getDb(): HaloDb
   /** In-memory active session (if loaded) — used to source the accurate agentId
-   *  and display name when persisting, including internal sessions that have no
-   *  db row. */
+   *  and display name when persisting, before falling back to the db row. */
   getSession(id: string): { agentId: string; agentName: string } | undefined
   getSessionById(id: string): { agentId: string; agentName: string } | null
   isSessionDeleted(id: string): boolean
-  persistSessionFile(opts: SessionSaveOptions): void
+  /** The tombstone-honouring UI-log write + row metadata update. `archive` =
+   *  the archive commit (full rewrite; rows leaving the file keep the exchange
+   *  count). Returns the active file's size after the write, or null when
+   *  nothing was written. */
+  persistUILog(sessionId: string, agentId: string, rows: SessionMessage[], inflight: SessionMessage | null, meta: UILogMeta, opts?: { archive?: boolean }): number | null
+  /** The db holding the session's row (global internal-sessions db for `__*__`). */
+  metaDb(agentId: string): HaloDb
   /** True when any in-memory session in the root's tree has an in-flight turn
    *  or compact. The idle sweep gates on this — a root's UIState carries its
    *  running subs' live stream/tool buffers (fire-and-forget subs keep running
@@ -237,10 +249,11 @@ export class SessionUIStore {
   }
 
   /** A new sub-session log starts from the sub's own file, the way
-   *  ensureUIState seeds a root — so persistLog can overwrite it whole. */
+   *  ensureUIState seeds a root — and becomes the writer's baseline (prime),
+   *  so persistLog appends to it. */
   private loadSubHistory = (taskId: string): SessionMessage[] => {
     const projectPath = this.uiStateProjectPaths.get(this.findRootSessionId(taskId)) ?? this.host.workspaceRoot
-    return loadSessionMessages(taskId, projectPath, this.resolveAgentId(taskId))
+    return loadSessionMessages(taskId, projectPath, this.resolveAgentId(taskId), { prime: true })
   }
 
   /** Debounced persist — coalesces rapid tool_call/tool_result saves into one
@@ -284,22 +297,19 @@ export class SessionUIStore {
     if (existing) return existing
 
     const state = createEmptyUIState()
-    // Seed from disk if available — resumed sessions
+    // Seed from disk if available — resumed sessions. One read of the UI log
+    // (it becomes the writer's baseline); token counts come from the row.
     try {
-      const row = this.db.select().from(agentSessions)
+      const agentId = this.resolveAgentId(rootId)
+      const row = this.host.metaDb(agentId).select().from(agentSessions)
         .where(eq(agentSessions.id, rootId)).get()
       if (row) {
         // UI state / session store APIs need a real path — use our known root.
         this.uiStateProjectPaths.set(rootId, this.host.workspaceRoot)
-        const messages = loadSessionMessages(rootId, this.host.workspaceRoot, row.agentId)
+        const messages = loadSessionMessages(rootId, this.host.workspaceRoot, row.agentId, { prime: true })
         if (messages.length > 0) state.messageLog = messages
-        // Token counts are on the file's top-level fields, not in messages
-        try {
-          const filePath = path.join(getSessionDir(row.agentId, this.host.workspaceRoot), `${fileSegment(rootId)}.json`)
-          const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) as SessionFileData
-          state.contextTokens = data.contextTokens ?? 0
-          state.outputTokens = data.totalOutputTokens ?? 0
-        } catch { /* no file yet */ }
+        state.contextTokens = row.contextTokens ?? 0
+        state.outputTokens = row.totalOutputTokens ?? 0
       }
     } catch { /* new session */ }
 
@@ -307,70 +317,56 @@ export class SessionUIStore {
     return state
   }
 
-  /** Persist one UI log to its own file, overwriting it whole: the root's
-   *  (`id` = root id: messages + token counts) or a sub-session's (`id` =
-   *  taskId: `state.subSessionLogs[id]`, which holds the sub's full history —
-   *  see loadSubHistory — plus the in-flight turn as a temp assistant, the
-   *  same snapshot the root writes). `archive` is passed ONLY by
-   *  archiveOldMessages (the commit step of an archive write, root or sub
-   *  alike): `count` is the new segment count and `userDelta` the main user
-   *  turns leaving the active file. Every other call leaves both on-disk
-   *  values alone. */
-  private persistLog(id: string, state: UIState, archive?: { count: number; userDelta: number }): void {
+  /** Persist one UI log to its own file: the root's (`id` = root id: its
+   *  messages + token counts) or a sub-session's (`id` = taskId:
+   *  `state.subSessionLogs[id]`, which holds the sub's full history — see
+   *  loadSubHistory). The in-flight assistant goes along as its own record
+   *  (stable id, see inflightMessage); the writer appends what changed since
+   *  the last write. `archive` is passed ONLY by archiveOldMessages: the
+   *  write is the archive commit (full rewrite of the kept tail), and the rows
+   *  leaving the file don't change the session's exchange count. Returns the
+   *  active file size, or null when nothing was written. */
+  private persistLog(id: string, state: UIState, archive?: boolean): number | null {
     const rootId = this.findRootSessionId(id)
     const sub = id === rootId ? undefined : state.subSessionLogs.get(id)
-    if (id !== rootId && (!sub || this.host.isSessionDeleted(rootId))) return  // root tombstoned → don't write its descendants
+    if (id !== rootId && (!sub || this.host.isSessionDeleted(rootId))) return null  // root tombstoned → don't write its descendants
     try {
-      const projectPath = this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot
-      const snapshot = createSaveSnapshot(sub ?? state)
-      if (snapshot.length === 0) return
+      const log = sub ?? state
+      const inflight = inflightMessage(log)
+      if (log.messageLog.length === 0 && !inflight) return null
+      const opts = archive ? { archive: true } : undefined
       if (sub) {
         // Directory id MUST be the authoritative slot agentId, never the
         // event-reconstructed `sub.agentId` (which can degrade to the display
         // name when a bare event arrived before agent_start). Resolve from the
         // in-memory session / db row by taskId — the same source the root uses
         // below — so the on-disk layout never depends on rebuilt memory state.
-        const parts = id.split('>')
-        this.host.persistSessionFile({
-          sessionId: id, projectPath, messages: snapshot,
-          contextTokens: 0, outputTokens: 0,
-          agentId: this.resolveAgentId(id), agentName: sub.agentName,
-          source: 'delegated', description: sub.description, parentSessionId: parts.slice(0, -1).join('>'),
-          archiveCount: archive?.count,
-          archivedUserDelta: archive?.userDelta,
-        })
-        return
+        return this.host.persistUILog(id, this.resolveAgentId(id), log.messageLog, inflight, {
+          delegated: true, description: sub.description, agentName: sub.agentName,
+        }, opts)
       }
-      // Source of truth for agentId: prefer the in-memory session (always
-      // accurate, including for internal sessions that don't have a db
-      // row), fall back to the workspace db row, and only as a last
-      // resort let saveSessionToFile pick its 'default' default. Without
-      // this, internal sessions (`__evo_agent__` etc.) get persisted to
-      // `sessions/default/` instead of the global internal-sessions
-      // directory.
+      // Source of truth for agentId: the in-memory session, else the db row
+      // (resolveAgentId) — internal sessions (`__evo_agent__` etc.) must land
+      // in the global internal-sessions directory, not `sessions/default/`.
+      const agentId = this.resolveAgentId(rootId)
       const inMem = this.host.getSession(rootId)
-      const row = inMem ? null : this.db.select().from(agentSessions)
+      const row = inMem ? null : this.host.metaDb(agentId).select({ agentName: agentSessions.agentName }).from(agentSessions)
         .where(eq(agentSessions.id, rootId)).get()
-      this.host.persistSessionFile({
-        sessionId: rootId,
-        projectPath,
-        messages: snapshot,
-        contextTokens: state.contextTokens,
-        outputTokens: state.outputTokens,
-        agentId: inMem?.agentId ?? row?.agentId,
+      const size = this.host.persistUILog(rootId, agentId, log.messageLog, inflight, {
+        delegated: false,
         // Display name = the agent's yaml `name` (e.g. "Producer"), not the
-        // slot `agentId` — keep these two distinct so a renamed default slot
-        // shows correctly. (agentId still drives the directory above.)
-        agentName: inMem?.agentName ?? row?.agentName ?? row?.agentId,
-        archiveCount: archive?.count,
-        archivedUserDelta: archive?.userDelta,
-      })
-      // Snapshot landed — memory adds nothing over disk now. Cleared here (not
-      // in the catch): a failed write keeps the state dirty so a later
-      // detach-save still retries it.
-      this.uiStateDirty.delete(rootId)
+        // slot `agentId` — the title fallback reads it.
+        agentName: inMem?.agentName ?? row?.agentName ?? agentId,
+        contextTokens: state.contextTokens,
+        totalOutputTokens: state.outputTokens,
+      }, opts)
+      // Snapshot landed — memory adds nothing over disk now. Only on success:
+      // a failed write keeps the state dirty so a later detach-save retries it.
+      if (size !== null) this.uiStateDirty.delete(rootId)
+      return size
     } catch (err) {
       console.error(`[SessionUIStore] persistLog failed for ${id}: ${err instanceof Error ? err.message : String(err)}`)
+      return null
     }
   }
 
@@ -383,21 +379,17 @@ export class SessionUIStore {
    * (`subSessionLogs`, keyed by the full `root>…` id) but is written to the
    * sub's own file, so archiving it never touches the parent's log or file.
    *
-   * Gated on the active file's SIZE (`ARCHIVE_SIZE_THRESHOLD`), not its exchange
-   * count: bytes are what make a log slow to load, and per-exchange size varies
-   * by orders of magnitude. Under the threshold this returns 0 after a single
-   * stat(), so the common compact pays almost nothing.
+   * Gated on the active file's SIZE (`ARCHIVE_SIZE_THRESHOLD`) as this process
+   * last wrote it (the writer's cache — no stat), not its exchange count:
+   * bytes are what make a log slow to load, and per-exchange size varies by
+   * orders of magnitude.
    *
-   * Two-step write, segment FIRST:
-   *   1. write `<seg>.arch.<N>.json.gz` (a brand-new path, nothing references it yet)
-   *   2. rewrite the active file with the kept tail + `archiveCount: N`
-   *
-   * `archiveCount` is the commit marker, so a crash between the steps leaves an
-   * uncommitted segment that no reader can reach and the active file still
-   * holding every message — nothing is lost, and the next compact simply
-   * re-derives the same `N` and overwrites the orphan (idempotent by
-   * construction, no reconciliation pass needed). The reverse order would risk
-   * dropping messages from the active file before their archive exists.
+   * Two-step write, segment FIRST (session-archive.ts):
+   *   1. write `<seg>.ui.arch.<N>.<h>.jsonl.gz` (tmp + rename);
+   *   2. rewrite the active file with the kept tail — the commit.
+   * A crash between the steps leaves a segment whose first-id hash still
+   * matches the active file's first row: counted as uncommitted, the next
+   * archive re-derives the same N and replaces it.
    *
    * Returns the number of archived messages (0 = nothing to do).
    */
@@ -416,38 +408,32 @@ export class SessionUIStore {
     const state = isRoot ? this.ensureUIState(rootId) : this.uiStates.get(rootId)
     // Always the live Map entry, never a copy read from disk: a pending
     // debounced persist resolves the same object when it fires, so it writes
-    // the kept tail (under the archiveCount saveSessionToFile carries over)
-    // instead of resurrecting the archived head.
+    // the kept tail instead of resurrecting the archived head.
     const log = isRoot ? state : state?.subSessionLogs.get(sessionId)
     if (!state || !log) return 0
     try {
       const dir = getSessionDir(this.resolveAgentId(sessionId), this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot)
       const seg = fileSegment(sessionId)
 
-      // Size gate first — below the threshold this is a pure stat() and out.
-      if (activeFileSize(dir, seg) <= ARCHIVE_SIZE_THRESHOLD) return 0
+      if (cachedUILogSize(uiLogPath(dir, seg)) <= ARCHIVE_SIZE_THRESHOLD) return 0
       // Over the threshold: keep only the newest exchange, archive the rest. A
       // log with a single exchange yields cut 0 and is left alone (there is
       // nothing to move without splitting the turn the user is looking at).
-      const cut = archiveSplitIndex(log.messageLog, 1)
+      const cut = archiveSplitIndex(log.messageLog)
       if (cut === 0) return 0
 
       const older = log.messageLog.slice(0, cut)
       const kept = log.messageLog.slice(cut)
-      const n = readArchiveCount(dir, seg) + 1
+      const n = countArchiveSegments(dir, seg) + 1
       writeArchiveSegment(dir, seg, n, older)
 
       log.messageLog = kept
-      // The archived slice's main user turns leave the active file — carry them
-      // in the header so exchangeCount stays the session's lifetime count.
-      this.persistLog(sessionId, state, { count: n, userDelta: countMainUserMessages(older) })
       // persistLog swallows its own IO errors (every session write does), so
-      // confirm the commit landed. An active file still at `< n` next to a
-      // truncated in-memory log would let the NEXT ordinary persist write the
-      // short log under the old count — that, not the crash case, is how
-      // messages would actually go missing. Roll memory back instead: the
-      // segment stays uncommitted and the next compact redoes the same N.
-      if (readArchiveCount(dir, seg) < n) {
+      // confirm the commit landed. A failed rewrite next to a truncated
+      // in-memory log would let the NEXT ordinary persist rewrite the file
+      // without the archived head while the segment still reads uncommitted —
+      // messages gone. Roll memory back instead: the next archive redoes N.
+      if (this.persistLog(sessionId, state, true) === null) {
         log.messageLog = [...older, ...kept]
         console.warn(`[SessionUIStore] archive commit for ${sessionId} segment ${n} did not land — rolled back`)
         return 0
@@ -488,6 +474,12 @@ export class SessionUIStore {
    */
   getCachedUIState(rootSessionId: string): UIState | null {
     return this.uiStates.get(rootSessionId) ?? null
+  }
+
+  /** Persist a loaded root's UI log (WS detach / switch save). */
+  persistRoot(rootSessionId: string): void {
+    const state = this.uiStates.get(rootSessionId)
+    if (state) this.persistLog(rootSessionId, state)
   }
 
   /** Whether the cached UIState holds local mutations not yet persisted.

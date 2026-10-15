@@ -1,9 +1,13 @@
 import { Hono } from 'hono'
 import { and, eq, gte, lt } from 'drizzle-orm'
-import { getWorkspaceDb, mirrorSessionMeta } from '../db/index.js'
+import { getWorkspaceDb } from '../db/index.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import { agentSessions } from '../db/schema.js'
-import { findSessionFileData, findAndDeleteSessionFile, findAndUpdateSessionTitle, readSessionFileMeta, stripTurnStamp } from '../sessions/session-store.js'
+import {
+  findAndDeleteSessionFile, getSessionDir, fileSegment, loadSessionView, stripTurnStamp,
+} from '../sessions/session-store.js'
+import { uiLogExists, uiLogPath } from '../sessions/session-log.js'
+import { countArchiveSegments } from '../sessions/session-archive.js'
 import { findLatestGoal } from '../agents/goal-mode.js'
 import { broadcast } from '../ws/broadcast.js'
 import { isSafeIdSegment } from './workspace-path.js'
@@ -218,24 +222,20 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
 
     const { db, workspacePath } = getWorkspaceDb(projectId)
 
-    // Per-row metadata comes from the mirrored db columns — no file reads.
-    // `exchangeCount === null` means the row predates those columns, so read
-    // the file once and mirror it back; subsequent pages hit the db.
-    const enrich = (s: typeof rows[number]) => {
-      let title = s.title ?? ''
-      let exchangeCount = s.exchangeCount
-      let contextTokens = s.contextTokens ?? 0
-      let totalOutputTokens = s.totalOutputTokens ?? 0
-      if (exchangeCount === null) {
-        const meta = readSessionFileMeta(s.id, s.agentId, workspacePath)
-        if (meta) {
-          mirrorSessionMeta(db, s.id, meta)
-          title = meta.title
-          exchangeCount = meta.exchangeCount
-          contextTokens = meta.contextTokens
-          totalOutputTokens = meta.totalOutputTokens
-        }
+    // Per-row metadata comes from the db columns — no file reads.
+    // `exchangeCount === null` means the row predates them and its session may
+    // still be a 1.x file: probing the UI log migrates it (back-filling the
+    // row's NULL columns), then the row is read again. Once per session.
+    const enrich = (row: typeof rows[number]) => {
+      let s = row
+      if (s.exchangeCount === null && uiLogExists(uiLogPath(getSessionDir(s.agentId, workspacePath), fileSegment(s.id)))) {
+        const fresh = db.select().from(agentSessions).where(eq(agentSessions.id, s.id)).get()
+        if (fresh) s = { ...s, title: fresh.title, exchangeCount: fresh.exchangeCount, contextTokens: fresh.contextTokens, totalOutputTokens: fresh.totalOutputTokens }
       }
+      const title = s.title ?? ''
+      const exchangeCount = s.exchangeCount
+      const contextTokens = s.contextTokens ?? 0
+      const totalOutputTokens = s.totalOutputTokens ?? 0
       return {
         id: s.id,
         agentId: s.agentId,
@@ -266,27 +266,48 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
     return c.json({ sessions: enriched, nextCursor })
   })
 
-  // GET /sessions/logs/:id?projectId=xxx — get full session log by ID
+  // GET /sessions/logs/:id?projectId=xxx — get full session log by ID: the
+  // session's row (metadata) + its active UI log and raw history.
   app.get('/sessions/logs/:id', (c) => {
     const id = c.req.param('id')
     if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid session id' }, 400)
     const projectId = c.req.query('projectId')
-    const data = findSessionFileData(id, projectId ?? null)
-    if (!data) return c.json({ error: 'Session not found' }, 404)
+    // 1.x scanned the workspace's session dirs; the row now names the dir.
+    if (!projectId) return c.json({ error: 'Session not found' }, 404)
+    const { db, workspacePath } = getWorkspaceDb(projectId)
+    let row = db.select().from(agentSessions).where(eq(agentSessions.id, id)).get()
+    if (!row) return c.json({ error: 'Session not found' }, 404)
+    const view = loadSessionView(id, row.agentId, workspacePath)
+    if (!view) return c.json({ error: 'Session not found' }, 404)
+    // Opening a 1.x session's log migrates it and back-fills the row's NULL
+    // columns (exchangeCount NULL = predates them) — answer with the fresh row.
+    if (row.exchangeCount === null) row = db.select().from(agentSessions).where(eq(agentSessions.id, id)).get() ?? row
 
-    // Only convert rawMessages when event log messages are empty
-    // (sub-agent sessions that were only tracked via session-manager)
-    const dataAny = data as unknown as Record<string, unknown>
-    const hasEventLog = Array.isArray(data.messages) && data.messages.length > 0
-    if (!hasEventLog) {
-      const raw = dataAny.rawMessages as RawMessage[] | undefined
-      if (raw && raw.length > 0) {
-        const agentName = data.agentName ?? data.agentId ?? 'Agent'
-        dataAny.messages = convertRawMessages(raw, agentName)
-      }
-    }
-
-    return c.json(data)
+    const agentName = row.agentName || row.agentId
+    // Only convert rawMessages when the UI log is empty (sub-agent sessions
+    // that were only tracked via session-manager).
+    const messages = view.messages.length > 0 || view.rawMessages.length === 0
+      ? view.messages
+      : convertRawMessages(view.rawMessages as RawMessage[], agentName)
+    return c.json({
+      id: row.id,
+      agentId: row.agentId,
+      agentName,
+      title: row.title ?? '',
+      source: row.parentId ? 'delegated' : 'explorer',
+      ...(row.parentId ? { parentSessionId: row.parentId } : {}),
+      createdAt: new Date(row.createdAt).toISOString(),
+      updatedAt: new Date(row.updatedAt).toISOString(),
+      messageCount: view.messages.length,
+      exchangeCount: row.exchangeCount ?? 0,
+      contextTokens: row.contextTokens ?? 0,
+      totalOutputTokens: row.totalOutputTokens ?? 0,
+      archiveCount: countArchiveSegments(getSessionDir(row.agentId, workspacePath), fileSegment(id)),
+      messages,
+      rawMessages: view.rawMessages,
+      ...(row.output !== null ? { output: row.output } : {}),
+      ...(row.lastActivityAt !== null ? { lastActivityAt: row.lastActivityAt } : {}),
+    })
   })
 
   // DELETE /sessions/logs/:id?projectId=xxx — permanently delete a session.
@@ -326,9 +347,8 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
     return c.json({ ok: true, deleted: allIds.length })
   })
 
-  // PATCH /sessions/logs/:id?projectId=xxx — rename a session's title.
-  // The JSON log file is the source of truth the listing reads, so the
-  // new title lands there. Admin-only edit (no channel exposes this).
+  // PATCH /sessions/logs/:id?projectId=xxx — rename a session's title. The
+  // row is the title's only home. Admin-only edit (no channel exposes this).
   app.patch('/sessions/logs/:id', async (c) => {
     const id = c.req.param('id')
     if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid session id' }, 400)
@@ -338,12 +358,9 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
     const title = body.title?.trim()
     if (!title) return c.json({ error: 'title required' }, 400)
 
-    const { db, workspacePath } = getWorkspaceDb(projectId)
-    const updated = findAndUpdateSessionTitle(id, title, workspacePath)
-    if (!updated) return c.json({ error: 'Session not found' }, 404)
-    // The listing reads the mirrored column, so the rename has to land there
-    // too — otherwise the new title only appears after the session's next write.
-    db.update(agentSessions).set({ title }).where(eq(agentSessions.id, id)).run()
+    const { db } = getWorkspaceDb(projectId)
+    const updated = db.update(agentSessions).set({ title }).where(eq(agentSessions.id, id)).run()
+    if (updated.changes === 0) return c.json({ error: 'Session not found' }, 404)
     // Push so every admin session list re-fetches the new title live.
     broadcast({ type: 'session:changed' })
     return c.json({ ok: true })

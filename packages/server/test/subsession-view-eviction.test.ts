@@ -14,14 +14,18 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
  */
 
 vi.mock('../src/ws/broadcast.js', () => ({ broadcast: () => {} }))
-// Fake disk: persistSessionFile writes here and loadSessionMessages reads it
-// back. Deep copies both ways, like a real file's JSON round-trip — a shared
+// Fake disk: persistUILog writes here (rows + the in-flight assistant, the
+// order a reader merges them into) and loadSessionMessages reads it back. Deep copies both ways, like a real file's JSON round-trip — a shared
 // array would let in-memory edits show up "on disk" without a write.
 const disk = new Map<string, SessionMessage[]>()
 vi.mock('../src/sessions/session-store.js', () => ({
   getSessionDir: () => '/tmp/none',
   loadSessionMessages: (id: string) => structuredClone(disk.get(id) ?? []),
   fileSegment: (id: string) => id,
+}))
+vi.mock('../src/sessions/session-log.js', () => ({
+  cachedUILogSize: () => 0,
+  uiLogPath: (dir: string, seg: string) => `${dir}/${seg}.ui.jsonl`,
 }))
 
 const { SessionUIStore } = await import('../src/agents/session-ui-store.js')
@@ -31,19 +35,22 @@ type Store = InstanceType<typeof SessionUIStore>
 const ROOT = 'root'
 const SUB = 'root>sub'
 
-type SaveOpts = Parameters<Host['persistSessionFile']>[0]
+interface SaveOpts { sessionId: string; messages: SessionMessage[]; delegated: boolean }
+const emptyDb = () => ({ select: () => ({ from: () => ({ where: () => ({ get: () => null }) }) }) }) as never
 function makeHost(over: Partial<Host> = {}): { host: Host; writes: SaveOpts[]; subWrites: () => number; rootWrites: () => number } {
   const writes: SaveOpts[] = []
   const host: Host = {
     workspaceRoot: '/ws',
-    getDb: () => ({ select: () => ({ from: () => ({ where: () => ({ get: () => null }) }) }) }) as never,
+    getDb: emptyDb,
+    metaDb: () => host.getDb(),
     getSession: () => undefined,
     getSessionById: () => null,
     isSessionDeleted: () => false,
-    persistSessionFile: (opts) => {
-      const messages = structuredClone(opts.messages)
-      writes.push({ ...opts, messages })
-      disk.set(opts.sessionId, messages)
+    persistUILog: (sessionId, _agentId, rows, inflight, meta) => {
+      const messages = structuredClone(inflight ? [...rows, inflight] : rows)
+      writes.push({ sessionId, messages, delegated: meta.delegated })
+      disk.set(sessionId, messages)
+      return 1
     },
     hasActiveWorkInTree: () => false,
     ...over,
@@ -395,7 +402,7 @@ describe('timer key vs eviction (review follow-ups)', () => {
 
     const subSaves = writes.filter((w) => w.sessionId === SUB)
     expect(subSaves).toHaveLength(2)          // context + the pending batch
-    expect(subSaves.every((w) => w.source === 'delegated')).toBe(true)  // never root-style from the seed
+    expect(subSaves.every((w) => w.delegated)).toBe(true)  // never root-style from the seed
     expect(assistants(subFile())[0]?.contentBlocks?.some((b) => b.type === 'tool_call')).toBe(true)
   })
 

@@ -2,17 +2,17 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { saveSessionToFile, loadSessionMessages, getSessionDir } from '../src/sessions/session-store.js'
+import { saveUILog, loadSessionMessages, getSessionDir } from '../src/sessions/session-store.js'
 import type { SessionMessage } from '../src/sessions/session-types.js'
 
 /**
- * Contract: session files are written as compact JSON (no 2-space indent). The
- * pretty-print was pure disk overhead — nothing reads these files by eye, and
- * every reader is JSON.parse. What must not change is round-trip fidelity, so
- * this pins "compact on disk" together with "loads back identically", plus the
- * ability to read a pretty-printed file written by an older build.
+ * Contract: UI logs are JSONL — one compact record per line, no indentation
+ * (nothing reads these files by eye, every reader is JSON.parse per line).
+ * What must not change is round-trip fidelity, so this pins the line shape
+ * together with "loads back identically", plus the ability to read a
+ * pretty-printed 1.x `.json` written by an older build (migrated on first read).
  */
-describe('session file is written compact', () => {
+describe('UI log is written as compact JSONL', () => {
   let projectPath: string
 
   beforeEach(() => {
@@ -34,28 +34,26 @@ describe('session file is written compact', () => {
     },
   ]
 
-  const filePath = () => path.join(getSessionDir('default', projectPath), 'sess-compact.json')
+  const filePath = () => path.join(getSessionDir('default', projectPath), 'sess-compact.ui.jsonl')
 
-  it('writes no indentation and no newlines', () => {
-    saveSessionToFile({
-      sessionId: 'sess-compact', projectPath, messages,
-      contextTokens: 10, outputTokens: 5, agentId: 'default', agentName: 'Default',
-    })
+  it('writes one unindented record per line', () => {
+    saveUILog('sess-compact', 'default', projectPath, messages, null)
 
-    const raw = fs.readFileSync(filePath(), 'utf-8')
-    expect(raw).not.toContain('\n')
-    expect(raw.startsWith('{"version":1,')).toBe(true)
+    const lines = fs.readFileSync(filePath(), 'utf-8').split('\n')
+    expect(lines.pop()).toBe('')   // newline-terminated
+    expect(lines).toHaveLength(2)
+    for (const l of lines) {
+      expect(l.startsWith('{"t":"add","id":')).toBe(true)
+      expect(l).toBe(JSON.stringify(JSON.parse(l)))
+    }
   })
 
   it('round-trips messages through the compact write', () => {
-    saveSessionToFile({
-      sessionId: 'sess-compact', projectPath, messages,
-      contextTokens: 10, outputTokens: 5, agentId: 'default', agentName: 'Default',
-    })
+    saveUILog('sess-compact', 'default', projectPath, messages, null)
     expect(loadSessionMessages('sess-compact', projectPath, 'default')).toEqual(messages)
   })
 
-  it('still loads a pretty-printed file written by an older build', () => {
+  it('still loads a pretty-printed 1.x file written by an older build', () => {
     // Byte-for-byte the old shape: 2-space indent, and an assistant message
     // carrying BOTH toolCalls and contentBlocks (the pre-dedup writer).
     const dir = getSessionDir('default', projectPath)
@@ -81,30 +79,10 @@ describe('session file is written compact', () => {
 
     const loaded = loadSessionMessages('sess-legacy', projectPath, 'default')
     expect(loaded).toHaveLength(2)
-    // The legacy duplicate is preserved on read — this build never rewrites
-    // history, it only stops producing new duplicates.
+    // The legacy duplicate is preserved — migration never rewrites history,
+    // the writer only stops producing new duplicates.
     expect(loaded[1].toolCalls).toHaveLength(1)
     expect(loaded[1].contentBlocks).toHaveLength(2)
-  })
-
-  it('a re-save of a pretty file rewrites it compact, preserving createdAt', () => {
-    const dir = getSessionDir('default', projectPath)
-    fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(
-      path.join(dir, 'sess-upgrade.json'),
-      JSON.stringify({ version: 1, id: 'sess-upgrade', agentId: 'default', title: 'kept title', createdAt: '2023-05-05T00:00:00.000Z', messages: [] }, null, 2),
-      'utf-8',
-    )
-
-    saveSessionToFile({
-      sessionId: 'sess-upgrade', projectPath, messages,
-      contextTokens: 0, outputTokens: 0, agentId: 'default',
-    })
-
-    const raw = fs.readFileSync(path.join(dir, 'sess-upgrade.json'), 'utf-8')
-    expect(raw).not.toContain('\n')
-    const parsed = JSON.parse(raw) as { createdAt: string; title: string }
-    expect(parsed.createdAt).toBe('2023-05-05T00:00:00.000Z')
-    expect(parsed.title).toBe('kept title')
+    expect(fs.readdirSync(dir)).toContain('sess-legacy.ui.jsonl')
   })
 })

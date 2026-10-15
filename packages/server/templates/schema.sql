@@ -19,7 +19,11 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   title TEXT,
   exchange_count INTEGER,
   context_tokens INTEGER,
-  total_output_tokens INTEGER
+  total_output_tokens INTEGER,
+  -- The session's latest turn output + last activity stamp (get_session_output
+  -- cold reads). Written by SessionStateStore; NULL until its first 2.0 write.
+  output TEXT,
+  last_activity_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS disabled_items (

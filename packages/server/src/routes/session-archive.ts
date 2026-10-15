@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { getWorkspaceDb } from '../db/index.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import { getSessionDir, fileSegment } from '../sessions/session-store.js'
-import { readArchiveCount, readArchiveSegment } from '../sessions/session-archive.js'
+import { readArchiveSegment } from '../sessions/session-archive.js'
 import { isSafeIdSegment } from './workspace-path.js'
 
 /**
@@ -37,10 +37,8 @@ export function createSessionArchiveRoutes(smRegistry?: SessionManagerRegistry) 
 
     const dir = getSessionDir(session.agentId, workspacePath)
     const seg = fileSegment(id)
-    // `archiveCount` is the commit marker: a segment beyond it only exists
-    // because a crash interrupted the two-step archive write, and no reader
-    // may reference it (sessions/session-archive.ts).
-    if (n > readArchiveCount(dir, seg)) return c.json({ error: 'Segment not found' }, 404)
+    // Committed segments only: one left uncommitted by a crash between the
+    // two archive steps reads as absent (sessions/session-archive.ts).
     const messages = readArchiveSegment(dir, seg, n)
     if (!messages) return c.json({ error: 'Segment not found' }, 404)
 

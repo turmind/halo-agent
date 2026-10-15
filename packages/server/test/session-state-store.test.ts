@@ -1,28 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { eq } from 'drizzle-orm'
 import { SessionStateStore, type SessionStateStoreHost, type SavableSession } from '../src/agents/session-state-store.js'
-import { saveSessionToFile, readSessionFileMeta } from '../src/sessions/session-store.js'
-import type { SessionMessage } from '../src/sessions/session-types.js'
+import { createDb, type HaloDb } from '../src/db/index.js'
+import { agentSessions } from '../src/db/schema.js'
 
 /**
- * Unit tests for SessionStateStore (fifth knife) — rawMessages disk
- * persistence. Fully isolated: a fake host points workspaceRoot at a tmpdir and
- * controls the delete tombstone, so this exercises the real read-merge-write
- * against real files with no SessionManager. The behaviors pinned are the ones
- * the carve-out had to preserve: save→load roundtrip, merge-not-clobber of
- * pre-existing fields, and the tombstone short-circuit (a late save must not
- * resurrect a just-deleted file).
+ * Unit tests for SessionStateStore (fifth knife) — model-history persistence
+ * (`raw.jsonl`) plus the row's output / lastActivityAt. Fully isolated: a fake
+ * host points workspaceRoot at a tmpdir, hands out a real db and controls the
+ * delete tombstone. Pinned: save→load roundtrip, append-only growth, the row
+ * columns, and the tombstone short-circuit (a late save must not resurrect a
+ * just-deleted file).
  */
 
 let ws: string
 let deleted: Set<string>
+let db: HaloDb
 
 function makeStore(): SessionStateStore {
   const host: SessionStateStoreHost = {
     workspaceRoot: ws,
     isSessionDeleted: (id) => deleted.has(id),
+    metaDb: () => db,
   }
   return new SessionStateStore(host)
 }
@@ -31,16 +33,22 @@ function session(over: Partial<SavableSession> = {}): SavableSession {
   return {
     id: over.id ?? 'default>sess1',
     agentId: over.agentId ?? 'default',
-    parentId: over.parentId ?? null,
-    description: over.description ?? 'a task',
     output: over.output ?? '',
     lastActivityAt: over.lastActivityAt ?? null,
     agent: over.agent ?? { messages: [] },
   }
 }
 
+function seedRow(id: string): void {
+  db.insert(agentSessions).values({
+    id, parentId: null, agentId: 'default', agentName: 'Default', description: '',
+    createdAt: 1000, updatedAt: 1000,
+  }).run()
+}
+
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'halo-statestore-'))
+  db = createDb(join(ws, '.halo'))
   deleted = new Set()
 })
 
@@ -58,22 +66,29 @@ describe('saveAgentState / loadAgentState roundtrip', () => {
     expect(loaded).toEqual(messages)
   })
 
-  it('writes the expected metadata fields to the file', () => {
+  it('writes one message per line under the leaf id, appending as the history grows', () => {
     const store = makeStore()
-    store.saveAgentState(session({ id: 'p>s2', parentId: 'p', agentId: 'default', description: 'do the thing', output: 'result text', lastActivityAt: '2026-09-18T14:00:00.000Z', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
+    const messages: unknown[] = [{ role: 'user', content: 'x' }]
+    store.saveAgentState(session({ id: 'p>s2', agent: { messages: messages as never } }))
+    const file = join(store.sessionDir('default'), 's2.raw.jsonl')
+    const first = readFileSync(file, 'utf-8')
 
-    const file = join(store.sessionDir('default'), 's2.json')
-    const data = JSON.parse(readFileSync(file, 'utf-8'))
-    expect(data.id).toBe('p>s2')
-    expect(data.agentId).toBe('default')
-    expect(data.title).toBe('do the thing')   // sub-session: derived from description (the brief)
-    // messageCount is deliberately absent — it counts the UI log and is owned
-    // by saveSessionToFile; this path only sees the raw LLM history.
-    expect(data.messageCount).toBeUndefined()
-    expect(data.output).toBe('result text')
-    expect(data.lastActivityAt).toBe('2026-09-18T14:00:00.000Z')
-    expect(data.createdAt).toBeTruthy()
-    expect(data.updatedAt).toBeTruthy()
+    messages.push({ role: 'assistant', content: 'y' })
+    store.saveAgentState(session({ id: 'p>s2', agent: { messages: messages as never } }))
+    const second = readFileSync(file, 'utf-8')
+    expect(second.startsWith(first)).toBe(true)
+    expect(second.trim().split('\n').map((l) => JSON.parse(l))).toEqual(messages)
+  })
+
+  it('writes output / lastActivityAt onto the row, not the file', () => {
+    const store = makeStore()
+    seedRow('p>s3')
+    store.saveAgentState(session({ id: 'p>s3', output: 'result text', lastActivityAt: '2026-09-18T14:00:00.000Z', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
+
+    const row = db.select().from(agentSessions).where(eq(agentSessions.id, 'p>s3')).get()!
+    expect(row.output).toBe('result text')
+    expect(row.lastActivityAt).toBe('2026-09-18T14:00:00.000Z')
+    expect(readFileSync(join(store.sessionDir('default'), 's3.raw.jsonl'), 'utf-8')).not.toContain('result text')
   })
 
   it('loadAgentState returns [] for a missing file', () => {
@@ -81,60 +96,14 @@ describe('saveAgentState / loadAgentState roundtrip', () => {
   })
 })
 
-describe('read-merge-write — preserves pre-existing fields', () => {
-  it('does not clobber an existing title / createdAt on resave', () => {
-    const store = makeStore()
-    const dir = store.sessionDir('default')
-    mkdirSync(dir, { recursive: true })
-    // Seed a file with a human-set title + original createdAt.
-    writeFileSync(join(dir, 's3.json'), JSON.stringify({
-      id: 's3', agentId: 'default', title: 'Custom Title', createdAt: '2020-01-01T00:00:00.000Z',
-    }))
-
-    store.saveAgentState(session({ id: 's3', description: 'new desc', agent: { messages: [] } }))
-
-    const data = JSON.parse(readFileSync(join(dir, 's3.json'), 'utf-8'))
-    expect(data.title).toBe('Custom Title')                 // NOT overwritten by description
-    expect(data.createdAt).toBe('2020-01-01T00:00:00.000Z')  // preserved
-  })
-})
-
-describe('title ownership — raw-state save racing the first UI-log save', () => {
-  // The first model call's saveAgentState usually lands before the debounced
-  // UI-log persist; whatever title it stamps is sticky from then on.
-  const userMsg = (content: string): SessionMessage => ({ id: 'u1', role: 'user', content, timestamp: 1_700_000_000_000 })
-
-  it('a root session takes its title from the first user message, not its creation label', () => {
-    const store = makeStore()
-    store.saveAgentState(session({ id: 'r1', description: 'Explorer chat', agent: { messages: [{ role: 'user', content: 'hello world' }] as never } }))
-    expect(JSON.parse(readFileSync(join(store.sessionDir('default'), 'r1.json'), 'utf-8')).title).toBeUndefined()
-
-    const meta = saveSessionToFile({
-      sessionId: 'r1', projectPath: ws, messages: [userMsg('hello world')],
-      contextTokens: 0, outputTokens: 0, agentId: 'default',
-    })
-    expect(meta?.title).toBe('hello world')
-    expect(readSessionFileMeta('r1', 'default', ws)?.title).toBe('hello world')
-  })
-
-  it('a sub-session keeps its description (the brief) as title over its first message', () => {
-    const store = makeStore()
-    store.saveAgentState(session({ id: 'r1>c1', parentId: 'r1', description: 'the brief', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
-
-    saveSessionToFile({
-      sessionId: 'r1>c1', projectPath: ws, messages: [userMsg('first message')],
-      contextTokens: 0, outputTokens: 0, agentId: 'default', source: 'delegated', description: 'the brief',
-    })
-    expect(readSessionFileMeta('r1>c1', 'default', ws)?.title).toBe('the brief')
-  })
-})
-
 describe('delete tombstone short-circuit', () => {
   it('skips the write when the session id is tombstoned', () => {
     const store = makeStore()
+    seedRow('s4')
     deleted.add('s4')
-    store.saveAgentState(session({ id: 's4', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
-    // No file should have been written.
-    expect(existsSync(join(store.sessionDir('default'), 's4.json'))).toBe(false)
+    store.saveAgentState(session({ id: 's4', output: 'late', agent: { messages: [{ role: 'user', content: 'x' }] as never } }))
+    // Neither the file nor the row column should have been written.
+    expect(existsSync(join(store.sessionDir('default'), 's4.raw.jsonl'))).toBe(false)
+    expect(db.select().from(agentSessions).where(eq(agentSessions.id, 's4')).get()!.output).toBeNull()
   })
 })

@@ -48,18 +48,17 @@ afterEach(() => {
 })
 
 describe('emitEvent → real disk persistence (UIStore wired into the real manager)', () => {
-  it('a complete event flushes the UI log to a real .json file under the workspace', () => {
+  it('a complete event flushes the UI log to a real .ui.jsonl file under the workspace', () => {
     seedRow('root1', { agentId: 'default' })
     sm.appendUserMessage('root1', 'hi there')
     sm.emitEvent('root1', { type: 'complete' })
 
-    // The session file should now exist on disk under sessions/<agentId>/.
+    // The UI log should now exist on disk under sessions/<agentId>/.
     const dir = join(ws, '.halo', 'sessions', 'default')
     expect(existsSync(dir)).toBe(true)
-    const files = readdirSync(dir).filter((f) => f.endsWith('.json'))
-    expect(files.length).toBeGreaterThan(0)
-    const data = JSON.parse(readFileSync(join(dir, files[0]), 'utf-8'))
-    expect(data.messages.some((m: { content?: string }) => m.content === 'hi there')).toBe(true)
+    expect(readdirSync(dir)).toContain('root1.ui.jsonl')
+    const records = readFileSync(join(dir, 'root1.ui.jsonl'), 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    expect(records.some((r: { m?: { content?: string } }) => r.m?.content === 'hi there')).toBe(true)
   })
 
   it('ensureUIState seeds agentId from the real db row when persisting', () => {

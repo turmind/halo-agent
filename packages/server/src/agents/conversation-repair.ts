@@ -59,7 +59,7 @@ export function repairConversationMessages(raw: AnthropicMessage[], label = '[Re
   for (const msg of messages) {
     const m = msg as { content?: unknown[] }
     if (Array.isArray(m.content)) {
-      m.content = m.content.filter((b) => {
+      const kept = m.content.filter((b) => {
         if (b == null) return false
         const block = b as Record<string, unknown>
         // Strip empty text blocks — Bedrock rejects them with
@@ -67,6 +67,10 @@ export function repairConversationMessages(raw: AnthropicMessage[], label = '[Re
         if (block.type === 'text' && (typeof block.text !== 'string' || block.text.length === 0)) return false
         return true
       })
+      // Reassign only on a real change: the raw log appends while every
+      // persisted message keeps its `content` reference (session-log.ts), and
+      // this pass runs on every turn end.
+      if (kept.length !== m.content.length) m.content = kept
     }
   }
 

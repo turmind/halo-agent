@@ -1,35 +1,37 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { gunzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
 import {
-  ARCHIVE_SIZE_THRESHOLD, activeFileSize, archiveSplitIndex, readArchiveCount,
-  writeArchiveSegment, deleteArchiveSegments,
+  ARCHIVE_SIZE_THRESHOLD, archiveSplitIndex, countArchiveSegments, writeArchiveSegment,
 } from '../src/sessions/session-archive.js'
-import { findAndDeleteSessionFile } from '../src/sessions/session-store.js'
+import { findAndDeleteSessionFile, loadRawMessages } from '../src/sessions/session-store.js'
+import { replaceUILog, replaceRawLog, readUILog, uiLogPath, rawLogPath } from '../src/sessions/session-log.js'
 import type { SessionMessage } from '../src/sessions/session-types.js'
 
 /**
- * UI-log archiving (`<seg>.arch.<N>.json.gz`). The UI half of a session file had
- * no compaction and grew without bound (measured: 6.9MB of a 7.4MB file). These
- * tests pin the five properties the design depends on:
+ * UI-log archiving (`<seg>.ui.arch.<N>.<h>.jsonl.gz`). The UI log has no
+ * compaction and grows without bound (measured: 6.9MB of a 7.4MB 1.x file).
+ * These tests pin the five properties the design depends on:
  *
  *  1. the trigger is the active file's SIZE, not its exchange count — under
- *     `ARCHIVE_SIZE_THRESHOLD` a compact is a pure no-op however long the log is
+ *     `ARCHIVE_SIZE_THRESHOLD` an archive call is a pure no-op however long the
+ *     log is
  *  2. over the threshold exactly ONE main exchange stays behind, and the split
  *     lands on a main-user-exchange boundary, never mid-turn
- *  3. the active file keeps its exact shape — only `messages` shrinks and an
- *     `archiveCount` header appears, so every existing reader is unaffected
- *  4. `archiveCount` is a COMMIT MARKER: a segment written but not committed is
- *     unreachable, and re-running the archive re-derives the same N (idempotent)
- *  5. deletion is filesystem-glob driven, so uncommitted/orphan segments go too
+ *  3. the active file is rewritten as the kept rows only; the raw log and the
+ *     row's lifetime exchange count are untouched
+ *  4. the COMMIT is the active-file rewrite: a segment whose first id is still
+ *     the active file's first row is uncommitted and unreachable, and
+ *     re-running the archive re-derives the same N (idempotent)
+ *  5. deletion is directory-listing driven, so uncommitted/orphan segments go too
  *
- * Real disk + real gzip throughout — the size gate, crash-consistency and glob
- * behaviours are exactly the parts a mocked fs would fake away, so fixtures are
- * genuinely inflated past 3MB rather than stubbing statSync.
+ * Real disk + real gzip throughout — the size gate, crash-consistency and
+ * listing behaviours are exactly the parts a mocked fs would fake away, so
+ * fixtures are genuinely inflated past the threshold rather than stubbed.
  */
 
 let ws: string
@@ -92,33 +94,41 @@ function seedRow(id: string, over: Partial<typeof agentSessions.$inferInsert> = 
     updatedAt: 1000,
     stoppedAt: null,
     archivedAt: null,
+    title: over.title ?? null,
+    exchangeCount: over.exchangeCount ?? null,
   }).run()
 }
 
-/** Seed a cold session .json in the same shape saveSessionToFile writes. */
-function seedFile(id: string, messages: SessionMessage[], extra: Record<string, unknown> = {}, agentId = 'default'): string {
+/** Seed a cold session: UI log `seg.ui.jsonl` + a one-message raw log.
+ *  Returns the UI log's path. */
+function seedFile(seg: string, messages: SessionMessage[], agentId = 'default'): string {
   const dir = sessionDir(agentId)
-  mkdirSync(dir, { recursive: true })
-  const filePath = join(dir, `${id}.json`)
-  writeFileSync(filePath, JSON.stringify({
-    version: 1, id, agentId, agentName: 'Default', title: 'seeded', source: 'explorer',
-    createdAt: new Date(1000).toISOString(), updatedAt: new Date(1000).toISOString(),
-    messageCount: messages.length, contextTokens: 111, totalOutputTokens: 222,
-    messages, rawMessages: [{ role: 'user', content: 'raw' }], ...extra,
-  }, null, 2))
-  return filePath
+  replaceUILog(uiLogPath(dir, seg), messages)
+  replaceRawLog(rawLogPath(dir, seg), [{ role: 'user', content: 'raw' }])
+  return uiLogPath(dir, seg)
 }
 
-function readActive(id: string, agentId = 'default'): Record<string, unknown> & { messages: SessionMessage[] } {
-  return JSON.parse(readFileSync(join(sessionDir(agentId), `${id}.json`), 'utf-8'))
+function readActive(seg: string, agentId = 'default'): SessionMessage[] {
+  return readUILog(uiLogPath(sessionDir(agentId), seg)) ?? []
 }
 
-function readSegment(id: string, n: number, agentId = 'default'): SessionMessage[] {
-  return JSON.parse(gunzipSync(readFileSync(join(sessionDir(agentId), `${id}.arch.${n}.json.gz`))).toString('utf-8'))
+function activeSize(seg: string, agentId = 'default'): number {
+  try { return statSync(uiLogPath(sessionDir(agentId), seg)).size } catch { return 0 }
 }
 
 function segmentNames(agentId = 'default'): string[] {
   return readdirSync(sessionDir(agentId)).filter((f) => f.includes('.arch.')).sort()
+}
+
+/** Segment file names with the content hash elided: `r1.ui.arch.1.jsonl.gz`. */
+function segmentShapes(agentId = 'default'): string[] {
+  return segmentNames(agentId).map((f) => f.replace(/\.[0-9a-f]{12}\.jsonl\.gz$/, '.jsonl.gz'))
+}
+
+function readSegment(seg: string, n: number, agentId = 'default'): SessionMessage[] {
+  const name = segmentNames(agentId).find((f) => f.startsWith(`${seg}.ui.arch.${n}.`))!
+  return gunzipSync(readFileSync(join(sessionDir(agentId), name))).toString('utf-8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l) as SessionMessage)
 }
 
 /** The store, reached through the manager that owns it (same wiring prod uses). */
@@ -138,20 +148,20 @@ afterEach(() => {
 
 describe('archiveSplitIndex — where the log is cut', () => {
   it('returns 0 when the log holds at most the keep count', () => {
-    expect(archiveSplitIndex(exchanges(1), 1)).toBe(0)
-    expect(archiveSplitIndex([], 1)).toBe(0)
+    expect(archiveSplitIndex(exchanges(1))).toBe(0)
+    expect(archiveSplitIndex([])).toBe(0)
   })
 
   it('keep=1 cuts everything but the newest exchange', () => {
     const log = exchanges(4)
-    const cut = archiveSplitIndex(log, 1)
+    const cut = archiveSplitIndex(log)
     expect(cut).toBe(6)                 // 3 exchanges × 2 messages move out
     expect(log.slice(cut).map((m) => m.content)).toEqual(['u3', 'a3'])
   })
 
   it('always cuts at the START of a main user exchange', () => {
     const log = exchanges(5)
-    const cut = archiveSplitIndex(log, 1)
+    const cut = archiveSplitIndex(log)
     expect(log[cut].role).toBe('user')
     expect(log[cut].taskId).toBeUndefined()
   })
@@ -165,7 +175,7 @@ describe('archiveSplitIndex — where the log is cut', () => {
       log.push(uiMsg('user', `sub${i}`, { taskId: 'root>child' }))
       log.push(uiMsg('assistant', `a${i}`))
     }
-    const cut = archiveSplitIndex(log, 1)
+    const cut = archiveSplitIndex(log)
     expect(log[cut].taskId).toBeUndefined()
     expect(log.slice(cut).filter((m) => m.role === 'user' && !m.taskId)).toHaveLength(1)
   })
@@ -174,39 +184,33 @@ describe('archiveSplitIndex — where the log is cut', () => {
     // A mid-turn compact: last user message has no assistant reply yet. Keeping
     // the newest exchange means the running turn is the one that stays.
     const log = [...exchanges(4), uiMsg('user', 'in-flight')]
-    const cut = archiveSplitIndex(log, 1)
+    const cut = archiveSplitIndex(log)
     expect(log.slice(cut).map((m) => m.content)).toEqual(['in-flight'])
     expect(log.slice(0, cut).some((m) => m.content === 'in-flight')).toBe(false)
   })
 })
 
 describe('the trigger is file size, not exchange count', () => {
-  it('no-ops on a long but small log (hundreds of exchanges, well under 3MB)', () => {
+  it('no-ops on a long but small log (hundreds of exchanges, well under the threshold)', () => {
     seedRow('r1')
-    const log = exchanges(300)
-    const path = seedFile('r1', log)
-    expect(activeFileSize(sessionDir(), 'r1')).toBeLessThan(ARCHIVE_SIZE_THRESHOLD)
+    const path = seedFile('r1', exchanges(300))
+    const before = readFileSync(path, 'utf-8')
+    expect(activeSize('r1')).toBeLessThan(ARCHIVE_SIZE_THRESHOLD)
 
     expect(uiStore().archiveOldMessages('r1')).toBe(0)
     expect(segmentNames()).toEqual([])
-    expect(readActive('r1').archiveCount).toBeUndefined()
     // File untouched entirely — not even rewritten.
-    expect(readFileSync(path, 'utf-8')).toBe(JSON.stringify({
-      version: 1, id: 'r1', agentId: 'default', agentName: 'Default', title: 'seeded', source: 'explorer',
-      createdAt: new Date(1000).toISOString(), updatedAt: new Date(1000).toISOString(),
-      messageCount: log.length, contextTokens: 111, totalOutputTokens: 222,
-      messages: log, rawMessages: [{ role: 'user', content: 'raw' }],
-    }, null, 2))
+    expect(readFileSync(path, 'utf-8')).toBe(before)
   })
 
-  it('fires on a short log once it is over 3MB', () => {
+  it('fires on a short log once it is over the threshold', () => {
     seedRow('r1')
     // Only 4 exchanges — a count-based rule would never trigger here.
     seedFile('r1', fatExchanges(4))
-    expect(activeFileSize(sessionDir(), 'r1')).toBeGreaterThan(ARCHIVE_SIZE_THRESHOLD)
+    expect(activeSize('r1')).toBeGreaterThan(ARCHIVE_SIZE_THRESHOLD)
 
     expect(uiStore().archiveOldMessages('r1')).toBe(6)
-    expect(readActive('r1').messages.map((m) => m.content)).toEqual(['u3', 'a3'])
+    expect(readActive('r1').map((m) => m.content)).toEqual(['u3', 'a3'])
   })
 
   it('archives 1 and keeps 1 when there are only two exchanges', () => {
@@ -215,24 +219,23 @@ describe('the trigger is file size, not exchange count', () => {
 
     expect(uiStore().archiveOldMessages('r1')).toBe(2)
     expect(readSegment('r1', 1).map((m) => m.content)).toEqual(['u0', 'a0'])
-    expect(readActive('r1').messages.map((m) => m.content)).toEqual(['u1', 'a1'])
-    expect(readActive('r1').archiveCount).toBe(1)
+    expect(readActive('r1').map((m) => m.content)).toEqual(['u1', 'a1'])
+    expect(countArchiveSegments(sessionDir(), 'r1')).toBe(1)
   })
 
   it('no-ops on a single oversized exchange — nothing to move without splitting it', () => {
     seedRow('r1')
     seedFile('r1', fatExchanges(1))
-    expect(activeFileSize(sessionDir(), 'r1')).toBeGreaterThan(ARCHIVE_SIZE_THRESHOLD)
+    expect(activeSize('r1')).toBeGreaterThan(ARCHIVE_SIZE_THRESHOLD)
 
     expect(uiStore().archiveOldMessages('r1')).toBe(0)
     expect(segmentNames()).toEqual([])
-    expect(readActive('r1').archiveCount).toBeUndefined()
   })
 
-  it('activeFileSize reports 0 for a session with no file yet', () => {
-    expect(activeFileSize(sessionDir(), 'never-written')).toBe(0)
+  it('no-ops for a session with no file yet', () => {
     seedRow('r1')
     expect(uiStore().archiveOldMessages('r1')).toBe(0)
+    expect(existsSync(sessionDir())).toBe(false)
   })
 })
 
@@ -245,22 +248,21 @@ describe('archiveOldMessages — segment write + active-file slim down', () => {
     const moved = uiStore().archiveOldMessages('r1')
 
     expect(moved).toBe(18)                    // 9 archived exchanges × 2
-    expect(segmentNames()).toEqual(['r1.arch.1.json.gz'])
+    expect(segmentShapes()).toEqual(['r1.ui.arch.1.jsonl.gz'])
     expect(readSegment('r1', 1).map((m) => m.content)).toEqual(log.slice(0, 18).map((m) => m.content))
 
-    const active = readActive('r1')
-    expect(active.messages.map((m) => m.content)).toEqual(['u9', 'a9'])
-    expect(active.archiveCount).toBe(1)
+    expect(readActive('r1').map((m) => m.content)).toEqual(['u9', 'a9'])
+    expect(countArchiveSegments(sessionDir(), 'r1')).toBe(1)
   })
 
   it('shrinks the active file below the threshold it was over', () => {
     seedRow('r1')
     seedFile('r1', fatExchanges(10))
-    const before = activeFileSize(sessionDir(), 'r1')
+    const before = activeSize('r1')
 
     uiStore().archiveOldMessages('r1')
 
-    const after = activeFileSize(sessionDir(), 'r1')
+    const after = activeSize('r1')
     expect(before).toBeGreaterThan(ARCHIVE_SIZE_THRESHOLD)
     expect(after).toBeLessThan(ARCHIVE_SIZE_THRESHOLD)
     // Roughly one exchange's worth of bytes left behind, not nine.
@@ -274,29 +276,26 @@ describe('archiveOldMessages — segment write + active-file slim down', () => {
 
     uiStore().archiveOldMessages('r1')
 
-    const rejoined = [...readSegment('r1', 1), ...readActive('r1').messages]
+    const rejoined = [...readSegment('r1', 1), ...readActive('r1')]
     expect(rejoined.map((m) => m.content)).toEqual(log.map((m) => m.content))
   })
 
-  it('leaves the active file shape untouched apart from messages + archiveCount', () => {
-    const log = fatExchanges(4)
-    seedRow('r1')
-    const before = JSON.parse(readFileSync(seedFile('r1', log), 'utf-8'))
+  it('rewrites only the active UI log — raw log and the row\'s exchange count untouched', () => {
+    seedRow('r1', { exchangeCount: 4, title: 'seeded' })
+    seedFile('r1', fatExchanges(4))
+    const rawBefore = readFileSync(rawLogPath(sessionDir(), 'r1'), 'utf-8')
 
     uiStore().archiveOldMessages('r1')
-    const after = readActive('r1')
 
-    // Every pre-existing key survives (no field dropped, none renamed).
-    for (const key of Object.keys(before)) expect(after).toHaveProperty(key)
-    // Only these three legitimately differ: the log shrank, its count follows,
-    // and updatedAt is refreshed by the write.
-    expect(after.rawMessages).toEqual(before.rawMessages)
-    expect(after.contextTokens).toBe(before.contextTokens)
-    expect(after.totalOutputTokens).toBe(before.totalOutputTokens)
-    expect(after.title).toBe(before.title)
-    expect(after.createdAt).toBe(before.createdAt)
-    expect(after.id).toBe(before.id)
-    expect(after.messageCount).toBe(after.messages.length)
+    // The kept rows, one `add` record each — a plain fresh log.
+    const lines = readFileSync(uiLogPath(sessionDir(), 'r1'), 'utf-8').trim().split('\n').map((l) => JSON.parse(l) as { t: string; m: SessionMessage })
+    expect(lines.map((r) => [r.t, r.m.content])).toEqual([['add', 'u3'], ['add', 'a3']])
+    expect(readFileSync(rawLogPath(sessionDir(), 'r1'), 'utf-8')).toBe(rawBefore)
+    expect(loadRawMessages('r1', 'default', ws)).toEqual([{ role: 'user', content: 'raw' }])
+    // The lifetime exchange count stays: 3 exchanges left the file, not the session.
+    const row = sm.getDb().select().from(agentSessions).all().find((r) => r.id === 'r1')!
+    expect(row.exchangeCount).toBe(4)
+    expect(row.title).toBe('seeded')
   })
 
   it('increments N across successive archives, older segment untouched', () => {
@@ -305,8 +304,9 @@ describe('archiveOldMessages — segment write + active-file slim down', () => {
     uiStore().archiveOldMessages('r1')
     const firstSegment = readSegment('r1', 1)
 
-    // Session keeps chatting until it is over the threshold again, then compacts.
-    // (The re-grow is what bounds segment count: each one costs 3MB of content.)
+    // Session keeps chatting until it is over the threshold again, then archives.
+    // (The re-grow is what bounds segment count: each one costs a threshold's
+    // worth of content.)
     const state = sm.getUIState('r1')!
     state.messageLog = [...state.messageLog, ...fatExchanges(4, 100)]
     sm.appendNotification('r1', 'flush the fattened log to disk')
@@ -316,11 +316,11 @@ describe('archiveOldMessages — segment write + active-file slim down', () => {
     // the last main user turn moves out, so the notification rides along in the
     // kept slice (it is not an exchange boundary).
     expect(moved).toBe(8)
-    expect(segmentNames()).toEqual(['r1.arch.1.json.gz', 'r1.arch.2.json.gz'])
+    expect(segmentShapes()).toEqual(['r1.ui.arch.1.jsonl.gz', 'r1.ui.arch.2.jsonl.gz'])
     expect(readSegment('r1', 1)).toEqual(firstSegment)   // read-only forever
-    expect(readActive('r1').messages.map((m) => m.content))
+    expect(readActive('r1').map((m) => m.content))
       .toEqual(['u103', 'a103', 'flush the fattened log to disk'])
-    expect(readActive('r1').archiveCount).toBe(2)
+    expect(countArchiveSegments(sessionDir(), 'r1')).toBe(2)
   })
 
   it('skips a tombstoned session (no segment written)', () => {
@@ -333,29 +333,28 @@ describe('archiveOldMessages — segment write + active-file slim down', () => {
   })
 })
 
-describe('archiveCount as commit marker — crash safety', () => {
+describe('the active-file rewrite as commit — crash safety', () => {
   it('an uncommitted segment is invisible and gets overwritten by the retry', () => {
-    // Simulate a crash between step 1 (segment written) and step 2 (commit):
-    // segment 1 exists on disk, the active file has no archiveCount and still
-    // holds the complete log.
+    // Simulate a crash between step 1 (segment written) and step 2 (active
+    // file rewritten): segment 1 exists on disk and starts at the active
+    // file's first row, which still holds the complete log.
     const log = fatExchanges(5)
     seedRow('r1')
     seedFile('r1', log)
-    mkdirSync(sessionDir(), { recursive: true })
-    writeArchiveSegment(sessionDir(), 'r1', 1, [uiMsg('user', 'stale-orphan')])
+    writeArchiveSegment(sessionDir(), 'r1', 1, [log[0], uiMsg('user', 'stale-orphan')])
 
     // Nothing committed → readers see count 0, so the orphan is unreachable.
-    expect(readArchiveCount(sessionDir(), 'r1')).toBe(0)
+    expect(countArchiveSegments(sessionDir(), 'r1')).toBe(0)
 
-    // The retry derives the SAME N=1 and overwrites the orphan in place.
+    // The retry derives the SAME N=1 and replaces the orphan.
     const moved = uiStore().archiveOldMessages('r1')
 
     expect(moved).toBe(8)
-    expect(segmentNames()).toEqual(['r1.arch.1.json.gz'])
+    expect(segmentShapes()).toEqual(['r1.ui.arch.1.jsonl.gz'])
     expect(readSegment('r1', 1).some((m) => m.content === 'stale-orphan')).toBe(false)
-    expect(readArchiveCount(sessionDir(), 'r1')).toBe(1)
+    expect(countArchiveSegments(sessionDir(), 'r1')).toBe(1)
     // Zero loss: everything is still reachable across segment + active file.
-    expect([...readSegment('r1', 1), ...readActive('r1').messages].map((m) => m.content))
+    expect([...readSegment('r1', 1), ...readActive('r1')].map((m) => m.content))
       .toEqual(log.map((m) => m.content))
   })
 
@@ -363,34 +362,36 @@ describe('archiveCount as commit marker — crash safety', () => {
     const log = fatExchanges(5)
     seedRow('r1')
     seedFile('r1', log)
-    // persistSessionFile swallows IO errors in prod; emulate a failed commit.
-    vi.spyOn(sm, 'persistSessionFile').mockImplementation(() => {})
+    // persistUILog swallows IO errors in prod (null = nothing written); emulate
+    // a failed commit.
+    vi.spyOn(sm, 'persistUILog').mockReturnValue(null)
 
     const moved = uiStore().archiveOldMessages('r1')
 
     // Reported as "nothing archived" and memory still holds the full log, so the
-    // next ordinary persist can't write a truncated log under the old count.
+    // next ordinary persist can't write a truncated log.
     expect(moved).toBe(0)
-    expect(readArchiveCount(sessionDir(), 'r1')).toBe(0)
+    expect(countArchiveSegments(sessionDir(), 'r1')).toBe(0)
     expect(sm.getUIState('r1')!.messageLog.map((m) => m.content)).toEqual(log.map((m) => m.content))
   })
 
-  it('ordinary persists preserve an existing archiveCount', () => {
+  it('ordinary persists keep the segment committed', () => {
     seedRow('r1')
     seedFile('r1', fatExchanges(4))
     uiStore().archiveOldMessages('r1')
-    expect(readActive('r1').archiveCount).toBe(1)
+    expect(countArchiveSegments(sessionDir(), 'r1')).toBe(1)
 
-    // A plain UI write (no archiveCount argument) must carry the marker forward —
-    // dropping it would orphan segment 1.
+    // A plain UI write appends; the active file's first row stays the kept
+    // tail's, so segment 1 still reads committed.
     sm.appendNotification('r1', 'context compacted')
-    expect(readActive('r1').archiveCount).toBe(1)
+    expect(countArchiveSegments(sessionDir(), 'r1')).toBe(1)
+    expect(readActive('r1').map((m) => m.content)).toEqual(['u3', 'a3', 'context compacted'])
   })
 })
 
 describe('sub-session logs — archived into the sub\'s own file', () => {
   // A sub's UI log lives in its root's UIState (`subSessionLogs['r1>c1']`) but
-  // is written to `sessions/<agent>/c1.json`. Archiving it must slim THAT file
+  // is written to `sessions/<agent>/c1.ui.jsonl`. Archiving it must slim THAT file
   // and leave the parent's log and file alone. Fake timers: these tests leave
   // debounced sub persists armed, which must neither fire after the tmpdir is
   // gone nor leak into the next test.
@@ -405,7 +406,7 @@ describe('sub-session logs — archived into the sub\'s own file', () => {
     seedRow('r1')
     seedRow(SUB, { parentId: 'r1', agentId: 'dev' })
     const rootBytes = readFileSync(seedFile('r1', exchanges(2)), 'utf-8')
-    seedFile('c1', subLog, { id: SUB, parentSessionId: 'r1', source: 'delegated' }, 'dev')
+    seedFile('c1', subLog, 'dev')
     return rootBytes
   }
 
@@ -422,28 +423,24 @@ describe('sub-session logs — archived into the sub\'s own file', () => {
 
     expect(uiStore().archiveOldMessages(SUB)).toBe(6)
 
-    expect(segmentNames('dev')).toEqual(['c1.arch.1.json.gz'])
+    expect(segmentShapes('dev')).toEqual(['c1.ui.arch.1.jsonl.gz'])
     expect(readSegment('c1', 1, 'dev').map((m) => m.content)).toEqual(log.slice(0, 6).map((m) => m.content))
-    const active = readActive('c1', 'dev')
-    expect(active.messages.map((m) => m.content)).toEqual(['u3', 'a3'])
-    expect(active.archiveCount).toBe(1)
-    expect(active.archivedUserCount).toBe(3)
-    expect(active.id).toBe(SUB)
-    expect(active.parentSessionId).toBe('r1')
-    expect(active.rawMessages).toEqual([{ role: 'user', content: 'raw' }])
+    expect(readActive('c1', 'dev').map((m) => m.content)).toEqual(['u3', 'a3'])
+    expect(countArchiveSegments(sessionDir('dev'), 'c1')).toBe(1)
+    expect(loadRawMessages(SUB, 'dev', ws)).toEqual([{ role: 'user', content: 'raw' }])
     // The parent: same bytes, no segment.
-    expect(readFileSync(join(sessionDir(), 'r1.json'), 'utf-8')).toBe(rootBytes)
+    expect(readFileSync(uiLogPath(sessionDir(), 'r1'), 'utf-8')).toBe(rootBytes)
     expect(segmentNames()).toEqual([])
   })
 
   it('no-ops under the size threshold', () => {
     seedTree(exchanges(50))
     startSub()
-    const before = readFileSync(join(sessionDir('dev'), 'c1.json'), 'utf-8')
+    const before = readFileSync(uiLogPath(sessionDir('dev'), 'c1'), 'utf-8')
 
     expect(uiStore().archiveOldMessages(SUB)).toBe(0)
     expect(segmentNames('dev')).toEqual([])
-    expect(readFileSync(join(sessionDir('dev'), 'c1.json'), 'utf-8')).toBe(before)
+    expect(readFileSync(uiLogPath(sessionDir('dev'), 'c1'), 'utf-8')).toBe(before)
   })
 
   it('keeps the in-flight turn (brief + live tool call) in the active file', () => {
@@ -456,7 +453,7 @@ describe('sub-session logs — archived into the sub\'s own file', () => {
     expect(uiStore().archiveOldMessages(SUB)).toBe(8)
 
     expect(readSegment('c1', 1, 'dev').map((m) => m.content)).toEqual(log.map((m) => m.content))
-    const kept = readActive('c1', 'dev').messages
+    const kept = readActive('c1', 'dev')
     expect(kept[0].content).toBe('follow-up brief')
     expect(kept.some((m) => m.type === 'tool_call' && m.toolName === 'shell_exec')).toBe(true)
     // The live turn's buffers ride along as the temp assistant message.
@@ -469,35 +466,35 @@ describe('sub-session logs — archived into the sub\'s own file', () => {
     // Arms the sub's 500ms debounce timer — it fires AFTER the archive.
     sm.emitEvent(SUB, { type: 'tool_result', agentName: 'Dev', toolResult: 'ok', durationMs: 1, taskId: SUB })
     expect(uiStore().archiveOldMessages(SUB)).toBe(6)
-    const persist = vi.spyOn(sm, 'persistSessionFile')
+    const persist = vi.spyOn(sm, 'persistUILog')
 
     vi.advanceTimersByTime(600)
 
-    expect(persist.mock.calls.some(([opts]) => opts.sessionId === SUB)).toBe(true)  // the timer really wrote
+    expect(persist.mock.calls.some(([id]) => id === SUB)).toBe(true)  // the timer really wrote
     const active = readActive('c1', 'dev')
-    expect(active.messages.map((m) => m.content).slice(0, 2)).toEqual(['u3', 'a3'])
-    expect(active.messages.some((m) => m.content === 'u0')).toBe(false)
-    expect(active.archiveCount).toBe(1)
+    expect(active.map((m) => m.content).slice(0, 2)).toEqual(['u3', 'a3'])
+    expect(active.some((m) => m.content === 'u0')).toBe(false)
+    expect(countArchiveSegments(sessionDir('dev'), 'c1')).toBe(1)
   })
 
   it('returns 0 without touching anything when the sub log is not in memory', () => {
     seedTree(fatExchanges(4))
-    const before = readFileSync(join(sessionDir('dev'), 'c1.json'), 'utf-8')
+    const before = readFileSync(uiLogPath(sessionDir('dev'), 'c1'), 'utf-8')
 
     expect(uiStore().archiveOldMessages(SUB)).toBe(0)
     expect(segmentNames('dev')).toEqual([])
-    expect(readFileSync(join(sessionDir('dev'), 'c1.json'), 'utf-8')).toBe(before)
+    expect(readFileSync(uiLogPath(sessionDir('dev'), 'c1'), 'utf-8')).toBe(before)
   })
 
-  it('an ordinary sub persist after the archive carries archiveCount forward', () => {
+  it('an ordinary sub persist after the archive keeps the segment committed', () => {
     seedTree(fatExchanges(4))
     startSub()
     uiStore().archiveOldMessages(SUB)
 
     sm.emitEvent(SUB, { type: 'agent_done', agentName: 'Dev', taskId: SUB })   // flush write
 
-    expect(readActive('c1', 'dev').archiveCount).toBe(1)
-    expect(readActive('c1', 'dev').archivedUserCount).toBe(3)
+    expect(countArchiveSegments(sessionDir('dev'), 'c1')).toBe(1)
+    expect(readActive('c1', 'dev')[0].content).toBe('u3')
   })
 
   it('selfCompactSession on a sub archives the sub log (compact-path wiring)', async () => {
@@ -523,34 +520,41 @@ describe('sub-session logs — archived into the sub\'s own file', () => {
 
     expect(await sm.selfCompactSession(SUB)).not.toBeNull()
 
-    expect(segmentNames('dev')).toEqual(['c1.arch.1.json.gz'])
-    expect(readActive('c1', 'dev').archiveCount).toBe(1)
-    expect(readActive('c1', 'dev').messages.map((m) => m.content)).toEqual(['u3', 'a3', 'Compacting context…'])
+    expect(segmentShapes('dev')).toEqual(['c1.ui.arch.1.jsonl.gz'])
+    expect(countArchiveSegments(sessionDir('dev'), 'c1')).toBe(1)
+    expect(readActive('c1', 'dev').map((m) => m.content)).toEqual(['u3', 'a3', 'Compacting context…'])
     expect(segmentNames()).toEqual([])
   })
 })
 
-describe('deletion — filesystem glob, not header state', () => {
-  it('deleteArchiveSegments removes committed AND uncommitted segments', async () => {
-    mkdirSync(sessionDir(), { recursive: true })
-    writeArchiveSegment(sessionDir(), 'r1', 1, exchanges(1))
-    writeArchiveSegment(sessionDir(), 'r1', 2, exchanges(1))
-    writeArchiveSegment(sessionDir(), 'r1', 3, exchanges(1))   // uncommitted orphan
-    seedFile('r1', exchanges(1), { archiveCount: 2 })
+describe('deletion — directory listing, not commit state', () => {
+  it('removes committed AND uncommitted segments', async () => {
+    seedRow('r1')
+    writeArchiveSegment(sessionDir(), 'r1', 1, exchanges(1, 10))
+    writeArchiveSegment(sessionDir(), 'r1', 2, exchanges(1, 20))
+    const active = exchanges(1)
+    writeArchiveSegment(sessionDir(), 'r1', 3, active)   // uncommitted orphan
+    seedFile('r1', active)
+    expect(countArchiveSegments(sessionDir(), 'r1')).toBe(2)
 
-    await deleteArchiveSegments(sessionDir(), 'r1')
+    await findAndDeleteSessionFile('r1', ws)
 
     expect(segmentNames()).toEqual([])
   })
 
-  it('only touches the target session\'s segments', async () => {
-    mkdirSync(sessionDir(), { recursive: true })
+  it('only touches the target session\'s files', async () => {
+    seedRow('r1')
     writeArchiveSegment(sessionDir(), 'r1', 1, exchanges(1))
     writeArchiveSegment(sessionDir(), 'other', 1, exchanges(1))
+    seedFile('r1', exchanges(1, 5))
+    seedFile('other', exchanges(1, 5))
+    // A session whose id extends this one's is not this one's.
+    seedFile('r1x', exchanges(1, 5))
 
-    await deleteArchiveSegments(sessionDir(), 'r1')
+    await findAndDeleteSessionFile('r1', ws)
 
-    expect(segmentNames()).toEqual(['other.arch.1.json.gz'])
+    expect(readdirSync(sessionDir()).map((f) => f.replace(/\.[0-9a-f]{12}\./, '.')).sort())
+      .toEqual(['other.raw.jsonl', 'other.ui.arch.1.jsonl.gz', 'other.ui.jsonl', 'r1x.raw.jsonl', 'r1x.ui.jsonl'])
   })
 
   it('findAndDeleteSessionFile (the DELETE /api route) clears segments too', async () => {
@@ -561,8 +565,7 @@ describe('deletion — filesystem glob, not header state', () => {
 
     await findAndDeleteSessionFile('r1', ws)
 
-    expect(existsSync(join(sessionDir(), 'r1.json'))).toBe(false)
-    expect(segmentNames()).toEqual([])
+    expect(readdirSync(sessionDir())).toEqual([])
   })
 })
 
@@ -573,26 +576,34 @@ describe('deleteExchange archive anchor', () => {
     seedFile('r1', log)
     uiStore().archiveOldMessages('r1')
     const before = readActive('r1')
+    const rawBefore = loadRawMessages('r1', 'default', ws)
 
-    // A panel opened before the compact still counts from the pre-archive top:
+    // A panel opened before the archive still counts from the pre-archive top:
     // its ordinal 0 points at a different turn here — refuse rather than delete
     // the wrong one.
     expect(await sm.deleteExchange('r1', 0, 0)).toBe('archived')
 
     const after = readActive('r1')
-    expect(after.messages.some((m) => m.deleted)).toBe(false)
-    expect(after.messages).toEqual(before.messages)
-    expect(after.rawMessages).toEqual(before.rawMessages)
+    expect(after.some((m) => m.deleted)).toBe(false)
+    expect(after).toEqual(before)
+    expect(loadRawMessages('r1', 'default', ws)).toEqual(rawBefore)
   })
 
-  it('deletes when the client anchor matches the on-disk count', async () => {
+  /** Two committed segments ahead of a 3-exchange active log. */
+  function seedArchived(): void {
     seedRow('r1')
-    seedFile('r1', exchanges(3), { archiveCount: 2 })
+    writeArchiveSegment(sessionDir(), 'r1', 1, exchanges(1, 50))
+    writeArchiveSegment(sessionDir(), 'r1', 2, exchanges(1, 60))
+    seedFile('r1', exchanges(3))
+  }
 
-    // Reopened after the compact: the client anchored at 2, so its ordinal 0
+  it('deletes when the client anchor matches the on-disk count', async () => {
+    seedArchived()
+
+    // Reopened after the archive: the client anchored at 2, so its ordinal 0
     // is the active log's first turn on both sides.
     expect(await sm.deleteExchange('r1', 0, 2)).toBe('deleted')
-    expect(readActive('r1').messages.filter((m) => m.deleted).map((m) => m.content)).toEqual(['u0', 'a0'])
+    expect(readActive('r1').filter((m) => m.deleted).map((m) => m.content)).toEqual(['u0', 'a0'])
   })
 
   it('still deletes normally when nothing has been archived', async () => {
@@ -603,9 +614,8 @@ describe('deleteExchange archive anchor', () => {
 
   it('reads the marker from disk, not memory', async () => {
     // No in-memory UI state at all (fresh manager over the same workspace, so the
-    // db row persists) — the guard must still compare against the on-disk header.
-    seedRow('r1')
-    seedFile('r1', exchanges(3), { archiveCount: 2 })
+    // db row persists) — the guard must still count the segments on disk.
+    seedArchived()
     sm = new SessionManager(ws)
 
     expect(await sm.deleteExchange('r1', 0, 0)).toBe('archived')

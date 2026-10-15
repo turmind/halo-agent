@@ -1,7 +1,7 @@
-import fsSync from 'node:fs'
-import path from 'node:path'
 import type { ModelRuntime } from './model-runtime.js'
-import { getSessionDir, fileSegment, atomicWriteSessionFile } from '../sessions/session-store.js'
+import { getSessionDir, fileSegment, loadRawMessages } from '../sessions/session-store.js'
+import { rawLogPath, writeRawLog } from '../sessions/session-log.js'
+import { updateSessionOutput, type HaloDb } from '../db/index.js'
 
 /**
  * The slice of an AgentSession that `saveAgentState` needs. A narrow structural
@@ -12,10 +12,6 @@ import { getSessionDir, fileSegment, atomicWriteSessionFile } from '../sessions/
 export interface SavableSession {
   id: string
   agentId: string
-  /** Display name (agent.yaml `name`) — distinct from the slot `agentId`. */
-  agentName: string
-  parentId: string | null
-  description: string
   output: string
   lastActivityAt: string | null
   agent: Pick<ModelRuntime, 'messages'>
@@ -24,19 +20,26 @@ export interface SavableSession {
 /**
  * Surface SessionStateStore needs from SessionManager. The tombstone check is
  * the one cross-read: a late save from an in-flight turn's releaseSession must
- * not resurrect a file the user just deleted.
+ * not resurrect a file the user just deleted. `metaDb` = the db holding the
+ * session's row (the global internal-sessions db for `__*__` agents).
  */
 export interface SessionStateStoreHost {
   readonly workspaceRoot: string
   isSessionDeleted(id: string): boolean
+  metaDb(agentId: string): HaloDb
 }
 
 /**
- * SessionStateStore — persists/loads an agent's `rawMessages` (the LLM-facing
- * history) to its on-disk `.json` file. Carved out of SessionManager (fifth
- * knife); stateless. This is the `rawMessages` half of session persistence
- * (the UI-log half lives in SessionUIStore); the two write the same file via
- * read-merge-write so both survive.
+ * SessionStateStore — persists/loads an agent's model history (`raw.jsonl`,
+ * one message per line) plus its latest output / activity stamp (row
+ * columns). Carved out of SessionManager (fifth knife); stateless — the
+ * writer's append baseline lives in session-log.ts. This is the raw half of
+ * session persistence; the UI-log half lives in SessionUIStore, in its own
+ * file, so neither half rewrites the other.
+ *
+ * Contract: a persisted raw message must not be edited in place without
+ * replacing its `content` array or changing its length — writeRawLog detects
+ * changes by reference (every current mutator complies; see session-log.ts).
  */
 export class SessionStateStore {
   constructor(private host: SessionStateStoreHost) {}
@@ -51,54 +54,27 @@ export class SessionStateStore {
     return getSessionDir(agentId, this.host.workspaceRoot)
   }
 
-  /** Save agent.messages as rawMessages field in the delegated log file (read-merge-write) */
+  /** Persist agent.messages (append, or atomic rewrite on a non-append
+   *  change) and the row's output / lastActivityAt. */
   saveAgentState(session: SavableSession): void {
-    // Honour the deletion tombstone like persistSessionFile/persistUIState do —
-    // a late write from an in-flight turn's releaseSession must not resurrect a
-    // file the user just deleted.
+    // Honour the deletion tombstone like persistUILog does — a late
+    // write from an in-flight turn's releaseSession must not resurrect a file
+    // the user just deleted.
     if (this.host.isSessionDeleted(session.id)) return
     try {
-      const dir = this.sessionDir(session.agentId)
-      fsSync.mkdirSync(dir, { recursive: true })
-      const filePath = path.join(dir, `${fileSegment(session.id)}.json`)
-
-      let existing: Record<string, unknown> = {}
-      try { existing = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) } catch { /* new file */ }
-
-      const now = new Date().toISOString()
-      existing.id = session.id
-      existing.agentId = session.agentId
-      if (!existing.agentName) existing.agentName = session.agentName
-      if (session.parentId) existing.parentSessionId = session.parentId
-      // Sub-sessions only: their description IS the brief (saveSessionToFile
-      // titles 'delegated' logs from it too). A root's description is a
-      // creation label ('Explorer chat', 'Telegram: …'), and this write usually
-      // beats the first debounced UI-log persist to disk — stamping the label
-      // here made it the sticky title of every new root. A root's title comes
-      // from saveSessionToFile (first user message) or createSession's
-      // explicit `title` pre-seed instead.
-      if (!existing.title && session.parentId) existing.title = session.description?.slice(0, 60) || `${session.agentId} session`
-      if (!existing.createdAt) existing.createdAt = now
-      existing.updatedAt = now
-      // messageCount is NOT written here: it counts the UI message log and is
-      // owned by saveSessionToFile. This path only knows the raw LLM history
-      // (a different, larger number), and both writing it made the field flap
-      // between the two values depending on which write landed last.
-      existing.output = session.output
-      existing.lastActivityAt = session.lastActivityAt
-      existing.rawMessages = session.agent.messages
-      atomicWriteSessionFile(filePath, JSON.stringify(existing))
+      writeRawLog(rawLogPath(this.sessionDir(session.agentId), fileSegment(session.id)), session.agent.messages)
+      updateSessionOutput(this.host.metaDb(session.agentId), session.id, session.output, session.lastActivityAt)
     } catch (err) {
       console.error(`[SessionStateStore] Failed to save state for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
-  /** Load agent.messages from the delegated log file's rawMessages field */
+  /** Load agent.messages from `raw.jsonl` ([] when absent). The result
+   *  becomes the live history, so it primes the writer's baseline: the next
+   *  save appends instead of rewriting. */
   loadAgentState(sessionId: string, agentId: string): unknown[] {
     try {
-      const filePath = path.join(this.sessionDir(agentId), `${fileSegment(sessionId)}.json`)
-      const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
-      return (data.rawMessages ?? []) as unknown[]
+      return loadRawMessages(sessionId, agentId, this.host.workspaceRoot, { prime: true })
     } catch {
       return []
     }

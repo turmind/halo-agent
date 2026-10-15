@@ -1,140 +1,120 @@
 /**
- * UI-log archiving — the `messages` half of a session file only ever grew.
- * `rawMessages` has compaction; the UI log had nothing, so a long-lived
- * session ended up multi-MB (measured: 6.9MB of 7.4MB was UI messages).
+ * UI-log archiving — the UI log only ever grows, so once the active
+ * `<seg>.ui.jsonl` passes `ARCHIVE_SIZE_THRESHOLD` all but the newest exchange
+ * moves out into a gzipped, immutable segment next to it. Raw history is never
+ * archived (compaction rewrites it).
  *
- * On compact, if the active file has grown past `ARCHIVE_SIZE_THRESHOLD`, all
- * but the newest main exchange moves out into `<seg>.arch.<N>.json.gz` next to
- * the active `.json`. Below the threshold nothing happens at all, however many
- * exchanges have piled up. The active file's shape is unchanged, so every
- * existing reader keeps working untouched.
+ * Segments: `<seg>.ui.arch.<N>.<h>.jsonl.gz` — N counts up from 1, `h` hashes
+ * the segment's first message id, the content is one merged message per line.
+ * (1.x segments are converted by legacy-migrate.ts; nothing here reads them.)
  *
- * Segments are append-only: `N` counts up from 1, and a written segment is
- * read-only forever. The active file's `archiveCount` header field is the
- * commit marker — a segment with `N > archiveCount` was never committed and no
- * reader may reference it, which is what makes the two-step write crash-safe
- * (see `SessionUIStore.archiveOldMessages`).
+ * No counter is stored anywhere. The archive commit is the atomic rewrite of
+ * the active file (segment first, then the active file without the archived
+ * head), and the committed count is the number of segment files — after one
+ * content check: if the highest segment's first id is still the active file's
+ * first row, the rewrite never landed (crash in between), so that segment is
+ * uncommitted and ignored; the next archive picks the same N and replaces it.
  */
 import fsSync from 'node:fs'
-import fs from 'node:fs/promises'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { gzipSync, gunzipSync } from 'node:zlib'
 import type { SessionMessage } from './session-types.js'
+import { atomicWriteFileSync, readFirstUIRowId, uiLogPath } from './session-log.js'
 
 /**
- * Active-file size above which a compact archives. Bytes, not an exchange
- * count, because bytes are the actual problem: file size is what makes the log
- * slow to read, parse and ship, and exchange size varies by ~three orders of
- * magnitude (a bare "yes" versus a turn carrying several 50KB tool results), so
- * a count is a badly distorted proxy — the same "15 exchanges" is 40KB in one
- * session and 40MB in another. Measuring the thing we care about removes the
- * guesswork.
- *
- * Also self-limiting: after an archive the file restarts near-empty, so it must
- * grow another 3MB of real content before the next one fires. Segment count is
- * therefore bounded by total bytes written, not by how often the user compacts.
- *
- * Not aligned with `config.compact.keep_messages` (that counts raw LLM-facing
- * messages, a different granularity with no honest mapping to UI rows). No
- * setting: one number, tuned once.
- *
- * Known, accepted edge — do not "fix" it: `rawMessages` shares the file, so if
- * raw alone approaches the threshold (rare — compaction is what bounds it), the
- * file can still exceed it right after the UI log is archived, and the next
- * compact writes another very small segment. Slight churn, harmless; guarding it
- * would mean second-guessing which half owns the bytes.
+ * Active-file size above which a turn end archives. Bytes, not an exchange
+ * count: file size is what makes the log slow to read, parse and ship, and
+ * exchange size varies by ~three orders of magnitude. Self-limiting: after an
+ * archive the file restarts at one exchange, so it must grow another 3MB of
+ * real content before the next one fires. No setting: one number, tuned once.
  */
 export const ARCHIVE_SIZE_THRESHOLD = 3 * 1024 * 1024
 
-/** `<seg>.arch.<N>.json.gz` — `seg` is `fileSegment(sessionId)`, the same leaf
- *  base the active `<seg>.json` uses. */
-function segmentPath(dir: string, seg: string, n: number): string {
-  return path.join(dir, `${seg}.arch.${n}.json.gz`)
+interface SegmentFile {
+  n: number
+  name: string
+  /** Hash of the segment's first message id (from the file name). */
+  hash: string
 }
 
-/**
- * Index to split the UI log at: `messages[0..cut)` is archivable, `[cut..]`
- * stays in the active file. 0 = nothing to archive.
- *
- * The split is always the START of a main user exchange (`role === 'user'`
- * without `taskId` — the same "main conversation" subset the admin renders and
- * `deleteExchange` counts ordinals on), so a turn's responses are never cut in
- * half. Keeping the last `keepExchanges` of them also keeps the in-flight turn
- * out of the archive by construction: its user message is the newest one, so a
- * mid-turn compact can never archive the turn it is running inside.
- *
- * A sub-session's own log splits by the same rule: every user row in it (the
- * brief, a query_session follow-up, a child's auto-report) is written without
- * `taskId`, so each one opens an exchange there just as in a root log.
- */
-export function archiveSplitIndex(
-  messages: SessionMessage[],
-  keepExchanges: number,
-): number {
-  const starts: number[] = []
-  for (let i = 0; i < messages.length; i++) {
-    if (messages[i].role === 'user' && !messages[i].taskId) starts.push(i)
+export function firstIdHash(id: string): string {
+  return createHash('sha1').update(id).digest('hex').slice(0, 12)
+}
+
+function listSegmentFiles(dir: string, seg: string): SegmentFile[] {
+  let names: string[]
+  try { names = fsSync.readdirSync(dir) } catch { return [] }
+  const prefix = `${seg}.ui.arch.`
+  const out: SegmentFile[] = []
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith('.jsonl.gz')) continue
+    const m = /^(\d+)\.([0-9a-f]{12})$/.exec(name.slice(prefix.length, -'.jsonl.gz'.length))
+    if (m) out.push({ n: Number(m[1]), name, hash: m[2] })
   }
-  if (starts.length <= keepExchanges) return 0
-  return starts[starts.length - keepExchanges]
+  return out.sort((a, b) => a.n - b.n)
 }
 
-/** Active `<seg>.json` size in bytes. 0 when it does not exist yet (a session
- *  whose first persist has not landed can't be over any threshold). */
-export function activeFileSize(dir: string, seg: string): number {
+function committedSegments(dir: string, seg: string): SegmentFile[] {
+  const files = listSegmentFiles(dir, seg)
+  // Numbers must run 1..k; anything past a gap was never reachable.
+  let k = 0
+  while (k < files.length && files[k].n === k + 1) k++
+  const segs = files.slice(0, k)
+  if (segs.length === 0) return segs
+  const first = readFirstUIRowId(uiLogPath(dir, seg))
+  if (first !== null && segs[k - 1].hash === firstIdHash(first)) return segs.slice(0, -1)
+  return segs
+}
+
+/** Committed segment count (see the module comment). One directory listing
+ *  plus the active file's first few KB. */
+export function countArchiveSegments(dir: string, seg: string): number {
+  return committedSegments(dir, seg).length
+}
+
+function readSegmentFile(dir: string, s: SegmentFile): SessionMessage[] | null {
   try {
-    return fsSync.statSync(path.join(dir, `${seg}.json`)).size
-  } catch {
-    return 0
-  }
-}
-
-/** Committed segment count, read from the active file's header. 0 when the
- *  file is missing/unreadable — the next segment is then 1. */
-export function readArchiveCount(dir: string, seg: string): number {
-  try {
-    const data = JSON.parse(fsSync.readFileSync(path.join(dir, `${seg}.json`), 'utf-8')) as { archiveCount?: number }
-    return typeof data.archiveCount === 'number' ? data.archiveCount : 0
-  } catch {
-    return 0
-  }
-}
-
-/**
- * Write segment `n`. No temp+rename dance: a segment only becomes readable
- * once the active file's `archiveCount` reaches `n`, so a half-written or
- * stale file at this path is by definition uncommitted and this call
- * overwrites it (the resume-after-crash path, idempotent for the same `n`).
- */
-export function writeArchiveSegment(dir: string, seg: string, n: number, messages: SessionMessage[]): void {
-  fsSync.mkdirSync(dir, { recursive: true })
-  fsSync.writeFileSync(segmentPath(dir, seg, n), gzipSync(JSON.stringify(messages)))
-}
-
-/**
- * Read segment `n` back. Null when the file is missing or unreadable — callers
- * must additionally check `n <= readArchiveCount(...)`, since an uncommitted
- * segment left by a crash is present on disk but not part of the log.
- */
-export function readArchiveSegment(dir: string, seg: string, n: number): SessionMessage[] | null {
-  try {
-    return JSON.parse(gunzipSync(fsSync.readFileSync(segmentPath(dir, seg, n))).toString('utf-8')) as SessionMessage[]
+    const text = gunzipSync(fsSync.readFileSync(path.join(dir, s.name))).toString('utf-8')
+    const out: SessionMessage[] = []
+    for (const line of text.split('\n')) if (line) out.push(JSON.parse(line) as SessionMessage)
+    return out
   } catch {
     return null
   }
 }
 
+/** Read committed segment `n`. Null when it doesn't exist, isn't committed,
+ *  or is unreadable. */
+export function readArchiveSegment(dir: string, seg: string, n: number): SessionMessage[] | null {
+  const s = committedSegments(dir, seg).find((f) => f.n === n)
+  return s ? readSegmentFile(dir, s) : null
+}
+
 /**
- * Delete every archive segment of a session. Driven by a filesystem glob, not
- * by the header's `archiveCount` or any in-memory state: whatever is on disk
- * goes, including segments left uncommitted by a crash.
+ * Write segment `n` (= committed count + 1), tmp + rename. Every segment file
+ * numbered `>= n` is by definition uncommitted (a crash leftover, possibly
+ * holding a different first row) and is removed first, so exactly one file
+ * carries each number.
  */
-export async function deleteArchiveSegments(dir: string, seg: string): Promise<void> {
-  const prefix = `${seg}.arch.`
-  let names: string[]
-  try { names = await fs.readdir(dir) } catch { return }
-  for (const name of names) {
-    if (!name.startsWith(prefix) || !name.endsWith('.json.gz')) continue
-    try { await fs.rm(path.join(dir, name)) } catch { /* raced with another delete */ }
+export function writeArchiveSegment(dir: string, seg: string, n: number, messages: SessionMessage[]): void {
+  fsSync.mkdirSync(dir, { recursive: true })
+  for (const s of listSegmentFiles(dir, seg)) {
+    if (s.n >= n) { try { fsSync.unlinkSync(path.join(dir, s.name)) } catch { /* raced */ } }
   }
+  const body = messages.map((m) => JSON.stringify(m)).join('\n') + '\n'
+  atomicWriteFileSync(path.join(dir, `${seg}.ui.arch.${n}.${firstIdHash(messages[0].id)}.jsonl.gz`), gzipSync(body))
+}
+
+/**
+ * Index to split the UI log at: `messages[0..cut)` is archivable, `[cut..]`
+ * stays. 0 = nothing to archive. The split is the start of the newest main
+ * user exchange (`role === 'user'` without `taskId` — the subset the admin
+ * renders and deleteExchange counts on), so a turn is never cut in half.
+ */
+export function archiveSplitIndex(messages: SessionMessage[]): number {
+  for (let i = messages.length - 1; i > 0; i--) {
+    if (messages[i].role === 'user' && !messages[i].taskId) return i
+  }
+  return 0
 }

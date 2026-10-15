@@ -7,7 +7,6 @@
  * Agent instances are created on-demand and released after each run.
  * Per-session locks prevent concurrent initialization.
  */
-import fsSync from 'node:fs'
 import path from 'node:path'
 import type { AgentEvent, AnthropicMessage, ContentBlock, ToolDef } from './bedrock-agent.js'
 import type { ModelRuntime } from './model-runtime.js'
@@ -21,7 +20,7 @@ import { replaceImageBlocks, trimHistoryImages } from './history-images.js'
 import { loadAgentYaml } from './agent-loader.js'
 import type { AgentSessionEvent } from './agent-events.js'
 import { broadcast } from '../ws/broadcast.js'
-import { createDb, mirrorSessionMeta, type HaloDb } from '../db/index.js'
+import { createDb, internalSessionsDb, updateSessionMeta, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools, buildContinueTaskTool } from './session-tools.js'
@@ -33,15 +32,16 @@ import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
-import { saveSessionToFile, fileSegment, findInternalSession, atomicWriteSessionFile, stripTurnStamp } from '../sessions/session-store.js'
-import { readArchiveCount } from '../sessions/session-archive.js'
+import { saveUILog, deriveSessionTitle, isInternalAgent, fileSegment, stripTurnStamp } from '../sessions/session-store.js'
+import { countArchiveSegments } from '../sessions/session-archive.js'
+import { rawLogPath, writeRawLog, uiLogExists, uiLogPath } from '../sessions/session-log.js'
 import { VISION_IMAGE_MIME_TYPES } from '../channels/shared/media-store.js'
 import type { SessionMessage } from '../sessions/session-types.js'
 import {
   createSaveSnapshot,
   type UIState,
 } from '../sessions/ui-log-builder.js'
-import { SessionUIStore } from './session-ui-store.js'
+import { SessionUIStore, type UILogMeta } from './session-ui-store.js'
 import { SessionQueryStore } from './session-query-store.js'
 import { SessionAgentBuilder, type AgentMeta, type BuiltAgent } from './session-agent-builder.js'
 import { SessionSkillCommands } from './session-skill-commands.js'
@@ -271,10 +271,10 @@ export interface SessionInfo {
   updatedAt: number
   stoppedAt: number | null
   archivedAt: number | null
-  /** List-visible metadata mirrored from the session file on every write, so
-   *  listing never opens the file. `exchangeCount === null` means this row was
-   *  never mirrored (written before the columns existed) — the list route then
-   *  reads the file once and backfills (see routes/sessions.ts). */
+  /** List-visible metadata — the row is its only home (session files carry
+   *  none), so listing never opens a file. `exchangeCount === null` means a
+   *  row from before 2.0 — the list route then probes the UI log once, which
+   *  migrates a 1.x session and back-fills the row (see routes/sessions.ts). */
   title: string | null
   exchangeCount: number | null
   contextTokens: number | null
@@ -406,7 +406,7 @@ export class SessionManager implements SessionManagerInternals {
   private readonly stateStore: SessionStateStore
   /**
    * Tombstones: ids of sessions deleted during this process's lifetime. After
-   * deletion any in-flight `saveSessionToFile` for these ids must be skipped,
+   * deletion any in-flight log write for these ids must be skipped,
    * otherwise a pending debouncedPersist or background WS save resurrects the
    * file we just removed. Entries are dropped after `TOMBSTONE_TTL_MS` (well
    * past the 500ms persist debounce + any WS save), so the Set stays bounded
@@ -425,14 +425,21 @@ export class SessionManager implements SessionManagerInternals {
     return this.deletedSessionIds.has(sessionId)
   }
 
+  /** The db holding a session's row: this workspace's, or — for internal
+   *  agents (`__*__`), whose files live under
+   *  `~/.halo/global/internal-sessions/` — the global db next to them, so a
+   *  user workspace never carries platform-tooling rows. */
+  metaDb(agentId: string): HaloDb {
+    return isInternalAgent(agentId) ? internalSessionsDb() : this.db
+  }
+
   /**
-   * Single entry point for writing a session's `.json` to disk.
+   * Single entry point for writing a session's UI log to disk.
    *
-   * All disk persistence routes through here so the tombstone check
+   * All UI-log persistence routes through here so the tombstone check
    * (`deletedSessionIds`) is honoured uniformly. WS handler, background
-   * save closures, and SessionManager's own `persistUIState` /
-   * `persistSubSession` all delegate here instead of importing
-   * `saveSessionToFile` directly. That keeps the invariant simple:
+   * save closures, and SessionUIStore's own persists all delegate here
+   * instead of writing the log directly. That keeps the invariant simple:
    *
    *   "If a session id has been deleted, no further writes for that id
    *    will ever land on disk."
@@ -441,16 +448,27 @@ export class SessionManager implements SessionManagerInternals {
    * resurrect a freshly-deleted file (this is the bug we hit when the
    * delete UI showed rows reappearing).
    *
-   * Being the single entry point also makes it the right place to mirror the
-   * file's list-visible header into the session's db row — the listing path
-   * reads those columns instead of opening every file. The mirror is
-   * idempotent (see mirrorSessionMeta), so the 500ms mid-turn persists don't
-   * churn the row.
+   * It is also where the write's metadata lands in the session's db row — the
+   * row is the only home of title / exchange count / token counts (the log
+   * files carry none). updateSessionMeta skips no-op updates, so the 500ms
+   * mid-turn persists don't churn the row.
    */
-  persistSessionFile(opts: import('../sessions/session-store.js').SessionSaveOptions): void {
-    if (this.deletedSessionIds.has(opts.sessionId)) return
-    const meta = saveSessionToFile(opts)
-    if (meta) mirrorSessionMeta(this.db, opts.sessionId, meta)
+  persistUILog(
+    sessionId: string, agentId: string, rows: SessionMessage[], inflight: SessionMessage | null,
+    meta: UILogMeta, opts?: { archive?: boolean },
+  ): number | null {
+    if (this.deletedSessionIds.has(sessionId)) return null
+    const res = saveUILog(sessionId, agentId, this.workspaceRoot, rows, inflight, { rewrite: opts?.archive })
+    if (!res) return null
+    updateSessionMeta(this.metaDb(agentId), sessionId, {
+      titleIfUnset: deriveSessionTitle(rows, meta),
+      // The archive commit moves rows out of the file; the exchange count is
+      // the session's lifetime count and stays.
+      exchangeDelta: opts?.archive ? 0 : res.userDelta,
+      contextTokens: meta.contextTokens,
+      totalOutputTokens: meta.totalOutputTokens,
+    })
+    return res.size
   }
 
   constructor(workspaceRoot: string, opts?: { reconcileOrphansOnBoot?: boolean }) {
@@ -745,19 +763,19 @@ export class SessionManager implements SessionManagerInternals {
         | typeof rows[number]
         | { id: string; parentId: string | null; agentId: string; agentName: string | null; description: string | null; workingDir: string | null; accessLevel: string | null; archivedAt: number | null }
       if (rows.length === 0) {
-        // Internal-agent sessions don't get a workspace `agent_sessions`
-        // row — their state lives entirely under
-        // `~/.halo/global/internal-sessions/<agentId>/<seg>.json`. Look
-        // there before giving up. Keeps user workspaces clean of
-        // platform-tooling rows (evo / score / apply / future).
-        const internal = findInternalSession(sessionId)
+        // Internal-agent sessions (evo / score / apply) keep their row in the
+        // global internal-sessions db, next to their files under
+        // `~/.halo/global/internal-sessions/` — the workspace they ran in (an
+        // evo sandbox) may be gone. Look there before giving up.
+        const internal = internalSessionsDb().select().from(agentSessions)
+          .where(eq(agentSessions.id, sessionId)).get()
         if (!internal) throw new Error(`Session ${sessionId} not found in database`)
         meta = {
           id: sessionId,
           parentId: null,
           agentId: internal.agentId,
-          agentName: internal.agentId,
-          description: internal.data.description ?? internal.data.title ?? null,
+          agentName: internal.agentName || internal.agentId,
+          description: internal.description || internal.title || null,
           workingDir: null,
           accessLevel: null,
           archivedAt: null,
@@ -872,7 +890,7 @@ export class SessionManager implements SessionManagerInternals {
     // the slot id), else the id as last resort.
     const resolvedAgentName = agentName ?? createdYaml?.name ?? agentId
 
-    this.db.insert(agentSessions).values({
+    const row = {
       id: sessionId,
       parentId,
       agentId,
@@ -882,24 +900,17 @@ export class SessionManager implements SessionManagerInternals {
       accessLevel,
       createdAt: now,
       updatedAt: now,
-    }).run()
-
-    // Caller-provided title: pre-seed the session JSON file before the first
-    // run so both persist paths (saveAgentState's `if (!existing.title)` and
-    // saveSessionToFile's sticky-existing-title logic) respect it instead of
-    // deriving a default from the description / first user message.
-    if (title) {
-      try {
-        const dir = this.sessionDir(agentId)
-        fsSync.mkdirSync(dir, { recursive: true })
-        atomicWriteSessionFile(
-          path.join(dir, `${fileSegment(sessionId)}.json`),
-          JSON.stringify({ id: sessionId, agentId, title, createdAt: new Date(now).toISOString() }),
-        )
-      } catch (err) {
-        console.warn(`[SessionManager] Failed to pre-seed title for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
-      }
+      // Caller-provided title lands in the row up front; the UI-log writes
+      // only derive one while the row has none (sticky). 0, not null: null
+      // marks a row from before 2.0 whose counts still sit in a 1.x file.
+      title: title || null,
+      exchangeCount: 0,
     }
+    this.db.insert(agentSessions).values(row).run()
+    // Internal agents: also the global row — the home of their metadata and
+    // what a later restore from another workspace finds (see ensureSession).
+    // The workspace row stays for this process's lifecycle updates, as in 1.x.
+    if (isInternalAgent(agentId)) internalSessionsDb().insert(agentSessions).values(row).onConflictDoNothing().run()
 
     const createdImageOverride = (createdYaml?.model as Record<string, unknown> | undefined)?.image as boolean | undefined
     const session = this.createAgentSession(
@@ -998,23 +1009,24 @@ export class SessionManager implements SessionManagerInternals {
     return this.queryStore.getSessionTree(rootId)
   }
 
-  /** Title from the mirrored `agent_sessions.title` column. Falls back to the
-   *  session file only for rows written before the mirror columns existed
-   *  (`exchangeCount === null`, same backfill signal routes/sessions.ts uses) —
-   *  channel `/list` calls this per row, and a sync MB-scale JSON read ×50
-   *  stalled the event loop. */
+  /** Title from the session's `agent_sessions.title` column (the row is its
+   *  only home) — channel `/list` calls this per row, so no file reads, except
+   *  once for a row that predates the columns (`exchangeCount === null`, same
+   *  signal routes/sessions.ts uses): probing its UI log migrates a 1.x file,
+   *  back-filling the row. */
   getSessionTitle(sessionId: string): string | null {
-    const row = this.db.select({ agentId: agentSessions.agentId, title: agentSessions.title, exchangeCount: agentSessions.exchangeCount })
-      .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
-    if (!row) return null
-    if (row.exchangeCount !== null) return row.title || null
-    try {
-      const filePath = path.join(this.sessionDir(row.agentId), `${fileSegment(sessionId)}.json`)
-      const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
-      return data.title || null
-    } catch {
-      return null
+    const read = () => {
+      const row = this.db.select({ agentId: agentSessions.agentId, title: agentSessions.title, exchangeCount: agentSessions.exchangeCount })
+        .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
+      if (!row || !isInternalAgent(row.agentId)) return row
+      const meta = this.metaDb(row.agentId).select({ title: agentSessions.title, exchangeCount: agentSessions.exchangeCount })
+        .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
+      return meta ? { ...row, ...meta } : row
     }
+    const row = read()
+    if (!row) return null
+    if (row.exchangeCount !== null || !uiLogExists(uiLogPath(this.sessionDir(row.agentId), fileSegment(sessionId)))) return row.title || null
+    return read()?.title || null
   }
 
   /** Get in-memory session (for direct access by handler) */
@@ -1153,6 +1165,12 @@ export class SessionManager implements SessionManagerInternals {
    *  process (cron `halo cli` child) may have advanced since. */
   isUIStateDirty(rootSessionId: string): boolean {
     return this.uiStore.isUIStateDirty(rootSessionId)
+  }
+
+  /** Persist a loaded root's UI log now (WS detach / switch save). No-op
+   *  when the state isn't loaded. */
+  persistUIState(rootSessionId: string): void {
+    this.uiStore.persistRoot(rootSessionId)
   }
 
   getUIState(rootSessionId: string): UIState | null {
@@ -3036,9 +3054,9 @@ export class SessionManager implements SessionManagerInternals {
     // onto a DIFFERENT turn here — a silently wrong delete. `archiveCount` is the
     // client's anchor — the segment count its view was opened against (from the
     // subscribe/reattach snapshot or the REST log read) — so a match means both
-    // sides count from the same top. Compare against the file header, not
-    // memory: the commit marker on disk is the truth about what was archived.
-    if (readArchiveCount(this.sessionDir(info.agentId), fileSegment(rootId)) !== archiveCount) return 'archived'
+    // sides count from the same top. Compare against the committed segments on
+    // disk, not memory: they are the truth about what was archived.
+    if (countArchiveSegments(this.sessionDir(info.agentId), fileSegment(rootId)) !== archiveCount) return 'archived'
 
     const uiState = this.getUIState(rootId)
     if (!uiState) return 'not_found'
@@ -3082,19 +3100,15 @@ export class SessionManager implements SessionManagerInternals {
       : (this.loadAgentState(rootId, info.agentId) as AnthropicMessage[])
     const newRaw = this.deleteRawTurn(rawSource, target, rank)
 
-    // Persist raw first, then UI — both do read-merge-write on the same file, so
-    // whichever runs second preserves the other's just-written field.
+    // Raw and UI are separate files; each write here is a full atomic rewrite
+    // (the raw array shrank, the UI rows were replaced).
     if (newRaw) {
       const repaired = repairConversationMessages(newRaw, `[Session:${rootId}]`)
       if (live) {
         live.agent.messages = repaired
         this.saveAgentState(live)
-      } else {
-        const filePath = path.join(this.sessionDir(info.agentId), `${fileSegment(rootId)}.json`)
-        let data: Record<string, unknown> = {}
-        try { data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) } catch { /* new file */ }
-        data.rawMessages = repaired
-        atomicWriteSessionFile(filePath, JSON.stringify(data))
+      } else if (!this.deletedSessionIds.has(rootId)) {
+        writeRawLog(rawLogPath(this.sessionDir(info.agentId), fileSegment(rootId)), repaired)
       }
     }
 
@@ -3267,12 +3281,11 @@ export class SessionManager implements SessionManagerInternals {
       output = session.output
       lastActivityAt = session.lastActivityAt
     } else {
-      try {
-        const filePath = path.join(this.sessionDir(meta!.agentId), `${fileSegment(sessionId)}.json`)
-        const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
-        output = typeof data.output === 'string' ? data.output : ''
-        lastActivityAt = typeof data.lastActivityAt === 'string' ? data.lastActivityAt : null
-      } catch { /* file may not exist */ }
+      // The row the raw save wrote (metaDb: internal agents' is the global one).
+      const row = this.metaDb(meta!.agentId).select({ output: agentSessions.output, lastActivityAt: agentSessions.lastActivityAt })
+        .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
+      output = row?.output ?? ''
+      lastActivityAt = row?.lastActivityAt ?? null
     }
     return JSON.stringify({ code: 0, status, output: this.truncateOutputTail(output) || '(no output yet)', last_activity_at: lastActivityAt })
   }

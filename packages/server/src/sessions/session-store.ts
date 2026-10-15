@@ -1,64 +1,42 @@
 /**
- * Session store — file-based persistence for session messages.
+ * Session store — file-based persistence for session logs.
  *
- * All sessions stored as: .halo/sessions/{agentId}/{sessionId}.json
- * No more explorer/delegated split — agentId determines the directory.
+ * Layout (2.0): `.halo/sessions/{agentId}/{seg}.ui.jsonl` (UI log) and
+ * `{seg}.raw.jsonl` (model history), plus UI archive segments — see
+ * session-log.ts / session-archive.ts. The files hold messages only; every
+ * piece of session metadata (title, counts, tokens, output, parent, agent
+ * name) lives in the session's `agent_sessions` row.
+ *
+ * 1.x kept one `{seg}.json` with both halves and a metadata header. Nothing
+ * here reads it: legacy-migrate.ts converts a session the first time its 2.0
+ * log is opened (session-log.ts `openLog`), and never touches the `.json`.
  */
-import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { homedir } from 'node:os'
-import type { SessionMessage, SessionFileData } from './session-types.js'
-import { deleteArchiveSegments } from './session-archive.js'
+import { and, eq, gte, inArray, lt, or } from 'drizzle-orm'
+import type { SessionMessage } from './session-types.js'
+import {
+  uiLogPath, rawLogPath, readUILog, readRawLog, writeUILog, forgetLogCaches,
+  type UIWriteResult,
+} from './session-log.js'
+import { internalSessionsDb } from '../db/index.js'
+import { agentSessions } from '../db/schema.js'
+import { globalInternalSessionsDir } from '../paths.js'
 
 /**
  * Internal agents (`__evo_agent__`, `__score__`, `__apply_agent__`) are
  * platform tooling — their sessions don't belong to any user workspace.
  * Their session files go to `~/.halo/global/internal-sessions/<agentId>/`
  * regardless of which workspace the cli was launched against, keeping
- * the user's workspace tree clean.
+ * the user's workspace tree clean. Their rows live in that directory's own
+ * db (`internalSessionsDb`, db/index.ts), same schema as a workspace's.
  *
  * Detection by id pattern (leading + trailing `__`); naming convention
  * the seed templates already use.
  */
 export function isInternalAgent(agentId: string): boolean {
   return agentId.startsWith('__') && agentId.endsWith('__')
-}
-
-/**
- * Look up a session JSON file under `~/.halo/global/internal-sessions/`
- * by sessionId alone. Returns the matching agentId (and the parsed JSON
- * blob) or null.
- *
- * The cli `-s <id>` resume path calls this when the workspace db has no
- * row for the id — internal-agent sessions are stored globally and have
- * no workspace db row by design (so they never pollute user workspaces).
- * The leaf-segment filename + dir-by-agent layout makes a directory scan
- * cheap (small fanout, only platform agents).
- */
-export function findInternalSession(sessionId: string): {
-  agentId: string
-  filePath: string
-  data: { agentId?: string; rawMessages?: unknown[]; messages?: unknown[]; createdAt?: string; description?: string; title?: string }
-} | null {
-  const root = path.join(homedir(), '.halo', 'global', 'internal-sessions')
-  if (!fsSync.existsSync(root)) return null
-  const seg = fileSegment(sessionId)
-  for (const agentDir of fsSync.readdirSync(root, { withFileTypes: true })) {
-    if (!agentDir.isDirectory()) continue
-    const filePath = path.join(root, agentDir.name, `${seg}.json`)
-    if (!fsSync.existsSync(filePath)) continue
-    try {
-      const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
-      const agentId = typeof data?.agentId === 'string' && data.agentId.length > 0
-        ? data.agentId
-        : agentDir.name
-      return { agentId, filePath, data }
-    } catch {
-      // corrupt JSON — keep scanning, another agent dir may have it
-    }
-  }
-  return null
 }
 
 /** Resolve session directory for an agent: .halo/sessions/{agentId}/ */
@@ -86,62 +64,17 @@ export function fileSegment(sessionId: string): string {
 
 /** Strip the arrival-time stamp runAgentTurn prepends to every model-facing user
  *  turn (`[2026-09-12T15:17:44.153Z] `). The UI log keeps the user's raw text,
- *  so anything that matches or displays a `rawMessages` user turn against it
+ *  so anything that matches or displays a raw user turn against it
  *  (deleteExchange's turn locator, the cold-path raw→display fallback) must
  *  drop the stamp first. */
 export function stripTurnStamp(s: string): string {
   return s.replace(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] ?/, '')
 }
 
-/** Resolve the path for a session file. Always uses the segment-based name —
- *  hierarchical IDs (`a>b>c`) only matter at runtime; on disk the file is the
- *  leaf segment. */
-function resolveSessionPath(dir: string, sessionId: string, ext: string): string {
-  return path.join(dir, `${fileSegment(sessionId)}${ext}`)
-}
-
-/** Options for saving a session */
-export interface SessionSaveOptions {
-  sessionId: string
-  projectPath: string | null
-  messages: SessionMessage[]
-  contextTokens: number
-  outputTokens: number
-  /** Agent ID (default: 'default') */
-  agentId?: string
-  /** Agent display name (default: 'Default') */
-  agentName?: string
-  /** Session source metadata (not used for path — kept for backward compat in JSON) */
-  source?: 'explorer' | 'delegated'
-  /** Description used as title for delegated sessions */
-  description?: string
-  /** Parent session ID (sub-sessions only) */
-  parentSessionId?: string | null
-  /** Number of committed UI-log archive segments (`<seg>.arch.<N>.json.gz`).
-   *  Only the archiving write passes it; every other write preserves whatever
-   *  the file already has. See sessions/session-archive.ts. */
-  archiveCount?: number
-  /** Main-conversation user turns this write is moving OUT into an archive
-   *  segment. Added to the header's `archivedUserCount` so `exchangeCount`
-   *  keeps counting the archived tail. Only the archiving write passes it. */
-  archivedUserDelta?: number
-}
-
-/** List-visible header fields, returned by `saveSessionToFile` so the caller can
- *  mirror them into the session's db row without re-reading the file (the
- *  listing path reads the row, never the file — see routes/sessions.ts). */
-export interface SessionFileMeta {
-  title: string
-  exchangeCount: number
-  contextTokens: number
-  totalOutputTokens: number
-}
-
 /**
  * Main-conversation user turns in a UI log — `role === 'user'` without a
  * `taskId`, the same subset `archiveSplitIndex` splits on and `deleteExchange`
- * counts ordinals over. Plus the archived tail (header `archivedUserCount`)
- * this is the session's exchange count.
+ * counts ordinals over.
  */
 export function countMainUserMessages(messages: SessionMessage[]): number {
   let n = 0
@@ -151,270 +84,132 @@ export function countMainUserMessages(messages: SessionMessage[]): number {
   return n
 }
 
-/**
- * Atomic file write: write to a temp file in the same directory, then
- * rename to the final path. POSIX guarantees rename within the same
- * filesystem is atomic — readers always see either the old complete
- * file or the new complete file, never a half-written one. Used for
- * session jsonl writes which would otherwise corrupt under SIGKILL /
- * OOM mid-write.
- *
- * Windows note: NTFS rename-over-existing is also atomic at the
- * filesystem level, but can fail with EPERM/EBUSY if another process
- * (antivirus scanning, indexer) has the target open. Halo targets
- * Linux/macOS today; Windows support is a separate effort.
- *
- * The temp suffix includes pid + ms so concurrent writers (different
- * processes shouldn't happen — there's a single-instance lock — but
- * be defensive about a fork or test runner) don't collide.
- */
-function atomicWriteJsonSync(filePath: string, content: string): void {
-  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now().toString(36)}`
-  fsSync.writeFileSync(tmpPath, content, 'utf-8')
-  try {
-    fsSync.renameSync(tmpPath, filePath)
-  } catch (err) {
-    // rename failed — clean up the orphan temp so we don't leave
-    // junk piling up. Best-effort; if cleanup also fails, the next
-    // server boot will eventually accumulate them (acceptable: temp
-    // files don't break listing — only `.json` files are scanned).
-    try { fsSync.unlinkSync(tmpPath) } catch { /* ignore */ }
-    throw err
-  }
+/** The title a session gets from its log: a delegated session's brief, else
+ *  the first user message minus the injected context lines. Only applied while
+ *  the session row has no title yet (sticky). */
+export function deriveSessionTitle(messages: SessionMessage[], opts: { delegated: boolean; description?: string; agentName: string }): string {
+  if (opts.delegated) return (opts.description || `${opts.agentName} session`).slice(0, 60)
+  const firstUser = messages.find((m) => m.role === 'user')
+  const rawTitle = (firstUser ? firstUser.content : '')
+    .replace(/\[Currently viewing:[^\]]*\]\s*/g, '')
+    .replace(/\[Face open:[^\]]*\]\s*/g, '')
+    .replace(/\[Selected text in[^\]]*\]\n```[\s\S]*?```\s*/g, '')
+    .trim()
+  return (rawTitle || 'New session').slice(0, 60)
 }
 
-/** Save session messages to JSON file — path determined by agentId.
- *  Returns the list-visible header fields (so the caller can mirror them into
- *  the db row), or null when nothing was written. */
-export function saveSessionToFile(opts: SessionSaveOptions): SessionFileMeta | null {
-  const { sessionId, projectPath, messages, contextTokens, outputTokens } = opts
-  const agentId = opts.agentId ?? 'default'
-  const agentName = opts.agentName ?? 'Default'
-  const source = opts.source ?? 'explorer'
+// ── UI log ────────────────────────────────────────────────────────────
 
-  if (!sessionId || messages.length === 0) return null
-  try {
-    const dir = getSessionDir(agentId, projectPath)
-    fsSync.mkdirSync(dir, { recursive: true })
-
-    const filePath = resolveSessionPath(dir, sessionId, '.json')
-
-    const now = new Date().toISOString()
-    let createdAt = now
-    let existingParent: string | undefined
-    let existingRawMessages: unknown
-    let existingOutput: unknown
-    let existingTitle: string | undefined
-    let existingArchiveCount: number | undefined
-    let existingArchivedUserCount = 0
-    try {
-      const existing = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
-      if (existing.createdAt) createdAt = existing.createdAt
-      if (existing.parentSessionId) existingParent = existing.parentSessionId
-      if (existing.title && existing.title !== 'New session') existingTitle = existing.title
-      // Preserve agent state fields (written by session-manager saveAgentState)
-      if (existing.rawMessages) existingRawMessages = existing.rawMessages
-      if (existing.output !== undefined) existingOutput = existing.output
-      if (typeof existing.archiveCount === 'number') existingArchiveCount = existing.archiveCount
-      if (typeof existing.archivedUserCount === 'number') existingArchivedUserCount = existing.archivedUserCount
-    } catch { /* new session */ }
-
-    // Title: derived once from the first user message and sticky thereafter.
-    // Callers may pass truncated message logs (e.g. event-driven views that
-    // miss the user turn) — preserving the existing title avoids clobbering
-    // a good title with 'New session' when the user msg isn't in `messages`.
-    let title: string
-    if (existingTitle) {
-      title = existingTitle
-    } else if (source === 'delegated') {
-      title = (opts.description ?? `${agentName} session`).slice(0, 60)
-    } else {
-      const firstUser = messages.find((m) => m.role === 'user')
-      let rawTitle = firstUser ? firstUser.content : ''
-      rawTitle = rawTitle
-        .replace(/\[Currently viewing:[^\]]*\]\s*/g, '')
-        .replace(/\[Face open:[^\]]*\]\s*/g, '')
-        .replace(/\[Selected text in[^\]]*\]\n```[\s\S]*?```\s*/g, '')
-        .trim()
-      title = (rawTitle || 'New session').slice(0, 60)
-    }
-
-    const parentSessionId = existingParent ?? (opts.parentSessionId || undefined)
-    const archiveCount = opts.archiveCount ?? existingArchiveCount
-    // Main user turns already moved out into archive segments. `messages` only
-    // holds the kept tail, so without this the exchange count would shrink
-    // every time a compact archives history.
-    const archivedUserCount = existingArchivedUserCount + (opts.archivedUserDelta ?? 0)
-    const exchangeCount = countMainUserMessages(messages) + archivedUserCount
-    const session: Record<string, unknown> = {
-      version: 1,
-      id: sessionId,
-      agentId,
-      agentName,
-      title,
-      source,
-      createdAt,
-      updatedAt: now,
-      messageCount: messages.length,
-      contextTokens,
-      totalOutputTokens: outputTokens,
-      messages,
-      ...(parentSessionId ? { parentSessionId } : {}),
-      // Preserve rawMessages/output from session-manager
-      ...(existingRawMessages ? { rawMessages: existingRawMessages } : {}),
-      ...(existingOutput !== undefined ? { output: existingOutput } : {}),
-      // Archive commit marker: the archiving write raises it, every other
-      // write carries the on-disk value forward. Dropping it here would
-      // orphan already-written segments.
-      ...(archiveCount ? { archiveCount } : {}),
-      ...(archivedUserCount ? { archivedUserCount } : {}),
-    }
-
-    atomicWriteJsonSync(filePath, JSON.stringify(session))
-    return { title, exchangeCount, contextTokens, totalOutputTokens: outputTokens }
-  } catch (err) {
-    console.debug(`[SessionStore] Failed to save session: ${err instanceof Error ? err.message : String(err)}`)
-    return null
-  }
-}
-
-/**
- * Same atomic write helper, exported so session-manager's saveAgentState
- * (which writes to the same jsonl path with a different field set) can
- * use it without duplicating the temp+rename dance. Both callers MUST
- * use this — session-manager and session-store write to the same file,
- * so a non-atomic write from either side would still corrupt the file
- * the other side reads back.
- */
-export function atomicWriteSessionFile(filePath: string, content: string): void {
-  atomicWriteJsonSync(filePath, content)
-}
-
-/** Load session messages from JSON file */
-export function loadSessionMessages(sessionId: string, projectPath?: string | null, agentId?: string): SessionMessage[] {
-  try {
-    const dir = getSessionDir(agentId ?? 'default', projectPath)
-    const filePath = resolveSessionPath(dir, sessionId, '.json')
-    const raw = fsSync.readFileSync(filePath, 'utf-8')
-    const session = JSON.parse(raw)
-    return (session.messages ?? []) as SessionMessage[]
-  } catch {
-    return []
-  }
-}
-
-/** Load full session file data (including token counts) */
-export function loadSessionFileData(sessionId: string, projectPath?: string | null, agentId?: string): SessionFileData | null {
-  try {
-    const dir = getSessionDir(agentId ?? 'default', projectPath)
-    const filePath = resolveSessionPath(dir, sessionId, '.json')
-    const raw = fsSync.readFileSync(filePath, 'utf-8')
-    return JSON.parse(raw) as SessionFileData
-  } catch {
-    return null
-  }
-}
-
-/** Delete a session JSON file plus its UI-log archive segments. */
-export async function deleteSessionFile(sessionId: string, projectPath?: string | null, agentId?: string): Promise<void> {
+/** Load a session's UI log ([] when it has none). `prime` = the result
+ *  becomes the log this process writes (see readUILog). */
+export function loadSessionMessages(sessionId: string, projectPath?: string | null, agentId?: string, opts?: { prime?: boolean }): SessionMessage[] {
   const dir = getSessionDir(agentId ?? 'default', projectPath)
-  const seg = fileSegment(sessionId)
-  try { await fs.rm(path.join(dir, `${seg}.json`)) } catch { /* not found */ }
-  await deleteArchiveSegments(dir, seg)
+  return readUILog(uiLogPath(dir, fileSegment(sessionId)), opts) ?? []
 }
 
-/** List all session files for an agent */
-export function listSessionFiles(projectPath?: string | null, agentId?: string): string[] {
+/**
+ * Persist a UI log (finalized rows + the optional in-flight assistant) —
+ * appends what changed since this process's last write (session-log.ts).
+ * Returns the main-user delta for the row's exchange count and the file size,
+ * or null when nothing was written.
+ */
+export function saveUILog(
+  sessionId: string, agentId: string, projectPath: string | null,
+  rows: SessionMessage[], inflight: SessionMessage | null,
+  opts?: { rewrite?: boolean },
+): UIWriteResult | null {
+  if (!sessionId || (rows.length === 0 && !inflight)) return null
   try {
-    const dir = getSessionDir(agentId ?? 'default', projectPath)
-    return fsSync.readdirSync(dir)
-      .filter((f) => f.endsWith('.json'))
-      .map((f) => f.replace('.json', ''))
+    const dir = getSessionDir(agentId, projectPath)
+    return writeUILog(uiLogPath(dir, fileSegment(sessionId)), rows, inflight, opts)
+  } catch (err) {
+    console.error(`[SessionStore] Failed to save UI log for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
+}
+
+// ── Raw log ───────────────────────────────────────────────────────────
+
+/** Load a session's model history ([] when it has none). `prime` = the
+ *  result becomes the live `agent.messages` (see readRawLog). */
+export function loadRawMessages(sessionId: string, agentId: string, projectPath?: string | null, opts?: { prime?: boolean }): unknown[] {
+  const dir = getSessionDir(agentId, projectPath)
+  return readRawLog(rawLogPath(dir, fileSegment(sessionId)), opts) ?? []
+}
+
+// ── Readers ───────────────────────────────────────────────────────────
+
+/** A session's UI + raw log for a known (agentId, sessionId) — the log route /
+ *  halo-city view. Null when the session has no UI log on disk. */
+export function loadSessionView(sessionId: string, agentId: string, projectPath?: string | null): { messages: SessionMessage[]; rawMessages: unknown[] } | null {
+  const dir = getSessionDir(agentId, projectPath)
+  const seg = fileSegment(sessionId)
+  const messages = readUILog(uiLogPath(dir, seg))
+  if (!messages) return null
+  return { messages, rawMessages: readRawLog(rawLogPath(dir, seg)) ?? [] }
+}
+
+// ── Delete ────────────────────────────────────────────────────────────
+
+/** A file of session `seg`: 2.0 logs and segments (plus a crashed write's
+ *  `.tmp.<pid>.<ms>`), the 1.x `.json` and its segments. */
+function isSessionFile(name: string, seg: string): boolean {
+  if (!name.startsWith(`${seg}.`)) return false
+  const rest = name.slice(seg.length + 1).replace(/\.tmp\.[^.]+\.[^.]+$/, '')
+  return rest === 'ui.jsonl' || rest === 'raw.jsonl' || rest === 'json'
+    || /^ui\.arch\.\d+\.[0-9a-f]{12}\.jsonl\.gz$/.test(rest)
+    || /^arch\.\d+\.json\.gz$/.test(rest)
+}
+
+/** Delete every file of one session in `dir`, found by a directory listing —
+ *  never by memory — and drop the writer caches. True when anything matched. */
+async function deleteSessionFilesIn(dir: string, seg: string): Promise<boolean> {
+  let names: string[]
+  try { names = await fs.readdir(dir) } catch { return false }
+  let hit = false
+  for (const name of names) {
+    if (!isSessionFile(name, seg)) continue
+    try { await fs.rm(path.join(dir, name)); hit = true } catch { /* raced with another delete */ }
+  }
+  forgetLogCaches(dir, seg)
+  return hit
+}
+
+/** Delete a session's files for a known agent. */
+export async function deleteSessionFile(sessionId: string, projectPath?: string | null, agentId?: string): Promise<void> {
+  await deleteSessionFilesIn(getSessionDir(agentId ?? 'default', projectPath), fileSegment(sessionId))
+}
+
+async function subdirs(base: string): Promise<string[]> {
+  try {
+    return (await fs.readdir(base, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => path.join(base, d.name))
   } catch {
     return []
   }
 }
 
-// ── Per-session jsonl enrichment ──────────────────────────────────
-
 /**
- * Read the header metadata of a known (agentId, sessionId) straight from its
- * file. This parses the WHOLE file (multi-MB for a long session), so it is not
- * a listing primitive: the listing path reads the mirrored db columns and only
- * falls back here once per row to backfill them (see routes/sessions.ts).
+ * Find and delete a session's files by id. Workspace sessions: the first agent
+ * dir holding its files (the caller iterates the tree and deletes the rows via
+ * `deleteSession`). Otherwise an internal session: its rows live in the global
+ * db (its workspace never had one), so the whole subtree's rows and files go
+ * here; a 1.x internal file without a row is found by scanning the dirs.
  */
-export function readSessionFileMeta(
-  sessionId: string,
-  agentId: string,
-  projectPath?: string | null,
-): (SessionFileMeta & { messageCount: number }) | null {
-  try {
-    const dir = getSessionDir(agentId, projectPath)
-    const filePath = resolveSessionPath(dir, sessionId, '.json')
-    const raw = fsSync.readFileSync(filePath, 'utf-8')
-    const data = JSON.parse(raw) as Partial<SessionFileData>
-    return {
-      title: data.title ?? '',
-      messageCount: data.messageCount ?? 0,
-      exchangeCount: countMainUserMessages(data.messages ?? []) + (data.archivedUserCount ?? 0),
-      contextTokens: data.contextTokens ?? 0,
-      totalOutputTokens: data.totalOutputTokens ?? 0,
-    }
-  } catch {
-    return null
-  }
-}
-
-/** Find and load a session file by ID (scans all agent dirs). */
-export function findSessionFileData(sessionId: string, projectPath?: string | null): SessionFileData | null {
-  try {
-    const baseDir = getSessionsBaseDir(projectPath)
-    const agentDirs = fsSync.readdirSync(baseDir)
-    const fileName = `${fileSegment(sessionId)}.json`
-    for (const agentDir of agentDirs) {
-      try {
-        return JSON.parse(fsSync.readFileSync(path.join(baseDir, agentDir, fileName), 'utf-8')) as SessionFileData
-      } catch { /* not in this agent's dir */ }
-    }
-  } catch { /* base dir doesn't exist */ }
-  return null
-}
-
-/** Find and delete a session file by ID (scans all agent dirs), plus its
- *  UI-log archive segments. */
 export async function findAndDeleteSessionFile(sessionId: string, projectPath?: string | null): Promise<void> {
-  try {
-    const baseDir = getSessionsBaseDir(projectPath)
-    const agentDirs = await fs.readdir(baseDir)
-    const seg = fileSegment(sessionId)
-    for (const agentDir of agentDirs) {
-      try {
-        await fs.rm(path.join(baseDir, agentDir, `${seg}.json`))
-        await deleteArchiveSegments(path.join(baseDir, agentDir), seg)
-        return
-      } catch { /* not here, try next agent dir */ }
-    }
-  } catch { /* base dir doesn't exist */ }
-}
-
-/** Find a session file by ID (scans all agent dirs) and overwrite its `title`.
- *  The JSON file is the source of truth the admin listing reads, so the rename
- *  lands here (read-merge-write, same atomic path the other writers use).
- *  Returns true when a file was found and updated. */
-export function findAndUpdateSessionTitle(sessionId: string, title: string, projectPath?: string | null): boolean {
-  try {
-    const baseDir = getSessionsBaseDir(projectPath)
-    const agentDirs = fsSync.readdirSync(baseDir)
-    const fileName = `${fileSegment(sessionId)}.json`
-    for (const agentDir of agentDirs) {
-      const filePath = path.join(baseDir, agentDir, fileName)
-      try {
-        const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) as Record<string, unknown>
-        data.title = title
-        atomicWriteJsonSync(filePath, JSON.stringify(data))
-        return true
-      } catch { /* not in this agent's dir, or unreadable — try next */ }
-    }
-  } catch { /* base dir doesn't exist */ }
-  return false
+  const seg = fileSegment(sessionId)
+  for (const dir of await subdirs(getSessionsBaseDir(projectPath))) {
+    if (await deleteSessionFilesIn(dir, seg)) return
+  }
+  const db = internalSessionsDb()
+  const tree = db.select({ id: agentSessions.id, agentId: agentSessions.agentId }).from(agentSessions)
+    .where(or(eq(agentSessions.id, sessionId), and(gte(agentSessions.id, sessionId + '>'), lt(agentSessions.id, sessionId + '>\uffff'))))
+    .all()
+  for (const r of tree) await deleteSessionFilesIn(path.join(globalInternalSessionsDir(), r.agentId), fileSegment(r.id))
+  if (tree.length > 0) {
+    db.delete(agentSessions).where(inArray(agentSessions.id, tree.map((r) => r.id))).run()
+    return
+  }
+  for (const dir of await subdirs(globalInternalSessionsDir())) {
+    if (await deleteSessionFilesIn(dir, seg)) return
+  }
 }

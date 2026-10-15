@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
@@ -9,8 +9,8 @@ import { agentSessions } from '../src/db/schema.js'
 /**
  * Descendant lookups ride the path-encoded id range (`root>` … `root>￿`)
  * instead of a per-level `WHERE parent_id = ?` recursion, and session titles
- * come from the mirrored `agent_sessions.title` column rather than a sync read
- * of the session file (with the file as the fallback for un-mirrored rows).
+ * come from the `agent_sessions.title` column rather than a sync read of the
+ * session file (an un-mirrored row's 1.x file is migrated once, back-filling it).
  */
 
 let ws: string
@@ -73,12 +73,18 @@ describe('getSessionTitle', () => {
     expect(sm.getSessionTitle('t1')).toBe('From column')
   })
 
-  it('falls back to the session file for a row never mirrored (exchangeCount null)', () => {
+  it('migrates a row never mirrored (exchangeCount null) from its 1.x file, once', () => {
     seedRow('t2', { exchangeCount: null, title: null })
     const dir = join(ws, '.halo', 'sessions', 'default')
     mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 't2.json'), JSON.stringify({ title: 'From file' }))
+    writeFileSync(join(dir, 't2.json'), JSON.stringify({
+      version: 1, id: 't2', title: 'From file',
+      messages: [{ id: 'u', role: 'user', content: 'q', timestamp: 1 }],
+    }))
     expect(sm.getSessionTitle('t2')).toBe('From file')
+    // Back-filled onto the row: the next call needs no file.
+    expect(existsSync(join(dir, 't2.json'))).toBe(false)
+    expect(sm.getDb().select().from(agentSessions).where(eq(agentSessions.id, 't2')).get()!.exchangeCount).toBe(1)
   })
 
   it('returns null for an unknown id', () => {

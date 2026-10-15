@@ -16,7 +16,8 @@ import { requestToken, resolveTokenAuth, tokenAuthJsonError } from '../middlewar
 import { getTokenFromCookieHeader, isAuthenticated } from '../middleware/auth.js'
 import { canAddressSession } from '../channels/web/handler.js'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
-import { readSessionFileMeta, loadSessionFileData } from '../sessions/session-store.js'
+import { getSessionDir, fileSegment, loadSessionView } from '../sessions/session-store.js'
+import { uiLogPath } from '../sessions/session-log.js'
 import { messageToolCalls } from '../sessions/session-types.js'
 import { createMtimeCache } from './mtime-cache.js'
 import { etagMatches } from './etag.js'
@@ -52,7 +53,8 @@ interface ShowSession {
   updatedAt: number
   contextTokens: number
   outputTokens: number
-  /** Persisted message count from the session file (0 when unreadable). */
+  /** Lifetime main-user turns from the session row (`exchange_count`; 0 when
+   *  unset) — an activity signal only. */
   messageCount: number
 }
 
@@ -131,26 +133,6 @@ function liveActivity(sm: SessionManager, sessionId: string): { lastTool: string
   return { lastTool, activeSkill }
 }
 
-// Disk-meta fallback cache for sessions with no live UIState. Keyed by
-// session id, invalidated by the session's updatedAt — so an idle/stopped
-// session costs one jsonl-header read per actual change, not per poll.
-interface MetaCacheEntry { updatedAt: number; contextTokens: number; outputTokens: number; messageCount: number }
-const _metaCache = new Map<string, MetaCacheEntry>()
-
-function sessionMeta(r: { id: string; agentId: string; updatedAt: number }, wsPath: string): MetaCacheEntry {
-  const cached = _metaCache.get(r.id)
-  if (cached && cached.updatedAt === r.updatedAt) return cached
-  const meta = readSessionFileMeta(r.id, r.agentId, wsPath)
-  const entry: MetaCacheEntry = {
-    updatedAt: r.updatedAt,
-    contextTokens: meta?.contextTokens ?? 0,
-    outputTokens: meta?.totalOutputTokens ?? 0,
-    messageCount: meta?.messageCount ?? 0,
-  }
-  _metaCache.set(r.id, entry)
-  return entry
-}
-
 function snapshotWorkspace(sm: SessionManager, wsPath: string, label: string): ShowWorkspace {
   // All depths (parentId undefined = no filter), newest first, non-archived.
   const { sessions: rows } = sm.listSessions({ includeArchived: false, limit: SESSIONS_PER_WS })
@@ -162,9 +144,8 @@ function snapshotWorkspace(sm: SessionManager, wsPath: string, label: string): S
       ? sm.getCachedUIState(r.id)
       : null
     // Live UIState only exists while this process drives the session; for
-    // everything else (idle/stopped/restarted) fall back to the persisted
-    // session-file header so tokens don't read as 0 the moment work pauses.
-    const meta = sessionMeta(r, wsPath)
+    // everything else (idle/stopped/restarted) fall back to the row's
+    // persisted counts so tokens don't read as 0 the moment work pauses.
     return {
       id: r.id,
       parentId: r.parentId,
@@ -175,9 +156,9 @@ function snapshotWorkspace(sm: SessionManager, wsPath: string, label: string): S
       lastTool,
       activeSkill,
       updatedAt: r.updatedAt,
-      contextTokens: (live?.contextTokens || meta.contextTokens) ?? 0,
-      outputTokens: (live?.outputTokens || meta.outputTokens) ?? 0,
-      messageCount: meta.messageCount,
+      contextTokens: (live?.contextTokens || r.contextTokens) ?? 0,
+      outputTokens: (live?.outputTokens || r.totalOutputTokens) ?? 0,
+      messageCount: r.exchangeCount ?? 0,
     }
   })
   const wsSkills = scanSkills(path.join(wsPath, '.halo', 'skills'))
@@ -213,13 +194,16 @@ interface RoSessionRow {
   description: string
   updated_at: number
   stopped_at: number | null
+  context_tokens: number | null
+  total_output_tokens: number | null
+  exchange_count: number | null
 }
 
 interface RoReader {
   db: InstanceType<typeof Database>
   listPage: Database.Statement<[number], RoSessionRow>
   liveParents: Database.Statement<[], { parent_id: string }>
-  getById: Database.Statement<[string], { agent_id: string }>
+  getById: Database.Statement<[string], { agent_id: string; context_tokens: number | null; total_output_tokens: number | null }>
 }
 const _roReaders = new Map<string, RoReader>()
 
@@ -237,7 +221,8 @@ function roReader(rawPath: string): RoReader | null {
     const reader: RoReader = {
       db,
       listPage: db.prepare(
-        `SELECT id, parent_id, agent_id, agent_name, description, updated_at, stopped_at
+        `SELECT id, parent_id, agent_id, agent_name, description, updated_at, stopped_at,
+                context_tokens, total_output_tokens, exchange_count
          FROM agent_sessions WHERE archived_at IS NULL
          ORDER BY updated_at DESC LIMIT ?`),
       // Every parent id that still has a non-stopped child — the same signal
@@ -246,7 +231,7 @@ function roReader(rawPath: string): RoReader | null {
       liveParents: db.prepare(
         `SELECT DISTINCT parent_id FROM agent_sessions
          WHERE parent_id IS NOT NULL AND stopped_at IS NULL AND archived_at IS NULL`),
-      getById: db.prepare(`SELECT agent_id FROM agent_sessions WHERE id = ?`),
+      getById: db.prepare(`SELECT agent_id, context_tokens, total_output_tokens FROM agent_sessions WHERE id = ?`),
     }
     _roReaders.set(wsPath, reader)
     return reader
@@ -290,7 +275,6 @@ function snapshotWorkspaceReadonly(wsPath: string, label: string): ShowWorkspace
     // promise check (nothing is in memory here by construction).
     const status = r.stopped_at ? 'stopped' as const : liveParents.has(r.id) ? 'running' as const : 'idle' as const
     counts[status]++
-    const meta = sessionMeta({ id: r.id, agentId: r.agent_id, updatedAt: r.updated_at }, wsPath)
     return {
       id: r.id,
       parentId: r.parent_id,
@@ -301,9 +285,9 @@ function snapshotWorkspaceReadonly(wsPath: string, label: string): ShowWorkspace
       lastTool: '',
       activeSkill: '',
       updatedAt: r.updated_at,
-      contextTokens: meta.contextTokens,
-      outputTokens: meta.outputTokens,
-      messageCount: meta.messageCount,
+      contextTokens: r.context_tokens ?? 0,
+      outputTokens: r.total_output_tokens ?? 0,
+      messageCount: r.exchange_count ?? 0,
     }
   })
   return {
@@ -517,23 +501,27 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
       }
 
       // Degraded read-only view: no live runtime for this workspace in this
-      // process, so serve the persisted session file (db row → agentId →
-      // file). maxContextTokens needs a live agent config — report 0, the
-      // city's inspector hides the meter when the cap is unknown.
+      // process, so serve the persisted UI log (db row → agentId → file).
+      // maxContextTokens needs a live agent config — report 0, the city's
+      // inspector hides the meter when the cap is unknown. A session still in
+      // 1.x format (no ui.jsonl) reads as not found: opening it through the
+      // log reader would migrate it — a write this read-only path must never
+      // make (another process may be driving the workspace).
       const reader = roReader(wsPath)
       if (!reader) return c.json({ error: 'session not found' }, 404)
       const row = reader.getById.get(id)
       if (!row) return c.json({ error: 'session not found' }, 404)
-      const data = loadSessionFileData(id, wsPath, row.agent_id)
+      if (!fs.existsSync(uiLogPath(getSessionDir(row.agent_id, wsPath), fileSegment(id)))) return c.json({ error: 'session not found' }, 404)
+      const data = loadSessionView(id, row.agent_id, wsPath)
       if (!data) return c.json({ error: 'session not found' }, 404)
-      const messages = data.messages ?? []
+      const messages = data.messages
       const liveParents = new Set(reader.liveParents.all().map((r) => r.parent_id))
       return c.json({
         id,
         messages: trimSessionMessages(messages),
         totalMessages: messages.length,
-        contextTokens: data.contextTokens ?? 0,
-        outputTokens: data.totalOutputTokens ?? 0,
+        contextTokens: row.context_tokens ?? 0,
+        outputTokens: row.total_output_tokens ?? 0,
         maxContextTokens: 0,
         isRunning: liveParents.has(id),
       })

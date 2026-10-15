@@ -38,7 +38,9 @@ CREATE TABLE agent_sessions (
   title TEXT,
   exchange_count INTEGER,
   context_tokens INTEGER,
-  total_output_tokens INTEGER
+  total_output_tokens INTEGER,
+  output TEXT,
+  last_activity_at TEXT
 );
 `
 
@@ -130,7 +132,7 @@ describe('toSessionInfo status derivation (via getSessionById)', () => {
     expect(makeStore().getSessionById('s1')?.status).toBe('idle')
   })
 
-  it('unknown id with no internal-session file ⇒ null', () => {
+  it('unknown id with no internal-session row ⇒ null', () => {
     expect(makeStore().getSessionById('s_does_not_exist')).toBeNull()
   })
 })

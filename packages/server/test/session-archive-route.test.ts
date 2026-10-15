@@ -5,6 +5,7 @@ import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { Hono } from 'hono'
 import type { SessionMessage } from '../src/sessions/session-types.js'
+import { replaceUILog, readUILog, uiLogPath } from '../src/sessions/session-log.js'
 
 /**
  * Contract: `GET /sessions/logs/:id/archive/:n` is the READ side of UI-log
@@ -13,8 +14,9 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
  *
  *  1. the body is exactly what `writeArchiveSegment` gzipped (no re-shaping),
  *     so segment + active file rejoin into the original log in order
- *  2. `archiveCount` stays the commit marker AT THE READ EDGE: a segment left
- *     on disk by a crashed archive is present but 404s
+ *  2. the commit check holds AT THE READ EDGE: a segment left on disk by a
+ *     crashed archive (its first id still the active file's first row) is
+ *     present but 404s
  *  3. guards fire before any disk touch — traversal-shaped id / bad `n` /
  *     missing projectId are 400, unknown session is 404
  *
@@ -26,8 +28,8 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
  * fs would fake away. Credentials/config resolve from os.homedir() at module
  * load → HOME is redirected BEFORE the dynamic imports.
  *
- * Mutation check (must fail on revert): drop the `n > readArchiveCount` guard →
- * the uncommitted-segment case goes red; drop `isSafeIdSegment` → traversal
+ * Mutation check (must fail on revert): serve any segment file without the
+ * commit check → the uncommitted-segment case goes red; drop `isSafeIdSegment` → traversal
  * goes red; drop the route from behind the middleware → the gate case goes red.
  */
 
@@ -77,16 +79,10 @@ function seedRow(id: string, parentId: string | null = null): void {
   }).run()
 }
 
-/** Seed a cold session .json in the shape saveSessionToFile writes. The file is
- *  named by the id's leaf segment, as on disk (`r1>c1` → `c1.json`). */
-function seedFile(id: string, messages: SessionMessage[], extra: Record<string, unknown> = {}): void {
-  fs.mkdirSync(sessionDir(), { recursive: true })
-  fs.writeFileSync(path.join(sessionDir(), `${id.split('>').pop()}.json`), JSON.stringify({
-    version: 1, id, agentId: 'default', agentName: 'Default', title: 'seeded', source: 'explorer',
-    createdAt: new Date(1000).toISOString(), updatedAt: new Date(1000).toISOString(),
-    messageCount: messages.length, contextTokens: 111, totalOutputTokens: 222,
-    messages, rawMessages: [{ role: 'user', content: 'raw' }], ...extra,
-  }, null, 2))
+/** Seed a cold session's UI log. The file is named by the id's leaf segment,
+ *  as on disk (`r1>c1` → `c1.ui.jsonl`). */
+function seedFile(id: string, messages: SessionMessage[]): void {
+  replaceUILog(uiLogPath(sessionDir(), id.split('>').pop()!), messages)
 }
 
 /** The archive writer, reached through the manager that owns it (prod wiring). */
@@ -94,13 +90,14 @@ function archiveOldMessages(id: string): number {
   return (sm as unknown as { uiStore: { archiveOldMessages: (i: string) => number } }).uiStore.archiveOldMessages(id)
 }
 
-function activeMessages(id: string): SessionMessage[] {
-  const data = JSON.parse(fs.readFileSync(path.join(sessionDir(), `${id}.json`), 'utf-8')) as { messages: SessionMessage[] }
-  return data.messages
+function activeMessages(seg: string): SessionMessage[] {
+  return readUILog(uiLogPath(sessionDir(), seg)) ?? []
 }
 
-function segmentOnDisk(id: string, n: number): SessionMessage[] {
-  return JSON.parse(gunzipSync(fs.readFileSync(path.join(sessionDir(), `${id}.arch.${n}.json.gz`))).toString('utf-8'))
+function segmentOnDisk(seg: string, n: number): SessionMessage[] {
+  const name = fs.readdirSync(sessionDir()).find((f) => f.startsWith(`${seg}.ui.arch.${n}.`))!
+  return gunzipSync(fs.readFileSync(path.join(sessionDir(), name))).toString('utf-8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l) as SessionMessage)
 }
 
 async function get(id: string, n: number | string, query = `?projectId=${encodeURIComponent(ws)}`): Promise<Response> {
@@ -162,11 +159,10 @@ describe('GET /sessions/logs/:id/archive/:n — committed segments', () => {
     seedFile('r1', log)
     archiveOldMessages('r1')
     // Session keeps chatting until it is over the threshold again (each segment
-    // costs another 3MB of content), then compacts → segment 2.
+    // costs another threshold's worth of content), then archives → segment 2.
     const later = fatExchanges(4, 100)
     // replaceMessageLog (not seedFile) so the fattened log reaches disk through
-    // the normal read-merge-write, which carries archiveCount forward — a raw
-    // re-seed would drop the marker and make the next archive overwrite segment 1.
+    // the normal writer — the archive gate reads the size the writer recorded.
     sm.replaceMessageLog('r1', [...sm.getUIState('r1')!.messageLog, ...later])
     archiveOldMessages('r1')
 
@@ -177,14 +173,15 @@ describe('GET /sessions/logs/:id/archive/:n — committed segments', () => {
       .toEqual([...log, ...later].map((m) => m.content))
   })
 
-  it('404s a segment beyond archiveCount even though the file is on disk', async () => {
+  it('404s an uncommitted segment even though the file is on disk', async () => {
     const log = fatExchanges(4)
     seedRow('r1')
     seedFile('r1', log)
     archiveOldMessages('r1')
-    // A crash between "write segment" and "commit archiveCount" leaves this.
-    archive.writeArchiveSegment(sessionDir(), 'r1', 2, [uiMsg('user', 'uncommitted')])
-    expect(fs.existsSync(path.join(sessionDir(), 'r1.arch.2.json.gz'))).toBe(true)
+    // A crash between "write segment" and the active-file rewrite leaves the
+    // next segment starting at the active file's first row.
+    archive.writeArchiveSegment(sessionDir(), 'r1', 2, activeMessages('r1'))
+    expect(fs.readdirSync(sessionDir()).some((f) => f.startsWith('r1.ui.arch.2.'))).toBe(true)
 
     expect((await get('r1', 1)).status).toBe(200)
     expect((await get('r1', 2)).status).toBe(404)
@@ -201,7 +198,7 @@ describe('GET /sessions/logs/:id/archive/:n — committed segments', () => {
     seedRow('r1')
     seedRow('r1>c1', 'r1')
     seedFile('r1', exchanges(2))
-    seedFile('r1>c1', log, { parentSessionId: 'r1', source: 'delegated' })
+    seedFile('r1>c1', log)
     // A sub log enters memory through an event carrying its taskId (the compact
     // paths' preflight notice does this in prod).
     sm.emitEvent('r1>c1', { type: 'agent_start', agentName: 'Default', agentId: 'default', text: '', taskId: 'r1>c1', sessionId: 'r1>c1' })

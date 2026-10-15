@@ -3,21 +3,22 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  saveSessionToFile,
+  saveUILog,
   loadSessionMessages,
-  readSessionFileMeta,
-  loadSessionFileData,
+  loadRawMessages,
+  loadSessionView,
+  deriveSessionTitle,
   getSessionDir,
 } from '../src/sessions/session-store.js'
+import { writeRawLog, rawLogPath } from '../src/sessions/session-log.js'
 import type { SessionMessage } from '../src/sessions/session-types.js'
 
 /**
- * Contract: the on-disk session format is frozen — every installed user has
- * historical sessions on disk written by this exact shape. If save→load stops
- * round-tripping, those histories silently fail to load. These tests assert
- * the round-trip and the format invariants the rest of the app reads back
- * (messageCount, sticky title, createdAt preservation), without asserting any
- * value the test itself made up — what you store is what you must read.
+ * Contract: what a session writes is what it reads back. The 2.0 files carry
+ * no metadata (title / counts / tokens live in the db row — see
+ * session-meta-mirror.test.ts); these tests assert the round-trip of both
+ * halves, the per-write exchange delta the row's count is built from, and the
+ * title rule the row is stamped with.
  */
 describe('session-store round-trip', () => {
   let projectPath: string
@@ -43,122 +44,60 @@ describe('session-store round-trip', () => {
       msg({ id: 'a', role: 'user', content: 'hello' }),
       msg({ id: 'b', role: 'assistant', content: 'hi there' }),
     ]
-    saveSessionToFile({
-      sessionId: 'sess-1',
-      projectPath,
-      messages,
-      contextTokens: 1234,
-      outputTokens: 56,
-      agentId: 'default',
-      agentName: 'Default',
-    })
-
-    const loaded = loadSessionMessages('sess-1', projectPath, 'default')
-    expect(loaded).toEqual(messages)
+    saveUILog('sess-1', 'default', projectPath, messages, null)
+    expect(loadSessionMessages('sess-1', projectPath, 'default')).toEqual(messages)
   })
 
-  it('persists messageCount and token counts that meta/list reads back', () => {
-    saveSessionToFile({
-      sessionId: 'sess-2',
-      projectPath,
-      messages: [
-        msg({ id: 'a', role: 'user', content: 'q' }),
-        msg({ id: 'b', role: 'assistant', content: 'r' }),
-        msg({ id: 'c', role: 'user', content: 'q2' }),
-      ],
-      contextTokens: 999,
-      outputTokens: 42,
-      agentId: 'default',
-    })
-
-    const meta = readSessionFileMeta('sess-2', 'default', projectPath)
-    expect(meta).not.toBeNull()
-    expect(meta!.messageCount).toBe(3)
-    expect(meta!.contextTokens).toBe(999)
-    expect(meta!.totalOutputTokens).toBe(42)
+  it('reads an in-flight assistant back as the last row', () => {
+    const rows = [msg({ id: 'a', role: 'user', content: 'q' })]
+    const inflight = msg({ id: 'live', role: 'assistant', content: '', contentBlocks: [{ type: 'text', text: 'partial' }] })
+    saveUILog('sess-if', 'default', projectPath, rows, inflight)
+    expect(loadSessionMessages('sess-if', projectPath, 'default')).toEqual([...rows, inflight])
   })
 
-  it('derives the title from the first user message, sticky across re-saves', () => {
-    saveSessionToFile({
-      sessionId: 'sess-3',
-      projectPath,
-      messages: [msg({ id: 'a', role: 'user', content: 'first question wins the title' })],
-      contextTokens: 0,
-      outputTokens: 0,
-      agentId: 'default',
-    })
-    expect(readSessionFileMeta('sess-3', 'default', projectPath)!.title).toBe('first question wins the title')
+  it('reports the main-user delta of each write (the row exchange count)', () => {
+    const a = msg({ id: 'a', role: 'user', content: 'q' })
+    const b = msg({ id: 'b', role: 'assistant', content: 'r' })
+    const sub = msg({ id: 's', role: 'user', content: 'brief', taskId: 'x>y' })
+    const c = msg({ id: 'c', role: 'user', content: 'q2' })
+    expect(saveUILog('sess-2', 'default', projectPath, [a, b], null)!.userDelta).toBe(1)
+    // A sub-agent's user row is not an exchange of this session.
+    expect(saveUILog('sess-2', 'default', projectPath, [a, b, sub, c], null)!.userDelta).toBe(1)
+    expect(saveUILog('sess-2', 'default', projectPath, [a, b, sub, c], null)!.userDelta).toBe(0)
+  })
 
-    // Re-save with a different leading user message — title must NOT change.
-    saveSessionToFile({
-      sessionId: 'sess-3',
-      projectPath,
-      messages: [msg({ id: 'z', role: 'user', content: 'a totally different later message' })],
-      contextTokens: 0,
-      outputTokens: 0,
-      agentId: 'default',
-    })
-    expect(readSessionFileMeta('sess-3', 'default', projectPath)!.title).toBe('first question wins the title')
+  it('derives the title from the first user message', () => {
+    const messages = [
+      msg({ id: 'a', role: 'user', content: 'first question wins the title' }),
+      msg({ id: 'z', role: 'user', content: 'a later message' }),
+    ]
+    expect(deriveSessionTitle(messages, { delegated: false, agentName: 'Default' })).toBe('first question wins the title')
+    // A delegated session keeps its brief.
+    expect(deriveSessionTitle(messages, { delegated: true, description: 'the brief', agentName: 'Default' })).toBe('the brief')
   })
 
   it('keeps the injected [Currently viewing] / [Face open] context lines out of the title', () => {
-    saveSessionToFile({
-      sessionId: 'sess-face',
-      projectPath,
-      messages: [msg({
-        id: 'a',
-        role: 'user',
-        content: '[Currently viewing: src/a.ts]\n[Face open: .halo/canvas/self.html · last: js ok, show a.png fail, voice blocked (needs a click)]\n\nhow are you',
-      })],
-      contextTokens: 0,
-      outputTokens: 0,
-      agentId: 'default',
-    })
-    expect(readSessionFileMeta('sess-face', 'default', projectPath)!.title).toBe('how are you')
-  })
-
-  it('preserves createdAt across re-saves while advancing updatedAt', () => {
-    saveSessionToFile({
-      sessionId: 'sess-4',
-      projectPath,
-      messages: [msg({ id: 'a', role: 'user', content: 'x' })],
-      contextTokens: 0,
-      outputTokens: 0,
-      agentId: 'default',
-    })
-    const first = loadSessionFileData('sess-4', projectPath, 'default')!
-    saveSessionToFile({
-      sessionId: 'sess-4',
-      projectPath,
-      messages: [msg({ id: 'a', role: 'user', content: 'x' }), msg({ id: 'b', role: 'assistant', content: 'y' })],
-      contextTokens: 0,
-      outputTokens: 0,
-      agentId: 'default',
-    })
-    const second = loadSessionFileData('sess-4', projectPath, 'default')!
-
-    expect(second.createdAt).toBe(first.createdAt)
-    expect(second.version).toBe(1)
-    expect(second.id).toBe('sess-4')
+    const messages = [msg({
+      id: 'a',
+      role: 'user',
+      content: '[Currently viewing: src/a.ts]\n[Face open: .halo/canvas/self.html · last: js ok, show a.png fail, voice blocked (needs a click)]\n\nhow are you',
+    })]
+    expect(deriveSessionTitle(messages, { delegated: false, agentName: 'Default' })).toBe('how are you')
   })
 
   it('writes the leaf segment of a hierarchical id as the filename', () => {
-    saveSessionToFile({
-      sessionId: 'root>child>leaf',
-      projectPath,
-      messages: [msg({ id: 'a', role: 'user', content: 'nested' })],
-      contextTokens: 0,
-      outputTokens: 0,
-      agentId: 'default',
-    })
+    saveUILog('root>child>leaf', 'default', projectPath, [msg({ id: 'a', role: 'user', content: 'nested' })], null)
+    writeRawLog(rawLogPath(getSessionDir('default', projectPath), 'leaf'), [{ role: 'user', content: 'nested' }])
     const dir = getSessionDir('default', projectPath)
-    expect(fs.existsSync(path.join(dir, 'leaf.json'))).toBe(true)
+    expect(fs.readdirSync(dir).sort()).toEqual(['leaf.raw.jsonl', 'leaf.ui.jsonl'])
     // And it loads back by the full hierarchical id.
     expect(loadSessionMessages('root>child>leaf', projectPath, 'default')).toHaveLength(1)
+    expect(loadRawMessages('root>child>leaf', 'default', projectPath)).toEqual([{ role: 'user', content: 'nested' }])
   })
 
   it('returns empty / null for a session that was never written', () => {
     expect(loadSessionMessages('does-not-exist', projectPath, 'default')).toEqual([])
-    expect(readSessionFileMeta('does-not-exist', 'default', projectPath)).toBeNull()
+    expect(loadRawMessages('does-not-exist', 'default', projectPath)).toEqual([])
+    expect(loadSessionView('does-not-exist', 'default', projectPath)).toBeNull()
   })
 })

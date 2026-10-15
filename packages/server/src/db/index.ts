@@ -1,11 +1,11 @@
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, sql } from 'drizzle-orm'
 import * as schema from './schema.js'
 import path from 'node:path'
 import fs from 'node:fs'
 import { ensureWorkspaceHalo, TEMPLATES_DIR } from '../init.js'
-import type { SessionFileMeta } from '../sessions/session-store.js'
+import { globalInternalSessionsDir } from '../paths.js'
 import { runMigrations, addColumnIfMissing, type Migration } from './migrate.js'
 
 // schema.sql lives alongside the other templates; resolve via TEMPLATES_DIR
@@ -58,6 +58,12 @@ export const HALO_MIGRATIONS: Migration[] = [
       ALTER TABLE disabled_items_v2 RENAME TO disabled_items;
     `)
   },
+  // v3: session store 2.0 — session files carry no metadata, so the latest
+  // turn output + last activity stamp move into the row.
+  (s) => {
+    addColumnIfMissing(s, 'agent_sessions', 'output', 'TEXT')
+    addColumnIfMissing(s, 'agent_sessions', 'last_activity_at', 'TEXT')
+  },
 ]
 
 export function createDb(dataDir: string) {
@@ -78,37 +84,74 @@ export function createDb(dataDir: string) {
 export { schema }
 export type HaloDb = ReturnType<typeof createDb>
 
+/** Session metadata changes for `updateSessionMeta`. */
+export interface SessionMetaPatch {
+  /** Set the title only while the row has none (titles are sticky). */
+  titleIfUnset?: string
+  /** Main user turns appended to the active UI log by this write. */
+  exchangeDelta?: number
+  contextTokens?: number
+  totalOutputTokens?: number
+}
+
 /**
- * Mirror a session file's list-visible header (title / exchange count / token
- * counts) into its `agent_sessions` row, so listing never opens the file.
+ * Apply a UI-log write's metadata to the session's row — the only home of
+ * title / exchange count / token counts (session files carry no header).
  *
- * Called on every session write (SessionManager.persistSessionFile) and by the
- * list route's backfill for rows written before these columns existed. Skips
- * the UPDATE when the row already holds these values — a session persists every
- * 500ms mid-turn and most of those writes change nothing here, and a no-op
- * write would churn the row for nothing. `updated_at` is deliberately NOT
- * touched: the turn lifecycle owns it (and it's the listing's sort key).
+ * Called on every UI-log write (SessionManager.persistUILog), so it reads the
+ * row once and skips the UPDATE when nothing changed: a session persists every
+ * 500ms mid-turn and most of those writes change nothing here. `updated_at` is
+ * deliberately NOT touched: the turn lifecycle owns it (the listing's sort
+ * key). Returns false when the row doesn't exist.
  */
-export function mirrorSessionMeta(db: HaloDb, sessionId: string, meta: SessionFileMeta): void {
+export function updateSessionMeta(db: HaloDb, sessionId: string, patch: SessionMetaPatch): boolean {
   const row = db.select({
     title: schema.agentSessions.title,
     exchangeCount: schema.agentSessions.exchangeCount,
     contextTokens: schema.agentSessions.contextTokens,
     totalOutputTokens: schema.agentSessions.totalOutputTokens,
   }).from(schema.agentSessions).where(eq(schema.agentSessions.id, sessionId)).get()
-  // No row: internal-agent sessions (`__evo_agent__` etc.) live outside any
-  // workspace db by design — nothing to mirror into.
-  if (!row) return
-  if (row.title === meta.title
-    && row.exchangeCount === meta.exchangeCount
-    && row.contextTokens === meta.contextTokens
-    && row.totalOutputTokens === meta.totalOutputTokens) return
-  db.update(schema.agentSessions).set({
-    title: meta.title,
-    exchangeCount: meta.exchangeCount,
-    contextTokens: meta.contextTokens,
-    totalOutputTokens: meta.totalOutputTokens,
-  }).where(eq(schema.agentSessions.id, sessionId)).run()
+  if (!row) return false
+  const set: Partial<typeof schema.agentSessions.$inferInsert> = {}
+  if (patch.titleIfUnset && !row.title) set.title = patch.titleIfUnset
+  if (patch.exchangeDelta || row.exchangeCount === null) set.exchangeCount = (row.exchangeCount ?? 0) + (patch.exchangeDelta ?? 0)
+  if (patch.contextTokens !== undefined && patch.contextTokens !== row.contextTokens) set.contextTokens = patch.contextTokens
+  if (patch.totalOutputTokens !== undefined && patch.totalOutputTokens !== row.totalOutputTokens) set.totalOutputTokens = patch.totalOutputTokens
+  if (Object.keys(set).length > 0) db.update(schema.agentSessions).set(set).where(eq(schema.agentSessions.id, sessionId)).run()
+  return true
+}
+
+/** Write a session's latest output + activity stamp (SessionStateStore, on
+ *  every raw save). One idempotent statement: no row churn when unchanged. */
+export function updateSessionOutput(db: HaloDb, sessionId: string, output: string, lastActivityAt: string | null): void {
+  db.update(schema.agentSessions).set({ output, lastActivityAt })
+    .where(and(
+      eq(schema.agentSessions.id, sessionId),
+      sql`(${schema.agentSessions.output} IS NOT ${output} OR ${schema.agentSessions.lastActivityAt} IS NOT ${lastActivityAt})`,
+    )).run()
+}
+
+/** halo.db under a `.halo`-style data dir, one connection per path per
+ *  process. Plain open (schema + migrations), no workspace scaffolding. */
+const haloDbCache = new Map<string, HaloDb>()
+export function openHaloDb(dataDir: string): HaloDb {
+  const key = path.resolve(dataDir)
+  let db = haloDbCache.get(key)
+  if (!db) {
+    db = createDb(key)
+    haloDbCache.set(key, db)
+  }
+  return db
+}
+
+/**
+ * The session db of internal-agent sessions (`__evo_agent__` etc.):
+ * `~/.halo/global/internal-sessions/halo.db`, next to their files and with the
+ * same `agent_sessions` schema, so their metadata takes the same code path as
+ * every other session's without polluting any user workspace's db.
+ */
+export function internalSessionsDb(): HaloDb {
+  return openHaloDb(globalInternalSessionsDir())
 }
 
 const dbCache = new Map<string, HaloDb>()

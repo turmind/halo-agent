@@ -64,15 +64,13 @@ beforeAll(async () => {
   insertAccount(db, { accountId: 'wsa', channelType: 'web', workspacePath: wsA, accessLevel: 'workspace', enabled: 1, config: { token: WS_TOKEN } })
   insertAccount(db, { accountId: 'wsb', channelType: 'web', workspacePath: wsB, accessLevel: 'workspace', enabled: 1, config: { token: 'tok-ws-b' } })
 
-  // A persisted session in B (db row + session file) for /show/session's
-  // read-only path (no live runtime in this process).
-  getWorkspaceDb(wsB).db.insert(agentSessions).values({ id: SESSION_B, agentId: 'default', createdAt: 1, updatedAt: 1 }).run()
+  // A persisted session in B (db row + UI log) for /show/session's read-only
+  // path (no live runtime in this process).
+  getWorkspaceDb(wsB).db.insert(agentSessions).values({ id: SESSION_B, agentId: 'default', createdAt: 1, updatedAt: 1, contextTokens: 7, totalOutputTokens: 3, exchangeCount: 1 }).run()
   const dir = path.join(wsB, '.halo', 'sessions', 'default')
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, `${SESSION_B}.json`), JSON.stringify({
-    messages: [{ id: 'm1', role: 'user', content: 'hello from B', timestamp: 1 }],
-    contextTokens: 7, totalOutputTokens: 3,
-  }))
+  const m1 = { id: 'm1', role: 'user', content: 'hello from B', timestamp: 1 }
+  fs.writeFileSync(path.join(dir, `${SESSION_B}.ui.jsonl`), JSON.stringify({ t: 'add', id: 'm1', u: 1, m: m1 }) + '\n')
 
   const authApp = auth.createAuthRoutes()
   const login = await authApp.request('/auth/login', {

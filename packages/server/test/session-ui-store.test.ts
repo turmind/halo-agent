@@ -8,7 +8,7 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
 const broadcastSpy = vi.fn()
 vi.mock('../src/ws/broadcast.js', () => ({ broadcast: (e: Record<string, unknown>) => broadcastSpy(e) }))
 // session-store touches disk for seeding/persisting; the store under test only
-// calls persistSessionFile through the host, but ensureUIState reads via
+// calls persistUILog through the host, but ensureUIState reads via
 // loadSessionMessages. Stub the lot to keep this a pure in-memory unit test.
 // `diskMessages` lets individual tests present an on-disk log to seed from
 // (the dirty-flag tests need a state that was built WITHOUT local mutation).
@@ -17,6 +17,10 @@ vi.mock('../src/sessions/session-store.js', () => ({
   getSessionDir: () => '/tmp/none',
   loadSessionMessages: () => diskMessages.value,
   fileSegment: (id: string) => id,
+}))
+vi.mock('../src/sessions/session-log.js', () => ({
+  cachedUILogSize: () => 0,
+  uiLogPath: (dir: string, seg: string) => `${dir}/${seg}.ui.jsonl`,
 }))
 
 const { SessionUIStore } = await import('../src/agents/session-ui-store.js')
@@ -31,17 +35,18 @@ type Host = ConstructorParameters<typeof SessionUIStore>[0]
  * these reproduces the "UI just stops updating" class of bug.
  */
 
-/** Fake host: no db row by default, records every persistSessionFile call. */
+/** Fake host: no db row by default, records every persistUILog call. */
 function makeHost(over: Partial<Host> = {}): { host: Host; persisted: Array<{ sessionId: string }> } {
   const persisted: Array<{ sessionId: string }> = []
   const host: Host = {
     workspaceRoot: '/ws',
     // ensureUIState calls db.select()...get(); return null row → empty state, no disk seed.
     getDb: () => ({ select: () => ({ from: () => ({ where: () => ({ get: () => null }) }) }) }) as never,
+    metaDb: () => host.getDb(),
     getSession: () => undefined,
     getSessionById: () => null,
     isSessionDeleted: () => false,
-    persistSessionFile: (opts) => { persisted.push(opts as { sessionId: string }) },
+    persistUILog: (sessionId) => { persisted.push({ sessionId }); return 1 },
     hasActiveWorkInTree: () => false,
     ...over,
   }
@@ -237,7 +242,7 @@ describe('SessionUIStore dirty flag (cron-session UI-log truncation guard)', () 
   })
 
   it('a failed persist keeps the state dirty so a later detach-save retries', () => {
-    const { host } = makeHost({ persistSessionFile: () => { throw new Error('disk full') } })
+    const { host } = makeHost({ persistUILog: () => { throw new Error('disk full') } })
     const store = new SessionUIStore(host)
     store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
     store.emitEvent('s1', { type: 'complete' } as AgentSessionEvent)  // sync flush → throws inside
@@ -257,7 +262,7 @@ describe('SessionUIStore dirty flag (cron-session UI-log truncation guard)', () 
   })
 
   it('dropUIState clears the flag along with the state', () => {
-    const { host } = makeHost({ persistSessionFile: () => { throw new Error('disk full') } })
+    const { host } = makeHost({ persistUILog: () => { throw new Error('disk full') } })
     const store = new SessionUIStore(host)
     store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
     store.emitEvent('s1', { type: 'complete' } as AgentSessionEvent)  // flush fails → stays dirty

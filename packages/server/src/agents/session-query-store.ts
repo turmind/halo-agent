@@ -1,7 +1,6 @@
-import type { HaloDb } from '../db/index.js'
+import { internalSessionsDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, desc, lt, gte, inArray } from 'drizzle-orm'
-import { findInternalSession } from '../sessions/session-store.js'
 import type { SessionInfo, SessionTreeNode } from './session-manager.js'
 
 /**
@@ -209,31 +208,31 @@ export class SessionQueryStore {
     const row = this.db.select().from(agentSessions)
       .where(eq(agentSessions.id, sessionId)).get()
     if (row) return this.toSessionInfo(row)
-    // Internal-agent sessions don't have a workspace db row by design —
-    // they live under `~/.halo/global/internal-sessions/<agentId>/`.
-    // Surface a synthetic SessionInfo so callers checking "does this
-    // session exist?" before resume/createSession see them.
-    const internal = findInternalSession(sessionId)
+    // Internal-agent sessions keep their row in the global internal-sessions
+    // db (their workspace may be an evo sandbox that's gone). Surface it as an
+    // idle session so callers checking "does this session exist?" before
+    // resume/createSession see them.
+    const internal = internalSessionsDb().select().from(agentSessions)
+      .where(eq(agentSessions.id, sessionId)).get()
     if (!internal) return null
-    const ts = internal.data.createdAt ? new Date(internal.data.createdAt).getTime() : Date.now()
     return {
       id: sessionId,
       parentId: null,
       agentId: internal.agentId,
-      agentName: internal.agentId,
-      description: internal.data.description ?? internal.data.title ?? '',
+      agentName: internal.agentName || internal.agentId,
+      description: internal.description || internal.title || '',
       status: 'idle',
       accessLevel: null,
       workingDir: null,
       goalSessionId: null,
-      createdAt: ts,
-      updatedAt: ts,
+      createdAt: internal.createdAt,
+      updatedAt: internal.updatedAt,
       stoppedAt: null,
       archivedAt: null,
-      title: internal.data.title ?? null,
-      exchangeCount: null,
-      contextTokens: null,
-      totalOutputTokens: null,
+      title: internal.title ?? null,
+      exchangeCount: internal.exchangeCount,
+      contextTokens: internal.contextTokens,
+      totalOutputTokens: internal.totalOutputTokens,
     }
   }
 

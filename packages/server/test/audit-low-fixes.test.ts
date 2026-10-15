@@ -75,19 +75,21 @@ describe('SessionUIStore.purge evicts the agentId cache (A-L1)', () => {
     const store = new SessionUIStore({
       workspaceRoot: os.tmpdir(),
       getDb: () => ({ select: () => ({ from: () => ({ where: () => ({ get: () => null }) }) }) }) as never,
+      metaDb: () => ({ select: () => ({ from: () => ({ where: () => ({ get: () => null }) }) }) }) as never,
       // Resolvable in memory, so the sub-session persist populates the cache without disk/db.
       getSession: (id: string) => ({ agentId: `agent-of-${id}`, agentName: 'sub' }),
       getSessionById: () => null,
       isSessionDeleted: () => false,
-      persistSessionFile: () => {},
+      persistUILog: () => 1,
       hasActiveWorkInTree: () => false,
     })
 
     // Drive a sub-session write: agent_start seeds the sub-log, agent_done
-    // persists it — which resolves (and caches) the taskId's agentId.
+    // persists it — which resolves (and caches) the taskId's agentId. The
+    // root's is cached too: ensureUIState resolves it to pick the row's db.
     store.emitEvent('root', { type: 'agent_start', agentName: 'sub', agentId: 'a', text: 't', taskId: 'root>child', sessionId: 'root>child' } as never)
     store.emitEvent('root', { type: 'agent_done', agentName: 'sub', taskId: 'root>child' } as never)
-    expect(cacheSize(store)).toBe(1)
+    expect(cacheSize(store)).toBe(2)
 
     // deleteSessionTree purges every id in the tree, root and descendants alike.
     store.purge('root')

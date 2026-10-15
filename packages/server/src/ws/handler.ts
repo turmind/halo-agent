@@ -18,7 +18,7 @@ import { createSaveSnapshot } from '../sessions/ui-log-builder.js'
 import { config } from '../config.js'
 import { WatcherPool } from './watcher-pool.js'
 import { saveInboundMedia } from '../channels/shared/media-store.js'
-import { readArchiveCount } from '../sessions/session-archive.js'
+import { countArchiveSegments } from '../sessions/session-archive.js'
 import { getSessionDir, fileSegment, findAndDeleteSessionFile } from '../sessions/session-store.js'
 import { sendJson, sendWsNotification, bufferDetachedNotification } from './event-processor.js'
 import { setClientWorkspaceResolver } from './broadcast.js'
@@ -140,7 +140,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     if (!agentId || !client.projectId) return 0
     const projectPath = resolveProjectPath(client.projectId)
     if (!projectPath) return 0
-    return readArchiveCount(getSessionDir(agentId, projectPath), fileSegment(sessionId))
+    return countArchiveSegments(getSessionDir(agentId, projectPath), fileSegment(sessionId))
   }
 
   function saveSession(client: ConnectedClient, sessionId: string): void {
@@ -156,21 +156,9 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     // detach/grace save landed minutes after the cli exited and erased its
     // final messages).
     if (!client.sessionManager.isUIStateDirty(sessionId)) return
-    const projectPath = resolveProjectPath(client.projectId)
-    const snapshot = createSaveSnapshot(state)
-    if (snapshot.length === 0) return
-    const sessionInfo = client.sessionManager.getSessionById(sessionId)
     // Route through SessionManager so its tombstone check fires — a freshly
     // deleted session must not be resurrected by an in-flight WS save closure.
-    client.sessionManager.persistSessionFile({
-      sessionId,
-      projectPath,
-      messages: snapshot,
-      contextTokens: state.contextTokens,
-      outputTokens: state.outputTokens,
-      agentId: sessionInfo?.agentId,
-      agentName: sessionInfo?.agentName,
-    })
+    client.sessionManager.persistUIState(sessionId)
   }
 
   // ── Event listener factory ────────────────────────────────────────

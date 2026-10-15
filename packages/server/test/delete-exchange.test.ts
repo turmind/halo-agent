@@ -1,16 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
+import { replaceUILog, replaceRawLog, uiLogPath, rawLogPath } from '../src/sessions/session-log.js'
+import { loadSessionMessages, loadRawMessages } from '../src/sessions/session-store.js'
 import type { SessionMessage } from '../src/sessions/session-types.js'
 
 /**
  * COLD-PATH coverage for SessionManager.deleteExchange — the on-disk half (no
  * live agent instance). Drives the exact locator + soft/physical split against a
- * real SQLite row and a real session .json file seeded with BOTH streams
- * (`messages` = UI log, `rawMessages` = LLM-facing history). The live path
+ * real SQLite row and real session files seeded with BOTH streams
+ * (`ui.jsonl` = UI log, `raw.jsonl` = LLM-facing history). The live path
  * (agent.messages mutation) shares the same helpers and can't run here without a
  * model build, so it's exercised via tsc + the shared repair path instead.
  */
@@ -34,18 +36,23 @@ function seedRow(id: string, over: Partial<typeof agentSessions.$inferInsert> = 
   }).run()
 }
 
-/** Seed a cold session .json with UI + raw streams under sessions/<agentId>/. */
-function seedFile(id: string, messages: SessionMessage[], rawMessages: unknown[], agentId = 'default'): string {
+/** Seed a cold session's UI + raw logs under sessions/<agentId>/. */
+function seedFile(id: string, messages: SessionMessage[], rawMessages: unknown[], agentId = 'default'): void {
+  const dir = join(ws, '.halo', 'sessions', agentId)
+  replaceUILog(uiLogPath(dir, id), messages)
+  replaceRawLog(rawLogPath(dir, id), rawMessages)
+}
+
+/** Seed a cold 1.x session .json (both streams in one file). */
+function seedLegacyFile(id: string, messages: SessionMessage[], rawMessages: unknown[], agentId = 'default'): void {
   const dir = join(ws, '.halo', 'sessions', agentId)
   mkdirSync(dir, { recursive: true })
-  const filePath = join(dir, `${id}.json`)
-  writeFileSync(filePath, JSON.stringify({
+  writeFileSync(join(dir, `${id}.json`), JSON.stringify({
     version: 1, id, agentId, agentName: 'Default', title: 't', source: 'explorer',
     createdAt: new Date(1000).toISOString(), updatedAt: new Date(1000).toISOString(),
     messageCount: messages.length, contextTokens: 0, totalOutputTokens: 0,
     messages, rawMessages,
   }, null, 2))
-  return filePath
 }
 
 function uiMsg(role: 'user' | 'assistant', content: string): SessionMessage {
@@ -53,7 +60,10 @@ function uiMsg(role: 'user' | 'assistant', content: string): SessionMessage {
 }
 
 function readFile(id: string, agentId = 'default'): { messages: SessionMessage[]; rawMessages: Array<{ role: string; content: unknown }> } {
-  return JSON.parse(readFileSync(join(ws, '.halo', 'sessions', agentId, `${id}.json`), 'utf-8'))
+  return {
+    messages: loadSessionMessages(id, ws, agentId),
+    rawMessages: loadRawMessages(id, agentId, ws) as Array<{ role: string; content: unknown }>,
+  }
 }
 
 beforeEach(() => {
@@ -213,6 +223,26 @@ describe('deleteExchange — cold session (disk)', () => {
     expect(data.rawMessages.length).toBe(2)
     expect(JSON.stringify(data.rawMessages)).toContain('"first"')
     expect(JSON.stringify(data.rawMessages)).not.toContain('"second"')
+  })
+
+  it('a cold session still in 1.x form is migrated first, then edited', async () => {
+    seedRow('r8')
+    seedLegacyFile('r8',
+      [uiMsg('user', 'first'), uiMsg('assistant', 'a1'), uiMsg('user', 'second'), uiMsg('assistant', 'a2')],
+      [
+        { role: 'user', content: [{ type: 'text', text: 'first' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'a1' }] },
+        { role: 'user', content: [{ type: 'text', text: 'second' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'a2' }] },
+      ],
+    )
+
+    expect(await sm.deleteExchange('r8', 0, 0)).toBe('deleted')
+    const data = readFile('r8')
+    expect(data.messages.map((m) => !!m.deleted)).toEqual([true, true, false, false])
+    expect(JSON.stringify(data.rawMessages)).not.toContain('"first"')
+    expect(data.rawMessages.length).toBe(2)
+    expect(existsSync(join(ws, '.halo', 'sessions', 'default', 'r8.json'))).toBe(false)
   })
 
   it('returns no_exchange for an out-of-range ordinal', async () => {
