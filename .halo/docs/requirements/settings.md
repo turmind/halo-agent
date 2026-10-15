@@ -167,6 +167,9 @@ Values can carry `<<ENV_NAME>>` placeholders. They're expanded:
 
 Env var unset → the `<<ENV_NAME>>` literal stays verbatim, plus `[MdVars] Env var "X" not set — keeping <<X>> literal` in the server log. The Settings UI returns the literal too — the browser never sees the real env value.
 
+- **Settings page hint**: each field in the `GET /api/settings` response carries `envMissing`, the names of `<<X>>` placeholders in its effective value whose variable is unset in the server process (names only, never values). The page shows an amber warning under that field's input naming the variables, and explains that background servers and the desktop app don't read `~/.bashrc` / `~/.zshrc`. The check runs against the server's `process.env`, not the user's shell.
+- **Model provider credentials** (`api_key`, `access_key_id` / `secret_access_key`): an unset placeholder is never sent as the key. Every model call in that session fails before the request with one `account`-class error naming the provider, field and variable, with no retries; opening and reading the session still work. A variable added while the session is in memory takes effect once the session's agent is rebuilt. See [guide/secrets-and-credentials.md → Missing env var](../guide/secrets-and-credentials.md#missing-env-var).
+
 ## Agent visibility
 
 Placeholder syntax in MD bodies (SKILL.md / AGENT.md):
