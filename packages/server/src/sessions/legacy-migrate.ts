@@ -272,10 +272,26 @@ function cleanUpLegacy(dir: string, seg: string): void {
   deleteLegacyFiles(dir, seg, legacy)
 }
 
+/** A session's pending 1.x conversion failed — it can't be opened until the
+ *  conversion succeeds. Loaders that otherwise swallow read errors (and open
+ *  the session empty) let this one through. */
+export class LegacyConversionError extends Error {}
+
+/** Sessions whose failed conversion was already logged in full. Log dedupe
+ *  only — never state: every open retries, the disk decides. */
+const loggedFailures = new Set<string>()
+
 /**
- * The automatic 2.0 trigger, called from session-log.ts `openLog` when a log
- * file is missing (ENOENT). Migrates when the session has a 1.x `<seg>.json`
- * but no `<seg>.ui.jsonl`; returns true when it tried (the caller re-opens).
+ * The automatic 2.0 trigger, called from session-log.ts `openLog` when a UI
+ * log is missing and on every raw-log open (raw is written first, so a
+ * `raw.jsonl` without its `ui.jsonl` may be half a conversion). Converts when
+ * the session has a 1.x `<seg>.json` but no `<seg>.ui.jsonl`; returns true
+ * when it converted (the caller re-opens), false when nothing was pending.
+ *
+ * Throws when the conversion fails: opening the session empty would let its
+ * next write start a fresh 2.0 log beside the unconverted 1.x history (the
+ * session then reads as truncated). The error names the reason and the
+ * command; the next open tries again.
  * Ships in 2.0 only — 2.1 deletes the call (this function then goes unused).
  */
 export function migrateOnMissingLog(filePath: string): boolean {
@@ -287,7 +303,13 @@ export function migrateOnMissingLog(filePath: string): boolean {
   try {
     migrateLegacySession(dir, seg)
   } catch (err) {
-    console.error(`[LegacyMigrate] ${path.join(dir, seg)}: ${err instanceof Error ? err.message : String(err)}`)
+    const reason = err instanceof Error ? err.message : String(err)
+    const key = path.join(dir, seg)
+    if (!loggedFailures.has(key)) {
+      loggedFailures.add(key)
+      console.error(`[LegacyMigrate] ${key}: ${reason}`)
+    }
+    throw new LegacyConversionError(`${seg}: 1.x conversion failed: ${reason} — run \`halo sessions migrate v1 v2\``)
   }
   return true
 }

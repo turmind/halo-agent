@@ -225,10 +225,15 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
     // Per-row metadata comes from the db columns — no file reads.
     // `exchangeCount === null` means the row predates them and its session may
     // still be a 1.x file: probing the UI log migrates it (back-filling the
-    // row's NULL columns), then the row is read again. Once per session.
+    // row's NULL columns), then the row is read again. Once per session. A
+    // failed conversion (logged by the migrator) leaves that one row
+    // un-enriched; the list still answers.
+    const probe = (s: typeof rows[number]) => {
+      try { return uiLogExists(uiLogPath(getSessionDir(s.agentId, workspacePath), fileSegment(s.id))) } catch { return false }
+    }
     const enrich = (row: typeof rows[number]) => {
       let s = row
-      if (s.exchangeCount === null && uiLogExists(uiLogPath(getSessionDir(s.agentId, workspacePath), fileSegment(s.id)))) {
+      if (s.exchangeCount === null && probe(s)) {
         const fresh = db.select().from(agentSessions).where(eq(agentSessions.id, s.id)).get()
         if (fresh) s = { ...s, title: fresh.title, exchangeCount: fresh.exchangeCount, contextTokens: fresh.contextTokens, totalOutputTokens: fresh.totalOutputTokens }
       }

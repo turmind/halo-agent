@@ -683,7 +683,14 @@ export function sweepActiveGoals(host: GoalHost & {
     // Append-then-send, same as channel inbound — sendUserMessage alone never
     // writes the nudge to the UI transcript (see execGoalCreate).
     const nudge = `[goal-mode] The server restarted; the in-flight round was lost. Call goal_context, re-read GOAL_SPEC.md and your own transcript, then re-dispatch the current work order to the worker via query_session. Counters and caps were preserved.`
-    host.appendUserMessage(row.id, nudge)
+    try {
+      // Runs in the SessionManager constructor: one session that can't be
+      // opened (failed 1.x conversion) must not take the workspace down.
+      host.appendUserMessage(row.id, nudge)
+    } catch (err) {
+      console.error(`[GoalMode] Restart nudge failed for ${row.id}: ${err instanceof Error ? err.message : String(err)}`)
+      continue
+    }
     host.sendUserMessage(row.id, nudge).catch((err) => {
       console.error(`[GoalMode] Restart nudge failed for ${row.id}: ${err instanceof Error ? err.message : String(err)}`)
     })

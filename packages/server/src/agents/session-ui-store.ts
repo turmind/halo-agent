@@ -5,6 +5,7 @@ import { agentSessions } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
 import { getSessionDir, loadSessionMessages, fileSegment } from '../sessions/session-store.js'
 import { cachedUILogSize, uiLogPath } from '../sessions/session-log.js'
+import { LegacyConversionError } from '../sessions/legacy-migrate.js'
 import {
   ARCHIVE_SIZE_THRESHOLD, archiveSplitIndex, countArchiveSegments, writeArchiveSegment,
 } from '../sessions/session-archive.js'
@@ -317,7 +318,12 @@ export class SessionUIStore {
         state.contextTokens = row.contextTokens ?? 0
         state.outputTokens = row.totalOutputTokens ?? 0
       }
-    } catch { /* new session */ }
+    } catch (err) {
+      // A failed 1.x conversion blocks the session: seeding it empty would
+      // show (and later persist) a truncated history.
+      if (err instanceof LegacyConversionError) throw err
+      /* new session */
+    }
 
     this.uiStates.set(rootId, state)
     return state

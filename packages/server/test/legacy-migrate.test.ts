@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,11 +9,12 @@ import { SessionManagerRegistry } from '../src/agents/session-manager-registry.j
 import { agentSessions } from '../src/db/schema.js'
 import { internalSessionsDb } from '../src/db/index.js'
 import { createSessionRoutes } from '../src/routes/sessions.js'
-import { migrateLegacySession, migrateWorkspaceSessions } from '../src/sessions/legacy-migrate.js'
-import { readUILog, readRawLog, writeUILog, replaceUILog, uiLogPath, rawLogPath } from '../src/sessions/session-log.js'
+import { LegacyConversionError, migrateLegacySession, migrateWorkspaceSessions } from '../src/sessions/legacy-migrate.js'
+import { readUILog, readRawLog, writeUILog, writeRawLog, replaceUILog, uiLogPath, rawLogPath } from '../src/sessions/session-log.js'
 import { countArchiveSegments, readArchiveSegment } from '../src/sessions/session-archive.js'
-import { loadSessionMessages } from '../src/sessions/session-store.js'
+import { loadSessionMessages, loadRawMessages, saveUILog } from '../src/sessions/session-store.js'
 import type { SessionMessage } from '../src/sessions/session-types.js'
+import { seedBundledModels } from './helpers/seed-models.js'
 
 /**
  * 1.x → 2.0 session conversion (legacy-migrate.ts), on real files in a tmpdir
@@ -169,7 +170,7 @@ describe('automatic conversion on first open', () => {
     seedLegacy('r1', { messages: [ui('dup', 'user', 'q1'), ui('a', 'assistant', 'a1'), ui('dup', 'user', 'q2')] })
     const before = legacyNames()
 
-    expect(loadSessionMessages('r1', ws, 'default')).toEqual([])
+    expect(() => loadSessionMessages('r1', ws, 'default')).toThrow(/UI log read back 2 rows, expected 3/)
     expect(legacyNames()).toEqual(before)
     expect(names()).toEqual(before)
 
@@ -200,6 +201,112 @@ describe('automatic conversion on first open', () => {
     const r = internalSessionsDb().select().from(agentSessions).where(eq(agentSessions.id, 'ev1')).get()!
     expect(r).toMatchObject({ agentId: '__evo_agent__', title: 'title of ev1', exchangeCount: 1, contextTokens: 321 })
     expect(legacyNames(d)).toEqual([])
+  })
+})
+
+describe('a failed conversion blocks the session instead of opening it empty', () => {
+  const broken = (seg: string) => {
+    fs.mkdirSync(dir(), { recursive: true })
+    fs.writeFileSync(path.join(dir(), `${seg}.json`), '{ not json')
+  }
+
+  it('readers throw with the reason and the command; nothing 2.0 is created', () => {
+    seedRow('bad')
+    broken('bad')
+
+    expect(() => loadSessionMessages('bad', ws, 'default')).toThrow(/^bad: 1\.x conversion failed: .*JSON.* — run `halo sessions migrate v1 v2`$/)
+    expect(() => loadRawMessages('bad', 'default', ws)).toThrow(LegacyConversionError)
+    expect(() => sm.getUIState('bad')).toThrow(/1\.x conversion failed/)
+    expect(() => sm.getSessionRawMessages('bad')).toThrow(/1\.x conversion failed/)
+    expect(names()).toEqual(['bad.json'])
+  })
+
+  it('a writer without a baseline throws too (saveUILog only logs) — no fresh 2.0 log beside the 1.x file', () => {
+    seedRow('bad')
+    broken('bad')
+
+    expect(() => writeRawLog(rawLogPath(dir(), 'bad'), [raw('user', 'new')])).toThrow(/1\.x conversion failed/)
+    expect(() => writeUILog(uiLogPath(dir(), 'bad'), [ui('n', 'user', 'new')], null)).toThrow(/1\.x conversion failed/)
+    expect(saveUILog('bad', 'default', ws, [ui('n', 'user', 'new')], null)).toBeNull()
+    expect(names()).toEqual(['bad.json'])
+  })
+
+  it('every open retries (disk decides); the full error is logged once', () => {
+    seedRow('r1')
+    seedLegacy('r1')
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fs.chmodSync(dir(), 0o555)
+    try {
+      expect(() => loadSessionMessages('r1', ws, 'default')).toThrow(/EACCES/)
+      expect(() => loadSessionMessages('r1', ws, 'default')).toThrow(/EACCES/)
+    } finally {
+      fs.chmodSync(dir(), 0o755)
+    }
+    expect(errors.mock.calls.filter((c) => String(c[0]).startsWith('[LegacyMigrate]'))).toHaveLength(1)
+    errors.mockRestore()
+
+    expect(loadSessionMessages('r1', ws, 'default').map((m) => m.id)).toEqual(['r1-u1', 'r1-a1'])
+    expect(legacyNames()).toEqual([])
+  })
+
+  it('a resume (ensureSession) refuses: the session never runs on an empty history', async () => {
+    const agentDir = path.join(ws, '.halo', 'agents', 'default')
+    fs.mkdirSync(agentDir, { recursive: true })
+    fs.writeFileSync(path.join(agentDir, 'agent.yaml'), ['model:', '  provider: anthropic', '  id: claude-opus-4-8', '  endpoint: https://api.anthropic.com'].join('\n'))
+    fs.writeFileSync(path.join(agentDir, 'AGENT.md'), 'x')
+    seedBundledModels(home)
+    seedRow('bad')
+    broken('bad')
+
+    expect(await sm.getSessionContext('bad')).toBeNull()
+    await expect(sm.sendUserMessage('bad', 'hello')).rejects.toThrow(/1\.x conversion failed/)
+    expect(sm.getSession('bad')).toBeUndefined()
+    expect(names()).toEqual(['bad.json'])
+  })
+
+  it('half a conversion (raw.jsonl, no ui.jsonl): a raw open converts first', () => {
+    seedRow('r1')
+    seedLegacy('r1')
+    fs.writeFileSync(rawLogPath(dir(), 'r1'), JSON.stringify(raw('user', 'stale')) + '\n')
+
+    expect(loadRawMessages('r1', 'default', ws)).toEqual([raw('user', 'q1'), raw('assistant', 'a1')])
+    expect(fs.existsSync(uiLogPath(dir(), 'r1'))).toBe(true)
+    expect(legacyNames()).toEqual([])
+  })
+
+  it('half a conversion that fails again: the raw open throws instead of serving the partial raw', () => {
+    seedRow('bad')
+    broken('bad')
+    fs.writeFileSync(rawLogPath(dir(), 'bad'), JSON.stringify(raw('user', 'partial')) + '\n')
+
+    expect(() => loadRawMessages('bad', 'default', ws)).toThrow(/1\.x conversion failed/)
+    expect(() => sm.getSessionRawMessages('bad')).toThrow(/1\.x conversion failed/)
+  })
+
+  it('the session list and getSessionTitle fall back per row', async () => {
+    seedRow('ok')
+    seedLegacy('ok')
+    seedRow('bad')
+    broken('bad')
+    const registry = new SessionManagerRegistry()
+    ;(registry as unknown as { cache: Map<string, SessionManager> }).cache.set(ws, sm)
+    const res = await createSessionRoutes(registry).request(`/sessions/logs?projectId=${encodeURIComponent(ws)}`)
+    expect(res.status).toBe(200)
+    const { sessions } = await res.json() as { sessions: Array<{ id: string; title: string }> }
+    expect(Object.fromEntries(sessions.map((s) => [s.id, s.title]))).toEqual({ ok: 'title of ok', bad: '' })
+    expect(sm.getSessionTitle('bad')).toBeNull()
+  })
+
+  it('get_session_output, cold: a NULL output converts the 1.x file first; a failure is returned as the error', () => {
+    seedRow('r1')
+    seedLegacy('r1')
+    expect(JSON.parse(sm.getSessionOutput('r1'))).toMatchObject({ code: 0, output: 'output of r1', last_activity_at: '2025-01-02T00:00:00.000Z' })
+
+    seedRow('bad')
+    broken('bad')
+    const out = JSON.parse(sm.getSessionOutput('bad')) as { code: number; error: string }
+    expect(out.code).toBe(1)
+    expect(out.error).toMatch(/1\.x conversion failed.*halo sessions migrate v1 v2/)
   })
 })
 

@@ -1,6 +1,7 @@
 import type { ModelRuntime } from './model-runtime.js'
 import { getSessionDir, fileSegment, loadRawMessages } from '../sessions/session-store.js'
 import { rawLogPath, writeRawLog } from '../sessions/session-log.js'
+import { LegacyConversionError } from '../sessions/legacy-migrate.js'
 import { updateSessionOutput, type HaloDb } from '../db/index.js'
 
 /**
@@ -71,11 +72,13 @@ export class SessionStateStore {
 
   /** Load agent.messages from `raw.jsonl` ([] when absent). The result
    *  becomes the live history, so it primes the writer's baseline: the next
-   *  save appends instead of rewriting. */
+   *  save appends instead of rewriting. A failed 1.x conversion throws — the
+   *  session must not run on an empty history. */
   loadAgentState(sessionId: string, agentId: string): unknown[] {
     try {
       return loadRawMessages(sessionId, agentId, this.host.workspaceRoot, { prime: true })
-    } catch {
+    } catch (err) {
+      if (err instanceof LegacyConversionError) throw err
       return []
     }
   }

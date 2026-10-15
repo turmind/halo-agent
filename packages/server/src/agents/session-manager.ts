@@ -866,7 +866,15 @@ export class SessionManager implements SessionManagerInternals {
       // save-order fix, or sessions compacted before context was preserved).
       // Without this the UI shows no Prompt button for resumed sessions.
       const rootId = this.findRootSessionId(sessionId)
-      const state = this.uiStore.ensureUIState(rootId)
+      let state: ReturnType<SessionUIStore['ensureUIState']>
+      try {
+        state = this.uiStore.ensureUIState(rootId)
+      } catch (err) {
+        // The root's 1.x conversion failed (sub restored on its own): don't
+        // leave a session in memory whose every event would throw.
+        this.sessions.delete(sessionId)
+        throw err
+      }
       const hasContext = state.messageLog.some((m) => m.type === 'context' && m.agentName === (meta.agentName ?? meta.agentId))
       if (!hasContext) {
         this.emitEvent(sessionId, {
@@ -1079,7 +1087,14 @@ export class SessionManager implements SessionManagerInternals {
     }
     const row = read()
     if (!row) return null
-    if (row.exchangeCount !== null || !uiLogExists(uiLogPath(this.sessionDir(row.agentId), fileSegment(sessionId)))) return row.title || null
+    if (row.exchangeCount !== null) return row.title || null
+    // A failed 1.x conversion (logged by the migrator) must not break the
+    // caller's whole list — this row just keeps what it has.
+    try {
+      if (!uiLogExists(uiLogPath(this.sessionDir(row.agentId), fileSegment(sessionId)))) return row.title || null
+    } catch {
+      return row.title || null
+    }
     return read()?.title || null
   }
 
@@ -3443,8 +3458,19 @@ export class SessionManager implements SessionManagerInternals {
       lastActivityAt = session.lastActivityAt
     } else {
       // The row the raw save wrote (metaDb: internal agents' is the global one).
-      const row = this.metaDb(meta!.agentId).select({ output: agentSessions.output, lastActivityAt: agentSessions.lastActivityAt })
+      const read = () => this.metaDb(meta!.agentId).select({ output: agentSessions.output, lastActivityAt: agentSessions.lastActivityAt })
         .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
+      let row = read()
+      // NULL output may mean a 1.x session not yet converted (its output sits
+      // in the `.json` header): probing the UI log converts it, back-filling
+      // the column — then read the row again.
+      if (row && row.output === null) {
+        try {
+          if (uiLogExists(uiLogPath(this.sessionDir(meta!.agentId), fileSegment(sessionId)))) row = read()
+        } catch (err) {
+          return JSON.stringify({ code: 1, error: err instanceof Error ? err.message : String(err) })
+        }
+      }
       output = row?.output ?? ''
       lastActivityAt = row?.lastActivityAt ?? null
     }

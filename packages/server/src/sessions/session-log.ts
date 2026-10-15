@@ -37,22 +37,40 @@ export function rawLogPath(dir: string, seg: string): string {
   return path.join(dir, `${seg}.raw.jsonl`)
 }
 
-/**
- * THE open of a session log file — every reader and writer below goes through
- * it (writers on the first write of a file, when they read it to rebuild their
- * cache). Null when the file doesn't exist.
- */
-function openLog(filePath: string): number | null {
+function openOrNull(filePath: string): number | null {
   try {
     return fsSync.openSync(filePath, 'r')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    return null
   }
-  // 1.x → 2.0 transition, removed in 2.1 (this branch only — legacy-migrate.ts
+}
+
+/**
+ * THE open of a session log file — every reader and writer below goes through
+ * it (writers on the first write of a file, when they read it to rebuild their
+ * cache). Null when the file doesn't exist. Throws when the session's 1.x
+ * conversion is pending and fails (see migrateOnMissingLog) — the session must
+ * not read as empty.
+ */
+function openLog(filePath: string): number | null {
+  const fd = openOrNull(filePath)
+  // The UI log is the conversion's commit marker: present = nothing pending.
+  if (fd !== null && filePath.endsWith('.ui.jsonl')) return fd
+  // 1.x → 2.0 transition, removed in 2.1 (this block only — legacy-migrate.ts
   // stays for `halo sessions migrate v1 v2`): a session never opened under
-  // 2.0 only has its 1.x `<seg>.json`.
-  if (!migrateOnMissingLog(filePath)) return null
-  try { return fsSync.openSync(filePath, 'r') } catch { return null }
+  // 2.0 only has its 1.x `<seg>.json`; a raw log without its UI log may be
+  // half a conversion (raw is written first), so raw opens check too.
+  let migrated: boolean
+  try {
+    migrated = migrateOnMissingLog(filePath)
+  } catch (err) {
+    if (fd !== null) fsSync.closeSync(fd)
+    throw err
+  }
+  if (!migrated) return fd
+  if (fd !== null) fsSync.closeSync(fd)
+  return openOrNull(filePath)
 }
 
 /** Whole-file read through openLog; the stat is of the same fd. */
