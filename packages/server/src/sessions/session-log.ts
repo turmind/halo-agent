@@ -68,8 +68,11 @@ function openLog(filePath: string): number | null {
     if (fd !== null) fsSync.closeSync(fd)
     throw err
   }
-  if (!migrated) return fd
+  if (fd !== null && !migrated) return fd
   if (fd !== null) fsSync.closeSync(fd)
+  // Converted just now — or, when missing, the file may have appeared since
+  // the first open: another process's conversion committed in between, and
+  // reading that session as empty would let a baseline-less write replace it.
   return openOrNull(filePath)
 }
 

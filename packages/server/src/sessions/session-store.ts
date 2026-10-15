@@ -152,11 +152,12 @@ export function loadSessionView(sessionId: string, agentId: string, projectPath?
 // ── Delete ────────────────────────────────────────────────────────────
 
 /** A file of session `seg`: 2.0 logs and segments (plus a crashed write's
- *  `.tmp.<pid>.<ms>`), the 1.x `.json` and its segments. */
+ *  `.tmp.<pid>.<ms>`), the 1.x `.json` and its segments, a 1.x conversion's
+ *  lock `.migrating` (legacy-migrate.ts). */
 function isSessionFile(name: string, seg: string): boolean {
   if (!name.startsWith(`${seg}.`)) return false
   const rest = name.slice(seg.length + 1).replace(/\.tmp\.[^.]+\.[^.]+$/, '')
-  return rest === 'ui.jsonl' || rest === 'raw.jsonl' || rest === 'json'
+  return rest === 'ui.jsonl' || rest === 'raw.jsonl' || rest === 'json' || rest === 'migrating'
     || /^ui\.arch\.\d+\.[0-9a-f]{12}\.jsonl\.gz$/.test(rest)
     || /^arch\.\d+\.json\.gz$/.test(rest)
 }

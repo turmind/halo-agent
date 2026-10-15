@@ -210,10 +210,146 @@ function deleteLegacyFiles(dir: string, seg: string, legacy: Legacy): void {
   if (keep.size > 0) console.warn(`[LegacyMigrate] ${path.join(dir, seg)}: kept unreadable 1.x segment(s) ${legacy.unreadable.join(', ')}`)
 }
 
+// ── Cross-process conversion lock: `<seg>.migrating` ────────────────────
+//
+// Several processes open the same session files (the server, a cron-spawned
+// `halo cli`, the TUI, the migrate command), and each converts on first open.
+// Two conversions of one session at once go wrong: a late replace overwrites
+// what the first converter's caller already appended, and a rollback deletes
+// files the other one committed. So a conversion runs under a lock file
+// created with O_EXCL and holding the converter's pid:
+//  - held by a live pid: wait up to MIGRATION_LOCK_WAIT_MS, checking every
+//    MIGRATION_LOCK_STEP_MS (Atomics.wait — the conversion is synchronous on
+//    every path) for the lock's release or the conversion having landed
+//    (conversionLanded); past the wait, fail (the open throws, as for a
+//    failed conversion);
+//  - held by a dead pid (crashed mid-conversion): take it over;
+//  - after taking the lock, check again: the holder before us has usually
+//    finished the conversion (`ui.jsonl` there) — release, nothing to do.
+// The conversion is synchronous and never re-enters itself (its read-back
+// finds `ui.jsonl` and opens it directly), so a lock naming this process's own
+// pid is a dead predecessor's under a reused pid.
+
+const MIGRATION_LOCK_WAIT_MS = 10_000
+const MIGRATION_LOCK_STEP_MS = 50
+
+function migrationLockPath(dir: string, seg: string): string {
+  return path.join(dir, `${seg}.migrating`)
+}
+
+/** The automatic trigger's condition, re-checked under the lock: 1.x file
+ *  present, UI log (the conversion's commit marker) not yet. */
+function conversionPending(dir: string, seg: string): boolean {
+  return !fsSync.existsSync(uiLogPath(dir, seg)) && fsSync.existsSync(path.join(dir, `${seg}.json`))
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/** Pid in a lock file; null = no lock; 0 = empty / unreadable content. */
+function lockHolder(lock: string): number | null {
+  try {
+    return parseInt(fsSync.readFileSync(lock, 'utf-8').trim(), 10) || 0
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+}
+
+function tryCreateLock(lock: string): boolean {
+  let fd: number
+  try {
+    fd = fsSync.openSync(lock, 'wx')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw err
+  }
+  try { fsSync.writeSync(fd, String(process.pid)) } finally { fsSync.closeSync(fd) }
+  return true
+}
+
+function lockIsStale(lock: string, pid: number): boolean {
+  if (pid === process.pid) return true
+  if (pid > 0) return !isPidAlive(pid)
+  // Empty: a holder between its O_EXCL create and the pid write (µs) — or one
+  // that died right there, once the file is older than any wait.
+  try { return Date.now() - fsSync.statSync(lock).mtimeMs > MIGRATION_LOCK_WAIT_MS } catch { return false }
+}
+
+/** Remove a dead holder's lock. Moved aside first (rename is atomic: of two
+ *  processes taking over at once, one moves it); when what moved isn't the
+ *  dead holder's file — another taker already replaced it with its own live
+ *  lock — it goes back. */
+function takeOverLock(lock: string, deadPid: number): void {
+  const aside = `${lock}.tmp.${process.pid}.${Date.now().toString(36)}`
+  try {
+    fsSync.renameSync(lock, aside)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw err
+  }
+  if (lockHolder(aside) !== deadPid) {
+    try { fsSync.linkSync(aside, lock) } catch { /* re-created meanwhile: that holder stands */ }
+  }
+  fsSync.rmSync(aside, { force: true })
+  console.warn(`[LegacyMigrate] ${lock}: took over from dead pid ${deadPid || '(none)'}`)
+}
+
+/** The holder's conversion landed: `ui.jsonl` there AND the 1.x file gone.
+ *  `ui.jsonl` alone is not enough — the holder writes it at its commit and only
+ *  then reads it back to verify; a waiter appending in between would fail that
+ *  check and the holder's rollback would delete what it appended. */
+function conversionLanded(dir: string, seg: string): boolean {
+  return fsSync.existsSync(uiLogPath(dir, seg)) && !fsSync.existsSync(path.join(dir, `${seg}.json`))
+}
+
+/** Take the session's conversion lock, waiting out a live holder. False when
+ *  the holder's conversion landed while waiting — nothing to do, nothing held. */
+function acquireMigrationLock(dir: string, seg: string): boolean {
+  const lock = migrationLockPath(dir, seg)
+  const deadline = Date.now() + MIGRATION_LOCK_WAIT_MS
+  for (;;) {
+    if (tryCreateLock(lock)) return true
+    const pid = lockHolder(lock)
+    if (pid === null) continue                       // released just now
+    if (lockIsStale(lock, pid)) { takeOverLock(lock, pid); continue }
+    if (Date.now() > deadline) {
+      throw new Error(`another process (pid ${pid}) has been converting this session for over ${MIGRATION_LOCK_WAIT_MS / 1000}s (${lock})`)
+    }
+    sleepSync(MIGRATION_LOCK_STEP_MS)
+    if (conversionLanded(dir, seg)) return false
+  }
+}
+
+/** Run `fn` under the session's conversion lock when `needed()` still holds
+ *  once the lock is had; false when it didn't (another process did it). */
+function underMigrationLock(dir: string, seg: string, needed: () => boolean, fn: () => void): boolean {
+  if (!acquireMigrationLock(dir, seg)) return false
+  try {
+    if (!needed()) return false
+    fn()
+    return true
+  } finally {
+    releaseMigrationLock(dir, seg)
+  }
+}
+
+function holdsMigrationLock(dir: string, seg: string): boolean {
+  try { return lockHolder(migrationLockPath(dir, seg)) === process.pid } catch { return false }
+}
+
+function releaseMigrationLock(dir: string, seg: string): void {
+  if (holdsMigrationLock(dir, seg)) fsSync.rmSync(migrationLockPath(dir, seg), { force: true })
+}
+
 /**
  * Convert one 1.x session (`<dir>/<seg>.json`) to 2.0 files, then delete the
- * 1.x files. Depends on no in-memory state. Throws on an unreadable legacy
- * file or a failed check — the 1.x files are then left as they were.
+ * 1.x files, under the session's conversion lock (above). Returns false when
+ * nothing was pending once the lock was had — another process converted it.
+ * Depends on no in-memory state. Throws on an unreadable legacy file, a
+ * failed check or a lock wait timeout — the 1.x files are then left as they
+ * were.
  *
  * Order — `ui.jsonl` is the commit marker:
  *   1. `rawMessages` → `raw.jsonl` as-is (already the compacted context);
@@ -232,7 +368,11 @@ function deleteLegacyFiles(dir: string, seg: string, legacy: Legacy): void {
  * it (verifyPreserved + delete) — the automatic path never sees the session
  * again.
  */
-export function migrateLegacySession(dir: string, seg: string): void {
+export function migrateLegacySession(dir: string, seg: string): boolean {
+  return underMigrationLock(dir, seg, () => conversionPending(dir, seg), () => convertLocked(dir, seg))
+}
+
+function convertLocked(dir: string, seg: string): void {
   const legacy = readLegacy(dir, seg)
 
   replaceRawLog(rawLogPath(dir, seg), legacy.raw)
@@ -249,6 +389,11 @@ export function migrateLegacySession(dir: string, seg: string): void {
   replaceUILog(uiLogPath(dir, seg), legacy.messages)
 
   const mismatch = verifyConverted(dir, seg, legacy)
+  // Undo only what this process wrote: still the lock holder, and the 1.x
+  // file still there (otherwise these 2.0 files may be another converter's).
+  if (mismatch && (!holdsMigrationLock(dir, seg) || !fsSync.existsSync(path.join(dir, `${seg}.json`)))) {
+    throw new Error(`check after conversion failed: ${mismatch}; lost the conversion lock — nothing undone`)
+  }
   if (mismatch) {
     fsSync.rmSync(uiLogPath(dir, seg), { force: true })
     fsSync.rmSync(rawLogPath(dir, seg), { force: true })
@@ -263,13 +408,18 @@ export function migrateLegacySession(dir: string, seg: string): void {
 }
 
 /** Finish a session whose 2.0 files were committed but whose 1.x files are
- *  still there (crash between commit and delete): check, then delete.
+ *  still there (crash between commit and delete): check, then delete — under
+ *  the conversion lock, so a conversion in flight elsewhere (committed, not
+ *  yet verified) finishes first. False when that one already deleted them.
  *  Throws on a failed check — the 1.x files are then kept. */
-function cleanUpLegacy(dir: string, seg: string): void {
-  const legacy = readLegacy(dir, seg)
-  const mismatch = verifyPreserved(dir, seg, legacy)
-  if (mismatch) throw new Error(`1.x files kept: ${mismatch}`)
-  deleteLegacyFiles(dir, seg, legacy)
+function cleanUpLegacy(dir: string, seg: string): boolean {
+  const pending = () => fsSync.existsSync(uiLogPath(dir, seg)) && fsSync.existsSync(path.join(dir, `${seg}.json`))
+  return underMigrationLock(dir, seg, pending, () => {
+    const legacy = readLegacy(dir, seg)
+    const mismatch = verifyPreserved(dir, seg, legacy)
+    if (mismatch) throw new Error(`1.x files kept: ${mismatch}`)
+    deleteLegacyFiles(dir, seg, legacy)
+  })
 }
 
 /** A session's pending 1.x conversion failed — it can't be opened until the
@@ -286,7 +436,9 @@ const loggedFailures = new Set<string>()
  * log is missing and on every raw-log open (raw is written first, so a
  * `raw.jsonl` without its `ui.jsonl` may be half a conversion). Converts when
  * the session has a 1.x `<seg>.json` but no `<seg>.ui.jsonl`; returns true
- * when it converted (the caller re-opens), false when nothing was pending.
+ * when a conversion was pending — converted here, or by another process while
+ * this one waited for its lock — so the caller re-opens; false when nothing
+ * was pending.
  *
  * Throws when the conversion fails: opening the session empty would let its
  * next write start a fresh 2.0 log beside the unconverted 1.x history (the
@@ -354,13 +506,12 @@ function migrateDir(dir: string, label: string, out: MigrateSummary): void {
   }
   for (const seg of legacy) {
     try {
+      // False = another process (a server opening the session) did it meanwhile.
       if (fsSync.existsSync(uiLogPath(dir, seg))) {
-        cleanUpLegacy(dir, seg)
-        out.cleaned++
-      } else {
-        migrateLegacySession(dir, seg)
-        out.migrated++
-      }
+        if (cleanUpLegacy(dir, seg)) out.cleaned++
+        else out.skipped++
+      } else if (migrateLegacySession(dir, seg)) out.migrated++
+      else out.skipped++
     } catch (err) {
       out.failed.push({ id: `${label}/${seg}`, reason: err instanceof Error ? err.message : String(err) })
     }
@@ -380,8 +531,10 @@ function agentDirs(base: string): string[] {
  * the global internal sessions (`~/.halo/global/internal-sessions/*\/`), and
  * finish any left between commit and delete. Idempotent: a second run finds
  * no 1.x files. Throws when a live server holds the workspace's runtime.lock
- * — it migrates on first access too, and two writers could overwrite each
- * other.
+ * (kept as the conservative default: concurrent conversions of one session
+ * are serialized by its `<seg>.migrating` lock, so running beside a server —
+ * one holding runtime.lock or not — is safe; a session the server converts
+ * meanwhile counts as skipped).
  */
 export function migrateWorkspaceSessions(root: string): MigrateSummary {
   const holder = liveRuntimeHolder(root)
