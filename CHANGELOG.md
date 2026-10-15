@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Ask an agent about an installed extension and it now reads that extension's own `README.md` (and `DESIGN.md`) from `~/.halo/global/extensions/<id>/` instead of guessing. Extensions add nothing to prompts on their own; agent instructions still come only from an extension skill you enable.
+
 ## [1.6.6] - 2026-10-14
 
 ### Changed

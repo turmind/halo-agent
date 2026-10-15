@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 103 // models: mimo-token-plan-china revision 2026101401 — mimo-v2.5-pro / mimo-v2.5 dropped (officially retired 2026-10-21).
+export const TEMPLATE_VERSION = 104 // skills/halo: point agents at an installed extension's own README.md / DESIGN.md (~/.halo/global/extensions/<id>/).
+// 103: models: mimo-token-plan-china revision 2026101401 — mimo-v2.5-pro / mimo-v2.5 dropped (officially retired 2026-10-21).
 // 102: skills/cron: delete leaves run rows for the server, which deletes stateless run sessions with them.
 // 101: models: new gemini provider (runtime gemini, revision 2026101201) — gemini-3.8-flash (default) + gemini-3.5-flash-lite on the OpenAI-compatible endpoint.
 // 100: skills/cron: a stateless job keeps its newest 10 runs, an older run's session is deleted with it (unless continued), deleting the job deletes them too. skills/workspace: tidy mode flags INDEX bloat (INDEX is injected every turn — short sections, details in docs).

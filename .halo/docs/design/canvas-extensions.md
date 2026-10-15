@@ -279,6 +279,14 @@ An extension can ship agent skills next to its viewer: `~/.halo/global/extension
 - **Read from disk**: the server, CLI / TUI and cron children all scan the extensions root on every read, never the in-memory registry, so every process sees the same set. In the admin, the `extension:changed` frame also bumps the skill bus, so the Skills sidebar and the agent form's skill picker refetch. Uninstalling removes the skills at once (next read finds no folder, no restart). The watcher is non-recursive, so editing files inside an installed extension's `skills/` pushes nothing. Reinstalling the extension is the way to publish a change.
 - **Sandbox**: `~/.halo/global/extensions/**` is outside the sandbox hidden lists, so workspace- and readonly-access sessions can read the skill's resources, and a workspace-access `shell_exec` can run its scripts. `activate_skill` names the skill's absolute directory in its resources header, so the agent knows where they are.
 
+### Extension docs
+
+An extension documents itself; nothing it ships is injected into prompts or INDEX (per-turn tokens, and INDEX has a 12K-character budget).
+
+- **Agent-facing instructions** → an extension skill (above). Opt-in per agent like any skill; an install never enables one by itself.
+- **Human-facing docs** → `README.md` at the extension root (every halo-hub extension has one), plus `DESIGN.md` for internals. They ship in the zip and sit at `~/.halo/global/extensions/<id>/` once installed.
+- **How agents find them** → the built-in `halo` skill (Platform Documentation, since `TEMPLATE_VERSION` 104) tells the agent to `file_read` that README when asked about an installed extension. The core repo's docs cover only what the core implements (protocol, capabilities, server proxies), not a hub extension's behavior.
+
 ## `extension` skill and halo-hub
 
 Built-in skill `templates/skills/extension/` (in `BUILTIN_SKILL_IDS`; `TEMPLATE_VERSION` bumped to 69 in the same change): object command `/extension install|list|remove|models` (`models` = model provider configs, see the end of this section), `requiresAccess: full`. The built-in `default` agent lists it in `skills:` (since `TEMPLATE_VERSION` 81), so `/extension` shows in the command popup wherever the default agent is the built-in one. The payload reaches the body as `$ARGUMENTS`; when it names a source the agent installs right away without confirming, and it mentions the hub only when asked what exists or when an install fails. Everything goes through `templates/ext.sh` (curl + unzip + node, + git for tag-based hubs; no `gh`). `ext.sh install <id|zip|url>`: a zip path / URL is used as given, an id is fetched from the hub (below); then the same pre-check + six-step atomic replace as the server. It never talks to the server — the watcher picks the rename up within ~300 ms. The `halo` skill has a one-line pointer.

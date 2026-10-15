@@ -95,6 +95,8 @@ What's bundled (and what's not):
 
 Questions outside these rows aren't in the bundled docs (backend internals, REST API reference, design specs live in the Halo source repo). Read the code or tell the user you don't know.
 
+Installed extensions carry their own docs: `file_read` `~/.halo/global/extensions/<id>/README.md` (and `DESIGN.md` when present) for questions about one; `file_list ~/.halo/global/extensions/` shows what is installed.
+
 ## Skills
 
 Skills are referenced by id from an agent's `agent.yaml`. The system prompt shows each skill's name + description; the full body is loaded on demand via `activate_skill`.
