@@ -68,7 +68,7 @@ Your deployment scripts should also prepend this line.
 ## Runtime directories
 
 - SQLite: `<workspace>/.halo/halo.db` (per-workspace, auto-created on first use) + global queues `~/.halo/global/evo.db`, `~/.halo/global/cron.db`, `~/.halo/global/runs.db` and `~/.halo/global/a2a.db` + channel accounts `~/.halo/secrets/channels/channels.db`
-- Session files: `.halo/sessions/{agentId}/{sessionId}.json`
+- Session files: `.halo/sessions/{agentId}/{seg}.ui.jsonl` + `{seg}.raw.jsonl` (+ archive segments)
 - Global config: `~/.halo/global/`
 - Per-project config: `<workspace>/.halo/`
 

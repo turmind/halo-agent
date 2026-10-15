@@ -143,7 +143,7 @@ UIState fields: `messageLog` / `streamBuffer` / `contextTokens` / `outputTokens`
 
 ### SessionUIStore — UI-log state + event routing
 
-File: `agents/session-ui-store.ts`. The stateful host around UILogBuilder, split out of SessionManager. Owns the per-root-session UIState map, the debounced persist timers, and the event-listener registry; drives `applyEvent` and decides flush-vs-debounce. SessionManager constructs it with `this` as the `SessionUIStoreHost` (db / workspaceRoot / in-memory session lookup / delete tombstone / the single tombstone-honouring `persistSessionFile`) and exposes same-named thin pass-throughs so external callers stay unchanged. Dependency is one-directional: store → host, never the reverse.
+File: `agents/session-ui-store.ts`. The stateful host around UILogBuilder, split out of SessionManager. Owns the per-root-session UIState map, the debounced persist timers, and the event-listener registry; drives `applyEvent` and decides flush-vs-debounce. SessionManager constructs it with `this` as the `SessionUIStoreHost` (db / workspaceRoot / in-memory session lookup / delete tombstone / the single tombstone-honouring `persistUILog`) and exposes same-named thin pass-throughs so external callers stay unchanged. Dependency is one-directional: store → host, never the reverse.
 
 ### SessionQueryStore — read-only session-metadata queries
 
@@ -164,7 +164,7 @@ File: `agents/session-state-store.ts`. Stateless. Saves/loads an agent's `rawMes
 ## Helper modules
 
 ### SessionStore — disk persistence
-File: `sessions/session-store.ts`. Path: `.halo/sessions/{agentId}/{sessionId}.json`. Format described in [design/storage.md](storage.md).
+File: `sessions/session-store.ts` (+ `session-log.ts` writers, `session-archive.ts`, `legacy-migrate.ts`). Path: `.halo/sessions/{agentId}/{seg}.ui.jsonl` + `{seg}.raw.jsonl`. Format described in [design/storage.md](storage.md#session-files-20).
 
 ### AgentLoader — agent config loader
 File: `agents/agent-loader.ts`. `loadAgentYaml(agentId, wsRoot)` loads with workspace > global precedence.
@@ -250,7 +250,7 @@ SQLite only holds metadata indexes; all content lives on the filesystem.
 | Medium | Writer | Contents |
 |---|---|---|
 | SQLite `agent_sessions` | SessionManager | Agent session metadata (root + children; includes `working_dir` and `access_level` columns) |
-| `.halo/sessions/{agentId}/{sid}.json` | SessionManager, SessionStore | Session messages |
+| `.halo/sessions/{agentId}/{seg}.{ui,raw}.jsonl` | SessionManager, SessionStore | Session messages |
 | `.halo/agents/{id}/agent.yaml` | AgentConfigRoutes | Agent YAML (workspace scope) |
 | `.halo/agents/{id}/AGENT.md` | AgentConfigRoutes | Agent personality |
 | `~/.halo/global/agents/{id}/agent.yaml` | AgentConfigRoutes | Agent YAML (global scope) |

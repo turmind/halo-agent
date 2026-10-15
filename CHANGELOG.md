@@ -8,12 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Sessions are stored in a new format. Each session is now two append-only logs, `<id>.ui.jsonl` (what the chat shows) and `<id>.raw.jsonl` (the model's history), instead of one `<id>.json` that was read, merged and rewritten whole on every save. A save now writes only what changed: on a 31 MB session a save blocked the server for about 400 ms and rewrote 31 MB; it now takes under 1 ms and appends a few KB. Title, turn count, tokens and the latest output now live only in the workspace database (`halo.db`); internal evolution / scoring sessions get a database of their own, `~/.halo/global/internal-sessions/halo.db`.
+- Long chat history is archived when a turn ends, once the active log passes 5 MB (was: during a compact, over 3 MB). A compaction summary is never where the archive cuts, so it stays next to the turn it summarises.
+- An interrupted reply is saved once, under the same id it streamed with, so after a reload the partial answer appears once instead of being written again under a new id on every save.
+- New command `halo sessions migrate v1 v2` converts every 1.x session of a workspace at once. Stop the server first.
 - Ask an agent about an installed extension and it now reads that extension's own `README.md` (and `DESIGN.md`) from `~/.halo/global/extensions/<id>/` instead of guessing. Extensions add nothing to prompts on their own; agent instructions still come only from an extension skill you enable.
 
 ### Fixed
 
 - A model key set to `<<ENV_NAME>>` whose variable isn't set in the server's environment no longer goes out as the literal key and comes back as a 401 that never names the variable. The turn now stops before the request with one error naming the provider, the field and the variable, and saying how to fix it (background servers and the desktop app opened from the Dock don't read `~/.bashrc` / `~/.zshrc`). AWS access keys are checked the same way. The Settings page also warns under any field whose variable is unset.
 - Deleting a session over the WebSocket (`session:delete`) now also removes its session files, archive segments and sub-agent sessions from disk, as the REST delete already did. Before, a client that only used the WebSocket left the files behind.
+
+### Upgrade notes
+
+- Session store 2.0: a 1.x session is converted the first time it is opened. After upgrading, stop the server and run `halo sessions migrate v1 v2` once in every workspace root to convert the rest (it also finishes conversions cut off before their old files were removed); it exits non-zero if any session failed, and those sessions keep their old files. Each session's 1.x files are **deleted** once its new files have been read back and checked, so going back to 1.x afterwards shows converted sessions (and sessions created on 2.0) empty.
+- Workspace sqlite migration v3 adds `agent_sessions.output` and `last_activity_at`.
+- The test-chat session routes (`/api/agent-configs/:id/sessions`) still read the 1.x `.json` files only, so sessions created on 2.0 don't appear there.
 
 ## [1.6.6] - 2026-10-14
 

@@ -232,6 +232,20 @@ halo models list                    # id · copy in effect (bundled | hub) · re
 
 Normally run for you by `/extension models`, which downloads the hub's newest `models-v*` release (https GitHub / Gitea / Forgejo / GitLab only) and passes the unpacked directory to `halo models install`. Per provider id the copy with the higher `revision` is in effect (tie → the `models.d` copy); an older one is skipped, an identical one reported up to date. Refused per provider: a `runtime:` this halo doesn't know (needs a newer halo), no `revision`, a `secrets[].default` that isn't empty or `<<ENV_NAME>>`. Endpoint changes against the copy in effect are always listed. Consent is needed for any URL the server would now send requests (and credentials) to that it didn't before: a new provider, a changed `defaultEndpoint` / `endpointPresets`, or a URL added to a model's `endpoints:` list that the provider doesn't already use anywhere. A model list that only loses URLs, or gains one already used elsewhere in the provider, is listed but needs no consent; a reorder alone is not a change. When consent is needed, **nothing is written** and the exit code is `3` — re-run with `--yes` to apply. Writes are atomic (tmp + rename); a running server reloads its registry from `models.d/` without a restart and pushes the change to open admin pages. Existing agents keep the model / endpoint in their own `agent.yaml`. Exit codes: `0` ok (refusals listed in the summary line), `1` error, `3` needs `--yes`. To undo, delete the file from `~/.halo/global/models.d/`.
 
+## Session store migration (`halo sessions migrate v1 v2`)
+
+```bash
+halo server stop                             # or: systemctl --user stop halo
+halo sessions migrate v1 v2 -w /path/to/ws   # once per workspace root
+halo server start
+```
+
+Halo 2.0 stores each session as append-only `.ui.jsonl` / `.raw.jsonl` logs instead of one `.json` file. A server converts a 1.x session the first time it is opened, so running this is optional: it converts every 1.x session of the workspace plus the global internal sessions (evolution / scoring) in one go, and finishes any conversion that was cut off before its old files were removed. Each session is read back and compared after converting; only then are its 1.x files deleted. Safe to run twice (the second run finds nothing to convert).
+
+Output: one `failed  <agent>/<session>: <reason>` line on stderr per failure, then `migrated N, cleaned N, skipped N, failed N` (`cleaned` = already converted, old files removed now; `skipped` = 2.0 only). Exit code `1` if anything failed — those sessions keep their 1.x files and stay readable — or if a server is running on the workspace (it refuses; also stop a dev server that has the workspace open, which the check can't see). Any other argument after `migrate` is refused (`only v1 v2 is supported`).
+
+Downgrading to 1.x after converting: converted sessions show up empty there (their old files are gone), as do sessions created on 2.0.
+
 ## Server Mode (background daemon)
 
 `halo server start|stop|restart|status|logs` manages a local server from the

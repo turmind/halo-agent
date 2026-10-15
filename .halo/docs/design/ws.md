@@ -152,7 +152,7 @@ Server-internal flags on `AgentSessionEvent` that are **not** carried into the W
 
 ### Archive anchor in `state:snapshot`
 
-`archiveCount` rides only the snapshots sent on **subscribe** and **reattach** — one header read per session open. The per-turn snapshots and the snapshot pushed after `exchange:delete` deliberately omit it: the client's "load older" cursor is an anchor pinned at the moment the session was opened, and a segment written mid-session (a compact while the tab is open) must not move it. The client then requests segments over HTTP (`GET /api/sessions/logs/:id/archive/:n`), not WS — one whole segment per call, cached client-side because segments are immutable. See [session.md](session.md#ui-log-archiving).
+`archiveCount` rides only the snapshots sent on **subscribe** and **reattach** — one segment count per session open. The per-turn snapshots and the snapshot pushed after `exchange:delete` deliberately omit it: the client's "load older" cursor is an anchor pinned at the moment the session was opened, and a segment written mid-session (a compact while the tab is open) must not move it. The client then requests segments over HTTP (`GET /api/sessions/logs/:id/archive/:n`), not WS — one whole segment per call, cached client-side because segments are immutable. See [session.md](session.md#ui-log-archiving).
 
 The same anchor is what the client sends back as `archiveCount` on `exchange:delete`, so the server can tell a stale ordinal from a live one.
 

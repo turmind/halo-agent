@@ -330,7 +330,7 @@ Implementation: a turn (one `runAgentTurn`, processing one inbound message) accu
 - `session.output` — **all** assistant text of the turn (mid-task filler + wrap-up). This is what `get_session_output` returns and what is persisted to disk.
 - `session.finalOutput` — **only** the wrap-up reply (text emitted when `stopReason !== 'tool_use'`, flagged by the agent-loop `final` event field). This feeds the auto-report to the parent (`tryReportToParent`), falling back to `session.output` when the turn ended without a closing message.
 
-In-memory sessions return `session.output` / `session.lastActivityAt`; released sessions read the `output` / `lastActivityAt` fields from `.halo/sessions/{agentId}/{sid}.json` (both written by `saveAgentState`). (Split introduced in 0.1.5; before that both reads shared one `session.output`.)
+In-memory sessions return `session.output` / `session.lastActivityAt`; released sessions read the `output` / `last_activity_at` columns of the session's `agent_sessions` row (both written by `saveAgentState`). (Split introduced in 0.1.5; before that both reads shared one `session.output`.)
 
 ### query_agent
 

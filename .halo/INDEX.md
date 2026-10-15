@@ -21,7 +21,7 @@ Needs Node.js 22+. On Linux, `workspace` / `readonly` sessions need bubblewrap (
 - **admin**: Next.js 15 static export → `out/`, served by Hono
 - **core**: shared building blocks — `Workspace` / `GitManager`, the image MIME table (`media/mime.ts`), WS / extension protocol types
 - **Agent framework**: custom agent loop + per-provider runtime (Bedrock Claude, Gemini, Kimi, DeepSeek, MiniMax, Qwen, Hunyuan, Doubao, GLM, generic OpenAI / Anthropic)
-- **Storage**: SQLite + Drizzle ORM · **Runtime**: Node.js 22+, ESM · **UI**: React + Tailwind + shadcn/ui + Monaco + xterm.js
+- **Storage**: SQLite + Drizzle ORM (session metadata) + append-only JSONL session logs (`<seg>.ui.jsonl` / `<seg>.raw.jsonl`, 1.x `.json` converted on open or by `halo sessions migrate v1 v2`) · **Runtime**: Node.js 22+, ESM · **UI**: React + Tailwind + shadcn/ui + Monaco + xterm.js
 
 Module map: [design/architecture.md](docs/design/architecture.md). Storage layout: [design/storage.md](docs/design/storage.md).
 

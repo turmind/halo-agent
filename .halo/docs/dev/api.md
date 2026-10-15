@@ -749,32 +749,35 @@ Archived sessions are excluded by default; pass `?includeArchived=1` to include 
 
 `status` is `'running' | 'idle' | 'stopped'`. A root counts as `running` while any of its sub-sessions runs. Returned since 1.5.3-alpha; the current admin no longer reads it. `parentSessionId` is present only on sub-sessions (omitted for roots). Timestamps are epoch ms.
 
-Rows are served from the mirrored `agent_sessions` metadata columns (`title` / `exchange_count` / `context_tokens` / `total_output_tokens`) — no session file is opened. A row whose `exchangeCount` is `null` predates those columns: the route reads that one file once, mirrors the values back, and never pays the cost again. `exchangeCount` counts **main user turns over the session's lifetime** (kept + archived), so unlike the file's `messageCount` it doesn't shrink when a compact archives history.
+Rows are served from the `agent_sessions` metadata columns (`title` / `exchange_count` / `context_tokens` / `total_output_tokens`) — their only home; no session file is opened. A row whose `exchangeCount` is `null` is from before 2.0: the route probes that session's UI log once, which migrates a 1.x session and back-fills the row from its header, then reads the row again (still `null` when the session has no files). `exchangeCount` counts **main user turns over the session's lifetime** (kept + archived), so unlike `messageCount` it doesn't shrink when archiving moves history out.
 
 ### GET `/api/sessions/logs/:id?projectId=<abs>`
 
-Returns the full session file — the **active** log only. Older exchanges that archiving moved out are fetched per-segment via [the archive endpoint](#get-apisessionslogsidarchivenprojectidabs). If only `rawMessages` is present (sub-agent sessions from SessionManager), `convertRawMessages()` transforms them into the display `messages` array on the fly.
+The session's `agent_sessions` row (metadata) plus its **active** UI log and model history. Older exchanges that archiving moved out are fetched per-segment via [the archive endpoint](#get-apisessionslogsidarchivenprojectidabs). If the UI log is empty and only raw history exists (sub-agent sessions from SessionManager), `convertRawMessages()` transforms it into the display `messages` array on the fly. `projectId` is required: the row names the session's directory (404 without it, or with no row / no UI log). Opening a 1.x session here migrates it; the response then carries the back-filled row.
 
 ```json
-// 200 — same shape as the on-disk JSON
+// 200
 {
-  "version": 1,
   "id": "sid_abc",
   "agentId": "default",
   "agentName": "Default",
   "title": "...",
-  "source": "explorer",
+  "source": "explorer",              // "delegated" for a sub-session
+  "parentSessionId": "sid_root",     // sub-sessions only
   "createdAt": "...", "updatedAt": "...",
   "messageCount": 12,
+  "exchangeCount": 30,
   "contextTokens": 5975,
   "totalOutputTokens": 6058,
   "archiveCount": 2,
   "messages": [ /* SessionMessage[] — see design/storage.md */ ],
-  "rawMessages": [ /* optional */ ]
+  "rawMessages": [ /* model history */ ],
+  "output": "...",                   // when set
+  "lastActivityAt": "..."            // when set
 }
 ```
 
-`messageCount` here is the **file's own** field (`messages.length`, shrinks on archive) — not the list endpoint's lifetime `exchangeCount`.
+`messageCount` is the active UI log's length (shrinks on archive); `exchangeCount` is the row's lifetime count, as in the list endpoint. `archiveCount` = committed segments on disk. The 1.x `version` field is gone.
 
 ### GET `/api/sessions/logs/:id/archive/:n?projectId=<abs>`
 
@@ -796,9 +799,9 @@ Failure modes, in the order checked:
 | 400 | `Invalid session id` | `id` fails `isSafeIdSegment` (path-traversal guard) |
 | 400 | `Invalid segment number` | `n` not a positive integer |
 | 404 | `Session not found` | no such session in this workspace |
-| 404 | `Segment not found` | `n > archiveCount` (uncommitted / nonexistent), or the segment file can't be read |
+| 404 | `Segment not found` | segment `n` isn't committed (crash leftover / nonexistent), or the file can't be read |
 
-The `n > archiveCount` check is the point, not a formality: `archiveCount` in the active file is the archive write's commit marker, so a segment file beyond it exists only because a crash interrupted the two-step write and must never be served. See [design/session.md](../design/session.md#ui-log-archiving).
+The commit check is the point, not a formality: the archive is committed by the active log's rewrite, so a segment whose first id is still the active log's first row exists only because a crash interrupted the two-step write and must never be served. See [design/session.md](../design/session.md#ui-log-archiving).
 
 ### GET `/api/settings/schema?projectId=<abs>`
 

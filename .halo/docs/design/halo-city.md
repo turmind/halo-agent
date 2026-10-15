@@ -18,18 +18,18 @@ Halo 服务器运行态的**街景式**像素可视化:每个 **workspace 是一
 - 独立部署(不进 admin、走 token)要和 Halo 同源反代 `/api/show/`,nginx 写法见
   hub [README.md](https://github.com/turmind/halo-hub/blob/main/extensions/halo-city/README.md#和-halo-同源)。
 - `/api/show/state` — 无活跃 UIState 的会话(idle/stopped/重启后)token
-  从会话文件头读取(按会话 `updatedAt` 缓存,未变化时不随轮询重读),不显示 0;含 `messageCount` 字段
+  从会话的 `agent_sessions` 行读取(`context_tokens` / `total_output_tokens`),不显示 0;含 `messageCount` 字段
 - `/api/show/state` 带弱 `ETag` + `Cache-Control: private, no-cache`:哈希不含
   `serverTime`,`uptime` 按分钟计入,所以服务器空闲时 7 秒一次的轮询绝大多数回
   空 body 的 304,每分钟最多一次 200。浏览器 `fetch` 默认缓存模式自动带
   `If-None-Match`,扩展不用改;鉴权仍在最前,不同 scope 的调用方 ETag 不同
 
-> **`messageCount` 与 admin 的 `exchangeCount` 是两个语义,不要互相对齐**:
-> 这里读的是会话文件里的 `messageCount`(活跃 UI 日志的长度),城市只把它
-> 当"这个市民最近有多热闹"的活跃度信号,compact 归档后会变小是可以接受的;
-> admin 会话列表用的是 sqlite 镜像列 `exchange_count`(整个生命期的主用户
-> 轮次数,归档后不缩)。城市这边继续走文件头是有意的:它必须能在**没有活跃
-> SessionManager**的情况下降级出图,不依赖 db 镜像何时写入。
+> **`messageCount` 取自行的 `exchange_count`**(整个生命期的主用户轮次数,
+> 归档后不缩;为 null 的 1.x 老行报 0),城市只把它当"这个市民最近有多热闹"
+> 的活跃度信号。会话存储 2.0 起会话文件不再带文件头,元数据只在 db 行里,
+> 只读降级路径照样只读 sqlite,不碰会话文件。降级路径的会话详情
+> (`/api/show/session`)遇到还没迁移的 1.x 会话(没有 `ui.jsonl`)返回
+> 404:经日志读取器打开它会触发迁移,是写操作,只读路径不能做。
 
 ## 轮询零副作用(服务端)
 

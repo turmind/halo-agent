@@ -73,7 +73,7 @@ Refreshing the browser or a network blip:
 
 Hover a session and click its trash icon (Sessions page or a chat tab), then confirm:
 - Cascade delete in SQLite (parent + all descendants)
-- `.halo/sessions/{agentId}/{sid}.json` removed
+- The session's files under `.halo/sessions/{agentId}/` removed (`{sid}.ui.jsonl`, `.raw.jsonl`, archive segments)
 - Sidebar entry removed
 
 **Not recoverable** — be careful.

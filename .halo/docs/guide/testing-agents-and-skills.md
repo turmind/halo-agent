@@ -23,7 +23,7 @@ The Explorer's Chat panel is now ready with your agent pre-selected. Send a mess
 
 - Input appears in the session
 - The agent streams a reply with tool-call cards inline
-- A session file is created at `<workspace>/.halo/sessions/<agentId>/<sid>.json`
+- Session files are created at `<workspace>/.halo/sessions/<agentId>/<sid>.ui.jsonl` (+ `.raw.jsonl`)
 - A SQLite row is added to `agent_sessions`
 
 **This is a real session.** The agent has its full tool set (whatever is in `agent.yaml tools`), access to the workspace filesystem, and persisted history. Anything it writes to disk is actually written.
@@ -117,7 +117,7 @@ You might be looking at a turn that was already running when you saved — it fi
 
 ### Deleting a test session
 
-Sessions → hover the session → trash icon. Or programmatically: `DELETE /api/sessions/logs/:id`. Deletion cascades to child sessions (sub-agents), their JSON files, and the SQLite rows. See [dev/api.md#session-logs](../dev/api.md#session-logs-unified).
+Sessions → hover the session → trash icon. Or programmatically: `DELETE /api/sessions/logs/:id`. Deletion cascades to child sessions (sub-agents), their session files, and the SQLite rows. See [dev/api.md#session-logs](../dev/api.md#session-logs-unified).
 
 ### "Test button does something weird" — the session is orphaned
 

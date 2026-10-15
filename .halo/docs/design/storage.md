@@ -22,9 +22,9 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   │   └── <providerId>.yaml          # merged with models/ by revision (see Model registry format)
 │   ├── skills/<id>/
 │   │   └── SKILL.md                   # Skill definition (frontmatter + body)
-│   ├── internal-sessions/<agentId>/   # Internal-agent sessions (`__evo_agent__`, `__score__`, `__apply_agent__`)
-│   │                                  #   — global so they don't pollute any workspace's halo.db
-│   │   └── <sessionId>.json
+│   ├── internal-sessions/             # Internal-agent sessions (`__evo_agent__`, `__score__`, `__apply_agent__`)
+│   │   ├── halo.db                    #   their agent_sessions rows — global so they don't pollute any workspace's halo.db
+│   │   └── <agentId>/<seg>.ui.jsonl …  #   same files as a workspace session (see Session files)
 │   ├── evo.db                         # Cross-workspace evolution queue (evolution_runs + evolution_applies)
 │   ├── cron.db                        # Cross-workspace cron jobs + run history (cron_jobs + cron_runs; schema in design/cron.md, migrations below)
 │   ├── runs.db                        # Run ledger: (workspace, session_id) rows for server-driven runs in flight; steady state empty (running_sessions)
@@ -58,7 +58,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── bootstrap/                     # Overrides ~/.halo/global/prompts/bootstrap/ if present
 │   ├── all/                           # Overrides ~/.halo/global/prompts/all/ if present
 │   └── root/                          # Overrides ~/.halo/global/prompts/root/ if present
-├── sessions/<agentId>/                # Session files (one per regular session)
+├── sessions/<agentId>/                # Session files: <seg>.ui.jsonl, <seg>.raw.jsonl, <seg>.ui.arch.<N>.<h>.jsonl.gz
 ├── memory/                             # Project memory (dated entries)
 ├── canvas/self.html                   # Agent's visual face — platform-owned, force-copied on every open (design/express-self.md)
 ├── goal/<goalId>/                     # Retained legacy goal-mode artifacts (GOAL_SPEC.md + decision-<n>.md); existing goals unchanged
@@ -112,42 +112,46 @@ Bias is deliberate: pid reuse can read a stale pid as "alive," which only costs 
 
 **`HALO_BADGE=DEV` servers never claim.** dev and prod serve the same workspaces, so prod (any other badge, or none) owns the lock outright: a DEV server (`config.server.ownsWorkspaceRuntimes === false`) builds its registry with `reconcileOrphansOnBoot: false`, skips the run-ledger eager sweep, and has channel route restore build the SessionManager directly. It never creates, rewrites or takes over `runtime.lock`, and runs no boot cleanup. Two costs: orphans left by a dev crash stay until prod's next restart cleans them, and a prod restart stamps the sub-sessions dev is running in a shared workspace stopped. That is what prod ownership means.
 
-## Session file format (v1)
+## Session files (2.0)
 
-Path: `.halo/sessions/{agentId}/{sessionId}.json`
+Directory: `.halo/sessions/{agentId}/` (internal agents: `~/.halo/global/internal-sessions/{agentId}/`). `{seg}` = the session id's leaf segment (`fileSegment(id)`: the part after the last `>`).
 
-```jsonc
-{
-  "version": 1,
-  "id": "oogezptkmoaeflb5",
-  "agentId": "default",
-  "agentName": "Default",
-  "title": "First user message...",  // max 60 chars, sticky once set. Root: first user message, or createSession's explicit title. Sub-session: its description (the brief). See session.md#session-file-format
-  "source": "explorer",              // "explorer" (root) | "delegated" (sub-session)
-  "createdAt": "ISO8601",
-  "updatedAt": "ISO8601",
-  "messageCount": 42,
-  "contextTokens": 5975,
-  "totalOutputTokens": 6058,
-  "parentSessionId": "parent_id",    // sub-sessions only
-  "archiveCount": 2,                 // committed UI-log archive segments; absent = never archived
-  "archivedUserCount": 30,           // main user turns that moved into segments
-  "messages": [SessionMessage],       // UI event-log format (written by WS handler / UIState reducer)
-  "rawMessages": [AnthropicMessage],  // raw Bedrock API shape (written by SessionManager saveAgentState); user text blocks start with the `[<iso>] ` arrival stamp — strip it (stripTurnStamp) before matching against `messages`
-  "output": "...",                    // accumulated assistant text from the latest turn
-  "lastActivityAt": "ISO8601"         // latest turn's last text / tool event; null if none — read by get_session_output for released sessions
-}
+| File | Content | Write mode |
+|---|---|---|
+| `{seg}.ui.jsonl` | UI records (below), no header | append; atomic rewrite (tmp + rename) on archive / `replaceMessageLog` / `deleteExchange` / a write by another process |
+| `{seg}.raw.jsonl` | one model message (`AnthropicMessage`) per line; user text blocks start with the `[<iso>] ` arrival stamp — strip it (`stripTurnStamp`) before matching against the UI log | append; atomic rewrite on any non-append change (compaction, repair edit, image trim, `deleteExchange`) |
+| `{seg}.ui.arch.{N}.{h}.jsonl.gz` | archived UI messages (merged), one per line, gzip, oldest-first; `N` from 1, `h` = first 12 hex of sha1(first message id) | written once (tmp + rename), immutable |
+
+No file ends in `.json` (the test-chat routes in `routes/agent-configs.ts` still list / bulk-delete `*.json`, so sessions created on 2.0 don't appear there — known limitation). A crashed atomic write can leave `<file>.tmp.<pid>.<ms>`; readers ignore it, session delete removes it.
+
+**No metadata in files.** agentId = directory, leaf id = file name, archive count = committed segment files; full id, parent, agent name, created / updated, `title`, `exchange_count`, `context_tokens`, `total_output_tokens`, `output`, `last_activity_at` = the session's [`agent_sessions`](#tables) row. `source` (explorer / delegated) is derived from the parent.
+
+### `ui.jsonl` records
+
+```
+{"t":"add","id":"<row id>","u"?:1,"m":<SessionMessage>}   append a row ("u":1 = main user turn)
+{"t":"patch","id":"<row id>","m":<SessionMessage>}          replace that row, position kept
+{"t":"inflight","id":"<row id>","m"?:<shell>,"from":k,"blocks":[ContentBlockEntry…]}
 ```
 
-Written as **compact JSON** (no indent) by all five writers of this path — nothing reads it by eye. `messageCount` is `messages.length` and has a single writer (`saveSessionToFile`); it *shrinks* when a compact archives history, so the lifetime count for listings is `exchangeCount` (mirrored to sqlite, see [`agent_sessions`](#tables)). See [session.md](session.md#session-file-format).
+`id` leads every record, so a reader gets the first row's id from the first few KB without parsing a multi-MB line (the archive commit check).
 
-### Archive segment file (UI-log archiving)
+Merge rule: rows in `add` order; `patch` replaces by id. `inflight` describes the one in-flight assistant: same id as the previous inflight record → `contentBlocks = previous.slice(0, from) ++ blocks`, `m` (shell: content, timestamp, agentName, taskId) only when it changed; a different id starts a fresh one. An `add` with the inflight id retires it. An inflight not retired at EOF (crash, or a mid-turn read by another process) is appended as the last row. It is not add-then-patch because rows (tool_call / tool_result / usage) keep landing *before* the streaming assistant, and a whole-message patch per write would rewrite every tool output of the turn each time (quadratic); the block delta writes each block's final form about once.
 
-Path: `.halo/sessions/{agentId}/{sessionId}.arch.{N}.json.gz`
+A last line that doesn't parse or has no trailing newline (torn write) is dropped by the reader; the next write is then a full rewrite.
 
-gzipped `JSON.stringify(SessionMessage[])` — the plain array, no wrapper object, oldest-first, in the same order the messages had in the active file. `N` counts up from 1. A segment is **immutable once committed** and the active file's `archiveCount` is the commit marker: `N > archiveCount` means the segment was written but the commit never landed, and no reader may reference it. Deleting a session deletes segments by **globbing `{sessionId}.arch.*.json.gz`** — not by iterating `archiveCount` — so crash-orphaned uncommitted segments are cleaned up too.
+### Archive segments
 
-A segment is written by a compact only when the active `.json` exceeded `ARCHIVE_SIZE_THRESHOLD` (3 MB), and then holds everything except the newest main exchange — so segment sizes are uneven by design and their count is bounded by total bytes written, not by compact frequency. Design + read path in [session.md](session.md#ui-log-archiving).
+Written at a turn end when the active `ui.jsonl` exceeds `ARCHIVE_SIZE_THRESHOLD` (5 MB): segment `N` = committed count + 1 holds everything except the newest main exchange (a compaction summary row is never a cut point), then `ui.jsonl` is atomically rewritten with the kept exchange — **that rename is the commit**. Committed count = segment files numbered 1..k, minus the highest when its `h` matches the active file's first row id (the rewrite never landed). Deleting a session deletes every file of it by directory listing, never by a count. Design + read path in [session.md](session.md#ui-log-archiving).
+
+### Migration from 1.x
+
+1.x kept a session in one `{seg}.json` (`messages` + `rawMessages` + a header: title, counts, tokens, `archiveCount` / `archivedUserCount`, `output`, `lastActivityAt`) with segments `{seg}.arch.{N}.json.gz`. Only `sessions/legacy-migrate.ts` reads them:
+
+- **Automatic (2.0 only, removed in 2.1).** The lowest-level log open (`session-log.ts` `openLog`), which every reader and writer goes through, on ENOENT checks for `{seg}.json` without `{seg}.ui.jsonl` and converts. Disk state, not memory, makes it once per session.
+- **Command** `halo sessions migrate v1 v2` (stays long-term): every session of a workspace plus the global internal ones; refuses while a live process holds the workspace's `runtime.lock`; prints `migrated / cleaned / skipped / failed`, exit 1 on any failure.
+- **Order**: `raw.jsonl` → committed segments (n ≤ header `archiveCount`) → db back-fill (the row's NULL columns from the header; an internal session gets its global row) → `ui.jsonl` (**the commit**) → read back through the 2.0 readers and compare counts and first / last ids → delete the 1.x files (`.json`, every `arch.*.json.gz` except a committed one that couldn't be read, `.json.tmp.*`). A failed check removes the new files and keeps the 1.x ones. A crash before the commit converts again on the next open; between commit and delete the command finishes it ("cleaned", after checking the 1.x history is an id-prefix of the 2.0 one).
+- **Downgrade**: a migrated session has no `.json` any more, so 1.x shows it empty (its row stays), as it does sessions created on 2.0.
 
 ### SessionMessage
 
@@ -200,6 +204,9 @@ interface SessionMessage {
 
   // Soft delete (deleteExchange) — greyed out in the UI, removed from raw context
   deleted?: boolean
+
+  // user row holding a compaction summary (emitted mid-turn) — never an archive cut point
+  compactSummary?: boolean
 }
 ```
 
@@ -254,15 +261,13 @@ Every reader goes through `messageToolCalls(msg)` (`sessions/session-types.ts`):
 
 1. Missing `type`: infer from `role` + existing fields
 2. Missing `contentBlocks`: fall back to the `toolCalls` + `content` split layout — the only reason `toolCalls` is still read
-3. Missing `version`: treat as v0, apply inference rules
-4. Missing `archiveCount`: session never archived (0 segments)
+3. Missing `compactSummary`: a user row whose content starts with `[Conversation Summary — ` is a summary
+4. 1.x `{seg}.json` files: converted on first open (see [Migration from 1.x](#migration-from-1x)); no 2.0 reader reads them
 
 ### Change rules
 
-- Format changes **must** bump `version`
-- Readers **must** handle every historical version
-- Persisted fields **must not** be removed
-- Adding optional fields does **not** require a version bump
+- A change to the file layout or record shape is a new format version with its own migration in `legacy-migrate.ts`-style code at the log open — readers and writers know only the current format
+- `SessionMessage` fields **must not** be removed; adding optional fields needs no version
 
 ## Agent Config format
 
@@ -603,7 +608,7 @@ Channel DB: `~/.halo/secrets/channels/channels.db`
 Schema seed: `packages/server/templates/schema.sql`
 ORM: `packages/server/src/db/schema.ts`, `packages/server/src/db/channel-db.ts`
 
-The databases hold session metadata indexes and workspace-scoped preferences (e.g. disabled items); message content lives in JSON files. Agent/skill/project config goes through the filesystem.
+The databases hold session metadata (the only home of title / counts / tokens / latest output — session files carry none) and workspace-scoped preferences (e.g. disabled items); message content lives in the session JSONL files. Internal-agent sessions keep the same `agent_sessions` table in `~/.halo/global/internal-sessions/halo.db`. Agent/skill/project config goes through the filesystem.
 
 ### Tables
 
@@ -623,12 +628,14 @@ The databases hold session metadata indexes and workspace-scoped preferences (e.
 | archived_at | INTEGER | Archived timestamp (null = not archived) |
 | goal / goal_session_id | TEXT | Retained legacy columns (goal mode binding JSON / back-pointer); existing bindings are unchanged and still honored |
 | reply_to | TEXT | Relay — JSON `{ workspace, sessionId }` of the caller session in another workspace; set by `relay_send`, cleared on report delivery. Added in `HALO_MIGRATIONS` slot (`db/index.ts`). |
-| title | TEXT | Mirror of the session file's `title` |
-| exchange_count | INTEGER | Mirror: main user turns over the session's lifetime (kept + archived) |
-| context_tokens | INTEGER | Mirror of the file's `contextTokens` |
-| total_output_tokens | INTEGER | Mirror of the file's `totalOutputTokens` |
+| title | TEXT | Session title, sticky once set |
+| exchange_count | INTEGER | Main user turns over the session's lifetime (kept + archived); new rows 0 |
+| context_tokens | INTEGER | Latest context size |
+| total_output_tokens | INTEGER | Output tokens over the session's lifetime |
+| output | TEXT | Latest turn's accumulated assistant text. Added in `HALO_MIGRATIONS` v3 |
+| last_activity_at | TEXT | ISO time of the latest turn's last text / tool event; null if none. Added in `HALO_MIGRATIONS` v3 |
 
-The last four are a **read cache for the session list** — `GET /api/sessions/logs` renders rows from these columns instead of opening and parsing every session file. Written only by `mirrorSessionMeta()` off the single persist seam (`SessionManager.persistSessionFile`) and by the PATCH-rename path; the write is skipped when all four already match, and it never touches `updated_at` (that column means "last activity", and a metadata mirror is not activity). `null` = row predates the columns → the list route backfills from the file once. Details in [session.md](session.md#sqlite-metadata).
+`title` … `total_output_tokens` are written by `updateSessionMeta()` off the single UI-log persist seam (`SessionManager.persistUILog`) and by the PATCH-rename path; `output` / `last_activity_at` by `updateSessionOutput()` on every raw save. Both skip no-op writes and never touch `updated_at` (that column means "last activity"). `exchange_count` null = a row from before 2.0 → the first probe of its UI log migrates the 1.x file and back-fills the null columns from its header. Details in [session.md](session.md#sqlite-metadata).
 
 **`disabled_items`** — per-workspace disable state for agents and skills (allows the same global item to be independently toggled in each workspace)
 
@@ -672,7 +679,7 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 - `schema.sql` / each db's `CREATE_SQL` always describes the FULL current shape, so a fresh db is complete after the CREATEs alone
 - Every change to an already-existing db gets a numbered slot in that file's ordered migration list — `HALO_MIGRATIONS` (`db/index.ts`), `CRON_MIGRATIONS` (`db/cron-db.ts`), `A2A_MIGRATIONS` (`db/a2a-db.ts`); `channel-db.ts` / `evo-db.ts` / `runs-db.ts` currently pass an empty list. `runMigrations(sqlite, list)` (`db/migrate.ts`) runs `list[user_version..]` in order, each in its own transaction, stamping `PRAGMA user_version = i + 1` after each
 - A fresh db is also at `user_version 0` and runs the whole list, so every slot must be a no-op against the current shape (`addColumnIfMissing`, `CREATE … IF NOT EXISTS`). A CHECK constraint can't be altered in SQLite: the slot rebuilds the table (create `_v2`, copy rows, drop, rename) and skips when `sqlite_master` already shows the new constraint — `HALO_MIGRATIONS` v2 (`disabled_items.scope` admits `'extension'`) is the pattern
-- Current slots worth knowing: `HALO_MIGRATIONS` v2 — the `disabled_items` rebuild above (rows kept). `CRON_MIGRATIONS` v5 — `cron_jobs.working_dir TEXT NULL` (job folder → `halo cli --dir`), `cron_jobs.stateless INTEGER NOT NULL DEFAULT 0` (1 = fresh session every run), `cron_runs.session_id TEXT NULL` (the session that run used). `CRON_MIGRATIONS` v6 — `cron_runs.workspace_path TEXT NULL` (the workspace the run fired against, where a stateless run's session lives), backfilled from the job row (`UPDATE … SET workspace_path = (SELECT workspace_path FROM cron_jobs …) WHERE workspace_path IS NULL`), so rows whose job is already gone stay NULL; column semantics in [cron.md](cron.md)
+- Current slots worth knowing: `HALO_MIGRATIONS` v2 — the `disabled_items` rebuild above (rows kept). `HALO_MIGRATIONS` v3 — `agent_sessions.output TEXT`, `agent_sessions.last_activity_at TEXT` (session store 2.0: the files carry no metadata). `CRON_MIGRATIONS` v5 — `cron_jobs.working_dir TEXT NULL` (job folder → `halo cli --dir`), `cron_jobs.stateless INTEGER NOT NULL DEFAULT 0` (1 = fresh session every run), `cron_runs.session_id TEXT NULL` (the session that run used). `CRON_MIGRATIONS` v6 — `cron_runs.workspace_path TEXT NULL` (the workspace the run fired against, where a stateless run's session lives), backfilled from the job row (`UPDATE … SET workspace_path = (SELECT workspace_path FROM cron_jobs …) WHERE workspace_path IS NULL`), so rows whose job is already gone stay NULL; column semantics in [cron.md](cron.md)
 - Append only — never reorder or edit a shipped slot. A db opened by a newer halo (user_version > list length) logs a warning and continues
 - Do not drop or rename existing columns
 - New channel types: add rows with a new `channel_type` value + define config shape in the channel's `accounts.ts` adapter
@@ -692,3 +699,4 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 | v1+ | 2026-09-20 | Schema migrations moved from ad-hoc boot-time ALTERs to `PRAGMA user_version` + ordered per-db migration lists (`db/migrate.ts`); existing dbs pick up at slot 0 and every slot is idempotent. Session-message + WS frame types moved to `@turmind/halo-core/protocol` (re-exported from their old server paths; no wire change). |
 | v1+ | 2026-10-10 | Model registry (additive): per-model `endpoints:`, `maxContextWindow`, `compressAt`; recommended `contextWindow` ≤ 272000; registry context / compressAt / verbosity defaults are scaffold-only; installer validates model fields and asks consent for URLs new to a provider. `HALO_MIGRATIONS` v2: `disabled_items.scope` admits `'extension'`. `CRON_MIGRATIONS` v5: `cron_jobs.working_dir`, `cron_jobs.stateless`, `cron_runs.session_id`. |
 | v1+ | 2026-10-13 | `CRON_MIGRATIONS` v6 (additive): `cron_runs.workspace_path`, backfilled from the job row (NULL where the job is already gone). |
+| v2 | 2026-10-15 | Session store 2.0: `{seg}.json` replaced by append-only `{seg}.ui.jsonl` (`add` / `patch` / `inflight` records) + `{seg}.raw.jsonl`; archive segments `{seg}.ui.arch.{N}.{h}.jsonl.gz`, committed count = segment files (no stored counter), archived at turn end over 5 MB; no metadata in files — `HALO_MIGRATIONS` v3 adds `agent_sessions.output` / `last_activity_at`, internal sessions get rows in `~/.halo/global/internal-sessions/halo.db`; `SessionMessage.compactSummary`. 1.x files are converted on first open (or `halo sessions migrate v1 v2`) and deleted after a read-back check. |

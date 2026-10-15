@@ -124,7 +124,7 @@ cleanupConnection
 | `packages/server/src/ws/event-processor.ts` | `sendWsNotification()`, `bufferDetachedNotification()` |
 | `packages/server/src/agents/session-ui-store.ts` | `emitEvent()`, `reduceIntoUIState()`, `persistLog()`, `flushPersist()` / `debouncedPersist()`, `isUIStateDirty()`, `flushSession()` / `flushAll()`, `registerEventListener()` |
 | `packages/server/src/sessions/ui-log-builder.ts` | `applyEvent()`, `createSaveSnapshot()`, UIState type |
-| `packages/server/src/sessions/session-store.ts` | `saveSessionToFile()`, `loadSessionMessages()` |
+| `packages/server/src/sessions/session-store.ts` | `saveUILog()`, `loadSessionMessages()` |
 
 ## Historical bug fixes (2026-04-20/21)
 
