@@ -13,6 +13,7 @@ vi.mock('../src/ws/broadcast.js', () => ({ broadcast: (e: Record<string, unknown
 // `diskMessages` lets individual tests present an on-disk log to seed from
 // (the dirty-flag tests need a state that was built WITHOUT local mutation).
 const diskMessages: { value: unknown[] } = { value: [] }
+const forgotten: string[] = []
 vi.mock('../src/sessions/session-store.js', () => ({
   getSessionDir: () => '/tmp/none',
   loadSessionMessages: () => diskMessages.value,
@@ -20,6 +21,7 @@ vi.mock('../src/sessions/session-store.js', () => ({
 }))
 vi.mock('../src/sessions/session-log.js', () => ({
   cachedUILogSize: () => 0,
+  forgetUILogCache: (p: string) => forgotten.push(p),
   uiLogPath: (dir: string, seg: string) => `${dir}/${seg}.ui.jsonl`,
 }))
 
@@ -197,6 +199,16 @@ describe('SessionUIStore UIState access', () => {
     expect(store.getCachedUIState('s1')).not.toBeNull()
     store.dropUIState('s1')
     expect(store.getCachedUIState('s1')).toBeNull()
+  })
+
+  it('dropUIState drops the writer baselines of the root and its sub logs', () => {
+    const { host } = makeHost()
+    const store = new SessionUIStore(host)
+    store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
+    store.emitEvent('s1', { type: 'agent_start', taskId: 's1>t1', agentName: 'w', description: 'd' } as AgentSessionEvent)
+    forgotten.length = 0
+    store.dropUIState('s1')
+    expect(forgotten).toEqual(['/tmp/none/s1.ui.jsonl', '/tmp/none/s1>t1.ui.jsonl'])
   })
 })
 

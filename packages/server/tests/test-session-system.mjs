@@ -419,7 +419,7 @@ async function main() {
     assert(!!listSessionCall, 'D7: session_list tool was called')
 
     // E6-E7: Delete session + log
-    const sessionFilePath = path.join(PROJECT_ID, '.halo/sessions/default', `${sessionIdDel}.json`)
+    const sessionFilePath = path.join(PROJECT_ID, '.halo/sessions/default', `${sessionIdDel}.ui.jsonl`)
     assert(fs.existsSync(sessionFilePath), 'E6: Session file exists before delete')
     const deleted = await removeSession(ws, cookie, sessionIdDel)
     assert(deleted?.sessionId === sessionIdDel, 'E6: Session deleted notification received')

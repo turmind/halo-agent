@@ -10,7 +10,7 @@ import {
 import { agentSessions } from '../src/db/schema.js'
 import { createRunsDb, setRunsDb, getRunsDb, runningSessions } from '../src/db/runs-db.js'
 import { repairConversationMessages } from '../src/agents/conversation-repair.js'
-import { loadSessionMessages, loadRawMessages } from '../src/sessions/session-store.js'
+import { loadSessionMessages, loadRawMessages, stripTurnStamp } from '../src/sessions/session-store.js'
 import { uiLogPath, rawLogPath, replaceUILog, replaceRawLog } from '../src/sessions/session-log.js'
 import type { SessionMessage } from '../src/sessions/session-types.js'
 
@@ -380,6 +380,42 @@ describe('5. hard kill mid-batch', () => {
 
     gate.release('r-three')
     await run
+  })
+})
+
+describe('5b. a turn with tool calls, then the next turn: raw is only ever appended / tail-rewritten', () => {
+  // e2e N1 (2c7cf83): two whole-file rewrites per tool turn with identical
+  // content — one ~5ms after `complete` (turn-end repair), one ~4ms after the
+  // next turn's ack (sendUserMessage's repair). Both turns go through
+  // sendUserMessage, the second from a reload (ensureSession → loadAgentState,
+  // primed), the way a user's next message after release arrives.
+  it.each(['in memory', 'reloaded'] as const)('same inode across turn end, release and the next turn (%s)', async (mode) => {
+    seedRow(sm, 'n1')
+    const tool: ToolDef = { name: 'step', description: 't', inputSchema: { type: 'object', properties: {} }, callback: async () => 'ok' }
+    const loop = new StepLoop([toolTurn(['t1'], 'step'), endTurn('one'), toolTurn(['t2'], 'step'), endTurn('two')], [tool])
+    const s = fakeSession(sm, 'n1', loop)
+    const settled = () => vi.waitFor(() => expect(s.promise).toBeNull())
+    expect(await sm.sendUserMessage('n1', 'first')).toBe('running')
+    await settled()
+    const file = rawLogPath(dir(), 'n1')
+    // Hold the file open: a rewrite (tmp + rename) unlinks this inode, and the
+    // open fd keeps its number from being reused by the replacement.
+    const fd = fs.openSync(file, 'r')
+    const ino = fs.fstatSync(fd).ino
+
+    // Released at run end. Put the session back — as is, or with its history
+    // reloaded from disk the way ensureSession seeds it.
+    if (mode === 'reloaded') loop.messages = loadRawMessages('n1', 'default', ws, { prime: true }) as typeof loop.messages
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('n1', s)
+    expect(await sm.sendUserMessage('n1', 'second')).toBe('running')
+    await settled()
+    try {
+      expect(fs.fstatSync(fd).nlink).toBe(1)
+      expect(stat(file).ino).toBe(ino)
+    } finally {
+      fs.closeSync(fd)
+    }
+    expect(raw('n1').map((m) => stripTurnStamp(rawText(m))).filter(Boolean)).toEqual(['first', 'one', 'second', 'two'])
   })
 })
 

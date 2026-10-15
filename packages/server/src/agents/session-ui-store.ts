@@ -1,10 +1,10 @@
 import type { AgentSessionEvent } from './agent-events.js'
 import { broadcast } from '../ws/broadcast.js'
-import type { HaloDb } from '../db/index.js'
+import { internalSessionsDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
 import { getSessionDir, loadSessionMessages, fileSegment } from '../sessions/session-store.js'
-import { cachedUILogSize, uiLogPath } from '../sessions/session-log.js'
+import { cachedUILogSize, forgetUILogCache, uiLogPath } from '../sessions/session-log.js'
 import { LegacyConversionError } from '../sessions/legacy-migrate.js'
 import {
   ARCHIVE_SIZE_THRESHOLD, archiveSplitIndex, countArchiveSegments, writeArchiveSegment,
@@ -459,14 +459,15 @@ export class SessionUIStore {
   private agentIdCache: Map<string, string> = new Map()
 
   /** Resolve a session's authoritative slot agentId from the in-memory session
-   *  (preferred — covers internal sessions with no db row) or the db row, never
-   *  from a display name. Cached process-locally. */
+   *  (preferred), the workspace row, or — an internal session restored from
+   *  another workspace has only that one — the global internal-sessions row;
+   *  never from a display name. Cached process-locally. */
   private resolveAgentId(sessionId: string): string {
     const cached = this.agentIdCache.get(sessionId)
     if (cached) return cached
     const inMem = this.host.getSession(sessionId)
-    const agentId = inMem?.agentId
-      ?? this.db.select().from(agentSessions).where(eq(agentSessions.id, sessionId)).get()?.agentId
+    const byId = (db: HaloDb) => db.select({ agentId: agentSessions.agentId }).from(agentSessions).where(eq(agentSessions.id, sessionId)).get()?.agentId
+    const agentId = inMem?.agentId ?? byId(this.db) ?? byId(internalSessionsDb())
     if (agentId) this.agentIdCache.set(sessionId, agentId)
     return agentId ?? 'default'
   }
@@ -573,6 +574,15 @@ export class SessionUIStore {
       // Same for the tree's pending sub-session writes: their logs live in this
       // state and die with it.
       for (const taskId of this.pendingSubPersists(sessionId)) this.flushPersist(taskId, state)
+    }
+    if (state) {
+      // The logs' writer baselines go with them, or the cache grows with every
+      // session ever loaded; the next ensureUIState / loadSubHistory re-primes.
+      // Raw baselines stay: the AgentSession may outlive this state.
+      const projectPath = this.uiStateProjectPaths.get(sessionId) ?? this.host.workspaceRoot
+      for (const id of [sessionId, ...state.subSessionLogs.keys()]) {
+        forgetUILogCache(uiLogPath(getSessionDir(this.resolveAgentId(id), projectPath), fileSegment(id)))
+      }
     }
     this.uiStates.delete(sessionId)
     this.uiStateProjectPaths.delete(sessionId)

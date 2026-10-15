@@ -33,7 +33,7 @@ import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
-import { saveUILog, deriveSessionTitle, isInternalAgent, fileSegment, stripTurnStamp } from '../sessions/session-store.js'
+import { saveUILog, deriveSessionTitle, isInternalAgent, sessionMetaDb, fileSegment, stripTurnStamp } from '../sessions/session-store.js'
 import { countArchiveSegments } from '../sessions/session-archive.js'
 import { rawLogPath, writeRawLog, uiLogExists, uiLogPath } from '../sessions/session-log.js'
 import { VISION_IMAGE_MIME_TYPES } from '../channels/shared/media-store.js'
@@ -483,7 +483,7 @@ export class SessionManager implements SessionManagerInternals {
    *  `~/.halo/global/internal-sessions/` — the global db next to them, so a
    *  user workspace never carries platform-tooling rows. */
   metaDb(agentId: string): HaloDb {
-    return isInternalAgent(agentId) ? internalSessionsDb() : this.db
+    return sessionMetaDb(this.db, agentId)
   }
 
   /**
@@ -1077,23 +1077,19 @@ export class SessionManager implements SessionManagerInternals {
    *  signal routes/sessions.ts uses): probing its UI log migrates a 1.x file,
    *  back-filling the row. */
   getSessionTitle(sessionId: string): string | null {
-    const read = () => {
-      const row = this.db.select({ agentId: agentSessions.agentId, title: agentSessions.title, exchangeCount: agentSessions.exchangeCount })
-        .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
-      if (!row || !isInternalAgent(row.agentId)) return row
-      const meta = this.metaDb(row.agentId).select({ title: agentSessions.title, exchangeCount: agentSessions.exchangeCount })
-        .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
-      return meta ? { ...row, ...meta } : row
-    }
+    const owner = this.db.select({ agentId: agentSessions.agentId })
+      .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
+    if (!owner) return null
+    const read = () => this.metaDb(owner.agentId).select({ title: agentSessions.title, exchangeCount: agentSessions.exchangeCount })
+      .from(agentSessions).where(eq(agentSessions.id, sessionId)).get()
     const row = read()
-    if (!row) return null
-    if (row.exchangeCount !== null) return row.title || null
+    if (row && row.exchangeCount !== null) return row.title || null
     // A failed 1.x conversion (logged by the migrator) must not break the
     // caller's whole list — this row just keeps what it has.
     try {
-      if (!uiLogExists(uiLogPath(this.sessionDir(row.agentId), fileSegment(sessionId)))) return row.title || null
+      if (!uiLogExists(uiLogPath(this.sessionDir(owner.agentId), fileSegment(sessionId)))) return row?.title || null
     } catch {
-      return row.title || null
+      return row?.title || null
     }
     return read()?.title || null
   }
@@ -1652,6 +1648,7 @@ export class SessionManager implements SessionManagerInternals {
           this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} context overflow, compacting locally...` })
           if (result.compacted) {
             session.agent.messages = result.messages
+            this.saveAgentState(session)  // as selfCompactSession: land it now
             this.emitEvent(session.id, { type: 'system', text: `Session ${session.agentId} context compacted (${result.messages.length} messages remaining, local fallback)` })
             if (attempt + 1 < maxRetries) {
               recordRetry('context_overflow')
@@ -2795,6 +2792,7 @@ export class SessionManager implements SessionManagerInternals {
       const [summaryMsg, ...tail] = local.messages
       const tailMicro = microCompactMessages(tail, 1)
       session.agent.messages = [summaryMsg, ...(tailMicro.compacted ? tailMicro.messages : tail)]
+      this.saveAgentState(session)  // as selfCompactSession: land it now
     }
     session.lastContextTokens = estimateMessageTokens(session.agent.messages) + estimateMessageTokens([{ role: 'user', content: session.systemPrompt }])
     const why = reason.length > 80 ? `${reason.slice(0, 80)}…` : reason
@@ -3012,6 +3010,10 @@ export class SessionManager implements SessionManagerInternals {
       const finalTail = tailMicro.compacted ? tailMicro.messages : cleanRecent
       session.agent.messages = [summaryMsg, ...finalTail]
       rebuilt = true
+      // Land the compacted history now (a full rewrite the next save would
+      // make anyway): until then a hard kill restores the pre-compact raw
+      // under a UI log that already shows the summary row.
+      this.saveAgentState(session)
 
       const estimatedTokens = estimateMessageTokens(session.agent.messages) + estimateMessageTokens([{ role: 'user', content: session.systemPrompt }])
       return { summary: summaryText, olderCount, estimatedTokens }

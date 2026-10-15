@@ -5,6 +5,7 @@ import type { SessionManagerRegistry } from '../agents/session-manager-registry.
 import { agentSessions } from '../db/schema.js'
 import {
   findAndDeleteSessionFile, getSessionDir, fileSegment, loadSessionView, stripTurnStamp,
+  sessionMetaDb,
 } from '../sessions/session-store.js'
 import { uiLogExists, uiLogPath } from '../sessions/session-log.js'
 import { countArchiveSegments } from '../sessions/session-archive.js'
@@ -234,7 +235,7 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
     const enrich = (row: typeof rows[number]) => {
       let s = row
       if (s.exchangeCount === null && probe(s)) {
-        const fresh = db.select().from(agentSessions).where(eq(agentSessions.id, s.id)).get()
+        const fresh = sessionMetaDb(db, s.agentId).select().from(agentSessions).where(eq(agentSessions.id, s.id)).get()
         if (fresh) s = { ...s, title: fresh.title, exchangeCount: fresh.exchangeCount, contextTokens: fresh.contextTokens, totalOutputTokens: fresh.totalOutputTokens }
       }
       const title = s.title ?? ''
@@ -280,13 +281,15 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
     // 1.x scanned the workspace's session dirs; the row now names the dir.
     if (!projectId) return c.json({ error: 'Session not found' }, 404)
     const { db, workspacePath } = getWorkspaceDb(projectId)
-    let row = db.select().from(agentSessions).where(eq(agentSessions.id, id)).get()
-    if (!row) return c.json({ error: 'Session not found' }, 404)
-    const view = loadSessionView(id, row.agentId, workspacePath)
+    const owner = db.select().from(agentSessions).where(eq(agentSessions.id, id)).get()
+    if (!owner) return c.json({ error: 'Session not found' }, 404)
+    const view = loadSessionView(id, owner.agentId, workspacePath)
     if (!view) return c.json({ error: 'Session not found' }, 404)
-    // Opening a 1.x session's log migrates it and back-fills the row's NULL
-    // columns (exchangeCount NULL = predates them) — answer with the fresh row.
-    if (row.exchangeCount === null) row = db.select().from(agentSessions).where(eq(agentSessions.id, id)).get() ?? row
+    // Metadata from its one home (an internal session's is the global db).
+    // Read after the view: opening a 1.x session's log migrates it and
+    // back-fills the row's NULL columns.
+    const meta = sessionMetaDb(db, owner.agentId).select().from(agentSessions).where(eq(agentSessions.id, id)).get()
+    const row = meta ? { ...owner, title: meta.title, exchangeCount: meta.exchangeCount, contextTokens: meta.contextTokens, totalOutputTokens: meta.totalOutputTokens, output: meta.output, lastActivityAt: meta.lastActivityAt } : owner
 
     const agentName = row.agentName || row.agentId
     // Only convert rawMessages when the UI log is empty (sub-agent sessions
@@ -364,8 +367,9 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
     if (!title) return c.json({ error: 'title required' }, 400)
 
     const { db } = getWorkspaceDb(projectId)
-    const updated = db.update(agentSessions).set({ title }).where(eq(agentSessions.id, id)).run()
-    if (updated.changes === 0) return c.json({ error: 'Session not found' }, 404)
+    const owner = db.select({ agentId: agentSessions.agentId }).from(agentSessions).where(eq(agentSessions.id, id)).get()
+    if (!owner) return c.json({ error: 'Session not found' }, 404)
+    sessionMetaDb(db, owner.agentId).update(agentSessions).set({ title }).where(eq(agentSessions.id, id)).run()
     // Push so every admin session list re-fetches the new title live.
     broadcast({ type: 'session:changed' })
     return c.json({ ok: true })

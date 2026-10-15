@@ -20,7 +20,7 @@ import {
   uiLogPath, rawLogPath, readUILog, readRawLog, writeUILog, forgetLogCaches,
   type UIWriteResult,
 } from './session-log.js'
-import { internalSessionsDb } from '../db/index.js'
+import { internalSessionsDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { globalInternalSessionsDir } from '../paths.js'
 
@@ -37,6 +37,14 @@ import { globalInternalSessionsDir } from '../paths.js'
  */
 export function isInternalAgent(agentId: string): boolean {
   return agentId.startsWith('__') && agentId.endsWith('__')
+}
+
+/** The db holding a session's metadata (title, counts, tokens, output): the
+ *  workspace's own, or the global internal-sessions db for an internal agent.
+ *  An internal session's workspace row (created alongside, see createSession)
+ *  is never updated — metadata must not be read from or written to it. */
+export function sessionMetaDb(workspaceDb: HaloDb, agentId: string): HaloDb {
+  return isInternalAgent(agentId) ? internalSessionsDb() : workspaceDb
 }
 
 /** Resolve session directory for an agent: .halo/sessions/{agentId}/ */

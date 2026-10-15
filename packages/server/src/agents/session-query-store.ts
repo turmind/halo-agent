@@ -2,6 +2,7 @@ import { internalSessionsDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, desc, lt, gte, inArray } from 'drizzle-orm'
 import type { SessionInfo, SessionTreeNode } from './session-manager.js'
+import { isInternalAgent, sessionMetaDb } from '../sessions/session-store.js'
 
 /**
  * Surface that SessionQueryStore needs from SessionManager. The manager exposes
@@ -296,6 +297,11 @@ export class SessionQueryStore {
         .get()
       status = activeChild ? 'running' : 'idle'
     }
+    // An internal session's metadata lives in the global db (sessionMetaDb):
+    // its workspace row only carries the lifecycle columns.
+    const meta = isInternalAgent(row.agentId)
+      ? sessionMetaDb(this.db, row.agentId).select().from(agentSessions).where(eq(agentSessions.id, row.id)).get() ?? row
+      : row
     return {
       id: row.id,
       parentId: row.parentId,
@@ -310,10 +316,10 @@ export class SessionQueryStore {
       updatedAt: row.updatedAt,
       stoppedAt: row.stoppedAt,
       archivedAt: row.archivedAt,
-      title: row.title ?? null,
-      exchangeCount: row.exchangeCount ?? null,
-      contextTokens: row.contextTokens ?? null,
-      totalOutputTokens: row.totalOutputTokens ?? null,
+      title: meta.title ?? null,
+      exchangeCount: meta.exchangeCount ?? null,
+      contextTokens: meta.contextTokens ?? null,
+      totalOutputTokens: meta.totalOutputTokens ?? null,
     }
   }
 }

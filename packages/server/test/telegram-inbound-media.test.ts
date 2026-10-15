@@ -109,8 +109,10 @@ function allSurfaces(stub: { messageQueue: Array<{ text: string }> }): string {
   const queue = JSON.stringify(stub.messageQueue)
   // Flush the debounced persist synchronously, then read the disk json.
   sm.emitEvent(SID, { type: 'complete' })
-  const diskPath = join(workspace, '.halo', 'sessions', 'default', `${SID}.json`)
-  const disk = fs.existsSync(diskPath) ? fs.readFileSync(diskPath, 'utf-8') : ''
+  const diskPath = join(workspace, '.halo', 'sessions', 'default', `${SID}.ui.jsonl`)
+  // The disk surface must really be read — a wrong path would pass vacuously.
+  expect(fs.existsSync(diskPath)).toBe(true)
+  const disk = fs.readFileSync(diskPath, 'utf-8')
   return uiLog + '\n' + queue + '\n' + disk
 }
 

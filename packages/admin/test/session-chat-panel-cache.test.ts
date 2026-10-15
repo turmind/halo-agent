@@ -47,7 +47,7 @@ const text = () => panelBox.textContent ?? ''
 const scroller = () => panelBox.querySelector<HTMLDivElement>('div.relative.flex-1.overflow-y-auto')!
 // Emit and settle in one act scope — a refetch's GET resolves on a microtask.
 const fileChanged = (id: string) => act(async () => {
-  ws.emit('file:changed', { path: `.halo/sessions/default/${id}.json`, action: 'change' })
+  ws.emit('file:changed', { path: `.halo/sessions/default/${id}.ui.jsonl`, action: 'change' })
   await vi.advanceTimersByTimeAsync(0)
 })
 

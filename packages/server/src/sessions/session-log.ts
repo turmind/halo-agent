@@ -126,13 +126,37 @@ function statOrNull(p: string): fsSync.Stats | null {
   try { return fsSync.statSync(p) } catch { return null }
 }
 
-/** Append `content` and return the file's stamp after the write (fstat on the
- *  same fd, so the cache tracks exactly what is on disk). */
-function appendAndStamp(filePath: string, content: string): FileStamp {
-  const fd = fsSync.openSync(filePath, 'a')
+/**
+ * Write `content` into the file this process last wrote (`stamp`) — appended,
+ * or from byte `at` with the rest cut off — and return the file's stamp after
+ * the write (fstat on the same fd, so the cache tracks exactly what is on
+ * disk). Null, with nothing written, when the opened file isn't that baseline
+ * any more: another process wrote it between the caller's stat and this open,
+ * and the caller rewrites it whole. A short write throws, with the file's
+ * cache dropped so the next write rewrites it clean.
+ */
+function writeOver(caches: Map<string, unknown>, filePath: string, stamp: FileStamp, content: string, at?: number): FileStamp | null {
+  let fd: number
   try {
-    fsSync.writeSync(fd, content)
-    return stampOf(fsSync.fstatSync(fd))
+    fd = fsSync.openSync(filePath, at === undefined ? 'a' : 'r+')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+  try {
+    if (!sameStamp(stamp, fsSync.fstatSync(fd))) return null
+    const bytes = Buffer.from(content)
+    const n = fsSync.writeSync(fd, bytes, 0, bytes.length, at ?? null)
+    if (n !== bytes.length) {
+      caches.delete(filePath)
+      throw new Error(`[SessionLog] short write to ${filePath}: ${n} of ${bytes.length} bytes`)
+    }
+    if (at !== undefined) fsSync.ftruncateSync(fd, at + n)
+    const after = fsSync.fstatSync(fd)
+    // Another process appended in the same instant: the file holds lines this
+    // cache doesn't know — the next write rewrites it whole.
+    if (at === undefined && after.size !== stamp.size + n) caches.delete(filePath)
+    return stampOf(after)
   } finally {
     fsSync.closeSync(fd)
   }
@@ -405,7 +429,15 @@ export function writeUILog(
     }
     inflightCache = inflightCacheOf(inflight, shellJson)
   }
-  if (out) c.stamp = appendAndStamp(filePath, out)
+  if (out) {
+    const stamp = writeOver(uiCaches, filePath, c.stamp, out)
+    if (!stamp) {
+      // Written by another process since the stat above: no baseline.
+      uiCaches.delete(filePath)
+      return writeUILog(filePath, rows, inflight, opts)
+    }
+    c.stamp = stamp
+  }
   for (const i of patches) c.rows.set(rows[i], i)
   for (let i = c.ids.length; i < rows.length; i++) { c.rows.set(rows[i], i); c.ids.push(rows[i].id) }
   c.users = usersAfter
@@ -555,15 +587,9 @@ export function writeRawLog(filePath: string, messages: unknown[]): void {
     // never a file without the tail message.
     const from = c.count - 1
     const { out, lastStart } = rawLines(messages.slice(from))
-    const fd = fsSync.openSync(filePath, 'r+')
-    try {
-      const bytes = Buffer.from(out)
-      fsSync.writeSync(fd, bytes, 0, bytes.length, c.tailStart)
-      fsSync.ftruncateSync(fd, c.tailStart + bytes.length)
-      c.stamp = stampOf(fsSync.fstatSync(fd))
-    } finally {
-      fsSync.closeSync(fd)
-    }
+    const stamp = writeOver(rawCaches, filePath, c.stamp, out, c.tailStart)
+    if (!stamp) { rawCaches.delete(filePath); return writeRawLog(filePath, messages) }
+    c.stamp = stamp
     c.tailStart += lastStart
     for (let i = from; i < messages.length; i++) noteRaw(c.seen, messages[i], i)
     c.count = messages.length
@@ -572,7 +598,9 @@ export function writeRawLog(filePath: string, messages: unknown[]): void {
   if (messages.length === c.count) return
   const { out, lastStart } = rawLines(messages.slice(c.count))
   const before = c.stamp.size
-  c.stamp = appendAndStamp(filePath, out)
+  const stamp = writeOver(rawCaches, filePath, c.stamp, out)
+  if (!stamp) { rawCaches.delete(filePath); return writeRawLog(filePath, messages) }
+  c.stamp = stamp
   c.tailStart = before + lastStart
   for (let i = c.count; i < messages.length; i++) noteRaw(c.seen, messages[i], i)
   c.count = messages.length
@@ -583,6 +611,12 @@ export function replaceRawLog(filePath: string, messages: unknown[]): void {
   fsSync.mkdirSync(path.dirname(filePath), { recursive: true })
   atomicWriteFileSync(filePath, messages.map((m) => JSON.stringify(m) + '\n').join(''))
   rawCaches.delete(filePath)
+}
+
+/** Drop the writer baseline of a UI log whose in-memory log was evicted — the
+ *  next load re-primes it (readUILog). */
+export function forgetUILogCache(filePath: string): void {
+  uiCaches.delete(filePath)
 }
 
 /** Drop the writer baselines of a deleted session's files. */

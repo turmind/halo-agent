@@ -9,6 +9,7 @@ import { SessionManagerRegistry } from '../src/agents/session-manager-registry.j
 import { SessionManager } from '../src/agents/session-manager.js'
 import { AgentLoop, MODEL_TIMEOUT_ERROR, type ModelCallResult, type ModelDelta, type ToolDef } from '../src/agents/agent-loop.js'
 import { agentSessions } from '../src/db/schema.js'
+import { loadRawMessages } from '../src/sessions/session-store.js'
 import { config } from '../src/config.js'
 import type { AgentSessionEvent } from '../src/agents/agent-events.js'
 import { execStop, execInterrupt } from '../src/channels/shared/commands.js'
@@ -310,6 +311,14 @@ describe('4. the auto-compact local-fallback notice carries compactEnd and the r
     expect(events.find((e) => e.text === text)?.compactEnd).toBe(true)
     expect(s.isCompacting).toBe(false)
     expect(s.compactAbortController).toBeNull()
+  })
+
+  it('the fallback lands the compacted raw history immediately (not at the next save)', async () => {
+    const s = fakeSession('d-raw', new FakeAgent(textMessages(compactable), 'throw'))
+    await autoCompact(s)
+    const onDisk = loadRawMessages('d-raw', 'default', ws)
+    expect(onDisk).toEqual((s.agent as FakeAgent).messages)
+    expect(textOf(onDisk[0] as Msg)).toMatch(/^\[Conversation Summary — \d+ messages compacted \(local fallback\)\]/)
   })
 
   it('caps the reason at 80 chars', async () => {

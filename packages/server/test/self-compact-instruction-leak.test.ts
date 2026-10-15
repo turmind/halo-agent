@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
+import { loadRawMessages } from '../src/sessions/session-store.js'
 
 /**
  * Regression: the self-compact instruction must NOT leak into the kept tail.
@@ -125,5 +126,21 @@ describe('selfCompactSession — instruction must not leak into kept tail', () =
     expect(result).not.toBeNull()
     const agent = (sm as unknown as { sessions: Map<string, { agent: FakeAgent }> }).sessions.get('root>sub1')!.agent
     expect(serialize(agent.messages)).not.toContain('Summarize the conversation')
+  })
+})
+
+describe('compaction lands the compacted raw history immediately', () => {
+  // Before: the compacted history reached raw.jsonl only at the next save
+  // (next tool call / turn end) — a hard kill in between restored the full
+  // pre-compact raw under a UI log already showing the summary row.
+  it('selfCompactSession: raw.jsonl is the compacted history when it returns', async () => {
+    const messages: Msg[] = []
+    for (let i = 0; i < 8; i++) messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: [{ type: 'text', text: `m${i}` }] })
+    const agent = seedSession('s3', messages)
+    Object.assign((sm as unknown as { sessions: Map<string, object> }).sessions.get('s3')!, { agentId: 'default', output: '', lastActivityAt: null })
+
+    expect(await sm.selfCompactSession('s3')).not.toBeNull()
+    expect(loadRawMessages('s3', 'default', ws)).toEqual(agent.messages)
+    expect(serialize(loadRawMessages('s3', 'default', ws))).toContain('SUMMARY_TEXT')
   })
 })

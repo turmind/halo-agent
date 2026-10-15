@@ -19,7 +19,7 @@ import { rawSqlite } from '../src/db/raw-sqlite.js'
 
 const AGENT_SESSION_COLS = [
   'working_dir', 'access_level', 'goal', 'goal_session_id', 'reply_to',
-  'title', 'exchange_count', 'context_tokens', 'total_output_tokens',
+  'title', 'exchange_count', 'context_tokens', 'total_output_tokens', 'output', 'last_activity_at',
 ]
 
 function userVersion(s: Database.Database): number {

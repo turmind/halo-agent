@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -130,6 +130,53 @@ describe('raw log', () => {
     expect(readRawLog(p)).toEqual(messages)
   })
 
+  it('another process writing between the stat and the append / tail write: rewritten from memory', () => {
+    const p = rawLogPath(dir, 's')
+    const open = fs.openSync
+    for (const flag of ['a', 'r+'] as const) {
+      const messages: unknown[] = [raw('user', 'q')]
+      writeRawLog(p, messages)
+      let hit = false
+      const spy = vi.spyOn(fs, 'openSync').mockImplementation(((file: fs.PathLike, flags?: fs.OpenMode, mode?: fs.Mode) => {
+        if (!hit && file === p && flags === flag) {
+          hit = true
+          fs.appendFileSync(p, JSON.stringify(raw('assistant', 'foreign')) + '\n')
+        }
+        return open(file, flags, mode)
+      }) as typeof fs.openSync)
+      try {
+        // 'a' = new message appended; 'r+' = a merge into the last message.
+        if (flag === 'a') messages.push(raw('assistant', 'mine'))
+        else (messages[0] as { content: unknown[] }).content = [{ type: 'text', text: 'q2' }]
+        writeRawLog(p, messages)
+        expect(hit).toBe(true)
+        expect(readRawLog(p)).toEqual(messages)
+      } finally {
+        spy.mockRestore()
+      }
+      fs.rmSync(p)
+    }
+  })
+
+  it('a short tail write throws and drops the baseline: the next write rewrites the file clean', () => {
+    const p = rawLogPath(dir, 's')
+    const messages: unknown[] = [raw('user', 'q'), raw('assistant', 'a')]
+    writeRawLog(p, messages)
+    const write = fs.writeSync
+    const spy = vi.spyOn(fs, 'writeSync').mockImplementationOnce(((fd: number, buf: Buffer, off: number, len: number, pos: number | null) =>
+      write(fd, buf, off, 1, pos)) as typeof fs.writeSync)
+    ;(messages[1] as { content: unknown[] }).content = [{ type: 'text', text: 'a2' }]
+    try {
+      expect(() => writeRawLog(p, messages)).toThrow(/short write/)
+    } finally {
+      spy.mockRestore()
+    }
+    const before = ino(p)
+    writeRawLog(p, messages)
+    expect(ino(p)).not.toBe(before)
+    expect(readRawLog(p)).toEqual(messages)
+  })
+
   it('a crashed atomic write (tmp left, never renamed) leaves the old file intact', () => {
     const p = rawLogPath(dir, 's')
     const messages = [raw('user', 'q'), raw('assistant', 'a')]
@@ -202,6 +249,50 @@ describe('UI log', () => {
     replaceUILog(p, [row('u1'), row('foreign')])   // another process
     const mine = [...rows, row('mine', 'assistant')]
     writeUILog(p, mine, null)
+    expect(readUILog(p)).toEqual(mine)
+  })
+
+  it('another process writing between the stat and the append: rewritten from memory, nothing appended to its file', () => {
+    const p = uiLogPath(dir, 's')
+    const rows = [row('u1')]
+    writeUILog(p, rows, null)
+    const open = fs.openSync
+    let hit = false
+    const spy = vi.spyOn(fs, 'openSync').mockImplementation(((file: fs.PathLike, flags?: fs.OpenMode, mode?: fs.Mode) => {
+      if (!hit && file === p && flags === 'a') {
+        hit = true
+        fs.appendFileSync(p, JSON.stringify({ t: 'add', id: 'foreign', u: 1, m: row('foreign') }) + '\n')
+      }
+      return open(file, flags, mode)
+    }) as typeof fs.openSync)
+    try {
+      const mine = [...rows, row('mine', 'assistant')]
+      const res = writeUILog(p, mine, null)
+      expect(hit).toBe(true)
+      expect(readUILog(p)).toEqual(mine)
+      expect(lines(p)).toHaveLength(2)
+      expect(res.userDelta).toBe(-1)   // the file held u1 + foreign
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('a short append throws and drops the baseline: the next write rewrites the file clean', () => {
+    const p = uiLogPath(dir, 's')
+    const rows = [row('u1')]
+    writeUILog(p, rows, null)
+    const write = fs.writeSync
+    const spy = vi.spyOn(fs, 'writeSync').mockImplementationOnce(((fd: number, buf: Buffer, off: number, len: number, pos: number | null) =>
+      write(fd, buf, off, Math.floor(len / 2), pos)) as typeof fs.writeSync)
+    const mine = [...rows, row('mine', 'assistant')]
+    try {
+      expect(() => writeUILog(p, mine, null)).toThrow(/short write/)
+    } finally {
+      spy.mockRestore()
+    }
+    const before = ino(p)
+    writeUILog(p, mine, null)
+    expect(ino(p)).not.toBe(before)
     expect(readUILog(p)).toEqual(mine)
   })
 

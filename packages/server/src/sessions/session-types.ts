@@ -23,22 +23,3 @@ export function messageToolCalls(msg: SessionMessage): ToolCallEntry[] {
   }
   return msg.toolCalls ?? []
 }
-
-export interface SessionFileData {
-  version?: number         // Format version (1 = current spec)
-  id: string
-  agentId: string
-  agentName: string
-  title: string
-  source: string
-  createdAt: string
-  updatedAt: string
-  messageCount: number
-  contextTokens: number
-  totalOutputTokens: number
-  parentSessionId?: string
-  /** Main-conversation user turns already moved into archive segments — added to
-   *  the live log's count so `exchangeCount` survives compaction. */
-  archivedUserCount?: number
-  messages: SessionMessage[]
-}

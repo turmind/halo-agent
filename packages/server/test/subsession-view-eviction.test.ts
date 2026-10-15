@@ -26,6 +26,7 @@ vi.mock('../src/sessions/session-store.js', () => ({
 }))
 vi.mock('../src/sessions/session-log.js', () => ({
   cachedUILogSize: () => 0,
+  forgetUILogCache: () => {},
   uiLogPath: (dir: string, seg: string) => `${dir}/${seg}.ui.jsonl`,
 }))
 
