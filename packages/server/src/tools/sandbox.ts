@@ -9,7 +9,7 @@ import { exec, execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { cleanChildEnv } from '../child-env.js'
 
 const execAsync = promisify(exec)
@@ -470,6 +470,46 @@ function isUnder(p: string, dir: string): boolean {
   return p === dir || p.startsWith(dir.endsWith('/') ? dir : dir + '/')
 }
 
+/**
+ * existsSync with one readdir per parent dir instead of one access() per path:
+ * the mask lists are re-checked on every bwrap spawn (no caching — a sensitive
+ * file created later must still be masked), ~37 metadata round trips per spawn
+ * on NFS/EFS. Answers exactly as existsSync (follows symlinks): an unlisted
+ * name doesn't exist, a symlink gets its own existsSync (dangling → false), a
+ * listed non-symlink exists iff the parent is searchable (listing needs r,
+ * lookup needs x — checked once, on the first such hit), a missing / non-dir
+ * parent means nothing under it exists. Whatever a listing can't answer — a
+ * non-normalized path, an unlistable parent — falls back to existsSync. Use a
+ * fresh one per batch: listings are memoized for the batch's lifetime.
+ */
+function batchedExists(): (p: string) => boolean {
+  type Listing = { names: Map<string, boolean>; searchable?: boolean } // name → isSymlink
+  // null = nothing under the parent exists; 'stat' = per-path fallback
+  const listings = new Map<string, Listing | null | 'stat'>()
+  const list = (parent: string): Listing | null | 'stat' => {
+    try {
+      return { names: new Map(readdirSync(parent, { withFileTypes: true }).map((d) => [d.name, d.isSymbolicLink()] as const)) }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      return code === 'ENOENT' || code === 'ENOTDIR' ? null : 'stat'
+    }
+  }
+  const searchable = (dir: string): boolean => {
+    try { accessSync(dir, fsConstants.X_OK); return true } catch { return false }
+  }
+  return (p) => {
+    const parent = path.dirname(p)
+    if (p !== path.resolve(p) || parent === p) return existsSync(p)
+    let listing = listings.get(parent)
+    if (listing === undefined) listings.set(parent, listing = list(parent))
+    if (listing === 'stat') return existsSync(p)
+    const isSymlink = listing?.names.get(path.basename(p))
+    if (listing == null || isSymlink === undefined) return false
+    if (isSymlink) return existsSync(p)
+    return listing.searchable ??= searchable(parent)
+  }
+}
+
 /** Exported for tests (mount-order assertions) — like the build*ScriptArgs
  *  builders, bwrap can't run in CI, so the argv itself is the testable unit. */
 export function buildBwrapArgs(opts: SandboxOptions): string[] {
@@ -482,15 +522,18 @@ export function buildBwrapArgs(opts: SandboxOptions): string[] {
   args.push('--tmpfs', '/tmp')
 
   // Hide sensitive directories with tmpfs overlays
+  const dirExists = batchedExists()
   for (const raw of _hiddenDirs) {
     const dir = expandTilde(raw)
-    if (existsSync(dir)) args.push('--tmpfs', dir)
+    if (dirExists(dir)) args.push('--tmpfs', dir)
   }
   // Hide sensitive files by binding an empty file over them (see EMPTY_MASK_FILE)
   const emptyFile = ensureEmptyMaskFile()
+  // Fresh batch: ensureEmptyMaskFile may just have created ~/.halo entries.
+  const fileExists = batchedExists()
   for (const raw of _hiddenFiles) {
     const file = expandTilde(raw)
-    if (existsSync(file)) args.push('--ro-bind', emptyFile, file)
+    if (fileExists(file)) args.push('--ro-bind', emptyFile, file)
   }
 
   // Workspace — workspace level gets rw override; readonly stays ro from the root bind
@@ -515,11 +558,11 @@ export function buildBwrapArgs(opts: SandboxOptions): string[] {
   // the workspace bind only because their paths never overlap it.)
   for (const rel of WORKSPACE_HIDDEN_DIRS) {
     const dir = path.join(opts.workspaceRoot, rel)
-    if (existsSync(dir)) args.push('--tmpfs', dir)
+    if (fileExists(dir)) args.push('--tmpfs', dir)
   }
   for (const rel of WORKSPACE_HIDDEN_FILES) {
     const file = path.join(opts.workspaceRoot, rel)
-    if (existsSync(file)) args.push('--ro-bind', emptyFile, file)
+    if (fileExists(file)) args.push('--ro-bind', emptyFile, file)
   }
 
   // /proc and /dev need real mounts
