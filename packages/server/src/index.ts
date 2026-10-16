@@ -60,6 +60,7 @@ import { compressResponses } from './middleware/compress.js'
 import { initLogger, logAlways } from './logger.js'
 import { formatListenBanner } from './listen-banner.js'
 import { initObservability, shutdownObservability } from './observability/otel.js'
+import { beginShutdown, shellExecsSettled } from './shutdown.js'
 import { config, resolveSandboxPaths } from './config.js'
 import { initBwrapCheck, getSandboxBackend, sandboxUnavailableWarning, setSandboxHiddenPaths } from './tools/sandbox.js'
 import { refreshTemplatesIfOutdated } from './init.js'
@@ -637,6 +638,9 @@ if (jupyterChannels) upgradeRoutes.set(JUPYTER_CHANNELS_PATH, jupyterChannels.ha
 // ------------------------------------------------------------------
 
 async function gracefulShutdown(signal: string): Promise<void> {
+  // First: from here on no shell_exec starts a command and no turn makes a
+  // new model call (runs are not ended — the ledger nudges them next boot).
+  beginShutdown()
   console.log(`[Server] Received ${signal}, shutting down gracefully...`)
 
   stopEvoTicker()
@@ -683,6 +687,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Flush buffered spans / metrics / log records (bounded to 3s) so the
   // shutdown line above and any in-flight turn spans reach the collector.
   await shutdownObservability()
+  // A command the stop cut off lands its result once its group is gone
+  // (immediate under systemd, which signals the whole cgroup); bounded so
+  // one that ignores SIGTERM can't hold up the exit.
+  await shellExecsSettled(1000)
   // Runs kept going through the awaits above (and may still finish a turn,
   // even run its finally) — land what they wrote since; a no-op when nothing
   // changed.

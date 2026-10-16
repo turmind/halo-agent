@@ -16,6 +16,7 @@ import { loadMergedSettings } from '../prompts/md-vars.js'
 import { loadSettingsSchema } from '../settings-schema.js'
 import { inferImageMime } from '../channels/shared/media-store.js'
 import { TOOL_ERROR_MARKER, TOOL_WARN_MARKER } from '../agents/agent-loop.js'
+import { isShuttingDown, shutdownWithin, trackShellExec } from '../shutdown.js'
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist'])
 
@@ -688,6 +689,48 @@ export function createWorkspaceTools(
     },
   }
 
+  const runShellExec = async (input: { command: string }, signal?: AbortSignal): Promise<string> => {
+    // The process exits within seconds of a shutdown starting: a command
+    // started now would only be cut off mid-run.
+    if (isShuttingDown()) return `${TOOL_ERROR_MARKER}\nError: command not run — the server is shutting down. Safe to re-issue after the restart if still needed.`
+
+    // Readonly sessions don't get secret substitution: any `{{params.x}}` /
+    // `<<ENV>>` placeholders pass through as literals, so a readonly agent
+    // can't borrow a more-privileged agent's keys via shell_exec. The cmd
+    // simply fails (401 / unknown auth) — that's the desired behavior.
+    const { cmd, secrets } = accessLevel === 'readonly'
+      ? { cmd: input.command.trim(), secrets: [] as string[] }
+      : await substituteSecrets(input.command.trim(), workspaceRoot, allowedNamespaces)
+    const mask = (s: string) => secrets.length > 0 ? maskSecrets(s, secrets) : s
+
+    try {
+      const { stdout, stderr } = await sandboxExec(cmd, {
+        ...sbOpts,
+        timeout: config.timeout.shellExec,
+        maxBuffer: config.limits.shellOutputBuffer,
+        signal,
+      })
+      return mask((stdout + (stderr ? `\nSTDERR: ${stderr}` : '')).trim() || '(no output)')
+    } catch (err: unknown) {
+      const error = err as { stdout?: string; stderr?: string; message: string; signal?: string | null; killed?: boolean }
+      // Killed by a signal we didn't send (our timeout sets `killed`, our
+      // abort no `signal`): a server stop SIGTERMs the whole cgroup at once,
+      // the command included, and its `close` can be handled before our own
+      // SIGTERM handler runs — so give the shutdown 500ms to show up before
+      // calling it a plain failure.
+      if (error.signal && !error.killed && await shutdownWithin(500)) {
+        return mask(`${TOOL_ERROR_MARKER}\n[Command cut off by a server restart — it was still running when the server shut down, so it may or may not have taken effect. Check before re-running it.]\nOutput so far:\n${error.stdout ?? ''}${error.stderr ? `\nSTDERR: ${error.stderr}` : ''}`)
+      }
+      const out = `${error.message}\n${error.stdout ?? ''}\n${error.stderr ?? ''}`
+      // Sandbox write denials look like ordinary permission errors; tell the
+      // agent the likely cause so it asks the user instead of retrying.
+      const hint = accessLevel !== 'full' && SANDBOX_DENIED_RE.test(out)
+        ? `\n[Sandbox] This session runs at "${accessLevel}" access: writes are limited to the workspace${accessLevel === 'readonly' ? ' (readonly: nowhere)' : ''} and /tmp is discarded after each command. If the command needs more, ask the user to switch the access level to Full in the chat input box.`
+        : ''
+      return mask(`${TOOL_ERROR_MARKER}\nCommand failed: ${out}${hint}`)
+    }
+  }
+
   const shellExec: ToolDef = {
     name: 'shell_exec',
     description: [
@@ -724,36 +767,9 @@ export function createWorkspaceTools(
       },
       required: ['command'],
     },
-    callback: async (_input: unknown, signal?: AbortSignal) => {
-      const input = _input as { command: string }
-      // Readonly sessions don't get secret substitution: any `{{params.x}}` /
-      // `<<ENV>>` placeholders pass through as literals, so a readonly agent
-      // can't borrow a more-privileged agent's keys via shell_exec. The cmd
-      // simply fails (401 / unknown auth) — that's the desired behavior.
-      const { cmd, secrets } = accessLevel === 'readonly'
-        ? { cmd: input.command.trim(), secrets: [] as string[] }
-        : await substituteSecrets(input.command.trim(), workspaceRoot, allowedNamespaces)
-      const mask = (s: string) => secrets.length > 0 ? maskSecrets(s, secrets) : s
-
-      try {
-        const { stdout, stderr } = await sandboxExec(cmd, {
-          ...sbOpts,
-          timeout: config.timeout.shellExec,
-          maxBuffer: config.limits.shellOutputBuffer,
-          signal,
-        })
-        return mask((stdout + (stderr ? `\nSTDERR: ${stderr}` : '')).trim() || '(no output)')
-      } catch (err: unknown) {
-        const error = err as { stdout?: string; stderr?: string; message: string }
-        const out = `${error.message}\n${error.stdout ?? ''}\n${error.stderr ?? ''}`
-        // Sandbox write denials look like ordinary permission errors; tell the
-        // agent the likely cause so it asks the user instead of retrying.
-        const hint = accessLevel !== 'full' && SANDBOX_DENIED_RE.test(out)
-          ? `\n[Sandbox] This session runs at "${accessLevel}" access: writes are limited to the workspace${accessLevel === 'readonly' ? ' (readonly: nowhere)' : ''} and /tmp is discarded after each command. If the command needs more, ask the user to switch the access level to Full in the chat input box.`
-          : ''
-        return mask(`${TOOL_ERROR_MARKER}\nCommand failed: ${out}${hint}`)
-      }
-    },
+    // Tracked until its result is returned: the last shutdown write waits for
+    // the commands the stop cut off (index.ts, shellExecsSettled).
+    callback: (input: unknown, signal?: AbortSignal) => trackShellExec(runShellExec(input as { command: string }, signal)),
   }
 
   const grepTool: ToolDef = {

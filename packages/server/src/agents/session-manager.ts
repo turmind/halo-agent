@@ -30,6 +30,7 @@ import { deliverRelayReport, deliverRelayInterim, readReplyTo, listActiveChildre
 import { sweepInterruptedRuns } from './run-ledger.js'
 import { resolveWorkingDir as resolveWorkingDirIn } from './working-dir.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
+import { isShuttingDown } from '../shutdown.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
@@ -1584,6 +1585,12 @@ export class SessionManager implements SessionManagerInternals {
           // for landForShutdown / landErrorPartial to land a copy of.
           onAssistantLanded: () => { session.callStreamText = '' },
           beforeCallModel: async () => {
+            // Server shutting down: a model call started now would be cut off
+            // by the exit (tokens spent for nothing, and its tool calls could
+            // start in a dying process). Park instead — no compact, no save:
+            // the run stays open (promise set, ledger row kept), so
+            // landForShutdown writes it and the next boot nudges it.
+            if (isShuttingDown()) await new Promise<never>(() => {})
             this.trimImages(session)
             await this.maybeAutoCompact(session)
             // Per model call, like tool_result: the row is throttled. A

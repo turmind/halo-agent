@@ -184,7 +184,9 @@ function spawnGroupExec(
         } else if (code === 0) {
           resolve({ stdout, stderr })
         } else {
-          reject(Object.assign(new Error(`Command failed: ${command}`), { stdout, stderr, code }))
+          // `signal`: killed by a signal we didn't send (a server stop SIGTERMs
+          // the whole cgroup) — execFile's errors carry it the same way.
+          reject(Object.assign(new Error(`Command failed: ${command}`), { stdout, stderr, code, signal }))
         }
       })
     })
