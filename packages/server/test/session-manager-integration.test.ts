@@ -166,10 +166,10 @@ describe('query store wired into the real manager (second knife)', () => {
 })
 
 describe('forgetExternalWrite — drop stale in-memory copies after a cron cli write', () => {
-  /** Minimal in-memory session stub — hasActiveWorkInTree only reads these. */
+  /** Minimal in-memory session stub — canDropTree only reads these. */
   function putSession(id: string, busy = false): void {
     ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, {
-      agentId: 'default', agentName: 'Default', promise: busy ? Promise.resolve() : null, isCompacting: false,
+      agentId: 'default', agentName: 'Default', promise: busy ? Promise.resolve() : null, isCompacting: false, messageQueue: [],
     })
   }
 

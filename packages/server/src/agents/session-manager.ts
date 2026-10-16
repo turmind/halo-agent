@@ -36,7 +36,7 @@ import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
 import { saveUILog, deriveSessionTitle, isInternalAgent, sessionMetaDb, fileSegment, stripTurnStamp, nextTurnStamp } from '../sessions/session-store.js'
 import { countArchiveSegments } from '../sessions/session-archive.js'
-import { rawLogPath, writeRawLog, forgetRawLogCache, logWrittenElsewhere, uiLogExists, uiLogPath } from '../sessions/session-log.js'
+import { rawLogPath, readRawLog, writeRawLog, forgetRawLogCache, logWrittenElsewhere, uiLogExists, uiLogPath } from '../sessions/session-log.js'
 import { VISION_IMAGE_MIME_TYPES } from '../channels/shared/media-store.js'
 import type { SessionMessage } from '../sessions/session-types.js'
 import {
@@ -875,6 +875,9 @@ export class SessionManager implements SessionManagerInternals {
       const restoredWorkingDir = meta.workingDir ? path.resolve(this.workspaceRoot, meta.workingDir) : undefined
       const { agent, yamlConfig: resumedYaml, contextConfig, modelId, systemPrompt, thinkingEffort, meta: agentMeta } = await this.buildAgentInstance(meta.agentId, sessionId, meta.parentId, restoredWorkingDir, restoredAccessLevel)
 
+      // Raw is read from disk below; a cached root UIState must not be older
+      // (reloadIfWrittenElsewhere — the UI half: the root isn't in memory).
+      if (sessionId === this.findRootSessionId(sessionId)) this.reloadIfWrittenElsewhere(sessionId)
       const savedMessages = this.loadAgentState(sessionId, meta.agentId)
       if (savedMessages.length > 0) {
         agent.messages = savedMessages as typeof agent.messages
@@ -1334,21 +1337,26 @@ export class SessionManager implements SessionManagerInternals {
     return this.uiStore.appendUserMessage(sessionId, text, opts)
   }
 
-  /** Turn start (every user-driven turn appends its row here first): another
-   *  process — a cron `halo cli`, the TUI, a manual `halo cli -s` — may have
-   *  written the tree since this process cached its idle copies: the root's
-   *  UIState (kept past release, see releaseSession) and an AgentSession a
-   *  view loaded. One stat per cached copy against its writer baseline; on a
-   *  mismatch they are dropped (forgetExternalWrite), so this turn reads the
-   *  other writer's turns from disk instead of rewriting the files from the
-   *  stale copy. Before the row lands — once it is in the state, a drop would
-   *  flush it over the other writer's file. Skipped while the tree has work
-   *  in flight (forgetExternalWrite keeps live state). */
+  /** Another process — a cron `halo cli`, the TUI, a manual `halo cli -s` —
+   *  may have written the tree since this process cached its idle copies: the
+   *  root's UIState (kept past release, see releaseSession) and an
+   *  AgentSession a view loaded. One stat per cached copy against its writer
+   *  baseline; on a mismatch — or no baseline to tell (seeded over a torn line
+   *  or another process's open in-flight row) — they are dropped
+   *  (forgetExternalWrite) and re-read from disk, instead of one side being
+   *  re-read while the other rewrites the files from its stale copy. Called
+   *  where the two copies could part: a turn's user row about to land
+   *  (appendUserMessage — before it lands, or the drop would discard it), raw
+   *  about to be read from disk (ensureSession's restore), and the paths that
+   *  read UI before raw or seed UI past their own guard (deleteExchange,
+   *  compactSession). The other fork — UI seeded while the AgentSession is
+   *  cached — is refreshStaleHistory. Skipped while the tree has work in
+   *  flight or a queued message (see canDropTree). */
   private reloadIfWrittenElsewhere(rootId: string): void {
-    if (this.hasActiveWorkInTree(rootId)) return
+    if (!this.canDropTree(rootId)) return
     const session = this.sessions.get(rootId)
     if (this.uiStore.uiLogWrittenElsewhere(rootId)
-      || (session && logWrittenElsewhere(rawLogPath(this.sessionDir(session.agentId), fileSegment(rootId))))) {
+      || (session && logWrittenElsewhere(rawLogPath(this.sessionDir(session.agentId), fileSegment(rootId))) !== false)) {
       console.debug(`[SessionManager] ${rootId} written by another process since cached — re-reading from disk`)
       this.forgetExternalWrite(rootId)
     }
@@ -1372,18 +1380,60 @@ export class SessionManager implements SessionManagerInternals {
    *  idle) and the root's UIState — WITHOUT saving, so the next view/message
    *  re-reads disk instead of overwriting the other writer's turn with this
    *  process's stale snapshot. Returns false (and drops nothing) while any
-   *  turn/compact in the tree is in flight: live state can't be discarded,
-   *  and the two writers race — the accepted cost of sharing a session. */
+   *  turn/compact in the tree is in flight or a message waits in a queue
+   *  (canDropTree): live state can't be discarded, and the two writers race —
+   *  the accepted cost of sharing a session.
+   *
+   *  The UIState's pending debounced writes are cancelled, not flushed: a
+   *  flush would rewrite the other writer's file whole from the stale state
+   *  just before the re-read. What they carried is made again after it (a
+   *  restore's `context` row) or not yet in memory (the user row at turn
+   *  start); a notice from the last ≤500ms is lost — the other writer wrote
+   *  in that window. */
   forgetExternalWrite(rootId: string): boolean {
-    if (this.hasActiveWorkInTree(rootId)) return false
+    if (!this.canDropTree(rootId)) return false
     for (const id of [...this.sessions.keys()]) {
       if (id === rootId || id.startsWith(`${rootId}>`)) {
         this.sessions.delete(id)
         this.stateStore.forgetRowWrites(id)
       }
     }
-    this.uiStore.dropUIState(rootId)
+    this.uiStore.dropUIState(rootId, { discard: true })
     return true
+  }
+
+  /** The tree's in-memory copies may be dropped: no turn / compact in flight
+   *  and no queued message — one enqueued as a turn ended waits on the idle
+   *  session for the next turn, and a drop would lose it. */
+  private canDropTree(rootId: string): boolean {
+    for (const [id, session] of this.sessions) {
+      if (id !== rootId && !id.startsWith(`${rootId}>`)) continue
+      if (session.promise !== null || session.isCompacting || session.messageQueue.length > 0) return false
+    }
+    return true
+  }
+
+  /** SessionUIStoreHost: the root's UIState is being seeded from disk while an
+   *  idle root AgentSession is in memory (a view loaded it; idle sessions are
+   *  never evicted). When another process wrote its raw log since — or there
+   *  is no baseline to tell — the history is reloaded from disk IN PLACE, not
+   *  dropped: the seed runs inside callers that hold the session (querySession
+   *  pushes to its queue, then emits the row that seeds), and the object, its
+   *  queue included, must stay the live one. Kept as is when the file is gone
+   *  or unreadable. */
+  refreshStaleHistory(rootId: string): void {
+    const session = this.sessions.get(rootId)
+    if (!session || this.hasActiveWorkInTree(rootId)) return
+    const file = rawLogPath(this.sessionDir(session.agentId), fileSegment(rootId))
+    if (logWrittenElsewhere(file) === false) return
+    try {
+      const fresh = readRawLog(file, { prime: true })
+      if (!fresh) return
+      session.agent.messages = fresh as typeof session.agent.messages
+      console.debug(`[SessionManager] ${rootId} raw written by another process since loaded — history reloaded (${fresh.length} messages)`)
+    } catch (err) {
+      console.error(`[SessionManager] refreshStaleHistory failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   // ── Loop detection ──────────────────────────────────────────────────
@@ -3171,6 +3221,9 @@ export class SessionManager implements SessionManagerInternals {
     sessionId: string,
     opts?: { onProgress?: (status: 'started' | 'summarizing' | 'done') => void },
   ): Promise<'nothing' | 'compacted' | 'cancelled' | 'running' | 'already' | 'no_session'> {
+    // Before the lookup: the UI is seeded only after beginCompact, past
+    // refreshStaleHistory's guard.
+    this.reloadIfWrittenElsewhere(this.findRootSessionId(sessionId))
     let session = this.sessions.get(sessionId)
     if (!session) {
       try { session = await this.ensureSession(sessionId) } catch { return 'no_session' }
@@ -3315,6 +3368,9 @@ export class SessionManager implements SessionManagerInternals {
     const rootId = this.findRootSessionId(sessionId)
     if (this.isSessionRunning(rootId)) return 'running'
     if (this.isSessionCompacting(rootId)) return 'compacting'
+    // The UI log is read (and soft-deleted) before raw is: both copies
+    // current first.
+    this.reloadIfWrittenElsewhere(rootId)
 
     const info = this.getSessionById(rootId)
     if (!info) return 'not_found'

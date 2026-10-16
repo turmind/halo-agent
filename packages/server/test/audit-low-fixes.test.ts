@@ -82,6 +82,7 @@ describe('SessionUIStore.purge evicts the agentId cache (A-L1)', () => {
       isSessionDeleted: () => false,
       persistUILog: () => 1,
       hasActiveWorkInTree: () => false,
+      refreshStaleHistory: () => {},
     })
 
     // Drive a sub-session write: agent_start seeds the sub-log, agent_done

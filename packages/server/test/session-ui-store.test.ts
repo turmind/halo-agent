@@ -50,6 +50,7 @@ function makeHost(over: Partial<Host> = {}): { host: Host; persisted: Array<{ se
     isSessionDeleted: () => false,
     persistUILog: (sessionId) => { persisted.push({ sessionId }); return 1 },
     hasActiveWorkInTree: () => false,
+    refreshStaleHistory: () => {},
     ...over,
   }
   return { host, persisted }

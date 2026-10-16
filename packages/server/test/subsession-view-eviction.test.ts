@@ -55,6 +55,7 @@ function makeHost(over: Partial<Host> = {}): { host: Host; writes: SaveOpts[]; s
       return 1
     },
     hasActiveWorkInTree: () => false,
+    refreshStaleHistory: () => {},
     ...over,
   }
   const count = (id: string) => () => writes.filter((w) => w.sessionId === id).length

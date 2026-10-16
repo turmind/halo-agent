@@ -787,4 +787,147 @@ describe('7. a foreign write on either log rewrites both from memory', () => {
     expect(stat(files.ui)).toEqual(before.ui)
     expect(stat(files.raw).ino).toBe(before.raw.ino)
   })
+
+  // ── Real restores: turns through ensureSession (scripted buildAgentInstance) ──
+  const live = (m: SessionManager) => (m as unknown as { sessions: Map<string, { messageQueue: unknown[] }> }).sessions
+  /** Each build `target` makes (ensureSession's restore) takes the next agent. */
+  function scriptBuilds(target: SessionManager, builds: Array<() => AgentLoop>): void {
+    vi.spyOn(target as unknown as { buildAgentInstance: () => Promise<unknown> }, 'buildAgentInstance').mockImplementation(async () => ({
+      agent: builds.shift()!(), yamlConfig: null, contextConfig: { maxTokens: 100000, compressAt: 0.8 },
+      modelId: 'test-model', systemPrompt: '', thinkingEffort: 'off', meta: { toolNames: [], skillNames: [], mdFiles: [] },
+    }))
+  }
+  const replying = (text: string) => () => new StepLoop([endTurn(text)])
+  /** As the WS handler: the user row, then the turn; resolves once it released. */
+  async function realTurn(target: SessionManager, text: string): Promise<void> {
+    const stamp = target.appendUserMessage('o1', text)
+    await target.sendUserMessage('o1', text, undefined, undefined, stamp)
+    await vi.waitFor(() => expect(live(target).has('o1')).toBe(false))
+  }
+  /** Another process (`halo cli -s o1`): a fresh module graph — its own writer
+   *  baselines — over the same workspace files and db. */
+  async function otherProcess(...builds: Array<() => AgentLoop>): Promise<SessionManager> {
+    vi.resetModules()
+    const { SessionManager: OtherManager } = await import('../src/agents/session-manager.js')
+    const other = new OtherManager(ws) as unknown as SessionManager
+    scriptBuilds(other, builds)
+    return other
+  }
+  /** Each log's user turns (raw: tool-result messages skipped, the turn's
+   *  system suffix — the final-report note on a report — cut). */
+  const mainUsers = () => ({
+    ui: ui('o1').filter((m) => m.role === 'user' && !m.deleted).map((m) => m.content),
+    raw: raw('o1').filter((m) => m.role === 'user' && resultIds(m).length === 0)
+      .map((m) => stripTurnStamp(rawText(m)).replace(/\n\n\[System @ [^\]]+\][\s\S]*$/, '')),
+  })
+  const uiReplies = () => ui('o1').filter((m) => m.role === 'assistant').map((m) => m.content)
+  const exchangeCount = () => sm.getDb().select({ n: agentSessions.exchangeCount }).from(agentSessions).get()!.n
+
+  /**
+   * B1: a view seeded the UIState while another process's turn was open on
+   * the file (an in-flight row) — no writer baseline. The other process then
+   * ends its turn; this one's next turn must still re-read, or it rewrites
+   * the UI log from the seed and the other turn's reply is lost.
+   * Mutation: no baseline → not written elsewhere → red.
+   */
+  it('B1 seeded over another process\'s open in-flight row (no baseline): the next turn still re-reads', async () => {
+    seedRow(sm, 'o1')
+    scriptBuilds(sm, [replying('reply one'), replying('reply three')])
+    await realTurn(sm, 'admin one')
+    const gate = gatedTool()
+    const other = await otherProcess(() => new StepLoop([toolTurn(['t1'], 'step'), endTurn('reply two')], [gate.tool]))
+    await other.sendUserMessage('o1', 'cli two', undefined, undefined, other.appendUserMessage('o1', 'cli two'))
+    await vi.waitFor(() => expect(gate.started()).toBe(1))
+    expect(fs.readFileSync(uiLogPath(dir(), 'o1'), 'utf-8')).toContain('"t":"inflight"')
+
+    await sm.getSessionView('o1')   // not self-driven: re-seeded from the open file
+    gate.release('tool done')
+    await vi.waitFor(() => expect(live(other).has('o1')).toBe(false))
+    await realTurn(sm, 'admin three')
+
+    const users = ['admin one', 'cli two', 'admin three']
+    expect(mainUsers()).toEqual({ ui: users, raw: users })
+    expect(uiReplies()).toEqual(['reply one', 'reply two', 'reply three'])
+    expect(raw('o1').filter((m) => m.role === 'assistant').map(rawText)).toEqual(['reply one', '', 'reply two', 'reply three'])
+    expect(exchangeCount()).toBe(3)
+  })
+
+  /**
+   * S1: query_session wakes the idle root (scenario O's order, the third turn
+   * a report). Cached UIState → ensureSession's restore re-reads it before
+   * raw is read; cached AgentSession → ensureUIState's seed reloads its
+   * history. Mutation: drop the ensureSession check (UIState) / the
+   * ensureUIState one (AgentSession) → red.
+   */
+  it.each(['UIState', 'AgentSession'] as const)('S1 query_session wakes the idle root after another process\'s turn: every turn on both logs (cached %s)', async (cached) => {
+    seedRow(sm, 'o1')
+    scriptBuilds(sm, [replying('reply one'), replying('reply three')])
+    await realTurn(sm, 'admin one')
+    if (cached === 'AgentSession') {
+      await sm.getSessionContext('o1')   // a view (/context) loads the session; it stays in memory
+      sm.dropUIState('o1')                // the idle sweep evicted the UIState
+    }
+    await realTurn(await otherProcess(replying('reply two')), 'cli two')
+
+    await sm.querySession('o1', 'src', 'report')
+    await vi.waitFor(() => expect(live(sm).has('o1')).toBe(false))
+
+    const users = ['admin one', 'cli two', '(from: session src)\nreport']
+    expect(mainUsers()).toEqual({ ui: users, raw: users })
+    expect(raw('o1').filter((m) => m.role === 'assistant').map(rawText)).toEqual(['reply one', 'reply two', 'reply three'])
+    expect(exchangeCount()).toBe(3)
+  })
+
+  /** S1: deleteExchange reads the UI log before raw. Mutation: drop its check
+   *  → the stale UIState has no second turn → red. */
+  it('S1 deleteExchange after another process\'s turn: re-read first, the turn deleted on both logs', async () => {
+    seedRow(sm, 'o1')
+    scriptBuilds(sm, [replying('reply one')])
+    await realTurn(sm, 'admin one')
+    await realTurn(await otherProcess(replying('reply two')), 'cli two')
+
+    expect(await sm.deleteExchange('o1', 1, 0)).toBe('deleted')
+    expect(mainUsers()).toEqual({ ui: ['admin one'], raw: ['admin one'] })
+  })
+
+  /**
+   * S2: a debounced write still pending on the dropped UIState is cancelled —
+   * flushed, it would rewrite the other process's file whole from the stale
+   * state just before the re-read. Its row is the accepted loss (the other
+   * writer wrote inside its ≤500ms window). Mutation: flush → red.
+   */
+  it('S2 the dropped state\'s pending debounced write is cancelled, not flushed over the other process\'s file', async () => {
+    seedRow(sm, 'o1')
+    scriptBuilds(sm, [replying('reply one'), replying('reply three')])
+    await realTurn(sm, 'admin one')
+    sm.emitEvent('o1', { type: 'system', text: 'late notice' })   // debounced
+    await realTurn(await otherProcess(replying('reply two')), 'cli two')
+    const timers = (sm as unknown as { uiStore: { persistTimers: Map<string, unknown> } }).uiStore.persistTimers
+    expect(timers.has('o1')).toBe(true)   // still pending as the next turn starts
+
+    await realTurn(sm, 'admin three')
+
+    const users = ['admin one', 'cli two', 'admin three']
+    expect(mainUsers()).toEqual({ ui: users, raw: users })
+    expect(uiReplies()).toEqual(['reply one', 'reply two', 'reply three'])
+    expect(ui('o1').some((m) => m.content === 'late notice')).toBe(false)
+    expect(exchangeCount()).toBe(3)
+  })
+
+  /** S3: a message queued on the idle session (enqueued as its turn ended)
+   *  waits for the next turn — a drop would lose it. Mutation: drop the queue
+   *  guard → red. */
+  it('S3 a queued message keeps the tree in memory past another process\'s write', async () => {
+    seedRow(sm, 'r1')
+    const s = await idleWithHistory('r1')
+    s.messageQueue.push({ text: 'queued at turn end' })
+    const state = sm.getCachedUIState('r1')
+    foreignRewrite('r1')
+
+    sm.appendUserMessage('r1', 'next')
+
+    expect(live(sm).get('r1')).toBe(s)
+    expect(s.messageQueue.map((q) => q.text)).toEqual(['queued at turn end'])
+    expect(sm.getCachedUIState('r1')).toBe(state)
+  })
 })

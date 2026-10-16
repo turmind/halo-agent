@@ -654,11 +654,15 @@ export function forgetUILogCache(filePath: string): void {
 }
 
 /** Whether another process wrote the log since this process last wrote or
- *  primed it: one stat against the writer baseline. False without a baseline
- *  (nothing to compare against). */
-export function logWrittenElsewhere(filePath: string): boolean {
+ *  primed it: one stat against the writer baseline. Null when that can't be
+ *  told — no baseline (the load found a torn line or another process's open
+ *  in-flight row, see readUILog / readRawLog) while the file exists; false
+ *  with neither. */
+export function logWrittenElsewhere(filePath: string): boolean | null {
   const stamp = (uiCaches.get(filePath) ?? rawCaches.get(filePath))?.stamp
-  return stamp !== undefined && !sameStamp(stamp, statOrNull(filePath))
+  const st = statOrNull(filePath)
+  if (stamp === undefined) return st ? null : false
+  return !sameStamp(stamp, st)
 }
 
 /** Drop a raw log's writer baseline: its next write rewrites it whole. */

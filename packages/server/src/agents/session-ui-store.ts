@@ -48,6 +48,10 @@ export interface SessionUIStoreHost {
   persistUILog(sessionId: string, agentId: string, rows: SessionMessage[], inflight: SessionMessage | null, meta: UILogMeta, opts?: { archive?: boolean }): number | null
   /** The db holding the session's row (global internal-sessions db for `__*__`). */
   metaDb(agentId: string): HaloDb
+  /** The root's UIState is about to be seeded from disk: an idle root
+   *  AgentSession whose raw log another process wrote since reloads its
+   *  history (SessionManager.refreshStaleHistory). */
+  refreshStaleHistory(rootId: string): void
   /** True when any in-memory session in the root's tree has an in-flight turn
    *  or compact. The idle sweep gates on this — a root's UIState carries its
    *  running subs' live stream/tool buffers (fire-and-forget subs keep running
@@ -285,6 +289,17 @@ export class SessionUIStore {
     this.persistLog(id, state)
   }
 
+  /** Cancel the root's and its subs' pending debounced writes, unwritten. */
+  private cancelPersists(rootId: string): void {
+    for (const key of [rootId, ...this.pendingSubPersists(rootId)]) {
+      const timer = this.persistTimers.get(key)
+      if (timer) {
+        clearTimeout(timer)
+        this.persistTimers.delete(key)
+      }
+    }
+  }
+
   /** Sub-sessions of `rootId` with a debounced write still pending. */
   private pendingSubPersists(rootId: string): string[] {
     const prefix = `${rootId}>`
@@ -302,6 +317,10 @@ export class SessionUIStore {
     this.uiStateTouched.set(rootId, Date.now())
     const existing = this.uiStates.get(rootId)
     if (existing) return existing
+    // Seeding from disk: an idle root AgentSession kept in memory must not be
+    // older than the log read below. Root keys only (a sub-id key is a
+    // view-only seed).
+    if (rootId === this.findRootSessionId(rootId)) this.host.refreshStaleHistory(rootId)
 
     const state = createEmptyUIState()
     // Seed from disk if available — resumed sessions. One read of the UI log
@@ -566,8 +585,14 @@ export class SessionUIStore {
    * while the session tree is mid-turn (callers gate on that): flushing then
    * would snapshot a temp in-flight assistant message that the turn's own
    * flush would later duplicate.
+   *
+   * `discard` (another process wrote the files — SessionManager
+   * forgetExternalWrite): the pending writes are cancelled instead. Made from
+   * the stale state, a flush would rewrite the other writer's file whole
+   * before the re-read; what they carried is re-made after it or describes a
+   * history the other writer's file replaced (see forgetExternalWrite).
    */
-  dropUIState(sessionId: string): void {
+  dropUIState(sessionId: string, opts?: { discard?: boolean }): void {
     const state = this.uiStates.get(sessionId)
     // Root keys only. A sub-id key is a never-event-fed disk seed
     // (prepareForView(subId)) and owns no timer: `persistTimers[subId]` and
@@ -575,10 +600,13 @@ export class SessionUIStore {
     // state — flushing them with the seed (no sub logs) would cancel the
     // batch without writing it.
     if (state && sessionId === this.findRootSessionId(sessionId)) {
-      if (this.persistTimers.has(sessionId)) this.flushPersist(sessionId, state)
-      // Same for the tree's pending sub-session writes: their logs live in this
-      // state and die with it.
-      for (const taskId of this.pendingSubPersists(sessionId)) this.flushPersist(taskId, state)
+      if (opts?.discard) this.cancelPersists(sessionId)
+      else {
+        if (this.persistTimers.has(sessionId)) this.flushPersist(sessionId, state)
+        // Same for the tree's pending sub-session writes: their logs live in this
+        // state and die with it.
+        for (const taskId of this.pendingSubPersists(sessionId)) this.flushPersist(taskId, state)
+      }
     }
     if (state) {
       // The logs' writer baselines go with them, or the cache grows with every
@@ -665,7 +693,11 @@ export class SessionUIStore {
    *  this process last wrote / read it (one stat). False when the state isn't
    *  cached — the next access reads disk anyway. */
   uiLogWrittenElsewhere(rootId: string): boolean {
-    return this.uiStates.has(rootId) && logWrittenElsewhere(this.uiLogFile(rootId, rootId))
+    if (!this.uiStates.has(rootId)) return false
+    // No baseline (seeded over another process's open in-flight row or a torn
+    // line): can't be told apart from another process's write — re-read,
+    // unless the state holds rows not yet saved.
+    return logWrittenElsewhere(this.uiLogFile(rootId, rootId)) ?? !this.uiStateDirty.has(rootId)
   }
 
   /** UI log file of `id` (the root or one of its subs) under the root state's
@@ -727,13 +759,7 @@ export class SessionUIStore {
     this.uiStateProjectPaths.delete(id)
     this.uiStateTouched.delete(id)
     this.uiStateDirty.delete(id)
-    for (const key of [id, ...this.pendingSubPersists(id)]) {
-      const timer = this.persistTimers.get(key)
-      if (timer) {
-        clearTimeout(timer)
-        this.persistTimers.delete(key)
-      }
-    }
+    this.cancelPersists(id)
     this.eventListeners.delete(id)
     // The cache is keyed by session id (roots and sub-sessions alike) and the
     // manager calls purge for every id in the deleted tree, so this evicts the

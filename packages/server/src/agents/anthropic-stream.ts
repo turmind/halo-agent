@@ -59,7 +59,7 @@ interface StreamUsage {
 
 /** Thrown by `finish()` for a stream cut off before its end events;
  *  classifyModelError maps the `AnthropicStreamTruncated` prefix to 'network'. */
-export const ANTHROPIC_STREAM_TRUNCATED = 'AnthropicStreamTruncated: stream ended without message_delta/message_stop; transient, retrying'
+export const ANTHROPIC_STREAM_TRUNCATED = 'AnthropicStreamTruncated: stream ended without message_delta/message_stop'
 
 type OpenBlock =
   | { type: 'text'; text: string }
