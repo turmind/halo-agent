@@ -271,8 +271,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   let state: Binding = await bindWorkspace(initialPath, opts.sessionId, opts.newSession ?? false, { agent: opts.agentId, dir: opts.dir })
 
   async function send(message: string, images?: Array<{ data: string; mimeType: string }>): Promise<'running' | 'queued'> {
-    state.sm.appendUserMessage(state.sessionId, message)
-    return state.sm.sendUserMessage(state.sessionId, message, images, state.accessLevel)
+    const stamp = state.sm.appendUserMessage(state.sessionId, message)
+    return state.sm.sendUserMessage(state.sessionId, message, images, state.accessLevel, stamp)
   }
 
   function onEvent(handler: EventHandler): void { eventHandlers.add(handler) }
@@ -313,8 +313,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       }
     })
 
-    sm.appendUserMessage(sessionId, message)
-    await sm.sendUserMessage(sessionId, message, images, accessLevel)
+    const stamp = sm.appendUserMessage(sessionId, message)
+    await sm.sendUserMessage(sessionId, message, images, accessLevel, stamp)
 
     try {
       while (!done) {

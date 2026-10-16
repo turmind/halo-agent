@@ -3,7 +3,7 @@ import { broadcast } from '../ws/broadcast.js'
 import { internalSessionsDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
-import { getSessionDir, loadSessionMessages, fileSegment } from '../sessions/session-store.js'
+import { getSessionDir, loadSessionMessages, fileSegment, nextTurnStamp } from '../sessions/session-store.js'
 import { cachedUILogSize, forgetUILogCache, uiLogPath } from '../sessions/session-log.js'
 import { LegacyConversionError } from '../sessions/legacy-migrate.js'
 import {
@@ -513,8 +513,13 @@ export class SessionUIStore {
     return this.ensureUIState(rootSessionId)
   }
 
-  appendUserMessage(sessionId: string, text: string, opts?: { local?: boolean }): void {
-    this.emitEvent(sessionId, { type: 'user', text, agentName: 'user', localEcho: opts?.local })
+  /** Append a main-conversation user row; returns its turn key (arrival
+   *  stamp) — the caller hands it to sendUserMessage / enqueueUserMessage so
+   *  the raw turn carries the same value. */
+  appendUserMessage(sessionId: string, text: string, opts?: { local?: boolean }): string {
+    const stamp = nextTurnStamp()
+    this.emitEvent(sessionId, { type: 'user', text, agentName: 'user', localEcho: opts?.local, stamp })
+    return stamp
   }
 
   /**

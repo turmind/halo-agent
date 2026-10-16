@@ -742,9 +742,9 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
       if (sm.isSessionCompacting(sid)) {
         console.debug(`[WS] Chat queued (compact in progress): session=${msg.sessionId}`)
-        sm.appendUserMessage(sid, uiMessage, { local: true })
+        const stamp = sm.appendUserMessage(sid, uiMessage, { local: true })
         rememberChat(msg)
-        await sm.enqueueUserMessage(sid, msg.message, msg.images)
+        await sm.enqueueUserMessage(sid, msg.message, msg.images, stamp)
         ackChat(msg)
         // An auto-compact runs inside a turn — the message waits for the turn
         // to yield after the compact, not for the compact alone (manual /compact).
@@ -757,14 +757,14 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
       if (sm.isSessionRunning(sid)) {
         console.debug(`[WS] Chat queued (agent busy): session=${msg.sessionId}`)
-        sm.appendUserMessage(sid, uiMessage, { local: true })
+        const stamp = sm.appendUserMessage(sid, uiMessage, { local: true })
         rememberChat(msg)
-        await sm.enqueueUserMessage(sid, msg.message, msg.images)
+        await sm.enqueueUserMessage(sid, msg.message, msg.images, stamp)
         ackChat(msg)
         return
       }
 
-      sm.appendUserMessage(sid, uiMessage, { local: true })
+      const stamp = sm.appendUserMessage(sid, uiMessage, { local: true })
       rememberChat(msg)
       ackChat(msg)
       console.debug(`[WS] Chat: session=${msg.sessionId}, project=${msg.projectId}, agent=${msg.agentId ?? client.agentId}`)
@@ -775,7 +775,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       const accessLevel = msg.accessLevel === undefined
         ? undefined
         : msg.accessLevel === 'full' || getSandboxBackend() === null ? null : msg.accessLevel
-      sm.sendUserMessage(sid, msg.message, msg.images, accessLevel).catch((err) => {
+      sm.sendUserMessage(sid, msg.message, msg.images, accessLevel, stamp).catch((err) => {
         console.debug(`[WS] Chat error: ${err instanceof Error ? err.message : String(err)}`)
         sendJson(ws, { type: 'error', error: err instanceof Error ? err.message : String(err), sessionId: sid })
         saveSession(client, sid)

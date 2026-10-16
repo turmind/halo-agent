@@ -80,6 +80,13 @@ export interface SessionMessage {
   // "deleted" marker survives reload.
   deleted?: boolean
 
+  // ── Turn key ──
+  // A main-conversation user row's arrival stamp (ISO) — the same value its
+  // raw copy's text block starts with (`[<stamp>] …`), so deleteExchange
+  // finds that block by key instead of by text. Rows written before 2.0 have
+  // none (deleteExchange matches those by text).
+  stamp?: string
+
   // ── Compaction summary ──
   // A user row carrying a compaction's summary (emitted mid-turn by the
   // compactors). Not the start of a turn: the UI archive never cuts there.

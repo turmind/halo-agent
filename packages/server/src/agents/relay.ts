@@ -30,8 +30,8 @@ export interface RelayTarget {
   getDb(): HaloDb
   getSessionById(sessionId: string): object | null
   createSession(agentId: string, parentId: null, description: string, agentName?: undefined, explicitId?: string): Promise<string>
-  appendUserMessage(sessionId: string, text: string): void
-  sendUserMessage(sessionId: string, message: string): Promise<'running' | 'queued'>
+  appendUserMessage(sessionId: string, text: string): string
+  sendUserMessage(sessionId: string, message: string, images?: undefined, accessLevel?: undefined, stamp?: string): Promise<'running' | 'queued'>
   interruptSession(sessionId: string): void
   stopSession(sessionId: string): Promise<void>
   getSessionOutput(sessionId: string): string
@@ -187,8 +187,8 @@ export async function deliverRelayReport(
   catch (err) { console.error(`[Relay] caller workspace ${to.workspace} unreachable: ${err instanceof Error ? err.message : String(err)}`); return }
   // Append-then-send, same as the run-ledger nudge: sendUserMessage alone
   // never writes to the UI transcript.
-  caller.appendUserMessage(to.sessionId, text)
-  await caller.sendUserMessage(to.sessionId, text)
+  const stamp = caller.appendUserMessage(to.sessionId, text)
+  await caller.sendUserMessage(to.sessionId, text, undefined, undefined, stamp)
   console.debug(`[Relay] ${host.workspaceRoot}/${session.id} → ${to.workspace}/${to.sessionId}: ${body.slice(0, 120)}`)
 }
 
@@ -217,8 +217,8 @@ export async function deliverRelayInterim(host: RelayTarget, sessionId: string, 
   catch (err) { console.error(`[Relay] caller workspace ${to.workspace} unreachable: ${err instanceof Error ? err.message : String(err)}`); return }
   const header = `[Relay interim report · workspace ${host.workspaceRoot} · session ${sessionId} · status: still running] This is an interim reply — the session is still working; its final [Relay report] follows when done. Do not treat this as the result.`
   const text = `${header}\n\n${body}`
-  caller.appendUserMessage(to.sessionId, text)
-  await caller.sendUserMessage(to.sessionId, text)
+  const stamp = caller.appendUserMessage(to.sessionId, text)
+  await caller.sendUserMessage(to.sessionId, text, undefined, undefined, stamp)
   console.debug(`[Relay] interim ${host.workspaceRoot}/${sessionId} → ${to.workspace}/${to.sessionId}: ${body.slice(0, 120)}`)
 }
 
@@ -321,8 +321,8 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
     }
     writeReplyTo(target.getDb(), params.session_id, { workspace: host.workspaceRoot, sessionId: callerSessionId })
     const prefixed = `${RELAY_CHANNEL_PREFIX}${host.workspaceRoot}]\n\n${params.message}`
-    target.appendUserMessage(params.session_id, params.message)
-    const state = await target.sendUserMessage(params.session_id, prefixed)
+    const stamp = target.appendUserMessage(params.session_id, params.message)
+    const state = await target.sendUserMessage(params.session_id, prefixed, undefined, undefined, stamp)
     // Hard interrupt: `queued` means the target was busy and the message is
     // already in its queue — abort the in-flight turn now so runSession's
     // drain picks it up immediately instead of after the current step. Same

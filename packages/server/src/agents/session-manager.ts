@@ -33,7 +33,7 @@ import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
-import { saveUILog, deriveSessionTitle, isInternalAgent, sessionMetaDb, fileSegment, stripTurnStamp } from '../sessions/session-store.js'
+import { saveUILog, deriveSessionTitle, isInternalAgent, sessionMetaDb, fileSegment, stripTurnStamp, nextTurnStamp } from '../sessions/session-store.js'
 import { countArchiveSegments } from '../sessions/session-archive.js'
 import { rawLogPath, writeRawLog, uiLogExists, uiLogPath } from '../sessions/session-log.js'
 import { VISION_IMAGE_MIME_TYPES } from '../channels/shared/media-store.js'
@@ -189,6 +189,9 @@ interface QueuedMessage {
   sourceSessionId?: string
   /** User multimodal payload; agent→agent messages have none. */
   images?: Array<{ data: string; mimeType: string }>
+  /** Arrival stamp (ISO) — the turn key its UI row carries (SessionMessage.stamp).
+   *  Absent: stamped when the message reaches the model. */
+  stamp?: string
 }
 
 /** The latest turn of one runSession run, refreshed before every turn (opening +
@@ -284,10 +287,10 @@ interface AgentSession {
    *  once. Manual `/compact` enqueues directly (no surrounding turn).
    *  THIS FLAG IS PER-SESSION — never share / hoist to module scope. */
   compactedThisTurn: boolean
-  /** Queue text a Stop folded while a compact was in flight. selfCompactSession
+  /** Queue entries a Stop folded while a compact was in flight. selfCompactSession
    *  resets agent.messages (rollback / rebuild) when it unwinds, which would
-   *  erase a fold landed mid-run — it lands this one right after instead. */
-  foldAfterCompact: string | null
+   *  erase a fold landed mid-run — it lands these right after instead. */
+  foldAfterCompact: QueuedMessage[] | null
   /** Full system prompt (for context event) */
   systemPrompt: string
   /** Thinking effort level (off/low/medium/high/xhigh/max) */
@@ -394,7 +397,7 @@ export interface SessionManagerInternals {
     accessLevel?: 'readonly' | 'workspace' | null,
     title?: string,
   ): Promise<string>
-  runSession(sessionId: string, message: string | ContentBlock[]): Promise<string>
+  runSession(sessionId: string, message: string | ContentBlock[], stamp?: string): Promise<string>
   querySession(targetSessionId: string, callerSessionId: string, message: string, interrupt?: boolean): Promise<string>
   interruptSession(sessionId: string): void
   /** continue_task tool backend — see drainQueue. */
@@ -1291,8 +1294,10 @@ export class SessionManager implements SessionManagerInternals {
     }
   }
 
-  appendUserMessage(sessionId: string, text: string, opts?: { local?: boolean }): void {
-    this.uiStore.appendUserMessage(sessionId, text, opts)
+  /** Returns the row's arrival stamp — pass it on to sendUserMessage /
+   *  enqueueUserMessage so the raw turn carries the same turn key. */
+  appendUserMessage(sessionId: string, text: string, opts?: { local?: boolean }): string {
+    return this.uiStore.appendUserMessage(sessionId, text, opts)
   }
 
   appendNotification(sessionId: string, text: string, agentName: string = 'System'): void {
@@ -1490,6 +1495,7 @@ export class SessionManager implements SessionManagerInternals {
   private async runAgentTurn(
     session: AgentSession,
     message: string | ContentBlock[],
+    opts?: { stamp?: string; stamped?: boolean },
   ): Promise<string> {
     let resultText = ''
     const maxRetries = config.agent.maxRetries
@@ -1511,17 +1517,22 @@ export class SessionManager implements SessionManagerInternals {
     // only attempt 0 hands it to run() — retries resume on the history that
     // attempt already landed (see the loop). New array/blocks, never in
     // place — the caller still holds the original. The compact instruction
-    // bypasses runAgentTurn and stays unstamped; the UI log keeps the raw text
-    // (deleteRawTurn strips the stamp when matching the two).
-    const stamp = `[${new Date().toISOString()}]`
-    const stamped = (text: string): string => (text ? `${stamp} ${text}` : stamp)
-    if (typeof message === 'string') {
-      message = stamped(message)
-    } else {
-      const i = message.findIndex((b) => b.type === 'text')
-      message = i === -1
-        ? [{ type: 'text', text: stamp }, ...message]
-        : message.map((b, j): ContentBlock => (j === i && b.type === 'text' ? { type: 'text', text: stamped(b.text) } : b))
+    // bypasses runAgentTurn and stays unstamped. The stamp is the message's
+    // arrival time: the one its UI row carries (`stamp`, the turn key
+    // deleteExchange locates the raw block by) when the caller passes it,
+    // else now. A drained batch arrives pre-stamped (`stamped`), one block
+    // per message (batchInput) — left as is.
+    if (!opts?.stamped) {
+      const tag = `[${opts?.stamp ?? nextTurnStamp()}]`
+      const stamped = (text: string): string => (text ? `${tag} ${text}` : tag)
+      if (typeof message === 'string') {
+        message = stamped(message)
+      } else {
+        const i = message.findIndex((b) => b.type === 'text')
+        message = i === -1
+          ? [{ type: 'text', text: tag }, ...message]
+          : message.map((b, j): ContentBlock => (j === i && b.type === 'text' ? { type: 'text', text: stamped(b.text) } : b))
+      }
     }
 
     // OTel invoke_agent span for the whole turn (all attempts) — closed by the
@@ -1833,13 +1844,15 @@ export class SessionManager implements SessionManagerInternals {
   async runSession(
     sessionId: string,
     message: string | ContentBlock[],
+    stamp?: string,
   ): Promise<string> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
     // `message` is the opening turn — a start_session / auto-report string, or
     // a user message's ContentBlock[] (sendUserMessage idle path). An empty
     // STRING means "the work is already in messageQueue" (querySession idle
-    // path) — skip the opening turn and go straight to drain.
+    // path) — skip the opening turn and go straight to drain. `stamp`: the
+    // opening message's arrival stamp (its UI row's turn key), if it has one.
     const hasFirst = typeof message === 'string' ? message !== '' : message.length > 0
     console.debug(`[SessionManager] runSession ${sessionId} (agent: ${session.agentId}, parent: ${session.parentId ?? 'none'}) — hasFirst: ${hasFirst}`)
 
@@ -1858,7 +1871,7 @@ export class SessionManager implements SessionManagerInternals {
         // relay send has when it is queued instead (sendUserMessage's busy branch).
         lastTurn.batch = [{ text: rawMessageText({ role: 'user', content: message }) }]
         lastTurn.waitingOnChildren = interimDoor(session.parentId, lastTurn.batch) !== null && listActiveChildren(this.db, session.id).length > 0
-        result = await this.runAgentTurn(session, message)
+        result = await this.runAgentTurn(session, message, { stamp })
         console.debug(`[SessionManager] runSession ${sessionId} first turn done — result: ${result.slice(0, 150)}`)
         // A follow-up already queued: the drain's next turn resets output, so
         // this turn's wrap-up (a natural end_turn → finalOutput set) would
@@ -2075,10 +2088,6 @@ export class SessionManager implements SessionManagerInternals {
         this.emitEvent(session.id, { type: 'queued_message', text: '', agentName: session.agentName })
       }
 
-      const merged = batch
-        .map((q) => (q.sourceSessionId ? `(from: session ${q.sourceSessionId})\n${q.text}` : q.text))
-        .join('\n\n')
-      const images = batch.flatMap((q) => q.images ?? [])
       // Sibling-status only when the batch carries an agent report; a pure-user
       // batch must not trigger "all sub-agents completed" noise.
       const suffix = batch.some((q) => q.sourceSessionId !== undefined) ? this.siblingStatusSuffix(session) : { llm: '', ui: '' }
@@ -2092,12 +2101,12 @@ export class SessionManager implements SessionManagerInternals {
         this.emitEvent(session.id, { type: 'system', text: suffix.ui, agentName: session.agentName })
       }
       const kickNote = kickFlagReset ? KICK_RESET_NOTE : ''
-      const input = this.buildInput(merged + suffix.llm + kickNote, images.length > 0 ? images : undefined, session.supportsImage)
+      const input = this.batchInput(session, batch, suffix.llm + kickNote)
 
       lastTurn.batch = batch
       lastTurn.waitingOnChildren = interimDoor(session.parentId, batch) !== null && listActiveChildren(this.db, session.id).length > 0
       try {
-        await this.runAgentTurn(session, input)
+        await this.runAgentTurn(session, input, { stamped: true })
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         console.error(`[SessionManager] Drain run error for ${session.id}: ${errMsg}`)
@@ -2127,14 +2136,15 @@ export class SessionManager implements SessionManagerInternals {
       // it its own bubble.
       if (session.messageQueue.length === 0) {
         if (session.selfKick && !session.interruptRequested) {
-          session.messageQueue.push({ text: CONTINUE_TASK_KICK })
+          const kickStamp = nextTurnStamp()
+          session.messageQueue.push({ text: CONTINUE_TASK_KICK, stamp: kickStamp })
           // The kick is a raw user turn, so it needs a UI user row too — otherwise
           // deleteExchange's UI span and deleteRawTurn's raw span diverge (the UI
           // span would swallow the kick's reply, the raw one wouldn't). Traced at
           // enqueue like every other queued message (querySession / channels);
           // sub-agents route into their own log via taskId.
           const taskId = session.parentId !== null ? session.id : undefined
-          this.emitEvent(session.id, { type: 'user', text: CONTINUE_TASK_KICK, agentName: 'user', report: true, taskId })
+          this.emitEvent(session.id, { type: 'user', text: CONTINUE_TASK_KICK, agentName: 'user', report: true, taskId, stamp: kickStamp })
           console.debug(`[SessionManager] continue_task kick for ${session.id}`)
         }
         // Consumed by the kick above, or — after an esc — dead with its turn: the
@@ -2333,22 +2343,28 @@ export class SessionManager implements SessionManagerInternals {
    *      repairConversationMessages' Phase 3 drops any message whose content
    *      isn't a non-empty array, so a string-content turn would be silently
    *      deleted by the repair that runs right after this. */
-  private foldIntoAgentMessages(session: AgentSession, text: string): void {
+  private foldIntoAgentMessages(session: AgentSession, entries: QueuedMessage[]): void {
     // A compact in flight resets agent.messages when it unwinds (rollback or
     // rebuild), erasing a fold landed now — park it for clearCompacting.
     if (session.isCompacting) {
-      session.foldAfterCompact = session.foldAfterCompact ? `${session.foldAfterCompact}\n\n${text}` : text
+      session.foldAfterCompact = [...(session.foldAfterCompact ?? []), ...entries]
       return
     }
+    // One stamped text block per entry, same shape as batchInput (images are
+    // not folded) — each UI row keeps its own raw block for deleteExchange.
+    const blocks: ContentBlock[] = entries.map((q) => ({
+      type: 'text',
+      text: `[${q.stamp ?? nextTurnStamp()}] ${q.sourceSessionId ? `(from: session ${q.sourceSessionId})\n${q.text}` : q.text}`,
+    }))
     const msgs = session.agent.messages
     const last = msgs[msgs.length - 1]
     if (last?.role === 'user' && Array.isArray(last.content)) {
-      last.content.push({ type: 'text', text })
+      last.content.push(...blocks)
     } else if (last?.role === 'user' && typeof last.content === 'string') {
       // Legacy string-content turn — normalize to blocks so repair keeps it.
-      last.content = [{ type: 'text', text: `${last.content}\n\n${text}` }]
+      last.content = [{ type: 'text', text: last.content }, ...blocks]
     } else {
-      msgs.push({ role: 'user', content: [{ type: 'text', text }] })
+      msgs.push({ role: 'user', content: blocks })
     }
   }
 
@@ -2374,11 +2390,9 @@ export class SessionManager implements SessionManagerInternals {
         // keep their `(from: session X)` prefix, user entries fold raw.
         // Done BEFORE abort so the aborted turn's runFn drain wakes to an empty
         // queue and stays stopped — no extra turn runs.
-        const queued = session.messageQueue.map((q) =>
-          q.sourceSessionId ? `(from: session ${q.sourceSessionId})\n${q.text}` : q.text
-        )
+        const queued = session.messageQueue
         if (queued.length > 0) {
-          this.foldIntoAgentMessages(session, queued.join('\n\n'))
+          this.foldIntoAgentMessages(session, queued)
           console.debug(`[SessionManager] stopSession ${id} — folded ${queued.length} un-drained message(s) into agent.messages`)
         }
         session.messageQueue = []
@@ -2475,8 +2489,9 @@ export class SessionManager implements SessionManagerInternals {
     // produce one new bubble, not N ghost bubbles.
     const prefix = `(from: session ${sourceSessionId})\n`
     const taskId = target.parentId !== null ? targetSessionId : undefined
-    target.messageQueue.push({ sourceSessionId, text: message })
-    this.emitEvent(targetSessionId, { type: 'user', text: prefix + message, agentName: 'user', report: true, taskId })
+    const stamp = nextTurnStamp()
+    target.messageQueue.push({ sourceSessionId, text: message, stamp })
+    this.emitEvent(targetSessionId, { type: 'user', text: prefix + message, agentName: 'user', report: true, taskId, stamp })
 
     if (interrupt && target.promise !== null) {
       // Abort the in-flight turn; runSession's finally sees the non-empty queue
@@ -2569,12 +2584,15 @@ export class SessionManager implements SessionManagerInternals {
    * If compacting: enqueues for post-compact processing (plus a graceful
    * interrupt when the compact runs inside a live turn).
    * Returns 'running' | 'queued' to inform the caller.
+   * `stamp`: the UI row's arrival stamp (appendUserMessage's return) — the
+   * raw turn is stamped with it so deleteExchange can pair the two.
    */
   async sendUserMessage(
     sessionId: string,
     message: string,
     images?: Array<{ data: string; mimeType: string }>,
     accessLevel?: 'readonly' | 'workspace' | null,
+    stamp?: string,
   ): Promise<'running' | 'queued'> {
     const session = await this.ensureSession(sessionId)
 
@@ -2613,7 +2631,7 @@ export class SessionManager implements SessionManagerInternals {
       // the turn resumes after the compact, so request the same soft interrupt
       // as the busy branch below, or the queued message waits for the turn's
       // natural end.
-      session.messageQueue.push({ text: message, images })
+      session.messageQueue.push({ text: message, images, stamp })
       if (session.abortController !== null) session.interruptRequested = true
       console.debug(`[SessionManager] sendUserMessage: ${sessionId} compacting — message queued`)
       return 'queued'
@@ -2624,7 +2642,7 @@ export class SessionManager implements SessionManagerInternals {
       // tool batch, then runAgentTurn's interrupt branch unwinds and runSession's
       // runFn drains the queue. A mid-flight shell is NOT SIGTERM'd (that's the
       // hard interrupt_session path).
-      session.messageQueue.push({ text: message, images })
+      session.messageQueue.push({ text: message, images, stamp })
       session.interruptRequested = true
       console.debug(`[SessionManager] sendUserMessage: ${sessionId} busy — message queued, interrupt requested`)
       return 'queued'
@@ -2639,10 +2657,25 @@ export class SessionManager implements SessionManagerInternals {
     // Route through the single runSession loop (runFn runs the opening turn,
     // then drainQueue folds anything that piles up). runSession handles the
     // per-turn reset + lifecycle (promise / complete / release).
-    this.runSession(sessionId, this.buildInput(message, images, session.supportsImage)).catch((err) => {
+    this.runSession(sessionId, this.buildInput(message, images, session.supportsImage), stamp).catch((err) => {
       console.error(`[SessionManager] runSession error for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
     })
     return 'running'
+  }
+
+  /** A drained batch as one turn's input: one block group per message — its
+   *  images, then a text block `[<stamp>] <text>` (an agent message with its
+   *  `(from: session X)` prefix after the stamp) — so each UI row's raw copy
+   *  stays its own block, keyed by the row's stamp (deleteExchange).
+   *  `suffix` (sibling status, the continue_task reset note) closes the last
+   *  text block. A message without a stamp is stamped now. */
+  private batchInput(session: AgentSession, batch: QueuedMessage[], suffix: string): ContentBlock[] {
+    return batch.flatMap((q, i) => {
+      const body = q.sourceSessionId ? `(from: session ${q.sourceSessionId})\n${q.text}` : q.text
+      const text = `[${q.stamp ?? nextTurnStamp()}] ${body}${i === batch.length - 1 ? suffix : ''}`
+      const built = this.buildInput(text, q.images, session.supportsImage)
+      return typeof built === 'string' ? [{ type: 'text', text: built }] : built
+    })
   }
 
   /** Build multimodal input from text + optional images */
@@ -3176,23 +3209,28 @@ export class SessionManager implements SessionManagerInternals {
    *    following message up to (not including) the next user message get
    *    `deleted: true`. Array length is unchanged (messageCount semantics hold),
    *    so the turn stays visible, greyed out.
-   *  - Raw log (`rawMessages`, LLM-facing): PHYSICAL delete of the whole turn —
-   *    located by matching the UI user text against a raw user turn (both
-   *    normalized, see normalizeTurnText), removed from that turn's start to
-   *    the next user turn start (so tool_use/tool_result pairs never split),
-   *    then `repairConversationMessages` cleans the seam.
+   *  - Raw log (`rawMessages`, LLM-facing): PHYSICAL delete — by the row's
+   *    `stamp` (its arrival stamp, which leads its raw text block) when it has
+   *    one: that block and its images, plus the reply when the row owns it
+   *    (deleteRawBlock). A row from before stamps (or one whose stamp raw
+   *    doesn't hold — a caller that didn't pass it on) falls back to matching
+   *    the UI user text against a raw user turn (both normalized, see
+   *    normalizeTurnText), removed from that turn's start to the next user
+   *    turn start (so tool_use/tool_result pairs never split). Either way
+   *    `repairConversationMessages` cleans the seam.
    *
    * The two halves move together: a turn after the last compaction must be
    * located in raw, or the delete is refused (`'raw_unmatched'`, nothing
    * changes) — a UI-only delete would leave the model with a turn the user
-   * thinks is gone. That covers a raw turn merged from several UI rows (queue
-   * batch, Stop fold, run()'s merge into a dangling turn): one row can't be
-   * cut out of it. A turn BEFORE the last compaction summary is UI-only by
-   * design (raw keeps only the summary) — soft-deleted, `'deleted'`. That line
-   * isn't clean: compactCut keeps the last few raw messages whole and may cut
-   * mid-turn, so the last turn or two before the summary row can still have
-   * (part of) a copy in raw, which stays. A summary row itself is refused
-   * (`'raw_unmatched'`): deleting raw's summary would drop the compacted history.
+   * thinks is gone. Without a stamp that covers a raw turn merged from several
+   * UI rows (queue batch, Stop fold, run()'s merge into a dangling turn): one
+   * row can't be cut out of it by text; a stamped row is its own block there.
+   * A stamp held by more than one UI row or raw block is refused too. A turn
+   * BEFORE the last compaction summary is mostly gone from raw (raw keeps the
+   * summary): its stamped block, if compactCut kept it in the tail, is
+   * removed with it; otherwise the delete is UI-only, `'deleted'`. A summary
+   * row itself is refused (`'raw_unmatched'`): deleting raw's summary would
+   * drop the compacted history.
    *
    * Rejects while the session is running or compacting (raw mutation mid-turn
    * would corrupt the in-flight conversation). Memory + disk stay in sync: a
@@ -3259,30 +3297,31 @@ export class SessionManager implements SessionManagerInternals {
       newLog[i] = { ...newLog[i], deleted: true }
     }
 
-    if (start < summaryAt) {
+    const live = this.sessions.get(rootId)
+    // Read lazily: a pre-summary row without a stamp is UI-only and never needs it.
+    let raw: AnthropicMessage[] | undefined
+    const rawSource = (): AnthropicMessage[] => raw ??= live
+      ? (live.agent.messages as AnthropicMessage[])
+      : (this.loadAgentState(rootId, info.agentId) as AnthropicMessage[])
+    let newRaw: AnthropicMessage[] | null = null
+    const stamp = messageLog[start].stamp
+    if (stamp) {
+      if (messageLog.filter((m) => m.role === 'user' && !m.taskId && m.stamp === stamp).length > 1) return 'raw_unmatched'
+      const hit = this.deleteRawBlock(rawSource(), stamp)
+      if (hit === 'ambiguous') {
+        console.debug(`[SessionManager] deleteExchange ${rootId}: UI turn #${userOrdinal} stamp held by several raw blocks — refused`)
+        return 'raw_unmatched'
+      }
+      newRaw = hit
+    }
+
+    if (!newRaw && start < summaryAt) {
       this.replaceMessageLog(rootId, newLog)
       console.debug(`[SessionManager] deleteExchange ${rootId}: soft-deleted UI turn #${userOrdinal} (before the last compaction — UI only)`)
       return 'deleted'
     }
 
-    const target = normalizeTurnText(messageLog[start].content)
-    // Occurrence of this text among the live (not deleted) user rows after the
-    // summary, counted from both ends — lets duplicate prompts ("hi" sent
-    // twice) map to the right raw turn. Same taskId skip as the ordinal loop.
-    let fromStart = 0
-    let fromEnd = 0
-    for (let i = summaryAt + 1; i < messageLog.length; i++) {
-      const m = messageLog[i]
-      if (m.role !== 'user' || m.taskId || m.deleted || normalizeTurnText(m.content) !== target) continue
-      if (i <= start) fromStart++
-      if (i >= start) fromEnd++
-    }
-
-    const live = this.sessions.get(rootId)
-    const rawSource = live
-      ? (live.agent.messages as AnthropicMessage[])
-      : (this.loadAgentState(rootId, info.agentId) as AnthropicMessage[])
-    const newRaw = this.deleteRawTurn(rawSource, target, fromStart, fromEnd)
+    if (!newRaw) newRaw = this.deleteRawTurnByText(messageLog, start, summaryAt, rawSource())
     if (!newRaw) {
       console.debug(`[SessionManager] deleteExchange ${rootId}: UI turn #${userOrdinal} not located in raw — refused`)
       return 'raw_unmatched'
@@ -3299,8 +3338,69 @@ export class SessionManager implements SessionManagerInternals {
     }
 
     this.replaceMessageLog(rootId, newLog)
-    console.debug(`[SessionManager] deleteExchange ${rootId}: soft-deleted UI turn #${userOrdinal}, raw ${rawSource.length}→${newRaw.length}`)
+    console.debug(`[SessionManager] deleteExchange ${rootId}: soft-deleted UI turn #${userOrdinal}, raw ${rawSource().length}→${newRaw.length}`)
     return 'deleted'
+  }
+
+  /** deleteExchange's text fallback for a row without a usable stamp: the
+   *  normalized row text located among raw turn starts (deleteRawTurn). */
+  private deleteRawTurnByText(messageLog: SessionMessage[], start: number, summaryAt: number, rawSource: AnthropicMessage[]): AnthropicMessage[] | null {
+    const target = normalizeTurnText(messageLog[start].content)
+    // Occurrence of this text among the live (not deleted) user rows after the
+    // summary, counted from both ends — lets duplicate prompts ("hi" sent
+    // twice) map to the right raw turn. Same taskId skip as the ordinal loop.
+    let fromStart = 0
+    let fromEnd = 0
+    for (let i = summaryAt + 1; i < messageLog.length; i++) {
+      const m = messageLog[i]
+      if (m.role !== 'user' || m.taskId || m.deleted || normalizeTurnText(m.content) !== target) continue
+      if (i <= start) fromStart++
+      if (i >= start) fromEnd++
+    }
+    return this.deleteRawTurn(rawSource, target, fromStart, fromEnd)
+  }
+
+  /** Remove the raw copy of the UI row stamped `stamp`: its `[<stamp>] …` text
+   *  block plus the image blocks right before it (buildInput / batchInput put
+   *  a message's images ahead of its text). A later user text in the same
+   *  message is a later row (queue batch, Stop fold, run()'s merge into a
+   *  dangling turn) and owns the reply; otherwise the reply goes too, through
+   *  to the next turn start, and what the message keeps (tool results it
+   *  answers, earlier rows' blocks) merges into the next turn's opening — the
+   *  same seam as deleteRawTurn. Returns the new array; null when no block
+   *  carries the stamp; 'ambiguous' when more than one does. */
+  private deleteRawBlock(raw: AnthropicMessage[], stamp: string): AnthropicMessage[] | null | 'ambiguous' {
+    const tag = `[${stamp}]`
+    let hit: { i: number; j: number } | null = null
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i].content
+      if (raw[i].role !== 'user' || !Array.isArray(c)) continue
+      for (let j = 0; j < c.length; j++) {
+        const b = c[j]
+        if (b.type !== 'text' || !b.text.startsWith(tag)) continue
+        if (hit) return 'ambiguous'
+        hit = { i, j }
+      }
+    }
+    if (!hit) return null
+    const { i, j } = hit
+    const content = raw[i].content as ContentBlock[]
+    let from = j
+    for (let b = content[from - 1]; b && (b.type === 'image' || (b.type === 'text' && b.text.startsWith('[image removed: '))); b = content[from - 1]) from--
+    const rest = [...content.slice(0, from), ...content.slice(j + 1)]
+    if (content.slice(j + 1).some((b) => b.type === 'text' && !b.text.startsWith('[image removed: '))) {
+      return [...raw.slice(0, i), { ...raw[i], content: rest }, ...raw.slice(i + 1)]
+    }
+    let end = raw.length
+    for (let k = i + 1; k < raw.length; k++) {
+      if (isRawTurnStart(raw[k])) { end = k; break }
+    }
+    if (rest.length === 0) return [...raw.slice(0, i), ...raw.slice(end)]
+    const next = raw[end]
+    if (next && Array.isArray(next.content)) {
+      return [...raw.slice(0, i), { role: 'user', content: [...rest, ...next.content] }, ...raw.slice(end + 1)]
+    }
+    return [...raw.slice(0, i), { role: 'user', content: rest }, ...raw.slice(end)]
   }
 
   /** Locate the raw user turn whose text matches `target` — the `fromStart`-th
@@ -3550,7 +3650,7 @@ export class SessionManager implements SessionManagerInternals {
    *  mid-turn auto-compact (beforeCallModel) does interrupt a live turn — the
    *  flag is set, so the turn yields at its next batch boundary instead of running on
    *  to its natural end with the message still queued. */
-  async enqueueUserMessage(sessionId: string, text: string, images?: Array<{ data: string; mimeType: string }>): Promise<void> {
+  async enqueueUserMessage(sessionId: string, text: string, images?: Array<{ data: string; mimeType: string }>, stamp?: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
     // Expand @scope here too: this path (admin WS busy/compacting queue) skips
@@ -3560,7 +3660,7 @@ export class SessionManager implements SessionManagerInternals {
     for (const w of scoped.warnings) {
       this.emitEvent(sessionId, { type: 'system', text: `⚠ ${w}` })
     }
-    session.messageQueue.push({ text: scoped.text, images })
+    session.messageQueue.push({ text: scoped.text, images, stamp })
     if (!session.isCompacting || session.abortController !== null) session.interruptRequested = true
     console.debug(`[SessionManager] User message enqueued for ${sessionId} (${session.messageQueue.length} in queue)`)
   }
@@ -3576,11 +3676,9 @@ export class SessionManager implements SessionManagerInternals {
     cancelA2AForSession(this.db, sessionId, 'Stopped on the remote side.')
     const session = this.sessions.get(sessionId)
     if (!session) return
-    const queued = session.messageQueue.map((q) =>
-      q.sourceSessionId ? `(from: session ${q.sourceSessionId})\n${q.text}` : q.text
-    )
+    const queued = session.messageQueue
     if (queued.length > 0) {
-      this.foldIntoAgentMessages(session, queued.join('\n\n'))
+      this.foldIntoAgentMessages(session, queued)
       console.debug(`[SessionManager] stopUserSession ${sessionId} — folded ${queued.length} un-drained message(s) into agent.messages`)
     }
     session.messageQueue = []

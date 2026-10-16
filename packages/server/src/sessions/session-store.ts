@@ -79,6 +79,15 @@ export function stripTurnStamp(s: string): string {
   return s.replace(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] ?/, '')
 }
 
+let lastTurnStampMs = 0
+/** A user message's arrival stamp (ISO), unique within this process — a
+ *  monotonic ms clock (`max(now, last + 1)`). It keys the UI row
+ *  (SessionMessage.stamp) to its raw text block (`[<stamp>] …`). */
+export function nextTurnStamp(): string {
+  lastTurnStampMs = Math.max(Date.now(), lastTurnStampMs + 1)
+  return new Date(lastTurnStampMs).toISOString()
+}
+
 /**
  * Main-conversation user turns in a UI log — `role === 'user'` without a
  * `taskId`, the same subset `archiveSplitIndex` splits on and `deleteExchange`

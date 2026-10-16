@@ -160,7 +160,9 @@ describe('stopUserSession folds the whole queue (never drops a message)', () => 
     const u = session.agent.messages[session.agent.messages.length - 1]
     const texts = (u.content as Array<{ text?: string }>).map((b) => b.text)
     expect(texts).toContain('pending question')
-    expect(texts).toContain('late add')
+    // Folded as its own block, stamped with its arrival time (the turn key
+    // deleteExchange locates the row's raw copy by).
+    expect(texts.map((t) => t?.replace(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] /, ''))).toContain('late add')
   })
 
   it('empty queue is a no-op (nothing folded)', () => {

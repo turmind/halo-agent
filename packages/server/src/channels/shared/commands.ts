@@ -585,8 +585,8 @@ async function execGoalCreate(ctx: CommandContext, arg: string): Promise<Command
   // alone only feeds the LLM context: the kick (and the user's goal hint) never
   // reached the on-disk UI log, so G's transcript opened with tool noise and
   // the hint was invisible after any reload.
-  ctx.sm.appendUserMessage(gId, kick)
-  ctx.sm.sendUserMessage(gId, kick).catch((err) => {
+  const stamp = ctx.sm.appendUserMessage(gId, kick)
+  ctx.sm.sendUserMessage(gId, kick, undefined, undefined, stamp).catch((err) => {
     console.error(`[GoalMode] intake kick failed for ${gId}: ${err instanceof Error ? err.message : String(err)}`)
   })
   return { text: t('goal.created', ctx.lang, { goal: gId, worker: workerId }), switchTo: gId }
@@ -624,8 +624,8 @@ async function execGoalResume(ctx: CommandContext): Promise<CommandResult> {
   writeGoalState(ctx.sm.getDb(), goalSessionId, state)
   // Append-then-send, same as the create kick — see execGoalCreate.
   const nudge = '[goal-mode] The user resumed the goal. Call goal_context, re-read GOAL_SPEC.md and your own transcript (the user may have made manual changes while paused), then re-dispatch the current work order to the worker via query_session.'
-  ctx.sm.appendUserMessage(goalSessionId, nudge)
-  ctx.sm.sendUserMessage(goalSessionId, nudge).catch((err) => {
+  const stamp = ctx.sm.appendUserMessage(goalSessionId, nudge)
+  ctx.sm.sendUserMessage(goalSessionId, nudge, undefined, undefined, stamp).catch((err) => {
     console.error(`[GoalMode] resume nudge failed for ${goalSessionId}: ${err instanceof Error ? err.message : String(err)}`)
   })
   return { text: t('goal.resumed', ctx.lang), switchTo: goalSessionId }

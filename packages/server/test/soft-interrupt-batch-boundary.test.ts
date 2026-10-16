@@ -152,12 +152,12 @@ describe('soft interrupt cuts at the batch boundary', () => {
     // No synthetic UI marker on the soft path — every call carries its real result.
     const uiResults = events.filter((e) => e.type === 'tool_result').map((e) => e.toolResult)
     expect(uiResults).toEqual(['A', 'B', 'C'])
-    // The batch's real results, then ONE user turn carrying both follow-ups.
+    // The batch's real results, then ONE user turn carrying both follow-ups,
+    // one stamped block each (batchInput), in arrival order.
     const msgs = loop.messages
     expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
     expect(toolResultsIn(msgs[2])).toEqual({ tu_a: 'A', tu_b: 'B', tu_c: 'C' })
-    const merged = userTexts([msgs[2]]).join('\n')
-    expect(merged).toContain('first follow-up\n\nsecond follow-up')
+    expect(userTexts([msgs[2]]).map((t) => t.replace(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] /, ''))).toEqual(['first follow-up', 'second follow-up'])
     expect(JSON.stringify(msgs)).not.toContain('interrupted')
     expectNoOrphans(msgs)
   })

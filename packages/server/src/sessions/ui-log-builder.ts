@@ -577,6 +577,7 @@ export function applyEvent(
         id: genId(), type: 'user', role: 'user',
         content: event.text ?? '', timestamp: Date.now(),
         ...(event.compactSummary ? { compactSummary: true } : {}),
+        ...(event.stamp ? { stamp: event.stamp } : {}),
       })
       result.persist = 'debounce'
       break

@@ -52,6 +52,9 @@ export interface AgentSessionEvent {
    *  pushed live so the green "Report from sub-session" bubble appears without
    *  a refresh. Distinct from `localEcho` below. */
   report?: boolean
+  /** `user`: the row's turn key (SessionMessage.stamp) — the arrival stamp
+   *  its raw text block starts with. */
+  stamp?: string
   /** Marks a 'user' event carrying a compaction summary — the UI row gets
    *  `compactSummary`, so the turn-end archive never cuts at it. */
   compactSummary?: boolean

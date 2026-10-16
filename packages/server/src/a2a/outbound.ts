@@ -46,8 +46,8 @@ interface DispatchRow {
 
 /** Host for report injection — the caller workspace's SessionManager. */
 export interface A2ACallerHost {
-  appendUserMessage(sessionId: string, text: string): void
-  sendUserMessage(sessionId: string, message: string): Promise<'running' | 'queued'>
+  appendUserMessage(sessionId: string, text: string): string
+  sendUserMessage(sessionId: string, message: string, images?: undefined, accessLevel?: undefined, stamp?: string): Promise<'running' | 'queued'>
 }
 
 let _registry: { getOrCreate(ws: string): A2ACallerHost } | null = null
@@ -261,8 +261,8 @@ async function deliverFinal(row: DispatchRow, state: string, task: Record<string
   // File notes after the cap, so a truncated text never hides a saved path.
   const capped = withNotes(capReport(body.trim() || (result.notes.length ? '' : '(no output)'), `a2a_read("${row.remote}", "${row.remote_task_id ?? ''}")`), result.notes)
   const text = `[A2A report · remote ${row.remote} · context ${row.remote_context_id ?? '?'} · task ${row.remote_task_id ?? '?'} · status: ${state}]\n\n${capped}`
-  host.appendUserMessage(row.session_id, text)
-  await host.sendUserMessage(row.session_id, text)
+  const stamp = host.appendUserMessage(row.session_id, text)
+  await host.sendUserMessage(row.session_id, text, undefined, undefined, stamp)
   console.debug(`[A2A] report ${row.remote}/${row.remote_task_id} → ${row.workspace}/${row.session_id} (${state})`)
 }
 
@@ -274,8 +274,8 @@ async function deliverInterim(row: DispatchRow, text: string): Promise<void> {
   const host = _registry?.getOrCreate(row.workspace)
   if (!host) return
   const msg = `[A2A interim report · remote ${row.remote} · context ${row.remote_context_id ?? '?'} · task ${row.remote_task_id ?? '?'} · status: still running] This is an interim reply — the remote is still working; its final [A2A report] follows when done. Do not treat this as the result.\n\n${capReport(text, `a2a_read("${row.remote}", "${row.remote_task_id ?? ''}")`)}`
-  host.appendUserMessage(row.session_id, msg)
-  await host.sendUserMessage(row.session_id, msg)
+  const stamp = host.appendUserMessage(row.session_id, msg)
+  await host.sendUserMessage(row.session_id, msg, undefined, undefined, stamp)
 }
 
 /** One GetTask, then deliver if terminal — the boot reconcile. */

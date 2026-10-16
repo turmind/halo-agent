@@ -358,9 +358,9 @@ export function createWebChannel(deps: {
         fullMessage += '\n\n' + savedPaths.map((p) => `[语音已保存: ${p}]`).join('\n')
       }
 
-      sm.appendUserMessage(sessionId, fullMessage)
+      const stamp = sm.appendUserMessage(sessionId, fullMessage)
       const channelPrefix = `[channel: web | account: ${account.accountId}]\n\n`
-      const result = await sm.sendUserMessage(sessionId, channelPrefix + fullMessage, realImages.length > 0 ? realImages : undefined, accessLevel)
+      const result = await sm.sendUserMessage(sessionId, channelPrefix + fullMessage, realImages.length > 0 ? realImages : undefined, accessLevel, stamp)
 
       if (result === 'queued') {
         listener.close()

@@ -14,7 +14,9 @@ import { agentSessions } from '../src/db/schema.js'
  * sub-agent report took to land. `runAgentTurn` is the single funnel every
  * user-role turn passes through (runSession's opening turn + each drainQueue
  * batch), so it prepends `[<iso>] ` to the first line of the input — once,
- * before the retry loop — while the UI log keeps the user's raw text.
+ * before the retry loop — while the UI log keeps the user's raw text. A
+ * drained batch arrives pre-stamped, one block per message (batchInput); the
+ * stamp is the message's arrival time, the same value its UI row carries.
  *
  * Same harness as self-compact-instruction-leak.test.ts: a real SessionManager
  * on a tmpdir workspace, a fake session seeded into the private map, and a
@@ -130,20 +132,29 @@ describe('runAgentTurn stamps the arrival time on every user-role turn', () => {
     expect(content[1]).toEqual(img('BBBB'))
   })
 
-  it('drained `(from: session X)` report → `[<iso>] (from: session X)\\n…` (stamp outermost)', async () => {
+  it('drained batch → one `[<stamp>] …` block per message, each equal to its UI row (stamp outermost)', async () => {
     seedRow('t4')
     const agent = new FakeAgent()
     const session = fakeSession('t4', agent)
     // runSession('') = "the work is already in messageQueue" → straight to drain.
-    session.messageQueue.push({ text: 'report body', sourceSessionId: 't4>kid' })
-
-    await sm.runSession('t4', '')
+    // A user message queued with its row's stamp (append → enqueue), then a
+    // sub-agent report (querySession stamps its own row + entry).
+    const userStamp = sm.appendUserMessage('t4', 'user note')
+    session.messageQueue.push({ text: 'user note', stamp: userStamp } as never)
+    await sm.querySession('t4', 't4>kid', 'report body')
+    await new Promise((r) => setTimeout(r, 0))
+    while ((session as { promise: Promise<string> | null }).promise) await (session as { promise: Promise<string> | null }).promise
 
     expect(agent.inputs).toHaveLength(1)
-    const text = agent.messages[0].content[0].text!
-    expect(text).toMatch(new RegExp(`^\\[${ISO}\\] \\(from: session t4>kid\\)\\nreport body`))
+    const rows = sm.getUIState('t4')!.messageLog.filter((m) => m.role === 'user')
+    expect(rows.map((r) => r.stamp)).toEqual([userStamp, expect.stringMatching(new RegExp(`^${ISO}$`))])
+    const content = agent.messages[0].content
+    expect(content).toHaveLength(2)
+    expect(content[0].text).toBe(`[${rows[0].stamp}] user note`)
+    const text = content[1].text!
+    expect(text.startsWith(`[${rows[1].stamp}] (from: session t4>kid)\nreport body`)).toBe(true)
     // Root batch with an agent report also carries the sibling-status suffix —
-    // the stamp must still be the very first thing, not the suffix's `[System @]`.
+    // on the last block, after the stamp, not before it.
     expect(text).toContain('[System @ ')
     expect(text.indexOf('[System @ ')).toBeGreaterThan(0)
   })

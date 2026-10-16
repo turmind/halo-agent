@@ -390,7 +390,7 @@ describe('3. landForShutdown lands raw beside the UI without ending the run', ()
 
     sm.stopUserSession('r1')
 
-    expect(rawText(raw('r1').at(-1)!)).toBe('late message')
+    expect(rawText(raw('r1').at(-1)!)).toMatch(/^\[\d{4}-\d{2}-\d{2}T[^\]]*\] late message$/)
   })
 })
 

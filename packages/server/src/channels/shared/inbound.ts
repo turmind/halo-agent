@@ -233,8 +233,8 @@ export async function deliverInbound<Route>(args: {
   bridge.ensureListener(sm, sessionId)
 
   const agentInput = `[channel: ${bridge.channel} | user: ${userTag}${threadTag ? ` | thread: ${threadTag}` : ''}]\n${agentText}`
-  sm.appendUserMessage(sessionId, uiText)
-  sm.sendUserMessage(sessionId, agentInput, images?.length ? images : undefined, accessLevel).catch((err) => {
+  const stamp = sm.appendUserMessage(sessionId, uiText)
+  sm.sendUserMessage(sessionId, agentInput, images?.length ? images : undefined, accessLevel, stamp).catch((err) => {
     console.log(`[${bridge.channel}] sendUserMessage ${sessionId}: ${String(err)}`)
   })
   return sessionId

@@ -34,8 +34,8 @@ import type { HaloDb } from '../db/index.js'
 export interface RunLedgerHost {
   workspaceRoot: string
   getDb(): HaloDb
-  sendUserMessage(sessionId: string, message: string): Promise<'running' | 'queued'>
-  appendUserMessage(sessionId: string, text: string): void
+  sendUserMessage(sessionId: string, message: string, images?: undefined, accessLevel?: undefined, stamp?: string): Promise<'running' | 'queued'>
+  appendUserMessage(sessionId: string, text: string): string
 }
 
 /** Sync read of the agent's `internal:` flag — the sweep runs from a sync
@@ -96,15 +96,16 @@ export function sweepInterruptedRuns(host: RunLedgerHost): void {
     // Append-then-send, same as channel inbound — sendUserMessage alone never
     // writes the nudge to the UI transcript (see sweepActiveGoals).
     const nudge = `[System] The server restarted at ${restartedAt} while you were mid-turn. Your conversation history up to your last completed tool call is intact; the tool call that was in flight when the process died was cut off, and its result may or may not have landed on disk — check before repeating anything with side effects. Look at what you were doing right before this message and continue the task from there; do not start over or wait for more input. If you had sub-agents running, they were cut off too (marked stopped, no further reports will arrive) — re-dispatch with query_session("<id>", ...) to revive one with its context intact.`
+    let stamp: string
     try {
       // Runs in the SessionManager constructor: one root that can't be opened
       // (failed 1.x conversion) must not take the workspace down with it.
-      host.appendUserMessage(rootId, nudge)
+      stamp = host.appendUserMessage(rootId, nudge)
     } catch (err) {
       console.error(`[RunLedger] Restart nudge failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
       continue
     }
-    sends.push(host.sendUserMessage(rootId, nudge).catch((err) => {
+    sends.push(host.sendUserMessage(rootId, nudge, undefined, undefined, stamp).catch((err) => {
       console.error(`[RunLedger] Restart nudge failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
     }))
   }

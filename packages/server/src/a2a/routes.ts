@@ -197,9 +197,9 @@ async function dispatchMessage(x: Ctx, p: Params): Promise<TaskRow> {
     if (push) putPushConfig(t.id, push)
 
     const prefixed = `${A2A_CHANNEL_PREFIX}account: ${x.caller.accountId}]\n\n${text}`
-    x.sm.appendUserMessage(sessionId, text)
+    const stamp = x.sm.appendUserMessage(sessionId, text)
     const vision = images.map((img) => ({ data: img.buffer!.toString('base64'), mimeType: img.mediaType }))
-    const state = await x.sm.sendUserMessage(sessionId, prefixed, vision.length ? vision : undefined, sessionAccess(x.caller.accessLevel))
+    const state = await x.sm.sendUserMessage(sessionId, prefixed, vision.length ? vision : undefined, sessionAccess(x.caller.accessLevel), stamp)
     // Hard interrupt: enqueue first, then abort (relay_interrupt's order) so the
     // finally never sees an empty queue and fires a spurious completion.
     if (hard && state === 'queued') x.sm.interruptSession(sessionId)

@@ -667,8 +667,8 @@ export function buildGoalTools(host: GoalHost, gSessionId: string): ToolDef[] {
  * owns the workspace runtime (same gate as the orphan reconcile).
  */
 export function sweepActiveGoals(host: GoalHost & {
-  sendUserMessage(sessionId: string, message: string): Promise<'running' | 'queued'>
-  appendUserMessage(sessionId: string, text: string): void
+  sendUserMessage(sessionId: string, message: string, images?: undefined, accessLevel?: undefined, stamp?: string): Promise<'running' | 'queued'>
+  appendUserMessage(sessionId: string, text: string): string
 }): void {
   const rows = host.getDb().select({ id: agentSessions.id, goal: agentSessions.goal })
     .from(agentSessions)
@@ -683,15 +683,16 @@ export function sweepActiveGoals(host: GoalHost & {
     // Append-then-send, same as channel inbound — sendUserMessage alone never
     // writes the nudge to the UI transcript (see execGoalCreate).
     const nudge = `[goal-mode] The server restarted; the in-flight round was lost. Call goal_context, re-read GOAL_SPEC.md and your own transcript, then re-dispatch the current work order to the worker via query_session. Counters and caps were preserved.`
+    let stamp: string
     try {
       // Runs in the SessionManager constructor: one session that can't be
       // opened (failed 1.x conversion) must not take the workspace down.
-      host.appendUserMessage(row.id, nudge)
+      stamp = host.appendUserMessage(row.id, nudge)
     } catch (err) {
       console.error(`[GoalMode] Restart nudge failed for ${row.id}: ${err instanceof Error ? err.message : String(err)}`)
       continue
     }
-    host.sendUserMessage(row.id, nudge).catch((err) => {
+    host.sendUserMessage(row.id, nudge, undefined, undefined, stamp).catch((err) => {
       console.error(`[GoalMode] Restart nudge failed for ${row.id}: ${err instanceof Error ? err.message : String(err)}`)
     })
   }

@@ -253,7 +253,7 @@ export async function execSkillCommand(
   // separately in the SSE / IM stream.
   const displayMessage = `[Skill activated: /${cmdName}]${args ? ` ${args}` : ''}`
   const agentMessage = `[Skill activated: /${cmdName}]\n\n${body}`
-  sm.appendUserMessage(sessionId, displayMessage)
-  sm.sendUserMessage(sessionId, agentMessage).catch(() => {})
+  const stamp = sm.appendUserMessage(sessionId, displayMessage)
+  sm.sendUserMessage(sessionId, agentMessage, undefined, undefined, stamp).catch(() => {})
   return 'ok'
 }
