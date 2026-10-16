@@ -856,17 +856,16 @@ describe('7. a foreign write on either log rewrites both from memory', () => {
    * S1: query_session wakes the idle root (scenario O's order, the third turn
    * a report). Cached UIState → ensureSession's restore re-reads it before
    * raw is read; cached AgentSession → ensureUIState's seed reloads its
-   * history. Mutation: drop the ensureSession check (UIState) / the
-   * ensureUIState one (AgentSession) → red.
+   * history; both cached → querySession's own check drops the UIState.
+   * Mutation: drop the ensureSession check (UIState) / the ensureUIState one
+   * (AgentSession) / querySession's (both) → red.
    */
-  it.each(['UIState', 'AgentSession'] as const)('S1 query_session wakes the idle root after another process\'s turn: every turn on both logs (cached %s)', async (cached) => {
+  it.each(['UIState', 'AgentSession', 'both'] as const)('S1 query_session wakes the idle root after another process\'s turn: every turn on both logs (cached %s)', async (cached) => {
     seedRow(sm, 'o1')
     scriptBuilds(sm, [replying('reply one'), replying('reply three')])
     await realTurn(sm, 'admin one')
-    if (cached === 'AgentSession') {
-      await sm.getSessionContext('o1')   // a view (/context) loads the session; it stays in memory
-      sm.dropUIState('o1')                // the idle sweep evicted the UIState
-    }
+    if (cached !== 'UIState') await sm.getSessionContext('o1')   // a view (/context) loads the session; it stays in memory
+    if (cached === 'AgentSession') sm.dropUIState('o1')         // the idle sweep evicted the UIState
     await realTurn(await otherProcess(replying('reply two')), 'cli two')
 
     await sm.querySession('o1', 'src', 'report')
@@ -929,5 +928,67 @@ describe('7. a foreign write on either log rewrites both from memory', () => {
     expect(live(sm).get('r1')).toBe(s)
     expect(s.messageQueue.map((q) => q.text)).toEqual(['queued at turn end'])
     expect(sm.getCachedUIState('r1')).toBe(state)
+  })
+
+  /** The raw side with no baseline: a view loaded the session over a torn raw
+   *  tail, so its file has no baseline to compare. It counts as written
+   *  elsewhere. Mutation: no baseline → not written (either raw check) → red. */
+  it('a raw log loaded over a torn tail (no baseline) counts as written elsewhere', async () => {
+    seedRow(sm, 'o1')
+    scriptBuilds(sm, [replying('reply one'), replying('reply three')])
+    await realTurn(sm, 'admin one')
+    fs.appendFileSync(rawLogPath(dir(), 'o1'), '{"role":"user","content":[{"type":"te')   // a torn last line
+    await sm.getSessionContext('o1')   // a view loads the session — no raw baseline
+    sm.dropUIState('o1')                // the idle sweep evicted the UIState
+    await realTurn(await otherProcess(replying('reply two')), 'cli two')
+
+    await sm.querySession('o1', 'src', 'report')
+    await vi.waitFor(() => expect(live(sm).has('o1')).toBe(false))
+
+    const users = ['admin one', 'cli two', '(from: session src)\nreport']
+    expect(mainUsers()).toEqual({ ui: users, raw: users })
+    expect(raw('o1').filter((m) => m.role === 'assistant').map(rawText)).toEqual(['reply one', 'reply two', 'reply three'])
+  })
+
+  /** Same, with the UIState cached and unchanged: the other process's write
+   *  is raw-only (a Stop fold), so only the raw check sees it. Mutation: no
+   *  baseline → not written (cachedCopiesWrittenElsewhere) → the fold is
+   *  rewritten away → red. */
+  it('a raw-only write over a raw log with no baseline is re-read at the next turn', async () => {
+    seedRow(sm, 'o1')
+    scriptBuilds(sm, [replying('reply one'), replying('reply three'), replying('reply three')])
+    await realTurn(sm, 'admin one')
+    fs.appendFileSync(rawLogPath(dir(), 'o1'), '{"role":"user","content":[{"type":"te')   // a torn last line
+    await sm.getSessionContext('o1')   // a view loads the session — no raw baseline; the UIState stays cached
+    const other = await otherProcess(replying('unused'))
+    await other.getSessionContext('o1')
+    live(other).get('o1')!.messageQueue.push({ text: 'folded elsewhere' })
+    other.stopUserSession('o1')        // a raw-only write
+
+    await realTurn(sm, 'admin three')
+
+    expect(raw('o1').some((m) => rawText(m).includes('folded elsewhere'))).toBe(true)
+    expect(mainUsers().ui).toEqual(['admin one', 'admin three'])
+  })
+
+  /** A view of a session this process doesn't drive re-seeds its UIState; a
+   *  debounced write still pending on the old state is cancelled when another
+   *  process wrote the file since — flushed, it rewrote that file from the
+   *  stale state. Mutation: always flush → red. */
+  it('a view re-seed cancels the old state\'s pending write when another process wrote the file', async () => {
+    seedRow(sm, 'o1')
+    scriptBuilds(sm, [replying('reply one')])
+    await realTurn(sm, 'admin one')
+    sm.emitEvent('o1', { type: 'system', text: 'late notice' })   // debounced
+    await realTurn(await otherProcess(replying('reply two')), 'cli two')
+    const timers = (sm as unknown as { uiStore: { persistTimers: Map<string, unknown> } }).uiStore.persistTimers
+    expect(timers.has('o1')).toBe(true)
+
+    const view = await sm.getSessionView('o1')
+
+    expect(view!.messages.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['admin one', 'cli two'])
+    expect(mainUsers()).toEqual({ ui: ['admin one', 'cli two'], raw: ['admin one', 'cli two'] })
+    expect(uiReplies()).toEqual(['reply one', 'reply two'])
+    expect(timers.has('o1')).toBe(false)
   })
 })

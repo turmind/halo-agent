@@ -28,6 +28,7 @@ vi.mock('../src/sessions/session-log.js', () => ({
   cachedUILogSize: () => 0,
   forgetUILogCache: () => {},
   uiLogPath: (dir: string, seg: string) => `${dir}/${seg}.ui.jsonl`,
+  logWrittenElsewhere: () => false,   // no other writer
 }))
 
 const { SessionUIStore } = await import('../src/agents/session-ui-store.js')

@@ -746,7 +746,10 @@ export class SessionUIStore {
       // over from an earlier epoch (this process drove the session, then
       // released it) must not survive onto the fresh seed or a detach-save
       // would write the seed back over another process's newer messages.
-      this.dropUIState(sessionId)
+      // Unless another process wrote the file since: the batch, made from the
+      // stale state, would rewrite its file whole (raw left unpaired) — cancel
+      // it, as forgetExternalWrite does.
+      this.dropUIState(sessionId, { discard: isRoot && this.uiLogWrittenElsewhere(sessionId) })
     }
     this.uiStateProjectPaths.set(sessionId, this.host.workspaceRoot)
     return this.ensureUIState(sessionId)

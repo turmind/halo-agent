@@ -1350,16 +1350,24 @@ export class SessionManager implements SessionManagerInternals {
    *  about to be read from disk (ensureSession's restore), and the paths that
    *  read UI before raw or seed UI past their own guard (deleteExchange,
    *  compactSession). The other fork — UI seeded while the AgentSession is
-   *  cached — is refreshStaleHistory. Skipped while the tree has work in
-   *  flight or a queued message (see canDropTree). */
+   *  cached — is refreshStaleHistory; querySession waking a root with both
+   *  cached drops the UIState only (see there). Skipped while the tree has
+   *  work in flight or a queued message (see canDropTree). */
   private reloadIfWrittenElsewhere(rootId: string): void {
     if (!this.canDropTree(rootId)) return
-    const session = this.sessions.get(rootId)
-    if (this.uiStore.uiLogWrittenElsewhere(rootId)
-      || (session && logWrittenElsewhere(rawLogPath(this.sessionDir(session.agentId), fileSegment(rootId))) !== false)) {
+    if (this.cachedCopiesWrittenElsewhere(rootId)) {
       console.debug(`[SessionManager] ${rootId} written by another process since cached — re-reading from disk`)
       this.forgetExternalWrite(rootId)
     }
+  }
+
+  /** Whether another process wrote the log of the root's cached UIState or of
+   *  its in-memory AgentSession since this process cached it — one stat per
+   *  cached copy; a file with no baseline to tell counts as written. */
+  private cachedCopiesWrittenElsewhere(rootId: string): boolean {
+    const session = this.sessions.get(rootId)
+    return this.uiStore.uiLogWrittenElsewhere(rootId)
+      || (session !== undefined && logWrittenElsewhere(rawLogPath(this.sessionDir(session.agentId), fileSegment(rootId))) !== false)
   }
 
   appendNotification(sessionId: string, text: string, agentName: string = 'System'): void {
@@ -2573,6 +2581,16 @@ export class SessionManager implements SessionManagerInternals {
       target = await this.ensureSession(targetSessionId)
     } catch {
       return JSON.stringify({ code: 1, error: `session ${targetSessionId} not found` })
+    }
+    // An idle root with both copies cached (a view kept the AgentSession, the
+    // UIState outlives release): ensureSession returned it and the emit below
+    // won't seed, so no other check point runs. Drop the UIState only — the
+    // emit re-seeds it, refreshStaleHistory reloads this object's history in
+    // place — never the session: a sub's auto-report calls in from its
+    // finally, before its release; after the await that release has run.
+    if (target.parentId === null && this.canDropTree(targetSessionId) && this.cachedCopiesWrittenElsewhere(targetSessionId)) {
+      console.debug(`[SessionManager] querySession: ${targetSessionId} written by another process since cached — re-reading from disk`)
+      this.uiStore.dropUIState(targetSessionId, { discard: true })
     }
 
     // query_session respects the queue cap (backpressure for agent fan-in
