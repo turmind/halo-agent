@@ -104,7 +104,10 @@ describe('sweepInterruptedRuns', () => {
     for (const n of sends) {
       expect(n.text).toContain('server restarted')
       expect(n.text).toContain('query_session')
-      expect(n.text).not.toContain('a>x') // children are not listed
+      // Idle roots (only child rows): each lists its own children, never the other root's.
+      const other = n.id === 'a' ? 'b' : 'a'
+      expect(n.text).toContain(`${n.id}>x, ${n.id}>y`)
+      expect(n.text).not.toContain(`${other}>x`)
     }
     // Append lands before send for each root (UI transcript first).
     expect(host.nudges.map((n) => n.via)).toEqual(['append', 'send', 'append', 'send'])
@@ -157,6 +160,38 @@ describe('sweepInterruptedRuns', () => {
     const paused = stubHost()
     sweepInterruptedRuns(paused)
     expect(sentTo(paused)).toEqual(['w1'])
+  })
+
+  it('root itself mid-run → the mid-turn nudge, sub-sessions not listed', () => {
+    seedSession('r1')
+    for (const id of ['r1', 'r1>kid']) insertRunning(ws, id)
+    const host = stubHost()
+    sweepInterruptedRuns(host)
+    const [send] = host.nudges.filter((n) => n.via === 'send')
+    expect(send.text).toContain('while you were mid-turn')
+    expect(send.text).toContain('the tool call that was in flight')
+    expect(send.text).not.toContain('You were idle')
+    expect(send.text).not.toContain('r1>kid')
+  })
+
+  it('root idle, only sub-sessions mid-run → the idle nudge listing them, sorted, capped at 10', () => {
+    seedSession('few')
+    seedSession('many')
+    for (const id of ['few>sid_b', 'few>sid_a']) insertRunning(ws, id)
+    const manyKids = Array.from({ length: 12 }, (_, i) => `many>k${String(i).padStart(2, '0')}`)
+    for (const id of [...manyKids].reverse()) insertRunning(ws, id)
+    const host = stubHost()
+    sweepInterruptedRuns(host)
+    const sent = Object.fromEntries(host.nudges.filter((n) => n.via === 'send').map((n) => [n.id, n.text]))
+    const appended = Object.fromEntries(host.nudges.filter((n) => n.via === 'append').map((n) => [n.id, n.text]))
+    expect(appended).toEqual(sent) // the same text lands in the UI transcript
+
+    expect(sent.few).toMatch(/^\[System\] The server restarted at \S+\. You were idle, but these sub-sessions of yours were mid-run and were cut off \(marked stopped, no further reports will arrive\): few>sid_a, few>sid_b\. If you were waiting on their reports, re-dispatch with query_session\("<id>", \.\.\.\) to revive one with its context intact; otherwise carry on\.$/)
+    expect(sent.few).not.toContain('mid-turn')
+    expect(sent.few).not.toContain('in flight')
+
+    expect(sent.many).toContain(`: ${manyKids.slice(0, 10).join(', ')} (+2 more). If you were waiting`)
+    expect(sent.many).not.toContain('many>k10')
   })
 
   it('only drains its own workspace — other workspaces\u2019 rows stay', () => {

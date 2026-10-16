@@ -50,6 +50,9 @@ function isInternalAgent(agentId: string, workspaceRoot: string): boolean {
   }
 }
 
+/** Sub-session ids listed in an idle root's nudge; the rest are counted. */
+const NUDGE_MAX_LISTED = 10
+
 /** Per workspace, while its sweep's nudges are in flight: settles once each
  *  has reached its session (running or queued — sendUserMessage restores the
  *  session first, a few ticks later). The server boot doesn't wait; AgentCore
@@ -74,8 +77,12 @@ export function nudgesSettled(workspaceRoot: string): Promise<void> {
  * `cron-*` sessions (cli-driven, never in the ledger by design but the id
  * prefix is the cheap guard); `internal: true` agents.
  *
- * Sub-sessions are not listed in the nudge — the agent has their ids in its
- * own transcript and `session_list` at hand.
+ * The text depends on whether the root itself was mid-run (its own id in the
+ * ledger): if so, it is told its own turn was cut off and to carry on, and
+ * sub-sessions are not listed (it has their ids in its transcript and
+ * `session_list` at hand). If only sub-sessions were mid-run, the root was
+ * idle — it is told so, with the cut-off sub-session ids listed (sorted, at
+ * most NUDGE_MAX_LISTED).
  */
 export function sweepInterruptedRuns(host: RunLedgerHost): void {
   const ids = drainRunning(host.workspaceRoot)
@@ -95,7 +102,14 @@ export function sweepInterruptedRuns(host: RunLedgerHost): void {
     if (isInternalAgent(row.agentId, host.workspaceRoot)) continue
     // Append-then-send, same as channel inbound — sendUserMessage alone never
     // writes the nudge to the UI transcript (see sweepActiveGoals).
-    const nudge = `[System] The server restarted at ${restartedAt} while you were mid-turn. Your conversation history up to your last completed tool call is intact; the tool call that was in flight when the process died was cut off, and its result may or may not have landed on disk — check before repeating anything with side effects. Look at what you were doing right before this message and continue the task from there; do not start over or wait for more input. If you had sub-agents running, they were cut off too (marked stopped, no further reports will arrive) — re-dispatch with query_session("<id>", ...) to revive one with its context intact.`
+    let nudge: string
+    if (ids.includes(rootId)) {
+      nudge = `[System] The server restarted at ${restartedAt} while you were mid-turn. Your conversation history up to your last completed tool call is intact; the tool call that was in flight when the process died was cut off, and its result may or may not have landed on disk — check before repeating anything with side effects. Look at what you were doing right before this message and continue the task from there; do not start over or wait for more input. If you had sub-agents running, they were cut off too (marked stopped, no further reports will arrive) — re-dispatch with query_session("<id>", ...) to revive one with its context intact.`
+    } else {
+      const subs = ids.filter((id) => id.startsWith(`${rootId}>`)).sort()
+      const listed = subs.slice(0, NUDGE_MAX_LISTED).join(', ') + (subs.length > NUDGE_MAX_LISTED ? ` (+${subs.length - NUDGE_MAX_LISTED} more)` : '')
+      nudge = `[System] The server restarted at ${restartedAt}. You were idle, but these sub-sessions of yours were mid-run and were cut off (marked stopped, no further reports will arrive): ${listed}. If you were waiting on their reports, re-dispatch with query_session("<id>", ...) to revive one with its context intact; otherwise carry on.`
+    }
     let stamp: string
     try {
       // Runs in the SessionManager constructor: one root that can't be opened
