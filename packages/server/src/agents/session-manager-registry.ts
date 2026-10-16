@@ -50,6 +50,12 @@ export class SessionManagerRegistry {
     return this.cache.get(resolved)
   }
 
+  /** peek for a path the caller already realpath'd — no fs call (AgentCore's
+   *  /ping, polled every few seconds against a workspace resolved at boot). */
+  peekResolved(resolvedPath: string): SessionManager | undefined {
+    return this.cache.get(resolvedPath)
+  }
+
   list(): Array<{ workspacePath: string; sm: SessionManager }> {
     return [...this.cache.entries()].map(([wp, sm]) => ({ workspacePath: wp, sm }))
   }

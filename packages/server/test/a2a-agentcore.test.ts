@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync, utimesSync } from 'node:fs'
+import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -67,6 +68,18 @@ describe('workspace lease', () => {
     const old = (Date.now() - 60_000) / 1000
     utimesSync(leaseFile(), old, old)
     expect(tryAcquireLease(leaseFile(), 'B', Date.now())).toBe('claimed')
+  })
+
+  it('a lease read is one open: body and mtime from the same fd, no path stat', () => {
+    tryAcquireLease(leaseFile(), 'A', 1000)
+    const stat = vi.spyOn(fs, 'statSync')
+    try {
+      expect(tryAcquireLease(leaseFile(), 'B', 2000)).toBe('busy')
+      expect(heartbeatLease(leaseFile(), 'A', 3000)).toBe(true)
+      expect(stat.mock.calls.filter(([f]) => f === leaseFile())).toEqual([])
+    } finally {
+      stat.mockRestore()
+    }
   })
 
   it('heartbeat refreshes our own; a vanished file is re-created', () => {
@@ -152,7 +165,7 @@ describe('upstream exposure', () => {
 
     function app(held: boolean, running = false) {
       const sm = { hasRunningSessions: () => running }
-      const registry = { peek: () => sm, getOrCreate: () => { throw new Error('not in this test') } } as unknown as SessionManagerRegistry
+      const registry = { peekResolved: () => sm, getOrCreate: () => { throw new Error('not in this test') } } as unknown as SessionManagerRegistry
       return createAgentCoreA2ARoutes({ registry, workspace: ws, accessLevel: 'workspace', lease: { held, acquire: async () => held }, activate: () => {} })
     }
 
@@ -180,6 +193,18 @@ describe('upstream exposure', () => {
       expect(await (await app(true, false).request('/ping')).json()).toEqual({ status: 'Healthy' })
     })
 
+    it('/ping looks the workspace up by its boot-resolved path: no realpath per poll', async () => {
+      const realpath = vi.spyOn(fs, 'realpathSync')
+      try {
+        const a = createAgentCoreA2ARoutes({ registry: new SessionManagerRegistry(), workspace: ws, accessLevel: 'workspace', lease: { held: true, acquire: async () => true }, activate: () => {} })
+        realpath.mockClear()
+        expect(await (await a.request('/ping')).json()).toEqual({ status: 'Healthy' })
+        expect(realpath).not.toHaveBeenCalled()
+      } finally {
+        realpath.mockRestore()
+      }
+    })
+
     it('/ping with the lease: a pending push keeps it HealthyBusy', async () => {
       const db = getA2ADb()!
       db.prepare(`INSERT INTO a2a_push_outbox (task_id, config_id, event_key, payload, attempts, next_at, created_at, dead) VALUES ('t', 'c', 'state:completed', '{}', 0, 0, 0, 0)`).run()
@@ -188,7 +213,7 @@ describe('upstream exposure', () => {
 
     it('the workspace is activated by the first non-/ping request, not by /ping', async () => {
       let n = 0
-      const registry = { peek: () => undefined } as unknown as SessionManagerRegistry
+      const registry = { peekResolved: () => undefined } as unknown as SessionManagerRegistry
       const a = createAgentCoreA2ARoutes({ registry, workspace: ws, accessLevel: 'workspace', lease: { held: true, acquire: async () => true }, activate: () => { n++ } })
       await a.request('/ping')
       expect(n).toBe(0)
@@ -200,7 +225,7 @@ describe('upstream exposure', () => {
       const res = await app(true).request('/foo', { method: 'POST', headers: { 'a2a-version': '1.0' }, body: '{}' })
       expect(res.status).toBe(404)
       let tries = 0
-      const registry = { peek: () => undefined } as unknown as SessionManagerRegistry
+      const registry = { peekResolved: () => undefined } as unknown as SessionManagerRegistry
       const a = createAgentCoreA2ARoutes({ registry, workspace: ws, accessLevel: 'workspace', lease: { held: false, acquire: async () => { tries++; return false } }, activate: () => {} })
       expect((await a.request('/api/auth/login', { method: 'POST', body: '{}' })).status).toBe(404)
       expect(tries).toBe(0)
@@ -209,7 +234,7 @@ describe('upstream exposure', () => {
     it('only the exact contract paths pass: `//`-style paths are 404 and reach neither the lease nor the workspace', async () => {
       let tries = 0
       let opened = 0
-      const registry = { peek: () => undefined, getOrCreate: () => { opened++; throw new Error('must not open the workspace') } } as unknown as SessionManagerRegistry
+      const registry = { peekResolved: () => undefined, getOrCreate: () => { opened++; throw new Error('must not open the workspace') } } as unknown as SessionManagerRegistry
       const a = createAgentCoreA2ARoutes({ registry, workspace: ws, accessLevel: 'workspace', lease: { held: false, acquire: async () => { tries++; return false } }, activate: () => {} })
       const rpc = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ListTasks', params: {} })
       for (const p of ['//', '//.', '///']) {

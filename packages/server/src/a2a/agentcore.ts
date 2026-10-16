@@ -55,12 +55,20 @@ interface LeaseBody { owner: string; host: string; pid: number; heartbeatAt: num
 function readLease(file: string): { body: LeaseBody | null; mtimeMs: number } | null {
   let raw: string
   let mtimeMs: number
+  let fd: number
   try {
-    raw = fs.readFileSync(file, 'utf8')
-    mtimeMs = fs.statSync(file).mtimeMs
+    fd = fs.openSync(file, 'r')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw err
+  }
+  // Body and mtime from the same fd: one open instead of open + path stat,
+  // and both describe the same lease file even across a holder's rename.
+  try {
+    mtimeMs = fs.fstatSync(fd).mtimeMs
+    raw = fs.readFileSync(fd, 'utf8')
+  } finally {
+    fs.closeSync(fd)
   }
   try {
     const b = JSON.parse(raw) as LeaseBody
@@ -254,7 +262,7 @@ export function createAgentCoreA2ARoutes(deps: { registry: SessionManagerRegistr
   // Transitions only: shows in the runtime log why a microVM is kept alive.
   let lastStatus = ''
   app.get('/ping', (c) => {
-    const busy = lease.held && ((registry.peek(workspace)?.hasRunningSessions() ?? false) || hasPendingPushes())
+    const busy = lease.held && ((registry.peekResolved(workspace)?.hasRunningSessions() ?? false) || hasPendingPushes())
     const status = busy ? 'HealthyBusy' : 'Healthy'
     if (status !== lastStatus) console.log(`[AgentCoreA2A] /ping → ${status}`)
     lastStatus = status
