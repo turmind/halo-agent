@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { AnthropicStreamAccumulator, fetchAnthropicStream, type AnthropicStreamEvent } from '../src/agents/anthropic-stream.js'
+import { ANTHROPIC_STREAM_TRUNCATED, AnthropicStreamAccumulator, fetchAnthropicStream, type AnthropicStreamEvent } from '../src/agents/anthropic-stream.js'
 import type { ModelDelta } from '../src/agents/agent-loop.js'
 
 /**
@@ -103,7 +103,7 @@ describe('AnthropicStreamAccumulator', () => {
     expect(result.assistantBlocks).toEqual([{ type: 'tool_use', id: 'tu_0', name: 'noop', input: {} }])
   })
 
-  it('no deltas at all → no ttftMs, invocationMetrics fill in missing usage, stopReason defaults to end_turn', () => {
+  it('no deltas at all, message_stop without a stop_reason → no ttftMs, invocationMetrics fill in missing usage, stopReason defaults to end_turn', () => {
     const { result, deltas } = run([
       { type: 'message_start', message: {} },
       { type: 'message_stop', 'amazon-bedrock-invocationMetrics': { inputTokenCount: 7, outputTokenCount: 2 } },
@@ -114,6 +114,42 @@ describe('AnthropicStreamAccumulator', () => {
     expect(result.stopReason).toBe('end_turn')
     expect(result.assistantBlocks).toEqual([])
     expect(result.usage).toEqual({ inputTokens: 7, outputTokens: 2, totalTokens: 9 })
+  })
+
+  describe('a stream that ends before its end events', () => {
+    const head = [
+      messageStart({ input_tokens: 10 }),
+      blockStart(0, { type: 'thinking' }),
+      delta(0, { type: 'thinking_delta', thinking: 'long thought' }),
+      blockStop(0),
+      blockStart(1, { type: 'text' }),
+      delta(1, { type: 'text_delta', text: 'half' }),
+    ]
+
+    it('neither a stop_reason message_delta nor message_stop → finish() throws the truncation marker (not an empty end_turn)', () => {
+      const acc = new AnthropicStreamAccumulator(Date.now())
+      for (const ev of head) acc.push(ev)
+      expect(() => acc.finish()).toThrow(ANTHROPIC_STREAM_TRUNCATED)
+      expect(ANTHROPIC_STREAM_TRUNCATED).toMatch(/^AnthropicStreamTruncated: /)
+    })
+
+    it('a message_delta without a stop_reason does not count as an end event', () => {
+      const acc = new AnthropicStreamAccumulator(Date.now())
+      for (const ev of [...head, { type: 'message_delta', usage: { output_tokens: 4 } }]) acc.push(ev)
+      expect(() => acc.finish()).toThrow(ANTHROPIC_STREAM_TRUNCATED)
+    })
+
+    it('stop_reason message_delta but no message_stop → completes with that stop_reason', () => {
+      const { result } = run([...head, blockStop(1), messageDelta({ stop_reason: 'max_tokens' }, 7)])
+      expect(result.stopReason).toBe('max_tokens')
+      expect(result.text).toBe('half')
+    })
+
+    it('message_stop but no stop_reason → completes as end_turn', () => {
+      const { result } = run([...head, blockStop(1), { type: 'message_stop' }])
+      expect(result.stopReason).toBe('end_turn')
+      expect(result.text).toBe('half')
+    })
   })
 
   it('redacted_thinking and unknown event types are ignored', () => {

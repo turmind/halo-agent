@@ -93,6 +93,17 @@ describe('BedrockAgent streaming callModel', () => {
     expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: 'Hi ' }])
   })
 
+  it('stream ends cleanly before message_delta / message_stop, no abort → the truncation error, not an empty end_turn', async () => {
+    const thinkingOnly = [
+      { type: 'message_start', message: { usage: { input_tokens: 12, output_tokens: 1 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'long thought' } },
+    ]
+    const err = await probe(fakeSend(thinkingOnly)).call(new AbortController().signal).then(() => null, (e: unknown) => e)
+    expect((err as Error).message).toMatch(/^AnthropicStreamTruncated: /)
+    expect((err as Error).name).not.toBe('AbortError')
+  })
+
   it('abort with a half-built tool input → AbortError, never JSON.parse of the fragment', async () => {
     const controller = new AbortController()
     const send = fakeSend([

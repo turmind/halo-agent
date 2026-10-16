@@ -141,6 +141,14 @@ describe('AnthropicAgent streaming callModel', () => {
     // Only what streamed before the abort reached the UI; nothing after.
     expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: 'Let me ' }])
   })
+
+  it('body ends cleanly before message_delta / message_stop, no abort → the truncation error, not an empty end_turn', async () => {
+    stubFetch(() => sseResponse(sseBody(textToolStream.slice(0, 4))))
+    const agent = new Probe({ ...base, endpoint: 'https://api.anthropic.com' })
+    const err = await agent.call(new AbortController().signal).then(() => null, (e: unknown) => e)
+    expect((err as Error).message).toMatch(/^AnthropicStreamTruncated: /)
+    expect((err as Error).name).not.toBe('AbortError')
+  })
 })
 
 describe('MiniMaxAgent / QwenAgent request shape', () => {

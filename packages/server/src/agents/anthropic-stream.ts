@@ -57,6 +57,10 @@ interface StreamUsage {
   cache_creation_input_tokens?: number
 }
 
+/** Thrown by `finish()` for a stream cut off before its end events;
+ *  classifyModelError maps the `AnthropicStreamTruncated` prefix to 'network'. */
+export const ANTHROPIC_STREAM_TRUNCATED = 'AnthropicStreamTruncated: stream ended without message_delta/message_stop; transient, retrying'
+
 type OpenBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; thinking: string }
@@ -73,6 +77,7 @@ export class AnthropicStreamAccumulator {
   private cacheReadTokens = 0
   private cacheWriteTokens = 0
   private invocationMetrics: AnthropicStreamEvent['amazon-bedrock-invocationMetrics']
+  private sawMessageStop = false
   private firstDeltaAt: number | undefined
 
   constructor(
@@ -136,14 +141,24 @@ export class AnthropicStreamAccumulator {
         break
       }
       case 'message_stop':
+        this.sawMessageStop = true
         this.invocationMetrics = event['amazon-bedrock-invocationMetrics']
         break
       // ping, content_block_stop and unknown types: nothing to fold
     }
   }
 
-  /** Build the loop-facing result. Call once, after the stream has ended. */
+  /** Build the loop-facing result. Call once, after the stream has ended
+   *  (callers check their abort signal first, so an abort stays AbortError). */
   finish(): ModelCallResult {
+    // Neither a stop_reason message_delta nor message_stop: the stream ended
+    // early without an error (seen on Bedrock: minutes of thinking, then a
+    // clean end, out=0). Defaulting to end_turn made that an empty final
+    // reply; throwing lets the turn's network backoff retry it. Both must be
+    // missing — a compatible provider may send only one of them.
+    if (this.stopReason === undefined && !this.sawMessageStop) {
+      throw new Error(ANTHROPIC_STREAM_TRUNCATED)
+    }
     let text = ''
     let thinking = ''
     const toolCalls: ModelCallResult['toolCalls'] = []

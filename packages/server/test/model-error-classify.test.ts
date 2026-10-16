@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { classifyModelError, type ModelErrorKind } from '../src/agents/model-error.js'
+import { ANTHROPIC_STREAM_TRUNCATED } from '../src/agents/anthropic-stream.js'
 
 /** AWS-SDK-shaped error: name + structured `$metadata.httpStatusCode`. */
 function sdkError(name: string, message: string, httpStatusCode?: number): Error {
@@ -29,6 +30,8 @@ describe('classifyModelError', () => {
       // error type to its status so it rides the `] <status>` regex.
       ['server error (Anthropic SSE overloaded)', new Error('[anthropic] 529 overloaded_error: Overloaded'), 'server_error'],
       ['network (undici)', new Error('fetch failed'), 'network'],
+      // Anthropic / Bedrock stream that ended cleanly before message_delta / message_stop.
+      ['network (Anthropic stream truncated)', new Error(ANTHROPIC_STREAM_TRUNCATED), 'network'],
       ['empty response (Mantle)', new Error('MantleEmptyResponse: status=completed with empty output[]'), 'empty_response'],
       ['corrupted (missing tool_result)', new Error('messages.3: tool_use ids were found without tool_result blocks'), 'corrupted'],
       ['multimodal 4xx', new Error('[Kimi] 400 Could not process image'), 'multimodal_4xx'],

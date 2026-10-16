@@ -123,6 +123,7 @@ function classifyKind(msg: string, errName: string, httpStatus: number | undefin
     msg === 'fetch failed'
     || msg === 'Model request timed out'  // agent-loop MODEL_TIMEOUT_ERROR — hung model call, treat as transport failure
     || msg.includes('http2 request did not get a response')  // AWS SDK NodeHttp2Handler requestTimeout — hung Bedrock stream, same class as MODEL_TIMEOUT
+    || msg.includes('AnthropicStreamTruncated')  // anthropic-stream finish(): the stream ended cleanly but before its end events
     || msg.includes('UND_ERR_HEADERS_TIMEOUT')
     || msg.includes('HeadersTimeoutError')
     || msg.includes('socket hang up')

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
 import { AgentLoop, type ModelCallResult, type ToolDef } from '../src/agents/agent-loop.js'
+import { ANTHROPIC_STREAM_TRUNCATED } from '../src/agents/anthropic-stream.js'
 
 /**
  * runAgentTurn's retry loop must not re-land the user input.
@@ -231,6 +232,17 @@ describe('runAgentTurn classifies errors by signal / status, not message text', 
 
     expect(agent.inputs).toHaveLength(1)
     expect(session.turnError).toBe('invalid api key')
+  }, 10_000)
+
+  it('a truncated Anthropic stream (no end events) is retried, not ended as an empty turn', async () => {
+    seedRow('c6')
+    const agent = new ScriptedAgent([new Error(ANTHROPIC_STREAM_TRUNCATED), 'ok'])
+    fakeSession('c6', agent as unknown as FakeAgent)
+
+    const result = await sm.runSession('c6', 'HELLO_MARKER')
+
+    expect(agent.inputs).toHaveLength(2)
+    expect(result).toContain('ok')
   }, 10_000)
 })
 
