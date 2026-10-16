@@ -20,9 +20,12 @@
  * what this process last wrote / read: a persisted row or raw message is never
  * edited in place — every mutator replaces the object or (raw) its `content`
  * array, or changes the array length. The cache is keyed by file path and
- * validated against the file's ino / size / mtime before every write, so a
- * write by another process (cron `halo cli` child, CLI/TUI) forces a full
- * rewrite from this process's memory — the same last-writer-wins as 1.x.
+ * validated against the file's ino / size / mtime at the write itself — an
+ * append / tail write checks the fstat of the fd it writes through, a full
+ * rewrite stats first — so a write by another process (cron `halo cli` child,
+ * CLI/TUI) forces a full rewrite from this process's memory, the same
+ * last-writer-wins as 1.x. A save with nothing new touches nothing, so that
+ * rewrite lands with this process's next real change, not its next save.
  */
 import fsSync from 'node:fs'
 import path from 'node:path'
@@ -364,12 +367,10 @@ export function writeUILog(
   inflight: SessionMessage | null,
   opts?: { rewrite?: boolean },
 ): UIWriteResult {
-  const cache = uiCaches.get(filePath)
-  const valid = cache !== undefined && sameStamp(cache.stamp, statOrNull(filePath))
+  let cache = uiCaches.get(filePath)
   const usersAfter = countUsers(rows)
-  const usersBefore = valid ? cache.users : countUsers(readUILog(filePath) ?? [])
 
-  let full = !valid || opts?.rewrite === true
+  let full = cache === undefined || opts?.rewrite === true
   const patches: number[] = []
   if (!full) {
     // Same object at the same index = unchanged. A different object under the
@@ -391,6 +392,11 @@ export function writeUILog(
     for (let i = cache!.ids.length; i < rows.length; i++) if (rows[i].id === open.id) { retired = true; break }
     if (!retired) full = true
   }
+  // Another process's write is caught on the write's own fd (writeOver), so
+  // only a full rewrite stats first — its delta is relative to what the file
+  // holds. A save with nothing new touches nothing (see the header).
+  if (full && cache && !sameStamp(cache.stamp, statOrNull(filePath))) cache = undefined
+  const usersBefore = cache ? cache.users : countUsers(readUILog(filePath) ?? [])
 
   if (full) {
     let out = ''
@@ -434,7 +440,7 @@ export function writeUILog(
   if (out) {
     const stamp = writeOver(uiCaches, filePath, c.stamp, out)
     if (!stamp) {
-      // Written by another process since the stat above: no baseline.
+      // Written by another process since this process's last write: no baseline.
       uiCaches.delete(filePath)
       return writeUILog(filePath, rows, inflight, opts)
     }
@@ -556,15 +562,7 @@ export function readRawLog(filePath: string, opts?: { prime?: boolean }): unknow
  */
 export function writeRawLog(filePath: string, messages: unknown[]): void {
   const cache = rawCaches.get(filePath)
-  const valid = cache !== undefined && sameStamp(cache.stamp, statOrNull(filePath))
-  if (!valid) {
-    // No baseline: this write replaces the file whole, but must still pass
-    // through openLog first so a pending 1.x migration lands BEFORE it, not
-    // over it.
-    const fd = openLog(filePath)
-    if (fd !== null) fsSync.closeSync(fd)
-  }
-  let full = !valid || messages.length < cache.count
+  let full = cache === undefined || messages.length < cache.count
   let tail = false
   for (let i = 0; !full && i < cache!.count; i++) {
     const m = messages[i]
@@ -574,6 +572,15 @@ export function writeRawLog(filePath: string, messages: unknown[]): void {
       if (i === cache!.count - 1) tail = true
       else full = true
     }
+  }
+  // Only a full rewrite stats first (append / tail check on their own fd —
+  // writeOver; a save with nothing new touches nothing — see the header).
+  if (full && (cache === undefined || !sameStamp(cache.stamp, statOrNull(filePath)))) {
+    // No baseline: this write replaces the file whole, but must still pass
+    // through openLog first so a pending 1.x migration lands BEFORE it, not
+    // over it.
+    const fd = openLog(filePath)
+    if (fd !== null) fsSync.closeSync(fd)
   }
   if (full) {
     const { out, lastStart } = rawLines(messages)

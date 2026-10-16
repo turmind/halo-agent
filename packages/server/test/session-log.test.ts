@@ -33,6 +33,12 @@ afterEach(() => {
 const row = (id: string, role: 'user' | 'assistant' = 'user', content = id): SessionMessage => ({ id, role, type: role, content, timestamp: 1 })
 const raw = (role: 'user' | 'assistant', text: string) => ({ role, content: [{ type: 'text', text }] })
 const ino = (p: string) => fs.statSync(p).ino
+/** Another process's whole-file UI rewrite (tmp + rename) — unlike replaceUILog,
+ *  this process's writer cache is left as it was. */
+const foreignUI = (p: string, rows: SessionMessage[]) => {
+  fs.writeFileSync(`${p}.x`, rows.map((m) => JSON.stringify({ t: 'add', id: m.id, ...(m.role === 'user' ? { u: 1 } : {}), m }) + '\n').join(''))
+  fs.renameSync(`${p}.x`, p)
+}
 const lines = (p: string) => fs.readFileSync(p, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>)
 
 describe('raw log', () => {
@@ -128,6 +134,57 @@ describe('raw log', () => {
     messages.push(raw('assistant', 'mine'))
     writeRawLog(p, messages)
     expect(readRawLog(p)).toEqual(messages)
+  })
+
+  it('a file another process rewrote whole: a save with nothing new leaves it alone, the next change rewrites it from memory', () => {
+    const p = rawLogPath(dir, 's')
+    const messages: unknown[] = [raw('user', 'q'), raw('assistant', 'a')]
+    writeRawLog(p, messages)
+    const foreign = JSON.stringify(raw('user', 'foreign')) + '\n'
+    fs.writeFileSync(`${p}.x`, foreign)
+    fs.renameSync(`${p}.x`, p)   // the other writer's atomic rewrite: new inode
+    const theirs = ino(p)
+
+    writeRawLog(p, messages)
+    expect(ino(p)).toBe(theirs)
+    expect(fs.readFileSync(p, 'utf-8')).toBe(foreign)
+
+    // Tail change, then a plain append — each must notice the foreign file.
+    for (const change of [
+      () => { (messages[1] as { content: unknown[] }).content = [{ type: 'text', text: 'a2' }] },
+      () => { messages.push(raw('user', 'q2')) },
+    ]) {
+      fs.writeFileSync(`${p}.x`, foreign)
+      fs.renameSync(`${p}.x`, p)
+      const foreignIno = ino(p)
+      change()
+      writeRawLog(p, messages)
+      expect(ino(p)).not.toBe(foreignIno)   // rewritten whole (tmp + rename), not written into theirs
+      expect(readRawLog(p)).toEqual(messages)
+      expect(fs.readFileSync(p, 'utf-8')).not.toContain('foreign')
+    }
+  })
+
+  /**
+   * Cost: append / tail / no-change saves do no path stat — the other-writer
+   * check rides on the fstat of the write's own fd. Only a full rewrite stats.
+   * Mutation check: restore the stat before every write → red.
+   */
+  it('append, tail and no-change saves stat nothing; a full rewrite does', () => {
+    const p = rawLogPath(dir, 's')
+    const messages: unknown[] = [raw('user', 'q')]
+    writeRawLog(p, messages)
+    const stat = vi.spyOn(fs, 'statSync')
+    try {
+      const statsOf = (fn: () => void): number => { stat.mockClear(); fn(); return stat.mock.calls.filter(([f]) => f === p).length }
+      expect(statsOf(() => { messages.push(raw('assistant', 'a')); writeRawLog(p, messages) }), 'append').toBe(0)
+      expect(statsOf(() => { (messages[1] as { content: unknown[] }).content = [{ type: 'text', text: 'a2' }]; writeRawLog(p, messages) }), 'tail').toBe(0)
+      expect(statsOf(() => writeRawLog(p, messages)), 'no change').toBe(0)
+      // The other-writer check before the rewrite + the new file's stamp after it.
+      expect(statsOf(() => writeRawLog(p, [raw('user', 'compacted')])), 'full').toBe(2)
+    } finally {
+      stat.mockRestore()
+    }
   })
 
   it('another process writing between the stat and the append / tail write: rewritten from memory', () => {
@@ -250,6 +307,52 @@ describe('UI log', () => {
     const mine = [...rows, row('mine', 'assistant')]
     writeUILog(p, mine, null)
     expect(readUILog(p)).toEqual(mine)
+  })
+
+  it('a file another process rewrote whole: a save with nothing new leaves it alone, the next change rewrites it from memory', () => {
+    const p = uiLogPath(dir, 's')
+    const rows = [row('u1'), row('a1', 'assistant')]
+    expect(writeUILog(p, rows, null).userDelta).toBe(1)
+    foreignUI(p, [row('u1'), row('f1'), row('f2')])   // 3 user rows
+    const theirs = fs.readFileSync(p, 'utf-8')
+
+    expect(writeUILog(p, rows, null).userDelta).toBe(0)
+    expect(fs.readFileSync(p, 'utf-8')).toBe(theirs)
+
+    const mine = [...rows, row('u2')]
+    const res = writeUILog(p, mine, null)
+    expect(readUILog(p)).toEqual(mine)
+    expect(lines(p).map((r) => r.id)).toEqual(['u1', 'a1', 'u2'])
+    // Relative to what the file held (3 users) — over both saves, the counter
+    // lands where the old stat-every-save writer put it: 1 + 0 + (2 - 3).
+    expect(res.userDelta).toBe(-1)
+  })
+
+  it('append and no-change saves stat nothing; a full rewrite (forced or rows removed) does', () => {
+    const p = uiLogPath(dir, 's')
+    const rows = [row('u1')]
+    writeUILog(p, rows, null)
+    const stat = vi.spyOn(fs, 'statSync')
+    try {
+      const statsOf = (fn: () => void): number => { stat.mockClear(); fn(); return stat.mock.calls.filter(([f]) => f === p).length }
+      expect(statsOf(() => { rows.push(row('a1', 'assistant')); writeUILog(p, rows, null) }), 'append').toBe(0)
+      expect(statsOf(() => writeUILog(p, rows, { ...row('live', 'assistant', ''), contentBlocks: [{ type: 'text', text: 'x' }] })), 'inflight').toBe(0)
+      expect(statsOf(() => writeUILog(p, rows, { ...row('live', 'assistant', ''), contentBlocks: [{ type: 'text', text: 'x' }] })), 'no change').toBe(0)
+      // The other-writer check before the rewrite + the new file's stamp after it.
+      expect(statsOf(() => writeUILog(p, rows, null, { rewrite: true })), 'forced').toBe(2)
+      expect(statsOf(() => writeUILog(p, [row('u1')], null)), 'removed').toBe(2)
+    } finally {
+      stat.mockRestore()
+    }
+  })
+
+  it('a forced rewrite (archive commit) over a file another process wrote still counts against that file', () => {
+    const p = uiLogPath(dir, 's')
+    const rows = [row('u1')]
+    writeUILog(p, rows, null)
+    foreignUI(p, [row('u1'), row('f1')])
+    expect(writeUILog(p, rows, null, { rewrite: true }).userDelta).toBe(-1)
+    expect(readUILog(p)).toEqual(rows)
   })
 
   it('another process writing between the stat and the append: rewritten from memory, nothing appended to its file', () => {
