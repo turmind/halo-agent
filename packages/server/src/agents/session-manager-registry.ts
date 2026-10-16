@@ -25,12 +25,14 @@ export class SessionManagerRegistry {
 
   getOrCreate(workspacePath: string): SessionManager {
     const resolved = fs.realpathSync(workspacePath)
+    // Hit: `.halo/` was scaffolded when this manager was built; re-running the
+    // ~10 mkdirs + self.html copy on every inbound message is pure metadata IO
+    // (costly on NFS/EFS). Writers that need a dir mkdir it themselves.
+    const cached = this.cache.get(resolved)
+    if (cached) return cached
     ensureWorkspaceHalo(resolved)
-    let sm = this.cache.get(resolved)
-    if (!sm) {
-      sm = new SessionManager(resolved, { reconcileOrphansOnBoot: this.opts.reconcileOrphansOnBoot })
-      this.cache.set(resolved, sm)
-    }
+    const sm = new SessionManager(resolved, { reconcileOrphansOnBoot: this.opts.reconcileOrphansOnBoot })
+    this.cache.set(resolved, sm)
     return sm
   }
 
