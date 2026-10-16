@@ -12,14 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Long chat history is archived when a turn ends, once the active log passes 5 MB (was: during a compact, over 3 MB). A compaction summary is never where the archive cuts, so it stays next to the turn it summarises.
 - An interrupted reply is saved once, under the same id it streamed with, so after a reload the partial answer appears once instead of being written again under a new id on every save.
 - New command `halo sessions migrate v1 v2` converts every 1.x session of a workspace at once. Stop the server first.
-- Ask an agent about an installed extension and it now reads that extension's own `README.md` (and `DESIGN.md`) from `~/.halo/global/extensions/<id>/` instead of guessing. Extensions add nothing to prompts on their own; agent instructions still come only from an extension skill you enable.
 - Less file-system work per request and per tool call, which matters most when the workspace or `~/.halo` is on network storage (NFS / EFS, as in AgentCore mode): a workspace's `.halo/` folders are set up once per server process instead of on every request; sandboxed file and shell tools look up the files they hide with one directory listing instead of one check per file (still on every call, so a sensitive file created later is still hidden); session saves no longer check the file before every write, and a save with nothing new no longer touches the disk; the log file's folder is no longer re-created before every line; AgentCore's health check and lease heartbeat each skip one lookup. If another process (a cron run, the TUI) writes a session meanwhile, this server still replaces it from its own copy, now at its next change instead of its next save.
 
 ### Fixed
 
-- A model key set to `<<ENV_NAME>>` whose variable isn't set in the server's environment no longer goes out as the literal key and comes back as a 401 that never names the variable. The turn now stops before the request with one error naming the provider, the field and the variable, and saying how to fix it (background servers and the desktop app opened from the Dock don't read `~/.bashrc` / `~/.zshrc`). AWS access keys are checked the same way. The Settings page also warns under any field whose variable is unset.
 - Deleting an exchange from the chat now finds its turn in the model's history by the message's arrival time instead of its text. Before, with the same short prompt sent more than once ("continue"), it could remove a different turn from the model's history than the one removed on screen. A message merged into one turn with others (sent while the agent was busy), or sent with a skill or an @scope, can now be deleted on its own. A message the model never received (lost to a restart while queued) is refused instead of matched by its text.
-- Deleting a session over the WebSocket (`session:delete`) now also removes its session files, archive segments and sub-agent sessions from disk, as the REST delete already did. Before, a client that only used the WebSocket left the files behind.
 - A command an agent was running when the server restarted is now reported to it as cut off by the restart, with the output it had produced so far, instead of as an ordinary failure. Once a restart begins, agents start no new commands, model calls or automatic context compactions, so no tokens are spent on a reply the restart would cut off (a call already under way finishes or is cut off as before). Stopping an agent during that window still works. Their work resumes after the restart as before.
 - After a restart, an agent that was idle while only its sub-agents were running is now told exactly that, with the ids of the sessions in its tree that were cut off. Before, it was told its own work had been interrupted mid-step.
 - AgentCore mode: the workspace databases (`halo.db`, `a2a.db`, `runs.db` on EFS) now flush every commit to storage. Before, a commit could sit in the microVM's cache for seconds, so a microVM that died could lose its last task updates — a task the caller had just been given unknown to the next microVM, a completed task reported as FAILED, or an interrupted run not resumed. Costs about one storage flush per commit (~10 per turn plus one per tool call). Normal server mode is unchanged.
@@ -30,6 +27,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Workspace sqlite migration v3 adds `agent_sessions.output` and `last_activity_at`.
 - While one process converts a 1.x session (the server, a cron run, the TUI), another opening the same session waits for it, up to 10 s, blocking that process meanwhile. Running `halo sessions migrate v1 v2` right after upgrading keeps this off the live path.
 - The test-chat session routes (`/api/agent-configs/:id/sessions`) still read the 1.x `.json` files only, so sessions created on 2.0 don't appear there.
+
+## [1.6.7] - 2026-10-15
+
+### Changed
+
+- Ask an agent about an installed extension and it now reads that extension's own `README.md` (and `DESIGN.md`) from `~/.halo/global/extensions/<id>/` instead of guessing. Extensions add nothing to prompts on their own; agent instructions still come only from an extension skill you enable.
+
+### Fixed
+
+- A model key set to `<<ENV_NAME>>` whose variable isn't set in the server's environment no longer goes out as the literal key and comes back as a 401 that never names the variable. The turn now stops before the request with one error naming the provider, the field and the variable, and saying how to fix it (background servers and the desktop app opened from the Dock don't read `~/.bashrc` / `~/.zshrc`). AWS access keys are checked the same way. The Settings page also warns under any field whose variable is unset.
+- Deleting a session over the WebSocket (`session:delete`) now also removes its session files, archive segments and sub-agent sessions from disk, as the REST delete already did. Before, a client that only used the WebSocket left the files behind.
 
 ## [1.6.6] - 2026-10-14
 
@@ -1047,7 +1055,9 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.5...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.7...HEAD
+[1.6.7]: https://github.com/turmind/halo-agent/compare/v1.6.6...v1.6.7
+[1.6.6]: https://github.com/turmind/halo-agent/compare/v1.6.5...v1.6.6
 [1.6.5]: https://github.com/turmind/halo-agent/compare/v1.6.4...v1.6.5
 [1.6.4]: https://github.com/turmind/halo-agent/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/turmind/halo-agent/compare/v1.6.2...v1.6.3
