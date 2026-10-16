@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-16
+
 ### Changed
 
 - Sessions are stored in a new format. Each session is now two append-only logs, `<id>.ui.jsonl` (what the chat shows) and `<id>.raw.jsonl` (the model's history), instead of one `<id>.json` that was read, merged and rewritten whole on every save. A save now writes only what changed: on a 31 MB session a save blocked the server for about 400 ms and rewrote 31 MB; it now takes under 1 ms and appends a few KB. Title, turn count, tokens and the latest output now live only in the workspace database (`halo.db`); internal evolution / scoring sessions get a database of their own, `~/.halo/global/internal-sessions/halo.db`.
@@ -1057,7 +1059,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.6.7...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/turmind/halo-agent/compare/v1.6.7...v2.0.0
 [1.6.7]: https://github.com/turmind/halo-agent/compare/v1.6.6...v1.6.7
 [1.6.6]: https://github.com/turmind/halo-agent/compare/v1.6.5...v1.6.6
 [1.6.5]: https://github.com/turmind/halo-agent/compare/v1.6.4...v1.6.5
