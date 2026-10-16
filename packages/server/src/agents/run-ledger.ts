@@ -81,8 +81,8 @@ export function nudgesSettled(workspaceRoot: string): Promise<void> {
  * ledger): if so, it is told its own turn was cut off and to carry on, and
  * sub-sessions are not listed (it has their ids in its transcript and
  * `session_list` at hand). If only sub-sessions were mid-run, the root was
- * idle — it is told so, with the cut-off sub-session ids listed (sorted, at
- * most NUDGE_MAX_LISTED).
+ * idle — it is told so, with the cut-off ids of its tree listed (children and
+ * deeper; sorted, at most NUDGE_MAX_LISTED).
  */
 export function sweepInterruptedRuns(host: RunLedgerHost): void {
   const ids = drainRunning(host.workspaceRoot)
@@ -108,7 +108,7 @@ export function sweepInterruptedRuns(host: RunLedgerHost): void {
     } else {
       const subs = ids.filter((id) => id.startsWith(`${rootId}>`)).sort()
       const listed = subs.slice(0, NUDGE_MAX_LISTED).join(', ') + (subs.length > NUDGE_MAX_LISTED ? ` (+${subs.length - NUDGE_MAX_LISTED} more)` : '')
-      nudge = `[System] The server restarted at ${restartedAt}. You were idle, but these sub-sessions of yours were mid-run and were cut off (marked stopped, no further reports will arrive): ${listed}. If you were waiting on their reports, re-dispatch with query_session("<id>", ...) to revive one with its context intact; otherwise carry on.`
+      nudge = `[System] The server restarted at ${restartedAt}. You were idle, but these sessions in your session tree were mid-run and were cut off (marked stopped, no further reports will arrive): ${listed}. If you were waiting on their reports, re-dispatch with query_session("<id>", ...) to revive one with its context intact; otherwise carry on.`
     }
     let stamp: string
     try {

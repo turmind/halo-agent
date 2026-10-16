@@ -82,6 +82,16 @@ function abortReason(reason: string): DOMException {
   return new DOMException(reason, 'AbortError')
 }
 
+/** Shutdown park for a turn: settles only once the turn's `signal` aborts
+ *  (at once if it already has). The agent loop returns on that abort, so a
+ *  Stop / interrupt / delete still ends the parked turn — a promise that
+ *  never settled left stopSession's `await session.promise` (and the channel
+ *  shutdown behind it) hanging. Otherwise it waits for the exit. */
+function parkUntilAborted(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+}
+
 /** Synthetic user turn pushed by drainQueue when the model called continue_task. */
 const CONTINUE_TASK_KICK = '[System] You called continue_task: the task interrupted earlier is not finished. Resume it now from where it stopped. Any tool call marked "[tool execution interrupted — no result]" was cut off mid-run and its result is lost, and any marked "was not run" never started — re-issue either if you still need the result (this overrides the interrupted marker\'s do-not-retry note — you explicitly asked to continue).'
 
@@ -1590,9 +1600,11 @@ export class SessionManager implements SessionManagerInternals {
             // start in a dying process). Park instead — no compact, no save:
             // the run stays open (promise set, ledger row kept), so
             // landForShutdown writes it and the next boot nudges it.
-            if (isShuttingDown()) await new Promise<never>(() => {})
+            if (isShuttingDown()) return parkUntilAborted(signal)
             this.trimImages(session)
             await this.maybeAutoCompact(session)
+            // Again: shutdown may have begun while a compact ran.
+            if (isShuttingDown()) return parkUntilAborted(signal)
             // Per model call, like tool_result: the row is throttled. A
             // compaction above has already saved itself, unthrottled.
             this.saveAgentState(session, { throttle: true })
@@ -2788,6 +2800,9 @@ export class SessionManager implements SessionManagerInternals {
    *  evo here — that runs once at runSession's finally block, even if the
    *  turn compacted multiple times. */
   private async maybeAutoCompact(session: AgentSession): Promise<void> {
+    // The summarize call would be cut off by the exit (mid-turn and turn-end
+    // alike); the next boot's turn compacts if still over the threshold.
+    if (isShuttingDown()) return
     if (session.lastContextTokens <= 0) return
     if (session.isCompacting) return
     const overThreshold = session.lastContextTokens > session.contextConfig.maxTokens * session.contextConfig.compressAt

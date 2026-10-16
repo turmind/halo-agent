@@ -186,7 +186,7 @@ describe('sweepInterruptedRuns', () => {
     const appended = Object.fromEntries(host.nudges.filter((n) => n.via === 'append').map((n) => [n.id, n.text]))
     expect(appended).toEqual(sent) // the same text lands in the UI transcript
 
-    expect(sent.few).toMatch(/^\[System\] The server restarted at \S+\. You were idle, but these sub-sessions of yours were mid-run and were cut off \(marked stopped, no further reports will arrive\): few>sid_a, few>sid_b\. If you were waiting on their reports, re-dispatch with query_session\("<id>", \.\.\.\) to revive one with its context intact; otherwise carry on\.$/)
+    expect(sent.few).toMatch(/^\[System\] The server restarted at \S+\. You were idle, but these sessions in your session tree were mid-run and were cut off \(marked stopped, no further reports will arrive\): few>sid_a, few>sid_b\. If you were waiting on their reports, re-dispatch with query_session\("<id>", \.\.\.\) to revive one with its context intact; otherwise carry on\.$/)
     expect(sent.few).not.toContain('mid-turn')
     expect(sent.few).not.toContain('in flight')
 

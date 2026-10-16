@@ -8,6 +8,7 @@ import { beginShutdown, isShuttingDown, resetShutdownForTests } from '../src/shu
 import { SessionManager } from '../src/agents/session-manager.js'
 import { AgentLoop, type ModelCallResult, type ToolDef } from '../src/agents/agent-loop.js'
 import { agentSessions } from '../src/db/schema.js'
+import { config } from '../src/config.js'
 import { createRunsDb, setRunsDb, getRunsDb, runningSessions } from '../src/db/runs-db.js'
 
 /**
@@ -113,76 +114,152 @@ describe('shell_exec across a server shutdown', () => {
 // ── The turn loop: no model call once shutdown began ───────────────────
 
 const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
+const toolUse = (id: string, name: string): ModelCallResult => {
+  const toolCalls = [{ id, name, input: {} }]
+  return { assistantBlocks: [{ type: 'tool_use', ...toolCalls[0] }], stopReason: 'tool_use', text: '', thinking: '', toolCalls, usage }
+}
+const endTurn = (text: string): ModelCallResult => ({
+  assistantBlocks: [{ type: 'text', text }], stopReason: 'end_turn', text, thinking: '', toolCalls: [], usage,
+})
+
+type Step = ModelCallResult | (() => ModelCallResult)
 
 class ScriptedLoop extends AgentLoop {
   calls = 0
-  constructor(tools: ToolDef[], private readonly script: ModelCallResult[]) { super(tools) }
+  constructor(tools: ToolDef[], private readonly script: Step[]) { super(tools) }
   protected async callModel(): Promise<ModelCallResult> {
     const step = this.script[this.calls++]
     if (!step) throw new Error(`script exhausted at model call ${this.calls}`)
-    return step
+    return typeof step === 'function' ? step() : step
+  }
+}
+
+async function until(pred: () => boolean, what: string): Promise<void> {
+  const start = Date.now()
+  while (!pred()) {
+    if (Date.now() - start > 3000) throw new Error(`${what}: timed out`)
+    await delay(10)
   }
 }
 
 describe('beforeCallModel once shutdown began', () => {
   let tmpGlobal: string
+  let sm: SessionManager
   beforeEach(() => {
     tmpGlobal = mkdtempSync(join(tmpdir(), 'halo-shutdown-cutoff-global-'))
     setRunsDb(createRunsDb(tmpGlobal))
+    // Server process (ledger on), real SessionManager, scripted loop seeded
+    // into its sessions map (the soft-interrupt / run-ledger harness).
+    sm = new SessionManager(dir, { reconcileOrphansOnBoot: true })
+    // A compacted turn's evo enqueue reads the machine's settings — keep it off.
+    ;(sm as unknown as { enqueueEvoForCompactedTurn: () => void }).enqueueEvoForCompactedTurn = () => {}
   })
   afterEach(() => {
     rmSync(tmpGlobal, { recursive: true, force: true })
   })
 
-  it('a tool result landing after shutdown began: no second model call, the run stays open, its ledger row stays', async () => {
-    // Server process (ledger on), real SessionManager, scripted loop seeded
-    // into its sessions map (the soft-interrupt / run-ledger harness).
-    const sm = new SessionManager(dir, { reconcileOrphansOnBoot: true })
+  const ledgerIds = () => getRunsDb().select().from(runningSessions).all().map((r) => r.sessionId)
+
+  function fakeSession(id: string, agent: unknown, contextConfig = { maxTokens: 100000, compressAt: 0.8 }) {
     sm.getDb().insert(agentSessions).values({
-      id: 's1', parentId: null, agentId: 'default', agentName: 'Default', description: '', workingDir: null,
+      id, parentId: null, agentId: 'default', agentName: 'Default', description: '', workingDir: null,
       accessLevel: null, createdAt: 1000, updatedAt: 1000, stoppedAt: null, archivedAt: null,
     }).run()
-    let toolDone = false
-    const work: ToolDef = {
-      name: 'work', description: '', inputSchema: {},
-      callback: async () => { beginShutdown(); toolDone = true; return 'worked' },
-    }
-    const toolCalls = [{ id: 'tu_1', name: 'work', input: {} }]
-    const loop = new ScriptedLoop([work], [
-      { assistantBlocks: [{ type: 'tool_use', ...toolCalls[0] }], stopReason: 'tool_use', text: '', thinking: '', toolCalls, usage },
-      { assistantBlocks: [{ type: 'text', text: 'never' }], stopReason: 'end_turn', text: 'never', thinking: '', toolCalls: [], usage },
-    ])
     const session = {
-      id: 's1', parentId: null as string | null, agentId: 'default', agentName: 'Default', agent: loop,
+      id, parentId: null as string | null, agentId: 'default', agentName: 'Default', agent,
       description: '', output: '', lastActivityAt: null as string | null, finalOutput: '',
       turnError: null as string | null, promise: null as Promise<string> | null,
       abortController: null as AbortController | null,
       messageQueue: [] as Array<{ text: string }>,
-      contextConfig: { maxTokens: 100000, compressAt: 0.8 }, currentModelId: 'test-model',
+      contextConfig, currentModelId: 'test-model',
       toolCallLog: [] as unknown[], warnedToolHashes: new Set<string>(), turnStartTime: 0,
       interruptRequested: false, selfKick: false, resumedAfterInterrupt: false,
       isCompacting: false, compactAbortController: null, compactedThisTurn: false, foldAfterCompact: null,
       systemPrompt: '', thinkingEffort: 'off', workingDir: null, accessLevel: null, supportsImage: false,
       lastContextTokens: 0, meta: { toolNames: [], skillNames: [], mdFiles: [] },
     }
-    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', session)
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, session)
+    return session
+  }
 
-    let ended = false
-    void sm.runSession('s1', 'go').finally(() => { ended = true })
-    const start = Date.now()
-    while (!toolDone) {
-      if (Date.now() - start > 3000) throw new Error('tool never ran')
-      await delay(10)
+  /** A run whose one tool call begins the shutdown — parked at the next
+   *  beforeCallModel. */
+  async function parkedRun(id: string) {
+    let toolDone = false
+    const work: ToolDef = {
+      name: 'work', description: '', inputSchema: {},
+      callback: async () => { beginShutdown(); toolDone = true; return 'worked' },
     }
+    const loop = new ScriptedLoop([work], [toolUse('tu_1', 'work'), endTurn('never')])
+    const session = fakeSession(id, loop)
+    const run = { ended: false }
+    void sm.runSession(id, 'go').finally(() => { run.ended = true })
+    await until(() => toolDone, 'tool run')
     await delay(300)
+    return { loop, session, run }
+  }
 
+  it('a tool result landing after shutdown began: no second model call, the run stays open, its ledger row stays', async () => {
+    const { loop, session, run } = await parkedRun('s1')
     expect(loop.calls).toBe(1)
-    expect(ended).toBe(false)
+    expect(run.ended).toBe(false)
     expect(session.promise).not.toBeNull()
-    expect(getRunsDb().select().from(runningSessions).all().map((r) => r.sessionId)).toEqual(['s1'])
+    expect(ledgerIds()).toEqual(['s1'])
     // The finished result is in the history the shutdown write lands.
     const last = loop.messages[loop.messages.length - 1]
     expect(last.role).toBe('user')
     expect(JSON.stringify(last.content)).toContain('worked')
+  })
+
+  it('a Stop on the parked run still ends it: stopSession returns, the run ends, its ledger row is gone', async () => {
+    // A park that never settled hung stopSession — and a channel shutdown
+    // awaiting a /goal pause stop behind it — until systemd's SIGKILL.
+    const { loop, run } = await parkedRun('s1')
+    const stopped = await Promise.race([sm.stopSession('s1').then(() => true), delay(2000).then(() => false)])
+    expect(stopped).toBe(true)
+    await until(() => run.ended, 'run end')
+    expect(loop.calls).toBe(1)
+    expect(ledgerIds()).toEqual([])
+  })
+
+  it('shutdown begins while a mid-turn auto-compact runs: no model call after it', async () => {
+    const work: ToolDef = { name: 'work', description: '', inputSchema: {}, callback: async () => 'worked' }
+    // Call 1's usage (2 tokens) puts the session over a 1-token window; the
+    // summarize call (2) begins the shutdown; the turn's next call (3) must not run.
+    const loop = new ScriptedLoop([work], [
+      toolUse('tu_1', 'work'),
+      () => { beginShutdown(); return endTurn('SUMMARY') },
+      endTurn('never'),
+    ])
+    loop.messages = Array.from({ length: 2 * (config.compact.keep_messages + 3) }, (_, i) => (
+      { role: i % 2 === 0 ? 'user' as const : 'assistant' as const, content: [{ type: 'text' as const, text: `m${i}` }] }
+    ))
+    fakeSession('c1', loop, { maxTokens: 1, compressAt: 0.8 })
+    const run = { ended: false }
+    void sm.runSession('c1', 'go').finally(() => { run.ended = true })
+    await until(() => loop.calls >= 2, 'summarize call')
+    await delay(300)
+    expect(loop.calls).toBe(2)
+    expect(run.ended).toBe(false)
+    expect(ledgerIds()).toEqual(['c1'])
+  })
+
+  it('maybeAutoCompact after shutdown began: no summarize call, the history untouched (mid-turn and turn-end alike)', async () => {
+    let runs = 0
+    const messages = Array.from({ length: 2 * (config.compact.keep_messages + 3) }, (_, i) => (
+      { role: i % 2 === 0 ? 'user' : 'assistant', content: [{ type: 'text', text: `m${i}` }] }
+    ))
+    const agent = {
+      messages: [...messages],
+      // eslint-disable-next-line require-yield
+      async *run(): AsyncGenerator<never> { runs++ },
+    }
+    const session = fakeSession('c2', agent, { maxTokens: 1000, compressAt: 0.8 })
+    session.lastContextTokens = 10_000
+    beginShutdown()
+    await (sm as unknown as { maybeAutoCompact(s: unknown): Promise<void> }).maybeAutoCompact(session)
+    expect(runs).toBe(0)
+    expect(agent.messages).toEqual(messages)
+    expect(session.isCompacting).toBe(false)
   })
 })
