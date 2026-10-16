@@ -36,7 +36,7 @@ import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
 import { saveUILog, deriveSessionTitle, isInternalAgent, sessionMetaDb, fileSegment, stripTurnStamp, nextTurnStamp } from '../sessions/session-store.js'
 import { countArchiveSegments } from '../sessions/session-archive.js'
-import { rawLogPath, writeRawLog, uiLogExists, uiLogPath } from '../sessions/session-log.js'
+import { rawLogPath, writeRawLog, forgetRawLogCache, logWrittenElsewhere, uiLogExists, uiLogPath } from '../sessions/session-log.js'
 import { VISION_IMAGE_MIME_TYPES } from '../channels/shared/media-store.js'
 import type { SessionMessage } from '../sessions/session-types.js'
 import {
@@ -528,6 +528,7 @@ export class SessionManager implements SessionManagerInternals {
     if (this.deletedSessionIds.has(sessionId)) return null
     const res = saveUILog(sessionId, agentId, this.workspaceRoot, rows, inflight, { rewrite: opts?.archive })
     if (!res) return null
+    if (res.foreign) this.rewriteRawLog(sessionId)
     updateSessionMeta(this.metaDb(agentId), sessionId, {
       titleIfUnset: deriveSessionTitle(rows, meta),
       // The archive commit moves rows out of the file; the exchange count is
@@ -673,9 +674,25 @@ export class SessionManager implements SessionManagerInternals {
     return this.stateStore.sessionDir(agentId)
   }
 
-  /** Save agent.messages as rawMessages field in the delegated log file (read-merge-write) */
+  /** Persist agent.messages + the row (SessionStateStore). The two log files
+   *  stay a pair: when the raw write replaced another process's write, the
+   *  UI log is rewritten whole from memory in the same save — persistUILog
+   *  does the reverse (rewriteRawLog). */
   private saveAgentState(session: AgentSession, opts?: { throttle?: boolean }): void {
-    this.stateStore.saveAgentState(session, opts)
+    if (this.stateStore.saveAgentState(session, opts)) this.uiStore.rewriteLog(session.id)
+  }
+
+  /** persistUILog's half of the pairing: its UI write replaced another
+   *  process's write, so the raw log is rewritten whole from memory now.
+   *  Nothing to write from when the session isn't in memory. Mid-compact the
+   *  live history carries the summarize instruction (see landForShutdown):
+   *  only the baseline is dropped, and the post-compact save — a full
+   *  rewrite — lands it. */
+  private rewriteRawLog(sessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    forgetRawLogCache(rawLogPath(this.sessionDir(session.agentId), fileSegment(sessionId)))
+    if (!session.isCompacting) this.stateStore.saveAgentState(session)
   }
 
   /** Load agent.messages from the delegated log file's rawMessages field */
@@ -1301,7 +1318,7 @@ export class SessionManager implements SessionManagerInternals {
         copy = [...messages, landed.msg]
       }
       try {
-        writeRawLog(rawLogPath(this.sessionDir(session.agentId), fileSegment(session.id)), copy)
+        if (writeRawLog(rawLogPath(this.sessionDir(session.agentId), fileSegment(session.id)), copy)) this.uiStore.rewriteLog(session.id)
       } catch (err) {
         console.error(`[SessionManager] landForShutdown failed for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -1313,7 +1330,28 @@ export class SessionManager implements SessionManagerInternals {
   /** Returns the row's arrival stamp — pass it on to sendUserMessage /
    *  enqueueUserMessage so the raw turn carries the same turn key. */
   appendUserMessage(sessionId: string, text: string, opts?: { local?: boolean }): string {
+    this.reloadIfWrittenElsewhere(this.findRootSessionId(sessionId))
     return this.uiStore.appendUserMessage(sessionId, text, opts)
+  }
+
+  /** Turn start (every user-driven turn appends its row here first): another
+   *  process — a cron `halo cli`, the TUI, a manual `halo cli -s` — may have
+   *  written the tree since this process cached its idle copies: the root's
+   *  UIState (kept past release, see releaseSession) and an AgentSession a
+   *  view loaded. One stat per cached copy against its writer baseline; on a
+   *  mismatch they are dropped (forgetExternalWrite), so this turn reads the
+   *  other writer's turns from disk instead of rewriting the files from the
+   *  stale copy. Before the row lands — once it is in the state, a drop would
+   *  flush it over the other writer's file. Skipped while the tree has work
+   *  in flight (forgetExternalWrite keeps live state). */
+  private reloadIfWrittenElsewhere(rootId: string): void {
+    if (this.hasActiveWorkInTree(rootId)) return
+    const session = this.sessions.get(rootId)
+    if (this.uiStore.uiLogWrittenElsewhere(rootId)
+      || (session && logWrittenElsewhere(rawLogPath(this.sessionDir(session.agentId), fileSegment(rootId))))) {
+      console.debug(`[SessionManager] ${rootId} written by another process since cached — re-reading from disk`)
+      this.forgetExternalWrite(rootId)
+    }
   }
 
   appendNotification(sessionId: string, text: string, agentName: string = 'System'): void {

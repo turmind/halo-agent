@@ -134,8 +134,9 @@ function statOrNull(p: string): fsSync.Stats | null {
  * or from byte `at` with the rest cut off — and return the file's stamp after
  * the write (fstat on the same fd, so the cache tracks exactly what is on
  * disk). Null, with nothing written, when the opened file isn't that baseline
- * any more: another process wrote it between the caller's stat and this open,
- * and the caller rewrites it whole. A short write throws, with the file's
+ * any more: another process wrote it between the caller's stat and this open
+ * (or deleted it — the append open doesn't create it), and the caller rewrites
+ * it whole. A short write throws, with the file's
  * cache dropped so the next write rewrites it clean. The `at` write is in
  * place (no tmp + rename): durable against a process kill, not against a
  * power loss / kernel crash mid-write (see writeRawLog's tail path).
@@ -143,7 +144,7 @@ function statOrNull(p: string): fsSync.Stats | null {
 function writeOver(caches: Map<string, unknown>, filePath: string, stamp: FileStamp, content: string, at?: number): FileStamp | null {
   let fd: number
   try {
-    fd = fsSync.openSync(filePath, at === undefined ? 'a' : 'r+')
+    fd = fsSync.openSync(filePath, at === undefined ? fsSync.constants.O_WRONLY | fsSync.constants.O_APPEND : 'r+')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw err
@@ -159,7 +160,8 @@ function writeOver(caches: Map<string, unknown>, filePath: string, stamp: FileSt
     if (at !== undefined) fsSync.ftruncateSync(fd, at + n)
     const after = fsSync.fstatSync(fd)
     // Another process appended in the same instant: the file holds lines this
-    // cache doesn't know — the next write rewrites it whole.
+    // cache doesn't know — the caller sees the baseline gone and rewrites it
+    // whole.
     if (at === undefined && after.size !== stamp.size + n) caches.delete(filePath)
     return stampOf(after)
   } finally {
@@ -349,6 +351,10 @@ export interface UIWriteResult {
   userDelta: number
   /** Active file size after the write (bytes, from the cache — no stat). */
   size: number
+  /** Another process had written the file since this process's last write,
+   *  and this write replaced it whole — the caller rewrites the session's
+   *  other log too (SessionManager.persistUILog). */
+  foreign: boolean
 }
 
 /**
@@ -395,7 +401,8 @@ export function writeUILog(
   // Another process's write is caught on the write's own fd (writeOver), so
   // only a full rewrite stats first — its delta is relative to what the file
   // holds. A save with nothing new touches nothing (see the header).
-  if (full && cache && !sameStamp(cache.stamp, statOrNull(filePath))) cache = undefined
+  let foreign = false
+  if (full && cache && !sameStamp(cache.stamp, statOrNull(filePath))) { cache = undefined; foreign = true }
   const usersBefore = cache ? cache.users : countUsers(readUILog(filePath) ?? [])
 
   if (full) {
@@ -410,7 +417,7 @@ export function writeUILog(
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true })
     const stamp = rewriteAndStamp(filePath, out)
     uiCaches.set(filePath, uiCacheOf(stamp, rows, usersAfter, inflightCache))
-    return { userDelta: usersAfter - usersBefore, size: stamp.size }
+    return { userDelta: usersAfter - usersBefore, size: stamp.size, foreign }
   }
 
   const c = cache!
@@ -442,7 +449,13 @@ export function writeUILog(
     if (!stamp) {
       // Written by another process since this process's last write: no baseline.
       uiCaches.delete(filePath)
-      return writeUILog(filePath, rows, inflight, opts)
+      return { ...writeUILog(filePath, rows, inflight, opts), foreign: true }
+    }
+    if (!uiCaches.has(filePath)) {
+      // Appended to in the same instant (writeOver): rewritten now, relative to
+      // the file — which holds this write's rows too, so the deltas add up.
+      const again = writeUILog(filePath, rows, inflight, opts)
+      return { userDelta: usersAfter - usersBefore + again.userDelta, size: again.size, foreign: true }
     }
     c.stamp = stamp
   }
@@ -450,7 +463,7 @@ export function writeUILog(
   for (let i = c.ids.length; i < rows.length; i++) { c.rows.set(rows[i], i); c.ids.push(rows[i].id) }
   c.users = usersAfter
   c.inflight = inflightCache
-  return { userDelta: usersAfter - usersBefore, size: c.stamp.size }
+  return { userDelta: usersAfter - usersBefore, size: c.stamp.size, foreign: false }
 }
 
 /** Replace a UI log whole with finalized `rows` (tmp + rename). Public
@@ -559,8 +572,12 @@ export function readRawLog(filePath: string, opts?: { prime?: boolean }): unknow
  * message — compaction (new array), repair, image trim, deleteExchange — is a
  * full atomic rewrite: tmp + rename over `raw.jsonl`, the old content dropped
  * (as 1.x).
+ *
+ * Returns true when another process had written the file since this
+ * process's last write and this write replaced it whole (see
+ * UIWriteResult.foreign).
  */
-export function writeRawLog(filePath: string, messages: unknown[]): void {
+export function writeRawLog(filePath: string, messages: unknown[]): boolean {
   const cache = rawCaches.get(filePath)
   let full = cache === undefined || messages.length < cache.count
   let tail = false
@@ -575,7 +592,9 @@ export function writeRawLog(filePath: string, messages: unknown[]): void {
   }
   // Only a full rewrite stats first (append / tail check on their own fd —
   // writeOver; a save with nothing new touches nothing — see the header).
+  let foreign = false
   if (full && (cache === undefined || !sameStamp(cache.stamp, statOrNull(filePath)))) {
+    foreign = cache !== undefined
     // No baseline: this write replaces the file whole, but must still pass
     // through openLog first so a pending 1.x migration lands BEFORE it, not
     // over it.
@@ -586,7 +605,7 @@ export function writeRawLog(filePath: string, messages: unknown[]): void {
     const { out, lastStart } = rawLines(messages)
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true })
     rawCaches.set(filePath, rawCacheOf(rewriteAndStamp(filePath, out), messages, lastStart))
-    return
+    return foreign
   }
   const c = cache!
   if (tail) {
@@ -601,22 +620,24 @@ export function writeRawLog(filePath: string, messages: unknown[]): void {
     const from = c.count - 1
     const { out, lastStart } = rawLines(messages.slice(from))
     const stamp = writeOver(rawCaches, filePath, c.stamp, out, c.tailStart)
-    if (!stamp) { rawCaches.delete(filePath); return writeRawLog(filePath, messages) }
+    if (!stamp) { rawCaches.delete(filePath); writeRawLog(filePath, messages); return true }
     c.stamp = stamp
     c.tailStart += lastStart
     for (let i = from; i < messages.length; i++) noteRaw(c.seen, messages[i], i)
     c.count = messages.length
-    return
+    return false
   }
-  if (messages.length === c.count) return
+  if (messages.length === c.count) return false
   const { out, lastStart } = rawLines(messages.slice(c.count))
   const before = c.stamp.size
   const stamp = writeOver(rawCaches, filePath, c.stamp, out)
-  if (!stamp) { rawCaches.delete(filePath); return writeRawLog(filePath, messages) }
+  // No stamp, or the baseline dropped (appended to in the same instant).
+  if (!stamp || !rawCaches.has(filePath)) { rawCaches.delete(filePath); writeRawLog(filePath, messages); return true }
   c.stamp = stamp
   c.tailStart = before + lastStart
   for (let i = c.count; i < messages.length; i++) noteRaw(c.seen, messages[i], i)
   c.count = messages.length
+  return false
 }
 
 /** Replace a raw log whole (tmp + rename) — see replaceUILog. */
@@ -630,6 +651,19 @@ export function replaceRawLog(filePath: string, messages: unknown[]): void {
  *  next load re-primes it (readUILog). */
 export function forgetUILogCache(filePath: string): void {
   uiCaches.delete(filePath)
+}
+
+/** Whether another process wrote the log since this process last wrote or
+ *  primed it: one stat against the writer baseline. False without a baseline
+ *  (nothing to compare against). */
+export function logWrittenElsewhere(filePath: string): boolean {
+  const stamp = (uiCaches.get(filePath) ?? rawCaches.get(filePath))?.stamp
+  return stamp !== undefined && !sameStamp(stamp, statOrNull(filePath))
+}
+
+/** Drop a raw log's writer baseline: its next write rewrites it whole. */
+export function forgetRawLogCache(filePath: string): void {
+  rawCaches.delete(filePath)
 }
 
 /** Drop the writer baselines of a deleted session's files. */

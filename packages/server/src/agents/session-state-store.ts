@@ -74,17 +74,20 @@ export class SessionStateStore {
    *  once and cancels the trailing write, so a turn end, a Stop or a graceful
    *  shutdown leaves the row exact; only a hard kill can leave it up to the
    *  throttle behind the last event. (The list sorts by updatedAt, written at
-   *  turn end — not by these columns.) */
-  saveAgentState(session: SavableSession, opts?: { throttle?: boolean }): void {
+   *  turn end — not by these columns.) Returns true when the raw write
+   *  replaced another process's write (writeRawLog) — the caller rewrites
+   *  the UI log to match. */
+  saveAgentState(session: SavableSession, opts?: { throttle?: boolean }): boolean {
     // Honour the deletion tombstone like persistUILog does — a late
     // write from an in-flight turn's releaseSession must not resurrect a file
     // the user just deleted.
-    if (this.host.isSessionDeleted(session.id)) return
+    if (this.host.isSessionDeleted(session.id)) return false
+    let foreign: boolean
     try {
-      writeRawLog(rawLogPath(this.sessionDir(session.agentId), fileSegment(session.id)), session.agent.messages)
+      foreign = writeRawLog(rawLogPath(this.sessionDir(session.agentId), fileSegment(session.id)), session.agent.messages)
     } catch (err) {
       console.error(`[SessionStateStore] Failed to save state for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
-      return
+      return false
     }
     const now = Date.now()
     const w = this.rowWrites.get(session.id)
@@ -96,9 +99,10 @@ export class SessionStateStore {
         this.writeRow(session, Date.now())
       }, w.at + ROW_WRITE_THROTTLE_MS - now)
       w.timer.unref?.()
-      return
+      return foreign
     }
     this.writeRow(session, now)
+    return foreign
   }
 
   /** Drop a session's throttle state (pending trailing write included) — it

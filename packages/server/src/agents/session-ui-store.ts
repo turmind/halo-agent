@@ -4,7 +4,7 @@ import { internalSessionsDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
 import { getSessionDir, loadSessionMessages, fileSegment, nextTurnStamp } from '../sessions/session-store.js'
-import { cachedUILogSize, forgetUILogCache, uiLogPath } from '../sessions/session-log.js'
+import { cachedUILogSize, forgetUILogCache, logWrittenElsewhere, uiLogPath } from '../sessions/session-log.js'
 import { LegacyConversionError } from '../sessions/legacy-migrate.js'
 import {
   ARCHIVE_SIZE_THRESHOLD, archiveSplitIndex, countArchiveSegments, writeArchiveSegment,
@@ -584,10 +584,7 @@ export class SessionUIStore {
       // The logs' writer baselines go with them, or the cache grows with every
       // session ever loaded; the next ensureUIState / loadSubHistory re-primes.
       // Raw baselines stay: the AgentSession may outlive this state.
-      const projectPath = this.uiStateProjectPaths.get(sessionId) ?? this.host.workspaceRoot
-      for (const id of [sessionId, ...state.subSessionLogs.keys()]) {
-        forgetUILogCache(uiLogPath(getSessionDir(this.resolveAgentId(id), projectPath), fileSegment(id)))
-      }
+      for (const id of [sessionId, ...state.subSessionLogs.keys()]) forgetUILogCache(this.uiLogFile(sessionId, id))
     }
     this.uiStates.delete(sessionId)
     this.uiStateProjectPaths.delete(sessionId)
@@ -648,6 +645,34 @@ export class SessionUIStore {
       if (this.uiStateDirty.has(rootId)) this.flushPersist(rootId, state)
       for (const taskId of state.subSessionLogs.keys()) this.flushPersist(taskId, state)
     }
+  }
+
+  /** Rewrite a session's UI log (root or sub) whole from memory now: its raw
+   *  log was just written over another process's write, and the two files
+   *  must stay a pair (SessionManager.saveAgentState). No-op when the log
+   *  isn't loaded — there is nothing to write from. */
+  rewriteLog(sessionId: string): void {
+    const rootId = this.findRootSessionId(sessionId)
+    const state = this.uiStates.get(rootId)
+    if (!state || (sessionId !== rootId && !state.subSessionLogs.has(sessionId))) return
+    // No baseline → the persist below is a full rewrite, its exchange delta
+    // relative to what the file holds.
+    forgetUILogCache(this.uiLogFile(rootId, sessionId))
+    this.flushPersist(sessionId, state)
+  }
+
+  /** Whether the root's cached UI log was written by another process since
+   *  this process last wrote / read it (one stat). False when the state isn't
+   *  cached — the next access reads disk anyway. */
+  uiLogWrittenElsewhere(rootId: string): boolean {
+    return this.uiStates.has(rootId) && logWrittenElsewhere(this.uiLogFile(rootId, rootId))
+  }
+
+  /** UI log file of `id` (the root or one of its subs) under the root state's
+   *  project path. */
+  private uiLogFile(rootId: string, id: string): string {
+    const projectPath = this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot
+    return uiLogPath(getSessionDir(this.resolveAgentId(id), projectPath), fileSegment(id))
   }
 
   /** Flush a sub-session's UI log to its own file now. Called after the

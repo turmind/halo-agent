@@ -28,7 +28,9 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
  *  5. a hard kill mid-batch: every finished result is already on disk, the
  *     raw file only grew / rewrote its tail;
  *  6. deleteExchange refuses what it can't locate in raw, deletes UI-only
- *     before the last compaction, and matches through a channel tag.
+ *     before the last compaction, and matches through a channel tag;
+ *  7. another process's write: the next turn re-reads both files first, and
+ *     a write that replaces it rewrites the other file too.
  */
 
 const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
@@ -592,5 +594,197 @@ describe('6. deleteExchange: raw must agree, or nothing changes', () => {
     ])
     expect(await sm.deleteExchange('r1', 0, 0)).toBe('deleted')
     expect(raw('r1').map(rawText)).toEqual(['[2026-01-01T00:01:00.000Z] keep me', 'kept'])
+  })
+})
+
+/**
+ * The UI log and the raw log are one pair: when either write finds the other
+ * process's write on disk (the stat before a full rewrite, or writeOver's fd
+ * check on an append / tail write) and replaces it with this process's memory,
+ * the other file is rewritten from memory in the same save — never left with
+ * that process's turns beside this process's. Normal saves write only the side
+ * that changed. Mutation check: drop either pairing call (SessionManager
+ * persistUILog → rewriteRawLog, saveAgentState → uiStore.rewriteLog) → red.
+ */
+describe('7. a foreign write on either log rewrites both from memory', () => {
+  /** A finished turn, the session kept in memory (as /context or a query
+   *  target would), both files written by this process. */
+  async function idleWithHistory(id: string, parentId: string | null = null) {
+    const s = fakeSession(sm, id, new StepLoop([endTurn('one')]), parentId)
+    await sm.runSession(id, 'first')
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, s)
+    return s
+  }
+  /** Another process (a cron `halo cli`, the TUI) rewrites both files whole. */
+  function foreignRewrite(id: string): void {
+    const seg = id.split('>').at(-1)!
+    for (const [file, line] of [
+      [rawLogPath(dir(), seg), JSON.stringify({ role: 'user', content: [{ type: 'text', text: 'FOREIGN-RAW' }] }) + '\n'],
+      [uiLogPath(dir(), seg), JSON.stringify({ t: 'add', id: 'foreign-row', u: 1, m: { id: 'foreign-row', role: 'user', type: 'user', content: 'FOREIGN-UI', timestamp: 1 } }) + '\n'],
+    ] as const) {
+      fs.writeFileSync(`${file}.x`, line)
+      fs.renameSync(`${file}.x`, file)
+    }
+  }
+  function expectBothMine(id: string, rawMessages: unknown[]): void {
+    const seg = id.split('>').at(-1)!
+    for (const file of [rawLogPath(dir(), seg), uiLogPath(dir(), seg)]) expect(fs.readFileSync(file, 'utf-8')).not.toContain('FOREIGN')
+    expect(raw(id)).toEqual(rawMessages)
+    expect(ui(id).map((m) => m.id)).toEqual(sm.getUIState(id.split('>')[0])!.messageLog.map((m) => m.id))
+  }
+
+  it('UI side only has something new: its write finds the foreign file, raw is rewritten from memory too', async () => {
+    seedRow(sm, 'r1')
+    const s = await idleWithHistory('r1')
+    foreignRewrite('r1')
+    const rawIno = fs.statSync(rawLogPath(dir(), 'r1')).ino
+
+    sm.appendNotification('r1', 'a notice')   // a UI-only write: raw has nothing new
+
+    expect(fs.statSync(rawLogPath(dir(), 'r1')).ino).not.toBe(rawIno)
+    expectBothMine('r1', s.agent.messages)
+    expect(ui('r1').at(-1)!.content).toBe('a notice')
+  })
+
+  it('raw side only has something new: its write finds the foreign file, UI is rewritten from memory too', async () => {
+    seedRow(sm, 'r1')
+    const s = await idleWithHistory('r1')
+    foreignRewrite('r1')
+    const uiIno = fs.statSync(uiLogPath(dir(), 'r1')).ino
+
+    s.messageQueue.push({ text: 'late message' })
+    sm.stopUserSession('r1')   // the idle fold: a raw-only write
+
+    expect(fs.statSync(uiLogPath(dir(), 'r1')).ino).not.toBe(uiIno)
+    expectBothMine('r1', s.agent.messages)
+    expect(rawText(raw('r1').at(-1)!)).toMatch(/late message$/)
+  })
+
+  it('a sub-session pairs on its own files, the root\'s left alone', async () => {
+    seedRow(sm, 'r1')
+    seedRow(sm, 'r1>c1', 'r1')
+    await idleWithHistory('r1')
+    const sub = fakeSession(sm, 'r1>c1', new StepLoop([]), 'r1')
+    sub.agent.messages = [{ role: 'user', content: [{ type: 'text', text: 'the brief' }] }] as typeof sub.agent.messages
+    sm.emitEvent('r1>c1', { type: 'system', text: 'sub notice', taskId: 'r1>c1' })
+    ;(sm as unknown as { saveAgentState: (x: unknown) => void }).saveAgentState(sub)
+    ;(sm as unknown as { uiStore: { flushSubSession: (id: string) => void } }).uiStore.flushSubSession('r1>c1')   // land the debounced write
+    const rootFiles = [rawLogPath(dir(), 'r1'), uiLogPath(dir(), 'r1')]
+    const rootBefore = rootFiles.map(stat)
+    foreignRewrite('r1>c1')
+
+    sub.messageQueue.push({ text: 'sub late' })
+    sm.stopUserSession('r1>c1')
+
+    for (const file of [rawLogPath(dir(), 'c1'), uiLogPath(dir(), 'c1')]) expect(fs.readFileSync(file, 'utf-8')).not.toContain('FOREIGN')
+    expect(raw('r1>c1')).toEqual(sub.agent.messages)
+    expect(ui('r1>c1').map((m) => m.content)).toEqual(['sub notice'])
+    expect(rootFiles.map(stat)).toEqual(rootBefore)
+  })
+
+  /**
+   * e2e scenario O: admin turn → `halo cli -s <same session>` turn → admin
+   * turn. Release drops the AgentSession but keeps the root's UIState, so the
+   * third turn re-reads raw from disk while the UI copy is the stale one from
+   * before the other process's turn — pairing at write time alone rewrites
+   * both files from memories that already disagree. The mirror case: the
+   * UIState was evicted (idle sweep) but a view kept the AgentSession. The
+   * turn-start stamp check (appendUserMessage → reloadIfWrittenElsewhere)
+   * drops the stale copies first. Mutation: drop the check (either half) → red.
+   */
+  it.each(['UIState', 'AgentSession'] as const)('scenario O: this process, another process (UI + raw), this process — every turn on both files, exchange count 3 (cached %s)', async (cached) => {
+    seedRow(sm, 'o1')
+    type Manager = SessionManager
+    type LoadRaw = typeof loadRawMessages
+    const live = (m: Manager) => (m as unknown as { sessions: Map<string, { agent: AgentLoop }> }).sessions
+    // As the WS handler: the user row first, then the turn — on the cached
+    // AgentSession if one is still in memory, else on one loaded from disk
+    // (ensureSession: release dropped the last one).
+    const turn = async (target: Manager, load: LoadRaw, text: string, reply: string) => {
+      const stamp = target.appendUserMessage('o1', text)
+      const kept = live(target).get('o1')
+      const s = fakeSession(target, 'o1', new StepLoop([endTurn(reply)]))
+      s.agent.messages = (kept?.agent.messages ?? load('o1', 'default', ws, { prime: true })) as typeof s.agent.messages
+      await target.sendUserMessage('o1', text, undefined, undefined, stamp)
+      await vi.waitFor(() => expect(s.promise).toBeNull())
+    }
+    await turn(sm, loadRawMessages, 'admin one', 'reply one')
+    expect(sm.getCachedUIState('o1')).not.toBeNull()          // kept past release
+    if (cached === 'AgentSession') {
+      // A view loaded the session after the turn; the idle sweep evicted the UIState.
+      fakeSession(sm, 'o1', new StepLoop([])).agent.messages = loadRawMessages('o1', 'default', ws, { prime: true }) as AgentLoop['messages']
+      sm.dropUIState('o1')
+    }
+
+    // The other process (`halo cli -s o1`): a fresh module graph, so its
+    // writer baselines are its own, over the same workspace files and db.
+    vi.resetModules()
+    const { SessionManager: OtherManager } = await import('../src/agents/session-manager.js')
+    const { loadRawMessages: otherLoad } = await import('../src/sessions/session-store.js')
+    await turn(new OtherManager(ws) as unknown as Manager, otherLoad, 'cli two', 'reply two')
+
+    await turn(sm, loadRawMessages, 'admin three', 'reply three')
+
+    const users = ['admin one', 'cli two', 'admin three']
+    expect(ui('o1').filter((m) => m.role === 'user').map((m) => m.content)).toEqual(users)
+    expect(raw('o1').filter((m) => m.role === 'user').map((m) => stripTurnStamp(rawText(m)))).toEqual(users)
+    expect(raw('o1').filter((m) => m.role === 'assistant').map(rawText)).toEqual(['reply one', 'reply two', 'reply three'])
+    expect(sm.getDb().select({ n: agentSessions.exchangeCount }).from(agentSessions).get()!.n).toBe(3)
+  })
+
+  it('turn start with no other writer: one stat per cached copy, nothing reloaded', async () => {
+    seedRow(sm, 'r1')
+    const s = await idleWithHistory('r1')
+    const files = [uiLogPath(dir(), 'r1'), rawLogPath(dir(), 'r1')]
+    const statSpy = vi.spyOn(fs, 'statSync')
+    const statsAt = (): string[] => statSpy.mock.calls.map(([f]) => String(f)).filter((f) => files.includes(f))
+    const state = sm.getCachedUIState('r1')
+
+    // Idle AgentSession kept (a view loaded it) + UIState: one stat each.
+    sm.appendUserMessage('r1', 'next')
+    expect(statsAt()).toEqual(files)
+    expect(sm.getCachedUIState('r1')).toBe(state)
+    expect((sm as unknown as { sessions: Map<string, unknown> }).sessions.get('r1')).toBe(s)
+
+    // Released (the common case): the UIState only — exactly one stat.
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.delete('r1')
+    statSpy.mockClear()
+    sm.appendUserMessage('r1', 'again')
+    expect(statsAt()).toEqual([files[0]])
+    expect(sm.getCachedUIState('r1')).toBe(state)
+  })
+
+  it('turn start while the tree runs: a foreign write never drops the live state', async () => {
+    seedRow(sm, 'r1')
+    const loop = new StreamingLoop()
+    const s = fakeSession(sm, 'r1', loop)
+    const run = sm.runSession('r1', 'tell me a story', sm.appendUserMessage('r1', 'tell me a story'))
+    await vi.waitFor(() => expect(loop.push).not.toBeNull())
+    const state = sm.getCachedUIState('r1')
+    expect(state).not.toBeNull()
+    foreignRewrite('r1')
+
+    sm.appendUserMessage('r1', 'queued while busy')   // the WS busy path
+
+    expect(sm.getCachedUIState('r1')).toBe(state)
+    expect((sm as unknown as { sessions: Map<string, unknown> }).sessions.get('r1')).toBe(s)
+    sm.interruptSession('r1')
+    await run
+  })
+
+  it('a normal save writes only the side that changed', async () => {
+    seedRow(sm, 'r1')
+    const s = await idleWithHistory('r1')
+    const files = { raw: rawLogPath(dir(), 'r1'), ui: uiLogPath(dir(), 'r1') }
+    let before = { raw: stat(files.raw), ui: stat(files.ui) }
+    sm.appendNotification('r1', 'a notice')
+    expect(stat(files.raw)).toEqual(before.raw)
+    expect(stat(files.ui).ino).toBe(before.ui.ino)   // appended, not rewritten
+
+    before = { raw: stat(files.raw), ui: stat(files.ui) }
+    s.messageQueue.push({ text: 'late message' })
+    sm.stopUserSession('r1')
+    expect(stat(files.ui)).toEqual(before.ui)
+    expect(stat(files.raw).ino).toBe(before.raw.ino)
   })
 })

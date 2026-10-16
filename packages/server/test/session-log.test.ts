@@ -190,7 +190,8 @@ describe('raw log', () => {
   it('another process writing between the stat and the append / tail write: rewritten from memory', () => {
     const p = rawLogPath(dir, 's')
     const open = fs.openSync
-    for (const flag of ['a', 'r+'] as const) {
+    const APPEND = fs.constants.O_WRONLY | fs.constants.O_APPEND
+    for (const flag of [APPEND, 'r+'] as const) {
       const messages: unknown[] = [raw('user', 'q')]
       writeRawLog(p, messages)
       let hit = false
@@ -202,8 +203,8 @@ describe('raw log', () => {
         return open(file, flags, mode)
       }) as typeof fs.openSync)
       try {
-        // 'a' = new message appended; 'r+' = a merge into the last message.
-        if (flag === 'a') messages.push(raw('assistant', 'mine'))
+        // APPEND = new message appended; 'r+' = a merge into the last message.
+        if (flag === APPEND) messages.push(raw('assistant', 'mine'))
         else (messages[0] as { content: unknown[] }).content = [{ type: 'text', text: 'q2' }]
         writeRawLog(p, messages)
         expect(hit).toBe(true)
@@ -362,7 +363,7 @@ describe('UI log', () => {
     const open = fs.openSync
     let hit = false
     const spy = vi.spyOn(fs, 'openSync').mockImplementation(((file: fs.PathLike, flags?: fs.OpenMode, mode?: fs.Mode) => {
-      if (!hit && file === p && flags === 'a') {
+      if (!hit && file === p && flags === (fs.constants.O_WRONLY | fs.constants.O_APPEND)) {
         hit = true
         fs.appendFileSync(p, JSON.stringify({ t: 'add', id: 'foreign', u: 1, m: row('foreign') }) + '\n')
       }
@@ -408,5 +409,117 @@ describe('UI log', () => {
     // The next process's first write (no in-flight) rewrites the file without it.
     writeUILog(p, [row('u1'), row('u2')], null)
     expect(readUILog(p)!.map((m) => m.id)).toEqual(['u1', 'u2'])
+  })
+})
+
+/**
+ * Each writer reports a write that replaced another process's (`foreign`), so
+ * the caller rewrites the session's other log in the same save. Own appends /
+ * tail writes / first writes are not foreign.
+ */
+describe('foreign-write report', () => {
+  it('raw: false on own writes; true whichever path found the other process\'s write', () => {
+    const p = rawLogPath(dir, 's')
+    const messages: unknown[] = [raw('user', 'q')]
+    expect(writeRawLog(p, messages), 'first write').toBe(false)
+    messages.push(raw('assistant', 'a'))
+    expect(writeRawLog(p, messages), 'append').toBe(false)
+    ;(messages[1] as { content: unknown[] }).content = [{ type: 'text', text: 'a2' }]
+    expect(writeRawLog(p, messages), 'tail').toBe(false)
+    expect(writeRawLog(p, messages), 'no change').toBe(false)
+    expect(writeRawLog(p, [raw('user', 'compacted')]), 'own full rewrite').toBe(false)
+
+    const foreign = () => fs.appendFileSync(p, JSON.stringify(raw('user', 'foreign')) + '\n')
+    const live: unknown[] = [raw('user', 'q')]
+    writeRawLog(p, live)
+    foreign(); live.push(raw('assistant', 'a'))
+    expect(writeRawLog(p, live), 'append over a foreign write').toBe(true)
+    foreign(); (live[1] as { content: unknown[] }).content = [{ type: 'text', text: 'a2' }]
+    expect(writeRawLog(p, live), 'tail over a foreign write').toBe(true)
+    foreign()
+    expect(writeRawLog(p, [raw('user', 'compacted')]), 'full over a foreign write').toBe(true)
+    expect(readRawLog(p)).toEqual([raw('user', 'compacted')])
+  })
+
+  it('UI: false on own writes; true whichever path found the other process\'s write', () => {
+    const p = uiLogPath(dir, 's')
+    const rows = [row('u1')]
+    expect(writeUILog(p, rows, null).foreign, 'first write').toBe(false)
+    rows.push(row('a1', 'assistant'))
+    expect(writeUILog(p, rows, null).foreign, 'append').toBe(false)
+    expect(writeUILog(p, [row('u1')], null).foreign, 'own full rewrite').toBe(false)
+
+    const mine = [row('u1')]
+    writeUILog(p, mine, null)
+    fs.appendFileSync(p, JSON.stringify({ t: 'add', id: 'f1', u: 1, m: row('f1') }) + '\n')
+    mine.push(row('a1', 'assistant'))
+    expect(writeUILog(p, mine, null).foreign, 'append over a foreign write').toBe(true)
+    foreignUI(p, [row('f1')])
+    expect(writeUILog(p, [row('u1')], null).foreign, 'full over a foreign write').toBe(true)
+    expect(readUILog(p)).toEqual([row('u1')])
+  })
+
+  it('another process appending in the same instant as this append: rewritten from memory now, reported', () => {
+    for (const kind of ['raw', 'ui'] as const) {
+      const p = kind === 'raw' ? rawLogPath(dir, 'same') : uiLogPath(dir, 'same')
+      const foreignLine = kind === 'raw' ? JSON.stringify(raw('user', 'foreign')) + '\n' : JSON.stringify({ t: 'add', id: 'f1', u: 1, m: row('f1') }) + '\n'
+      const messages: unknown[] = [raw('user', 'q')]
+      const rows = [row('u1')]
+      if (kind === 'raw') writeRawLog(p, messages)
+      else writeUILog(p, rows, null)
+      // The other process's append lands between this write's fstat check and
+      // its own write — the post-write fstat is the only thing that sees it.
+      const write = fs.writeSync
+      const spy = vi.spyOn(fs, 'writeSync').mockImplementationOnce(((fd: number, buf: Buffer, off: number, len: number, pos: number | null) => {
+        fs.appendFileSync(p, foreignLine)
+        return write(fd, buf, off, len, pos)
+      }) as typeof fs.writeSync)
+      try {
+        if (kind === 'raw') {
+          messages.push(raw('assistant', 'mine'))
+          expect(writeRawLog(p, messages)).toBe(true)
+          expect(readRawLog(p)).toEqual(messages)
+        } else {
+          rows.push(row('mine', 'assistant'))
+          const res = writeUILog(p, rows, null)
+          expect(res.foreign).toBe(true)
+          expect(res.userDelta).toBe(-1)   // as the stat-to-open race: the file held u1 + foreign f1
+          expect(readUILog(p)).toEqual(rows)
+        }
+        expect(fs.readFileSync(p, 'utf-8')).not.toContain('foreign')
+        expect(fs.readFileSync(p, 'utf-8')).not.toContain('f1')
+      } finally {
+        spy.mockRestore()
+      }
+    }
+  })
+
+  it('a file deleted under a live baseline: the append open creates nothing, the write rewrites it whole', () => {
+    for (const kind of ['raw', 'ui'] as const) {
+      const p = kind === 'raw' ? rawLogPath(dir, 'gone') : uiLogPath(dir, 'gone')
+      const messages: unknown[] = [raw('user', 'q')]
+      const rows = [row('u1')]
+      if (kind === 'raw') writeRawLog(p, messages)
+      else writeUILog(p, rows, null)
+      fs.rmSync(p)
+      const open = vi.spyOn(fs, 'openSync')
+      try {
+        if (kind === 'raw') {
+          messages.push(raw('assistant', 'mine'))
+          writeRawLog(p, messages)
+          expect(readRawLog(p)).toEqual(messages)
+        } else {
+          rows.push(row('mine', 'assistant'))
+          writeUILog(p, rows, null)
+          expect(readUILog(p)).toEqual(rows)
+        }
+        // The append open hit ENOENT (no O_CREAT): nothing was written into a
+        // fresh empty file — the content above came from the whole rewrite.
+        const appendOpen = open.mock.results.find((r, i) => open.mock.calls[i][0] === p && open.mock.calls[i][1] === (fs.constants.O_WRONLY | fs.constants.O_APPEND))
+        expect(appendOpen?.type).toBe('throw')
+      } finally {
+        open.mockRestore()
+      }
+    }
   })
 })
