@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -377,12 +377,76 @@ describe('deleteExchange by stamp — cold session (disk)', () => {
     expect(readBack('sk').raw).toEqual([])
   })
 
-  it('a stamped row whose stamp raw lacks (caller never passed it on) falls back to the text match', async () => {
-    seedRow('fb')
-    seedFile('fb', [uiRow('user', 'hi', { stamp: T(9) }), uiRow('assistant', 'r')], [
-      { role: 'user', content: [txt(`[${T(1)}] hi`)] }, { role: 'assistant', content: [txt('r')] },
+  it('S1: a stamped row whose block never reached raw is refused — no text match onto a same-text turn', async () => {
+    // P "继续" sits before the summary, its turn kept in raw by compactCut; after
+    // the summary X1 and X2 say "继续" too, and X2's block never landed (queued,
+    // then a restart before the drain). Raw = [P, X1]: a text match counted
+    // from both ends lands X2 on X1 — and without X1, on P.
+    const P = (): SessionMessage => uiRow('user', '继续', { stamp: T(1) })
+    const SUM = (): SessionMessage => uiRow('user', SUMMARY, { compactSummary: true })
+    const head = [{ role: 'user', content: [txt(SUMMARY)] }, { role: 'assistant', content: [txt('ack')] }, { role: 'user', content: [txt(`[${T(1)}] 继续`)] }, { role: 'assistant', content: [txt('p')] }]
+
+    seedRow('s1a')
+    seedFile('s1a', [P(), uiRow('assistant', 'p'), SUM(), uiRow('user', '继续', { stamp: T(2) }), uiRow('assistant', 'x1'), uiRow('user', '继续', { stamp: T(3) })],
+      [...head, { role: 'user', content: [txt(`[${T(2)}] 继续`)] }, { role: 'assistant', content: [txt('x1')] }])
+    expect(await sm.deleteExchange('s1a', 3, 0)).toBe('raw_unmatched')
+    let r = readBack('s1a')
+    expect(r.raw).toHaveLength(6)
+    expect(r.messages.some((m) => m.deleted)).toBe(false)
+
+    seedRow('s1b')
+    seedFile('s1b', [P(), uiRow('assistant', 'p'), SUM(), uiRow('user', '继续', { stamp: T(3) })], head)
+    expect(await sm.deleteExchange('s1b', 2, 0)).toBe('raw_unmatched')
+    r = readBack('s1b')
+    expect(r.raw).toEqual(head)
+
+    // The refusal is the stamp branch's, not a lucky text miss: a stamped row
+    // never reaches the text path (it would rank the row among legacy rows).
+    const byText = vi.spyOn(sm as unknown as { deleteRawTurnByText: () => unknown }, 'deleteRawTurnByText')
+    seedRow('s1d')
+    seedFile('s1d', [uiRow('user', '继续', { stamp: T(3) })], [{ role: 'user', content: [txt('[2026-01-01T00:00:00.000Z] 继续')] }])
+    expect(await sm.deleteExchange('s1d', 0, 0)).toBe('raw_unmatched')
+    expect(byText).not.toHaveBeenCalled()
+
+    // Before the summary, the same miss stays a UI-only delete.
+    seedRow('s1c')
+    seedFile('s1c', [uiRow('user', '继续', { stamp: T(4) }), uiRow('assistant', 'r'), SUM()], head.slice(0, 2))
+    expect(await sm.deleteExchange('s1c', 0, 0)).toBe('deleted')
+    expect(readBack('s1c').raw).toEqual(head.slice(0, 2))
+  })
+
+  it('legacy rows match legacy turns only — stamped rows and their turns stay out of the text count', async () => {
+    const OLD = '[2026-01-01T00:00:00.000Z] 继续'
+    // P (legacy) before the summary, its turn kept in the raw tail; L (legacy)
+    // after it; N (stamped) whose block never landed. Counting N with the
+    // legacy rows lined L's rank up with P's raw copy → P deleted.
+    seedRow('lg1')
+    seedFile('lg1', [
+      uiRow('user', '继续'), uiRow('assistant', 'p'), uiRow('user', SUMMARY, { compactSummary: true }),
+      uiRow('user', '继续'), uiRow('assistant', 'l'), uiRow('user', '继续', { stamp: T(5) }),
+    ], [
+      { role: 'user', content: [txt(SUMMARY)] }, { role: 'assistant', content: [txt('ack')] },
+      { role: 'user', content: [txt(OLD)] }, { role: 'assistant', content: [txt('p')] },
+      { role: 'user', content: [txt('[2026-01-02T00:00:00.000Z] 继续')] }, { role: 'assistant', content: [txt('l')] },
     ])
-    expect(await sm.deleteExchange('fb', 0, 0)).toBe('deleted')
-    expect(readBack('fb').raw).toEqual([])
+    expect(await sm.deleteExchange('lg1', 2, 0)).toBe('raw_unmatched')  // P's tail copy is uncounted (pre-existing) → refused, not mis-deleted
+    expect(readBack('lg1').raw.map((m) => m.content[0].text)).toContain(OLD)
+
+    // L legacy, N stamped but missing from raw: L's own turn is found (the
+    // stamped row used to throw the count off and refuse it).
+    seedRow('lg2')
+    seedFile('lg2', [uiRow('user', '继续'), uiRow('assistant', 'l'), uiRow('user', '继续', { stamp: T(5) })],
+      [{ role: 'user', content: [txt(OLD)] }, { role: 'assistant', content: [txt('l')] }])
+    expect(await sm.deleteExchange('lg2', 0, 0)).toBe('deleted')
+    expect(readBack('lg2').raw).toEqual([])
+
+    // L legacy, N stamped and in raw: L takes its own turn, N's stays.
+    seedRow('lg3')
+    seedFile('lg3', [uiRow('user', '继续'), uiRow('assistant', 'l'), uiRow('user', '继续', { stamp: T(5) }), uiRow('assistant', 'n')], [
+      { role: 'user', content: [txt(OLD)] }, { role: 'assistant', content: [txt('l')] },
+      { role: 'user', content: [txt(`[${T(5)}] 继续`)] }, { role: 'assistant', content: [txt('n')] },
+    ])
+    expect(await sm.deleteExchange('lg3', 0, 0)).toBe('deleted')
+    expect(readBack('lg3').raw.map((m) => m.content[0].text)).toEqual([`[${T(5)}] 继续`, 'n'])
   })
 })

@@ -25,7 +25,6 @@ import { agentSessions } from '../src/db/schema.js'
  */
 
 const ISO = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z`
-const STAMP_RE = new RegExp(`^\\[${ISO}\\] `)
 
 interface Block { type: string; text?: string; source?: unknown }
 interface Msg { role: 'user' | 'assistant'; content: Block[] }
@@ -65,7 +64,7 @@ function seedRow(id: string): void {
 function fakeSession(id: string, agent: FakeAgent, over: { supportsImage?: boolean } = {}) {
   const session = {
     id, parentId: null, agentId: 'default', agentName: 'Default', agent,
-    description: '', output: '', finalOutput: '', turnError: null as string | null,
+    description: '', output: '', lastActivityAt: null as string | null, finalOutput: '', turnError: null as string | null,
     promise: null, abortController: null,
     messageQueue: [] as Array<{ text: string; sourceSessionId?: string; images?: unknown[] }>,
     contextConfig: { maxTokens: 100000, compressAt: 0.8 },
@@ -175,13 +174,14 @@ describe('runAgentTurn stamps the arrival time on every user-role turn', () => {
     expect(text.match(/\[\d{4}-/g)).toHaveLength(1)
   }, 10_000)  // transient-transport backoff sleeps ~1-1.5s before attempt 2
 
-  it('keeps the UI log unstamped and deleteExchange still matches the raw turn', async () => {
+  it('keeps the UI text unstamped (the stamp rides in `stamp`) and deleteExchange matches the raw turn', async () => {
     seedRow('t6')
     const agent = new FakeAgent()
     fakeSession('t6', agent)
-    // What the WS handler / channels do: UI log gets the raw text, model gets the turn.
-    sm.appendUserMessage('t6', 'first')
-    await sm.runSession('t6', 'first')
+    // What the WS handler / channels do: UI log gets the raw text, model gets
+    // the turn, stamped with the row's arrival stamp.
+    const stamp = sm.appendUserMessage('t6', 'first')
+    await sm.runSession('t6', 'first', stamp)
     // runSession's finally released the session (promise null → deleteExchange
     // sees it idle); re-register the live session so the raw delete hits memory.
     fakeSession('t6', agent)
@@ -189,10 +189,11 @@ describe('runAgentTurn stamps the arrival time on every user-role turn', () => {
     const ui = sm.getUIState('t6')!.messageLog.filter((m) => m.role === 'user')
     expect(ui).toHaveLength(1)
     expect(ui[0].content).toBe('first')
-    expect(agent.messages[0].content[0].text).toMatch(STAMP_RE)
+    expect(ui[0].stamp).toBe(stamp)
+    expect(agent.messages[0].content[0].text).toBe(`[${stamp}] first`)
 
     expect(await sm.deleteExchange('t6', 0, 0)).toBe('deleted')
-    // The stamped raw turn was located (stamp stripped for the match) and removed.
+    // The stamped raw turn was located by the row's stamp and removed.
     expect(agent.messages).toHaveLength(0)
   })
 })

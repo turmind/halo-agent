@@ -1263,15 +1263,20 @@ export class SessionManager implements SessionManagerInternals {
    * alone. Idempotent: with nothing new since the last call, nothing is
    * written (writeRawLog / writeUILog skip no-op writes).
    *
-   * A session mid-compact is skipped: its live history carries the
+   * A session mid-compact keeps its raw log: its live history carries the
    * summarize instruction (selfCompactSession runs it in place); its raw log
    * on disk is the pre-compact state, which every result / finished call
-   * already reached.
+   * already reached. Its row is written all the same (the two don't depend
+   * on each other).
    */
   landForShutdown(): void {
     this.uiStore.flushAll()
     for (const session of this.sessions.values()) {
-      if (session.promise === null || session.isCompacting || this.deletedSessionIds.has(session.id)) continue
+      if (session.promise === null || this.deletedSessionIds.has(session.id)) continue
+      if (session.isCompacting) {
+        this.stateStore.saveRow(session)
+        continue
+      }
       const messages: unknown[] = session.agent.messages
       let copy = messages
       if (session.callStreamText) {
@@ -1581,7 +1586,9 @@ export class SessionManager implements SessionManagerInternals {
           beforeCallModel: async () => {
             this.trimImages(session)
             await this.maybeAutoCompact(session)
-            this.saveAgentState(session)
+            // Per model call, like tool_result: the row is throttled. A
+            // compaction above has already saved itself, unthrottled.
+            this.saveAgentState(session, { throttle: true })
             // Soft interrupt (a message queued while busy) lands HERE, at the
             // batch boundary: the batch that just finished ran every call, so
             // nothing is pending, and the turn unwinds before the next model
@@ -3321,7 +3328,11 @@ export class SessionManager implements SessionManagerInternals {
       return 'deleted'
     }
 
-    if (!newRaw) newRaw = this.deleteRawTurnByText(messageLog, start, summaryAt, rawSource())
+    // A stamped row whose block raw lacks never reached the model's history
+    // (queued, then lost to a restart before the drain; a send that threw
+    // after the append) — refused: the text match would land on another
+    // turn with the same text. Only rows from before stamps match by text.
+    if (!newRaw && !stamp) newRaw = this.deleteRawTurnByText(messageLog, start, summaryAt, rawSource())
     if (!newRaw) {
       console.debug(`[SessionManager] deleteExchange ${rootId}: UI turn #${userOrdinal} not located in raw — refused`)
       return 'raw_unmatched'
@@ -3342,22 +3353,40 @@ export class SessionManager implements SessionManagerInternals {
     return 'deleted'
   }
 
-  /** deleteExchange's text fallback for a row without a usable stamp: the
-   *  normalized row text located among raw turn starts (deleteRawTurn). */
+  /** deleteExchange's text fallback for a row from before stamps: the
+   *  normalized row text located among raw turn starts (deleteRawTurn).
+   *  Legacy rows only match legacy turns — stamped rows are left out of the
+   *  occurrence count and the raw turns their stamps lead are left out of
+   *  the candidates, so a newer turn with the same text (or a stamped row
+   *  whose raw copy is missing) can't shift the count onto the wrong turn. */
   private deleteRawTurnByText(messageLog: SessionMessage[], start: number, summaryAt: number, rawSource: AnthropicMessage[]): AnthropicMessage[] | null {
     const target = normalizeTurnText(messageLog[start].content)
-    // Occurrence of this text among the live (not deleted) user rows after the
-    // summary, counted from both ends — lets duplicate prompts ("hi" sent
-    // twice) map to the right raw turn. Same taskId skip as the ordinal loop.
+    const stamped = new Set<string>()
+    for (const m of messageLog) if (m.stamp) stamped.add(`[${m.stamp}]`)
+    // Occurrence of this text among the live (not deleted) unstamped user rows
+    // after the summary, counted from both ends — lets duplicate prompts ("hi"
+    // sent twice) map to the right raw turn. Same taskId skip as the ordinal loop.
     let fromStart = 0
     let fromEnd = 0
     for (let i = summaryAt + 1; i < messageLog.length; i++) {
       const m = messageLog[i]
-      if (m.role !== 'user' || m.taskId || m.deleted || normalizeTurnText(m.content) !== target) continue
+      if (m.role !== 'user' || m.taskId || m.stamp || m.deleted || normalizeTurnText(m.content) !== target) continue
       if (i <= start) fromStart++
       if (i >= start) fromEnd++
     }
-    return this.deleteRawTurn(rawSource, target, fromStart, fromEnd)
+    // The same rank among the raw candidates no stamped row owns, mapped back
+    // onto deleteRawTurn's candidate list (which counts every candidate).
+    let total = 0
+    const legacy: number[] = []
+    for (const msg of rawSource) {
+      if (!isRawTurnStart(msg) || rawTurnText(msg) !== target) continue
+      const owned = Array.isArray(msg.content) && msg.content.some((b) => b.type === 'text' && stamped.has(b.text.slice(0, b.text.indexOf(']') + 1)))
+      if (!owned) legacy.push(total)
+      total++
+    }
+    const at = legacy[fromStart - 1]
+    if (at === undefined || at !== legacy[legacy.length - fromEnd]) return null
+    return this.deleteRawTurn(rawSource, target, at + 1, total - at)
   }
 
   /** Remove the raw copy of the UI row stamped `stamp`: its `[<stamp>] …` text

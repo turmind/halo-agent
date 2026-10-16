@@ -67,10 +67,10 @@ export class SessionStateStore {
   /** Persist agent.messages (append, or atomic rewrite on a non-append
    *  change) and the row's output / lastActivityAt. The raw log is written on
    *  every call. `throttle` (the per-event save points: tool_call /
-   *  tool_result / usage) holds the row write to one per
-   *  ROW_WRITE_THROTTLE_MS per session, with a trailing write of the latest
-   *  values — each was a real UPDATE + WAL fsync, since output and
-   *  lastActivityAt change on every event. Every other save writes the row at
+   *  tool_result / usage, and the save before each model call) holds the
+   *  row write to one per ROW_WRITE_THROTTLE_MS per session, with a trailing
+   *  write of the latest values — each was a real UPDATE + WAL fsync, since
+   *  output and lastActivityAt change on every event. Every other save writes the row at
    *  once and cancels the trailing write, so a turn end, a Stop or a graceful
    *  shutdown leaves the row exact; only a hard kill can leave it up to the
    *  throttle behind the last event. (The list sorts by updatedAt, written at

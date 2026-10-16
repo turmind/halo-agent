@@ -12,11 +12,11 @@ import { eq } from 'drizzle-orm'
 
 /**
  * The session row's output / lastActivityAt: the per-event save points
- * (tool_call / tool_result / usage) write it at most once per
- * ROW_WRITE_THROTTLE_MS per session, plus a trailing write of the latest
- * values; every other save — and the raw log on every save — is immediate.
- * Release and shutdown leave the row exact; a deleted session's trailing
- * write never lands.
+ * (tool_call / tool_result / usage, and the save before each model call)
+ * write it at most once per ROW_WRITE_THROTTLE_MS per session, plus a
+ * trailing write of the latest values; every other save — and the raw log on
+ * every save — is immediate. Release and shutdown (a session mid-compact
+ * too) leave the row exact; a deleted session's trailing write never lands.
  */
 
 let ws: string
@@ -116,7 +116,7 @@ describe('SessionStateStore row throttle', () => {
   })
 })
 
-describe('SessionManager: release and shutdown leave the row exact', () => {
+describe('SessionManager: hot saves throttled, release and shutdown exact', () => {
   const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
   const reply = (text: string, ids: string[] = []): ModelCallResult => ({
     assistantBlocks: [{ type: 'text', text }, ...ids.map((id) => ({ type: 'tool_use' as const, id, name: 'step', input: {} }))],
@@ -185,6 +185,39 @@ describe('SessionManager: release and shutdown leave the row exact', () => {
     sm.landForShutdown()
 
     expect(row('r1')).toEqual({ output: 'one', lastActivityAt: '2099-01-01T00:00:00.000Z' })
+    sm.interruptSession('r1')
+    await run
+  })
+
+  it('a sequential tool loop (tool_result → beforeCallModel → tool_result …) writes the row once per window', async () => {
+    const s = seed('r1', new Loop([reply('a', ['t1']), reply('b', ['t2']), reply('c', ['t3'])], [tool], true))
+    const writeRow = vi.spyOn((sm as unknown as { stateStore: object }).stateStore as { writeRow: () => void }, 'writeRow')
+    const run = sm.runSession('r1', 'go')
+    // Three tool batches done, the 4th model call in flight: four
+    // beforeCallModel saves, each batch's tool_call / tool_result / usage.
+    await vi.waitFor(() => expect((s.agent as Loop).calls).toBe(4))
+    expect(writeRow).toHaveBeenCalledTimes(1)
+    expect(fs.readFileSync(rawLogPath(path.join(ws, '.halo', 'sessions', 'default'), 'r1'), 'utf-8').trim().split('\n')).toHaveLength(7)
+    sm.interruptSession('r1')
+    await run
+  })
+
+  it('shutdown during a compact: the row is written, the raw log is left alone', async () => {
+    const s = seed('r1', new Loop([reply('one', ['t1'])], [tool], true))
+    const run = sm.runSession('r1', 'go')
+    await vi.waitFor(() => expect((s.agent as Loop).calls).toBe(2))
+    const file = rawLogPath(path.join(ws, '.halo', 'sessions', 'default'), 'r1')
+    const rawBefore = fs.readFileSync(file, 'utf-8')
+    s.isCompacting = true
+    s.agent.messages.push({ role: 'user', content: [{ type: 'text', text: 'summarize instruction' }] })
+    s.lastActivityAt = '2099-01-01T00:00:00.000Z'
+
+    sm.landForShutdown()
+
+    expect(row('r1')).toEqual({ output: 'one', lastActivityAt: '2099-01-01T00:00:00.000Z' })
+    expect(fs.readFileSync(file, 'utf-8')).toBe(rawBefore)
+    s.agent.messages.pop()
+    s.isCompacting = false
     sm.interruptSession('r1')
     await run
   })
