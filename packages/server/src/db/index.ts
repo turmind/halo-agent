@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import { ensureWorkspaceHalo, TEMPLATES_DIR } from '../init.js'
 import { globalInternalSessionsDir } from '../paths.js'
 import { runMigrations, addColumnIfMissing, type Migration } from './migrate.js'
+import { applyCommitDurability } from './durability.js'
 
 // schema.sql lives alongside the other templates; resolve via TEMPLATES_DIR
 // so the bundled-cli layout (single dist/) and the monorepo dev layout
@@ -71,6 +72,7 @@ export function createDb(dataDir: string) {
   const dbPath = path.join(dataDir, 'halo.db')
   const sqlite = new Database(dbPath)
   sqlite.pragma('journal_mode = WAL')
+  applyCommitDurability(sqlite, dataDir)
   sqlite.pragma('foreign_keys = ON')
   const db = drizzle(sqlite, { schema })
 

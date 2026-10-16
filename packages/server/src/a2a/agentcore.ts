@@ -25,6 +25,7 @@ import { RUNTIME_LOCK_FILE } from '../agents/workspace-runtime-lock.js'
 import { CHAT_ACCESS_LEVELS, type AccountAccessLevel } from '../channels/shared/accounts.js'
 import { createA2ADb, setA2ADb } from '../db/a2a-db.js'
 import { createRunsDb, setRunsDb } from '../db/runs-db.js'
+import { setDurableDbDir } from '../db/durability.js'
 import { nudgesSettled } from '../agents/run-ledger.js'
 import { CARD_FILE, publicOrigin, type A2ACaller, type A2AStrategies } from './exposure.js'
 import { createA2ARoutes } from './routes.js'
@@ -296,6 +297,8 @@ export function createAgentCoreA2ARoutes(deps: { registry: SessionManagerRegistr
 export function createAgentCoreA2A(registry: SessionManagerRegistry, rawWorkspace: string, onLost: () => void): { app: Hono; lease: WorkspaceLease; workspace: string } {
   const workspace = fs.realpathSync(rawWorkspace)
   const haloDir = path.join(workspace, '.halo')
+  // halo.db / a2a.db / runs.db here are on EFS: fsync every commit (db/durability.ts).
+  setDurableDbDir(haloDir)
   if (!config.a2a.publicUrl) console.warn('[AgentCoreA2A] HALO_A2A_PUBLIC_URL is not set — the card advertises the container\'s own URL, not the AgentCore invoke URL')
   const accessLevel = upstreamAccessLevel()
   const lease = new WorkspaceLease(path.join(haloDir, LEASE_FILE), {

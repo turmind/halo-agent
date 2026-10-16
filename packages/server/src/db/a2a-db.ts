@@ -20,6 +20,7 @@ import Database from 'better-sqlite3'
 import path from 'node:path'
 import fs from 'node:fs'
 import { runMigrations, addColumnIfMissing, type Migration } from './migrate.js'
+import { applyCommitDurability } from './durability.js'
 
 const CREATE_SQL = `
 CREATE TABLE IF NOT EXISTS a2a_tasks (
@@ -101,6 +102,7 @@ export function createA2ADb(globalDir: string): A2ADb {
   fs.mkdirSync(globalDir, { recursive: true })
   const sqlite = new Database(path.join(globalDir, 'a2a.db'))
   sqlite.pragma('journal_mode = WAL')
+  applyCommitDurability(sqlite, globalDir)
   sqlite.exec(CREATE_SQL)
   runMigrations(sqlite, A2A_MIGRATIONS)
   return sqlite

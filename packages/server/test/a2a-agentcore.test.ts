@@ -14,6 +14,8 @@ import { runtimeSessionId, sigv4Headers, isRetryableConflict, send, type Remote 
 import { createA2ADb, setA2ADb, getA2ADb } from '../src/db/a2a-db.js'
 import { createRunsDb, setRunsDb, getRunsDb, insertRunning, runningSessions } from '../src/db/runs-db.js'
 import { createDb } from '../src/db/index.js'
+import { rawSqlite } from '../src/db/raw-sqlite.js'
+import { setDurableDbDir } from '../src/db/durability.js'
 import { agentSessions } from '../src/db/schema.js'
 import { BOOT_AT, createTask } from '../src/a2a/tasks.js'
 import { stopPushSender } from '../src/a2a/push.js'
@@ -367,6 +369,7 @@ describe('resume after a mid-task kill (run ledger on the workspace)', () => {
   // a2a.db (updated before this process booted), reply_to on the root.
   let lease: WorkspaceLease | null = null
   afterEach(() => {
+    setDurableDbDir(null)
     lease?.stop()
     lease = null
     stopPushSender()
@@ -422,12 +425,16 @@ describe('resume after a mid-task kill (run ledger on the workspace)', () => {
   it('the acquiring request sweeps the workspace ledger and waits: the interrupted task reads WORKING, an un-resumed one FAILED', async () => {
     const { taskId, orphanTaskId } = leftovers()
     const { nudged } = stubSessions()
-    const mode = createAgentCoreA2A(new SessionManagerRegistry({ reconcileOrphansOnBoot: true }), ws, () => {})
+    const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
+    const mode = createAgentCoreA2A(registry, ws, () => {})
     lease = mode.lease
 
     const res = await (await rpc(mode.app, 'GetTask', { id: taskId })).json() as { result: { status: { state: string } } }
     expect(nudged).toEqual(['a2a_agentcore_r1: [System] The server restarted'])
     expect(res.result.status.state).toBe('TASK_STATE_WORKING')
+    // The workspace dbs the acquisition opened commit with fsync (synchronous=FULL = 2), as db/durability.ts.
+    const sync = (db: { pragma: (s: string, o: { simple: true }) => unknown }) => db.pragma('synchronous', { simple: true })
+    expect([sync(getA2ADb()!), sync(rawSqlite(getRunsDb())), sync(rawSqlite(registry.peekResolved(ws)!['db']))]).toEqual([2, 2, 2])
     // Drained from the WORKSPACE ledger (the one a2a.db sits next to).
     expect(getRunsDb().select().from(runningSessions).all()).toEqual([])
     expect(existsSync(join(ws, '.halo', 'runs.db'))).toBe(true)
