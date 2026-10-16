@@ -660,8 +660,8 @@ export class SessionManager implements SessionManagerInternals {
   }
 
   /** Save agent.messages as rawMessages field in the delegated log file (read-merge-write) */
-  private saveAgentState(session: AgentSession): void {
-    this.stateStore.saveAgentState(session)
+  private saveAgentState(session: AgentSession, opts?: { throttle?: boolean }): void {
+    this.stateStore.saveAgentState(session, opts)
   }
 
   /** Load agent.messages from the delegated log file's rawMessages field */
@@ -913,6 +913,7 @@ export class SessionManager implements SessionManagerInternals {
     if (!session) return
     this.uiStore.flushSession(sessionId)
     this.saveAgentState(session)
+    this.stateStore.forgetRowWrites(sessionId)
     this.sessions.delete(sessionId)
     console.debug(`[SessionManager] Released session ${sessionId}`)
     // Deliberately NOT dropping the root's UIState here. Turn end is the wrong
@@ -1285,6 +1286,8 @@ export class SessionManager implements SessionManagerInternals {
       } catch (err) {
         console.error(`[SessionManager] landForShutdown failed for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
       }
+      // The row too: a throttled trailing write would die with the process.
+      this.stateStore.saveRow(session)
     }
   }
 
@@ -1315,7 +1318,10 @@ export class SessionManager implements SessionManagerInternals {
   forgetExternalWrite(rootId: string): boolean {
     if (this.hasActiveWorkInTree(rootId)) return false
     for (const id of [...this.sessions.keys()]) {
-      if (id === rootId || id.startsWith(`${rootId}>`)) this.sessions.delete(id)
+      if (id === rootId || id.startsWith(`${rootId}>`)) {
+        this.sessions.delete(id)
+        this.stateStore.forgetRowWrites(id)
+      }
     }
     this.uiStore.dropUIState(rootId)
     return true
@@ -1405,7 +1411,7 @@ export class SessionManager implements SessionManagerInternals {
         // restarted yet", restarts again, and loops forever. With it, repair
         // synthesizes an "[interrupted]" result for the dangling tool_use and
         // the agent knows the command was issued.
-        this.saveAgentState(session)
+        this.saveAgentState(session, { throttle: true })
         const loopStatus = this.checkLoop(session, event.toolName!, event.toolInput)
         if (loopStatus === 'warn') {
           this.emitEvent(session.id, { type: 'system', text: `⚠️ Tool "${event.toolName}" called repeatedly with identical input. Consider a different approach.` })
@@ -1420,7 +1426,7 @@ export class SessionManager implements SessionManagerInternals {
         // persist it here, in the same synchronous slice as the UI's flush of
         // the result row below — a restart / crash mid-batch keeps every
         // finished result on both sides (a tail rewrite, not a full one).
-        this.saveAgentState(session)
+        this.saveAgentState(session, { throttle: true })
         // UI always receives the full result (toolResultFull). The truncated
         // toolResult is LLM-facing only — already applied in agent-loop.ts
         // before the event was yielded. Don't re-truncate here.
@@ -1435,7 +1441,7 @@ export class SessionManager implements SessionManagerInternals {
         // it with the UI's flush of the usage row (same slice). Covers the
         // reply without tool calls — the final one — which had no save point
         // until release.
-        this.saveAgentState(session)
+        this.saveAgentState(session, { throttle: true })
         this.emitEvent(session.id, {
           type: 'usage',
           totalTokens: u.totalTokens,
@@ -3387,6 +3393,7 @@ export class SessionManager implements SessionManagerInternals {
     for (const id of allIds) {
       this.uiStore.purge(id)
       this.deletedSessionIds.add(id)
+      this.stateStore.forgetRowWrites(id)
     }
 
     // Sweep the tombstones once the race window (persist debounce + any in-flight
@@ -3438,6 +3445,7 @@ export class SessionManager implements SessionManagerInternals {
       }
       session.messageQueue = []
       this.sessions.delete(sessionId)
+      this.stateStore.forgetRowWrites(sessionId)
     }
     this.uiStore.dropUIState(sessionId)
   }

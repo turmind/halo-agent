@@ -42,8 +42,17 @@ export interface SessionStateStoreHost {
  * replacing its `content` array or changing its length — writeRawLog detects
  * changes by reference (every current mutator complies; see session-log.ts).
  */
+/** Minimum gap between two row writes of one session's output /
+ *  lastActivityAt on the hot save points (`throttle`). */
+export const ROW_WRITE_THROTTLE_MS = 5_000
+
 export class SessionStateStore {
   constructor(private host: SessionStateStoreHost) {}
+
+  /** Per session: when its row was last written, and the trailing write
+   *  pending (throttled saves). Process-local and lossy by design — the row
+   *  is a cache of the in-memory output; a lost timer costs ≤ the throttle. */
+  private rowWrites = new Map<string, { at: number; timer: NodeJS.Timeout | null }>()
 
   /** Directory for an agent's session files.
    *  Resolution lives in session-store.ts so that all session-path
@@ -56,14 +65,62 @@ export class SessionStateStore {
   }
 
   /** Persist agent.messages (append, or atomic rewrite on a non-append
-   *  change) and the row's output / lastActivityAt. */
-  saveAgentState(session: SavableSession): void {
+   *  change) and the row's output / lastActivityAt. The raw log is written on
+   *  every call. `throttle` (the per-event save points: tool_call /
+   *  tool_result / usage) holds the row write to one per
+   *  ROW_WRITE_THROTTLE_MS per session, with a trailing write of the latest
+   *  values — each was a real UPDATE + WAL fsync, since output and
+   *  lastActivityAt change on every event. Every other save writes the row at
+   *  once and cancels the trailing write, so a turn end, a Stop or a graceful
+   *  shutdown leaves the row exact; only a hard kill can leave it up to the
+   *  throttle behind the last event. (The list sorts by updatedAt, written at
+   *  turn end — not by these columns.) */
+  saveAgentState(session: SavableSession, opts?: { throttle?: boolean }): void {
     // Honour the deletion tombstone like persistUILog does — a late
     // write from an in-flight turn's releaseSession must not resurrect a file
     // the user just deleted.
     if (this.host.isSessionDeleted(session.id)) return
     try {
       writeRawLog(rawLogPath(this.sessionDir(session.agentId), fileSegment(session.id)), session.agent.messages)
+    } catch (err) {
+      console.error(`[SessionStateStore] Failed to save state for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    const now = Date.now()
+    const w = this.rowWrites.get(session.id)
+    if (opts?.throttle && w && now - w.at < ROW_WRITE_THROTTLE_MS) {
+      // The timer reads the session's fields when it fires: the latest values.
+      w.timer ??= setTimeout(() => {
+        w.timer = null
+        if (this.host.isSessionDeleted(session.id)) return
+        this.writeRow(session, Date.now())
+      }, w.at + ROW_WRITE_THROTTLE_MS - now)
+      w.timer.unref?.()
+      return
+    }
+    this.writeRow(session, now)
+  }
+
+  /** Drop a session's throttle state (pending trailing write included) — it
+   *  left memory (release saved the row) or was deleted. */
+  forgetRowWrites(sessionId: string): void {
+    const w = this.rowWrites.get(sessionId)
+    if (w?.timer) clearTimeout(w.timer)
+    this.rowWrites.delete(sessionId)
+  }
+
+  /** Write the row now (cancelling a pending trailing write) — for a caller
+   *  that lands the raw log itself (landForShutdown). */
+  saveRow(session: SavableSession): void {
+    if (this.host.isSessionDeleted(session.id)) return
+    this.writeRow(session, Date.now())
+  }
+
+  private writeRow(session: SavableSession, now: number): void {
+    const w = this.rowWrites.get(session.id)
+    if (w?.timer) clearTimeout(w.timer)
+    this.rowWrites.set(session.id, { at: now, timer: null })
+    try {
       updateSessionOutput(this.host.metaDb(session.agentId), session.id, session.output, session.lastActivityAt)
     } catch (err) {
       console.error(`[SessionStateStore] Failed to save state for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
