@@ -69,6 +69,23 @@ Sessions live in the workspace's `.halo/` and A2A task state in
 tokens, so it (and `-wal` / `-shm`) is hidden from non-full sessions
 (`tools/sandbox.ts`).
 
+Everything the mode keeps on the workspace (EFS), under `<ws>/.halo/`:
+
+| File | What | Written |
+|---|---|---|
+| `halo.db` (+ `-wal` / `-shm`) | session rows (title, counts, tokens, output, `reply_to`, `stopped_at`) | every turn and tool call — see [SQLite durability](#sqlite-durability) |
+| `a2a.db` (+ `-wal` / `-shm`) | A2A tasks, push configs + outbox | task create / touch / transition, push delivery |
+| `runs.db` (+ `-wal` / `-shm`) | run ledger, see [Resume after a mid-task kill](#resume-after-a-mid-task-kill) | entry / exit of every run |
+| `sessions/<agentId>/<seg>.{ui,raw}.jsonl` | session logs ([session.md](session.md)) | appended at every save, rewritten whole on compaction / archive |
+| `sessions/<agentId>/<seg>.ui.arch.<N>.<h>.jsonl.gz` | archived UI history | turn end, past 5 MB |
+| `agentcore.lease` | single-writer lease (below) | heartbeat every 10 s |
+| `runtime.lock` | runtime claim; deleted and re-claimed at each acquisition | lease acquisition |
+| `agent-card.json` | the served card, seeded if missing | first non-`/ping` request |
+| `agents/`, `skills/`, `prompts/`, `memory/`, `canvas/self.html`, `tmp/`, `assets/a2a/…` | workspace content, as on any server ([storage.md](storage.md)) | by the agent / inbound images |
+
+The container's `HALO_HOME` (`~/.halo`: settings, model registry, `server.log`)
+is the image's and dies with the microVM.
+
 Each runtime session id gets its own microVM, all mounting the same EFS, so a
 single-writer lease guards it — `<ws>/.halo/agentcore.lease`, plain NFSv4 file
 ops only:
@@ -112,6 +129,16 @@ The [run ledger](session.md#run-ledger--restart-nudge-for-interrupted-roots-halo
 - Nothing wakes a new microVM by itself: the resume happens on the **next invocation** — the caller's `a2a_read` / GetTask, or a new send. No caller-side polling.
 - `ownsRuntimes` stays `false`, so the lazy FAILED in `routes.ts` `reconcileStale` remains the fallback for a task the sweep didn't resume (root idle, quiet subtree): "Interrupted by a server restart on the remote. Send again on the same context to resume."
 - Verified locally: `kill -9` mid-task (2 of 6 `sleep 30` calls done) → new process refused for ~45 s, then the first accepted GetTask read `WORKING` and the task completed with all six results.
+
+### SQLite durability
+
+**`synchronous=FULL` on the workspace dbs.** WAL mode defaults to `synchronous=NORMAL` (better-sqlite3 builds with `SQLITE_DEFAULT_WAL_SYNCHRONOUS=1`): a commit writes its WAL frames and returns without an fsync. On EFS those frames sit in the NFS client's page cache until writeback or a checkpoint — SQLite's unlock is on `-shm` and flushes nothing of `-wal`. A microVM that dies (stop timeout, crash, the 8 h `maxLifetime`) could lose its last seconds of commits: a lost `insertRunning` means the killed run is never resumed, a lost `createTask` leaves the caller a taskId nobody knows, a lost `transition` gets a completed task marked FAILED by the next boot's reconcile. So `createAgentCoreA2A` registers `<ws>/.halo` (`setDurableDbDir`, `db/durability.ts`) before anything opens there, and `createDb` / `createRunsDb` / `createA2ADb` set `synchronous=FULL` on a connection in that dir, right after `journal_mode` and before their own schema writes and the SessionManager constructor's sweeps. Server mode registers nothing — every db there (HOME-side ones included) keeps NORMAL. The session `.jsonl` files need nothing: every write closes its fd, and NFS close-to-open flushes on close.
+
+Cost: one fsync per commit that changes a row; an UPDATE that changes nothing writes no frame and syncs nothing. Measured (strace, scripted A2A SendMessage): a follow-up turn with no tool call commits 10 times (a2a.db 2 — create + complete; runs.db 2 — insert + delete; halo.db 6 — `reply_to` set + clear, output / last-activity twice (first event, release), counts / tokens, `updated_at`); each tool call adds one (the next model call's token UPDATE), plus the output / last-activity write at most once per 5 s mid-turn. Checkpoints fsync the main db file on top.
+
+**Known risk — `-shm` and dead-host locks on NFS (unverified).** SQLite doesn't support WAL on network filesystems; here the lease keeps a single writer, so normal running is fine, and the risk sits at a crash handoff. When a db opens, SQLite rebuilds the wal-index only if no other connection holds the DMS lock byte on `-shm`. A killed microVM's NFS locks persist until its lock lease expires on the server; if that outlasts the ~47 s lease handoff, the next holder keeps the old `-shm` contents — which the dead client's mmap may never have written back — and the wal-index may not match the WAL (wrong pages read). Needs measuring on EFS: the lock lease length, and a `kill -9` handoff under write load. If it bites, the candidate is `journal_mode=TRUNCATE` + `synchronous=FULL` on the workspace dbs (no `-shm`; ~8 ms per commit, ~5 ms more than now).
+
+**Known cost — synchronous IO on the event loop.** Session-log writes, SQLite commits and the bwrap mask lookups are synchronous by design (they keep UI / raw writes and the tombstone check in one synchronous slice), so each EFS round trip blocks the loop: estimated at ~40 ms per tool call and ~70 ms per turn before the 2.0 IO trimming, during which other sessions and `/ping` wait. Moving to async IO would reorder the write paths' guarantees; not planned.
 
 ## Access model
 

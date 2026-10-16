@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - An interrupted reply is saved once, under the same id it streamed with, so after a reload the partial answer appears once instead of being written again under a new id on every save.
 - New command `halo sessions migrate v1 v2` converts every 1.x session of a workspace at once. Stop the server first.
 - Ask an agent about an installed extension and it now reads that extension's own `README.md` (and `DESIGN.md`) from `~/.halo/global/extensions/<id>/` instead of guessing. Extensions add nothing to prompts on their own; agent instructions still come only from an extension skill you enable.
+- Less file-system work per request and per tool call, which matters most when the workspace or `~/.halo` is on network storage (NFS / EFS, as in AgentCore mode): a workspace's `.halo/` folders are set up once per server process instead of on every request; sandboxed file and shell tools look up the files they hide with one directory listing instead of one check per file (still on every call, so a sensitive file created later is still hidden); session saves no longer check the file before every write, and a save with nothing new no longer touches the disk; the log file's folder is no longer re-created before every line; AgentCore's health check and lease heartbeat each skip one lookup. If another process (a cron run, the TUI) writes a session meanwhile, this server still replaces it from its own copy, now at its next change instead of its next save.
 
 ### Fixed
 
@@ -21,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Deleting a session over the WebSocket (`session:delete`) now also removes its session files, archive segments and sub-agent sessions from disk, as the REST delete already did. Before, a client that only used the WebSocket left the files behind.
 - A command an agent was running when the server restarted is now reported to it as cut off by the restart, with the output it had produced so far, instead of as an ordinary failure. Once a restart begins, agents start no new commands and no new model calls, so no tokens are spent on a reply the restart would cut off. Their work resumes after the restart as before.
 - After a restart, an agent that was idle while only its sub-agents were running is now told exactly that, with the ids of the sub-agents that were cut off. Before, it was told its own work had been interrupted mid-step.
+- AgentCore mode: the workspace databases (`halo.db`, `a2a.db`, `runs.db` on EFS) now flush every commit to storage. Before, a commit could sit in the microVM's cache for seconds, so a microVM that died could lose its last task updates — a task the caller had just been given unknown to the next microVM, a completed task reported as FAILED, or an interrupted run not resumed. Costs about one storage flush per commit (~10 per turn plus one per tool call). Normal server mode is unchanged.
 
 ### Upgrade notes
 
