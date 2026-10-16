@@ -80,6 +80,8 @@ Run a shell command. Full shell access.
 
 Timeout 120 s (`HALO_SHELL_TIMEOUT`). Max output 5 MB. The tool description surfaces the effective timeout to the agent and advises backgrounding (`nohup … &` + log polling) for longer tasks.
 
+**Server shutdown** (server only — the CLI / TUI never enter shutdown). A command killed by a signal halo didn't send while the server is shutting down (a systemd stop signals the whole cgroup, the command with it) returns `[Command cut off by a server restart — it was still running when the server shut down, so it may or may not have taken effect. Check before re-running it.]` followed by `Output so far:` and the partial stdout (`STDERR:` appended when there is any), instead of `Command failed: …`. A command issued after shutdown began is not run: `Error: command not run — the server is shutting down. Safe to re-issue after the restart if still needed.` Normal exits read as before. See [session.md → Shutdown](../design/session.md#boot-reconcile-of-crash-orphans-reconcileorphansonboot).
+
 **Windows output encoding.** The Windows path (`sandbox.ts`) prepends `chcp 65001` so cmd built-ins (`echo`, …) emit UTF-8, then captures raw bytes (`encoding: 'buffer'`) and decodes them strict-UTF-8 with a GBK fallback. This is because native Win32 console tools (`ipconfig`, `systeminfo`, …) ignore `chcp` and still emit the OEM code page (GBK/CP936 on zh-CN); decoding such bytes as UTF-8 produced mojibake. The strict-UTF-8 attempt passes genuine UTF-8 through untouched and only falls back to GBK when the bytes aren't valid UTF-8 (GBK double-byte sequences almost always aren't). mac/Linux are unaffected (UTF-8 throughout).
 
 ### grep
