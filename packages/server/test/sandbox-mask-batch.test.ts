@@ -209,6 +209,39 @@ describe('buildBwrapArgs masks — batched lookup matches per-path existsSync', 
     setSandboxHiddenPaths([empty], [empty])
     expect(newMaskArgs(ws, 'readonly')).toEqual(['--ro-bind', empty, empty])
   })
+
+  /**
+   * A listing that fails on an ENTRY (d_type DT_UNKNOWN → Node lstats it, and
+   * it was renamed away in between — the lease's tmp + rename) throws ENOENT
+   * from lstat. That is not "the parent is missing": the masks under it must
+   * still be checked one by one.
+   * Mutation check: drop the `syscall === 'scandir'` condition → red.
+   */
+  it('an entry vanishing mid-listing (ENOENT from lstat) falls back to per-path checks, workspace and HOME side', () => {
+    fs.mkdirSync(path.join(halo, 'sessions'), { recursive: true })
+    fs.writeFileSync(path.join(halo, 'halo.db'), '')
+    inHome('.ssh', (p) => fs.mkdirSync(p))
+    inHome('.gitconfig', (p) => fs.writeFileSync(p, ''))
+    const vanished = (dir: string): void => {
+      vi.mocked(readdirSync).mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
+        if (p === dir) throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${dir}/x.tmp'`), { code: 'ENOENT', syscall: 'lstat' })
+        return (fs.readdirSync as (...a: unknown[]) => unknown)(p, ...rest)
+      }) as typeof fs.readdirSync)
+    }
+    try {
+      vanished(halo)
+      const args = expectSameAsOld()
+      expect(has(args, tmpfs('sessions'))).toBe(true)
+      expect(has(args, ['--ro-bind', path.join(HOME, '.halo', '.sandbox-empty'), path.join(halo, 'halo.db')])).toBe(true)
+
+      vanished(HOME)
+      const homeArgs = expectSameAsOld()
+      expect(has(homeArgs, ['--tmpfs', path.join(HOME, '.ssh')])).toBe(true)
+      expect(has(homeArgs, ['--ro-bind', path.join(HOME, '.halo', '.sandbox-empty'), path.join(HOME, '.gitconfig')])).toBe(true)
+    } finally {
+      vi.mocked(readdirSync).mockImplementation(fs.readdirSync)
+    }
+  })
 })
 
 /**

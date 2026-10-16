@@ -479,8 +479,15 @@ function isUnder(p: string, dir: string): boolean {
  * listed non-symlink exists iff the parent is searchable (listing needs r,
  * lookup needs x — checked once, on the first such hit), a missing / non-dir
  * parent means nothing under it exists. Whatever a listing can't answer — a
- * non-normalized path, an unlistable parent — falls back to existsSync. Use a
- * fresh one per batch: listings are memoized for the batch's lifetime.
+ * non-normalized path, an unlistable parent, any other listing error — falls
+ * back to existsSync. Use a fresh one per batch: listings are memoized for the
+ * batch's lifetime.
+ *
+ * Assumes a case-sensitive filesystem: on a case-insensitive one (CIFS, vfat,
+ * ext4 +F) a configured `~/Secrets` over an on-disk `~/secrets` hits for
+ * existsSync but not for the name lookup. On a filesystem that returns no
+ * d_type, Node lstats every entry during the listing, which can cost more
+ * round trips than the per-path checks it replaces.
  */
 function batchedExists(): (p: string) => boolean {
   type Listing = { names: Map<string, boolean>; searchable?: boolean } // name → isSymlink
@@ -490,8 +497,12 @@ function batchedExists(): (p: string) => boolean {
     try {
       return { names: new Map(readdirSync(parent, { withFileTypes: true }).map((d) => [d.name, d.isSymbolicLink()] as const)) }
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      return code === 'ENOENT' || code === 'ENOTDIR' ? null : 'stat'
+      // Only the parent's own open (scandir) failing means "nothing under it".
+      // With d_type DT_UNKNOWN Node lstats each entry, and an entry renamed
+      // away in between (the lease's tmp + rename, an editor's temp file)
+      // fails the whole listing with ENOENT from lstat — per-path, then.
+      const { code, syscall } = err as NodeJS.ErrnoException
+      return (code === 'ENOENT' || code === 'ENOTDIR') && syscall === 'scandir' ? null : 'stat'
     }
   }
   const searchable = (dir: string): boolean => {
