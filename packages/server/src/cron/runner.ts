@@ -1,7 +1,8 @@
 /**
- * Cron runner — schedules jobs from `cron_jobs` via croner, executes each
- * fire by spawning a fresh `halo cli` child, captures stdout for channel
- * dispatch, and persists a `cron_runs` audit row.
+ * Cron runner — schedules jobs from `cron_jobs` (croner computes the fire
+ * times, the timers are the runner's own), executes each fire by spawning
+ * a fresh `halo cli` child, captures stdout for channel dispatch, and
+ * persists a `cron_runs` audit row.
  *
  * Same shape as the evo wrapper:
  *   - `spawn(halo cli, [-a <agent>, -n, -w <workspace>, <prompt>])`
@@ -238,13 +239,22 @@ let _sessionRegistry: CronSessionRegistry | null = null
  *  = no server-side sessions to guard. */
 export function setCronSessionRegistry(r: CronSessionRegistry | null): void { _sessionRegistry = r }
 
+/** Longest single timer hop toward a fire target. Same 30s cap croner uses:
+ *  the wall clock is re-read at least every 30s, so a target holds across
+ *  clock steps and machine sleep. */
+const MAX_TIMER_HOP_MS = 30_000
+
 interface ActiveSchedule {
   jobId: string
-  cron: Cron
+  /** Recurring jobs: computes fire times only — built paused with no
+   *  handler, so croner never arms a timer of its own. null for a one-shot. */
+  cron: Cron | null
+  /** The pending hop toward the next fire; null once there is none. */
+  timer: ReturnType<typeof setTimeout> | null
 }
 
-/** Map of `cron_jobs.id` → croner instance. Drives `start/stopAll` +
- *  hot-reload after CRUD operations. */
+/** Map of `cron_jobs.id` → active schedule (fire-time source + pending
+ *  timer). Drives `start/stopAll` + hot-reload after CRUD operations. */
 const _active = new Map<string, ActiveSchedule>()
 
 /** Set of jobIds currently executing in this server process. Same job
@@ -435,7 +445,7 @@ export function stopCronDaemon(): void {
   for (const t of _daemonTimers) clearInterval(t)
   _daemonTimers = []
   for (const a of _active.values()) {
-    try { a.cron.stop() } catch { /* best effort */ }
+    if (a.timer) clearTimeout(a.timer)
   }
   _active.clear()
   _expired.clear()
@@ -443,12 +453,12 @@ export function stopCronDaemon(): void {
 
 /**
  * Reload all schedules from db. Tear down every existing schedule, then
- * re-create from scratch. Called after CRUD; cheap (croner cancellation
- * is synchronous and we never have more than ~hundreds of jobs).
+ * re-create from scratch. Called after CRUD; cheap (cancellation is a
+ * synchronous clearTimeout and we never have more than ~hundreds of jobs).
  */
 export function reloadAll(): void {
   for (const a of _active.values()) {
-    try { a.cron.stop() } catch { /* best effort */ }
+    if (a.timer) clearTimeout(a.timer)
   }
   _active.clear()
   _expired.clear()
@@ -490,11 +500,42 @@ export function activeWindowOptions(j: { activeFrom: number | null; activeUntil:
   }
 }
 
+/** Arm the next hop toward `target`: at most MAX_TIMER_HOP_MS, then
+ *  onTimer re-checks the wall clock. */
+function armTimer(entry: ActiveSchedule, target: Date): void {
+  const delay = Math.min(Math.max(target.getTime() - Date.now(), 0), MAX_TIMER_HOP_MS)
+  entry.timer = setTimeout(() => onTimer(entry, target), delay)
+}
+
+/** One timer hop. The target is fixed when armed and only replaced after
+ *  it fires. Why the runner owns this loop instead of croner (10.0.1): on a
+ *  timer that wakes a fraction of a ms early, croner re-plans from a fresh
+ *  clock read; when the clock crosses the fire instant during that re-plan,
+ *  an instance that never fired (every job after a restart, every one-shot)
+ *  skips the fire silently. Upstream fix (croner #388 / #393) is only in
+ *  11.0.0-dev. One clock read per hop; no catch-up — a sleep / clock step
+ *  over several fires runs once, the next target counts from now. */
+function onTimer(entry: ActiveSchedule, target: Date): void {
+  if (_active.get(entry.jobId) !== entry) return
+  const now = Date.now()
+  if (now < target.getTime()) {
+    armTimer(entry, target)
+    return
+  }
+  void runJob(entry.jobId, 'scheduled').catch((err) => {
+    console.warn(`[Cron] ${entry.jobId} scheduled run crashed: ${err instanceof Error ? err.message : String(err)}`)
+  })
+  if (_active.get(entry.jobId) !== entry) return
+  const next = entry.cron?.nextRun(new Date(now)) ?? null
+  if (next) armTimer(entry, next)
+  else entry.timer = null
+}
+
 /** Schedule one job by id. Idempotent — replaces an existing schedule. */
 export function scheduleJob(jobId: string): void {
   const existing = _active.get(jobId)
   if (existing) {
-    try { existing.cron.stop() } catch { /* best effort */ }
+    if (existing.timer) clearTimeout(existing.timer)
     _active.delete(jobId)
   }
   _expired.delete(jobId)
@@ -504,16 +545,12 @@ export function scheduleJob(jobId: string): void {
   if (!job) return
   if (job.enabled !== 1) return
 
-  let cron: Cron
+  let cron: Cron | null = null
+  let target: Date | null
   try {
-    const handler = () => {
-      void runJob(jobId, 'scheduled').catch((err) => {
-        console.log(`[Cron] ${jobId} scheduled run crashed: ${err instanceof Error ? err.message : String(err)}`)
-      })
-    }
     if (job.runAt) {
-      // One-shot mode. croner accepts a Date as the "schedule" — fires
-      // exactly once at that instant, then self-stops. If the time is in
+      // One-shot mode. The runAt instant is the fire target itself — no
+      // croner instance. If the time is in
       // the past (server was down across the fire window), we mark the
       // job as missed and disable it so the next reconcile pass doesn't
       // keep retrying (which used to log "runAt is in the past" every
@@ -528,10 +565,10 @@ export function scheduleJob(jobId: string): void {
         broadcast({ type: 'cron:job_changed', jobId, kind: 'missed' })
         return
       }
-      cron = new Cron(new Date(job.runAt), { timezone: job.timezone ?? undefined }, handler)
+      target = new Date(job.runAt)
     } else {
       // Past the active window: stays enabled (so the window can be
-      // extended later) but gets no croner. Recorded in `_expired` so
+      // extended later) but gets no timer. Recorded in `_expired` so
       // reconcile's "fingerprint cached but not in _active" retry branch
       // doesn't re-run this (and re-log) on every pass.
       if (isPastActiveUntil(job)) {
@@ -540,22 +577,25 @@ export function scheduleJob(jobId: string): void {
         console.log(`[Cron] ${jobId} past activeUntil; not scheduled`)
         return
       }
-      cron = new Cron(job.schedule, { timezone: job.timezone ?? undefined, ...activeWindowOptions(job) }, handler)
+      // Paused, no handler: croner only computes fire times (see onTimer).
+      cron = new Cron(job.schedule, { timezone: job.timezone ?? undefined, paused: true, ...activeWindowOptions(job) })
+      target = cron.nextRun()
     }
   } catch (err) {
-    console.log(`[Cron] ${jobId} schedule invalid (${job.schedule}): ${err instanceof Error ? err.message : String(err)}`)
+    console.warn(`[Cron] ${jobId} schedule invalid (${job.schedule}): ${err instanceof Error ? err.message : String(err)}`)
     return
   }
-  _active.set(jobId, { jobId, cron })
+  const entry: ActiveSchedule = { jobId, cron, timer: null }
+  _active.set(jobId, entry)
+  if (target) armTimer(entry, target)
   // Keep fingerprint in sync so the next reconcile pass doesn't tear
   // down + re-instantiate this same schedule.
   _fingerprint.set(jobId, jobFingerprint(job))
-  const next = cron.nextRun()
   const sched = job.runAt ? `runAt=${new Date(job.runAt).toISOString()}` : job.schedule
   const window = job.activeFrom != null || job.activeUntil != null
     ? ` active=[${job.activeFrom != null ? new Date(job.activeFrom).toISOString() : '-'}, ${job.activeUntil != null ? new Date(job.activeUntil).toISOString() : '-'})`
     : ''
-  console.log(`[Cron] ${jobId} scheduled (${sched})${window} next=${next?.toISOString() ?? 'n/a'}`)
+  console.log(`[Cron] ${jobId} scheduled (${sched})${window} next=${target?.toISOString() ?? 'n/a'}`)
 }
 
 /** Cancel a single job's schedule. Doesn't touch the db row. */
@@ -563,7 +603,7 @@ export function unscheduleJob(jobId: string): void {
   if (_expired.delete(jobId)) _fingerprint.delete(jobId)
   const existing = _active.get(jobId)
   if (!existing) return
-  try { existing.cron.stop() } catch { /* best effort */ }
+  if (existing.timer) clearTimeout(existing.timer)
   _active.delete(jobId)
   _fingerprint.delete(jobId)
 }
@@ -1048,7 +1088,7 @@ function finalize(runId: string, jobId: string, a: FinalizeArgs): void {
   // Auto-disable one-shot (at-mode) jobs after they complete so they don't
   // re-fire on the next reload pass. We keep the row (history + run-now
   // remains usable) — only the schedule is paused. The runner's reconcile
-  // loop sees enabled=0 and tears down the croner instance.
+  // loop sees enabled=0 and tears down the schedule.
   const job = db.select().from(cronJobs).where(eq(cronJobs.id, jobId)).get()
   const patch: Record<string, unknown> = {
     lastRunStatus: a.status,
