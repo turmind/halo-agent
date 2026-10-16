@@ -54,10 +54,18 @@ function rotate(): void {
 
 function writeToFile(line: string): void {
   try {
-    ensureDir()
     if (currentSize < 0) currentSize = measureSize()
     if (currentSize >= config.logging.maxFileSize) rotate()
-    fs.appendFileSync(logFile, line)
+    try {
+      fs.appendFileSync(logFile, line)
+    } catch (err) {
+      // The dir is made when an append finds it missing (first line, or
+      // removed while running), not before every line — that was a mkdir
+      // round trip per log line on an NFS/EFS HOME.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      ensureDir()
+      fs.appendFileSync(logFile, line)
+    }
     currentSize += Buffer.byteLength(line)
   } catch {
     // Silently fail — don't break the server for logging issues
