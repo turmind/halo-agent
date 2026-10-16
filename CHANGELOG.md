@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Session store 2.0: a 1.x session is converted the first time it is opened. After upgrading, stop the server and run `halo sessions migrate v1 v2` once in every workspace root to convert the rest (it also finishes conversions cut off before their old files were removed); it exits non-zero if any session failed, and those sessions keep their old files. Each session's 1.x files are **deleted** once its new files have been read back and checked, so going back to 1.x afterwards shows converted sessions (and sessions created on 2.0) empty.
 - Workspace sqlite migration v3 adds `agent_sessions.output` and `last_activity_at`.
+- While one process converts a 1.x session (the server, a cron run, the TUI), another opening the same session waits for it, up to 10 s, blocking that process meanwhile. Running `halo sessions migrate v1 v2` right after upgrading keeps this off the live path.
 - The test-chat session routes (`/api/agent-configs/:id/sessions`) still read the 1.x `.json` files only, so sessions created on 2.0 don't appear there.
 
 ## [1.6.6] - 2026-10-14
