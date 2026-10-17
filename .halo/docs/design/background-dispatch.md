@@ -63,7 +63,7 @@ bindOrCreateSession → createSession(...) → subscribeSession(client, sm, sid)
 Nothing is lost without a listener: `SessionUIStore.emitEvent` folds every event into the root's `UIState` (`reduceIntoUIState → applyEvent`) and persists the log it changed **before** it looks up listeners. Listeners are a pure fan-out for live UI; the persistence path is independent of them.
 
 - **Which file**: `applyEvent` returns the log it touched. A root event writes the root's session file; a sub-agent event (`taskId` set) writes only that sub-session's **own** file from `subSessionLogs[taskId]` — the root's file isn't rewritten for sub-agent traffic. The sub log is dropped from memory at its `agent_done` (its file is complete by then).
-- **When**: `applyEvent`'s `persist` hint — `'flush'` writes now (root `complete`, a sub's `agent_done`), `'debounce'` coalesces within 500 ms (tool calls / results, usage, …), absent = no write (the next write carries the change). Timers are keyed by the log's own id, so root and sub writes don't cancel each other.
+- **When**: `applyEvent`'s `persist` hint — `'flush'` writes now (`tool_call`, `tool_result`, `usage`, root `complete`, a sub's `agent_done`, `error`, `call_discarded`), `'debounce'` coalesces within 500 ms (`user` / `system` / `context` rows), absent = no write (the next write carries the change). Timers are keyed by the log's own id, so root and sub writes don't cancel each other.
 - **Dirty tracking**: a root event marks the root `uiStateDirty` until `persistLog` lands it. `isUIStateDirty(rootId)` is what the WS saves below gate on — a state only seeded from disk (viewing a session another process, e.g. a cron `halo cli` child, is driving) is clean and is never written back, so it can't overwrite that process's newer file.
 
 ### When save fires
@@ -73,7 +73,7 @@ Background state persists in four scenarios:
 1. **SessionUIStore's own persist** — the per-event rule above; this is what keeps a background session's files current
 2. **`unsubscribeSession`** — a session leaves the connection's set (`unsubscribe`, or a workspace switch dropping every subscription); `saveSession` runs before the listener is released. It returns early unless `isUIStateDirty`
 3. **Disconnect** — WS closes (or errors): every subscription without active work in its tree is saved and released (same dirty gate); the rest detach (below)
-4. **Server shutdown** — `landForShutdown()` (SessionManager; its UI half is SessionUIStore `flushAll()`) lands every loaded tree: a dirty root plus every live sub log, since pending debounce timers would never fire
+4. **Server shutdown** — `landForShutdown()` (SessionManager). Its UI half, SessionUIStore `flushAll()`, lands every loaded tree: a dirty root plus every live sub log, since pending debounce timers would never fire. Its raw log + row half covers only the sessions this process is running (`promise !== null`, subs too) — an idle in-memory copy was saved on the spot and may be stale ([session.md](session.md#session-files))
 
 Until 1.5.3-alpha, scenarios 2 and 3 went through `client.backgroundSaves`: the save closures `session:clear` registered, run on the next subscribe to that session or flushed on disconnect.
 

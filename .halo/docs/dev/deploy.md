@@ -304,6 +304,8 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 1. `halo upgrade` — bumps the on-disk npm package
 2. `halo server restart` (under a user or system unit alike; `sudo systemctl restart halo` also works for a system unit) — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts (`halo cli` / `halo tui` run the same check on start, so a CLI-only install refreshes without a server). Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
 
+**1.x → 2.0** (new session store): stop the server → `halo sessions migrate v1 v2 -w <ws>` once per workspace → start it — see [guide/cli.md → Session store migration](../guide/cli.md#session-store-migration-halo-sessions-migrate-v1-v2). On prod, 30 workspaces / 1171 sessions migrated in ~93 s, ~1.6 min of downtime in total. First run `find <ws>/.halo -not -user <service user>`: a root-owned file there fails the migration with `EACCES` (agentcore-workspace did in the 2.0 prod upgrade).
+
 ### Public release command reference
 
 Use only for a new public release; the retained details here are not extra preparation for installing an existing version.

@@ -210,7 +210,7 @@ No `/search` endpoint: the cron form takes the WeCom `chatId` verbatim (a `useri
 
 ## Cron
 
-File: `packages/server/src/routes/cron.ts`. Admin cookie auth. REST CRUD over `cron_jobs` + read-only `cron_runs`. Mutations call `reloadAll()` / `scheduleJob()` / `unscheduleJob()` so in-memory croner stays in sync with the db. Each mutation also broadcasts `cron:job_changed`.
+File: `packages/server/src/routes/cron.ts`. Admin cookie auth. REST CRUD over `cron_jobs` + read-only `cron_runs`. Mutations call `scheduleJob()` / `unscheduleJob()` (`POST /cron/reload` calls `reloadAll()`) so the runner's in-memory schedules — its own fire timers (`armTimer` / `onTimer`), with croner only computing `nextRun` from a paused instance — stay in sync with the db. Each mutation also broadcasts `cron:job_changed`.
 
 ### Jobs
 

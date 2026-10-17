@@ -159,7 +159,7 @@ File: `agents/session-skill-commands.ts`. Stateless, pure reads. Resolves which 
 
 ### SessionStateStore — rawMessages disk persistence
 
-File: `agents/session-state-store.ts`. Stateless. Saves/loads an agent's `rawMessages` (LLM-facing history) to its `.json` file via read-merge-write — the `rawMessages` half of session persistence (SessionUIStore owns the UI-log half; both write the same file). `saveAgentState` takes a narrow `SavableSession` (8 fields), not the full AgentSession. Host surface: workspaceRoot + `isSessionDeleted` (the tombstone short-circuit so a late save can't resurrect a deleted file).
+File: `agents/session-state-store.ts`. Stateless (the writer's append baseline lives in `session-log.ts`). Saves/loads an agent's `rawMessages` (LLM-facing history) to its `<seg>.raw.jsonl`, one message per line — a save appends the new messages, rewrites the last line in place when only it changed, and does an atomic full rewrite for anything else (compaction, repair, deleteExchange) — plus the row's `output` / `lastActivityAt` (throttled on the per-event save points). It is the raw half of session persistence; SessionUIStore owns the UI-log half in its own `<seg>.ui.jsonl`, so neither rewrites the other. `saveAgentState` takes a narrow `SavableSession` (5 fields), not the full AgentSession. Host surface: workspaceRoot + `isSessionDeleted` (the tombstone short-circuit so a late save can't resurrect a deleted file) + `metaDb` (the db holding the session's row).
 
 ## Helper modules
 
