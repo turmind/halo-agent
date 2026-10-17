@@ -148,8 +148,10 @@ ops only:
 The [run ledger](session.md#run-ledger--restart-nudge-for-interrupted-roots-haloglobalrunsdb) lives on the workspace in this mode — `<ws>/.halo/runs.db` (hidden from non-full sessions, like `a2a.db`), not the container's `HALO_HOME`, which dies with the microVM. So a task cut off mid-run (the 8 h `maxLifetime`, a crash, a recycle) resumes on the next microVM:
 
 - `onAcquired` opens the ledger (`setRunsDb(createRunsDb(<ws>/.halo))`) **before** `registry.getOrCreate`; `index.ts` opens none in this mode. The SessionManager constructor then runs the server's boot chain — claim `runtime.lock`, orphan reconcile, goal sweep, run-ledger sweep — which drains the rows the dead microVM left and nudges each interrupted root.
-- The `POST /` that acquired the lease waits for those nudges to reach their sessions (`nudgesSettled`) before it is handled, so a GetTask on the interrupted task sees its root running → `WORKING`, not idle.
-- Nothing wakes a new microVM by itself: the resume happens on the **next invocation** — the caller's `a2a_read` / GetTask, or a new send. No caller-side polling.
+- The lease counts as held only once `onAcquired` has returned. If it throws (an `a2a.db` migration, `createRunsDb`, `getOrCreate`), the lease file is released, the half-opened db handles are closed and unset, `[AgentCore] workspace lease released: opening the workspace failed (…)` is logged, and the request is refused. The next request retries the whole acquisition. Otherwise the process would hold a lease with no heartbeat, and a second writer would take over 45 s later.
+- `/invocations` sessions resume the same way: a root with an `{invocation}` `reply_to` gets the nudge, and its resumed run finishes the job (state, result, notify). That includes `cron-*` session ids — the `agentcore-deploy` skill passes the local cron session id as `session`. The sweep skips a `cron-*` root only when it has no `reply_to` (a cli-driven cron tree); with one, a caller is waiting on it.
+- The request that acquired the lease — a `POST /` (A2A) or a `POST /invocations`, a `get` included — triggers that sweep. A `POST /` and a new `/invocations` job then wait for the nudges to reach their sessions (`nudgesSettled`) before they are handled, so a GetTask on the interrupted task sees its root running → `WORKING`, not idle. A `get` answers at once: a job's row has no lazy reconcile and stays `running` until the resumed run finishes it.
+- Nothing wakes a new microVM by itself: the resume happens on the **next invocation** — the caller's `a2a_read` / GetTask, a new send, or an `/invocations` call (a new job or a `get`). No caller-side polling.
 - `ownsRuntimes` stays `false`, so the lazy FAILED in `routes.ts` `reconcileStale` remains the fallback for a task the sweep didn't resume (root idle, quiet subtree): "Interrupted by a server restart on the remote. Send again on the same context to resume."
 - Verified locally: `kill -9` mid-task (2 of 6 `sleep 30` calls done) → new process refused for ~45 s, then the first accepted GetTask read `WORKING` and the task completed with all six results.
 
@@ -247,7 +249,14 @@ the workspace at finish (realpath checked; paths as the agent wrote them,
   running, or cut off and never resumed) takes the pointer: the earlier row
   becomes `superseded` with `supersededBy` = the new id, its sync waiter and SSE
   stream answer that at once, and one completion — the new job's — covers both
-  (the message folded into the same session).
+  (the message folded into the same session). The same happens when an A2A
+  message or a `relay_send` / `relay_interrupt` lands on a session owing a job:
+  the job is superseded (`supersededBy` = `a2a:<task id>` /
+  `relay:<caller session>`), then their pointer is written (`relay.ts`
+  `takeReplyTo`). A job on a session owing an A2A task or a relay report is
+  refused (409). For a new session that is checked again right after it is
+  created, in the same synchronous slice as the write, so a concurrent request
+  can't slip in between.
 
 ### Completion and the notify hook
 
@@ -272,6 +281,15 @@ to Feishu / Slack / Telegram / WeCom from secrets in the runtime env.
 In single-process mode the hook's env and `HALO_WORKSPACE` are the server's own
 (the workspace). In [session-dirs mode](#notify-hand-off) the worker hands the
 reply to the root front instead, which runs the hook on vetted input.
+
+**At most once.** The job's row is final before the hook starts, and nothing
+re-runs a hook. A hook that is cut off loses that push, and the row still
+reads `ok` / `error` (`get` has the result). A hook is cut off by the 300 s
+kill, or when the microVM goes away mid-hook: a stop, or the 8 h `maxLifetime`.
+`/ping` reports `HealthyBusy` while a hook runs, so an idle reap doesn't cut
+one off. On SIGTERM, single-process mode's `gracefulShutdown` does not wait for
+a running hook; in session-dirs mode the front does, within its 30 s stop
+budget ([front and worker](#front-and-worker)).
 
 ### Job rows (`a2a.db`)
 
@@ -311,14 +329,17 @@ AgentCore ──► front  (PID 1, root, :9000 | :8080; node builtins only — n
   `HealthyBusy`, so a worker whose loop is blocked on EFS IO isn't reaped
   mid-run), `HealthyBusy` while the front runs a hook.
 - Every other request needs `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id`
-  matching `^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$` (AgentCore's 33–256 chars; a
-  leading dot can't match, so `.template` / `.tmp-*` are never served) — else
-  400. Once a microVM serves a session id, any other id is 409: it never
-  switches workspace.
-- **First request:** the base must be mounted (`/proc/self/mountinfo`; EFS
-  arrives only at the first invocation — not yet → 503, retried by the next
-  request). `<base>/<sid>` is created if missing: built in a dot-named
-  `.tmp-<sid>-<rand>` (0700) from `<base>/.template` minus `.halo/sessions`,
+  matching `^[A-Za-z0-9][A-Za-z0-9_-]{32,254}$` — 33–255 chars: AgentCore
+  allows 256, but the id is the dir name and NAME_MAX is 255, so a 256-char id
+  is a 400 rather than a dir that can never be made. A leading dot can't
+  match, so `.template` / `.tmp-*` are never served. Else 400. Once a microVM
+  serves a session id, any other id is 409: it never switches workspace.
+- **First request:** the base must be a mount point (`/proc/self/mountinfo`;
+  EFS arrives only at the first invocation — not yet → 503 "`<base>` is not a
+  mount point …", retried by the next request; a `HALO_WORKSPACE` that isn't
+  the EFS mount path keeps answering it). `<base>/<sid>` is created if
+  missing: built in a dot-named `.tmp-<16 hex>` (0700 — no id in the name, so
+  a long id can't push it past NAME_MAX) from `<base>/.template` minus `.halo/sessions`,
   sqlite files (+ `-wal` / `-shm` / `-journal`), `runtime.lock` and
   `agentcore.lease*`, chowned to 1000:1000 (best effort — an access point that
   enforces 0:0 refuses it and access still works), then renamed in, so a
@@ -332,19 +353,37 @@ AgentCore ──► front  (PID 1, root, :9000 | :8080; node builtins only — n
   agentcore --workspace /workspace -p 9100`, cwd `/workspace`. The allowlist:
   `PATH`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`,
   `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `HALO_LOG_LEVEL`,
-  `HALO_A2A_ACCESS`, `HALO_A2A_PUBLIC_URL`, every `OTEL_*`,
-  `AGENT_OBSERVABILITY_*` and `AWS_CONTAINER_*`, plus `HOME=/home/node` and the
-  front's loopback URL + token. Channel secrets and `HALO_AGENTCORE_NOTIFY`
-  stay with the front.
+  `HALO_A2A_ACCESS`, `HALO_A2A_PUBLIC_URL`, Halo's tuning knobs
+  (`HALO_MAX_CONTEXT_TOKENS`, `HALO_SHELL_TIMEOUT`, `HALO_WEB_FETCH_TIMEOUT`,
+  `HALO_MODEL_TIMEOUT`, `HALO_SESSION_GRACE`, `HALO_TERMINAL_GRACE`,
+  `HALO_MAX_CACHED_SESSIONS`, `HALO_LOG_MAX_SIZE`, `HALO_LOG_MAX_FILES`), every
+  `OTEL_*`, `AGENT_OBSERVABILITY_*` and `AWS_CONTAINER_*`, plus
+  `HOME=/home/node` and the front's loopback URL + token — each named, no
+  `HALO_*` wildcard. Channel secrets, `HALO_AGENTCORE_NOTIFY` and
+  `HALO_PASSWORD` stay with the front.
+- **Models: Bedrock on the runtime role only.** Model keys don't pass either:
+  a `<<OPENAI_API_KEY>>`-style placeholder in `settings.yaml` resolves to
+  nothing in the worker. The worker's credentials are the AWS ones above, so
+  its agents use Bedrock through the runtime's execution role (as the
+  `agentcore-deploy` skill deploys them). Another provider needs its key
+  written as a literal value into the image's `/home/node/.halo` — and is then
+  readable by the agent.
 - The worker is the single-workspace mode on `/workspace`, unchanged (lease,
   run ledger, dbs, `/invocations`), bound to 127.0.0.1; once listening it posts
   `/ready` to the front (push, no probe). No `/ready` within 30 s → 503 for
-  good. The request that triggered the start waits for it, then is proxied;
+  good. The request that triggered the start waits for it, then is proxied
+  (unless its client has gone meanwhile — then nothing reaches the worker);
   hop-by-hop headers dropped, bodies streamed (SSE chunk by chunk), a closed
-  client aborts the upstream request.
-- The worker exiting ends the front with its exit code. SIGTERM / SIGINT to
-  the front go to the worker — its graceful stop
-  releases the lease — and the front exits once it has, SIGKILL after 30 s.
+  client aborts the upstream request, and a worker response cut off mid-body
+  closes the client's too (logged `[AgentCore] front: worker response cut off
+  mid-stream`), so no client hangs on a dead stream. A handler that throws is
+  logged and answered 500, never fatal to the front.
+- The worker exiting ends the front: with the worker's exit code, or 1 when
+  that was 0 or a signal (an unasked-for worker exit is a failure). SIGTERM /
+  SIGINT to the front go to the worker — its graceful stop releases the lease.
+  Either way the front first waits for its own notify work (a MEDIA copy or a
+  hook still running), within the same 30 s budget: SIGKILL to the worker and
+  exit once it is spent.
 
 ### View setup
 
@@ -364,6 +403,13 @@ Fail closed: any failing step or check answers 503 for that request and every
 later one, the worker is never spawned and the setup never re-run (a half-done
 setup must not be served). There is no network step — see
 [the limits](#known-limitations-session-isolation-within-a-runtime).
+
+**503 means "not serving right now", not "give up"** — the reason is the
+body's `error` text, the status alone doesn't say which. Only two are for good
+on this microVM: the view setup failed, and the worker wasn't ready in 30 s.
+The base not being a mount point yet and the workspace lease being held by
+another runtime session (`/invocations`) clear on their own — retry with the
+same id. A caller can't decide to stop retrying from a 503 alone.
 
 ### Notify hand-off
 

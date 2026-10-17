@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,6 +9,7 @@ import { agentSessions } from '../src/db/schema.js'
 import { writeReplyTo, readReplyTo, A2A_CHANNEL_PREFIX } from '../src/agents/relay.js'
 import { createA2ADb, setA2ADb, getA2ADb } from '../src/db/a2a-db.js'
 import { createTask, getTask, putPushConfig } from '../src/a2a/tasks.js'
+import { createInvocation, getInvocation } from '../src/a2a/invocations.js'
 import { stopPushSender } from '../src/a2a/push.js'
 import { createA2ARoutes } from '../src/a2a/routes.js'
 import type { A2AStrategies } from '../src/a2a/exposure.js'
@@ -237,5 +238,30 @@ describe('lazy FAILED on read (restart orphan)', () => {
     expect(card.status).toBe(200)
     const etag = card.headers.get('etag')!
     expect((await a.request('/a2a/x/.well-known/agent-card.json', { headers: { 'if-none-match': etag } })).status).toBe(304)
+  })
+})
+
+describe('a session owing an /invocations job', () => {
+  it('an A2A message on it supersedes the job (by the new task), then writes its own pointer', async () => {
+    const strategies: A2AStrategies = {
+      authenticate: () => ({ ok: true, caller: { accountId: 'acc', label: 'acc', accessLevel: 'full' }, workspace: ws }),
+      interfaceUrl: () => 'http://h/a2a/x/',
+    }
+    const a = new Hono()
+    a.route('/a2a', createA2ARoutes({ registry: { getOrCreate: () => sm } as unknown as SessionManagerRegistry, strategies, ownsRuntimes: true }))
+    seedRow('a2a_acc_inv')
+    const invId = createInvocation('j1', 'a2a_acc_inv')
+    writeReplyTo(sm.getDb(), 'a2a_acc_inv', { invocation: invId })
+    vi.spyOn(sm, 'appendUserMessage').mockReturnValue('stamp')
+    vi.spyOn(sm, 'sendUserMessage').mockResolvedValue('queued')
+    const res = await a.request('/a2a/x', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'a2a-version': '1.0' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'SendMessage', params: { message: { role: 'ROLE_USER', messageId: 'm1', contextId: 'a2a_acc_inv', parts: [{ text: 'take over' }] }, configuration: { returnImmediately: true } } }),
+    }).then((r) => r.json() as Promise<{ result?: { task?: { id: string } }; error?: unknown }>)
+    const taskId = res.result!.task!.id
+    expect(readReplyTo(sm.getDb(), 'a2a_acc_inv')).toEqual({ a2a: taskId })
+    expect(getInvocation(invId)).toMatchObject({ state: 'superseded', superseded_by: `a2a:${taskId}` })
+    vi.restoreAllMocks()
   })
 })

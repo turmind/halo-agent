@@ -8,6 +8,8 @@ import { createInvocation, findInvocation, getInvocation, invocationBody, type I
 import { createA2ADb, setA2ADb, getA2ADb, A2A_MIGRATIONS } from '../src/db/a2a-db.js'
 import { agentSessions } from '../src/db/schema.js'
 import { readReplyTo, writeReplyTo } from '../src/agents/relay.js'
+import { sweepInterruptedRuns } from '../src/agents/run-ledger.js'
+import { createRunsDb, setRunsDb, insertRunning } from '../src/db/runs-db.js'
 import { SessionManager } from '../src/agents/session-manager.js'
 import type { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
 
@@ -224,6 +226,8 @@ describe('POST /invocations', () => {
     expect(parseInvocation(JSON.stringify({ promptFile: 'jobs/a.md', session: 'job-x', agent: 'coach', id: 'e' })))
       .toEqual({ prompt: null, promptFile: 'jobs/a.md', session: 'job-x', agent: 'coach', id: 'e', async: false })
     expect(parseInvocation(JSON.stringify({ get: 'e' }))).toEqual({ get: 'e' })
+    // A present `get` must be a string — null is not "absent" there.
+    expect(parseInvocation(JSON.stringify({ get: null }))).toBe('get must be a non-empty string')
     // Unknown fields are ignored (callers may send newer ones).
     expect(parseInvocation(JSON.stringify({ prompt: 'p', async: true, future: 1 }))).toMatchObject({ prompt: 'p', async: true })
   })
@@ -282,6 +286,38 @@ describe('POST /invocations', () => {
     await until(() => findInvocation('b2')?.state === 'ok' && existsSync(join(ws, 'notify.env')))
     expect(prompts).toHaveLength(2) // the second folded into a follow-up turn
     expect(readFileSync(join(ws, 'notify.stdin'), 'utf8')).toMatch(/^done: 2/)
+  })
+
+  it('a new session pointed by a concurrent request while it was being created: re-read after the create — another job is superseded, an A2A / relay pointer is a 409', async () => {
+    const create = vi.mocked(SessionManager.prototype.createSession)
+    // Job r2 arrives (and points the session) while r1 is inside createSession.
+    let inner: Promise<Response> | null = null
+    create.mockImplementationOnce(async (_a, _p, _d, _n, explicitId, _w, accessLevel) => {
+      seedSession(explicitId!, accessLevel ?? null)
+      inner = post(app(), { prompt: 'second', session: 'job-race-00000000000000000000000000', id: 'r2' })
+      await until(() => findInvocation('r2') !== null && readReplyTo(sm.getDb(), explicitId!) !== null)
+      return explicitId!
+    })
+    let release!: () => void
+    gate = new Promise((r) => { release = r })
+    expect((await (await post(app(), { prompt: 'first', session: 'job-race-00000000000000000000000000', id: 'r1' })).json())).toMatchObject({ status: 'accepted' })
+    expect((await inner!).status).toBe(200)
+    // r1 wrote last and took over from r2 — r2 is not left `running` with no pointer.
+    expect(readReplyTo(sm.getDb(), 'job-race-00000000000000000000000000')).toEqual({ invocation: findInvocation('r1')!.id })
+    expect(findInvocation('r2')).toMatchObject({ state: 'superseded', superseded_by: findInvocation('r1')!.id })
+    release()
+    await until(() => findInvocation('r1')?.state === 'ok')
+
+    // Same race, but what lands meanwhile is an A2A task's pointer: 409, r3's row dropped.
+    create.mockImplementationOnce(async (_a, _p, _d, _n, explicitId, _w, accessLevel) => {
+      seedSession(explicitId!, accessLevel ?? null)
+      writeReplyTo(sm.getDb(), explicitId!, { a2a: 'task-9' })
+      return explicitId!
+    })
+    const r3 = await post(app(), { prompt: 'x', session: 'job-race-a2a-0000000000000000000000', id: 'r3' })
+    expect(r3.status).toBe(409)
+    expect(findInvocation('r3')).toBeNull()
+    expect(readReplyTo(sm.getDb(), 'job-race-a2a-0000000000000000000000')).toEqual({ a2a: 'task-9' })
   })
 
   it('a dispatch failure frees the id: 500, and a retry with the same id runs', async () => {
@@ -352,6 +388,26 @@ describe('POST /invocations', () => {
     await until(() => prompts.length === 2 && !sm.isSessionRunning('job-k'))
     await new Promise((r) => setTimeout(r, 100))
     expect(existsSync(join(ws, 'notify.env'))).toBe(false)
+  })
+
+  it('resume after a mid-run kill on a cron-* session id (the skill passes the local cron session): the real ledger sweep nudges it, the job ends ok, one notify', async () => {
+    const sid = 'cron-cron-19fc5f6fc06-93ng7q'
+    seedSession(sid)
+    const invId = createInvocation('c1', sid)
+    writeReplyTo(sm.getDb(), sid, { invocation: invId })
+    const runsDir = mkdtempSync(join(tmpdir(), 'halo-agentcore-inv-runs-'))
+    try {
+      setRunsDb(createRunsDb(runsDir))
+      insertRunning(ws, sid)
+      sweepInterruptedRuns(sm)
+      await until(() => getInvocation(invId)?.state === 'ok' && existsSync(join(ws, 'notify.env')))
+      expect(prompts[0]).toMatch(/\[System\] The server restarted at .* while you were mid-turn/)
+      expect(readFileSync(join(ws, 'notify.env'), 'utf8')).toBe(`${sid}|ok|${ws}`)
+      expect(readReplyTo(sm.getDb(), sid)).toBeNull()
+    } finally {
+      setRunsDb(null)
+      rmSync(runsDir, { recursive: true, force: true })
+    }
   })
 
   it('only the exact path: /invocations/ and //invocations are 404', async () => {

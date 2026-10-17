@@ -82,7 +82,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 
 <base>/                               # AgentCore session-dirs mode (HALO_AGENTCORE_SESSION_DIRS=1): HALO_WORKSPACE is a base, not a workspace
 ├── .template/                        # Deployer-synced seed for new session dirs (copied minus .halo/sessions, *.db + sidecars, runtime.lock, agentcore.lease*)
-├── .tmp-<sid>-<rand>/                # A session dir being built (0700); renamed to <sid>/ when complete, never served
+├── .tmp-<16 hex>/                    # A session dir being built (0700); renamed to <sid>/ when complete, never served
 └── <sid>/                            # One workspace per AgentCore runtime session id (owned 1000:1000 where chown is allowed), seen by its worker as /workspace
 ```
 
@@ -700,7 +700,7 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 | created_at / finished_at | INTEGER | Unix ms; `finished_at` null while running |
 | result | TEXT | Final reply text (`MEDIA:` lines kept), written at finish. Added in `A2A_MIGRATIONS` v2 |
 | result_files | TEXT | JSON `[{ path, size }]` — the reply's `MEDIA:` files that existed at finish, never their bytes. Added in `A2A_MIGRATIONS` v2 |
-| superseded_by | TEXT | Invocation id of the later job on the same session that took this one's completion. Added in `A2A_MIGRATIONS` v2 |
+| superseded_by | TEXT | What took this one's completion on the same session: a later job's invocation id, `a2a:<task id>` or `relay:<caller session id>`. Added in `A2A_MIGRATIONS` v2 |
 
 Rows are never pruned.
 

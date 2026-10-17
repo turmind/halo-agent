@@ -5,7 +5,8 @@
  * then passes `POST /` (JSON-RPC), `GET /.well-known/agent-card.json` and
  * `GET /ping` through on :9000. The same image serves serverProtocol HTTP
  * (:8080, `POST /invocations` — scheduled jobs, invocations.ts). One fixed
- * workspace (HALO_WORKSPACE — the EFS mount), no per-user dirs.
+ * workspace (HALO_WORKSPACE — the EFS mount); with HALO_AGENTCORE_SESSION_DIRS=1
+ * this is the worker behind agentcore-front.ts, on its session's dir.
  *
  * Single writer: each runtime session id gets its own microVM, all mounting
  * the same workspace. `<ws>/.halo/agentcore.lease` (heartbeat file, plain
@@ -25,21 +26,23 @@ import { config } from '../config.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionManager } from '../agents/session-manager.js'
 import { RUNTIME_LOCK_FILE } from '../agents/workspace-runtime-lock.js'
-import { readReplyTo, writeReplyTo, clearReplyTo } from '../agents/relay.js'
+import { readReplyTo, takeReplyTo, clearReplyTo } from '../agents/relay.js'
 import { loadAgentYaml } from '../agents/agent-loader.js'
+import { ROOT_SESSION_ID_RE } from '../agents/session-id.js'
 import { resolveDefaultAgentId } from '../channels/shared/commands.js'
 import { CHAT_ACCESS_LEVELS, sessionAccess, type AccountAccessLevel } from '../channels/shared/accounts.js'
 import { isHiddenWorkspacePath } from '../tools/sandbox.js'
-import { createA2ADb, setA2ADb } from '../db/a2a-db.js'
-import { createRunsDb, setRunsDb } from '../db/runs-db.js'
+import { createA2ADb, setA2ADb, type A2ADb } from '../db/a2a-db.js'
+import { createRunsDb, setRunsDb, type RunsDb } from '../db/runs-db.js'
+import { rawSqlite } from '../db/raw-sqlite.js'
 import { setDurableDbDir } from '../db/durability.js'
 import { nudgesSettled } from '../agents/run-ledger.js'
 import { CARD_FILE, publicOrigin, type A2ACaller, type A2AStrategies } from './exposure.js'
-import { createA2ARoutes } from './routes.js'
+import { SSE_KEEPALIVE_MS, createA2ARoutes, isUniqueViolation } from './routes.js'
 import { hasPendingPushes, startPushSender } from './push.js'
 import { reconcileOpenDispatches } from './outbound.js'
 import {
-  TERMINAL_INVOCATION, createInvocation, deleteInvocation, findInvocation, getInvocation, invocationBody, lookupInvocation, onInvocationDone, supersedeInvocation,
+  TERMINAL_INVOCATION, createInvocation, deleteInvocation, findInvocation, getInvocation, invocationBody, lookupInvocation, onInvocationDone,
 } from './invocations.js'
 import { notifyInFlight } from './agentcore-notify.js'
 import { CARD_SUFFIX, RPC, rpcError } from './wire.js'
@@ -166,9 +169,18 @@ export class WorkspaceLease {
         r = tryAcquireLease(this.file, this.owner)
       }
       if (r === 'held') {
+        try {
+          this.hooks.onAcquired()
+        } catch (err) {
+          // Held only once the workspace state opened: a failed open (an a2a.db
+          // migration, getOrCreate) would otherwise leave a lease no heartbeat
+          // keeps — taken over 45 s later while this process still writes.
+          releaseLease(this.file, this.owner)
+          console.error(`[AgentCore] workspace lease released: opening the workspace failed (${err instanceof Error ? err.message : String(err)}) — the next request retries`)
+          return false
+        }
         this._held = true
         console.log(`[AgentCoreA2A] workspace lease acquired (${this.owner})`)
-        this.hooks.onAcquired()
         this.schedule()
         return true
       }
@@ -250,9 +262,6 @@ export function seedAgentCard(workspace: string): boolean {
 
 const MAX_INVOCATION_BODY = 1024 * 1024
 const MAX_PROMPT_FILE = 1024 * 1024
-/** Root session ids only (no `>`): the id names the session log file. Same
- *  charset as routes/cron.ts SESSION_ID_RE. */
-const INV_SESSION_RE = /^[A-Za-z0-9_:-]{1,200}$/
 /** An agent id is a directory name under agents/ — no separators, no leading dot. */
 const INV_AGENT_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
 /** Model-bound only, ahead of the job prompt: a scheduled job is unattended by
@@ -261,7 +270,6 @@ const UNATTENDED_PREAMBLE = '[Unattended scheduled run — nobody will answer qu
 /** Sync mode's wait, A2A blocking SendMessage's cap (routes.ts BLOCKING_WAIT_MS):
  *  past it the answer is `running` + the invocation id, the run continues. */
 const INVOCATION_WAIT_MS = 10 * 60_000
-const SSE_KEEPALIVE_MS = 15_000
 
 export interface InvocationRequest { prompt: string | null; promptFile: string | null; session: string | null; agent: string | null; id: string | null; async: boolean }
 /** `{"get": "<invocation id or caller id>"}`: read a job's current body. */
@@ -283,7 +291,9 @@ export function parseInvocation(raw: string): InvocationRequest | InvocationQuer
   if (b.async !== undefined && typeof b.async !== 'boolean') return 'async must be a boolean'
   try {
     if (b.get !== undefined) {
-      const get = optStr(b.get, 'get')!
+      // optStr maps null to "absent" — here a present `get` must be a string.
+      const get = optStr(b.get, 'get')
+      if (get === null) return 'get must be a non-empty string'
       if (get.length > 256) return 'get is longer than 256 chars'
       if (['prompt', 'promptFile', 'session', 'agent', 'id', 'async'].some((k) => b[k] !== undefined)) return 'get takes no other fields'
       return { get }
@@ -291,7 +301,7 @@ export function parseInvocation(raw: string): InvocationRequest | InvocationQuer
     const req: InvocationRequest = {
       prompt: optStr(b.prompt, 'prompt'),
       promptFile: optStr(b.promptFile, 'promptFile'),
-      session: optStr(b.session, 'session', INV_SESSION_RE),
+      session: optStr(b.session, 'session', ROOT_SESSION_ID_RE),
       agent: optStr(b.agent, 'agent', INV_AGENT_RE),
       id: optStr(b.id, 'id'),
       async: b.async === true,
@@ -313,10 +323,6 @@ function readPromptFile(workspace: string, rel: string): string | { error: strin
   if (st.size > MAX_PROMPT_FILE) return { error: `promptFile is larger than ${MAX_PROMPT_FILE} bytes: ${rel}` }
   const text = fs.readFileSync(real, 'utf8')
   return text.trim() ? text : { error: `promptFile is empty: ${rel}` }
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  return String((err as { code?: unknown })?.code ?? '').startsWith('SQLITE_CONSTRAINT')
 }
 
 type InvocationReply = [200 | 400 | 409, Record<string, unknown>]
@@ -373,10 +379,17 @@ export async function startInvocation(sm: SessionManager, workspace: string, acc
   try {
     const level = sessionAccess(accessLevel)
     if (agentId) await sm.createSession(agentId, null, 'AgentCore invocation', undefined, sessionId, undefined, level)
+    // Re-read past that await: a concurrent request may have pointed the
+    // session meanwhile (`owed` above is only the fast refusal). From here to
+    // the write it is synchronous, so nothing can slip in between.
+    const now = readReplyTo(sm.getDb(), sessionId)
+    if (now && !('invocation' in now)) {
+      deleteInvocation(invId)
+      return [409, { error: `session ${sessionId} is serving an A2A task or relay — pick another session` }]
+    }
     // A job still owed on this session (busy, or cut off and never resumed):
     // the new one takes the pointer — one notify, at the end, for both.
-    if (owed) supersedeInvocation(owed.invocation, invId)
-    writeReplyTo(sm.getDb(), sessionId, { invocation: invId })
+    takeReplyTo(sm.getDb(), sessionId, { invocation: invId }, invId)
     const stamp = sm.appendUserMessage(sessionId, prompt)
     const state = await sm.sendUserMessage(sessionId, `${UNATTENDED_PREAMBLE}\n\n${prompt}`, undefined, level, stamp)
     console.log(`[AgentCore] invocation ${invId}${req.id ? ` (id ${req.id})` : ''} → ${sessionId} (${agentId ? 'new' : 'resumed'}, ${state})`)
@@ -542,19 +555,33 @@ export function createAgentCoreA2A(registry: SessionManagerRegistry, rawWorkspac
   const accessLevel = upstreamAccessLevel()
   const lease = new WorkspaceLease(path.join(haloDir, LEASE_FILE), {
     onAcquired() {
-      // a2a.db on the workspace: tasks survive a microVM recycle.
-      setA2ADb(createA2ADb(haloDir))
-      // Run ledger on the workspace too (index.ts sets none in this mode): the
-      // rows a killed microVM left (8 h maxLifetime, crash, recycle) are here
-      // for the next holder. Before getOrCreate — its constructor drains them.
-      setRunsDb(createRunsDb(haloDir))
-      // The lease is the cross-host single-writer gate. runtime.lock's pid
-      // probe can't see other microVMs (a crashed one's pid may read alive
-      // here), so drop it and let the SessionManager claim it afresh.
-      fs.rmSync(path.join(haloDir, RUNTIME_LOCK_FILE), { force: true })
-      // Constructor, as at server boot: claim runtime.lock → orphan reconcile
-      // → goal sweep → run-ledger sweep (nudges; the POST awaits them).
-      registry.getOrCreate(workspace)
+      let a2a: A2ADb | null = null
+      let runs: RunsDb | null = null
+      try {
+        // a2a.db on the workspace: tasks survive a microVM recycle.
+        a2a = createA2ADb(haloDir)
+        setA2ADb(a2a)
+        // Run ledger on the workspace too (index.ts sets none in this mode): the
+        // rows a killed microVM left (8 h maxLifetime, crash, recycle) are here
+        // for the next holder. Before getOrCreate — its constructor drains them.
+        runs = createRunsDb(haloDir)
+        setRunsDb(runs)
+        // The lease is the cross-host single-writer gate. runtime.lock's pid
+        // probe can't see other microVMs (a crashed one's pid may read alive
+        // here), so drop it and let the SessionManager claim it afresh.
+        fs.rmSync(path.join(haloDir, RUNTIME_LOCK_FILE), { force: true })
+        // Constructor, as at server boot: claim runtime.lock → orphan reconcile
+        // → goal sweep → run-ledger sweep (nudges; the POST awaits them).
+        registry.getOrCreate(workspace)
+      } catch (err) {
+        // Back to "nothing opened" (the lease is released by the caller): the
+        // next request's acquisition opens everything afresh.
+        setA2ADb(null)
+        setRunsDb(null)
+        try { a2a?.close() } catch { /* already closed */ }
+        try { if (runs) rawSqlite(runs).close() } catch { /* already closed */ }
+        throw err
+      }
       startPushSender({ maxAgeMs: PUSH_MAX_AGE_MS })
       reconcileOpenDispatches()
     },

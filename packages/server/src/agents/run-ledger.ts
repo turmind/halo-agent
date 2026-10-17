@@ -75,7 +75,9 @@ export function nudgesSettled(workspaceRoot: string): Promise<void> {
  * `deliverGoalRound` returns early for a non-running goal. (Not
  * `resolveGoalRoute`: that describes where chat goes, not who re-dispatches.)
  * `cron-*` sessions (cli-driven, never in the ledger by design but the id
- * prefix is the cheap guard); `internal: true` agents.
+ * prefix is the cheap guard) — unless the row has a `reply_to`: then a caller
+ * (an AgentCore `/invocations` job on a cron session id, A2A, relay) is
+ * waiting and the root is nudged like any other; `internal: true` agents.
  *
  * The text depends on whether the root itself was mid-run (its own id in the
  * ledger): if so, it is told its own turn was cut off and to carry on, and
@@ -92,11 +94,13 @@ export function sweepInterruptedRuns(host: RunLedgerHost): void {
   const restartedAt = new Date().toISOString()
   const sends: Promise<unknown>[] = []
   for (const rootId of roots) {
-    if (rootId.startsWith('cron-')) continue
-    const row = db.select({ agentId: agentSessions.agentId, archivedAt: agentSessions.archivedAt, goal: agentSessions.goal, goalSessionId: agentSessions.goalSessionId })
+    const row = db.select({ agentId: agentSessions.agentId, archivedAt: agentSessions.archivedAt, goal: agentSessions.goal, goalSessionId: agentSessions.goalSessionId, replyTo: agentSessions.replyTo })
       .from(agentSessions)
       .where(eq(agentSessions.id, rootId))
       .get()
+    // A `cron-*` root with a reply_to is not a cli-driven cron tree: a caller
+    // waits on it (AgentCore /invocations passes the local cron session id).
+    if (rootId.startsWith('cron-') && !row?.replyTo) continue
     if (!row || row.archivedAt !== null || row.goal !== null) continue
     if (row.goalSessionId && readGoalState(db, row.goalSessionId)?.status === 'running') continue
     if (isInternalAgent(row.agentId, host.workspaceRoot)) continue

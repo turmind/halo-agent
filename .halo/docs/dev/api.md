@@ -481,7 +481,7 @@ PATCH / DELETE walk the dotted key layer by layer, so a segment of `__proto__` /
 - `general.observability.headers` — extra OTLP request headers, comma-separated `k=v` (secret)
 - `general.observability.capture_content` — put prompt/completion/tool text on spans, default `false`
 
-All four are `globalOnly`, take effect on restart. See [design/observability.md](../design/observability.md).
+All four are `globalOnly`, take effect on restart. The standard `OTEL_*` env vars override them: `OTEL_EXPORTER_OTLP_ENDPOINT` / `_HEADERS` / `OTEL_SERVICE_NAME` when exported (the settings fill them only if unset), and `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (`true` / `false` / `1` / `0`) beats `capture_content` either way — so a container can be configured from its env alone, without a settings edit. See [design/observability.md](../design/observability.md).
 
 ### Notebook kernel settings
 
@@ -528,7 +528,9 @@ Files: `packages/server/src/a2a/agentcore.ts` (routes), `invocations.ts` (jobs),
 
 Any other path is 404, exact match (`//`, `/invocations/` are 404 too). An earlier HTTP mode (`/invocations` with WS `/ws` and per-user workspaces) was removed 2026-10-09; today's `/invocations` is the job entry below.
 
-**Session-dirs mode** (`HALO_AGENTCORE_SESSION_DIRS=1`, [design](../design/agentcore.md#session-dirs)): a root front answers first. `/ping` is its own until a worker is up. Every other request needs `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` matching `^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$` — missing / invalid → 400; another id than the one this microVM serves → 409; base not mounted yet → 503 (retry); session-dir creation failed → 500 (retry); view setup failed or worker not ready within 30 s → 503 for every later request. Errors are `{"error": "…"}`. Past that, requests are proxied to the worker unchanged.
+**Session-dirs mode** (`HALO_AGENTCORE_SESSION_DIRS=1`, [design](../design/agentcore.md#session-dirs)): a root front answers first. `/ping` is its own until a worker is up. Every other request needs `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` matching `^[A-Za-z0-9][A-Za-z0-9_-]{32,254}$` (33–255 chars: the id is the dir name, so AgentCore's 256-char maximum is a 400 here) — missing / invalid → 400; another id than the one this microVM serves → 409; base not a mount point yet → 503 (retry); session-dir creation failed → 500 (retry); view setup failed or worker not ready within 30 s → 503 for every later request; a front handler failing → 500. Errors are `{"error": "…"}`. Past that, requests are proxied to the worker unchanged.
+
+**503 = not serving right now; the reason is the `error` text.** Only a failed view setup and a worker not ready in 30 s are for good on that microVM; the base not a mount point yet and the lease held by another runtime session clear on their own (retry with the same `id`). Don't decide to give up from the status alone.
 
 ### POST `/invocations`
 
@@ -559,7 +561,7 @@ Response mode for a new job: `"async": true` → the receipt; `Accept: text/even
   "files": [{ "path": "/workspace/out/a.mp3", "size": 48213 }], // MEDIA: files that existed at finish
   "startedAt": "2026-10-17T14:02:11.000Z",
   "finishedAt": "2026-10-17T14:02:15.500Z", // null while running
-  "supersededBy": "<uuid>"                  // only when superseded
+  "supersededBy": "<uuid> | a2a:<task id> | relay:<session id>"  // only when superseded
 }
 
 // Same id seen before: that job's current body + "duplicate": true, nothing runs
@@ -581,7 +583,7 @@ event: result
 data: {<job body>}
 ```
 
-`superseded`: a new job on the same session took over this one's completion (`supersededBy` = its invocation id); a sync waiter or SSE stream on the old job answers that at once.
+`superseded`: something else on the same session took over this one's completion — a new job (`supersededBy` = its invocation id), an A2A SendMessage (`a2a:<task id>`) or a relay dispatch (`relay:<caller session id>`); a sync waiter or SSE stream on the old job answers that at once.
 
 | Status | When |
 |---|---|
@@ -590,7 +592,7 @@ data: {<job body>}
 | 404 | `get` of an unknown key |
 | 409 | The session owes an A2A task or a relay report |
 | 500 | Dispatch failed (`dispatch failed: …`); the job row is dropped, so a retry with the same `id` runs |
-| 503 | Workspace lease held by another runtime session (the `-32603` text) — `get` included |
+| 503 | Not serving right now, reason in `error`: the workspace lease held by another runtime session (the `-32603` text; `get` included — retry), or in session-dirs mode one of the front's 503s above |
 
 Errors are `{"error": "…"}`. Completion runs `HALO_AGENTCORE_NOTIFY` with the final reply on stdin — see [the notify hook](../design/agentcore.md#completion-and-the-notify-hook).
 

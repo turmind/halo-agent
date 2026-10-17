@@ -15,7 +15,7 @@ import { streamSSE } from 'hono/streaming'
 import crypto from 'node:crypto'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionManager } from '../agents/session-manager.js'
-import { readReplyTo, writeReplyTo, clearReplyTo, listActiveChildren, A2A_CHANNEL_PREFIX } from '../agents/relay.js'
+import { readReplyTo, takeReplyTo, clearReplyTo, listActiveChildren, A2A_CHANNEL_PREFIX } from '../agents/relay.js'
 import { resolveDefaultAgentId } from '../channels/shared/commands.js'
 import { sessionAccess } from '../channels/shared/accounts.js'
 import { sessionPrefix } from '../channels/shared/session-prefix.js'
@@ -37,7 +37,8 @@ const STREAMING = true
 const BLOCKING_WAIT_MS = 10 * 60_000
 /** Fits a message's 10 MB of images (base64 ≈ 13.4 MB) plus its text. */
 const MAX_BODY = 16 * 1024 * 1024
-const SSE_KEEPALIVE_MS = 15_000
+/** Also /invocations' SSE (agentcore.ts). */
+export const SSE_KEEPALIVE_MS = 15_000
 
 interface Ctx { c: Context; sm: SessionManager; workspace: string; caller: A2ACaller; ownsRuntimes: boolean }
 type Params = Record<string, unknown>
@@ -108,7 +109,8 @@ async function parsePushConfig(raw: unknown): Promise<PushConfigInput> {
   }
 }
 
-function isUniqueViolation(err: unknown): boolean {
+/** A UNIQUE / constraint failure from better-sqlite3 (the dedupe backstops here and in agentcore.ts). */
+export function isUniqueViolation(err: unknown): boolean {
   return String((err as { code?: unknown })?.code ?? '').startsWith('SQLITE_CONSTRAINT')
 }
 
@@ -193,7 +195,7 @@ async function dispatchMessage(x: Ctx, p: Params): Promise<TaskRow> {
       const agentId = await resolveDefaultAgentId(x.sm, x.workspace)
       await x.sm.createSession(agentId, null, `A2A: ${x.caller.label || x.caller.accountId}`, undefined, sessionId, undefined, sessionAccess(x.caller.accessLevel))
     }
-    if (!followUp) writeReplyTo(x.sm.getDb(), sessionId, { a2a: t.id })
+    if (!followUp) takeReplyTo(x.sm.getDb(), sessionId, { a2a: t.id }, `a2a:${t.id}`)
     if (push) putPushConfig(t.id, push)
 
     const prefixed = `${A2A_CHANNEL_PREFIX}account: ${x.caller.accountId}]\n\n${text}`

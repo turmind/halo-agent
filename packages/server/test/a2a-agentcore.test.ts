@@ -121,6 +121,27 @@ describe('workspace lease', () => {
     b.stop()
     expect(existsSync(leaseFile())).toBe(false)
   }, 10_000)
+
+  it('WorkspaceLease: onAcquired throwing → not held, the lease file released, no heartbeat; the next request retries and holds', async () => {
+    let calls = 0
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const a = new WorkspaceLease(leaseFile(), { onAcquired: () => { if (++calls === 1) throw new Error('a2a.db migration v2 failed') }, onLost: () => {} })
+    try {
+      expect(await a.acquire()).toBe(false)
+      expect(a.held).toBe(false)
+      expect(existsSync(leaseFile())).toBe(false)
+      expect(a['timer']).toBeNull()
+      expect(err.mock.calls.some((c) => /\[AgentCore\] workspace lease released: opening the workspace failed \(a2a\.db migration v2 failed\)/.test(String(c[0])))).toBe(true)
+      expect(await a.acquire()).toBe(true)
+      expect(calls).toBe(2)
+      expect(a.held).toBe(true)
+      expect(leaseBody().owner).toBe(a.owner)
+      expect(a['timer']).not.toBeNull()
+    } finally {
+      a.stop()
+      err.mockRestore()
+    }
+  })
 })
 
 describe('upstream exposure', () => {
