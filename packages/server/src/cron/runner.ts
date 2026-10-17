@@ -422,7 +422,7 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
 /**
  * Start every enabled job in `cron_jobs`. Idempotent — schedules already
  * running get torn down and re-created so the in-memory state matches db
- * (used after CRUD via the `reload` hook from REST routes).
+ * (reloadAll, which runs only here at boot and on `POST /cron/reload`).
  */
 /** Daemon-owned interval handles (log prune + db reconcile), saved so
  *  stopCronDaemon can clear them — otherwise reconcileFromDb keeps
@@ -461,7 +461,8 @@ export function stopCronDaemon(): void {
 
 /**
  * Reload all schedules from db. Tear down every existing schedule, then
- * re-create from scratch. Called after CRUD; cheap (cancellation is a
+ * re-create from scratch. Called only at boot and by `POST /cron/reload`
+ * (CRUD calls scheduleJob / unscheduleJob per job); cheap (cancellation is a
  * synchronous clearTimeout and we never have more than ~hundreds of jobs).
  */
 export function reloadAll(): void {
@@ -593,11 +594,13 @@ export function scheduleJob(jobId: string): void {
       target = cron.nextRun()
     }
   } catch (err) {
-    // Only an out-of-band write gets here (REST validates). Handled like
-    // past activeUntil: one warn per fingerprint, retried once the row changes.
+    // Invalid schedule or timezone: REST doesn't check the timezone, an
+    // out-of-band write checks nothing, and croner throws on a bad timezone
+    // only at nextRun(). Handled like past activeUntil: one warn per
+    // fingerprint, retried once the row changes.
     _expired.add(jobId)
     _fingerprint.set(jobId, jobFingerprint(job))
-    console.warn(`[Cron] ${jobId} schedule invalid (${job.schedule}): ${err instanceof Error ? err.message : String(err)}`)
+    console.warn(`[Cron] ${jobId} schedule invalid (${job.schedule}${job.timezone ? `, tz ${job.timezone}` : ''}): ${err instanceof Error ? err.message : String(err)}`)
     return
   }
   const entry: ActiveSchedule = { jobId, cron, timer: null }
