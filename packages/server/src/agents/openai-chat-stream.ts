@@ -52,8 +52,9 @@ function streamErrorText(err: NonNullable<ChatCompletionChunk['error']>): string
   return `${code}: ${err.message.slice(0, 300)}${err.type && err.type !== code ? ` (${err.type})` : ''}`
 }
 
-/** finish() on a stream that ended without a finish_reason — network-class in classifyModelError. */
-export const OPENAI_STREAM_TRUNCATED = 'OpenAIStreamTruncated: stream ended without a finish_reason; transient, retrying'
+/** finish() on a stream that ended without a finish_reason — network-class in
+ *  classifyModelError (matched on the `OpenAIStreamTruncated` prefix). */
+export const OPENAI_STREAM_TRUNCATED = 'OpenAIStreamTruncated: stream ended without a finish_reason'
 
 /** Folded result — shaped like the non-streaming `choices[0].message` + siblings so the agents' existing parse code runs unchanged. */
 export interface ChatCompletionFolded {
@@ -125,6 +126,9 @@ export class ChatCompletionAccumulator {
     // kimi / zhipu / doubao / hunyuan / gemini, text + tool replies, 2026-10-17)
     // sends one on its last choices chunk, before the usage chunk and [DONE].
     if (this.finishReason === undefined) throw new Error(OPENAI_STREAM_TRUNCATED)
+    // DeepSeek's documented "request interrupted due to insufficient resource
+    // of the inference system": the same cut-off reply, with a reason.
+    if (this.finishReason === 'insufficient_system_resource') throw new Error('OpenAIStreamTruncated: finish_reason insufficient_system_resource')
     return {
       message: {
         ...(this.content ? { content: this.content } : {}),

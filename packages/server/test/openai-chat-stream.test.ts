@@ -283,6 +283,15 @@ describe('fetchChatCompletionStream', () => {
       await expect(call()).rejects.toThrow(OPENAI_STREAM_TRUNCATED)
     })
 
+    it('DeepSeek finish_reason "insufficient_system_resource" → the truncation error (network), not an end_turn', async () => {
+      stubFetch(() => sseResponse([chunk({ content: 'par' }), chunk({}, 'insufficient_system_resource')]))
+
+      const err = await call().then(() => null, (e: unknown) => e as Error)
+
+      expect(err?.message).toBe('OpenAIStreamTruncated: finish_reason insufficient_system_resource')
+      expect(classifyModelError(err).kind).toBe('network')
+    })
+
     it('finish_reason "length" with no content → max_tokens result, no throw', async () => {
       stubFetch(() => sseResponse([chunk({ role: 'assistant', content: '' }), chunk({}, 'length')]))
 
