@@ -393,7 +393,7 @@ if (!AGENTCORE) {
   app.route('/api', extensionRoutes)
   startExtensionsWatcher()
 
-  // Update checks (newer Halo on npm) — admin Settings only, so not in AgentCore mode.
+  // Update checks (newer Halo on npm; installed extensions via update.json) — admin Settings only, so not in AgentCore mode.
   app.route('/api', createUpdateRoutes())
 
   app.route('/api', createJupyterRoutes(jupyter!))
