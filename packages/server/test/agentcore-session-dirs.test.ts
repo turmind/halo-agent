@@ -4,17 +4,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import {
-  parseSessionHeader, isMountPoint, skipTemplateEntry, ensureSessionDir, buildWorkerArgv, workerEnv,
-  workerPathToHost, rewriteMediaLines, mediaMapper, isContractPath, startAgentCoreFront, SESSION_HEADER,
+  parseSessionHeader, isMountPoint, skipTemplateEntry, ensureSessionDir, buildSetupCommands, buildWorkerCommand, workerEnv,
+  copyMediaFile, copyMediaLines, isContractPath, startAgentCoreFront, SESSION_HEADER,
 } from '../src/a2a/agentcore-front.js'
 import { FRONT_TOKEN_ENV, FRONT_TOKEN_HEADER, FRONT_URL_ENV } from '../src/a2a/agentcore-notify.js'
 
 /**
- * AgentCore session-dirs mode (CONTRACT §1b v2): the root front validates the
- * session header, creates `<base>/<sid>` from `.template`, spawns the worker
- * in its own mount namespace and proxies to it. The namespace / setpriv part
- * runs only on a real microVM — here its argv is the testable unit, and the
- * front runs against a stand-in worker.
+ * AgentCore session-dirs mode (CONTRACT §1b, boss 11:45Z / 12:18Z): the root
+ * front validates the session header, creates `<base>/<sid>` from
+ * `.template`, binds it at /workspace + unmounts the base + rejects uid 1000's
+ * NFS egress (in its own namespace, once), spawns the worker via setpriv and
+ * proxies to it. mount / iptables / setpriv run only on a real microVM — here
+ * their argv is the testable unit, and the front runs against a stand-in
+ * view setup and worker.
  */
 
 const SID_A = 'job-english-coach-000000000000000000000'
@@ -59,67 +61,80 @@ describe('pure parts', () => {
     for (const rel of ['.halo', '.halo/agents', '.halo/agents/coach/agent.yaml', '.halo/sessions-notes.md', 'INSTRUCTIONS.md', 'scripts/tts_polly.py', 'data/x.dbx']) expect(skipTemplateEntry(rel), rel).toBe(false)
   })
 
-  it('worker argv: unshare -m private → bind at /workspace → umount -l base → setpriv drop; paths as args, not in the script', () => {
-    const argv = buildWorkerArgv({ base: '/mnt/efs', sessionDir: `/mnt/efs/${SID_A}`, uid: 1000, gid: 1000, command: ['/usr/bin/node', '/usr/lib/halo/dist/index.js', 'agentcore', '--workspace', '/workspace', '-p', '9100'] })
-    expect(argv.slice(0, 6)).toEqual(['unshare', '-m', '--propagation', 'private', 'sh', '-c'])
-    const script = argv[6]
-    const lines = script.split('\n')
-    expect(lines[1]).toBe('mkdir -p /workspace && mount --bind "$src" /workspace || exit 91')
-    expect(lines[2]).toBe('umount -l "$base" || exit 93')
-    expect(lines[3]).toBe('[ ! -e "$src" ] || exit 94')
-    expect(lines[4]).toBe('exec setpriv --reuid=1000 --regid=1000 --clear-groups --inh-caps=-all --bounding-set=-all --no-new-privs -- "$@"')
-    expect(script).not.toContain('/mnt/efs')
-    expect(script).not.toContain(SID_A)
-    expect(argv.slice(7)).toEqual(['halo-worker', `/mnt/efs/${SID_A}`, '/mnt/efs', '/usr/bin/node', '/usr/lib/halo/dist/index.js', 'agentcore', '--workspace', '/workspace', '-p', '9100'])
+  it('view setup: bind the session dir at /workspace, then lazy-umount the base, then reject uid 1000 → :2049', () => {
+    expect(buildSetupCommands('/mnt/efs', `/mnt/efs/${SID_A}`)).toEqual([
+      ['mkdir', '-p', '/workspace'],
+      ['mount', '--bind', `/mnt/efs/${SID_A}`, '/workspace'],
+      ['umount', '-l', '/mnt/efs'],
+      ['iptables', '-A', 'OUTPUT', '-m', 'owner', '--uid-owner', '1000', '-p', 'tcp', '--dport', '2049', '-j', 'REJECT'],
+    ])
   })
 
-  it('worker env: allowlist only — channel secrets and the notify command never pass', () => {
+  it('worker command: setpriv uid AND gid 1000, no groups, every cap cleared, no_new_privs, then env -i <allowlist>', () => {
+    const argv = buildWorkerCommand({ PATH: '/usr/bin', HOME: '/home/node', X: 'a b=c' }, ['/usr/bin/node', '/usr/lib/halo/bin/halo.js', 'agentcore', '--workspace', '/workspace', '-p', '9100'])
+    expect(argv).toEqual([
+      'setpriv', '--reuid=1000', '--regid=1000', '--clear-groups', '--inh-caps=-all', '--bounding-set=-all', '--no-new-privs',
+      'env', '-i', 'PATH=/usr/bin', 'HOME=/home/node', 'X=a b=c',
+      '/usr/bin/node', '/usr/lib/halo/bin/halo.js', 'agentcore', '--workspace', '/workspace', '-p', '9100',
+    ])
+  })
+
+  it('worker env: allowlist only — channel secrets and the notify command never pass; every OTEL_* does', () => {
     const env = workerEnv({
       PATH: '/usr/bin', AWS_REGION: 'ap-northeast-1', AWS_DEFAULT_REGION: 'ap-northeast-1', HALO_LOG_LEVEL: 'info',
-      HALO_A2A_ACCESS: 'full', HALO_A2A_PUBLIC_URL: 'https://x', OTEL_SERVICE_NAME: 's', AGENT_OBSERVABILITY_ENABLED: 'true',
+      HALO_A2A_ACCESS: 'full', HALO_A2A_PUBLIC_URL: 'https://x', OTEL_SERVICE_NAME: 's', OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'true', AGENT_OBSERVABILITY_ENABLED: 'true',
       AWS_CONTAINER_CREDENTIALS_FULL_URI: 'http://169.254.170.2/x',
       FEISHU_APP_SECRET: 's1', SLACK_BOT_TOKEN: 's2', TELEGRAM_BOT_TOKEN: 's3', WECOM_WEBHOOK_KEY: 's4', WECOM_BOT_SECRET: 's5',
       HALO_AGENTCORE_NOTIFY: 'python3 /opt/notify.py', HALO_AGENTCORE_SESSION_DIRS: '1', HALO_WORKSPACE: '/mnt/efs', HALO_PORT: '8080', HOME: '/root', HALO_PASSWORD: 'p',
     }, { url: 'http://127.0.0.1:4000', token: 't0k' })
     expect(env).toEqual({
       PATH: '/usr/bin', AWS_REGION: 'ap-northeast-1', AWS_DEFAULT_REGION: 'ap-northeast-1', HALO_LOG_LEVEL: 'info',
-      HALO_A2A_ACCESS: 'full', HALO_A2A_PUBLIC_URL: 'https://x', OTEL_SERVICE_NAME: 's', AGENT_OBSERVABILITY_ENABLED: 'true',
+      HALO_A2A_ACCESS: 'full', HALO_A2A_PUBLIC_URL: 'https://x', OTEL_SERVICE_NAME: 's', OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'true', AGENT_OBSERVABILITY_ENABLED: 'true',
       AWS_CONTAINER_CREDENTIALS_FULL_URI: 'http://169.254.170.2/x',
-      HOME: '/home/node', HALO_HOME: '/home/node/.halo', [FRONT_URL_ENV]: 'http://127.0.0.1:4000', [FRONT_TOKEN_ENV]: 't0k',
+      HOME: '/home/node', [FRONT_URL_ENV]: 'http://127.0.0.1:4000', [FRONT_TOKEN_ENV]: 't0k',
     })
     expect(workerEnv({}, { url: 'u', token: 't' }).PATH).toMatch(/\/usr\/bin/)
   })
 
-  it('MEDIA rewrite: /workspace/… → the host session dir; outside, `..` escapes, symlinks out and dirs are dropped', () => {
-    const dir = join(base, SID_A)
-    mkdirSync(join(dir, 'out'), { recursive: true })
-    mkdirSync(join(base, SID_B))
-    writeFileSync(join(dir, 'out', 'a.mp3'), 'x')
-    writeFileSync(join(base, SID_B, 'secret.txt'), 'b')
-    symlinkSync(join(base, SID_B, 'secret.txt'), join(dir, 'out', 'link.txt'))
-    expect(workerPathToHost('/workspace/out/a.mp3', dir)).toBe(join(dir, 'out', 'a.mp3'))
-    expect(workerPathToHost('/workspace/../mnt/x', dir)).toBeNull()
-    expect(workerPathToHost('/workspacex/a', dir)).toBeNull()
+  it('MEDIA copy: only a regular file opened under the root, ≤ the cap, is copied; symlinks out, dirs, oversize, relative and missing are dropped', async () => {
+    const root = join(base, 'ws')
+    const outside = join(base, 'outside')
+    const dest = join(base, 'dest')
+    mkdirSync(join(root, 'out'), { recursive: true })
+    mkdirSync(outside)
+    mkdirSync(dest, { mode: 0o700 })
+    writeFileSync(join(root, 'out', 'a.mp3'), 'audio')
+    writeFileSync(join(root, 'out', 'big.bin'), Buffer.alloc(64))
+    writeFileSync(join(outside, 'secret.txt'), 'b')
+    symlinkSync(join(outside, 'secret.txt'), join(root, 'out', 'link.txt'))
+    symlinkSync(outside, join(root, 'dirlink'))
+    symlinkSync(join(root, 'out', 'a.mp3'), join(root, 'inner.mp3'))
+
+    const one = (p: string, max?: number) => copyMediaFile(p, root, join(dest, `f${Math.random()}`), max)
+    expect(await one(join(root, 'out', 'a.mp3'))).toBeNull()
+    expect(await one(join(root, 'inner.mp3'))).toBeNull() // a symlink that stays inside is fine
+    expect(await one(join(root, 'out', 'link.txt'))).toMatch(/not under/)
+    expect(await one(join(root, 'dirlink', 'secret.txt'))).toMatch(/not under/)
+    expect(await one(join(root, 'out', '..', '..', 'outside', 'secret.txt'))).toMatch(/not under/)
+    expect(await one(join(root, 'out'))).toMatch(/not a regular file/)
+    expect(await one(join(root, 'out', 'big.bin'), 63)).toMatch(/larger than 63 bytes/)
+    expect(await one(join(root, 'out', 'big.bin'), 64)).toBeNull()
+    expect(await one('out/a.mp3')).toMatch(/absolute/)
+    expect(await one(join(root, 'nope.mp3'))).toMatch(/cannot open \(ENOENT\)/)
+    expect(await one('/proc/1/environ')).toMatch(/not under|cannot open/)
+
     const text = [
       'Today\'s phrase.',
-      'MEDIA:/workspace/out/a.mp3',
-      'MEDIA: /workspace/out/a.mp3 ',
-      `MEDIA:/workspace/../${SID_B}/secret.txt`,
-      'MEDIA:/workspace/out/link.txt',
-      'MEDIA:/workspace/out',
-      `MEDIA:${base}/${SID_B}/secret.txt`,
-      'not MEDIA:/workspace/out/a.mp3',
+      `MEDIA:${root}/out/a.mp3`,
+      `MEDIA: ${root}/out/a.mp3 `,
+      `MEDIA:${root}/out/link.txt`,
+      `MEDIA:${root}/out`,
+      `not MEDIA:${root}/out/a.mp3`,
     ].join('\n')
-    expect(rewriteMediaLines(text, mediaMapper(dir)).split('\n')).toEqual([
-      'Today\'s phrase.',
-      `MEDIA:${dir}/out/a.mp3`,
-      `MEDIA:${dir}/out/a.mp3`,
-      '[file not attached: secret.txt — not a file in this workspace]',
-      '[file not attached: link.txt — not a file in this workspace]',
-      '[file not attached: out — not a file in this workspace]',
-      '[file not attached: secret.txt — not a file in this workspace]',
-      'not MEDIA:/workspace/out/a.mp3',
-    ])
+    const rewritten = (await copyMediaLines(text, root, dest, 'inv_1')).split('\n')
+    expect(rewritten).toEqual(['Today\'s phrase.', `MEDIA:${dest}/0/a.mp3`, `MEDIA:${dest}/1/a.mp3`, `not MEDIA:${root}/out/a.mp3`])
+    expect(readFileSync(join(dest, '0', 'a.mp3'), 'utf8')).toBe('audio')
+    expect(readdirSync(dest).filter((f) => !f.startsWith('f')).sort()).toEqual(['0', '1'])
   })
 
   it('new session dir: template copied minus sessions / dbs / lock / lease; an existing dir is left alone', () => {
@@ -175,7 +190,7 @@ http.createServer(async (req, res) => {
     busy = true
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ status: 'accepted', session: 'inv_1', id: null, echo: JSON.parse(body), sid: req.headers['x-amzn-bedrock-agentcore-runtime-session-id'], env: Object.keys(process.env).sort() }))
-    setTimeout(async () => { busy = false; await post('/notify', { id: 'i1', session: 'inv_1', status: 'ok', text: 'done\\nMEDIA:/workspace/out/a.mp3' }) }, 100)
+    setTimeout(async () => { busy = false; await post('/notify', { id: 'i1', session: 'inv_1', status: 'ok', text: 'done\\nMEDIA:' + process.env.MEDIA_FILE }) }, 100)
     return
   }
   res.writeHead(418); res.end('{}')
@@ -185,23 +200,47 @@ http.createServer(async (req, res) => {
 describe('front', () => {
   let front: Awaited<ReturnType<typeof startAgentCoreFront>> | null = null
   let exits: number[] = []
-  let spawned: Array<{ sessionDir: string; env: Record<string, string> }> = []
+  let spawned: Array<{ env: Record<string, string> }> = []
+  let setups: Array<[string, string]> = []
   let mounted = true
+  let setupFails = false
+  let out = ''
   const prevNotify = process.env.HALO_AGENTCORE_NOTIFY
 
+  // The hook (run by the front, as the deployer configured it) records what
+  // it got: stdin, the validated env, its workspace's mode, each MEDIA file.
+  const HOOK = [
+    'cat > "$NOTIFY_OUT/stdin"',
+    'printf "%s|%s" "$HALO_SESSION_ID" "$HALO_RUN_STATUS" > "$NOTIFY_OUT/env"',
+    'printf "%s|%s|%s" "$HALO_WORKSPACE" "$(pwd)" "$(stat -c %a "$HALO_WORKSPACE")" > "$NOTIFY_OUT/ws"',
+    'for f in $(sed -n "s/^MEDIA://p" "$NOTIFY_OUT/stdin"); do cat "$f" >> "$NOTIFY_OUT/media"; done',
+  ].join('; ')
+
+  // No bind mount here: the stand-in view is the session dir itself.
   async function start(opts: { readyTimeoutMs?: number; worker?: string } = {}) {
-    exits = []
+    // Per front: a closed front's SIGKILLed worker reports late, never into the next test.
+    const myExits: number[] = []
+    exits = myExits
     spawned = []
-    process.env.HALO_AGENTCORE_NOTIFY = 'cat > "$HALO_WORKSPACE/notify.stdin"; printf "%s|%s|%s" "$HALO_SESSION_ID" "$HALO_RUN_STATUS" "$HALO_WORKSPACE" > "$HALO_WORKSPACE/notify.env"'
+    setups = []
+    out = join(base, '..', `${base.split('/').pop()}-out`)
+    mkdirSync(out, { recursive: true })
+    process.env.NOTIFY_OUT = out
+    process.env.HALO_AGENTCORE_NOTIFY = HOOK
     const workerPort = 20000 + Math.floor(Math.random() * 20000)
     front = await startAgentCoreFront({
       base, port: 0, host: '127.0.0.1', workerPort, readyTimeoutMs: opts.readyTimeoutMs ?? 5000,
+      viewRoot: join(base, SID_A),
       isMounted: () => mounted,
-      spawnWorker: ({ sessionDir, env, workerPort: wp }): ChildProcess => {
-        spawned.push({ sessionDir, env })
-        return spawn(process.execPath, ['-e', opts.worker ?? FAKE_WORKER], { env: { ...env, WORKER_PORT: String(wp) }, stdio: 'ignore' })
+      setupView: async (b, dir) => {
+        setups.push([b, dir])
+        if (setupFails) throw new Error('view setup failed at `umount -l /mnt/efs`: target is busy')
       },
-      onWorkerExit: (code) => { exits.push(code) },
+      spawnWorker: ({ env, workerPort: wp }): ChildProcess => {
+        spawned.push({ env })
+        return spawn(process.execPath, ['-e', opts.worker ?? FAKE_WORKER], { env: { ...env, WORKER_PORT: String(wp), MEDIA_FILE: join(base, SID_A, 'out', 'a.mp3') }, stdio: 'ignore' })
+      },
+      onWorkerExit: (code) => { myExits.push(code) },
     })
     return `http://127.0.0.1:${(front.server.address() as { port: number }).port}`
   }
@@ -210,9 +249,16 @@ describe('front', () => {
     front?.close()
     front = null
     mounted = true
+    setupFails = false
+    rmSync(out, { recursive: true, force: true })
+    delete process.env.NOTIFY_OUT
     if (prevNotify === undefined) delete process.env.HALO_AGENTCORE_NOTIFY
     else process.env.HALO_AGENTCORE_NOTIFY = prevNotify
   })
+
+  /** As the agent could: it can read the worker's env, so it has the token. */
+  const loopbackPost = (route: string, body: unknown) =>
+    fetch(`${spawned[0].env[FRONT_URL_ENV]}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', [FRONT_TOKEN_HEADER]: spawned[0].env[FRONT_TOKEN_ENV] }, body: JSON.stringify(body) })
 
   const inv = (url: string, sid?: string, body: unknown = { prompt: 'hi' }) =>
     fetch(`${url}/invocations`, { method: 'POST', headers: { 'content-type': 'application/json', ...(sid ? { [SESSION_HEADER]: sid } : {}) }, body: JSON.stringify(body) })
@@ -225,7 +271,7 @@ describe('front', () => {
     }
   }
 
-  it('first request: session dir created, worker spawned with the allowlisted env, request proxied; /ping passes the worker\'s answer through', async () => {
+  it('first request: session dir created, view set up once, worker spawned with the allowlisted env, request proxied; /ping passes the worker\'s answer through', async () => {
     process.env.SLACK_BOT_TOKEN = 'xoxb-secret'
     mkdirSync(join(base, '.template', 'out'), { recursive: true })
     writeFileSync(join(base, '.template', 'out', 'a.mp3'), 'x')
@@ -243,15 +289,22 @@ describe('front', () => {
       expect(body.env).not.toContain('SLACK_BOT_TOKEN')
       expect(body.env).not.toContain('HALO_AGENTCORE_NOTIFY')
       expect(spawned).toHaveLength(1)
-      expect(spawned[0].sessionDir).toBe(join(base, SID_A))
+      expect(setups).toEqual([[base, join(base, SID_A)]])
       expect(existsSync(join(base, SID_A))).toBe(true)
       expect(await (await fetch(`${url}/ping`)).json()).toEqual({ status: 'HealthyBusy' })
 
-      // The worker's notify comes back over loopback: MEDIA mapped to the host
-      // dir (out/a.mp3 came from .template), the hook run here.
-      await until(() => existsSync(join(base, SID_A, 'notify.env')) && readFileSync(join(base, SID_A, 'notify.env'), 'utf8').length > 0)
-      expect(readFileSync(join(base, SID_A, 'notify.env'), 'utf8')).toBe(`inv_1|ok|${join(base, SID_A)}`)
-      expect(readFileSync(join(base, SID_A, 'notify.stdin'), 'utf8')).toBe(`done\nMEDIA:${join(base, SID_A)}/out/a.mp3`)
+      // The worker's notify comes back over loopback; the hook runs here, its
+      // MEDIA a copy (out/a.mp3 came from .template) in a 0700 dir that is
+      // also its HALO_WORKSPACE + cwd, removed once the hook is done.
+      await until(() => existsSync(join(out, 'ws')) && readFileSync(join(out, 'ws'), 'utf8').length > 0)
+      await until(() => existsSync(join(out, 'media')))
+      expect(readFileSync(join(out, 'env'), 'utf8')).toBe('inv_1|ok')
+      const [ws, cwd, mode] = readFileSync(join(out, 'ws'), 'utf8').split('|')
+      expect(cwd).toBe(ws)
+      expect(mode).toBe('700')
+      expect(readFileSync(join(out, 'stdin'), 'utf8')).toBe(`done\nMEDIA:${ws}/0/a.mp3`)
+      expect(readFileSync(join(out, 'media'), 'utf8')).toBe('x')
+      await until(() => !existsSync(ws))
       let status = ''
       for (let i = 0; i < 100 && status !== 'Healthy'; i++) {
         status = ((await (await fetch(`${url}/ping`)).json()) as { status: string }).status
@@ -282,6 +335,34 @@ describe('front', () => {
     expect(((await res.json()) as { error: string }).error).toMatch(/missing x-amzn-bedrock-agentcore-runtime-session-id/)
     expect(spawned).toEqual([])
     expect(readdirSync(base)).toEqual([])
+  })
+
+  it('view setup fails → 503 for this and every later request, the worker never spawned, setup never retried', async () => {
+    setupFails = true
+    const url = await start()
+    const r1 = await inv(url, SID_A)
+    expect(r1.status).toBe(503)
+    expect(((await r1.json()) as { error: string }).error).toMatch(/umount -l/)
+    setupFails = false
+    expect((await inv(url, SID_A)).status).toBe(503)
+    expect(setups).toHaveLength(1)
+    expect(spawned).toEqual([])
+    expect(exits).toEqual([])
+  })
+
+  it('loopback /notify: every field is agent-controlled — session regex, status enum, string text; nothing after /ready but /notify', async () => {
+    const url = await start()
+    expect((await inv(url, SID_A)).status).toBe(200)
+    for (const bad of [
+      { session: 'inv_1; touch /tmp/x', status: 'ok', text: '' },
+      { session: '$(id)', status: 'ok', text: '' },
+      { session: 'a'.repeat(201), status: 'ok', text: '' },
+      { session: 'inv_1', status: 'ok\nHALO_X=1', text: '' },
+      { session: 'inv_1', status: 'done', text: '' },
+      { session: 'inv_1', status: 'ok', text: ['x'] },
+    ]) expect((await loopbackPost('/notify', bad)).status, JSON.stringify(bad)).toBe(400)
+    expect((await loopbackPost('/ready', {})).status).toBe(404)
+    expect((await loopbackPost('/run', { cmd: 'id' })).status).toBe(404)
   })
 
   it('base not mounted yet → 503 (fail closed), and the next request after the mount goes through', async () => {

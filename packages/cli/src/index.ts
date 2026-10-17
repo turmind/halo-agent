@@ -210,10 +210,12 @@ Environment:
   HALO_AGENTCORE_SESSION_DIRS=1
                            One workspace per runtime session id: --workspace
                            is the base, the session's dir <base>/<id> (seeded
-                           from <base>/.template) is served as /workspace by a
-                           worker in its own mount namespace, uid 1000, no
-                           capabilities. Needs root; the worker gets only an
-                           env allowlist (no channel secrets).
+                           from <base>/.template) is bound at /workspace, the
+                           base unmounted, uid 1000's NFS egress rejected; a
+                           worker serves it as uid/gid 1000, no capabilities,
+                           no_new_privs. Needs root, mount, iptables, setpriv;
+                           the worker gets only an env allowlist (no channel
+                           secrets).
 
 Run \`halo setup --non-interactive\` first (in the image build): the server
 exits at boot if ~/.halo/global/ is not initialized.

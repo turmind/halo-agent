@@ -58,7 +58,7 @@ export function supersedeInvocation(id: string, by: string): void {
  * subtree is quiet. Guarded on `running` (first writer wins), then the hook.
  * Text = `finalOutput || output`, the answer `halo cli` prints for its run.
  * A session-dirs worker hands it to the front instead (agentcore-front.ts),
- * which holds the channel secrets and runs the hook in the main mount view.
+ * which holds the channel secrets and runs the hook on vetted input.
  */
 export function finishInvocation(id: string, s: { id: string; finalOutput: string; output: string; turnError: string | null }, workspace: string): void {
   const status = s.turnError ? 'error' : 'ok'

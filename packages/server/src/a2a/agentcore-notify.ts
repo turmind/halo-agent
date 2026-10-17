@@ -25,8 +25,8 @@ function tail(s: string): string {
 
 /** `sh -c <cmd>`, stdin = text, env = ours + `extra`. Its own process group,
  *  so the timeout kill reaches what the shell started too. Never throws; the
- *  outcome is logged `[AgentCore] notify …`. */
-export function runNotify(cmd: string, text: string, extra: Record<string, string>, cwd: string): void {
+ *  outcome is logged `[AgentCore] notify …`, then `onDone` runs. */
+export function runNotify(cmd: string, text: string, extra: Record<string, string>, cwd: string, onDone?: () => void): void {
   notifying++
   const started = Date.now()
   let out = ''
@@ -37,6 +37,7 @@ export function runNotify(cmd: string, text: string, extra: Record<string, strin
     done = true
     notifying--
     clearTimeout(timer)
+    onDone?.()
     const line = `[AgentCore] notify ${extra.HALO_SESSION_ID}: ${what} (${Date.now() - started} ms)${out.trim() ? ` stdout: ${tail(out)}` : ''}${err.trim() ? ` stderr: ${tail(err)}` : ''}`
     if (warn) console.warn(line)
     else console.log(line)
