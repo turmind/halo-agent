@@ -280,6 +280,19 @@ case $cmd in
     [[ $id =~ $ID_RE ]] || { echo "invalid id: $id" >&2; exit 1; }
     [[ -d $ROOT/$id ]] || { echo "not installed: $id" >&2; exit 1; }
     rm -rf "$ROOT/$id"
+    # Drop its on / off state too, so a reinstall starts on — same rule as the
+    # server's uninstall (extensions/state.ts forgetExtension). Missing or
+    # unreadable file = nothing to drop.
+    node -e '
+      const fs = require("fs"), file = process.argv[1], id = process.argv[2]
+      let s
+      try { s = JSON.parse(fs.readFileSync(file, "utf8")) } catch { process.exit(0) }
+      if (!s || typeof s !== "object" || Array.isArray(s) || !Object.hasOwn(s, id)) process.exit(0)
+      delete s[id]
+      const tmp = file + "." + process.pid + ".tmp"
+      fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + "\n")
+      fs.renameSync(tmp, file)
+    ' "$ROOT/.state.json" "$id"
     echo "removed $id" ;;
   models)
     sub=${1:-update}

@@ -5,6 +5,7 @@ import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/proto
 import {
   register, setExtensions, resolve, resolvedKey, canPreview, isHeavyPreview, isReadOnlyViewer, isImmersiveViewer, getVersion, subscribe,
   detectPlatform, currentPlatform, runsHere, excludedByPlatform, resolveBundle, isBundleName,
+  activityEntries, chatbarEntries, disabledFor,
 } from '../src/features/editor/previews/registry'
 import type { PreviewPlugin } from '../src/features/editor/previews/types'
 
@@ -48,7 +49,7 @@ async function freshModules() {
 }
 
 beforeEach(() => {
-  setExtensions({ extensions: [], errors: [] })
+  setExtensions({ extensions: [], disabled: [], errors: [] })
 })
 
 describe('resolve with no extensions installed', () => {
@@ -75,7 +76,7 @@ describe('resolve ordering with extensions', () => {
         ext('opt'),
         ext('new-default', { priority: 'default', installedAt: 200 }),
       ],
-      errors: [],
+      disabled: [], errors: [],
     })
     expect(keys('glb')).toEqual([
       'extension:new-default', 'extension:old-default', 'builtin:glb-builtin', 'extension:opt', 'text',
@@ -84,18 +85,18 @@ describe('resolve ordering with extensions', () => {
 
   it('option extension does not displace the built-in default', () => {
     register(plugin('glb-builtin', ['glb']))
-    setExtensions({ extensions: [ext('opt')], errors: [] })
+    setExtensions({ extensions: [ext('opt')], disabled: [], errors: [] })
     expect(resolve('glb')[0].kind).toBe('builtin')
   })
 
   it('an extension for a type with no built-in makes it previewable', () => {
-    setExtensions({ extensions: [ext('echo', { extensions: ['.echo'] })], errors: [] })
+    setExtensions({ extensions: [ext('echo', { extensions: ['.echo'] })], disabled: [], errors: [] })
     expect(canPreview('echo')).toBe(true)
     expect(keys('echo')).toEqual(['extension:echo', 'text'])
   })
 
   it('scanner errors are listed nowhere in the candidates', () => {
-    setExtensions({ extensions: [], errors: [{ id: 'broken', error: 'bad manifest' }] })
+    setExtensions({ extensions: [], disabled: [], errors: [{ id: 'broken', error: 'bad manifest' }] })
     expect(keys('glb').filter((k) => k.includes('broken'))).toEqual([])
   })
 })
@@ -114,7 +115,7 @@ describe('isHeavyPreview', () => {
         ext('viewer', { priority: 'default', extensions: ['.ro'] }),
         ext('editor', { priority: 'default', extensions: ['.rw'], capabilities: ['save'] }),
       ],
-      errors: [],
+      disabled: [], errors: [],
     })
     expect(isHeavyPreview('ro')).toBe(true)
     expect(isHeavyPreview('rw')).toBe(false)
@@ -161,7 +162,7 @@ describe('platforms + bundle', () => {
         ext('desk-only', { priority: 'default', platforms: ['desktop-mac', 'desktop-win'] }),
         ext('web-ok', { priority: 'option', platforms: ['web'] }),
       ],
-      errors: [],
+      disabled: [], errors: [],
     })
     expect(keys('glb')).toEqual(['builtin:glb-builtin', 'extension:web-ok', 'text'])
     expect(excludedByPlatform('glb').map((e) => e.id)).toEqual(['desk-only'])
@@ -174,7 +175,7 @@ describe('platforms + bundle', () => {
         ext('htrans', { priority: 'default', extensions: ['.htrans'], bundle: true }),
         ext('opt', { priority: 'option', extensions: ['.htrans'], bundle: true, installedAt: 5 }),
       ],
-      errors: [],
+      disabled: [], errors: [],
     })
     expect(keys('htrans')).toEqual(['text'])                 // a FILE named x.htrans is untouched
     expect(canPreview('htrans')).toBe(false)
@@ -185,7 +186,7 @@ describe('platforms + bundle', () => {
     expect(isBundleName('.htrans')).toBe(false)
     expect(isBundleName('a.txt')).toBe(false)
 
-    setExtensions({ extensions: [ext('htrans', { priority: 'default', extensions: ['.htrans'], bundle: true, platforms: ['desktop-mac'] })], errors: [] })
+    setExtensions({ extensions: [ext('htrans', { priority: 'default', extensions: ['.htrans'], bundle: true, platforms: ['desktop-mac'] })], disabled: [], errors: [] })
     expect(isBundleName('Standup.htrans')).toBe(false)       // excluded here → plain folder
     expect(resolveBundle('htrans').map(resolvedKey)).toEqual(['text'])
     expect(excludedByPlatform('htrans', true).map((e) => e.id)).toEqual(['htrans'])
@@ -193,8 +194,33 @@ describe('platforms + bundle', () => {
   })
 
   it('a bundle extension is never heavy, even without save', () => {
-    setExtensions({ extensions: [ext('htrans', { priority: 'default', extensions: ['.htrans'], bundle: true, capabilities: ['media'] })], errors: [] })
+    setExtensions({ extensions: [ext('htrans', { priority: 'default', extensions: ['.htrans'], bundle: true, capabilities: ['media'] })], disabled: [], errors: [] })
     expect(isHeavyPreview('htrans', true)).toBe(false)
+  })
+
+  it('switched-off extensions are offered nowhere — only disabledFor names them', () => {
+    register(plugin('glb-builtin', ['glb']))
+    const off = [
+      ext('glb', { priority: 'default', activity: { order: 1 }, chatbar: { height: 160, order: 1 } }),
+      ext('htrans', { priority: 'default', extensions: ['.htrans'], bundle: true }),
+    ]
+    setExtensions({ extensions: [ext('obj', { priority: 'option' })], disabled: off, errors: [] })
+    expect(keys('glb')).toEqual(['builtin:glb-builtin', 'extension:obj', 'text'])
+    expect(resolveBundle('htrans').map(resolvedKey)).toEqual(['text'])
+    expect(isBundleName('Standup.htrans')).toBe(false)
+    expect(activityEntries()).toEqual([])
+    expect(chatbarEntries()).toEqual([])
+    expect(excludedByPlatform('glb')).toEqual([])
+    expect(disabledFor('glb').map((e) => e.id)).toEqual(['glb'])
+    expect(disabledFor('htrans', true).map((e) => e.id)).toEqual(['htrans'])
+    expect(disabledFor('htrans', false)).toEqual([])
+    expect(disabledFor('obj')).toEqual([])
+
+    // Switched back on: offered again.
+    setExtensions({ extensions: [ext('obj', { priority: 'option' }), ...off], disabled: [], errors: [] })
+    expect(keys('glb')[0]).toBe('extension:glb')
+    expect(activityEntries().map((e) => e.id)).toEqual(['glb'])
+    expect(disabledFor('glb')).toEqual([])
   })
 })
 
@@ -203,11 +229,11 @@ describe('version signal', () => {
     let calls = 0
     const unsub = subscribe(() => { calls++ })
     const before = getVersion()
-    setExtensions({ extensions: [ext('x')], errors: [] })
+    setExtensions({ extensions: [ext('x')], disabled: [], errors: [] })
     expect(getVersion()).toBe(before + 1)
     expect(calls).toBe(1)
     unsub()
-    setExtensions({ extensions: [], errors: [] })
+    setExtensions({ extensions: [], disabled: [], errors: [] })
     expect(calls).toBe(1)
   })
 })
@@ -239,7 +265,7 @@ describe('loadExtensions', () => {
     expect(settled).toBe(false)
     expect(registry.canPreview('glb')).toBe(false) // list in flight ≡ "nothing installed"
 
-    respond({ extensions: [ext('glb', { priority: 'default' })], errors: [] })
+    respond({ extensions: [ext('glb', { priority: 'default' })], disabled: [], errors: [] })
     await Promise.all([first, second])
     expect(registry.canPreview('glb')).toBe(true)
     expect(spy).toHaveBeenCalledTimes(1)
@@ -277,7 +303,7 @@ describe('loadExtensions', () => {
     expect(spy).toHaveBeenCalledTimes(1)
 
     const before = registry.getVersion()
-    respond({ extensions: [ext('glb', { priority: 'default' })], errors: [] })
+    respond({ extensions: [ext('glb', { priority: 'default' })], disabled: [], errors: [] })
     await vi.waitFor(() => expect(registry.canPreview('glb')).toBe(true))
     expect(registry.getVersion()).toBe(before + 1)
   })
@@ -291,7 +317,7 @@ describe('loadExtensions', () => {
 
     const load = registry.loadExtensions()
     await vi.advanceTimersByTimeAsync(1_000)
-    respond({ extensions: [ext('glb', { priority: 'default' })], errors: [] })
+    respond({ extensions: [ext('glb', { priority: 'default' })], disabled: [], errors: [] })
     await load
     expect(registry.canPreview('glb')).toBe(true)
     expect(vi.getTimerCount()).toBe(0)
@@ -364,7 +390,7 @@ describe('EditorPanel routing while the extension list is in flight', () => {
     expect(read).not.toHaveBeenCalled()
 
     await act(async () => {
-      respond({ extensions: [glbExt], errors: [] })
+      respond({ extensions: [glbExt], disabled: [], errors: [] })
       await vi.waitFor(() => expect(buffers()['b.glb']?.preview).toBeTruthy())
     })
     expect(buffers()['a.png']?.preview).toBeTruthy()
@@ -386,7 +412,7 @@ describe('EditorPanel routing while the extension list is in flight', () => {
     expect(read).not.toHaveBeenCalled()
 
     await act(async () => {
-      respond({ extensions: [glbExt], errors: [] })
+      respond({ extensions: [glbExt], disabled: [], errors: [] })
       await vi.waitFor(() => expect(buffers()['b.glb']?.preview).toBeTruthy())
     })
     expect(read).not.toHaveBeenCalled()
@@ -407,11 +433,32 @@ describe('EditorPanel routing while the extension list is in flight', () => {
     // The list lands with a read-only default viewer for .png: the open tab
     // turns heavy while its path is still in the MRU cache.
     await act(async () => {
-      registry.setExtensions({ extensions: [ext('png-viewer', { priority: 'default', extensions: ['.png'] })], errors: [] })
+      registry.setExtensions({ extensions: [ext('png-viewer', { priority: 'default', extensions: ['.png'] })], disabled: [], errors: [] })
     })
     const frames = container.querySelectorAll('iframe')
     expect(frames).toHaveLength(1)
     expect(frames[0].closest('.hidden')).toBeNull()
     expect(container.querySelector('img[alt="a.png"]')).toBeNull()
+  })
+
+  it('switching off an open viewer: clean → fallback page naming it, back on → viewer; dirty → kept with the disabled banner', async () => {
+    const { registry, useEditorStore } = await mountPanel('editor-only')
+    act(() => useEditorStore.getState().openPreview('b.glb', '/dl', '/view'))
+    await act(async () => { registry.setExtensions({ extensions: [glbExt], disabled: [], errors: [] }) })
+    expect(container.querySelectorAll('iframe')).toHaveLength(1)
+
+    await act(async () => { registry.setExtensions({ extensions: [], disabled: [glbExt], errors: [] }) })
+    expect(container.querySelectorAll('iframe')).toHaveLength(0)
+    expect(container.textContent).toContain('editor.unsupported.disabled')
+
+    await act(async () => { registry.setExtensions({ extensions: [glbExt], disabled: [], errors: [] }) })
+    expect(container.querySelectorAll('iframe')).toHaveLength(1)
+    expect(container.textContent).not.toContain('editor.unsupported.disabled')
+
+    act(() => useEditorStore.setState((s) => ({ buffers: { ...s.buffers, 'b.glb': { ...s.buffers['b.glb']!, modified: true } } })))
+    await act(async () => { registry.setExtensions({ extensions: [], disabled: [glbExt], errors: [] }) })
+    expect(container.querySelectorAll('iframe')).toHaveLength(1)
+    expect(container.textContent).toContain('editor.extension.disabled')
+    expect(container.textContent).not.toContain('editor.extension.uninstalled')
   })
 })

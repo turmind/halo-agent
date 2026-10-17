@@ -1,20 +1,21 @@
 'use client'
 
-import { useRef, useState, useSyncExternalStore } from 'react'
-import { Upload, Trash2, AlertTriangle } from 'lucide-react'
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Upload, Trash2, AlertTriangle, ToggleLeft, ToggleRight } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { useI18n } from '@/shared/i18n'
-import { confirmAction } from '@/shared/utils'
+import { cn, confirmAction } from '@/shared/utils'
 import { getExtensionsSnapshot, platformLabels, runsHere, subscribe } from '@/features/editor/previews/registry'
 
 /**
  * Settings → Extensions: the installed canvas preview extensions
- * (~/.halo/global/extensions/), upload a zip, uninstall. The list is the
- * preview registry's snapshot — seeded on page load and pushed on every
- * `extension:changed` — so install / remove here never re-fetch: the
- * server's dir watcher broadcasts and the row appears / disappears on its
- * own. Directories the scanner refused show as red rows so they can still
- * be removed.
+ * (~/.halo/global/extensions/), upload a zip, switch on / off, uninstall.
+ * The list is the preview registry's snapshot — seeded on page load and
+ * pushed on every `extension:changed` — so install / switch / remove here
+ * never re-fetch: the server broadcasts and the row changes on its own.
+ * Switched-off extensions are listed (dimmed, "Off") among the others by id
+ * — this is the only place they show. Directories the scanner refused show
+ * as red rows so they can still be removed.
  */
 export function ExtensionsView() {
   const { t } = useI18n()
@@ -35,6 +36,18 @@ export function ExtensionsView() {
     }
   }
 
+  async function handleSetEnabled(id: string, enabled: boolean) {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.extensions.setEnabled(id, enabled)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function handleRemove(id: string, name: string) {
     if (!(await confirmAction(t('settings.extensions.confirmRemove', { name })))) return
     setBusy(true)
@@ -48,7 +61,12 @@ export function ExtensionsView() {
     }
   }
 
-  const empty = snapshot.extensions.length === 0 && snapshot.errors.length === 0
+  // On and off in one id-sorted list.
+  const rows = useMemo(() => [
+    ...snapshot.extensions.map((ext) => ({ ext, off: false })),
+    ...snapshot.disabled.map((ext) => ({ ext, off: true })),
+  ].sort((a, b) => a.ext.id.localeCompare(b.ext.id)), [snapshot])
+  const empty = rows.length === 0 && snapshot.errors.length === 0
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
@@ -83,12 +101,17 @@ export function ExtensionsView() {
         <p className="text-xs text-[var(--muted-foreground)]">{t('settings.extensions.empty')}</p>
       ) : (
         <ul className="divide-y divide-[var(--border)] rounded border border-[var(--border)]">
-          {snapshot.extensions.map((ext) => (
+          {rows.map(({ ext, off }) => (
             <li key={ext.id} className="flex items-center gap-3 px-3 py-2">
-              <div className="min-w-0 flex-1">
+              <div className={cn('min-w-0 flex-1', off && 'opacity-50')}>
                 <div className="flex items-baseline gap-2">
                   <span className="truncate text-xs font-medium text-[var(--foreground)]">{ext.name}</span>
                   <code className="text-[10px] text-[var(--muted-foreground)]">{ext.id}@{ext.version}</code>
+                  {off && (
+                    <span className="shrink-0 rounded bg-[var(--secondary)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
+                      {t('settings.extensions.off')}
+                    </span>
+                  )}
                   {ext.platforms && (
                     <span className="shrink-0 rounded border border-[var(--border)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
                       {platformLabels(ext.platforms, t)}
@@ -126,6 +149,17 @@ export function ExtensionsView() {
                   <p className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">{ext.description}</p>
                 )}
               </div>
+              <button
+                role="switch"
+                aria-checked={!off}
+                onClick={() => handleSetEnabled(ext.id, off)}
+                disabled={busy}
+                title={t(off ? 'settings.extensions.enable' : 'settings.extensions.disable')}
+                aria-label={t(off ? 'settings.extensions.enable' : 'settings.extensions.disable')}
+                className="shrink-0 cursor-pointer rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] disabled:opacity-50"
+              >
+                {off ? <ToggleLeft className="h-4.5 w-4.5" /> : <ToggleRight className="h-4.5 w-4.5 text-blue-500" />}
+              </button>
               <RemoveButton disabled={busy} onClick={() => handleRemove(ext.id, ext.name)} label={t('settings.extensions.remove')} />
             </li>
           ))}

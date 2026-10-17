@@ -193,6 +193,29 @@ describe('git mode end to end', () => {
     expect(r.code).not.toBe(0)
     expect(r.err).toContain('no release for nope')
   })
+
+  it('reinstall keeps the on / off state; remove drops only that id from it (a reinstall starts on)', async () => {
+    // A local zip, independent of the hub tags above (3.0.0 now needs a build step).
+    const { default: JSZip } = await import('jszip')
+    const z = new JSZip()
+    z.file('halo-extension.json', JSON.stringify({ id: 'demo', name: 'Demo', version: '4.0.0', extensions: ['.demo'], entry: 'index.html' }))
+    z.file('index.html', '<p>4.0.0</p>')
+    const zipPath = path.join(tmpRoot, 'demo-4.0.0.zip')
+    fs.writeFileSync(zipPath, await z.generateAsync({ type: 'nodebuffer' }))
+    const stateFile = path.join(path.dirname(installed()), '.state.json')
+    fs.writeFileSync(stateFile, JSON.stringify({ demo: { disabled: true }, other: { disabled: true } }))
+    expect(ext(['install', zipPath])).toMatchObject({ code: 0, out: 'installed demo 4.0.0' })
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({ demo: { disabled: true }, other: { disabled: true } })
+    expect(ext(['list']).out).not.toContain('.state')
+    expect(ext(['remove', 'demo'])).toMatchObject({ code: 0, out: 'removed demo' })
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({ other: { disabled: true } })
+    // An unreadable state file is left as it is; the remove still succeeds.
+    expect(ext(['install', zipPath]).code).toBe(0)
+    fs.writeFileSync(stateFile, '{ broken')
+    expect(ext(['remove', 'demo'])).toMatchObject({ code: 0, out: 'removed demo' })
+    expect(fs.readFileSync(stateFile, 'utf8')).toBe('{ broken')
+    fs.rmSync(stateFile)
+  })
 })
 
 describe('models update (https release hubs only)', () => {

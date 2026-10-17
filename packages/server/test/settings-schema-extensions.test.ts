@@ -80,4 +80,34 @@ describe('extension settings sections', () => {
     expect(f.value).not.toContain('EXAMPLE')
     expect(body.orphans).toEqual([])
   })
+
+  it('switched off: no section, values kept on disk and never listed as orphans; back on: section returns with them', async () => {
+    const registry = await import('../src/extensions/registry.js')
+    const state = await import('../src/extensions/state.js')
+    type Body = { sections: Array<{ namespaceId: string; fields: Array<{ key: string; hasValue: boolean }> }>; orphans: Array<{ namespaceId: string; key: string }> }
+    const settingsFile = path.join(tmpHome, '.halo', 'secrets', 'settings.yaml')
+    // A genuinely unclaimed namespace still lists, so the exclusion is targeted.
+    expect((await app.request('/settings', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'global', key: 'ext-gone.params.region', value: 'x' }),
+    })).status).toBe(200)
+    try {
+      state.setExtensionDisabled('htrans', true)
+      registry.scanExtensions()
+      expect(schema.loadSettingsSchema().some((s) => s.namespaceId === 'ext-htrans')).toBe(false)
+      const off = await (await app.request('/settings/schema')).json() as Body
+      expect(off.sections.some((s) => s.namespaceId === 'ext-htrans')).toBe(false)
+      expect(off.orphans.map((o) => `${o.namespaceId}.${o.key}`)).toEqual(['ext-gone.region'])
+      expect(fs.readFileSync(settingsFile, 'utf-8')).toContain('AKIAEXAMPLE1234')
+
+      state.setExtensionDisabled('htrans', false)
+      registry.scanExtensions()
+      const on = await (await app.request('/settings/schema')).json() as Body
+      expect(on.sections.find((s) => s.namespaceId === 'ext-htrans')?.fields.find((f) => f.key === 'access_key_id')?.hasValue).toBe(true)
+      expect(on.orphans.map((o) => o.namespaceId)).toEqual(['ext-gone'])
+    } finally {
+      state.setExtensionDisabled('htrans', false)
+      registry.scanExtensions()
+    }
+  })
 })

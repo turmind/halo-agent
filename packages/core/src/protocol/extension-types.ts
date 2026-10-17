@@ -117,6 +117,11 @@ export interface ExtensionError {
 }
 
 export interface ExtensionsSnapshot {
+  /** Valid and switched on — the only list the host offers anywhere. */
   extensions: ExtensionInfo[]
+  /** Valid but switched off (Settings → Extensions; server
+   *  extensions/state.ts): treated as not installed everywhere except the
+   *  Settings list, files and settings values kept. Sorted by id. */
+  disabled: ExtensionInfo[]
   errors: ExtensionError[]
 }

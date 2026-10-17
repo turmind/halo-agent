@@ -67,11 +67,11 @@ const ctx: ActivityContext = { capabilities: ['media', 'stt-local'], theme: 'dar
 const frame = (f: Record<string, unknown>) => ({ haloExt: 1, ...f }) as ExtensionClientFrame
 
 describe('chatbarEntries', () => {
-  beforeEach(() => setExtensions({ extensions: [], errors: [] }))
+  beforeEach(() => setExtensions({ extensions: [], disabled: [], errors: [] }))
 
   it('nothing installed / no chatbar field → no entries', () => {
     expect(chatbarEntries()).toEqual([])
-    setExtensions({ extensions: [ext('glb', { chatbar: undefined, extensions: ['.glb'] })], errors: [{ id: 'bad', error: 'x' }] })
+    setExtensions({ extensions: [ext('glb', { chatbar: undefined, extensions: ['.glb'] })], disabled: [], errors: [{ id: 'bad', error: 'x' }] })
     expect(chatbarEntries()).toEqual([])
   })
 
@@ -83,7 +83,7 @@ describe('chatbarEntries', () => {
         ext('alpha'),
         ext('mac-only', { chatbar: { height: 160, order: 0 }, platforms: ['desktop-mac'] }), // jsdom UA = web
       ],
-      errors: [],
+      disabled: [], errors: [],
     })
     expect(chatbarEntries().map((e) => e.id)).toEqual(['zeta', 'alpha', 'beta'])
   })
@@ -215,7 +215,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     vi.spyOn(api.extensions, 'token').mockResolvedValue({ token: 'tok', expiresAt: Date.now() + 24 * 3600_000 })
     useProjectStore.setState({ activeProject: null, folderPath: '', projects: [] })
     useChatStore.setState({ sessionId: 's1', sandboxAvailable: false, isStreaming: false, usableAgentCount: 1 })
-    setExtensions({ extensions: [], errors: [] })
+    setExtensions({ extensions: [], disabled: [], errors: [] })
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -223,7 +223,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
-    setExtensions({ extensions: [], errors: [] })
+    setExtensions({ extensions: [], disabled: [], errors: [] })
     vi.restoreAllMocks()
     vi.useRealTimers()
   })
@@ -255,9 +255,9 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   it('no chatbar extension → no extra toolbar button', async () => {
     await renderInput()
     const before = container.querySelectorAll('button').length
-    act(() => setExtensions({ extensions: [ext('glb', { chatbar: undefined, extensions: ['.glb'] })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('glb', { chatbar: undefined, extensions: ['.glb'] })], disabled: [], errors: [] }))
     expect(container.querySelectorAll('button').length).toBe(before)
-    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 200, order: 1, title: 'Voice' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 200, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     expect(container.querySelectorAll('button').length).toBe(before + 1)
     expect(button('Voice')!.className).toContain('h-8 w-8')
     expect(button('Voice')!.getAttribute('title')).toBe('Voice')
@@ -265,7 +265,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   })
 
   it('opens the panel above the input with the activity grant; toggles, ×, Esc close; outside click does not', async () => {
-    act(() => setExtensions({ extensions: [ext('voice', { capabilities: ['media', 'stt-local', 'save'], version: '2.0.0', chatbar: { height: 200, order: 1, title: 'Voice' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { capabilities: ['media', 'stt-local', 'save'], version: '2.0.0', chatbar: { height: 200, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     await renderInput()
     expect(iframe()).toBeNull()
     act(() => button('Voice')!.click())
@@ -305,7 +305,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   })
 
   it('one panel at a time; the textarea Esc closes it instead of interrupting the turn', async () => {
-    act(() => setExtensions({ extensions: [ext('a', { chatbar: { height: 160, order: 1, title: 'A' } }), ext('b', { chatbar: { height: 160, order: 2, title: 'B' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('a', { chatbar: { height: 160, order: 1, title: 'A' } }), ext('b', { chatbar: { height: 160, order: 2, title: 'B' } })], disabled: [], errors: [] }))
     const onInterrupt = vi.fn()
     await renderInput({ isStreaming: true, onInterrupt })
     act(() => button('A')!.click())
@@ -320,7 +320,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   })
 
   it('insert-text lands at the caret / over the selection, verbatim, never focuses or sends — also mid-turn', async () => {
-    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     const onSend = await renderInput({ isStreaming: true })
     type('hello world', 5)
     act(() => button('Voice')!.click())
@@ -356,20 +356,20 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   })
 
   it('uninstalling the open extension closes its panel', async () => {
-    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     await renderInput()
     act(() => button('Voice')!.click())
     await flush()
     expect(iframe()).toBeTruthy()
-    act(() => setExtensions({ extensions: [], errors: [] }))
+    act(() => setExtensions({ extensions: [], disabled: [], errors: [] }))
     expect(iframe()).toBeNull()
     expect(button('Voice')).toBeNull()
-    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     expect(iframe()).toBeNull() // reinstall does not reopen
   })
 
   it('no ready within 10 s → unresponsive + Retry inside the panel', async () => {
-    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     await renderInput()
     vi.useFakeTimers()
     act(() => button('Voice')!.click())
@@ -384,7 +384,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   })
 
   it('follows the input (resize / ancestor resize / pointer move) by restyling only — the iframe is never remounted', async () => {
-    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 200, order: 1, title: 'Voice' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 200, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     await renderInput()
     act(() => button('Voice')!.click())
     await flush()
@@ -407,7 +407,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   })
 
   it('a hidden input (chat tab on the terminal, dock collapsed → 0×0) closes the panel', async () => {
-    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     await renderInput()
     act(() => button('Voice')!.click())
     await flush()
@@ -421,7 +421,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
 
   it('switching the chat tab closes the panel; other tab-store changes do not', async () => {
     const tabs = useChatTabs.getState()
-    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     await renderInput()
     act(() => button('Voice')!.click())
     await flush()
@@ -433,7 +433,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   })
 
   describe('busy → close-request', () => {
-    const voice = () => act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], errors: [] }))
+    const voice = () => act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     /** Open the panel, answer its ready, report `busy`; returns the iframe's window + its postMessage spy. */
     async function openBusy(busy: boolean | null = true) {
       act(() => button('Voice')!.click())
@@ -578,7 +578,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
 
     it('a tab switch, a hidden input, an uninstall or another panel unmount a busy / winding-down panel at once', async () => {
       const tabs = useChatTabs.getState()
-      act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } }), ext('b', { chatbar: { height: 160, order: 2, title: 'B' } })], errors: [] }))
+      act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } }), ext('b', { chatbar: { height: 160, order: 2, title: 'B' } })], disabled: [], errors: [] }))
       await renderInput()
 
       let probe = await openBusy()
@@ -602,7 +602,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
       act(() => button('B')!.click())
 
       probe = await openBusy()
-      act(() => setExtensions({ extensions: [ext('b', { chatbar: { height: 160, order: 2, title: 'B' } })], errors: [] }))
+      act(() => setExtensions({ extensions: [ext('b', { chatbar: { height: 160, order: 2, title: 'B' } })], disabled: [], errors: [] }))
       expect(iframe()).toBeNull()
       expect(probe.closeRequests()).toBe(0)
       act(() => useChatTabs.setState(tabs, true))

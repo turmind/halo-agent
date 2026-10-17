@@ -705,6 +705,10 @@ export const api = {
     remove(id: string) {
       return request<{ ok: boolean; id: string }>(`/extensions/${encodeURIComponent(id)}`, { method: 'DELETE' })
     },
+    /** Switch on / off (target state; repeating it is a no-op). */
+    setEnabled(id: string, enabled: boolean) {
+      return request<{ ok: boolean; id: string; enabled: boolean }>(`/extensions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) })
+    },
   },
 
   wechat: {

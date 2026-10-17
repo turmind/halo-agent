@@ -128,6 +128,27 @@ describe('skill sources', () => {
     }
   })
 
+  it('a switched-off extension ships no skills, and an id it claimed goes to the next extension', async () => {
+    const state = await import('../src/extensions/state.js')
+    const toolExtra = writeExtension('tool-extra')
+    writeSkill(path.join(toolExtra, 'skills', 'tool-extra'), 'Dup')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      state.setExtensionDisabled('tool', true)
+      expect(sources.extensionSkillDirs()).toEqual([
+        { id: 'tool-extra', dir: path.join(toolExtra, 'skills', 'tool-extra'), scope: 'extension', extId: 'tool-extra' },
+      ])
+      expect(sources.skillSourceDir('tool')).toBe(path.join(globalSkills, 'tool')) // as if not installed
+      expect(schema.loadSettingsSchema().find((s) => s.source === 'skill' && s.namespaceId === 'tool')).toBeUndefined()
+      state.setExtensionDisabled('tool', false)
+      expect(sources.extensionSkillDirs().map((s) => `${s.extId}:${s.id}`)).toEqual(['tool:tool', 'tool:tool-extra'])
+    } finally {
+      state.setExtensionDisabled('tool', false)
+      warn.mockRestore()
+      fs.rmSync(toolExtra, { recursive: true, force: true })
+    }
+  })
+
   it('precedence workspace > global > extension, shadowed folders flagged overridden', () => {
     writeSkill(path.join(globalSkills, 'tool-extra'), 'Global Tool Extra')
     expect(sources.skillSourceDir('tool', ws)).toBe(path.join(extRoot, 'tool', 'skills', 'tool'))

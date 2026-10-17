@@ -187,6 +187,90 @@ describe('DELETE /api/extensions/:id', () => {
   })
 })
 
+describe('PATCH /api/extensions/:id  (on / off)', () => {
+  const patch = (id: string, body: unknown, withCookie = true) => app.request(`/api/extensions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...(withCookie ? { Cookie: cookie } : {}) },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  })
+  const zip = (version = '1.0.0') => zipOf({ 'halo-extension.json': JSON.stringify({ ...manifest, version }), 'index.html': '<html>glb</html>' })
+
+  it('switching off moves the row to `disabled` with one push; on brings it back with one more', async () => {
+    await upload(app, await zip(), cookie)
+    sock.sent.length = 0
+    const off = await patch('glb', { enabled: false })
+    expect(off.status).toBe(200)
+    expect(await off.json()).toEqual({ ok: true, id: 'glb', enabled: false })
+    const listed = await (await get('/api/extensions')).json() as { extensions: { id: string }[]; disabled: { id: string }[] }
+    expect(listed.extensions).toEqual([])
+    expect(listed.disabled.map((e) => e.id)).toEqual(['glb'])
+    await new Promise((r) => setTimeout(r, 450)) // the watcher's own rescan of the rename: same key, silent
+    let msgs = changed() as unknown as Array<{ extensions: { id: string }[]; disabled: { id: string }[] }>
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].disabled.map((e) => e.id)).toEqual(['glb'])
+
+    expect((await patch('glb', { enabled: true })).status).toBe(200)
+    await new Promise((r) => setTimeout(r, 450))
+    msgs = changed() as unknown as Array<{ extensions: { id: string }[]; disabled: { id: string }[] }>
+    expect(msgs).toHaveLength(2)
+    expect(msgs[1].extensions.map((e) => e.id)).toEqual(['glb'])
+    expect(msgs[1].disabled).toEqual([])
+  })
+
+  it('repeating the current state writes and pushes nothing', async () => {
+    await upload(app, await zip(), cookie)
+    await patch('glb', { enabled: false })
+    await new Promise((r) => setTimeout(r, 450))
+    sock.sent.length = 0
+    expect((await patch('glb', { enabled: false })).status).toBe(200)
+    expect((await patch('glb', { enabled: false })).status).toBe(200)
+    await new Promise((r) => setTimeout(r, 450))
+    expect(changed()).toHaveLength(0)
+  })
+
+  it('400 on a bad id or body, 404 when not installed or an error row, 401 without the cookie', async () => {
+    fs.mkdirSync(path.join(root, 'broken'))
+    watcher.rescanAndBroadcast()
+    expect((await patch('Bad.Id', { enabled: false })).status).toBe(400)
+    expect((await patch('glb', { enabled: 'no' })).status).toBe(400)
+    expect((await patch('glb', '{ not json')).status).toBe(400)
+    expect((await patch('nope', { enabled: false })).status).toBe(404)
+    expect((await patch('broken', { enabled: false })).status).toBe(404)
+    expect((await patch('glb', { enabled: false }, false)).status).toBe(401)
+  })
+
+  it('a switched-off extension still serves its assets (a dirty tab kept open must load and save)', async () => {
+    await upload(app, await zip(), cookie)
+    await patch('glb', { enabled: false })
+    expect((await asset('glb', '1.0.0', 'index.html')).status).toBe(200)
+    expect((await asset('glb', '0.9.0', 'index.html')).status).toBe(404)
+  })
+
+  it('off = not installed for getExtension — the gate of the transcribe / stt handshakes (403)', async () => {
+    await upload(app, await zip(), cookie)
+    expect(ext.getExtension('glb')?.id).toBe('glb')
+    await patch('glb', { enabled: false })
+    expect(ext.getExtension('glb')).toBeUndefined()
+    expect(ext.getInstalledExtension('glb')?.id).toBe('glb')
+  })
+
+  it('an update keeps it off; uninstall clears the state, so a reinstall starts on', async () => {
+    await upload(app, await zip(), cookie)
+    await patch('glb', { enabled: false })
+    expect((await upload(app, await zip('1.1.0'), cookie)).status).toBe(200)
+    let listed = await (await get('/api/extensions')).json() as { extensions: { id: string }[]; disabled: { id: string; version: string }[] }
+    expect(listed.extensions).toEqual([])
+    expect(listed.disabled.map((e) => `${e.id}@${e.version}`)).toEqual(['glb@1.1.0'])
+
+    expect((await app.request('/api/extensions/glb', { method: 'DELETE', headers: { Cookie: cookie } })).status).toBe(200)
+    expect(JSON.parse(fs.readFileSync(path.join(root, '.state.json'), 'utf-8'))).toEqual({})
+    await upload(app, await zip(), cookie)
+    listed = await (await get('/api/extensions')).json() as { extensions: { id: string }[]; disabled: { id: string; version: string }[] }
+    expect(listed.extensions.map((e) => e.id)).toEqual(['glb'])
+    expect(listed.disabled).toEqual([])
+  })
+})
+
 describe('GET /api/extensions/:id/:version/:token/*  (static assets)', () => {
   const wasm = Buffer.from([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0])
   beforeEach(async () => {

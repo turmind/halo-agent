@@ -10,7 +10,8 @@
  * Event burst → 300ms debounce → rescan → broadcast `extension:changed` to
  * every admin socket, but only when the snapshot key actually changed (the
  * installer's `.tmp-*` / `.old-*` staging dirs are skipped by the scanner, so
- * a normal install yields exactly one broadcast).
+ * a normal install yields exactly one broadcast). The on / off switch's
+ * `.state.json` is a direct child too, so its rename lands here the same way.
  */
 import fs, { type FSWatcher } from 'node:fs'
 import type { ExtensionsSnapshot } from '@turmind/halo-core/protocol'
@@ -91,9 +92,9 @@ export function start(): void {
   lastKey = snapshotKey(snap)
   reconcileSttModels(snap)
   openWatcher(root)
-  const { extensions, errors } = getSnapshot()
-  if (extensions.length > 0 || errors.length > 0) {
-    console.log(`[Extensions] ${extensions.length} installed${errors.length ? `, ${errors.length} invalid` : ''}: ${[...extensions.map((e) => `${e.id}@${e.version}`), ...errors.map((e) => `${e.id}(!)`)].join(', ')}`)
+  const { extensions, disabled, errors } = getSnapshot()
+  if (extensions.length > 0 || disabled.length > 0 || errors.length > 0) {
+    console.log(`[Extensions] ${extensions.length} installed${disabled.length ? `, ${disabled.length} off` : ''}${errors.length ? `, ${errors.length} invalid` : ''}: ${[...extensions.map((e) => `${e.id}@${e.version}`), ...disabled.map((e) => `${e.id}@${e.version}(off)`), ...errors.map((e) => `${e.id}(!)`)].join(', ')}`)
   }
 }
 

@@ -106,9 +106,10 @@ async function execFs(projectId: string, bundlePath: string, eff: Extract<HostEf
 
 interface Props extends PreviewProps {
   info: ExtensionInfo
-  /** The registry no longer lists this extension but the document has
-   *  unsaved edits — keep the loaded iframe alive so they can be saved. */
-  uninstalled?: boolean
+  /** The registry no longer offers this extension (uninstalled, or switched
+   *  off in Settings) but the document has unsaved edits — keep the loaded
+   *  iframe alive so they can be saved; the value picks the banner. */
+  gone?: 'uninstalled' | 'disabled'
 }
 
 /**
@@ -125,7 +126,7 @@ interface Props extends PreviewProps {
  * transfers the bytes (§6). Protocol decisions live in extension-host-logic.ts;
  * this component only executes the effects it returns.
  */
-export function ExtensionHostPreview({ info, uninstalled, name, path, projectId, viewUrl, downloadUrl, size, onOpenAsText }: Props) {
+export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, size, onOpenAsText }: Props) {
   const { t, lang } = useI18n()
   const useEditorStore = useScopedEditorStore()
   const { theme } = useTheme()
@@ -556,7 +557,7 @@ export function ExtensionHostPreview({ info, uninstalled, name, path, projectId,
   return (
     <PreviewShell name={name} downloadUrl={downloadUrl} onOpenAsText={onOpenAsText} extraToolbar={toolbar} hideHeader={immersive}>
       <div data-immersive={immersive || undefined} className={cn('flex h-full flex-col', immersive && 'fixed inset-0 z-[70] bg-[var(--background)]')}>
-        {uninstalled && <Banner>{t('editor.extension.uninstalled')}</Banner>}
+        {gone && <Banner>{t(`editor.extension.${gone}`)}</Banner>}
         {upgradeNotice && (
           <Banner onClose={() => setUpgradeNotice(null)}>
             {upgradeNotice}

@@ -23,6 +23,7 @@ import { randomBytes } from 'node:crypto'
 import JSZip from 'jszip'
 import type { ExtensionInfo } from '@turmind/halo-core/protocol'
 import { extensionsRoot, isExtensionId, MANIFEST_FILE, readExtensionDir } from './registry.js'
+import { forgetExtension } from './state.js'
 
 export class ExtensionInstallError extends Error {}
 
@@ -137,12 +138,15 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string): Pr
   }
 }
 
-/** Remove `<root>/<id>/`. Returns false when nothing was installed under id. */
+/** Remove `<root>/<id>/` and its on / off state (a reinstall starts on).
+ *  Returns false when nothing was installed under id. An update
+ *  (installExtensionZip) leaves the state alone, so "off" survives it. */
 export function uninstallExtension(id: string): boolean {
   if (!isExtensionId(id)) throw new ExtensionInstallError(`"${id}" is not a valid extension id`)
   const dir = path.join(extensionsRoot(), id)
   if (!fs.existsSync(dir)) return false
   fs.rmSync(dir, { recursive: true, force: true })
+  forgetExtension(id)
   console.log(`[Extensions] removed ${id}`)
   return true
 }

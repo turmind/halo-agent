@@ -393,7 +393,9 @@ export function loadSettingsSchema(workspaceRoot?: string): SchemaSection[] {
  *  namespace `ext-<id>` (prefixed so an extension id can't collide with a
  *  skill / provider namespace). Read from the registry's cached snapshot —
  *  the manifest was already strictly validated there. Global-only: only
- *  server code (e.g. the transcribe proxy) reads these, never per workspace. */
+ *  server code (e.g. the transcribe proxy) reads these, never per workspace.
+ *  A switched-off extension gets no section, like an uninstalled one; its
+ *  stored values stay in settings.yaml (see extensionOffNamespaces). */
 function extensionSections(): SchemaSection[] {
   const sections: SchemaSection[] = []
   for (const ext of getExtensionsSnapshot().extensions) {
@@ -413,4 +415,12 @@ function extensionSections(): SchemaSection[] {
     })
   }
   return sections
+}
+
+/** `ext-<id>` namespaces of switched-off extensions: no section while off,
+ *  but their values are kept, not orphans — routes/settings.ts leaves them out
+ *  of the Orphans list so nobody removes them as leftovers. They come back
+ *  untouched when the extension is switched on. */
+export function extensionOffNamespaces(): Set<string> {
+  return new Set(getExtensionsSnapshot().disabled.map((e) => `ext-${e.id}`))
 }

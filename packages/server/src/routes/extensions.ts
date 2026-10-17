@@ -1,8 +1,9 @@
 /**
  * Canvas preview extensions — admin API + static asset serving.
  *
- *   GET    /extensions                                installed list (valid + error entries)
+ *   GET    /extensions                                installed list (on + off + error entries)
  *   POST   /extensions/install                        multipart `file` = zip → install / upgrade
+ *   PATCH  /extensions/:id                            `{ enabled }` → switch on / off (state.ts)
  *   DELETE /extensions/:id                            uninstall
  *   GET    /extensions/token                          short-lived asset token for the iframe URL
  *   GET    /extensions/:id/:version/:token/<asset>    static file from the extension dir
@@ -24,18 +25,24 @@
  * stale tab holding an old URL 404s after an upgrade (the admin treats that
  * as "reload me"), and it makes the assets safely immutable-cached.
  *
- * Install / uninstall do NOT broadcast themselves: the resulting rename / rm
- * trips extensions/watcher.ts, the single notifier for every install path.
- * They do call rescanAndBroadcast() so the response and the very next GET
- * already reflect the change without waiting for the debounce.
+ * Install / uninstall / on-off do NOT broadcast themselves: the resulting
+ * rename / rm trips extensions/watcher.ts, the single notifier for every
+ * install path. They do call rescanAndBroadcast() so the response and the
+ * very next GET already reflect the change without waiting for the debounce.
+ *
+ * A switched-off extension still serves its assets (the version check is
+ * against the installed one, on or off): a dirty tab kept alive on it must
+ * keep loading and saving. Everything that OFFERS an extension — previews,
+ * activity / chat bar, skills, settings sections, the proxies — skips it.
  */
 import { Hono } from 'hono'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { imageMimeFromExt } from '@turmind/halo-core'
-import { extensionsRoot, getExtension, getSnapshot, isExtensionId } from '../extensions/registry.js'
+import { extensionsRoot, getInstalledExtension, getSnapshot, isExtensionId } from '../extensions/registry.js'
 import { ExtensionInstallError, installExtensionZip, uninstallExtension } from '../extensions/install.js'
+import { setExtensionDisabled } from '../extensions/state.js'
 import { rescanAndBroadcast } from '../extensions/watcher.js'
 import { mintScopedToken, verifyScopedToken } from '../middleware/auth.js'
 
@@ -73,10 +80,11 @@ export function assetMime(fileName: string): string {
  * dot-prefixed segment, or the target isn't a regular file. Hono URL-decodes
  * the param, so `rest` can arrive as `../../x` — the segment check runs
  * BEFORE any path.join, and a realpath prefix check guards symlinks.
+ * Switched off still serves (see the header).
  */
 export function resolveAsset(id: string, version: string, rest: string): string | null {
   if (!isExtensionId(id)) return null
-  const info = getExtension(id)
+  const info = getInstalledExtension(id)
   if (!info || info.version !== version) return null
   const segments = rest.split('/')
   if (segments.some((s) => s === '' || s === '.' || s === '..' || s.startsWith('.') || s.includes('\\'))) return null
@@ -132,6 +140,27 @@ export function createExtensionRoutes() {
       if (err instanceof ExtensionInstallError) return c.json({ error: err.message }, 400)
       const msg = err instanceof Error ? err.message : String(err)
       console.log(`[Extensions] install failed: ${msg}`)
+      return c.json({ error: msg }, 500)
+    }
+  })
+
+  // Target state, not a flip: a retried request is a no-op (no write, no push).
+  // Error rows (no valid manifest) can only be removed.
+  app.patch('/extensions/:id', async (c) => {
+    const id = c.req.param('id')
+    if (!isExtensionId(id)) return c.json({ error: 'Invalid extension id' }, 400)
+    const body = await c.req.json<{ enabled?: unknown }>().catch(() => null)
+    if (typeof body?.enabled !== 'boolean') return c.json({ error: '`enabled` (boolean) is required' }, 400)
+    if (!getInstalledExtension(id)) return c.json({ error: 'Extension not installed' }, 404)
+    try {
+      if (setExtensionDisabled(id, !body.enabled)) {
+        console.log(`[Extensions] ${id} switched ${body.enabled ? 'on' : 'off'}`)
+        rescanAndBroadcast()
+      }
+      return c.json({ ok: true, id, enabled: body.enabled })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log(`[Extensions] switch ${id} failed: ${msg}`)
       return c.json({ error: msg }, 500)
     }
   })

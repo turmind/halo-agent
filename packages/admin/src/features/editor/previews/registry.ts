@@ -8,13 +8,14 @@ import type { PreviewPlugin, Resolved } from './types'
  *   - built-in plugins, registered at module load by `plugins/index.ts`
  *   - runtime extensions, the server's `ExtensionsSnapshot` (initial GET via
  *     `loadExtensions()` + every `extension:changed` WS frame — see
- *     ws-handlers/state-handlers)
+ *     ws-handlers/state-handlers). Only `extensions` (switched on) feeds
+ *     resolution; `disabled` is for Settings and the fallback page's hint.
  * `resolve(ext)` merges them into the ordered candidate list the editor picks
  * from; the version counter lets render-time consumers re-run when either
  * layer changes.
  */
 const builtins = new Map<string, PreviewPlugin>() // ext (lowercase, no dot) → plugin
-let snapshot: ExtensionsSnapshot = { extensions: [], errors: [] }
+let snapshot: ExtensionsSnapshot = { extensions: [], disabled: [], errors: [] }
 
 let version = 0
 const listeners = new Set<() => void>()
@@ -174,6 +175,14 @@ export function isBundleName(name: string): boolean {
 export function excludedByPlatform(ext: string, bundle = false): ExtensionInfo[] {
   const key = normalize(ext)
   return snapshot.extensions.filter((e) => claims(e, key, bundle) && !runsHere(e))
+}
+
+/** Switched-off extensions for this suffix — the fallback page names them
+ *  ("… is turned off"). `disabled` is never resolved anywhere else: an off
+ *  extension routes, lists and mounts as if it were not installed. */
+export function disabledFor(ext: string, bundle = false): ExtensionInfo[] {
+  const key = normalize(ext)
+  return snapshot.disabled.filter((e) => claims(e, key, bundle))
 }
 
 /** Extensions with an activity-bar entry that run on this platform, in bar
