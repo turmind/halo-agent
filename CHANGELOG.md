@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-17
+
 ### Added
 
 - AgentCore mode: `halo agentcore` now also serves `POST /invocations`, so the same image can run as an AgentCore runtime with the HTTP protocol (port 8080, set `HALO_PORT=8080`) for callers that can't speak A2A, such as EventBridge Scheduler or a script. A job is `{"prompt": "…"}` or `{"promptFile": "<workspace path>"}`, with an optional `session` (a fixed session keeps the job's history from run to run), `agent` (for a new session) and `id`. By default the request waits up to 10 minutes and answers with the final reply and the files it named on `MEDIA:` lines. With `Accept: text/event-stream` the reply streams as it is written, with a keepalive every 15 s. With `"async": true` you get a receipt at once, and `{"get": "<id>"}` reads a job later. A client that disconnects doesn't stop the run. Sending the same `id` again returns that job instead of running it twice, also after the microVM was replaced, because jobs and their results are kept in the workspace's `a2a.db` on EFS. A new job on a session whose previous job hasn't finished takes it over; the earlier job then reads `superseded`, as it does when an A2A message or a `relay_send` takes the session over. A job cut off by a microVM replacement resumes on the next one, also on a session whose id starts with `cron-` (the hub skill reuses local cron session ids). Sessions run at the `HALO_A2A_ACCESS` level, as A2A tasks do.
@@ -1087,7 +1089,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/turmind/halo-agent/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/turmind/halo-agent/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/turmind/halo-agent/compare/v1.6.7...v2.0.0
 [1.6.7]: https://github.com/turmind/halo-agent/compare/v1.6.6...v1.6.7
