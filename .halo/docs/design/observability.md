@@ -11,7 +11,7 @@ A vendor-neutral observability layer built on the official OpenTelemetry JS SDK.
 | `general.observability.endpoint` | string | `''` | OTLP base URL of an OpenTelemetry collector (e.g. `http://localhost:4318`). Traces, metrics and logs all exported over OTLP http/protobuf — `http://` or `https://`, on the collector's OTLP/HTTP port (4318 by default); gRPC (4317) not supported. Empty = off. Server: restart required; cron / evolution runs: next run. |
 | `general.observability.service_name` | string | `halo` | OTel resource `service.name`. Server: restart required; cron / evolution runs: next run. |
 | `general.observability.headers` | string, **secret** | `''` | Extra headers for every OTLP request, comma-separated `k=v` (e.g. `authorization=Bearer …`). Server: restart required; cron / evolution runs: next run. |
-| `general.observability.capture_content` | boolean | `false` | Put prompt / completion / tool argument+result text on spans (`gen_ai.*.messages` etc.). Off = metadata only (model, tokens, latency, tool names). Server: restart required; cron / evolution runs: next run. |
+| `general.observability.capture_content` | boolean | `false` | Put prompt / completion / tool argument+result text on spans (`gen_ai.*.messages` etc.). Off = metadata only (model, tokens, latency, tool names). Env `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` overrides it (below). Server: restart required; cron / evolution runs: next run. |
 
 All four keys are `globalOnly`. The server's own exporter switches only on restart — `otel.ts` reads them once at boot, before anything else touches the OTel API. A `halo cli` / `halo tui` process reads them the same way at its own start, so a change reaches the next run — including the cron and evolution children the server spawns, which don't inherit the server's boot-time values (see the child-env rule below). A changed or cleared endpoint therefore reaches their next run without a server restart.
 
@@ -23,6 +23,8 @@ All four keys are `globalOnly`. The server's own exporter switches only on resta
 - `headers` → `OTEL_EXPORTER_OTLP_HEADERS`
 - `service_name` → `OTEL_SERVICE_NAME`
 - always `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` (declarative — the `*-otlp-proto` exporters are hard-wired to it; this just makes an externally-loaded SDK agree on wire protocol)
+
+`capture_content` goes the other way: it isn't mapped onto an env var; instead `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (the OTel GenAI instrumentation's own switch), when exported as `true` / `false` / `1` / `0` (any case), beats the setting in both directions (`config.ts` `envBool`); unset or any other value → the setting. Read once at process start, like the rest. This is what lets a container (an AgentCore runtime) turn content capture on or off from its env alone, with no settings edit. A server that exports it passes it on to its cron / evolution children (it isn't in `settingsOtelEnvKeys`).
 
 No `OTEL_EXPORTER_OTLP_ENDPOINT` after the mapping → `enabled=false`, `initObservability()` returns without registering anything.
 
@@ -173,7 +175,7 @@ exporters:
 
 Prerequisites: CloudWatch Transaction Search must be enabled (spans land in the shared `aws/spans` log group, no resource policy needed); the log group `/aws/bedrock-agentcore/runtimes/<name>` must be created beforehand.
 
-Halo-side settings for this setup: `endpoint=http://localhost:4318`, `service_name=<name>`, `capture_content=true` (AgentCore Evaluations needs content to score against).
+Halo-side settings for this setup: `endpoint=http://localhost:4318`, `service_name=<name>`, `capture_content=true` (AgentCore Evaluations needs content to score against). Or, from the runtime env alone: `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`.
 
 ## AgentCore Evaluations
 

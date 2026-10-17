@@ -517,15 +517,82 @@ File: `packages/server/src/routes/evolution.ts`. Surfaces the global `evolution_
 
 ## AgentCore runtime container (`halo agentcore` only)
 
-File: `packages/server/src/a2a/agentcore.ts`. Served **only** when `HALO_RUNTIME_MODE=agentcore-a2a` (set by `halo agentcore`; see [design/agentcore.md](../design/agentcore.md)), on port 9000, with no cookie / token auth — AgentCore verifies the caller's signed request before forwarding. Not present in normal server mode.
+Files: `packages/server/src/a2a/agentcore.ts` (routes), `invocations.ts` (jobs), `agentcore-front.ts` (session-dirs front). Served **only** when `HALO_RUNTIME_MODE=agentcore-a2a` (set by `halo agentcore`; see [design/agentcore.md](../design/agentcore.md)), on port 9000 (A2A runtimes) or 8080 (HTTP runtimes) — every route on either; AgentCore forwards only its protocol's. No cookie / token auth — AgentCore verifies the caller's signed request before forwarding. Not present in normal server mode.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/ping` | `{"status":"HealthyBusy"}` while the workspace lease is held and a session is running or a push is pending, else `{"status":"Healthy"}` |
+| GET | `/ping` | `{"status":"HealthyBusy"}` while the workspace lease is held and a session is running, a push is pending or a notify hook is in flight, else `{"status":"Healthy"}` |
 | POST | `/` | A2A JSON-RPC. Without the workspace lease: error `-32603` "workspace is in use by another runtime session…" |
 | GET | `/.well-known/agent-card.json` | The agent card (`<ws>/.halo/agent-card.json`, seeded if missing); interface URL = `HALO_A2A_PUBLIC_URL` + `/`; no `securitySchemes` |
+| POST | `/invocations` | Prompt job over plain HTTP (HTTP-protocol runtimes: EventBridge Scheduler, scripts) — [below](#post-invocations) |
 
-Any other path is 404. The former HTTP-protocol routes (`POST /invocations`, WS `/ws`) were removed 2026-10-09.
+Any other path is 404, exact match (`//`, `/invocations/` are 404 too). An earlier HTTP mode (`/invocations` with WS `/ws` and per-user workspaces) was removed 2026-10-09; today's `/invocations` is the job entry below.
+
+**Session-dirs mode** (`HALO_AGENTCORE_SESSION_DIRS=1`, [design](../design/agentcore.md#session-dirs)): a root front answers first. `/ping` is its own until a worker is up. Every other request needs `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` matching `^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$` — missing / invalid → 400; another id than the one this microVM serves → 409; base not mounted yet → 503 (retry); session-dir creation failed → 500 (retry); view setup failed or worker not ready within 30 s → 503 for every later request. Errors are `{"error": "…"}`. Past that, requests are proxied to the worker unchanged.
+
+### POST `/invocations`
+
+Request body — a JSON object, ≤ 1 MiB; unknown fields are ignored:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `prompt` | string | The job prompt. Exactly one of `prompt` / `promptFile`. |
+| `promptFile` | string | Workspace-relative path of the prompt: a regular file inside the workspace, not a hidden runtime path, non-empty, ≤ 1 MiB. |
+| `session` | string | Halo root session id, `^[A-Za-z0-9_:-]{1,200}$`. Existing → resumed with its own agent; new → created. Absent → a fresh `inv_…` session. |
+| `agent` | string | Agent for a new session (default: the workspace default). Ignored for an existing one. |
+| `id` | string | Caller's idempotency key, ≤ 256 chars. |
+| `async` | boolean | `true` → answer the receipt at once. |
+
+Or, alone: `{"get": "<invocation id or caller id>"}` (≤ 256 chars; any other field → 400).
+
+Response mode for a new job: `"async": true` → the receipt; `Accept: text/event-stream` → SSE; otherwise sync — wait up to 10 min for the job to finish, then the job body (still `running` past the cap; `get` it later). A dropped client only stops waiting; the run continues.
+
+```jsonc
+// Receipt (async; also SSE's first event)
+{ "status": "accepted", "invocation": "<uuid>", "session": "s1", "id": "job-42" }
+
+// Job body (sync, get, SSE's result event)
+{
+  "status": "ok",                          // running | ok | error | superseded
+  "invocation": "<uuid>", "session": "s1", "id": "job-42",   // id null when not given
+  "result": "<final reply, MEDIA: lines kept>",              // null while running
+  "files": [{ "path": "/workspace/out/a.mp3", "size": 48213 }], // MEDIA: files that existed at finish
+  "startedAt": "2026-10-17T14:02:11.000Z",
+  "finishedAt": "2026-10-17T14:02:15.500Z", // null while running
+  "supersededBy": "<uuid>"                  // only when superseded
+}
+
+// Same id seen before: that job's current body + "duplicate": true, nothing runs
+{ "status": "running", "invocation": "<uuid>", …, "duplicate": true }
+```
+
+SSE (`text/event-stream`):
+
+```
+event: accepted
+data: {"status":"accepted","invocation":"<uuid>","session":"s1","id":"job-42"}
+
+event: delta
+data: {"text":"…"}            ← root session's live text, any number
+
+: keepalive                    ← every 15 s
+
+event: result
+data: {<job body>}
+```
+
+`superseded`: a new job on the same session took over this one's completion (`supersededBy` = its invocation id); a sync waiter or SSE stream on the old job answers that at once.
+
+| Status | When |
+|---|---|
+| 200 | Job body, receipt, duplicate, or the SSE stream |
+| 400 | Bad body (not JSON / not an object, field types or formats, both or neither of `prompt` / `promptFile`, `async` not boolean, `get` with other fields, too long), `promptFile` not found / outside the workspace / not a regular file / too large / empty, unknown or internal `agent` |
+| 404 | `get` of an unknown key |
+| 409 | The session owes an A2A task or a relay report |
+| 500 | Dispatch failed (`dispatch failed: …`); the job row is dropped, so a retry with the same `id` runs |
+| 503 | Workspace lease held by another runtime session (the `-32603` text) — `get` included |
+
+Errors are `{"error": "…"}`. Completion runs `HALO_AGENTCORE_NOTIFY` with the final reply on stdin — see [the notify hook](../design/agentcore.md#completion-and-the-notify-hook).
 
 ---
 
