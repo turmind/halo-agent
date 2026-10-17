@@ -192,6 +192,12 @@ function settingsBool(settingsPath: string, fallback: boolean): boolean {
   return raw === 'true' || raw === '1'
 }
 
+/** Boolean env var: true / false / 1 / 0 (any case); unset or anything else = undefined. */
+function envBool(envKey: string): boolean | undefined {
+  const raw = process.env[envKey]?.trim().toLowerCase()
+  return raw === 'true' || raw === '1' ? true : raw === 'false' || raw === '0' ? false : undefined
+}
+
 
 /** Read int config: env > config.yaml > fallback */
 function systemInt(envKey: string, configPath: string, fallback: number): number {
@@ -447,7 +453,9 @@ export const config = {
     endpoint: settingsStr('general.observability.endpoint', ''),
     serviceName: settingsStr('general.observability.service_name', 'halo'),
     headers: settingsStr('general.observability.headers', ''),
-    captureContent: settingsBool('general.observability.capture_content', false),
+    // The OTel GenAI instrumentation's own switch, when exported, beats settings
+    // (endpoint / headers / service_name get the same from otel.ts `??=`).
+    captureContent: envBool('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT') ?? settingsBool('general.observability.capture_content', false),
   },
 
   // Notebook kernels (jupyter/manager.ts). Getters: read at each spawn.
