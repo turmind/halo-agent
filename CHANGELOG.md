@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Models reached over the OpenAI chat-completions format (DeepSeek, Kimi, GLM, Doubao, Hunyuan, Gemini, generic OpenAI-compatible endpoints): when the model's reply stream stops partway through without an error, the turn is now retried with the usual backoff, as it already was for Claude and the Anthropic API format. Before, it ended as an empty or cut-off reply, which a sub-agent reported as `(no output)`. On the retry the model thinks again from the start, so its thinking streams a second time. A DeepSeek reply the server cut off (`finish_reason: insufficient_system_resource` for lack of resources, or `aborted`) is retried the same way. A self-hosted or third-party OpenAI-compatible endpoint must send a `finish_reason` in its stream: one that never does is now retried up to the limit on every turn before it fails.
+- Cron: a one-shot job still running when the schedule was reloaded or edited is no longer marked `missed`; it ends with its real status. After a server restart, a one-shot whose run was cut off shows `failed` and is disabled, instead of staying enabled past its time. A job whose schedule or timezone the scheduler can't parse logs one warning, not one on every check.
 
 ## [2.0.0] - 2026-10-16
 
