@@ -44,6 +44,7 @@ import { createA2ARoutes } from './a2a/routes.js'
 import { createA2APushRoutes, reconcileOpenDispatches, setA2AOutboundRegistry } from './a2a/outbound.js'
 import { startPushSender, stopPushSender } from './a2a/push.js'
 import { createAgentCoreA2A, type WorkspaceLease } from './a2a/agentcore.js'
+import { FRONT_URL_ENV, postToFront } from './a2a/agentcore-notify.js'
 import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
 import { createExtensionRoutes } from './routes/extensions.js'
@@ -583,10 +584,15 @@ app.onError((err, c) => {
 // Start server with WebSocket support
 // ------------------------------------------------------------------
 
+// Session-dirs worker (a2a/agentcore-front.ts): reachable only through the
+// front's proxy, so loopback only; it tells the front it is up (push, no probe).
+const AGENTCORE_WORKER = AGENTCORE && !!process.env[FRONT_URL_ENV]
 const server = serve({
   fetch: app.fetch,
   port: PORT,
+  ...(AGENTCORE_WORKER ? { hostname: '127.0.0.1' } : {}),
 }, (info) => {
+  if (AGENTCORE_WORKER) void postToFront('/ready', {})
   // Always shown (stderr, whatever the log level): without it a foreground
   // `halo server start` prints nothing at the default `warn` and the user
   // can't tell it came up. AgentCore's microVM is only reached through

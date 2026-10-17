@@ -22,6 +22,7 @@ import { resolveDefaultAgentId } from '../channels/shared/commands.js'
 import { isSelfOrAncestor, selfOrAncestorRefusal } from './session-tools.js'
 import { getA2ADb } from '../db/a2a-db.js'
 import { completeTask, getTask, interim, transition } from '../a2a/tasks.js'
+import { finishInvocation } from '../a2a/invocations.js'
 
 /** What relay needs from a SessionManager — its own or a foreign workspace's.
  *  Structural — the manager satisfies it with `this`; tests pass a stub. */
@@ -39,9 +40,10 @@ export interface RelayTarget {
 }
 export interface RelayRegistry { getOrCreate(workspacePath: string): RelayTarget }
 /** `reply_to` = who this root owes its wrap-up: a relay caller session on this
- *  server, or an inbound A2A task (plans/a2a.md §2) — same quiet gate, same
- *  interim doors, one column. */
-export type ReplyTo = { workspace: string; sessionId: string } | { a2a: string }
+ *  server, an inbound A2A task (plans/a2a.md §2), or an AgentCore
+ *  `/invocations` job (a2a/invocations.ts) — same quiet gate, same interim
+ *  doors, one column. */
+export type ReplyTo = { workspace: string; sessionId: string } | { a2a: string } | { invocation: string }
 /** Prefix relay_send stamps on the model-bound text. SessionManager.drainQueue
  *  matches it to tell a relay message (owed an interim report) from local chat. */
 export const RELAY_CHANNEL_PREFIX = '[channel: relay | from: '
@@ -160,6 +162,15 @@ export async function deliverRelayReport(
     return
   }
 
+  if ('invocation' in to) {
+    // AgentCore /invocations job: record the outcome (+ start the notify hook)
+    // first, then the back-pointer — the same crash-safe order as the A2A branch.
+    if (!getA2ADb()) { console.warn(`[AgentCore] no a2a db — cannot finish invocation ${to.invocation} for ${session.id}`); return }
+    finishInvocation(to.invocation, session, host.workspaceRoot)
+    clearReplyTo(db, session.id)
+    return
+  }
+
   const registry = getRelayRegistry()
   if (!registry) { console.warn(`[Relay] no registry — cannot deliver report for ${session.id} to ${to.workspace}`); return }
 
@@ -210,6 +221,8 @@ export async function deliverRelayInterim(host: RelayTarget, sessionId: string, 
     if (getA2ADb()) interim(to.a2a, body)
     return
   }
+  // An /invocations job notifies its final reply only (what `halo cli` prints).
+  if ('invocation' in to) return
   const registry = getRelayRegistry()
   if (!registry) { console.warn(`[Relay] no registry — cannot deliver interim report for ${sessionId} to ${to.workspace}`); return }
   let caller: RelayTarget

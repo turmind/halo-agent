@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 /**
  * initObservability / shutdownObservability contract, shared by the server and
@@ -113,6 +116,54 @@ describe('cleanChildEnv × initObservability', () => {
     const { otel, cleanChildEnv } = await load()
     await otel.initObservability()
     expect(cleanChildEnv()).not.toHaveProperty('HALO_PASSWORD')
+  })
+})
+
+// The real config.ts (the mock above stands in for it elsewhere): env beats
+// settings.yaml for capture_content, like otel.ts `??=` does for the rest.
+describe('config.observability.captureContent', () => {
+  const KEY = 'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT'
+  const savedHome = process.env.HOME
+  const homes: string[] = []
+
+  /** config.ts resolves ~/.halo from homedir() at load → a fresh HOME + module per case. */
+  async function captureContent(settings: string | null, env: string | undefined): Promise<boolean> {
+    const home = mkdtempSync(join(tmpdir(), 'halo-otel-cfg-'))
+    homes.push(home)
+    if (settings !== null) {
+      mkdirSync(join(home, '.halo', 'secrets'), { recursive: true })
+      writeFileSync(join(home, '.halo', 'secrets', 'settings.yaml'), `general:\n  observability:\n    capture_content: ${settings}\n`)
+    }
+    process.env.HOME = home
+    if (env === undefined) delete process.env[KEY]
+    else process.env[KEY] = env
+    vi.resetModules()
+    const { config } = await vi.importActual<typeof import('../src/config.js')>('../src/config.js')
+    return config.observability.captureContent
+  }
+
+  afterEach(() => {
+    process.env.HOME = savedHome
+    delete process.env[KEY]
+    for (const h of homes.splice(0)) rmSync(h, { recursive: true, force: true })
+  })
+
+  it('unset → settings.yaml, else the schema default (off)', async () => {
+    expect(await captureContent(null, undefined)).toBe(false)
+    expect(await captureContent('true', undefined)).toBe(true)
+  })
+
+  it('set → wins over settings.yaml either way; true / false / 1 / 0, any case', async () => {
+    expect(await captureContent('false', 'true')).toBe(true)
+    expect(await captureContent('false', '1')).toBe(true)
+    expect(await captureContent('false', 'TRUE')).toBe(true)
+    expect(await captureContent('true', 'false')).toBe(false)
+    expect(await captureContent('true', '0')).toBe(false)
+  })
+
+  it('an unrecognised value is ignored → settings.yaml', async () => {
+    expect(await captureContent('true', 'yes')).toBe(true)
+    expect(await captureContent('false', '')).toBe(false)
   })
 })
 

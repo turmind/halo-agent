@@ -184,16 +184,20 @@ and logs why. A clean exit — including \`halo server stop\` — never restarts
 const HELP_AGENTCORE = `Usage: halo agentcore --workspace <path> [-p N]
 
 Run the server in the foreground as an Amazon Bedrock AgentCore Runtime
-container with the A2A server protocol (HALO_RUNTIME_MODE=agentcore-a2a):
-GET /ping, POST / (A2A JSON-RPC) and GET /.well-known/agent-card.json on one
-fixed workspace. No admin UI, password, channels, cron or evolution — the
-caller's signed request is verified by AgentCore before it reaches here.
+container (HALO_RUNTIME_MODE=agentcore-a2a): GET /ping, POST / (A2A JSON-RPC),
+GET /.well-known/agent-card.json and POST /invocations (plain-HTTP job:
+{"prompt" | "promptFile", "session"?, "agent"?, "id"?, "async"?} — waits for
+the result (≤ 10 min), streams it with Accept: text/event-stream, or returns
+a receipt with "async": true; {"get": "<id>"} reads a job) on one fixed
+workspace. No admin UI, password, channels, cron or evolution — the caller's
+signed request is verified by AgentCore before it reaches here.
 
 Options:
   -w, --workspace <path>   Workspace to serve (default: HALO_WORKSPACE env;
                            required). Seeded with .halo/agent-card.json if
                            missing.
-  -p, --port <n>           Listen port (default: 9000, the AgentCore contract)
+  -p, --port <n>           Listen port (default: HALO_PORT env, else 9000 —
+                           the A2A contract; HTTP-protocol runtimes use 8080)
   -h, --help               Show this help
 
 Environment:
@@ -201,6 +205,18 @@ Environment:
                            invoke URL (…/runtimes/<escaped ARN>/invocations)
   HALO_A2A_ACCESS          Session access level: workspace (default) | full |
                            readonly
+  HALO_AGENTCORE_NOTIFY    Shell command run (sh -c, cwd = workspace) when a
+                           /invocations run finishes: stdin = its final reply,
+                           env + HALO_SESSION_ID, HALO_RUN_STATUS (ok|error),
+                           HALO_WORKSPACE. Runs outside the agent sandbox.
+  HALO_AGENTCORE_SESSION_DIRS=1
+                           One workspace per runtime session id: --workspace
+                           is the base, the session's dir <base>/<id> (seeded
+                           from <base>/.template) is bound at /workspace, the
+                           base unmounted; a worker serves it as uid/gid
+                           1000, no capabilities, no_new_privs. Needs root,
+                           mount, setpriv; the worker gets only an env
+                           allowlist (no channel secrets).
 
 Run \`halo setup --non-interactive\` first (in the image build): the server
 exits at boot if ~/.halo/global/ is not initialized.
@@ -1344,9 +1360,11 @@ async function cmdAgentcore(argv: string[]): Promise<void> {
       port: { type: 'string', short: 'p' },
     },
   })
-  const port = parsePort(values.port ?? '9000')
+  // HALO_PORT is how an HTTP-protocol runtime asks for :8080 (A2A ones run :9000).
+  const rawPort = values.port ?? process.env.HALO_PORT ?? '9000'
+  const port = parsePort(rawPort)
   if (port == null) {
-    process.stderr.write(`Invalid port: ${values.port}\n`)
+    process.stderr.write(`Invalid port: ${rawPort}\n`)
     process.exitCode = 1
     return
   }
@@ -1360,6 +1378,13 @@ async function cmdAgentcore(argv: string[]): Promise<void> {
   if (!fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
     process.stderr.write(`Workspace is not a directory: ${workspace}\n`)
     process.exitCode = 1
+    return
+  }
+  // Session-dirs mode: this process is only the root front (no server, no
+  // dbs); it spawns the real `halo agentcore` per session id, isolated.
+  if (process.env.HALO_AGENTCORE_SESSION_DIRS === '1') {
+    const { runAgentCoreFront } = await import('@turmind/halo-server/a2a/agentcore-front')
+    await runAgentCoreFront({ base: workspace, port })
     return
   }
   process.env.HALO_RUNTIME_MODE = 'agentcore-a2a'

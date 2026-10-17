@@ -6,7 +6,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import Database from 'better-sqlite3'
 import { Hono } from 'hono'
-import { createA2ADb, setA2ADb, getA2ADb } from '../src/db/a2a-db.js'
+import { createA2ADb, setA2ADb, getA2ADb, A2A_MIGRATIONS } from '../src/db/a2a-db.js'
 import { createTask, getTask, completeTask, transition } from '../src/a2a/tasks.js'
 import { stopPushSender } from '../src/a2a/push.js'
 import { createA2ARoutes } from '../src/a2a/routes.js'
@@ -342,12 +342,12 @@ describe('a2a.db migration', () => {
     setA2ADb(db)
     const cols = (db.prepare('PRAGMA table_info(a2a_tasks)').all() as Array<{ name: string }>).map((c) => c.name)
     expect(cols).toContain('result_files')
-    expect(db.pragma('user_version', { simple: true })).toBe(1)
+    expect(db.pragma('user_version', { simple: true })).toBe(A2A_MIGRATIONS.length)
     expect((taskJson(getTask('t0')!) as { artifacts: unknown[] }).artifacts).toEqual([{ artifactId: 'result', name: 'result', parts: [{ text: 'old' }] }])
     // Re-open: the slot has run, nothing re-applied.
     db.close()
     setA2ADb(createA2ADb(old))
-    expect(getA2ADb()!.pragma('user_version', { simple: true })).toBe(1)
+    expect(getA2ADb()!.pragma('user_version', { simple: true })).toBe(A2A_MIGRATIONS.length)
     rmSync(old, { recursive: true, force: true })
   })
 })

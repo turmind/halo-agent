@@ -7,7 +7,8 @@
  * webhooks per task), `a2a_push_outbox` (persisted push deliveries, one row
  * per (task, config, event) — the dedupe key). Outbound: `a2a_dispatches`
  * (this server's own sends to remote agents, matched by push id + remote
- * task id when their push lands).
+ * task id when their push lands). AgentCore mode only: `agentcore_invocations`
+ * (`POST /invocations` jobs — the caller's idempotency key, a2a/invocations.ts).
  *
  * Global rather than per-workspace halo.db: the boot jobs (outbox resume,
  * outbound reconcile) scan across workspaces, like the evo / cron / runs dbs.
@@ -86,6 +87,19 @@ CREATE TABLE IF NOT EXISTS a2a_dispatches (
 CREATE INDEX IF NOT EXISTS idx_a2a_dispatch_push ON a2a_dispatches(push_id);
 CREATE INDEX IF NOT EXISTS idx_a2a_dispatch_state ON a2a_dispatches(state);
 CREATE INDEX IF NOT EXISTS idx_a2a_dispatch_ctx ON a2a_dispatches(workspace, remote, remote_context_id);
+
+CREATE TABLE IF NOT EXISTS agentcore_invocations (
+  id          TEXT PRIMARY KEY,
+  request_id  TEXT,
+  session_id  TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  finished_at INTEGER,
+  result      TEXT,
+  result_files TEXT,
+  superseded_by TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agentcore_inv_req ON agentcore_invocations(request_id) WHERE request_id IS NOT NULL;
 `
 
 export type A2ADb = Database.Database
@@ -96,6 +110,14 @@ export const A2A_MIGRATIONS: Migration[] = [
   // v1: `result_files` — JSON [{ filename, mediaType, raw }] of the images a
   // result attached via MEDIA: lines (plans/a2a.md §5 "Image parts").
   (s) => addColumnIfMissing(s, 'a2a_tasks', 'result_files', 'TEXT'),
+  // v2: `agentcore_invocations` (table added after 2.0.1 by a plain CREATE)
+  // keeps its outcome for sync / SSE / `get` (a2a/invocations.ts): the final
+  // reply, JSON [{ path, size }] of its MEDIA: files, the job that took over.
+  (s) => {
+    addColumnIfMissing(s, 'agentcore_invocations', 'result', 'TEXT')
+    addColumnIfMissing(s, 'agentcore_invocations', 'result_files', 'TEXT')
+    addColumnIfMissing(s, 'agentcore_invocations', 'superseded_by', 'TEXT')
+  },
 ]
 
 export function createA2ADb(globalDir: string): A2ADb {
