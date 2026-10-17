@@ -9,6 +9,7 @@ import { useI18n } from '@/shared/i18n'
 import { useTheme } from '@/shared/theme'
 import { SecurityView } from './security-view'
 import { ExtensionsView } from './extensions-view'
+import { CoreUpdate } from './core-update'
 import { useModelsBus } from '@/shared/models-bus'
 import { getExtensionsSnapshot, subscribe as subscribeExtensions } from '@/features/editor/previews/registry'
 
@@ -207,12 +208,8 @@ export function SettingsMain() {
           <NavList sections={sections} orphans={orphans} active={activeNs} onPick={setActiveNs} />
         </div>
 
-        {/* Version — stamped into the bundle at build time, read from /api/health */}
-        {version && (
-          <div className="shrink-0 border-t border-[var(--border)] px-3 py-2 text-[10px] text-[var(--muted-foreground)]">
-            Halo v{version}
-          </div>
-        )}
+        {/* Version — stamped into the bundle at build time, read from /api/health — plus 检查更新 */}
+        {version && <CoreUpdate version={version} />}
       </div>
 
       {/* Right: section content */}

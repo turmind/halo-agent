@@ -46,3 +46,4 @@ export type {
   ExtensionClientFrameType,
 } from './extension-frames.js'
 export { EXTENSION_PROTOCOL_VERSION, EXTENSION_THEME_TOKENS } from './extension-frames.js'
+export type { UpdateScope, CoreUpdateState, CoreUpdateStatus } from './update-types.js'

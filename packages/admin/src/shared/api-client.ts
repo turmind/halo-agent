@@ -1,5 +1,5 @@
 import type { ChatMessage, Skill } from '@/shared/types'
-import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import type { CoreUpdateStatus, ExtensionInfo, ExtensionsSnapshot, UpdateScope } from '@turmind/halo-core/protocol'
 
 const API_BASE = '/api'
 
@@ -708,6 +708,19 @@ export const api = {
     /** Switch on / off (target state; repeating it is a no-op). */
     setEnabled(id: string, enabled: boolean) {
       return request<{ ok: boolean; id: string; enabled: boolean }>(`/extensions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) })
+    },
+  },
+
+  // Update checks. Both answer with the cached status at once; a check they
+  // start reports `checking` and its result arrives as `updates:changed`.
+  updates: {
+    /** Cached Halo status; the server starts a check when it is > 24 h old. */
+    core() {
+      return request<CoreUpdateStatus>('/updates?scope=core')
+    },
+    /** Force a check (server-side 60 s cooldown). */
+    check(scope: UpdateScope) {
+      return request<CoreUpdateStatus>('/updates/check', { method: 'POST', body: JSON.stringify({ scope }) })
     },
   },
 
