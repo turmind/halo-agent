@@ -2,8 +2,9 @@
  * Cron tasks admin routes.
  *
  * REST CRUD over `cron_jobs` + read-only access to `cron_runs` history
- * and the per-run log file. Mutations re-emit a `reloadAll()` so the
- * in-memory croner schedules stay in sync with the db.
+ * and the per-run log file. Create / update / delete call `scheduleJob` /
+ * `unscheduleJob` for that one job so the runner's in-memory schedules
+ * stay in sync with the db; only `POST /cron/reload` calls `reloadAll()`.
  *
  * Listing channels-available-as-targets is also handled here — the
  * admin UI's create form needs the workspace + agent + channel-account

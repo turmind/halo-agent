@@ -283,7 +283,8 @@ export const _inflightSessions = new Set<string>()
 const _fingerprint = new Map<string, string>()
 
 /** Enabled recurring jobs `scheduleJob` deliberately left unscheduled
- *  because they're past `activeUntil` — "handled", not "lost". */
+ *  because they're past `activeUntil` or croner rejects their schedule —
+ *  "handled", not "lost". */
 const _expired = new Set<string>()
 
 /** Resolves `~/.halo/global/logs/cron/`. Created on first use. */
@@ -556,6 +557,9 @@ export function scheduleJob(jobId: string): void {
       // keep retrying (which used to log "runAt is in the past" every
       // 10s). UI shows the status; user can clone the job or run-now.
       if (job.runAt <= Date.now()) {
+        // Its own fire is still running (a reload mid-run): finalize sets
+        // the real status and enabled=0 — it isn't missed.
+        if (_inflight.has(jobId)) return
         const now = Date.now()
         console.warn(`[Cron] ${jobId} runAt was ${new Date(job.runAt).toISOString()} (past); marking missed`)
         db.update(cronJobs)
@@ -582,6 +586,10 @@ export function scheduleJob(jobId: string): void {
       target = cron.nextRun()
     }
   } catch (err) {
+    // Only an out-of-band write gets here (REST validates). Handled like
+    // past activeUntil: one warn per fingerprint, retried once the row changes.
+    _expired.add(jobId)
+    _fingerprint.set(jobId, jobFingerprint(job))
     console.warn(`[Cron] ${jobId} schedule invalid (${job.schedule}): ${err instanceof Error ? err.message : String(err)}`)
     return
   }

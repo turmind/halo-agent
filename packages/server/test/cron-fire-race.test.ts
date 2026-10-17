@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import Database from 'better-sqlite3'
 import { eq } from 'drizzle-orm'
 import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src/db/cron-db.js'
-import { scheduleJob, unscheduleJob, stopCronDaemon } from '../src/cron/runner.js'
+import { scheduleJob, unscheduleJob, stopCronDaemon, reloadAll, reconcileFromDb } from '../src/cron/runner.js'
 
 /**
  * Contract: a scheduled fire is never skipped by timer jitter. The runner owns
@@ -263,5 +264,77 @@ describe('cron fire — warn-level logs', () => {
     await new Promise((r) => setImmediate(r))
     expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('[Cron] job-gone scheduled run crashed'))).toBe(true)
     expect(logSpy.mock.calls.some((c) => String(c[0]).includes('scheduled run crashed'))).toBe(false)
+  })
+
+  it('invalid schedule from an out-of-band write: one warn per fingerprint across reconcile passes', () => {
+    /** Second connection = the skill writing cron.db directly; bumps the
+     *  runner connection's data_version so reconcile does a full pass. */
+    const outOfBand = (sql: string, ...params: unknown[]) => {
+      const other = new Database(path.join(tmpDir, 'cron.db'))
+      other.prepare(sql).run(...params)
+      other.close()
+    }
+    const invalidWarns = () => warnSpy.mock.calls.filter((c) => String(c[0]).includes('[Cron] job-oob schedule invalid')).length
+    insertJob('job-oob', { schedule: '0 9 * * *', timezone: 'UTC' })
+    insertJob('job-other', { schedule: '0 9 * * *', timezone: 'UTC' })
+    reloadAll()
+    reconcileFromDb() // prime data_version
+
+    outOfBand('UPDATE cron_jobs SET schedule = ? WHERE id = ?', 'not a cron', 'job-oob')
+    reconcileFromDb()
+    expect(invalidWarns()).toBe(1)
+    // Unrelated out-of-band writes force more full passes.
+    outOfBand('UPDATE cron_jobs SET label = ? WHERE id = ?', 'x1', 'job-other')
+    reconcileFromDb()
+    outOfBand('UPDATE cron_jobs SET label = ? WHERE id = ?', 'x2', 'job-other')
+    reconcileFromDb()
+    expect(invalidWarns()).toBe(1)
+
+    // A reload rebuilds from scratch (one warn), then the passes stay quiet.
+    reloadAll()
+    expect(invalidWarns()).toBe(2)
+    outOfBand('UPDATE cron_jobs SET label = ? WHERE id = ?', 'x3', 'job-other')
+    reconcileFromDb()
+    outOfBand('UPDATE cron_jobs SET label = ? WHERE id = ?', 'x4', 'job-other')
+    reconcileFromDb()
+    expect(invalidWarns()).toBe(2)
+
+    // Fixing the schedule (new fingerprint) brings it back.
+    outOfBand('UPDATE cron_jobs SET schedule = ? WHERE id = ?', '0 10 * * *', 'job-oob')
+    reconcileFromDb()
+    expect(logSpy.mock.calls.filter((c) => String(c[0]).includes('job-oob scheduled (0 10 * * *)'))).toHaveLength(1)
+    expect(invalidWarns()).toBe(2)
+  })
+})
+
+describe('cron one-shot — reload while its own run is in flight', () => {
+  it('is not marked missed; finalize records the real status', async () => {
+    const t0 = RealDate.UTC(2026, 9, 16, 9, 0, 0)
+    insertJob('job-once-busy', { runAt: t0 })
+    insertJob('job-once-past', { runAt: t0 - MIN })
+    // Real workspace, missing folder: runJob is parked on the folder check
+    // (an await) across reloadAll, then fails 'folder not found'.
+    db.update(cronJobs).set({ workspacePath: tmpDir, workingDir: 'no-such-folder' }).where(eq(cronJobs.id, 'job-once-busy')).run()
+    const job = (id: string) => db.select().from(cronJobs).where(eq(cronJobs.id, id)).get()!
+    const run = () => db.select().from(cronRuns).where(eq(cronRuns.jobId, 'job-once-busy')).get()
+    const missedWarns = (id: string) => warnSpy.mock.calls.filter((c) => String(c[0]).includes(`[Cron] ${id} runAt was`)).length
+
+    clock = t0 - 20_000
+    scheduleJob('job-once-busy')
+    clock = t0 + 0.3
+    wake()
+    expect(run()?.status).toBe('running')
+
+    reloadAll() // POST /api/cron/reload mid-run
+    expect(job('job-once-busy')).toMatchObject({ enabled: 1, lastRunStatus: null })
+    expect(missedWarns('job-once-busy')).toBe(0)
+    // A past one-shot with no run in flight is still marked missed.
+    expect(job('job-once-past')).toMatchObject({ enabled: 0, lastRunStatus: 'missed' })
+    expect(missedWarns('job-once-past')).toBe(1)
+
+    for (let i = 0; i < 1000 && run()?.status === 'running'; i++) await new Promise((r) => setImmediate(r))
+    expect(run()).toMatchObject({ status: 'failed', failureReason: expect.stringMatching(/folder not found/) })
+    expect(job('job-once-busy')).toMatchObject({ enabled: 0, lastRunStatus: 'failed' })
+    expect(missedWarns('job-once-busy')).toBe(0)
   })
 })
