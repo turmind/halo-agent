@@ -301,8 +301,14 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 
 ### Upgrade flow
 
+**Knowing there is one.** Settings (bottom of the left sidebar, next to "Halo v<version>") checks npm's `latest` for `@turmind/halo` when Settings is opened — at most once a day, or on **Check for updates** (at most once a minute) — and when a newer release is out shows "New version X", the command below with a copy button, and a Release notes link. It only notifies: nothing is downloaded or installed, and the server never restarts itself. The server reads the registry from `npm_config_registry` when it is an https URL (a mirror), else registry.npmjs.org; it has no proxy support, so a server that reaches the internet only through a proxy shows "Could not check". Source builds show "Source build — not checked"; the desktop app links to the new installer instead. Rules: [design/canvas-extensions.md → Updates](../design/canvas-extensions.md#updates-updatejson).
+
+**Doing it.** Run as the user that installed Halo:
+
 1. `halo upgrade` — bumps the on-disk npm package
 2. `halo server restart` (under a user or system unit alike; `sudo systemctl restart halo` also works for a system unit) — server's startup check sees `~/.halo/global/.template-version` is behind the new bundled `TEMPLATE_VERSION`, runs `ensureHaloHome` automatically, then starts (`halo cli` / `halo tui` run the same check on start, so a CLI-only install refreshes without a server). Refreshes `docs/`, built-in agents, built-in skills, system prompts, and the model registry. User-owned files (USER.md, custom agents/skills, INSTRUCTIONS.md overrides) are left alone. See `init.ts` for the per-category overwrite policy.
+
+Under a systemd **system** unit, either step may need sudo: a global npm install under `/usr` fails `halo upgrade` with EACCES (it says to retry with sudo; keep `umask 022`, as in [Local maintenance](#local-maintenance--default-short-path)), and when polkit refuses the restart, `halo server restart` prints the `sudo systemctl restart halo` line to run. Extensions are updated separately, from Settings → Extensions (each one's own update.json; no restart needed).
 
 **1.x → 2.0** (new session store): stop the server → `halo sessions migrate v1 v2 -w <ws>` once per workspace → start it — see [guide/cli.md → Session store migration](../guide/cli.md#session-store-migration-halo-sessions-migrate-v1-v2). On prod, 30 workspaces / 1171 sessions migrated in ~93 s, ~1.6 min of downtime in total. First run `find <ws>/.halo -not -user <service user>`: a root-owned file there fails the migration with `EACCES` (agentcore-workspace did in the 2.0 prod upgrade).
 

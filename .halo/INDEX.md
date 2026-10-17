@@ -98,10 +98,10 @@ A particle face at `<workspace>/.halo/canvas/self.html` the agent drives with `<
 
 ## Canvas Preview Extensions
 
-Installable static viewers for file types the editor can't preview (3D, draw.io, Excalidraw, notebooks) and folder-backed apps (`htrans`); a manifest may also add one activity-bar page (`activity`) and one chat-input button (`chatbar`, may insert into the draft, never send). The directory is the install: the server watches `~/.halo/global/extensions/`, validates `halo-extension.json` and pushes `extension:changed`; the admin hosts each in a sandboxed iframe with a scoped asset token. Capabilities, settings, the Transcribe / STT / Jupyter proxies: see the design doc. Installed via Settings, the `extension` skill (hub default [turmind/halo-hub](https://github.com/turmind/halo-hub)) or a directory drop; the same skill updates model providers (`~/.halo/global/models.d/`).
+Installable static viewers for file types the editor can't preview (3D, draw.io, Excalidraw, notebooks) and folder-backed apps (`htrans`); a manifest may also add one activity-bar page (`activity`) and one chat-input button (`chatbar`, never sends). The directory is the install: the server watches `~/.halo/global/extensions/`, validates `halo-extension.json` and pushes `extension:changed`; the admin hosts each in a sandboxed iframe with a scoped asset token. Installed via Settings, the `extension` skill (hub default [turmind/halo-hub](https://github.com/turmind/halo-hub)) or a directory drop. Settings turns one off or one-click updates it (its `update.json`) and flags a newer Halo; the skill also updates model providers.
 
-- Key state: `~/.halo/global/extensions/<id>/`
-- Code: `packages/core/src/protocol/extension-*.ts` + `packages/server/src/extensions/` + `routes/{extensions,transcribe-ws,jupyter}.ts` + admin `features/editor/previews/` + `templates/skills/extension/`
+- Key state: `~/.halo/global/extensions/{<id>/,.state.json}`
+- Code: `packages/core/src/protocol/extension-*.ts` + `packages/server/src/{extensions,updates}/` + `routes/{extensions,updates,transcribe-ws,jupyter}.ts` + admin `features/editor/previews/` + `templates/skills/extension/`
 - Docs: [design/canvas-extensions.md](docs/design/canvas-extensions.md), [dev/api.md](docs/dev/api.md#canvas-preview-extensions), [requirements/editor.md](docs/requirements/editor.md#preview-extensions-installable-viewers), model registry in [design/storage.md](docs/design/storage.md#model-registry-format)
 
 ## Halo City (pixel runtime visualizer)

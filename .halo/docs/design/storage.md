@@ -30,6 +30,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── runs.db                        # Run ledger: (workspace, session_id) rows for server-driven runs in flight; steady state empty (running_sessions)
 │   ├── a2a.db                         # A2A: inbound tasks, push configs + outbox, outbound dispatches (see design/a2a.md)
 │   ├── extensions/<id>/               # Installed Canvas preview extensions (halo-extension.json + bundle)
+│   ├── extensions/.state.json         # Per-extension on / off switch, outside <id>/ so an update keeps it (see design/canvas-extensions.md)
 │   ├── stt-models/                    # On-device STT model files, downloaded on demand (see design/stt-local.md)
 │   │   ├── sense-voice-zh-en-ja-ko-yue-2024-07-17/   # model.int8.onnx + tokens.txt (in-progress downloads: <file>.part)
 │   │   └── silero-vad-v4/silero_vad.onnx

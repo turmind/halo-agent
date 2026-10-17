@@ -50,7 +50,7 @@ missing ──ensure()──▶ downloading{received,total} ──all files ok�
 ### Triggers
 
 - **WS connect** (`routes/stt-ws.ts`): if the model isn't ready, `ensure()` runs, and that socket then receives `model` frames until `ready` or `error`.
-- **Extensions reconcile** (`extensions/watcher.ts` → `reconcileSttModels`): after `start()`'s first scan and after every `rescanAndBroadcast()` scan (install / uninstall / watcher event). If any valid extension declares `stt-local` and the state is neither `ready` nor `downloading`, it calls `ensure()`. This makes installing the extension the moment the ~240 MB fetch starts, and it retries an `error` on the next rescan. The watcher doesn't run in AgentCore mode.
+- **Extensions reconcile** (`extensions/watcher.ts` → `reconcileSttModels`): after `start()`'s first scan and after every `rescanAndBroadcast()` scan (install / uninstall / watcher event). If any valid, switched-on extension declares `stt-local` and the state is neither `ready` nor `downloading`, it calls `ensure()`. This makes installing the extension the moment the ~240 MB fetch starts, and it retries an `error` on the next rescan. The watcher doesn't run in AgentCore mode.
 
 ## Engine
 
@@ -81,7 +81,7 @@ Each stream keeps a 30 s ring of raw samples (it must reach back past a 20 s seg
 
 `noServer` ws server behind `ws/upgrade-router.ts`, same structure as the Transcribe proxy (`routes/transcribe-ws.ts`).
 
-- **Handshake**: login cookie (`isAuthenticated(getTokenFromCookieHeader(cookie))`), else **401**. `ext` must be installed and declare `stt-local`, else **403**. Frames are capped at 1 MiB (`maxPayload`). Every socket has an `error` listener, so a protocol violation (oversize → 1009, bad UTF-8 → 1007) closes only that socket.
+- **Handshake**: login cookie (`isAuthenticated(getTokenFromCookieHeader(cookie))`), else **401**. `ext` must be installed, switched on and declare `stt-local`, else **403**. Frames are capped at 1 MiB (`maxPayload`). Every socket has an `error` listener, so a protocol violation (oversize → 1009, bad UTF-8 → 1007) closes only that socket.
 - **Server → client** (text JSON):
   - `{"type":"model","state":"missing"|"downloading"|"ready"|"error","received"?,"total"?,"message"?}`: always the **first** frame. While the model isn't ready, more `model` frames follow (progress ≤ 2/s, plus every state change). `received` / `total` are present only for `downloading`, `message` only for `error`.
   - `{"type":"ready"}`: model ready **and** engine loaded. Audio is accepted from here on.
