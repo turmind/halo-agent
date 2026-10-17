@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import JSZip from 'jszip'
 import { installExtensionZip, uninstallExtension, ExtensionInstallError } from '../src/extensions/install.js'
 import { extensionsRoot, scanExtensions } from '../src/extensions/registry.js'
+import { disabledExtensionIds, setExtensionDisabled } from '../src/extensions/state.js'
 
 /**
  * Contract: installing from a zip is atomic from the root watcher's point of
@@ -116,6 +117,43 @@ describe('installExtensionZip', () => {
 
   it('empty zip is rejected', async () => {
     await expect(installExtensionZip(await new JSZip().generateAsync({ type: 'nodebuffer' }))).rejects.toThrow(/empty/)
+  })
+})
+
+describe('on / off state across install and uninstall', () => {
+  const offIds = () => [...disabledExtensionIds()]
+
+  it('an update keeps "off"; a fresh install (dir gone, entry left by a manual rm -rf) starts on', async () => {
+    await installExtensionZip(await zipOf(flat()))
+    setExtensionDisabled('glb', true)
+    setExtensionDisabled('other', true)
+    await installExtensionZip(await zipOf(flat({ ...manifest, version: '2.0.0' })))
+    expect(offIds()).toEqual(['glb', 'other'])
+
+    fs.rmSync(path.join(extensionsRoot(), 'glb'), { recursive: true })
+    expect(offIds()).toEqual(['glb', 'other'])
+    await installExtensionZip(await zipOf(flat()))
+    expect(offIds()).toEqual(['other'])
+    expect(scanExtensions().extensions.map((e) => e.id)).toEqual(['glb'])
+  })
+
+  it('uninstall drops the state; an unwritable state file only warns — the uninstall still succeeds', async () => {
+    await installExtensionZip(await zipOf(flat()))
+    setExtensionDisabled('glb', true)
+    expect(uninstallExtension('glb')).toBe(true)
+    expect(offIds()).toEqual([])
+
+    await installExtensionZip(await zipOf(flat()))
+    setExtensionDisabled('glb', true)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw new Error('EACCES') })
+    try {
+      expect(uninstallExtension('glb')).toBe(true)
+    } finally {
+      vi.restoreAllMocks()
+    }
+    expect(fs.existsSync(path.join(extensionsRoot(), 'glb'))).toBe(false)
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[Extensions\] could not clear the on \/ off state of glb: /))
   })
 })
 

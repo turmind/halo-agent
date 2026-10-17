@@ -309,7 +309,7 @@ export function getExtension(id: string): ExtensionInfo | undefined {
 }
 
 /** Installed and valid, on or off: asset serving (a dirty tab kept open on a
- *  switched-off extension must still load and save) and the on / off route. */
+ *  switched-off extension may still lazy-load assets) and the on / off route. */
 export function getInstalledExtension(id: string): ExtensionInfo | undefined {
   return getExtension(id) ?? snapshot.disabled.find((e) => e.id === id)
 }

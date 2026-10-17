@@ -194,6 +194,23 @@ safe_unzip() {
   unzip -q "$1" -d "$2"
 }
 
+# Drop extension $1's on / off state from `$ROOT/.state.json` (the server's
+# extensions/state.ts owns that file; this is its forgetExtension), so the id
+# starts on. Missing or unreadable file = nothing to drop. A failed write only
+# warns: the directory change it follows already happened.
+state_forget() {
+  node -e '
+    const fs = require("fs"), file = process.argv[1], id = process.argv[2]
+    let s
+    try { s = JSON.parse(fs.readFileSync(file, "utf8")) } catch { process.exit(0) }
+    if (!s || typeof s !== "object" || Array.isArray(s) || !Object.hasOwn(s, id)) process.exit(0)
+    delete s[id]
+    const tmp = file + "." + process.pid + ".tmp"
+    fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + "\n")
+    fs.renameSync(tmp, file)
+  ' "$ROOT/.state.json" "$1" || echo "warning: could not clear the on / off state of $1 in $ROOT/.state.json" >&2
+}
+
 # Model provider configs: newest `models-v*` release of hub $1, https +
 # release API only (a provider yaml carries endpoints the server will call —
 # no plain-git / local / http source). Validation, planning and the write into
@@ -259,7 +276,9 @@ case $cmd in
     stage="$ROOT/.tmp-$id-$RANDOM$RANDOM"
     mv "$dir" "$stage"
     old=""
-    if [[ -d $ROOT/$id ]]; then old="$ROOT/.old-$id-$RANDOM$RANDOM"; mv "$ROOT/$id" "$old"; fi
+    # A fresh install (no `<id>/` yet) starts on, whatever a manual `rm -rf`
+    # left in the state file; an update keeps the switch.
+    if [[ -d $ROOT/$id ]]; then old="$ROOT/.old-$id-$RANDOM$RANDOM"; mv "$ROOT/$id" "$old"; else state_forget "$id"; fi
     mv "$stage" "$ROOT/$id" || { [[ -n $old ]] && mv "$old" "$ROOT/$id"; rm -rf "$stage"; exit 1; }
     if [[ -n $old ]]; then rm -rf "$old"; fi
     echo "installed $id $ver" ;;
@@ -280,19 +299,7 @@ case $cmd in
     [[ $id =~ $ID_RE ]] || { echo "invalid id: $id" >&2; exit 1; }
     [[ -d $ROOT/$id ]] || { echo "not installed: $id" >&2; exit 1; }
     rm -rf "$ROOT/$id"
-    # Drop its on / off state too, so a reinstall starts on — same rule as the
-    # server's uninstall (extensions/state.ts forgetExtension). Missing or
-    # unreadable file = nothing to drop.
-    node -e '
-      const fs = require("fs"), file = process.argv[1], id = process.argv[2]
-      let s
-      try { s = JSON.parse(fs.readFileSync(file, "utf8")) } catch { process.exit(0) }
-      if (!s || typeof s !== "object" || Array.isArray(s) || !Object.hasOwn(s, id)) process.exit(0)
-      delete s[id]
-      const tmp = file + "." + process.pid + ".tmp"
-      fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + "\n")
-      fs.renameSync(tmp, file)
-    ' "$ROOT/.state.json" "$id"
+    state_forget "$id"
     echo "removed $id" ;;
   models)
     sub=${1:-update}

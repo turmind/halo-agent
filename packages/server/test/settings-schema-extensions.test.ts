@@ -110,4 +110,45 @@ describe('extension settings sections', () => {
       registry.scanExtensions()
     }
   })
+
+  it("switched off: the skills it ships keep their params / secrets out of Orphans; uninstalled, they list", async () => {
+    const registry = await import('../src/extensions/registry.js')
+    const state = await import('../src/extensions/state.js')
+    type Body = { sections: Array<{ namespaceId: string }>; orphans: Array<{ namespaceId: string; kind: string; key: string }> }
+    const extDir = path.join(registry.extensionsRoot(), 'glb')
+    for (const id of ['glb', 'glb-tools']) {
+      const dir = path.join(extDir, 'skills', id)
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${id}\n---\n`)
+      fs.writeFileSync(path.join(dir, 'config.yaml'), 'params:\n  - key: endpoint\nsecrets:\n  - key: token\n')
+    }
+    const patch = (key: string) => app.request('/settings', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'global', key, value: 'v' }),
+    })
+    for (const key of ['glb.params.endpoint', 'glb.secrets.token', 'glb-tools.params.endpoint', 'glb-tools.secrets.token']) {
+      expect((await patch(key)).status).toBe(200)
+    }
+    const skillOrphans = (b: Body) => b.orphans.filter((o) => o.namespaceId.startsWith('glb')).map((o) => `${o.namespaceId}.${o.kind}.${o.key}`).sort()
+    try {
+      const on = await (await app.request('/settings/schema')).json() as Body
+      expect(on.sections.map((s) => s.namespaceId)).toEqual(expect.arrayContaining(['glb', 'glb-tools']))
+      expect(skillOrphans(on)).toEqual([])
+
+      state.setExtensionDisabled('glb', true)
+      registry.scanExtensions()
+      const off = await (await app.request('/settings/schema')).json() as Body
+      expect(off.sections.some((s) => s.namespaceId.startsWith('glb'))).toBe(false)
+      expect(skillOrphans(off)).toEqual([])
+
+      // Control: uninstalled (its dir and state gone), the same values are orphans.
+      state.forgetExtension('glb')
+      fs.rmSync(extDir, { recursive: true })
+      registry.scanExtensions()
+      const gone = await (await app.request('/settings/schema')).json() as Body
+      expect(skillOrphans(gone)).toEqual(['glb-tools.param.endpoint', 'glb-tools.secret.token', 'glb.param.endpoint', 'glb.secret.token'])
+    } finally {
+      state.forgetExtension('glb')
+      registry.scanExtensions()
+    }
+  })
 })

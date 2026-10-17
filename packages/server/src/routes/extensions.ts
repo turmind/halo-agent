@@ -31,9 +31,11 @@
  * very next GET already reflect the change without waiting for the debounce.
  *
  * A switched-off extension still serves its assets (the version check is
- * against the installed one, on or off): a dirty tab kept alive on it must
- * keep loading and saving. Everything that OFFERS an extension — previews,
- * activity / chat bar, skills, settings sections, the proxies — skips it.
+ * against the installed one, on or off): a dirty tab kept alive on it holds an
+ * already-loaded iframe that may still lazy-load more of them (dynamic chunks,
+ * wasm, fonts) — its save goes through PUT /files/raw, not here. Everything
+ * that OFFERS an extension — previews, activity / chat bar, skills, settings
+ * sections, the proxies — skips it.
  */
 import { Hono } from 'hono'
 import fs from 'node:fs'

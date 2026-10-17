@@ -66,6 +66,30 @@ describe('extension on / off state', () => {
     expect([...disabledExtensionIds()]).toEqual(['obj'])
   })
 
+  it('a file swapped in by rename with the same mtime and size is still re-read (inode in the cache key)', () => {
+    setExtensionDisabled('glb', true)
+    const file = extensionStatePath()
+    const t = new Date('2026-01-01T00:00:00Z') // whole second: survives utimes exactly
+    fs.utimesSync(file, t, t)
+    const st = fs.statSync(file)
+    expect([...disabledExtensionIds()]).toEqual(['glb'])
+    const tmp = `${file}.other`
+    fs.writeFileSync(tmp, fs.readFileSync(file, 'utf-8').replace('glb', 'obj'))
+    fs.utimesSync(tmp, t, t)
+    fs.renameSync(tmp, file)
+    expect([fs.statSync(file).mtimeMs, fs.statSync(file).size]).toEqual([st.mtimeMs, st.size])
+    expect([...disabledExtensionIds()]).toEqual(['obj'])
+  })
+
+  it('a rename that fails (Windows lock) falls back to an in-place write, leaving no tmp file', () => {
+    setExtensionDisabled('glb', true)
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw new Error('EPERM') })
+    expect(setExtensionDisabled('obj', true)).toBe(true)
+    vi.restoreAllMocks()
+    expect(read()).toEqual({ glb: { disabled: true }, obj: { disabled: true } })
+    expect(fs.readdirSync(path.dirname(extensionStatePath()))).toEqual(['.state.json'])
+  })
+
   it('forgetExtension drops the whole entry; nothing stored = false', () => {
     fs.mkdirSync(path.dirname(extensionStatePath()), { recursive: true })
     fs.writeFileSync(extensionStatePath(), JSON.stringify({ glb: { disabled: true, source: 'x' }, obj: { disabled: true } }))

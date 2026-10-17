@@ -5,7 +5,7 @@ import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/proto
 import {
   register, setExtensions, resolve, resolvedKey, canPreview, isHeavyPreview, isReadOnlyViewer, isImmersiveViewer, getVersion, subscribe,
   detectPlatform, currentPlatform, runsHere, excludedByPlatform, resolveBundle, isBundleName,
-  activityEntries, chatbarEntries, disabledFor,
+  activityEntries, chatbarEntries, disabledFor, getExtensionsSnapshot,
 } from '../src/features/editor/previews/registry'
 import type { PreviewPlugin } from '../src/features/editor/previews/types'
 
@@ -221,6 +221,13 @@ describe('platforms + bundle', () => {
     expect(keys('glb')[0]).toBe('extension:glb')
     expect(activityEntries().map((e) => e.id)).toEqual(['glb'])
     expect(disabledFor('glb')).toEqual([])
+  })
+
+  it('a snapshot without `disabled` (server from before the switch) reads as nothing off', () => {
+    setExtensions({ extensions: [ext('glb', { priority: 'default' })], errors: [] } as unknown as ExtensionsSnapshot)
+    expect(getExtensionsSnapshot().disabled).toEqual([])
+    expect(disabledFor('glb')).toEqual([])
+    expect(keys('glb')[0]).toBe('extension:glb')
   })
 })
 

@@ -73,6 +73,27 @@ function childDirs(parent: string): string[] {
   })
 }
 
+/** Extension `extId` may ship skill `id` only as a SKILL_ID_RE id equal to
+ *  `<extId>` or starting with `<extId>-`. */
+function isExtensionSkillId(extId: string, id: string): boolean {
+  return SKILL_ID_RE.test(id) && (id === extId || id.startsWith(`${extId}-`))
+}
+
+/** Skill ids (folders with a SKILL.md, passing isExtensionSkillId) under the
+ *  given extensions' `skills/` — on disk, whether they load or not (no
+ *  manifest, on / off or cross-extension uniqueness check). settings-schema
+ *  keeps a switched-off extension's skill settings out of the Orphans list. */
+export function extensionSkillIds(extIds: Iterable<string>): string[] {
+  const out: string[] = []
+  for (const extId of extIds) {
+    const skills = path.join(extensionsRoot(), extId, 'skills')
+    for (const id of childDirs(skills)) {
+      if (isExtensionSkillId(extId, id) && fs.existsSync(path.join(skills, id, 'SKILL.md'))) out.push(id)
+    }
+  }
+  return out
+}
+
 /** Validated manifest per manifest mtime → its entry file's path (null =
  *  invalid): a scan costs readdir + stats, and a manifest is only re-validated
  *  after a (re)install rewrote it. The validator also requires the entry file,
@@ -125,7 +146,7 @@ export function extensionSkillDirs(): Array<Omit<SkillDir, 'overridden'>> {
       // No SKILL.md = not a skill (it would claim the id, list, and never
       // load; a lone config.yaml would still grow a Settings section).
       if (!fs.existsSync(path.join(dir, 'SKILL.md'))) continue
-      if (!SKILL_ID_RE.test(id) || (id !== extId && !id.startsWith(`${extId}-`)) || taken.has(id)) {
+      if (!isExtensionSkillId(extId, id) || taken.has(id)) {
         ignored.push(id)
         continue
       }

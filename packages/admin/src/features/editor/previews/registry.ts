@@ -42,9 +42,11 @@ export function register(plugin: PreviewPlugin): void {
   bump()
 }
 
-/** Replace the runtime-extension layer with the server's current snapshot. */
+/** Replace the runtime-extension layer with the server's current snapshot.
+ *  `disabled` defaults to [] — a server from before the on / off switch
+ *  sends none (GET and `extension:changed` both land here). */
 export function setExtensions(next: ExtensionsSnapshot): void {
-  snapshot = next
+  snapshot = { ...next, disabled: next.disabled ?? [] }
   bump()
 }
 

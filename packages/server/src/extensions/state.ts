@@ -14,14 +14,14 @@
  * these functions, never the file. (ext.sh `remove` carries a node one-off
  * that drops an id the same way; it can't import this.)
  *
- * Read from disk, cached by (mtime, size): the scanner, skill-sources (also
+ * Read from disk, cached by (inode, mtime, size): the scanner, skill-sources (also
  * in CLI / cron children) and the routes all see the same switch without
  * sharing memory. A file that isn't a JSON object reads as "everything on"
  * (warned once per change) and is never overwritten — writes refuse.
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { writeFileAtomic } from '../init.js'
 import { globalExtensionsDir } from '../paths.js'
 
 export interface ExtensionState {
@@ -48,7 +48,7 @@ function load(): { states: States | null; disabled: Set<string> } {
   } catch {
     return { states: {}, disabled: new Set() } // no file = nothing switched off
   }
-  const key = `${file}:${st.mtimeMs}:${st.size}`
+  const key = `${file}:${st.ino}:${st.mtimeMs}:${st.size}`
   if (cache?.key === key) return cache
   let states: States | null = null
   try {
@@ -71,18 +71,15 @@ export function disabledExtensionIds(): ReadonlySet<string> {
   return load().disabled
 }
 
-/** Read-modify-write via tmp + rename. `fn` mutates a copy and says whether
- *  anything changed; nothing changed = no write (so no watcher event). */
+/** Read-modify-write via writeFileAtomic (tmp + rename, Windows fallback).
+ *  `fn` mutates a copy and says whether anything changed; nothing changed =
+ *  no write (so no watcher event). */
 function update(fn: (states: States) => boolean): boolean {
   const { states } = load()
   if (!states) throw new ExtensionStateError(`${extensionStatePath()} is not a JSON object — fix or delete it first`)
   const next = structuredClone(states)
   if (!fn(next)) return false
-  const file = extensionStatePath()
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const tmp = `${file}.${randomBytes(3).toString('hex')}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n')
-  fs.renameSync(tmp, file)
+  writeFileAtomic(extensionStatePath(), JSON.stringify(next, null, 2) + '\n')
   cache = null
   return true
 }

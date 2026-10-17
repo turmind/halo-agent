@@ -197,7 +197,7 @@ function fieldFor(
  *  user can clean up. The general section's keys are never considered orphan
  *  because we don't enumerate every possible general key here. `kept`
  *  namespaces are undeclared on purpose (a switched-off extension's
- *  `ext-<id>`) and never listed. */
+ *  `ext-<id>` and its skills') and never listed. */
 function detectOrphans(
   tree: Record<string, unknown>,
   declared: SchemaSection[],

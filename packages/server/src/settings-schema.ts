@@ -43,7 +43,7 @@ import YAML from 'yaml'
 import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
 import { loadProviders } from './models/registry.js'
 import { getSnapshot as getExtensionsSnapshot } from './extensions/registry.js'
-import { listSkillDirs } from './agents/skill-sources.js'
+import { extensionSkillIds, listSkillDirs } from './agents/skill-sources.js'
 import { createMtimeCache } from './routes/mtime-cache.js'
 
 const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
@@ -417,10 +417,13 @@ function extensionSections(): SchemaSection[] {
   return sections
 }
 
-/** `ext-<id>` namespaces of switched-off extensions: no section while off,
- *  but their values are kept, not orphans — routes/settings.ts leaves them out
- *  of the Orphans list so nobody removes them as leftovers. They come back
- *  untouched when the extension is switched on. */
+/** Namespaces of switched-off extensions — their `ext-<id>` plus the ids of
+ *  the skills they ship (skill-sources stops listing those while off): no
+ *  section while off, but their values are kept, not orphans —
+ *  routes/settings.ts leaves them out of the Orphans list so nobody removes
+ *  them as leftovers. They come back untouched when the extension is
+ *  switched on. */
 export function extensionOffNamespaces(): Set<string> {
-  return new Set(getExtensionsSnapshot().disabled.map((e) => `ext-${e.id}`))
+  const off = getExtensionsSnapshot().disabled.map((e) => e.id)
+  return new Set([...off.map((id) => `ext-${id}`), ...extensionSkillIds(off)])
 }

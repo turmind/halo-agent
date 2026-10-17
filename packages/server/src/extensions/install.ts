@@ -120,6 +120,9 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string): Pr
     const target = path.join(root, manifestId)
     const old = path.join(root, `.old-${manifestId}-${rand()}`)
     const hadOld = fs.existsSync(target)
+    // A fresh install starts on, whatever a manual `rm -rf` left in the state
+    // file; an update (hadOld) keeps the switch.
+    if (!hadOld) forgetState(manifestId)
     if (hadOld) fs.renameSync(target, old)
     try {
       fs.renameSync(stage, target)
@@ -146,7 +149,17 @@ export function uninstallExtension(id: string): boolean {
   const dir = path.join(extensionsRoot(), id)
   if (!fs.existsSync(dir)) return false
   fs.rmSync(dir, { recursive: true, force: true })
-  forgetExtension(id)
+  forgetState(id)
   console.log(`[Extensions] removed ${id}`)
   return true
+}
+
+/** forgetExtension, warning instead of throwing: the directory change it
+ *  goes with is the real work and must not turn into an error over it. */
+function forgetState(id: string): void {
+  try {
+    forgetExtension(id)
+  } catch (err) {
+    console.warn(`[Extensions] could not clear the on / off state of ${id}: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }

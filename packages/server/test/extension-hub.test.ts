@@ -216,6 +216,34 @@ describe('git mode end to end', () => {
     expect(fs.readFileSync(stateFile, 'utf8')).toBe('{ broken')
     fs.rmSync(stateFile)
   })
+
+  it('a fresh install (dir gone, entry left by a manual rm -rf) starts on; a failed state write only warns', async () => {
+    const { default: JSZip } = await import('jszip')
+    const z = new JSZip()
+    z.file('halo-extension.json', JSON.stringify({ id: 'demo', name: 'Demo', version: '4.0.0', extensions: ['.demo'], entry: 'index.html' }))
+    z.file('index.html', '<p>4.0.0</p>')
+    const zipPath = path.join(tmpRoot, 'demo-4.0.0-fresh.zip')
+    fs.writeFileSync(zipPath, await z.generateAsync({ type: 'nodebuffer' }))
+    const root = path.dirname(installed())
+    const stateFile = path.join(root, '.state.json')
+    fs.rmSync(installed(), { recursive: true, force: true })
+    fs.mkdirSync(root, { recursive: true })
+    fs.writeFileSync(stateFile, JSON.stringify({ demo: { disabled: true }, other: { disabled: true } }))
+    expect(ext(['install', zipPath])).toMatchObject({ code: 0, out: 'installed demo 4.0.0' })
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({ other: { disabled: true } })
+
+    // The state write fails (a preload makes node's rename throw): remove
+    // still removes and exits 0, with a warning; the file is left as it was.
+    fs.writeFileSync(stateFile, JSON.stringify({ demo: { disabled: true } }))
+    const preload = path.join(tmpRoot, 'fail-rename.cjs')
+    fs.writeFileSync(preload, 'require("fs").renameSync = () => { throw new Error("EPERM") }\n')
+    const r = ext(['remove', 'demo'], { NODE_OPTIONS: `--require=${preload}` })
+    expect(r).toMatchObject({ code: 0, out: 'removed demo' })
+    expect(r.err).toContain('warning: could not clear the on / off state of demo')
+    expect(fs.existsSync(installed())).toBe(false)
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({ demo: { disabled: true } })
+    fs.rmSync(stateFile)
+  })
 })
 
 describe('models update (https release hubs only)', () => {
