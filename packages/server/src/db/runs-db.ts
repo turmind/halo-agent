@@ -59,7 +59,7 @@ export function createRunsDb(globalDir: string) {
 export type RunsDb = ReturnType<typeof createRunsDb>
 
 let _runsDb: RunsDb | null = null
-export function setRunsDb(db: RunsDb): void { _runsDb = db }
+export function setRunsDb(db: RunsDb | null): void { _runsDb = db }
 export function getRunsDb(): RunsDb {
   if (!_runsDb) throw new Error('[runs-db] getRunsDb() called before setRunsDb()')
   return _runsDb

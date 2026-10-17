@@ -22,6 +22,7 @@ import { reloadAll, scheduleJob, unscheduleJob, runJob, deleteJobRuns, activeWin
 import { resolveWorkingDir } from '../agents/working-dir.js'
 import { listAllCronTargets } from '../cron/dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
+import { ROOT_SESSION_ID_RE } from '../agents/session-id.js'
 
 interface CreateBody {
   label?: string
@@ -97,11 +98,6 @@ function validateTimeoutSec(v: unknown): string | null {
   return null
 }
 
-/** Root session ids only — no `>` sub-session paths. The charset every
- *  channel / cli-minted id already fits, and nothing that could escape the
- *  sessions dir once the id becomes a file name. */
-const SESSION_ID_RE = /^[A-Za-z0-9_:-]{1,200}$/
-
 /** Normalize a `sessionId` body value: null/undefined/blank → null (= the
  *  job's own session), else a validated root session id. */
 function parseSessionId(v: unknown): { sessionId: string | null } | { error: string } {
@@ -109,7 +105,7 @@ function parseSessionId(v: unknown): { sessionId: string | null } | { error: str
   if (typeof v !== 'string') return { error: 'sessionId must be a string or null' }
   const s = v.trim()
   if (s.length === 0) return { sessionId: null }
-  if (!SESSION_ID_RE.test(s)) {
+  if (!ROOT_SESSION_ID_RE.test(s)) {
     return { error: 'sessionId must be a root session id (letters, digits, _ : - only; no ">" sub-session path)' }
   }
   return { sessionId: s }

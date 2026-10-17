@@ -22,7 +22,7 @@ import { resolveDefaultAgentId } from '../channels/shared/commands.js'
 import { isSelfOrAncestor, selfOrAncestorRefusal } from './session-tools.js'
 import { getA2ADb } from '../db/a2a-db.js'
 import { completeTask, getTask, interim, transition } from '../a2a/tasks.js'
-import { finishInvocation } from '../a2a/invocations.js'
+import { finishInvocation, getInvocation, supersedeInvocation } from '../a2a/invocations.js'
 
 /** What relay needs from a SessionManager — its own or a foreign workspace's.
  *  Structural — the manager satisfies it with `this`; tests pass a stub. */
@@ -74,6 +74,18 @@ export function writeReplyTo(db: HaloDb, sessionId: string, to: ReplyTo): void {
     .set({ replyTo: JSON.stringify(to) })
     .where(eq(agentSessions.id, sessionId))
     .run()
+}
+
+/** writeReplyTo for a new owner of the session's wrap-up (an A2A task, a
+ *  relay caller, a newer /invocations job). An `{invocation}` job still owed
+ *  there is superseded first — its row reads `superseded` (`by` = who took
+ *  over) and its waiters answer — rather than silently losing its pointer and
+ *  staying `running` forever. Synchronous: callers keep it in one slice with
+ *  their own reply_to checks. */
+export function takeReplyTo(db: HaloDb, sessionId: string, to: ReplyTo, by: string): void {
+  const cur = readReplyTo(db, sessionId)
+  if (cur && 'invocation' in cur && getA2ADb()) supersedeInvocation(cur.invocation, by)
+  writeReplyTo(db, sessionId, to)
 }
 
 export function clearReplyTo(db: HaloDb, sessionId: string): void {
@@ -166,6 +178,9 @@ export async function deliverRelayReport(
     // AgentCore /invocations job: record the outcome (+ start the notify hook)
     // first, then the back-pointer — the same crash-safe order as the A2A branch.
     if (!getA2ADb()) { console.warn(`[AgentCore] no a2a db — cannot finish invocation ${to.invocation} for ${session.id}`); return }
+    // Unknown here = another server's job (a plain server opening an
+    // AgentCore workspace): clearing would strand it `running` forever.
+    if (!getInvocation(to.invocation)) { console.warn(`[AgentCore] invocation ${to.invocation} for ${session.id} is not in this server's a2a.db — left for its owner`); return }
     finishInvocation(to.invocation, session, host.workspaceRoot)
     clearReplyTo(db, session.id)
     return
@@ -332,7 +347,7 @@ export function buildRelayTools(host: RelayTarget, callerSessionId: string): Too
       const agentId = params.agent_id ?? await resolveDefaultAgentId(target as never, wsPath)
       await target.createSession(agentId, null, `Relay: ${params.message.slice(0, 60)}`, undefined, params.session_id)
     }
-    writeReplyTo(target.getDb(), params.session_id, { workspace: host.workspaceRoot, sessionId: callerSessionId })
+    takeReplyTo(target.getDb(), params.session_id, { workspace: host.workspaceRoot, sessionId: callerSessionId }, `relay:${callerSessionId}`)
     const prefixed = `${RELAY_CHANNEL_PREFIX}${host.workspaceRoot}]\n\n${params.message}`
     const stamp = target.appendUserMessage(params.session_id, params.message)
     const state = await target.sendUserMessage(params.session_id, prefixed, undefined, undefined, stamp)

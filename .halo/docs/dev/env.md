@@ -97,7 +97,7 @@ Source: `packages/server/src/config.ts`
 
 | Variable | Default | Config path | Description |
 |---|---|---|---|
-| `HALO_PORT` | `9527` | `config.yaml server.port` | Hono listen port |
+| `HALO_PORT` | `9527` | `config.yaml server.port` | Hono listen port. `halo agentcore`: `-p` first, then `HALO_PORT`, else `9000` (the A2A contract; an HTTP-protocol runtime sets `HALO_PORT=8080`) — `server.port` is not read there |
 | `HALO_PASSWORD` | (none) | `config.yaml server.password` (scrypt hash) | Plaintext login password. When set, takes precedence over the stored hash and bypasses scrypt entirely — intended for Docker / systemd / CI. It also satisfies the **startup gate**: the server refuses to boot with no password configured, and env plaintext counts as a first-class credential there, so an env-only deployment (`halo setup -y && HALO_PASSWORD=... halo server start`, no stored hash) boots fine. The hash is set by `halo setup` for interactive installs. |
 | `HALO_CORS_ORIGINS` | empty (reflect any origin) | `config.yaml server.cors_origins` | CORS allowlist (comma-separated, exact origins). Empty = reflect any incoming Origin **without** `Allow-Credentials` (header-token callers like `x-token` work; cookie-carrying cross-origin requests don't). A non-empty list = only those origins get CORS, with `Allow-Credentials` (e.g. a frontend behind an SSO that must send its cookie). Read at startup — a change needs a restart. Prefer a same-origin reverse proxy over listing origins (see the halo-city extension's [README](https://github.com/turmind/halo-hub/blob/main/extensions/halo-city/README.md#和-halo-同源)). |
 | `HALO_FRONTEND_DIR` | auto (bundled `admin-out`, else `packages/admin/out`) | — | Static frontend dir; resolved against the current working directory |
@@ -117,13 +117,14 @@ Source: `packages/server/src/config.ts`
 | `HALO_WORKSPACE` | `process.cwd()` | — | The one workspace served in agentcore-a2a mode (`halo agentcore -w` overrides it; required there) |
 | `HALO_A2A_ROOT` | the user's home | — | Base dir A2A exposes workspaces under: a workspace `<base>/A/B` with `.halo/agent-card.json` is served at `/a2a/A/B` (see [design/a2a.md](../design/a2a.md)); workspaces outside it can't be exposed |
 | `HALO_A2A_PUBLIC_URL` | (none) | `settings.yaml general.a2a.public_url` | This server's A2A origin as peers see it (no trailing slash), used for the agent card's interface URL and as the default push-webhook base. In agentcore-a2a mode: the runtime's invoke URL (`…/runtimes/<escaped ARN>/invocations`) |
-| `HALO_A2A_ACCESS` | `workspace` | — | agentcore-a2a mode only: access level of every A2A session — `workspace` \| `full` \| `readonly`; anything else is a boot error |
+| `HALO_A2A_ACCESS` | `workspace` | — | agentcore-a2a mode only: access level of every A2A session and every `POST /invocations` job's session — `workspace` \| `full` \| `readonly`; anything else is a boot error |
 | `HALO_AGENTCORE_NOTIFY` | (none) | — | agentcore-a2a mode only: shell command (`sh -c`) run when a `POST /invocations` job finishes — stdin = the final reply, env + `HALO_SESSION_ID`, `HALO_RUN_STATUS` (`ok` \| `error`), `HALO_WORKSPACE` (also its cwd: the workspace; in session-dirs mode a root-only 0700 dir with the vetted MEDIA copies). Runs outside the agent sandbox, killed after 5 min (see [design/agentcore.md](../design/agentcore.md#completion-and-the-notify-hook)) |
 | `HALO_AGENTCORE_SESSION_DIRS` | (none) | — | `1` (agentcore-a2a mode, root): one workspace per AgentCore runtime session id — `HALO_WORKSPACE` is the base, `<base>/<id>` (seeded from `<base>/.template`) is bound at `/workspace` and served by an unprivileged worker that gets only an env allowlist (see [design/agentcore.md](../design/agentcore.md#session-dirs)) |
 | `HALO_DEFAULT_PROVIDER` | (none) | — | Read by `halo setup --non-interactive`: binds every built-in agent to this provider id (and its default model) and, for each of its env-backed keys whose variable is set, writes the `<<NAME>>` placeholder into `settings.yaml` (Bedrock excepted). An unknown id only prints a warning |
 | `HALO_CLI` | `halo` (`halo.cmd` on Windows) | — | `halo` cli executable that cron runs and the evolution wrapper spawn — a dev override |
 | `HALO_VERSION` | `dev` | — | Version string reported by `GET /api/health` and the cli; stamped by the bundle / desktop launcher, so normally not set by hand |
 | `HALO_PROMPT` | (none) | — | `plain` makes `halo setup` use numbered-menu prompts instead of the raw-mode TUI |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | (none) | `settings.yaml general.observability.capture_content` | `true` / `false` / `1` / `0` (any case) overrides `capture_content` either way; unset or any other value → the setting. Read at process start (see [design/observability.md](../design/observability.md)) |
 
 settings.yaml only (no env override):
 - `general.session.max_queue_size` (default 256), restart required
@@ -141,7 +142,7 @@ settings.yaml only (no env override):
 - `general.observability.endpoint` (default `''`) — OTLP collector base URL (e.g. `http://localhost:4318`); empty = off, scope: global, restart required (the server; `halo cli` / `halo tui` read all `general.observability.*` keys at start, so cron and evolution runs pick a change up on their next run). See [design/observability.md](../design/observability.md)
 - `general.observability.service_name` (default `halo`) — OTel resource `service.name`, scope: global, restart required
 - `general.observability.headers` (default `''`, secret) — extra OTLP request headers, comma-separated `k=v`, scope: global, restart required
-- `general.observability.capture_content` (default `false`) — put prompt/completion/tool text on spans, scope: global, restart required
+- `general.observability.capture_content` (default `false`) — put prompt/completion/tool text on spans, scope: global, restart required; env `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (`true` / `false` / `1` / `0`) overrides it
 
 `<provider-id>.secrets.*` (server-only, hard-rejected by `{{}}` substitution; declared in `models/<provider-id>.yaml` `secrets:`):
 - `aws-bedrock-claude-invoke.secrets.access_key_id` / `.secret_access_key` — AWS / Bedrock credentials

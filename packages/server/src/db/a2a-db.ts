@@ -7,8 +7,9 @@
  * webhooks per task), `a2a_push_outbox` (persisted push deliveries, one row
  * per (task, config, event) — the dedupe key). Outbound: `a2a_dispatches`
  * (this server's own sends to remote agents, matched by push id + remote
- * task id when their push lands). AgentCore mode only: `agentcore_invocations`
- * (`POST /invocations` jobs — the caller's idempotency key, a2a/invocations.ts).
+ * task id when their push lands). `agentcore_invocations` (`POST /invocations`
+ * jobs — the caller's idempotency key, a2a/invocations.ts): created in every
+ * a2a.db, written only in AgentCore mode.
  *
  * Global rather than per-workspace halo.db: the boot jobs (outbox resume,
  * outbound reconcile) scan across workspaces, like the evo / cron / runs dbs.

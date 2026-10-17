@@ -32,6 +32,8 @@ import { pipeline } from 'node:stream'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
 import { FRONT_TOKEN_ENV, FRONT_TOKEN_HEADER, FRONT_URL_ENV, notifyInFlight, runNotify } from './agentcore-notify.js'
+// `HALO_SESSION_ID` for the hook: the Halo root session id /invocations accepts.
+import { ROOT_SESSION_ID_RE } from '../agents/session-id.js'
 
 export const SESSION_HEADER = 'x-amzn-bedrock-agentcore-runtime-session-id'
 /** AgentCore's runtimeSessionId is 33–256 chars, and the dir name is the full
@@ -57,8 +59,6 @@ const MAX_UMOUNTS = 5
 export const MAX_MEDIA_BYTES = 20 * 1024 * 1024
 /** Linux O_PATH (same value on x86_64 and arm64); Node doesn't export it. */
 const O_PATH = 0o10000000
-/** `HALO_SESSION_ID` for the hook: agentcore.ts INV_SESSION_RE (a Halo session id). */
-const NOTIFY_SESSION_RE = /^[A-Za-z0-9_:-]{1,200}$/
 
 /** The AgentCore contract paths, exact (agentcore.ts filters the same way —
  *  `//`-style paths would otherwise reach the A2A routes past the lease gate). */
@@ -402,7 +402,7 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
     // `null` / an array / a scalar parse fine: refuse them before any field is read.
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return json(res, 400, { error: 'bad body' })
     const b = parsed as { session?: unknown; status?: unknown; text?: unknown }
-    if (typeof b.session !== 'string' || !NOTIFY_SESSION_RE.test(b.session) || (b.status !== 'ok' && b.status !== 'error') || typeof b.text !== 'string') return json(res, 400, { error: 'bad body' })
+    if (typeof b.session !== 'string' || !ROOT_SESSION_ID_RE.test(b.session) || (b.status !== 'ok' && b.status !== 'error') || typeof b.text !== 'string') return json(res, 400, { error: 'bad body' })
     json(res, 202, { ok: true })
     const cmd = process.env.HALO_AGENTCORE_NOTIFY?.trim()
     if (!cmd) return

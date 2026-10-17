@@ -470,7 +470,7 @@ PATCH / DELETE walk the dotted key layer by layer, so a segment of `__proto__` /
 - `general.observability.headers` — extra OTLP request headers, comma-separated `k=v` (secret)
 - `general.observability.capture_content` — put prompt/completion/tool text on spans, default `false`
 
-All four are `globalOnly`, take effect on restart. See [design/observability.md](../design/observability.md).
+All four are `globalOnly`, take effect on restart. The standard `OTEL_*` env vars override them: `OTEL_EXPORTER_OTLP_ENDPOINT` / `_HEADERS` / `OTEL_SERVICE_NAME` when exported (the settings fill them only if unset), and `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (`true` / `false` / `1` / `0`) beats `capture_content` either way — so a container can be configured from its env alone, without a settings edit. See [design/observability.md](../design/observability.md).
 
 ### Notebook kernel settings
 
@@ -550,7 +550,7 @@ Response mode for a new job: `"async": true` → the receipt; `Accept: text/even
   "files": [{ "path": "/workspace/out/a.mp3", "size": 48213 }], // MEDIA: files that existed at finish
   "startedAt": "2026-10-17T14:02:11.000Z",
   "finishedAt": "2026-10-17T14:02:15.500Z", // null while running
-  "supersededBy": "<uuid>"                  // only when superseded
+  "supersededBy": "<uuid> | a2a:<task id> | relay:<session id>"  // only when superseded
 }
 
 // Same id seen before: that job's current body + "duplicate": true, nothing runs
@@ -572,7 +572,7 @@ event: result
 data: {<job body>}
 ```
 
-`superseded`: a new job on the same session took over this one's completion (`supersededBy` = its invocation id); a sync waiter or SSE stream on the old job answers that at once.
+`superseded`: something else on the same session took over this one's completion — a new job (`supersededBy` = its invocation id), an A2A SendMessage (`a2a:<task id>`) or a relay dispatch (`relay:<caller session id>`); a sync waiter or SSE stream on the old job answers that at once.
 
 | Status | When |
 |---|---|

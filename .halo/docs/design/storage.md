@@ -699,7 +699,7 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 | created_at / finished_at | INTEGER | Unix ms; `finished_at` null while running |
 | result | TEXT | Final reply text (`MEDIA:` lines kept), written at finish. Added in `A2A_MIGRATIONS` v2 |
 | result_files | TEXT | JSON `[{ path, size }]` — the reply's `MEDIA:` files that existed at finish, never their bytes. Added in `A2A_MIGRATIONS` v2 |
-| superseded_by | TEXT | Invocation id of the later job on the same session that took this one's completion. Added in `A2A_MIGRATIONS` v2 |
+| superseded_by | TEXT | What took this one's completion on the same session: a later job's invocation id, `a2a:<task id>` or `relay:<caller session id>`. Added in `A2A_MIGRATIONS` v2 |
 
 Rows are never pruned.
 

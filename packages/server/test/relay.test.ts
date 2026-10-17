@@ -10,6 +10,8 @@ import {
   setRelayRegistry, readReplyTo, writeReplyTo, deliverRelayReport, deliverRelayInterim, buildRelayTools,
   type RelayTarget,
 } from '../src/agents/relay.js'
+import { createA2ADb, setA2ADb, getA2ADb } from '../src/db/a2a-db.js'
+import { createInvocation, getInvocation } from '../src/a2a/invocations.js'
 
 /**
  * Relay — cross-workspace dispatch with auto-report (see agents/relay.ts):
@@ -103,6 +105,25 @@ describe('deliverRelayReport', () => {
     await deliverRelayReport(deptSm, sessionShape('dept-1'))
     expect(callerStub.appended).toHaveLength(0)
     expect(callerStub.sent).toHaveLength(0)
+  })
+
+  it('an {invocation} pointer this server\'s a2a.db doesn\'t know (another server\'s job) is left for its owner, not cleared', async () => {
+    setA2ADb(createA2ADb(join(deptWs, '.halo')))
+    try {
+      seedSession(deptSm, 'job-x')
+      writeReplyTo(deptSm.getDb(), 'job-x', { invocation: 'not-ours' })
+      await deliverRelayReport(deptSm, sessionShape('job-x'))
+      expect(readReplyTo(deptSm.getDb(), 'job-x')).toEqual({ invocation: 'not-ours' })
+      // A job that is ours finishes and clears the pointer.
+      const invId = createInvocation(null, 'job-x')
+      writeReplyTo(deptSm.getDb(), 'job-x', { invocation: invId })
+      await deliverRelayReport(deptSm, sessionShape('job-x', { finalOutput: 'done' }))
+      expect(readReplyTo(deptSm.getDb(), 'job-x')).toBeNull()
+      expect(getInvocation(invId)).toMatchObject({ state: 'ok', result: 'done' })
+    } finally {
+      getA2ADb()?.close()
+      setA2ADb(null)
+    }
   })
 
   it('waits while a child is still active (reply_to stays set)', async () => {
@@ -222,6 +243,24 @@ describe('relay_send', () => {
     expect(sendSpy.mock.calls[0][0]).toBe('dept-new')
     expect(sendSpy.mock.calls[0][1].startsWith(`[channel: relay | from: ${callerWs}]`)).toBe(true)
     expect(sendSpy.mock.calls[0][1]).toContain('file the Q3 report')
+  })
+
+  it('a session still owing an /invocations job: the job is superseded (by the relay caller), then the relay pointer is written', async () => {
+    setA2ADb(createA2ADb(join(deptWs, '.halo')))
+    try {
+      seedSession(deptSm, 'job-1')
+      const invId = createInvocation('j1', 'job-1')
+      writeReplyTo(deptSm.getDb(), 'job-1', { invocation: invId })
+      vi.spyOn(deptSm, 'sendUserMessage').mockResolvedValue('queued')
+      const res = JSON.parse(await relaySend().callback({ workspace: deptWs, session_id: 'job-1', message: 'take this over' }) as string)
+      expect(res.code).toBe(0)
+      expect(readReplyTo(deptSm.getDb(), 'job-1')).toEqual({ workspace: callerWs, sessionId: 'sec-1' })
+      expect(getInvocation(invId)).toMatchObject({ state: 'superseded', superseded_by: 'relay:sec-1' })
+      expect(getInvocation(invId)!.finished_at).not.toBeNull()
+    } finally {
+      getA2ADb()?.close()
+      setA2ADb(null)
+    }
   })
 
   it('rejects a nonexistent workspace path', async () => {

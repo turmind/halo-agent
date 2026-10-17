@@ -8,6 +8,7 @@ import { agentSessions } from '../src/db/schema.js'
 import { createRunsDb, setRunsDb, getRunsDb, runningSessions, insertRunning, listRunningWorkspaces } from '../src/db/runs-db.js'
 import { sweepInterruptedRuns, type RunLedgerHost } from '../src/agents/run-ledger.js'
 import { initialGoalState, writeGoalState, setWorkerBackptr } from '../src/agents/goal-mode.js'
+import { writeReplyTo } from '../src/agents/relay.js'
 import { RUNTIME_LOCK_FILE, claimWorkspaceRuntime } from '../src/agents/workspace-runtime-lock.js'
 
 /**
@@ -129,6 +130,17 @@ describe('sweepInterruptedRuns', () => {
     const host = stubHost()
     sweepInterruptedRuns(host)
     expect(host.nudges.filter((n) => n.via === 'send').map((n) => n.id)).toEqual(['plain'])
+    expect(ledgerRows()).toHaveLength(0)
+  })
+
+  it('a cron-* root with a reply_to (an /invocations job on a cron session id) is nudged; one without stays skipped', () => {
+    seedSession('cron-cron-19fc5f6fc06-93ng7q')
+    writeReplyTo(sm.getDb(), 'cron-cron-19fc5f6fc06-93ng7q', { invocation: 'inv-1' })
+    seedSession('cron-plain')
+    for (const id of ['cron-cron-19fc5f6fc06-93ng7q', 'cron-plain']) insertRunning(ws, id)
+    const host = stubHost()
+    sweepInterruptedRuns(host)
+    expect(host.nudges.filter((n) => n.via === 'send').map((n) => n.id)).toEqual(['cron-cron-19fc5f6fc06-93ng7q'])
     expect(ledgerRows()).toHaveLength(0)
   })
 
