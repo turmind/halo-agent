@@ -594,10 +594,10 @@ export function scheduleJob(jobId: string): void {
       target = cron.nextRun()
     }
   } catch (err) {
-    // Invalid schedule or timezone: REST doesn't check the timezone, an
-    // out-of-band write checks nothing, and croner throws on a bad timezone
-    // only at nextRun(). Handled like past activeUntil: one warn per
-    // fingerprint, retried once the row changes.
+    // Invalid schedule or timezone: REST validates both, but an out-of-band
+    // write checks nothing, and croner throws on a bad timezone only at
+    // nextRun(). Handled like past activeUntil: one warn per fingerprint,
+    // retried once the row changes.
     _expired.add(jobId)
     _fingerprint.set(jobId, jobFingerprint(job))
     console.warn(`[Cron] ${jobId} schedule invalid (${job.schedule}${job.timezone ? `, tz ${job.timezone}` : ''}): ${err instanceof Error ? err.message : String(err)}`)

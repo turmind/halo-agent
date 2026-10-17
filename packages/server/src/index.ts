@@ -445,7 +445,7 @@ if (!AGENTCORE) {
 const OWNS_RUNTIMES = config.server.ownsWorkspaceRuntimes
 const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: OWNS_RUNTIMES })
 if (!OWNS_RUNTIMES) {
-  console.log('[Server] HALO_BADGE=DEV: workspace runtime.lock left to the owning server — no claim, no boot cleanup')
+  logAlways('[Server] HALO_BADGE=DEV: workspace runtime.lock left to the owning server — no claim, no boot cleanup')
 }
 setRelayRegistry(registry)
 // Cron jobs may run in a user-picked session; the runner peeks the live

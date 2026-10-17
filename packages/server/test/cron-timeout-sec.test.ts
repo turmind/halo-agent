@@ -138,3 +138,38 @@ describe('cron_jobs.timeout_sec', () => {
     }
   })
 })
+
+// `cron_jobs.timezone`: REST rejects a non-IANA zone up front — croner only
+// throws at nextRun(), so a bad zone used to be saved and silently never fire.
+describe('cron_jobs.timezone', () => {
+  it('POST rejects an invalid timezone with 400, stores nothing', async () => {
+    const res = await createJob({ timezone: 'Mars/Olympus' })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'invalid timezone: Mars/Olympus' })
+    const nonString = await createJob({ timezone: 8 })
+    expect(nonString.status).toBe(400)
+    expect(await nonString.json()).toEqual({ error: 'timezone must be a string' })
+    expect(db.select().from(cronJobs).all()).toHaveLength(0)
+  })
+
+  it('POST with a valid timezone stores it', async () => {
+    const res = await createJob({ timezone: 'Asia/Shanghai' })
+    expect(res.status).toBe(200)
+    const { id } = await res.json() as { id: string }
+    expect(getJob(id).timezone).toBe('Asia/Shanghai')
+  })
+
+  it('PUT rejects an invalid timezone, row untouched', async () => {
+    const { id } = await (await createJob({ timezone: 'Asia/Shanghai' })).json() as { id: string }
+    const res = await put(id, { timezone: 'Not/AZone' })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'invalid timezone: Not/AZone' })
+    expect(getJob(id).timezone).toBe('Asia/Shanghai')
+  })
+
+  it('PUT with an empty string clears the timezone (host default)', async () => {
+    const { id } = await (await createJob({ timezone: 'Asia/Shanghai' })).json() as { id: string }
+    expect((await put(id, { timezone: '' })).status).toBe(200)
+    expect(getJob(id).timezone).toBeNull()
+  })
+})
