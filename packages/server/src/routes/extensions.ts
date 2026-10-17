@@ -1,13 +1,15 @@
 /**
  * Canvas preview extensions — admin API + static asset serving.
  *
- *   GET    /extensions                                installed list (valid + error entries)
+ *   GET    /extensions                                installed list (on + off + error entries)
  *   POST   /extensions/install                        multipart `file` = zip → install / upgrade
+ *   PATCH  /extensions/:id                            `{ enabled }` → switch on / off (state.ts)
+ *   POST   /extensions/:id/update                     install the newer version its update.json names
  *   DELETE /extensions/:id                            uninstall
  *   GET    /extensions/token                          short-lived asset token for the iframe URL
  *   GET    /extensions/:id/:version/:token/<asset>    static file from the extension dir
  *
- * The first four sit behind the admin cookie (index.ts mounts this router
+ * The first five sit behind the admin cookie (index.ts mounts this router
  * under /api, which authMiddleware guards). The static route is what the
  * admin's sandboxed iframe loads and is NOT cookie-authed: the host iframe
  * was first shipped as `sandbox="allow-scripts"` only — an opaque origin
@@ -24,24 +26,37 @@
  * stale tab holding an old URL 404s after an upgrade (the admin treats that
  * as "reload me"), and it makes the assets safely immutable-cached.
  *
- * Install / uninstall do NOT broadcast themselves: the resulting rename / rm
- * trips extensions/watcher.ts, the single notifier for every install path.
- * They do call rescanAndBroadcast() so the response and the very next GET
- * already reflect the change without waiting for the debounce.
+ * Install / uninstall / on-off do NOT broadcast themselves: the resulting
+ * rename / rm trips extensions/watcher.ts, the single notifier for every
+ * install path. They do call rescanAndBroadcast() so the response and the
+ * very next GET already reflect the change without waiting for the debounce.
+ *
+ * A switched-off extension still serves its assets (the version check is
+ * against the installed one, on or off): a dirty tab kept alive on it holds an
+ * already-loaded iframe that may still lazy-load more of them (dynamic chunks,
+ * wasm, fonts) — its save goes through PUT /files/raw, not here. Everything
+ * that OFFERS an extension — previews, activity / chat bar, skills, settings
+ * sections, the proxies — skips it.
  */
 import { Hono } from 'hono'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { imageMimeFromExt } from '@turmind/halo-core'
-import { extensionsRoot, getExtension, getSnapshot, isExtensionId } from '../extensions/registry.js'
+import { extensionsRoot, getInstalledExtension, getSnapshot, isExtensionId } from '../extensions/registry.js'
 import { ExtensionInstallError, installExtensionZip, uninstallExtension } from '../extensions/install.js'
+import { setExtensionDisabled } from '../extensions/state.js'
 import { rescanAndBroadcast } from '../extensions/watcher.js'
 import { mintScopedToken, verifyScopedToken } from '../middleware/auth.js'
+import { checkExtensionNow } from '../updates/extension-check.js'
+import { downloadPackage } from '../updates/extension-fetch.js'
 
 /** Upload cap. The glb viewer is ~2 MB unpacked; a drawio-class extension
  *  (draw.war is 54 MB) needs headroom. */
 export const MAX_ZIP_BYTES = 100 * 1024 * 1024
+
+/** Ids with an update in flight (POST /extensions/:id/update → 409). */
+const updating = new Set<string>()
 
 /** Asset-token lifetime. It only grants reads of extension static files and
  *  the admin fetches a fresh one before every iframe mount, so short is free. */
@@ -73,10 +88,11 @@ export function assetMime(fileName: string): string {
  * dot-prefixed segment, or the target isn't a regular file. Hono URL-decodes
  * the param, so `rest` can arrive as `../../x` — the segment check runs
  * BEFORE any path.join, and a realpath prefix check guards symlinks.
+ * Switched off still serves (see the header).
  */
 export function resolveAsset(id: string, version: string, rest: string): string | null {
   if (!isExtensionId(id)) return null
-  const info = getExtension(id)
+  const info = getInstalledExtension(id)
   if (!info || info.version !== version) return null
   const segments = rest.split('/')
   if (segments.some((s) => s === '' || s === '.' || s === '..' || s.startsWith('.') || s.includes('\\'))) return null
@@ -133,6 +149,72 @@ export function createExtensionRoutes() {
       const msg = err instanceof Error ? err.message : String(err)
       console.log(`[Extensions] install failed: ${msg}`)
       return c.json({ error: msg }, 500)
+    }
+  })
+
+  // Target state, not a flip: a retried request is a no-op (no write, no push).
+  // Error rows (no valid manifest) can only be removed.
+  app.patch('/extensions/:id', async (c) => {
+    const id = c.req.param('id')
+    if (!isExtensionId(id)) return c.json({ error: 'Invalid extension id' }, 400)
+    const body = await c.req.json<{ enabled?: unknown }>().catch(() => null)
+    if (typeof body?.enabled !== 'boolean') return c.json({ error: '`enabled` (boolean) is required' }, 400)
+    if (!getInstalledExtension(id)) return c.json({ error: 'Extension not installed' }, 404)
+    try {
+      if (setExtensionDisabled(id, !body.enabled)) {
+        console.log(`[Extensions] ${id} switched ${body.enabled ? 'on' : 'off'}`)
+        rescanAndBroadcast()
+      }
+      return c.json({ ok: true, id, enabled: body.enabled })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log(`[Extensions] switch ${id} failed: ${msg}`)
+      return c.json({ error: msg }, 500)
+    }
+  })
+
+  // One-click update (design: .halo/docs/design/canvas-extensions.md). Takes no
+  // body: the server re-reads update.json itself and goes ahead only on an
+  // `available` verdict; the zip must hash to its sha256 and carry its id +
+  // version. On / off state lives outside <id>/, so a switched-off extension
+  // stays off. One update per id at a time (in-process; a restart mid-update
+  // leaves only the installer's dot-staging dirs, which the scanner skips).
+  // 409 = the update can't happen now (one already running, nothing newer,
+  // needs a newer Halo); 502 = the source or its package is at fault (read
+  // failed, no source, sha256 / id / version / manifest refused) — the
+  // client sent nothing that could be wrong.
+  app.post('/extensions/:id/update', async (c) => {
+    const id = c.req.param('id')
+    if (!isExtensionId(id)) return c.json({ error: 'Invalid extension id' }, 400)
+    const ext = getInstalledExtension(id)
+    if (!ext) return c.json({ error: 'Extension not installed' }, 404)
+    if (updating.has(id)) return c.json({ error: 'An update of this extension is already running' }, 409)
+    updating.add(id)
+    try {
+      const { entry, info } = await checkExtensionNow(ext)
+      if (!info) {
+        const blocked = entry.state === 'current' || entry.state === 'needs-halo'
+        return c.json({ error: entry.error ?? `no update available (${entry.state})`, status: entry }, blocked ? 409 : 502)
+      }
+      let zip: Buffer
+      try {
+        zip = await downloadPackage(info, { maxBytes: MAX_ZIP_BYTES })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.log(`[Extensions] update ${id}: download failed: ${msg}`)
+        return c.json({ error: msg }, 502)
+      }
+      const installed = await installExtensionZip(zip, id, info.version)
+      console.log(`[Extensions] ${id} updated ${ext.version} → ${installed.version}`)
+      rescanAndBroadcast()
+      return c.json(installed)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log(`[Extensions] update ${id} failed: ${msg}`)
+      if (err instanceof ExtensionInstallError) return c.json({ error: msg }, 502)
+      return c.json({ error: msg }, 500)
+    } finally {
+      updating.delete(id)
     }
   })
 

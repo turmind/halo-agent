@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseManifest, scanExtensions, getSnapshot, getExtension, snapshotKey, readExtensionDir, extensionsRoot } from '../src/extensions/registry.js'
+import { parseManifest, scanExtensions, getSnapshot, getExtension, getInstalledExtension, snapshotKey, readExtensionDir, extensionsRoot } from '../src/extensions/registry.js'
+import { setExtensionDisabled } from '../src/extensions/state.js'
 
 /**
  * Contract: `~/.halo/global/extensions/<id>/` is the install. The scanner is
@@ -87,6 +88,14 @@ describe('parseManifest', () => {
   it('homepage must be http(s)', () => {
     expect(errorOf(parse({ homepage: 'ftp://x' }))).toMatch(/homepage/)
     expect(errorOf(parse({ license: 3 }))).toMatch(/license/)
+  })
+
+  it('source is optional and must be an https URL (of the update.json)', () => {
+    expect(parse({ source: 'https://cdn.example.com/x/update.json' })).toMatchObject({ source: 'https://cdn.example.com/x/update.json' })
+    expect(parse({})).not.toHaveProperty('source')
+    for (const source of ['http://x/update.json', 'https://', 'https://a b', '', 3]) {
+      expect(errorOf(parse({ source }))).toBe('source must be an https URL (of the update.json)')
+    }
   })
 
   // htrans protocol §1: bundle / platforms / media.
@@ -278,7 +287,33 @@ describe('scanExtensions (on-disk)', () => {
 
   it('root resolves under HOME and a missing root scans as empty', () => {
     expect(extensionsRoot()).toBe(path.join(home, '.halo', 'global', 'extensions'))
-    expect(scanExtensions()).toEqual({ extensions: [], errors: [] })
+    expect(scanExtensions()).toEqual({ extensions: [], disabled: [], errors: [] })
+  })
+
+  it('a switched-off extension moves to `disabled`; getExtension skips it, getInstalledExtension finds it', () => {
+    writeExt('glb', { ...ok })
+    writeExt('obj', { ...ok, id: 'obj' })
+    writeExt('broken', '{ not json')
+    setExtensionDisabled('glb', true)
+    setExtensionDisabled('broken', true) // an error row stays an error row
+    const snap = scanExtensions()
+    expect(snap.extensions.map((e) => e.id)).toEqual(['obj'])
+    expect(snap.disabled.map((e) => e.id)).toEqual(['glb'])
+    expect(snap.errors.map((e) => e.id)).toEqual(['broken'])
+    expect(getExtension('glb')).toBeUndefined()
+    expect(getInstalledExtension('glb')?.version).toBe('1.0.0')
+    expect(getInstalledExtension('obj')?.id).toBe('obj')
+    expect(getInstalledExtension('broken')).toBeUndefined()
+  })
+
+  it('snapshotKey changes when an extension is switched off and back on', () => {
+    writeExt('glb', { ...ok })
+    const on = snapshotKey(scanExtensions())
+    setExtensionDisabled('glb', true)
+    const off = snapshotKey(scanExtensions())
+    expect(off).not.toBe(on)
+    setExtensionDisabled('glb', false)
+    expect(snapshotKey(scanExtensions())).toBe(on)
   })
 
   it('lists valid dirs, keeps invalid ones as errors, skips dot-dirs and files', () => {

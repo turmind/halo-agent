@@ -7,7 +7,10 @@
  * module is the ONLY validator: whoever puts a directory there (the admin's
  * zip upload, the `extension` skill's ext.sh, a manual `cp -r`) gets the same
  * verdict, and an invalid directory is still LISTED (as an error entry) so the
- * admin shows "installed but broken" rather than "not installed".
+ * admin shows "installed but broken" rather than "not installed". The one
+ * piece of user state, the on / off switch, lives beside the dirs in
+ * `.state.json` (state.ts) and only splits valid entries into
+ * `extensions` / `disabled`.
  *
  * `scanExtensions` runs at boot and whenever extensions/watcher.ts sees the
  * root change — never per request. Routes read the cached snapshot.
@@ -18,6 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { ExtensionActivity, ExtensionCapability, ExtensionChatbar, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { globalExtensionsDir } from '../paths.js'
+import { disabledExtensionIds } from './state.js'
 
 export const MANIFEST_FILE = 'halo-extension.json'
 
@@ -217,6 +221,7 @@ export function parseManifest(
 
   if (m.homepage !== undefined && (typeof m.homepage !== 'string' || !/^https?:\/\//.test(m.homepage))) return { error: 'homepage must be an http(s) URL' }
   if (m.license !== undefined && typeof m.license !== 'string') return { error: 'license must be a string' }
+  if (m.source !== undefined && (typeof m.source !== 'string' || !/^https:\/\/\S+$/.test(m.source) || !URL.canParse(m.source))) return { error: 'source must be an https URL (of the update.json)' }
 
   return {
     id: m.id,
@@ -234,6 +239,7 @@ export function parseManifest(
     ...(chatbar ? { chatbar } : {}),
     ...(m.homepage !== undefined ? { homepage: m.homepage } : {}),
     ...(m.license !== undefined ? { license: m.license } : {}),
+    ...(m.source !== undefined ? { source: m.source } : {}),
   }
 }
 
@@ -260,12 +266,15 @@ export function readExtensionDir(dir: string, id: string = path.basename(dir)): 
   return { ...parsed, installedAt }
 }
 
-let snapshot: ExtensionsSnapshot = { extensions: [], errors: [] }
+let snapshot: ExtensionsSnapshot = { extensions: [], disabled: [], errors: [] }
 
-/** Scan the root and replace the cached snapshot. Missing root = empty. */
+/** Scan the root and replace the cached snapshot. Missing root = empty.
+ *  Valid extensions the user switched off (state.ts) go to `disabled`. */
 export function scanExtensions(): ExtensionsSnapshot {
   const root = extensionsRoot()
+  const off = disabledExtensionIds()
   const extensions: ExtensionInfo[] = []
+  const disabled: ExtensionInfo[] = []
   const errors: ExtensionError[] = []
   let entries: fs.Dirent[] = []
   try {
@@ -281,11 +290,12 @@ export function scanExtensions(): ExtensionsSnapshot {
     }
     const result = readExtensionDir(path.join(root, entry.name))
     if ('error' in result) errors.push(result)
-    else extensions.push(result)
+    else (off.has(result.id) ? disabled : extensions).push(result)
   }
   extensions.sort((a, b) => a.id.localeCompare(b.id))
+  disabled.sort((a, b) => a.id.localeCompare(b.id))
   errors.sort((a, b) => a.id.localeCompare(b.id))
-  snapshot = { extensions, errors }
+  snapshot = { extensions, disabled, errors }
   return snapshot
 }
 
@@ -293,17 +303,27 @@ export function getSnapshot(): ExtensionsSnapshot {
   return snapshot
 }
 
-/** Installed (valid) extension by id, or undefined. */
+/** Installed, valid and switched ON extension by id, or undefined. A
+ *  switched-off one counts as not installed (the proxies' handshakes, the
+ *  STT model reconcile) — use getInstalledExtension where off still counts. */
 export function getExtension(id: string): ExtensionInfo | undefined {
   return snapshot.extensions.find((e) => e.id === id)
 }
 
-/** Cheap change detection for the watcher: id@version per extension plus the
- *  error list. Staging-dir churn during an install produces identical keys
- *  (staging dirs are skipped), so no spurious broadcast. */
+/** Installed and valid, on or off: asset serving (a dirty tab kept open on a
+ *  switched-off extension may still lazy-load assets) and the on / off route. */
+export function getInstalledExtension(id: string): ExtensionInfo | undefined {
+  return getExtension(id) ?? snapshot.disabled.find((e) => e.id === id)
+}
+
+/** Cheap change detection for the watcher: id@version per extension, the
+ *  switched-off ones marked `-`, plus the error list. Staging-dir churn during
+ *  an install produces identical keys (staging dirs are skipped), so no
+ *  spurious broadcast. */
 export function snapshotKey(s: ExtensionsSnapshot): string {
   return [
     ...s.extensions.map((e) => `${e.id}@${e.version}#${e.installedAt}`),
+    ...s.disabled.map((e) => `-${e.id}@${e.version}#${e.installedAt}`),
     ...s.errors.map((e) => `!${e.id}:${e.error}`),
   ].join('\n')
 }

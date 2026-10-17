@@ -1,5 +1,5 @@
 import type { ChatMessage, Skill } from '@/shared/types'
-import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import type { CoreUpdateStatus, ExtensionInfo, ExtensionsSnapshot, ExtensionsUpdateStatus } from '@turmind/halo-core/protocol'
 
 const API_BASE = '/api'
 
@@ -704,6 +704,35 @@ export const api = {
     },
     remove(id: string) {
       return request<{ ok: boolean; id: string }>(`/extensions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    },
+    /** Switch on / off (target state; repeating it is a no-op). */
+    setEnabled(id: string, enabled: boolean) {
+      return request<{ ok: boolean; id: string; enabled: boolean }>(`/extensions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) })
+    },
+    /** Install the newer version its update.json names (the server re-reads
+     *  and re-judges it; 409 when nothing newer or one is already running). */
+    update(id: string) {
+      return request<ExtensionInfo>(`/extensions/${encodeURIComponent(id)}/update`, { method: 'POST' })
+    },
+  },
+
+  // Update checks. Both answer with the cached status at once; a check they
+  // start reports `checking` and its result arrives as `updates:changed`.
+  updates: {
+    /** Cached Halo status; the server starts a check when it is > 24 h old. */
+    core() {
+      return request<CoreUpdateStatus>('/updates?scope=core')
+    },
+    /** Cached status of every installed extension; same 24 h rule. */
+    extensions() {
+      return request<ExtensionsUpdateStatus>('/updates?scope=extensions')
+    },
+    /** Force a check (server-side 60 s cooldown). */
+    checkCore() {
+      return request<CoreUpdateStatus>('/updates/check', { method: 'POST', body: JSON.stringify({ scope: 'core' }) })
+    },
+    checkExtensions() {
+      return request<ExtensionsUpdateStatus>('/updates/check', { method: 'POST', body: JSON.stringify({ scope: 'extensions' }) })
     },
   },
 

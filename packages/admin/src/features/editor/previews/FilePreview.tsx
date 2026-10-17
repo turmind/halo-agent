@@ -12,7 +12,7 @@
 import { Suspense, useEffect, useState, type ReactNode } from 'react'
 import { File as FileIcon } from 'lucide-react'
 import './plugins' // side-effect: registers all built-in plugins
-import { excludedByPlatform, platformLabels, resolve, resolveBundle, resolvedKey, useRegistryVersion } from './registry'
+import { disabledFor, excludedByPlatform, getExtensionsSnapshot, platformLabels, resolve, resolveBundle, resolvedKey, useRegistryVersion } from './registry'
 import { ExtensionHostPreview } from './extension-host'
 import { OpenWithMenu } from './ui/open-with-menu'
 import { PreviewShell, OpenWithSlot } from './ui/preview-shell'
@@ -76,10 +76,12 @@ function Dispatch({ candidates, useEditorStore, ...props }: PreviewProps & {
   const live = (r: Resolved) => candidates.find((c) => resolvedKey(c) === resolvedKey(r))
 
   let current: Resolved = (override && live(override)) ?? candidates[0]
-  let uninstalled = false
+  let gone: 'uninstalled' | 'disabled' | undefined
   if (shown?.kind === 'extension' && !live(shown) && isModified) {
     current = shown
-    uninstalled = true
+    // Switched off = same handling as uninstalled, only the banner differs.
+    const id = shown.info.id
+    gone = getExtensionsSnapshot().disabled.some((e) => e.id === id) ? 'disabled' : 'uninstalled'
   }
   // Track by key plus the (snapshot-stable) `info` identity, never the
   // wrapper object — `resolve` builds fresh wrappers each render.
@@ -110,7 +112,7 @@ function Dispatch({ candidates, useEditorStore, ...props }: PreviewProps & {
   } else if (current.kind === 'extension') {
     // Keyed on the id so switching extensions remounts the host; version
     // changes are handled inside (reload vs. banner when dirty).
-    body = <ExtensionHostPreview key={current.info.id} {...props} info={current.info} uninstalled={uninstalled} />
+    body = <ExtensionHostPreview key={current.info.id} {...props} info={current.info} gone={gone} />
   } else if (current.kind === 'builtin') {
     const { Component } = current.plugin
     // Live refresh: a newer disk mtime remounts the viewer (fresh fetch /
@@ -159,6 +161,8 @@ function UnsupportedPreview({ name, projectId, downloadUrl, onOpenAsText, bundle
   const [hub, setHub] = useState<{ url: string | null; raw: string }>({ url: HALO_HUB_URL, raw: '' })
   // Installed, but this platform is excluded by its manifest `platforms`.
   const excluded = excludedByPlatform(name.split('.').pop() ?? '', !!bundle)
+  // Installed, but switched off in Settings → Extensions.
+  const off = disabledFor(name.split('.').pop() ?? '', !!bundle)
   useEffect(() => {
     let alive = true
     api.settings.getSchema(projectId)
@@ -180,6 +184,11 @@ function UnsupportedPreview({ name, projectId, downloadUrl, onOpenAsText, bundle
         {excluded.map((e) => (
           <p key={e.id} className="text-xs text-[var(--foreground)]">
             {t('editor.unsupported.platform', { name: e.name, platforms: platformLabels(e.platforms ?? [], t) })}
+          </p>
+        ))}
+        {off.map((e) => (
+          <p key={e.id} className="text-xs text-[var(--foreground)]">
+            {t('editor.unsupported.disabled', { name: e.name })}
           </p>
         ))}
         <p className="text-xs text-[var(--muted-foreground)]">

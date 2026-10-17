@@ -60,7 +60,7 @@ async function setup() {
   vi.resetModules()
   const { api } = await import('../src/shared/api-client')
   const disk: Record<string, { mtime: number; content: string }> = {}
-  vi.spyOn(api.extensions, 'list').mockResolvedValue({ extensions: [], errors: [] })
+  vi.spyOn(api.extensions, 'list').mockResolvedValue({ extensions: [], disabled: [], errors: [] })
   vi.spyOn(api.files, 'tree').mockResolvedValue({ projectId: PROJECT, root: 'live-refresh', path: '', tree: [] })
   const stat = vi.spyOn(api.files, 'stat').mockImplementation(async (p) =>
     ({ path: p, modifiedAt: disk[p]?.mtime ?? 1, createdAt: 1, size: 3 }))

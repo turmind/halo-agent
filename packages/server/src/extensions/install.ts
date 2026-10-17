@@ -23,6 +23,7 @@ import { randomBytes } from 'node:crypto'
 import JSZip from 'jszip'
 import type { ExtensionInfo } from '@turmind/halo-core/protocol'
 import { extensionsRoot, isExtensionId, MANIFEST_FILE, readExtensionDir } from './registry.js'
+import { forgetExtension } from './state.js'
 
 export class ExtensionInstallError extends Error {}
 
@@ -87,9 +88,11 @@ function rand(): string {
  * Install (or replace) an extension from zip bytes. `expectId` — when the
  * caller knows which id it asked for (the skill's `install <id>`) — must match
  * the manifest; the admin upload passes nothing and takes the manifest's id.
+ * `expectVersion` — the update route's update.json version — likewise, so a
+ * mispacked or swapped zip is refused before it replaces a working install.
  * Returns the freshly validated info (installedAt from the final rename).
  */
-export async function installExtensionZip(zipBuf: Buffer, expectId?: string): Promise<ExtensionInfo> {
+export async function installExtensionZip(zipBuf: Buffer, expectId?: string, expectVersion?: string): Promise<ExtensionInfo> {
   const root = extensionsRoot()
   fs.mkdirSync(root, { recursive: true })
 
@@ -102,14 +105,17 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string): Pr
     stripWrapperDir(stage)
 
     let manifestId: string
+    let manifestVersion: unknown
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(stage, MANIFEST_FILE), 'utf-8')) as { id?: unknown }
+      const raw = JSON.parse(fs.readFileSync(path.join(stage, MANIFEST_FILE), 'utf-8')) as { id?: unknown; version?: unknown }
       manifestId = typeof raw.id === 'string' ? raw.id : ''
+      manifestVersion = raw.version
     } catch (err) {
       throw new ExtensionInstallError(`${MANIFEST_FILE} missing or unreadable at the zip root: ${err instanceof Error ? err.message : String(err)}`)
     }
     if (!isExtensionId(manifestId)) throw new ExtensionInstallError(`manifest id "${manifestId}" is not a valid extension id`)
     if (expectId !== undefined && manifestId !== expectId) throw new ExtensionInstallError(`manifest id "${manifestId}" does not match requested "${expectId}"`)
+    if (expectVersion !== undefined && manifestVersion !== expectVersion) throw new ExtensionInstallError(`manifest version ${JSON.stringify(manifestVersion) ?? 'undefined'} does not match update.json "${expectVersion}"`)
 
     // Pre-check with the scanner's own rules before touching a working install.
     const verdict = readExtensionDir(stage, manifestId)
@@ -119,6 +125,9 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string): Pr
     const target = path.join(root, manifestId)
     const old = path.join(root, `.old-${manifestId}-${rand()}`)
     const hadOld = fs.existsSync(target)
+    // A fresh install starts on, whatever a manual `rm -rf` left in the state
+    // file; an update (hadOld) keeps the switch.
+    if (!hadOld) forgetState(manifestId)
     if (hadOld) fs.renameSync(target, old)
     try {
       fs.renameSync(stage, target)
@@ -126,7 +135,14 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string): Pr
       if (hadOld) fs.renameSync(old, target)
       throw err
     }
-    if (hadOld) fs.rmSync(old, { recursive: true, force: true })
+    // The new version is in place: failing to delete the old copy (Windows
+    // EBUSY from an open handle) must not turn a done install into an error.
+    // A leftover `.old-*` dir is dot-prefixed, so the scanner skips it.
+    if (hadOld) {
+      try { fs.rmSync(old, { recursive: true, force: true, maxRetries: 3 }) } catch (err) {
+        console.log(`[Extensions] could not remove the previous copy ${old}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
 
     const info = readExtensionDir(target)
     if ('error' in info) throw new ExtensionInstallError(`installed but failed re-validation: ${info.error}`) // unreachable in practice
@@ -137,12 +153,25 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string): Pr
   }
 }
 
-/** Remove `<root>/<id>/`. Returns false when nothing was installed under id. */
+/** Remove `<root>/<id>/` and its on / off state (a reinstall starts on).
+ *  Returns false when nothing was installed under id. An update
+ *  (installExtensionZip) leaves the state alone, so "off" survives it. */
 export function uninstallExtension(id: string): boolean {
   if (!isExtensionId(id)) throw new ExtensionInstallError(`"${id}" is not a valid extension id`)
   const dir = path.join(extensionsRoot(), id)
   if (!fs.existsSync(dir)) return false
   fs.rmSync(dir, { recursive: true, force: true })
+  forgetState(id)
   console.log(`[Extensions] removed ${id}`)
   return true
+}
+
+/** forgetExtension, warning instead of throwing: the directory change it
+ *  goes with is the real work and must not turn into an error over it. */
+function forgetState(id: string): void {
+  try {
+    forgetExtension(id)
+  } catch (err) {
+    console.warn(`[Extensions] could not clear the on / off state of ${id}: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }

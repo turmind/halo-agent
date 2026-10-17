@@ -150,7 +150,7 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
   // Extensions can ship skills (`<ext>/skills/<id>/`), so every skill list —
   // Skills page, agent-form picker — re-fetches too.
   unsubs.push(
-    wsClient.on('extension:changed', ({ extensions, errors }) => { setExtensions({ extensions, errors }); bumpSkillBus() }),
+    wsClient.on('extension:changed', ({ extensions, disabled, errors }) => { setExtensions({ extensions, disabled, errors }); bumpSkillBus() }),
   )
   unsubs.push(onWsReconnect(wsClient, () => { api.extensions.list().then(setExtensions).catch(() => {}) }))
 

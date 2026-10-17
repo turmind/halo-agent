@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
-import { loadSettingsSchema, type SchemaSection, type SchemaField } from '../settings-schema.js'
+import { extensionOffNamespaces, loadSettingsSchema, type SchemaSection, type SchemaField } from '../settings-schema.js'
 import { resolveProjectPath } from './workspace-path.js'
 import { missingEnvRefs } from '../config.js'
 
@@ -195,10 +195,13 @@ function fieldFor(
 /** Walk a settings tree and find namespaces whose `secrets`/`params` keys
  *  aren't covered by any declared schema section — these are "orphans" the
  *  user can clean up. The general section's keys are never considered orphan
- *  because we don't enumerate every possible general key here. */
+ *  because we don't enumerate every possible general key here. `kept`
+ *  namespaces are undeclared on purpose (a switched-off extension's
+ *  `ext-<id>` and its skills') and never listed. */
 function detectOrphans(
   tree: Record<string, unknown>,
   declared: SchemaSection[],
+  kept: ReadonlySet<string>,
 ): Array<{ namespaceId: string; kind: 'param' | 'secret'; key: string }> {
   const declaredMap = new Map<string, Set<string>>()
   for (const s of declared) {
@@ -211,7 +214,7 @@ function detectOrphans(
     // `<id>.{params|secrets}.<key>` pattern — its declared keys are
     // enumerated by the built-in schema, so anything else there isn't
     // really an orphan in the same sense (it'd be a typo or rogue edit).
-    if (namespaceId === 'general') continue
+    if (namespaceId === 'general' || kept.has(namespaceId)) continue
     if (!nsVal || typeof nsVal !== 'object') continue
     for (const kindWord of ['params', 'secrets'] as const) {
       const block = (nsVal as Record<string, unknown>)[kindWord]
@@ -246,7 +249,7 @@ export function createSettingsRoutes() {
     // Detect orphans against the merged tree (workspace overlay), so
     // workspace-only orphans show up too.
     const merged = workspaceTree ? deepMerge(globalTree, workspaceTree) : globalTree
-    const orphans = detectOrphans(merged, declared)
+    const orphans = detectOrphans(merged, declared, extensionOffNamespaces())
     return c.json({
       scope: workspaceTree ? 'workspace' : 'global',
       sections,

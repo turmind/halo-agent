@@ -48,6 +48,7 @@ import { FRONT_URL_ENV, postToFront } from './a2a/agentcore-notify.js'
 import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
 import { createExtensionRoutes } from './routes/extensions.js'
+import { createUpdateRoutes } from './routes/updates.js'
 import { start as startExtensionsWatcher, stop as stopExtensionsWatcher } from './extensions/watcher.js'
 import { start as startModelsWatcher, stop as stopModelsWatcher } from './models/watcher.js'
 import { createEvoDb, setEvoDb } from './db/evo-db.js'
@@ -392,6 +393,9 @@ if (!AGENTCORE) {
   const extensionRoutes = createExtensionRoutes()
   app.route('/api', extensionRoutes)
   startExtensionsWatcher()
+
+  // Update checks (newer Halo on npm) — admin Settings only, so not in AgentCore mode.
+  app.route('/api', createUpdateRoutes())
 
   app.route('/api', createJupyterRoutes(jupyter!))
 }

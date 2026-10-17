@@ -40,11 +40,11 @@ const ctx: ActivityContext = { capabilities: ['media'], theme: 'dark', themeVars
 const frame = (f: Record<string, unknown>) => ({ haloExt: 1, ...f }) as ExtensionClientFrame
 
 describe('activityEntries', () => {
-  beforeEach(() => setExtensions({ extensions: [], errors: [] }))
+  beforeEach(() => setExtensions({ extensions: [], disabled: [], errors: [] }))
 
   it('nothing installed / no activity field → no entries', () => {
     expect(activityEntries()).toEqual([])
-    setExtensions({ extensions: [ext('glb', { activity: undefined, extensions: ['.glb'] })], errors: [{ id: 'bad', error: 'x' }] })
+    setExtensions({ extensions: [ext('glb', { activity: undefined, extensions: ['.glb'] })], disabled: [], errors: [{ id: 'bad', error: 'x' }] })
     expect(activityEntries()).toEqual([])
   })
 
@@ -56,7 +56,7 @@ describe('activityEntries', () => {
         ext('alpha', { activity: { order: 100 } }),
         ext('mac-only', { activity: { order: 0 }, platforms: ['desktop-mac'] }), // jsdom UA = web
       ],
-      errors: [],
+      disabled: [], errors: [],
     })
     expect(activityEntries().map((e) => e.id)).toEqual(['zeta', 'alpha', 'beta'])
   })

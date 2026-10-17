@@ -3,14 +3,18 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
+import https from 'node:https'
+import { createHash } from 'node:crypto'
 import { spawnSync, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 /**
- * Contract for the extension skill's configurable hub (`hub_repo` param →
- * HALO_HUB_REPO): URL normalization + platform detection, the per-platform
- * release pickers (fixtures are real GitHub / Codeberg / gitlab.com API
- * responses, trimmed and re-tagged), and the git-tag install path end to end.
+ * Contract for the extension skill's configurable hub: `hub_repo` →
+ * HALO_HUB_REPO (URL normalization + platform detection, the per-platform
+ * release pickers `models update` uses — fixtures are real GitHub / Codeberg /
+ * gitlab.com API responses, trimmed and re-tagged), and `install <id>` via
+ * `<hub_base>/<id>/update.json` (hub_base → HALO_HUB_BASE, default derived
+ * from a GitHub hub_repo) end to end against a local https hub.
  * Runs the real ext.sh under bash; HOME is redirected so no real install dir
  * is touched.
  */
@@ -25,7 +29,7 @@ const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
   ...process.env,
   HOME: path.join(tmpRoot, 'home'),
   GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
-  GITHUB_TOKEN: '', GITLAB_TOKEN: '', GITEA_TOKEN: '', HALO_HUB_REPO: '',
+  GITHUB_TOKEN: '', GITLAB_TOKEN: '', GITEA_TOKEN: '', HALO_HUB_REPO: '', HALO_HUB_BASE: '',
   ...extra,
 })
 
@@ -129,75 +133,205 @@ describe('hub_pick_release (real API shapes)', () => {
   })
 })
 
-describe('hub_pick_tag', () => {
-  it('highest semver, prereleases and longer ids skipped', () => {
-    const refs = ['demo-v1.0.0', 'demo-v1.9.0', 'demo-v1.10.0', 'demo-v2.0.0-alpha', 'demo-viewer-v5.0.0', 'other-v9.9.9']
-      .map((t) => `0123abcd\trefs/tags/${t}`).join('\n')
-    expect(fn('hub_pick_tag demo', [], refs).out).toBe('demo-v1.10.0')
-    expect(fn('hub_pick_tag nope', [], refs).out).toBe('')
+describe('hub_base', () => {
+  const cases: Array<[string, string, string]> = [
+    ['', '', 'https://raw.githubusercontent.com/turmind/halo-hub/main/extensions'],
+    ['{{extension.params.hub_base}}', '{{extension.params.hub_repo}}', 'https://raw.githubusercontent.com/turmind/halo-hub/main/extensions'],
+    ['', 'o/r', 'https://raw.githubusercontent.com/o/r/main/extensions'],
+    ['', 'https://github.com/o/r.git', 'https://raw.githubusercontent.com/o/r/main/extensions'],
+    ['https://mirror.example/ext/', 'o/r', 'https://mirror.example/ext'],
+    ['', 'https://gitlab.com/g/r', ''],
+    ['', '/srv/hub', ''],
+  ]
+  it.each(cases)('hub_base %j, hub_repo %j → %j', (base, repo, out) => {
+    expect(fn('hub_base "$1" "$2"', [base, repo]).out).toBe(out)
   })
 })
 
-describe('git mode end to end', () => {
-  const repo = path.join(tmpRoot, 'hub-repo')
+describe('install <id> via update.json (local https hub)', () => {
+  const run = promisify(execFile)
   const installed = () => path.join(tmpRoot, 'home', '.halo', 'global', 'extensions', 'demo')
-  const git = (...args: string[]) => {
-    const r = spawnSync('git', ['-C', repo, ...args], { env: env(), encoding: 'utf8' })
-    if (r.status !== 0) throw new Error(r.stderr)
+  let server: https.Server
+  let hub = ''
+  let caFile = ''
+  let routes: Record<string, (res: http.ServerResponse) => void> = {}
+
+  const zipOf = async (version: string, m: Record<string, unknown> = {}) => {
+    const { default: JSZip } = await import('jszip')
+    const z = new JSZip()
+    z.file('demo/halo-extension.json', JSON.stringify({ id: 'demo', name: 'Demo', version, extensions: ['.demo'], entry: 'index.html', ...m }))
+    z.file('demo/index.html', `<p>${version}</p>`)
+    return z.generateAsync({ type: 'nodebuffer', platform: 'UNIX' })
   }
-  const release = (version: string, extra: Record<string, string> = {}) => {
-    const dir = path.join(repo, 'extensions', 'demo')
-    fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(path.join(dir, 'halo-extension.json'), JSON.stringify({ id: 'demo', name: 'Demo', version, extensions: ['.demo'], entry: 'index.html' }))
-    fs.writeFileSync(path.join(dir, 'index.html'), `<p>${version}</p>`)
-    for (const [f, body] of Object.entries(extra)) {
-      fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true })
-      fs.writeFileSync(path.join(dir, f), body)
+  /** Serve demo `version` at <hub>/demo/: update.json via a redirect, the zip relative to it. */
+  const publish = async (version: string, opts: { zip?: Buffer; json?: Record<string, unknown> } = {}) => {
+    const zip = opts.zip ?? await zipOf(version)
+    const body = JSON.stringify({ id: 'demo', version, url: `../files/demo-${version}.zip`, sha256: createHash('sha256').update(zip).digest('hex'), ...opts.json })
+    routes = {
+      '/hub/demo/update.json': (res) => { res.writeHead(302, { location: '/mirror/demo/update.json' }); res.end() },
+      '/mirror/demo/update.json': (res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(body) },
+      [`/mirror/files/demo-${version}.zip`]: (res) => { res.writeHead(200); res.end(zip) },
     }
-    git('add', '-A')
-    git('commit', '-qm', version)
-    git('tag', `demo-v${version}`)
+  }
+  /** Async: the hub lives in this process's event loop. */
+  const install = async (extra: Record<string, string> = {}) => {
+    try {
+      const { stdout, stderr } = await run('bash', [EXT, 'install', 'demo'], { env: env({ HALO_HUB_BASE: hub, CURL_CA_BUNDLE: caFile, ...extra }) })
+      return { code: 0, out: stdout.trim(), err: stderr.trim() }
+    } catch (e) {
+      const err = e as { code: number; stdout: string; stderr: string }
+      return { code: err.code, out: err.stdout.trim(), err: err.stderr.trim() }
+    }
   }
 
-  beforeAll(() => {
-    fs.mkdirSync(repo, { recursive: true })
-    git('init', '-q')
-    release('1.0.0')
-    release('1.9.0')
-    release('1.10.0', { 'src/main.js': '//', 'package.json': '{}' })
-    release('2.0.0-alpha')
+  beforeAll(async () => {
+    const dir = path.join(tmpRoot, 'tls')
+    fs.mkdirSync(dir, { recursive: true })
+    const gen = spawnSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=localhost',
+      '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
+      '-keyout', path.join(dir, 'key.pem'), '-out', path.join(dir, 'cert.pem'),
+    ], { encoding: 'utf-8' })
+    if (gen.status !== 0) throw new Error(`openssl failed: ${gen.stderr}`)
+    caFile = path.join(dir, 'cert.pem')
+    server = https.createServer({ key: fs.readFileSync(path.join(dir, 'key.pem')), cert: fs.readFileSync(caFile) }, (req, res) => {
+      const handler = routes[req.url ?? '']
+      if (handler) handler(res)
+      else { res.writeHead(404); res.end('nope') }
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    hub = `https://127.0.0.1:${(server.address() as { port: number }).port}/hub/`
+  })
+  afterAll(() => { server.close() })
+
+  it('reads update.json (after a redirect), resolves a relative url against it, checks sha256 + id + version, installs', async () => {
+    await publish('1.2.0')
+    expect(await install()).toMatchObject({ code: 0, out: 'installed demo 1.2.0' })
+    expect(fs.readFileSync(path.join(installed(), 'index.html'), 'utf8')).toBe('<p>1.2.0</p>')
   })
 
-  it('installs the highest non-prerelease tag, minus build inputs (local path)', () => {
-    const r = ext(['install', 'demo'], { HALO_HUB_REPO: repo })
-    expect(r).toMatchObject({ code: 0, out: 'installed demo 1.10.0' })
-    expect(fs.readFileSync(path.join(installed(), 'index.html'), 'utf8')).toBe('<p>1.10.0</p>')
-    expect(fs.existsSync(path.join(installed(), 'src'))).toBe(false)
-    expect(fs.existsSync(path.join(installed(), 'package.json'))).toBe(false)
-  })
-
-  it('file:// URL works the same', () => {
-    expect(ext(['install', 'demo'], { HALO_HUB_REPO: `file://${repo}` })).toMatchObject({ code: 0, out: 'installed demo 1.10.0' })
-  })
-
-  it('a tag with a build step is refused and the previous install stays', () => {
-    release('3.0.0', { 'fetch-deps.sh': '#!/bin/sh\n' })
-    const r = ext(['install', 'demo'], { HALO_HUB_REPO: repo })
+  it('refuses a sha256 mismatch, a version or id mismatch, and a non-https url; the previous install stays', async () => {
+    await publish('1.3.0', { json: { sha256: 'b'.repeat(64) } })
+    let r = await install()
     expect(r.code).not.toBe(0)
-    expect(r.err).toContain('demo needs a build step — install it from a release zip')
-    expect(fs.readFileSync(path.join(installed(), 'index.html'), 'utf8')).toBe('<p>1.10.0</p>')
+    expect(r.err).toMatch(/sha256 mismatch/)
+
+    await publish('1.3.0', { zip: await zipOf('1.2.9') })
+    r = await install()
+    expect(r.err).toContain('manifest version "1.2.9" does not match update.json "1.3.0"')
+
+    await publish('1.3.0', { json: { id: 'other' } })
+    r = await install()
+    expect(r.err).toMatch(/invalid update.json .*id "other" does not match "demo"/)
+
+    await publish('1.3.0', { json: { id: { toString: 0 } } })
+    r = await install()
+    expect(r.err).toMatch(/invalid update.json .*id \{"toString":0\} does not match "demo"/)
+
+    await publish('1.3.0', { json: { url: 'http://127.0.0.1:9/demo.zip' } })
+    r = await install()
+    expect(r.err).toMatch(/url must be https/)
+
+    expect(fs.readFileSync(path.join(installed(), 'index.html'), 'utf8')).toBe('<p>1.2.0</p>')
   })
 
-  it('unknown id → clear error', () => {
-    const r = ext(['install', 'nope'], { HALO_HUB_REPO: repo })
+  it('minHalo: refused below it (build sha / -dirty dropped), installs at or above it', async () => {
+    const stub = path.join(tmpRoot, 'halo-version-stub.sh')
+    fs.writeFileSync(stub, '#!/bin/sh\n[ "$1" = --version ] && echo "halo $STUB_VERSION"\n', { mode: 0o755 })
+    await publish('5.0.0', { json: { minHalo: '2.1.0' } })
+    const r = await install({ HALO_CLI: stub, STUB_VERSION: '2.0.9-abc1234-dirty' })
     expect(r.code).not.toBe(0)
-    expect(r.err).toContain('no release for nope')
+    expect(r.err).toBe('demo 5.0.0 needs Halo 2.1.0 (this is 2.0.9) — upgrade Halo first: halo upgrade && halo server restart')
+    expect(fs.readFileSync(path.join(installed(), 'index.html'), 'utf8')).toBe('<p>1.2.0</p>')
+
+    expect(await install({ HALO_CLI: stub, STUB_VERSION: '2.1.0-abc1234' })).toMatchObject({ code: 0, out: 'installed demo 5.0.0' })
+    await publish('5.0.1', { json: { minHalo: '2.1.0-beta.2' } })
+    expect(await install({ HALO_CLI: stub, STUB_VERSION: '2.1.0-beta.10' })).toMatchObject({ code: 0, out: 'installed demo 5.0.1' })
+    await publish('5.0.2', { json: { minHalo: '2.1.0' } })
+    expect((await install({ HALO_CLI: stub, STUB_VERSION: '2.1.0-beta.10' })).err).toMatch(/needs Halo 2\.1\.0 \(this is 2\.1\.0-beta\.10\)/)
+  })
+
+  it('minHalo with no readable Halo version (no halo command, dev build) → one warning, installs anyway', async () => {
+    await publish('6.0.0', { json: { minHalo: '99.0.0' } })
+    let r = await install({ HALO_CLI: path.join(tmpRoot, 'no-such-halo') })
+    expect(r).toMatchObject({ code: 0, out: 'installed demo 6.0.0' })
+    expect(r.err).toBe('warning: cannot read the Halo version (no halo command) — not checking that demo 6.0.0 needs Halo 99.0.0')
+    const stub = path.join(tmpRoot, 'halo-version-stub.sh')
+    r = await install({ HALO_CLI: stub, STUB_VERSION: 'dev' })
+    expect(r).toMatchObject({ code: 0, out: 'installed demo 6.0.0' })
+    expect(r.err).toBe('warning: cannot read the Halo version (halo dev) — not checking that demo 6.0.0 needs Halo 99.0.0')
+  })
+
+  it('a malformed minHalo is an invalid update.json', async () => {
+    await publish('7.0.0', { json: { minHalo: 'v2' } })
+    expect((await install()).err).toMatch(/invalid update.json .*minHalo must be semver/)
+  })
+
+  it('no update.json (404) → clear error', async () => {
+    routes = {}
+    const r = await install()
+    expect(r.code).not.toBe(0)
+    expect(r.err).toContain('no update.json for demo at ')
+  })
+
+  it('refuses an http hub_base, and says so when no base can be derived', async () => {
+    let r = await install({ HALO_HUB_BASE: 'http://127.0.0.1:9/hub' })
+    expect(r.err).toContain('hub_base must be an https URL')
+    r = await install({ HALO_HUB_BASE: '', HALO_HUB_REPO: 'https://gitlab.com/g/r' })
+    expect(r.err).toContain('no hub_base set and hub_repo is not a GitHub repo')
+  })
+
+  it('reinstall keeps the on / off state; remove drops only that id from it (a reinstall starts on)', async () => {
+    // A local zip — the hub plays no part in the state rule.
+    const zipPath = path.join(tmpRoot, 'demo-4.0.0.zip')
+    fs.writeFileSync(zipPath, await zipOf('4.0.0'))
+    const stateFile = path.join(path.dirname(installed()), '.state.json')
+    fs.writeFileSync(stateFile, JSON.stringify({ demo: { disabled: true }, other: { disabled: true } }))
+    expect(ext(['install', zipPath])).toMatchObject({ code: 0, out: 'installed demo 4.0.0' })
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({ demo: { disabled: true }, other: { disabled: true } })
+    expect(ext(['list']).out).not.toContain('.state')
+    expect(ext(['remove', 'demo'])).toMatchObject({ code: 0, out: 'removed demo' })
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({ other: { disabled: true } })
+    // An unreadable state file is left as it is; the remove still succeeds.
+    expect(ext(['install', zipPath]).code).toBe(0)
+    fs.writeFileSync(stateFile, '{ broken')
+    expect(ext(['remove', 'demo'])).toMatchObject({ code: 0, out: 'removed demo' })
+    expect(fs.readFileSync(stateFile, 'utf8')).toBe('{ broken')
+    fs.rmSync(stateFile)
+  })
+
+  it('a fresh install (dir gone, entry left by a manual rm -rf) starts on; a failed state write only warns', async () => {
+    const { default: JSZip } = await import('jszip')
+    const z = new JSZip()
+    z.file('halo-extension.json', JSON.stringify({ id: 'demo', name: 'Demo', version: '4.0.0', extensions: ['.demo'], entry: 'index.html' }))
+    z.file('index.html', '<p>4.0.0</p>')
+    const zipPath = path.join(tmpRoot, 'demo-4.0.0-fresh.zip')
+    fs.writeFileSync(zipPath, await z.generateAsync({ type: 'nodebuffer' }))
+    const root = path.dirname(installed())
+    const stateFile = path.join(root, '.state.json')
+    fs.rmSync(installed(), { recursive: true, force: true })
+    fs.mkdirSync(root, { recursive: true })
+    fs.writeFileSync(stateFile, JSON.stringify({ demo: { disabled: true }, other: { disabled: true } }))
+    expect(ext(['install', zipPath])).toMatchObject({ code: 0, out: 'installed demo 4.0.0' })
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({ other: { disabled: true } })
+
+    // The state write fails (a preload makes node's rename throw): remove
+    // still removes and exits 0, with a warning; the file is left as it was.
+    fs.writeFileSync(stateFile, JSON.stringify({ demo: { disabled: true } }))
+    const preload = path.join(tmpRoot, 'fail-rename.cjs')
+    fs.writeFileSync(preload, 'require("fs").renameSync = () => { throw new Error("EPERM") }\n')
+    const r = ext(['remove', 'demo'], { NODE_OPTIONS: `--require=${preload}` })
+    expect(r).toMatchObject({ code: 0, out: 'removed demo' })
+    expect(r.err).toContain('warning: could not clear the on / off state of demo')
+    expect(fs.existsSync(installed())).toBe(false)
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({ demo: { disabled: true } })
+    fs.rmSync(stateFile)
   })
 })
 
 describe('models update (https release hubs only)', () => {
   it.each([
-    ['a local repo path', () => path.join(tmpRoot, 'hub-repo'), /need an https release hub/],
+    ['a local repo path', () => tmpRoot, /need an https release hub/],
     ['an http URL', () => 'http://127.0.0.1:9/o/r', /need an https release hub/],
     ['an ssh git URL', () => 'git@host:o/r.git', /need an https release hub/],
     ['an https host without a release API', () => 'https://git.invalid/o/r', /has no release API/],

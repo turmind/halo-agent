@@ -80,4 +80,75 @@ describe('extension settings sections', () => {
     expect(f.value).not.toContain('EXAMPLE')
     expect(body.orphans).toEqual([])
   })
+
+  it('switched off: no section, values kept on disk and never listed as orphans; back on: section returns with them', async () => {
+    const registry = await import('../src/extensions/registry.js')
+    const state = await import('../src/extensions/state.js')
+    type Body = { sections: Array<{ namespaceId: string; fields: Array<{ key: string; hasValue: boolean }> }>; orphans: Array<{ namespaceId: string; key: string }> }
+    const settingsFile = path.join(tmpHome, '.halo', 'secrets', 'settings.yaml')
+    // A genuinely unclaimed namespace still lists, so the exclusion is targeted.
+    expect((await app.request('/settings', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'global', key: 'ext-gone.params.region', value: 'x' }),
+    })).status).toBe(200)
+    try {
+      state.setExtensionDisabled('htrans', true)
+      registry.scanExtensions()
+      expect(schema.loadSettingsSchema().some((s) => s.namespaceId === 'ext-htrans')).toBe(false)
+      const off = await (await app.request('/settings/schema')).json() as Body
+      expect(off.sections.some((s) => s.namespaceId === 'ext-htrans')).toBe(false)
+      expect(off.orphans.map((o) => `${o.namespaceId}.${o.key}`)).toEqual(['ext-gone.region'])
+      expect(fs.readFileSync(settingsFile, 'utf-8')).toContain('AKIAEXAMPLE1234')
+
+      state.setExtensionDisabled('htrans', false)
+      registry.scanExtensions()
+      const on = await (await app.request('/settings/schema')).json() as Body
+      expect(on.sections.find((s) => s.namespaceId === 'ext-htrans')?.fields.find((f) => f.key === 'access_key_id')?.hasValue).toBe(true)
+      expect(on.orphans.map((o) => o.namespaceId)).toEqual(['ext-gone'])
+    } finally {
+      state.setExtensionDisabled('htrans', false)
+      registry.scanExtensions()
+    }
+  })
+
+  it("switched off: the skills it ships keep their params / secrets out of Orphans; uninstalled, they list", async () => {
+    const registry = await import('../src/extensions/registry.js')
+    const state = await import('../src/extensions/state.js')
+    type Body = { sections: Array<{ namespaceId: string }>; orphans: Array<{ namespaceId: string; kind: string; key: string }> }
+    const extDir = path.join(registry.extensionsRoot(), 'glb')
+    for (const id of ['glb', 'glb-tools']) {
+      const dir = path.join(extDir, 'skills', id)
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${id}\n---\n`)
+      fs.writeFileSync(path.join(dir, 'config.yaml'), 'params:\n  - key: endpoint\nsecrets:\n  - key: token\n')
+    }
+    const patch = (key: string) => app.request('/settings', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'global', key, value: 'v' }),
+    })
+    for (const key of ['glb.params.endpoint', 'glb.secrets.token', 'glb-tools.params.endpoint', 'glb-tools.secrets.token']) {
+      expect((await patch(key)).status).toBe(200)
+    }
+    const skillOrphans = (b: Body) => b.orphans.filter((o) => o.namespaceId.startsWith('glb')).map((o) => `${o.namespaceId}.${o.kind}.${o.key}`).sort()
+    try {
+      const on = await (await app.request('/settings/schema')).json() as Body
+      expect(on.sections.map((s) => s.namespaceId)).toEqual(expect.arrayContaining(['glb', 'glb-tools']))
+      expect(skillOrphans(on)).toEqual([])
+
+      state.setExtensionDisabled('glb', true)
+      registry.scanExtensions()
+      const off = await (await app.request('/settings/schema')).json() as Body
+      expect(off.sections.some((s) => s.namespaceId.startsWith('glb'))).toBe(false)
+      expect(skillOrphans(off)).toEqual([])
+
+      // Control: uninstalled (its dir and state gone), the same values are orphans.
+      state.forgetExtension('glb')
+      fs.rmSync(extDir, { recursive: true })
+      registry.scanExtensions()
+      const gone = await (await app.request('/settings/schema')).json() as Body
+      expect(skillOrphans(gone)).toEqual(['glb-tools.param.endpoint', 'glb-tools.secret.token', 'glb.param.endpoint', 'glb.secret.token'])
+    } finally {
+      state.forgetExtension('glb')
+      registry.scanExtensions()
+    }
+  })
 })

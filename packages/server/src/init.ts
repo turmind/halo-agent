@@ -57,7 +57,9 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 106 // agents/__score__: the dry-run session log is `cli_*.ui.jsonl` (session store 2.0).
+export const TEMPLATE_VERSION = 108 // skills/extension (ext.sh changed again after 107): `install <id>` reads `<hub_base>/<id>/update.json` (new hub_base param, https only, sha256 + id + version checked, `minHalo` vs `halo --version` — unreadable version only warns) instead of release API / git tags, `models` keeps the release API; a fresh install (no previous `<id>/`) clears that id's on / off state so it starts on; a failed `.state.json` write only warns.
+// 107: skills/extension: ext.sh `remove` also drops the extension's on / off state (`extensions/.state.json`), so a reinstall starts on.
+// 106: agents/__score__: the dry-run session log is `cli_*.ui.jsonl` (session store 2.0).
 // 105: docs: guide/secrets-and-credentials.md — unset <<ENV>> model keys fail before the call + Settings warning; where the server reads env vars (foreground / server.env / system unit / desktop).
 // 104: skills/halo: point agents at an installed extension's own README.md / DESIGN.md (~/.halo/global/extensions/<id>/).
 // 103: models: mimo-token-plan-china revision 2026101401 — mimo-v2.5-pro / mimo-v2.5 dropped (officially retired 2026-10-21).

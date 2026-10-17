@@ -7,7 +7,8 @@
  *   1. workspace  `<ws>/.halo/skills/<id>/`
  *   2. global     `~/.halo/global/skills/<id>/`
  *   3. extension  `~/.halo/global/extensions/<extId>/skills/<id>/` — shipped by
- *                 an installed canvas extension, gone when it is uninstalled.
+ *                 an installed canvas extension, gone when it is uninstalled
+ *                 or switched off (extensions/state.ts, read from disk too).
  *                 Read-only: the skills routes refuse writes, /skill delete
  *                 refuses, evo is told never to patch them. Copying the folder
  *                 into global or workspace is how a user customises one.
@@ -25,6 +26,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { extensionsRoot, isExtensionId, MANIFEST_FILE, readExtensionDir } from '../extensions/registry.js'
+import { disabledExtensionIds } from '../extensions/state.js'
 import { createMtimeCache } from '../routes/mtime-cache.js'
 
 export const GLOBAL_SKILLS_DIR = path.join(homedir(), '.halo', 'global', 'skills')
@@ -71,6 +73,27 @@ function childDirs(parent: string): string[] {
   })
 }
 
+/** Extension `extId` may ship skill `id` only as a SKILL_ID_RE id equal to
+ *  `<extId>` or starting with `<extId>-`. */
+function isExtensionSkillId(extId: string, id: string): boolean {
+  return SKILL_ID_RE.test(id) && (id === extId || id.startsWith(`${extId}-`))
+}
+
+/** Skill ids (folders with a SKILL.md, passing isExtensionSkillId) under the
+ *  given extensions' `skills/` — on disk, whether they load or not (no
+ *  manifest, on / off or cross-extension uniqueness check). settings-schema
+ *  keeps a switched-off extension's skill settings out of the Orphans list. */
+export function extensionSkillIds(extIds: Iterable<string>): string[] {
+  const out: string[] = []
+  for (const extId of extIds) {
+    const skills = path.join(extensionsRoot(), extId, 'skills')
+    for (const id of childDirs(skills)) {
+      if (isExtensionSkillId(extId, id) && fs.existsSync(path.join(skills, id, 'SKILL.md'))) out.push(id)
+    }
+  }
+  return out
+}
+
 /** Validated manifest per manifest mtime → its entry file's path (null =
  *  invalid): a scan costs readdir + stats, and a manifest is only re-validated
  *  after a (re)install rewrote it. The validator also requires the entry file,
@@ -91,6 +114,8 @@ const _warned = new Set<string>()
  *
  * Manifest `platforms` is deliberately not consulted: it only decides where the
  * viewer UI is offered; an extension's skills load on every platform.
+ * A switched-off extension contributes nothing — as if not installed, so an
+ * id it would have claimed goes to the next extension.
  */
 export function extensionSkillDirs(): Array<Omit<SkillDir, 'overridden'>> {
   const root = extensionsRoot()
@@ -98,11 +123,14 @@ export function extensionSkillDirs(): Array<Omit<SkillDir, 'overridden'>> {
   try { extIds = fs.readdirSync(root) } catch { return [] }
   const out: Array<Omit<SkillDir, 'overridden'>> = []
   const taken = new Set<string>()
+  let off: ReadonlySet<string> | undefined
   // isExtensionId also drops the installer's `.tmp-*` / `.old-*` staging dirs.
   for (const extId of extIds.filter(isExtensionId).sort()) {
     const extDir = path.join(root, extId)
     const ids = childDirs(path.join(extDir, 'skills'))
     if (ids.length === 0) continue // the common case — no manifest read at all
+    off ??= disabledExtensionIds() // one stat, only when some extension ships skills
+    if (off.has(extId)) continue
     const manifest = path.join(extDir, MANIFEST_FILE)
     let mtimeMs: number
     try { mtimeMs = fs.statSync(manifest).mtimeMs } catch { continue }
@@ -118,7 +146,7 @@ export function extensionSkillDirs(): Array<Omit<SkillDir, 'overridden'>> {
       // No SKILL.md = not a skill (it would claim the id, list, and never
       // load; a lone config.yaml would still grow a Settings section).
       if (!fs.existsSync(path.join(dir, 'SKILL.md'))) continue
-      if (!SKILL_ID_RE.test(id) || (id !== extId && !id.startsWith(`${extId}-`)) || taken.has(id)) {
+      if (!isExtensionSkillId(extId, id) || taken.has(id)) {
         ignored.push(id)
         continue
       }
