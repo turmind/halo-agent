@@ -1021,6 +1021,33 @@ describe('7. a foreign write on either log rewrites both from memory', () => {
     expect(uiReplies()).toEqual(['reply one', 'reply three'])
   })
 
+  /** Same raw-only write, but the UIState was seeded over a torn UI line —
+   *  no baseline, so the UI file can't be told to be this process's: the
+   *  pending write is cancelled, not flushed. Mutation: no baseline counts as
+   *  own (uiLogIsOwn) → the stale state is flushed → red. */
+  it('a raw-only write elsewhere over a UI log with no baseline: the pending write is cancelled', async () => {
+    seedRow(sm, 'o1')
+    scriptBuilds(sm, [replying('reply one'), replying('unused'), replying('reply three')])
+    await realTurn(sm, 'admin one')
+    await sm.getSessionContext('o1')   // a view keeps the session
+    fs.appendFileSync(uiLogPath(dir(), 'o1'), '{"t":"add","id":"x","m":{"id":"x"')   // a torn last line
+    sm.dropUIState('o1')
+    sm.getUIState('o1')                 // re-seeded over the torn line — no UI baseline
+    sm.emitEvent('o1', { type: 'system', text: 'late notice' })   // debounced
+    const other = await otherProcess(replying('unused'))
+    await other.getSessionContext('o1')
+    live(other).get('o1')!.messageQueue.push({ text: 'folded elsewhere' })
+    other.stopUserSession('o1')        // a raw-only write
+    const timers = (sm as unknown as { uiStore: { persistTimers: Map<string, unknown> } }).uiStore.persistTimers
+    expect(timers.has('o1')).toBe(true)   // still pending at the drop
+
+    await realTurn(sm, 'admin three')
+
+    expect(ui('o1').some((m) => m.content === 'late notice')).toBe(false)
+    expect(raw('o1').some((m) => rawText(m).includes('folded elsewhere'))).toBe(true)
+    expect(mainUsers().ui).toEqual(['admin one', 'admin three'])
+  })
+
   /** A cold wake (root not in memory): ensureSession's restore has just
    *  checked the UIState and read raw, so querySession's own check is not
    *  repeated — a torn raw tail (no baseline) must not make it drop the
