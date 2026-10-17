@@ -74,10 +74,15 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 ├── assets/<channel>/inbound/<accountId>/<date>/  # Inbound media per channel (image/voice/video/file)
 ├── runtime.lock                       # Workspace runtime ownership marker (pid) — see below
 ├── halo.db                           # Per-workspace sqlite (sessions metadata, disabled-items)
-├── a2a.db                            # AgentCore mode only: A2A tasks + push outbox (instead of ~/.halo/global/a2a.db) — design/agentcore.md
+├── a2a.db                            # AgentCore mode only: A2A tasks + push outbox (instead of ~/.halo/global/a2a.db), `/invocations` jobs (agentcore_invocations) — design/agentcore.md
 ├── runs.db                           # AgentCore mode only: the run ledger (instead of ~/.halo/global/runs.db)
 ├── agentcore.lease                   # AgentCore mode only: single-writer heartbeat lease file
 └── docs/                               # Project docs (requirements/design/dev/test/plans)
+
+<base>/                               # AgentCore session-dirs mode (HALO_AGENTCORE_SESSION_DIRS=1): HALO_WORKSPACE is a base, not a workspace
+├── .template/                        # Deployer-synced seed for new session dirs (copied minus .halo/sessions, *.db + sidecars, runtime.lock, agentcore.lease*)
+├── .tmp-<sid>-<rand>/                # A session dir being built (0700); renamed to <sid>/ when complete, never served
+└── <sid>/                            # One workspace per AgentCore runtime session id (owned 1000:1000 where chown is allowed), seen by its worker as /workspace
 ```
 
 **When `.halo/` is created.** `ensureWorkspaceHalo()` (`init.ts`) creates `sessions/ agents/ skills/ logs/ memory/ canvas/ tmp/ evo/{runs,applies,history}` and copies in `canvas/self.html`. It runs each time a directory is opened as a workspace: `POST /api/fs/workspace/resolve` (the admin folder picker), channel account binding and every inbound channel message (`resolveAccountWorkspace`), `/workspace switch`, every `getWorkspaceDb()` call, and `SessionManagerRegistry.getOrCreate()` on a cache miss only (a hit returns the manager built, and `.halo/` scaffolded, earlier in this process). `halo.db` appears the first time the workspace db is opened. `runtime.lock` appears when the server first claims the runtime. Read-only list routes (`GET /api/sessions/logs`, `GET /api/agent-configs`) call `hasWorkspaceHalo()` first. For a directory with no `.halo/` they return an empty or global-only list, so a list request never turns a directory into a workspace. The cron form's path field used to scaffold every real directory the user typed through. Show routes use `registry.peek()` for the same reason (see [halo-city.md](halo-city.md)). Any new read-only route that takes a workspace path should do the same.
@@ -636,7 +641,7 @@ The databases hold session metadata (the only home of title / counts / tokens / 
 | stopped_at | INTEGER | Stopped timestamp (null = active) |
 | archived_at | INTEGER | Archived timestamp (null = not archived) |
 | goal / goal_session_id | TEXT | Retained legacy columns (goal mode binding JSON / back-pointer); existing bindings are unchanged and still honored |
-| reply_to | TEXT | Relay — JSON `{ workspace, sessionId }` of the caller session in another workspace; set by `relay_send`, cleared on report delivery. Added in `HALO_MIGRATIONS` slot (`db/index.ts`). |
+| reply_to | TEXT | Relay — JSON `{ workspace, sessionId }` of the caller session in another workspace; set by `relay_send`, cleared on report delivery. Also `{ a2a: taskId }` (an inbound A2A task) and, in AgentCore mode, `{ invocation: id }` (an `/invocations` job, `agentcore_invocations` below). Added in `HALO_MIGRATIONS` slot (`db/index.ts`). |
 | title | TEXT | Session title, sticky once set |
 | exchange_count | INTEGER | Main user turns over the session's lifetime (kept + archived); new rows 0 |
 | context_tokens | INTEGER | Latest context size |
@@ -683,12 +688,27 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 | feishu | `appId`, `appSecret`, `verificationToken`, `encryptKey`, `botOpenId` |
 | wecom | `botId`, `secret` |
 
+**`agentcore_invocations`** — AgentCore `POST /invocations` jobs (lives in the workspace's `<ws>/.halo/a2a.db`, AgentCore mode only; [agentcore.md](agentcore.md#job-rows-a2adb))
+
+| Column | Type | Notes |
+|---|---|---|
+| id | TEXT PK | Invocation id (UUID) — what `reply_to = { invocation }` points at |
+| request_id | TEXT | Caller's idempotency `id`; partial unique index where not null |
+| session_id | TEXT NOT NULL | The halo root session the job runs in |
+| state | TEXT NOT NULL | `running` \| `ok` \| `error` \| `superseded` |
+| created_at / finished_at | INTEGER | Unix ms; `finished_at` null while running |
+| result | TEXT | Final reply text (`MEDIA:` lines kept), written at finish. Added in `A2A_MIGRATIONS` v2 |
+| result_files | TEXT | JSON `[{ path, size }]` — the reply's `MEDIA:` files that existed at finish, never their bytes. Added in `A2A_MIGRATIONS` v2 |
+| superseded_by | TEXT | Invocation id of the later job on the same session that took this one's completion. Added in `A2A_MIGRATIONS` v2 |
+
+Rows are never pruned.
+
 ### Schema change rules
 
 - `schema.sql` / each db's `CREATE_SQL` always describes the FULL current shape, so a fresh db is complete after the CREATEs alone
 - Every change to an already-existing db gets a numbered slot in that file's ordered migration list — `HALO_MIGRATIONS` (`db/index.ts`), `CRON_MIGRATIONS` (`db/cron-db.ts`), `A2A_MIGRATIONS` (`db/a2a-db.ts`); `channel-db.ts` / `evo-db.ts` / `runs-db.ts` currently pass an empty list. `runMigrations(sqlite, list)` (`db/migrate.ts`) runs `list[user_version..]` in order, each in its own transaction, stamping `PRAGMA user_version = i + 1` after each
 - A fresh db is also at `user_version 0` and runs the whole list, so every slot must be a no-op against the current shape (`addColumnIfMissing`, `CREATE … IF NOT EXISTS`). A CHECK constraint can't be altered in SQLite: the slot rebuilds the table (create `_v2`, copy rows, drop, rename) and skips when `sqlite_master` already shows the new constraint — `HALO_MIGRATIONS` v2 (`disabled_items.scope` admits `'extension'`) is the pattern
-- Current slots worth knowing: `HALO_MIGRATIONS` v2 — the `disabled_items` rebuild above (rows kept). `HALO_MIGRATIONS` v3 — `agent_sessions.output TEXT`, `agent_sessions.last_activity_at TEXT` (session store 2.0: the files carry no metadata). `CRON_MIGRATIONS` v5 — `cron_jobs.working_dir TEXT NULL` (job folder → `halo cli --dir`), `cron_jobs.stateless INTEGER NOT NULL DEFAULT 0` (1 = fresh session every run), `cron_runs.session_id TEXT NULL` (the session that run used). `CRON_MIGRATIONS` v6 — `cron_runs.workspace_path TEXT NULL` (the workspace the run fired against, where a stateless run's session lives), backfilled from the job row (`UPDATE … SET workspace_path = (SELECT workspace_path FROM cron_jobs …) WHERE workspace_path IS NULL`), so rows whose job is already gone stay NULL; column semantics in [cron.md](cron.md)
+- Current slots worth knowing: `HALO_MIGRATIONS` v2 — the `disabled_items` rebuild above (rows kept). `HALO_MIGRATIONS` v3 — `agent_sessions.output TEXT`, `agent_sessions.last_activity_at TEXT` (session store 2.0: the files carry no metadata). `CRON_MIGRATIONS` v5 — `cron_jobs.working_dir TEXT NULL` (job folder → `halo cli --dir`), `cron_jobs.stateless INTEGER NOT NULL DEFAULT 0` (1 = fresh session every run), `cron_runs.session_id TEXT NULL` (the session that run used). `CRON_MIGRATIONS` v6 — `cron_runs.workspace_path TEXT NULL` (the workspace the run fired against, where a stateless run's session lives), backfilled from the job row (`UPDATE … SET workspace_path = (SELECT workspace_path FROM cron_jobs …) WHERE workspace_path IS NULL`), so rows whose job is already gone stay NULL; column semantics in [cron.md](cron.md). `A2A_MIGRATIONS` v1 — `a2a_tasks.result_files TEXT`; v2 — `agentcore_invocations.result`, `result_files`, `superseded_by` (all `TEXT`, for a table an earlier build created without them; a2a.db at `user_version` 2 after it)
 - Append only — never reorder or edit a shipped slot. A db opened by a newer halo (user_version > list length) logs a warning and continues
 - Do not drop or rename existing columns
 - New channel types: add rows with a new `channel_type` value + define config shape in the channel's `accounts.ts` adapter
@@ -709,3 +729,4 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table.
 | v1+ | 2026-10-10 | Model registry (additive): per-model `endpoints:`, `maxContextWindow`, `compressAt`; recommended `contextWindow` ≤ 272000; registry context / compressAt / verbosity defaults are scaffold-only; installer validates model fields and asks consent for URLs new to a provider. `HALO_MIGRATIONS` v2: `disabled_items.scope` admits `'extension'`. `CRON_MIGRATIONS` v5: `cron_jobs.working_dir`, `cron_jobs.stateless`, `cron_runs.session_id`. |
 | v1+ | 2026-10-13 | `CRON_MIGRATIONS` v6 (additive): `cron_runs.workspace_path`, backfilled from the job row (NULL where the job is already gone). |
 | v2 | 2026-10-15 | Session store 2.0: `{seg}.json` replaced by append-only `{seg}.ui.jsonl` (`add` / `patch` / `inflight` records) + `{seg}.raw.jsonl`; archive segments `{seg}.ui.arch.{N}.{h}.jsonl.gz`, committed count = segment files (no stored counter), archived at turn end over 5 MB; no metadata in files — `HALO_MIGRATIONS` v3 adds `agent_sessions.output` / `last_activity_at`, internal sessions get rows in `~/.halo/global/internal-sessions/halo.db`; `SessionMessage.compactSummary`. 1.x files are converted on first open (or `halo sessions migrate v1 v2`) and deleted after a read-back check. |
+| v2 | 2026-10-17 | AgentCore `/invocations` (additive): `agentcore_invocations` in the workspace `a2a.db`; `A2A_MIGRATIONS` v2 adds `result`, `result_files`, `superseded_by`. `reply_to` gains `{ invocation }`. Session-dirs mode lays out `<base>/{.template,<sid>}/`. |

@@ -112,10 +112,10 @@ A read-only pixel city of a server's runtime (workspaces = buildings, sessions =
 
 ## AgentCore Runtime Mode
 
-`halo agentcore --workspace <path>` runs the server as an Amazon Bedrock AgentCore Runtime container speaking A2A on :9000 (`/ping`, `POST /`, agent card only — no admin, channels, cron or WS). One EFS workspace, single writer via a heartbeat lease; a task cut off mid-run resumes on the next invocation via the workspace run ledger. Callers are Halo servers with an `auth: sigv4` remote.
+`halo agentcore --workspace <path>` runs the server as an Amazon Bedrock AgentCore Runtime container: A2A on :9000 (`/ping`, `POST /`, agent card) for Halo servers with an `auth: sigv4` remote, and `POST /invocations` on :8080 — a prompt job (sync / SSE / async / get, idempotent by `id`, an optional notify hook) for HTTP-protocol runtimes such as EventBridge Scheduler. No admin, channels, cron or WS; one EFS workspace, single writer via a heartbeat lease, and a task cut off mid-run resumes on the next invocation via the workspace run ledger. With `HALO_AGENTCORE_SESSION_DIRS=1` a root front gives each runtime session id its own dir bound at `/workspace` and serves it through an unprivileged per-session worker — protection against accidental cross-session reads, not hard isolation (that is a separate runtime).
 
-- Key state: `<workspace>/.halo/{a2a.db,runs.db,agentcore.lease}`
-- Code: `packages/server/src/a2a/agentcore.ts` + `a2a/outbound.ts` (sigv4) + `packages/cli/src/index.ts` · Doc: [design/agentcore.md](docs/design/agentcore.md)
+- Key state: `<workspace>/.halo/{a2a.db,runs.db,agentcore.lease}` (jobs in `a2a.db` `agentcore_invocations`); session dirs `<base>/{.template,<sid>}/`
+- Code: `packages/server/src/a2a/agentcore.ts` + `a2a/invocations.ts` + `a2a/agentcore-front.ts` + `a2a/outbound.ts` (sigv4) + `packages/cli/src/index.ts` · Doc: [design/agentcore.md](docs/design/agentcore.md)
 
 ## Source Control (Git)
 

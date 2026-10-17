@@ -272,27 +272,41 @@ recognized as intentional and never respawns. Full policy in
 ## AgentCore runtime (`halo agentcore`)
 
 ```bash
-halo agentcore --workspace /mnt/efs/halo [-p 9000]
+halo agentcore --workspace /mnt/efs/halo [-p 9000]   # A2A runtime
+HALO_PORT=8080 halo agentcore -w /mnt/efs/halo       # HTTP runtime
 ```
 
 Runs the server in the foreground as an Amazon Bedrock AgentCore Runtime
-container speaking the A2A protocol (`HALO_RUNTIME_MODE=agentcore-a2a`): `GET
-/ping`, `POST /` (A2A JSON-RPC) and `GET /.well-known/agent-card.json` on one
-fixed workspace. No admin UI, password, channels, cron or evolution — AgentCore
-verifies the caller's signed request before it reaches the container. It always
-runs in the foreground (no `-d`) — meant as the container's entry command.
+container (`HALO_RUNTIME_MODE=agentcore-a2a`) on one fixed workspace: `GET
+/ping`, `POST /` (A2A JSON-RPC), `GET /.well-known/agent-card.json` and `POST
+/invocations` (a prompt job over plain HTTP). The same process serves both
+AgentCore protocols — an A2A runtime listens on 9000, an HTTP runtime on 8080,
+and AgentCore forwards only its protocol's paths. No admin UI, password,
+channels, cron or evolution — AgentCore verifies the caller's signed request
+before it reaches the container. It always runs in the foreground (no `-d`) —
+meant as the container's entry command.
 
 | Flag / env | Meaning |
 |---|---|
-| `-w, --workspace <path>` / `HALO_WORKSPACE` | Workspace to serve — required, must exist. Seeded with `.halo/agent-card.json` if missing. |
-| `-p, --port <n>` | Listen port, default `9000` (the AgentCore contract) |
+| `-w, --workspace <path>` / `HALO_WORKSPACE` | Workspace to serve — required, must exist. Seeded with `.halo/agent-card.json` if missing. In session-dirs mode, the base holding one dir per session id. |
+| `-p, --port <n>` / `HALO_PORT` | Listen port: `-p`, else `HALO_PORT`, else `9000`. Use `8080` for an HTTP-protocol runtime. |
 | `HALO_A2A_PUBLIC_URL` | Interface URL advertised in the card — the runtime's invoke URL (`…/runtimes/<escaped ARN>/invocations`) |
-| `HALO_A2A_ACCESS` | Session access level: `workspace` (default) \| `full` \| `readonly` |
+| `HALO_A2A_ACCESS` | Session access level (A2A and `/invocations`): `workspace` (default) \| `full` \| `readonly` |
+| `HALO_AGENTCORE_NOTIFY` | Shell command run when an `/invocations` job finishes: stdin = the final reply, env adds `HALO_SESSION_ID`, `HALO_RUN_STATUS` (`ok` \| `error`), `HALO_WORKSPACE`; runs outside the agent sandbox (e.g. a script that pushes the reply to an IM) |
+| `HALO_AGENTCORE_SESSION_DIRS=1` | One workspace per runtime session id: `<base>/<id>`, created from `<base>/.template`, is mounted at `/workspace` and served by an unprivileged worker (uid/gid 1000, no capabilities, env allowlist). Needs root, `mount` and `setpriv` in the image. |
+
+An `/invocations` job is `{"prompt": "…"}` (or `"promptFile"`), with optional
+`session` (a halo session id — a fixed one keeps the job's history), `agent`,
+`id` (idempotency key) and `async`. By default the request waits for the
+result (up to 10 min); `Accept: text/event-stream` streams it; `"async": true`
+returns a receipt at once; `{"get": "<id>"}` reads a job. Shapes:
+[dev/api.md](../dev/api.md#post-invocations).
 
 One runtime session id owns the workspace at a time (`.halo/agentcore.lease`);
 requests on another id are refused until the holder has been gone ~45 s. Design,
-the caller-side `auth: sigv4` remote and ops notes:
-[design/agentcore.md](../design/agentcore.md).
+the caller-side `auth: sigv4` remote, session dirs and ops notes:
+[design/agentcore.md](../design/agentcore.md). The hub skill `agentcore-deploy`
+builds the image and creates the runtime for you.
 
 ## Architecture
 
