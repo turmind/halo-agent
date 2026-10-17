@@ -92,13 +92,13 @@ params:
 secrets: []
 ```
 
-Built-in skills declare theirs the same way — today `extension`, with a plain `hub_repo` param (the hub `/extension install <id>` pulls from; empty = turmind/halo-hub), and `web-search`, with plain `fast_region` / `deep_region` params (AWS regions for its two Bedrock gears; empty = us-east-1 fast, us-west-2 deep / us-east-1 for sol). `halo setup` asks only for built-in skills' `secret: true` params; plain params are configured in Settings → Skills only.
+Built-in skills declare theirs the same way — today `extension`, with plain `hub_base` (the https base URL holding each hub extension's `<id>/update.json`, read by `/extension install <id>` and the admin's update check; point it at a mirror; empty = the GitHub raw `extensions/` directory of `hub_repo`) and `hub_repo` (the hub `/extension models` pulls release zips from, and where the default `hub_base` comes from; empty = turmind/halo-hub) params, and `web-search`, with plain `fast_region` / `deep_region` params (AWS regions for its two Bedrock gears; empty = us-east-1 fast, us-west-2 deep / us-east-1 for sol). `halo setup` asks only for built-in skills' `secret: true` params; plain params are configured in Settings → Skills only.
 
 Global agents declare theirs the same way in `agents/<agent-id>/agent-config.yaml` (same `params:` / `secrets:` lists; shown under Settings → Agents).
 
 ### Extension params/secrets — `halo-extension.json` `settings`
 
-An installed canvas extension declares its own config in its manifest: `"settings": { "params": [field…], "secrets": [field…] }`, same field format as a skill's `config.yaml` (`key`, `description`, `description_zh`, `default`, `type`, `options`) but validated strictly — a malformed field makes the whole manifest an error (red row in Settings → Extensions) instead of being skipped. Each such extension becomes one section with `source: "extension"`, namespace **`ext-<extension-id>`** (the prefix keeps it from colliding with a skill / provider namespace) and the manifest `name` as title, listed in the left nav under its own group **Extension settings / 扩展配置**, right below the Extensions entry. Every field is `globalOnly` (stored in `~/.halo/secrets/settings.yaml` only; a workspace write is rejected with 400) and every `secrets` field is masked. Only server code reads the values (e.g. the Meeting Recorder's Amazon Transcribe region and keys) — they never reach the extension, the manifest or the hub. The section appears / disappears live: installing or removing an extension pushes `extension:changed`, and the open Settings page re-fetches the schema. See [design/canvas-extensions.md → Extension settings](../design/canvas-extensions.md#extension-settings).
+An installed canvas extension declares its own config in its manifest: `"settings": { "params": [field…], "secrets": [field…] }`, same field format as a skill's `config.yaml` (`key`, `description`, `description_zh`, `default`, `type`, `options`) but validated strictly — a malformed field makes the whole manifest an error (red row in Settings → Extensions) instead of being skipped. Each such extension becomes one section with `source: "extension"`, namespace **`ext-<extension-id>`** (the prefix keeps it from colliding with a skill / provider namespace) and the manifest `name` as title, listed in the left nav under its own group **Extension settings / 扩展配置**, right below the Extensions entry. Every field is `globalOnly` (stored in `~/.halo/secrets/settings.yaml` only; a workspace write is rejected with 400) and every `secrets` field is masked. Only server code reads the values (e.g. the Meeting Recorder's Amazon Transcribe region and keys) — they never reach the extension, the manifest or the hub. The section appears / disappears live: installing, removing or switching an extension on / off pushes `extension:changed`, and the open Settings page re-fetches the schema. A switched-off extension has no section, but its values are kept — they are not listed as orphans and are back as they were when it is switched on. See [design/canvas-extensions.md → Extension settings](../design/canvas-extensions.md#extension-settings).
 
 ### General — built-in
 
@@ -190,13 +190,25 @@ A malicious skill that tries `curl -H "Bearer {{aws-bedrock-claude-invoke.secret
 
 ## Orphans
 
-`params` / `secrets` values present in `settings.yaml` that no current schema declaration covers (the whole namespace is gone, or just that key) are surfaced as **orphans** in a dedicated tab. They aren't deleted automatically — uninstalling a skill keeps its values around so re-installing pops them back in. Users prune them on their own schedule via the orphan tab's per-key Remove buttons.
+`params` / `secrets` values present in `settings.yaml` that no current schema declaration covers (the whole namespace is gone, or just that key) are surfaced as **orphans** in a dedicated tab. They aren't deleted automatically — uninstalling a skill keeps its values around so re-installing pops them back in. A switched-off extension's values (its `ext-<id>` namespace and the skills it ships) are not orphans and are never listed here. Users prune them on their own schedule via the orphan tab's per-key Remove buttons.
 
 `general.*` is intentionally excluded from orphan detection — its declared keys are enumerated by the built-in schema, so anything else there is treated as either a typo or a forward-compat field, not an orphan.
 
 ## Left nav
 
 Groups top to bottom: **System** (General · Security · Extensions, each with a leading icon), **Extension settings**, **Model providers**, **Agents**, **Skills**, and **Orphans** when there are any. Each group header is a quiet toggle (chevron + smaller muted label) that collapses its items; all groups start expanded, and the collapsed ones are remembered per browser (`localStorage` `halo_settings_navCollapsed`, collapsed ids only — so a group that appears later starts expanded).
+
+## Extensions view and update notices
+
+**Settings → Extensions** (System group) lists the installed canvas preview extensions — on and off in one list sorted by id, plus refused directories as red rows — with **Install from zip** in the header. Each valid row offers:
+
+- an **on / off switch**. Off = the extension acts as uninstalled everywhere (no previews, Open with, activity-bar or chat-bar entry, skills or settings section) while its files and settings values stay; the row is dimmed with an "Off" tag. A fresh install starts on; an update keeps the switch; uninstalling forgets it. A tab with unsaved changes stays open on a just-switched-off extension with a "turned off — save your changes" banner;
+- **Update** when its update.json names a newer version (a blue "Latest X" under the name). One click downloads, verifies and installs it; open tabs pick the new version up as with any upgrade. A newer version that needs a newer Halo shows "X needs Halo Y — upgrade Halo first" and no button. A downgrade is never offered. Other grey lines: "No update info at the source", "No update source configured" (a non-GitHub `hub_repo` with no `hub_base`), or why the source couldn't be read (invalid / refused / unreachable);
+- **Remove** (with a confirm).
+
+The header's **Check for updates** re-checks every extension (at most once a minute), and "Last checked hh:mm" shows when the last check finished. Opening the view checks automatically only when the last check is over a day old; results are pushed to every open admin, with no polling and no badge.
+
+**Halo itself**: the foot of the Settings sidebar shows "Halo v<version>" and **Check for updates**. It is checked when Settings is opened (again at most once a day; the button forces it, at most once a minute) against npm's `latest` — no badge elsewhere, no automatic upgrade. A newer release shows "New version X", the command `halo upgrade && halo server restart` with a copy button, a hint that a systemd system unit needs `sudo` (see [dev/deploy.md → Upgrade flow](../dev/deploy.md#upgrade-flow)) and a Release notes link. In the desktop app it shows only "Download the new installer"; a source build shows "Source build — not checked"; a failed check shows one grey line. Design: [design/canvas-extensions.md → Updates](../design/canvas-extensions.md#updates-updatejson).
 
 ## Security view (change password + logout)
 
