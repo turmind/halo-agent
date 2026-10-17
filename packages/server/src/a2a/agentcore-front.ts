@@ -5,9 +5,9 @@
  * the EFS base (HALO_WORKSPACE), and one session must not see another's
  * files. One microVM serves one session, so isolation is the VM's own mount
  * view: the front (PID 1, root) answers the first non-/ping request by
- * creating the session dir, bind-mounting it at /workspace, lazily
- * unmounting the base and closing uid 1000's NFS egress — in its own
- * namespace, once, after which nothing in the VM sees the base — then
+ * creating the session dir, bind-mounting it at /workspace and lazily
+ * unmounting the base — in its own namespace, once, after which nothing in
+ * the VM sees the base — then
  * spawning the WORKER via setpriv: uid/gid 1000, no groups, no capabilities,
  * no_new_privs, `env -i` allowlist. Any setup step failing → 503 for good,
  * the worker never starts. The worker is the plain single-workspace
@@ -134,16 +134,15 @@ export function ensureSessionDir(base: string, sid: string, owner: { uid: number
 /**
  * The once-per-process view setup, run as root in the front's own (the VM's
  * main) mount namespace, in this order: bind the session dir at /workspace
- * first, then lazy-umount the base; then reject uid 1000's TCP to 2049 — the
- * EFS has no file-system policy, so a userspace NFS client run by the agent
- * could mount the fs root (the kernel's own NFS traffic isn't uid 1000's).
+ * first, then lazy-umount the base.
  */
 export function buildSetupCommands(base: string, sessionDir: string): string[][] {
   return [
     ['mkdir', '-p', WORKER_ROOT],
     ['mount', '--bind', sessionDir, WORKER_ROOT],
     ['umount', '-l', base],
-    ['iptables', '-A', 'OUTPUT', '-m', 'owner', '--uid-owner', String(WORKER_UID), '-p', 'tcp', '--dport', '2049', '-j', 'REJECT'],
+    // No per-uid block on TCP 2049 here: the microVM has no CAP_NET_ADMIN and no Landlock, so
+    // EFS egress is closed at the infra layer by the EFS file-system policy (agentcore-deploy skill).
   ]
 }
 
@@ -372,7 +371,7 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
       throw Object.assign(err as Error, { status: 503, fatal: true })
     }
     viewReady = true
-    console.log(`[AgentCore] front: ${sessionDir} bound at ${WORKER_ROOT}, ${base} unmounted, uid ${WORKER_UID} NFS egress rejected`)
+    console.log(`[AgentCore] front: ${sessionDir} bound at ${WORKER_ROOT}, ${base} unmounted`)
     const lb = loopback.address() as { port: number }
     const ready = new Promise<void>((resolve) => { markReady = resolve })
     worker = spawnWorker({ env: workerEnv(process.env, { url: `http://127.0.0.1:${lb.port}`, token }), workerPort })
@@ -497,7 +496,7 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
  *  container: SIGTERM / SIGINT are forwarded to the worker (its graceful
  *  shutdown releases the lease) and we exit once it has, 30 s at most. */
 export async function runAgentCoreFront(o: { base: string; port: number }): Promise<void> {
-  if (process.getuid?.() !== 0) throw new Error('HALO_AGENTCORE_SESSION_DIRS=1 needs root (bind mount, umount, iptables); the worker drops to an unprivileged uid itself')
+  if (process.getuid?.() !== 0) throw new Error('HALO_AGENTCORE_SESSION_DIRS=1 needs root (bind mount, umount); the worker drops to an unprivileged uid itself')
   if (o.port === WORKER_PORT) throw new Error(`port ${WORKER_PORT} is the worker's loopback port — pick another HALO_PORT`)
   const base = path.resolve(o.base)
   const overlaps = (a: string, b: string) => a === b || a.startsWith(b === '/' ? '/' : `${b}/`)

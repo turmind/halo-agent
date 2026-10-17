@@ -12,9 +12,9 @@ import { FRONT_TOKEN_ENV, FRONT_TOKEN_HEADER, FRONT_URL_ENV } from '../src/a2a/a
 /**
  * AgentCore session-dirs mode (CONTRACT §1b, boss 11:45Z / 12:18Z): the root
  * front validates the session header, creates `<base>/<sid>` from
- * `.template`, binds it at /workspace + unmounts the base + rejects uid 1000's
- * NFS egress (in its own namespace, once), spawns the worker via setpriv and
- * proxies to it. mount / iptables / setpriv run only on a real microVM — here
+ * `.template`, binds it at /workspace + unmounts the base (in its own
+ * namespace, once), spawns the worker via setpriv and proxies to it.
+ * mount / setpriv run only on a real microVM — here
  * their argv is the testable unit, and the front runs against a stand-in
  * view setup and worker.
  */
@@ -61,12 +61,11 @@ describe('pure parts', () => {
     for (const rel of ['.halo', '.halo/agents', '.halo/agents/coach/agent.yaml', '.halo/sessions-notes.md', 'INSTRUCTIONS.md', 'scripts/tts_polly.py', 'data/x.dbx']) expect(skipTemplateEntry(rel), rel).toBe(false)
   })
 
-  it('view setup: bind the session dir at /workspace, then lazy-umount the base, then reject uid 1000 → :2049', () => {
+  it('view setup: bind the session dir at /workspace, then lazy-umount the base (no iptables — the VM has no CAP_NET_ADMIN)', () => {
     expect(buildSetupCommands('/mnt/efs', `/mnt/efs/${SID_A}`)).toEqual([
       ['mkdir', '-p', '/workspace'],
       ['mount', '--bind', `/mnt/efs/${SID_A}`, '/workspace'],
       ['umount', '-l', '/mnt/efs'],
-      ['iptables', '-A', 'OUTPUT', '-m', 'owner', '--uid-owner', '1000', '-p', 'tcp', '--dport', '2049', '-j', 'REJECT'],
     ])
   })
 
