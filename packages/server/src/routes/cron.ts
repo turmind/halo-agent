@@ -79,6 +79,21 @@ function validateSchedule(expr: string): string | null {
   }
 }
 
+/** `timezone` body value: undefined / null / '' = unset (host timezone), else
+ *  a valid IANA zone. croner resolves zones through Intl too, but throws only
+ *  at nextRun() — after the row is saved (runner.ts scheduleJob). Intl throws
+ *  RangeError on an unknown zone. Returns an error message or null. */
+function validateTimezone(v: unknown): string | null {
+  if (v === undefined || v === null || v === '') return null
+  if (typeof v !== 'string') return 'timezone must be a string'
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: v })
+    return null
+  } catch {
+    return `invalid timezone: ${v}`
+  }
+}
+
 /** Per-job cli timeout bounds (seconds). Lower bound keeps a fat-fingered
  *  "1" from killing every run instantly; upper bound (6h) keeps a stuck
  *  child from squatting `_inflight` for days. */
@@ -214,6 +229,8 @@ export function createCronRoutes(): Hono {
       const scheduleErr = validateSchedule(body.schedule)
       if (scheduleErr) return c.json({ error: `invalid schedule: ${scheduleErr}` }, 400)
     }
+    const timezoneErr = validateTimezone(body.timezone)
+    if (timezoneErr) return c.json({ error: timezoneErr }, 400)
     if (hasRunAt && body.runAt! <= Date.now()) {
       return c.json({ error: 'runAt must be in the future' }, 400)
     }
@@ -292,6 +309,8 @@ export function createCronRoutes(): Hono {
       const err = validateSchedule(body.schedule)
       if (err) return c.json({ error: `invalid schedule: ${err}` }, 400)
     }
+    const timezoneErr = validateTimezone(body.timezone)
+    if (timezoneErr) return c.json({ error: timezoneErr }, 400)
     // runAt: future epoch-ms number, or null (= clear). Reject other types
     // here — a garbage-typed runAt would slip past the exclusivity check
     // below and land in the db as-is.
