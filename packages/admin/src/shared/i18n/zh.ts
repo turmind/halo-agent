@@ -403,6 +403,15 @@ export const zh: Record<string, string> = {
   'settings.extensions.off': '已停用',
   'settings.extensions.enable': '启用：所有地方恢复使用',
   'settings.extensions.disable': '停用：等同卸载，但保留文件和配置',
+  'settings.extensions.lastChecked': '上次检查 {time}',
+  'settings.extensions.update': '更新',
+  'settings.extensions.latest': '最新 {version}',
+  'settings.extensions.needsHalo': '{version} 需要先升级 Halo 到 {minHalo}',
+  'settings.extensions.notFound': '来源里没有更新信息',
+  'settings.extensions.noSource': '未配置更新来源',
+  'settings.extensions.invalid': '更新信息无效：{error}',
+  'settings.extensions.refused': '更新来源被拒绝：{error}',
+  'settings.extensions.unreachable': '来源不可达：{error}',
 
   // security (change password + logout)
   'security.changePassword.title': '修改密码',

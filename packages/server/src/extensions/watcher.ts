@@ -17,6 +17,7 @@ import fs, { type FSWatcher } from 'node:fs'
 import type { ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { broadcast } from '../ws/broadcast.js'
 import { sttModels } from '../stt/models.js'
+import { rejudgeExtensionUpdates } from '../updates/extension-check.js'
 import { extensionsRoot, getSnapshot, scanExtensions, snapshotKey } from './registry.js'
 
 let watcher: FSWatcher | null = null
@@ -42,6 +43,7 @@ export function rescanAndBroadcast(): void {
   if (key === lastKey) return
   lastKey = key
   broadcast({ type: 'extension:changed', ...snap })
+  rejudgeExtensionUpdates()
 }
 
 /** An installed `stt-local` extension wants its model files: start the

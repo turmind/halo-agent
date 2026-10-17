@@ -4,11 +4,12 @@
  *   GET    /extensions                                installed list (on + off + error entries)
  *   POST   /extensions/install                        multipart `file` = zip → install / upgrade
  *   PATCH  /extensions/:id                            `{ enabled }` → switch on / off (state.ts)
+ *   POST   /extensions/:id/update                     install the newer version its update.json names
  *   DELETE /extensions/:id                            uninstall
  *   GET    /extensions/token                          short-lived asset token for the iframe URL
  *   GET    /extensions/:id/:version/:token/<asset>    static file from the extension dir
  *
- * The first four sit behind the admin cookie (index.ts mounts this router
+ * The first five sit behind the admin cookie (index.ts mounts this router
  * under /api, which authMiddleware guards). The static route is what the
  * admin's sandboxed iframe loads and is NOT cookie-authed: the host iframe
  * was first shipped as `sandbox="allow-scripts"` only — an opaque origin
@@ -47,10 +48,15 @@ import { ExtensionInstallError, installExtensionZip, uninstallExtension } from '
 import { setExtensionDisabled } from '../extensions/state.js'
 import { rescanAndBroadcast } from '../extensions/watcher.js'
 import { mintScopedToken, verifyScopedToken } from '../middleware/auth.js'
+import { checkExtensionNow } from '../updates/extension-check.js'
+import { downloadPackage } from '../updates/extension-fetch.js'
 
 /** Upload cap. The glb viewer is ~2 MB unpacked; a drawio-class extension
  *  (draw.war is 54 MB) needs headroom. */
 export const MAX_ZIP_BYTES = 100 * 1024 * 1024
+
+/** Ids with an update in flight (POST /extensions/:id/update → 409). */
+const updating = new Set<string>()
 
 /** Asset-token lifetime. It only grants reads of extension static files and
  *  the admin fetches a fresh one before every iframe mount, so short is free. */
@@ -164,6 +170,44 @@ export function createExtensionRoutes() {
       const msg = err instanceof Error ? err.message : String(err)
       console.log(`[Extensions] switch ${id} failed: ${msg}`)
       return c.json({ error: msg }, 500)
+    }
+  })
+
+  // One-click update (design: .halo/tmp/ext-plans/updates.md §2). Takes no
+  // body: the server re-reads update.json itself and goes ahead only on an
+  // `available` verdict; the zip must hash to its sha256 and carry its id +
+  // version. On / off state lives outside <id>/, so a switched-off extension
+  // stays off. One update per id at a time (in-process; a restart mid-update
+  // leaves only the installer's dot-staging dirs, which the scanner skips).
+  app.post('/extensions/:id/update', async (c) => {
+    const id = c.req.param('id')
+    if (!isExtensionId(id)) return c.json({ error: 'Invalid extension id' }, 400)
+    const ext = getInstalledExtension(id)
+    if (!ext) return c.json({ error: 'Extension not installed' }, 404)
+    if (updating.has(id)) return c.json({ error: 'An update of this extension is already running' }, 409)
+    updating.add(id)
+    try {
+      const { entry, info } = await checkExtensionNow(ext)
+      if (!info) return c.json({ error: entry.error ?? `no update available (${entry.state})`, status: entry }, 409)
+      let zip: Buffer
+      try {
+        zip = await downloadPackage(info, { maxBytes: MAX_ZIP_BYTES })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.log(`[Extensions] update ${id}: download failed: ${msg}`)
+        return c.json({ error: msg }, 502)
+      }
+      const installed = await installExtensionZip(zip, id, info.version)
+      console.log(`[Extensions] ${id} updated ${ext.version} → ${installed.version}`)
+      rescanAndBroadcast()
+      return c.json(installed)
+    } catch (err) {
+      if (err instanceof ExtensionInstallError) return c.json({ error: err.message }, 400)
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log(`[Extensions] update ${id} failed: ${msg}`)
+      return c.json({ error: msg }, 500)
+    } finally {
+      updating.delete(id)
     }
   })
 

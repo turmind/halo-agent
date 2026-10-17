@@ -403,6 +403,15 @@ export const en: Record<string, string> = {
   'settings.extensions.off': 'Off',
   'settings.extensions.enable': 'Turn on — use it again everywhere',
   'settings.extensions.disable': 'Turn off — acts as uninstalled; files and settings are kept',
+  'settings.extensions.lastChecked': 'Last checked {time}',
+  'settings.extensions.update': 'Update',
+  'settings.extensions.latest': 'Latest {version}',
+  'settings.extensions.needsHalo': '{version} needs Halo {minHalo} — upgrade Halo first',
+  'settings.extensions.notFound': 'No update info at the source',
+  'settings.extensions.noSource': 'No update source configured',
+  'settings.extensions.invalid': 'Invalid update info: {error}',
+  'settings.extensions.refused': 'Update source refused: {error}',
+  'settings.extensions.unreachable': 'Update source unreachable: {error}',
 
   // security (change password + logout)
   'security.changePassword.title': 'Change Password',

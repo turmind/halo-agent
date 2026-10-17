@@ -84,6 +84,14 @@ describe('installExtensionZip', () => {
     await expect(installExtensionZip(await zipOf(flat()), 'glb')).resolves.toMatchObject({ id: 'glb' })
   })
 
+  it('expectVersion must match the manifest version (update route), the working install stays', async () => {
+    await installExtensionZip(await zipOf(flat()))
+    await expect(installExtensionZip(await zipOf(flat({ ...manifest, version: '1.1.0' })), 'glb', '1.2.0')).rejects.toThrow('manifest version "1.1.0" does not match update.json "1.2.0"')
+    expect(fs.readFileSync(path.join(extensionsRoot(), 'glb', 'index.html'), 'utf-8')).toBe('<html>v1.0.0</html>')
+    expect(rootEntries()).toEqual(['glb'])
+    await expect(installExtensionZip(await zipOf(flat({ ...manifest, version: '1.2.0' })), 'glb', '1.2.0')).resolves.toMatchObject({ version: '1.2.0' })
+  })
+
   it('an invalid package never disturbs the working install and leaves no staging dirs', async () => {
     await installExtensionZip(await zipOf(flat()))
     const before = fs.statSync(path.join(extensionsRoot(), 'glb')).mtimeMs

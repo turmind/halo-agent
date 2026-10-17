@@ -15,7 +15,8 @@
  * optional. Unknown fields are ignored so the format can grow.
  *
  * The same id / version / sha256 then gate the install: the downloaded zip
- * must hash to `sha256`, and its manifest must carry the same id and version.
+ * must hash to `sha256`, and its manifest must carry the same id and version
+ * (install.ts expectId / expectVersion).
  */
 import { createHash } from 'node:crypto'
 import semver from 'semver'
@@ -118,13 +119,4 @@ export function judgeUpdate(installedVersion: string, info: UpdateInfo, haloVers
 export function checkPackageHash(zip: Buffer, info: UpdateInfo): string | null {
   const actual = createHash('sha256').update(zip).digest('hex')
   return actual === info.sha256 ? null : `sha256 mismatch: update.json says ${info.sha256}, package is ${actual}`
-}
-
-/** null = the package's own manifest is the extension and version update.json
- *  promised (a mispacked or swapped zip is refused before it replaces anything). */
-export function checkPackageManifest(manifest: unknown, info: UpdateInfo): string | null {
-  const m = (typeof manifest === 'object' && manifest !== null ? manifest : {}) as Record<string, unknown>
-  if (m.id !== info.id) return `package manifest id "${String(m.id)}" does not match update.json "${info.id}"`
-  if (m.version !== info.version) return `package manifest version "${String(m.version)}" does not match update.json "${info.version}"`
-  return null
 }

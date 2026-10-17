@@ -5,11 +5,9 @@
  *   - https only, redirects included (≤ 5 hops, each hop re-checked);
  *   - `maxBytes` caps the body, first by Content-Length, then while streaming;
  *   - `timeoutMs` is ONE deadline for the whole call, redirects included
- *     (node's own `timeout` option only bounds socket idle time);
- *   - `allowlist` = the A2A URL policy (a2a/url-policy.ts) for addresses an
- *     extension author chose (manifest `source`): refused at DNS-lookup time,
- *     so the checked address is the one connected. `null` = an address the
- *     admin configured (npm registry, the hub base), not restricted.
+ *     (node's own `timeout` option only bounds socket idle time).
+ *
+ * No address policy (why: extension-fetch.ts header).
  *
  * A final non-2xx is a result, not an error (`status`, empty body) — the
  * caller decides what a 404 means. No proxy support: node:https ignores
@@ -17,8 +15,6 @@
  */
 import https from 'node:https'
 import type http from 'node:http'
-import { isIP } from 'node:net'
-import { checkAddress, guardedLookup, type Allowlist } from '../a2a/url-policy.js'
 
 export type HttpsGetErrorCode = 'refused' | 'too-large' | 'timeout' | 'redirects' | 'network'
 
@@ -31,8 +27,6 @@ export class HttpsGetError extends Error {
 export interface HttpsGetOptions {
   maxBytes: number
   timeoutMs: number
-  /** URL policy for author-chosen URLs; null / absent = admin-configured, unrestricted. */
-  allowlist?: Allowlist | null
   headers?: Record<string, string>
 }
 
@@ -49,22 +43,15 @@ const MAX_REDIRECTS = 5
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 
 /** Parse + check one hop's URL. Throws HttpsGetError('refused'). */
-function checkHop(raw: string, base: string | undefined, allowlist: Allowlist | null): URL {
+function checkHop(raw: string, base: string | undefined): URL {
   let url: URL
   try { url = new URL(raw, base) } catch { throw new HttpsGetError('refused', `invalid url: ${raw}`) }
   if (url.protocol !== 'https:') throw new HttpsGetError('refused', `only https urls are allowed: ${url.href}`)
   if (url.username || url.password) throw new HttpsGetError('refused', 'urls with credentials are not allowed')
-  // An IP literal never goes through `lookup` — check it here.
-  const literal = url.hostname.replace(/^\[|\]$/g, '')
-  if (allowlist && isIP(literal)) {
-    const verdict = checkAddress(literal, url, allowlist)
-    if (verdict) throw new HttpsGetError('refused', verdict)
-  }
   return url
 }
 
 export function httpsGet(rawUrl: string, opts: HttpsGetOptions): Promise<HttpsGetResult> {
-  const allowlist = opts.allowlist ?? null
   return new Promise((resolve, reject) => {
     let req: http.ClientRequest | null = null
     let settled = false
@@ -83,11 +70,10 @@ export function httpsGet(rawUrl: string, opts: HttpsGetOptions): Promise<HttpsGe
 
     const hop = (raw: string, base: string | undefined, redirects: number) => {
       let url: URL
-      try { url = checkHop(raw, base, allowlist) } catch (err) { return finish(err as Error) }
+      try { url = checkHop(raw, base) } catch (err) { return finish(err as Error) }
       req = https.request(url, {
         method: 'GET',
         headers: { 'user-agent': 'halo', ...opts.headers },
-        ...(allowlist ? { lookup: guardedLookup(url, allowlist) } : {}),
       }, (res) => {
         const status = res.statusCode ?? 0
         const location = res.headers.location
@@ -119,9 +105,8 @@ export function httpsGet(rawUrl: string, opts: HttpsGetOptions): Promise<HttpsGe
         res.on('end', () => finish(null, { status, url: url.href, headers: res.headers, body: Buffer.concat(chunks) }))
         res.on('error', (err) => finish(new HttpsGetError('network', err.message)))
       })
-      req.on('error', (err: Error & { code?: string }) => {
-        if (err instanceof HttpsGetError) return finish(err)
-        finish(err.code === 'A2A_URL_REFUSED' ? new HttpsGetError('refused', err.message) : new HttpsGetError('network', err.message))
+      req.on('error', (err) => {
+        finish(err instanceof HttpsGetError ? err : new HttpsGetError('network', err.message))
       })
       req.end()
     }

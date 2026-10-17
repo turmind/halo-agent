@@ -104,6 +104,8 @@ export interface ExtensionInfo {
   chatbar?: ExtensionChatbar
   homepage?: string
   license?: string
+  /** https URL of this extension's update.json; absent = `<hub_base>/<id>/update.json`. */
+  source?: string
   /** Extension directory mtime (ms). Among several `default` extensions for
    *  the same file extension the newest install wins. */
   installedAt: number

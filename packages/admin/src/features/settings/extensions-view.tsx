@@ -1,8 +1,10 @@
 'use client'
 
-import { useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Upload, Trash2, AlertTriangle, ToggleLeft, ToggleRight } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Upload, Trash2, AlertTriangle, ToggleLeft, ToggleRight, RefreshCw, ArrowUpCircle } from 'lucide-react'
+import type { ExtensionUpdateEntry, ExtensionsUpdateStatus } from '@turmind/halo-core/protocol'
 import { api } from '@/shared/api-client'
+import { wsClient } from '@/shared/ws-client'
 import { useI18n } from '@/shared/i18n'
 import { cn, confirmAction } from '@/shared/utils'
 import { getExtensionsSnapshot, platformLabels, runsHere, subscribe } from '@/features/editor/previews/registry'
@@ -16,6 +18,12 @@ import { getExtensionsSnapshot, platformLabels, runsHere, subscribe } from '@/fe
  * Switched-off extensions are listed (dimmed, "Off") among the others by id
  * — this is the only place they show. Directories the scanner refused show
  * as red rows so they can still be removed.
+ *
+ * Updates: mounting asks `GET /updates?scope=extensions` (the server answers
+ * from its 24 h cache and checks only when stale); 检查更新 forces one (60 s
+ * server cooldown). Results arrive as `updates:changed` — no polling. Each
+ * row shows its verdict; 更新 asks the server to install what update.json
+ * names (it re-reads and re-judges, the client sends nothing but the id).
  */
 export function ExtensionsView() {
   const { t } = useI18n()
@@ -23,6 +31,34 @@ export function ExtensionsView() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [updates, setUpdates] = useState<ExtensionsUpdateStatus | null>(null)
+
+  useEffect(() => {
+    const off = wsClient.on('updates:changed', (frame) => { if (frame.scope === 'extensions') setUpdates(frame.status) })
+    api.updates.extensions()
+      .then(setUpdates)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+    return off
+  }, [])
+
+  function handleCheck() {
+    setError(null)
+    api.updates.checkExtensions()
+      .then(setUpdates)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+  }
+
+  async function handleUpdate(id: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.extensions.update(id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function handleUpload(file: File) {
     setBusy(true)
@@ -61,12 +97,18 @@ export function ExtensionsView() {
     }
   }
 
-  // On and off in one id-sorted list.
-  const rows = useMemo(() => [
-    ...snapshot.extensions.map((ext) => ({ ext, off: false })),
-    ...snapshot.disabled.map((ext) => ({ ext, off: true })),
-  ].sort((a, b) => a.ext.id.localeCompare(b.ext.id)), [snapshot])
+  // On and off in one id-sorted list, each with its update verdict — only one
+  // judged against the version shown (the `extension:changed` push of an
+  // update lands just before the re-judged `updates:changed`).
+  const rows = useMemo(() => {
+    const updateOf = new Map((updates?.extensions ?? []).map((u) => [`${u.id}@${u.installed}`, u]))
+    return [
+      ...snapshot.extensions.map((ext) => ({ ext, off: false })),
+      ...snapshot.disabled.map((ext) => ({ ext, off: true })),
+    ].sort((a, b) => a.ext.id.localeCompare(b.ext.id)).map((r) => ({ ...r, update: updateOf.get(`${r.ext.id}@${r.ext.version}`) }))
+  }, [snapshot, updates])
   const empty = rows.length === 0 && snapshot.errors.length === 0
+  const checking = updates?.checking ?? false
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
@@ -85,14 +127,29 @@ export function ExtensionsView() {
             if (file) void handleUpload(file)
           }}
         />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={busy}
-          className="flex shrink-0 items-center gap-1.5 rounded bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-colors hover:opacity-90 disabled:opacity-50"
-        >
-          <Upload className="h-3.5 w-3.5" />
-          {busy ? t('settings.extensions.working') : t('settings.extensions.upload')}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {updates?.checkedAt != null && (
+            <span className="text-[10px] text-[var(--muted-foreground)]">
+              {t('settings.extensions.lastChecked', { time: new Date(updates.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }) })}
+            </span>
+          )}
+          <button
+            onClick={handleCheck}
+            disabled={checking}
+            className="flex shrink-0 items-center gap-1.5 rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--secondary)] disabled:opacity-50"
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', checking && 'animate-spin')} />
+            {checking ? t('settings.update.checking') : t('settings.update.check')}
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+            className="flex shrink-0 items-center gap-1.5 rounded bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-colors hover:opacity-90 disabled:opacity-50"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            {busy ? t('settings.extensions.working') : t('settings.extensions.upload')}
+          </button>
+        </div>
       </div>
 
       {error && <p className="text-[11px] text-red-400">{error}</p>}
@@ -101,7 +158,7 @@ export function ExtensionsView() {
         <p className="text-xs text-[var(--muted-foreground)]">{t('settings.extensions.empty')}</p>
       ) : (
         <ul className="divide-y divide-[var(--border)] rounded border border-[var(--border)]">
-          {rows.map(({ ext, off }) => (
+          {rows.map(({ ext, off, update }) => (
             <li key={ext.id} className="flex items-center gap-3 px-3 py-2">
               <div className={cn('min-w-0 flex-1', off && 'opacity-50')}>
                 <div className="flex items-baseline gap-2">
@@ -148,7 +205,18 @@ export function ExtensionsView() {
                 ) : ext.description && (
                   <p className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">{ext.description}</p>
                 )}
+                {update && <UpdateLine entry={update} />}
               </div>
+              {update?.state === 'available' && (
+                <button
+                  onClick={() => handleUpdate(ext.id)}
+                  disabled={busy}
+                  className="flex shrink-0 cursor-pointer items-center gap-1 rounded px-2 py-0.5 text-[10px] text-blue-500 hover:bg-blue-500/10 disabled:opacity-50"
+                >
+                  <ArrowUpCircle className="h-3 w-3" />
+                  {t('settings.extensions.update')}
+                </button>
+              )}
               <button
                 role="switch"
                 aria-checked={!off}
@@ -177,6 +245,28 @@ export function ExtensionsView() {
       )}
     </div>
   )
+}
+
+/** The row's update verdict. `current` and `unknown` say nothing. */
+function UpdateLine({ entry }: { entry: ExtensionUpdateEntry }) {
+  const { t } = useI18n()
+  const muted = 'mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]'
+  switch (entry.state) {
+    case 'available':
+      return <p className="mt-0.5 truncate text-[10px] text-blue-500">{t('settings.extensions.latest', { version: entry.latest ?? '' })}</p>
+    case 'needs-halo':
+      return <p className={muted}>{t('settings.extensions.needsHalo', { version: entry.latest ?? '', minHalo: entry.minHalo ?? '' })}</p>
+    case 'not-found':
+      return <p className={muted}>{t('settings.extensions.notFound')}</p>
+    case 'no-source':
+      return <p className={muted}>{t('settings.extensions.noSource')}</p>
+    case 'invalid':
+    case 'refused':
+    case 'unreachable':
+      return <p className={muted} title={entry.error}>{t(`settings.extensions.${entry.state}`, { error: entry.error ?? '' })}</p>
+    default:
+      return null
+  }
 }
 
 function RemoveButton({ disabled, onClick, label }: { disabled: boolean; onClick: () => void; label: string }) {

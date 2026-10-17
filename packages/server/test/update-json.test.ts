@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import {
-  checkPackageHash, checkPackageManifest, defaultHubBase, haloBaseVersion, judgeUpdate, parseUpdateJson, updateJsonUrl,
+  checkPackageHash, defaultHubBase, haloBaseVersion, judgeUpdate, parseUpdateJson, updateJsonUrl,
   type UpdateInfo,
 } from '../src/updates/update-json.js'
 
@@ -132,11 +132,5 @@ describe('package gates', () => {
     const sha = createHash('sha256').update(zip).digest('hex')
     expect(checkPackageHash(zip, info({ sha256: sha }))).toBeNull()
     expect(checkPackageHash(zip, info())).toMatch(/sha256 mismatch/)
-  })
-  it('checkPackageManifest needs the same id and version', () => {
-    expect(checkPackageManifest({ id: 'glb', version: '1.2.0' }, info())).toBeNull()
-    expect(checkPackageManifest({ id: 'drawio', version: '1.2.0' }, info())).toMatch(/id "drawio" does not match/)
-    expect(checkPackageManifest({ id: 'glb', version: '1.1.0' }, info())).toMatch(/version "1.1.0" does not match/)
-    expect(checkPackageManifest(null, info())).toMatch(/id "undefined"/)
   })
 })

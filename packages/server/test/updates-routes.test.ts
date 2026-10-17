@@ -6,7 +6,8 @@ import { Hono } from 'hono'
 
 /**
  * Contract for /api/updates (routes/updates.ts): behind the admin cookie,
- * `scope` validated, GET / POST answer with the core status right away.
+ * `scope` validated, GET / POST answer with the core status right away (the
+ * `extensions` scope against a real hub: extensions-update-route.test.ts).
  * HALO_VERSION=dev so nothing touches the network (the checker's cadence is
  * covered in updates-core.test.ts). Every src import is dynamic: config.ts
  * reads jwt_secret at module load, so credentials go on disk first (same
@@ -58,7 +59,7 @@ describe('/api/updates routes', () => {
 
   it('validates scope', async () => {
     expect((await app.request('/api/updates', { headers: { Cookie: cookie } })).status).toBe(400)
-    expect((await app.request('/api/updates?scope=extensions', { headers: { Cookie: cookie } })).status).toBe(400)
+    expect((await app.request('/api/updates?scope=nope', { headers: { Cookie: cookie } })).status).toBe(400)
     expect((await app.request('/api/updates/check', { method: 'POST', headers: { Cookie: cookie }, body: 'nope' })).status).toBe(400)
   })
 

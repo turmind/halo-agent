@@ -11,12 +11,15 @@
 #   ext.sh models update [--yes]   # hub's newest models-v* zip → halo models install
 #   ext.sh models list             # = halo models list
 #
-# `install <id>` reads the hub in $HALO_HUB_REPO (the skill's hub_repo param;
-# empty → https://github.com/turmind/halo-hub). GitHub / Gitea-Forgejo / GitLab
-# hubs go through their public release API (GITHUB_TOKEN / GITEA_TOKEN /
-# GITLAB_TOKEN, if set, are sent — lifts GitHub's 60 req/h anonymous limit);
-# any other git URL or local repo installs from `<id>-v<semver>` tags.
-# Needs curl + unzip + node (+ git for tag-based hubs). No `gh`.
+# `install <id>` reads `<hub base>/<id>/update.json` — $HALO_HUB_BASE (the
+# skill's hub_base param; empty → the GitHub raw `extensions/` dir of
+# $HALO_HUB_REPO) — over https only, then the zip it names, checked against
+# its sha256, id and version (same protocol as the admin's update check,
+# server updates/update-json.ts). `models update` reads $HALO_HUB_REPO (the
+# hub_repo param; empty → https://github.com/turmind/halo-hub) through its
+# public release API (GITHUB_TOKEN / GITEA_TOKEN / GITLAB_TOKEN, if set, are
+# sent — lifts GitHub's 60 req/h anonymous limit).
+# Needs curl + unzip + node. No `gh`.
 set -euo pipefail
 
 ROOT="$HOME/.halo/global/extensions"
@@ -47,8 +50,7 @@ precheck() {
 
 # Normalize a hub setting: empty / unsubstituted `{{…}}` → default,
 # `owner/repo` → GitHub, an existing dir → absolute path, drop trailing `/`.
-# A `.git` suffix stays (git mode clones the URL as given); the API helpers
-# below drop it.
+# A `.git` suffix stays; the API helpers below drop it.
 hub_url() {
   local h=${1:-}
   if [[ -z $h || $h == '{{'* ]]; then h=$DEFAULT_HUB; fi
@@ -93,7 +95,7 @@ hub_probe() {
   [[ $ct == application/json* ]]
 }
 
-# github | gitlab | gitea | git (= tag-based fallback) for a normalized hub URL.
+# github | gitlab | gitea | git (= no release API) for a normalized hub URL.
 hub_platform() {
   if [[ ! $1 =~ ^https?://([^/]+)/[^/]+/.+$ ]]; then echo git; return; fi
   case ${BASH_REMATCH[1]} in
@@ -128,33 +130,6 @@ hub_pick_release() {
     })' "$1" "$2"
 }
 
-# stdin = `git ls-remote --tags --refs`; print the highest `<id>-vX.Y.Z` tag
-# (prerelease `-…` suffixes skipped), nothing if there is none.
-hub_pick_tag() {
-  local v
-  v=$(sed -n "s|.*refs/tags/$1-v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$|\1|p" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
-  if [[ -n $v ]]; then echo "$1-v$v"; fi
-}
-
-# Tag-based hub: shallow-clone the newest `<id>-v<semver>` tag and echo
-# `extensions/<id>/` minus the build inputs scripts/pack.mjs leaves out of a
-# release zip. A package with a build step is refused — its output isn't in git.
-hub_git_package() {
-  local hub=$1 id=$2 tmp=$3 url=$1 refs tag dir
-  if [[ $url == /* ]]; then url="file://$url"; fi   # a plain path makes git ignore --depth
-  refs=$(git ls-remote --tags --refs "$url") || { echo "cannot list tags of $hub (git ls-remote failed)" >&2; exit 1; }
-  tag=$(printf '%s\n' "$refs" | hub_pick_tag "$id")
-  [[ -n $tag ]] || { echo "no release for $id in $hub (no $id-v<x.y.z> tag)" >&2; exit 1; }
-  git -c advice.detachedHead=false clone -q --depth 1 --branch "$tag" "$url" "$tmp/repo" || { echo "git clone of $tag from $hub failed" >&2; exit 1; }
-  dir="$tmp/repo/extensions/$id"
-  [[ -d $dir ]] || { echo "$hub tag $tag has no extensions/$id/" >&2; exit 1; }
-  if [[ -e $dir/fetch-deps.sh || -e $dir/build.sh ]]; then
-    echo "$id needs a build step — install it from a release zip (install <path/to.zip> or <https://…zip>)" >&2; exit 1
-  fi
-  rm -rf "$dir/node_modules" "$dir/src" "$dir/package.json" "$dir/package-lock.json"
-  echo "$dir"
-}
-
 # Download the newest `<id>-v*` release zip of <platform> hub $2 into $4 and
 # echo its path. Extra args ($5…) go to every curl (models pass
 # `--proto =https --proto-redir =https`).
@@ -174,14 +149,53 @@ hub_fetch_release() {
   echo "$tmp/pkg.zip"
 }
 
-# Fetch hub package <id> from hub URL $1 into $3: echo a zip path (release
-# API) or the package dir (git tags). API errors never fall back to git — a
-# git checkout of a build-step package would install broken.
-hub_fetch() {
-  local hub=$1 id=$2 tmp=$3 platform
-  platform=$(hub_platform "$hub")
-  if [[ $platform == git ]]; then hub_git_package "$hub" "$id" "$tmp"; return; fi
-  hub_fetch_release "$platform" "$hub" "$id" "$tmp"
+# Hub base for `install <id>` from settings $1 = hub_base, $2 = hub_repo:
+# hub_base as given (trailing `/` dropped); empty / unsubstituted `{{…}}` →
+# the GitHub raw `extensions/` dir on `main` of a GitHub hub_repo (the
+# server's updates/update-json.ts defaultHubBase); nothing for any other hub.
+hub_base() {
+  local b=${1:-} h
+  if [[ -n $b && $b != '{{'* ]]; then echo "${b%/}"; return; fi
+  h=$(hub_url "${2:-}")
+  if [[ $h =~ ^https://github\.com/([A-Za-z0-9][A-Za-z0-9_.-]*)/([A-Za-z0-9_.-]+)$ ]]; then
+    echo "https://raw.githubusercontent.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}/main/extensions"
+  fi
+}
+
+# Fetch hub package <id> into $3 by `<hub base $1>/<id>/update.json`: https
+# only (redirects too, ≤ 5), update.json ≤ 64 KB / 10 s, zip ≤ 100 MB; a
+# relative `url` resolves against update.json's final (redirected) URL; the
+# zip must hash to its `sha256`. Echo the zip path; the version it promises
+# goes to $3/want-version for the manifest check after unpacking.
+hub_fetch_update() {
+  local base=$1 id=$2 tmp=$3 json final line url sha ver got
+  local https=(--proto =https --proto-redir =https --max-redirs 5)
+  [[ -n $base ]] || { echo "no hub_base set and hub_repo is not a GitHub repo to derive one from — set hub_base (Settings → Skills → extension), or install <path/to.zip>" >&2; exit 1; }
+  [[ $base == https://* ]] || { echo "hub_base must be an https URL: $base" >&2; exit 1; }
+  json="$base/$id/update.json"
+  final=$(curl -fsSL "${https[@]}" --max-time 10 --max-filesize 65536 -o "$tmp/update.json" -w '%{url_effective}' "$json") \
+    || { echo "no update.json for $id at $json — check the id and hub_base, or install <path/to.zip>" >&2; exit 1; }
+  line=$(node -e '
+    const fs = require("fs"), [file, base, id] = process.argv.slice(1)
+    const fail = (msg) => { console.log(msg); process.exit(1) }
+    let u
+    try { u = JSON.parse(fs.readFileSync(file, "utf8")) } catch { fail("not valid JSON") }
+    if (!u || typeof u !== "object" || Array.isArray(u)) fail("not a JSON object")
+    if (u.id !== id) fail("id \"" + u.id + "\" does not match \"" + id + "\"")
+    if (typeof u.version !== "string" || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(u.version)) fail("version must be semver (x.y.z[-pre])")
+    if (typeof u.url !== "string" || u.url === "") fail("url is required")
+    let url
+    try { url = new URL(u.url, base) } catch { fail("url is invalid: " + u.url) }
+    if (url.protocol !== "https:") fail("url must be https: " + url.href)
+    if (typeof u.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(u.sha256)) fail("sha256 must be 64 hex characters")
+    console.log(url.href + " " + u.sha256.toLowerCase() + " " + u.version)
+  ' "$tmp/update.json" "$final" "$id") || { echo "invalid update.json at $final: $line" >&2; exit 1; }
+  read -r url sha ver <<<"$line"
+  curl -fsSL "${https[@]}" --max-filesize 104857600 "$url" -o "$tmp/pkg.zip" || { echo "download failed: $url" >&2; exit 1; }
+  got=$(node -e 'console.log(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$tmp/pkg.zip")
+  [[ $got == "$sha" ]] || { echo "sha256 mismatch for $url: update.json says $sha, the download is $got" >&2; exit 1; }
+  echo "$ver" >"$tmp/want-version"
+  echo "$tmp/pkg.zip"
 }
 
 # Unpack zip $1 into the new dir $2 with the same refusals as the server's zip
@@ -237,13 +251,13 @@ models_update() {
   "${HALO_CLI:-halo}" models install "$dir" "$@"
 }
 
-# Echo a local zip or an unpacked package dir for source $1 (path, https URL, or hub id).
+# Echo a local zip path for source $1 (path, https URL, or hub id).
 resolve_source() {
   local src=$1
   if [[ -f $src ]]; then echo "$src"; return; fi
   if [[ $src =~ ^https?:// ]]; then curl -fsSL "$src" -o "$TMP/pkg.zip"; echo "$TMP/pkg.zip"; return; fi
   [[ $src =~ $ID_RE ]] || { echo "invalid id or missing file: $src" >&2; exit 1; }
-  hub_fetch "$(hub_url "${HALO_HUB_REPO:-}")" "$src" "$TMP"
+  hub_fetch_update "$(hub_base "${HALO_HUB_BASE:-}" "${HALO_HUB_REPO:-}")" "$src" "$TMP"
 }
 
 # Sourced (tests, later reuse of the hub_* functions): definitions only.
@@ -257,21 +271,21 @@ case $cmd in
     src=${1:?usage: ext.sh install <id|zip|url>}
     TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
     pkg=$(resolve_source "$src")
-    if [[ -d $pkg ]]; then
-      dir=$pkg
-    else
-      safe_unzip "$pkg" "$TMP/x"
-      # `zip -r glb.zip glb/` wraps everything in one directory — descend into it.
-      dir="$TMP/x"
-      if [[ ! -f $dir/halo-extension.json ]]; then
-        only=$(find "$dir" -mindepth 1 -maxdepth 1 | head -2)
-        if [[ $(printf '%s\n' "$only" | wc -l) -eq 1 && -f $only/halo-extension.json ]]; then dir=$only; fi
-      fi
+    safe_unzip "$pkg" "$TMP/x"
+    # `zip -r glb.zip glb/` wraps everything in one directory — descend into it.
+    dir="$TMP/x"
+    if [[ ! -f $dir/halo-extension.json ]]; then
+      only=$(find "$dir" -mindepth 1 -maxdepth 1 | head -2)
+      if [[ $(printf '%s\n' "$only" | wc -l) -eq 1 && -f $only/halo-extension.json ]]; then dir=$only; fi
     fi
     expect=""
     if [[ $src =~ $ID_RE && ! -f $src ]]; then expect=$src; fi
     if ! out=$(precheck "$dir" "$expect"); then echo "invalid extension: $out" >&2; exit 1; fi
     read -r id ver _ <<<"$out"
+    if [[ -f $TMP/want-version ]]; then
+      want=$(<"$TMP/want-version")
+      [[ $ver == "$want" ]] || { echo "invalid extension: manifest version \"$ver\" does not match update.json \"$want\"" >&2; exit 1; }
+    fi
     mkdir -p "$ROOT"
     stage="$ROOT/.tmp-$id-$RANDOM$RANDOM"
     mv "$dir" "$stage"

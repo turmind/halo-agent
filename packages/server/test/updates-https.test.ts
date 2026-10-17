@@ -8,16 +8,15 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
 import { httpsGet, HttpsGetError } from '../src/updates/https-get.js'
-import { parseAllowlist } from '../src/a2a/url-policy.js'
 import { downloadPackage, fetchUpdateJson } from '../src/updates/extension-fetch.js'
 
 /**
  * Contract for the update downloader (updates/https-get.ts) and the
  * update.json fetch on top of it (updates/extension-fetch.ts), against a
  * local self-signed TLS server: https only (redirects too), the redirect cap,
- * the byte cap (declared and streamed), one deadline for the whole call, the
- * URL policy for author-chosen URLs, and the update.json error codes the
- * admin turns into grey text (404 → not-found).
+ * the byte cap (declared and streamed), one deadline for the whole call, no
+ * address policy (an intranet / loopback https source works), and the
+ * update.json error codes the admin turns into grey text (404 → not-found).
  */
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-upd-https-'))
@@ -112,17 +111,6 @@ describe('httpsGet', () => {
     expect((await rejection(httpsGet(`${base}/hang`, { ...opts, timeoutMs: 300 }))).code).toBe('timeout')
     expect(Date.now() - started).toBeLessThan(2_000)
   })
-
-  it('applies the URL policy to author-chosen URLs: loopback refused unless listed', async () => {
-    routes = { '/ok': reply(200, 'hi') }
-    const strict = parseAllowlist('')
-    expect((await rejection(httpsGet(`${base}/ok`, { ...opts, allowlist: strict }))).code).toBe('refused')
-    // Hostname form goes through the guarded DNS lookup instead of the literal check.
-    const port = (server.address() as AddressInfo).port
-    expect((await rejection(httpsGet(`https://localhost:${port}/ok`, { ...opts, allowlist: strict }))).code).toBe('refused')
-    const listed = parseAllowlist('127.0.0.0/8,::1/128')
-    expect((await httpsGet(`${base}/ok`, { ...opts, allowlist: listed })).body.toString()).toBe('hi')
-  })
 })
 
 describe('fetchUpdateJson / downloadPackage', () => {
@@ -130,7 +118,7 @@ describe('fetchUpdateJson / downloadPackage', () => {
 
   it('reads update.json and resolves url against the final (redirected) URL', async () => {
     routes = { '/hub/glb/update.json': redirect('/mirror/glb/update.json'), '/mirror/glb/update.json': reply(200, JSON.stringify(good)) }
-    const r = await fetchUpdateJson('glb', `${base}/hub/glb/update.json`, { fromManifest: false })
+    const r = await fetchUpdateJson('glb', `${base}/hub/glb/update.json`)
     expect(r).toEqual({ info: { id: 'glb', version: '1.2.0', url: `${base}/mirror/glb/glb-1.2.0.zip`, sha256: ZIP_SHA } })
   })
 
@@ -141,25 +129,26 @@ describe('fetchUpdateJson / downloadPackage', () => {
       '/gone': reply(410, ''),
       '/boom': reply(500, ''),
     }
-    expect(await fetchUpdateJson('glb', `${base}/missing`, { fromManifest: false })).toMatchObject({ code: 'not-found' })
-    expect(await fetchUpdateJson('glb', `${base}/gone`, { fromManifest: false })).toMatchObject({ code: 'not-found' })
-    expect(await fetchUpdateJson('glb', `${base}/bad-json`, { fromManifest: false })).toMatchObject({ code: 'invalid' })
-    expect(await fetchUpdateJson('glb', `${base}/bad-id`, { fromManifest: false })).toMatchObject({ code: 'invalid', error: expect.stringMatching(/does not match/) })
-    expect(await fetchUpdateJson('glb', `${base}/boom`, { fromManifest: false })).toMatchObject({ code: 'unreachable' })
-    expect(await fetchUpdateJson('glb', 'http://127.0.0.1/x', { fromManifest: false })).toMatchObject({ code: 'refused' })
+    expect(await fetchUpdateJson('glb', `${base}/missing`)).toMatchObject({ code: 'not-found' })
+    expect(await fetchUpdateJson('glb', `${base}/gone`)).toMatchObject({ code: 'not-found' })
+    expect(await fetchUpdateJson('glb', `${base}/bad-json`)).toMatchObject({ code: 'invalid' })
+    expect(await fetchUpdateJson('glb', `${base}/bad-id`)).toMatchObject({ code: 'invalid', error: expect.stringMatching(/does not match/) })
+    expect(await fetchUpdateJson('glb', `${base}/boom`)).toMatchObject({ code: 'unreachable' })
+    expect(await fetchUpdateJson('glb', 'http://127.0.0.1/x')).toMatchObject({ code: 'refused' })
   })
 
-  it('refuses a manifest-source URL on loopback under the default URL policy', async () => {
+  it('reads a loopback https source — no address policy on any update URL', async () => {
     routes = { '/glb/update.json': reply(200, JSON.stringify(good)) }
-    expect(await fetchUpdateJson('glb', `${base}/glb/update.json`, { fromManifest: true })).toMatchObject({ code: 'refused' })
+    const port = (server.address() as AddressInfo).port
+    expect(await fetchUpdateJson('glb', `https://localhost:${port}/glb/update.json`)).toMatchObject({ info: { version: '1.2.0' } })
   })
 
   it('downloads a package whose sha256 matches, refuses one that does not', async () => {
     routes = { '/glb.zip': reply(200, ZIP) }
     const info = { id: 'glb', version: '1.2.0', url: `${base}/glb.zip`, sha256: ZIP_SHA }
-    expect((await downloadPackage(info, { fromManifest: false, maxBytes: 1024 })).equals(ZIP)).toBe(true)
-    await expect(downloadPackage({ ...info, sha256: 'b'.repeat(64) }, { fromManifest: false, maxBytes: 1024 })).rejects.toThrow(/sha256 mismatch/)
-    await expect(downloadPackage(info, { fromManifest: false, maxBytes: 4 })).rejects.toMatchObject({ code: 'too-large' })
-    await expect(downloadPackage({ ...info, url: `${base}/nope.zip` }, { fromManifest: false, maxBytes: 1024 })).rejects.toThrow(/HTTP 404/)
+    expect((await downloadPackage(info, { maxBytes: 1024 })).equals(ZIP)).toBe(true)
+    await expect(downloadPackage({ ...info, sha256: 'b'.repeat(64) }, { maxBytes: 1024 })).rejects.toThrow(/sha256 mismatch/)
+    await expect(downloadPackage(info, { maxBytes: 4 })).rejects.toMatchObject({ code: 'too-large' })
+    await expect(downloadPackage({ ...info, url: `${base}/nope.zip` }, { maxBytes: 1024 })).rejects.toThrow(/HTTP 404/)
   })
 })

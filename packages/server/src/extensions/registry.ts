@@ -221,6 +221,7 @@ export function parseManifest(
 
   if (m.homepage !== undefined && (typeof m.homepage !== 'string' || !/^https?:\/\//.test(m.homepage))) return { error: 'homepage must be an http(s) URL' }
   if (m.license !== undefined && typeof m.license !== 'string') return { error: 'license must be a string' }
+  if (m.source !== undefined && (typeof m.source !== 'string' || !/^https:\/\/\S+$/.test(m.source) || !URL.canParse(m.source))) return { error: 'source must be an https URL (of the update.json)' }
 
   return {
     id: m.id,
@@ -238,6 +239,7 @@ export function parseManifest(
     ...(chatbar ? { chatbar } : {}),
     ...(m.homepage !== undefined ? { homepage: m.homepage } : {}),
     ...(m.license !== undefined ? { license: m.license } : {}),
+    ...(m.source !== undefined ? { source: m.source } : {}),
   }
 }
 

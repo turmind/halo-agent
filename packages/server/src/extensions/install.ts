@@ -88,9 +88,11 @@ function rand(): string {
  * Install (or replace) an extension from zip bytes. `expectId` — when the
  * caller knows which id it asked for (the skill's `install <id>`) — must match
  * the manifest; the admin upload passes nothing and takes the manifest's id.
+ * `expectVersion` — the update route's update.json version — likewise, so a
+ * mispacked or swapped zip is refused before it replaces a working install.
  * Returns the freshly validated info (installedAt from the final rename).
  */
-export async function installExtensionZip(zipBuf: Buffer, expectId?: string): Promise<ExtensionInfo> {
+export async function installExtensionZip(zipBuf: Buffer, expectId?: string, expectVersion?: string): Promise<ExtensionInfo> {
   const root = extensionsRoot()
   fs.mkdirSync(root, { recursive: true })
 
@@ -103,14 +105,17 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string): Pr
     stripWrapperDir(stage)
 
     let manifestId: string
+    let manifestVersion: unknown
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(stage, MANIFEST_FILE), 'utf-8')) as { id?: unknown }
+      const raw = JSON.parse(fs.readFileSync(path.join(stage, MANIFEST_FILE), 'utf-8')) as { id?: unknown; version?: unknown }
       manifestId = typeof raw.id === 'string' ? raw.id : ''
+      manifestVersion = raw.version
     } catch (err) {
       throw new ExtensionInstallError(`${MANIFEST_FILE} missing or unreadable at the zip root: ${err instanceof Error ? err.message : String(err)}`)
     }
     if (!isExtensionId(manifestId)) throw new ExtensionInstallError(`manifest id "${manifestId}" is not a valid extension id`)
     if (expectId !== undefined && manifestId !== expectId) throw new ExtensionInstallError(`manifest id "${manifestId}" does not match requested "${expectId}"`)
+    if (expectVersion !== undefined && manifestVersion !== expectVersion) throw new ExtensionInstallError(`manifest version "${String(manifestVersion)}" does not match update.json "${expectVersion}"`)
 
     // Pre-check with the scanner's own rules before touching a working install.
     const verdict = readExtensionDir(stage, manifestId)

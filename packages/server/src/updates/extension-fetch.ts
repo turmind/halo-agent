@@ -2,13 +2,14 @@
  * Network half of the update.json protocol (rules: update-json.ts): read one
  * extension's update.json, download the package it names.
  *
- * `fromManifest` = the URL came from the extension's own manifest `source`
- * (author-chosen), so every hop goes through the A2A URL policy — private /
- * loopback / link-local refused unless general.a2a.url_allowlist lists them.
- * The hub base is admin-configured and may well be an intranet host, so it
- * (and the package an update.json read from it names) is not restricted.
+ * Every URL — manifest `source`, the hub base, the package an update.json
+ * names — gets the same treatment: https only (every redirect hop), size cap,
+ * one deadline, ≤ 5 redirects; then sha256 + the package manifest are checked.
+ * No A2A URL policy on purpose: intranet https / S3 / CDN sources must work;
+ * the metadata endpoint (IMDS) is http-only so https-only already excludes it;
+ * extensions are installed by the admin; and a response is only ever parsed
+ * as a strict update.json, never echoed back.
  */
-import { currentAllowlist } from '../a2a/url-policy.js'
 import { httpsGet, HttpsGetError } from './https-get.js'
 import { checkPackageHash, parseUpdateJson, type UpdateInfo } from './update-json.js'
 
@@ -23,26 +24,18 @@ export type UpdateJsonErrorCode =
   | 'not-found'
   /** Reachable, but not a valid update.json for this id. */
   | 'invalid'
-  /** URL refused by the https-only rule or the URL policy. */
+  /** URL refused by the https-only rule. */
   | 'refused'
   /** Network error, timeout, non-2xx other than 404 / 410. */
   | 'unreachable'
 
 export type UpdateJsonResult = { info: UpdateInfo } | { error: string; code: UpdateJsonErrorCode }
 
-export interface FetchOptions {
-  fromManifest: boolean
-}
-
-function allowlistFor(opts: FetchOptions) {
-  return opts.fromManifest ? currentAllowlist() : null
-}
-
 /** Read and validate extension `id`'s update.json at `url`. Never throws. */
-export async function fetchUpdateJson(id: string, url: string, opts: FetchOptions): Promise<UpdateJsonResult> {
+export async function fetchUpdateJson(id: string, url: string): Promise<UpdateJsonResult> {
   let res
   try {
-    res = await httpsGet(url, { maxBytes: UPDATE_JSON_MAX_BYTES, timeoutMs: UPDATE_JSON_TIMEOUT_MS, allowlist: allowlistFor(opts), headers: { accept: 'application/json' } })
+    res = await httpsGet(url, { maxBytes: UPDATE_JSON_MAX_BYTES, timeoutMs: UPDATE_JSON_TIMEOUT_MS, headers: { accept: 'application/json' } })
   } catch (err) {
     const code = err instanceof HttpsGetError && err.code === 'refused' ? 'refused' : err instanceof HttpsGetError && err.code === 'too-large' ? 'invalid' : 'unreachable'
     return { error: err instanceof Error ? err.message : String(err), code }
@@ -59,12 +52,12 @@ export async function fetchUpdateJson(id: string, url: string, opts: FetchOption
  * Download the package `info` names and verify its sha256. Throws
  * HttpsGetError (network / size / timeout / refused) or a plain Error (HTTP
  * status, hash mismatch). The id / version check against the package's own
- * manifest happens at install (update-json.ts checkPackageManifest), once
+ * manifest happens at install (install.ts expectId / expectVersion), once
  * the zip is unpacked. `maxBytes` is the caller's zip cap — the update route
  * passes routes/extensions.ts MAX_ZIP_BYTES, the same cap as an upload.
  */
-export async function downloadPackage(info: UpdateInfo, opts: FetchOptions & { maxBytes: number }): Promise<Buffer> {
-  const res = await httpsGet(info.url, { maxBytes: opts.maxBytes, timeoutMs: PACKAGE_TIMEOUT_MS, allowlist: allowlistFor(opts) })
+export async function downloadPackage(info: UpdateInfo, opts: { maxBytes: number }): Promise<Buffer> {
+  const res = await httpsGet(info.url, { maxBytes: opts.maxBytes, timeoutMs: PACKAGE_TIMEOUT_MS })
   if (res.status < 200 || res.status >= 300) throw new Error(`package download failed: HTTP ${res.status} from ${info.url}`)
   const mismatch = checkPackageHash(res.body, info)
   if (mismatch) throw new Error(mismatch)

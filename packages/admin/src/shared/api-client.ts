@@ -1,5 +1,5 @@
 import type { ChatMessage, Skill } from '@/shared/types'
-import type { CoreUpdateStatus, ExtensionInfo, ExtensionsSnapshot, UpdateScope } from '@turmind/halo-core/protocol'
+import type { CoreUpdateStatus, ExtensionInfo, ExtensionsSnapshot, ExtensionsUpdateStatus } from '@turmind/halo-core/protocol'
 
 const API_BASE = '/api'
 
@@ -709,6 +709,11 @@ export const api = {
     setEnabled(id: string, enabled: boolean) {
       return request<{ ok: boolean; id: string; enabled: boolean }>(`/extensions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) })
     },
+    /** Install the newer version its update.json names (the server re-reads
+     *  and re-judges it; 409 when nothing newer or one is already running). */
+    update(id: string) {
+      return request<ExtensionInfo>(`/extensions/${encodeURIComponent(id)}/update`, { method: 'POST' })
+    },
   },
 
   // Update checks. Both answer with the cached status at once; a check they
@@ -718,9 +723,16 @@ export const api = {
     core() {
       return request<CoreUpdateStatus>('/updates?scope=core')
     },
+    /** Cached status of every installed extension; same 24 h rule. */
+    extensions() {
+      return request<ExtensionsUpdateStatus>('/updates?scope=extensions')
+    },
     /** Force a check (server-side 60 s cooldown). */
-    check(scope: UpdateScope) {
-      return request<CoreUpdateStatus>('/updates/check', { method: 'POST', body: JSON.stringify({ scope }) })
+    checkCore() {
+      return request<CoreUpdateStatus>('/updates/check', { method: 'POST', body: JSON.stringify({ scope: 'core' }) })
+    },
+    checkExtensions() {
+      return request<ExtensionsUpdateStatus>('/updates/check', { method: 'POST', body: JSON.stringify({ scope: 'extensions' }) })
     },
   },
 

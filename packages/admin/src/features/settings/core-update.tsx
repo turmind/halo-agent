@@ -36,7 +36,7 @@ export function CoreUpdate({ version }: { version: string }) {
 
   function check() {
     setRequestError(null)
-    api.updates.check('core')
+    api.updates.checkCore()
       .then(setStatus)
       .catch((err) => setRequestError(err instanceof Error ? err.message : String(err)))
   }

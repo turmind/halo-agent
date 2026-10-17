@@ -90,6 +90,14 @@ describe('parseManifest', () => {
     expect(errorOf(parse({ license: 3 }))).toMatch(/license/)
   })
 
+  it('source is optional and must be an https URL (of the update.json)', () => {
+    expect(parse({ source: 'https://cdn.example.com/x/update.json' })).toMatchObject({ source: 'https://cdn.example.com/x/update.json' })
+    expect(parse({})).not.toHaveProperty('source')
+    for (const source of ['http://x/update.json', 'https://', 'https://a b', '', 3]) {
+      expect(errorOf(parse({ source }))).toBe('source must be an https URL (of the update.json)')
+    }
+  })
+
   // htrans protocol §1: bundle / platforms / media.
   it('bundle: optional boolean, default false, incompatible with save', () => {
     expect(parse({ bundle: true, extensions: ['.htrans'] })).toMatchObject({ bundle: true })
