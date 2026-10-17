@@ -311,14 +311,17 @@ AgentCore ──► front  (PID 1, root, :9000 | :8080; node builtins only — n
   `HealthyBusy`, so a worker whose loop is blocked on EFS IO isn't reaped
   mid-run), `HealthyBusy` while the front runs a hook.
 - Every other request needs `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id`
-  matching `^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$` (AgentCore's 33–256 chars; a
-  leading dot can't match, so `.template` / `.tmp-*` are never served) — else
-  400. Once a microVM serves a session id, any other id is 409: it never
-  switches workspace.
-- **First request:** the base must be mounted (`/proc/self/mountinfo`; EFS
-  arrives only at the first invocation — not yet → 503, retried by the next
-  request). `<base>/<sid>` is created if missing: built in a dot-named
-  `.tmp-<sid>-<rand>` (0700) from `<base>/.template` minus `.halo/sessions`,
+  matching `^[A-Za-z0-9][A-Za-z0-9_-]{32,254}$` — 33–255 chars: AgentCore
+  allows 256, but the id is the dir name and NAME_MAX is 255, so a 256-char id
+  is a 400 rather than a dir that can never be made. A leading dot can't
+  match, so `.template` / `.tmp-*` are never served. Else 400. Once a microVM
+  serves a session id, any other id is 409: it never switches workspace.
+- **First request:** the base must be a mount point (`/proc/self/mountinfo`;
+  EFS arrives only at the first invocation — not yet → 503 "`<base>` is not a
+  mount point …", retried by the next request; a `HALO_WORKSPACE` that isn't
+  the EFS mount path keeps answering it). `<base>/<sid>` is created if
+  missing: built in a dot-named `.tmp-<16 hex>` (0700 — no id in the name, so
+  a long id can't push it past NAME_MAX) from `<base>/.template` minus `.halo/sessions`,
   sqlite files (+ `-wal` / `-shm` / `-journal`), `runtime.lock` and
   `agentcore.lease*`, chowned to 1000:1000 (best effort — an access point that
   enforces 0:0 refuses it and access still works), then renamed in, so a
@@ -332,19 +335,37 @@ AgentCore ──► front  (PID 1, root, :9000 | :8080; node builtins only — n
   agentcore --workspace /workspace -p 9100`, cwd `/workspace`. The allowlist:
   `PATH`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`,
   `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `HALO_LOG_LEVEL`,
-  `HALO_A2A_ACCESS`, `HALO_A2A_PUBLIC_URL`, every `OTEL_*`,
-  `AGENT_OBSERVABILITY_*` and `AWS_CONTAINER_*`, plus `HOME=/home/node` and the
-  front's loopback URL + token. Channel secrets and `HALO_AGENTCORE_NOTIFY`
-  stay with the front.
+  `HALO_A2A_ACCESS`, `HALO_A2A_PUBLIC_URL`, Halo's tuning knobs
+  (`HALO_MAX_CONTEXT_TOKENS`, `HALO_SHELL_TIMEOUT`, `HALO_WEB_FETCH_TIMEOUT`,
+  `HALO_MODEL_TIMEOUT`, `HALO_SESSION_GRACE`, `HALO_TERMINAL_GRACE`,
+  `HALO_MAX_CACHED_SESSIONS`, `HALO_LOG_MAX_SIZE`, `HALO_LOG_MAX_FILES`), every
+  `OTEL_*`, `AGENT_OBSERVABILITY_*` and `AWS_CONTAINER_*`, plus
+  `HOME=/home/node` and the front's loopback URL + token — each named, no
+  `HALO_*` wildcard. Channel secrets, `HALO_AGENTCORE_NOTIFY` and
+  `HALO_PASSWORD` stay with the front.
+- **Models: Bedrock on the runtime role only.** Model keys don't pass either:
+  a `<<OPENAI_API_KEY>>`-style placeholder in `settings.yaml` resolves to
+  nothing in the worker. The worker's credentials are the AWS ones above, so
+  its agents use Bedrock through the runtime's execution role (as the
+  `agentcore-deploy` skill deploys them). Another provider needs its key
+  written as a literal value into the image's `/home/node/.halo` — and is then
+  readable by the agent.
 - The worker is the single-workspace mode on `/workspace`, unchanged (lease,
   run ledger, dbs, `/invocations`), bound to 127.0.0.1; once listening it posts
   `/ready` to the front (push, no probe). No `/ready` within 30 s → 503 for
-  good. The request that triggered the start waits for it, then is proxied;
+  good. The request that triggered the start waits for it, then is proxied
+  (unless its client has gone meanwhile — then nothing reaches the worker);
   hop-by-hop headers dropped, bodies streamed (SSE chunk by chunk), a closed
-  client aborts the upstream request.
-- The worker exiting ends the front with its exit code. SIGTERM / SIGINT to
-  the front go to the worker — its graceful stop
-  releases the lease — and the front exits once it has, SIGKILL after 30 s.
+  client aborts the upstream request, and a worker response cut off mid-body
+  closes the client's too (logged `[AgentCore] front: worker response cut off
+  mid-stream`), so no client hangs on a dead stream. A handler that throws is
+  logged and answered 500, never fatal to the front.
+- The worker exiting ends the front: with the worker's exit code, or 1 when
+  that was 0 or a signal (an unasked-for worker exit is a failure). SIGTERM /
+  SIGINT to the front go to the worker — its graceful stop releases the lease.
+  Either way the front first waits for its own notify work (a MEDIA copy or a
+  hook still running), within the same 30 s budget: SIGKILL to the worker and
+  exit once it is spent.
 
 ### View setup
 
@@ -364,6 +385,13 @@ Fail closed: any failing step or check answers 503 for that request and every
 later one, the worker is never spawned and the setup never re-run (a half-done
 setup must not be served). There is no network step — see
 [the limits](#known-limitations-session-isolation-within-a-runtime).
+
+**503 means "not serving right now", not "give up"** — the reason is the
+body's `error` text, the status alone doesn't say which. Only two are for good
+on this microVM: the view setup failed, and the worker wasn't ready in 30 s.
+The base not being a mount point yet and the workspace lease being held by
+another runtime session (`/invocations`) clear on their own — retry with the
+same id. A caller can't decide to stop retrying from a 503 alone.
 
 ### Notify hand-off
 

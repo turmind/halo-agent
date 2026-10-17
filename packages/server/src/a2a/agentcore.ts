@@ -5,7 +5,8 @@
  * then passes `POST /` (JSON-RPC), `GET /.well-known/agent-card.json` and
  * `GET /ping` through on :9000. The same image serves serverProtocol HTTP
  * (:8080, `POST /invocations` — scheduled jobs, invocations.ts). One fixed
- * workspace (HALO_WORKSPACE — the EFS mount), no per-user dirs.
+ * workspace (HALO_WORKSPACE — the EFS mount); with HALO_AGENTCORE_SESSION_DIRS=1
+ * this is the worker behind agentcore-front.ts, on its session's dir.
  *
  * Single writer: each runtime session id gets its own microVM, all mounting
  * the same workspace. `<ws>/.halo/agentcore.lease` (heartbeat file, plain

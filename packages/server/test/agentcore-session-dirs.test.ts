@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync, symlinkSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -48,10 +48,10 @@ beforeEach(() => { base = realpathSync(mkdtempSync(join(tmpdir(), 'halo-sdirs-')
 afterEach(() => rmSync(base, { recursive: true, force: true }))
 
 describe('pure parts', () => {
-  it('session header: 33–256 chars, [A-Za-z0-9] first, then [A-Za-z0-9_-]; missing / bad → error', () => {
+  it('session header: 33–255 chars (NAME_MAX — the dir name is the id), [A-Za-z0-9] first, then [A-Za-z0-9_-]; missing / bad → error', () => {
     expect(parseSessionHeader(SID_A)).toEqual({ sid: SID_A })
-    expect(parseSessionHeader('a'.repeat(256))).toEqual({ sid: 'a'.repeat(256) })
-    for (const bad of [undefined, '', 'a'.repeat(32), 'a'.repeat(257), `.${'a'.repeat(40)}`, `-${'a'.repeat(40)}`, `${'a'.repeat(40)}/x`, `${'a'.repeat(40)}..`, `${'a'.repeat(40)} `, [SID_A, SID_B]]) {
+    expect(parseSessionHeader('a'.repeat(255))).toEqual({ sid: 'a'.repeat(255) })
+    for (const bad of [undefined, '', 'a'.repeat(32), 'a'.repeat(256), 'a'.repeat(257), `.${'a'.repeat(40)}`, `-${'a'.repeat(40)}`, `${'a'.repeat(40)}/x`, `${'a'.repeat(40)}..`, `${'a'.repeat(40)} `, [SID_A, SID_B]]) {
       expect('error' in parseSessionHeader(bad as never), String(bad)).toBe(true)
     }
     expect((parseSessionHeader(undefined) as { error: string }).error).toMatch(/missing x-amzn-bedrock-agentcore-runtime-session-id/)
@@ -113,18 +113,23 @@ describe('pure parts', () => {
     ])
   })
 
-  it('worker env: allowlist only — channel secrets and the notify command never pass; every OTEL_* does', () => {
+  it('worker env: allowlist only — channel secrets, model keys, the notify command and the password never pass; every OTEL_* and Halo\'s tuning knobs do', () => {
+    const tuning = {
+      HALO_MAX_CONTEXT_TOKENS: '200000', HALO_SHELL_TIMEOUT: '300000', HALO_WEB_FETCH_TIMEOUT: '20000', HALO_MODEL_TIMEOUT: '900000', HALO_SESSION_GRACE: '60000',
+      HALO_TERMINAL_GRACE: '60000', HALO_MAX_CACHED_SESSIONS: '10', HALO_LOG_MAX_SIZE: '1048576', HALO_LOG_MAX_FILES: '2',
+    }
     const env = workerEnv({
       PATH: '/usr/bin', AWS_REGION: 'ap-northeast-1', AWS_DEFAULT_REGION: 'ap-northeast-1', HALO_LOG_LEVEL: 'info',
       HALO_A2A_ACCESS: 'full', HALO_A2A_PUBLIC_URL: 'https://x', OTEL_SERVICE_NAME: 's', OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'true', AGENT_OBSERVABILITY_ENABLED: 'true',
-      AWS_CONTAINER_CREDENTIALS_FULL_URI: 'http://169.254.170.2/x',
-      FEISHU_APP_SECRET: 's1', SLACK_BOT_TOKEN: 's2', TELEGRAM_BOT_TOKEN: 's3', WECOM_WEBHOOK_KEY: 's4', WECOM_BOT_SECRET: 's5',
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: 'http://169.254.170.2/x', ...tuning,
+      FEISHU_APP_SECRET: 's1', SLACK_BOT_TOKEN: 's2', TELEGRAM_BOT_TOKEN: 's3', WECOM_WEBHOOK_KEY: 's4', WECOM_BOT_SECRET: 's5', OPENAI_API_KEY: 'sk-x',
       HALO_AGENTCORE_NOTIFY: 'python3 /opt/notify.py', HALO_AGENTCORE_SESSION_DIRS: '1', HALO_WORKSPACE: '/mnt/efs', HALO_PORT: '8080', HOME: '/root', HALO_PASSWORD: 'p',
+      HALO_JWT_SECRET: 'j', HALO_BADGE: 'DEV',
     }, { url: 'http://127.0.0.1:4000', token: 't0k' })
     expect(env).toEqual({
       PATH: '/usr/bin', AWS_REGION: 'ap-northeast-1', AWS_DEFAULT_REGION: 'ap-northeast-1', HALO_LOG_LEVEL: 'info',
       HALO_A2A_ACCESS: 'full', HALO_A2A_PUBLIC_URL: 'https://x', OTEL_SERVICE_NAME: 's', OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'true', AGENT_OBSERVABILITY_ENABLED: 'true',
-      AWS_CONTAINER_CREDENTIALS_FULL_URI: 'http://169.254.170.2/x',
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: 'http://169.254.170.2/x', ...tuning,
       HOME: '/home/node', [FRONT_URL_ENV]: 'http://127.0.0.1:4000', [FRONT_TOKEN_ENV]: 't0k',
     })
     expect(workerEnv({}, { url: 'u', token: 't' }).PATH).toMatch(/\/usr\/bin/)
@@ -200,6 +205,18 @@ describe('pure parts', () => {
     expect(ensureSessionDir(base, SID_B, null)).toBe(true)
     expect(readdirSync(join(base, SID_B))).toEqual([])
   })
+
+  it('new session dir: ids up to 255 chars build — the temp dir name no longer carries the id (NAME_MAX)', () => {
+    mkdirSync(join(base, '.template'))
+    writeFileSync(join(base, '.template', 'INSTRUCTIONS.md'), 'i')
+    for (const n of [241, 255]) {
+      const sid = 'a'.repeat(n)
+      expect('sid' in parseSessionHeader(sid), String(n)).toBe(true)
+      expect(ensureSessionDir(base, sid, null), String(n)).toBe(true)
+      expect(readFileSync(join(base, sid, 'INSTRUCTIONS.md'), 'utf8')).toBe('i')
+    }
+    expect(readdirSync(base).filter((f) => f.startsWith('.tmp-'))).toEqual([])
+  })
 })
 
 /** A stand-in worker: a small node server on the worker port that answers
@@ -214,6 +231,13 @@ http.createServer(async (req, res) => {
   let body = ''
   for await (const c of req) body += c
   if (req.url === '/ping') return res.end(JSON.stringify({ status: busy ? 'HealthyBusy' : 'Healthy' }))
+  if (req.url === '/' && req.headers['x-cut']) {
+    // A stream that began, then the worker's socket dies mid-body.
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: one\\n\\n')
+    setTimeout(() => res.socket.destroy(), 100)
+    return
+  }
   if (req.url === '/' && req.headers.accept === 'text/event-stream') {
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.write('data: one\\n\\n')
@@ -423,6 +447,101 @@ describe('front', () => {
     let rest = ''
     for (;;) { const r = await reader.read(); if (r.done) break; rest += new TextDecoder().decode(r.value) }
     expect(rest).toBe('data: two\n\n')
+  })
+
+  it('loopback /notify: a body that parses to null / an array / a scalar → 400, and the front keeps serving', async () => {
+    const url = await start()
+    expect((await inv(url, SID_A)).status).toBe(200)
+    for (const bad of [null, [], [{ session: 'inv_1', status: 'ok', text: '' }], 42, 'inv_1', true]) {
+      expect((await loopbackPost('/notify', bad)).status, JSON.stringify(bad)).toBe(400)
+    }
+    expect((await inv(url, SID_A)).status).toBe(200)
+    expect((await loopbackPost('/notify', { session: 'inv_1', status: 'ok', text: 'x' })).status).toBe(202)
+  })
+
+  it('notify: the hook dir can\'t be made (tmp full) → logged, not run, and /ping stops reporting busy', async () => {
+    const warn = vi.spyOn(console, 'warn')
+    const prevTmp = process.env.TMPDIR
+    try {
+      const url = await start()
+      process.env.TMPDIR = join(base, 'no-such-tmp')
+      expect((await inv(url, SID_A)).status).toBe(200)
+      await until(() => warn.mock.calls.some((c) => /notify inv_1: not run/.test(String(c[0]))))
+      let status = ''
+      for (let i = 0; i < 100 && status !== 'Healthy'; i++) {
+        status = ((await (await fetch(`${url}/ping`)).json()) as { status: string }).status
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      expect(status).toBe('Healthy')
+      expect(existsSync(join(out, 'env'))).toBe(false)
+    } finally {
+      if (prevTmp === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = prevTmp
+      warn.mockRestore()
+    }
+  })
+
+  it('a worker stream cut after it began → the client\'s response ends too, and the front logs it', async () => {
+    const warn = vi.spyOn(console, 'warn')
+    try {
+      const url = await start()
+      const res = await fetch(`${url}/`, { method: 'POST', headers: { accept: 'text/event-stream', 'x-cut': '1', [SESSION_HEADER]: SID_A }, body: '{}' })
+      const reader = res.body!.getReader()
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: one\n\n')
+      const drain = (async () => { for (;;) if ((await reader.read()).done) return 'done' })().catch(() => 'error')
+      const end = await Promise.race([drain, new Promise((r) => setTimeout(() => r('hang'), 3000))])
+      expect(end).not.toBe('hang')
+      await until(() => warn.mock.calls.some((c) => /worker response cut off mid-stream/.test(String(c[0]))))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('the client leaves while the worker is starting → nothing is proxied: the worker never sees a connection', async () => {
+    const seen = join(base, 'seen.log')
+    const url = await start({
+      worker: `
+const http = require('node:http'), fs = require('node:fs')
+const log = (s) => fs.appendFileSync(${JSON.stringify(seen)}, s + '\\n')
+const srv = http.createServer((req, res) => { log('req ' + req.url); res.end('{}') })
+srv.on('connection', () => log('conn'))
+srv.listen(Number(process.env.WORKER_PORT), '127.0.0.1', () => setTimeout(async () => {
+  const r = await fetch(process.env.${FRONT_URL_ENV} + '/ready', { method: 'POST', headers: { '${FRONT_TOKEN_HEADER}': process.env.${FRONT_TOKEN_ENV} }, body: '{}' })
+  log('ready ' + r.status)
+}, 400))
+`,
+    })
+    const ac = new AbortController()
+    setTimeout(() => ac.abort(), 100)
+    await expect(fetch(`${url}/invocations`, { method: 'POST', headers: { [SESSION_HEADER]: SID_A }, body: '{}', signal: ac.signal })).rejects.toThrow()
+    await until(() => existsSync(seen) && readFileSync(seen, 'utf8').includes('ready 200'))
+    await new Promise((r) => setTimeout(r, 200))
+    expect(readFileSync(seen, 'utf8')).toBe('ready 200\n')
+    // The next request is served as usual.
+    expect((await inv(url, SID_A)).status).toBe(200)
+    expect(readFileSync(seen, 'utf8')).toMatch(/conn\nreq \/invocations\n$/)
+  })
+
+  it('the worker exits while a notify hook runs → the front exits only once the hook is done', async () => {
+    const url = await start({
+      worker: `
+const http = require('node:http')
+const post = (route, body) => fetch(process.env.${FRONT_URL_ENV} + route, { method: 'POST', headers: { '${FRONT_TOKEN_HEADER}': process.env.${FRONT_TOKEN_ENV} }, body: JSON.stringify(body) })
+http.createServer(async (req, res) => {
+  for await (const _c of req) {}
+  res.end('{}')
+  if (req.url === '/invocations') { await post('/notify', { session: 'inv_1', status: 'ok', text: 'done' }); process.exit(3) }
+}).listen(Number(process.env.WORKER_PORT), '127.0.0.1', () => { post('/ready', {}) })
+`,
+    })
+    process.env.HALO_AGENTCORE_NOTIFY = 'sleep 1; touch "$NOTIFY_OUT/hookdone"'
+    expect((await inv(url, SID_A)).status).toBe(200)
+    await until(() => front!.worker()?.exitCode !== null)
+    expect(exits).toEqual([])
+    expect(existsSync(join(out, 'hookdone'))).toBe(false)
+    await until(() => exits.length > 0)
+    expect(existsSync(join(out, 'hookdone'))).toBe(true)
+    expect(exits).toEqual([3])
   })
 
   it('the loopback endpoint refuses a wrong token', async () => {

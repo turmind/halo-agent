@@ -81,7 +81,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 
 <base>/                               # AgentCore session-dirs mode (HALO_AGENTCORE_SESSION_DIRS=1): HALO_WORKSPACE is a base, not a workspace
 ├── .template/                        # Deployer-synced seed for new session dirs (copied minus .halo/sessions, *.db + sidecars, runtime.lock, agentcore.lease*)
-├── .tmp-<sid>-<rand>/                # A session dir being built (0700); renamed to <sid>/ when complete, never served
+├── .tmp-<16 hex>/                    # A session dir being built (0700); renamed to <sid>/ when complete, never served
 └── <sid>/                            # One workspace per AgentCore runtime session id (owned 1000:1000 where chown is allowed), seen by its worker as /workspace
 ```
 

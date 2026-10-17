@@ -7,12 +7,12 @@
  * view: the front (PID 1, root) answers the first non-/ping request by
  * creating the session dir, bind-mounting it at /workspace and lazily
  * unmounting the base — in its own namespace, once, after which nothing in
- * the VM sees the base — then
- * spawning the WORKER via setpriv: uid/gid 1000, no groups, no capabilities,
- * no_new_privs, `env -i` allowlist. Any setup step failing → 503 for good,
- * the worker never starts. The worker is the plain single-workspace
- * `halo agentcore` on /workspace (lease, run ledger, dbs, /invocations —
- * unchanged) on a loopback port; the front proxies every request to it.
+ * the VM sees the base — then spawning the WORKER via setpriv: uid/gid 1000,
+ * no groups, no capabilities, no_new_privs, `env -i` allowlist. Any setup
+ * step failing → 503 for good, the worker never starts. The worker is the
+ * plain single-workspace `halo agentcore` on /workspace (lease, run ledger,
+ * dbs, /invocations — unchanged) on a loopback port; the front proxies every
+ * request to it.
  *
  * Channel secrets stay in the front's env. The one thing the worker can ask
  * root for is the notify hand-off (loopback, per-boot token — which the agent
@@ -28,14 +28,16 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { pipeline } from 'node:stream'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
 import { FRONT_TOKEN_ENV, FRONT_TOKEN_HEADER, FRONT_URL_ENV, notifyInFlight, runNotify } from './agentcore-notify.js'
 
 export const SESSION_HEADER = 'x-amzn-bedrock-agentcore-runtime-session-id'
-/** AgentCore's runtimeSessionId is 33–256 chars: the dir name is the full id.
+/** AgentCore's runtimeSessionId is 33–256 chars, and the dir name is the full
+ *  id — so 255 (NAME_MAX) is the cap here; a 256-char id gets the 400.
  *  A leading dot can't match, so `.template` (and our `.tmp-*`) is never served. */
-const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$/
+const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{32,254}$/
 /** Loopback port of the worker (127.0.0.1 only). */
 export const WORKER_PORT = 9100
 export const WORKER_UID = 1000
@@ -44,6 +46,8 @@ const WORKER_HOME = '/home/node'
 /** Where the worker sees its session dir. */
 export const WORKER_ROOT = '/workspace'
 const READY_TIMEOUT_MS = 30_000
+/** From SIGTERM (or the worker's exit) to the front's own exit. */
+const STOP_BUDGET_MS = 30_000
 const MAX_NOTIFY_BODY = 16 * 1024 * 1024
 const DEFAULT_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 const TEMPLATE_DIR = '.template'
@@ -103,7 +107,8 @@ function chownTree(dir: string, owner: { uid: number; gid: number }, sid: string
 export function ensureSessionDir(base: string, sid: string, owner: { uid: number; gid: number } | null): boolean {
   const dir = path.join(base, sid)
   if (fs.existsSync(dir)) return false
-  const tmp = path.join(base, `.tmp-${sid}-${crypto.randomBytes(4).toString('hex')}`)
+  // Not `.tmp-<sid>-…`: a long id would push the name past NAME_MAX.
+  const tmp = path.join(base, `.tmp-${crypto.randomBytes(8).toString('hex')}`)
   fs.mkdirSync(tmp, { mode: 0o700 })
   try {
     const template = path.join(base, TEMPLATE_DIR)
@@ -194,8 +199,15 @@ export async function runViewSetup(base: string, sessionDir: string, deps: ViewS
 
 // The runtime role's own credentials, should AgentCore hand them over as env
 // (the SDK chain otherwise reads the metadata service, reachable from the
-// worker anyway) — not channel secrets.
-const PASS_ENV = ['PATH', 'AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'HALO_LOG_LEVEL', 'HALO_A2A_ACCESS', 'HALO_A2A_PUBLIC_URL']
+// worker anyway) — not channel secrets — and Halo's tuning knobs (config.ts),
+// named one by one: no `HALO_*` wildcard, so NOTIFY / PASSWORD never pass.
+// Model keys (`<<OPENAI_API_KEY>>` placeholders) don't either: the worker's
+// model is Bedrock on the role, or a literal key in the image's ~/.halo.
+const PASS_ENV = [
+  'PATH', 'AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'HALO_LOG_LEVEL', 'HALO_A2A_ACCESS', 'HALO_A2A_PUBLIC_URL',
+  'HALO_MAX_CONTEXT_TOKENS', 'HALO_SHELL_TIMEOUT', 'HALO_WEB_FETCH_TIMEOUT', 'HALO_MODEL_TIMEOUT', 'HALO_SESSION_GRACE', 'HALO_TERMINAL_GRACE',
+  'HALO_MAX_CACHED_SESSIONS', 'HALO_LOG_MAX_SIZE', 'HALO_LOG_MAX_FILES',
+]
 const PASS_ENV_PREFIX = ['OTEL_', 'AGENT_OBSERVABILITY_', 'AWS_CONTAINER_']
 
 /** The worker's whole environment (nothing else is inherited — the channel
@@ -231,20 +243,23 @@ export async function copyMediaFile(p: string, root: string, dest: string, max =
     if (!st.isFile()) return 'not a regular file'
     if (st.size > max) return `larger than ${max} bytes`
     const src = await fsp.open(`/proc/self/fd/${pfd}`, 'r')
-    const out = await fsp.open(dest, 'wx', 0o600)
     try {
-      const buf = Buffer.alloc(1024 * 1024)
-      let total = 0
-      for (;;) {
-        const { bytesRead } = await src.read(buf, 0, buf.length, null)
-        if (bytesRead === 0) return null
-        total += bytesRead
-        if (total > max) return `larger than ${max} bytes`
-        await out.write(buf, 0, bytesRead)
+      const out = await fsp.open(dest, 'wx', 0o600)
+      try {
+        const buf = Buffer.alloc(1024 * 1024)
+        let total = 0
+        for (;;) {
+          const { bytesRead } = await src.read(buf, 0, buf.length, null)
+          if (bytesRead === 0) return null
+          total += bytesRead
+          if (total > max) return `larger than ${max} bytes`
+          await out.write(buf, 0, bytesRead)
+        }
+      } finally {
+        await out.close()
       }
     } finally {
       await src.close()
-      await out.close()
     }
   } finally {
     fs.closeSync(pfd)
@@ -289,6 +304,20 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(s)
 }
 
+/** A handler that throws → logged, 500 (or the started response cut), never
+ *  an unhandled rejection: nothing in the front catches those, and one ends PID 1. */
+function guard(name: string, h: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>): http.RequestListener {
+  return async (req, res) => {
+    try {
+      await h(req, res)
+    } catch (err) {
+      console.error(`[AgentCore] front ${name}: ${req.method} ${req.url} failed: ${(err as Error).message}`)
+      if (!res.headersSent) json(res, 500, { error: (err as Error).message })
+      else res.destroy()
+    }
+  }
+}
+
 function readBody(req: http.IncomingMessage, max: number): Promise<string | null> {
   return new Promise((resolve) => {
     let size = 0
@@ -311,7 +340,8 @@ export interface FrontOptions {
   setupView?: (base: string, sessionDir: string) => Promise<void>
   spawnWorker?: (o: { env: Record<string, string>; workerPort: number }) => ChildProcess
   viewRoot?: string
-  /** The worker died (not after a ready timeout, where we keep refusing). */
+  /** The worker died (not after a ready timeout, where we keep refusing);
+   *  called once the front's notify work is done, ≤ STOP_BUDGET_MS later. */
   onWorkerExit: (code: number) => void
 }
 
@@ -322,7 +352,7 @@ type State =
   | { kind: 'failed'; sid: string; why: string }
 
 /** Start the front. Resolves once both listeners are up. */
-export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: http.Server; loopback: http.Server; worker(): ChildProcess | null; close(): void }> {
+export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: http.Server; loopback: http.Server; worker(): ChildProcess | null; whenIdle(ms: number): Promise<void>; close(): void }> {
   const base = fs.realpathSync(o.base)
   const workerPort = o.workerPort ?? WORKER_PORT
   const token = crypto.randomBytes(32).toString('hex')
@@ -334,6 +364,18 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
   let preparing = 0
   let worker: ChildProcess | null = null
   let markReady: (() => void) | null = null
+  const readyTimeoutMs = o.readyTimeoutMs ?? READY_TIMEOUT_MS
+
+  // The front's own notify work (MEDIA copy, then the hook): exiting waits for it.
+  const idle = (): boolean => !notifyInFlight() && preparing === 0
+  const idleWaiters: Array<() => void> = []
+  const settle = (): void => { if (idle()) for (const w of idleWaiters.splice(0)) w() }
+  /** Resolves once no notify is being prepared or run, or after `ms`. */
+  const whenIdle = (ms: number): Promise<void> => new Promise((resolve) => {
+    if (idle()) return resolve()
+    const t = setTimeout(resolve, ms).unref()
+    idleWaiters.push(() => { clearTimeout(t); resolve() })
+  })
 
   const spawnWorker = o.spawnWorker ?? (({ env, workerPort: wp }) => {
     const argv = buildWorkerCommand(env, [process.execPath, process.argv[1], 'agentcore', '--workspace', WORKER_ROOT, '-p', String(wp)])
@@ -344,19 +386,22 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
   // ── loopback: worker → front. The token is readable by the agent (same
   // uid as the worker), so every field here is agent-controlled: the only
   // root action is the deployer's fixed hook, on validated input. ──
-  const loopback = http.createServer(async (req, res) => {
+  const loopback = http.createServer(guard('loopback', async (req, res) => {
     const got = Buffer.from(String(req.headers[FRONT_TOKEN_HEADER] ?? ''))
     const want = Buffer.from(token)
     if (req.method !== 'POST' || got.length !== want.length || !crypto.timingSafeEqual(got, want)) return json(res, 403, { error: 'forbidden' })
     const raw = await readBody(req, MAX_NOTIFY_BODY)
-    // Startup only: resolves the wait for the worker, a no-op route after.
+    // Startup only: resolves the wait for the worker; 404 once it is ready.
     if (req.url === '/ready' && state.kind === 'starting') {
       markReady?.()
       return json(res, 200, { ok: true })
     }
     if (req.url !== '/notify' || !viewReady) return json(res, 404, { error: 'not found' })
-    let b: { session?: unknown; status?: unknown; text?: unknown }
-    try { b = JSON.parse(raw ?? '') as typeof b } catch { return json(res, 400, { error: 'bad body' }) }
+    let parsed: unknown
+    try { parsed = JSON.parse(raw ?? '') } catch { return json(res, 400, { error: 'bad body' }) }
+    // `null` / an array / a scalar parse fine: refuse them before any field is read.
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return json(res, 400, { error: 'bad body' })
+    const b = parsed as { session?: unknown; status?: unknown; text?: unknown }
     if (typeof b.session !== 'string' || !NOTIFY_SESSION_RE.test(b.session) || (b.status !== 'ok' && b.status !== 'error') || typeof b.text !== 'string') return json(res, 400, { error: 'bad body' })
     json(res, 202, { ok: true })
     const cmd = process.env.HALO_AGENTCORE_NOTIFY?.trim()
@@ -365,21 +410,23 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
     // hook's HALO_WORKSPACE and cwd, so notify.py's own "under
     // $HALO_WORKSPACE" check admits the copies and nothing agent-writable.
     preparing++
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-notify-'))
-    const cleanup = (): void => fs.rmSync(dir, { recursive: true, force: true })
+    let dir = ''
+    const cleanup = (): void => { fs.rmSync(dir, { recursive: true, force: true }); settle() }
     try {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-notify-'))
       const text = await copyMediaLines(b.text, viewRoot, dir, b.session)
       runNotify(cmd, text, { HALO_SESSION_ID: b.session, HALO_RUN_STATUS: b.status, HALO_WORKSPACE: dir }, dir, cleanup)
     } catch (err) {
       console.warn(`[AgentCore] notify ${b.session}: not run (${(err as Error).message})`)
-      cleanup()
+      if (dir) cleanup()
     } finally {
       preparing--
+      settle()
     }
-  })
+  }))
 
   const activate = async (sid: string): Promise<void> => {
-    if (!isMounted(base)) throw Object.assign(new Error(`${base} is not mounted yet — refusing to serve the image's empty dir`), { status: 503 })
+    if (!isMounted(base)) throw Object.assign(new Error(`${base} is not a mount point (the EFS not mounted yet, or HALO_WORKSPACE is not its mount path) — refusing to serve the image's empty dir`), { status: 503 })
     const sessionDir = path.join(base, sid)
     if (ensureSessionDir(base, sid, { uid: WORKER_UID, gid: WORKER_GID })) console.log(`[AgentCore] front: created ${sessionDir}`)
     // Once per process and not retried: a half-done setup must never be
@@ -399,9 +446,10 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
     const died = new Promise<never>((_r, reject) => {
       child.on('exit', (code, signal) => {
         exited = true
-        console.error(`[AgentCore] worker exited (${signal ? `signal ${signal}` : `code ${code}`})${state.kind === 'failed' ? '' : ' — front exits'}`)
+        const exits = state.kind !== 'failed'
+        console.error(`[AgentCore] worker exited (${signal ? `signal ${signal}` : `code ${code}`})${!exits ? '' : idle() ? ' — front exits' : ` — front exits once its notify is done (≤ ${STOP_BUDGET_MS / 1000} s)`}`)
         reject(Object.assign(new Error('worker exited during startup'), { status: 503 }))
-        if (state.kind !== 'failed') o.onWorkerExit(code || 1)
+        if (exits) void whenIdle(STOP_BUDGET_MS).then(() => o.onWorkerExit(code || 1))
       })
       child.on('error', (err) => {
         console.error(`[AgentCore] worker spawn failed: ${err.message}`)
@@ -412,7 +460,7 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
     died.catch(() => {})
     let timer: NodeJS.Timeout | undefined
     const timeout = new Promise<never>((_r, reject) => {
-      timer = setTimeout(() => reject(Object.assign(new Error(`worker not ready after ${(o.readyTimeoutMs ?? READY_TIMEOUT_MS) / 1000} s`), { status: 503, fatal: true })), o.readyTimeoutMs ?? READY_TIMEOUT_MS)
+      timer = setTimeout(() => reject(Object.assign(new Error(`worker not ready after ${readyTimeoutMs / 1000} s`), { status: 503, fatal: true })), readyTimeoutMs)
     })
     try {
       await Promise.race([ready, died, timeout])
@@ -422,16 +470,30 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
   }
 
   const proxy = (req: http.IncomingMessage, res: http.ServerResponse): void => {
+    let clientGone = false
     const up = http.request({ host: '127.0.0.1', port: workerPort, method: req.method, path: req.url, headers: endToEnd(req.headers) }, (ur) => {
       res.writeHead(ur.statusCode ?? 502, endToEnd(ur.headers))
-      ur.pipe(res)
+      // Not ur.pipe(res): a worker stream cut mid-body errors `ur` only, and
+      // pipe() would leave the client hanging on a dead (SSE) response.
+      pipeline(ur, res, (err) => {
+        if (!err || clientGone) return
+        console.warn(`[AgentCore] front: worker response cut off mid-stream (${err.message}) — closing the client's`)
+        res.destroy()
+      })
     })
     up.on('error', (err) => {
-      if (!res.headersSent) json(res, 502, { error: `worker unreachable: ${err.message}` })
-      else res.destroy()
+      if (clientGone) return
+      if (!res.headersSent) {
+        console.warn(`[AgentCore] front: worker unreachable (${err.message}) → 502`)
+        json(res, 502, { error: `worker unreachable: ${err.message}` })
+      } else {
+        console.warn(`[AgentCore] front: worker connection lost after the response began (${err.message}) — closing the client's`)
+        res.destroy()
+      }
     })
     // Client gone (an SSE stream closed) → abort upstream, the worker sees it.
-    res.on('close', () => up.destroy())
+    // `up` already destroyed = the worker side ended first (logged above).
+    res.on('close', () => { clientGone = !up.destroyed; up.destroy() })
     req.pipe(up)
   }
 
@@ -452,7 +514,7 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
     json(res, 200, { status })
   }
 
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer(guard('server', async (req, res) => {
     const p = (req.url ?? '/').split('?')[0]
     const m = req.method ?? 'GET'
     if (!isContractPath(m, p)) return json(res, 404, { error: 'not found' })
@@ -491,8 +553,11 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
         return json(res, e.status ?? 500, { error: e.message })
       }
     }
+    // The client left while the worker was starting: its 'close' is already
+    // past, so proxy's abort-upstream listener would never fire.
+    if (res.destroyed) return
     proxy(req, res)
-  })
+  }))
 
   await new Promise<void>((resolve) => loopback.listen(0, '127.0.0.1', resolve))
   await new Promise<void>((resolve) => server.listen(o.port, o.host, resolve))
@@ -501,6 +566,7 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
     server,
     loopback,
     worker: () => worker,
+    whenIdle,
     close() {
       server.closeAllConnections()
       server.close()
@@ -521,14 +587,18 @@ export async function runAgentCoreFront(o: { base: string; port: number }): Prom
   const overlaps = (a: string, b: string) => a === b || a.startsWith(b === '/' ? '/' : `${b}/`)
   if (overlaps(WORKER_ROOT, base) || overlaps(base, WORKER_ROOT)) throw new Error(`HALO_WORKSPACE (${base}) must not overlap ${WORKER_ROOT}`)
   let stopping = false
+  // onWorkerExit already waits for the front's notify work.
   const front = await startAgentCoreFront({ base, port: o.port, onWorkerExit: (code) => process.exit(stopping ? 0 : code) })
   const stop = (): void => {
     if (stopping) return
     stopping = true
     const w = front.worker()
-    if (!w || w.exitCode !== null || w.signalCode !== null) process.exit(0)
+    if (!w || w.exitCode !== null || w.signalCode !== null) {
+      void front.whenIdle(STOP_BUDGET_MS).then(() => process.exit(0))
+      return
+    }
     w.kill('SIGTERM')
-    setTimeout(() => { w.kill('SIGKILL'); process.exit(0) }, 30_000).unref()
+    setTimeout(() => { w.kill('SIGKILL'); process.exit(0) }, STOP_BUDGET_MS).unref()
   }
   process.on('SIGTERM', stop)
   process.on('SIGINT', stop)

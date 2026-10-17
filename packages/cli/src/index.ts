@@ -205,10 +205,12 @@ Environment:
                            invoke URL (…/runtimes/<escaped ARN>/invocations)
   HALO_A2A_ACCESS          Session access level: workspace (default) | full |
                            readonly
-  HALO_AGENTCORE_NOTIFY    Shell command run (sh -c, cwd = workspace) when a
-                           /invocations run finishes: stdin = its final reply,
-                           env + HALO_SESSION_ID, HALO_RUN_STATUS (ok|error),
-                           HALO_WORKSPACE. Runs outside the agent sandbox.
+  HALO_AGENTCORE_NOTIFY    Shell command run (sh -c) when a /invocations run
+                           finishes: stdin = its final reply, env +
+                           HALO_SESSION_ID, HALO_RUN_STATUS (ok|error),
+                           HALO_WORKSPACE (also its cwd: the workspace; with
+                           SESSION_DIRS=1 a root-only 0700 dir holding the
+                           vetted MEDIA copies). Runs outside the agent sandbox.
   HALO_AGENTCORE_SESSION_DIRS=1
                            One workspace per runtime session id: --workspace
                            is the base, the session's dir <base>/<id> (seeded
