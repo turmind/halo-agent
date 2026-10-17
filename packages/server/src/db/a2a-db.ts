@@ -7,7 +7,8 @@
  * webhooks per task), `a2a_push_outbox` (persisted push deliveries, one row
  * per (task, config, event) — the dedupe key). Outbound: `a2a_dispatches`
  * (this server's own sends to remote agents, matched by push id + remote
- * task id when their push lands).
+ * task id when their push lands). AgentCore mode only: `agentcore_invocations`
+ * (`POST /invocations` jobs — the caller's idempotency key, a2a/invocations.ts).
  *
  * Global rather than per-workspace halo.db: the boot jobs (outbox resume,
  * outbound reconcile) scan across workspaces, like the evo / cron / runs dbs.
@@ -86,6 +87,16 @@ CREATE TABLE IF NOT EXISTS a2a_dispatches (
 CREATE INDEX IF NOT EXISTS idx_a2a_dispatch_push ON a2a_dispatches(push_id);
 CREATE INDEX IF NOT EXISTS idx_a2a_dispatch_state ON a2a_dispatches(state);
 CREATE INDEX IF NOT EXISTS idx_a2a_dispatch_ctx ON a2a_dispatches(workspace, remote, remote_context_id);
+
+CREATE TABLE IF NOT EXISTS agentcore_invocations (
+  id          TEXT PRIMARY KEY,
+  request_id  TEXT,
+  session_id  TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  finished_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agentcore_inv_req ON agentcore_invocations(request_id) WHERE request_id IS NOT NULL;
 `
 
 export type A2ADb = Database.Database

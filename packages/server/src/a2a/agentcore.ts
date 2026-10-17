@@ -3,8 +3,9 @@
  * agentcore`, plans/a2a.md §11). The container behind an AgentCore runtime
  * with serverProtocol A2A: AgentCore verifies the caller's signed request,
  * then passes `POST /` (JSON-RPC), `GET /.well-known/agent-card.json` and
- * `GET /ping` through on :9000. One fixed workspace (HALO_WORKSPACE — the EFS
- * mount), no per-user dirs.
+ * `GET /ping` through on :9000. The same image serves serverProtocol HTTP
+ * (:8080, `POST /invocations` — scheduled jobs, invocations.ts). One fixed
+ * workspace (HALO_WORKSPACE — the EFS mount), no per-user dirs.
  *
  * Single writer: each runtime session id gets its own microVM, all mounting
  * the same workspace. `<ws>/.halo/agentcore.lease` (heartbeat file, plain
@@ -21,8 +22,13 @@ import crypto from 'node:crypto'
 import { Hono } from 'hono'
 import { config } from '../config.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
+import type { SessionManager } from '../agents/session-manager.js'
 import { RUNTIME_LOCK_FILE } from '../agents/workspace-runtime-lock.js'
-import { CHAT_ACCESS_LEVELS, type AccountAccessLevel } from '../channels/shared/accounts.js'
+import { readReplyTo, writeReplyTo, clearReplyTo } from '../agents/relay.js'
+import { loadAgentYaml } from '../agents/agent-loader.js'
+import { resolveDefaultAgentId } from '../channels/shared/commands.js'
+import { CHAT_ACCESS_LEVELS, sessionAccess, type AccountAccessLevel } from '../channels/shared/accounts.js'
+import { isHiddenWorkspacePath } from '../tools/sandbox.js'
 import { createA2ADb, setA2ADb } from '../db/a2a-db.js'
 import { createRunsDb, setRunsDb } from '../db/runs-db.js'
 import { setDurableDbDir } from '../db/durability.js'
@@ -31,6 +37,7 @@ import { CARD_FILE, publicOrigin, type A2ACaller, type A2AStrategies } from './e
 import { createA2ARoutes } from './routes.js'
 import { hasPendingPushes, startPushSender } from './push.js'
 import { reconcileOpenDispatches } from './outbound.js'
+import { createInvocation, deleteInvocation, findInvocation, notifyInFlight, supersedeInvocation } from './invocations.js'
 import { CARD_SUFFIX, RPC, rpcError } from './wire.js'
 
 export const LEASE_FILE = 'agentcore.lease'
@@ -235,6 +242,134 @@ export function seedAgentCard(workspace: string): boolean {
   }
 }
 
+// ── /invocations ──────────────────────────────────────────────────────
+
+const MAX_INVOCATION_BODY = 1024 * 1024
+const MAX_PROMPT_FILE = 1024 * 1024
+/** Root session ids only (no `>`): the id names the session log file. Same
+ *  charset as routes/cron.ts SESSION_ID_RE. */
+const INV_SESSION_RE = /^[A-Za-z0-9_:-]{1,200}$/
+/** An agent id is a directory name under agents/ — no separators, no leading dot. */
+const INV_AGENT_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
+/** Model-bound only, ahead of the job prompt: a scheduled job is unattended by
+ *  construction — the reason and wording of cron/runner.ts UNATTENDED_PREAMBLE. */
+const UNATTENDED_PREAMBLE = '[Unattended scheduled run — nobody will answer questions. Deliver the result directly; if genuinely blocked, state what\'s blocked in one line and stop.]'
+
+export interface InvocationRequest { prompt: string | null; promptFile: string | null; session: string | null; agent: string | null; id: string | null }
+
+function optStr(v: unknown, key: string, re?: RegExp): string | null {
+  if (v === undefined || v === null) return null
+  if (typeof v !== 'string' || !v.trim()) throw new Error(`${key} must be a non-empty string`)
+  if (re && !re.test(v)) throw new Error(`${key} has an invalid format`)
+  return v
+}
+
+/** Request shape only (no workspace access): an error string = 400. */
+export function parseInvocation(raw: string): InvocationRequest | string {
+  if (raw.length > MAX_INVOCATION_BODY) return 'request body too large'
+  let b: Record<string, unknown>
+  try { b = JSON.parse(raw) as Record<string, unknown> } catch { return 'body must be JSON' }
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return 'body must be a JSON object'
+  try {
+    const req: InvocationRequest = {
+      prompt: optStr(b.prompt, 'prompt'),
+      promptFile: optStr(b.promptFile, 'promptFile'),
+      session: optStr(b.session, 'session', INV_SESSION_RE),
+      agent: optStr(b.agent, 'agent', INV_AGENT_RE),
+      id: optStr(b.id, 'id'),
+    }
+    if (req.id && req.id.length > 256) return 'id is longer than 256 chars'
+    if (!req.prompt === !req.promptFile) return 'exactly one of prompt / promptFile is required'
+    return req
+  } catch (err) { return (err as Error).message }
+}
+
+/** promptFile → its text: a regular file inside the workspace, not a hidden
+ *  runtime path (sessions, dbs). An error string = 400. */
+function readPromptFile(workspace: string, rel: string): string | { error: string } {
+  let real: string
+  try { real = fs.realpathSync(path.resolve(workspace, rel)) } catch { return { error: `promptFile not found: ${rel}` } }
+  if (!real.startsWith(workspace + path.sep) || isHiddenWorkspacePath(real, workspace)) return { error: `promptFile must be a file inside the workspace: ${rel}` }
+  const st = fs.statSync(real)
+  if (!st.isFile()) return { error: `promptFile is not a regular file: ${rel}` }
+  if (st.size > MAX_PROMPT_FILE) return { error: `promptFile is larger than ${MAX_PROMPT_FILE} bytes: ${rel}` }
+  const text = fs.readFileSync(real, 'utf8')
+  return text.trim() ? text : { error: `promptFile is empty: ${rel}` }
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return String((err as { code?: unknown })?.code ?? '').startsWith('SQLITE_CONSTRAINT')
+}
+
+type InvocationReply = [200 | 400 | 409, Record<string, unknown>]
+
+/**
+ * Dispatch one job — create or resume the session, point its `reply_to` at
+ * the job, send (a2a/routes.ts dispatchMessage's order). The same `id` seen
+ * before answers `duplicate` and runs nothing; the dedupe re-check right
+ * before the insert sits in the same synchronous slice, so two concurrent
+ * retries can't both run (the unique index is the cross-process backstop).
+ */
+export async function startInvocation(sm: SessionManager, workspace: string, accessLevel: AccountAccessLevel, req: InvocationRequest): Promise<InvocationReply> {
+  const dup = (): InvocationReply | null => {
+    const row = req.id ? findInvocation(req.id) : null
+    return row ? [200, { status: 'duplicate', session: row.session_id, id: req.id }] : null
+  }
+  const early = dup()
+  if (early) return early
+
+  let prompt = req.prompt ?? ''
+  if (req.promptFile) {
+    const r = readPromptFile(workspace, req.promptFile)
+    if (typeof r !== 'string') return [400, r]
+    prompt = r
+  }
+  const sessionId = req.session ?? `inv_${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`
+  const exists = sm.getSessionById(sessionId) !== null
+  let agentId: string | null = null
+  if (!exists) {
+    if (req.agent) {
+      const yaml = await loadAgentYaml(req.agent, workspace)
+      if (!yaml || yaml.internal === true) return [400, { error: `unknown agent: ${req.agent}` }]
+    }
+    agentId = req.agent ?? await resolveDefaultAgentId(sm, workspace)
+  }
+  // An existing session keeps its agent; `agent` applies only when creating it.
+  const owed = exists ? readReplyTo(sm.getDb(), sessionId) : null
+  if (owed && !('invocation' in owed)) return [409, { error: `session ${sessionId} is serving an A2A task or relay — pick another session` }]
+
+  // Synchronous from the re-check to the insert (see the doc comment).
+  const late = dup()
+  if (late) return late
+  let invId: string
+  try {
+    invId = createInvocation(req.id, sessionId)
+  } catch (err) {
+    const raced = isUniqueViolation(err) ? dup() : null
+    if (raced) return raced
+    throw err
+  }
+
+  try {
+    const level = sessionAccess(accessLevel)
+    if (agentId) await sm.createSession(agentId, null, 'AgentCore invocation', undefined, sessionId, undefined, level)
+    // A job still owed on this session (busy, or cut off and never resumed):
+    // the new one takes the pointer — one notify, at the end, for both.
+    if (owed) supersedeInvocation(owed.invocation, invId)
+    writeReplyTo(sm.getDb(), sessionId, { invocation: invId })
+    const stamp = sm.appendUserMessage(sessionId, prompt)
+    const state = await sm.sendUserMessage(sessionId, `${UNATTENDED_PREAMBLE}\n\n${prompt}`, undefined, level, stamp)
+    console.log(`[AgentCore] invocation ${invId}${req.id ? ` (id ${req.id})` : ''} → ${sessionId} (${agentId ? 'new' : 'resumed'}, ${state})`)
+  } catch (err) {
+    // Nothing reached the session: free the key so the caller's retry runs.
+    const to = readReplyTo(sm.getDb(), sessionId)
+    if (to && 'invocation' in to && to.invocation === invId) clearReplyTo(sm.getDb(), sessionId)
+    deleteInvocation(invId)
+    throw err
+  }
+  return [200, { status: 'accepted', session: sessionId, id: req.id }]
+}
+
 // ── routes + boot ─────────────────────────────────────────────────────
 
 export function createAgentCoreA2ARoutes(deps: { registry: SessionManagerRegistry; workspace: string; accessLevel: AccountAccessLevel; lease: { readonly held: boolean; acquire(): Promise<boolean> }; activate: () => void }): Hono {
@@ -247,7 +382,7 @@ export function createAgentCoreA2ARoutes(deps: { registry: SessionManagerRegistr
   app.use('*', async (c, next) => {
     const p = c.req.path
     const m = c.req.method
-    const ok = m === 'POST' ? p === '/' : m === 'GET' && (p === '/ping' || p === CARD_PATH)
+    const ok = m === 'POST' ? p === '/' || p === '/invocations' : m === 'GET' && (p === '/ping' || p === CARD_PATH)
     return ok ? next() : c.json({ error: 'not found' }, 404)
   })
 
@@ -263,11 +398,29 @@ export function createAgentCoreA2ARoutes(deps: { registry: SessionManagerRegistr
   // Transitions only: shows in the runtime log why a microVM is kept alive.
   let lastStatus = ''
   app.get('/ping', (c) => {
-    const busy = lease.held && ((registry.peekResolved(workspace)?.hasRunningSessions() ?? false) || hasPendingPushes())
+    const busy = lease.held && ((registry.peekResolved(workspace)?.hasRunningSessions() ?? false) || hasPendingPushes() || notifyInFlight())
     const status = busy ? 'HealthyBusy' : 'Healthy'
     if (status !== lastStatus) console.log(`[AgentCoreA2A] /ping → ${status}`)
     lastStatus = status
     return c.json({ status })
+  })
+
+  // Plain-HTTP job entry (AgentCore serverProtocol HTTP; EventBridge Scheduler
+  // can't send A2A). Same lease gate + nudge wait as `POST /`; answers at once,
+  // the run continues and ends in the notify hook (invocations.ts).
+  app.post('/invocations', async (c) => {
+    const req = parseInvocation(await c.req.text())
+    if (typeof req === 'string') return c.json({ error: req }, 400)
+    if (!(await lease.acquire())) return c.json({ error: LEASE_BUSY }, 503)
+    await nudgesSettled(workspace)
+    try {
+      const [status, body] = await startInvocation(registry.getOrCreate(workspace), workspace, deps.accessLevel, req)
+      return c.json(body, status)
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err)
+      console.error(`[AgentCore] invocation dispatch failed: ${why}`)
+      return c.json({ error: `dispatch failed: ${why}` }, 500)
+    }
   })
 
   app.post('/', async (c, next) => {
