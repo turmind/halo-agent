@@ -326,7 +326,8 @@ function newRunId(): string {
  *      belongs to our cli (no `ps -o args=`; WMI/PowerShell are heavyweight),
  *      so with pid reuse a `taskkill /T /F` risks taking down an unrelated
  *      process tree. Mis-kill risk outweighs the double-write risk we accept.
- *   d. mark the row 'failed' regardless so the UI drops the ghost 'running'.
+ *   d. mark the row 'failed' regardless so the UI drops the ghost 'running';
+ *      a one-shot's job row too (enabled=0, 'failed'), as finalize would.
  *   e. release `_inflight` once the orphan is confirmed dead (or immediately
  *      when there was nothing to kill).
  *
@@ -383,6 +384,12 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
     }).where(eq(cronRuns.id, runId)).run()
     broadcast({ type: 'cron:run_changed', jobId, runId, status: 'failed' })
     console.log(`[Cron] orphan sweep: run ${runId} (job ${jobId}) — ${disposition}`)
+    // A one-shot's job row gets the terminal state finalize would have
+    // written — its one fire is over, so it must not sit enabled past runAt.
+    if (job?.runAt) {
+      db.update(cronJobs).set({ enabled: 0, lastRunStatus: 'failed', lastRunAt: now, lastRunId: runId, updatedAt: now }).where(eq(cronJobs.id, jobId)).run()
+      broadcast({ type: 'cron:job_changed', jobId, lastRunStatus: 'failed', lastRunAt: now, ...jobChangedFields(job) })
+    }
 
     if (!needsKill || pid == null) {
       // (e) Nothing alive to wait for — release immediately.

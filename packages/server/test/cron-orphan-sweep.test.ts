@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { eq } from 'drizzle-orm'
 import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src/db/cron-db.js'
-import { sweepOrphanRuns, runJob, _inflight } from '../src/cron/runner.js'
+import { sweepOrphanRuns, runJob, reloadAll, stopCronDaemon, _inflight } from '../src/cron/runner.js'
 
 /**
  * Contract: boot-time orphan sweep (`sweepOrphanRuns`) — a previous server
@@ -170,6 +170,45 @@ describe('sweepOrphanRuns', () => {
 
       await delay(500)
       expect(_inflight.has('job-term')).toBe(false)
+    },
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'a one-shot with a live orphan: its job row is finalized failed + disabled, the boot reload arms nothing',
+    async () => {
+      const now = Date.now()
+      db.insert(cronJobs).values({
+        id: 'job-once', workspacePath: tmpHome, agentId: 'default', userPrompt: 'noop',
+        schedule: '', runAt: now - 60_000, targets: '[]', enabled: 1, createdAt: now, updatedAt: now,
+      }).run()
+      insertJob('job-rec') // recurring: its job row is left alone
+      const { child, exited } = spawnFakeOrphan('job-once', /* ignoreSigterm */ true)
+      await delay(150)
+      insertRunningRun('run-once', 'job-once', child.pid!)
+      insertRunningRun('run-rec', 'job-rec', null)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const timer = vi.spyOn(globalThis, 'setTimeout')
+      try {
+        // Boot order (startCronDaemon): sweep, then reload.
+        sweepOrphanRuns({ graceMs: 300 })
+        expect(_inflight.has('job-once')).toBe(true)
+        timer.mockClear()
+        reloadAll()
+
+        const job = (id: string) => db.select().from(cronJobs).where(eq(cronJobs.id, id)).get()!
+        expect(job('job-once')).toMatchObject({ enabled: 0, lastRunStatus: 'failed', lastRunId: 'run-once' })
+        expect(job('job-once').lastRunAt).toBe(getRun('run-once')?.completedAt)
+        expect(job('job-rec')).toMatchObject({ enabled: 1, lastRunStatus: null, lastRunId: null })
+        expect(warn.mock.calls.some((c) => String(c[0]).includes('marking missed'))).toBe(false)
+        // Only job-rec is armed by the reload; job-once gets no timer.
+        expect(timer).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.restoreAllMocks()
+        stopCronDaemon()
+        child.kill('SIGKILL')
+        await exited
+      }
     },
   )
 })
