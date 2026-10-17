@@ -48,6 +48,7 @@ const MAX_NOTIFY_BODY = 16 * 1024 * 1024
 const DEFAULT_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 const TEMPLATE_DIR = '.template'
 const SETUP_TIMEOUT_MS = 30_000
+const MAX_UMOUNTS = 5
 /** Per MEDIA file handed to the hook (WeCom's file cap, the largest in notify.py). */
 export const MAX_MEDIA_BYTES = 20 * 1024 * 1024
 /** Linux O_PATH (same value on x86_64 and arm64); Node doesn't export it. */
@@ -68,13 +69,14 @@ export function parseSessionHeader(v: string | string[] | undefined): { sid: str
   return { sid: v }
 }
 
-/** Is `dir` a mount point, per /proc/self/mountinfo text (field 5, octal-escaped)? */
-export function isMountPoint(dir: string, mountinfo: string): boolean {
+/** How many mounts are stacked on `dir`, per /proc/self/mountinfo text
+ *  (field 5, octal-escaped); 0 = not a mount point. */
+export function mountLayers(dir: string, mountinfo: string): number {
   const unescape = (s: string) => s.replace(/\\([0-7]{3})/g, (_m, o: string) => String.fromCharCode(parseInt(o, 8)))
-  return mountinfo.split('\n').some((line) => {
+  return mountinfo.split('\n').filter((line) => {
     const f = line.split(' ')
     return f.length > 4 && unescape(f[4]) === dir
-  })
+  }).length
 }
 
 /** Template entries never copied into a new session dir: Halo sessions,
@@ -134,13 +136,12 @@ export function ensureSessionDir(base: string, sid: string, owner: { uid: number
 /**
  * The once-per-process view setup, run as root in the front's own (the VM's
  * main) mount namespace, in this order: bind the session dir at /workspace
- * first, then lazy-umount the base.
+ * first, then lazy-umount the base (runViewSetup, until no layer is left).
  */
-export function buildSetupCommands(base: string, sessionDir: string): string[][] {
+export function buildSetupCommands(sessionDir: string): string[][] {
   return [
     ['mkdir', '-p', WORKER_ROOT],
     ['mount', '--bind', sessionDir, WORKER_ROOT],
-    ['umount', '-l', base],
     // No per-uid block on TCP 2049 here: the microVM has no CAP_NET_ADMIN and no Landlock, so
     // EFS egress is closed at the infra layer by the EFS file-system policy (agentcore-deploy skill).
   ]
@@ -159,18 +160,36 @@ export function buildWorkerCommand(env: Record<string, string>, command: string[
 
 const execFileP = promisify(execFile)
 
-/** Run the setup; any failing step, or the base still visible afterwards (a
- *  stacked mount), throws — the caller never spawns the worker then. */
-async function runViewSetup(base: string, sessionDir: string, isMounted: (b: string) => boolean): Promise<void> {
-  for (const argv of buildSetupCommands(base, sessionDir)) {
+/** What runViewSetup touches: the mountinfo text and command execution. */
+export interface ViewSetupDeps {
+  mountinfo: () => string
+  exec: (argv: string[]) => Promise<unknown>
+}
+
+const readMountinfo = (): string => fs.readFileSync('/proc/self/mountinfo', 'utf8')
+const SYSTEM_SETUP: ViewSetupDeps = {
+  mountinfo: readMountinfo,
+  exec: (argv) => execFileP(argv[0], argv.slice(1), { timeout: SETUP_TIMEOUT_MS }),
+}
+
+/** Run the setup; any failing step, or the base still visible afterwards,
+ *  throws — the caller never spawns the worker then. */
+export async function runViewSetup(base: string, sessionDir: string, deps: ViewSetupDeps = SYSTEM_SETUP): Promise<void> {
+  const run = async (argv: string[]): Promise<void> => {
     try {
-      await execFileP(argv[0], argv.slice(1), { timeout: SETUP_TIMEOUT_MS })
+      await deps.exec(argv)
     } catch (err) {
       const e = err as Error & { stderr?: string }
       throw new Error(`view setup failed at \`${argv.join(' ')}\`: ${(e.stderr || e.message).trim()}`)
     }
   }
-  if (isMounted(base) || fs.existsSync(sessionDir)) throw new Error(`view setup: ${base} is still visible after umount -l`)
+  for (const argv of buildSetupCommands(sessionDir)) await run(argv)
+  // The base can carry stacked mounts (the platform's overlay bind under the
+  // nfs4 one) and each umount pops only the top one — so repeat, bounded.
+  for (let i = 0; i < MAX_UMOUNTS && mountLayers(base, deps.mountinfo()) > 0; i++) await run(['umount', '-l', base])
+  const left = mountLayers(base, deps.mountinfo())
+  if (left > 0) throw new Error(`view setup: ${base} still has ${left} mount(s) after ${MAX_UMOUNTS} × umount -l`)
+  if (fs.existsSync(sessionDir)) throw new Error(`view setup: ${base} is still visible after umount -l`)
 }
 
 // The runtime role's own credentials, should AgentCore hand them over as env
@@ -307,8 +326,8 @@ export async function startAgentCoreFront(o: FrontOptions): Promise<{ server: ht
   const base = fs.realpathSync(o.base)
   const workerPort = o.workerPort ?? WORKER_PORT
   const token = crypto.randomBytes(32).toString('hex')
-  const isMounted = o.isMounted ?? ((b: string) => isMountPoint(b, fs.readFileSync('/proc/self/mountinfo', 'utf8')))
-  const setupView = o.setupView ?? ((b: string, dir: string) => runViewSetup(b, dir, isMounted))
+  const isMounted = o.isMounted ?? ((b: string) => mountLayers(b, readMountinfo()) > 0)
+  const setupView = o.setupView ?? ((b: string, dir: string) => runViewSetup(b, dir))
   const viewRoot = o.viewRoot ?? WORKER_ROOT
   let state: State = { kind: 'idle' }
   let viewReady = false

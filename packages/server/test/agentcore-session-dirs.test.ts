@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import {
-  parseSessionHeader, isMountPoint, skipTemplateEntry, ensureSessionDir, buildSetupCommands, buildWorkerCommand, workerEnv,
+  parseSessionHeader, mountLayers, skipTemplateEntry, ensureSessionDir, buildSetupCommands, runViewSetup, buildWorkerCommand, workerEnv,
   copyMediaFile, copyMediaLines, isContractPath, startAgentCoreFront, SESSION_HEADER,
 } from '../src/a2a/agentcore-front.js'
 import { FRONT_TOKEN_ENV, FRONT_TOKEN_HEADER, FRONT_URL_ENV } from '../src/a2a/agentcore-notify.js'
@@ -22,6 +22,27 @@ import { FRONT_TOKEN_ENV, FRONT_TOKEN_HEADER, FRONT_URL_ENV } from '../src/a2a/a
 const SID_A = 'job-english-coach-000000000000000000000'
 const SID_B = 'user-bob-00000000000000000000000000000'
 
+/** /mnt/efs as the rebuilt R1 image has it: the platform's overlay bind, nfs4 on top. */
+const TWO_LAYERS = [
+  '551 527 0:22 /mnt/efs /mnt/efs rw,noatime master:1 - overlay overlayfs:/overlay/root rw,lowerdir=/,upperdir=/overlay/root,workdir=/overlay/work',
+  '495 551 0:50 / /mnt/efs rw,relatime master:255 - nfs4 127.0.0.1:/ rw,vers=4.1,port=20641',
+]
+
+/** A mock mountinfo over `layers` on /mnt/efs: each `umount -l` pops the top
+ *  one (none when `stuck`); every argv run is recorded. */
+function stackedBase(layers: string[], o: { stuck?: boolean } = {}) {
+  const stack = [...layers]
+  const calls: string[][] = []
+  const deps = {
+    mountinfo: () => ['22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/root rw', ...stack].join('\n'),
+    exec: async (argv: string[]) => {
+      calls.push(argv)
+      if (argv[0] === 'umount' && !o.stuck) stack.pop()
+    },
+  }
+  return { deps, calls }
+}
+
 let base: string
 beforeEach(() => { base = realpathSync(mkdtempSync(join(tmpdir(), 'halo-sdirs-'))) })
 afterEach(() => rmSync(base, { recursive: true, force: true }))
@@ -36,16 +57,16 @@ describe('pure parts', () => {
     expect((parseSessionHeader(undefined) as { error: string }).error).toMatch(/missing x-amzn-bedrock-agentcore-runtime-session-id/)
   })
 
-  it('mount point from mountinfo: field 5, octal escapes; a subdir of a mount is not one', () => {
+  it('mount layers from mountinfo: field 5, octal escapes, stacked mounts counted; a subdir of a mount is not one', () => {
     const info = [
       '22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/root rw',
-      '95 22 0:50 / /mnt/efs rw,relatime shared:40 - nfs4 fs-1.efs.amazonaws.com:/ rw',
+      ...TWO_LAYERS,
       '96 22 0:51 / /mnt/with\\040space rw - tmpfs tmpfs rw',
     ].join('\n')
-    expect(isMountPoint('/mnt/efs', info)).toBe(true)
-    expect(isMountPoint('/mnt/with space', info)).toBe(true)
-    expect(isMountPoint('/mnt/efs/x', info)).toBe(false)
-    expect(isMountPoint('/mnt', info)).toBe(false)
+    expect(mountLayers('/mnt/efs', info)).toBe(2)
+    expect(mountLayers('/mnt/with space', info)).toBe(1)
+    expect(mountLayers('/mnt/efs/x', info)).toBe(0)
+    expect(mountLayers('/mnt', info)).toBe(0)
   })
 
   it('contract paths are exact', () => {
@@ -61,12 +82,26 @@ describe('pure parts', () => {
     for (const rel of ['.halo', '.halo/agents', '.halo/agents/coach/agent.yaml', '.halo/sessions-notes.md', 'INSTRUCTIONS.md', 'scripts/tts_polly.py', 'data/x.dbx']) expect(skipTemplateEntry(rel), rel).toBe(false)
   })
 
-  it('view setup: bind the session dir at /workspace, then lazy-umount the base (no iptables — the VM has no CAP_NET_ADMIN)', () => {
-    expect(buildSetupCommands('/mnt/efs', `/mnt/efs/${SID_A}`)).toEqual([
+  it('view setup: bind the session dir at /workspace (no iptables — the VM has no CAP_NET_ADMIN), then lazy-umount the base', async () => {
+    expect(buildSetupCommands(`/mnt/efs/${SID_A}`)).toEqual([
       ['mkdir', '-p', '/workspace'],
       ['mount', '--bind', `/mnt/efs/${SID_A}`, '/workspace'],
-      ['umount', '-l', '/mnt/efs'],
     ])
+    const one = stackedBase(TWO_LAYERS.slice(1))
+    await runViewSetup('/mnt/efs', `/mnt/efs/${SID_A}`, one.deps)
+    expect(one.calls).toEqual([...buildSetupCommands(`/mnt/efs/${SID_A}`), ['umount', '-l', '/mnt/efs']])
+  })
+
+  it('view setup: umount -l once per stacked layer (overlay bind under nfs4, as on the microVM)', async () => {
+    const two = stackedBase(TWO_LAYERS)
+    await runViewSetup('/mnt/efs', `/mnt/efs/${SID_A}`, two.deps)
+    expect(two.calls.filter((a) => a[0] === 'umount')).toEqual([['umount', '-l', '/mnt/efs'], ['umount', '-l', '/mnt/efs']])
+  })
+
+  it('view setup: a layer that never pops → fails after 5 × umount -l, naming what is left', async () => {
+    const stuck = stackedBase(TWO_LAYERS, { stuck: true })
+    await expect(runViewSetup('/mnt/efs', `/mnt/efs/${SID_A}`, stuck.deps)).rejects.toThrow('/mnt/efs still has 2 mount(s) after 5 × umount -l')
+    expect(stuck.calls.filter((a) => a[0] === 'umount')).toHaveLength(5)
   })
 
   it('worker command: setpriv uid AND gid 1000, no groups, every cap cleared, no_new_privs, then env -i <allowlist>', () => {
@@ -235,7 +270,8 @@ describe('front', () => {
       isMounted: () => mounted,
       setupView: async (b, dir) => {
         setups.push([b, dir])
-        if (setupFails) throw new Error('view setup failed at `umount -l /mnt/efs`: target is busy')
+        // The real setup over a base whose layers never pop.
+        if (setupFails) await runViewSetup(b, dir, stackedBase(TWO_LAYERS.map((l) => l.replaceAll('/mnt/efs', b)), { stuck: true }).deps)
       },
       spawnWorker: ({ env, workerPort: wp }): ChildProcess => {
         spawned.push({ env })
@@ -338,12 +374,12 @@ describe('front', () => {
     expect(readdirSync(base)).toEqual([])
   })
 
-  it('view setup fails → 503 for this and every later request, the worker never spawned, setup never retried', async () => {
+  it('view setup fails (the base never unmounts) → 503 for this and every later request, the worker never spawned, setup never retried', async () => {
     setupFails = true
     const url = await start()
     const r1 = await inv(url, SID_A)
     expect(r1.status).toBe(503)
-    expect(((await r1.json()) as { error: string }).error).toMatch(/umount -l/)
+    expect(((await r1.json()) as { error: string }).error).toMatch(/still has 2 mount\(s\) after 5 × umount -l/)
     setupFails = false
     expect((await inv(url, SID_A)).status).toBe(503)
     expect(setups).toHaveLength(1)
