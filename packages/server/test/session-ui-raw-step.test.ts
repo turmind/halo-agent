@@ -991,4 +991,53 @@ describe('7. a foreign write on either log rewrites both from memory', () => {
     expect(uiReplies()).toEqual(['reply one', 'reply two'])
     expect(timers.has('o1')).toBe(false)
   })
+
+  /** Another process's raw-only write (a Stop fold) leaves the UI log this
+   *  process's own: the dropped UIState's pending debounced write lands as
+   *  usual instead of being cancelled. Mutation: always cancel → red. */
+  it.each(['turn start', 'query_session'] as const)('a raw-only write elsewhere: the dropped state\'s pending write still lands (%s)', async (via) => {
+    seedRow(sm, 'o1')
+    // The view's build answers a query_session wake (the session is kept);
+    // a turn start drops it and restores with the third.
+    scriptBuilds(sm, [replying('reply one'), replying('reply three'), replying('reply three')])
+    await realTurn(sm, 'admin one')
+    await sm.getSessionContext('o1')   // a view keeps the session; the UIState stays cached
+    sm.emitEvent('o1', { type: 'system', text: 'late notice' })   // debounced
+    const other = await otherProcess(replying('unused'))
+    await other.getSessionContext('o1')
+    live(other).get('o1')!.messageQueue.push({ text: 'folded elsewhere' })
+    other.stopUserSession('o1')        // a raw-only write
+    const timers = (sm as unknown as { uiStore: { persistTimers: Map<string, unknown> } }).uiStore.persistTimers
+    expect(timers.has('o1')).toBe(true)   // still pending at the drop
+
+    if (via === 'turn start') await realTurn(sm, 'admin three')
+    else {
+      await sm.querySession('o1', 'src', 'report')
+      await vi.waitFor(() => expect(live(sm).has('o1')).toBe(false))
+    }
+
+    expect(ui('o1').some((m) => m.content === 'late notice')).toBe(true)
+    expect(raw('o1').some((m) => rawText(m).includes('folded elsewhere'))).toBe(true)
+    expect(uiReplies()).toEqual(['reply one', 'reply three'])
+  })
+
+  /** A cold wake (root not in memory): ensureSession's restore has just
+   *  checked the UIState and read raw, so querySession's own check is not
+   *  repeated — a torn raw tail (no baseline) must not make it drop the
+   *  UIState it just checked. Mutation: check whatever ensureSession returned
+   *  → the UIState is dropped and re-seeded → red. */
+  it('query_session cold-waking a root over a torn raw tail keeps the UIState the restore checked', async () => {
+    seedRow(sm, 'o1')
+    scriptBuilds(sm, [replying('reply one'), replying('reply two')])
+    await realTurn(sm, 'admin one')
+    fs.appendFileSync(rawLogPath(dir(), 'o1'), '{"role":"user","content":[{"type":"te')   // a torn last line
+    const state = sm.getCachedUIState('o1')
+
+    await sm.querySession('o1', 'src', 'report')
+    await vi.waitFor(() => expect(live(sm).has('o1')).toBe(false))
+
+    expect(sm.getCachedUIState('o1')).toBe(state)
+    const users = ['admin one', '(from: session src)\nreport']
+    expect(mainUsers()).toEqual({ ui: users, raw: users })
+  })
 })

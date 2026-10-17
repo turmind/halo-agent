@@ -1392,12 +1392,14 @@ export class SessionManager implements SessionManagerInternals {
    *  (canDropTree): live state can't be discarded, and the two writers race —
    *  the accepted cost of sharing a session.
    *
-   *  The UIState's pending debounced writes are cancelled, not flushed: a
-   *  flush would rewrite the other writer's file whole from the stale state
-   *  just before the re-read. What they carried is made again after it (a
+   *  The UIState's pending debounced writes are cancelled, not flushed, when
+   *  the UI log itself is no longer this process's (uiLogIsOwn): a flush
+   *  would rewrite the other writer's file whole from the stale state just
+   *  before the re-read. What they carried is made again after it (a
    *  restore's `context` row) or not yet in memory (the user row at turn
    *  start); a notice from the last ≤500ms is lost — the other writer wrote
-   *  in that window. */
+   *  in that window. Another process's raw-only write leaves the UI file
+   *  ours: the writes land as usual. */
   forgetExternalWrite(rootId: string): boolean {
     if (!this.canDropTree(rootId)) return false
     for (const id of [...this.sessions.keys()]) {
@@ -1406,8 +1408,16 @@ export class SessionManager implements SessionManagerInternals {
         this.stateStore.forgetRowWrites(id)
       }
     }
-    this.uiStore.dropUIState(rootId, { discard: true })
+    this.dropStaleUIState(rootId)
     return true
+  }
+
+  /** Drop the root's cached UIState for a re-read: its pending writes are
+   *  flushed when the UI log is still this process's file, else cancelled
+   *  (see forgetExternalWrite). */
+  private dropStaleUIState(rootId: string): void {
+    if (!this.uiStore.getCachedUIState(rootId)) return
+    this.uiStore.dropUIState(rootId, { discard: !this.uiStore.uiLogIsOwn(rootId) })
   }
 
   /** The tree's in-memory copies may be dropped: no turn / compact in flight
@@ -2577,6 +2587,7 @@ export class SessionManager implements SessionManagerInternals {
     console.debug(`[SessionManager] querySession: ${sourceSessionId} → ${targetSessionId} (interrupt=${interrupt}) — message: ${message.slice(0, 150)}`)
 
     let target: AgentSession
+    const cached = this.sessions.get(targetSessionId)
     try {
       target = await this.ensureSession(targetSessionId)
     } catch {
@@ -2584,13 +2595,15 @@ export class SessionManager implements SessionManagerInternals {
     }
     // An idle root with both copies cached (a view kept the AgentSession, the
     // UIState outlives release): ensureSession returned it and the emit below
-    // won't seed, so no other check point runs. Drop the UIState only — the
-    // emit re-seeds it, refreshStaleHistory reloads this object's history in
-    // place — never the session: a sub's auto-report calls in from its
-    // finally, before its release; after the await that release has run.
-    if (target.parentId === null && this.canDropTree(targetSessionId) && this.cachedCopiesWrittenElsewhere(targetSessionId)) {
+    // won't seed, so no other check point runs. Only for the session cached
+    // before the await — a restore just checked the UIState and read raw.
+    // Drop the UIState only — the emit re-seeds it, refreshStaleHistory
+    // reloads this object's history in place — never the session: a sub's
+    // auto-report calls in from its finally, before its release; after the
+    // await that release has run.
+    if (target === cached && target.parentId === null && this.canDropTree(targetSessionId) && this.cachedCopiesWrittenElsewhere(targetSessionId)) {
       console.debug(`[SessionManager] querySession: ${targetSessionId} written by another process since cached — re-reading from disk`)
-      this.uiStore.dropUIState(targetSessionId, { discard: true })
+      this.dropStaleUIState(targetSessionId)
     }
 
     // query_session respects the queue cap (backpressure for agent fan-in

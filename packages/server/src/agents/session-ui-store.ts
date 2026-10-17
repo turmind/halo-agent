@@ -700,6 +700,13 @@ export class SessionUIStore {
     return logWrittenElsewhere(this.uiLogFile(rootId, rootId)) ?? !this.uiStateDirty.has(rootId)
   }
 
+  /** Whether the root's UI log is still the file this process last wrote /
+   *  read (one stat): a flush of its pending writes appends to its own file.
+   *  False when another process wrote it or there is no baseline to tell. */
+  uiLogIsOwn(rootId: string): boolean {
+    return logWrittenElsewhere(this.uiLogFile(rootId, rootId)) === false
+  }
+
   /** UI log file of `id` (the root or one of its subs) under the root state's
    *  project path. */
   private uiLogFile(rootId: string, id: string): string {
