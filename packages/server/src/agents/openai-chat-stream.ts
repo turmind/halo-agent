@@ -126,9 +126,13 @@ export class ChatCompletionAccumulator {
     // kimi / zhipu / doubao / hunyuan / gemini, text + tool replies, 2026-10-17)
     // sends one on its last choices chunk, before the usage chunk and [DONE].
     if (this.finishReason === undefined) throw new Error(OPENAI_STREAM_TRUNCATED)
-    // DeepSeek's documented "request interrupted due to insufficient resource
-    // of the inference system": the same cut-off reply, with a reason.
-    if (this.finishReason === 'insufficient_system_resource') throw new Error('OpenAIStreamTruncated: finish_reason insufficient_system_resource')
+    // DeepSeek's documented server-side cut-offs: "interrupted due to
+    // insufficient resource of the inference system" / "the generation was
+    // interrupted" — the same half reply, with a reason. Our own aborts go
+    // through the signal, never a finish_reason.
+    if (this.finishReason === 'insufficient_system_resource' || this.finishReason === 'aborted') {
+      throw new Error(`OpenAIStreamTruncated: finish_reason ${this.finishReason}`)
+    }
     return {
       message: {
         ...(this.content ? { content: this.content } : {}),
