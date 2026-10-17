@@ -52,6 +52,9 @@ function streamErrorText(err: NonNullable<ChatCompletionChunk['error']>): string
   return `${code}: ${err.message.slice(0, 300)}${err.type && err.type !== code ? ` (${err.type})` : ''}`
 }
 
+/** finish() on a stream that ended without a finish_reason — network-class in classifyModelError. */
+export const OPENAI_STREAM_TRUNCATED = 'OpenAIStreamTruncated: stream ended without a finish_reason; transient, retrying'
+
 /** Folded result — shaped like the non-streaming `choices[0].message` + siblings so the agents' existing parse code runs unchanged. */
 export interface ChatCompletionFolded {
   message: {
@@ -113,8 +116,15 @@ export class ChatCompletionAccumulator {
     }
   }
 
-  /** Build the agent-facing result. Call once, after the stream has ended. */
+  /** Build the agent-facing result. Call once, after the stream has ended
+   *  (the caller checks its abort signal first, so an abort stays AbortError). */
   finish(): ChatCompletionFolded {
+    // No finish_reason: the stream ended early without an error. Folding it
+    // to end_turn made that an empty (or cut-off) final reply; throwing lets
+    // the turn's network backoff retry it. Every live-probed provider (deepseek /
+    // kimi / zhipu / doubao / hunyuan / gemini, text + tool replies, 2026-10-17)
+    // sends one on its last choices chunk, before the usage chunk and [DONE].
+    if (this.finishReason === undefined) throw new Error(OPENAI_STREAM_TRUNCATED)
     return {
       message: {
         ...(this.content ? { content: this.content } : {}),

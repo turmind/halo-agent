@@ -3,6 +3,7 @@ import { GeminiAgent, ThoughtSplitter } from '../src/agents/gemini-agent.js'
 import type { GeminiAgentConfig } from '../src/agents/gemini-agent.js'
 import type { ModelCallResult, ModelDelta } from '../src/agents/agent-loop.js'
 import { sseResponse } from './helpers/sse-response.js'
+import { OPENAI_STREAM_TRUNCATED } from '../src/agents/openai-chat-stream.js'
 
 /**
  * Pins the Gemini wire quirks found by live probes (2026-10-12): a tool
@@ -45,6 +46,13 @@ describe('GeminiAgent tool calls', () => {
     const result = await (agent as unknown as Callable).callModel(undefined)
     expect(result.stopReason).toBe('tool_use')
     expect(result.toolCalls.map((t) => t.id)).toEqual(['call_1', 'call_2'])
+  })
+
+  it('a tool-call reply cut off before its finish_reason → the truncation error, not a tool_use / empty end_turn', async () => {
+    stubReplies(toolCallReply.slice(0, 2))
+    const agent = new GeminiAgent(base)
+    agent.messages = [{ role: 'user', content: 'weather?' }]
+    await expect((agent as unknown as Callable).callModel(undefined)).rejects.toThrow(OPENAI_STREAM_TRUNCATED)
   })
 
   it('replays the captured thought_signature on the call that carried it', async () => {

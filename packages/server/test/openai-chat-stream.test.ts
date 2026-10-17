@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { fetchChatCompletionStream } from '../src/agents/openai-chat-stream.js'
+import { fetchChatCompletionStream, OPENAI_STREAM_TRUNCATED } from '../src/agents/openai-chat-stream.js'
 import type { AgentLoop, ModelCallResult, ModelDelta } from '../src/agents/agent-loop.js'
 import { OpenAIAgent } from '../src/agents/openai-agent.js'
 import { DeepSeekAgent } from '../src/agents/deepseek-agent.js'
@@ -260,6 +260,47 @@ describe('fetchChatCompletionStream', () => {
     expect((err as Error).name).toBe('AbortError')
     expect(shownDeltas(deltas)).toEqual([{ type: 'text_delta', text: 'one ' }])
   })
+
+  describe('a stream that ends before its finish_reason', () => {
+    it('body ends cleanly with no finish_reason, no abort → the truncation error (network), not an empty end_turn', async () => {
+      stubFetch(() => sseResponse([
+        chunk({ role: 'assistant', content: null, reasoning_content: '' }),
+        chunk({ reasoning_content: 'thinking a while' }),
+      ]))
+
+      const err = await call().then(() => null, (e: unknown) => e as Error)
+
+      expect(err?.message).toBe(OPENAI_STREAM_TRUNCATED)
+      expect(classifyModelError(err).kind).toBe('network')
+    })
+
+    it('a usage chunk alone does not count as the end (kimi-style choices: [] after the content)', async () => {
+      stubFetch(() => sseResponse([
+        chunk({ content: 'par' }),
+        { id: 'c1', object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } },
+      ]))
+
+      await expect(call()).rejects.toThrow(OPENAI_STREAM_TRUNCATED)
+    })
+
+    it('finish_reason "length" with no content → max_tokens result, no throw', async () => {
+      stubFetch(() => sseResponse([chunk({ role: 'assistant', content: '' }), chunk({}, 'length')]))
+
+      const r = await call()
+
+      expect(r.finishReason).toBe('length')
+      expect(r.message.content).toBeUndefined()
+    })
+
+    it('abort at the instant the body ends with no finish_reason → AbortError, not the truncation error', async () => {
+      const controller = new AbortController()
+      stubFetch(() => abortingSseBody([chunk({ content: 'one ' }), chunk({ content: 'two' })], 1, controller))
+
+      const err = await call({ signal: controller.signal }).then(() => null, (e: unknown) => e as Error)
+
+      expect(err?.name).toBe('AbortError')
+    })
+  })
 })
 
 describe('OpenAI-family agents over the stream transport', () => {
@@ -301,6 +342,12 @@ describe('OpenAI-family agents over the stream transport', () => {
 
       stubFetch(() => new Response(JSON.stringify({ error: { message: 'bad request' } }), { status: 400 }))
       await expect(callOf(make())).rejects.toThrow(new RegExp(`^\\[${tag}\\] API error 400: `))
+    })
+
+    it(`${tag}: body ends cleanly without a finish_reason → the truncation error, not an empty end_turn`, async () => {
+      stubFetch(() => sseResponse([chunk({ role: 'assistant', content: '' }), chunk({ reasoning_content: 'hmm' })]))
+
+      await expect(callOf(make())).rejects.toThrow(OPENAI_STREAM_TRUNCATED)
     })
   }
 })

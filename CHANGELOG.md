@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Models reached over the OpenAI chat-completions format (DeepSeek, Kimi, GLM, Doubao, Hunyuan, Gemini, generic OpenAI-compatible endpoints): when the model's reply stream stops partway through without an error, the turn is now retried with the usual backoff, as it already was for Claude and the Anthropic API format. Before, it ended as an empty or cut-off reply, which a sub-agent reported as `(no output)`. On the retry the model thinks again from the start, so its thinking streams a second time.
+
 ## [2.0.0] - 2026-10-16
 
 ### Changed

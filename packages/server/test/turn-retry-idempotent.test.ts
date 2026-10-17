@@ -6,6 +6,7 @@ import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
 import { AgentLoop, type ModelCallResult, type ToolDef } from '../src/agents/agent-loop.js'
 import { ANTHROPIC_STREAM_TRUNCATED } from '../src/agents/anthropic-stream.js'
+import { OPENAI_STREAM_TRUNCATED } from '../src/agents/openai-chat-stream.js'
 
 /**
  * runAgentTurn's retry loop must not re-land the user input.
@@ -240,6 +241,17 @@ describe('runAgentTurn classifies errors by signal / status, not message text', 
     fakeSession('c6', agent as unknown as FakeAgent)
 
     const result = await sm.runSession('c6', 'HELLO_MARKER')
+
+    expect(agent.inputs).toHaveLength(2)
+    expect(result).toContain('ok')
+  }, 10_000)
+
+  it('a truncated OpenAI-family stream (no finish_reason) is retried, not ended as an empty turn', async () => {
+    seedRow('c7')
+    const agent = new ScriptedAgent([new Error(OPENAI_STREAM_TRUNCATED), 'ok'])
+    fakeSession('c7', agent as unknown as FakeAgent)
+
+    const result = await sm.runSession('c7', 'HELLO_MARKER')
 
     expect(agent.inputs).toHaveLength(2)
     expect(result).toContain('ok')
