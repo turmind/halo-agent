@@ -16,8 +16,12 @@ import { checkPackageHash, parseUpdateJson, type UpdateInfo } from './update-jso
 /** update.json is a handful of fields; anything bigger is not one. */
 export const UPDATE_JSON_MAX_BYTES = 64 * 1024
 export const UPDATE_JSON_TIMEOUT_MS = 10_000
-/** Whole download, redirects included. */
-export const PACKAGE_TIMEOUT_MS = 60_000
+/** Whole download, redirects included — a 20+ MB package over a slow link
+ *  (GitHub from mainland China) needs minutes; a stalled one is cut by the
+ *  idle timeout below. */
+export const PACKAGE_TIMEOUT_MS = 10 * 60_000
+/** No byte received for this long → abort. */
+export const PACKAGE_IDLE_TIMEOUT_MS = 30_000
 
 export type UpdateJsonErrorCode =
   /** 404 / 410 — the source has no update info for this extension (grey "来源里没有更新信息"). */
@@ -44,7 +48,8 @@ export async function fetchUpdateJson(id: string, url: string): Promise<UpdateJs
   if (res.status < 200 || res.status >= 300) return { error: `HTTP ${res.status} from ${url}`, code: 'unreachable' }
   let raw: unknown
   try { raw = JSON.parse(res.body.toString('utf-8')) } catch { return { error: 'update.json is not valid JSON', code: 'invalid' } }
-  const parsed = parseUpdateJson(raw, res.url, id)
+  let parsed
+  try { parsed = parseUpdateJson(raw, res.url, id) } catch (err) { return { error: `update.json rejected: ${err instanceof Error ? err.message : String(err)}`, code: 'invalid' } }
   return 'error' in parsed ? { error: parsed.error, code: 'invalid' } : { info: parsed }
 }
 
@@ -57,7 +62,7 @@ export async function fetchUpdateJson(id: string, url: string): Promise<UpdateJs
  * passes routes/extensions.ts MAX_ZIP_BYTES, the same cap as an upload.
  */
 export async function downloadPackage(info: UpdateInfo, opts: { maxBytes: number }): Promise<Buffer> {
-  const res = await httpsGet(info.url, { maxBytes: opts.maxBytes, timeoutMs: PACKAGE_TIMEOUT_MS })
+  const res = await httpsGet(info.url, { maxBytes: opts.maxBytes, timeoutMs: PACKAGE_TIMEOUT_MS, idleTimeoutMs: PACKAGE_IDLE_TIMEOUT_MS })
   if (res.status < 200 || res.status >= 300) throw new Error(`package download failed: HTTP ${res.status} from ${info.url}`)
   const mismatch = checkPackageHash(res.body, info)
   if (mismatch) throw new Error(mismatch)

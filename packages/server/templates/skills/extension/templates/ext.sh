@@ -162,13 +162,56 @@ hub_base() {
   fi
 }
 
+# update.json `minHalo` $3 for <id> $1 <version> $2 vs the installed Halo
+# (`halo --version`, the build sha / `-dirty` dropped — the admin check's rule,
+# server updates/update-json.ts haloBaseVersion). Below it → refuse; no
+# readable version (no halo command, desktop, dev build) → warn and go on.
+hub_check_min_halo() {
+  local hv
+  hv=$("${HALO_CLI:-halo}" --version 2>/dev/null) || hv=""
+  node -e '
+    const [id, ver, min, raw] = process.argv.slice(1)
+    const base = raw.trim().replace(/^halo\s+/, "").replace(/-dirty$/, "").replace(/-[0-9a-f]{7,40}$/, "")
+    const parse = (v) => {
+      const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(v)
+      return m && { core: m.slice(1, 4).map(Number), pre: m[4] ? m[4].split(".") : [] }
+    }
+    // semver precedence: core numbers, then a prerelease sorts before none.
+    const cmp = (a, b) => {
+      for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]
+      if (!a.pre.length || !b.pre.length) return b.pre.length - a.pre.length
+      for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+        const x = a.pre[i], y = b.pre[i]
+        if (x === undefined) return -1
+        if (y === undefined) return 1
+        if (x === y) continue
+        const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y)
+        if (nx && ny) return Number(x) - Number(y)
+        if (nx !== ny) return nx ? -1 : 1
+        return x < y ? -1 : 1
+      }
+      return 0
+    }
+    const cur = parse(base)
+    if (!cur) {
+      console.error("warning: cannot read the Halo version (" + (raw.trim() || "no halo command") + ") — not checking that " + id + " " + ver + " needs Halo " + min)
+      process.exit(0)
+    }
+    if (cmp(cur, parse(min)) < 0) {
+      console.error(id + " " + ver + " needs Halo " + min + " (this is " + base + ") — upgrade Halo first: halo upgrade && halo server restart")
+      process.exit(1)
+    }
+  ' "$1" "$2" "$3" "$hv"
+}
+
 # Fetch hub package <id> into $3 by `<hub base $1>/<id>/update.json`: https
-# only (redirects too, ≤ 5), update.json ≤ 64 KB / 10 s, zip ≤ 100 MB; a
-# relative `url` resolves against update.json's final (redirected) URL; the
-# zip must hash to its `sha256`. Echo the zip path; the version it promises
-# goes to $3/want-version for the manifest check after unpacking.
+# only (redirects too, ≤ 5), update.json ≤ 64 KB / 10 s, zip ≤ 100 MB (10 min,
+# aborted after 30 s under 1 KB/s); a relative `url` resolves against
+# update.json's final (redirected) URL; `minHalo` is checked against this
+# Halo; the zip must hash to its `sha256`. Echo the zip path; the version it
+# promises goes to $3/want-version for the manifest check after unpacking.
 hub_fetch_update() {
-  local base=$1 id=$2 tmp=$3 json final line url sha ver got
+  local base=$1 id=$2 tmp=$3 json final line url sha ver min got
   local https=(--proto =https --proto-redir =https --max-redirs 5)
   [[ -n $base ]] || { echo "no hub_base set and hub_repo is not a GitHub repo to derive one from — set hub_base (Settings → Skills → extension), or install <path/to.zip>" >&2; exit 1; }
   [[ $base == https://* ]] || { echo "hub_base must be an https URL: $base" >&2; exit 1; }
@@ -181,17 +224,20 @@ hub_fetch_update() {
     let u
     try { u = JSON.parse(fs.readFileSync(file, "utf8")) } catch { fail("not valid JSON") }
     if (!u || typeof u !== "object" || Array.isArray(u)) fail("not a JSON object")
-    if (u.id !== id) fail("id \"" + u.id + "\" does not match \"" + id + "\"")
+    if (u.id !== id) fail("id " + JSON.stringify(u.id) + " does not match \"" + id + "\"")
     if (typeof u.version !== "string" || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(u.version)) fail("version must be semver (x.y.z[-pre])")
     if (typeof u.url !== "string" || u.url === "") fail("url is required")
     let url
     try { url = new URL(u.url, base) } catch { fail("url is invalid: " + u.url) }
     if (url.protocol !== "https:") fail("url must be https: " + url.href)
     if (typeof u.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(u.sha256)) fail("sha256 must be 64 hex characters")
-    console.log(url.href + " " + u.sha256.toLowerCase() + " " + u.version)
+    if (u.minHalo !== undefined && (typeof u.minHalo !== "string" || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(u.minHalo))) fail("minHalo must be semver (x.y.z[-pre])")
+    console.log(url.href + " " + u.sha256.toLowerCase() + " " + u.version + " " + (u.minHalo || ""))
   ' "$tmp/update.json" "$final" "$id") || { echo "invalid update.json at $final: $line" >&2; exit 1; }
-  read -r url sha ver <<<"$line"
-  curl -fsSL "${https[@]}" --max-filesize 104857600 "$url" -o "$tmp/pkg.zip" || { echo "download failed: $url" >&2; exit 1; }
+  read -r url sha ver min <<<"$line"
+  if [[ -n $min ]]; then hub_check_min_halo "$id" "$ver" "$min" || exit 1; fi
+  curl -fsSL "${https[@]}" --max-filesize 104857600 --connect-timeout 10 --max-time 600 --speed-limit 1024 --speed-time 30 "$url" -o "$tmp/pkg.zip" \
+    || { echo "download failed: $url" >&2; exit 1; }
   got=$(node -e 'console.log(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$tmp/pkg.zip")
   [[ $got == "$sha" ]] || { echo "sha256 mismatch for $url: update.json says $sha, the download is $got" >&2; exit 1; }
   echo "$ver" >"$tmp/want-version"

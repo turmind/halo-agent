@@ -1,6 +1,6 @@
 /**
  * "Is there a newer version of an installed extension?" — the `extensions`
- * scope of /api/updates (design: .halo/tmp/ext-plans/updates.md §2–§4).
+ * scope of /api/updates (design: .halo/docs/design/canvas-extensions.md).
  *
  * Every installed extension, on or off, reads its own update.json: manifest
  * `source` when set, else `<hub_base>/<id>/update.json` (hub_base = the
@@ -82,13 +82,20 @@ export function createExtensionsChecker(opts: {
 
   function run(): void {
     inflight = (async () => {
-      const queue = [...opts.installed()]
-      const worker = async () => {
-        for (let ext = queue.shift(); ext; ext = queue.shift()) await fetchOne(ext)
+      try {
+        const queue = [...opts.installed()]
+        const worker = async () => {
+          for (let ext = queue.shift(); ext; ext = queue.shift()) await fetchOne(ext)
+        }
+        // allSettled: a worker that throws stops, the others still drain the
+        // queue, and nothing writes the cache after `inflight` is cleared.
+        const results = await Promise.allSettled(Array.from({ length: CHECK_CONCURRENCY }, worker))
+        for (const r of results) if (r.status === 'rejected') console.log(`[Updates] extensions check: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`)
+      } finally {
+        // Always settle — a stuck `inflight` would spin every admin's 检查更新 until restart.
+        checkedAt = now()
+        inflight = null
       }
-      await Promise.all(Array.from({ length: CHECK_CONCURRENCY }, worker))
-      checkedAt = now()
-      inflight = null
       push()
     })()
   }

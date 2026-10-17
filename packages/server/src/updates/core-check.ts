@@ -1,6 +1,6 @@
 /**
  * "Is there a newer Halo?" — notify only; upgrading stays `halo upgrade` +
- * a restart by the operator (design: .halo/tmp/ext-plans/updates.md §1).
+ * a restart by the operator (design: .halo/docs/design/canvas-extensions.md).
  *
  * Source: the npm registry's dist-tags for @turmind/halo (`latest` only —
  * ~40 bytes), from `npm_config_registry` when the server runs with a mirror

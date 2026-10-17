@@ -224,11 +224,47 @@ describe('install <id> via update.json (local https hub)', () => {
     r = await install()
     expect(r.err).toMatch(/invalid update.json .*id "other" does not match "demo"/)
 
+    await publish('1.3.0', { json: { id: { toString: 0 } } })
+    r = await install()
+    expect(r.err).toMatch(/invalid update.json .*id \{"toString":0\} does not match "demo"/)
+
     await publish('1.3.0', { json: { url: 'http://127.0.0.1:9/demo.zip' } })
     r = await install()
     expect(r.err).toMatch(/url must be https/)
 
     expect(fs.readFileSync(path.join(installed(), 'index.html'), 'utf8')).toBe('<p>1.2.0</p>')
+  })
+
+  it('minHalo: refused below it (build sha / -dirty dropped), installs at or above it', async () => {
+    const stub = path.join(tmpRoot, 'halo-version-stub.sh')
+    fs.writeFileSync(stub, '#!/bin/sh\n[ "$1" = --version ] && echo "halo $STUB_VERSION"\n', { mode: 0o755 })
+    await publish('5.0.0', { json: { minHalo: '2.1.0' } })
+    const r = await install({ HALO_CLI: stub, STUB_VERSION: '2.0.9-abc1234-dirty' })
+    expect(r.code).not.toBe(0)
+    expect(r.err).toBe('demo 5.0.0 needs Halo 2.1.0 (this is 2.0.9) — upgrade Halo first: halo upgrade && halo server restart')
+    expect(fs.readFileSync(path.join(installed(), 'index.html'), 'utf8')).toBe('<p>1.2.0</p>')
+
+    expect(await install({ HALO_CLI: stub, STUB_VERSION: '2.1.0-abc1234' })).toMatchObject({ code: 0, out: 'installed demo 5.0.0' })
+    await publish('5.0.1', { json: { minHalo: '2.1.0-beta.2' } })
+    expect(await install({ HALO_CLI: stub, STUB_VERSION: '2.1.0-beta.10' })).toMatchObject({ code: 0, out: 'installed demo 5.0.1' })
+    await publish('5.0.2', { json: { minHalo: '2.1.0' } })
+    expect((await install({ HALO_CLI: stub, STUB_VERSION: '2.1.0-beta.10' })).err).toMatch(/needs Halo 2\.1\.0 \(this is 2\.1\.0-beta\.10\)/)
+  })
+
+  it('minHalo with no readable Halo version (no halo command, dev build) → one warning, installs anyway', async () => {
+    await publish('6.0.0', { json: { minHalo: '99.0.0' } })
+    let r = await install({ HALO_CLI: path.join(tmpRoot, 'no-such-halo') })
+    expect(r).toMatchObject({ code: 0, out: 'installed demo 6.0.0' })
+    expect(r.err).toBe('warning: cannot read the Halo version (no halo command) — not checking that demo 6.0.0 needs Halo 99.0.0')
+    const stub = path.join(tmpRoot, 'halo-version-stub.sh')
+    r = await install({ HALO_CLI: stub, STUB_VERSION: 'dev' })
+    expect(r).toMatchObject({ code: 0, out: 'installed demo 6.0.0' })
+    expect(r.err).toBe('warning: cannot read the Halo version (halo dev) — not checking that demo 6.0.0 needs Halo 99.0.0')
+  })
+
+  it('a malformed minHalo is an invalid update.json', async () => {
+    await publish('7.0.0', { json: { minHalo: 'v2' } })
+    expect((await install()).err).toMatch(/invalid update.json .*minHalo must be semver/)
   })
 
   it('no update.json (404) → clear error', async () => {

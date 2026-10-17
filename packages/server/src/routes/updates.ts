@@ -1,5 +1,5 @@
 /**
- * Update checks (design: .halo/tmp/ext-plans/updates.md §4).
+ * Update checks (design: .halo/docs/design/canvas-extensions.md).
  *
  *   GET  /updates?scope=core|extensions   cached status; starts a check when > 24 h old
  *   POST /updates/check { scope }         force a check (60 s cooldown)

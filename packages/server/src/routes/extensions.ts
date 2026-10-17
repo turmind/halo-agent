@@ -173,12 +173,16 @@ export function createExtensionRoutes() {
     }
   })
 
-  // One-click update (design: .halo/tmp/ext-plans/updates.md §2). Takes no
+  // One-click update (design: .halo/docs/design/canvas-extensions.md). Takes no
   // body: the server re-reads update.json itself and goes ahead only on an
   // `available` verdict; the zip must hash to its sha256 and carry its id +
   // version. On / off state lives outside <id>/, so a switched-off extension
   // stays off. One update per id at a time (in-process; a restart mid-update
   // leaves only the installer's dot-staging dirs, which the scanner skips).
+  // 409 = the update can't happen now (one already running, nothing newer,
+  // needs a newer Halo); 502 = the source or its package is at fault (read
+  // failed, no source, sha256 / id / version / manifest refused) — the
+  // client sent nothing that could be wrong.
   app.post('/extensions/:id/update', async (c) => {
     const id = c.req.param('id')
     if (!isExtensionId(id)) return c.json({ error: 'Invalid extension id' }, 400)
@@ -188,7 +192,10 @@ export function createExtensionRoutes() {
     updating.add(id)
     try {
       const { entry, info } = await checkExtensionNow(ext)
-      if (!info) return c.json({ error: entry.error ?? `no update available (${entry.state})`, status: entry }, 409)
+      if (!info) {
+        const blocked = entry.state === 'current' || entry.state === 'needs-halo'
+        return c.json({ error: entry.error ?? `no update available (${entry.state})`, status: entry }, blocked ? 409 : 502)
+      }
       let zip: Buffer
       try {
         zip = await downloadPackage(info, { maxBytes: MAX_ZIP_BYTES })
@@ -202,9 +209,9 @@ export function createExtensionRoutes() {
       rescanAndBroadcast()
       return c.json(installed)
     } catch (err) {
-      if (err instanceof ExtensionInstallError) return c.json({ error: err.message }, 400)
       const msg = err instanceof Error ? err.message : String(err)
       console.log(`[Extensions] update ${id} failed: ${msg}`)
+      if (err instanceof ExtensionInstallError) return c.json({ error: msg }, 502)
       return c.json({ error: msg }, 500)
     } finally {
       updating.delete(id)

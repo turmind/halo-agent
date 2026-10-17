@@ -70,6 +70,39 @@ describe('extensions checker', () => {
     expect(h.fetch.mock.calls.map((c) => c[0]).sort()).toEqual(['bad', 'city', 'drawio', 'glb', 'voice'])
   })
 
+  it('a fetch that throws still settles the check (checking:false), the others still judged', async () => {
+    const installed = [ext('a'), ext('boom'), ext('c')]
+    const checker = createExtensionsChecker({
+      haloVersion: '2.0.0',
+      installed: () => installed,
+      resolveUrl: (e) => `https://hub/${e.id}/update.json`,
+      fetchUpdateJson: async (id) => { if (id === 'boom') throw new TypeError('Cannot convert object to primitive value'); return found(id, '1.1.0') },
+    })
+    expect(checker.getStatus(false).checking).toBe(true)
+    await checker.settled()
+    const s = checker.getStatus(false)
+    expect(s.checking).toBe(false)
+    expect(s.checkedAt).not.toBeNull()
+    expect(s.extensions.map((e) => `${e.id}:${e.state}`)).toEqual(['a:available', 'boom:unknown', 'c:available'])
+  })
+
+  it('the hostile {"id":{"toString":0}} update.json reads as invalid end to end', async () => {
+    const { parseUpdateJson } = await import('../src/updates/update-json.js')
+    const checker = createExtensionsChecker({
+      haloVersion: '2.0.0',
+      installed: () => [ext('glb')],
+      resolveUrl: () => 'https://hub/glb/update.json',
+      // the real parser on the hostile body (the network half is in updates-https.test.ts)
+      fetchUpdateJson: async (id) => {
+        const parsed = parseUpdateJson(JSON.parse('{"id":{"toString":0},"version":"1.1.0","url":"x.zip","sha256":"' + 'a'.repeat(64) + '"}'), 'https://hub/glb/update.json', id)
+        return 'error' in parsed ? { error: parsed.error, code: 'invalid' as const } : { info: parsed }
+      },
+    })
+    checker.getStatus(false)
+    await checker.settled()
+    expect(checker.getStatus(false)).toMatchObject({ checking: false, extensions: [{ id: 'glb', state: 'invalid', error: 'update.json id {"toString":0} does not match "glb"' }] })
+  })
+
   it('a dev Halo is not held back by minHalo', async () => {
     const h = harness({ installed: [ext('city')], answers: { city: found('city', '1.2.0', '9.0.0') }, haloVersion: 'dev' })
     h.checker.getStatus(false)

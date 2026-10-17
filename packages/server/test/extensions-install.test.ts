@@ -84,6 +84,23 @@ describe('installExtensionZip', () => {
     await expect(installExtensionZip(await zipOf(flat()), 'glb')).resolves.toMatchObject({ id: 'glb' })
   })
 
+  it('the new version is in place even when the old copy cannot be deleted (Windows EBUSY): no throw, no listed leftover', async () => {
+    await installExtensionZip(await zipOf(flat()))
+    const realRm = fs.rmSync
+    const rm = vi.spyOn(fs, 'rmSync').mockImplementation((p, o) => {
+      if (path.basename(String(p)).startsWith('.old-')) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      return realRm(p, o)
+    })
+    try {
+      await expect(installExtensionZip(await zipOf(flat({ ...manifest, version: '2.0.0' })))).resolves.toMatchObject({ version: '2.0.0' })
+      expect(rm.mock.calls.find((c) => path.basename(String(c[0])).startsWith('.old-'))?.[1]).toMatchObject({ maxRetries: 3 })
+    } finally {
+      rm.mockRestore()
+    }
+    expect(fs.readFileSync(path.join(extensionsRoot(), 'glb', 'index.html'), 'utf-8')).toBe('<html>v2.0.0</html>')
+    expect(scanExtensions().extensions.map((e) => `${e.id}@${e.version}`)).toEqual(['glb@2.0.0'])
+  })
+
   it('expectVersion must match the manifest version (update route), the working install stays', async () => {
     await installExtensionZip(await zipOf(flat()))
     await expect(installExtensionZip(await zipOf(flat({ ...manifest, version: '1.1.0' })), 'glb', '1.2.0')).rejects.toThrow('manifest version "1.1.0" does not match update.json "1.2.0"')

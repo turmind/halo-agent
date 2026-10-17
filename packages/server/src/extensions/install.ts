@@ -115,7 +115,7 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string, exp
     }
     if (!isExtensionId(manifestId)) throw new ExtensionInstallError(`manifest id "${manifestId}" is not a valid extension id`)
     if (expectId !== undefined && manifestId !== expectId) throw new ExtensionInstallError(`manifest id "${manifestId}" does not match requested "${expectId}"`)
-    if (expectVersion !== undefined && manifestVersion !== expectVersion) throw new ExtensionInstallError(`manifest version "${String(manifestVersion)}" does not match update.json "${expectVersion}"`)
+    if (expectVersion !== undefined && manifestVersion !== expectVersion) throw new ExtensionInstallError(`manifest version ${JSON.stringify(manifestVersion) ?? 'undefined'} does not match update.json "${expectVersion}"`)
 
     // Pre-check with the scanner's own rules before touching a working install.
     const verdict = readExtensionDir(stage, manifestId)
@@ -135,7 +135,14 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string, exp
       if (hadOld) fs.renameSync(old, target)
       throw err
     }
-    if (hadOld) fs.rmSync(old, { recursive: true, force: true })
+    // The new version is in place: failing to delete the old copy (Windows
+    // EBUSY from an open handle) must not turn a done install into an error.
+    // A leftover `.old-*` dir is dot-prefixed, so the scanner skips it.
+    if (hadOld) {
+      try { fs.rmSync(old, { recursive: true, force: true, maxRetries: 3 }) } catch (err) {
+        console.log(`[Extensions] could not remove the previous copy ${old}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
 
     const info = readExtensionDir(target)
     if ('error' in info) throw new ExtensionInstallError(`installed but failed re-validation: ${info.error}`) // unreachable in practice

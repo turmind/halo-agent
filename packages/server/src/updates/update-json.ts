@@ -88,7 +88,8 @@ export function updateJsonUrl(id: string, source: string | undefined, hubBase: s
 export function parseUpdateJson(raw: unknown, fileUrl: string, expectId: string): UpdateInfo | { error: string } {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { error: 'update.json must be a JSON object' }
   const u = raw as Record<string, unknown>
-  if (u.id !== expectId) return { error: `update.json id "${String(u.id)}" does not match "${expectId}"` }
+  // JSON.stringify, not String(): a parsed object like {"toString":0} makes String() throw.
+  if (u.id !== expectId) return { error: `update.json id ${JSON.stringify(u.id) ?? 'undefined'} does not match "${expectId}"` }
   if (!isVersion(u.version)) return { error: 'update.json version must be semver (x.y.z[-pre])' }
   if (typeof u.url !== 'string' || u.url === '') return { error: 'update.json url is required' }
   let url: URL

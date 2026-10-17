@@ -105,6 +105,21 @@ describe('httpsGet', () => {
     expect((await rejection(httpsGet(`${base}/chunked`, opts))).code).toBe('too-large')
   })
 
+  it('idle timeout: a stalled body is cut even under a long deadline; a steady trickle is not', async () => {
+    routes = {
+      '/stall': (_req, res) => { res.writeHead(200); res.write('a') /* then nothing */ },
+      '/trickle': (_req, res) => {
+        res.writeHead(200)
+        let n = 0
+        const t = setInterval(() => { res.write('b'); if (++n === 4) { clearInterval(t); res.end() } }, 100)
+      },
+    }
+    const started = Date.now()
+    expect((await rejection(httpsGet(`${base}/stall`, { ...opts, timeoutMs: 5_000, idleTimeoutMs: 300 }))).message).toMatch(/no data for 300ms/)
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect((await httpsGet(`${base}/trickle`, { ...opts, timeoutMs: 5_000, idleTimeoutMs: 300 })).body.toString()).toBe('bbbb')
+  })
+
   it('times out the whole call', async () => {
     routes = { '/hang': () => { /* never answers */ } }
     const started = Date.now()
@@ -135,6 +150,11 @@ describe('fetchUpdateJson / downloadPackage', () => {
     expect(await fetchUpdateJson('glb', `${base}/bad-id`)).toMatchObject({ code: 'invalid', error: expect.stringMatching(/does not match/) })
     expect(await fetchUpdateJson('glb', `${base}/boom`)).toMatchObject({ code: 'unreachable' })
     expect(await fetchUpdateJson('glb', 'http://127.0.0.1/x')).toMatchObject({ code: 'refused' })
+  })
+
+  it('never throws: an id whose String() throws ({"toString":0}) is just invalid', async () => {
+    routes = { '/evil': reply(200, JSON.stringify({ ...good, id: { toString: 0 } })) }
+    expect(await fetchUpdateJson('glb', `${base}/evil`)).toEqual({ code: 'invalid', error: 'update.json id {"toString":0} does not match "glb"' })
   })
 
   it('reads a loopback https source — no address policy on any update URL', async () => {

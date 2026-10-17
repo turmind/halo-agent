@@ -13,7 +13,7 @@ const RELEASES_URL = 'https://github.com/turmind/halo-agent/releases'
 
 /**
  * Settings sidebar foot: "Halo v<version>" + 检查更新 — notify only, never
- * upgrades (design: .halo/tmp/ext-plans/updates.md §1).
+ * upgrades (design: .halo/docs/design/canvas-extensions.md).
  *
  * Mounting it (= opening Settings) asks `GET /updates?scope=core`; the server
  * answers from its 24 h cache and starts a check only when that is stale. The

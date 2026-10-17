@@ -16,9 +16,11 @@ import type { WebSocketServer } from 'ws'
  * `extensions` scope of /api/updates, against a local self-signed TLS "hub"
  * whose base is the extension skill's `hub_base` param:
  *  - the server re-reads update.json itself and installs only on an
- *    `available` verdict (current / not-found → 409, nothing touched);
- *  - sha256, id and version mismatches are refused and the working install
- *    stays; a switched-off extension stays off after its update;
+ *    `available` verdict — nothing newer → 409, a source that can't be read
+ *    → 502, nothing touched;
+ *  - sha256, id and version mismatches are refused (502: the package is at
+ *    fault) and the working install stays; a switched-off extension stays off
+ *    after its update;
  *  - one update per id at a time (409);
  *  - after an update the extensions status is re-judged and pushed without
  *    another update.json read.
@@ -56,7 +58,8 @@ beforeAll(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-ext-update-'))
   process.env.HOME = tmpHome
   delete process.env.HALO_PASSWORD
-  delete process.env.HALO_VERSION
+  // A release version, so `minHalo` applies (a dev build is never held back).
+  process.env.HALO_VERSION = '2.0.0'
 
   const gen = spawnSync('openssl', [
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=localhost',
@@ -110,6 +113,7 @@ beforeAll(async () => {
 })
 
 afterAll(() => {
+  delete process.env.HALO_VERSION
   watcher.stop()
   https.globalAgent.options.ca = realCa
   server.closeAllConnections()
@@ -150,14 +154,18 @@ describe('POST /api/extensions/:id/update', () => {
     expect(frames('extension:changed')).toHaveLength(1)
   })
 
-  it('409 when nothing newer (same, older, or no update.json) — nothing downloaded', async () => {
+  it('409 when nothing newer (same, older) or it needs a newer Halo; 502 when the source has no update.json — nothing downloaded', async () => {
     await publish('1.0.0')
     expect((await update()).status).toBe(409)
     await publish('0.9.0')
     expect((await update()).status).toBe(409)
-    routes = {}
-    const res = await update()
+    routes['/hub/glb/update.json'] = json({ id: 'glb', version: '1.1.0', url: 'glb-1.1.0.zip', sha256: 'a'.repeat(64), minHalo: '999.0.0' })
+    let res = await update()
     expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ status: { state: 'needs-halo', minHalo: '999.0.0' } })
+    routes = {}
+    res = await update()
+    expect(res.status).toBe(502)
     expect(await res.json()).toMatchObject({ status: { state: 'not-found' } })
     expect(hits.filter((h) => h.endsWith('.zip'))).toEqual([])
     expect(installedHtml()).toBe('<p>1.0.0</p>')
@@ -171,12 +179,12 @@ describe('POST /api/extensions/:id/update', () => {
 
     await publish('1.1.0', { zip: await zipOf('1.0.5') })
     res = await update()
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(502)
     expect(((await res.json()) as { error: string }).error).toBe('manifest version "1.0.5" does not match update.json "1.1.0"')
 
     await publish('1.1.0', { zip: await zipOf('1.1.0', { id: 'drawio' }) })
     res = await update()
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(502)
     expect(((await res.json()) as { error: string }).error).toMatch(/does not match requested "glb"/)
 
     expect(installedHtml()).toBe('<p>1.0.0</p>')
