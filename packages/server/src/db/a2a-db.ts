@@ -94,7 +94,10 @@ CREATE TABLE IF NOT EXISTS agentcore_invocations (
   session_id  TEXT NOT NULL,
   state       TEXT NOT NULL,
   created_at  INTEGER NOT NULL,
-  finished_at INTEGER
+  finished_at INTEGER,
+  result      TEXT,
+  result_files TEXT,
+  superseded_by TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agentcore_inv_req ON agentcore_invocations(request_id) WHERE request_id IS NOT NULL;
 `
@@ -107,6 +110,14 @@ export const A2A_MIGRATIONS: Migration[] = [
   // v1: `result_files` — JSON [{ filename, mediaType, raw }] of the images a
   // result attached via MEDIA: lines (plans/a2a.md §5 "Image parts").
   (s) => addColumnIfMissing(s, 'a2a_tasks', 'result_files', 'TEXT'),
+  // v2: `agentcore_invocations` (table added after 2.0.1 by a plain CREATE)
+  // keeps its outcome for sync / SSE / `get` (a2a/invocations.ts): the final
+  // reply, JSON [{ path, size }] of its MEDIA: files, the job that took over.
+  (s) => {
+    addColumnIfMissing(s, 'agentcore_invocations', 'result', 'TEXT')
+    addColumnIfMissing(s, 'agentcore_invocations', 'result_files', 'TEXT')
+    addColumnIfMissing(s, 'agentcore_invocations', 'superseded_by', 'TEXT')
+  },
 ]
 
 export function createA2ADb(globalDir: string): A2ADb {

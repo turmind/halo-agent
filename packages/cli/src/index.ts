@@ -186,7 +186,9 @@ const HELP_AGENTCORE = `Usage: halo agentcore --workspace <path> [-p N]
 Run the server in the foreground as an Amazon Bedrock AgentCore Runtime
 container (HALO_RUNTIME_MODE=agentcore-a2a): GET /ping, POST / (A2A JSON-RPC),
 GET /.well-known/agent-card.json and POST /invocations (plain-HTTP job:
-{"prompt" | "promptFile", "session"?, "agent"?, "id"?}) on one fixed
+{"prompt" | "promptFile", "session"?, "agent"?, "id"?, "async"?} — waits for
+the result (≤ 10 min), streams it with Accept: text/event-stream, or returns
+a receipt with "async": true; {"get": "<id>"} reads a job) on one fixed
 workspace. No admin UI, password, channels, cron or evolution — the caller's
 signed request is verified by AgentCore before it reaches here.
 

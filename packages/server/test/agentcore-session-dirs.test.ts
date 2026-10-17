@@ -213,7 +213,9 @@ describe('front', () => {
     'cat > "$NOTIFY_OUT/stdin"',
     'printf "%s|%s" "$HALO_SESSION_ID" "$HALO_RUN_STATUS" > "$NOTIFY_OUT/env"',
     'printf "%s|%s|%s" "$HALO_WORKSPACE" "$(pwd)" "$(stat -c %a "$HALO_WORKSPACE")" > "$NOTIFY_OUT/ws"',
-    'for f in $(sed -n "s/^MEDIA://p" "$NOTIFY_OUT/stdin"); do cat "$f" >> "$NOTIFY_OUT/media"; done',
+    'for f in $(sed -n "s/^MEDIA://p" "$NOTIFY_OUT/stdin"); do cat "$f" >> "$NOTIFY_OUT/media.part"; done',
+    // Last, by rename: a reader never sees a half-written file.
+    'mv "$NOTIFY_OUT/media.part" "$NOTIFY_OUT/media"',
   ].join('; ')
 
   // No bind mount here: the stand-in view is the session dir itself.

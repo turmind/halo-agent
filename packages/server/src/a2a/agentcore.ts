@@ -19,7 +19,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
+import { streamSSE } from 'hono/streaming'
 import { config } from '../config.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionManager } from '../agents/session-manager.js'
@@ -37,7 +38,9 @@ import { CARD_FILE, publicOrigin, type A2ACaller, type A2AStrategies } from './e
 import { createA2ARoutes } from './routes.js'
 import { hasPendingPushes, startPushSender } from './push.js'
 import { reconcileOpenDispatches } from './outbound.js'
-import { createInvocation, deleteInvocation, findInvocation, supersedeInvocation } from './invocations.js'
+import {
+  TERMINAL_INVOCATION, createInvocation, deleteInvocation, findInvocation, getInvocation, invocationBody, lookupInvocation, onInvocationDone, supersedeInvocation,
+} from './invocations.js'
 import { notifyInFlight } from './agentcore-notify.js'
 import { CARD_SUFFIX, RPC, rpcError } from './wire.js'
 
@@ -255,8 +258,14 @@ const INV_AGENT_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
 /** Model-bound only, ahead of the job prompt: a scheduled job is unattended by
  *  construction — the reason and wording of cron/runner.ts UNATTENDED_PREAMBLE. */
 const UNATTENDED_PREAMBLE = '[Unattended scheduled run — nobody will answer questions. Deliver the result directly; if genuinely blocked, state what\'s blocked in one line and stop.]'
+/** Sync mode's wait, A2A blocking SendMessage's cap (routes.ts BLOCKING_WAIT_MS):
+ *  past it the answer is `running` + the invocation id, the run continues. */
+const INVOCATION_WAIT_MS = 10 * 60_000
+const SSE_KEEPALIVE_MS = 15_000
 
-export interface InvocationRequest { prompt: string | null; promptFile: string | null; session: string | null; agent: string | null; id: string | null }
+export interface InvocationRequest { prompt: string | null; promptFile: string | null; session: string | null; agent: string | null; id: string | null; async: boolean }
+/** `{"get": "<invocation id or caller id>"}`: read a job's current body. */
+export interface InvocationQuery { get: string }
 
 function optStr(v: unknown, key: string, re?: RegExp): string | null {
   if (v === undefined || v === null) return null
@@ -266,18 +275,26 @@ function optStr(v: unknown, key: string, re?: RegExp): string | null {
 }
 
 /** Request shape only (no workspace access): an error string = 400. */
-export function parseInvocation(raw: string): InvocationRequest | string {
+export function parseInvocation(raw: string): InvocationRequest | InvocationQuery | string {
   if (raw.length > MAX_INVOCATION_BODY) return 'request body too large'
   let b: Record<string, unknown>
   try { b = JSON.parse(raw) as Record<string, unknown> } catch { return 'body must be JSON' }
   if (!b || typeof b !== 'object' || Array.isArray(b)) return 'body must be a JSON object'
+  if (b.async !== undefined && typeof b.async !== 'boolean') return 'async must be a boolean'
   try {
+    if (b.get !== undefined) {
+      const get = optStr(b.get, 'get')!
+      if (get.length > 256) return 'get is longer than 256 chars'
+      if (['prompt', 'promptFile', 'session', 'agent', 'id', 'async'].some((k) => b[k] !== undefined)) return 'get takes no other fields'
+      return { get }
+    }
     const req: InvocationRequest = {
       prompt: optStr(b.prompt, 'prompt'),
       promptFile: optStr(b.promptFile, 'promptFile'),
       session: optStr(b.session, 'session', INV_SESSION_RE),
       agent: optStr(b.agent, 'agent', INV_AGENT_RE),
       id: optStr(b.id, 'id'),
+      async: b.async === true,
     }
     if (req.id && req.id.length > 256) return 'id is longer than 256 chars'
     if (!req.prompt === !req.promptFile) return 'exactly one of prompt / promptFile is required'
@@ -307,14 +324,16 @@ type InvocationReply = [200 | 400 | 409, Record<string, unknown>]
 /**
  * Dispatch one job — create or resume the session, point its `reply_to` at
  * the job, send (a2a/routes.ts dispatchMessage's order). The same `id` seen
- * before answers `duplicate` and runs nothing; the dedupe re-check right
- * before the insert sits in the same synchronous slice, so two concurrent
- * retries can't both run (the unique index is the cross-process backstop).
+ * before answers that job's current body + `duplicate: true` and runs
+ * nothing; the dedupe re-check right before the insert sits in the same
+ * synchronous slice, so two concurrent retries can't both run (the unique
+ * index is the cross-process backstop). A new job answers the receipt
+ * `{ status: accepted, invocation, … }` — the route waits / streams on it.
  */
 export async function startInvocation(sm: SessionManager, workspace: string, accessLevel: AccountAccessLevel, req: InvocationRequest): Promise<InvocationReply> {
   const dup = (): InvocationReply | null => {
     const row = req.id ? findInvocation(req.id) : null
-    return row ? [200, { status: 'duplicate', session: row.session_id, id: req.id }] : null
+    return row ? [200, { ...invocationBody(row), duplicate: true }] : null
   }
   const early = dup()
   if (early) return early
@@ -368,7 +387,59 @@ export async function startInvocation(sm: SessionManager, workspace: string, acc
     deleteInvocation(invId)
     throw err
   }
-  return [200, { status: 'accepted', session: sessionId, id: req.id }]
+  return [200, { status: 'accepted', invocation: invId, session: sessionId, id: req.id }]
+}
+
+/** Resolve once `id` is no longer running, after `ms`, or when `signal`
+ *  aborts (routes.ts waitTerminal). The run never depends on the waiter. */
+function waitInvocation(id: string, ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(t); off(); signal.removeEventListener('abort', done); resolve() }
+    const off = onInvocationDone(id, done)
+    const t = setTimeout(done, ms)
+    signal.addEventListener('abort', done)
+    const row = getInvocation(id)
+    if (signal.aborted || !row || TERMINAL_INVOCATION.has(row.state)) done()
+  })
+}
+
+/** SSE (routes.ts streamTask's shape): an `accepted` event with the receipt
+ *  first (the invocation id a dropped client `get`s by), `delta` events with
+ *  the root's live text, `: keepalive` every 15 s, then one `result` event =
+ *  the sync body, and close. A dropped client only unsubscribes; the run goes on. */
+function streamInvocation(c: Context, sm: SessionManager, receipt: Record<string, unknown>): Response {
+  const id = receipt.invocation as string
+  return streamSSE(c, async (stream) => {
+    const deltas: string[] = []
+    let finished = false
+    let wake: (() => void) | null = null
+    const off = onInvocationDone(id, () => { finished = true; wake?.() })
+    // Root turns only (a sub-session's deltas carry a taskId), as A2A's progress.
+    const offDelta = sm.registerEventListener(receipt.session as string, (ev) => {
+      if (ev.type === 'stream_delta' && !ev.taskId && ev.text) { deltas.push(ev.text); wake?.() }
+    })
+    const keepalive = setInterval(() => { void stream.write(': keepalive\n\n') }, SSE_KEEPALIVE_MS)
+    stream.onAbort(() => { wake?.() })
+    try {
+      await stream.writeSSE({ event: 'accepted', data: JSON.stringify(receipt) })
+      const first = getInvocation(id)
+      finished = finished || !first || TERMINAL_INVOCATION.has(first.state)
+      while (!stream.aborted) {
+        while (deltas.length > 0) await stream.writeSSE({ event: 'delta', data: JSON.stringify({ text: deltas.shift() }) })
+        if (finished) {
+          const row = getInvocation(id)
+          await stream.writeSSE({ event: 'result', data: JSON.stringify(row ? invocationBody(row) : { error: `invocation ${id} is gone` }) })
+          return
+        }
+        await new Promise<void>((r) => { wake = r; if (deltas.length > 0 || finished || stream.aborted) r() })
+        wake = null
+      }
+    } finally {
+      clearInterval(keepalive)
+      off()
+      offDelta()
+    }
+  })
 }
 
 // ── routes + boot ─────────────────────────────────────────────────────
@@ -407,21 +478,35 @@ export function createAgentCoreA2ARoutes(deps: { registry: SessionManagerRegistr
   })
 
   // Plain-HTTP job entry (AgentCore serverProtocol HTTP; EventBridge Scheduler
-  // can't send A2A). Same lease gate + nudge wait as `POST /`; answers at once,
-  // the run continues and ends in the notify hook (invocations.ts).
+  // can't send A2A). Same lease gate + nudge wait as `POST /`. A new job is
+  // answered by mode — sync (default: wait ≤ 10 min, then the body), SSE
+  // (`Accept: text/event-stream`), or `"async": true` (the receipt at once);
+  // the run ends in the notify hook either way (invocations.ts). `{"get"}`
+  // reads a job's body; a duplicate id answers its body at once, in any mode.
   app.post('/invocations', async (c) => {
     const req = parseInvocation(await c.req.text())
     if (typeof req === 'string') return c.json({ error: req }, 400)
     if (!(await lease.acquire())) return c.json({ error: LEASE_BUSY }, 503)
+    if ('get' in req) {
+      const row = lookupInvocation(req.get)
+      return row ? c.json(invocationBody(row)) : c.json({ error: `unknown invocation: ${req.get}` }, 404)
+    }
     await nudgesSettled(workspace)
+    const sm = registry.getOrCreate(workspace)
+    let reply: InvocationReply
     try {
-      const [status, body] = await startInvocation(registry.getOrCreate(workspace), workspace, deps.accessLevel, req)
-      return c.json(body, status)
+      reply = await startInvocation(sm, workspace, deps.accessLevel, req)
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err)
       console.error(`[AgentCore] invocation dispatch failed: ${why}`)
       return c.json({ error: `dispatch failed: ${why}` }, 500)
     }
+    const [status, body] = reply
+    if (status !== 200 || body.status !== 'accepted' || req.async) return c.json(body, status)
+    const invId = body.invocation as string
+    if (c.req.header('accept')?.includes('text/event-stream')) return streamInvocation(c, sm, body)
+    await waitInvocation(invId, INVOCATION_WAIT_MS, c.req.raw.signal)
+    return c.json(invocationBody(getInvocation(invId)!))
   })
 
   app.post('/', async (c, next) => {
