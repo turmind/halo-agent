@@ -37,7 +37,8 @@ import { CARD_FILE, publicOrigin, type A2ACaller, type A2AStrategies } from './e
 import { createA2ARoutes } from './routes.js'
 import { hasPendingPushes, startPushSender } from './push.js'
 import { reconcileOpenDispatches } from './outbound.js'
-import { createInvocation, deleteInvocation, findInvocation, notifyInFlight, supersedeInvocation } from './invocations.js'
+import { createInvocation, deleteInvocation, findInvocation, supersedeInvocation } from './invocations.js'
+import { notifyInFlight } from './agentcore-notify.js'
 import { CARD_SUFFIX, RPC, rpcError } from './wire.js'
 
 export const LEASE_FILE = 'agentcore.lease'

@@ -7,6 +7,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./agents/*": "./dist/agents/*.js",
+    "./a2a/agentcore-front": "./dist/a2a/agentcore-front.js",
     "./config": "./dist/config.js",
     "./init": "./dist/init.js",
     "./db/*": "./dist/db/*.js",

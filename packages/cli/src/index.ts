@@ -207,6 +207,13 @@ Environment:
                            /invocations run finishes: stdin = its final reply,
                            env + HALO_SESSION_ID, HALO_RUN_STATUS (ok|error),
                            HALO_WORKSPACE. Runs outside the agent sandbox.
+  HALO_AGENTCORE_SESSION_DIRS=1
+                           One workspace per runtime session id: --workspace
+                           is the base, the session's dir <base>/<id> (seeded
+                           from <base>/.template) is served as /workspace by a
+                           worker in its own mount namespace, uid 1000, no
+                           capabilities. Needs root; the worker gets only an
+                           env allowlist (no channel secrets).
 
 Run \`halo setup --non-interactive\` first (in the image build): the server
 exits at boot if ~/.halo/global/ is not initialized.
@@ -1368,6 +1375,13 @@ async function cmdAgentcore(argv: string[]): Promise<void> {
   if (!fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
     process.stderr.write(`Workspace is not a directory: ${workspace}\n`)
     process.exitCode = 1
+    return
+  }
+  // Session-dirs mode: this process is only the root front (no server, no
+  // dbs); it spawns the real `halo agentcore` per session id, isolated.
+  if (process.env.HALO_AGENTCORE_SESSION_DIRS === '1') {
+    const { runAgentCoreFront } = await import('@turmind/halo-server/a2a/agentcore-front')
+    await runAgentCoreFront({ base: workspace, port })
     return
   }
   process.env.HALO_RUNTIME_MODE = 'agentcore-a2a'
