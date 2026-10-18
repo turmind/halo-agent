@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Extensions: live transcription now tells speakers apart. Each finished sentence from the transcribe proxy carries a `speaker` label (`"0"`, `"1"`… — a number per stream, not a name), and a sentence spoken by several people arrives as one line per speaker; the meeting recorder extension htrans (1.0.5) shows it as "Speaker N" and writes it into `transcript.md` / `transcript.jsonl`. Captions still being spoken carry no label.
+
 ## [2.0.3] - 2026-10-18
 
 ### Fixed

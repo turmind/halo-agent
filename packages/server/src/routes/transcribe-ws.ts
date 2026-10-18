@@ -4,7 +4,11 @@
  * A canvas extension declaring capability `transcribe` streams raw PCM
  * (s16le mono 16 kHz) here; the server relays it to Amazon Transcribe
  * streaming and sends back `ready` / `partial` / `final` / `error` text
- * frames. The browser never sees AWS credentials: they come from the
+ * frames. Speaker labels are always requested: a `final` carries
+ * Transcribe's `speaker` label ("0", "1"… — per stream, not a name) when it
+ * has one, and a result spoken by several people is split into one `final`
+ * per speaker run; `partial`s never carry one. The browser never sees AWS
+ * credentials: they come from the
  * extension's own global settings (`ext-<id>.secrets.*`, read per connection
  * so a change needs no restart) or, when none are set, the SDK default chain.
  *
@@ -20,6 +24,7 @@ import {
   StartStreamTranscriptionCommand,
   TranscribeStreamingClient,
   type AudioStream,
+  type Item,
   type StartStreamTranscriptionCommandOutput,
   type TranscribeStreamingClientConfig,
   type TranscriptResultStream,
@@ -73,6 +78,46 @@ export function classifyTranscribeError(err: unknown): TranscribeErrorCode {
   if (/LimitExceeded/.test(name)) return 'limit'
   if (/BadRequest/.test(name)) return 'bad-request'
   return 'io'
+}
+
+export interface SpeakerSegment { text: string; start: number; end: number; speaker?: string }
+
+/** A final result → one segment per speaker run. Runs follow the items in
+ *  order: a pronunciation item with a different `Speaker` opens a new run,
+ *  everything else (punctuation, speakerless items) stays in the current one.
+ *  Text is cut from `text` (the Transcript) — joining item contents would lose
+ *  the spaces of mixed Chinese / English — at the offset of each run's first
+ *  item, located left to right with indexOf. One speaker → the result as is
+ *  plus its label; no labels → the result as is; an item not found in the
+ *  text → the whole result under the speaker with the most words. */
+export function splitBySpeaker(text: string, start: number, end: number, items: Item[]): SpeakerSegment[] {
+  const counts = new Map<string, number>()
+  for (const i of items) if (i.Type === 'pronunciation' && i.Speaker !== undefined) counts.set(i.Speaker, (counts.get(i.Speaker) ?? 0) + 1)
+  if (counts.size === 0) return [{ text, start, end }]
+  if (counts.size === 1) return [{ text, start, end, speaker: [...counts.keys()][0] }]
+
+  const runs: Array<{ at: number; speaker: string; start: number; end: number }> = []
+  let cursor = 0
+  for (const item of items) {
+    const content = item.Content ?? ''
+    const at = text.indexOf(content, cursor)
+    if (at < 0) {
+      let top = ''
+      for (const [s, n] of counts) if (n > (counts.get(top) ?? 0)) top = s
+      return [{ text, start, end, speaker: top }]
+    }
+    cursor = at + content.length
+    const run = runs.at(-1)
+    if (item.Type === 'pronunciation' && item.Speaker !== undefined && item.Speaker !== run?.speaker) {
+      // Anything before the first labelled item belongs to the first run.
+      runs.push({ at: run ? at : 0, speaker: item.Speaker, start: (run ? item : items[0]).StartTime ?? start, end: item.EndTime ?? end })
+    } else if (run) {
+      run.end = item.EndTime ?? run.end
+    }
+  }
+  return runs
+    .map((r, k) => ({ text: text.slice(r.at, runs[k + 1]?.at ?? text.length).trim(), start: r.start, end: r.end, speaker: r.speaker }))
+    .filter((s) => s.text)
 }
 
 /** Effective `ext-<id>.params.<key>`: stored value → manifest-declared
@@ -227,21 +272,25 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
           ...languageOpts,
           MediaEncoding: 'pcm',
           MediaSampleRateHertz: 16000,
+          ShowSpeakerLabel: true,
           AudioStream: audio(),
         }), { abortSignal: abort.signal })
         // In-stream exceptions (LimitExceeded, BadRequest…) are thrown by the
         // SDK's event-stream unmarshaller and land in the catch below.
         for await (const ev of res.TranscriptResultStream ?? ([] as TranscriptResultStream[])) {
           for (const r of ev.TranscriptEvent?.Transcript?.Results ?? []) {
-            const text = r.Alternatives?.[0]?.Transcript ?? ''
+            const alt = r.Alternatives?.[0]
+            const text = alt?.Transcript ?? ''
             if (!text) continue
-            send({
-              type: r.IsPartial ? 'partial' : 'final',
-              start: r.StartTime ?? 0,
-              end: r.EndTime ?? 0,
-              text,
-              lang: r.LanguageCode ?? ('code' in langSpec ? langSpec.code : ''),
-            })
+            const start = r.StartTime ?? 0
+            const end = r.EndTime ?? 0
+            const lang = r.LanguageCode ?? ('code' in langSpec ? langSpec.code : '')
+            // Speaker labels only ever come on final items.
+            if (r.IsPartial) {
+              send({ type: 'partial', start, end, text, lang })
+              continue
+            }
+            for (const s of splitBySpeaker(text, start, end, alt?.Items ?? [])) send({ type: 'final', ...s, lang })
           }
         }
         if (!closed) ws.close(1000)

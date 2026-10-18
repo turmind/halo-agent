@@ -10,9 +10,12 @@ import { WebSocket } from 'ws'
  *    `transcribe` capability → 403;
  *  - `ready` is sent on connect, before the upstream call resolves (the SDK's
  *    send() only resolves once audio flowed — waiting would deadlock);
- *  - binary PCM is fed to StartStreamTranscription (pcm / 16 kHz), results
- *    come back as `partial` / `final` frames, `{"type":"end"}` flushes and
- *    the server closes 1000;
+ *  - binary PCM is fed to StartStreamTranscription (pcm / 16 kHz, speaker
+ *    labels on), results come back as `partial` / `final` frames,
+ *    `{"type":"end"}` flushes and the server closes 1000;
+ *  - a `final` carries Transcribe's `speaker` label; one spoken by several
+ *    speakers is split into one `final` per speaker run, its text cut from the
+ *    Transcript; `partial`s never carry a speaker;
  *  - `lang=auto` → IdentifyMultipleLanguages + LanguageOptions from the
  *    extension param (manifest default otherwise); `lang=xx-XX,yy-YY` (2–5
  *    distinct codes) → the same over that list; region/creds from
@@ -41,7 +44,7 @@ const extensions: Record<string, unknown> = {
 }
 vi.mock('../src/extensions/registry.js', () => ({ getExtension: (id: string) => extensions[id] }))
 
-const { createTranscribeProxy, classifyTranscribeError, TRANSCRIBE_PATH } = await import('../src/routes/transcribe-ws.js')
+const { createTranscribeProxy, classifyTranscribeError, splitBySpeaker, TRANSCRIBE_PATH } = await import('../src/routes/transcribe-ws.js')
 const { createUpgradeRouter } = await import('../src/ws/upgrade-router.js')
 type Factory = NonNullable<Parameters<typeof createTranscribeProxy>[0]>['createClient']
 
@@ -159,7 +162,7 @@ describe('transcribe proxy streaming', () => {
     expect(frames.filter((f) => f.type === 'partial')).toHaveLength(2)
     expect(frames.at(-1)).toEqual({ type: 'final', start: 0, end: 0.2, text: '你好', lang: 'zh-CN' })
     expect(up.audioBytes).toBe(6400)
-    expect(up.input).toMatchObject({ LanguageCode: 'zh-CN', MediaEncoding: 'pcm', MediaSampleRateHertz: 16000 })
+    expect(up.input).toMatchObject({ LanguageCode: 'zh-CN', MediaEncoding: 'pcm', MediaSampleRateHertz: 16000, ShowSpeakerLabel: true })
     expect(up.input).not.toHaveProperty('IdentifyMultipleLanguages')
     // No settings → us-east-1 + the SDK default credential chain (a provider fn).
     expect(up.region).toBe('us-east-1')
@@ -169,7 +172,7 @@ describe('transcribe proxy streaming', () => {
   it('lang=auto (default) → multi-language identification; settings win over manifest default', async () => {
     let r = run(connect('ext=htrans'), (s) => s.send(JSON.stringify({ type: 'end' })))
     await r
-    expect(up.input).toMatchObject({ IdentifyMultipleLanguages: true, LanguageOptions: 'ja-JP,en-US' })
+    expect(up.input).toMatchObject({ IdentifyMultipleLanguages: true, LanguageOptions: 'ja-JP,en-US', ShowSpeakerLabel: true })
     expect(up.input).not.toHaveProperty('LanguageCode')
 
     settings.set('ext-htrans.params.auto_languages', 'zh-CN,en-US')
@@ -261,6 +264,73 @@ describe('transcribe proxy streaming', () => {
       for (let i = 0; i < 31; i++) s.send(Buffer.alloc(32000))
     })
     expect(frames.at(-1)).toMatchObject({ type: 'error', code: 'io' })
+  })
+})
+
+/** A Transcribe item shaped like a real `ShowSpeakerLabel` final's. */
+const word = (Content: string, StartTime: number, EndTime: number, Speaker?: string) =>
+  ({ Type: 'pronunciation' as const, Content, StartTime, EndTime, VocabularyFilterMatch: false, Confidence: 0.99, ...(Speaker === undefined ? {} : { Speaker }) })
+const punct = (Content: string, at: number) => ({ Type: 'punctuation' as const, Content, StartTime: at, EndTime: at, VocabularyFilterMatch: false })
+
+/** Two speakers in one final, mixed Chinese / English. */
+const TWO_TEXT = '预算要加 20% 吗? I think so, 我同意。'
+const twoItems = [
+  word('预算', 0.1, 0.5, '0'), word('要', 0.5, 0.6, '0'), word('加', 0.6, 0.8, '0'), word('20%', 0.8, 1.3, '0'), word('吗', 1.3, 1.5, '0'), punct('?', 1.5),
+  word('I', 2.0, 2.1, '1'), word('think', 2.1, 2.4, '1'), word('so', 2.4, 2.6, '1'), punct(',', 2.6), word('我', 2.8, 3.0, '1'), word('同意', 3.0, 3.4, '1'), punct('。', 3.4),
+]
+
+describe('speaker labels', () => {
+  /** Upstream: a speakerless partial, then the given finals, after the audio ends. */
+  const finals = (...results: Array<{ text: string; start: number; end: number; items?: unknown[] }>) =>
+    async (input: Record<string, unknown>) => (async function* () {
+      for await (const _ of input.AudioStream as AsyncIterable<unknown>) { /* drain */ }
+      yield { TranscriptEvent: { Transcript: { Results: [{ IsPartial: true, StartTime: 0, EndTime: 0.3, Alternatives: [{ Transcript: '预算', Items: [{ Type: 'pronunciation', Content: '预算', StartTime: 0.1, EndTime: 0.3 }] }], LanguageCode: 'zh-CN' }] } } }
+      for (const f of results) {
+        yield { TranscriptEvent: { Transcript: { Results: [{ IsPartial: false, StartTime: f.start, EndTime: f.end, Alternatives: [{ Transcript: f.text, ...(f.items ? { Items: f.items } : {}) }], LanguageCode: 'zh-CN' }] } } }
+      }
+    })()
+  const stream = async () => (await run(connect('ext=htrans&lang=zh-CN'), (s) => s.send(JSON.stringify({ type: 'end' })))).frames
+
+  it('one speaker → one final, unchanged but for its label; partials carry none', async () => {
+    behavior = finals({ text: '大家好,', start: 0.056, end: 0.616, items: [word('大家', 0.096, 0.456, '0'), word('好', 0.456, 0.616, '0'), punct(',', 0.616)] })
+    const frames = await stream()
+    expect(frames.find((f) => f.type === 'partial')).toEqual({ type: 'partial', start: 0, end: 0.3, text: '预算', lang: 'zh-CN' })
+    expect(frames.filter((f) => f.type === 'final')).toEqual([{ type: 'final', start: 0.056, end: 0.616, text: '大家好,', lang: 'zh-CN', speaker: '0' }])
+  })
+
+  it('two speakers in one final → one final per speaker, text cut from the Transcript', async () => {
+    behavior = finals({ text: TWO_TEXT, start: 0.05, end: 3.45, items: twoItems })
+    expect((await stream()).filter((f) => f.type === 'final')).toEqual([
+      { type: 'final', start: 0.1, end: 1.5, text: '预算要加 20% 吗?', lang: 'zh-CN', speaker: '0' },
+      { type: 'final', start: 2.0, end: 3.4, text: 'I think so, 我同意。', lang: 'zh-CN', speaker: '1' },
+    ])
+  })
+
+  it('a final without items, or without labelled items → one final without a speaker', async () => {
+    behavior = finals({ text: '你好', start: 0, end: 0.2 }, { text: '再见', start: 1, end: 1.4, items: [word('再见', 1, 1.4)] })
+    expect((await stream()).filter((f) => f.type === 'final')).toEqual([
+      { type: 'final', start: 0, end: 0.2, text: '你好', lang: 'zh-CN' },
+      { type: 'final', start: 1, end: 1.4, text: '再见', lang: 'zh-CN' },
+    ])
+  })
+
+  it('an item not found in the Transcript → the whole result under the speaker with the most words', async () => {
+    const items = [word('好', 0.1, 0.2, '0'), word('的', 0.2, 0.3, '1'), word('呀', 0.3, 0.4, '1'), word('ok', 0.4, 0.5, '0'), word('嗯', 0.5, 0.6, '1')]
+    expect(splitBySpeaker('好的呀 OK 嗯', 0, 0.7, items)).toEqual([{ text: '好的呀 OK 嗯', start: 0, end: 0.7, speaker: '1' }])
+  })
+
+  it('run boundaries: leading punctuation joins the first run, a speaker switch back opens a new run, empty segments are dropped', () => {
+    const items = [punct('“', 0), word('A', 0.1, 0.2, '0'), word('B', 0.3, 0.4, '1'), punct('.', 0.4), word('C', 0.5, 0.6, '0')]
+    expect(splitBySpeaker('“A B. C', 0, 0.7, items)).toEqual([
+      { text: '“A', start: 0, end: 0.2, speaker: '0' },
+      { text: 'B.', start: 0.3, end: 0.4, speaker: '1' },
+      { text: 'C', start: 0.5, end: 0.6, speaker: '0' },
+    ])
+    // Speakerless pronunciation items stay in the current run.
+    expect(splitBySpeaker('a b c', 0, 1, [word('a', 0, 0.1, '0'), word('b', 0.2, 0.3), word('c', 0.4, 0.5, '2')])).toEqual([
+      { text: 'a b', start: 0, end: 0.3, speaker: '0' },
+      { text: 'c', start: 0.4, end: 0.5, speaker: '2' },
+    ])
   })
 })
 
