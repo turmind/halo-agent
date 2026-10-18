@@ -306,8 +306,11 @@ describe('front', () => {
     return `http://127.0.0.1:${(front.server.address() as { port: number }).port}`
   }
 
-  afterEach(() => {
+  afterEach(async () => {
     front?.close()
+    // A 202'd /notify runs the hook detached, writing into `out` after the
+    // test body returns: wait for it, or rmSync races its writes (ENOTEMPTY).
+    await front?.whenIdle(5000)
     front = null
     mounted = true
     setupFails = false
