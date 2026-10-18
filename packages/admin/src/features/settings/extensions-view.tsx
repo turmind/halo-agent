@@ -8,6 +8,7 @@ import { wsClient } from '@/shared/ws-client'
 import { useI18n } from '@/shared/i18n'
 import { cn, confirmAction } from '@/shared/utils'
 import { getExtensionsSnapshot, platformLabels, runsHere, subscribe } from '@/features/editor/previews/registry'
+import { newerStatus } from './update-status'
 
 /**
  * Settings → Extensions: the installed canvas preview extensions
@@ -34,9 +35,9 @@ export function ExtensionsView() {
   const [updates, setUpdates] = useState<ExtensionsUpdateStatus | null>(null)
 
   useEffect(() => {
-    const off = wsClient.on('updates:changed', (frame) => { if (frame.scope === 'extensions') setUpdates(frame.status) })
+    const off = wsClient.on('updates:changed', (frame) => { if (frame.scope === 'extensions') setUpdates((prev) => newerStatus(prev, frame.status)) })
     api.updates.extensions()
-      .then(setUpdates)
+      .then((next) => setUpdates((prev) => newerStatus(prev, next)))
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
     return off
   }, [])
@@ -44,7 +45,7 @@ export function ExtensionsView() {
   function handleCheck() {
     setError(null)
     api.updates.checkExtensions()
-      .then(setUpdates)
+      .then((next) => setUpdates((prev) => newerStatus(prev, next)))
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }
 

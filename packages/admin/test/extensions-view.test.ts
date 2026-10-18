@@ -121,6 +121,24 @@ describe('Settings → Extensions updates', () => {
     expect(rows()[0].textContent).toContain('settings.extensions.latest')
   })
 
+  it('a result pushed before the check request answers is not overwritten by the late `checking: true`', async () => {
+    let push: ((frame: unknown) => void) | undefined
+    vi.spyOn(wsClient, 'on').mockImplementation(((type: string, handler: (frame: unknown) => void) => {
+      if (type === 'updates:changed') push = handler
+      return () => {}
+    }) as typeof wsClient.on)
+    let answer!: (s: ExtensionsUpdateStatus) => void
+    vi.spyOn(api.updates, 'checkExtensions').mockReturnValue(new Promise((r) => { answer = r }))
+    setExtensions({ extensions: [ext('glb')], disabled: [], errors: [] })
+    await act(async () => root.render(createElement(ExtensionsView)))
+    const checkButton = [...host.querySelectorAll('button')].find((b) => b.textContent === 'settings.update.check')!
+    await act(async () => { checkButton.click() })
+    act(() => push!({ type: 'updates:changed', scope: 'extensions', status }))
+    await act(async () => { answer({ ...idle, checking: true }) }) // the HTTP answer, carrying the pre-check checkedAt
+    expect(host.textContent).not.toContain('settings.update.checking')
+    expect(checkButton.disabled).toBe(false)
+  })
+
   // Header verdict after "Last checked": count of fresh `available` rows, or
   // "all up to date" only when every row is `current`.
   const header = () => [...host.querySelectorAll('span')].find((s) => s.textContent?.startsWith('settings.extensions.lastChecked'))?.textContent ?? ''

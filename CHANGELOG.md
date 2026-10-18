@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Settings → Extensions: after a check, "Last checked hh:mm" is now followed by its result — "· 2 updates available", or "· all up to date" when every extension is on its latest version — so a check that finds nothing new no longer looks like it did nothing; when some extension couldn't be checked (no update info, unreachable source, needs a newer Halo) only the time is shown, and those rows keep their own grey note.
 
+### Fixed
+
+- Settings: pressing **Check for updates** (for Halo itself or for extensions) could leave it showing "Checking…" for good, with the button greyed out, until the page was reloaded. This happened behind a proxy or CDN (e.g. CloudFront), where the finished result, pushed over the WebSocket, can reach the browser before the answer to the button's own request; that late answer, still saying "checking", then replaced the result. The page now ignores a status older than the one it already shows.
+
 ## [2.0.2] - 2026-10-17
 
 ### Added

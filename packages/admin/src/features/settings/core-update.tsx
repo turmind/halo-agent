@@ -7,6 +7,7 @@ import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
 import { useI18n } from '@/shared/i18n'
 import { currentPlatform } from '@/features/editor/previews/registry'
+import { newerStatus } from './update-status'
 
 const UPGRADE_COMMAND = 'halo upgrade && halo server restart'
 const RELEASES_URL = 'https://github.com/turmind/halo-agent/releases'
@@ -27,9 +28,9 @@ export function CoreUpdate({ version }: { version: string }) {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    const off = wsClient.on('updates:changed', (frame) => { if (frame.scope === 'core') setStatus(frame.status) })
+    const off = wsClient.on('updates:changed', (frame) => { if (frame.scope === 'core') setStatus((prev) => newerStatus(prev, frame.status)) })
     api.updates.core()
-      .then(setStatus)
+      .then((next) => setStatus((prev) => newerStatus(prev, next)))
       .catch((err) => setRequestError(err instanceof Error ? err.message : String(err)))
     return off
   }, [])
@@ -37,7 +38,7 @@ export function CoreUpdate({ version }: { version: string }) {
   function check() {
     setRequestError(null)
     api.updates.checkCore()
-      .then(setStatus)
+      .then((next) => setStatus((prev) => newerStatus(prev, next)))
       .catch((err) => setRequestError(err instanceof Error ? err.message : String(err)))
   }
 
