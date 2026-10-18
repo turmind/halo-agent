@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-10-18
+
 ### Added
 
 - Extensions: live transcription now tells speakers apart. Each finished sentence from the transcribe proxy carries a `speaker` label (`"0"`, `"1"`… — a number per stream, not a name), and a sentence spoken by several people arrives as one line per speaker; the meeting recorder extension htrans (1.0.5) shows it as "Speaker N" and writes it into `transcript.md` / `transcript.jsonl`. Captions still being spoken carry no label.
@@ -1102,7 +1104,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.3...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.4...HEAD
+[2.0.4]: https://github.com/turmind/halo-agent/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/turmind/halo-agent/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/turmind/halo-agent/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/turmind/halo-agent/compare/v2.0.0...v2.0.1
