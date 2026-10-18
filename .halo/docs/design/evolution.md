@@ -87,7 +87,7 @@ Restart-safe: no in-memory state. On server reboot, ticker re-evaluates db on fi
 
 ## Wrapper Orchestration — Mode=Run (3-phase model)
 
-Located: `/packages/server/src/evolution/evo-wrapper.ts` (compiled to `.js`, spawned by ticker)
+Located: `/packages/server/src/evolution/evo-wrapper.ts` (compiled to `.js`, spawned by ticker). `spawn.ts` runs `node <dir of its own module>/evo-wrapper.js`: `server/dist/evolution/evo-wrapper.js` in a source / desktop server tree. The npm package is a single-file bundle, so `build-bundle.mjs` emits the wrapper as a second esbuild entry, `dist/evo-wrapper.js` beside `dist/index.js`, and fails the build when it is missing. 1.6.0–2.0.4 shipped without it, and every evo run on an npm install timed out. The wrapper's stderr is appended to its own run / apply log (`~/.halo/global/logs/evo/{run,apply}-<id>.log`), so a startup failure such as `Cannot find module` shows there. A non-zero exit or a signal logs `[EvoSpawn] <mode> wrapper pid=… id=… exited code=… signal=… — see <log>` at error level.
 
 The wrapper is the orchestrator; individual agents do focused work only. Every phase spawns a **fresh** cli session (`-n`) — no message history is inherited. The source conversation reaches evo/score as disk files (`tool-flow.md` for a fast skim, `source-snapshot.json` for the full record), with inline base64 images decoded to `images/` so the agents can `view_image` them; the briefs direct agents to write run-dir artifacts (patch.md, .skip.md, score.json) with absolute paths because relative tool paths resolve against the sandbox.
 
@@ -315,7 +315,7 @@ After apply publishes to main, **no explicit session-release step needed**. Sess
 |---|---|
 | `/packages/server/src/evolution/enqueue.ts` | Snapshot session + prompt surface at trigger time. Write runDir/, INSERT evolution_runs. Both `/evo` and pre-compact hook call this. |
 | `/packages/server/src/evolution/ticker.ts` | Stateless 30s scheduler. Mark timeouts, claim pending, spawn wrappers. Per-workspace apply mutex. Broadcast status changes to admin UI. |
-| `/packages/server/src/evolution/spawn.ts` | Real spawner: detached Node child running evo-wrapper.js. Override-able for testing. |
+| `/packages/server/src/evolution/spawn.ts` | Real spawner: detached Node child running `evo-wrapper.js` from its own module's directory (`dist/evo-wrapper.js` in the npm bundle — build-bundle's second entry). stdin/stdout ignored, stderr appended to the run / apply log; a non-zero exit logs an `[EvoSpawn]` error. `spawnEvoWrapper(path, mode, id)` takes the wrapper path for tests; the ticker's spawner is still override-able via `setEvoSpawner`. |
 | `/packages/server/src/evolution/evo-wrapper.ts` | Wrapper orchestrator. 3-phase run mode (draft/dry-run/score). Apply mode (merge/regress/publish). Heartbeat every 60s. Handles Windows command-line limits via stdin briefs. |
 | `/packages/server/src/evolution/archive.ts` | Archive job: 14d → zip (pure-JS jszip) + delete, 30d → purge. Runs daily + at boot. Idempotent. |
 

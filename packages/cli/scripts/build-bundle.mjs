@@ -13,7 +13,8 @@
  *   ├── bin/
  *   │   └── halo.js    ← `#!/usr/bin/env node` shim
  *   ├── dist/
- *   │   └── index.js     ← esbuild bundle (cli + server + core)
+ *   │   ├── index.js     ← esbuild bundle (cli + server + core)
+ *   │   └── evo-wrapper.js ← evo wrapper entry, spawned by evolution/spawn.ts
  *   ├── templates/       ← copied from packages/server/templates/
  *   ├── bundled-docs/    ← copied from .halo/docs/ (the user-facing subset)
  *   └── admin-out/       ← copied from packages/admin/out/
@@ -211,13 +212,24 @@ console.log(`[build-bundle] version: ${PKG_VERSION}${IS_RELEASE ? ' (release)' :
 // resolve at runtime.
 // Hard timeout — if esbuild hangs, abort within 60s rather than burn CPU.
 const TIMEOUT_MS = 60_000
+// Second entry: the evo wrapper. The server spawns it as its own process
+// (`node <dir of spawn.ts's code>/evo-wrapper.js`, evolution/spawn.ts), which
+// in the bundle means `dist/evo-wrapper.js` beside index.js. Without it every
+// evo run on an npm install died at `Cannot find module` and timed out
+// (1.6.0–2.0.4). Bundled from server's tsc output like the rest; each entry is
+// self-contained (no splitting), so `import.meta.url` in the wrapper is its own
+// file and its `argv[1] === import.meta.url` entry guard holds.
+const EVO_WRAPPER_SRC = path.join(SERVER_ROOT, 'dist', 'evolution', 'evo-wrapper.js')
 const buildPromise = build({
-  entryPoints: [path.join(CLI_ROOT, 'src', 'index.ts')],
+  entryPoints: {
+    index: path.join(CLI_ROOT, 'src', 'index.ts'),
+    'evo-wrapper': EVO_WRAPPER_SRC,
+  },
   bundle: true,
   platform: 'node',
   format: 'esm',
   target: 'node22',
-  outfile: path.join(PUB_DIR, 'dist', 'index.js'),
+  outdir: path.join(PUB_DIR, 'dist'),
   external: EXTERNAL,
   define: {
     'process.env.HALO_VERSION': JSON.stringify(PKG_VERSION),
@@ -237,7 +249,11 @@ timer.unref()
 await buildPromise
 clearTimeout(timer)
 
-console.log('[build-bundle] bundled dist/index.js')
+if (!fs.existsSync(path.join(PUB_DIR, 'dist', 'evo-wrapper.js'))) {
+  console.error('[build-bundle] FATAL: dist/evo-wrapper.js missing — every evo run would fail with `Cannot find module` and time out.')
+  process.exit(1)
+}
+console.log('[build-bundle] bundled dist/index.js + dist/evo-wrapper.js')
 
 // ── 2. bin shim ────────────────────────────────────────────────────────────
 // Silence two always-noise Node warnings that transitive deps trigger on
