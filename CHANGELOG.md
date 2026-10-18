@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-10-18
+
 ### Fixed
 
 - Self-evolution: on an npm install of Halo, evo runs never started and each one ended as `timeout` after about 36 minutes (three 12-minute heartbeat attempts). This has been the case since 1.6.0. The package was missing `dist/evo-wrapper.js`, the process the server spawns for each run or apply. It now ships, and the bundle build fails if it is missing. When a wrapper fails to start, its error is now written to that run's log in the Evolution tab, and the server logs an `[EvoSpawn]` error.
@@ -1108,7 +1110,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.4...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.5...HEAD
+[2.0.5]: https://github.com/turmind/halo-agent/compare/v2.0.4...v2.0.5
 [2.0.4]: https://github.com/turmind/halo-agent/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/turmind/halo-agent/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/turmind/halo-agent/compare/v2.0.1...v2.0.2
