@@ -10,7 +10,8 @@ import {
   tryAcquireLease, heartbeatLease, releaseLease, WorkspaceLease, upstreamStrategies, upstreamAccessLevel, seedAgentCard, createAgentCoreA2ARoutes, createAgentCoreA2A,
 } from '../src/a2a/agentcore.js'
 import { buildCard } from '../src/a2a/exposure.js'
-import { runtimeSessionId, sigv4Headers, isRetryableConflict, send, type Remote } from '../src/a2a/outbound.js'
+import { runtimeSessionId, sigv4Headers, isRetryableConflict, send } from '../src/a2a/outbound.js'
+import type { Remote } from '../src/a2a/remotes.js'
 import { createA2ADb, setA2ADb, getA2ADb } from '../src/db/a2a-db.js'
 import { createRunsDb, setRunsDb, getRunsDb, insertRunning, runningSessions } from '../src/db/runs-db.js'
 import { createDb } from '../src/db/index.js'

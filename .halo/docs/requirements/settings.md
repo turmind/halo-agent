@@ -190,13 +190,13 @@ A malicious skill that tries `curl -H "Bearer {{aws-bedrock-claude-invoke.secret
 
 ## Orphans
 
-`params` / `secrets` values present in `settings.yaml` that no current schema declaration covers (the whole namespace is gone, or just that key) are surfaced as **orphans** in a dedicated tab. They aren't deleted automatically — uninstalling a skill keeps its values around so re-installing pops them back in. A switched-off extension's values (its `ext-<id>` namespace and the skills it ships) are not orphans and are never listed here. Users prune them on their own schedule via the orphan tab's per-key Remove buttons.
+`params` / `secrets` values present in `settings.yaml` that no current schema declaration covers (the whole namespace is gone, or just that key) are surfaced as **orphans** in a dedicated tab. They aren't deleted automatically — uninstalling a skill keeps its values around so re-installing pops them back in. A switched-off extension's values (its `ext-<id>` namespace and the skills it ships) are not orphans and are never listed here. Outbound A2A tokens `a2a.secrets.<remote>` are declared by `~/.halo/secrets/a2a-remotes.yaml` (one field per `auth: bearer` remote, shown under **System → A2A remotes**), so they aren't orphans either — only a token whose remote has left the list is. Users prune them on their own schedule via the orphan tab's per-key Remove buttons.
 
 `general.*` is intentionally excluded from orphan detection — its declared keys are enumerated by the built-in schema, so anything else there is treated as either a typo or a forward-compat field, not an orphan.
 
 ## Left nav
 
-Groups top to bottom: **System** (General · Security · Extensions, each with a leading icon), **Extension settings**, **Model providers**, **Agents**, **Skills**, and **Orphans** when there are any. Each group header is a quiet toggle (chevron + smaller muted label) that collapses its items; all groups start expanded, and the collapsed ones are remembered per browser (`localStorage` `halo_settings_navCollapsed`, collapsed ids only — so a group that appears later starts expanded).
+Groups top to bottom: **System** (General · A2A remotes — only while a2a-remotes.yaml has a bearer remote · Security · Extensions, each with a leading icon), **Extension settings**, **Model providers**, **Agents**, **Skills**, and **Orphans** when there are any. Each group header is a quiet toggle (chevron + smaller muted label) that collapses its items; all groups start expanded, and the collapsed ones are remembered per browser (`localStorage` `halo_settings_navCollapsed`, collapsed ids only — so a group that appears later starts expanded).
 
 ## Extensions view and update notices
 

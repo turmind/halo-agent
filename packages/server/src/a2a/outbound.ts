@@ -16,12 +16,9 @@
  *     still-open dispatch (never polls)
  */
 import fs from 'node:fs'
-import path from 'node:path'
 import crypto from 'node:crypto'
-import YAML from 'yaml'
 import { Hono } from 'hono'
 import { config, getServerSecret } from '../config.js'
-import { secretsDir } from '../paths.js'
 import { getA2ADb, type A2ADb } from '../db/a2a-db.js'
 import type { ToolDef } from '../agents/bedrock-agent.js'
 import { capReport } from '../agents/relay.js'
@@ -30,12 +27,11 @@ import { Sha256 } from '@aws-crypto/sha256-js'
 import { defaultProvider } from '@aws-sdk/credential-provider-node'
 import { policyRequest, type HttpResult } from './http.js'
 import { A2A_VERSION, TERMINAL, rowState, type WireFile } from './wire.js'
+import { loadRemotes, type Remote } from './remotes.js'
 import { MAX_IMAGES_TOTAL_BYTES, readImageFile, readResultParts, refusedPath } from './files.js'
 import type { AccountAccessLevel } from '../channels/shared/accounts.js'
 
 const TIMEOUT_MS = 30_000
-
-export interface Remote { name: string; card: string; auth: 'bearer' | 'sigv4'; pushBase?: string }
 
 /** Persisted dispatch (one remote task this server is waiting on). */
 interface DispatchRow {
@@ -57,22 +53,6 @@ export const A2A_UNAVAILABLE = 'a2a is not available in the CLI / TUI — it onl
 
 function jsonErr(error: string): string { return JSON.stringify({ code: 1, error }) }
 function errMsg(err: unknown): string { return err instanceof Error ? err.message : String(err) }
-
-// ── remotes ───────────────────────────────────────────────────────────
-
-/** The one remote list (server-wide; only full sessions can read / edit it). */
-function remotesFile(): string { return path.join(secretsDir(), 'a2a-remotes.yaml') }
-
-export function loadRemotes(): Record<string, Remote> {
-  let doc: { remotes?: Record<string, { card?: string; auth?: string; push_base?: string }> }
-  try { doc = (YAML.parse(fs.readFileSync(remotesFile(), 'utf8')) ?? {}) as typeof doc } catch { return {} }
-  const out: Record<string, Remote> = {}
-  for (const [name, r] of Object.entries(doc.remotes ?? {})) {
-    if (!r?.card) continue
-    out[name] = { name, card: r.card, auth: r.auth === 'sigv4' ? 'sigv4' : 'bearer', pushBase: r.push_base?.replace(/\/+$/, '') }
-  }
-  return out
-}
 
 // ── auth ──────────────────────────────────────────────────────────────
 

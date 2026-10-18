@@ -18,6 +18,9 @@
  *                                            `halo-extension.json` `settings`.
  *                                            Stored at `ext-<id>.params.<key>` /
  *                                            `ext-<id>.secrets.<key>` (global only).
+ *   5. **A2A remote tokens**             — one per `auth: bearer` remote in
+ *                                            `secrets/a2a-remotes.yaml`. Stored
+ *                                            at `a2a.secrets.<remote>`.
  *
  * Each declared field carries enough metadata for the admin UI to render a
  * proper input (label, help text, secret masking, default placeholder).
@@ -45,6 +48,7 @@ import { loadProviders } from './models/registry.js'
 import { getSnapshot as getExtensionsSnapshot } from './extensions/registry.js'
 import { extensionSkillIds, listSkillDirs } from './agents/skill-sources.js'
 import { createMtimeCache } from './routes/mtime-cache.js'
+import { loadRemotes } from './a2a/remotes.js'
 
 const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
 
@@ -386,7 +390,31 @@ function agentSections(): SchemaSection[] {
  * Without it the schema only covers globally-deployed skills.
  */
 export function loadSettingsSchema(workspaceRoot?: string): SchemaSection[] {
-  return [generalSection(), ...providerSections(), ...skillSections(workspaceRoot), ...agentSections(), ...extensionSections()]
+  return [generalSection(), ...a2aSections(), ...providerSections(), ...skillSections(workspaceRoot), ...agentSections(), ...extensionSections()]
+}
+
+/** Outbound A2A bearer tokens — one `a2a.secrets.<remote>` field per
+ *  `auth: bearer` remote in a2a-remotes.yaml (sigv4 remotes sign with AWS
+ *  creds, no token). Not globalOnly: outbound.ts reads it via getServerSecret,
+ *  so a workspace value overrides global. No bearer remote → no section. */
+function a2aSections(): SchemaSection[] {
+  const fields: SchemaField[] = Object.values(loadRemotes()).filter((r) => r.auth === 'bearer').map((r) => ({
+    key: r.name,
+    kind: 'secret',
+    secret: true,
+    description: `Bearer token for the A2A remote "${r.name}" (card: ${r.card}).`,
+    description_zh: `A2A 远程 "${r.name}" 的 bearer token（card：${r.card}）。`,
+  }))
+  if (fields.length === 0) return []
+  return [{
+    namespaceId: 'a2a',
+    source: 'general',
+    displayName: 'A2A remotes',
+    displayName_zh: 'A2A 远程',
+    description: 'Tokens for the bearer remotes in ~/.halo/secrets/a2a-remotes.yaml. Prefer global: non-full sessions can read the workspace settings.yaml.',
+    description_zh: '~/.halo/secrets/a2a-remotes.yaml 中 bearer 远程的 token。建议设在全局：非 full 会话可以读取工作区的 settings.yaml。',
+    fields,
+  }]
 }
 
 /** One section per installed extension that declares manifest `settings`,

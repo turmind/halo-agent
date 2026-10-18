@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound, Puzzle, AlertTriangle, X, ChevronRight, SlidersHorizontal } from 'lucide-react'
+import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound, Puzzle, AlertTriangle, X, ChevronRight, SlidersHorizontal, Network } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { useI18n } from '@/shared/i18n'
 import { useTheme } from '@/shared/theme'
@@ -291,7 +291,7 @@ function NavList({
   const group = (id: string, label: string) => ({ label, collapsed: collapsed.has(id), onToggle: () => toggle(id) })
   return (
     <div className="py-1">
-      <NavGroup {...group('system', t('settings.nav.system'))} items={grouped.general} icons={{ general: SlidersHorizontal }} active={active} onPick={onPick}>
+      <NavGroup {...group('system', t('settings.nav.system'))} items={grouped.general} icons={{ general: SlidersHorizontal, a2a: Network }} active={active} onPick={onPick}>
         {/* Security / Extensions — synthetic nav targets like __orphans:
             credentials live in config.yaml and installed canvas preview
             extensions in ~/.halo/global/extensions/, not settings.yaml. */}
