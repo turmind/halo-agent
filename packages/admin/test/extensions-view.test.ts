@@ -120,4 +120,30 @@ describe('Settings → Extensions updates', () => {
     expect(host.textContent).not.toContain('settings.update.checking')
     expect(rows()[0].textContent).toContain('settings.extensions.latest')
   })
+
+  // Header verdict after "Last checked": count of fresh `available` rows, or
+  // "all up to date" only when every row is `current`.
+  const header = () => [...host.querySelectorAll('span')].find((s) => s.textContent?.startsWith('settings.extensions.lastChecked'))?.textContent ?? ''
+  const entry = (id: string, state: 'current' | 'available' | 'not-found') => ({ id, installed: '1.0.0', state, ...(state === 'not-found' ? { error: 'x' } : { latest: state === 'available' ? '1.1.0' : '1.0.0' }) })
+  async function renderWith(entries: ReturnType<typeof entry>[]) {
+    vi.spyOn(api.updates, 'extensions').mockResolvedValue({ checkedAt: Date.UTC(2026, 0, 1, 8, 47), checking: false, extensions: entries })
+    setExtensions({ extensions: [ext('glb'), ext('ipynb')], disabled: [ext('obj')], errors: [] })
+    await act(async () => root.render(createElement(ExtensionsView)))
+  }
+
+  it('header: updates available', async () => {
+    await renderWith([entry('glb', 'available'), entry('ipynb', 'current'), entry('obj', 'not-found')])
+    expect(header()).toContain(' · settings.extensions.updateAvailable')
+    expect(header()).not.toContain('settings.extensions.allCurrent')
+  })
+
+  it('header: all up to date (off rows included)', async () => {
+    await renderWith([entry('glb', 'current'), entry('ipynb', 'current'), entry('obj', 'current')])
+    expect(header()).toContain(' · settings.extensions.allCurrent')
+  })
+
+  it('header: no verdict when a row has none to give (not-found)', async () => {
+    await renderWith([entry('glb', 'current'), entry('ipynb', 'current'), entry('obj', 'not-found')])
+    expect(header()).not.toContain(' · ')
+  })
 })

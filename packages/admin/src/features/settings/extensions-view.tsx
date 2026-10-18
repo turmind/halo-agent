@@ -109,6 +109,15 @@ export function ExtensionsView() {
   }, [snapshot, updates])
   const empty = rows.length === 0 && snapshot.errors.length === 0
   const checking = updates?.checking ?? false
+  // Header verdict after "Last checked", from the same version-matched
+  // entries the rows show: N available, or all current; anything else
+  // (unknown, not-found, unreachable, needs-halo…) says nothing — those rows
+  // carry their own grey line, and "all up to date" would mislead.
+  const available = rows.filter((r) => r.update?.state === 'available').length
+  const summary = checking ? null
+    : available > 0 ? t(available === 1 ? 'settings.extensions.updateAvailable' : 'settings.extensions.updatesAvailable', { n: available })
+    : rows.length > 0 && rows.every((r) => r.update?.state === 'current') ? t('settings.extensions.allCurrent')
+    : null
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
@@ -131,6 +140,7 @@ export function ExtensionsView() {
           {updates?.checkedAt != null && (
             <span className="text-[10px] text-[var(--muted-foreground)]">
               {t('settings.extensions.lastChecked', { time: new Date(updates.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }) })}
+              {summary && ` · ${summary}`}
             </span>
           )}
           <button

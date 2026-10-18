@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 108 // skills/extension (ext.sh changed again after 107): `install <id>` reads `<hub_base>/<id>/update.json` (new hub_base param, https only, sha256 + id + version checked, `minHalo` vs `halo --version` — unreadable version only warns) instead of release API / git tags, `models` keeps the release API; a fresh install (no previous `<id>/`) clears that id's on / off state so it starts on; a failed `.state.json` write only warns.
+export const TEMPLATE_VERSION = 109 // docs: requirements/settings.md — Settings → Extensions header adds "· N updates available" / "· all up to date" after "Last checked".
+// 108: skills/extension (ext.sh changed again after 107): `install <id>` reads `<hub_base>/<id>/update.json` (new hub_base param, https only, sha256 + id + version checked, `minHalo` vs `halo --version` — unreadable version only warns) instead of release API / git tags, `models` keeps the release API; a fresh install (no previous `<id>/`) clears that id's on / off state so it starts on; a failed `.state.json` write only warns.
 // 107: skills/extension: ext.sh `remove` also drops the extension's on / off state (`extensions/.state.json`), so a reinstall starts on.
 // 106: agents/__score__: the dry-run session log is `cli_*.ui.jsonl` (session store 2.0).
 // 105: docs: guide/secrets-and-credentials.md — unset <<ENV>> model keys fail before the call + Settings warning; where the server reads env vars (foreground / server.env / system unit / desktop).
