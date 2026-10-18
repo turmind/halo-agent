@@ -62,7 +62,8 @@ When you catch yourself doing any of these, stop and reconsider:
   - Keep all five package versions aligned with the tag. Build admin via `pnpm --filter @turmind/halo-admin build` (never bare `next build`) and verify `packages/admin/out/monaco/vs/loader.js`. Template changes require a same-change `TEMPLATE_VERSION` bump in `packages/server/src/init.ts`.
   - Root npm installs use `umask 022`; run `halo --version` as the actual service user before restart. Keep secret/log umask 077 out of package installation (root-only directories cause non-root service 203/EXEC).
   - Only when running inside the target service, use an independent systemd task to carry restart/basic checks. From dev or another service, operate directly; no complex runner framework.
-- **Remind to sync docs after code changes**: After landing changes, identify affected docs and **remind the user** (don't edit directly) — let the user decide whether to update now, after acceptance, or not at all. Typical mappings:
+  - **Docs before release (fixed step)**: before handing a release to `release` (Halo or a halo-hub extension), check every change in it against the doc mapping below and update the affected docs in the release itself — never publish first and ask about docs afterwards. Nothing affected → say so in the release summary.
+- **Remind to sync docs after code changes**: After landing changes, identify affected docs and **remind the user** (don't edit directly) — let the user decide whether to update now, after acceptance, or not at all. Exception: changes about to be released get their docs updated before the release, without asking (see Packaging / release). Typical mappings:
   - API / tool / command schema or behavior changes → `.halo/docs/dev/api.md` · `tools.md` · `requirements/command.md`
   - Architecture / data flow / WS protocol / storage format → `.halo/docs/design/`
   - User-visible features (UI behavior, interactions) → `.halo/docs/requirements/`
