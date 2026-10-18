@@ -6,6 +6,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    setupFiles: ['test/setup-home.ts'],
     // setup-prompts tests spawn `node --import tsx` children (~2s each).
     testTimeout: 30_000,
   },

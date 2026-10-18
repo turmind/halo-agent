@@ -7,8 +7,16 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
 import { afterAll } from 'vitest'
 import { seedBundledModels } from './helpers/seed-models.js'
+
+// os.homedir() reads USERPROFILE on Windows, never HOME — so redirecting HOME
+// alone left Windows runs writing the real ~/.halo. Make it follow HOME;
+// syncBuiltinESMExports updates `import { homedir } from 'node:os'` bindings too.
+const realHomedir = os.homedir
+os.homedir = function homedirFromEnv() { return process.env.HOME || realHomedir() }
+syncBuiltinESMExports()
 
 const realHome = process.env.HOME
 const realGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL
@@ -23,4 +31,6 @@ afterAll(() => {
   process.env.HOME = realHome
   if (realGitConfigGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL
   fs.rmSync(home, { recursive: true, force: true })
+  os.homedir = realHomedir
+  syncBuiltinESMExports()
 })
