@@ -6,13 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- Settings → Extensions: after a check, "Last checked hh:mm" is now followed by its result — "· 2 updates available", or "· all up to date" when every extension is on its latest version — so a check that finds nothing new no longer looks like it did nothing; when some extension couldn't be checked (no update info, unreachable source, needs a newer Halo) only the time is shown, and those rows keep their own grey note.
+## [2.0.3] - 2026-10-18
 
 ### Fixed
 
-- Settings: pressing **Check for updates** (for Halo itself or for extensions) could leave it showing "Checking…" for good, with the button greyed out, until the page was reloaded. This happened behind a proxy or CDN (e.g. CloudFront), where the finished result, pushed over the WebSocket, can reach the browser before the answer to the button's own request; that late answer, still saying "checking", then replaced the result. The page now ignores a status older than the one it already shows.
+- Settings → Extensions: the header now ends "Last checked HH:MM" with what the check found — "· N updates available" or "· all up to date" — so a check that finds nothing new no longer looks as if the button did nothing.
+- Settings: **Check for updates** (Halo itself and extensions) no longer stays stuck on "Checking…" with the button disabled when the pushed result arrives before the request's own answer (seen behind a CDN). A status older than the one shown is now ignored.
+- Settings: tokens for outbound A2A remotes (`a2a.secrets.<remote>` for each `auth: bearer` remote in `~/.halo/secrets/a2a-remotes.yaml`) are no longer listed under Orphans with a Remove button. They now have their own **A2A remotes** section in the System group. A token whose remote is no longer in the list is still an orphan.
+- Tests (contributors): on Windows the server and cli test suites redirected only `HOME`, which `os.homedir()` ignores there, so a test run wrote sample values (`a.secrets.k`, `a.secrets.b`, `a.secrets.k1`, `b.params.k2`, `other.secrets.token`) into the real `%USERPROFILE%\.halo\secrets\settings.yaml`. Tests now stay in their temp home on Windows too. If you ran the tests on Windows, remove those entries in Settings → Orphans.
 
 ## [2.0.2] - 2026-10-17
 
@@ -1097,7 +1098,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.3...HEAD
+[2.0.3]: https://github.com/turmind/halo-agent/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/turmind/halo-agent/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/turmind/halo-agent/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/turmind/halo-agent/compare/v1.6.7...v2.0.0
