@@ -87,7 +87,7 @@ File types without a built-in plugin can be handled by an **installed extension*
 ### Renderable text formats (Markdown / HTML)
 Markdown and HTML open as text in Monaco *and* have a rendered view — Canvas defaults to the **rendered** view since the primary audience is an AI generating reports / pages for humans to read.
 - Each pane's tab bar shows an **Edit / Preview** toggle for the active Markdown / HTML tab; the state is per pane, shared by both formats
-- **Markdown** → `MarkdownPreview` (react-markdown + GFM; relative image `src` rewritten to the download endpoint so local images work)
+- **Markdown** → `MarkdownPreview` (react-markdown + GFM; relative image `src` rewritten to the download endpoint so local images work; an absolute `src` may point anywhere on the server except Halo's hidden secrets)
 - **HTML** → sandboxed iframe (`sandbox="allow-scripts allow-same-origin"`: the page's own JS runs, so a self-contained page renders live; top-navigation, forms and pop-ups stay blocked. Trusted like opening the file in Monaco — it comes from the user's own workspace)
 - Toggle to Edit → Monaco source, Cmd+S saves as usual
 
