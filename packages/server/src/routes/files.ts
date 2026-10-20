@@ -5,7 +5,6 @@ import { Readable } from 'node:stream'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { imageMimeFromExt, type FileTreeNode } from '@turmind/halo-core'
-import { isInTempDir } from '../channels/shared/media.js'
 import { resolveProjectPath, validatePath } from './workspace-path.js'
 import { isHiddenHostPath } from '../tools/sandbox.js'
 import { DEFAULT_FOLDER_ZIP_LIMITS, FolderZipError, planFolderZip, planSummary, streamFolderZip, type FolderZipLimits } from './folder-zip.js'
@@ -482,6 +481,28 @@ export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {
     wasm: 'application/wasm',
   }
 
+  // Host paths by absolute path — used by /files/download's absolute branch and
+  // the /fs/* routes below. Absolute only, no `..` segment.
+  function systemPath(target: string | undefined): string | null {
+    if (!target || !path.isAbsolute(target) || target.split(/[\\/]/).includes('..')) return null
+    return path.resolve(target)
+  }
+  const fsErrorStatus = (err: unknown) => {
+    const code = (err as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 404 : code === 'EACCES' || code === 'EPERM' ? 403 : 500
+  }
+  // Halo's own secrets (the sandbox hidden lists: ~/.halo/secrets, ~/.ssh,
+  // .git-credentials, the global dbs …) are judged by realpath — so a symlink
+  // can't reach them — and answer exactly like a missing file.
+  function hiddenAsMissing(syscall: string, target: string): NodeJS.ErrnoException {
+    return Object.assign(new Error(`ENOENT: no such file or directory, ${syscall} '${target}'`), { code: 'ENOENT' })
+  }
+  async function readableRealPath(target: string): Promise<string> {
+    const real = await fs.realpath(target)
+    if (isHiddenHostPath(real)) throw hiddenAsMissing('realpath', target)
+    return real
+  }
+
   // GET /files/download?path=xxx&projectId=xxx&inline=1 - Download or view a file
   app.get('/files/download', async (c) => {
     try {
@@ -498,20 +519,28 @@ export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {
         return c.json({ error: 'Project not found' }, 404)
       }
 
-      // Agents sometimes save working files to the OS temp dir (e.g. Playwright
-      // screenshots) and reference them via MEDIA:... — allow inline preview of those.
-      const isTmp = path.isAbsolute(filePath) && isInTempDir(filePath)
-      if (!isTmp && !validatePath(filePath, projectPath)) {
-        return c.json({ error: 'Path traversal not allowed' }, 403)
+      // Relative path → confined to the workspace. Absolute path → anywhere on
+      // the host under /fs/raw's rules (no `..`, judged by realpath, hidden
+      // lists answer like a missing file): agents MEDIA: files from other
+      // workspaces and temp dirs. Same trust boundary as /fs/raw — admin cookie
+      // only (not in PUBLIC_PATHS), and that face already has the terminal.
+      let absolutePath: string
+      if (path.isAbsolute(filePath)) {
+        const target = systemPath(filePath)
+        if (!target) return c.json({ error: 'absolute path without .. required' }, 400)
+        absolutePath = await readableRealPath(target)
+      } else {
+        if (!validatePath(filePath, projectPath)) {
+          return c.json({ error: 'Path traversal not allowed' }, 403)
+        }
+        absolutePath = path.resolve(projectPath, filePath)
       }
-
-      const absolutePath = isTmp ? path.resolve(filePath) : path.resolve(projectPath, filePath)
       const stat = await fs.stat(absolutePath)
       if (stat.isDirectory()) {
         return c.json({ error: 'Cannot download a directory' }, 400)
       }
 
-      const fileName = path.basename(filePath)
+      const fileName = path.basename(absolutePath)
       const ext = fileName.split('.').pop()?.toLowerCase() ?? ''
       const mime = inline ? (imageMimeFromExt(ext) ?? MIME_MAP[ext] ?? 'application/octet-stream') : 'application/octet-stream'
       const disposition = inline ? `inline; filename="${encodeURIComponent(fileName)}"` : `attachment; filename="${encodeURIComponent(fileName)}"`
@@ -562,17 +591,18 @@ export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {
 
       return new Response(webStream, { status, headers })
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return c.json({ error: 'File not found' }, 404)
+      const status = fsErrorStatus(err)
+      if (status === 404) return c.json({ error: 'File not found' }, 404)
       const errorMessage = err instanceof Error ? err.message : String(err)
       console.log(`[Files] Error downloading: ${errorMessage}`)
-      return c.json({ error: errorMessage }, 500)
+      return c.json({ error: errorMessage }, status)
     }
   })
 
   // GET /files/download-folder?path=&projectId=[&include=excluded][&estimate=1]
   // Folder → one zip streamed as it is built (routes/folder-zip.ts). The walk
   // (and its 413 limits) runs before any header goes out; `estimate=1` returns
-  // just the walk's counts. Unlike /files/download: no /tmp exception — the
+  // just the walk's counts. Unlike /files/download: no absolute-path branch — the
   // path must be a directory inside the project ('' = workspace root).
   app.get('/files/download-folder', async (c) => {
     const relPath = c.req.query('path') ?? ''
@@ -783,26 +813,8 @@ export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {
 
   // ── Read-only file access by absolute path (extension capability fs-read,
   // `scope: 'system'`). Same admin-cookie trust as /fs/browse and the
-  // terminal; never a PUBLIC_PATHS entry. Absolute only, no `..` segment.
-  function systemPath(target: string | undefined): string | null {
-    if (!target || !path.isAbsolute(target) || target.split(/[\\/]/).includes('..')) return null
-    return path.resolve(target)
-  }
-  const fsErrorStatus = (err: unknown) => {
-    const code = (err as NodeJS.ErrnoException).code
-    return code === 'ENOENT' || code === 'ENOTDIR' ? 404 : code === 'EACCES' || code === 'EPERM' ? 403 : 500
-  }
-  // Halo's own secrets (the sandbox hidden lists: ~/.halo/secrets, ~/.ssh,
-  // .git-credentials, the global dbs …) are judged by realpath — so a symlink
-  // can't reach them — and answer exactly like a missing file.
-  function hiddenAsMissing(syscall: string, target: string): NodeJS.ErrnoException {
-    return Object.assign(new Error(`ENOENT: no such file or directory, ${syscall} '${target}'`), { code: 'ENOENT' })
-  }
-  async function readableRealPath(target: string): Promise<string> {
-    const real = await fs.realpath(target)
-    if (isHiddenHostPath(real)) throw hiddenAsMissing('realpath', target)
-    return real
-  }
+  // terminal; never a PUBLIC_PATHS entry. Path rules: systemPath /
+  // readableRealPath above (shared with /files/download's absolute branch).
 
   // GET /fs/stat?path=/abs → { path, realPath, size, modifiedAt, isDirectory }
   app.get('/fs/stat', async (c) => {

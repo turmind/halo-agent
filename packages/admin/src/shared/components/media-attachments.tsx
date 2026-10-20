@@ -14,9 +14,9 @@
  *   - Outbound agent markers (from the wechat-send skill):
  *       MEDIA:/abs/path    (line-start form, as emitted by the skill)
  *
- * Files are fetched via /api/files/download?inline=1 (which enforces
- * path-in-workspace). Anything outside the workspace falls back to showing the
- * original marker text — no thumbnail.
+ * Files are fetched via /api/files/download?inline=1, which takes any absolute
+ * host path and decides readability server-side (sensitive dirs / missing →
+ * 404). Without an active workspace or an absolute path the chip is static.
  */
 
 import { useState, useEffect } from 'react'
@@ -103,22 +103,12 @@ export function MediaAttachments({ media }: { media: MediaRef[] }) {
   )
 }
 
-function buildMediaUrl(path: string, projectPath: string | null): string | null {
+/** Absolute path (POSIX `/…`, Windows `C:\…` / `C:/…`, UNC `\\…`) + an active
+ *  workspace → download URL; otherwise null. The server is the only judge of
+ *  what's readable (hidden / missing → 404). */
+export function buildMediaUrl(path: string, projectPath: string | null): string | null {
   if (!projectPath) return null
-  // Decide whether this path is worth handing to the download endpoint (which
-  // does the authoritative in-workspace/in-temp check server-side, where it can
-  // path.resolve). This gate just avoids rendering an obviously-foreign chip as
-  // clickable. It must be cross-platform: on Windows the workspace path is
-  // `C:\...` with `\` separators, so a hardcoded `'/'` (the old bug) never
-  // matched and every agent file degraded to an un-clickable chip. Normalize
-  // both sides' separators to `/` (case-insensitively, since Windows FS is) and
-  // do a prefix test; temp-dir files are admitted by name regardless of drive.
-  const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
-  const np = norm(path)
-  const root = norm(projectPath).replace(/\/$/, '')
-  const inWorkspace = np === root || np.startsWith(root + '/')
-  const inTmp = /(^|\/)(tmp|temp)\//.test(np)
-  if (!inWorkspace && !inTmp) return null
+  if (!/^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(path)) return null
   const params = new URLSearchParams()
   params.set('path', path)
   params.set('projectId', projectPath)
@@ -131,7 +121,7 @@ function MediaThumbnail({ media, onOpen }: { media: MediaRef; onOpen: () => void
   const url = buildMediaUrl(media.path, projectPath)
   const fileName = media.path.split('/').pop() ?? media.path
 
-  // Outside workspace — no preview endpoint, just a static chip
+  // No active workspace or not an absolute path — just a static chip
   if (!url) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded border border-[var(--border)] bg-[var(--secondary)]/30 px-2 py-1 font-mono text-[10px] text-[var(--muted-foreground)]">
