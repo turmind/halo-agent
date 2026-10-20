@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.0.6] - 2026-10-20
+
 ### Fixed
 
 - Chat (web): files an agent sends with a `MEDIA:` line that live in another workspace, or anywhere else on the server, can now be previewed and downloaded. Before, the chip was clickable but the download failed ("File wasn't available on site"). Markdown previews showing an image by absolute path outside the workspace now load it the same way. Sensitive locations (`~/.halo/secrets`, `~/.ssh`, `.git-credentials`, Halo's global databases …) are still unreadable and show as unavailable, like a missing file.
@@ -1114,7 +1116,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.5...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.6...HEAD
+[2.0.6]: https://github.com/turmind/halo-agent/compare/v2.0.5...v2.0.6
 [2.0.5]: https://github.com/turmind/halo-agent/compare/v2.0.4...v2.0.5
 [2.0.4]: https://github.com/turmind/halo-agent/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/turmind/halo-agent/compare/v2.0.2...v2.0.3
