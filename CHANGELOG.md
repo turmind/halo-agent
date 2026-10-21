@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.0.7] - 2026-10-21
+
 ### Fixed
 
 - Extensions: when an extension reads or writes files (for example the meeting recorder htrans saving audio) and the user's Halo sign-in has expired, the extension is now told so: the fs reply carries `auth: true` with `code: 'io'`. Before, a sign-in proxy in front of Halo (CloudFront / Midway, oauth2-proxy …) redirecting to its login page showed up as a bare `Failed to fetch`. A same-origin login page was worse: the write was treated as successful, so the data was silently lost. Halo's own 401 is reported the same way. Other failures (not found, denied, network, server errors) are reported as before.
@@ -1120,7 +1122,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.6...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.7...HEAD
+[2.0.7]: https://github.com/turmind/halo-agent/compare/v2.0.6...v2.0.7
 [2.0.6]: https://github.com/turmind/halo-agent/compare/v2.0.5...v2.0.6
 [2.0.5]: https://github.com/turmind/halo-agent/compare/v2.0.4...v2.0.5
 [2.0.4]: https://github.com/turmind/halo-agent/compare/v2.0.3...v2.0.4
