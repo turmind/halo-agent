@@ -338,6 +338,18 @@ describe('bundle extensions', () => {
     expect(fsReply(onFsResult(readyBundle(), 5, { ok: false, status: 403, message: 'x' }).effects)).toMatchObject({ code: 'denied' })
     expect(fsReply(onFsResult(readyBundle(), 5, { ok: false, status: 0, message: 'net' }).effects)).toMatchObject({ code: 'io' })
   })
+
+  it('an expired sign-in stays io and adds auth:true; other failures carry no auth', () => {
+    const message = 'sign-in required — sign in to Halo again in another tab'
+    for (const status of [401, 0]) {
+      expect(onFsResult(readyBundle(), 8, { ok: false, status, message, auth: true }).effects)
+        .toEqual([{ type: 'post', frame: { haloExt: 1, type: 'fs-result', id: 8, ok: false, code: 'io', error: message, auth: true } }])
+    }
+    for (const [status, code] of [[404, 'not-found'], [403, 'denied'], [500, 'io'], [0, 'io']] as const) {
+      expect(onFsResult(readyBundle(), 9, { ok: false, status, message: 'x' }).effects)
+        .toEqual([{ type: 'post', frame: { haloExt: 1, type: 'fs-result', id: 9, ok: false, code, error: 'x' } }])
+    }
+  })
 })
 
 /**

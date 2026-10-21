@@ -143,8 +143,8 @@ function onExportFrame(state: HostState, frame: Extract<ExtensionClientFrame, { 
   return { state, effects: [{ type: 'export', name: frame.name, buffer: frame.buffer }] }
 }
 
-function fsError(id: number, code: ExtensionFsErrorCode, error: string): HostEffect {
-  return { type: 'post', frame: { haloExt: 1, type: 'fs-result', id, ok: false, code, error } }
+function fsError(id: number, code: ExtensionFsErrorCode, error: string, auth?: true): HostEffect {
+  return { type: 'post', frame: { haloExt: 1, type: 'fs-result', id, ok: false, code, error, ...(auth ? { auth } : {}) } }
 }
 
 /** Validate one `fs` request: exactly one reply comes out of here (an error
@@ -198,13 +198,16 @@ function onPickFrame(state: HostState, frame: Extract<ExtensionClientFrame, { ty
   return { state, effects: [{ type: 'pick', id, accept, ...(start !== undefined ? { start } : {}) }] }
 }
 
-/** Outcome of one executed `fs` effect. Failures carry the HTTP status (0 = network). */
+/** Outcome of one executed `fs` effect. Failures carry the HTTP status (0 =
+ *  network); `auth` = the sign-in expired (401 / login redirect). */
 export type FsOutcome =
   | { ok: true; buffer?: ArrayBuffer; entries?: ExtensionFsEntry[]; size?: number; mtime?: number }
-  | { ok: false; status: number; message: string }
+  | { ok: false; status: number; message: string; auth?: true }
 
 export function onFsResult(state: HostState, id: number, outcome: FsOutcome): Step {
   if (!outcome.ok) {
+    // An expired sign-in stays `io` (older extensions retry it as before) and adds `auth`.
+    if (outcome.auth) return { state, effects: [fsError(id, 'io', outcome.message, true)] }
     const code: ExtensionFsErrorCode = outcome.status === 404 ? 'not-found' : outcome.status === 403 ? 'denied' : 'io'
     return { state, effects: [fsError(id, code, outcome.message)] }
   }

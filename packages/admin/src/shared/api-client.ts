@@ -3,6 +3,16 @@ import type { CoreUpdateStatus, ExtensionInfo, ExtensionsSnapshot, ExtensionsUpd
 
 const API_BASE = '/api'
 
+/** Expired sign-in on a request fetched with `redirect: 'manual'`: Halo's own
+ *  auth answers 401; a proxy in front of it (midway / CloudFront, oauth2-proxy,
+ *  Cloudflare Access) redirects to its login page, which `manual` surfaces as an
+ *  `opaqueredirect` instead of a CORS `Failed to fetch` or a followed 200 HTML. */
+export function signInRequired(res: Response): { ok: false; status: number; message: string; auth: true } | null {
+  return res.status === 401 || res.type === 'opaqueredirect'
+    ? { ok: false, status: res.status, message: 'sign-in required — sign in to Halo again in another tab', auth: true }
+    : null
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -164,11 +174,12 @@ export const api = {
     /** Binary-safe overwrite of an existing file (canvas extensions' save
      *  path). Resolves instead of throwing on failure: a 409 carries the
      *  on-disk mtime the caller needs to offer overwrite / discard.
-     *  `create` / `append` = bundle extensions' fs write / append. */
+     *  `create` / `append` = bundle extensions' fs write / append. Redirects
+     *  are not followed: a login redirect is `auth`, never a fake success. */
     async saveRaw(path: string, buffer: ArrayBuffer, projectId: string, expectMtime?: number, opts?: { create?: boolean; append?: boolean; root?: string }): Promise<
       | { ok: true; mtime: number; size: number }
       | { ok: false; status: 409; mtime: number }
-      | { ok: false; status: number; message: string }
+      | { ok: false; status: number; message: string; auth?: true }
     > {
       const params = new URLSearchParams({ path, projectId })
       if (expectMtime != null) params.set('expectMtime', String(expectMtime))
@@ -181,10 +192,13 @@ export const api = {
           method: 'PUT',
           headers: { 'Content-Type': 'application/octet-stream' },
           body: buffer,
+          redirect: 'manual',
         })
       } catch (err) {
         return { ok: false, status: 0, message: err instanceof Error ? err.message : String(err) }
       }
+      const signIn = signInRequired(res)
+      if (signIn) return signIn
       const body = await res.json().catch(() => ({})) as { mtime?: number; size?: number; error?: string }
       if (res.ok) return { ok: true, mtime: body.mtime ?? 0, size: body.size ?? buffer.byteLength }
       if (res.status === 409 && typeof body.mtime === 'number') return { ok: false, status: 409, mtime: body.mtime }

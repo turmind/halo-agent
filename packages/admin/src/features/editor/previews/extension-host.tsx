@@ -2,7 +2,7 @@
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ExtensionInfo } from '@turmind/halo-core/protocol'
-import { api } from '@/shared/api-client'
+import { api, signInRequired } from '@/shared/api-client'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { useTheme } from '@/shared/theme'
 import { readHostTheme } from '@/shared/theme/palette'
@@ -29,7 +29,12 @@ export const MEDIA_ALLOW = 'microphone; display-capture; clipboard-write'
 /** Absolute paths on the wire use forward slashes (Windows `C:/…`). */
 const toSlash = (p: string) => p.replace(/\\/g, '/')
 
+/** Every host fs fetch is `redirect: 'manual'` (see `signInRequired`). */
+const NO_FOLLOW: RequestInit = { redirect: 'manual' }
+
 async function httpFailure(res: Response): Promise<FsOutcome> {
+  const signIn = signInRequired(res)
+  if (signIn) return signIn
   const body = await res.json().catch(() => ({})) as { error?: string }
   return { ok: false, status: res.status, message: body.error ?? res.statusText }
 }
@@ -40,17 +45,17 @@ async function execSystemFs(eff: Extract<HostEffect, { type: 'fs' }>): Promise<F
   const q = encodeURIComponent(eff.path)
   switch (eff.op) {
     case 'read': {
-      const res = await fetch(`/api/fs/raw?path=${q}`)
+      const res = await fetch(`/api/fs/raw?path=${q}`, NO_FOLLOW)
       return res.ok ? { ok: true, buffer: await res.arrayBuffer() } : await httpFailure(res)
     }
     case 'list': {
-      const res = await fetch(`/api/fs/browse?path=${q}&files=1`)
+      const res = await fetch(`/api/fs/browse?path=${q}&files=1`, NO_FOLLOW)
       if (!res.ok) return await httpFailure(res)
       const body = await res.json() as { entries: Array<{ name: string; type: 'file' | 'directory' }> }
       return { ok: true, entries: body.entries.map(({ name, type }) => ({ name, type })) }
     }
     case 'stat': {
-      const res = await fetch(`/api/fs/stat?path=${q}`)
+      const res = await fetch(`/api/fs/stat?path=${q}`, NO_FOLLOW)
       if (!res.ok) return await httpFailure(res)
       const body = await res.json() as { size: number; modifiedAt: number }
       return { ok: true, size: body.size, mtime: body.modifiedAt }
@@ -63,8 +68,8 @@ async function execSystemFs(eff: Extract<HostEffect, { type: 'fs' }>): Promise<F
 /** Run one validated `fs` request (protocol §3) against the files API;
  *  `eff.path` is bundle-relative, workspace-relative with `scope:
  *  'workspace'`, or absolute with `scope: 'system'` (scoped = read / stat /
- *  list only); '' = that root (list only). */
-async function execFs(projectId: string, bundlePath: string, eff: Extract<HostEffect, { type: 'fs' }>): Promise<FsOutcome> {
+ *  list only); '' = that root (list only). Exported for tests. */
+export async function execFs(projectId: string, bundlePath: string, eff: Extract<HostEffect, { type: 'fs' }>): Promise<FsOutcome> {
   if (eff.scope === 'system') {
     try { return await execSystemFs(eff) } catch (err) {
       return { ok: false, status: 0, message: err instanceof Error ? err.message : String(err) }
@@ -75,17 +80,17 @@ async function execFs(projectId: string, bundlePath: string, eff: Extract<HostEf
   try {
     switch (eff.op) {
       case 'read': {
-        const res = await fetch(api.files.viewUrl(full, projectId))
+        const res = await fetch(api.files.viewUrl(full, projectId), NO_FOLLOW)
         return res.ok ? { ok: true, buffer: await res.arrayBuffer() } : await httpFailure(res)
       }
       case 'list': {
-        const res = await fetch(`/api/files/tree?${query}`)
+        const res = await fetch(`/api/files/tree?${query}`, NO_FOLLOW)
         if (!res.ok) return await httpFailure(res)
         const body = await res.json() as { tree: Array<{ name: string; type: 'file' | 'directory' }> }
         return { ok: true, entries: body.tree.map(({ name, type }) => ({ name, type })) }
       }
       case 'stat': {
-        const res = await fetch(`/api/files/stat?${query}`)
+        const res = await fetch(`/api/files/stat?${query}`, NO_FOLLOW)
         if (!res.ok) return await httpFailure(res)
         const body = await res.json() as { size: number; modifiedAt: number }
         return { ok: true, size: body.size, mtime: body.modifiedAt }
@@ -96,7 +101,7 @@ async function execFs(projectId: string, bundlePath: string, eff: Extract<HostEf
         // (→ not-found) instead of being recreated at its old path.
         const r = await api.files.saveRaw(full, eff.buffer!, projectId, undefined, { create: true, append: eff.op === 'append', root: bundlePath })
         if (r.ok) return { ok: true, size: r.size, mtime: r.mtime }
-        return { ok: false, status: r.status, message: 'message' in r ? r.message : 'conflict' }
+        return 'message' in r ? r : { ok: false, status: r.status, message: 'conflict' }
       }
     }
   } catch (err) {

@@ -111,7 +111,9 @@ export type ExtensionHostFrame =
       size?: number
       mtime?: number
     })
-  | (ExtensionFrameBase & { type: 'fs-result'; id: number; ok: false; code: ExtensionFsErrorCode; error: string })
+  // `auth` = the request failed because the user's sign-in expired (Halo 401,
+  // or a proxy's login redirect); `code` stays `io`. Absent otherwise.
+  | (ExtensionFrameBase & { type: 'fs-result'; id: number; ok: false; code: ExtensionFsErrorCode; error: string; auth?: true })
   // exactly one reply per `pick`, same `id`; `path` = workspace-relative POSIX
   // when the file is inside the workspace (realpath-compared), else absolute
   // (read it with `scope: 'system'`)
