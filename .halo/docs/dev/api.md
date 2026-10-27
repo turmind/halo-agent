@@ -347,7 +347,7 @@ File: `packages/server/src/nodes/routes.ts` (+ `hub.ts` for the WebSocket). Not 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/nodes/accounts` | All machine tokens → `{accounts: [{accountId, name, workspacePath, workspaceMissing, token, createdAt, online: {root \| null, shell, os, since} \| null}]}` (`root: null` = whole-machine mode) |
-| POST | `/api/nodes/accounts` | Create. Body `{workspacePath, name}` (`name` = `^[a-z0-9][a-z0-9-]{0,31}$`) → `{accountId, token, name, workspacePath}`. 400 bad name / workspace (must exist and contain `.halo/`), 409 name already used in that workspace |
+| POST | `/api/nodes/accounts` | Create. Body `{workspacePath, name}` (`name` = `^[a-z0-9][a-z0-9-]{0,31}$`) → `{accountId, token, name, workspacePath}`. 400 bad name / workspace (must be an absolute path that exists; `.halo/` is created if missing), 409 name already used in that workspace |
 | DELETE | `/api/nodes/accounts/:id` | Delete; a connected machine is closed with `4001` and exits → `{ok: true}` |
 
 ### Machine connection

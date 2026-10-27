@@ -123,6 +123,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_DEFAULT_PROVIDER` | (none) | — | Read by `halo setup --non-interactive`: binds every built-in agent to this provider id (and its default model) and, for each of its env-backed keys whose variable is set, writes the `<<NAME>>` placeholder into `settings.yaml` (Bedrock excepted). An unknown id only prints a warning |
 | `HALO_CLI` | `halo` (`halo.cmd` on Windows) | — | `halo` cli executable that cron runs and the evolution wrapper spawn — a dev override |
 | `HALO_VERSION` | `dev` | — | Version string reported by `GET /api/health` and the cli; stamped by the bundle / desktop launcher, so normally not set by hand |
+| `HALO_NODE_TOKEN` | (none) | — | `halo node` only (on the linked machine): pairing token, used when `--token` isn't given — preferred over the flag, which shows up in `ps` / shell history. Stripped from child-process env (see [design/node.md](../design/node.md)) |
 | `HALO_PROMPT` | (none) | — | `plain` makes `halo setup` use numbered-menu prompts instead of the raw-mode TUI |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | (none) | `settings.yaml general.observability.capture_content` | `true` / `false` / `1` / `0` (any case) overrides `capture_content` either way; unset or any other value → the setting. Read at process start (see [design/observability.md](../design/observability.md)) |
 

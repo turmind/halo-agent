@@ -94,7 +94,7 @@ Three session levels, stored per session (`agent_sessions.access_level`; `full` 
 
 | Level | Tools the agent can get (from its `tools:` list) | Sandbox |
 |---|---|---|
-| `full` | all 9 workspace tools | none (the `rm` guard still applies) |
+| `full` | all 9 workspace tools, plus the full-only bundles `relay_send` and `node_list` (linked machines) when listed | none (the `rm` guard still applies) |
 | `workspace` | all 9 | writes only inside the workspace; credentials and workspace runtime state are hidden |
 | `readonly` | all 9 with an OS sandbox (writes fail); only `file_read`, `view_image`, `file_list`, `grep`, `glob` without one | nothing writable |
 
@@ -103,7 +103,7 @@ Extra rules:
 - A readonly `shell_exec` gets no secret substitution — `{{…params…}}` / `<<ENV>>` placeholders stay literal.
 - `view_image` also needs a vision-capable model.
 - A skill with `requiresAccess` above the session level is hidden (no metadata, no `activate_skill`).
-- Relay tools are only built for `full` sessions. A2A tools (`a2a_send` in `tools:`) are built at every level except the A2A read-only profile; a non-full session's `files` must sit in the workspace or the temp dir ([dev/tools.md → A2A tools](../dev/tools.md#a2a-tools)).
+- Relay tools and linked-machine tools (`node_list` in `tools:` → the eight `node_*` tools, [node.md](node.md)) are only built for `full` sessions. A2A tools (`a2a_send` in `tools:`) are built at every level except the A2A read-only profile; a non-full session's `files` must sit in the workspace or the temp dir ([dev/tools.md → A2A tools](../dev/tools.md#a2a-tools)).
 - Hidden from `workspace` / `readonly` sessions only (Full sessions, the admin file explorer and the terminal see everything): a built-in list that is always included (`~/.halo/secrets`, `~/.aws`, `~/.ssh`, `~/.gnupg`, `~/.docker`, `~/.config/gh`, `~/.gitconfig`, `~/.git-credentials`, `~/.npmrc`, `~/.netrc`, the global evo/cron/runs databases, internal-session transcripts, logs, …), any extra paths added in `general.sandbox.hidden_dirs` / `hidden_files` (they add to the built-in list, never replace it), plus the workspace's own `.halo/sessions`, `.halo/logs`, `.halo/evo`, `.halo/halo.db*` (fixed in code). The rest of `.halo/` stays readable.
 
 ### Where a session's level comes from

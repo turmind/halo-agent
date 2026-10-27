@@ -69,7 +69,7 @@ team:                 # a non-empty team is what enables delegation
   - executor          # the agent ids this one may spawn
 ```
 
-**Workspace tools**: `file_read / view_image / file_write / file_edit / file_list / shell_exec / grep / glob / web_fetch` — listed by name under `tools`.
+**Workspace tools**: `file_read / view_image / file_write / file_edit / file_list / shell_exec / grep / glob / web_fetch` — listed by name under `tools`. `node_list` switches on the eight `node_*` tools for [linked machines](node.md) as one set (full-access sessions only).
 
 **Session tools**: `start_session / session_list / query_session / interrupt_session / stop_session / archive_session / get_session_output / query_agent` — **not** listed under `tools`. The whole bundle is granted automatically the moment an agent declares a non-empty `team`; an empty/absent `team` means no delegation (no session tools, no roster). To let a sub-agent delegate further, give it its own `team`. Add the agent's own id to its `team` to enable parallel self-spawn.
 

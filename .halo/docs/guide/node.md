@@ -17,7 +17,7 @@ Supported: **macOS and Linux**. Windows works on a best-effort basis (not regula
 Admin → **Channels → Linked machines** → **Add machine**. Pick the workspace and a machine name (`a-z 0-9 -`, e.g. `mbp`; unique within the workspace — the agent uses it to address the machine). The dialog shows a command to copy:
 
 ```bash
-halo node --server https://halo.example.com --token <token> --root <folder>
+HALO_NODE_TOKEN=<token> halo node --server https://halo.example.com --root <folder>
 ```
 
 The token stays on the list row (copy button). Deleting the row revokes it at once and disconnects the machine.
@@ -80,7 +80,7 @@ Then just ask: "list my machines", "read `notes/todo.md` on mbp", "run the tests
 | `token rejected by the server (401)` | Wrong / deleted token — create a new one. 5 bad tries in 15 min lock the address out for a while (429). |
 | `the workspace this token is bound to no longer exists (404)` | The workspace folder was removed on the server. |
 | `protocol mismatch (426)` | `halo` versions too far apart — upgrade the older side. |
-| `this token is already connected from another process` | Another `halo node` with the same token is running; this one keeps retrying until that one stops. |
+| `this token is already connected from another process` | Another `halo node` with the same token is running; this one keeps retrying until that one stops. Also normal right after the machine rebooted or woke from sleep: the server needs 40–60 s to notice the old connection is dead, so the new process backs off and can take up to ~90 s to come online. |
 | agent: `machine "mbp" is offline` | `halo node` isn't running / connected. |
 | agent: `went offline during the call` | The connection dropped mid-call; the operation may or may not have happened. Running commands on the machine were stopped. |
 | agent: `not available in this runtime` | You're in the standalone CLI / TUI — linked machines only work through `halo server` (admin UI or a channel). |

@@ -664,12 +664,12 @@ The databases hold session metadata (the only home of title / counts / tokens / 
 
 **`channel_accounts`** — unified channel account index (lives in `~/.halo/secrets/channels/channels.db`)
 
-All channel types (telegram, web, wechat, slack, feishu, wecom) share one table. Common fields are explicit columns; channel-specific fields live in the `config` JSON column.
+All channel types (telegram, web, wechat, slack, feishu, wecom) share one table, as do linked-machine tokens (`node`, see [node.md](node.md): `label` = machine name, `config` = `{ token }`, `access_level` always `full`). Common fields are explicit columns; channel-specific fields live in the `config` JSON column.
 
 | Column | Type | Notes |
 |---|---|---|
 | account_id | TEXT PK | Channel-specific ID (e.g. `halo_agent_bot`, `abc-im-bot`, `e718bb7b`) |
-| channel_type | TEXT NOT NULL | `'telegram'`, `'web'`, `'wechat'`, `'slack'`, `'feishu'`, or `'wecom'` |
+| channel_type | TEXT NOT NULL | `'telegram'`, `'web'`, `'wechat'`, `'slack'`, `'feishu'`, `'wecom'`, or `'node'` (a `halo node` pairing token) |
 | workspace_path | TEXT NOT NULL | Absolute path of the bound workspace |
 | label | TEXT | User-chosen name |
 | enabled | INTEGER | 1 = active, 0 = disabled |

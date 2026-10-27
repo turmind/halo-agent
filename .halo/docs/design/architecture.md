@@ -39,6 +39,8 @@
 │    /api/slack/*       (slack descriptor)                            │
 │    /api/feishu/*      (feishu descriptor)                           │
 │    /api/wecom/*       (wecom descriptor)                            │
+│    /api/nodes/*       → createNodeRoutes() (linked machines)        │
+│    /api/nodes/connect → NodeHub.handleUpgrade (halo node WS)        │
 │    /ws                → setupWebSocketHandler({wss,registry})       │
 │    /*                 → static frontend (Next.js out/)              │
 │    /ping, POST / (A2A) → a2a/agentcore.ts (agentcore-a2a mode)      │
@@ -262,7 +264,7 @@ SQLite only holds metadata indexes; all content lives on the filesystem.
 | `~/.halo/global/models.d/<provider>.yaml` | `halo models install` (`/extension models`) | Hub-installed provider yamls; per id the higher `revision` wins over `models/` (tie → `models.d`); watched, applied without restart |
 | `~/.halo/global/prompts/{bootstrap,all,root}/*.md` | init.ts seed + user | System prompts |
 | `~/.halo/global/logs/server.log` | Logger | Server logs (10 MB rotation) |
-| `~/.halo/secrets/channels/channels.db` | All channels | Unified channel accounts (Web, Telegram, WeChat, Slack, Feishu, WeCom) — see [storage.md](storage.md#channel_accounts) |
+| `~/.halo/secrets/channels/channels.db` | All channels, NodeRoutes | Unified channel accounts (Web, Telegram, WeChat, Slack, Feishu, WeCom) and Linked machines tokens (`channel_type='node'`) — see [storage.md](storage.md#channel_accounts) |
 
 ## Coupling hot spots
 

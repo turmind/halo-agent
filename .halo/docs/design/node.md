@@ -70,7 +70,9 @@ node → server  { t: 'res', id, ok: true, text } | { t: 'res', id, ok: false, e
 Results are never replayed. When the link drops mid-call:
 
 - server side: each pending call rejects with `machine "<n>" went offline during the call (connection lost). The operation may or may not have completed on the machine — check its state before retrying.`
-- machine side: every running call is aborted (child processes killed) and the log reads `connection lost (…) — stopped N running call(s); reconnecting in Xs`.
+- machine side: every running call is aborted (node_run's process group gets SIGTERM, SIGKILL 2 s later) and the log reads `connection lost (…) — stopped N running call(s); reconnecting in Xs`.
+
+When `halo node` itself exits — Ctrl-C (`stop`) or a fatal refusal such as a revoked token (4001) — the same abort runs, but `done` (and so `process.exit`) waits until the aborted calls have settled, capped at 2.5 s. The SIGKILL follow-up is a timer in the node process and the command's group is detached, so exiting first would leave a TERM-ignoring command running on the machine.
 
 Offline vs unknown are distinct errors: `machine "<n>" is offline (…). Do not retry in a loop — tell the user to start it.` vs `unknown machine "<n>" — machines linked to this workspace: a, b (see node_list)`.
 
@@ -81,7 +83,9 @@ A cron run is a `halo cli` child — no hub in that process. `cron/runner.ts` sp
 - `HALO_NODE_RELAY_URL` = `http://127.0.0.1:<port>/api/nodes/call`
 - `HALO_NODE_RELAY_TOKEN` = a 32-byte hex secret generated per server boot (never persisted)
 
-The child's node tools POST `{ workspace, node, op, args }` there (`op: 'nodes'` = node_list) with header `x-halo-node-relay`. The route is in `PUBLIC_PATHS` and gated by loopback source **and** a `timingSafeEqual` match on the secret — the secret is the real gate (a same-host reverse proxy is loopback too). `child-env.ts` strips `HALO_NODE_RELAY_URL` / `HALO_NODE_RELAY_TOKEN` / `HALO_NODE_TOKEN` from every other child (shell_exec, MCP, …), so neither leaks into agent commands.
+The child's node tools POST `{ workspace, node, op, args }` there (`op: 'nodes'` = node_list) with header `x-halo-node-relay`. The route is in `PUBLIC_PATHS` and gated by loopback source **and** a `timingSafeEqual` match on the secret — the secret is the real gate (a same-host reverse proxy is loopback too). The secret is **server-wide, not bound to a workspace**: the body's `workspace` picks the machines, so whoever holds it can reach every workspace's machines. `child-env.ts` strips `HALO_NODE_RELAY_URL` / `HALO_NODE_RELAY_TOKEN` / `HALO_NODE_TOKEN` from every other child (shell_exec and the rest of `cleanChildEnv`'s users), so they don't appear in agent subprocess env. That is env hygiene, not a boundary: a full-level command runs unsandboxed (no bwrap) as the same user and can read that user's processes and files — the cron child's environment included — anyway.
+
+The relay request carries its own timeout (`max(shell timeout, 120 s) + 30 s`, node:http — fetch's fixed 300 s headers timeout would cut a long node_run first); the hub's per-call timeout normally answers well before it.
 
 ## Prompt-cache invariant
 
@@ -91,4 +95,4 @@ Cost: the 8 descriptions measure ≈ 460 tokens (Claude CountTokens); with schem
 
 ## Admin
 
-`features/nodes/` adds **Channels → Linked machines** (after Web): a row per token with online dot, name, workspace, `root | Whole machine · shell on/off · os`, token copy and delete. The add dialog takes workspace + name and shows a ready-to-copy `halo node --server <origin> --token <t> --root <folder>`. Online state comes from the list response, then `nodes:changed` (full snapshot, global broadcast — the channels page is a global view); a WS reconnect re-fetches the list. No polling.
+`features/nodes/` adds **Channels → Linked machines** (after Web): a row per token with online dot, name, workspace, `root | Whole machine · shell on/off · os`, token copy and delete. The add dialog takes workspace + name and shows a ready-to-copy `HALO_NODE_TOKEN=<t> halo node --server <origin> --root <folder>` (token in the env, not a flag). Online state comes from the list response, then `nodes:changed` (full snapshot, global broadcast — the channels page is a global view); a WS reconnect drops the pushed snapshot and re-fetches the list. No polling.
