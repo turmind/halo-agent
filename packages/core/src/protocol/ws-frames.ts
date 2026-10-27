@@ -164,6 +164,8 @@ export type WsServerMessage =
   // A skill was created / deleted / toggled, or a workspace skill folder changed on disk — re-fetch
   // skill lists. Scoped server-side: workspace changes reach only that workspace's sockets, global ones all
   | { type: 'skills:changed' }
+  // A `halo node` connected / disconnected — full snapshot of online machines, not a diff (root null = whole machine)
+  | { type: 'nodes:changed'; online: Array<{ accountId: string; root: string | null; shell: boolean; os: string; since: number }> }
 
 export type WsServerMessageType = WsServerMessage['type']
 
