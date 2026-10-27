@@ -206,14 +206,18 @@ function mountXterm(host: HTMLDivElement, id: string, theme: Theme, onMenu: (men
 
 interface TerminalPanelProps {
   headerless?: boolean
+  /** Name of the terminal on screen (null = none yet) — the bottom bar's title. */
+  onActiveNameChange?: (name: string | null) => void
 }
 
-export function TerminalPanel({ headerless }: TerminalPanelProps = {}) {
+export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelProps = {}) {
   const t = useT()
   const hostRef = useRef<HTMLDivElement>(null)
   const instancesRef = useRef<Map<string, TermInstance>>(new Map())
   const [tabs, setTabs] = useState<{ id: string; name: string }[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
+  const activeName = tabs.find((tab) => tab.id === activeId)?.name ?? null
+  useEffect(() => { onActiveNameChange?.(activeName) }, [activeName, onActiveNameChange])
   const [menu, setMenu] = useState<MenuState | null>(null)
   const closeMenu = useCallback(() => setMenu(null), [])
   const activeProject = useProjectStore((s) => s.activeProject)

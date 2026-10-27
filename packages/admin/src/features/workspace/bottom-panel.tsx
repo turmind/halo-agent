@@ -44,18 +44,34 @@ export function BottomPanel({ floating = false, dragHandleRef }: BottomPanelProp
     return wsClient.on('_disconnected', () => setTerminalKey((k) => k + 1))
   }, [])
 
+  // Centred bar title: each panel reports what it has on screen (setState is
+  // stable, so the panels' report effects fire only when the value changes).
+  const [chatTitle, setChatTitle] = useState('')
+  const [terminalName, setTerminalName] = useState<string | null>(null)
+  const barTitle = activeTab === 'chat' ? chatTitle : terminalName ?? ''
+
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">
       {/* VS Code style tab bar */}
       <div
         ref={dragHandleRef}
         className={cn(
-          'flex h-[35px] shrink-0 items-center gap-0 border-b border-[var(--border)] bg-[var(--card)] px-2',
+          'relative flex h-[35px] shrink-0 items-center gap-0 border-b border-[var(--border)] bg-[var(--card)] px-2',
           floating && 'cursor-move select-none',
         )}
       >
         <TabButton label={t('nav.chat')} active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
         <TabButton label={t('nav.terminal')} active={activeTab === 'terminal'} onClick={() => setActiveTab('terminal')} />
+        {/* Centred on the whole bar, not the gap between the tabs and the
+            buttons: equal side insets as wide as the wider side (the tabs), so
+            it truncates instead of overlapping, and a too-narrow bar leaves it
+            zero-width (hidden). Only the text takes the pointer (for the
+            tooltip); a mousedown on it still bubbles to the bar's float drag. */}
+        {barTitle && (
+          <div className="pointer-events-none absolute inset-y-0 left-48 right-48 flex items-center justify-center overflow-hidden">
+            <span title={barTitle} className="pointer-events-auto truncate text-[11px] text-[var(--muted-foreground)]">{barTitle}</span>
+          </div>
+        )}
         <div className="flex-1" />
         <button
           onMouseDown={(e) => e.stopPropagation()}
@@ -78,10 +94,10 @@ export function BottomPanel({ floating = false, dragHandleRef }: BottomPanelProp
       {/* Content */}
       <div className="min-h-0 flex-1">
         <div className={activeTab === 'chat' ? 'h-full' : 'hidden'}>
-          <ChatPanel />
+          <ChatPanel onTitleChange={setChatTitle} />
         </div>
         <div className={activeTab === 'terminal' ? 'h-full' : 'hidden'}>
-          {terminalEverOpened && <TerminalPanel key={terminalKey} headerless />}
+          {terminalEverOpened && <TerminalPanel key={terminalKey} headerless onActiveNameChange={setTerminalName} />}
         </div>
       </div>
     </div>

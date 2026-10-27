@@ -142,11 +142,23 @@ function AgentSelector() {
 const WINDOW_INITIAL_TURNS = 30
 const WINDOW_STEP_TURNS = 30
 
-export function ChatPanel() {
+export function ChatPanel({ onTitleChange }: {
+  /** Title of the session on screen — the bottom bar shows it centred. */
+  onTitleChange?: (title: string) => void
+} = {}) {
   const t = useT()
   const { messages, sendMessage, isStreaming, deleteSession, stopGeneration, interruptGeneration, pendingMessages, removePendingMessage, handleCommand, sessionId } = useChat()
   const activeTab = useChatTabs((s) => s.tabs.find((tab) => tab.tabId === s.activeTabId))
   const { sessions, remove: removeSession, loadMore: loadMoreSessions, hasMore: hasMoreSessions, loadingMore: loadingMoreSessions } = useExplorerSessions()
+  // Read from the list the sidebar shows (refetched on `session:changed`), so
+  // a rename / generated title lands here with it. Fallbacks match its titleOf;
+  // a session not (yet) in the list has no row there and no title here.
+  const title = useMemo(() => {
+    if (sessionId === null) return t('chat.tabs.newSession')
+    const listed = sessions.find((s) => s.id === sessionId)
+    return listed ? listed.title || t('chat.tabs.untitled') : ''
+  }, [sessionId, sessions, t])
+  useEffect(() => { onTitleChange?.(title) }, [title, onTitleChange])
   // Debug toggle — same as the Sessions tab's, under its own key so the two
   // surfaces don't flip each other.
   const [debugMode, setDebugMode] = useState<boolean>(() => {
