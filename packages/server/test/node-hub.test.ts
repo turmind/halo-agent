@@ -225,6 +225,44 @@ describe('call semantics', () => {
     expect(onlineNames()).toEqual(['e2e-box'])
   })
 
+  // The SIGKILL follow-up to SIGTERM is a timer in the node process; `halo
+  // node` exits right after `done`, so `done` must wait for the group to die.
+  // `trap "" TERM` is inherited by `sleep` (SIG_IGN survives exec).
+  const TERM_PROOF = 'trap "" TERM; echo $$ > t.pid; sleep 4; touch marker'
+  async function groupGone(pgid: number, ms: number): Promise<boolean> {
+    const end = Date.now() + ms
+    for (;;) {
+      try { process.kill(-pgid, 0) } catch { return true }
+      if (Date.now() > end) return false
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+
+  it.skipIf(process.platform === 'win32')('stop(): done settles only after a TERM-ignoring command\'s process group is dead', async () => {
+    const { h } = startNode({ allowShell: true })
+    await until(() => onlineNames().includes('e2e-box'))
+    const failed = expect(hub.call(ws, 'e2e-box', 'run', { command: TERM_PROOF })).rejects.toThrow(/went offline during the call/)
+    const pgid = await readPid(path.join(nodeRoot, 't.pid'))
+    await h.stop()
+    // Only reaping slack for the reparented `sleep` — the bug left it alive ~2s.
+    expect(await groupGone(pgid, 300)).toBe(true)
+    expect((await h.done).exitCode).toBe(0)
+    await failed
+    expect(fs.existsSync(path.join(nodeRoot, 'marker'))).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('revoked (4001): exit 1 only after a TERM-ignoring command\'s process group is dead', async () => {
+    const { h } = startNode({ allowShell: true })
+    await until(() => onlineNames().includes('e2e-box'))
+    const failed = expect(hub.call(ws, 'e2e-box', 'run', { command: TERM_PROOF })).rejects.toThrow(/went offline during the call/)
+    const pgid = await readPid(path.join(nodeRoot, 't.pid'))
+    deleteNodeAccount(db, accountId)
+    hub.disconnect(accountId)
+    expect((await h.done).exitCode).toBe(1)
+    expect(await groupGone(pgid, 300)).toBe(true)
+    await failed
+  })
+
   it('a server-side timeout rejects the call and sends cancel', async () => {
     await stopServer()
     await startServer(undefined, { callTimeoutMs: 200 })

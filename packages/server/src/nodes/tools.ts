@@ -4,7 +4,9 @@
  * db, env or the machine list at build time. Online state reaches the model
  * only through node_list's RESULT. Design: .halo/docs/design/node.md.
  */
+import http from 'node:http'
 import type { ToolDef } from '../agents/agent-loop.js'
+import { config } from '../config.js'
 import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { getNodeHub } from './hub.js'
 import { HEADER_RELAY, type NodeOp } from './protocol.js'
@@ -70,24 +72,36 @@ function schemas(): Map<string, Record<string, unknown>> {
   return _schemas
 }
 
-/** POST to the server's loopback relay (cron's `halo cli` child). */
-async function relayCall(url: string, secret: string, body: { workspace: string; node?: string; op: RelayOp; args?: Record<string, unknown> }, signal?: AbortSignal): Promise<string> {
-  let res: Response
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', [HEADER_RELAY]: secret },
-      body: JSON.stringify(body),
-      signal,
+/** POST to the server's loopback relay (cron's `halo cli` child). node:http,
+ *  not fetch: undici's fixed 300s headersTimeout would cut a node_run whose
+ *  shell timeout is over ~285s with a misleading "could not reach". The hub
+ *  times every call out itself (120s; node_run: shell timeout + 15s) — this
+ *  explicit timeout is only the backstop above it. */
+function relayCall(url: string, secret: string, body: { workspace: string; node?: string; op: RelayOp; args?: Record<string, unknown> }, signal?: AbortSignal): Promise<string> {
+  const timeoutMs = Math.max(config.timeout.shellExec, 120_000) + 30_000
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, { method: 'POST', headers: { 'content-type': 'application/json', [HEADER_RELAY]: secret }, signal, timeout: timeoutMs }, (res) => {
+      let raw = ''
+      res.setEncoding('utf-8')
+      res.on('data', (chunk: string) => { raw += chunk })
+      res.on('error', reject)
+      res.on('end', () => {
+        const data = ((): { ok?: boolean; text?: string; error?: string } | null => {
+          try { return JSON.parse(raw) } catch { return null }   // non-JSON → refused below
+        })()
+        const status = res.statusCode ?? 0
+        if (status < 200 || status >= 300 || !data) return reject(new Error(`machine relay refused the call (HTTP ${status}${data?.error ? `: ${data.error}` : ''})`))
+        if (!data.ok) return reject(new Error(data.error ?? 'failed on the machine'))
+        resolve(data.text ?? '')
+      })
     })
-  } catch (err) {
-    if (signal?.aborted) throw err
-    throw new Error(`could not reach the server's machine relay (${err instanceof Error ? err.message : String(err)})`)
-  }
-  const data = await res.json().catch(() => null) as { ok?: boolean; text?: string; error?: string } | null
-  if (!res.ok || !data) throw new Error(`machine relay refused the call (HTTP ${res.status}${data?.error ? `: ${data.error}` : ''})`)
-  if (!data.ok) throw new Error(data.error ?? 'failed on the machine')
-  return data.text ?? ''
+    req.on('timeout', () => req.destroy(new Error(`no answer within ${Math.round(timeoutMs / 1000)}s`)))
+    req.on('error', (err) => {
+      if (signal?.aborted) return reject(err)
+      reject(new Error(`could not reach the server's machine relay (${err.message})`))
+    })
+    req.end(JSON.stringify(body))
+  })
 }
 
 /** In the server process: the hub. In cron's child: the loopback relay. Else unavailable. */

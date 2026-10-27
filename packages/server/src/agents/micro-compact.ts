@@ -45,6 +45,15 @@ const COMPACTABLE_TOOLS = new Set<string>([
   'glob',
   'shell_exec',
   'web_fetch',
+  // Linked machines: the same tools run on a `halo node` (node_list stays —
+  // it's the small online-state answer the model may still act on).
+  'node_read',
+  'node_write',
+  'node_edit',
+  'node_list_dir',
+  'node_grep',
+  'node_glob',
+  'node_run',
 ])
 
 /** Keep this many most-recent compactable tool_result pairs intact. The

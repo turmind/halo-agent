@@ -345,7 +345,8 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       // parent agent doesn't assume sub-agents can use tools they can't.
       let tools = yamlConfig.tools ?? []
       if (currentAccessLevel === 'readonly') {
-        const excluded = new Set(['file_write', 'file_edit', 'shell_exec', 'web_fetch'])
+        // node_list: the node_* set is only built for full sessions.
+        const excluded = new Set(['file_write', 'file_edit', 'shell_exec', 'web_fetch', 'node_list'])
         tools = tools.filter((t) => !excluded.has(t))
       }
       const content = [

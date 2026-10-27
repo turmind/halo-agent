@@ -33,14 +33,17 @@ export interface RunNodeOptions {
 }
 
 export interface NodeHandle {
-  /** Settles when the node stops for good: 0 = stop(), 1 = fatal refusal. */
+  /** Settles when the node stops for good: 0 = stop(), 1 = fatal refusal —
+   *  only after the running calls' commands are dead (see drain). */
   done: Promise<{ exitCode: number }>
-  /** Abort running calls, close(1000), resolve once closed. */
+  /** Abort running calls, close(1000), resolve once closed and drained. */
   stop(): Promise<void>
 }
 
 const HANDSHAKE_TIMEOUT_MS = 10_000
 const LOCKED_OUT_RETRY_MS = 60_000
+/** > sandbox.ts KILL_GRACE_MS (2s) + its 200ms force-settle. */
+const EXIT_DRAIN_MS = 2500
 
 /** http→ws, https→wss, + NODE_WS_PATH after any path prefix. */
 export function nodeWsUrl(server: string): string {
@@ -95,12 +98,29 @@ export function runNode(opts: RunNodeOptions): NodeHandle {
   let finish!: (r: { exitCode: number }) => void
   const done = new Promise<{ exitCode: number }>((r) => { finish = r })
   const running = new Map<string, AbortController>()
+  /** Every exec still in flight, aborted or not — what the exit paths wait on. */
+  const inflight = new Set<Promise<unknown>>()
 
   const abortAll = (): number => {
     const n = running.size
     for (const c of running.values()) c.abort()
     running.clear()
     return n
+  }
+
+  /** Exit paths only (stop / fatal): an aborted node_run gets SIGTERM on its
+   *  process group, and sandbox.ts's SIGKILL follow-up is a timer in THIS
+   *  process — exiting before it fires leaves a TERM-ignoring command running
+   *  (the group is detached, so it doesn't die with us). Wait for the aborted
+   *  execs to settle: spawnGroupExec settles within KILL_GRACE_MS + 200ms
+   *  (SIGKILL, then force-settle), so the cap only guards a stuck file op. */
+  const drain = (): Promise<void> => {
+    if (inflight.size === 0) return Promise.resolve()
+    let cap: NodeJS.Timeout | undefined
+    return Promise.race([
+      Promise.allSettled([...inflight]).then(() => undefined),
+      new Promise<void>((r) => { cap = setTimeout(r, EXIT_DRAIN_MS) }),
+    ]).finally(() => clearTimeout(cap))
   }
 
   const nextDelay = (floor = 0): number => {
@@ -118,7 +138,8 @@ export function runNode(opts: RunNodeOptions): NodeHandle {
   const fatal = (msg: string): void => {
     log(`[Node] ${msg}`)
     stopping = true
-    finish({ exitCode: 1 })
+    abortAll()
+    void drain().then(() => finish({ exitCode: 1 }))
   }
 
   function handleRequest(sock: WebSocket, frame: Extract<ServerFrame, { t: 'req' }>): void {
@@ -132,10 +153,12 @@ export function runNode(opts: RunNodeOptions): NodeHandle {
     }
     const op = NODE_OPS.has(frame.op) ? frame.op as NodeOp : null
     if (!op) { reply({ t: 'res', id: frame.id, ok: false, error: `unknown op "${String(frame.op)}"` }); return }
-    exec(op, frame.args ?? {}, ctrl.signal).then(
+    const p = exec(op, frame.args ?? {}, ctrl.signal).then(
       (text) => reply({ t: 'res', id: frame.id, ok: true, text }),
       (err: unknown) => reply({ t: 'res', id: frame.id, ok: false, error: err instanceof Error ? err.message : String(err) }),
     )
+    inflight.add(p)
+    void p.finally(() => inflight.delete(p))
   }
 
   function connect(): void {
@@ -190,7 +213,9 @@ export function runNode(opts: RunNodeOptions): NodeHandle {
       if (watchdog) clearTimeout(watchdog)
       if (ws === sock) ws = null
       // Results of the calls this socket carried are never delivered or
-      // replayed: stop them (process groups get SIGTERM, then SIGKILL).
+      // replayed: abort them — each node_run's process group gets SIGTERM now
+      // and sandbox.ts's SIGKILL 2s later (this process lives on to reconnect,
+      // so that timer fires). The exit paths wait for it in drain().
       const stopped = abortAll()
       if (stopping) return
       const reason = reasonBuf.toString()
@@ -217,10 +242,12 @@ export function runNode(opts: RunNodeOptions): NodeHandle {
       stopping = true
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
       abortAll()
+      const drained = drain()
       const sock = ws
-      if (!sock || sock.readyState === WebSocket.CLOSED) { finish({ exitCode: 0 }); return done.then(() => undefined) }
+      if (!sock || sock.readyState === WebSocket.CLOSED) { void drained.then(() => finish({ exitCode: 0 })); return done.then(() => undefined) }
       const forced = setTimeout(() => sock.terminate(), 2000)
-      sock.once('close', () => { clearTimeout(forced); finish({ exitCode: 0 }) })
+      const closed = new Promise<void>((r) => sock.once('close', () => { clearTimeout(forced); r() }))
+      void Promise.all([closed, drained]).then(() => finish({ exitCode: 0 }))
       if (sock.readyState === WebSocket.CONNECTING) sock.terminate()
       else sock.close(1000, 'node stopped')
       return done.then(() => undefined)

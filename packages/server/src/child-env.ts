@@ -17,7 +17,9 @@ export function cleanChildEnv(): NodeJS.ProcessEnv {
   delete env.HALO_JWT_SECRET
   // Linked machines: the cron child's relay secret (cron/runner.ts adds it back
   // for that one child) and a `halo node`'s pairing token (its node_run commands
-  // spawn through here too).
+  // spawn through here too) — kept out of agent subprocess env. Not a boundary
+  // for full-level commands: they run unsandboxed as the same user and can read
+  // that user's processes and files anyway.
   delete env.HALO_NODE_RELAY_URL
   delete env.HALO_NODE_RELAY_TOKEN
   delete env.HALO_NODE_TOKEN
