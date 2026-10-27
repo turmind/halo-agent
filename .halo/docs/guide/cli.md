@@ -308,6 +308,29 @@ the caller-side `auth: sigv4` remote, session dirs and ops notes:
 [design/agentcore.md](../design/agentcore.md). The hub skill `agentcore-deploy`
 builds the image and creates the runtime for you.
 
+## Linked machine (`halo node`)
+
+```bash
+HALO_NODE_TOKEN=<token> halo node --server https://halo.example.com --root ~/proj [--allow-shell]
+```
+
+Links this machine to a workspace on a halo server, so that workspace's
+full-access agents can work on files here with the `node_*` tools. Runs in the
+foreground, reconnects on its own, Ctrl-C to stop. Needs no `halo setup` and
+no model keys — nothing is written under `~/.halo/`. Create the token in
+Admin → Channels → Linked machines.
+
+| Flag / env | Meaning |
+|---|---|
+| `--server <url>` | Server address, `http(s)://host:port` (`ws(s)://` also accepted) — required |
+| `--token <t>` / `HALO_NODE_TOKEN` | Pairing token — required; prefer the env var (flags show up in `ps`) |
+| `--root <dir>` | Folder to share; every path must stay inside it. Omit (or `/`) for whole-machine mode: any path this user can reach, relative paths from the current dir |
+| `--allow-shell` | Let agents run commands (`node_run`) as this user, not sandboxed. Off by default |
+| `--header "Name: value"` | Repeatable. Extra header on the connection, for an auth proxy in front of the server |
+
+Exits 1 on a rejected / revoked token, a deleted workspace or a protocol
+mismatch; retries everything else. Full guide: [node.md](node.md).
+
 ## Architecture
 
 ```

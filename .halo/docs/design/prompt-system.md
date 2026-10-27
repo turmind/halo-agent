@@ -236,6 +236,8 @@ Tail-append:
 Your available tools: <tool1>, <tool2>, .... Only use tools in this list.
 ```
 
+**Linked-machine tools inject nothing dynamic.** The eight `node_*` tools are decided only by `node_list` in the YAML plus a full-access session; their names, descriptions and schemas are code constants. Which machines exist or are online never reaches the system prompt or the tool block — the model learns it from `node_list`'s result — so machines connecting and disconnecting don't break the prompt cache. See [node.md](node.md#prompt-cache-invariant).
+
 ## Final injection order
 
 ### Root agent

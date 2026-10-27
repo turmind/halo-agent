@@ -77,6 +77,13 @@ A2A v1.0 (JSON-RPC only). **Inbound**: a workspace with `.halo/agent-card.json` 
 - Key state: `~/.halo/global/a2a.db` (tasks, push configs / outbox, dispatches), `agent_sessions.reply_to`
 - Code: `packages/server/src/a2a/` + `db/a2a-db.ts` + `agents/relay.ts` · Docs: [design/a2a.md](docs/design/a2a.md), [dev/tools.md](docs/dev/tools.md#a2a-tools), [dev/api.md](docs/dev/api.md#a2a-agent-to-agent)
 
+## Linked machines (`halo node`)
+
+`halo node --server <url> [--root <dir>] [--allow-shell]` on a user's machine dials the server over WebSocket (token from Admin → Channels → Linked machines, bound to one workspace) and that workspace's full-access agents get eight `node_*` tools that run the local file tools — and opt-in `shell_exec`, unsandboxed — on the machine. Opt-in with `tools: [node_list]` (the default agent lists it); tool list and prompt are constant, online state only in `node_list`'s result. Cron runs reach it via a loopback relay. Server only.
+
+- Key state: `~/.halo/secrets/channels/channels.db` `channel_accounts` (`channel_type='node'`); live connections in memory only
+- Code: `packages/server/src/nodes/` + `packages/cli/src/index.ts` (`cmdNode`) + admin `features/nodes/` · Docs: [design/node.md](docs/design/node.md), [guide/node.md](docs/guide/node.md), [dev/tools.md](docs/dev/tools.md#node-tools), [dev/api.md](docs/dev/api.md#linked-machines-halo-node)
+
 ## Run Ledger
 
 `runSession` records each in-flight run in a global table and deletes it on exit, so rows left at boot are exactly the runs the previous process died in. The boot sweep sends one restart nudge per interrupted root (skipping cron, internal agents and goal-bound sessions).

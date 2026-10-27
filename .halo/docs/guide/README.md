@@ -24,6 +24,10 @@ Aimed at Halo end-users. Pick the doc that matches your situation.
 - [WeChat](channels/wechat.md) — QR-scan iLink bot
 - [ACP](channels/acp.md) — Zed / JetBrains or other ACP clients driving a remote halo
 
+## Linked machines
+
+[node.md](node.md) — run `halo node` on your own computer so a workspace's agents can work on files there.
+
 ## Related docs
 
 - Development: [dev/](../dev/) — environment, API, tool reference

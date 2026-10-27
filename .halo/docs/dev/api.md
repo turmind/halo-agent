@@ -338,6 +338,26 @@ SSE responses (`/api/web/chat`, `/api/web/subscribe`) carry an SSE comment line 
 
 See [design/web.md](../design/web.md).
 
+## Linked machines (`halo node`)
+
+File: `packages/server/src/nodes/routes.ts` (+ `hub.ts` for the WebSocket). Not mounted in AgentCore mode. Design: [design/node.md](../design/node.md).
+
+### Admin endpoints (cookie auth)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/nodes/accounts` | All machine tokens → `{accounts: [{accountId, name, workspacePath, workspaceMissing, token, createdAt, online: {root \| null, shell, os, since} \| null}]}` (`root: null` = whole-machine mode) |
+| POST | `/api/nodes/accounts` | Create. Body `{workspacePath, name}` (`name` = `^[a-z0-9][a-z0-9-]{0,31}$`) → `{accountId, token, name, workspacePath}`. 400 bad name / workspace (must exist and contain `.halo/`), 409 name already used in that workspace |
+| DELETE | `/api/nodes/accounts/:id` | Delete; a connected machine is closed with `4001` and exits → `{ok: true}` |
+
+### Machine connection
+
+`GET /api/nodes/connect` + WebSocket upgrade, headers `authorization: Bearer <token>`, `x-halo-node-protocol: 1`, `x-halo-node-instance: <uuid>`, `x-halo-node-info: <base64url JSON>`. Refusals before the upgrade: 429 locked out (5 bad tokens / 15 min, `node-token` bucket) · 426 protocol · 401 token · 404 workspace gone · 400 info / instance missing · 409 connected from another instance. Frames and close codes: [design/node.md](../design/node.md#protocol-v1).
+
+### Internal relay
+
+`POST /api/nodes/call` — loopback only and header `x-halo-node-relay: <per-boot secret>` (else 403); in `PUBLIC_PATHS`, used by cron's `halo cli` child. Body `{workspace, op, node?, args?}` (`op: 'nodes'` = node_list) → `{ok: true, text}` or `{ok: false, error}`. Not a public API.
+
 ## A2A (Agent-to-Agent)
 
 Files: `packages/server/src/a2a/routes.ts` (JSON-RPC handler), `exposure.ts` (path resolution, auth, card), `outbound.ts` (push receiver). A2A v1.0, JSON-RPC binding only. Mounted in normal server mode outside `/api/*` (no admin cookie) and before the static frontend; not in the CLI / TUI. AgentCore mode serves the same handler at `/` instead — see [AgentCore runtime container](#agentcore-runtime-container-halo-agentcore-only). Design: [design/a2a.md](../design/a2a.md).
@@ -1082,5 +1102,6 @@ It does not remove session files. The full delete (rows + JSON + archive segment
 | `chat:ack` | `clientMsgId` | Chat appended to the session log (or re-acked on resend) |
 | `listener:released` | `sessionId` | Event listener reclaimed — re-send `subscribe` (see above) |
 | `skills:changed` | — | A skill was created / deleted / toggled, or a workspace skill folder changed on disk — re-fetch skill lists and `/api/commands`. Workspace-scoped changes reach only that workspace's sockets (see [Skills](#skills)) |
+| `nodes:changed` | `online: [{accountId, root \| null, shell, os, since}]` | A `halo node` connected / disconnected — full snapshot of online machines (global broadcast; `root: null` = whole machine). See [Linked machines](#linked-machines-halo-node) |
 
 Events with `taskId` set belong to sub-agent turns (nested sessions); events without are the root agent's. Session-scoped frames carry `sessionId` (the root session they belong to); the admin routes each one to the tab holding that session, and a frame without one goes to the tab on screen. Full list in [design/ws.md](../design/ws.md).

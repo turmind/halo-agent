@@ -535,6 +535,63 @@ The remotes configured on this server (the same list in every workspace) — eac
 
 Returns `{ "code": 0, "remotes": [{ name, agent, description, skills }], "pending": [{ remote, context_id, task_id, since }] }`.
 
+## Node tools
+
+File: `packages/server/src/nodes/tools.ts` (`buildNodeTools`). Design notes in [design/node.md](../design/node.md); user guide [guide/node.md](../guide/node.md).
+
+Act on the user's **linked machines** — computers running `halo node`, paired with this workspace in Admin → Channels → Linked machines. Each node tool mirrors one local workspace tool and runs **that same tool** on the machine (same arguments, same output), plus a required `node` argument naming the machine:
+
+| Tool | Mirrors | Extra / different args |
+|---|---|---|
+| `node_list` | — | none |
+| `node_read` | `file_read` | `node` |
+| `node_write` | `file_write` | `node` |
+| `node_edit` | `file_edit` | `node` |
+| `node_list_dir` | `file_list` | `node` |
+| `node_grep` | `grep` | `node` |
+| `node_glob` | `glob` | `node` |
+| `node_run` | `shell_exec` | `node`, `command`, `cwd` (default: the machine's folder) |
+
+**Enabling**: opt-in by the single name `node_list` in `agent.yaml`'s `tools:` — it brings all eight; the other seven names are not recognised on their own. **Full-access sessions only** (`accessLevel === null`). The bundled `default` agent lists it. The admin tool picker shows one `node_list` chip naming the set. Names, descriptions and schemas are constants — which machines are online never changes the tool list or the system prompt (prompt-cache invariant); online state is only in `node_list`'s result.
+
+**Paths**: a machine shares one folder (`--root`; `root` in `node_list`) — relative paths resolve against it, paths that resolve outside it (symlinks included) are refused: `"<p>" is outside this machine's shared folder (<root>) — node tools can only reach paths inside it`. A whole-machine node (`root: null, wholeMachine: true`) has no such check; relative paths resolve against its `base`.
+
+**Runtime**: in `halo server` calls go over the machine's WebSocket; cron runs (a `halo cli` child) reach it through the server's loopback relay. In the standalone CLI / TUI, the evo sandbox and AgentCore mode the tools are listed but every one — `node_list` included — returns `linked machines are not available in this runtime — only \`halo server\` accepts \`halo node\` connections. This is permanent for this runtime, not a temporary outage: do not retry. …`.
+
+**Errors** (returned as the tool error text):
+
+| Case | Message |
+|---|---|
+| Machine linked but not connected | `machine "<n>" is offline (\`halo node\` is not connected). Do not retry in a loop — tell the user to start it.` |
+| Name not linked to this workspace | `unknown machine "<n>" — machines linked to this workspace: <a, b \| (none)> (see node_list)` |
+| Link dropped mid-call | `machine "<n>" went offline during the call (connection lost). The operation may or may not have completed on the machine — check its state before retrying.` |
+| No answer in time (120 s; node_run: shell timeout + 15 s) | `machine "<n>" did not answer within <s>s — the call was cancelled; it may or may not have taken effect.` |
+| node_run without `--allow-shell` | `node_run is disabled on this machine — the user must restart \`halo node\` with --allow-shell to allow commands` |
+| Request over 8 MB | `request too large to send to the machine (<x> MB > 8 MB limit)` |
+
+Results over 256K chars are cut on the machine (`[Content truncated on the machine: N chars total]`); the usual tool-result budget then applies.
+
+### node_list
+
+The machines linked to this workspace and whether each is online. No arguments. Its description doubles as the usage note for the whole set.
+
+Returns `{ "code": 0, "nodes": [...] }`, one entry per linked machine:
+
+- offline: `{ "name": "nas", "online": false }`
+- online: `{ "name": "mbp", "online": true, "root": "/Users/a/proj", "shell": true, "shellTimeoutSec": 120, "os": "darwin", "since": "<ISO>" }` — whole-machine: `"root": null, "wholeMachine": true, "base": "<start dir>"`; `shellTimeoutSec` only when `shell` is true.
+
+No machines at all → `"nodes": []` plus `"hint": "No machines linked — create a token in Admin → Channels → Linked machines, then run \`halo node\` on the machine."`.
+
+### node_run
+
+`shell_exec` on the machine; needs `shell: true` in `node_list`. Runs unsandboxed as the machine's user in `cwd` (default: its folder; in folder mode `cwd` must stay inside it, the command itself is not confined). Killed after `shellTimeoutSec`; output capped like `shell_exec` (~8000 chars to the model) — redirect large output to a file, start long jobs with `nohup … &`. `{{ns.params.x}}` placeholders are not substituted.
+
+| Arg | Type | Required | Description |
+|---|---|---|---|
+| `node` | string | yes | Machine name from `node_list` |
+| `command` | string | yes | Shell command |
+| `cwd` | string | no | Directory to run in, like `path` (default: the machine's folder) |
+
 ## Tool assignment
 
 Workspace tools are enabled strictly by name in `agent.yaml`'s `tools` list:
@@ -547,7 +604,7 @@ skills:
   - code-review    # auto-injects activate_skill
 ```
 
-Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`), and `continue_task` is auto-injected for **every** agent unconditionally (see [continue_task](#continue_task)). The relay and A2A sets are the two name-gated bundles: listing `relay_send` alone brings `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list` with it, full-access sessions only (see [Relay tools](#relay-tools)); listing `a2a_send` alone brings `a2a_stop` / `a2a_read` / `a2a_list`, at every access level except the A2A read-only profile (see [A2A tools](#a2a-tools)).
+Tools not listed are not injected. Session/delegation tools do **not** go in `tools:` — they ride on a non-empty `team` (see [Session tools](#session-tools) above). `activate_skill` is auto-injected whenever the YAML lists `skills` (no need to put it in `tools`), and `continue_task` is auto-injected for **every** agent unconditionally (see [continue_task](#continue_task)). The relay, A2A and node sets are the three name-gated bundles: listing `relay_send` alone brings `relay_interrupt` / `relay_stop` / `relay_read` / `relay_list` with it, full-access sessions only (see [Relay tools](#relay-tools)); listing `a2a_send` alone brings `a2a_stop` / `a2a_read` / `a2a_list`, at every access level except the A2A read-only profile (see [A2A tools](#a2a-tools)); listing `node_list` alone brings the other seven `node_*` tools, full-access sessions only (see [Node tools](#node-tools)).
 
 There is **no implicit default tool set**: `filterTools()` (in `agent-loader.ts`) returns only the tools whose names appear in `agent.yaml`'s `tools:` list. If the field is absent or empty, the agent has zero workspace tools. The admin UI's "Create agent" form scaffolds a fresh agent with an empty `tools: []` for the same reason — fill it in deliberately. The `default` agent's bundled `agent.yaml` lists the common set (`file_read` / `file_write` / `file_edit` / `view_image` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`) that most agents will want; copy that line if you're starting from scratch.
 
