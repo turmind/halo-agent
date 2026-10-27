@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.0.8] - 2026-10-27
+
 ### Changed
 
 - Extensions: speaker labels in live transcription are now opt-in. The transcribe proxy only asks Amazon Transcribe for them, and only splits / labels finals by speaker, when the stream is opened with `speakers=1`; by default captions come without `speaker`, as before 2.0.4. The meeting recorder htrans 1.0.8 adds an "Identify speakers" checkbox next to the language picker, unticked by default.
@@ -1126,7 +1128,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.7...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.8...HEAD
+[2.0.8]: https://github.com/turmind/halo-agent/compare/v2.0.7...v2.0.8
 [2.0.7]: https://github.com/turmind/halo-agent/compare/v2.0.6...v2.0.7
 [2.0.6]: https://github.com/turmind/halo-agent/compare/v2.0.5...v2.0.6
 [2.0.5]: https://github.com/turmind/halo-agent/compare/v2.0.4...v2.0.5
