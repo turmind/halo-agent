@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Models: the bundled provider list now matches the halo-hub release `models-v2026.10.27`, so a new install offers these without `/extension models`: GPT-6.1 Terra (AWS Bedrock OpenAI-compatible, `global.openai.gpt-6.1-terra`; AWS Bedrock Mantle, us-east-1 only), Kimi K3.1 Pro, MiniMax M3.1 Flash (now MiniMax's default model), and Doubao Seed 2.1 Pro / Lite 260915 (Pro 260915 is now Doubao's default) and Seed 2.1 Turbo.
+
 ## [2.0.8] - 2026-10-27
 
 ### Changed

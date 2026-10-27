@@ -1,12 +1,12 @@
 id: minimax
 runtime: minimax
-revision: 2026101002
+revision: 2026101901
 displayName: MiniMax
 displayName_zh: MiniMax
-description: MiniMax M3 / M2.7 family via the Anthropic-compatible Messages API
-description_zh: MiniMax M3 / M2.7 系列，通过 Anthropic 兼容的 Messages API 调用
+description: MiniMax M3.1 / M3 / M2.7 family via the Anthropic-compatible Messages API
+description_zh: MiniMax M3.1 / M3 / M2.7 系列，通过 Anthropic 兼容的 Messages API 调用
 defaultEndpoint: https://api.minimaxi.com/anthropic
-defaultModelId: MiniMax-M3
+defaultModelId: MiniMax-M3.1-Flash
 
 secrets:
   - key: api_key
@@ -38,6 +38,37 @@ secrets:
 #     observed to truncate the run with stop=max_tokens before any thinking
 #     completes — leaving it out of the preset list. medium/high are safe.
 models:
+  # MiniMax-M3.1-Flash (listed 2026-09-16, platform.minimaxi.com/docs/guides/models-intro
+  # + /api-reference/text-anthropic-api): 1,000,000 context, native multimodal.
+  # Live probe 2026-10-19 on /anthropic: plain, effort low / medium / high /
+  # xhigh / max all 200 (bogus value 400s with "allowed: low, medium, high,
+  # xhigh, max"); thinking:{type:'adaptive'} 200; thinking:{type:'disabled'}
+  # 400 ("requires adaptive thinking") — thinking can't be switched off, and
+  # omitting it leaves it on, so Halo's "off" (field omitted) is safe. Red PNG
+  # → "Red"; tool_use OK; max_tokens 524288 OK, 524289 → 400, so the hard cap
+  # is 524288 — kept at 131072 like M3. Halo's minimax-agent only sends
+  # thinking:{type:'adaptive'} (no output_config.effort), so the API default
+  # (max) applies; the doc's effort levels aren't exposed until the runtime
+  # sends them. Caching is passive: cache_read_input_tokens rose on turn 2
+  # with or without cache_control, cache_creation stayed 0 and `ttl:'1h'`
+  # made no difference — no promptCaching key, as for M3.
+  - id: MiniMax-M3.1-Flash
+    displayName: MiniMax M3.1 Flash
+    maxOutputTokens: 131072
+    contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: adaptive
+        effortPresets:
+          - { value: adaptive, label: Adaptive }
+
   - id: MiniMax-M3
     displayName: MiniMax M3
     # Official recommended value; hard cap is 524288 but we don't max out.

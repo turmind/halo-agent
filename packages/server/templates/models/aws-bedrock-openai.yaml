@@ -1,10 +1,10 @@
 id: aws-bedrock-openai
 runtime: bedrock-mantle
-revision: 2026101005
+revision: 2026102701
 displayName: AWS Bedrock OpenAI-compatible (GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3 · GLM 5.3)
 displayName_zh: AWS Bedrock OpenAI 兼容接口（GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3 · GLM 5.3）
-description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6.1 Sol, GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.7 / 4.6, Moonshot Kimi K3, Z.AI GLM 5.3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).
-description_zh: 通过 bedrock-runtime 端点的 OpenAI Responses API（/openai/v1）调用 Bedrock 上的前沿模型——OpenAI GPT-6.1 Sol、GPT-6（Astra / Sol / Luna）与 GPT-5.6（Sol / Terra / Luna）、xAI Grok 4.7 / 4.6、月之暗面 Kimi K3、智谱 GLM 5.3。仅支持跨区域推理 profile（global.*）——每个区域都能调所有模型，无区域分裂。不支持服务端 web_search（那是 Mantle 独有）。
+description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6.1 (Sol / Terra), GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.7 / 4.6, Moonshot Kimi K3, Z.AI GLM 5.3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).
+description_zh: 通过 bedrock-runtime 端点的 OpenAI Responses API（/openai/v1）调用 Bedrock 上的前沿模型——OpenAI GPT-6.1（Sol / Terra）、GPT-6（Astra / Sol / Luna）与 GPT-5.6（Sol / Terra / Luna）、xAI Grok 4.7 / 4.6、月之暗面 Kimi K3、智谱 GLM 5.3。仅支持跨区域推理 profile（global.*）——每个区域都能调所有模型，无区域分裂。不支持服务端 web_search（那是 Mantle 独有）。
 # Why a second Bedrock/OpenAI provider next to aws-bedrock-mantle: this is the
 # bedrock-runtime host (https://bedrock-runtime.<region>.amazonaws.com/openai/v1),
 # which AWS now recommends for new applications; bedrock-mantle is the legacy
@@ -59,7 +59,7 @@ secrets:
 #   - Reasoning summaries are never surfaced (output[].reasoning.summary
 #     empty) — same as GPT on Mantle; reasoning_tokens > 0 proves it ran.
 models:
-  # OpenAI GPT-6.1 / GPT-6 / GPT-5.6 — the same seven models as
+  # OpenAI GPT-6.1 / GPT-6 / GPT-5.6 — the same eight models as
   # aws-bedrock-mantle.yaml (see that file for the per-model background:
   # 1,050,000 context for GPT-6 and 5.6 per the Bedrock model cards, 128,000 /
   # 64,000 max output, 2x input price past 272K — hence contextWindow 272000
@@ -110,6 +110,46 @@ models:
     maxOutputTokens: 131072
     contextWindow: 272000
     maxContextWindow: 1000000
+    compressAt: 0.9
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: xhigh
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+      verbosity:
+        default: medium
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  # GPT-6.1 Terra (Bedrock GA 2026-10-26; model card: 1,050,000 context /
+  # 128,000 max output, EOL no sooner than 2027-10-26). Live-probed 2026-10-27
+  # with SigV4 on global.openai.gpt-6.1-terra: 200 from us-east-1 / us-west-2 /
+  # eu-west-1 / ap-northeast-1; the bare openai.gpt-6.1-terra id 400s (needs the
+  # profile). reasoning.effort accepts none/low/medium/high/xhigh/max (`minimal`
+  # 400s; presets follow GPT-6 Sol, no "none"); text.verbosity low/medium/high;
+  # image → "Red"; tool call → function_call; implicit cache: turn 1 wrote 6014
+  # tokens, turn 2 read 6014. max_output_tokens 128001 is not rejected (proves
+  # nothing), so 128000 is the card's figure.
+  - id: global.openai.gpt-6.1-terra
+    displayName: GPT-6.1 Terra
+    maxOutputTokens: 128000
+    contextWindow: 272000
+    maxContextWindow: 1050000
     compressAt: 0.9
     capabilities:
       image: true

@@ -1,10 +1,10 @@
 id: kimi
 runtime: kimi
-revision: 2026101004
+revision: 2026102701
 displayName: Kimi (Moonshot AI)
 displayName_zh: Kimi（月之暗面）
-description: Kimi K3 / K2.7 Code / K2.6 via OpenAI-compatible chat completions API
-description_zh: Kimi K3 / K2.7 Code / K2.6，通过 OpenAI 兼容的 chat completions API 调用
+description: Kimi K3.1 Pro / K3 / K2.7 Code / K2.6 via OpenAI-compatible chat completions API
+description_zh: Kimi K3.1 Pro / K3 / K2.7 Code / K2.6，通过 OpenAI 兼容的 chat completions API 调用
 defaultEndpoint: https://api.moonshot.cn/v1
 
 secrets:
@@ -25,6 +25,44 @@ secrets:
 #     k2.6). An earlier comment here claiming K2.6 accepts
 #     reasoning_effort { minimal, low, medium, high } was wrong.
 models:
+  # Kimi K3.1 Pro (platform.kimi.com/docs/models + docs/guide/kimi-k3-1-pro-quickstart:
+  # 1M context, top-level reasoning_effort low / high / max, default max,
+  # max_completion_tokens default 131072). /v1/models: context_length 1048576,
+  # image in. Live probe 2026-10-27: plain, effort low/high/max/medium/xhigh all
+  # 200 (reasoning returned; medium/xhigh are silently accepted, only the three
+  # documented values are offered); red 64×64 PNG → "Red"; tool call →
+  # tool_calls; automatic cache: turn 2 read 4864 of 5110 tokens. Docs say
+  # thinking can't be turned off, though thinking:disabled / effort none were
+  # accepted and returned no reasoning — not exposed. max_tokens 1048577 isn't
+  # rejected (proves nothing); output stays at the official 131072 default.
+  # prompt_cache_options.ttl '1h' is documented and accepted, but usage never
+  # reports a TTL bucket, so 5m stays the only preset. The sibling
+  # kimi-k3.1-pro-highspeed is on the docs page but 404s for this account —
+  # add after a probe by someone with access.
+  - id: kimi-k3.1-pro
+    displayName: Kimi K3.1 Pro
+    maxOutputTokens: 131072
+    contextWindow: 272000
+    maxContextWindow: 1048576
+    compressAt: 0.9
+    capabilities:
+      # Video input exists upstream; Halo has no video path (see K3).
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # Always on server-side; same top-level reasoning_effort as K3.
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: high, label: High }
+          - { value: max, label: Max }
+
   - id: kimi-k3
     displayName: Kimi K3
     # Official default output cap; the model can go up to 1M but we don't max out.
