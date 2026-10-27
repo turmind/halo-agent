@@ -67,6 +67,8 @@ Two tabs:
 
 Current tab stored in `editorStore.bottomTab`.
 
+The middle of the tab bar shows the current tab's title — the session title on Chat ("New session" for a draft, "Untitled session" until it has one), the active terminal's name on Terminal. It is truncated with an ellipsis when it doesn't fit (full text on hover) and hidden when the bar is too narrow.
+
 ### Floating mode
 The tab bar has a maximize button and, at the far right, a float button. Toggling the float button detaches the panel into a draggable window:
 - **Default position/size**: bottom-right corner, 480×640 with a 24px margin

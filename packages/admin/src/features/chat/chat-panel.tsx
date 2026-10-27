@@ -152,12 +152,10 @@ export function ChatPanel({ onTitleChange }: {
   const { sessions, remove: removeSession, loadMore: loadMoreSessions, hasMore: hasMoreSessions, loadingMore: loadingMoreSessions } = useExplorerSessions()
   // Read from the list the sidebar shows (refetched on `session:changed`), so
   // a rename / generated title lands here with it. Fallbacks match its titleOf;
-  // a session not (yet) in the list has no row there and no title here.
-  const title = useMemo(() => {
-    if (sessionId === null) return t('chat.tabs.newSession')
-    const listed = sessions.find((s) => s.id === sessionId)
-    return listed ? listed.title || t('chat.tabs.untitled') : ''
-  }, [sessionId, sessions, t])
+  // a session not (yet) in the list reads as untitled too.
+  const title = useMemo(() => (sessionId === null
+    ? t('chat.tabs.newSession')
+    : sessions.find((s) => s.id === sessionId)?.title || t('chat.tabs.untitled')), [sessionId, sessions, t])
   useEffect(() => { onTitleChange?.(title) }, [title, onTitleChange])
   // Debug toggle — same as the Sessions tab's, under its own key so the two
   // surfaces don't flip each other.
