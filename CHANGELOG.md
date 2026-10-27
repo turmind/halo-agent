@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Extensions: speaker labels in live transcription are now opt-in. The transcribe proxy only asks Amazon Transcribe for them, and only splits / labels finals by speaker, when the stream is opened with `speakers=1`; by default captions come without `speaker`, as before 2.0.4. The meeting recorder htrans 1.0.8 adds an "Identify speakers" checkbox next to the language picker, unticked by default.
+
 ## [2.0.7] - 2026-10-21
 
 ### Fixed
