@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 110 // models/*.yaml: synced with halo-hub models-v2026.10.27 — + GPT-6.1 Terra (Mantle / bedrock-runtime), Kimi K3.1 Pro, MiniMax M3.1 Flash, Doubao Seed 2.1 pro / lite 260915 + turbo; Doubao / MiniMax default model ids follow the hub.
+export const TEMPLATE_VERSION = 111 // agents/default: `tools:` adds node_list — linked machines (`halo node`), the 8 node_* tools for full-access sessions; docs: dev/tools.md adds "Node tools".
+// 110: models/*.yaml: synced with halo-hub models-v2026.10.27 — + GPT-6.1 Terra (Mantle / bedrock-runtime), Kimi K3.1 Pro, MiniMax M3.1 Flash, Doubao Seed 2.1 pro / lite 260915 + turbo; Doubao / MiniMax default model ids follow the hub.
 // 109: docs: requirements/settings.md — Settings → Extensions header adds "· N updates available" / "· all up to date" after "Last checked".
 // 108: skills/extension (ext.sh changed again after 107): `install <id>` reads `<hub_base>/<id>/update.json` (new hub_base param, https only, sha256 + id + version checked, `minHalo` vs `halo --version` — unreadable version only warns) instead of release API / git tags, `models` keeps the release API; a fresh install (no previous `<id>/`) clears that id's on / off state so it starts on; a failed `.state.json` write only warns.
 // 107: skills/extension: ext.sh `remove` also drops the extension's on / off state (`extensions/.state.json`), so a reinstall starts on.

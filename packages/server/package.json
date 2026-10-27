@@ -21,6 +21,7 @@
     "./setup-settings": "./dist/setup-settings.js",
     "./setup-providers": "./dist/setup-providers.js",
     "./models/*": "./dist/models/*.js",
+    "./nodes/*": "./dist/nodes/*.js",
     "./logger": "./dist/logger.js",
     "./observability/otel": "./dist/observability/otel.js"
   },
@@ -67,6 +68,9 @@
       ],
       "models/*": [
         "./dist/models/*"
+      ],
+      "nodes/*": [
+        "./dist/nodes/*"
       ],
       "logger": [
         "./dist/logger"

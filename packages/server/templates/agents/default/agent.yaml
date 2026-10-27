@@ -28,6 +28,8 @@ tools:
   - grep
   - glob
   - web_fetch
+  # Linked machines (`halo node`): grants all 8 node_* tools, full-access sessions only.
+  - node_list
 # Delegation: a non-empty `team` is what grants the whole session-tool bundle
 # (start_session / query_session / … / archive_session / query_agent) + the
 # roster — they're no longer hand-listed under `tools:`. These ids also scope

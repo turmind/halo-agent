@@ -37,6 +37,9 @@ import { SessionManagerRegistry } from './agents/session-manager-registry.js'
 import { claimWorkspaceRuntime, releaseWorkspaceRuntime } from './agents/workspace-runtime-lock.js'
 import { setRelayRegistry } from './agents/relay.js'
 import { createChannelDb, setChannelDb } from './db/channel-db.js'
+import { createNodeHub, setNodeHub } from './nodes/hub.js'
+import { createNodeRoutes } from './nodes/routes.js'
+import { NODE_WS_PATH } from './nodes/protocol.js'
 import { createCronDb, setCronDb } from './db/cron-db.js'
 import { createRunsDb, setRunsDb, listRunningWorkspaces } from './db/runs-db.js'
 import { createA2ADb, setA2ADb } from './db/a2a-db.js'
@@ -405,6 +408,11 @@ startModelsWatcher()
 
 const channelDb = createChannelDb(path.join(HALO_HOME, 'secrets'))
 setChannelDb(channelDb)
+// Linked machines (`halo node`): the hub holds the online set in memory and
+// forwards node_* calls. AgentCore has no WS surface, so node tools report
+// "not available" there, as in the CLI.
+const nodeHub = AGENTCORE ? null : createNodeHub({ db: channelDb, port: PORT })
+setNodeHub(nodeHub)
 // Self-evolution global db. Stash the instance in a module-level singleton
 // so dispatcher code (`/note` handler etc.) can reach it without threading
 // the handle through every caller.
@@ -503,6 +511,8 @@ if (!AGENTCORE) {
   // long-poll/SSE runners, mounts admin routes. Adding a new channel =
   // add an entry to `defaultChannelDescriptors`; this block stays untouched.
   bootChannels(app, defaultChannelDescriptors, { registry, db: channelDb })
+  // Not a channel: pairing-token CRUD + cron's loopback relay.
+  app.route('/api', createNodeRoutes({ db: channelDb, hub: nodeHub! }))
 
   // Cron daemon runs after channels boot so every cron dispatcher is
   // registered before the first scheduled fire could happen.
@@ -641,6 +651,7 @@ const upgradeRoutes = new Map<string, UpgradeHandler>(AGENTCORE ? [] : [
 if (transcribe) upgradeRoutes.set(TRANSCRIBE_PATH, transcribe.handleUpgrade)
 if (stt) upgradeRoutes.set(STT_PATH, stt.handleUpgrade)
 if (jupyterChannels) upgradeRoutes.set(JUPYTER_CHANNELS_PATH, jupyterChannels.handleUpgrade)
+if (nodeHub) upgradeRoutes.set(NODE_WS_PATH, nodeHub.handleUpgrade)
 ;(server as import('node:http').Server).on('upgrade', createUpgradeRouter(upgradeRoutes))
 
 // ------------------------------------------------------------------
@@ -672,6 +683,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
     client.close(1001, 'Server shutting down')
   })
   wss.close()
+  // Machines see 1001 and reconnect once the server is back.
+  nodeHub?.close()
   transcribe?.close()
   // Also aborts a model download in progress (the .part is resumed next boot).
   stt?.close()

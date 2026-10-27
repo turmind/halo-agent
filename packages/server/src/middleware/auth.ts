@@ -287,7 +287,7 @@ function passwordStrengthError(pw: string): string | null {
 
 // ---------- Middleware ----------
 
-const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/check', '/api/auth/logout', '/api/health', '/api/web/chat', '/api/web/sessions', '/api/web/stop', '/api/web/history', '/api/web/subscribe', '/api/web/file', '/api/show/state', '/api/show/session', '/api/metrics']
+const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/check', '/api/auth/logout', '/api/health', '/api/web/chat', '/api/web/sessions', '/api/web/stop', '/api/web/history', '/api/web/subscribe', '/api/web/file', '/api/show/state', '/api/show/session', '/api/metrics', '/api/nodes/call']
 
 /** Extension asset requests: `/api/extensions/<id>/<version>/<token>/<asset…>`
  *  (≥ 4 segments after /extensions/). They come from the admin's sandboxed

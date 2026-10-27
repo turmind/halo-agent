@@ -30,6 +30,7 @@ import { findAndDeleteSessionFile } from '../sessions/session-store.js'
 import { dispatchToTargets, type CronTarget, type DispatchResult } from './dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
 import { cleanChildEnv } from '../child-env.js'
+import { getNodeHub } from '../nodes/hub.js'
 import { resolveWorkingDir } from '../agents/working-dir.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -896,7 +897,8 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     // equivalent `timeout` command).
     const child = spawn(spawnBin, spawnArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: cleanChildEnv(),
+      // + the loopback relay, so the child's node_* tools reach the hub (nodes/tools.ts).
+      env: { ...cleanChildEnv(), ...getNodeHub()?.relayEnv() },
       // Suppress the console window the `cmd.exe /c` wrapper would otherwise
       // pop up on Windows (CREATE_NO_WINDOW). No-op on macOS/Linux.
       windowsHide: true,

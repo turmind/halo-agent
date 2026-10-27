@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
 import { toggleDisabled } from '../src/db/index.js'
+import { setNodeHub } from '../src/nodes/hub.js'
 
 /**
  * INTEGRATION coverage for SessionAgentBuilder, the agent-construction pipeline
@@ -277,5 +278,71 @@ describe('delegation — by-id session tools are scoped to the caller\'s own tre
     expect(JSON.parse(out as string).code).toBe(0)
     const kid = sm.getDb().select().from(agentSessions).all().find((r) => r.id === 'web_a_root>kid')
     expect(kid?.stoppedAt).not.toBeNull()
+  })
+})
+
+describe('linked machines — node_list grants the fixed node_* set to full-access sessions', () => {
+  const NODE_TOOLS = ['node_list', 'node_read', 'node_write', 'node_edit', 'node_list_dir', 'node_grep', 'node_glob', 'node_run']
+
+  function seedAt(sm: SessionManager, id: string, agentId: string, accessLevel: 'workspace' | null): void {
+    sm.getDb().insert(agentSessions).values({
+      id, parentId: null, agentId, agentName: agentId,
+      description: '', workingDir: null, accessLevel,
+      createdAt: 1000, updatedAt: 1000, stoppedAt: null, archivedAt: null,
+    }).run()
+  }
+
+  /** Tool JSON exactly as the provider request serializes it. */
+  function toolJson(sm: SessionManager, id: string): string {
+    const agent = sm.sessions.get(id)!.agent as unknown as { tools: Array<{ name: string; description: string; inputSchema: unknown }> }
+    return JSON.stringify(agent.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })))
+  }
+
+  afterEach(() => setNodeHub(null))
+
+  it('full access: all 8 node tools', async () => {
+    writeAgent('nodey', ['name: Nodey', ...ANTHROPIC_MODEL, 'tools: [file_read, node_list]'], 'x')
+    const sm = new SessionManager(ws)
+    seedAt(sm, 's_full', 'nodey', null)
+    const ctx = await sm.getSessionContext('s_full')
+    for (const name of NODE_TOOLS) expect(ctx?.meta.toolNames).toContain(name)
+  })
+
+  it('workspace access: none of them', async () => {
+    writeAgent('nodey', ['name: Nodey', ...ANTHROPIC_MODEL, 'tools: [file_read, node_list]'], 'x')
+    const sm = new SessionManager(ws)
+    seedAt(sm, 's_ws', 'nodey', 'workspace')
+    const ctx = await sm.getSessionContext('s_ws')
+    expect(ctx?.meta.toolNames).toContain('file_read')
+    for (const name of NODE_TOOLS) expect(ctx?.meta.toolNames).not.toContain(name)
+  })
+
+  it('prompt-cache invariant: tools + system prompt are byte-identical with 0 and 2 machines online', async () => {
+    writeAgent('nodey', ['name: Nodey', ...ANTHROPIC_MODEL, 'tools: [file_read, node_list]'], 'x')
+    const sm = new SessionManager(ws)
+    seedAt(sm, 's_zero', 'nodey', null)
+    seedAt(sm, 's_two', 'nodey', null)
+
+    setNodeHub(null)
+    await sm.getSessionContext('s_zero')
+
+    const online = [
+      { accountId: 'a1', name: 'marmot-mbp', workspace: ws, root: '/Users/m/proj', shell: true, os: 'darwin', since: 1 },
+      { accountId: 'a2', name: 'walrus-nas', workspace: ws, root: null, shell: false, os: 'linux', since: 2 },
+    ]
+    setNodeHub({
+      handleUpgrade: () => {}, online: () => online, relayEnv: () => ({}), isRelaySecret: () => false,
+      list: () => JSON.stringify({ code: 0, nodes: online }), call: async () => 'x', disconnect: () => {}, close: () => {},
+    })
+    await sm.getSessionContext('s_two')
+
+    expect(toolJson(sm, 's_two')).toBe(toolJson(sm, 's_zero'))
+    const prompt = sm.getSessionSystemPrompt('s_two') ?? ''
+    expect(prompt).toBe(sm.getSessionSystemPrompt('s_zero'))
+    expect(prompt).toContain('node_list')
+    for (const name of ['marmot-mbp', 'walrus-nas', '/Users/m/proj']) {
+      expect(prompt).not.toContain(name)
+      expect(toolJson(sm, 's_two')).not.toContain(name)
+    }
   })
 })

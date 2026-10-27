@@ -15,6 +15,7 @@ import { getDisabledSet, type HaloDb } from '../db/index.js'
 import { isSkillDisabled } from './skill-sources.js'
 import { GOAL_AGENT_ID } from './goal-mode.js'
 import { buildA2ATools } from '../a2a/outbound.js'
+import { buildNodeTools } from '../nodes/tools.js'
 import { sessionPrefix } from '../channels/shared/session-prefix.js'
 
 /** The A2A channel's session-id stem (`a2a_<accountId>_…`, routes.ts). */
@@ -238,6 +239,11 @@ export class SessionAgentBuilder {
     // a remote's readonly token must not make this server call third parties.
     if (nameSet.has('a2a_send') && !a2aReadOnly) {
       sessionTools.push(...buildA2ATools(this.host.workspaceRoot, sessionId, accessLevel))
+    }
+    // Linked machines: opt-in by `node_list`, full-access only (they write / run
+    // on a user's computer). Fixed set — online state never reaches the prompt.
+    if (nameSet.has('node_list') && accessLevel === null) {
+      sessionTools.push(...buildNodeTools(this.host.workspaceRoot))
     }
 
     return { workspaceTools, sessionTools, allowedNamespaces }

@@ -14,6 +14,7 @@ import { modelBlockFromProvider } from '../setup-providers.js'
 import { isSafeIdSegment } from './workspace-path.js'
 import { createMtimeCache } from './mtime-cache.js'
 import { buildA2ATools } from '../a2a/outbound.js'
+import { buildNodeTools } from '../nodes/tools.js'
 
 /** List available tools with name + description */
 let _cachedTools: Array<{ name: string; description: string }> | null = null
@@ -35,7 +36,12 @@ function getAvailableTools(): Array<{ name: string; description: string }> {
     name: 'a2a_send',
     description: `Cross-server A2A (one toggle, grants the whole set): ${a2a.map((t) => t.name).join(', ')}.\n\n${a2a[0].description}`,
   }
-  _cachedTools = tools.map((t) => ({ name: t.name, description: t.description })).concat(relayChip, a2aChip)
+  const nodeTools = buildNodeTools('/tmp')
+  const nodeChip = {
+    name: 'node_list',
+    description: `Linked machines (one toggle, grants the whole set; full-access sessions only): ${nodeTools.map((t) => t.name).join(', ')}.\n\n${nodeTools[0].description}`,
+  }
+  _cachedTools = tools.map((t) => ({ name: t.name, description: t.description })).concat(relayChip, a2aChip, nodeChip)
   return _cachedTools
 }
 

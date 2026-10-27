@@ -15,6 +15,12 @@ export function cleanChildEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env }
   delete env.HALO_PASSWORD
   delete env.HALO_JWT_SECRET
+  // Linked machines: the cron child's relay secret (cron/runner.ts adds it back
+  // for that one child) and a `halo node`'s pairing token (its node_run commands
+  // spawn through here too).
+  delete env.HALO_NODE_RELAY_URL
+  delete env.HALO_NODE_RELAY_TOKEN
+  delete env.HALO_NODE_TOKEN
   for (const key of settingsOtelEnvKeys) delete env[key]
   return env
 }
