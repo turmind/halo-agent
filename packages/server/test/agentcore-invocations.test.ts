@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createAgentCoreA2ARoutes, parseInvocation } from '../src/a2a/agentcore.js'
 import Database from 'better-sqlite3'
 import { createInvocation, findInvocation, getInvocation, invocationBody, type InvocationRow } from '../src/a2a/invocations.js'
+import { notifyInFlight } from '../src/a2a/agentcore-notify.js'
 import { createA2ADb, setA2ADb, getA2ADb, A2A_MIGRATIONS } from '../src/db/a2a-db.js'
 import { agentSessions } from '../src/db/schema.js'
 import { readReplyTo, writeReplyTo } from '../src/agents/relay.js'
@@ -124,11 +125,14 @@ beforeEach(() => {
   })
   process.env.HALO_AGENTCORE_NOTIFY = NOTIFY
 })
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers()
   vi.restoreAllMocks()
   if (prevNotify === undefined) delete process.env.HALO_AGENTCORE_NOTIFY
   else process.env.HALO_AGENTCORE_NOTIFY = prevNotify
+  // A test that ends on state 'ok' leaves the notify hook (cwd = ws) still
+  // writing notify.stdin / notify.env; removing ws under it raced (ENOTEMPTY).
+  await until(() => !notifyInFlight())
   getA2ADb()?.close()
   setA2ADb(null)
   rmSync(ws, { recursive: true, force: true })
