@@ -53,7 +53,7 @@ export function WebSettings() {
   )
 }
 
-function TokenLine(props: { token: string }) {
+export function TokenLine(props: { token: string }) {
   const t = useT()
   const [copied, setCopied] = useState(false)
 

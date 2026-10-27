@@ -860,6 +860,31 @@ export const api = {
     },
   },
 
+  nodes: {
+    listAccounts() {
+      return request<{ accounts: Array<{
+        accountId: string
+        name: string
+        workspacePath: string
+        workspaceMissing: boolean
+        token: string
+        createdAt: number
+        online: { root: string | null; shell: boolean; os: string; since: number } | null
+      }> }>('/nodes/accounts')
+    },
+    createAccount(params: { workspacePath: string; name: string }) {
+      return request<{ accountId: string; token: string; name: string; workspacePath: string }>(
+        '/nodes/accounts',
+        { method: 'POST', body: JSON.stringify(params) },
+      )
+    },
+    deleteAccount(accountId: string) {
+      return request<{ ok: boolean }>(`/nodes/accounts/${encodeURIComponent(accountId)}`, {
+        method: 'DELETE',
+      })
+    },
+  },
+
   slack: {
     listAccounts() {
       return request<{ accounts: Array<{
