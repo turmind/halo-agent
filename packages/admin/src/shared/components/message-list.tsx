@@ -778,8 +778,21 @@ function tryParseJson(s: string): Record<string, unknown> | null {
   } catch { return null }
 }
 
+/** node_* (linked machines) → the local tool each one mirrors. */
+const NODE_TOOL_LOCAL: Record<string, string> = {
+  node_read: 'file_read', node_write: 'file_write', node_edit: 'file_edit', node_list_dir: 'file_list',
+  node_grep: 'grep', node_glob: 'glob', node_run: 'shell_exec',
+}
+
 function formatToolInput(name: string, input: string): { summary: string; detail?: string } {
   const obj = tryParseJson(input)
+  const local = NODE_TOOL_LOCAL[name]
+  if (obj && local) {
+    // Same format as the local tool, prefixed with the machine: `mbp: src/a.ts`.
+    const { node, ...rest } = obj as Record<string, unknown>
+    const f = formatToolInput(local, JSON.stringify(rest))
+    return typeof node === 'string' && node ? { ...f, summary: `${node}: ${f.summary}` } : f
+  }
   if (obj) {
     switch (name) {
       case 'shell_exec': return { summary: String(obj.command ?? obj.cmd ?? '') || input }

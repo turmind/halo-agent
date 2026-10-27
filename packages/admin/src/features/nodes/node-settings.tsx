@@ -23,18 +23,17 @@ type Online = NonNullable<NodeAccount['online']>
  */
 export function NodeSettings() {
   const { accounts, loading, reload } = useChannelAccounts<NodeAccount>('nodes', api.nodes.listAccounts)
-  const [online, setOnline] = useState<Map<string, Online>>(new Map())
+  // Latest pushed snapshot; null until the first push and again after a WS
+  // reconnect, when the re-fetched list is the truth.
+  const [pushed, setPushed] = useState<Map<string, Online> | null>(null)
   const [adding, setAdding] = useState(false)
-
-  useEffect(() => {
-    setOnline(new Map(accounts.flatMap((a) => (a.online ? [[a.accountId, a.online] as const] : []))))
-  }, [accounts])
+  const online = pushed ?? new Map(accounts.flatMap((a) => (a.online ? [[a.accountId, a.online] as const] : [])))
 
   useEffect(() => {
     const offFrame = wsClient.on('nodes:changed', (f) => {
-      setOnline(new Map(f.online.map(({ accountId, ...o }) => [accountId, o])))
+      setPushed(new Map(f.online.map(({ accountId, ...o }) => [accountId, o])))
     })
-    const offReconnect = onWsReconnect(wsClient, reload)
+    const offReconnect = onWsReconnect(wsClient, () => { setPushed(null); reload() })
     return () => { offFrame(); offReconnect() }
   }, [reload])
 
@@ -113,7 +112,7 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
   }
 
   if (token) {
-    const command = `halo node --server ${location.origin} --token ${token} --root <folder>`
+    const command = `HALO_NODE_TOKEN=${token} halo node --server ${location.origin} --root <folder>`
     return (
       <ChannelDialog width="w-[480px]" onClose={onDone}>
         <h3 className="mb-3 text-sm font-medium text-[var(--foreground)]">{t('nodes.createSuccess')}</h3>
