@@ -10,12 +10,14 @@ import { WebSocket } from 'ws'
  *    `transcribe` capability → 403;
  *  - `ready` is sent on connect, before the upstream call resolves (the SDK's
  *    send() only resolves once audio flowed — waiting would deadlock);
- *  - binary PCM is fed to StartStreamTranscription (pcm / 16 kHz, speaker
- *    labels on), results come back as `partial` / `final` frames,
- *    `{"type":"end"}` flushes and the server closes 1000;
- *  - a `final` carries Transcribe's `speaker` label; one spoken by several
+ *  - binary PCM is fed to StartStreamTranscription (pcm / 16 kHz), results
+ *    come back as `partial` / `final` frames, `{"type":"end"}` flushes and the
+ *    server closes 1000;
+ *  - speaker labels only with `speakers=1`: ShowSpeakerLabel is requested, a
+ *    `final` carries Transcribe's `speaker` label and one spoken by several
  *    speakers is split into one `final` per speaker run, its text cut from the
- *    Transcript; `partial`s never carry a speaker;
+ *    Transcript; `partial`s never carry a speaker. Without it (default, any
+ *    other value) no ShowSpeakerLabel, one `final` per result, no `speaker`;
  *  - `lang=auto` → IdentifyMultipleLanguages + LanguageOptions from the
  *    extension param (manifest default otherwise); `lang=xx-XX,yy-YY` (2–5
  *    distinct codes) → the same over that list; region/creds from
@@ -162,8 +164,9 @@ describe('transcribe proxy streaming', () => {
     expect(frames.filter((f) => f.type === 'partial')).toHaveLength(2)
     expect(frames.at(-1)).toEqual({ type: 'final', start: 0, end: 0.2, text: '你好', lang: 'zh-CN' })
     expect(up.audioBytes).toBe(6400)
-    expect(up.input).toMatchObject({ LanguageCode: 'zh-CN', MediaEncoding: 'pcm', MediaSampleRateHertz: 16000, ShowSpeakerLabel: true })
+    expect(up.input).toMatchObject({ LanguageCode: 'zh-CN', MediaEncoding: 'pcm', MediaSampleRateHertz: 16000 })
     expect(up.input).not.toHaveProperty('IdentifyMultipleLanguages')
+    expect(up.input).not.toHaveProperty('ShowSpeakerLabel')
     // No settings → us-east-1 + the SDK default credential chain (a provider fn).
     expect(up.region).toBe('us-east-1')
     expect(typeof up.credentials).toBe('function')
@@ -172,7 +175,7 @@ describe('transcribe proxy streaming', () => {
   it('lang=auto (default) → multi-language identification; settings win over manifest default', async () => {
     let r = run(connect('ext=htrans'), (s) => s.send(JSON.stringify({ type: 'end' })))
     await r
-    expect(up.input).toMatchObject({ IdentifyMultipleLanguages: true, LanguageOptions: 'ja-JP,en-US', ShowSpeakerLabel: true })
+    expect(up.input).toMatchObject({ IdentifyMultipleLanguages: true, LanguageOptions: 'ja-JP,en-US' })
     expect(up.input).not.toHaveProperty('LanguageCode')
 
     settings.set('ext-htrans.params.auto_languages', 'zh-CN,en-US')
@@ -279,7 +282,7 @@ const twoItems = [
   word('I', 2.0, 2.1, '1'), word('think', 2.1, 2.4, '1'), word('so', 2.4, 2.6, '1'), punct(',', 2.6), word('我', 2.8, 3.0, '1'), word('同意', 3.0, 3.4, '1'), punct('。', 3.4),
 ]
 
-describe('speaker labels', () => {
+describe('speaker labels (speakers=1)', () => {
   /** Upstream: a speakerless partial, then the given finals, after the audio ends. */
   const finals = (...results: Array<{ text: string; start: number; end: number; items?: unknown[] }>) =>
     async (input: Record<string, unknown>) => (async function* () {
@@ -289,7 +292,15 @@ describe('speaker labels', () => {
         yield { TranscriptEvent: { Transcript: { Results: [{ IsPartial: false, StartTime: f.start, EndTime: f.end, Alternatives: [{ Transcript: f.text, ...(f.items ? { Items: f.items } : {}) }], LanguageCode: 'zh-CN' }] } } }
       }
     })()
-  const stream = async () => (await run(connect('ext=htrans&lang=zh-CN'), (s) => s.send(JSON.stringify({ type: 'end' })))).frames
+  const stream = async (query = 'ext=htrans&lang=zh-CN&speakers=1') => (await run(connect(query), (s) => s.send(JSON.stringify({ type: 'end' })))).frames
+
+  it('speakers=1 → ShowSpeakerLabel requested, with any language option', async () => {
+    behavior = finals()
+    await stream()
+    expect(up.input).toMatchObject({ LanguageCode: 'zh-CN', ShowSpeakerLabel: true })
+    await stream('ext=htrans&lang=zh-CN,en-US&speakers=1')
+    expect(up.input).toMatchObject({ IdentifyMultipleLanguages: true, LanguageOptions: 'zh-CN,en-US', ShowSpeakerLabel: true })
+  })
 
   it('one speaker → one final, unchanged but for its label; partials carry none', async () => {
     behavior = finals({ text: '大家好,', start: 0.056, end: 0.616, items: [word('大家', 0.096, 0.456, '0'), word('好', 0.456, 0.616, '0'), punct(',', 0.616)] })
@@ -331,6 +342,26 @@ describe('speaker labels', () => {
       { text: 'a b', start: 0, end: 0.3, speaker: '0' },
       { text: 'c', start: 0.4, end: 0.5, speaker: '2' },
     ])
+  })
+
+  describe('speakers off (no param, or any value but 1) — the pre-speaker-label behavior', () => {
+    it.each(['ext=htrans&lang=zh-CN', 'ext=htrans&lang=zh-CN&speakers=0', 'ext=htrans&lang=zh-CN&speakers=true', 'ext=htrans&lang=zh-CN&speakers='])('%s → no ShowSpeakerLabel upstream', async (query) => {
+      behavior = finals()
+      await stream(query)
+      expect(up.input).toMatchObject({ LanguageCode: 'zh-CN', MediaEncoding: 'pcm', MediaSampleRateHertz: 16000 })
+      expect(up.input).not.toHaveProperty('ShowSpeakerLabel')
+    })
+
+    it('a final with labelled items from two speakers → one final, the whole result, no speaker', async () => {
+      // Upstream shouldn't label without ShowSpeakerLabel; even if it did, nothing is split or labelled.
+      behavior = finals({ text: TWO_TEXT, start: 0.05, end: 3.45, items: twoItems }, { text: '大家好,', start: 4, end: 4.6, items: [word('大家', 4.1, 4.4, '0'), word('好', 4.4, 4.6, '0'), punct(',', 4.6)] })
+      const frames = await stream('ext=htrans&lang=zh-CN')
+      expect(frames.find((f) => f.type === 'partial')).toEqual({ type: 'partial', start: 0, end: 0.3, text: '预算', lang: 'zh-CN' })
+      expect(frames.filter((f) => f.type === 'final')).toEqual([
+        { type: 'final', start: 0.05, end: 3.45, text: TWO_TEXT, lang: 'zh-CN' },
+        { type: 'final', start: 4, end: 4.6, text: '大家好,', lang: 'zh-CN' },
+      ])
+    })
   })
 })
 

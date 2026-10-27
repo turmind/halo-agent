@@ -1,13 +1,15 @@
 /**
- * Streaming transcription proxy — WS `/api/transcribe/stream?ext=<id>&lang=<auto|xx-XX|xx-XX,yy-YY,…>`.
+ * Streaming transcription proxy — WS `/api/transcribe/stream?ext=<id>&lang=<auto|xx-XX|xx-XX,yy-YY,…>[&speakers=1]`.
  *
  * A canvas extension declaring capability `transcribe` streams raw PCM
  * (s16le mono 16 kHz) here; the server relays it to Amazon Transcribe
  * streaming and sends back `ready` / `partial` / `final` / `error` text
- * frames. Speaker labels are always requested: a `final` carries
+ * frames. Speaker labels only with `speakers=1`: then a `final` carries
  * Transcribe's `speaker` label ("0", "1"… — per stream, not a name) when it
  * has one, and a result spoken by several people is split into one `final`
- * per speaker run; `partial`s never carry one. The browser never sees AWS
+ * per speaker run; `partial`s never carry one. Without it (the default)
+ * labels aren't requested and each final result is one `final`, as before
+ * speaker labels existed. The browser never sees AWS
  * credentials: they come from the
  * extension's own global settings (`ext-<id>.secrets.*`, read per connection
  * so a change needs no restart) or, when none are set, the SDK default chain.
@@ -170,6 +172,7 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
     const q = parseQuery(req)
     const extId = q.get('ext')!
     const lang = q.get('lang') || 'auto'
+    const speakers = q.get('speakers') === '1'
     const openedAt = Date.now()
     let closed = false
 
@@ -202,7 +205,7 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
     }
 
     const region = extParam(extId, 'region', 'us-east-1')
-    console.log(`[Transcribe] stream open ext=${extId} lang=${lang} region=${region}`)
+    console.log(`[Transcribe] stream open ext=${extId} lang=${lang} speakers=${speakers ? 1 : 0} region=${region}`)
 
     // Bounded audio queue drained by the async generator the SDK pulls from.
     const queue: Buffer[] = []
@@ -272,7 +275,7 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
           ...languageOpts,
           MediaEncoding: 'pcm',
           MediaSampleRateHertz: 16000,
-          ShowSpeakerLabel: true,
+          ...(speakers ? { ShowSpeakerLabel: true } : {}),
           AudioStream: audio(),
         }), { abortSignal: abort.signal })
         // In-stream exceptions (LimitExceeded, BadRequest…) are thrown by the
@@ -286,8 +289,8 @@ export function createTranscribeProxy(deps: { createClient?: TranscribeClientFac
             const end = r.EndTime ?? 0
             const lang = r.LanguageCode ?? ('code' in langSpec ? langSpec.code : '')
             // Speaker labels only ever come on final items.
-            if (r.IsPartial) {
-              send({ type: 'partial', start, end, text, lang })
+            if (r.IsPartial || !speakers) {
+              send({ type: r.IsPartial ? 'partial' : 'final', start, end, text, lang })
               continue
             }
             for (const s of splitBySpeaker(text, start, end, alt?.Items ?? [])) send({ type: 'final', ...s, lang })
