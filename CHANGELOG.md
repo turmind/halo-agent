@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-27
+
 ### Added
 
 - Models: the bundled provider list now matches the halo-hub release `models-v2026.10.27`, so a new install offers these without `/extension models`: GPT-6.1 Terra (AWS Bedrock OpenAI-compatible, `global.openai.gpt-6.1-terra`; AWS Bedrock Mantle, us-east-1 only), Kimi K3.1 Pro, MiniMax M3.1 Flash (now MiniMax's default model), and Doubao Seed 2.1 Pro / Lite 260915 (Pro 260915 is now Doubao's default) and Seed 2.1 Turbo.
@@ -1134,7 +1136,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.0.8...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/turmind/halo-agent/compare/v2.0.8...v2.1.0
 [2.0.8]: https://github.com/turmind/halo-agent/compare/v2.0.7...v2.0.8
 [2.0.7]: https://github.com/turmind/halo-agent/compare/v2.0.6...v2.0.7
 [2.0.6]: https://github.com/turmind/halo-agent/compare/v2.0.5...v2.0.6
