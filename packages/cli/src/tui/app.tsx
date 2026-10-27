@@ -116,10 +116,23 @@ function truncateTail(s: string, maxLen: number): string {
  * `⚙ file_read hello.txt 5ms` instead of `⚙ file_read 5ms`. Best-effort — an
  * unknown tool (or missing field) just renders no summary.
  */
+/** node_* (linked machines) → the local tool each one mirrors. */
+const NODE_TOOL_LOCAL: Record<string, string> = {
+  node_read: 'file_read', node_write: 'file_write', node_edit: 'file_edit', node_list_dir: 'file_list',
+  node_grep: 'grep', node_glob: 'glob', node_run: 'shell_exec',
+}
+
 function summarizeToolInput(toolName: string, input: unknown): string | null {
   if (input == null || typeof input !== 'object') return null
   const o = input as Record<string, unknown>
   const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null)
+  const local = NODE_TOOL_LOCAL[toolName]
+  if (local) {
+    // Same summary as the local tool, prefixed with the machine: `mbp: src/a.ts`.
+    const s = summarizeToolInput(local, o)
+    const node = str(o.node)
+    return node ? `${node}: ${s ?? ''}`.trimEnd() : s
+  }
   switch (toolName) {
     case 'file_read':
     case 'file_write':
