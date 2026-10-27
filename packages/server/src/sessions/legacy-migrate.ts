@@ -8,7 +8,7 @@
  *
  * Lifetime:
  *  - The AUTOMATIC migration (session-log.ts `openLog`'s ENOENT branch →
- *    `migrateOnMissingLog`) ships in 2.0 only; 2.1 deletes that one branch.
+ *    `migrateOnMissingLog`) ships in 2.0 and 2.1; a later release deletes that one branch.
  *  - This file — `migrateLegacySession`, `migrateWorkspaceSessions` — and the
  *    `halo sessions migrate v1 v2` command stay long-term, for users upgrading
  *    from 1.x. So it may only use the storage layer's PUBLIC functions
@@ -444,7 +444,7 @@ const loggedFailures = new Set<string>()
  * next write start a fresh 2.0 log beside the unconverted 1.x history (the
  * session then reads as truncated). The error names the reason and the
  * command; the next open tries again.
- * Ships in 2.0 only — 2.1 deletes the call (this function then goes unused).
+ * Ships in 2.0 and 2.1 — a later release deletes the call (this function then goes unused).
  */
 export function migrateOnMissingLog(filePath: string): boolean {
   const m = /^(.*)\.(?:ui|raw)\.jsonl$/.exec(path.basename(filePath))

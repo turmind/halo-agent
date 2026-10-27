@@ -60,10 +60,11 @@ function openLog(filePath: string): number | null {
   const fd = openOrNull(filePath)
   // The UI log is the conversion's commit marker: present = nothing pending.
   if (fd !== null && filePath.endsWith('.ui.jsonl')) return fd
-  // 1.x → 2.0 transition, removed in 2.1 (this block only — legacy-migrate.ts
-  // stays for `halo sessions migrate v1 v2`): a session never opened under
-  // 2.0 only has its 1.x `<seg>.json`; a raw log without its UI log may be
-  // half a conversion (raw is written first), so raw opens check too.
+  // 1.x → 2.0 transition, kept through 2.1, removed in a later release (this
+  // block only — legacy-migrate.ts stays for `halo sessions migrate v1 v2`):
+  // a session never opened under 2.0 only has its 1.x `<seg>.json`; a raw
+  // log without its UI log may be half a conversion (raw is written first),
+  // so raw opens check too.
   let migrated: boolean
   try {
     migrated = migrateOnMissingLog(filePath)
