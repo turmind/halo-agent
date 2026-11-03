@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Terminal: terminals now persist and are shared. Closing the browser, losing the connection or opening the workspace on another device or browser brings back the same terminals with their full screen — scrollback, and vim / htop as they were. Several pages can be attached at once and stay in sync; closing a terminal with ✕ on any page ends it everywhere. A terminal now ends only when you close it, its shell exits or the server restarts.
+- Terminal: local echo. What you type appears immediately (dimmed) and turns normal once the server echoes it, so typing doesn't lag on a slow link. Always on; vim / vi / nano / tmux and full-screen programs are not predicted. Ported from VS Code's terminal type-ahead (MIT).
+- Admin: split view for the bottom panel — Chat and Terminal side by side (stacked when the panel is narrower than 720px, e.g. floating), with a draggable divider. Remembered across refreshes.
+
+### Changed
+
+- Settings: `timeout.terminal_grace` / `HALO_TERMINAL_GRACE` are gone (terminals no longer expire on disconnect), and `general.limits.terminal_scrollback_bytes` is replaced by `general.limits.terminal_scrollback_lines` (default 5000 lines per terminal). Leftover old keys are ignored.
+
+### Fixed
+
+- Server: the workspace file watcher no longer leaves a zombie `sh` process and an open pipe behind each time it starts on Linux / Windows (`@parcel/watcher` probed for watchman and never closed the probe).
+
 ## [2.1.0] - 2026-10-27
 
 ### Added
