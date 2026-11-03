@@ -38,13 +38,16 @@ const LOCAL_ECHO_STYLE: LocalEchoStyle = 'dim';
 /** VS Code's DEFAULT_LOCAL_ECHO_EXCLUDE (vim, vi, nano, tmux), compiled. */
 const EXCLUDE_PROGRAM_RE = /\b(vim|vi|nano|tmux)\b/i;
 
+// Plain quotes, not upstream's backticks: Next's SWC inlines template-literal
+// const-enum members with their raw text, so `\x1b[` reached the terminal as
+// the literal characters "\x1b[" (vitest/esbuild compiles it correctly).
 const enum VT {
 	Esc = '\x1b',
-	Csi = `\x1b[`,
-	ShowCursor = `\x1b[?25h`,
-	HideCursor = `\x1b[?25l`,
-	DeleteChar = `\x1b[X`,
-	DeleteRestOfLine = `\x1b[K`,
+	Csi = '\x1b[',
+	ShowCursor = '\x1b[?25h',
+	HideCursor = '\x1b[?25l',
+	DeleteChar = '\x1b[X',
+	DeleteRestOfLine = '\x1b[K',
 }
 
 /* eslint-disable no-control-regex -- terminal escape sequences start with ESC (\x1b) */
