@@ -116,7 +116,7 @@ describe('pure parts', () => {
   it('worker env: allowlist only — channel secrets, model keys, the notify command and the password never pass; every OTEL_* and Halo\'s tuning knobs do', () => {
     const tuning = {
       HALO_MAX_CONTEXT_TOKENS: '200000', HALO_SHELL_TIMEOUT: '300000', HALO_WEB_FETCH_TIMEOUT: '20000', HALO_MODEL_TIMEOUT: '900000', HALO_SESSION_GRACE: '60000',
-      HALO_TERMINAL_GRACE: '60000', HALO_MAX_CACHED_SESSIONS: '10', HALO_LOG_MAX_SIZE: '1048576', HALO_LOG_MAX_FILES: '2',
+      HALO_MAX_CACHED_SESSIONS: '10', HALO_LOG_MAX_SIZE: '1048576', HALO_LOG_MAX_FILES: '2',
     }
     const env = workerEnv({
       PATH: '/usr/bin', AWS_REGION: 'ap-northeast-1', AWS_DEFAULT_REGION: 'ap-northeast-1', HALO_LOG_LEVEL: 'info',

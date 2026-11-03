@@ -102,7 +102,7 @@ Bottom-panel Terminal tab:
 - xterm.js frontend + node-pty backend
 - Multi-instance (each terminal owns its own PTY), listed as a collapsible vertical tab strip on the right
 - cwd = current project root
-- Reconnect grace: 5 min (`timeout.terminal_grace`)
+- Terminals are shared by every browser / device that opens the workspace and kept until closed with ✕ (or the shell exits, or the server restarts): reconnecting, refreshing or coming back days later restores the full screen — scrollback, and vim / htop as they were
 
 ## Settings
 

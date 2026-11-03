@@ -461,7 +461,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
               if (msg.terminalId) terminalManager.close(msg.terminalId)
               break
             case 'terminal:reattach':
-              terminalManager.reattachAll(msg.browserId ?? '', msg.workspacePath ?? '')
+              terminalManager.reattachAll(msg.workspacePath ?? '')
               break
             case 'session:delete':
               await handleSessionDelete(client, ws, msg)
@@ -933,8 +933,8 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
           cwd,
           cols: msg.cols,
           rows: msg.rows,
-          browserId: msg.browserId ?? '',
           workspacePath: msg.workspacePath ?? '',
+          name: msg.name,
         })
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err)

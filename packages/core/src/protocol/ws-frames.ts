@@ -54,14 +54,14 @@ export interface WsClientMessage {
   rows?: number
   cwd?: string
   terminalId?: string
-  /** Workspace path the terminal belongs to. Used by terminal:start and
-   *  terminal:reattach so PTYs are scoped per-workspace and tabs in
-   *  different workspaces don't steal each other's terminals on reconnect. */
+  /** Workspace path the terminal belongs to. terminal:start files the PTY
+   *  under it; terminal:reattach attaches every PTY of that workspace and
+   *  subscribes the connection to PTYs started there later — from any
+   *  browser or device. */
   workspacePath?: string
-  /** Stable per-browser UUID (admin's localStorage). Combined with
-   *  workspacePath as the PTY ownership key — terminals from one browser
-   *  are invisible to another. */
-  browserId?: string
+  /** terminal:start — tab name chosen by the creator, kept by the server and
+   *  handed to every page that attaches. */
+  name?: string
   /** Client-generated id for `chat` messages. The client resends a chat over
    *  a fresh connection when the ack doesn't arrive (zombie-socket recovery,
    *  see admin ws-client.ts), so the server acks with this id after folding
@@ -145,7 +145,13 @@ export type WsServerMessage =
   | { type: 'terminal:ready'; terminalId: string }
   | { type: 'terminal:output'; data: string; terminalId: string }
   | { type: 'terminal:exit'; exitCode: number; terminalId: string }
-  | { type: 'terminal:reattached'; terminalIds: string[] }
+  // Every PTY of the workspace, now attached; a `terminal:snapshot` follows for each
+  | { type: 'terminal:reattached'; terminals: Array<{ id: string; name: string }> }
+  // Another page of a subscribed workspace started a PTY; a snapshot follows
+  | { type: 'terminal:opened'; terminalId: string; name: string }
+  // Serialized screen + scrollback + modes at attach time, at the PTY's
+  // cols × rows (replay at that size, then fit); live output resumes right after it
+  | { type: 'terminal:snapshot'; terminalId: string; data: string; cols: number; rows: number }
   // workspace file watcher (+ git ops, which report as path '.git')
   | { type: 'file:changed'; path: string; action: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir' }
   // server-global broadcasts

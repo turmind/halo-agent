@@ -9,7 +9,6 @@
 #   timeout.web_fetch         → HALO_WEB_FETCH_TIMEOUT
 #   timeout.model_request     → HALO_MODEL_TIMEOUT
 #   timeout.session_grace     → HALO_SESSION_GRACE
-#   timeout.terminal_grace    → HALO_TERMINAL_GRACE
 #   logging.max_file_size     → HALO_LOG_MAX_SIZE
 #   logging.max_files         → HALO_LOG_MAX_FILES
 
@@ -56,11 +55,6 @@ timeout:
     default: 300000
     description: "Idle session grace period before unloading from memory (ms)."
     description_zh: "空闲会话保留在内存中的时长（毫秒）。"
-  terminal_grace:
-    value: 300000
-    default: 300000
-    description: "Terminal grace period after disconnect before killing the pty (ms)."
-    description_zh: "终端断连后保留 pty 的时长（毫秒）。"
 
 logging:
   max_file_size:

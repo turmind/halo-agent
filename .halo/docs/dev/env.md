@@ -106,7 +106,6 @@ Source: `packages/server/src/config.ts`
 | `HALO_WEB_FETCH_TIMEOUT` | `10000` | `config.yaml timeout.web_fetch` | web_fetch timeout |
 | `HALO_MODEL_TIMEOUT` | `600000` | `config.yaml timeout.model_request` | Per model-call idle timeout (ms, 10 min): every provider streams (Bedrock, the Anthropic-Messages providers anthropic / mimo / minimax / qwen, the OpenAI-family openai / deepseek / kimi / zhipu / doubao / hunyuan, and Mantle aws-bedrock-mantle / aws-bedrock-openai) and re-arms it on any data the stream delivers — text / thinking deltas, pings, tool-argument fragments, empty reasoning chunks, SSE comment frames — so it fires only when the model goes silent for this long, not on a long but live answer. It is also the only bound on a compact's LLM summary (no separate compact timeout). A bare fetch has no default timeout, so a half-open connection would hang the request forever; on expiry the call aborts and the agent loop retries with backoff. |
 | `HALO_SESSION_GRACE` | `300000` | `config.yaml timeout.session_grace` | WS-disconnect session grace |
-| `HALO_TERMINAL_GRACE` | `300000` | `config.yaml timeout.terminal_grace` | Terminal disconnect grace |
 | `HALO_MAX_CACHED_SESSIONS` | `50` | — | In-memory session cache |
 | `HALO_LOG_MAX_SIZE` | `10485760` | `config.yaml logging.max_file_size` | Log file size cap (10 MB) |
 | `HALO_LOG_MAX_FILES` | `5` | `config.yaml logging.max_files` | Retained rotated logs |
@@ -170,7 +169,7 @@ settings.yaml-driven `general.limits.*` (no env override):
 - `general.limits.tool_result_render_chars` (default 8000)
 - `general.limits.tool_result_ui_chars` (default 64 KiB)
 - `general.limits.auto_report_chars` (default 8192)
-- `general.limits.terminal_scrollback_bytes` (default 50000)
+- `general.limits.terminal_scrollback_lines` (default 5000)
 
 Two ways to authenticate:
 

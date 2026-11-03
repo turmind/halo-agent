@@ -403,7 +403,6 @@ export const config = {
     // long but live stream is never cut off.
     modelRequest: systemInt('HALO_MODEL_TIMEOUT', 'timeout.model_request', 10 * 60_000),
     sessionGrace: systemInt('HALO_SESSION_GRACE', 'timeout.session_grace', 5 * 60_000),
-    terminalGrace: systemInt('HALO_TERMINAL_GRACE', 'timeout.terminal_grace', 5 * 60_000),
   },
 
   // Runtime caps — read live from settings.yaml on every access. Getters
@@ -417,7 +416,7 @@ export const config = {
     get toolResultMax(): number { return settingsInt('general.limits.tool_result_render_chars', 8000) },
     get toolResultUiMax(): number { return settingsInt('general.limits.tool_result_ui_chars', 64 * 1024) },
     get autoReportMax(): number { return settingsInt('general.limits.auto_report_chars', 8192) },
-    get terminalOutputBuffer(): number { return settingsInt('general.limits.terminal_scrollback_bytes', 50_000) },
+    get terminalScrollbackLines(): number { return settingsInt('general.limits.terminal_scrollback_lines', 5000) },
   },
 
   compact: {

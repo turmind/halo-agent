@@ -4,7 +4,6 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { wsClient } from '@/shared/ws-client'
-import { getBrowserId } from '@/shared/browser-id'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { useTheme, type Theme } from '@/shared/theme'
@@ -262,8 +261,8 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
       cwd,
       cols: term.cols,
       rows: term.rows,
-      browserId: getBrowserId(),
       workspacePath: activeProject?.path ?? '',
+      name,
     })
 
     setTabs((prev) => [...prev, { id, name }])
@@ -271,6 +270,24 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
 
     return id
   }, [activeProject, tabs.length])
+
+  // Bind a local tab to a PTY the server already runs (reattach on load /
+  // reconnect, or `terminal:opened` from another page of this workspace).
+  // Its screen arrives in the `terminal:snapshot` that follows.
+  const adoptTerminal = useCallback((id: string, name: string): TermInstance | undefined => {
+    const existing = instancesRef.current.get(id)
+    if (existing) return existing
+    const host = hostRef.current
+    if (!host) return
+
+    termCounter++
+    const { term, fit, container, ro } = mountXterm(host, id, themeRef.current, setMenu)
+    const inst: TermInstance = { id, name, term, fit, container, ro, ready: true, exited: false }
+    instancesRef.current.set(id, inst)
+    setTabs((prev) => [...prev, { id, name }])
+    setActiveId((prev) => prev ?? id)
+    return inst
+  }, [])
 
   // Close a terminal
   const closeTerminal = useCallback((id: string) => {
@@ -366,91 +383,82 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
       }
     }))
 
+    // Another page of this workspace started a PTY: show it here too.
+    unsubs.push(wsClient.on('terminal:opened', (msg) => {
+      adoptTerminal(msg.terminalId, msg.name)
+    }))
+
+    // The server's screen of a PTY we just attached to (scrollback, alt
+    // buffer, modes — bracketed paste included), followed by its live output.
+    // Replayed at the size it was serialized at, then fit to our container;
+    // the fitted size is then reported (the server applies it only if no
+    // other page is driving the PTY).
+    unsubs.push(wsClient.on('terminal:snapshot', (msg) => {
+      const inst = adoptTerminal(msg.terminalId, 'bash')
+      if (!inst) return
+      inst.term.reset()
+      inst.term.resize(msg.cols, msg.rows)
+      inst.term.write(msg.data, () => {
+        inst.fit.fit()
+        wsClient.send({ type: 'terminal:resize', cols: inst.term.cols, rows: inst.term.rows, terminalId: msg.terminalId })
+      })
+    }))
+
     return () => unsubs.forEach((u) => u())
-  }, [])
+  }, [adoptTerminal])
 
   // Reattach handling — runs on first mount AND on every WS reconnect.
-  // Two scenarios funnel through the same `terminal:reattached` listener:
-  //   - First mount (page load, no local xterm yet): server's detached pool
-  //     becomes the source of truth, we build local xterm instances for each id.
-  //   - Reconnect (local xterm still alive): we just resync size; the existing
-  //     instance picks up new output via the live channel.
-  // If the server reports zero ids AND we have nothing locally, fall through to
-  // createTerminal. If we already have local instances and server has nothing,
-  // do nothing — those tabs are already showing `[Process exited]` from grace
-  // expiry, and silently replacing them would lose the user's scrollback.
+  // `terminal:reattached` lists every PTY of this workspace (from any browser
+  // or device); each gets a local tab and its screen arrives in the
+  // `terminal:snapshot` that follows. Ids already shown here (the reattach
+  // sent at mount and the one sent on `_connected` both answer) are skipped.
+  // If the server has none AND we have nothing locally, open a fresh one.
   const mountedRef = useRef(false)
   useEffect(() => {
     if (mountedRef.current) return
     mountedRef.current = true
 
     const unsubReattached = wsClient.on('terminal:reattached', (msg) => {
-      const ids = (msg as { terminalIds: string[] }).terminalIds
-      const host = hostRef.current
-      let firstNewIndex = 0
-      for (const id of ids) {
-        if (instancesRef.current.has(id)) {
-          // Already alive locally — resync size in case the window resized
-          // while disconnected.
-          const existing = instancesRef.current.get(id)!
-          wsClient.send({ type: 'terminal:resize', cols: existing.term.cols, rows: existing.term.rows, terminalId: id })
-          continue
-        }
-        if (!host) continue
-
-        termCounter++
-        const name = firstNewIndex === 0 && instancesRef.current.size === 0 ? 'bash' : `bash (${termCounter})`
-        firstNewIndex++
-
-        const { term, fit, container, ro } = mountXterm(host, id, themeRef.current, setMenu)
-
-        // Resync bracketed paste mode (DECSET 2004). Bash readline enabled it
-        // when the PTY's current prompt was drawn — but that sequence went to
-        // the previous xterm instance, destroyed with the old page. A fresh
-        // instance starts with the flag off, so a multi-line paste would be
-        // fed to the shell unbracketed and execute line by line. Writing the
-        // sequence here only flips xterm's internal flag (no visible output,
-        // nothing sent to the PTY); bash keeps it in sync from the next
-        // prompt onward.
-        term.write('\x1b[?2004h')
-
-        const inst: TermInstance = { id, name, term, fit, container, ro, ready: true, exited: false }
-        instancesRef.current.set(id, inst)
-        setTabs((prev) => [...prev, { id, name }])
-        setActiveId((prev) => prev ?? id)
-        wsClient.send({ type: 'terminal:resize', cols: term.cols, rows: term.rows, terminalId: id })
-      }
-
-      if (ids.length === 0 && instancesRef.current.size === 0) {
+      for (const { id, name } of msg.terminals) adoptTerminal(id, name)
+      if (msg.terminals.length === 0 && instancesRef.current.size === 0) {
         createTerminal()
       }
     })
 
-    // Send reattach on initial connect AND every subsequent reconnect.
-    // Scope reattach to (this browser × current workspace) so other
-    // browsers / other workspaces' PTYs aren't pulled into this tab.
+    // Send reattach on initial connect AND every subsequent reconnect. It
+    // also subscribes this connection to the workspace, so PTYs other pages
+    // start later arrive as `terminal:opened`.
     const sendReattach = () => {
       wsClient.send({
-        type: 'terminal:reattach' as never,
-        browserId: getBrowserId(),
+        type: 'terminal:reattach',
         workspacePath: activeProject?.path ?? '',
-      } as never)
+      })
     }
     sendReattach()
-    const unsubConnected = wsClient.on('_connected', sendReattach)
 
-    // Fallback for first-mount only: if no reattached response within 2s and
-    // we still have nothing, create a fresh terminal so the tab isn't blank.
-    const fallback = setTimeout(() => {
-      if (instancesRef.current.size === 0) createTerminal()
-    }, 2000)
+    // Fallback: if still nothing 2s after the connection is up, create a fresh
+    // terminal so the tab isn't blank. Armed only once connected — the panel
+    // remounts on every disconnect, and a timer running through an outage
+    // would add a PTY that, now never expiring, piles up with each outage.
+    let fallback: ReturnType<typeof setTimeout> | undefined
+    const armFallback = () => {
+      if (fallback) return
+      fallback = setTimeout(() => {
+        if (instancesRef.current.size === 0) createTerminal()
+      }, 2000)
+    }
+    if (wsClient.connected) armFallback()
+    const unsubConnected = wsClient.on('_connected', () => {
+      sendReattach()
+      armFallback()
+    })
 
     return () => {
       clearTimeout(fallback)
       unsubReattached()
       unsubConnected()
     }
-  }, [createTerminal])
+  }, [createTerminal, adoptTerminal])
 
   // Watch for "open in integrated terminal" requests from the Explorer.
   // Subscribe to the store and consume the pending cwd in a one-shot:

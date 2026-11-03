@@ -110,6 +110,8 @@
     "@smithy/signature-v4": "^5.3.13",
     "@turmind/halo-core": "workspace:*",
     "@wecom/aibot-node-sdk": "^1.0.7",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
     "better-sqlite3": "^11.7.0",
     "croner": "^10.0.1",
     "drizzle-orm": "^0.45.2",

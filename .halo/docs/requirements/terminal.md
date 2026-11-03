@@ -22,25 +22,32 @@ xterm.js terminal with a node-pty backend, multi-tab, reconnect-resilient.
 
 Derivation in `createTerminal` in [packages/admin/src/features/terminal/terminal-panel.tsx](../../../packages/admin/src/features/terminal/terminal-panel.tsx); backend resolution in `TerminalManager.start` in [packages/server/src/ws/terminal-manager.ts](../../../packages/server/src/ws/terminal-manager.ts).
 
-Workspace switch reloads the page and does **not** migrate existing terminals — they keep their original cwd and are only reattached in their own workspace (within the grace period); the new workspace starts a fresh terminal at its root.
+Workspace switch reloads the page and does **not** migrate existing terminals — they keep their original cwd and are reattached only in their own workspace; the new workspace shows its own terminals, or starts a fresh one at its root if it has none.
+
+### Shared, persistent terminals
+
+A workspace's terminals belong to the workspace, not to a browser: the admin has one login, so every page that opens the workspace — another tab, another browser, another device — sees and drives the same terminals.
+
+- **Persistence**: a PTY ends only when it is closed with ✕, when its shell exits, or when the server restarts. Closing the browser, losing the connection, or leaving for days doesn't end it — there is no grace timer.
+- **Full restore**: the server mirrors each PTY into a headless xterm (`@xterm/headless`). A page that attaches gets a serialized snapshot of it (`@xterm/addon-serialize`): the scrollback (`general.limits.terminal_scrollback_lines`, default 5000 lines), the screen, a full-screen program's alternate screen (vim, htop), and the terminal modes — bracketed paste, application cursor keys, mouse tracking and SGR mouse encoding, hidden cursor. Output made while nobody was attached is part of the snapshot.
+- **Live sync**: every attached page receives the output and can type; all input goes to the one PTY.
+- **Close everywhere**: ✕ on any page sends `terminal:close` and the PTY ends; every attached page gets `terminal:exit` and prints `[Process exited]`.
+- **Size**: the PTY follows its *driver*, the page that last typed into it. Each page reports its size (`terminal:resize`); when a page types and its size differs from the PTY's, the PTY (and the mirror) switch to that size. A resize from a page that isn't the driver is only recorded, unless no driver is attached any more — then it applies at once. Pages with a different size than the driver see the driver's layout reflowed into their own width.
 
 ### Reconnect resilience
 
-When the WebSocket drops:
-
-1. PTYs are **not killed** — they stay in the module-level `terminals` map with `currentWs = null` (`packages/server/src/ws/terminal-manager.ts`)
-2. Output during detach is buffered (ring buffer, up to `config.limits.terminalOutputBuffer` = 50 KB per terminal)
-3. Grace period: `config.timeout.terminalGrace` (default 5 min)
-4. On reconnect, the client sends `terminal:reattach` with its `browserId` and workspace path (sent on initial mount **and** on every subsequent `_connected` event); only PTYs of that browser × workspace are claimed
-5. Server replays the entire output buffer, reattaches live I/O, and responds with `terminal:reattached { terminalIds: [...] }`
-6. If the grace timer expires first, the PTY is killed and the detach entry removed
+1. On mount **and** on every `_connected`, the panel sends `terminal:reattach { workspacePath }`. The server attaches the connection to every PTY of that workspace and subscribes it to the workspace
+2. The server answers `terminal:reattached { terminals: [{ id, name }] }`, then one `terminal:snapshot` per PTY, then live `terminal:output`. Snapshot and live stream join exactly: output that arrives while a snapshot is being taken is queued for that page and sent right after it — nothing lost, nothing repeated
+3. A PTY another page starts later is pushed to every subscribed page as `terminal:opened { terminalId, name }` + its snapshot — no polling
+4. When a connection closes, the server only removes it from the PTYs' attached sets and from the workspace subscription; no timer is started
 
 Connection-level liveness and reconnect (server keepalive tolerance, client self-check timer, auth-expiry handling) are owned by the shared WS client — see [design/ws.md](../design/ws.md#client-side-liveness--reconnect).
 
-When the WS drops, the bottom panel remounts `TerminalPanel` (fresh key on `_disconnected`): local xterm instances are disposed without sending `terminal:close`, and the new panel reattaches like a page load. The local scrollback is lost; the server replays only what was buffered while detached. On the reattach handler ([packages/admin/src/features/terminal/terminal-panel.tsx](../../../packages/admin/src/features/terminal/terminal-panel.tsx)), each id in `terminalIds` is dispatched by whether a local xterm instance already exists:
+When the WS drops, the bottom panel remounts `TerminalPanel` (fresh key on `_disconnected`): local xterm instances are disposed without sending `terminal:close`, and the new panel reattaches like a page load — its screen comes back from the snapshots. In the panel ([packages/admin/src/features/terminal/terminal-panel.tsx](../../../packages/admin/src/features/terminal/terminal-panel.tsx)):
 
-- **Already exists** (a reattach without a remount): only a `terminal:resize` is sent so server PTY dimensions resync; the existing instance keeps its scrollback and continues receiving live output.
-- **Does not exist** (first mount, or after the remount above): a fresh xterm container is created and bound to that id. Bracketed paste mode is resynced by locally writing `\x1b[?2004h` into the new instance — bash enabled the mode on the PTY at spawn time, but that sequence went to the disposed instance; without the resync, a multi-line paste into the reattached terminal would be sent unbracketed and execute line by line.
+- `terminal:reattached` / `terminal:opened`: a tab is added for each id not shown yet, named as the server says (the name the creating page gave in `terminal:start`).
+- `terminal:snapshot`: the local xterm (created if missing) is `reset()`, sized to the snapshot's `cols × rows`, given the snapshot, then fit to its container; the fitted size is reported with `terminal:resize`.
+- If 2 s after the connection is up the panel still has no terminal, it starts one (the timer is armed only while connected, so an outage doesn't add a PTY per remount).
 
 ### Environment
 - Shell: `$SHELL` or `/bin/bash` (`ComSpec` / `powershell.exe` on Windows); bash / zsh / sh / fish start as login shells (`-l`)
@@ -64,42 +71,43 @@ Keys depend on the client's OS (the keyboard in front of the user — the PTY is
 ### Lifecycle
 
 ```
-          ┌─────────────┐
-create ──▶│ in this WS  │
-          │ session map │
-          └──────┬──────┘
-                 │ WS drops
-                 ▼
-          ┌─────────────┐
-          │  detached   │  (grace timer = 5min, ring buffer active)
-          │    pool     │
-          └──┬───────┬──┘
-   reattach  │       │  grace expires
-             ▼       ▼
-       ┌─────────┐  kill PTY, clean up
-       │ replay +│
-       │ live IO │
-       └─────────┘
+               terminal:start
+                     │
+                     ▼
+   ┌──────────────────────────────────┐   page attaches
+   │ PTY + headless mirror            │◀── (reattach / opened):
+   │ attached pages: 0..n             │    snapshot, then live
+   │ (output + exit go to all)        │
+   └──┬──────────────┬─────────────┬──┘
+      │ page leaves  │ ✕ / shell   │ server
+      │ (WS drops)   │ exits       │ restart
+      ▼              ▼             ▼
+   still running   exit to all   gone
+   (0 pages ok,    pages, PTY
+    no timer)      removed
 ```
 
 Close semantics:
-- Explicit `terminal:close` — PTY killed immediately, detach entry (if any) cleaned up
-- WS drop → grace expires (default 5 min) without reattach → PTY killed
+- Explicit `terminal:close` (✕ on any page) — PTY killed immediately; every attached page gets `terminal:exit`
+- The shell exits by itself — every attached page gets `terminal:exit` with its exit code
 - Server shutdown — all PTYs die with the process
+- WS drop / browser closed — **not** an end: the PTY keeps running with no page attached, for as long as it takes
 
 ## WebSocket protocol
 
 | Direction | Type | Fields | Purpose |
 |---|---|---|---|
-| C→S | `terminal:start` | `terminalId?`, `cwd?`, `cols?`, `rows?` | Spawn a new PTY |
-| C→S | `terminal:input` | `terminalId`, `data` | Send user keystrokes |
-| C→S | `terminal:resize` | `terminalId`, `cols`, `rows` | Resize PTY (screen resize) |
-| C→S | `terminal:close` | `terminalId` | Explicit close |
-| C→S | `terminal:reattach` | — | Reattach all detached terminals after reconnect |
-| S→C | `terminal:ready` | `terminalId` | PTY spawned and ready |
-| S→C | `terminal:output` | `terminalId`, `data` | PTY stdout/stderr |
-| S→C | `terminal:exit` | `terminalId`, `exitCode` | PTY exited |
-| S→C | `terminal:reattached` | `terminalIds` | Reattach completed for these |
+| C→S | `terminal:start` | `terminalId?`, `cwd?`, `cols?`, `rows?`, `workspacePath?`, `name?` | Spawn a new PTY in the workspace; `name` is the tab name every page shows. Pushed to the workspace's other subscribers |
+| C→S | `terminal:input` | `terminalId`, `data` | Send user keystrokes; makes the sender the PTY's size driver. Rejected without `terminalId` |
+| C→S | `terminal:resize` | `terminalId`, `cols`, `rows` | Report this page's size; applied if it is the driver or no driver is attached. Rejected without `terminalId` |
+| C→S | `terminal:close` | `terminalId` | Explicit close — ends the PTY for every page |
+| C→S | `terminal:reattach` | `workspacePath` | Attach to every PTY of the workspace and subscribe to it |
+| S→C | `terminal:ready` | `terminalId` | PTY spawned and ready (to its creator) |
+| S→C | `terminal:output` | `terminalId`, `data` | PTY stdout/stderr, to every attached page |
+| S→C | `terminal:exit` | `terminalId`, `exitCode` | PTY ended (close or shell exit), to every attached page |
+| S→C | `terminal:reattached` | `terminals: [{ id, name }]` | The workspace's PTYs, all now attached; a snapshot follows for each |
+| S→C | `terminal:opened` | `terminalId`, `name` | Another page started a PTY in a subscribed workspace; a snapshot follows |
+| S→C | `terminal:snapshot` | `terminalId`, `data`, `cols`, `rows` | Serialized scrollback + screen + modes at attach time, taken at `cols × rows`; live output continues right after it |
 
 Source: [packages/server/src/ws/terminal-manager.ts](../../../packages/server/src/ws/terminal-manager.ts).
 
@@ -107,8 +115,9 @@ Source: [packages/server/src/ws/terminal-manager.ts](../../../packages/server/sr
 
 | Config key | Default | Purpose |
 |---|---|---|
-| `config.timeout.terminalGrace` | 300,000 ms | Detach retention period |
-| `config.limits.terminalOutputBuffer` (setting `general.limits.terminal_scrollback_bytes`) | 50,000 bytes | Detach output ring buffer cap |
+| `config.limits.terminalScrollbackLines` (setting `general.limits.terminal_scrollback_lines`) | 5000 lines | Scrollback the server-side mirror keeps per terminal (restored on attach); applies to terminals opened after a change |
+
+`timeout.terminal_grace` / `HALO_TERMINAL_GRACE` and `general.limits.terminal_scrollback_bytes` are gone; a value left in an existing `config.yaml` / `settings.yaml` is ignored.
 
 Defined in [packages/server/src/config.ts](../../../packages/server/src/config.ts).
 
@@ -119,8 +128,13 @@ Defined in [packages/server/src/config.ts](../../../packages/server/src/config.t
 | T1 | Start, run `ls` | Output arrives; prompt returns |
 | T2 | Explorer → right-click a folder → Open in Integrated Terminal | A new terminal whose cwd is that folder (`pwd` confirms) |
 | T3 | Resize window | PTY cols/rows update; long-running process (e.g. `watch ls`) reflows |
-| T4 | Disconnect mid-command (`sleep 5 && echo done`) → reconnect within grace period | Buffered output replayed; `done` visible |
-| T5 | Disconnect → wait > grace period → reconnect | Terminal gone (PTY killed at grace expiry) |
+| T4 | Disconnect mid-command (`sleep 5 && echo done`) → reconnect | Screen restored from the snapshot: scrollback from before the drop plus `done` |
+| T5 | Disconnect (or close the browser) → come back hours later | The terminal is still there, scrollback and running programs intact |
+| T5b | Run `vim` (or `htop`) → refresh the page | vim's screen is back as it was; keys and mouse work in it; after `:q` the shell's scrollback is back |
+| T5c | Open the same workspace in two browsers | Both show the same terminals; typing in either shows on both; ✕ in one prints `[Process exited]` in both |
+| T5d | Open a terminal in browser A while B has the workspace open | B gets the new tab with A's name, live |
+| T5e | Open the workspace on another device | Same terminals with their full scrollback; another workspace's terminals don't appear |
+| T5f | Two browsers with different window sizes, type in the narrow one, then in the wide one | `stty size` follows whoever typed last |
 | T6 | Open 3 tabs, close 1 explicitly | Other 2 keep their PTYs; closed one gets `terminal:exit` |
 | T7 | `exit` from within shell | `terminal:exit` with the shell's exit code; the terminal prints `[Process exited]` and its tab stays until closed |
 | T8 | Paste a 10 KB block | Sent as `terminal:input` without choking; shell echoes in chunks |
@@ -131,5 +145,5 @@ Follows the pattern of [test/session.md](../test/session.md).
 
 ## Related design
 
-- Detach / reattach plumbing: [design/architecture.md#terminalmanager](../design/architecture.md#terminalmanager--pty-management)
+- Attach / snapshot plumbing: [design/architecture.md#terminalmanager](../design/architecture.md#terminalmanager--pty-management)
 - WS envelope shape: [design/ws.md](../design/ws.md)

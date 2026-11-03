@@ -64,6 +64,8 @@ beforeEach(() => {
     disconnect() {}
   })
   vi.spyOn(wsClient, 'send').mockImplementation((m) => { sent.push(m as { type: string }) })
+  // The panel's no-terminal fallback is armed only while connected.
+  vi.spyOn(wsClient, 'connected', 'get').mockReturnValue(true)
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -83,7 +85,7 @@ const resizeFrames = () => sent.filter((m) => m.type === 'terminal:resize')
 describe('terminal resize debounce', () => {
   it('fits on every observer callback but sends one resize frame per burst', () => {
     act(() => root.render(createElement(TerminalPanel)))
-    // No reattach reply → the 2s first-mount fallback spawns a terminal.
+    // Connected, no reattach reply → the 2s fallback spawns a terminal.
     act(() => { vi.advanceTimersByTime(2000) })
     expect(sent.some((m) => m.type === 'terminal:start')).toBe(true)
     expect(fake.observers).toHaveLength(1)
