@@ -13,6 +13,7 @@ import { ResizableSidebar } from '@/shared/components/resizable-sidebar'
 import { VerticalTabAdd, VerticalTabRow, VerticalTabSquare } from '@/shared/components/vertical-tab-list'
 import { IS_MAC, terminalClipboardKey } from './terminal-clipboard'
 import { TerminalContextMenu } from './terminal-context-menu'
+import { TypeAheadAddon } from './type-ahead/type-ahead-addon'
 import '@xterm/xterm/css/xterm.css'
 
 interface TermInstance {
@@ -20,6 +21,8 @@ interface TermInstance {
   name: string
   term: XTerm
   fit: FitAddon
+  /** Local echo: every PTY output write goes through `beforeServerInput`. */
+  typeAhead: TypeAheadAddon
   container: HTMLDivElement
   /** Held so closeTerminal / unmount cleanup can disconnect it — otherwise
    *  the observer keeps the detached container (and xterm buffers) alive. */
@@ -145,7 +148,7 @@ interface MenuState { x: number; y: number; term: XTerm }
  *  container resize → fit + debounced `terminal:resize`, clipboard keys,
  *  right-click → `onMenu`. Shared by fresh tabs (createTerminal) and
  *  server-reattached ones. */
-function mountXterm(host: HTMLDivElement, id: string, theme: Theme, onMenu: (menu: MenuState) => void): Pick<TermInstance, 'term' | 'fit' | 'container' | 'ro'> {
+function mountXterm(host: HTMLDivElement, id: string, theme: Theme, onMenu: (menu: MenuState) => void): Pick<TermInstance, 'term' | 'fit' | 'typeAhead' | 'container' | 'ro'> {
   const container = document.createElement('div')
   container.className = 'absolute inset-0'
   container.style.display = 'none'
@@ -157,6 +160,11 @@ function mountXterm(host: HTMLDivElement, id: string, theme: Theme, onMenu: (men
   term.loadAddon(fit)
   term.open(container)
   fit.fit()
+
+  // Predictive local echo: registers its own onData to draw keystrokes before
+  // the PTY echoes them; disposed with the terminal.
+  const typeAhead = new TypeAheadAddon()
+  term.loadAddon(typeAhead)
 
   // Input → server
   term.onData((data) => {
@@ -200,7 +208,7 @@ function mountXterm(host: HTMLDivElement, id: string, theme: Theme, onMenu: (men
   })
   ro.observe(container)
 
-  return { term, fit, container, ro }
+  return { term, fit, typeAhead, container, ro }
 }
 
 interface TerminalPanelProps {
@@ -246,9 +254,9 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
     const id = `term_${Date.now().toString(36)}_${termCounter}`
     const name = tabs.length === 0 ? 'bash' : `bash (${termCounter})`
 
-    const { term, fit, container, ro } = mountXterm(host, id, themeRef.current, setMenu)
+    const { term, fit, typeAhead, container, ro } = mountXterm(host, id, themeRef.current, setMenu)
 
-    const inst: TermInstance = { id, name, term, fit, container, ro, ready: false, exited: false }
+    const inst: TermInstance = { id, name, term, fit, typeAhead, container, ro, ready: false, exited: false }
     instancesRef.current.set(id, inst)
 
     // Start on server — prefer explicit cwd (right-click "Open in Terminal"),
@@ -281,8 +289,8 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
     if (!host) return
 
     termCounter++
-    const { term, fit, container, ro } = mountXterm(host, id, themeRef.current, setMenu)
-    const inst: TermInstance = { id, name, term, fit, container, ro, ready: true, exited: false }
+    const { term, fit, typeAhead, container, ro } = mountXterm(host, id, themeRef.current, setMenu)
+    const inst: TermInstance = { id, name, term, fit, typeAhead, container, ro, ready: true, exited: false }
     instancesRef.current.set(id, inst)
     setTabs((prev) => [...prev, { id, name }])
     setActiveId((prev) => prev ?? id)
@@ -354,14 +362,13 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
 
     unsubs.push(wsClient.on('terminal:output', (msg) => {
       const { terminalId, data } = msg as { terminalId?: string; data: string }
-      // Route to correct instance
-      if (terminalId) {
-        instancesRef.current.get(terminalId)?.term.write(data)
-      } else {
-        // Legacy: write to first terminal
-        const first = instancesRef.current.values().next().value as TermInstance | undefined
-        first?.term.write(data)
-      }
+      // Route to correct instance (legacy frames without an id: the first).
+      // Through the predictor: confirmed predictions are kept, mismatches —
+      // e.g. input typed on another page of this PTY — rolled back.
+      const inst = terminalId
+        ? instancesRef.current.get(terminalId)
+        : instancesRef.current.values().next().value as TermInstance | undefined
+      inst?.term.write(inst.typeAhead.beforeServerInput(data))
     }))
 
     unsubs.push(wsClient.on('terminal:ready', (msg) => {
@@ -378,7 +385,9 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
         const inst = instancesRef.current.get(terminalId)
         if (inst) {
           inst.exited = true
-          inst.term.writeln('\r\n\x1b[90m[Process exited]\x1b[0m')
+          // Through the predictor too, so pending predictions are rolled back
+          // before the line instead of by a later timer above it.
+          inst.term.write(inst.typeAhead.beforeServerInput('\r\n\x1b[90m[Process exited]\x1b[0m\r\n'))
         }
       }
     }))
@@ -396,6 +405,9 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
     unsubs.push(wsClient.on('terminal:snapshot', (msg) => {
       const inst = adoptTerminal(msg.terminalId, 'bash')
       if (!inst) return
+      // The snapshot replaces the screen: predictions made against the old one
+      // are dropped, not rolled back.
+      inst.typeAhead.reset()
       inst.term.reset()
       inst.term.resize(msg.cols, msg.rows)
       inst.term.write(msg.data, () => {

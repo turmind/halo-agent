@@ -68,6 +68,19 @@ Keys depend on the client's OS (the keyboard in front of the user — the PTY is
 - **Right-click menu** (inside the terminal): Copy (disabled with no selection) · Paste · Select all · Clear. Menu copy / paste use the async Clipboard API; when paste is refused (plain-http origin or no clipboard-read permission) the menu says to use the keyboard shortcut instead
 - Key mapping: `terminalClipboardKey` in [packages/admin/src/features/terminal/terminal-clipboard.ts](../../../packages/admin/src/features/terminal/terminal-clipboard.ts); menu in `terminal-context-menu.tsx`
 
+### Local echo (predictive)
+Keystrokes show up before the server's echo comes back, so typing over a slow link doesn't lag. This is a port of VS Code's terminal type-ahead ([packages/admin/src/features/terminal/type-ahead/](../../../packages/admin/src/features/terminal/type-ahead/)), and it is always on. No setting turns it off.
+
+- A predicted character is drawn **dim**. When the PTY echoes the same character, it is redrawn normally. When the PTY sends something else, the prediction is rolled back: the original cell and cursor come back, then the real output is written. This happens, for example, when another page typed into the same terminal first (see Shared, persistent terminals). No residue is left.
+- Predicted keys: printable characters, Backspace, ←/→ (also `Esc b` / `Esc f`), and Enter when the cursor isn't on the last row. Any other key ends prediction until the PTY answers: Tab, ↑/↓, Ctrl-keys and the like. This is why **Tab completion and history paging are not predicted**.
+- The first keystroke on a line is drawn only after the PTY has echoed one. A prompt that doesn't echo starts nothing.
+- Not predicted:
+  - while the title names `vim`, `vi`, `nano` or `tmux`;
+  - in any full-screen program on the alternate screen (htop, less in full-screen mode…);
+  - at a `less`-style `:` prompt on the bottom row.
+- A prediction the PTY never echoes is withdrawn after a timeout: at least 500 ms, or 1.5 × the slowest confirmed echo, whichever is longer. **Password prompts**: if the prompt is on a line where echo was already confirmed, a typed character may flash dim and then be withdrawn. At a fresh prompt nothing is drawn.
+- A `terminal:snapshot` drops all pending predictions without rolling them back, because the snapshot replaces the whole screen.
+
 ### Lifecycle
 
 ```
@@ -140,6 +153,11 @@ Defined in [packages/server/src/config.ts](../../../packages/server/src/config.t
 | T8 | Paste a 10 KB block | Sent as `terminal:input` without choking; shell echoes in chunks |
 | T9 | Windows/Linux: select text → `Ctrl+C`; then `Ctrl+C` again with nothing selected | First copies and clears the selection; second sends `^C` (interrupts a running `sleep 30`) |
 | T10 | Right-click in the terminal → Paste | Clipboard text inserted at the prompt (or the "use the shortcut" hint on a plain-http origin) |
+| T11 | Over a slow link (e.g. 300 ms RTT), type `ls -la` after a first confirmed character | Characters appear at once, dim. They turn normal as the echo arrives. Backspace and ←/→ are instant too |
+| T12 | Two browsers on one terminal, type different characters in both at the same moment | Each page ends up showing exactly what the shell echoed. A dim prediction from the losing page is rolled back with no stray character left |
+| T13 | Type in `vim`, `nano`, `tmux`, `htop`, `less` | Nothing is drawn ahead of the program's own output |
+| T14 | `sudo -k; sudo true`, then type the password | Nothing stays on screen. At most a dim character flashes and is withdrawn within about 0.5 s |
+| T15 | Type, then Tab to complete or ↑ for history | The completion or history entry appears only when the shell sends it. The characters typed before it are kept |
 
 Follows the pattern of [test/session.md](../test/session.md).
 
