@@ -83,6 +83,15 @@ const NATIVE_IGNORE = IS_WIN32
   : [...IGNORED_SEGMENTS, `**/{${IGNORED_SEGMENTS.join(',')}}/**`]
 
 /**
+ * Name the native backend instead of 'default'. On Linux / Windows the default
+ * probes watchman first via popen("watchman … get-sockname"); with no watchman
+ * installed the empty reply throws before pclose() (@parcel/watcher 2.6.0,
+ * WatchmanBackend.cc getSockPath), so every subscribe left a zombie `sh` and a
+ * pipe fd in the server. macOS picks fs-events before the probe — left alone.
+ */
+const NATIVE_BACKEND = process.platform === 'linux' ? 'inotify' : IS_WIN32 ? 'windows' : undefined
+
+/**
  * Process-wide serialization of native subscribe/unsubscribe. Watchers are
  * one per workspace root (ws/watcher-pool.ts), so on workspace switch the old
  * root's stop() races the new root's start() ACROSS instances — an
@@ -186,7 +195,7 @@ export class WorkspaceWatcher {
           return
         }
         for (const e of events) this.handleEvent(e.type, e.path)
-      }, { ignore: NATIVE_IGNORE }))
+      }, { ignore: NATIVE_IGNORE, backend: NATIVE_BACKEND }))
       if (this.startEpoch !== epoch) {
         // Superseded by a newer start()/stop() while subscribing. Assigning
         // now would overwrite this.subscription and leak a live native
