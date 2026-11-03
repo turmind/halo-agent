@@ -6,7 +6,7 @@ import { TerminalPanel } from '@/features/terminal/terminal-panel'
 import { wsClient } from '@/shared/ws-client'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { cn } from '@/shared/utils'
-import { Columns2, Maximize2, Minimize2, PictureInPicture2, X } from 'lucide-react'
+import { Maximize2, Minimize2, PictureInPicture2, SquareSplitHorizontal, X } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
 type BottomTab = 'chat' | 'terminal'
@@ -182,7 +182,7 @@ export function BottomPanel({ floating = false, dragHandleRef }: BottomPanelProp
           title={t(split ? 'bottom.singleView' : 'bottom.splitView')}
           className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
         >
-          <Columns2 className="h-3.5 w-3.5" />
+          <SquareSplitHorizontal className="h-3.5 w-3.5" />
         </button>
         <button
           onMouseDown={(e) => e.stopPropagation()}
