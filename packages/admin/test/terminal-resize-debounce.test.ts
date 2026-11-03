@@ -46,6 +46,7 @@ vi.mock('@xterm/addon-fit', () => ({
 
 import { TerminalPanel } from '../src/features/terminal/terminal-panel'
 import { wsClient } from '../src/shared/ws-client'
+import { useProjectStore } from '../src/shared/stores/project-store'
 
 let container: HTMLDivElement
 let root: Root
@@ -66,6 +67,8 @@ beforeEach(() => {
   vi.spyOn(wsClient, 'send').mockImplementation((m) => { sent.push(m as { type: string }) })
   // The panel's no-terminal fallback is armed only while connected.
   vi.spyOn(wsClient, 'connected', 'get').mockReturnValue(true)
+  // The panel waits for the workspace before reattaching / falling back.
+  useProjectStore.getState().openFolder('/ws')
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -83,6 +86,18 @@ afterEach(() => {
 const resizeFrames = () => sent.filter((m) => m.type === 'terminal:resize')
 
 describe('terminal resize debounce', () => {
+  it('reattaches only once the workspace is known (split view mounts before it resolves)', () => {
+    useProjectStore.setState({ activeProject: null })
+    act(() => root.render(createElement(TerminalPanel)))
+    act(() => { vi.advanceTimersByTime(2000) })
+    expect(sent.filter((m) => m.type === 'terminal:reattach' || m.type === 'terminal:start')).toEqual([])
+
+    act(() => useProjectStore.getState().openFolder('/ws'))
+    expect(sent.filter((m) => m.type === 'terminal:reattach')).toEqual([
+      { type: 'terminal:reattach', workspacePath: '/ws' },
+    ])
+  })
+
   it('fits on every observer callback but sends one resize frame per burst', () => {
     act(() => root.render(createElement(TerminalPanel)))
     // Connected, no reattach reply → the 2s fallback spawns a terminal.

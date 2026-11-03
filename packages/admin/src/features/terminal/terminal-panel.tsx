@@ -425,9 +425,12 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
   // `terminal:snapshot` that follows. Ids already shown here (the reattach
   // sent at mount and the one sent on `_connected` both answer) are skipped.
   // If the server has none AND we have nothing locally, open a fresh one.
+  // Wait for the workspace: split view mounts this panel on page load, before
+  // workspace-layout's async resolve sets activeProject — a reattach then would
+  // ask for workspace '' and miss every PTY.
   const mountedRef = useRef(false)
   useEffect(() => {
-    if (mountedRef.current) return
+    if (mountedRef.current || !activeProject) return
     mountedRef.current = true
 
     const unsubReattached = wsClient.on('terminal:reattached', (msg) => {
@@ -470,7 +473,7 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
       unsubReattached()
       unsubConnected()
     }
-  }, [createTerminal, adoptTerminal])
+  }, [activeProject, createTerminal, adoptTerminal])
 
   // Watch for "open in integrated terminal" requests from the Explorer.
   // Subscribe to the store and consume the pending cwd in a one-shot:
