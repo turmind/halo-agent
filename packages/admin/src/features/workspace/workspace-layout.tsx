@@ -296,11 +296,11 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         e.preventDefault()
         setShowQuickOpen((v) => !v)
       }
-      // Ctrl/Cmd + ` → Switch to terminal tab
+      // Ctrl/Cmd + ` → Switch to terminal tab (no-op in split view: both show)
       if ((e.metaKey || e.ctrlKey) && e.key === '`') {
         e.preventDefault()
         const store = useEditorStore.getState()
-        store.setBottomTab(store.bottomTab === 'terminal' ? 'chat' : 'terminal')
+        if (!store.bottomSplit) store.setBottomTab(store.bottomTab === 'terminal' ? 'chat' : 'terminal')
       }
       // Alt/Option + W → Close active editor tab (Cmd+W can't be overridden
       // in browsers). Match on e.code (physical key): on macOS Option+W types

@@ -471,6 +471,8 @@ export const en: Record<string, string> = {
   'nav.canvas': 'Canvas',
   'nav.chat': 'CHAT',
   'nav.terminal': 'TERMINAL',
+  'bottom.splitView': 'Split view',
+  'bottom.singleView': 'Single view',
   'nav.desc.explorer': 'Browse, edit and preview files',
   'nav.desc.sessions': "Browse every session's history",
   'nav.desc.source-control': 'Review changes, commit, push',

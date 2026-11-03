@@ -471,6 +471,8 @@ export const zh: Record<string, string> = {
   'nav.canvas': '画布',
   'nav.chat': '对话',
   'nav.terminal': '终端',
+  'bottom.splitView': '分屏',
+  'bottom.singleView': '单窗口',
   'nav.desc.explorer': '浏览、编辑和预览文件',
   'nav.desc.sessions': '查看所有会话记录',
   'nav.desc.source-control': '查看改动、提交和推送',

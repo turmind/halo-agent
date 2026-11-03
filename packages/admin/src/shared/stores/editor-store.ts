@@ -128,9 +128,13 @@ interface EditorStore {
   setMaximized(value: boolean): void
   bottomFloating: boolean
   bottomMaximized: boolean
+  /** Chat and Terminal shown side by side (or stacked when narrow) instead of
+   *  one tab at a time. Persisted in localStorage (`halo_bottom_split`). */
+  bottomSplit: boolean
   bottomFloatRect: { x: number; y: number; w: number; h: number }
   setBottomFloating(value: boolean): void
   setBottomMaximized(value: boolean): void
+  setBottomSplit(value: boolean): void
   setBottomFloatRect(rect: { x: number; y: number; w: number; h: number }): void
   selectedText: string | null
   selectedRange: { startLine: number; endLine: number } | null
@@ -285,6 +289,7 @@ export function createEditorStore() {
       maximized: typeof window !== 'undefined' && localStorage.getItem('halo_editor_maximized') === 'true',
       bottomFloating: typeof window !== 'undefined' && sessionStorage.getItem('halo_bottom_floating') === 'true',
       bottomMaximized: false,
+      bottomSplit: typeof window !== 'undefined' && localStorage.getItem('halo_bottom_split') === 'true',
       bottomFloatRect: (() => {
         if (typeof window === 'undefined') return { x: 0, y: 0, w: 480, h: 640 }
         const raw = sessionStorage.getItem('halo_bottom_float_rect')
@@ -657,6 +662,13 @@ export function createEditorStore() {
 
       setBottomMaximized(value) {
         set({ bottomMaximized: value })
+      },
+
+      setBottomSplit(value) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('halo_bottom_split', String(value))
+        }
+        set({ bottomSplit: value })
       },
 
       setBottomFloatRect(rect) {
