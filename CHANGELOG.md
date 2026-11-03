@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-11-03
+
 ### Added
 
 - Terminal: terminals now persist and are shared. Closing the browser, losing the connection or opening the workspace on another device or browser brings back the same terminals with their full screen — scrollback, and vim / htop as they were. Several pages can be attached at once and stay in sync; closing a terminal with ✕ on any page ends it everywhere. A terminal now ends only when you close it, its shell exits or the server restarts.
@@ -1150,7 +1152,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.1...HEAD
+[2.1.1]: https://github.com/turmind/halo-agent/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/turmind/halo-agent/compare/v2.0.8...v2.1.0
 [2.0.8]: https://github.com/turmind/halo-agent/compare/v2.0.7...v2.0.8
 [2.0.7]: https://github.com/turmind/halo-agent/compare/v2.0.6...v2.0.7
