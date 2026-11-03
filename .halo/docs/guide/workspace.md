@@ -103,6 +103,7 @@ Bottom-panel Terminal tab:
 - Multi-instance (each terminal owns its own PTY), listed as a collapsible vertical tab strip on the right
 - cwd = current project root
 - Terminals are shared by every browser / device that opens the workspace and kept until closed with ✕ (or the shell exits, or the server restarts): reconnecting, refreshing or coming back days later restores the full screen — scrollback, and vim / htop as they were
+- Local echo: what you type shows at once (dimmed) and turns normal when the server echoes it back, so a slow link doesn't lag typing; vim / nano / tmux and other full-screen programs are not predicted
 
 ## Settings
 
@@ -140,12 +141,14 @@ See [requirements/settings.md](../requirements/settings.md), [secrets-and-creden
 | `Cmd/Ctrl + P` | Quick Open |
 | `Cmd/Ctrl + S` | Save file |
 | `Alt + W` | Close editor tab (browser; the desktop app uses `Cmd/Ctrl + W`) |
-| `Cmd/Ctrl + \`` | Switch the bottom panel between Chat and Terminal |
+| `Cmd/Ctrl + \`` | Switch the bottom panel between Chat and Terminal (no-op in split view) |
 | `Esc` | Leave editor maximize |
 
 ## Bottom panel switching
 
-Two tabs in the header: Chat / Terminal, plus maximize and float / dock buttons. The panel opens on Chat after a refresh.
+Two tabs in the header: Chat / Terminal, plus split, maximize and float / dock buttons. The panel opens on Chat after a refresh, unless split view is on.
+
+**Split view** shows Chat and Terminal at once — side by side, or stacked when the panel is narrow (e.g. floating); drag the divider to resize. It stays on across refreshes; click either tab to go back to a single view.
 
 ## Login / logout
 

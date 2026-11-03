@@ -36,7 +36,7 @@ A workspace's terminals belong to the workspace, not to a browser: the admin has
 
 ### Reconnect resilience
 
-1. On mount **and** on every `_connected`, the panel sends `terminal:reattach { workspacePath }`. The server attaches the connection to every PTY of that workspace and subscribes it to the workspace
+1. On mount (once the workspace is known — with split view on, the panel mounts before the page has resolved its workspace) **and** on every `_connected`, the panel sends `terminal:reattach { workspacePath }`. The server attaches the connection to every PTY of that workspace and subscribes it to the workspace
 2. The server answers `terminal:reattached { terminals: [{ id, name }] }`, then one `terminal:snapshot` per PTY, then live `terminal:output`. Snapshot and live stream join exactly: output that arrives while a snapshot is being taken is queued for that page and sent right after it — nothing lost, nothing repeated
 3. A PTY another page starts later is pushed to every subscribed page as `terminal:opened { terminalId, name }` + its snapshot — no polling
 4. When a connection closes, the server only removes it from the PTYs' attached sets and from the workspace subscription; no timer is started

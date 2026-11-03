@@ -70,7 +70,7 @@ Current tab stored in `editorStore.bottomTab`.
 The middle of the tab bar shows the current tab's title — the session title on Chat ("New session" for a draft, "Untitled session" until it has one), the active terminal's name on Terminal. It is truncated with an ellipsis when it doesn't fit (full text on hover) and hidden when the bar is too narrow.
 
 ### Split view
-A split button (columns icon, left of maximize) shows Chat and Terminal at once; pressing it again returns to the single view:
+A split button (split-square icon, left of maximize) shows Chat and Terminal at once; pressing it again returns to the single view:
 - **Layout**: side by side (Chat left, Terminal right) when the panel's content is at least 720px wide; stacked (Chat on top) when it's narrower — e.g. the 480-wide floating window. The direction follows the width live
 - **Divider**: drag to resize; each pane keeps at least 20%. The ratio is remembered separately for side-by-side and stacked (`localStorage` `halo_bottom_split_ratio_row` / `_column`)
 - **Tab bar**: both tabs show as selected; clicking either one leaves the split and shows just that tab. The centred title reads `<chat title> · <terminal name>`, dropping an empty half
