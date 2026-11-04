@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import type { FileTreeNode } from '@/shared/stores/editor-store'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { loadDirChildren } from './use-file-tree'
@@ -321,6 +321,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
   const gitDecorations = useGitDecorations(projectId)
 
   const isRoot = depth === 0 && !node.path
+  const vPaths = useMemo(() => (isRoot ? collectVisiblePaths(node) : undefined), [isRoot, node])
 
   // Optional create-row + sorted child nodes at `childDepth` — shared by the
   // root and expanded-directory branches below.
@@ -361,10 +362,6 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
 
   // Root: compute visiblePaths once, render children
   if (isRoot) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    const computedVisible = useCallback(() => collectVisiblePaths(node), [node])
-    const vPaths = computedVisible()
-
     const handleRootDragOver = (e: React.DragEvent) => {
       if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes(DRAG_TYPE)) {
         e.preventDefault()
