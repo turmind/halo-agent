@@ -1071,20 +1071,6 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     return (
       <div className="flex h-full flex-col">
         {uploadBar}
-        {/* Selection info bar */}
-        {selectedPaths.size > 0 && (
-          <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-1.5">
-            <span className="text-[10px] text-[var(--muted-foreground)]">
-              {selectedPaths.size} selected
-            </span>
-            <button
-              onClick={() => setSelectedPaths(new Set())}
-              className="rounded px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        )}
         <div ref={treeContainerRef} tabIndex={0} className="flex-1 overflow-y-auto outline-none">
           {loading ? (
             <div className="p-3 text-xs text-[var(--muted-foreground)]">Loading...</div>
