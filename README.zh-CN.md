@@ -190,7 +190,6 @@ curl -N -H "x-token: $TOKEN" -H "Content-Type: application/json" \
 - [`.halo/docs/dev/deploy.md`](.halo/docs/dev/deploy.md) —— 部署（systemd / Nginx）
 - [`.halo/docs/dev/env.md`](.halo/docs/dev/env.md) —— 环境变量、构建命令
 - [`CHANGELOG.md`](CHANGELOG.md) —— 每个版本的变更
-- [`CLAUDE.md`](CLAUDE.md) —— 面向 Claude Code 的开发说明
 
 ## 现状与局限
 

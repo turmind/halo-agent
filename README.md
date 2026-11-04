@@ -190,7 +190,6 @@ A read-only pixel city that visualizes a live halo server: each workspace is a b
 - [`.halo/docs/dev/deploy.md`](.halo/docs/dev/deploy.md) — deployment (systemd / Nginx)
 - [`.halo/docs/dev/env.md`](.halo/docs/dev/env.md) — env vars, build commands
 - [`CHANGELOG.md`](CHANGELOG.md) — what changed in each release
-- [`CLAUDE.md`](CLAUDE.md) — development instructions for Claude Code
 
 ## Status & Limitations
 
