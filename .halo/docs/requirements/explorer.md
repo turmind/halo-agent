@@ -48,6 +48,8 @@ Visual directory browser opened by the 📁🔍 button:
 - Expansion state lives in localStorage; restored on refresh and lazily reloaded
 - WebSocket `file:changed` events incrementally update loaded branches; unloaded branches are left alone (re-fetched on expand)
 - **Reconnect reconciliation**: because the tree is kept in sync purely by `file:changed` deltas, events missed while the socket was down (laptop lid, network drop) would leave it stale forever. On WS *re*connect (not first connect) the root level is silently refetched; expanded directories self-heal because their fresh nodes come back without children, which re-arms the lazy-load along the persisted expanded-paths spine
+- The root listing is fetched once, by the panel that renders the tree (the main Explorer's editor-only panel shares its store and doesn't fetch again)
+- **Slow / failing networks**: every directory listing has a 20s deadline and is aborted when the folder collapses or unmounts. A failed listing shows an inline **Failed to load · Retry** row instead of a spinner and retries on its own after 2 / 4 / 8 / 16 / 30s, then waits for **Retry**. A failure never re-fires immediately. A WS *re*connect retries every failed folder at once and cancels and re-sends any listing still in flight (likely stuck on the dead connection), restarting the backoff from 2s
 
 ### Selection model
 VS Code-style highlight selection (no checkboxes):

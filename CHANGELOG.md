@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Admin: ` ```mermaid ` code blocks are drawn as diagrams — in chat once a reply has finished (while it streams it stays a code block), and in the Markdown preview. Follows the light / dark theme; a block that fails to parse stays a code block with the error below it. The renderer loads on first use, so pages without diagrams don't pay for it.
+
+### Fixed
+
+- Explorer: on a slow or flaky network a folder no longer spins forever. A listing now times out after 20s and is cancelled when the folder is collapsed; a failure shows "Failed to load · Retry" and retries with backoff instead of re-sending at once (one reset link used to fire thousands of requests in seconds), and folders left empty by going offline load again when the connection comes back. A listing stuck on a dead connection is re-sent as soon as the WebSocket reconnects.
+- Explorer / Source Control: git status refreshes no longer pile up behind each other on a slow link — at most one is in flight, with at least 3s between runs and none while the tab is hidden — so they stop delaying folder listings while an agent is writing files. The root listing is fetched once instead of twice.
+- Explorer: dragging a file or folder onto the workspace root failed with "no such file or directory"; multi-selection drags to the root now move every item.
+- Models: the AWS Bedrock Claude (Invoke API) provider description said it calls InvokeModel non-streaming; it streams (InvokeModelWithResponseStream). Behavior is unchanged.
+
 ## [2.1.1] - 2026-11-03
 
 ### Added
