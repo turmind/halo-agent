@@ -1,10 +1,10 @@
 id: aws-bedrock-claude-invoke
 runtime: bedrock-invoke
-revision: 2026101005
+revision: 2026110401
 displayName: AWS Bedrock Claude (Invoke API)
 displayName_zh: AWS Bedrock Claude（Invoke API）
-description: Invokes Bedrock via InvokeModel (non-streaming), sends raw Anthropic Messages API format
-description_zh: 通过 Bedrock InvokeModel（非流式）调用，发送原生 Anthropic Messages API 格式
+description: Invokes Bedrock via InvokeModelWithResponseStream (streaming), sends raw Anthropic Messages API format
+description_zh: 通过 Bedrock InvokeModelWithResponseStream（流式）调用，发送原生 Anthropic Messages API 格式
 defaultEndpoint: https://bedrock-runtime.us-east-1.amazonaws.com
 endpointPresets:
   - https://bedrock-runtime.us-east-1.amazonaws.com

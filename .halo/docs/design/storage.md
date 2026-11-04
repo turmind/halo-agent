@@ -473,8 +473,8 @@ runtime: bedrock-invoke                        # required, implementation class 
 revision: 2026100501                           # integer YYYYMMDDNN — bump on every edit; absent = 0
 displayName: AWS Bedrock Claude (Invoke API)   # shown in UI
 displayName_zh: AWS Bedrock Claude（Invoke API） # optional zh override
-description: Invokes Bedrock via InvokeModel (non-streaming)
-description_zh: 通过 Bedrock InvokeModel（非流式）调用
+description: Invokes Bedrock via InvokeModelWithResponseStream (streaming)
+description_zh: 通过 Bedrock InvokeModelWithResponseStream（流式）调用
 defaultEndpoint: https://bedrock-runtime.us-east-1.amazonaws.com
 defaultModelId: global.anthropic.claude-sonnet-4-6   # picked when user switches to this provider
 endpointPresets:                               # endpoint dropdown for models without their own `endpoints:`
