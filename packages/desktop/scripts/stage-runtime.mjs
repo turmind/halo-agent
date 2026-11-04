@@ -361,6 +361,12 @@ function fetchTargetArchNatives() {
   // the build host's active node.
   // Re-fetch into every copy node might load (flat + .pnpm).
   for (const pkg of resolvePkgDirs('better-sqlite3')) {
+    // pnpm deploy hard-links build/Release/better_sqlite3.node from the shared
+    // pnpm store, and prebuild-install's extract writes through an existing
+    // file — it turned the store's Linux ELF into the target's PE, so every
+    // later install linked a binary that can't load. Unlink first so the
+    // download lands in a fresh inode and the store copy is untouched.
+    fs.rmSync(path.join(pkg, 'build'), { recursive: true, force: true })
     console.log(`[stage] prebuild-install better-sqlite3 (node ${NODE_VERSION_BARE}, ${TARGET_PLATFORM}-${TARGET_ARCH}) in ${pkg}`)
     execSync(
       `npx --yes prebuild-install --runtime=node --target=${NODE_VERSION_BARE} --arch=${TARGET_ARCH} --platform=${TARGET_PLATFORM}`,
