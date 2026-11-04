@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-11-04
+
 ### Added
 
 - Admin: ` ```mermaid ` code blocks are drawn as diagrams — in chat once a reply has finished (while it streams it stays a code block), and in the Markdown preview. Follows the light / dark theme; a block that fails to parse stays a code block with the error below it. The renderer loads on first use, so pages without diagrams don't pay for it.
@@ -1163,7 +1165,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.2...HEAD
+[2.1.2]: https://github.com/turmind/halo-agent/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/turmind/halo-agent/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/turmind/halo-agent/compare/v2.0.8...v2.1.0
 [2.0.8]: https://github.com/turmind/halo-agent/compare/v2.0.7...v2.0.8
