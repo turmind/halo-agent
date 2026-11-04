@@ -87,6 +87,18 @@ export interface FileContextInfo {
   isDir: boolean
 }
 
+/** Paths carried by an in-tree drag: `handleDragStart` writes a JSON array;
+ *  a bare string is a legacy single path. */
+export function parseDragPaths(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed as string[]
+  } catch {
+    // legacy single path
+  }
+  return [raw]
+}
+
 /** Inline pending edit (create / rename) state surfaced from the parent so
  *  FileTree knows where to render an editable input row. */
 export interface PendingEdit {
@@ -376,9 +388,9 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
       e.preventDefault()
       e.stopPropagation()
       setDragOver(false)
-      const sourcePath = e.dataTransfer.getData(DRAG_TYPE)
-      if (sourcePath) {
-        onMoveFile?.(sourcePath, '')
+      const raw = e.dataTransfer.getData(DRAG_TYPE)
+      if (raw) {
+        for (const sourcePath of parseDragPaths(raw)) onMoveFile?.(sourcePath, '')
         return
       }
       const files = await collectDroppedFiles(e.dataTransfer)
@@ -562,17 +574,9 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
     if (!expanded) setExpanded(true)
     const raw = e.dataTransfer.getData(DRAG_TYPE)
     if (raw) {
-      try {
-        const paths = JSON.parse(raw) as string[]
-        for (const sourcePath of paths) {
-          if (sourcePath !== node.path && !sourcePath.startsWith(node.path + '/')) {
-            onMoveFile?.(sourcePath, node.path)
-          }
-        }
-      } catch {
-        // Legacy single path
-        if (raw !== node.path && !raw.startsWith(node.path + '/')) {
-          onMoveFile?.(raw, node.path)
+      for (const sourcePath of parseDragPaths(raw)) {
+        if (sourcePath !== node.path && !sourcePath.startsWith(node.path + '/')) {
+          onMoveFile?.(sourcePath, node.path)
         }
       }
       return
