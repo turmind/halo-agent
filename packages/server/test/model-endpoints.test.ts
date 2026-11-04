@@ -61,8 +61,8 @@ describe('aws-bedrock-mantle.yaml', () => {
   const at = (id: string) => server.resolveModelEndpoints(data, data.models.find((m) => m.id === id))
 
   it('per-model endpoints follow the region matrix', () => {
-    expect(at('openai.gpt-6-astra')).toEqual({ presets: [W2], defaultEndpoint: W2, modelScoped: true })
-    for (const id of ['openai.gpt-6-sol', 'openai.gpt-6.1-sol', 'openai.gpt-6-luna']) {
+    expect(at('openai.gpt-6-astra')).toEqual({ presets: [E1, W2], defaultEndpoint: E1, modelScoped: true })
+    for (const id of ['openai.gpt-6-sol', 'openai.gpt-6.1-sol', 'openai.gpt-6.1-terra', 'openai.gpt-6-luna']) {
       expect(at(id)).toEqual({ presets: [E1], defaultEndpoint: E1, modelScoped: true })
     }
     expect(at('openai.gpt-5.6-sol')).toEqual({ presets: [E1, E2], defaultEndpoint: E1, modelScoped: true })

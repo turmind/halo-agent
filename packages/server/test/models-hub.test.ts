@@ -319,7 +319,7 @@ describe('install planner', () => {
       write(srcDir, 'aws-bedrock-mantle.yaml', withModel('openai.gpt-6-astra', null))
       p = plan()
       expect(p.needsConfirm).toBe(false)
-      expect(p.entries[0]!.endpointChanges).toEqual([`model openai.gpt-6-astra endpoints: - ${W2}`])
+      expect(p.entries[0]!.endpointChanges).toEqual([`model openai.gpt-6-astra endpoints: - ${E1}, - ${W2}`])
     })
 
     it('unchanged per-model lists → no endpoint lines', () => {
