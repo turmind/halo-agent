@@ -3,15 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { GitBranch, Tag } from 'lucide-react'
 import { api } from '@/shared/api-client'
-import { wsClient } from '@/shared/ws-client'
-import { onWsReconnect } from '@/shared/ws-reconnect'
-import { isSessionLogEvent } from '@/shared/file-events'
 import { timeAgo } from '@/shared/components/session-list-dropdown'
 import { useT } from '@/shared/i18n'
 import { cn } from '@/shared/utils'
 import { getFileIcon } from '@/shared/file-icons'
 import { useGitStore } from './git-store'
 import { statusMeta } from './status-meta'
+import { useGitRefresh } from './git-refresh'
 
 type Commit = Awaited<ReturnType<typeof api.git.log>>['commits'][number]
 type CommitFile = Awaited<ReturnType<typeof api.git.commitFiles>>['files'][number]
@@ -147,38 +145,26 @@ export function GitGraph({ projectId }: { projectId: string }) {
   const [filesByHash, setFilesByHash] = useState<Record<string, CommitFile[]>>({})
   const sentinelRef = useRef<HTMLDivElement | null>(null)
 
-  const refresh = useCallback(async () => {
-    try {
-      const res = await api.git.log(projectId, limit)
+  // New commits change the log: refetch on mount, file:changed and reconnect
+  // via useGitRefresh (one run in flight, delta runs spaced out, no polling).
+  // The server re-broadcasts file:changed after commit/stage/unstage/push/pull
+  // (the watcher ignores .git, so those wouldn't otherwise reach us). `limit`
+  // is part of the key: growing it starts a fresh run, a run for the old page
+  // size is dropped.
+  useGitRefresh(
+    `${projectId}\n${limit}`,
+    (signal) => api.git.log(projectId, limit, signal),
+    (res) => {
       setCommits(res.commits)
       setHasMore(res.commits.length >= limit)
       setError(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
       setLoaded(true)
-    }
-  }, [projectId, limit])
-
-  useEffect(() => { void refresh() }, [refresh])
-
-  // New commits change the log; refresh on file:changed (debounced, no polling).
-  // The server re-broadcasts file:changed after commit/stage/unstage/push/pull
-  // (the watcher ignores .git, so those wouldn't otherwise reach us).
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const unsub = wsClient.on('file:changed', (data) => {
-      // A session transcript write can't have produced a commit — skip the log
-      // refetch for that churn (see isSessionLogEvent).
-      if (isSessionLogEvent(data)) return
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => { void refresh() }, 400)
-    })
-    // Reconnect reconciliation — a commit made while the socket was down (e.g.
-    // command-line git during a network drop) would otherwise never appear.
-    const unsubReconnect = onWsReconnect(wsClient, () => { void refresh() })
-    return () => { if (timer) clearTimeout(timer); unsub(); unsubReconnect() }
-  }, [refresh])
+    },
+    (err) => {
+      setError(err instanceof Error ? err.message : String(err))
+      setLoaded(true)
+    },
+  )
 
   // Auto-load older commits when the bottom sentinel scrolls into view. Only
   // armed while there's a full page already loaded, so it's a no-op for short

@@ -334,7 +334,7 @@ export const api = {
   },
 
   git: {
-    status(projectId: string) {
+    status(projectId: string, signal?: AbortSignal) {
       return request<{
         // false when the folder isn't a git work-tree root (no repo, or nested
         // inside an ancestor's repo) — the rest of the fields are absent then.
@@ -344,13 +344,13 @@ export const api = {
         ahead: number
         behind: number
         files: Array<{ path: string; index: string; workingDir: string; from?: string }>
-      }>(`/git/status?projectId=${encodeURIComponent(projectId)}`)
+      }>(`/git/status?projectId=${encodeURIComponent(projectId)}`, { signal })
     },
 
-    ignored(projectId: string) {
+    ignored(projectId: string, signal?: AbortSignal) {
       // Same isRepo:false gate as status() (a folder nested inside an ancestor's
       // repo is not this workspace's repo); `ignored` is always present, [] then.
-      return request<{ isRepo?: boolean; ignored: string[] }>(`/git/ignored?projectId=${encodeURIComponent(projectId)}`)
+      return request<{ isRepo?: boolean; ignored: string[] }>(`/git/ignored?projectId=${encodeURIComponent(projectId)}`, { signal })
     },
 
     diff(projectId: string, path: string, staged: boolean, from?: string, commit?: string) {
@@ -363,12 +363,12 @@ export const api = {
       return request<{ path: string; original: string; modified: string }>(`/git/diff?${params.toString()}`)
     },
 
-    log(projectId: string, limit?: number) {
+    log(projectId: string, limit?: number, signal?: AbortSignal) {
       const params = new URLSearchParams({ projectId })
       if (limit) params.set('limit', String(limit))
       return request<{
         commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string; refs: string; pushed: boolean }>
-      }>(`/git/log?${params.toString()}`)
+      }>(`/git/log?${params.toString()}`, { signal })
     },
 
     commitFiles(projectId: string, hash: string) {
@@ -420,9 +420,10 @@ export const api = {
       })
     },
 
-    remotes(projectId: string) {
+    remotes(projectId: string, signal?: AbortSignal) {
       return request<{ remotes: Array<{ name: string; url: string }> }>(
         `/git/remotes?projectId=${encodeURIComponent(projectId)}`,
+        { signal },
       )
     },
 

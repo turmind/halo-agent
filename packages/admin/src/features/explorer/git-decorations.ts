@@ -3,10 +3,8 @@
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { api } from '@/shared/api-client'
-import { wsClient } from '@/shared/ws-client'
-import { onWsReconnect } from '@/shared/ws-reconnect'
-import { isSessionLogEvent } from '@/shared/file-events'
 import { isStagedChar, isWorkingChar } from '@/features/source-control/status-meta'
+import { useGitRefresh } from '@/features/source-control/git-refresh'
 
 /**
  * Git status decorations for the Explorer file tree (VSCode-style file/folder
@@ -145,66 +143,39 @@ export function isPathIgnored(ignored: Set<string>, path: string): boolean {
 
 /**
  * Mount once per workspace to keep the active project's decorations in sync.
- * Fetches on mount + project change, and on `file:changed` (debounced — the
- * watcher ignores .git so this won't loop on our own stage/commit). No polling.
+ * Fetches on mount + project change, on `file:changed` and on WS reconnect —
+ * through useGitRefresh, so at most one status + ignored pair is in flight and
+ * delta-driven runs are spaced out (the watcher ignores .git so this won't loop
+ * on our own stage/commit). No polling.
  */
 export function useGitDecorationsSync(projectId: string | null): void {
+  useGitRefresh(
+    projectId,
+    // Status + ignored in one shot per run. ignored is a separate cheap call (dirs collapsed).
+    (signal) => Promise.all([api.git.status(projectId!, signal), api.git.ignored(projectId!, signal)]),
+    ([status, ign]) => {
+      const { setForProject, clearProject, setRepoStatus } = useGitDecorationsStore.getState()
+      // Non-repo folder (isRepo:false) → no decorations, keep the tree clean.
+      if (status.isRepo === false) {
+        clearProject(projectId!)
+        setRepoStatus(projectId!, false)
+        return
+      }
+      setForProject(projectId!, buildDecorations(status.files, ign.ignored))
+      setRepoStatus(projectId!, true)
+    },
+    () => {
+      // Non-git folder or transient error — drop decorations, keep the tree usable.
+      const { clearProject, setRepoStatus } = useGitDecorationsStore.getState()
+      clearProject(projectId!)
+      setRepoStatus(projectId!, false)
+    },
+  )
+
   useEffect(() => {
     if (!projectId) return
-    const { setForProject, clearProject, setRepoStatus, clearRepoStatus } = useGitDecorationsStore.getState()
-    let cancelled = false
-
-    async function refresh() {
-      try {
-        // Status + ignored in one shot per refresh (same debounce, no extra
-        // polling). ignored is a separate cheap call (dirs collapsed).
-        const [status, ign] = await Promise.all([
-          api.git.status(projectId!),
-          api.git.ignored(projectId!),
-        ])
-        // Non-repo folder (isRepo:false) → no decorations, keep the tree clean.
-        if (status.isRepo === false) {
-          if (!cancelled) {
-            clearProject(projectId!)
-            setRepoStatus(projectId!, false)
-          }
-          return
-        }
-        if (!cancelled) {
-          setForProject(projectId!, buildDecorations(status.files, ign.ignored))
-          setRepoStatus(projectId!, true)
-        }
-      } catch {
-        // Non-git folder or transient error — drop decorations, keep the tree usable.
-        if (!cancelled) {
-          clearProject(projectId!)
-          setRepoStatus(projectId!, false)
-        }
-      }
-    }
-
-    void refresh()
-
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const unsub = wsClient.on('file:changed', (data) => {
-      // Skip the agent's own transcript/log churn — a refresh here is two git
-      // round-trips, and a live session rewrites its (multi-MB) log on every
-      // utterance. See isSessionLogEvent for the accepted staleness.
-      if (isSessionLogEvent(data)) return
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => { void refresh() }, 400)
-    })
-
-    // Reconnect reconciliation — `file:changed` events emitted while the
-    // socket was down are lost, leaving stale decorations until the next
-    // unrelated event (or forever). See shared/ws-reconnect.
-    const unsubReconnect = onWsReconnect(wsClient, () => { void refresh() })
-
     return () => {
-      cancelled = true
-      if (timer) clearTimeout(timer)
-      unsub()
-      unsubReconnect()
+      const { clearProject, clearRepoStatus } = useGitDecorationsStore.getState()
       clearProject(projectId)
       // Drop the repo signal too, so switching workspaces falls back to
       // 'unknown' (show) rather than leaking the old workspace's true/false.

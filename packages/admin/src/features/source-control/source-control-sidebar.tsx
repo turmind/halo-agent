@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   GitBranch,
   RefreshCw,
@@ -18,9 +18,6 @@ import {
   Upload,
 } from 'lucide-react'
 import { api } from '@/shared/api-client'
-import { wsClient } from '@/shared/ws-client'
-import { onWsReconnect } from '@/shared/ws-reconnect'
-import { isSessionLogEvent } from '@/shared/file-events'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { cn } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
@@ -28,6 +25,7 @@ import { useGitStore } from './git-store'
 import { ChangeTree } from './change-tree'
 import { CredentialsModal } from './credentials-modal'
 import { GitGraph } from './git-graph'
+import { useGitRefresh } from './git-refresh'
 import { isStagedChar, isWorkingChar } from './status-meta'
 import type { GitStatus, GitFileStatus } from './types'
 
@@ -63,10 +61,19 @@ export function SourceControlSidebar() {
   const [remotes, setRemotes] = useState<Array<{ name: string; url: string }> | null>(null)
   const [remoteUrl, setRemoteUrl] = useState('')
 
-  const refresh = useCallback(async () => {
-    if (!projectId) return
-    try {
-      const res = await api.git.status(projectId)
+  // Push-based refresh (mount, `file:changed`, reconnect) via useGitRefresh:
+  // one status + remotes run in flight at a time, delta runs spaced out. The
+  // watcher ignores .git, so our own stage/commit don't loop. No polling.
+  const refresh = useGitRefresh(
+    projectId,
+    async (signal) => {
+      const res = await api.git.status(projectId!, signal)
+      // Once we know it's a repo, learn whether a remote is configured — that
+      // alone gates the add-remote prompt (gate ③) vs the push/pull UI.
+      const r = res.isRepo === false ? null : await api.git.remotes(projectId!, signal)
+      return { res, remotes: r?.remotes ?? null }
+    },
+    ({ res, remotes: r }) => {
       // Not a git work-tree root → friendly "initialize" empty state (the
       // server reports this as a normal 200, isRepo:false — not an error).
       if (res.isRepo === false) {
@@ -79,35 +86,10 @@ export function SourceControlSidebar() {
       setStatus(res)
       setNotRepo(false)
       setError(null)
-      // Once we know it's a repo, learn whether a remote is configured — that
-      // alone gates the add-remote prompt (gate ③) vs the push/pull UI.
-      const r = await api.git.remotes(projectId)
-      setRemotes(r.remotes)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }, [projectId])
-
-  useEffect(() => { void refresh() }, [refresh])
-
-  // Push-based refresh: the workspace file watcher already broadcasts
-  // `file:changed` whenever the tree changes (it ignores .git, so our own
-  // stage/commit don't loop). Debounce to collapse rapid bursts. No polling.
-  useEffect(() => {
-    if (!projectId) return
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const unsub = wsClient.on('file:changed', (data) => {
-      // Agent transcript/log churn isn't a working-tree change worth a status +
-      // remotes refetch (see isSessionLogEvent).
-      if (isSessionLogEvent(data)) return
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => { void refresh() }, 400)
-    })
-    // Reconnect reconciliation — events lost while the socket was down would
-    // otherwise leave the CHANGES list stale. See shared/ws-reconnect.
-    const unsubReconnect = onWsReconnect(wsClient, () => { void refresh() })
-    return () => { if (timer) clearTimeout(timer); unsub(); unsubReconnect() }
-  }, [projectId, refresh])
+      setRemotes(r)
+    },
+    (err) => setError(err instanceof Error ? err.message : String(err)),
+  )
 
   const files = status?.files ?? []
   const stagedFiles = files.filter((f) => isStagedChar(f.index))
