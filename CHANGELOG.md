@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.1.3] - 2026-11-04
+
 ### Added
 
 - Chat: file paths in a reply (inline code or markdown links) are clickable and open in the canvas — workspace files like a click in the tree (with `:line` jumps), folders located in the tree, files outside the workspace as read-only tabs; Windows paths included.
@@ -1182,7 +1184,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.2...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.3...HEAD
+[2.1.3]: https://github.com/turmind/halo-agent/compare/v2.1.2...v2.1.3
 [2.1.2]: https://github.com/turmind/halo-agent/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/turmind/halo-agent/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/turmind/halo-agent/compare/v2.0.8...v2.1.0
