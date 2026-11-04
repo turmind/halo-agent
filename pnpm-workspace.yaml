@@ -8,6 +8,8 @@ allowBuilds:
   node-pty: true
   protobufjs: true
   sharp: true
+minimumReleaseAgeExclude:
+  - mermaid@12.3.0
 onlyBuiltDependencies:
   - '@parcel/watcher'
   - better-sqlite3

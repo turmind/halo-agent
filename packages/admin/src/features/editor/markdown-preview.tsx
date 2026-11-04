@@ -1,12 +1,21 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { useT } from '@/shared/i18n'
 import { SafeImage } from '@/shared/components/safe-image'
+import { MermaidBlock, mermaidSource } from '@/shared/components/mermaid-block'
+
+/** ```mermaid → diagram; any other `pre` renders exactly as react-markdown's
+ *  default (a bare `<pre>`, styled by the article's prose classes). */
+function PreviewPre({ node, ...props }: React.ComponentProps<'pre'> & ExtraProps) {
+  const source = mermaidSource(node)
+  if (source === null) return <pre {...props} />
+  return <MermaidBlock source={source} fallback={<pre {...props} />} />
+}
 
 /** Slugify a heading's text into an id/anchor (lowercase, spaces→-, strip
  *  punctuation). Keeps CJK as-is. Mirrors common markdown-anchor behavior. */
@@ -284,6 +293,7 @@ export function MarkdownPreview({ content, filePath, projectId }: MarkdownPrevie
                 }
                 return <SafeImage src={resolved} alt={alt ?? ''} {...rest} placeholderClassName="my-2 aspect-[4/3] w-full max-w-sm" />
               },
+              pre: PreviewPre,
             }}
           >
             {content}

@@ -25,6 +25,7 @@ A change applies from the next message you send, and the level is saved per sess
 - Enter to send
 - Shift+Enter for a newline
 - The agent streams its reply; tool calls render inline as cards
+- ` ```mermaid ` blocks in a reply become diagrams once the reply finishes (they show as code while it streams)
 
 ## Context injection
 

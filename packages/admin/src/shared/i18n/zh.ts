@@ -561,6 +561,7 @@ export const zh: Record<string, string> = {
   'common.workspace': '工作区',
   'common.internal': '内部',
   'common.imageUnavailable': '图片无法加载',
+  'mermaid.renderFailed': 'Mermaid 图渲染失败:{error}',
   'sidebar.collapse': '收起',
   'sidebar.expand': '展开',
   'sidebar.resize': '拖动调整宽度',

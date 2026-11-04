@@ -561,6 +561,7 @@ export const en: Record<string, string> = {
   'common.workspace': 'Workspace',
   'common.internal': 'Internal',
   'common.imageUnavailable': 'Image unavailable',
+  'mermaid.renderFailed': 'Mermaid diagram failed to render: {error}',
   'sidebar.collapse': 'Collapse',
   'sidebar.expand': 'Expand',
   'sidebar.resize': 'Drag to resize',

@@ -21,6 +21,7 @@ The primary surface for talking to an agent.
 
 ### Message rendering
 - Markdown + code-block highlighting
+- A ` ```mermaid ` block is drawn as a diagram once the message has finished: while the reply streams it stays a plain code block (half a diagram is a parse error), and settled history messages render directly. Same renderer as the Markdown preview ([editor.md](editor.md#renderable-text-formats-markdown--html)): app-themed, strict security, and a diagram that fails to render stays as source with a small error line
 - Tool-call card: expandable, shows tool name / input / output
 - Sub-agent streams stay out of the chat: their reports land as a green callout, and Debug mode adds agent start/done markers labelled with the agent name (e.g. "Coder", "Researcher")
 - A reply that has produced nothing yet shows a spinner with "Thinking..."; once the model streams reasoning text, the spinner gives way to a **live thinking panel**: expanded, muted, with a "Thinking..." header and char count, capped at about 9 lines and tailing its own text (so the chat log grows by at most the cap). It folds to the one-line collapsed "Thinking · N chars" header (click to expand; it stays in the log) as soon as text or a tool call follows, or the message settles. Providers that stream no reasoning text stay on the spinner. Debug mode shows the same live panel; it only adds to the normal view

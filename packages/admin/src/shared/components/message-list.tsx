@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useMemo, useRef, useEffect, useLayoutEffect, memo } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage, ToolCallInfo, ContentBlock } from '@/shared/types'
 import { inferMessageType } from '@/shared/types'
 import { MediaAttachments, parseMediaMarkers } from '@/shared/components/media-attachments'
 import { SafeImage } from '@/shared/components/safe-image'
+import { MermaidBlock, mermaidSource } from '@/shared/components/mermaid-block'
 import { cn, confirmAction } from '@/shared/utils'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useSessionViewStore } from '@/features/agents/agent-sessions-sidebar'
@@ -515,7 +516,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
           ? <LiveThinkingBlock key={`b${i}`} text={block.text} />
           : <ThinkingBlock key={`b${i}`} text={block.text} />)
       } else if (block.type === 'text' && block.text.trim()) {
-        elements.push(<TextBlock key={`b${i}`} text={block.text} />)
+        elements.push(<TextBlock key={`b${i}`} text={block.text} streaming={message.streaming} />)
       } else if (block.type === 'tool_call') {
         toolSeen++
         elements.push(<InlineToolCall key={`b${i}`} call={block.toolCall} isStreaming={message.streaming} isLast={toolSeen === blockToolCallCount} />)
@@ -556,7 +557,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
       const isCompactingNotice = !isAssistant && /^Compacting context /.test(message.content)
       elements.push(
         isAssistant
-          ? <TextBlock key="txt" text={message.content} />
+          ? <TextBlock key="txt" text={message.content} streaming={message.streaming} />
           : isCompactingNotice
             ? <span key="txt" className="inline-flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
                 <Loader2 className="h-3 w-3 animate-spin shrink-0" />
@@ -724,7 +725,19 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
   )
 }
 
-function TextBlock({ text }: { text: string }) {
+function ChatPre({ children }: { children?: React.ReactNode }) { return <pre className="overflow-x-auto">{children}</pre> }
+
+/** Settled-message `pre`: a ```mermaid block becomes a diagram. Module-level
+ *  (not inline in `components`) so its identity is stable — react-markdown uses
+ *  it as the element type, and the memoized ExchangeRow still re-renders an
+ *  already-settled message while a sibling in the same exchange streams. */
+function ChatPreMermaid({ node, children }: React.ComponentProps<'pre'> & ExtraProps) {
+  const source = mermaidSource(node)
+  if (source === null) return <ChatPre>{children}</ChatPre>
+  return <MermaidBlock source={source} fallback={<ChatPre>{children}</ChatPre>} />
+}
+
+function TextBlock({ text, streaming }: { text: string; streaming?: boolean }) {
   const { text: parsed, media } = useMemo(() => parseMediaMarkers(text), [text])
   // Hide the LLM's control markers, never meant for the user to read:
   //  • <<<CAPTURE>>> / <<<CAPTURE:screen|camera>>> — request a live frame
@@ -753,7 +766,9 @@ function TextBlock({ text }: { text: string }) {
             img({ src, alt, node: _node, ...props }) {
               return <SafeImage src={src} alt={alt ?? ''} {...props} placeholderClassName="my-2 aspect-[4/3] w-full max-w-sm" />
             },
-            pre({ children }) { return <pre className="overflow-x-auto">{children}</pre> },
+            // While the reply streams a mermaid block stays plain code (half a
+            // diagram is a parse error); it's drawn once the message settles.
+            pre: streaming ? ChatPre : ChatPreMermaid,
             code({ className, children, node: _node, ...props }) {
               const isBlock = className?.startsWith('language-') || String(children).includes('\n')
               if (isBlock) return <ChatCodeBlock className={className}>{children}</ChatCodeBlock>

@@ -81,7 +81,7 @@ Monaco, multi-tab:
 - **Tab persistence**: stored in localStorage, survives refreshes
 
 Special-file previews:
-- Markdown: Preview toggle in the top-right
+- Markdown: Preview toggle in the top-right; ` ```mermaid ` blocks show as diagrams (a block with a syntax error shows its source plus an error line)
 - PDF / DOCX / XLSX: rendered in-browser
 - Images / video / audio: native players
 
