@@ -84,6 +84,19 @@ function subscribePathExpanded(path: string, fn: (expanded: boolean) => void): (
   }
 }
 
+/** Collapse every folder at once (Explorer header "Collapse All"). */
+export function collapseAllPaths(): void {
+  const paths = getExpandedPaths()
+  if (paths.size === 0) return
+  const was = [...paths]
+  paths.clear()
+  persistExpanded()
+  for (const p of was) {
+    const subs = subscribers.get(p)
+    if (subs) for (const fn of subs) fn(false)
+  }
+}
+
 export function isPathExpanded(path: string): boolean {
   return getExpandedPaths().has(path)
 }
@@ -526,6 +539,10 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
   const isModified = modifiedPaths.has(node.path)
   const isActive = activeTab === node.path
   const isSelected = selectedPaths?.has(node.path) ?? false
+  // The open tab's highlight only stands in when nothing is selected: after a
+  // right-click elsewhere it outshone the new selection, so the old file still
+  // looked like the one the menu acts on.
+  const showActive = isActive && !selectedPaths?.size
   const { Icon: FileIcon, color: fileColor } = getFileIcon(node.path)
 
   // Git status decoration: leaf files get a colored name + letter badge;
@@ -720,10 +737,11 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         className={cn(
-          'flex w-full items-center gap-1 py-1 text-left text-xs transition-colors hover:bg-[var(--secondary)]',
+          'flex w-full items-center gap-1 py-1 text-left text-xs transition-colors',
           isSelected && 'bg-[var(--primary)]/20 text-[var(--foreground)]',
-          !isSelected && isActive && 'bg-[var(--accent)] text-[var(--accent-foreground)]',
-          !isSelected && !isActive && 'text-[var(--foreground)]',
+          !isSelected && 'hover:bg-[var(--secondary)]',
+          !isSelected && showActive && 'bg-[var(--accent)] text-[var(--accent-foreground)]',
+          !isSelected && !showActive && 'text-[var(--foreground)]',
           dragOver && isDir && 'bg-[var(--accent)] ring-1 ring-[var(--primary)]',
         )}
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
