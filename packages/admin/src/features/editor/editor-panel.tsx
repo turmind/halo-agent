@@ -154,7 +154,11 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   // root for scroll-into-view.
   const treeContainerRef = useRef<HTMLDivElement>(null)
 
-  const { tree, loading } = useFileTree(projectId)
+  // Only the panel that renders the tree loads it (C1): the main Explorer's
+  // editor-only panel shares the default store with the tree-only one beside
+  // it, and both fetching meant two root listings per mount and per reconnect.
+  // Skills / Agents mount `full` panels on their own scoped store — they still own theirs.
+  const { tree, loading } = useFileTree(mode === 'editor-only' ? null : projectId)
   const [tabsRestored, setTabsRestored] = useState(false)
   const prevProjectRef = useRef<string | null>(null)
 

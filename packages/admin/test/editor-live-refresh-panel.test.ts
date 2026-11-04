@@ -78,9 +78,14 @@ async function setup() {
     const root = createRoot(container)
     roots.push(root)
     act(() => root.render(createElement(EditorPanel, { projectId: PROJECT, mode })))
-    await act(async () => {
-      await vi.waitFor(() => expect(useEditorStore.getState().fileTree).toBeTruthy())
-    })
+    // Only tree-only lists the tree; editor-only has nothing to wait for but its first effects.
+    if (mode === 'tree-only') {
+      await act(async () => {
+        await vi.waitFor(() => expect(useEditorStore.getState().fileTree).toBeTruthy())
+      })
+    } else {
+      await settle()
+    }
     return container
   }
   const statsOf = (p: string) => stat.mock.calls.filter(([q]) => q === p).length
@@ -154,6 +159,14 @@ describe('file:changed listener', () => {
       await vi.waitFor(() => expect(store.getState().buffers['a.txt'].content).toBe('newer'))
     })
     expect(statsOf('a.txt') - mid).toBe(1)
+  })
+
+  it('editor-only panel does not list the tree — the tree-only panel beside it owns that', async () => {
+    const { api, mount } = await setup()
+    await mount('editor-only')
+    expect(api.files.tree).not.toHaveBeenCalled()
+    await mount('tree-only')
+    expect(api.files.tree).toHaveBeenCalledTimes(1)
   })
 })
 

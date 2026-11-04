@@ -377,8 +377,10 @@ describe('EditorPanel routing while the extension list is in flight', () => {
     // Sync act commits the mount (async act only flushes on exit); the tree
     // load then settles inside act, so its state updates don't warn.
     act(() => mounted.render(createElement(EditorPanel, { projectId: PROJECT, mode })))
+    // Only tree-only lists the tree; editor-only just needs its first effects flushed.
     await act(async () => {
-      await vi.waitFor(() => expect(useEditorStore.getState().fileTree).toBeTruthy())
+      if (mode === 'tree-only') await vi.waitFor(() => expect(useEditorStore.getState().fileTree).toBeTruthy())
+      else await new Promise((r) => setTimeout(r, 0))
     })
     return { respond, stat, read, registry, useEditorStore, buffers: () => useEditorStore.getState().buffers }
   }
