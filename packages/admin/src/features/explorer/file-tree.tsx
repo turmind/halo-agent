@@ -403,13 +403,25 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
   // Unmount (parent collapsed / root replaced / node deleted): drop the request.
   useEffect(() => abortLoad, [abortLoad])
 
-  // A failed listing retries on WS reconnect — the usual end of the outage that
-  // failed it. Subscribed only while failed, so any `_connected` from here on is
-  // a reconnect (onWsReconnect's first-connect gate would swallow it when the
-  // failure happened while the socket was already down).
+  // WS reconnect — the usual end of the outage behind a failed or stuck listing:
+  // - error: retry. Subscribed only while failed, so any `_connected` from here
+  //   on is a reconnect (onWsReconnect's first-connect gate would swallow it
+  //   when the failure happened while the socket was already down).
+  // - loading: the request may sit on the dead connection until its 20s
+  //   deadline, again per backoff retry (measured: back online 69s, folder 77s
+  //   after the drop) — abort it and re-send now. The superseded attempt finds
+  //   loadAbortRef moved on, so it neither shows the error row nor schedules a
+  //   retry. A listing started before the socket ever opened is skipped for
+  //   that first connect: the page's initial connect proves no outage.
+  // retryLoad resets the backoff in both: failures before the reconnect were
+  // the outage's, not the folder's.
   useEffect(() => {
-    if (loadState !== 'error') return
-    return wsClient.on('_connected', retryLoad)
+    if (loadState === 'idle') return
+    let skipInitialConnect = loadState === 'loading' && wsClient.lastReceiveAgeMs === Infinity
+    return wsClient.on('_connected', () => {
+      if (skipInitialConnect) { skipInitialConnect = false; return }
+      retryLoad()
+    })
   }, [loadState, retryLoad])
 
   const modifiedPaths = useEditorStore((s) => s.modifiedPaths)
