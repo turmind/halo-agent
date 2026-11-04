@@ -12,6 +12,7 @@ import {
   Eye,
   Pencil,
   GitCompareArrows,
+  Lock,
 } from 'lucide-react'
 import { getFileIcon } from '@/shared/file-icons'
 import { useT } from '@/shared/i18n'
@@ -22,11 +23,11 @@ function getTabLabels(tabs: EditorTab[]): Map<string, string> {
   const labels = new Map<string, string>()
   const nameCount = new Map<string, number>()
   for (const tab of tabs) {
-    const name = tab.path.split('/').pop() ?? tab.path
+    const name = tab.path.split(/[\\/]/).pop() ?? tab.path
     nameCount.set(name, (nameCount.get(name) ?? 0) + 1)
   }
   for (const tab of tabs) {
-    const parts = tab.path.split('/')
+    const parts = tab.path.split(/[\\/]/)
     const name = parts.pop() ?? tab.path
     if ((nameCount.get(name) ?? 0) > 1 && parts.length > 0) {
       labels.set(tab.path, `${parts[parts.length - 1]}/${name}`)
@@ -316,9 +317,10 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
               {showDropRight && <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-[var(--primary)]" />}
 
               <Icon className={cn('h-3.5 w-3.5 shrink-0', color)} />
-              <span className="max-w-40 truncate">
+              <span className="max-w-40 truncate" title={tab.readOnly ? `${tab.path} · ${t('pathLink.readOnly')}` : undefined}>
                 {labels.get(tab.path) ?? tab.path.split('/').pop()}
               </span>
+              {tab.readOnly && <Lock className="h-3 w-3 shrink-0 opacity-60" aria-label={t('pathLink.readOnly')} />}
               {tab.path === pinnedTab ? null : tab.modified ? (
                 <Circle className="h-2 w-2 fill-amber-400 text-amber-400 shrink-0" />
               ) : (

@@ -5,6 +5,7 @@ import Editor, { type OnMount } from '@monaco-editor/react'
 import './monaco-loader'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { useTheme, monacoThemeFor, defineMonacoThemes } from '@/shared/theme'
+import { useT } from '@/shared/i18n'
 
 interface CodeEditorProps {
   path: string
@@ -13,12 +14,37 @@ interface CodeEditorProps {
   onChange?: (value: string) => void
   onSave?: () => void
   onClose?: () => void
+  readOnly?: boolean
+  /** Scroll here and place the cursor (chat path link `a.ts:12`), then `onRevealed`. */
+  reveal?: { line: number; column?: number } | null
+  onRevealed?: () => void
 }
 
-export function CodeEditor({ path, content, language, onChange, onSave, onClose }: CodeEditorProps) {
+export function CodeEditor({ path, content, language, onChange, onSave, onClose, readOnly, reveal, onRevealed }: CodeEditorProps) {
+  const t = useT()
   const useEditorStore = useScopedEditorStore()
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null)
   const { theme } = useTheme()
+
+  // Runs after Monaco's own path effect (a child), so the model is already the
+  // new file's. layout() first: the editor may have just been un-hidden.
+  const revealRef = useRef(reveal)
+  const onRevealedRef = useRef(onRevealed)
+  const applyReveal = useCallback(() => {
+    const editor = editorRef.current
+    const r = revealRef.current
+    if (!editor || !r) return
+    editor.layout()
+    editor.revealLineInCenter(r.line)
+    editor.setPosition({ lineNumber: r.line, column: r.column ?? 1 })
+    editor.focus()
+    onRevealedRef.current?.()
+  }, [])
+  useEffect(() => {
+    revealRef.current = reveal
+    onRevealedRef.current = onRevealed
+    applyReveal()
+  }, [reveal, onRevealed, path, applyReveal])
 
   // The editor instance persists across tab switches (models swap via the
   // `path` prop), but Monaco actions register once at mount — route them
@@ -40,18 +66,25 @@ export function CodeEditor({ path, content, language, onChange, onSave, onClose 
     }
   }, [path])
 
+  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null)
   const handleChange = useCallback(
     (value: string | undefined) => {
+      // Leaving a read-only tab, @monaco-editor/react loads the next file with
+      // setValue (it fires onChange) while the previous tab's handler is still
+      // subscribed — a change on another file's model isn't this tab's edit.
+      const model = editorRef.current?.getModel()
+      if (model && monacoRef.current && model.uri.toString() !== monacoRef.current.Uri.parse(path).toString()) return
       if (value !== undefined && onChange) {
         onChange(value)
       }
     },
-    [onChange],
+    [onChange, path],
   )
 
   const handleMount: OnMount = useCallback(
     (editor, monaco) => {
       editorRef.current = editor
+      monacoRef.current = monaco
 
       // With `keepCurrentModel`, a remounting editor can pick up a model kept
       // from a previous mount whose content went stale while no editor was
@@ -99,8 +132,10 @@ export function CodeEditor({ path, content, language, onChange, onSave, onClose 
           onCloseRef.current?.()
         },
       })
+
+      applyReveal()
     },
-    [],
+    [applyReveal],
   )
 
   return (
@@ -137,6 +172,8 @@ export function CodeEditor({ path, content, language, onChange, onSave, onClose 
         padding: { top: 12, bottom: 12 },
         bracketPairColorization: { enabled: true },
         automaticLayout: true,
+        readOnly: !!readOnly,
+        readOnlyMessage: { value: t('pathLink.readOnly') },
         overviewRulerLanes: 0,
         hideCursorInOverviewRuler: true,
         overviewRulerBorder: false,

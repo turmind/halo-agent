@@ -887,6 +887,11 @@ export const zh: Record<string, string> = {
   'capture.screenshotHint': '拖拽框选区域 · Enter 确认 · Esc 取消',
   'capture.screenshotConfirm': '确认（Enter）',
   'capture.screenshotCancel': '取消（Esc）',
+  // ── 聊天里的路径链接 ──
+  'pathLink.missing': '文件不存在',
+  'pathLink.tooLarge': '文件太大，无法打开（上限 10MB）',
+  'pathLink.outside': '不在当前工作区',
+  'pathLink.readOnly': '只读 — 不在当前工作区',
   // ── AI 的面孔（self.html）──
   'face.button': '显示 AI 的面孔',
   'face.on': '面孔已打开（AI 知道它开着）— 点击关闭',

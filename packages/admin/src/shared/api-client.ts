@@ -73,6 +73,12 @@ export const api = {
         `/fs/stat?path=${encodeURIComponent(path)}`,
       )
     },
+    /** Absolute-path file content as utf-8 text (`/fs/raw`) — files outside the workspace. */
+    async readText(path: string): Promise<string> {
+      const res = await fetch(`${API_BASE}/fs/raw?path=${encodeURIComponent(path)}`)
+      if (!res.ok) throw new Error(`API error ${res.status}`)
+      return res.text()
+    },
     resolveWorkspace(path: string) {
       return request<{ id: string; path: string }>('/fs/workspace/resolve', {
         method: 'POST',

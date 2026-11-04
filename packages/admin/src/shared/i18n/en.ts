@@ -887,6 +887,11 @@ export const en: Record<string, string> = {
   'capture.screenshotHint': 'Drag to select a region · Enter to confirm · Esc to cancel',
   'capture.screenshotConfirm': 'Confirm (Enter)',
   'capture.screenshotCancel': 'Cancel (Esc)',
+  // ── Chat path links ──
+  'pathLink.missing': 'File not found',
+  'pathLink.tooLarge': 'File too large to open (max 10MB)',
+  'pathLink.outside': 'Not in the current workspace',
+  'pathLink.readOnly': 'Read-only — outside the current workspace',
   // ── The assistant's face (self.html) ──
   'face.button': "Show the assistant's face",
   'face.on': "Face on (the assistant can see it's open) — click to close",

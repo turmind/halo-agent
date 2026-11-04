@@ -353,11 +353,13 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
       if (!detail?.tab) return
-      // When bottom panel is floating, Chat is already globally visible — skip the auto-jump to explorer
+      // When bottom panel is floating, Chat is already globally visible — skip the auto-jump to explorer.
+      // `force`: the canvas itself must show (chat path link opened a file).
       const { bottomFloating } = useEditorStore.getState()
-      if (bottomFloating && detail.tab === 'explorer') return
+      if (bottomFloating && detail.tab === 'explorer' && !detail.force) return
       setActiveTab(detail.tab as SidebarTab)
-      setSidebarOpen(true)
+      // `sidebar: false` (path link opened a file) leaves a closed sidebar closed.
+      if (detail.sidebar !== false) setSidebarOpen(true)
     }
     window.addEventListener('halo:navigate', handler)
     return () => window.removeEventListener('halo:navigate', handler)

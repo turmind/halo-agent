@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo, useRef, useEffect, useLayoutEffect, memo } from 'react'
-import ReactMarkdown, { type ExtraProps } from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage, ToolCallInfo, ContentBlock } from '@/shared/types'
 import { inferMessageType } from '@/shared/types'
@@ -18,6 +18,7 @@ import { wsClient } from '@/shared/ws-client'
 import { useT } from '@/shared/i18n'
 import { CAPTURE_MARKER } from '@/features/chat/web-capture'
 import { useStickToBottom } from '@/shared/stick-to-bottom'
+import { openPath, parsePathRef, type PathRef } from '@/shared/path-link'
 import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2, AlertTriangle } from 'lucide-react'
 
 /**
@@ -737,6 +738,50 @@ function ChatPreMermaid({ node, children }: React.ComponentProps<'pre'> & ExtraP
   return <MermaidBlock source={source} fallback={<ChatPre>{children}</ChatPre>} />
 }
 
+/** Markdown link target that is a path (`[x](C:\\a\\b.ts)`) passes as written —
+ *  the default transform would drop a drive letter as an unknown protocol. */
+function chatUrlTransform(url: string): string {
+  return parsePathRef(url) ? url : defaultUrlTransform(url)
+}
+
+function hrefPathRef(href: string | undefined): PathRef | null {
+  if (!href) return null
+  let decoded = href
+  try { decoded = decodeURIComponent(href) } catch { /* keep raw */ }
+  return parsePathRef(decoded)
+}
+
+/** Inline code / link that looks like a path (shared/path-link): a click opens
+ *  it in the canvas; a miss shows a one-line hint above it for a moment.
+ *  Module-level so react-markdown keeps its identity across streaming renders. */
+function PathLink({ pathRef, href, className, children }: { pathRef: PathRef; href?: string; className?: string; children?: React.ReactNode }) {
+  const t = useT()
+  const [hint, setHint] = useState<string | null>(null)
+  useEffect(() => {
+    if (!hint) return
+    const timer = setTimeout(() => setHint(null), 2500)
+    return () => clearTimeout(timer)
+  }, [hint])
+  const onClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    void openPath(pathRef).then((r) => { if (r !== 'ok') setHint(t(`pathLink.${r}`)) })
+  }
+  const cls = cn(className, 'cursor-pointer underline-offset-2 hover:underline')
+  return (
+    <span className="relative">
+      {href !== undefined
+        ? <a href={href} onClick={onClick} className={cls}>{children}</a>
+        : <code onClick={onClick} className={cls}>{children}</code>}
+      {hint && (
+        <span role="status" className="absolute bottom-full left-0 z-10 mb-1 whitespace-nowrap rounded border border-[var(--border)] bg-[var(--card)] px-2 py-0.5 text-[11px] font-normal text-[var(--muted-foreground)] shadow">
+          {hint}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function TextBlock({ text, streaming }: { text: string; streaming?: boolean }) {
   const { text: parsed, media } = useMemo(() => parseMediaMarkers(text), [text])
   // Hide the LLM's control markers, never meant for the user to read:
@@ -755,12 +800,16 @@ function TextBlock({ text, streaming }: { text: string; streaming?: boolean }) {
       {stripped && (
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          urlTransform={chatUrlTransform}
           components={{
             // Open links in a new tab — default same-tab navigation leaves the
             // admin (and in Electron used to navigate the whole app window).
+            // A link to a path opens it in the canvas instead.
             // `node` (hast element, from react-markdown's passNode) is pulled
             // out so the spread doesn't leak it onto the DOM element.
             a({ href, children, node: _node, ...props }) {
+              const ref = hrefPathRef(href)
+              if (ref) return <PathLink pathRef={ref} href={href} className={props.className}>{children}</PathLink>
               return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
             },
             img({ src, alt, node: _node, ...props }) {
@@ -772,6 +821,8 @@ function TextBlock({ text, streaming }: { text: string; streaming?: boolean }) {
             code({ className, children, node: _node, ...props }) {
               const isBlock = className?.startsWith('language-') || String(children).includes('\n')
               if (isBlock) return <ChatCodeBlock className={className}>{children}</ChatCodeBlock>
+              const ref = typeof children === 'string' ? parsePathRef(children) : null
+              if (ref) return <PathLink pathRef={ref} className={className}>{children}</PathLink>
               return <code className={className} {...props}>{children}</code>
             },
           }}

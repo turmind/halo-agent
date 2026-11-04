@@ -18,13 +18,14 @@ export function isContentChange(action: string): boolean {
  * - `preview`: a built-in preview. Stat it, then bump the buffer mtime
  *   (FilePreview remounts on that).
  * - `none`: a dirty text tab (edits win), the pinned face (a reload resets
- *   it), or a bundle directory with no host mounted.
+ *   it), a read-only tab from outside the workspace (the files API can't
+ *   reach it), or a bundle directory with no host mounted.
  */
 export function tabRefresh(
-  buf: Pick<EditorBuffer, 'preview' | 'modified'> | undefined,
+  buf: Pick<EditorBuffer, 'preview' | 'modified' | 'readOnly'> | undefined,
   opts: { pinned: boolean; hasHost: boolean },
 ): 'none' | 'host' | 'text' | 'preview' {
-  if (!buf || opts.pinned) return 'none'
+  if (!buf || opts.pinned || buf.readOnly) return 'none'
   if (!buf.preview) return buf.modified ? 'none' : 'text'
   if (opts.hasHost) return 'host'
   return buf.preview.bundle ? 'none' : 'preview'

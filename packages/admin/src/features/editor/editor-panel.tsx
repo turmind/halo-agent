@@ -23,6 +23,7 @@ import { wsClient } from '@/shared/ws-client'
 import { onWsReconnect } from '@/shared/ws-reconnect'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { getLanguageFromPath, cn, confirmAction, formatFileSize } from '@/shared/utils'
+import { homeDir, resolvePathRef, setPathOpener } from '@/shared/path-link'
 import {
   Code2,
   X,
@@ -372,10 +373,12 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   // Persist groups (multi-pane tab layout) to localStorage. Older saves
   // used `{ tabs, activeTab }`; restore() understands both shapes.
   // The pinned face tab is left out: the face toggle (face-store) restores it.
+  // So are read-only tabs from outside the workspace: restore reads through
+  // the workspace-only files API, where they'd only 403.
   useEffect(() => {
     if (!projectId || !tabsRestored) return
     const persistedGroups = groups.map((g) => ({
-      tabs: g.tabs.filter((p) => p !== pinnedTab).map((p) => {
+      tabs: g.tabs.filter((p) => p !== pinnedTab && !buffers[p]?.readOnly).map((p) => {
         const buf = buffers[p]
         return { path: p, isPreview: !!buf?.preview, ...(buf?.preview?.bundle ? { bundle: true } : {}), language: buf?.language }
       }),
@@ -592,7 +595,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       const savePath = path ?? activeTab
       if (!savePath || !projectId) return
       const tab = useEditorStore.getState().tabs.find((t) => t.path === savePath)
-      if (!tab || !tab.modified) return
+      if (!tab || !tab.modified || tab.readOnly) return
       // A bundle tab's "modified" is its extension's busy flag — nothing to save.
       if (tab.preview?.bundle) return
       // Extension preview tabs keep their content inside the iframe; the host
@@ -904,6 +907,87 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     },
     [projectId, pendingEdit, useEditorStore, handleFileSelect, closeBusyBundleTabs],
   )
+
+  // Chat path links (shared/path-link). The main Explorer's tree panel is the
+  // opener: it owns the tree a folder is located in, and its store is the
+  // canvas. Existence is one /fs/stat per click — it also tells file from dir.
+  useEffect(() => {
+    if (mode !== 'tree-only' || !projectId || !workspaceRoot) return
+    const showCanvas = (sidebar: boolean) => {
+      useGlobalEditorStore.getState().setBottomMaximized(false)
+      window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer', force: true, sidebar } }))
+    }
+    // Expand down to `rel`, select it, scroll it in. Rows mount as each
+    // ancestor's lazy listing lands, so the scroll waits (bounded) for its row.
+    const locate = (rel: string) => {
+      const parts = rel.split('/')
+      for (let i = 1; i <= parts.length; i++) setPathExpanded(parts.slice(0, i).join('/'), true)
+      handleSelectionChange(new Set([rel]), rel)
+      let tries = 0
+      const tick = () => {
+        const row = treeContainerRef.current?.querySelector<HTMLElement>(`button[data-path="${CSS.escape(rel)}"]`)
+        if (row) row.scrollIntoView({ block: 'nearest' })
+        else if (++tries < 50) setTimeout(tick, 100)
+      }
+      tick()
+    }
+    return setPathOpener(async (ref) => {
+      const target = resolvePathRef(ref.path, workspaceRoot, ref.path.startsWith('~') ? await homeDir() : null)
+      if (!target) return 'missing'
+      let stat: Awaited<ReturnType<typeof api.fs.stat>>
+      try {
+        stat = await api.fs.stat(target.kind === 'workspace' ? target.abs : target.path)
+      } catch { return 'missing' }
+      const store = useEditorStore.getState()
+
+      if (target.kind === 'workspace') {
+        const rel = target.path
+        if (stat.isDirectory && !(rel && isBundleName(baseName(rel)))) {
+          showCanvas(true)
+          if (rel) locate(rel)
+          return 'ok'
+        }
+        await handleFileSelect(rel, stat.isDirectory ? { bundle: true } : undefined)
+        const buf = useEditorStore.getState().buffers[rel]
+        if (!buf) return 'missing'
+        if (ref.line && !buf.preview) store.requestReveal(rel, ref.line, ref.column)
+        showCanvas(false)
+        return 'ok'
+      }
+
+      // Outside the workspace: a read-only tab keyed by the server-normalized
+      // absolute path — viewed through /fs/*, never saved or live-refreshed.
+      if (stat.isDirectory) return 'outside'
+      const abs = stat.path
+      if (!store.buffers[abs]) {
+        if (await isBinaryExtension(abs.split('.').pop()?.toLowerCase() ?? '')) {
+          const { downloadUrl, viewUrl } = previewMeta(abs, projectId, false)
+          store.openPreview(abs, downloadUrl, viewUrl, { size: stat.size, mtime: stat.modifiedAt, readOnly: true })
+        } else {
+          // Same cap as GET /files.
+          if (stat.size > 10 * 1024 * 1024) return 'tooLarge'
+          let content: string
+          try { content = await api.fs.readText(abs) } catch { return 'missing' }
+          store.openFile(abs, content, getLanguageFromPath(abs), stat.modifiedAt, { size: stat.size, readOnly: true })
+        }
+      } else store.setActiveTab(abs)
+      if (ref.line && !useEditorStore.getState().buffers[abs]?.preview) store.requestReveal(abs, ref.line, ref.column)
+      showCanvas(false)
+      return 'ok'
+    })
+  }, [mode, projectId, workspaceRoot, useEditorStore, handleFileSelect, handleSelectionChange])
+
+  // A line reveal (chat `a.md:12`) needs the source view: flip a pane showing
+  // that md / html file out of rendered mode — CodeEditor only reveals visible.
+  const pendingReveal = useEditorStore((s) => s.pendingReveal)
+  useEffect(() => {
+    if (!pendingReveal) return
+    const lang = buffers[pendingReveal.path]?.language
+    if (lang !== 'markdown' && lang !== 'html') return
+    const ids = groups.filter((g) => g.activeTab === pendingReveal.path).map((g) => g.id)
+    setRenderModeByGroup((prev) => ids.every((id) => prev[id] === false) ? prev : { ...prev, ...Object.fromEntries(ids.map((id) => [id, false])) })
+  }, [pendingReveal, groups, buffers])
+  const clearReveal = useCallback(() => useEditorStore.getState().clearReveal(), [useEditorStore])
 
   // ── File-tree keyboard navigation (VSCode-style) ────────────────────
   // Window-level listener gated to *this instance's* tree container via ref
@@ -1333,6 +1417,9 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                                   onChange={(value) => handleContentChange(paneFile.path, value)}
                                   onSave={() => handleSave(paneFile.path)}
                                   onClose={() => handleCloseTabInGroup(gi, paneFile.path)}
+                                  readOnly={paneFile.readOnly}
+                                  reveal={!mdPreview && !htmlPreview && pendingReveal?.path === paneFile.path ? pendingReveal : null}
+                                  onRevealed={clearReveal}
                                 />
                               </div>
                             </>

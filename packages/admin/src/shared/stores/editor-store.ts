@@ -43,6 +43,8 @@ export interface EditorBuffer {
   size?: number
   /** `bundle` = the path is a bundle DIRECTORY opened by a bundle extension. */
   preview?: { downloadUrl: string; viewUrl: string; tooLarge?: boolean; bundle?: boolean }
+  /** A file outside the workspace (chat path link): viewable, never saved — `PUT /files` is workspace-only. */
+  readOnly?: boolean
 }
 
 /** Legacy alias kept for selectors that read `s.tabs`. Same shape as
@@ -134,6 +136,10 @@ interface EditorStore {
   bottomFloatRect: { x: number; y: number; w: number; h: number }
   setBottomFloating(value: boolean): void
   setBottomMaximized(value: boolean): void
+  /** Line a chat path link (`a.ts:12`) asked for; the CodeEditor showing `path` scrolls there, then clears it. */
+  pendingReveal: { path: string; line: number; column?: number } | null
+  requestReveal(path: string, line: number, column?: number): void
+  clearReveal(): void
   setBottomSplit(value: boolean): void
   setBottomFloatRect(rect: { x: number; y: number; w: number; h: number }): void
   selectedText: string | null
@@ -143,8 +149,8 @@ interface EditorStore {
   setContextEnabled(enabled: boolean): void
 
   // ── File ops (default to active group) ────────────────────────────
-  openFile(path: string, content: string, language: string, mtime?: number, meta?: { size?: number; createdAt?: number }): void
-  openPreview(path: string, downloadUrl: string, viewUrl: string, meta?: { size?: number; mtime?: number; createdAt?: number; tooLarge?: boolean; bundle?: boolean }): void
+  openFile(path: string, content: string, language: string, mtime?: number, meta?: { size?: number; createdAt?: number; readOnly?: boolean }): void
+  openPreview(path: string, downloadUrl: string, viewUrl: string, meta?: { size?: number; mtime?: number; createdAt?: number; tooLarge?: boolean; bundle?: boolean; readOnly?: boolean }): void
   /** Close `path` in every group it appears in, then drop the buffer if no
    *  group still references it. Used by destructive flows (rename, delete)
    *  where the path is gone from disk and shouldn't linger anywhere. */
@@ -289,6 +295,7 @@ export function createEditorStore() {
       maximized: typeof window !== 'undefined' && localStorage.getItem('halo_editor_maximized') === 'true',
       bottomFloating: typeof window !== 'undefined' && sessionStorage.getItem('halo_bottom_floating') === 'true',
       bottomMaximized: false,
+      pendingReveal: null,
       bottomSplit: typeof window !== 'undefined' && localStorage.getItem('halo_bottom_split') === 'true',
       bottomFloatRect: (() => {
         if (typeof window === 'undefined') return { x: 0, y: 0, w: 480, h: 640 }
@@ -323,7 +330,7 @@ export function createEditorStore() {
         if (path === get().pinnedTab) { get().setActiveTab(path); return }
         set((state) => {
           const { buffers, groups } = showInGroup(state, state.activeGroupIdx, path,
-            () => ({ path, content, originalContent: content, language, mtime, size: meta?.size, createdAt: meta?.createdAt }))
+            () => ({ path, content, originalContent: content, language, mtime, size: meta?.size, createdAt: meta?.createdAt, ...(meta?.readOnly ? { readOnly: true } : {}) }))
           const next = { ...state, buffers, groups }
           return { buffers, groups, ...deriveActiveView(next) }
         })
@@ -333,7 +340,7 @@ export function createEditorStore() {
         if (path === get().pinnedTab) { get().setActiveTab(path); return }
         set((state) => {
           const { buffers, groups } = showInGroup(state, state.activeGroupIdx, path,
-            () => ({ path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl, tooLarge: meta?.tooLarge, ...(meta?.bundle ? { bundle: true } : {}) }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt }))
+            () => ({ path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl, tooLarge: meta?.tooLarge, ...(meta?.bundle ? { bundle: true } : {}) }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt, ...(meta?.readOnly ? { readOnly: true } : {}) }))
           const next = { ...state, buffers, groups }
           return { buffers, groups, ...deriveActiveView(next) }
         })
@@ -662,6 +669,14 @@ export function createEditorStore() {
 
       setBottomMaximized(value) {
         set({ bottomMaximized: value })
+      },
+
+      requestReveal(path, line, column) {
+        set({ pendingReveal: { path, line, column } })
+      },
+
+      clearReveal() {
+        if (get().pendingReveal) set({ pendingReveal: null })
       },
 
       setBottomSplit(value) {
