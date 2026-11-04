@@ -4,13 +4,14 @@ import { useState, useRef, useEffect } from 'react'
 import { EditorPanel } from '@/features/editor/editor-panel'
 import { isBundleName } from '@/features/editor/previews/FilePreview'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
+import { collapseAllPaths } from '@/features/explorer/file-tree'
 import { FolderPicker } from '@/features/explorer/folder-picker'
 import { useRecentWorkspaces } from '@/features/explorer/use-recent-workspaces'
 import { useChatStore } from '@/features/chat/chat-store'
 import { api } from '@/shared/api-client'
 import { useScopedEditorStore } from '@/shared/stores/editor-store'
 import { cn, promptInput } from '@/shared/utils'
-import { FolderTree, FolderOpen, RefreshCw, FilePlus, FolderPlus, Upload, FolderSearch, History, X } from 'lucide-react'
+import { FolderTree, FolderOpen, RefreshCw, CopyMinus, FilePlus, FolderPlus, Upload, FolderSearch, History, X } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
 interface ExplorerSidebarProps {
@@ -123,6 +124,15 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
             className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] transition-colors disabled:opacity-50"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+          </button>
+        )}
+        {projectId && (
+          <button
+            onClick={collapseAllPaths}
+            title="Collapse All"
+            className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] transition-colors"
+          >
+            <CopyMinus className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
