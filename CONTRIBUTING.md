@@ -49,7 +49,7 @@ pnpm --filter @turmind/halo-admin test
 
 Lint: `pnpm --filter @turmind/halo-server lint` (same for `halo-cli` and `halo-admin`).
 
-CI (`.github/workflows/ci.yml`) runs lint → typecheck build → all five test suites on every push; any red blocks merge. Before opening a PR, run the tests for the package you touched plus its `tsc` — the whole suite is 1100+ tests and takes about a minute per package, so you don't need all of it for a one-package change.
+CI (`.github/workflows/ci.yml`) runs lint → typecheck build → all five test suites on every push; it is a signal, not a merge gate (no branch protection), so treat a red run as yours to fix before merging. Before opening a PR, run the tests for the package you touched plus its `tsc` — the whole suite is 1100+ tests and takes about a minute per package, so you don't need all of it for a one-package change.
 
 ## Coding conventions
 
