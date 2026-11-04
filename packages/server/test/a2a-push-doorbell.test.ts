@@ -46,7 +46,7 @@ beforeEach(async () => {
       const port = (remote.address() as AddressInfo).port
       if (req.method === 'GET') {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ name: 'r', supportedInterfaces: [{ url: `http://127.0.0.1:${port}/rpc`, protocolBinding: 'JSONRPC', protocolVersion: '1.0' }] }))
+        res.end(JSON.stringify({ name: 'r', capabilities: { pushNotifications: true }, supportedInterfaces: [{ url: `http://127.0.0.1:${port}/rpc`, protocolBinding: 'JSONRPC', protocolVersion: '1.0' }] }))
         return
       }
       const j = JSON.parse(body) as { id: unknown; method: string }

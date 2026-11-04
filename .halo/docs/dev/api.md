@@ -408,9 +408,11 @@ Parts: `{ text }`, and images `{ raw: <base64>, mediaType, filename? }` / `{ url
 **`POST /a2a-push/:pushId`** (receiver): token in `X-A2A-Notification-Token` (or `Authorization: Bearer`), compared constant-time with the dispatch's; unknown id or wrong token → 404 `{error: "not found"}`. Body `{ task }` or `{ statusUpdate }` whose task id must belong to that dispatch (else 404 `{error: "unknown task"}`); invalid JSON → 400.
 
 The push is a doorbell: only the task id is read from the body. The receiver then runs its own authed GetTask on the remote, with a 10 s deadline:
-- **GetTask succeeds:** answers `{ ok: true }` and injects the fetched Task into the calling session asynchronously — the report when it is terminal, an interim when it is WORKING with a status message.
+- **GetTask succeeds:** answers `{ ok: true }` and injects the fetched Task into the calling session asynchronously — the report when it is terminal (`REJECTED` included), one waiting report on `INPUT_REQUIRED` / `AUTH_REQUIRED`, an interim when it is WORKING / SUBMITTED with a status message.
 - **GetTask fails** (network, timeout, HTTP or JSON-RPC error): answers **503** `{error: "task fetch failed, retry later"}` and delivers nothing, so the sender retries.
-- **Dispatch already reported:** answers `{ ok: true }` without a fetch.
+- **Dispatch already final:** answers `{ ok: true }` without a fetch (a dispatch waiting for input / auth still fetches).
+
+A remote that can't push (card without `capabilities.pushNotifications: true`, or `-32003` on SendMessage) never calls this endpoint: its dispatch is polled with GetTask instead ([design/a2a.md](../design/a2a.md#polling-remotes-that-cant-push)).
 
 ## Show (world snapshot)
 

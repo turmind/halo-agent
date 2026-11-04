@@ -449,7 +449,7 @@ Returns `{ "code": 0, "workspace": "<realpath>", "sessions": [{ id, agentId, age
 
 File: `packages/server/src/a2a/outbound.ts` (`buildA2ATools`). Design notes in [design/a2a.md](../design/a2a.md).
 
-Cross-**server** dispatch over A2A v1.0: the agent sends a message to a remote A2A agent (normally another halo server's exposed workspace) and the result is pushed back into this session when the remote is done, no polling. Remotes are configured once per server in `~/.halo/secrets/a2a-remotes.yaml` (no per-workspace file; `<ws>/.halo/a2a-remotes.yaml` is not read):
+Cross-**server** dispatch over A2A v1.0: the agent sends a message to a remote A2A agent (normally another halo server's exposed workspace) and the result is pushed back into this session when the remote is done, no polling by the agent (the server polls only a remote that can't push). Remotes are configured once per server in `~/.halo/secrets/a2a-remotes.yaml` (no per-workspace file; `<ws>/.halo/a2a-remotes.yaml` is not read):
 
 ```yaml
 remotes:
@@ -471,13 +471,16 @@ Errors are `{ "code": 1, "error": "…" }`; a remote JSON-RPC error reads `<Meth
 
 ### a2a_send
 
-Send a message to a remote. Omit `context_id` to start a new conversation; pass the `context_id` from an earlier call for a follow-up — a follow-up to a busy remote is queued and softly interrupts its current step, `interrupt: true` aborts that step instead. Sent as SendMessage with `returnImmediately: true` plus a per-dispatch webhook (a follow-up on a context with a pending dispatch reuses its webhook, so the report comes once). Returns immediately.
+Send a message to a remote. Omit `context_id` to start a new conversation; pass the `context_id` from an earlier call for a follow-up — a follow-up to a busy remote is queued and softly interrupts its current step, `interrupt: true` aborts that step instead. Pass `task_id` too to continue that task — the way to answer an `input-required` report. Sent as SendMessage with `returnImmediately: true` plus a per-dispatch webhook. A follow-up reuses the webhook of **this session's** pending dispatch on the context, so the report comes once; another session on the same context gets its own webhook and its own report. With `task_id`, the dispatch tracking that task is reopened and reports to the calling session. Returns immediately.
+
+A remote whose agent card doesn't declare `capabilities.pushNotifications: true`, or that answers `-32003` PushNotificationNotSupported (the message is then sent once more without the webhook), can't push: its task is polled with GetTask (5 s, doubling to every 60 s; given up as `failed` after 24 h, pointing at `a2a_read`). The agent sees the same reports either way.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
 | `remote` | string | yes | Remote name from `~/.halo/secrets/a2a-remotes.yaml` (see `a2a_list`) |
 | `message` | string | yes | The message to send |
 | `context_id` | string | no | Conversation to continue (from an earlier `a2a_send`); omit to start one |
+| `task_id` | string | no | Task to continue (sent as `message.taskId`), with its `context_id` — e.g. to answer an `input-required` report |
 | `interrupt` | boolean | no | Follow-up only: abort the remote's current step instead of waiting for it |
 | `files` | string[] | no | Absolute paths of images to attach |
 
@@ -495,7 +498,9 @@ Returns `{ "code": 0, "remote", "context_id", "task_id", "state": "working" | �
 [图片已保存: <path>]
 ```
 
-`status:` is `completed`, `failed` or `canceled`. The text is capped at `limits.autoReportMax` with a `[Report truncated: N chars total. Use a2a_read("<name>", "<T>") for the full text.]` marker. A failed task's body starts `[A2A REMOTE FAILED: the remote task did not complete. <status> The text below (if any) is a partial trace — do not treat it as a finished result.]`, a canceled one `[A2A REMOTE CANCELED: <status>]`. Images in the result are saved under `.halo/assets/a2a/inbound/<remote>/…` and listed **after** the cap as `[图片已保存: <path>]` (open with `view_image`); image URLs are listed as `[图片: <url>]` and not downloaded; anything else gets `[file not saved: <name> — <reason>]`.
+`status:` is `completed`, `failed`, `canceled` or `rejected` (final), or `input-required` / `auth-required` (the remote waits for us). The text is capped at `limits.autoReportMax` with a `[Report truncated: N chars total. Use a2a_read("<name>", "<T>") for the full text.]` marker. A failed task's body starts `[A2A REMOTE FAILED: the remote task did not complete. <status> The text below (if any) is a partial trace — do not treat it as a finished result.]`, a canceled one `[A2A REMOTE CANCELED: <status>]`, a rejected one `[A2A REMOTE REJECTED: <status>]`.
+
+A waiting report arrives once per wait and carries the remote's status message after an instruction line: `input-required` → `[A2A REMOTE INPUT REQUIRED: the remote is waiting for your reply — answer with a2a_send with context_id "<C>" and task_id "<T>". If you don't know the answer, ask the user.]`; `auth-required` → `[A2A REMOTE AUTH REQUIRED: the remote needs an authorization completed outside A2A — tell the user what it asks for. To reply to the remote, use a2a_send with context_id "<C>" and task_id "<T>".]`. After the answer the task's final report (or the next wait) follows as usual. Images in the result are saved under `.halo/assets/a2a/inbound/<remote>/…` and listed **after** the cap as `[图片已保存: <path>]` (open with `view_image`); image URLs are listed as `[图片: <url>]` and not downloaded; anything else gets `[file not saved: <name> — <reason>]`.
 
 **Interim report**: when the remote answers a follow-up and keeps working, the answer arrives first as
 
@@ -531,9 +536,9 @@ Returns `{ "code": 0, "task_id", "context_id", "state": "TASK_STATE_…", "statu
 
 ### a2a_list
 
-The remotes configured on this server (the same list in every workspace) — each with its card's agent name, description and skills (`{ id, name, description }`), or an `error` when the card can't be fetched — plus the dispatches this workspace is still waiting on (newest 50). No arguments.
+The remotes configured on this server (the same list in every workspace) — each with its card's agent name, description and skills (`{ id, name, description }`), or an `error` when the card can't be fetched — plus the dispatches this workspace is still waiting on (newest 50): running ones and ones waiting for our input / auth. No arguments.
 
-Returns `{ "code": 0, "remotes": [{ name, agent, description, skills }], "pending": [{ remote, context_id, task_id, since }] }`.
+Returns `{ "code": 0, "remotes": [{ name, agent, description, skills }], "pending": [{ remote, context_id, task_id, state: "working" | "input-required" | "auth-required", since }] }`.
 
 ## Node tools
 

@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS a2a_dispatches (
   remote_context_id TEXT,
   state             TEXT NOT NULL,
   last_interim      TEXT,
+  poll              INTEGER NOT NULL DEFAULT 0,
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL
 );
@@ -119,6 +120,9 @@ export const A2A_MIGRATIONS: Migration[] = [
     addColumnIfMissing(s, 'agentcore_invocations', 'result_files', 'TEXT')
     addColumnIfMissing(s, 'agentcore_invocations', 'superseded_by', 'TEXT')
   },
+  // v3: `a2a_dispatches.poll` — 1 = the remote can't push (card without
+  // capabilities.pushNotifications, or -32003): GetTask on a backoff instead.
+  (s) => addColumnIfMissing(s, 'a2a_dispatches', 'poll', 'INTEGER NOT NULL DEFAULT 0'),
 ]
 
 export function createA2ADb(globalDir: string): A2ADb {
