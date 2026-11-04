@@ -37,7 +37,10 @@ When agents or scripts write files, the canvas picks it up — push-based, no po
 With no session selected no `file:changed` arrives (the WS subscribes on session select), so only the tab-switch / focus / reconnect checks apply.
 
 ### Tab persistence
-Open tabs and the active tab live in localStorage; survive refresh.
+Open tabs and the active tab live in localStorage; survive refresh. Read-only tabs (below) are not restored.
+
+### Read-only tabs (files outside the workspace)
+A file outside the workspace opened from a chat path link ([chat.md](chat.md#message-rendering)) opens as a read-only tab: a lock icon and "Read-only — not in the current workspace" tooltip on the tab, Monaco read-only (typing shows the same message), never saved, no `file:changed` auto-refresh, not restored after a reload. Text is read via `/fs/stat` + `/fs/raw` (10 MB cap, same as `/files`); images and other previews load from `/files/download`'s absolute-path branch. "Open as text" on an outside binary preview isn't supported.
 
 ### Diff view
 - A tab with unsaved edits shows a **Diff** button in its pane's tab bar: last saved content vs. the current buffer, computed in the client (no git involved; `GET /api/git/diff` is the Source Control panel's)

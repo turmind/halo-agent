@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Chat: file paths in a reply (inline code or markdown links) are clickable and open in the canvas — workspace files like a click in the tree (with `:line` jumps), folders located in the tree, files outside the workspace as read-only tabs; Windows paths included.
+- Explorer: a Collapse All button next to Refresh folds every folder at once.
+- A2A: `a2a_send` now works with non-halo A2A v1.0 remotes. A remote asking for input or authorization (`INPUT_REQUIRED` / `AUTH_REQUIRED`) is reported once and answered with the new `task_id` parameter; `REJECTED` ends the task with a report; a remote without push notifications is polled (5 s backoff up to 60 s, 24 h limit, resumed after a restart).
+
+### Changed
+
+- Explorer: the "N selected" strip above the file tree is gone — the highlight already shows the selection.
+
+### Fixed
+
+- Explorer: after selecting or right-clicking another item, the previously open file no longer stays highlighted as if it were still the selection.
+- Desktop build: staging the Windows runtime no longer overwrites the shared pnpm store's Linux better-sqlite3 binary (later installs on the build machine failed with "invalid ELF header").
+- A2A: when another session in the same workspace follows up on a context that still has a pending dispatch, its report now comes back to that session instead of the one that started the context.
+- Models: the Bedrock Mantle template now lists GPT-6 Astra on us-east-1 as well as us-west-2, and the Mantle / bedrock-runtime OpenAI notes no longer claim reasoning summaries are never returned — they come back when requested (Halo doesn't request them yet).
+
 ## [2.1.2] - 2026-11-04
 
 ### Added

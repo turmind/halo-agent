@@ -46,6 +46,7 @@ Visual directory browser opened by the 📁🔍 button:
 - Hides only well-known noise: `.git`, `.DS_Store`, `node_modules`, `__pycache__`. Other dotfiles (`.gitignore`, `.env`, `.vscode/` etc.) are shown — modern IDE convention
 - No max depth limit
 - Expansion state lives in localStorage; restored on refresh and lazily reloaded
+- **Collapse All** (header button next to Refresh): folds every folder at once and clears the stored expansion state, so a reload doesn't reopen them
 - WebSocket `file:changed` events incrementally update loaded branches; unloaded branches are left alone (re-fetched on expand)
 - **Reconnect reconciliation**: because the tree is kept in sync purely by `file:changed` deltas, events missed while the socket was down (laptop lid, network drop) would leave it stale forever. On WS *re*connect (not first connect) the root level is silently refetched; expanded directories self-heal because their fresh nodes come back without children, which re-arms the lazy-load along the persisted expanded-paths spine
 - The root listing is fetched once, by the panel that renders the tree (the main Explorer's editor-only panel shares its store and doesn't fetch again)
@@ -58,6 +59,8 @@ VS Code-style highlight selection (no checkboxes):
 - **Bundle directory** (a folder whose suffix an installed bundle extension claims, e.g. `Standup.htrans/`, shown with a package icon): click, double-click or Enter **opens** it in its extension like a file; only the chevron expands it
 - **Ctrl/Cmd + click**: toggle multi-select
 - **Shift + click**: range select
+- **Highlight**: selected rows get the selection color. The open editor tab's row is tinted only while nothing is selected, so after selecting or right-clicking another item the highlight is on that item alone, never the previously open file
+- Right-click on an unselected item selects just that item before the menu opens; right-click inside a multi-selection keeps it
 
 ### Drag-move
 - Selected files/folders drag onto a target dir
