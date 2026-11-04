@@ -7,17 +7,26 @@ import { loadDirChildren } from './use-file-tree'
 import { useGitDecorations, MIXED, isPathIgnored } from './git-decorations'
 import { statusMeta, MIXED_STATUS_COLOR } from '@/features/source-control/status-meta'
 import { cn } from '@/shared/utils'
+import { wsClient } from '@/shared/ws-client'
+import { useT } from '@/shared/i18n'
 import {
   ChevronRight,
   ChevronDown,
   Folder,
   FolderOpen,
   Circle,
+  CircleAlert,
   Loader2,
   Package,
 } from 'lucide-react'
 import { getFileIcon } from '@/shared/file-icons'
 import { isBundleName, useRegistryVersion } from '@/features/editor/previews/registry'
+
+// Failed directory listing: backed-off auto-retries (2s, 4s, 8s, 16s, 30s),
+// then only the row's Retry button or a WS reconnect tries again.
+const LOAD_RETRY_BASE_MS = 2_000
+const LOAD_RETRY_MAX_MS = 30_000
+const LOAD_MAX_AUTO_RETRIES = 5
 
 // ── Expanded state persistence ──────────────────────────────────
 // Module-level Set is the source of truth; mounted FileTree nodes subscribe so
@@ -282,9 +291,16 @@ export function collectVisiblePaths(node: FileTreeNode): string[] {
 
 export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles, onMoveFile, selectedPaths, onSelectionChange, lastAnchor, visiblePaths, depth, pendingEdit, onCommitEdit, onCancelEdit }: FileTreeProps) {
   const useEditorStore = useScopedEditorStore()
+  const t = useT()
   const [expanded, setExpandedRaw] = useState(() => node.path ? isPathExpanded(node.path) : false)
   const [dragOver, setDragOver] = useState(false)
-  const [loadingChildren, setLoadingChildren] = useState(false)
+  const [loadState, setLoadState] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // The in-flight listing (aborted on collapse / unmount / supersede), the
+  // pending auto-retry, and consecutive failures (drives the backoff).
+  const loadAbortRef = useRef<AbortController | null>(null)
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const failuresRef = useRef(0)
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dragExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -311,22 +327,90 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
     return subscribePathExpanded(node.path, (val) => setExpandedRaw(val))
   }, [node.path])
 
+  /** Drop the in-flight listing and any pending retry, without touching state. */
+  const abortLoad = useCallback(() => {
+    const ctrl = loadAbortRef.current
+    loadAbortRef.current = null
+    ctrl?.abort()
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+    retryTimerRef.current = null
+  }, [])
+
+  // One listing attempt. A failure (incl. the 20s timeout in loadDirChildren)
+  // parks the row in 'error' and schedules a backed-off retry. It never refires
+  // from the effect below: the old `.finally(() => setLoading(false))` flipped
+  // the effect's own dep back with needsLoad still true, so a failing request
+  // re-sent itself at once — 3172 requests in 10s on a reset connection.
+  const loadChildren = useCallback(function run() {
+    if (!node.path) return
+    abortLoad()
+    const ctrl = new AbortController()
+    loadAbortRef.current = ctrl
+    setLoadState('loading')
+    loadDirChildren(projectId, node.path, useEditorStore, ctrl.signal).then(
+      () => {
+        if (loadAbortRef.current !== ctrl) return
+        loadAbortRef.current = null
+        failuresRef.current = 0
+        setLoadError(null)
+        setLoadState('idle')
+      },
+      (err: unknown) => {
+        // Aborted by collapse / unmount / a newer attempt — not a failure.
+        if (loadAbortRef.current !== ctrl) return
+        loadAbortRef.current = null
+        const failures = ++failuresRef.current
+        console.error('[Explorer] Failed to load directory:', node.path, err)
+        setLoadError(err instanceof Error ? err.message : String(err))
+        setLoadState('error')
+        if (failures <= LOAD_MAX_AUTO_RETRIES) {
+          retryTimerRef.current = setTimeout(run, Math.min(LOAD_RETRY_BASE_MS * 2 ** (failures - 1), LOAD_RETRY_MAX_MS))
+        }
+      },
+    )
+  }, [node.path, projectId, useEditorStore, abortLoad])
+
+  const retryLoad = useCallback(() => {
+    failuresRef.current = 0
+    loadChildren()
+  }, [loadChildren])
+
   // Auto-load children when a directory is expanded. Two triggers:
   // - needsLoad: never fetched (children === undefined) — the original lazy load.
+  //   Only from 'idle': a failed row waits for its backoff timer, the Retry
+  //   button or a WS reconnect (below), never an immediate refire.
   // - collapsed→expanded transition with cached children: refetch anyway. The
   //   cache is only kept fresh by file:changed events, so a missed watcher
   //   event (watcher failed to start, WS drop) used to freeze a stale
   //   `children: []` / `hasChildren: false` FOREVER — the folder showed empty
   //   no matter how often the user re-expanded it. Re-expanding is the natural
   //   "look again" gesture; one level per click keeps the cost trivial.
+  // Collapsing cancels the listing and any pending retry.
   useEffect(() => {
     const wasExpanded = prevExpandedRef.current
     prevExpandedRef.current = expanded
-    if (!expanded || loadingChildren || !node.path) return
-    if (!needsLoad && wasExpanded) return
-    setLoadingChildren(true)
-    loadDirChildren(projectId, node.path, useEditorStore).finally(() => setLoadingChildren(false))
-  }, [expanded, needsLoad, loadingChildren, node.path, projectId, useEditorStore])
+    if (!node.path) return
+    if (!expanded) {
+      abortLoad()
+      failuresRef.current = 0
+      setLoadState('idle')
+      return
+    }
+    if (wasExpanded && !(needsLoad && loadState === 'idle')) return
+    loadChildren()
+  }, [expanded, needsLoad, loadState, node.path, abortLoad, loadChildren])
+
+  // Unmount (parent collapsed / root replaced / node deleted): drop the request.
+  useEffect(() => abortLoad, [abortLoad])
+
+  // A failed listing retries on WS reconnect — the usual end of the outage that
+  // failed it. Subscribed only while failed, so any `_connected` from here on is
+  // a reconnect (onWsReconnect's first-connect gate would swallow it when the
+  // failure happened while the socket was already down).
+  useEffect(() => {
+    if (loadState !== 'error') return
+    return wsClient.on('_connected', retryLoad)
+  }, [loadState, retryLoad])
 
   const modifiedPaths = useEditorStore((s) => s.modifiedPaths)
   const activeTab = useEditorStore((s) => s.activeTab)
@@ -678,13 +762,31 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
         </span>
       </button>
 
-      {isDir && expanded && loadingChildren && !node.children && (
+      {isDir && expanded && loadState === 'loading' && !node.children && (
         <div
           className="flex items-center gap-1.5 py-1 text-[10px] text-[var(--muted-foreground)]"
           style={{ paddingLeft: `${(depth + 1) * 12 + 8}px` }}
         >
           <Loader2 className="h-3 w-3 animate-spin" />
           <span>Loading...</span>
+        </div>
+      )}
+
+      {isDir && expanded && loadState === 'error' && (
+        <div
+          className="flex items-center gap-1.5 py-1 text-[10px] text-[var(--muted-foreground)]"
+          style={{ paddingLeft: `${(depth + 1) * 12 + 8}px` }}
+          title={loadError ?? undefined}
+        >
+          <CircleAlert className="h-3 w-3 shrink-0 text-red-400" />
+          <span>{t('explorer.tree.loadFailed')}</span>
+          <span>·</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); retryLoad() }}
+            className="text-[var(--primary)] hover:underline"
+          >
+            {t('explorer.tree.retry')}
+          </button>
         </div>
       )}
 

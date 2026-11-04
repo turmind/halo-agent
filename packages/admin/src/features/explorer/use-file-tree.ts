@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { api } from '@/shared/api-client'
+import { api, withDeadline } from '@/shared/api-client'
 import { useEditorStore, useScopedEditorStore, type EditorStoreApi, type FileTreeNode } from '@/shared/stores/editor-store'
 import { wsClient } from '@/shared/ws-client'
 import type { WsClient } from '@/shared/ws-client-types'
@@ -18,12 +18,19 @@ function toRootNode(projectId: string, data: Awaited<ReturnType<typeof api.files
   }
 }
 
+/** Deadline for one `/files/tree` listing — without it a folder whose request
+ *  hung on a dead connection spun for as long as the OS kept the TCP alive. */
+export const TREE_FETCH_TIMEOUT_MS = 20_000
+
+function fetchTree(projectId: string, dirPath?: string, signal?: AbortSignal) {
+  return withDeadline(TREE_FETCH_TIMEOUT_MS, (s) => api.files.tree(projectId, dirPath, s), signal)
+}
+
 /** Imperatively fetch the root file tree (one level) and set in the given
  *  editor store. Defaults to the global singleton — pass a scoped store for
  *  nested EditorPanels (e.g. Skills). */
 export function loadFileTree(projectId: string, store: EditorStoreApi = useEditorStore) {
-  api.files
-    .tree(projectId)
+  fetchTree(projectId)
     .then((data) => {
       store.getState().setFileTree(toRootNode(projectId, data))
     })
@@ -32,14 +39,11 @@ export function loadFileTree(projectId: string, store: EditorStoreApi = useEdito
     })
 }
 
-/** Lazy-load a single directory's children into the given editor store. */
-export async function loadDirChildren(projectId: string, dirPath: string, store: EditorStoreApi = useEditorStore): Promise<void> {
-  try {
-    const data = await api.files.tree(projectId, dirPath)
-    store.getState().setDirChildren(dirPath, data.tree as FileTreeNode[])
-  } catch (err) {
-    console.error('[Explorer] Failed to load directory:', dirPath, err)
-  }
+/** Lazy-load a single directory's children into the given editor store.
+ *  Rejects on failure / timeout / abort — the caller (FileTree) owns retry. */
+export async function loadDirChildren(projectId: string, dirPath: string, store: EditorStoreApi = useEditorStore, signal?: AbortSignal): Promise<void> {
+  const data = await fetchTree(projectId, dirPath, signal)
+  store.getState().setDirChildren(dirPath, data.tree as FileTreeNode[])
 }
 
 /**
@@ -71,7 +75,7 @@ export function useFileTree(projectId: string | null) {
     setLoading(true)
     setError(null)
     try {
-      const data = await api.files.tree(projectId)
+      const data = await fetchTree(projectId)
       store.getState().setFileTree(toRootNode(projectId, data))
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load file tree'

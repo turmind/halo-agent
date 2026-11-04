@@ -617,6 +617,9 @@ export const zh: Record<string, string> = {
   'explorer.download.include': '包含 node_modules、.git 及其他构建/缓存目录',
   'explorer.download.cancel': '取消',
   'explorer.download.confirm': '下载',
+  // ── Explorer: directory listing failure row ──
+  'explorer.tree.loadFailed': '加载失败',
+  'explorer.tree.retry': '重试',
   'editor.print': '打印',
   'editor.openAsText': '以文本打开',
   'editor.download': '下载',

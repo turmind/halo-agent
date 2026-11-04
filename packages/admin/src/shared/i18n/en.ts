@@ -617,6 +617,9 @@ export const en: Record<string, string> = {
   'explorer.download.include': 'Include node_modules, .git and other build/cache folders',
   'explorer.download.cancel': 'Cancel',
   'explorer.download.confirm': 'Download',
+  // ── Explorer: directory listing failure row ──
+  'explorer.tree.loadFailed': 'Failed to load',
+  'explorer.tree.retry': 'Retry',
   'editor.print': 'Print',
   'editor.openAsText': 'Open as text',
   'editor.download': 'Download',

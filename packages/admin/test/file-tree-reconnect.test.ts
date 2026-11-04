@@ -68,7 +68,8 @@ describe('watchTreeReconnect', () => {
     // Reconnect — deltas were lost while down, reconcile.
     emit('_connected')
     expect(treeSpy).toHaveBeenCalledTimes(1)
-    expect(treeSpy).toHaveBeenCalledWith(PROJECT)
+    // Root listing (no dirPath), under the tree fetch deadline's signal.
+    expect(treeSpy).toHaveBeenCalledWith(PROJECT, undefined, expect.any(AbortSignal))
 
     // The refetched root actually lands in the store (silent replace).
     await vi.waitFor(() => {

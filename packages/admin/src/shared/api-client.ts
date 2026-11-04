@@ -13,6 +13,22 @@ export function signInRequired(res: Response): { ok: false; status: number; mess
     : null
 }
 
+/** Run `call` with a signal that aborts (TimeoutError) after `ms`, or when the
+ *  caller's `signal` does. fetch has no deadline of its own: on a silently dead
+ *  connection (lost NAT mapping, no RST) a request stays pending until the OS
+ *  gives up on TCP, ~15 min on Linux. */
+export function withDeadline<T>(ms: number, call: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException(`Request timed out after ${ms / 1000}s`, 'TimeoutError')), ms)
+  const onAbort = () => ctrl.abort(signal?.reason)
+  if (signal?.aborted) onAbort()
+  else signal?.addEventListener('abort', onAbort, { once: true })
+  return call(ctrl.signal).finally(() => {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  })
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -80,7 +96,7 @@ export const api = {
       )
     },
 
-    tree(projectId: string, dirPath?: string) {
+    tree(projectId: string, dirPath?: string, signal?: AbortSignal) {
       const params = new URLSearchParams()
       params.set('projectId', projectId)
       if (dirPath) params.set('path', dirPath)
@@ -94,7 +110,7 @@ export const api = {
           type: 'file' | 'directory'
           hasChildren?: boolean
         }>
-      }>(`/files/tree?${params.toString()}`)
+      }>(`/files/tree?${params.toString()}`, { signal })
     },
 
     search(projectId: string, query: string, limit?: number, dirsOnly?: boolean) {
