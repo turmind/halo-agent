@@ -1454,6 +1454,21 @@ export class SessionManager implements SessionManagerInternals {
     }
   }
 
+  /** Whether the session's model history holds the user text stamped `stamp`
+   *  (`[<stamp>] …`, runAgentTurn / batchInput) — the message reached a turn,
+   *  not only the queue, which a restart drops. Cron's boot recovery checks
+   *  the webhook events it handed to a resumed run with it. */
+  rawHasStamp(sessionId: string, stamp: string): boolean {
+    const live = this.sessions.get(sessionId)
+    const agentId = live?.agentId ?? this.getSessionById(sessionId)?.agentId
+    if (!agentId) return false
+    const raw = (live ? live.agent.messages : this.loadAgentState(sessionId, agentId)) as AnthropicMessage[]
+    const tag = `[${stamp}]`
+    return raw.some((m) => m.role === 'user' && (typeof m.content === 'string'
+      ? m.content.startsWith(tag)
+      : m.content.some((b) => b.type === 'text' && b.text.startsWith(tag))))
+  }
+
   // ── Loop detection ──────────────────────────────────────────────────
 
   private static readonly LOOP_EXEMPT_TOOLS = new Set([

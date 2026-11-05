@@ -50,6 +50,7 @@ import { createAgentCoreA2A, type WorkspaceLease } from './a2a/agentcore.js'
 import { FRONT_URL_ENV, postToFront } from './a2a/agentcore-notify.js'
 import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
+import { createCronHookRoutes } from './routes/cron-hooks.js'
 import { createExtensionRoutes } from './routes/extensions.js'
 import { createUpdateRoutes } from './routes/updates.js'
 import { start as startExtensionsWatcher, stop as stopExtensionsWatcher } from './extensions/watcher.js'
@@ -514,6 +515,10 @@ if (!AGENTCORE) {
   bootChannels(app, defaultChannelDescriptors, { registry, db: channelDb })
   // Not a channel: linked-machine pairing-token CRUD.
   app.route('/api', createNodeRoutes({ db: channelDb, hub: nodeHub! }))
+
+  // Cron webhook receiver /cron-hooks/:jobId: outside /api/* (the job's
+  // secret is its auth, no admin cookie), before serveStatic / the SPA fallback.
+  app.route('/', createCronHookRoutes())
 
   // Cron daemon runs after channels boot so every cron dispatcher is
   // registered before the first scheduled fire could happen.

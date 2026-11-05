@@ -37,8 +37,8 @@ export interface CronHarness {
   inputs: string[]
   /** Script for the next turns; a turn with nothing scripted replies `ok: <n>`. */
   turns: StubTurn[]
-  /** Calls to createSession: [agentId, description, explicitId, workingDir, accessLevel]. */
-  created: Array<{ agentId: string; description: string; id: string; workingDir: string | null; accessLevel: 'readonly' | 'workspace' | null }>
+  /** Calls to createSession: [agentId, description, explicitId, workingDir, accessLevel, title]. */
+  created: Array<{ agentId: string; description: string; id: string; workingDir: string | null; accessLevel: 'readonly' | 'workspace' | null; title?: string }>
   /** Insert a session row (+ in-memory stub), as createSession / a restore would leave it. */
   seedSession(id: string, opts?: { agentId?: string; accessLevel?: 'readonly' | 'workspace' | null; workingDir?: string | null; inMemory?: boolean }): void
 }
@@ -114,10 +114,10 @@ export function installCronHarness(ws: string, opts: { ledger?: boolean; registe
   }
   current = h
   // createSession builds a model runtime; the stub stands in (no agents in this HOME).
-  vi.spyOn(SessionManager.prototype, 'createSession').mockImplementation(async function (this: SessionManager, agentId, _p, description, _n, explicitId, workingDir, accessLevel) {
+  vi.spyOn(SessionManager.prototype, 'createSession').mockImplementation(async function (this: SessionManager, agentId, _p, description, _n, explicitId, workingDir, accessLevel, title) {
     const id = explicitId!
     const rel = workingDir ? path.relative(this.workspaceRoot, workingDir) : null
-    h.created.push({ agentId, description, id, workingDir: rel, accessLevel: accessLevel ?? null })
+    h.created.push({ agentId, description, id, workingDir: rel, accessLevel: accessLevel ?? null, ...(title ? { title } : {}) })
     h.seedSession(id, { agentId, accessLevel: accessLevel ?? null, workingDir: rel })
     return id
   })

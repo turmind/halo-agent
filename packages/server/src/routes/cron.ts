@@ -13,11 +13,12 @@
  * `listAccounts` we already export.
  */
 import { Hono } from 'hono'
-import { eq, desc, lt, and } from 'drizzle-orm'
+import { eq, desc, lt, and, inArray, sql } from 'drizzle-orm'
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Cron } from 'croner'
-import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
+import { cronEvents, cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
 import { reloadAll, scheduleJob, unscheduleJob, runJob, deleteJobRuns, activeWindowOptions, effectiveSessionId, sessionAgentIdFor, sessionAgentConflict, jobChangedFields } from '../cron/runner.js'
 import { resolveWorkingDir } from '../agents/working-dir.js'
 import { listAllCronTargets } from '../cron/dispatcher.js'
@@ -35,6 +36,10 @@ interface CreateBody {
    *  the runner schedules a single fire at this instant. After completion
    *  the job is auto-disabled. */
   runAt?: number
+  /** Webhook job: fired by `POST /cron-hooks/<id>` events instead of a
+   *  timer; the server generates the secret. Exclusive with schedule / runAt;
+   *  no active window, no picked session. */
+  webhook?: boolean
   timezone?: string
   /** Max seconds one cron-fired cli may run (60–21600). Unset/null = the
    *  runner's default 3600. */
@@ -64,6 +69,12 @@ interface CreateBody {
  *  `sessionId: null` (or '') clears back to the job's own session;
  *  `workingDir: null` (or '') clears back to the workspace root. */
 type UpdateBody = Partial<Omit<CreateBody, 'runAt' | 'timeoutSec' | 'sessionId'>> & { runAt?: number | null; timeoutSec?: number | null; sessionId?: string | null }
+
+function newWebhookSecret(): string {
+  return crypto.randomBytes(32).toString('base64url')
+}
+
+const WEBHOOK_SESSION_ERR = 'a webhook job runs in its own session (or a new one every run), not a picked sessionId'
 
 function newJobId(): string {
   return `cron-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -158,9 +169,10 @@ function validateActiveBound(name: 'activeFrom' | 'activeUntil', v: unknown): st
  *  "activeUntil in the future" check is the caller's — PUT only applies it
  *  to a newly supplied value, so editing an already-expired job's other
  *  fields isn't blocked by its own stored past bound. */
-function validateActiveWindow(row: { runAt: number | null; activeFrom: number | null; activeUntil: number | null }): string | null {
+function validateActiveWindow(row: { runAt: number | null; webhook: boolean; activeFrom: number | null; activeUntil: number | null }): string | null {
   if (row.activeFrom == null && row.activeUntil == null) return null
   if (row.runAt != null) return 'activeFrom/activeUntil only apply to recurring jobs, not runAt one-shots'
+  if (row.webhook) return 'activeFrom/activeUntil only apply to recurring jobs, not webhook jobs'
   if (row.activeFrom != null && row.activeUntil != null && row.activeUntil <= row.activeFrom) {
     return 'activeUntil must be after activeFrom'
   }
@@ -204,6 +216,9 @@ export function createCronRoutes(): Hono {
       // created) — the admin locks the job's agent field on it.
       sessionAgentId: sessionAgentIdFor(r),
       stateless: r.stateless === 1,
+      // Relative: the admin prefixes its own origin (the server can't know
+      // the public one behind a proxy).
+      webhookPath: r.webhookSecret ? `/cron-hooks/${r.id}` : null,
     }))
     const nextCursor = hasMore ? trimmed[trimmed.length - 1]!.createdAt : null
     return c.json({ jobs: items, hasMore, nextCursor })
@@ -216,11 +231,15 @@ export function createCronRoutes(): Hono {
     for (const k of ['workspacePath', 'agentId', 'userPrompt'] as const) {
       if (!body[k] || typeof body[k] !== 'string') return c.json({ error: `${k} required` }, 400)
     }
-    // Recurring vs at-mode: exactly one of `schedule` / `runAt` must be set.
+    // Recurring vs at-mode vs webhook: exactly one of `schedule` / `runAt` /
+    // `webhook` must be set.
+    if (body.webhook !== undefined && typeof body.webhook !== 'boolean') return c.json({ error: 'webhook must be a boolean' }, 400)
     const hasSchedule = typeof body.schedule === 'string' && body.schedule.trim().length > 0
     const hasRunAt = typeof body.runAt === 'number' && Number.isFinite(body.runAt)
-    if (!hasSchedule && !hasRunAt) return c.json({ error: 'schedule or runAt required' }, 400)
+    const webhook = body.webhook === true
+    if (!hasSchedule && !hasRunAt && !webhook) return c.json({ error: 'schedule, runAt or webhook required' }, 400)
     if (hasSchedule && hasRunAt) return c.json({ error: 'schedule and runAt are mutually exclusive' }, 400)
+    if (webhook && (hasSchedule || hasRunAt)) return c.json({ error: 'webhook and schedule / runAt are mutually exclusive' }, 400)
     if (hasSchedule) {
       const scheduleErr = validateSchedule(body.schedule)
       if (scheduleErr) return c.json({ error: `invalid schedule: ${scheduleErr}` }, 400)
@@ -240,6 +259,7 @@ export function createCronRoutes(): Hono {
     if (body.stateless !== undefined && typeof body.stateless !== 'boolean') return c.json({ error: 'stateless must be a boolean' }, 400)
     const stateless = body.stateless === true
     if (stateless && session.sessionId) return c.json({ error: STATELESS_SESSION_ERR }, 400)
+    if (webhook && session.sessionId) return c.json({ error: WEBHOOK_SESSION_ERR }, 400)
     const folder = await parseWorkingDir(body.workspacePath, body.workingDir)
     if ('error' in folder) return c.json({ error: folder.error }, 400)
     for (const k of ['activeFrom', 'activeUntil'] as const) {
@@ -251,7 +271,7 @@ export function createCronRoutes(): Hono {
     if (activeUntil !== null && activeUntil <= Date.now()) {
       return c.json({ error: 'activeUntil must be in the future' }, 400)
     }
-    const windowErr = validateActiveWindow({ runAt: hasRunAt ? body.runAt! : null, activeFrom, activeUntil })
+    const windowErr = validateActiveWindow({ runAt: hasRunAt ? body.runAt! : null, webhook, activeFrom, activeUntil })
     if (windowErr) return c.json({ error: windowErr }, 400)
 
     const id = newJobId()
@@ -266,6 +286,7 @@ export function createCronRoutes(): Hono {
       userPrompt: body.userPrompt,
       schedule: hasSchedule ? body.schedule : '',
       runAt: hasRunAt ? body.runAt! : null,
+      webhookSecret: webhook ? newWebhookSecret() : null,
       timezone: body.timezone ?? null,
       timeoutSec: body.timeoutSec ?? null,
       sessionId: session.sessionId,
@@ -361,21 +382,30 @@ export function createCronRoutes(): Hono {
     // kill the recurring schedule too. Setting both in one body is a
     // client error (400, same as create); setting only one side is a mode
     // switch and implicitly clears the other.
+    // Webhook is the third mode: `webhook: true` switches to it (the secret
+    // is kept if it already was one), `false` leaves it, a schedule / runAt
+    // alone switches away from it.
+    if (body.webhook !== undefined && typeof body.webhook !== 'boolean') return c.json({ error: 'webhook must be a boolean' }, 400)
     const hasSchedule = typeof body.schedule === 'string' && body.schedule.trim().length > 0
     const hasRunAt = typeof body.runAt === 'number'
+    const setWebhook = body.webhook === true
     if (hasSchedule && hasRunAt) {
       return c.json({ error: 'schedule and runAt are mutually exclusive' }, 400)
     }
-    const clearRunAt = hasSchedule && body.runAt === undefined
-    const clearSchedule = hasRunAt && body.schedule === undefined
+    if (setWebhook && (hasSchedule || hasRunAt)) return c.json({ error: 'webhook and schedule / runAt are mutually exclusive' }, 400)
+    const clearRunAt = (hasSchedule || setWebhook) && body.runAt === undefined
+    const clearSchedule = (hasRunAt || setWebhook) && body.schedule === undefined
     // The merged row must still have a trigger — reject a PUT that clears
     // the active side and supplies nothing (a triggerless job would sit
     // enabled but never fire).
     const nextSchedule = clearSchedule ? '' : (body.schedule ?? existing.schedule)
     const nextRunAt = clearRunAt ? null : (body.runAt !== undefined ? body.runAt : existing.runAt)
-    if (nextSchedule.trim().length === 0 && typeof nextRunAt !== 'number') {
-      return c.json({ error: 'schedule or runAt required' }, 400)
+    const nextWebhookSecret = setWebhook ? (existing.webhookSecret ?? newWebhookSecret())
+      : (body.webhook === false || hasSchedule || hasRunAt) ? null : existing.webhookSecret
+    if (!nextWebhookSecret && nextSchedule.trim().length === 0 && typeof nextRunAt !== 'number') {
+      return c.json({ error: 'schedule, runAt or webhook required' }, 400)
     }
+    if (nextWebhookSecret && merged.sessionId) return c.json({ error: WEBHOOK_SESSION_ERR }, 400)
     // Active window: same partial-body contract (undefined = untouched,
     // null = clear), cross-field rules checked on the merged row — so a
     // mode switch to runAt has to clear a stored window in the same body.
@@ -388,6 +418,7 @@ export function createCronRoutes(): Hono {
     }
     const windowErr = validateActiveWindow({
       runAt: nextRunAt,
+      webhook: nextWebhookSecret !== null,
       activeFrom: body.activeFrom !== undefined ? body.activeFrom : existing.activeFrom,
       activeUntil: body.activeUntil !== undefined ? body.activeUntil : existing.activeUntil,
     })
@@ -400,6 +431,7 @@ export function createCronRoutes(): Hono {
     if (body.userPrompt !== undefined) patch.userPrompt = body.userPrompt
     if (body.schedule !== undefined || clearSchedule) patch.schedule = nextSchedule
     if (body.runAt !== undefined || clearRunAt) patch.runAt = nextRunAt
+    if (nextWebhookSecret !== existing.webhookSecret) patch.webhookSecret = nextWebhookSecret
     if (body.timezone !== undefined) patch.timezone = body.timezone || null
     if (body.timeoutSec !== undefined) patch.timeoutSec = body.timeoutSec
     if (body.sessionId !== undefined) patch.sessionId = session.sessionId
@@ -440,12 +472,27 @@ export function createCronRoutes(): Hono {
   // the UI over WS (`cron:run_changed`), no polling.
   router.post('/cron/jobs/:id/run-now', async (c) => {
     const id = c.req.param('id')
-    // Don't await runJob — the cli can take minutes. Fire-and-forget; the
+    // Don't await runJob — a run can take minutes. On a webhook job it runs the
+    // prompt alone (no events) — a test of the job. Fire-and-forget; the
     // runner broadcasts cron:run_changed as the run progresses.
     runJob(id, 'manual').catch((err) => {
       console.log(`[Cron] run-now ${id} crashed: ${err instanceof Error ? err.message : String(err)}`)
     })
     return c.json({ ok: true })
+  })
+
+  // POST /api/cron/jobs/:id/webhook-secret — rotate a webhook job's secret.
+  // The old one stops working at once.
+  router.post('/cron/jobs/:id/webhook-secret', async (c) => {
+    const id = c.req.param('id')
+    const db = getCronDb()
+    const existing = db.select({ webhookSecret: cronJobs.webhookSecret }).from(cronJobs).where(eq(cronJobs.id, id)).get()
+    if (!existing) return c.json({ error: 'not found' }, 404)
+    if (!existing.webhookSecret) return c.json({ error: 'not a webhook job' }, 400)
+    const webhookSecret = newWebhookSecret()
+    db.update(cronJobs).set({ webhookSecret, updatedAt: Date.now() }).where(eq(cronJobs.id, id)).run()
+    broadcast({ type: 'cron:job_changed', jobId: id, kind: 'updated' })
+    return c.json({ ok: true, webhookSecret })
   })
 
   // POST /api/cron/reload — re-read every job from db and rebuild schedules.
@@ -478,9 +525,13 @@ export function createCronRoutes(): Hono {
       .all()
     const hasMore = rows.length > limit
     const trimmed = rows.slice(0, limit)
+    // Webhook events per run: one grouped count over this page's runs.
+    const counts = new Map(trimmed.length === 0 ? [] : db.select({ runId: cronEvents.runId, n: sql<number>`count(*)` }).from(cronEvents)
+      .where(inArray(cronEvents.runId, trimmed.map((r) => r.id))).groupBy(cronEvents.runId).all().map((e) => [e.runId, e.n]))
     const items = trimmed.map((r) => ({
       ...r,
       dispatchResults: safeParseDispatch(r.dispatchResults),
+      eventCount: counts.get(r.id) ?? 0,
     }))
     return c.json({
       runs: items,
@@ -543,8 +594,8 @@ function safeParseDispatch(raw: string | null): Array<{ channelType: string; acc
   } catch { return null }
 }
 
-function computeNextRun(j: { schedule: string; runAt: number | null; timezone: string | null; enabled: number; activeFrom: number | null; activeUntil: number | null }): number | null {
-  if (j.enabled !== 1) return null
+function computeNextRun(j: { schedule: string; runAt: number | null; webhookSecret: string | null; timezone: string | null; enabled: number; activeFrom: number | null; activeUntil: number | null }): number | null {
+  if (j.enabled !== 1 || j.webhookSecret) return null
   // At-mode: the configured runAt is itself the next (and only) fire.
   // If it's already past, the runner won't schedule it — surface null so
   // the UI doesn't show a stale "next run" for an expired one-shot.

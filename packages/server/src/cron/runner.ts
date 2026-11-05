@@ -18,6 +18,11 @@
  * Each job runs in one stable session: its own (id = the job id, see
  * effectiveSessionId) by default, or an existing root session picked on the
  * job (`session_id`); a stateless job gets a fresh one per fire.
+ *
+ * A webhook job (`webhook_secret` set) has no timer: `POST /cron-hooks/<id>`
+ * stores each delivery in `cron_events` and calls startOrInject — a run of the
+ * job in flight takes the event as a queued message, else a run starts with
+ * every pending event in its opening message (cron/events.ts).
  */
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -25,8 +30,8 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { Cron } from 'croner'
 import Database from 'better-sqlite3'
-import { and, eq, gte, inArray, lt, notInArray, or } from 'drizzle-orm'
-import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
+import { and, eq, gte, inArray, isNull, lt, notInArray, or } from 'drizzle-orm'
+import { cronEvents, cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
 import { rawSqlite } from '../db/raw-sqlite.js'
 import { getWorkspaceDb, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
@@ -37,6 +42,7 @@ import { resolveWorkingDir } from '../agents/working-dir.js'
 import { readReplyTo, takeReplyTo, clearReplyTo, setCronRunDoor, type ReplyTo } from '../agents/relay.js'
 import { nudgesSettled } from '../agents/run-ledger.js'
 import type { AgentSessionEvent } from '../agents/agent-events.js'
+import { claimPendingEvents, countPendingEvents, eventText, jobsWithPendingEvents, requeueEvents, runEvents, settleRunEvents, stampEvents, type CronEvent } from './events.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -233,12 +239,14 @@ export interface CronSessionHost {
   deleteSession(rootId: string): Promise<string[]>
   getDb(): HaloDb
   getSessionById(sessionId: string): { agentId: string } | null
-  createSession(agentId: string, parentId: null, description: string, agentName?: string, explicitId?: string, workingDir?: string | null, accessLevel?: 'readonly' | 'workspace' | null): Promise<string>
+  createSession(agentId: string, parentId: null, description: string, agentName?: string, explicitId?: string, workingDir?: string | null, accessLevel?: 'readonly' | 'workspace' | null, title?: string): Promise<string>
   setWorkingDir(sessionId: string, workingDir: string | null): unknown
   appendUserMessage(sessionId: string, text: string): string
   sendUserMessage(sessionId: string, message: string, images?: undefined, accessLevel?: undefined, stamp?: string): Promise<'running' | 'queued'>
   stopSession(sessionId: string): Promise<void>
   registerEventListener(rootSessionId: string, handler: (event: AgentSessionEvent) => void): () => void
+  /** Whether the model history holds the user message stamped `stamp`. */
+  rawHasStamp(sessionId: string, stamp: string): boolean
 }
 export interface CronSessionRegistry {
   /** Cache lookup only — never constructs a manager (whose constructor runs
@@ -267,6 +275,17 @@ interface RunCtx {
    *  truncation…) — prefixed to the dispatched text the way `halo cli`
    *  prints them, so a recipient can tell why a reply looks off. */
   notices: string[]
+  /** Webhook runs: final replies of turns an injected event cut short — the
+   *  event's follow-up turn resets the per-turn output finishRun reads, so the
+   *  earlier reply (answering the earlier events) would reach no target. */
+  answers: string[]
+  /** The current root turn's final reply, as streamed. */
+  turnFinal: string
+  /** The last ended turn's final reply while the root sits idle (the run
+   *  waits on sub-agents) — kept if an event wakes it. */
+  idleFinal: string
+  /** Events injected since the last drained-turn boundary. */
+  injected: number
   timer: ReturnType<typeof setTimeout> | null
   unlisten: () => void
 }
@@ -317,8 +336,8 @@ export const _inflightSessions = new Set<string>()
  *  croner when we have to. */
 const _fingerprint = new Map<string, string>()
 
-/** Enabled recurring jobs `scheduleJob` deliberately left unscheduled
- *  because they're past `activeUntil` or croner rejects their schedule —
+/** Enabled jobs `scheduleJob` deliberately left unscheduled — past
+ *  `activeUntil`, a schedule croner rejects, or a webhook job (no timer) —
  *  "handled", not "lost". */
 const _expired = new Set<string>()
 
@@ -372,15 +391,24 @@ export async function recoverRuns(opts?: { graceMs?: number }): Promise<void> {
       reapLegacyRun(row, job, graceMs)
       continue
     }
-    // Released unless the run resumes (then its end releases it).
+    // Released unless the run resumes (then its end releases it); its
+    // webhook events go back to pending for the next run.
     let resumed = false
     try {
       resumed = await recoverInProcessRun(row, job)
     } catch (err) {
       failRecovered(row, `interrupted by server restart (recovery failed: ${err instanceof Error ? err.message : String(err)})`)
     } finally {
-      if (!resumed) _inflight.delete(row.jobId)
+      if (!resumed) {
+        requeueEvents({ runId: row.id })
+        _inflight.delete(row.jobId)
+      }
     }
+  }
+  // Webhook events still waiting (received while the session had another
+  // owner, or handed back above): start their runs now.
+  for (const jobId of jobsWithPendingEvents()) {
+    await startOrInject(jobId).catch((err) => console.warn(`[Cron] recovery: pending webhook events of ${jobId}: ${err instanceof Error ? err.message : String(err)}`))
   }
 }
 
@@ -414,8 +442,17 @@ async function recoverInProcessRun(row: typeof cronRuns.$inferSelect, job: typeo
     return false
   }
   const timeoutSec = job?.timeoutSec ?? RUN_TIMEOUT_SEC
-  trackRun({ runId: row.id, jobId: row.jobId, sessionId: sid, workspacePath: ws, host }, row.startedAt + timeoutSec * 1000 - Date.now(), timeoutSec)
+  const ctx = trackRun({ runId: row.id, jobId: row.jobId, sessionId: sid, workspacePath: ws, host }, row.startedAt + timeoutSec * 1000 - Date.now(), timeoutSec)
   console.log(`[Cron] recovered run ${row.id} (job ${row.jobId}): resumed in ${sid} after the restart`)
+  // Webhook events handed to this run: an event whose stamped message never
+  // reached the model history (a queued message dies with the process) is
+  // sent again. At-least-once — a compaction since can also drop the stamp.
+  for (const ev of runEvents(row.id)) {
+    if (ev.stamp && host.rawHasStamp(sid, ev.stamp)) continue
+    await injectEvent(ctx, ev, true).catch((err) => {
+      console.warn(`[Cron] run ${row.id}: redelivering webhook event ${ev.id} failed: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }
   return true
 }
 
@@ -485,18 +522,38 @@ function reapLegacyRun(row: typeof cronRuns.$inferSelect, job: typeof cronJobs.$
 /** Register a run that has reached its session (runJob) or resumed in it
  *  after a restart (recoverRuns): job guard, notice listener, and a timer for
  *  what is left of the wall-clock budget (≤ 0 → it times out right away). */
-function trackRun(base: Pick<RunCtx, 'runId' | 'jobId' | 'sessionId' | 'workspacePath' | 'host'>, remainingMs: number, timeoutSec: number): void {
-  const ctx: RunCtx = { ...base, notices: [], timer: null, unlisten: () => {} }
+function trackRun(base: Pick<RunCtx, 'runId' | 'jobId' | 'sessionId' | 'workspacePath' | 'host'>, remainingMs: number, timeoutSec: number): RunCtx {
+  const ctx: RunCtx = { ...base, notices: [], answers: [], turnFinal: '', idleFinal: '', injected: 0, timer: null, unlisten: () => {} }
   _runs.set(ctx.runId, ctx)
   _inflight.add(ctx.jobId)
-  // Same filter as `halo cli` (cli.ts): root notices only — not a
-  // sub-session's (taskId) nor the drain-time sibling-status line (agentName).
   ctx.unlisten = ctx.host.registerEventListener(ctx.sessionId, (e) => {
-    if (e.type === 'system' && e.text && !e.taskId && !e.agentName) ctx.notices.push(e.text)
+    if (e.taskId) return
+    // Same filter as `halo cli` (cli.ts): root notices only — not a
+    // sub-session's (taskId) nor the drain-time sibling-status line (agentName).
+    if (e.type === 'system' && e.text && !e.agentName) ctx.notices.push(e.text)
+    else if (e.type === 'stream') {
+      ctx.idleFinal = ''
+      if (e.final && e.text) ctx.turnFinal += e.text
+    }
+    // A retried model call: what it streamed is dropped.
+    else if (e.type === 'call_discarded') ctx.turnFinal = ''
+    else if (e.type === 'complete') {
+      ctx.idleFinal = ctx.turnFinal.trim()
+      ctx.turnFinal = ''
+      ctx.injected = 0
+    } else if (e.type === 'queued_message') {
+      ctx.idleFinal = ''
+      // A drained turn starts. Kept only when an injected event is why it
+      // follows (child reports alone: the last turn's wrap-up is the answer).
+      if (ctx.injected > 0 && ctx.turnFinal.trim()) ctx.answers.push(ctx.turnFinal.trim())
+      ctx.injected = 0
+      ctx.turnFinal = ''
+    }
   })
   ctx.timer = setTimeout(() => {
     timeoutRun(ctx, timeoutSec).catch((err) => console.warn(`[Cron] run ${ctx.runId}: timeout handling failed: ${err instanceof Error ? err.message : String(err)}`))
   }, Math.max(0, remainingMs))
+  return ctx
 }
 
 /** Drop a run's process-local state (timer, listener). The job guard
@@ -533,6 +590,7 @@ async function timeoutRun(ctx: RunCtx, timeoutSec: number): Promise<void> {
   try {
     clearOwnPointer(ctx.host.getDb(), ctx.sessionId, ctx.runId)
     finalize(ctx.runId, ctx.jobId, { status: 'timeout', output: null, exitCode: null, failureReason: `run exceeded ${timeoutSec}s timeout`, dispatchResults: [] })
+    settleRunEvents(ctx.runId, false)
     let settle: ReturnType<typeof setTimeout> | undefined
     const stopped = await Promise.race([
       ctx.host.stopSession(ctx.sessionId).then(() => true, (err) => {
@@ -546,6 +604,7 @@ async function timeoutRun(ctx: RunCtx, timeoutSec: number): Promise<void> {
     await pruneOldRuns(ctx.jobId)
   } finally {
     _inflight.delete(ctx.jobId)
+    kickPendingEvents(ctx.jobId)
   }
 }
 
@@ -565,8 +624,9 @@ async function finishRun(runId: string, db: HaloDb, session: { id: string; final
   try {
     clearOwnPointer(db, session.id, runId)
     // What `halo cli` printed: the notices, a blank line, the final reply
-    // (`finalOutput || output`, as tryReportToParent / finishInvocation).
-    const answer = (session.finalOutput || session.output).trim()
+    // (`finalOutput || output`, as tryReportToParent / finishInvocation) —
+    // after a webhook run's replies to events its later turns cut short.
+    const answer = [...(ctx?.answers ?? []), (session.finalOutput || session.output).trim()].filter(Boolean).join('\n\n')
     const notices = ctx?.notices ?? []
     const text = (notices.length > 0 ? notices.map((n) => `ℹ️ ${n}`).join('\n') + (answer ? '\n\n' : '') : '') + answer
     // Empty output is a failure — most cron use cases (daily report,
@@ -580,6 +640,10 @@ async function finishRun(runId: string, db: HaloDb, session: { id: string; final
       status = 'failed'
       failureReason = 'run produced no output (nothing to dispatch)'
     }
+    // Its webhook events were processed by a completed turn or not — the
+    // dispatch below doesn't change that. Settled before the await, so boot
+    // recovery's requeue can't race it.
+    settleRunEvents(runId, status === 'succeeded')
     // Dispatch only on success. Raw output goes down as-is; dispatchToTargets
     // splits off the agent's `MEDIA:<path>` markers per target. The media
     // sandbox root is the run's workspace (where it produced its files), not
@@ -600,6 +664,7 @@ async function finishRun(runId: string, db: HaloDb, session: { id: string; final
   } finally {
     _finishing.delete(runId)
     _inflight.delete(row.jobId)
+    kickPendingEvents(row.jobId)
   }
 }
 
@@ -615,7 +680,9 @@ function cancelRun(runId: string, db: HaloDb, sessionId: string, reason: string)
   if (finalize(runId, jobId, { status: 'failed', output: null, exitCode: null, failureReason: reason, dispatchResults: [] })) {
     console.log(`[Cron] run ${runId} (job ${jobId}): ${reason}`)
   }
+  settleRunEvents(runId, false)
   _inflight.delete(jobId)
+  kickPendingEvents(jobId)
   pruneOldRuns(jobId).catch((err) => console.warn(`[Cron] prune after run ${runId} failed: ${err instanceof Error ? err.message : String(err)}`))
 }
 
@@ -627,6 +694,61 @@ setCronRunDoor({
   finish: finishRun,
   cancel: cancelRun,
 })
+
+/**
+ * A webhook job's events are waiting (the receiver stored one, a run ended
+ * with more pending, boot recovery). A run of the job in flight here that
+ * still owns its session takes them as queued messages — folded into its
+ * running turn (drainQueue), so one run reports a batch. Otherwise a run
+ * starts with all of them. A run starting / ending / being recovered right
+ * now: its end calls back here (kickPendingEvents).
+ */
+export async function startOrInject(jobId: string): Promise<void> {
+  const ctx = [..._runs.values()].find((r) => r.jobId === jobId)
+  if (ctx) {
+    const to = readReplyTo(ctx.host.getDb(), ctx.sessionId)
+    if (!to || !('cron' in to) || to.cron !== ctx.runId) return
+    for (const ev of claimPendingEvents(jobId, ctx.runId, ctx.sessionId)) {
+      try {
+        await injectEvent(ctx, ev, false)
+      } catch (err) {
+        requeueEvents({ ids: [ev.id] })
+        console.warn(`[Cron] run ${ctx.runId}: injecting webhook event ${ev.id} failed, back to pending: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    return
+  }
+  if (_inflight.has(jobId)) return
+  const job = getCronDb().select({ webhookSecret: cronJobs.webhookSecret, enabled: cronJobs.enabled }).from(cronJobs).where(eq(cronJobs.id, jobId)).get()
+  // Switched off webhook mode / disabled since: the events wait.
+  if (!job?.webhookSecret || job.enabled !== 1) return
+  await runJob(jobId, 'webhook')
+}
+
+/** One event into a run's session as its own message (UI row + model text,
+ *  one stamp). Stamped on the event before the send, so recovery can tell
+ *  whether the model got it. */
+async function injectEvent(ctx: RunCtx, ev: CronEvent, redelivered: boolean): Promise<void> {
+  const { ui, model } = eventText(ev, ctx.workspacePath, redelivered)
+  // The root is idle between turns (waiting on sub-agents): this event opens
+  // a new turn, which resets the reply the last one gave.
+  if (ctx.idleFinal) {
+    ctx.answers.push(ctx.idleFinal)
+    ctx.idleFinal = ''
+  }
+  ctx.injected++
+  const stamp = ctx.host.appendUserMessage(ctx.sessionId, ui)
+  stampEvents([ev.id], stamp)
+  await ctx.host.sendUserMessage(ctx.sessionId, model, undefined, undefined, stamp)
+}
+
+/** A run of `jobId` ended: events that arrived meanwhile start the next one. */
+function kickPendingEvents(jobId: string): void {
+  if (countPendingEvents(jobId) === 0) return
+  setImmediate(() => {
+    startOrInject(jobId).catch((err) => console.warn(`[Cron] ${jobId}: starting a run for pending webhook events failed: ${err instanceof Error ? err.message : String(err)}`))
+  })
+}
 
 /**
  * Start every enabled job in `cron_jobs`. Idempotent — schedules already
@@ -700,7 +822,7 @@ export function reloadAll(): void {
  *  Agent / prompt / folder / mode don't touch croner, but a skill-side edit
  *  of them still has to reach the admin as a `reconciled` push. */
 function jobFingerprint(j: typeof cronJobs.$inferSelect): string {
-  return JSON.stringify([j.enabled, j.schedule, j.runAt, j.timezone, j.activeFrom, j.activeUntil, j.agentId, j.userPrompt, j.workingDir, j.stateless])
+  return JSON.stringify([j.enabled, j.schedule, j.runAt, j.timezone, j.activeFrom, j.activeUntil, j.agentId, j.userPrompt, j.workingDir, j.stateless, j.webhookSecret !== null])
 }
 
 /** Recurring job past its `activeUntil` — enabled but never scheduled. */
@@ -764,6 +886,12 @@ export function scheduleJob(jobId: string): void {
   const job = db.select().from(cronJobs).where(eq(cronJobs.id, jobId)).get()
   if (!job) return
   if (job.enabled !== 1) return
+  // Webhook job: fired by its events (startOrInject), never by a timer.
+  if (job.webhookSecret) {
+    _expired.add(jobId)
+    _fingerprint.set(jobId, jobFingerprint(job))
+    return
+  }
 
   let cron: Cron | null = null
   let target: Date | null
@@ -939,12 +1067,15 @@ export function reconcileFromDb(): void {
  * Execute a job once, in-process: persists a `cron_runs` row, appends + sends
  * the prompt to the job's session and points the session's `reply_to` at the
  * run. Returns as soon as the prompt is in — the run ends at its session's
- * turn end (finishRun), its timeout, or a local stop. Used by both scheduled
- * fires and the run-now button in the admin UI.
+ * turn end (finishRun), its timeout, or a local stop. Used by scheduled fires,
+ * the run-now button in the admin UI and webhook events (startOrInject; the
+ * opening message then carries every pending event — run-now on a webhook
+ * job sends the prompt alone).
  *
- * Returns the runId so the run-now route can return it.
+ * Returns the runId; '' when a webhook fire found its session owed to someone
+ * else (no row — the events stay pending for a later run).
  */
-export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual'): Promise<string> {
+export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' | 'webhook'): Promise<string> {
   const db = getCronDb()
   const job = db.select().from(cronJobs).where(eq(cronJobs.id, jobId)).get()
   if (!job) throw new Error(`cron job ${jobId} not found`)
@@ -990,17 +1121,24 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   _inflight.add(jobId)
   let tracked = false
   try {
-    // Session-level guards. A fire is only ever skipped, never injected into a
-    // busy session: its folder can't change mid-turn, its timeout would stop
-    // the other turn, and the reply would be whose? Picked sessions only — a
-    // job's own session can only be busy if someone chats in it.
+    // Session-level guards. A timer / run-now fire is only ever skipped, never
+    // injected into a busy session: its folder can't change mid-turn, its
+    // timeout would stop the other turn, and the reply would be whose? Picked
+    // sessions only — a job's own session can only be busy if someone chats in
+    // it. A webhook fire queues behind a user's turn (its events must not be
+    // dropped) and only waits out another owner of the wrap-up.
+    const webhook = triggerKind === 'webhook'
     let host: CronSessionHost | null = null
     let hostError: string | null = null
     if (fs.existsSync(job.workspacePath) && _sessionRegistry) {
       // A workspace whose db can't be opened fails the run (below), recorded.
       try { host = _sessionRegistry.getOrCreate(job.workspacePath) }
       catch (err) { hostError = `could not open workspace ${job.workspacePath}: ${err instanceof Error ? err.message : String(err)}` }
-      const busy = host && sessionBusy(host, sessionId)
+      const busy = host && sessionBusy(host, sessionId, webhook)
+      if (busy && webhook) {
+        console.warn(`[Cron] ${jobId}: webhook events stay pending — ${busy}`)
+        return ''
+      }
       if (busy) return skip(busy)
     }
 
@@ -1052,13 +1190,15 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     }
     try {
       if (existing) host.setWorkingDir(sessionId, folderAbs)
-      else await host.createSession(job.agentId, null, `Cron: ${job.label || job.id}`, undefined, sessionId, folderAbs, null)
+      // A webhook job's session is titled up front: its first message is an
+      // event payload, a poor title.
+      else await host.createSession(job.agentId, null, `Cron: ${job.label || job.id}`, undefined, sessionId, folderAbs, null, job.webhookSecret ? `Webhook: ${job.label || job.id}` : undefined)
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err))
     }
     // Re-check past the awaits (a chat turn or another owner may have taken
     // the session meanwhile). From here to the pointer write it is synchronous.
-    const busy = sessionBusy(host, sessionId)
+    const busy = sessionBusy(host, sessionId, webhook)
     if (busy) return fail(busy)
     // Recorded meanwhile by another cron.db writer: nothing to run for.
     if (!isRunning(runId)) return runId
@@ -1070,17 +1210,24 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     const timeoutSec = job.timeoutSec ?? RUN_TIMEOUT_SEC
     trackRun({ runId, jobId, sessionId, workspacePath: job.workspacePath, host }, startedAt + timeoutSec * 1000 - Date.now(), timeoutSec)
     tracked = true
+    // Claimed in the same synchronous slice as trackRun: an event stored
+    // before this point rides the opening message, one stored after finds the
+    // tracked run and is injected (startOrInject).
+    const events = webhook ? claimPendingEvents(jobId, runId, sessionId) : []
     try {
       // The UI row shows the prompt alone; the model also gets the preamble:
       // nothing else in its view says nobody will answer (the `cron-*` id is
       // invisible to it, prompts typed into the admin form don't carry one).
-      const stamp = host.appendUserMessage(sessionId, job.userPrompt)
+      const texts = events.map((ev) => eventText(ev, job.workspacePath, false))
+      const stamp = host.appendUserMessage(sessionId, [job.userPrompt, ...texts.map((t) => t.ui)].join('\n\n'))
+      stampEvents(events.map((ev) => ev.id), stamp)
       // accessLevel undefined: the session keeps its own level.
-      await host.sendUserMessage(sessionId, `${UNATTENDED_PREAMBLE}\n\n${job.userPrompt}`, undefined, undefined, stamp)
+      await host.sendUserMessage(sessionId, [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].join('\n\n'), undefined, undefined, stamp)
     } catch (err) {
       untrackRun(runId)
       tracked = false
       clearOwnPointer(host.getDb(), sessionId, runId)
+      requeueEvents({ runId })
       return fail(err instanceof Error ? err.message : String(err))
     }
     console.log(`[Cron] run ${runId} (job ${jobId}, ${triggerKind}) → ${sessionId}`)
@@ -1094,10 +1241,10 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
 /** Why a fire can't take `sessionId` now, or null. reply_to = someone is owed
  *  this session's wrap-up (another cron run, a relay caller, an A2A task, an
  *  /invocations job); it lives in the db, so it holds across restarts. */
-function sessionBusy(host: CronSessionHost, sessionId: string): string | null {
+function sessionBusy(host: CronSessionHost, sessionId: string, ownerOnly = false): string | null {
   const to = readReplyTo(host.getDb(), sessionId)
   if (to) return `session ${sessionId} busy: owed to ${ownerLabel(to)}`
-  if (host.hasActiveWorkInTree(sessionId)) return `session ${sessionId} busy: a turn is running in it`
+  if (!ownerOnly && host.hasActiveWorkInTree(sessionId)) return `session ${sessionId} busy: a turn is running in it`
   return null
 }
 
@@ -1259,6 +1406,7 @@ async function pruneOldRuns(jobId: string): Promise<void> {
  *  sessions first. */
 export async function deleteJobRuns(jobId: string): Promise<void> {
   await deleteRuns(getCronDb().select(DOOMED_RUN_COLUMNS).from(cronRuns).where(eq(cronRuns.jobId, jobId)).all())
+  getCronDb().delete(cronEvents).where(and(eq(cronEvents.jobId, jobId), isNull(cronEvents.runId))).run()
 }
 
 /** Every run row whose job is gone, its stateless runs' sessions first. The
@@ -1269,6 +1417,8 @@ export async function deleteOrphanRuns(): Promise<void> {
   const db = getCronDb()
   await deleteRuns(db.select(DOOMED_RUN_COLUMNS).from(cronRuns)
     .where(notInArray(cronRuns.jobId, db.select({ id: cronJobs.id }).from(cronJobs))).all())
+  // Events no run took (pending) of a job that is gone.
+  db.delete(cronEvents).where(and(isNull(cronEvents.runId), notInArray(cronEvents.jobId, db.select({ id: cronJobs.id }).from(cronJobs)))).run()
 }
 
 /** Delete `cron_runs` rows; a stateless run's session goes with its row.
@@ -1321,7 +1471,10 @@ async function deleteRuns(runs: DoomedRun[]): Promise<void> {
     }
   }
   const ids = runs.map((r) => r.id).filter((id) => !keptRows.has(id))
-  if (ids.length > 0) db.delete(cronRuns).where(inArray(cronRuns.id, ids)).run()
+  if (ids.length > 0) {
+    db.delete(cronEvents).where(inArray(cronEvents.runId, ids)).run()
+    db.delete(cronRuns).where(inArray(cronRuns.id, ids)).run()
+  }
   if (deleted > 0) {
     console.log(`[Cron] pruned ${ids.length} run row(s), deleted ${deleted} stateless run session(s)`)
     broadcast({ type: 'session:changed' })

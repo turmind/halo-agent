@@ -41,6 +41,11 @@ export const cronJobs = sqliteTable('cron_jobs', {
   runAt: integer('run_at'),
   /** IANA timezone name; null = host timezone. */
   timezone: text('timezone'),
+  /** Non-null = a webhook job: fired by `POST /cron-hooks/<id>` (HMAC
+   *  `X-Hub-Signature-256` or `Authorization: Bearer` with this secret), never
+   *  by a timer — `schedule` is '' and `runAt` NULL. Stored in clear: HMAC
+   *  verification needs it (plans/cron-in-process.md Q3). */
+  webhookSecret: text('webhook_secret'),
   /** Max wall-clock seconds a single cron run may take (a server restart
    *  included) before the runner stops its session. NULL = default 3600
    *  (runner.ts RUN_TIMEOUT_SEC). Range 60–21600,
@@ -84,8 +89,8 @@ export const cronJobs = sqliteTable('cron_jobs', {
 export const cronRuns = sqliteTable('cron_runs', {
   id: text('id').primaryKey(),
   jobId: text('job_id').notNull(),
-  /** 'manual' for run-now button; 'scheduled' for croner-fired. Lets the UI
-   *  distinguish ad-hoc tests from real schedule executions. */
+  /** 'manual' for run-now button; 'scheduled' for croner-fired; 'webhook'
+   *  for a run started by webhook events (cron_events.run_id names them). */
   triggerKind: text('trigger_kind').notNull(),
   status: text('status').notNull(),
   startedAt: integer('started_at').notNull(),
@@ -122,6 +127,25 @@ export const cronRuns = sqliteTable('cron_runs', {
   workspacePath: text('workspace_path'),
 })
 
+/** One webhook delivery. pending (received, not yet in a run) → injected
+ *  (handed to run `run_id`'s session, `stamp` = its UI row / raw turn key) →
+ *  done | failed with that run's outcome. Deduped per job on `delivery_id`. */
+export const cronEvents = sqliteTable('cron_events', {
+  id: text('id').primaryKey(),
+  jobId: text('job_id').notNull(),
+  /** X-GitHub-Delivery / Idempotency-Key / X-Request-Id, else sha256(body). */
+  deliveryId: text('delivery_id').notNull(),
+  /** X-GitHub-Event / X-Gitlab-Event — display only. */
+  eventType: text('event_type'),
+  receivedAt: integer('received_at').notNull(),
+  state: text('state').notNull(),
+  runId: text('run_id'),
+  sessionId: text('session_id'),
+  stamp: text('stamp'),
+  /** The request body as received (utf-8). */
+  payload: text('payload').notNull(),
+})
+
 const CREATE_SQL = `
 CREATE TABLE IF NOT EXISTS cron_jobs (
   id              TEXT PRIMARY KEY,
@@ -132,6 +156,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   schedule        TEXT NOT NULL,
   run_at          INTEGER,
   timezone        TEXT,
+  webhook_secret  TEXT,
   timeout_sec     INTEGER,
   session_id      TEXT,
   working_dir     TEXT,
@@ -167,6 +192,22 @@ CREATE TABLE IF NOT EXISTS cron_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_cron_runs_status ON cron_runs(status);
+
+CREATE TABLE IF NOT EXISTS cron_events (
+  id          TEXT PRIMARY KEY,
+  job_id      TEXT NOT NULL,
+  delivery_id TEXT NOT NULL,
+  event_type  TEXT,
+  received_at INTEGER NOT NULL,
+  state       TEXT NOT NULL,
+  run_id      TEXT,
+  session_id  TEXT,
+  stamp       TEXT,
+  payload     TEXT NOT NULL,
+  UNIQUE(job_id, delivery_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cron_events_job ON cron_events(job_id, state);
+CREATE INDEX IF NOT EXISTS idx_cron_events_run ON cron_events(run_id);
 `
 
 /** Ordered cron.db migrations (see migrate.ts). CREATE_SQL must always
@@ -217,6 +258,9 @@ export const CRON_MIGRATIONS: Migration[] = [
       WHERE workspace_path IS NULL
     `)
   },
+  // v7: webhook jobs — `webhook_secret` + the `cron_events` table (CREATE_SQL
+  // already made it; the IF NOT EXISTS there covers an existing db).
+  (s) => addColumnIfMissing(s, 'cron_jobs', 'webhook_secret', 'TEXT'),
 ]
 
 export function createCronDb(globalDir: string) {
@@ -226,7 +270,7 @@ export function createCronDb(globalDir: string) {
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(CREATE_SQL)
   runMigrations(sqlite, CRON_MIGRATIONS)
-  return drizzle(sqlite, { schema: { cronJobs, cronRuns } })
+  return drizzle(sqlite, { schema: { cronJobs, cronRuns, cronEvents } })
 }
 
 export type CronDb = ReturnType<typeof createCronDb>
