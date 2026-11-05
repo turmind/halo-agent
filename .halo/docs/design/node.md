@@ -1,6 +1,6 @@
 # Linked machines (`halo node`)
 
-> User guide: [guide/node.md](../guide/node.md). Tool reference: [dev/tools.md → Node tools](../dev/tools.md#node-tools). API: [dev/api.md → Linked machines](../dev/api.md#linked-machines-halo-node). Code: `packages/server/src/nodes/` (wired in `index.ts`, `session-agent-builder.ts`, `cron/runner.ts`), CLI `packages/cli/src/index.ts` (`cmdNode`), admin `features/nodes/`.
+> User guide: [guide/node.md](../guide/node.md). Tool reference: [dev/tools.md → Node tools](../dev/tools.md#node-tools). API: [dev/api.md → Linked machines](../dev/api.md#linked-machines-halo-node). Code: `packages/server/src/nodes/` (wired in `index.ts`, `session-agent-builder.ts`, `cron/runner.ts`), CLI `packages/cli/src/index.ts` (`cmdNode`), Go client `packages/node-go/`, admin `features/nodes/`.
 
 ## Problem
 
@@ -16,6 +16,8 @@ The server's agents work on the server's filesystem. Users also want them to tou
 | Routes | `nodes/routes.ts` | Admin CRUD (`/api/nodes/accounts`) + the cron relay (`POST /api/nodes/call`) |
 | Client | `nodes/node-client.ts` | `runNode()` — the `halo node` process: connect, reconnect with backoff, execute requests |
 | Executor | `nodes/node-exec.ts` + `node-path.ts` | Machine side. Wraps the **same** `createWorkspaceTools(base, { accessLevel: 'full' })` the server's agents use; adds the root check |
+| Go client | `packages/node-go/` | `halo-node`: a static Go binary (linux amd64 / arm64 / armv7, no cgo, ~7 MB) speaking the same protocol v1 with the same flags. It ports the client, the executor and the parts of `workspace-tools.ts` / `sandbox.ts` it needs (the seven ops, rm guard, process-group kill), with JS value, UTF-16 and V8 regex semantics (`internal/jsv`, `internal/jsregex` over regexp2). Ships as release assets via `.github/workflows/node-go.yml`, not npm |
+| Conformance | `packages/server/test/node-go-conformance.test.ts` + `packages/node-go/conformance/` | The TS executor is the oracle: a real hub connects TS `runNode` (`test/helpers/ts-node-main.ts`) and the Go binary side by side, and every result, file and log line is compared. Skipped unless `HALO_NODE_GO_BIN` is set. node-go.yml runs it, along with rm-guard vector `--check` and a 20k regex differential fuzz, on any PR touching either side, so a TS change goes red until Go follows. Accepted differences: plan D1–D10 |
 
 Not built in AgentCore mode (`nodeHub = AGENTCORE ? null : …`), the CLI / TUI or the evo sandbox — there the tools exist but return `NODES_UNAVAILABLE`.
 
@@ -95,4 +97,4 @@ Cost: the 8 descriptions measure ≈ 460 tokens (Claude CountTokens); with schem
 
 ## Admin
 
-`features/nodes/` adds **Channels → Linked machines** (after Web): a row per token with online dot, name, workspace, `root | Whole machine · shell on/off · os`, token copy and delete. The add dialog takes workspace + name and shows a ready-to-copy `HALO_NODE_TOKEN=<t> halo node --server <origin> --root <folder>` (token in the env, not a flag). Online state comes from the list response, then `nodes:changed` (full snapshot, global broadcast — the channels page is a global view); a WS reconnect drops the pushed snapshot and re-fetches the list. No polling.
+`features/nodes/` adds **Channels → Linked machines** (after Web): a row per token with online dot, name, workspace, `root | Whole machine · shell on/off · os`, token copy and delete. The add dialog takes workspace + name and shows two ready-to-copy commands (token in the env, not a flag). **Linux** maps `uname -m` to amd64 / arm64 / armv7, `curl`s `halo-node-linux-$A`, then runs `HALO_NODE_TOKEN=<t> ./halo-node --server <origin> --root <folder>`. **macOS / Windows** runs `HALO_NODE_TOKEN=<t> halo node --server <origin> --root <folder>` (npm). The download base comes from `/api/health`'s `version`: a plain `x.y.z` pins `releases/download/v<x.y.z>`, so the machine and the server come from the same tag; a dev build (`x.y.z-<sha>`) or a failed fetch uses `releases/latest/download`. Online state comes from the list response, then `nodes:changed` (full snapshot, global broadcast — the channels page is a global view); a WS reconnect drops the pushed snapshot and re-fetches the list. No polling.

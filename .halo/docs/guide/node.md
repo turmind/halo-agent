@@ -4,33 +4,51 @@ Let a workspace's agents work on files on **your own computer** — a laptop, a 
 
 ```
 [your laptop]                               [server]
-halo node --root ~/proj ──WebSocket──────▶ halo server ── agent in workspace W
+halo-node --root ~/proj ──WebSocket──────▶ halo server ── agent in workspace W
   (files, optional shell)                     node_read / node_write / … / node_run
 ```
 
-The machine needs only the `halo` package — no `halo setup`, no model keys, nothing under `~/.halo/`.
+Two clients do the same job, with the same flags and the same behaviour:
 
-Supported: **macOS and Linux**. Windows works on a best-effort basis (not regularly tested; `node_run` commands go to `cmd.exe`).
+- **Linux (x86_64 / arm64 / armv7)**: `halo-node`, a single ~7 MB binary attached to every GitHub release. It needs no Node.js and idles at about 9 MB of memory.
+- **macOS / Windows** (or a Linux box that already has the npm package): `halo node` from `npm install -g @turmind/halo`.
+
+Neither needs `halo setup` or model keys, and neither writes anything under `~/.halo/`.
+
+Supported: **Linux and macOS**. Windows works on a best-effort basis (not regularly tested; `node_run` commands go to `cmd.exe`).
 
 ## 1. Create a token
 
-Admin → **Channels → Linked machines** → **Add machine**. Pick the workspace and a machine name (`a-z 0-9 -`, e.g. `mbp`; unique within the workspace — the agent uses it to address the machine). The dialog shows a command to copy:
-
-```bash
-HALO_NODE_TOKEN=<token> halo node --server https://halo.example.com --root <folder>
-```
+Admin → **Channels → Linked machines** → **Add machine**. Pick the workspace and a machine name (`a-z 0-9 -`, e.g. `mbp`; unique within the workspace — the agent uses it to address the machine). The dialog shows two commands to copy: one downloads and runs `halo-node` on Linux, the other runs `halo node` on macOS / Windows. The download link points at the server's own release, so the machine and the server come from the same version.
 
 The token stays on the list row (copy button). Deleting the row revokes it at once and disconnects the machine.
 
-## 2. Run `halo node` on the machine
+## 2. Run it on the machine
+
+**Linux** — download the binary once:
+
+```bash
+A=$(uname -m); case "$A" in x86_64) A=amd64;; aarch64|arm64) A=arm64;; armv7l|armv8l) A=armv7;; *) echo "no halo-node build for $A — use npm" >&2;; esac
+curl -fLo halo-node "https://github.com/turmind/halo-agent/releases/latest/download/halo-node-linux-$A" && chmod +x halo-node
+# optional: verify
+curl -fsL https://github.com/turmind/halo-agent/releases/latest/download/SHA256SUMS | grep "halo-node-linux-$A\$" | sed "s/halo-node-linux-$A/halo-node/" | sha256sum -c
+export HALO_NODE_TOKEN=<token>                 # better than --token: flags show up in ps / shell history
+./halo-node --server https://halo.example.com --root ~/proj
+```
+
+To match a specific server version, use `releases/download/v<version>/` in place of `releases/latest/download/`; the admin's command already does this. `armv8l` (a 64-bit kernel with 32-bit userland) runs the armv7 build. If the machine can't reach GitHub, download the file on another machine and copy it over. `./halo-node --version` prints the version.
+
+**macOS / Windows**:
 
 ```bash
 npm install -g @turmind/halo                   # once
-export HALO_NODE_TOKEN=<token>                 # better than --token: flags show up in ps / shell history
+export HALO_NODE_TOKEN=<token>
 halo node --server https://halo.example.com --root ~/proj
 ```
 
-It runs in the foreground and logs each call (`[Node] read src/app.ts`, `[Node] refused write ../x: outside root`). Ctrl-C stops it. It reconnects by itself after network drops or a server restart; it exits on a bad / revoked token or when the workspace is gone.
+On Linux, `halo node` still works, and prints one `[Node] tip:` line pointing at the binary.
+
+Either one runs in the foreground and logs each call (`[Node] read src/app.ts`, `[Node] refused write ../x: outside root`). Ctrl-C stops it. It reconnects by itself after network drops or a server restart; it exits (code 1) on a bad / revoked token or when the workspace is gone.
 
 The admin row turns green (live, no refresh) and shows `folder · shell on/off · os`.
 
@@ -54,9 +72,44 @@ Everything inside the shared folder — including `.env` files, keys, credential
 `halo node` sends a bearer token, nothing else. If the server sits behind an auth proxy (Cloudflare Access, an SSO gateway, basic auth), either point `--server` at an address the machine can reach directly, or pass the proxy's credentials with `--header` (repeatable, `Name: value`, split on the first colon):
 
 ```bash
-halo node --server https://halo.example.com --root ~/proj \
+halo-node --server https://halo.example.com --root ~/proj \
   --header "CF-Access-Client-Id: <id>" --header "CF-Access-Client-Secret: <secret>"
 ```
+
+Neither client follows `HTTP(S)_PROXY`. To reach the server through a forward proxy, put a reverse proxy in front of the server instead, or use `--header`.
+
+### TLS certificates (`https://` servers)
+
+`halo-node` trusts the system's CA store (`/etc/ssl/certs/…`; `SSL_CERT_FILE` / `SSL_CERT_DIR` point it elsewhere). It falls back to a built-in Mozilla root set only on a system with no CA bundle at all. For a private or corporate CA, install it into the system store, or set `SSL_CERT_FILE`. `halo node` (Node.js) does the opposite: it uses Node's built-in roots plus `NODE_EXTRA_CA_CERTS`, and ignores the system store.
+
+### Run it as a service (systemd)
+
+```ini
+# /etc/systemd/system/halo-node.service
+[Unit]
+Description=halo node
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=alice
+WorkingDirectory=/home/alice                 # whole-machine mode: relative paths start here
+EnvironmentFile=/home/alice/.halo-node.env   # HALO_NODE_TOKEN=…   (chmod 600)
+ExecStart=/usr/local/bin/halo-node --server https://halo.example.com --root /home/alice/proj
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=1                   # 1 = bad / revoked token or workspace gone: restarting won't help
+# Environment=GOMEMLIMIT=24MiB                # optional, for very small boards
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Network drops, server restarts, a busy token (409) and a lockout (429) are handled inside the process, which keeps running, so `on-failure` is enough. Don't use `Restart=always`: it keeps restarting after a revoked token, and each restart is a failed login. After 5 failures in 15 minutes the server locks out that IP address, which blocks every machine connecting from it. For the npm client, set `ExecStart=/usr/bin/halo node …`.
+
+### Settings on the machine
+
+`halo-node` takes its shell timeout only from `HALO_SHELL_TIMEOUT` (ms, default 120 s); grep's default of 50 matches and the 5 MiB command-output cap are fixed. `halo node` (npm) also reads them from the machine's own `~/.halo/secrets/` (`timeout.shell_exec` in `config.yaml`, the `general.limits.*` keys in `settings.yaml`). This only matters on a machine that also runs a halo server with those settings changed.
 
 ## 3. Let the agent use it
 
@@ -79,7 +132,7 @@ Then just ask: "list my machines", "read `notes/todo.md` on mbp", "run the tests
 |---|---|
 | `token rejected by the server (401)` | Wrong / deleted token — create a new one. 5 bad tries in 15 min lock the address out for a while (429). |
 | `the workspace this token is bound to no longer exists (404)` | The workspace folder was removed on the server. |
-| `protocol mismatch (426)` | `halo` versions too far apart — upgrade the older side. |
+| `protocol mismatch (426)` | Client and server versions too far apart — upgrade the older side. |
 | `this token is already connected from another process` | Another `halo node` with the same token is running; this one keeps retrying until that one stops. Also normal right after the machine rebooted or woke from sleep: the server needs 40–60 s to notice the old connection is dead, so the new process backs off and can take up to ~90 s to come online. |
 | agent: `machine "mbp" is offline` | `halo node` isn't running / connected. |
 | agent: `went offline during the call` | The connection dropped mid-call; the operation may or may not have happened. Running commands on the machine were stopped. |

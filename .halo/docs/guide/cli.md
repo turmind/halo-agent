@@ -320,6 +320,11 @@ foreground, reconnects on its own, Ctrl-C to stop. Needs no `halo setup` and
 no model keys — nothing is written under `~/.halo/`. Create the token in
 Admin → Channels → Linked machines.
 
+On Linux (x86_64 / arm64 / armv7) the standalone `halo-node` binary from the
+GitHub release does the same job with the same flags and doesn't need Node.js;
+`halo node` there prints a one-line `[Node] tip:` pointing at it. See
+[node.md](node.md#2-run-it-on-the-machine).
+
 | Flag / env | Meaning |
 |---|---|
 | `--server <url>` | Server address, `http(s)://host:port` (`ws(s)://` also accepted) — required |
