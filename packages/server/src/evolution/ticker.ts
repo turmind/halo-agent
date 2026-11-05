@@ -24,6 +24,7 @@ import { config } from '../config.js'
 import { evolutionApplies, evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { broadcast } from '../ws/broadcast.js'
 import { failApply } from './queue-apply.js'
+import { notifyAutoApplied } from './notify.js'
 
 /**
  * Last-seen status snapshot for run/apply rows. Diff'd at the end of
@@ -97,6 +98,7 @@ export async function runTick(): Promise<void> {
   startPendingRuns()
   startPendingApplies()
   broadcastChanges()
+  notifyAutoApplied(getEvoDb())
 }
 
 /**

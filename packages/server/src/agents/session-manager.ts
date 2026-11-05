@@ -1374,6 +1374,14 @@ export class SessionManager implements SessionManagerInternals {
     this.uiStore.appendNotification(sessionId, text, agentName)
   }
 
+  /** Out-of-band one-liner into a session's chat, live AND persisted: unlike
+   *  appendNotification (log only), this goes through the event path, so an
+   *  open admin gets a `chat:system` frame now and a mid-turn channel
+   *  responder relays it. Used by the evo ticker's auto-apply notice. */
+  notifySystem(sessionId: string, text: string): void {
+    this.emitEvent(sessionId, { type: 'system', text })
+  }
+
   replaceMessageLog(sessionId: string, messages: SessionMessage[]): void {
     this.uiStore.replaceMessageLog(sessionId, messages)
   }

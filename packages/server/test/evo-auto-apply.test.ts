@@ -329,6 +329,12 @@ describe('extractLargerObservation', () => {
     expect(extractLargerObservation('## Larger observation\n\n## Next\n')).toBeNull()
     expect(extractLargerObservation('**Larger observation**: bold, not the heading')).toBeNull()
   })
+  it('the drafter template names exactly the heading the parser reads; .skip.md shape too', () => {
+    const tpl = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'templates', 'agents', '__evo_agent__', 'AGENT.md'), 'utf-8')
+    expect(tpl).toContain('`## Larger observation`')
+    expect(tpl).not.toMatch(/auto_apply_threshold|behavior ≥|confidence.*high.*auto/i)
+    expect(extractLargerObservation('Rule already exists in INSTRUCTIONS.md.\n\n## Larger observation\nThe skill list is stale.\n')).toBe('The skill list is stale.')
+  })
   it('caps at 2000 chars', () => {
     expect(extractLargerObservation(`## Larger observation\n${'x'.repeat(5000)}`)!.length).toBe(OBSERVATION_MAX_CHARS)
   })

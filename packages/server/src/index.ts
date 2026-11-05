@@ -58,6 +58,7 @@ import { createEvoDb, setEvoDb } from './db/evo-db.js'
 import { setEvoSpawner, startEvoTicker, stopEvoTicker } from './evolution/ticker.js'
 import { startArchiveDaemon, stopArchiveDaemon } from './evolution/archive.js'
 import { realEvoSpawner } from './evolution/spawn.js'
+import { setEvoSessionRegistry } from './evolution/notify.js'
 import { bootChannels, shutdownChannels } from './channels/registry.js'
 import { defaultChannelDescriptors } from './channels/descriptors.js'
 import { createAuthRoutes, authMiddleware, getTokenFromCookieHeader, isAuthenticated } from './middleware/auth.js'
@@ -459,6 +460,8 @@ setRelayRegistry(registry)
 // Cron jobs may run in a user-picked session; the runner peeks the live
 // managers to skip busy sessions and drop stale caches after a cli run.
 setCronSessionRegistry(registry)
+// Evo ticker posts the one-line auto-apply notice into the source session.
+setEvoSessionRegistry(registry)
 
 // Run ledger eager sweep: build the SessionManager NOW for every workspace
 // that has leftover `running_sessions` rows, so its constructor chain
