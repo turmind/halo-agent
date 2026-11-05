@@ -146,7 +146,7 @@ See [requirements/settings.md](../requirements/settings.md), [secrets-and-creden
 
 ## Bottom panel switching
 
-Two tabs in the header: Chat / Terminal, plus split, maximize and float / dock buttons. The panel opens on Chat after a refresh, unless split view is on.
+Two tabs in the header: Chat / Terminal, plus split, maximize and float / dock buttons. A refresh keeps the panel as you left it — same tab, split view and maximized state.
 
 **Split view** shows Chat and Terminal at once — side by side, or stacked when the panel is narrow (e.g. floating); drag the divider to resize. It stays on across refreshes; click either tab to go back to a single view.
 
