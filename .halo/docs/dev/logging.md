@@ -15,7 +15,7 @@ Any `?token=…` value in a message is replaced with `?token=<redacted>` before 
 
 ## Log locations
 
-One file for the whole server: `~/.halo/global/logs/server.log`. A single server process serves many workspaces, so there is no per-workspace log. Cron runs and evolution runs keep their own logs under `~/.halo/global/logs/{cron,evo}/`. `halo server start -d` additionally captures the process's stdout/stderr in `~/.halo/logs/server.log` — via the systemd user unit's `StandardOutput=append:` on Linux with systemd, otherwise via the built-in supervisor, which adds its `[respawn]` lines — that is the file `halo server logs` tails. A system unit's stdout goes to the journal (`journalctl -u <unit>`).
+One file for the whole server: `~/.halo/global/logs/server.log`. A single server process serves many workspaces, so there is no per-workspace log. Evolution runs keep their own logs under `~/.halo/global/logs/evo/`. Cron runs write none — a run's session and its run-history row are its record; `~/.halo/global/logs/cron/` only holds files of the older cli-child runner until they age out (30 days). `halo server start -d` additionally captures the process's stdout/stderr in `~/.halo/logs/server.log` — via the systemd user unit's `StandardOutput=append:` on Linux with systemd, otherwise via the built-in supervisor, which adds its `[respawn]` lines — that is the file `halo server logs` tails. A system unit's stdout goes to the journal (`journalctl -u <unit>`).
 
 ## Log format
 

@@ -65,7 +65,7 @@ Halo can send to a Telegram chat without that user having messaged the bot first
 The telegram cron-dispatcher (`channels/telegram/cron-dispatcher.ts`) registers itself with `cron/dispatcher.ts`'s registry at boot and **requires an explicit `chatId`** (numeric — Telegram private-chat ids equal user ids, group ids are negative):
 
 - Cron jobs created from inside a telegram chat via the `cron` skill auto-pin the current chat id (target `telegram:<account>:<chatId>`).
-- Admin-UI cron jobs that don't specify a target run silently — the result shows in the cron log, nothing is pushed.
+- Admin-UI cron jobs that don't specify a target run silently — nothing is pushed; the result is in the run history and the job's session.
 - `@username` entries are not accepted by `sendMessage`; the dispatcher rejects non-numeric values with a clear error.
 
 Earlier drafts considered "fan-out to every id in `allowedUsers`" or "fall back to `lastActiveChatId`", but in practice both pushed the cron output to strangers' chats. The cron creator's intent is "reach me, the person who set this up" — so the only target is what the caller passes explicitly.
