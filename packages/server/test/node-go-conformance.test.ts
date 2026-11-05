@@ -23,7 +23,7 @@ import * as P from '../src/nodes/protocol.js'
  * (plan node-go.md §3). Both run as external processes against one real hub;
  * every case in packages/node-go/conformance/cases/*.json goes to both and the
  * normalized results, written files and `[Node]` log lines must match.
- *   HALO_NODE_GO_BIN=<binary> [HALO_NODE_GO_EXEC="qemu-arm-static"] [HALO_NODE_GO_SMOKE=1]
+ *   HALO_NODE_GO_BIN=<binary> [HALO_NODE_GO_EXEC="qemu-arm"] [HALO_NODE_GO_SMOKE=1]
  * Skipped without HALO_NODE_GO_BIN, so the main CI is unaffected.
  */
 

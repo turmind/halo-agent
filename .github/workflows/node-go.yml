@@ -67,18 +67,18 @@ jobs:
       - name: conformance (amd64, full)
         run: pnpm --filter @turmind/halo-server exec vitest run test/node-go-conformance.test.ts
         env: { HALO_NODE_GO_BIN: "${{ github.workspace }}/packages/node-go/dist/halo-node-linux-amd64" }
-      - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      - run: sudo apt-get update && sudo apt-get install -y qemu-user
       - name: conformance (arm64 under qemu, smoke)
         run: pnpm --filter @turmind/halo-server exec vitest run test/node-go-conformance.test.ts
         env:
           HALO_NODE_GO_BIN: "${{ github.workspace }}/packages/node-go/dist/halo-node-linux-arm64"
-          HALO_NODE_GO_EXEC: qemu-aarch64-static
+          HALO_NODE_GO_EXEC: qemu-aarch64
           HALO_NODE_GO_SMOKE: "1"
       - name: conformance (armv7 under qemu, smoke)
         run: pnpm --filter @turmind/halo-server exec vitest run test/node-go-conformance.test.ts
         env:
           HALO_NODE_GO_BIN: "${{ github.workspace }}/packages/node-go/dist/halo-node-linux-armv7"
-          HALO_NODE_GO_EXEC: qemu-arm-static
+          HALO_NODE_GO_EXEC: qemu-arm
           HALO_NODE_GO_SMOKE: "1"
 
   release:

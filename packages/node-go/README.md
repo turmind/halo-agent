@@ -47,7 +47,7 @@ pnpm --filter @turmind/halo-core build && ./build.sh
 HALO_NODE_GO_BIN=$PWD/dist/halo-node-linux-amd64 \
   pnpm --filter @turmind/halo-server exec vitest run test/node-go-conformance.test.ts
 # arm under qemu-user, smoke subset:
-#   HALO_NODE_GO_BIN=$PWD/dist/halo-node-linux-arm64 HALO_NODE_GO_EXEC=qemu-aarch64-static HALO_NODE_GO_SMOKE=1
+#   HALO_NODE_GO_BIN=$PWD/dist/halo-node-linux-arm64 HALO_NODE_GO_EXEC=qemu-aarch64 HALO_NODE_GO_SMOKE=1
 ```
 
 ## Install script
