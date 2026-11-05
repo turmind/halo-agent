@@ -1,0 +1,44 @@
+{"src":"${1,0}","err":"Invalid regular expression: /${1,0}/: Nothing to repeat"}
+{"src":"^{2,1}","err":"Invalid regular expression: /^{2,1}/: Nothing to repeat"}
+{"src":"\\b{2,1}","err":"Invalid regular expression: /\\b{2,1}/: Nothing to repeat"}
+{"src":"^{1}","err":"Invalid regular expression: /^{1}/: Nothing to repeat"}
+{"src":"\\b+","err":"Invalid regular expression: /\\b+/: Nothing to repeat"}
+{"src":"(?<a>(\\r(?<a>x)","err":"Invalid regular expression: /(?<a>(\\r(?<a>x)/: Unterminated group"}
+{"src":"(?<a>.)(?<a>","err":"Invalid regular expression: /(?<a>.)(?<a>/: Unterminated group"}
+{"src":"(?<a>x)(?<a>y)","err":"Invalid regular expression: /(?<a>x)(?<a>y)/: Duplicate capture group name"}
+{"src":"(?<a>(?<a>x))","err":"Invalid regular expression: /(?<a>(?<a>x))/: Duplicate capture group name"}
+{"src":"(?<a>x)(?<\\u0061>y)","err":"Invalid regular expression: /(?<a>x)(?<\\u0061>y)/: Duplicate capture group name"}
+{"src":"(?<a\\u0062>x)(?<\\u{61}\\u{62}>y)","err":"Invalid regular expression: /(?<a\\u0062>x)(?<\\u{61}\\u{62}>y)/: Duplicate capture group name"}
+{"src":"[\\S-\\xef\\k]](?<a>)","err":"Invalid regular expression: /[\\S-\\xef\\k]](?<a>)/: Invalid escape"}
+{"src":"[\\k](?<a>)","err":"Invalid regular expression: /[\\k](?<a>)/: Invalid escape"}
+{"src":"[\\k]","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000000000000000"}
+{"src":"\\k(?<a>)","err":"Invalid regular expression: /\\k(?<a>)/: Invalid named reference"}
+{"src":"(?<\\uFaC>x)","err":"Invalid regular expression: /(?<\\uFaC>x)/: Invalid Unicode escape"}
+{"src":"(?<$\\uf{1)","err":"Invalid regular expression: /(?<$\\uf{1)/: Invalid Unicode escape"}
+{"src":"(?<\\u{110000}>x)","err":"Invalid regular expression: /(?<\\u{110000}>x)/: Invalid Unicode escape"}
+{"src":"(?<\\u{61>x)","err":"Invalid regular expression: /(?<\\u{61>x)/: Invalid Unicode escape"}
+{"src":"(?<a\\x>x)","err":"Invalid regular expression: /(?<a\\x>x)/: Invalid capture group name"}
+{"src":"(?<\\u{61}>x)","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000100100000000001"}
+{"src":"(a\\1)","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"011000010101101000"}
+{"src":"(?<n>a\\k<n>)b","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"001000010000100000"}
+{"src":"((a)|b\\2)+","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"011010010101101000"}
+{"src":"^(a\\1)$","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"010000000000000000"}
+{"src":"]{0,0}((?<a>\\b){2147483647,}?)","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"011111110101111101"}
+{"src":"(?:\\b){2,}?","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"011111110101111101"}
+{"src":"(?=a){2147483647,}","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"011000010101101000"}
+{"src":"(?:(?=a)|^){3}","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"111111111111111111"}
+{"src":"(?:){5}a","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"011000010101101000"}
+{"src":"()*a","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"011000010101101000"}
+{"src":"(\\b)+\\1","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"011111110101111101"}
+{"src":"(a)(?:\\b){0}\\1","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000000000000000"}
+{"src":"(?:\\b|^){2147483646,}?","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"111111111111111111"}
+{"src":"(\\b){2147483646,}","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"011111110101111101"}
+{"src":"(?:(?=a)){0,}b","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"001010010100101000"}
+{"src":"😁|😀","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000001100000000"}
+{"src":"😀|😁","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000001100000000"}
+{"src":"a\\uD83Db|a\\uD83Dc","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000000000000000"}
+{"src":"😁?","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000001100000000"}
+{"src":"😀{2}","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000000000000000"}
+{"src":"😁*\\D","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000001100000000"}
+{"src":"(?<=😀*)..","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000000100000000"}
+{"src":"😀{2}(\\0*?[_-😀 -!0]){1,3}","in":["","a","abc","xyz","Abc_1","foo\r","x y","ab cd","😀","a😀b","é","aé","tab\there","{1}","a-b]","\\c*","\u001b\u0007\b\u0000","$x_1"],"out":"000000000000000000"}

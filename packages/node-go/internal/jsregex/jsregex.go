@@ -32,6 +32,9 @@ const MatchTimeout = 120 * time.Second
 
 const maxCount = 1<<31 - 1
 
+// maxCaptures is V8's RegExpMacroAssembler::kMaxCaptures ((2^16-1-1)/2).
+const maxCaptures = (1<<16 - 2) / 2
+
 // SyntaxError carries V8's message.
 type SyntaxError struct{ Src, Msg string }
 
@@ -75,6 +78,7 @@ const (
 	kAssert
 	kLookahead
 	kLookbehind
+	kZero // a group that can only match empty (V8 max_match() == 0)
 )
 
 type parser struct {
@@ -84,8 +88,14 @@ type parser struct {
 	nCaps    int
 	capSeen  int
 	hasNamed bool
-	names    map[string]int
+	names    map[string]int // registered at the group's close paren, like V8
 	refs     []string
+	open     []openGroup // groups whose ')' hasn't been reached
+}
+
+type openGroup struct {
+	idx  int // capture index; 0 = not a capture
+	name string
 }
 
 type synErr struct{ msg string }
@@ -117,7 +127,7 @@ func Translate(src string) (out string, err error) {
 			out, err = "", &SyntaxError{src, se.msg}
 		}
 	}()
-	out = p.disjunction()
+	out, _ = p.disjunction()
 	if p.i < len(p.u) { // only a ')' stops the top level early
 		p.fail("Unmatched ')'")
 	}
@@ -166,43 +176,58 @@ func (p *parser) peek(off int) rune {
 	return -1
 }
 
-func (p *parser) disjunction() string {
+// disjunction / alternative / term also report zero-width (V8 max_match() == 0).
+func (p *parser) disjunction() (string, bool) {
 	var b strings.Builder
-	b.WriteString(p.alternative())
+	s, zero := p.alternative()
+	b.WriteString(s)
 	for p.peek(0) == '|' {
 		p.i++
 		b.WriteByte('|')
-		b.WriteString(p.alternative())
+		s, z := p.alternative()
+		b.WriteString(s)
+		zero = zero && z
 	}
-	return b.String()
+	return b.String(), zero
 }
 
-func (p *parser) alternative() string {
+func (p *parser) alternative() (string, bool) {
 	var b strings.Builder
+	zero := true
 	for p.i < len(p.u) {
 		if c := p.u[p.i]; c == '|' || c == ')' {
 			break
 		}
-		b.WriteString(p.term())
+		s, z := p.term()
+		b.WriteString(s)
+		zero = zero && z
 	}
-	return b.String()
+	return b.String(), zero
 }
 
-func (p *parser) term() string {
+func (p *parser) term() (string, bool) {
 	atom, k := p.atom()
+	if k == kAssert { // V8 `continue`s past ^ $ \b \B: a following * / {n} is the next atom's "Nothing to repeat"
+		return atom, true
+	}
+	zero := k == kLookahead || k == kLookbehind || k == kZero
 	q, ok := p.quantifier()
 	if !ok {
-		return atom
+		return atom, zero
 	}
-	switch k {
-	case kAssert:
-		p.fail("Nothing to repeat")
-	case kLookbehind:
+	if k == kLookbehind {
 		p.fail("Invalid quantifier")
-	case kLookahead: // Annex B QuantifiableAssertion
-		atom = "(?:" + atom + ")"
 	}
-	return atom + q
+	if zero {
+		// V8 AddQuantifierToAtom: an atom that only matches empty loses its
+		// quantifier — dropped when min is 0, kept once otherwise. regexp2 would
+		// iterate it up to 2^31 times. `{0}` keeps capture numbering intact.
+		if q[0] == '*' || q[0] == '?' || strings.HasPrefix(q, "{0}") || strings.HasPrefix(q, "{0,") {
+			return "(?:" + atom + "){0}", true
+		}
+		return atom, true
+	}
+	return atom + q, strings.HasPrefix(q, "{0}")
 }
 
 // braces parses `{n}` / `{n,}` / `{n,m}` at p.i (no consume). max -1 = ∞.
@@ -282,6 +307,22 @@ func lit(c rune) string {
 	if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
 		return string(c)
 	}
+	if c >= 0xD800 && c <= 0xDFFF {
+		// regexp2's string table dedups Multi literals by string([]rune), which
+		// turns every surrogate into U+FFFD — 😁|😀 (or a\uD83Db|a\uD83Dc) would
+		// share one entry. Empty lookaheads fence the unit into its own One node
+		// (compared by value); the group keeps a quantifier on the whole unit.
+		// Root fix belongs in regexp2's writer.stringCode.
+		return fmt.Sprintf(`(?:(?=)\u%04X(?=))`, c)
+	}
+	return fmt.Sprintf(`\u%04X`, c)
+}
+
+// classLit is lit inside [...] (no wrapping).
+func classLit(c rune) string {
+	if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+		return string(c)
+	}
 	return fmt.Sprintf(`\u%04X`, c)
 }
 
@@ -332,29 +373,55 @@ func (p *parser) group() (string, kind) {
 				p.i += 3
 			default:
 				p.i += 2
+				p.openCapture()
 				name = p.groupName()
-				p.capSeen++
-				if _, dup := p.names[name]; !dup {
-					p.names[name] = p.capSeen
-				} else {
-					name = "\x00dup" // reported at the close paren, like V8
-				}
 			}
 		default:
 			p.fail("Invalid group")
 		}
 	} else {
-		p.capSeen++
+		p.openCapture()
 	}
-	body := p.disjunction()
+	idx := p.capSeen
+	if prefix != "(" {
+		idx = 0
+	}
+	p.open = append(p.open, openGroup{idx, name})
+	body, zero := p.disjunction()
 	if p.i >= len(p.u) {
 		p.fail("Unterminated group")
 	}
 	p.i++ // )
-	if name == "\x00dup" {
-		p.fail("Duplicate capture group name")
+	p.open = p.open[:len(p.open)-1]
+	if name != "" { // V8 registers (and dup-checks) a name at its close paren
+		if _, dup := p.names[name]; dup {
+			p.fail("Duplicate capture group name")
+		}
+		p.names[name] = idx
+	}
+	if zero && k == kAtom {
+		k = kZero
 	}
 	return prefix + body + ")", k
+}
+
+// openCapture: V8 caps captures at kMaxCaptures = (2^16-2)/2, checked before the name is parsed.
+func (p *parser) openCapture() {
+	if p.capSeen >= maxCaptures {
+		p.fail("Too many captures")
+	}
+	p.capSeen++
+}
+
+// insideCapture: V8 turns a backreference to a still-open group into an empty
+// match (AddEmpty); regexp2 would see the previous iteration's capture.
+func (p *parser) insideCapture(idx int, name string) bool {
+	for _, g := range p.open {
+		if idx != 0 && g.idx == idx || name != "" && g.name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func isHex(c rune) bool {
@@ -374,7 +441,9 @@ func (p *parser) hexN(off, n int) (rune, bool) {
 	return v, true
 }
 
-// groupName parses RegExpIdentifierName up to '>' (p.i just past '<').
+// groupName parses RegExpIdentifierName up to '>' (p.i just past '<'), the
+// V8 ParseCaptureGroupName way: unicode mode (pairs, \u{…}), a bad \u escape
+// is "Invalid Unicode escape", an escaped '>' still ends the name.
 func (p *parser) groupName() string {
 	var cps []rune
 	for {
@@ -382,15 +451,7 @@ func (p *parser) groupName() string {
 		if c == -1 {
 			p.fail("Invalid capture group name")
 		}
-		if c == '>' {
-			p.i++
-			break
-		}
-		var cp rune
-		if c == '\\' {
-			if p.peek(1) != 'u' {
-				p.fail("Invalid capture group name")
-			}
+		if c == '\\' && p.peek(1) == 'u' {
 			if p.peek(2) == '{' {
 				j := 3
 				var v rune
@@ -398,46 +459,51 @@ func (p *parser) groupName() string {
 					d, _ := strconv.ParseUint(string(p.peek(j)), 16, 8)
 					v = v*16 + rune(d)
 					if v > 0x10FFFF {
-						p.fail("Invalid capture group name")
+						p.fail("Invalid Unicode escape")
 					}
 					j++
 				}
 				if j == 3 || p.peek(j) != '}' {
-					p.fail("Invalid capture group name")
+					p.fail("Invalid Unicode escape")
 				}
-				cp = v
+				c = v
 				p.i += j + 1
 			} else {
 				v, ok := p.hexN(2, 4)
 				if !ok {
-					p.fail("Invalid capture group name")
+					p.fail("Invalid Unicode escape")
 				}
 				p.i += 6
-				cp = v
+				c = v
 				if v >= 0xD800 && v <= 0xDBFF && p.peek(0) == '\\' && p.peek(1) == 'u' {
 					if lo, ok := p.hexN(2, 4); ok && lo >= 0xDC00 && lo <= 0xDFFF {
-						cp = 0x10000 + (v-0xD800)<<10 + (lo - 0xDC00)
+						c = 0x10000 + (v-0xD800)<<10 + (lo - 0xDC00)
 						p.i += 6
 					}
 				}
 			}
 		} else {
-			cp = c
 			p.i++
 			if c >= 0xD800 && c <= 0xDBFF {
 				if lo := p.peek(0); lo >= 0xDC00 && lo <= 0xDFFF {
-					cp = 0x10000 + (c-0xD800)<<10 + (lo - 0xDC00)
+					c = 0x10000 + (c-0xD800)<<10 + (lo - 0xDC00)
 					p.i++
 				}
 			}
 		}
-		if len(cps) == 0 && !idStart(cp) || len(cps) > 0 && !idContinue(cp) {
+		if c == '\\' {
 			p.fail("Invalid capture group name")
 		}
-		cps = append(cps, cp)
-	}
-	if len(cps) == 0 {
-		p.fail("Invalid capture group name")
+		if len(cps) == 0 {
+			if !idStart(c) {
+				p.fail("Invalid capture group name")
+			}
+		} else if c == '>' {
+			break
+		} else if !idContinue(c) {
+			p.fail("Invalid capture group name")
+		}
+		cps = append(cps, c)
 	}
 	return string(cps)
 }
@@ -534,6 +600,9 @@ func (p *parser) atomEscape() (string, kind) {
 		}
 		p.i += 2
 		name := p.groupName()
+		if p.insideCapture(0, name) {
+			return "(?:)", kZero
+		}
 		p.refs = append(p.refs, name)
 		return refMarkL + strconv.Itoa(len(p.refs)-1) + refMarkR, kAtom
 	case '0':
@@ -553,6 +622,9 @@ func (p *parser) atomEscape() (string, kind) {
 		}
 		if n <= p.nCaps {
 			p.i = j
+			if p.insideCapture(n, "") {
+				return "(?:)", kZero
+			}
 			return `(?:\` + strconv.Itoa(n) + `)`, kAtom
 		}
 		if c >= '8' {
@@ -579,14 +651,14 @@ func (p *parser) classAtom() classAtom {
 	c := p.u[p.i]
 	if c != '\\' {
 		p.i++
-		return classAtom{s: lit(c), unit: c}
+		return classAtom{s: classLit(c), unit: c}
 	}
 	p.i++
 	c = p.peek(0)
 	if c == -1 {
 		p.fail(`\ at end of pattern`)
 	}
-	unit := func(v rune) classAtom { return classAtom{s: lit(v), unit: v} }
+	unit := func(v rune) classAtom { return classAtom{s: classLit(v), unit: v} }
 	switch c {
 	case 'd', 'D', 'w', 'W', 's', 'S':
 		p.i++
@@ -602,6 +674,10 @@ func (p *parser) classAtom() classAtom {
 		return unit('\\') // `\` literal; the `c` is the next class atom
 	case 'x', 'u':
 		return unit(p.hexEscape(c))
+	case 'k':
+		if p.hasNamed { // V8 ParseCharacterEscape: \k is no identity escape once named groups exist
+			p.fail("Invalid escape")
+		}
 	}
 	if isOctal(c) {
 		return unit(p.octal())
@@ -646,7 +722,7 @@ func (p *parser) class() string {
 			p.i++
 			z := p.classAtom()
 			if a.isEsc || z.isEsc { // Annex B: `-` is literal next to a class escape (R6)
-				b.WriteString(a.s + lit('-') + z.s)
+				b.WriteString(a.s + classLit('-') + z.s)
 				continue
 			}
 			if a.unit > z.unit {
