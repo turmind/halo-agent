@@ -252,6 +252,92 @@ describe('startOrInject — batching', () => {
     expect(runsOf('cron-wait')).toEqual([expect.objectContaining({ status: 'succeeded', output: 'a\n\nb\n\nc' })])
   })
 
+  it('a user turn running when the job has a folder: the webhook run still queues (folder left for a later run), events done', async () => {
+    fs.mkdirSync(path.join(ws, 'sub'))
+    insertJob('cron-dir', { workingDir: 'sub' })
+    h.seedSession('cron-dir')
+    let release!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { release = r }), reply: 'user reply' }, { reply: 'event done' })
+    await h.sm.sendUserMessage('cron-dir', 'hello')
+    await until(() => h.inputs.length === 1)
+    expect((await post('cron-dir', '{"q":1}', { authorization: `Bearer ${SECRET}` })).status).toBe(202)
+    // The run took the session while the user's turn still runs.
+    await until(() => runsOf('cron-dir').length === 1 && readReplyTo(h.sm.getDb(), 'cron-dir') !== null)
+    expect(readReplyTo(h.sm.getDb(), 'cron-dir')).toEqual({ cron: runsOf('cron-dir')[0].id })
+    expect(h.sm.hasActiveWorkInTree('cron-dir')).toBe(true)
+    release()
+    await until(() => settled('cron-dir'))
+    expect(runsOf('cron-dir')[0]).toMatchObject({ status: 'succeeded', output: 'event done' })
+    expect(eventsOf('cron-dir')[0].state).toBe('done')
+  })
+
+  it('another owner taking the session during the fire\'s awaits: no run row, events pending, its release starts the run', async () => {
+    fs.mkdirSync(path.join(ws, 'sub2'))
+    insertJob('cron-late-own', { workingDir: 'sub2' })
+    h.seedSession('cron-late-own')
+    // Lands between the first ownership check and the re-check (the folder
+    // resolve is the await in between).
+    const realStat = fs.promises.stat
+    let taken = false
+    vi.spyOn(fs.promises, 'stat').mockImplementation(async (...args: Parameters<typeof fs.promises.stat>) => {
+      if (!taken && String(args[0]).endsWith('sub2')) {
+        taken = true
+        writeReplyTo(h.sm.getDb(), 'cron-late-own', { a2a: 'task-late' })
+      }
+      return realStat(...args)
+    })
+    expect((await post('cron-late-own', '{"n":1}', { authorization: `Bearer ${SECRET}`, 'x-request-id': 'lo1' })).status).toBe(202)
+    await until(() => taken && !_inflight.has('cron-late-own'))
+    expect(runsOf('cron-late-own')).toEqual([])
+    expect(eventsOf('cron-late-own')[0].state).toBe('pending')
+    expect(db.select().from(cronJobs).where(eq(cronJobs.id, 'cron-late-own')).get()!.lastRunStatus).toBeNull()
+    clearReplyTo(h.sm.getDb(), 'cron-late-own')
+    await until(() => settled('cron-late-own'))
+    expect(runsOf('cron-late-own')).toEqual([expect.objectContaining({ triggerKind: 'webhook', status: 'succeeded' })])
+    expect(h.inputs[0]).toContain('delivery lo1')
+    expect(eventsOf('cron-late-own')[0].state).toBe('done')
+  })
+
+  it('the opening send throwing: the run fails, its events fail (not requeued), the session pointer is cleared', async () => {
+    insertJob('cron-throw')
+    h.seedSession('cron-throw')
+    vi.spyOn(h.sm, 'sendUserMessage').mockRejectedValueOnce(new Error('send blew up'))
+    expect((await post('cron-throw', '{"n":1}', { authorization: `Bearer ${SECRET}`, 'x-request-id': 'th1' })).status).toBe(202)
+    await until(() => settled('cron-throw'))
+    expect(runsOf('cron-throw')).toEqual([expect.objectContaining({ status: 'failed', failureReason: 'send blew up' })])
+    expect(eventsOf('cron-throw')).toEqual([expect.objectContaining({ state: 'failed', runId: runsOf('cron-throw')[0].id })])
+    expect(readReplyTo(h.sm.getDb(), 'cron-throw')).toBeNull()
+    expect(_runs.size).toBe(0)
+  })
+
+  it('a run-now failing before its turn: an event that arrived during it gets its own run', async () => {
+    fs.mkdirSync(path.join(ws, 'sub3'))
+    insertJob('cron-now-fail', { workingDir: 'sub3' })
+    // The manual run fails at its first ownership-free step past the awaits:
+    // the folder resolve is held until an event is in, then createSession throws.
+    const realStat = fs.promises.stat
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let held = false
+    vi.spyOn(fs.promises, 'stat').mockImplementation(async (...args: Parameters<typeof fs.promises.stat>) => {
+      if (!held && String(args[0]).endsWith('sub3')) { held = true; await gate }
+      return realStat(...args)
+    })
+    vi.spyOn(h.sm, 'createSession').mockRejectedValueOnce(new Error('create blew up'))
+    expect((await Promise.resolve(rest.request('/cron/jobs/cron-now-fail/run-now', { method: 'POST' }))).status).toBe(200)
+    await until(() => held)
+    // The job is in flight (manual), so the event only waits.
+    expect((await post('cron-now-fail', '{"n":1}', { authorization: `Bearer ${SECRET}`, 'x-request-id': 'nf1' })).status).toBe(202)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(eventsOf('cron-now-fail')[0].state).toBe('pending')
+    release()
+    await until(() => runsOf('cron-now-fail').length === 2 && settled('cron-now-fail'))
+    const byKind = Object.fromEntries(runsOf('cron-now-fail').map((r) => [r.triggerKind, r]))
+    expect(byKind.manual).toMatchObject({ status: 'failed', failureReason: 'create blew up' })
+    expect(byKind.webhook).toMatchObject({ status: 'succeeded' })
+    expect(eventsOf('cron-now-fail')[0]).toMatchObject({ state: 'done', runId: byKind.webhook.id })
+  })
+
   it('a user turn in the session: the webhook run queues behind it instead of skipping', async () => {
     insertJob('cron-busy')
     h.seedSession('cron-busy')

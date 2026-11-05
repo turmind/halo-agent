@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { eq } from 'drizzle-orm'
-import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src/db/cron-db.js'
+import { createCronDb, setCronDb, cronEvents, cronJobs, cronRuns, type CronDb } from '../src/db/cron-db.js'
 import { createRunsDb, setRunsDb, insertRunning } from '../src/db/runs-db.js'
 import { getWorkspaceDb } from '../src/db/index.js'
 import { agentSessions } from '../src/db/schema.js'
@@ -165,6 +165,44 @@ describe('recoverRuns — in-process runs', () => {
     db.insert(cronRuns).values({ id: 'run-gone', jobId: 'cron-gone', triggerKind: 'scheduled', status: 'running', startedAt: Date.now(), sessionId: 'cron-gone', workspacePath: path.join(tmpHome, 'nope') }).run()
     await recoverRuns()
     expect(getRun('run-gone').failureReason).toContain('workspace not found')
+  })
+
+  it('a run whose resumed turn ended during an earlier row\'s await ("ended"): left as recorded, no second release / requeue', async () => {
+    // Row 1 resumes and awaits the redelivery of its lost event (held here);
+    // row 2 ends by its own path meanwhile (finishRun: recorded, events done,
+    // its job guard held until its end releases it).
+    const ws2 = path.join(tmpHome, 'ws2')
+    fs.mkdirSync(path.join(ws2, '.halo'), { recursive: true })
+    insertJob('cron-e1')
+    insertJob('cron-e2', { workspacePath: ws2 })
+    leftover('run-e1', 'cron-e1', 'cron-e1')
+    db.insert(cronEvents).values({ id: 'ev-e1', jobId: 'cron-e1', deliveryId: 'e1', receivedAt: 1, state: 'injected', runId: 'run-e1', sessionId: 'cron-e1', stamp: '2026-01-01T00:00:00.009Z', payload: '{}' }).run()
+    db.insert(cronRuns).values({ id: 'run-e2', jobId: 'cron-e2', triggerKind: 'webhook', status: 'running', startedAt: Date.now() - 1000, sessionId: 'cron-e2', workspacePath: ws2 }).run()
+    db.insert(cronEvents).values({ id: 'ev-e2', jobId: 'cron-e2', deliveryId: 'e2', receivedAt: 1, state: 'injected', runId: 'run-e2', sessionId: 'cron-e2', stamp: 's', payload: '{}' }).run()
+    const hh = boot()
+    let releaseNudge!: () => void
+    hh.turns.push({ gate: new Promise<void>((r) => { releaseNudge = r }) })
+    const realSend = hh.sm.sendUserMessage.bind(hh.sm)
+    let releaseSend!: () => void
+    const sendGate = new Promise<void>((r) => { releaseSend = r })
+    let redelivering = false
+    vi.spyOn(hh.sm, 'sendUserMessage').mockImplementation(async (...args: Parameters<typeof realSend>) => {
+      if (args[1].includes('[redelivered after restart]')) { redelivering = true; await sendGate }
+      return realSend(...args)
+    })
+    const recovering = recoverRuns()
+    await until(() => redelivering)
+    db.update(cronRuns).set({ status: 'succeeded', completedAt: Date.now() }).where(eq(cronRuns.id, 'run-e2')).run()
+    db.update(cronEvents).set({ state: 'done' }).where(eq(cronEvents.id, 'ev-e2')).run()
+    releaseSend()
+    await recovering
+    releaseNudge()
+    expect(getRun('run-e2')).toMatchObject({ status: 'succeeded' })
+    expect(db.select().from(cronEvents).where(eq(cronEvents.id, 'ev-e2')).get()).toMatchObject({ state: 'done', runId: 'run-e2' })
+    // Its guard is its end path's to drop, not recovery's.
+    expect(_inflight.has('cron-e2')).toBe(true)
+    _inflight.delete('cron-e2')
+    await until(() => getRun('run-e1').status !== 'running' && !_inflight.has('cron-e1'))
   })
 
   it('startCronDaemon blocks every job with a running row synchronously, before any schedule is armed', async () => {

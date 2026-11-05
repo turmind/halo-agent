@@ -372,7 +372,7 @@ function newRunId(): string {
  * before — identity check on the process command line (pid reuse), SIGTERM,
  * SIGKILL tree after the grace window, job + session blocked meanwhile;
  * never killed on Windows (identity can't be verified cheaply). Marked
- * failed regardless. Remove this branch one minor release after in-process cron.
+ * failed regardless. remove after 2.3.0
  *
  * `graceMs` is a test-only override of the legacy SIGTERM→SIGKILL grace.
  */
@@ -1141,15 +1141,19 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
     broadcast({ type: 'cron:run_changed', jobId, runId, status: 'skipped' })
     return runId
   }
-  const fail = (reason: string, eventsWait = false): string => {
+  const fail = (reason: string): string => {
     finalize(runId, jobId, { status: 'failed', output: null, exitCode: null, failureReason: reason, dispatchResults: [] })
     // A webhook fire's events fail with it — the ones it had claimed and the
     // ones still pending (not retried: a broken workspace would loop; the
     // sender may redeliver a failed event).
-    if (triggerKind === 'webhook' && !eventsWait) {
+    if (triggerKind === 'webhook') {
       claimPendingEvents(jobId, runId, sessionId)
       settleRunEvents(runId, false)
     }
+    // A run-now that never reached its turn: events that arrived during it
+    // (startOrInject saw the job in flight) get their own run. That one
+    // failing settles them failed and kicks nothing — no loop.
+    if (triggerKind === 'manual') kickPendingEvents(jobId)
     return runId
   }
 
@@ -1233,7 +1237,11 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       return fail(`session ${sessionId} runs agent ${existing.agentId}, not the job's ${job.agentId}; delete that session or turn on "new session every run" to change the agent`)
     }
     try {
-      if (existing) host.setWorkingDir(sessionId, folderAbs)
+      // A webhook fire queues behind a running turn, whose folder can't change
+      // mid-turn (setWorkingDir throws): the folder applies on a later run.
+      if (existing) {
+        if (!(webhook && host.hasActiveWorkInTree(sessionId))) host.setWorkingDir(sessionId, folderAbs)
+      }
       // A webhook job's session is titled up front: its first message is an
       // event payload, a poor title.
       else await host.createSession(job.agentId, null, `Cron: ${job.label || job.id}`, undefined, sessionId, folderAbs, null, job.webhookSecret ? `Webhook: ${job.label || job.id}` : undefined)
@@ -1243,9 +1251,16 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
     // Re-check past the awaits (a chat turn or another owner may have taken
     // the session meanwhile). From here to the pointer write it is synchronous.
     const busy = sessionBusy(host, sessionId, webhook)
-    // Webhook: another owner took the session meanwhile — its events wait for
-    // it as at the first check (its release kicks them).
-    if (busy) return fail(busy, webhook)
+    // Webhook: another owner took the session meanwhile — as at the first
+    // check, no run: the row goes, the events wait for that owner's release
+    // (clearReplyTo kicks them).
+    if (busy && webhook) {
+      db.delete(cronRuns).where(and(eq(cronRuns.id, runId), eq(cronRuns.status, 'running'))).run()
+      broadcast({ type: 'cron:run_changed', jobId, runId, status: 'deleted' })
+      console.warn(`[Cron] ${jobId}: webhook events stay pending — ${busy}`)
+      return ''
+    }
+    if (busy) return fail(busy)
     // Recorded meanwhile by another cron.db writer: nothing to run for.
     if (!isRunning(runId)) return runId
     takeReplyTo(host.getDb(), sessionId, { cron: runId }, `cron:${runId}`)
