@@ -19,7 +19,7 @@ Supported: **Linux and macOS**. Windows works on a best-effort basis (not regula
 
 ## 1. Create a token
 
-Admin → **Channels → Linked machines** → **Add machine**. Pick the workspace and a machine name (`a-z 0-9 -`, e.g. `mbp`; unique within the workspace — the agent uses it to address the machine). The dialog shows two commands to copy: one installs and runs `halo-node` on Linux, the other runs `halo node` on macOS / Windows. The install link points at the server's own release, so the machine and the server come from the same version.
+Admin → **Channels → Linked machines** → **Add machine**. Pick the workspace and a machine name (`a-z 0-9 -`, e.g. `mbp`; unique within the workspace — the agent uses it to address the machine). The dialog shows two commands to copy: one installs `halo-node` on Linux and runs it with `~/.local/bin` prepended to `PATH` (where a non-root install lands), the other runs `halo node` on macOS / Windows. The install link points at the server's own release, so the machine and the server come from the same version.
 
 The token stays on the list row (copy button). Deleting the row revokes it at once and disconnects the machine.
 
@@ -29,6 +29,7 @@ The token stays on the list row (copy button). Deleting the row revokes it at on
 
 ```bash
 curl -fsSL https://github.com/turmind/halo-agent/releases/latest/download/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"           # non-root install; Debian / Ubuntu add it only at the next login
 export HALO_NODE_TOKEN=<token>                 # better than --token: flags show up in ps / shell history
 halo-node --server https://halo.example.com --root ~/proj
 ```
@@ -37,7 +38,8 @@ What the script does (`sh`, busybox included; curl or wget):
 
 - picks `halo-node-linux-{amd64,arm64,armv7}` from `uname -m` (`armv8l`, a 64-bit kernel with 32-bit userland, gets armv7). Any other architecture, or not Linux, stops with a message.
 - downloads that release's binary and checks it against the release's `SHA256SUMS` (`sha256sum` or `shasum`). A mismatch stops with an error and leaves nothing behind. With neither tool installed it warns and skips the check.
-- installs to `/usr/local/bin/halo-node` when run as root, otherwise to `~/.local/bin/halo-node`. If that directory isn't in `PATH`, it says so; run it by full path or add the directory to `PATH`.
+- installs to `/usr/local/bin/halo-node` when run as root, otherwise to `~/.local/bin/halo-node`. If that directory isn't in `PATH`, it says so. Debian, Ubuntu and Raspberry Pi OS add `~/.local/bin` to `PATH` only at a login after it exists, which is why the commands above (and the admin's) prepend it.
+- runs the downloaded binary's `--version` before replacing anything; a download that doesn't run stops with an error.
 - replaces an existing `halo-node` in place, even one that is running (that process keeps the old file until it restarts). **Re-run the script to upgrade.**
 - needs no token, starts nothing, and writes no service file.
 
@@ -108,13 +110,18 @@ After=network-online.target
 
 [Service]
 User=alice
-WorkingDirectory=/home/alice                 # whole-machine mode: relative paths start here
-EnvironmentFile=/home/alice/.halo-node.env   # HALO_NODE_TOKEN=…   (chmod 600)
-ExecStart=/usr/local/bin/halo-node --server https://halo.example.com --root /home/alice/proj   # installed as root; as alice: /home/alice/.local/bin/halo-node
+# whole-machine mode: relative paths start here
+WorkingDirectory=/home/alice
+# HALO_NODE_TOKEN=…   (chmod 600)
+EnvironmentFile=/home/alice/.halo-node.env
+# installed as root; as alice: /home/alice/.local/bin/halo-node
+ExecStart=/usr/local/bin/halo-node --server https://halo.example.com --root /home/alice/proj
 Restart=on-failure
 RestartSec=10
-RestartPreventExitStatus=1                   # 1 = bad / revoked token or workspace gone: restarting won't help
-# Environment=GOMEMLIMIT=24MiB                # optional, for very small boards
+# 1 = bad / revoked token or workspace gone: restarting won't help
+RestartPreventExitStatus=1
+# optional, for very small boards
+# Environment=GOMEMLIMIT=24MiB
 
 [Install]
 WantedBy=multi-user.target

@@ -1,7 +1,8 @@
 # halo-node (Go)
 
 Single static binary that speaks the `halo node` v1 protocol — a drop-in for the
-TS `halo node` (same flags, same output text). Spec: `.halo/docs/plans/node-go.md`.
+TS `halo node` (same flags, same output text). Design and the accepted differences from
+the TS client: `.halo/docs/design/node.md` ("Go client: known differences from the TS client").
 
 Needs Go 1.27 (`go.mod` pins `toolchain go1.27.3`). No cgo.
 
@@ -48,6 +49,13 @@ HALO_NODE_GO_BIN=$PWD/dist/halo-node-linux-amd64 \
 # arm under qemu-user, smoke subset:
 #   HALO_NODE_GO_BIN=$PWD/dist/halo-node-linux-arm64 HALO_NODE_GO_EXEC=qemu-aarch64-static HALO_NODE_GO_SMOKE=1
 ```
+
+## Install script
+
+`install.sh` (POSIX sh) is what users pipe into `sh`: the release job stamps the tag into
+`__HALO_VERSION__` and uploads it next to the binaries. It picks the arch, verifies against
+`SHA256SUMS`, smoke-runs `--version`, and renames into `/usr/local/bin` (root) or `~/.local/bin`.
+CI runs `shellcheck` on it.
 
 ## Run
 

@@ -1,5 +1,6 @@
 // halo-node: the standalone `halo node` client (same flags, same wire v1, same
-// tool output as the TS one). Design: .halo/docs/plans/node-go.md.
+// tool output as the TS one). Design and accepted differences from the TS client:
+// .halo/docs/design/node.md ("Go client: known differences from the TS client").
 package main
 
 import (
