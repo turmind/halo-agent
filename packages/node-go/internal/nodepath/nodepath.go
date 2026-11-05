@@ -9,7 +9,7 @@ import (
 )
 
 // Home is os.homedir(): $HOME when set — even to "" (then `~/x` → relative
-// `x`, like path.join('', 'x')) — else the passwd entry.
+// `x`, like path.join("", "x")) — else the passwd entry.
 func Home() string {
 	if h, ok := os.LookupEnv("HOME"); ok {
 		return h
