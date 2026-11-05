@@ -57,7 +57,8 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 115 // models/aws-bedrock-mantle.yaml + aws-bedrock-openai.yaml: reasoning notes follow MantleAgent sending reasoning.summary 'auto' — GPT-6 Sol / Astra summaries and Kimi K3 reasoning_text show in the thinking panel, may be empty on simple prompts; revision 2026110501. docs: dev/add-model-provider.md.
+export const TEMPLATE_VERSION = 116 // docs: dev/tools.md — a relay target's ABORTED report after a model refusal says not to resume it: relay_send to a NEW session id with a clean brief.
+// 115: models/aws-bedrock-mantle.yaml + aws-bedrock-openai.yaml: reasoning notes follow MantleAgent sending reasoning.summary 'auto' — GPT-6 Sol / Astra summaries and Kimi K3 reasoning_text show in the thinking panel, may be empty on simple prompts; revision 2026110501. docs: dev/add-model-provider.md.
 // 114: models/aws-bedrock-mantle.yaml + aws-bedrock-openai.yaml: GPT-6 Astra on Mantle us-east-1 too (`endpoints:` us-east-1 + us-west-2, region table / description synced); reasoning summaries are returned when requested (MantleAgent doesn't request them), not "never surfaced"; revision 2026110402. docs: dev/add-model-provider.md.
 // 113: models/aws-bedrock-claude-invoke.yaml: description corrected to InvokeModelWithResponseStream (streaming) — it never was non-streaming; revision 2026110401. docs: design/storage.md.
 // 111: agents/default: `tools:` adds node_list — linked machines (`halo node`), the 8 node_* tools for full-access sessions; docs: dev/tools.md adds "Node tools".
