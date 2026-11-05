@@ -24,15 +24,19 @@ Let agents draft and validate improvements to their own prompt surface by learni
    │   (Phase A'/B'/12 for apply: merge+regress+sync) │
    └────────────────────────────────────────────────┘
                             ↓
-         evolution_runs: id → 'awaiting_review'
-                   ↓ (admin approves)
+         L2/L3: three gates (source full · change category · score)
+            ↓ pass                              ↓ fail / below L2
+   wrapper queues the apply itself      evolution_runs: id → 'awaiting_review'
+   (run → 'approved', approved_by=auto)            ↓ (admin approves)
+                            ↓                       ↓
          evolution_applies: id → 'pending'
                             ↓ (ticker spawns apply wrapper)
               wrapper merges patches, regress-tests
-                            ↓ (phase 12 sync to main)
+                            ↓ (phase 12: auto re-check, sync to main)
            evolution_applies: id → 'applied'
                 evolution_runs: id → 'applied'
-                            ↓
+                            ↓ (auto: one chat:system line in the source session)
+                            ↓ (either: one-click rollback → 'rolled_back')
          SessionManager cold-start picks up new prompts
               next user message uses patched rules
 ```
@@ -58,6 +62,7 @@ Server flow (synchronous, ~10ms):
    - Write `source-snapshot.json` (frozen `session.agent.messages`)
    - Write `tool-flow.md` (tool_result-stripped Markdown view for skimming)
    - Write `meta.json` (metadata: id, triggerKind, sourceSession, userHint, workspacePath, createdAt)
+   - Record the source session's persisted access level in `evolution_runs.source_access` (null → `full`, the session-agent-builder default) — the L2/L3 source gate reads it
    - Write `evo-context.json` (snapshot of prompt surface at trigger time: assembled system prompt, all prompt files, agent/skill listings)
 4. INSERT `evolution_runs` row with `status='pending'`, `trigger_kind='note'` (internal trigger id keeps the old name; only the user-visible command was renamed to `/evo`).
 5. Reply via `chat:system`: "📝 Queued for evaluation".
@@ -68,7 +73,7 @@ Server flow (synchronous, ~10ms):
 
 Compaction only sets a per-session `compactedThisTurn` flag; `SessionManager.enqueueEvoForCompactedTurn()` consumes it once the compact is done — at the end of `runSession` for auto-compact (mid-turn or turn-end), right after the summary lands for manual `/compact`. A turn that compacts several times therefore enqueues one run.
 
-1. Checks: `evolution.level` = L1, `evolution.triggers.pre_compact` on, root session (`parentId` null).
+1. Checks: `evolution.level` ≥ L1, `evolution.triggers.pre_compact` on, root session (`parentId` null).
 2. `enqueueEvoRun()` with `trigger='pre-compact'` snapshots the session's current `rawMessages`. Because the enqueue is deferred, that is the already-compacted history (summary + kept tail), not the pre-compact one.
 3. INSERT `evolution_runs` row.
 
@@ -208,18 +213,63 @@ For each source_run_id:
 1. Read `testScenario` from source run's `patch.md`.
 2. Run `halo cli -a <agentId> -n -w <applyDir>/sandbox --access workspace` (testMessage on stdin, same 2700s timer) against merged sandbox.
 3. Spawn `__score__` with regress-mode brief, write `regress/<runId>/score.json`.
-4. Any score with `lint < 50` or `behavior < 50` (or a missing / malformed `score.json`) → regression, abort with `failed`.
+4. Any score with `lint < 50` or `behavior < 50` (or a missing / malformed `score.json`) → regression, abort with `failed`. A previous attempt's `score.json` is deleted before the scorer spawns (run-mode phase C too), so a scorer that dies without writing can't be read as the old attempt's score.
 
 ### Phase 12 — Final Sync (checkpointed)
 
 Four steps, with a checkpoint before the dangerous one:
 
-1. **Preflight** (idempotent): walk sandbox, diff against main, snapshot pre-apply files to `history/apply-<id>/` with `MANIFEST.json`.
+1. **Preflight** (idempotent): walk sandbox, diff against main, snapshot pre-apply files to `history/apply-<id>/` with `MANIFEST.json` (first preflight only — a resume keeps the original).
+   - **Auto re-check** (`approved_by='auto'`, not on resume): the files preflight will publish are classified again against the live surface, and the level is read again (the user may have lowered it since). Blocked → apply `failed` with `auto_recheck:<reason>`, main untouched. See [Auto-apply](#auto-apply-l2--l3).
 2. **Checkpoint**: set `evolution_applies.status='syncing'`. From here on, if wrapper crashes, ticker recovery resumes at step 3 (skip A'/B'/preflight to avoid re-running LLM phases).
 3. **Publish** (dangerous): cp each changed file from sandbox to main.
 4. Mark source_runs `applied`, finalize apply row `applied`.
 
+A wrapper's terminal writes (run `finalize` / `markObservation`, apply `finalizeApply`) only land while the row is still `running` at the attempt that wrapper was spawned on: a re-claimed row belongs to the newer wrapper, and a `syncing` row whose resume preflight failed is left to the ticker (which fails it once retries run out and keeps the run `approved`).
+
 Per-workspace mutex in ticker prevents two applies from racing on the same workspace — the assumption phase 12 leans on.
+
+## Auto-apply (L2 / L3)
+
+Code: `evolution/auto-apply.ts` (pure, no agent-loader import — it runs in the detached wrapper), hook `maybeAutoApply` in `evo-wrapper.ts`, shared enqueue `queue-apply.ts`.
+
+**Where.** At L2+, right after phase C the run-mode wrapper decides and writes `runs/<id>/auto-apply.json`. A pass calls `queueApply({ mode: 'auto', attempts })`: one transaction flips the run `running → approved` (only while it is still `running` at this wrapper's attempt) and inserts a `pending` apply with `approved_by='auto'`. A pass never goes through `awaiting_review`, so it can't race a reviewer. A fail (or below L2) finalizes `awaiting_review` as before. The ticker needs no change — its existing broadcast diff pushes `running → approved` and the new apply.
+
+**Three gates**, checked in this order; the first that fails is the recorded `reason`:
+
+1. **Source access** — the run's `source_access` must be `full`. A `workspace` / `readonly` session's conversation (a channel guest's, say) must not rewrite prompts every session runs on without a reviewer. Rows from before the column read null → never auto-applied. Reason `source_access`.
+2. **Change category** — the sandbox is diffed against the live pre-patch surface (workspace file, else global for `agents/` / `skills/` / `prompts/` dirs the workspace doesn't override; byte-equal copies of a global folder drop out). Each changed file is `prompt`, `capability` or `manual`; the strictest wins. Prompt needs L2, capability L3, manual never. Reasons `level`, `no_effective_change`, `category_manual:<rel>(<why>)`.
+3. **Score** — `avg ≥ auto_apply_threshold`, `confidence: high`, `behavior ≥ 70`, `lint = 100`, all four `checks` passed (`patchInSandbox: pass`, `usedInDryRun: yes`, `probe: valid`, `probeLanguage: same`). The behavior floor matters: 100/50/100 averages 83. Reasons `score_missing`, `below_threshold`, `confidence`, `behavior_floor`, `lint_floor`, `checks:<name>`.
+
+| Change | Category |
+|---|---|
+| `INSTRUCTIONS.md`, `INDEX.md`, `agents/<id>/AGENT.md`, `prompts/{bootstrap,all,root}/*.md` | prompt |
+| `SKILL.md` body / `name` / `description` only | prompt |
+| `SKILL.md` `command` / `disable-model-invocation` / `user-invocable`; `verbs` with no `requiresAccess` change | capability |
+| `agent.yaml` `description` / `system_prompt` / `context`; `tools` removed or a non-egress tool added; `skills` removed; `model.id` / `maxTokens` / `promptCaching` / `thinking` / `verbosity` | capability |
+| `agent.yaml` `priority` (routing), `team` / `internal` / `name` / unknown keys, `model.provider` / `model.endpoint`, `tools` adding `shell_exec` / `web_fetch` / `relay_send` / `a2a_send` / `node_*`, `skills` adding one | manual |
+| `SKILL.md` `requiresAccess`, any verb's effective `requiresAccess` (own or object-level fallback; a verb added or removed counts), other frontmatter keys | manual |
+| `USER.md`; any other file in a skill / agent folder; a new agent / skill dir; a deleted file; an internal agent (live `agent.yaml` `internal: true`, or a `__` id); unrecognized paths | manual |
+
+Egress tools and `relay_send` / `node_*` are manual because the dry-run runs `--access workspace`, where they aren't even injected — a score is no evidence about them.
+
+**Phase-12 re-check.** An auto apply is gated again before `markSyncing`: the files preflight will publish are classified against the live surface and the level is re-read (the apply agent may touch files the run didn't; the user may have lowered the level). Publish never deletes, so a workspace file the merge dropped is not a change here; a new override dir that would hide a global file the sandbox lacks still is. The score gate isn't repeated — phase B' already held the merge to the regression floor. Blocked → `auto_recheck:<reason>`, main untouched.
+
+**Failure.** Any failure of an auto apply (merge, regress, re-check, timeout) fails the apply and sends its run back to `awaiting_review` in the same transaction (`failApply`), so a reviewer can approve it by hand. Reviewer applies keep their run `approved`.
+
+**Notice.** Each tick, `notifyAutoApplied` (`evolution/notify.ts`) finds `approved_by='auto' AND status='applied' AND notified_at IS NULL` (db, so restarts neither resend nor miss) and sends one `chat:system` line to the source session: the effectively changed files (MANIFEST minus `unchanged`, > 3 summarised), score, and an observation preview. `notified_at` is stamped even when the session is gone.
+
+## Rollback
+
+`POST /api/evolution/applies/:id/rollback { force? }` (`evolution/rollback.ts`), for reviewer and auto applies alike. Synchronous fs with no await, so the in-process ticker can't interleave. Source of truth is `history/apply-<id>/` on disk.
+
+1. Preconditions (409): apply `applied` (`not_applied`), no `pending` / `running` / `syncing` apply in the workspace (`apply_in_flight`), a readable MANIFEST whose paths stay inside `.halo/` with every `overwrite` backup present (`no_snapshot`).
+2. Per-file state against main now: `clean` (hash = `after`), `reverted` (already back: hash = `before`, or a `new` file that is gone — skipped, not a conflict), `modified`, `missing`, `unverified` (old manifest, no hashes). Any of the last three without `force` → 409 `conflict` with `conflicts[{rel, reason}]`.
+3. Then (conflicts cleared or forced): any `overwrite` backup that doesn't hash to `before` → 409 `backup_mismatch` with `files`, `force` or not — restoring it would write something else. Nothing has been written at this point.
+4. Copy what will be overwritten / removed to `rollback-pre/`, restore `overwrite` files, remove `new` ones, then `rmdir` each `createdDirs` entry deepest first. An emptied `agents/<id>/` (`skills/`, `prompts/`) dir must go: it would override the global one wholesale. A dir someone has since put files in is kept and reported in `keptDirs`.
+5. Write `ROLLBACK.json`; in one transaction the apply and its `applied` source runs become `rolled_back`; broadcast.
+
+`200 { ok, restored, removed, removedDirs, keptDirs }`. A second call answers `not_applied`. Limits: an apply row is archived 14 days after it is terminal and purged 30 days later — no rollback entry after that; deleting the run deletes the snapshot too; rollback restores files, not session behaviour already shown.
 
 ## Data on Disk
 
@@ -234,6 +284,8 @@ Per-workspace mutex in ticker prevents two applies from racing on the same works
     patch.md                  # __evo_agent__ writes (has testScenario frontmatter)
     .skip.md                  # evo wrote this → no patch proposed
     score.json                # __score__ writes (lint/behavior/scope/avg + checks)
+    auto-apply.json           # L2+ verdict (gates, files, score, observation);
+                              # not an input file, so a retry clears it
     dry-run-output.txt        # stdout from phase B dry-run
     dry-run-fail-<n>.log      # failure logs from dry-run attempts
     sub-cli.log               # tee'd stdout+stderr of every halo cli spawn
@@ -249,8 +301,10 @@ Per-workspace mutex in ticker prevents two applies from racing on the same works
       dry-run-fail.log        # only when the regress dry-run failed
       score.json
   history/apply-<id>/         # rollback snapshot (NOT archived)
-    MANIFEST.json             # which paths were overwritten
-    <files>                   # pre-apply content
+    MANIFEST.json             # files[{rel, kind, before, after, unchanged?}] + createdDirs
+    <files>                   # pre-apply content of `overwrite` files
+    rollback-pre/<files>      # main's content just before a rollback overwrote / removed it
+    ROLLBACK.json             # what the rollback did (per file action, dirs removed / kept)
   archive/
     run-<id>.zip              # zipped after 14 days in terminal state
     apply-<id>.zip
@@ -288,13 +342,28 @@ literals.
 
 Skill content NOT inlined (too large at scale); only listings. Both agents and skills include a `scope` tag (`workspace` | `global` | `builtin`).
 
+`MANIFEST.json` format (written on the first preflight, when the sandbox is final and main still pre-apply):
+
+```json
+{
+  "applyId": "…", "sourceRunIds": ["…"], "capturedAt": "<ISO>",
+  "files": [
+    { "rel": "INSTRUCTIONS.md", "kind": "overwrite", "before": "<sha256>", "after": "<sha256>" },
+    { "rel": "agents/helper/agent.yaml", "kind": "new", "before": null, "after": "<sha256>", "unchanged": true }
+  ],
+  "createdDirs": ["agents/helper", "agents"]
+}
+```
+
+`rel` uses native separators. `before` / `after` are sha256 of main before and of what was published; `unchanged` marks a copy byte-equal to the global file it now overrides (completing a new workspace override dir — not an effective change, left out of notices and the admin file list); `createdDirs` are the dirs publish created, deepest first. Manifests from before this format have no hashes / `createdDirs`.
+
 ## Archive and Retention
 
 Located: `/packages/server/src/evolution/archive.ts`
 
 Two-stage lifecycle (both orthogonal to `status`):
 
-- **14 days after terminal status** (applied/rejected/skipped/failed/timeout): zip the run/apply dir to `archive/{run|apply}-<id>.zip`, delete original, set `archived_at = now()`. DB row stays.
+- **14 days after terminal status** (applied/rejected/skipped/failed/timeout/rolled_back): zip the run/apply dir to `archive/{run|apply}-<id>.zip`, delete original, set `archived_at = now()`. DB row stays.
 - **30 days after `archived_at`**: delete zip and DB row outright.
 
 Active rows (pending/running/awaiting_review/approved/syncing) never archived. `history/apply-<id>/` (rollback tree) never archived — kept cheap and discoverable.
@@ -318,6 +387,10 @@ After apply publishes to main, **no explicit session-release step needed**. Sess
 | `/packages/server/src/evolution/spawn.ts` | Real spawner: detached Node child running `evo-wrapper.js` from its own module's directory (`dist/evo-wrapper.js` in the npm bundle — build-bundle's second entry). stdin/stdout ignored, stderr appended to the run / apply log; a non-zero exit logs an `[EvoSpawn]` error. `spawnEvoWrapper(path, mode, id)` takes the wrapper path for tests; the ticker's spawner is still override-able via `setEvoSpawner`. |
 | `/packages/server/src/evolution/evo-wrapper.ts` | Wrapper orchestrator. 3-phase run mode (draft/dry-run/score). Apply mode (merge/regress/publish). Heartbeat every 60s. Handles Windows command-line limits via stdin briefs. |
 | `/packages/server/src/evolution/archive.ts` | Archive job: 14d → zip (pure-JS jszip) + delete, 30d → purge. Runs daily + at boot. Idempotent. |
+| `/packages/server/src/evolution/auto-apply.ts` | L2/L3 decision: live-baseline diff (`collectChanges` / `publishChanges`), per-file classification, the source / category / score gates. Pure; loaded by the wrapper. |
+| `/packages/server/src/evolution/queue-apply.ts` | `queueApply` (reviewer approve + auto, one transaction) and `failApply` (auto failure → run back to `awaiting_review`). |
+| `/packages/server/src/evolution/rollback.ts` | `inspectRollback` / `rollbackApply` from the history MANIFEST; `readPublishedFiles`. |
+| `/packages/server/src/evolution/notify.ts` | `notifyAutoApplied`: one `chat:system` line per landed auto apply, driven by `notified_at`. |
 
 ## Sandbox Model
 
@@ -337,7 +410,8 @@ Session rows, db, logs, memory — all intentionally excluded from sandbox. Avoi
 general:
   language: en-US          # BCP-47; also used for evo/score output language
   evolution:
-    level: L0              # L0=disabled, L1=enabled
+    level: L0              # L0..L3, see below
+    auto_apply_threshold: 80   # 0–100, L2/L3 only; out of range → 400 on save
     max_concurrent_run: 1
     max_concurrent_apply: 1
     run_timeout_minutes: 12
@@ -347,18 +421,21 @@ general:
       pre_compact: true
 ```
 
-L0 = manual drafting only (`/evo`); L1 also enables pre-compact triggering. Defaults conservative; tune if machine handles more.
+L0 = manual drafting only (`/evo`); L1 also enables pre-compact triggering; L2 also auto-applies prompt-only changes that pass the gates; L3 also auto-applies capability changes. The level only decides how runs are enqueued and whether the wrapper queues an apply itself — runs already queued always finish. All evolution keys are global-only. Defaults conservative; tune if machine handles more.
 
 ## Admin UI Integration
 
 Top-level "Evolution" tab shows:
 
-- **List**: evolution_runs + latest apply per run, newest first (cursor-paginated by `created_at`, up to 300 loaded). Filterable by status, plus an `archived` view. Joins runs+applies to show consolidated view.
-- **Detail**: patch.md (raw), score.json, the `.skip.md` reason, a snapshot summary (message count, first user / assistant message), wrapper log + sub-cli log.
+- **List**: evolution_runs + latest apply per run, newest first (cursor-paginated by `created_at`, up to 300 loaded). Filterable by status (incl. `rolled_back`), plus an `archived` view and two client-side filters: `auto` (latest apply `approved_by='auto'`) and `observation` (`has_observation`). Rows carry an AUTO tag, a lightbulb when the draft has an observation, and an "apply failed" mark.
+- **Detail**: patch.md (raw), score.json, the `.skip.md` reason, a snapshot summary (message count, first user / assistant message), wrapper log + sub-cli log. At L2+: the auto-applied banner (level, score, the files the apply effectively changed — `publishedFiles`) or the translated reason it wasn't auto-applied. The Larger observation block (see below), and a **Rollback** button while the latest apply is `applied`.
 - **Approve**: Opens an inline panel, optional reviewer_hint. Flips the run to `approved` **and** inserts the pending `evolution_applies` row **inside one `db.transaction`** — it's a single reviewer decision, and half of it (run flipped, apply missing) strands the run in a status the ticker never advances.
 - **Reject**: Sets status='rejected'.
-- **Retry**: Resets row to pending, requires new hint. The route allows any status except `pending` / `running`; the UI offers it on `awaiting_review`, `failed` / `timeout` / `skipped` / `rejected`, and on an `approved` run whose apply failed.
-- **Manual Delete**: Removes artifacts (live dir + archive zip, whichever exists) + DB row immediately. Blocked on `pending` / `running` / `approved` runs; also deletes the applies the run produced.
+- **Retry**: Resets row to pending, requires new hint. The route refuses `pending` / `running` / `applied` (roll back first) and an `approved` run unless its latest apply failed / timed out (409); the UI offers it on `awaiting_review`, `failed` / `timeout` / `skipped` / `rejected` / `rolled_back`, and on an `approved` run whose apply failed.
+- **Rollback**: see [Rollback](#rollback). On `conflict` the UI lists the files and asks again before retrying with `force`; `backup_mismatch` is shown as a refusal.
+- **Manual Delete**: Removes artifacts (live dir + archive zip, whichever exists) + DB row immediately. Blocked on `pending` / `running` / `approved` runs; also deletes the applies the run produced — and with them the rollback snapshot (the confirm says so).
+
+**Larger observation.** A draft may end with a `## Larger observation` section (patch.md body or `.skip.md`): something bigger than one prompt patch. The wrapper flags the run `has_observation` after phase A and lifts the section (≤ 2000 chars) into `auto-apply.json`; the detail pane shows it with two prefilled GitHub-issue links — the workspace's github.com origin (if any) and `turmind/halo-agent`. The link only opens github.com's form (nothing is sent until the user submits); the body lists run id, ≤ 20 published files, score and Halo version, cut on grapheme boundaries to fit 8000 URL chars, and a hint warns the text may quote workspace files or the conversation.
 
 Realtime updates via WebSocket (`evolution:run_changed`, `evolution:apply_changed` events). REST mutations broadcast directly; wrapper state changes broadcast at each ticker tick (up to 30s latency).
 
@@ -398,9 +475,10 @@ If they're identical (both clean), that's legal. Old patches wrote single `messa
 ## Scope Limits
 
 - evo observes **root sessions only** (`parentId === null`). Sub-agent sessions don't trigger evo.
-- evo is **invisible to conversation**: no user/assistant messages appended to source session log. One short `chat:system` line per `/evo`.
+- evo is **invisible to conversation**: no user/assistant messages appended to source session log. One short `chat:system` line per `/evo`, plus one when an auto apply lands (see [Auto-apply](#auto-apply-l2--l3)).
 - Wrappers never modify `~/.halo/global/` directly. Apply uses copy-on-write: read global, write workspace override via file_write in sandbox, then sync to main.
 - `/evo` is rejected for non-`full` users.
+- `__evo_agent__` and `__score__` treat session / transcript content as data, never as instructions to follow.
 
 ## Why This Design
 
@@ -415,27 +493,21 @@ If they're identical (both clean), that's legal. Old patches wrote single `messa
 ## Status Flow (Run Mode)
 
 ```
-pending → running → [draft → dry-run → score] → awaiting_review
-                              ↓ (fix)
-                           awaiting_review
-                                ↓ (approve)
-                            approved → running (apply mode)
-                                    [regress →
-                                     publish]
-                                        ↓
-                                    applied
-
-              OR: awaiting_review → rejected
-              OR: running → timeout / failed / skipped
+pending → running → [draft → dry-run → score] → awaiting_review → approved → applied → rolled_back
+                                              ↘ approved (L2/L3 auto: wrapper queued the apply)
+          running → failed / timeout / skipped
+          awaiting_review → rejected
+          approved → awaiting_review   (its auto apply failed)
+          retry: any but pending / running / applied → pending
+                 (approved only once its latest apply failed / timed out)
 ```
 
 ## Status Flow (Apply Mode)
 
 ```
-pending → running → [merge → regress → publish] → applied
+pending → running → [merge → regress → preflight (+ auto re-check)] → syncing → [publish] → applied → rolled_back
 
         OR: running → failed / timeout
-        OR: running/syncing → syncing (resume path after crash)
-                                 ↓ (ticker recovery)
-                            running → [publish] → applied
+        OR: syncing, heartbeat lost → (ticker recovery) wrapper resumes at publish → applied
+            (retries spent → failed)
 ```

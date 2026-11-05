@@ -11,7 +11,7 @@ Top-level built-in slash commands: `/help` `/evo` `/session` `/agent` `/skill` `
 | Name | Slash | Type | Purpose |
 |---|---|---|---|
 | `help` | `/help` | server | List commands — object commands show only the verbs the user can run; a command is hidden entirely if no verb is runnable |
-| `evo` | `/evo [text]` | server | Flat command (no verbs), **full-only**. Trigger self-evolution on the current root session: snapshot the conversation + queue an evo run. Optional text becomes a hint for what to focus on. Works at every `general.evolution.level` (L0 = manual only; L1 also drafts automatically on pre-compact). Hidden from `/help` for non-full users. See [design/evolution.md](../design/evolution.md). |
+| `evo` | `/evo [text]` | server | Flat command (no verbs), **full-only**. Trigger self-evolution on the current root session: snapshot the conversation + queue an evo run. Optional text becomes a hint for what to focus on. Works at every `general.evolution.level` (L0 = manual only; L1 also drafts automatically on pre-compact; L2 / L3 may also auto-apply the result — prompt-only / capability changes that pass the gates — then post one `chat:system` line in this session). Hidden from `/help` for non-full users. See [design/evolution.md](../design/evolution.md). |
 
 The rest are noun-verb **object commands**: `/<obj> <verb> [args]`. Some verbs are built-in deterministic code (`SUBCOMMAND_ROUTES`); the others fall through to the same-name skill (LLM, dispatched via `$1`). Bare `/<obj>` or `/<obj> help` lists the verbs available to the user (filtered by access level).
 
