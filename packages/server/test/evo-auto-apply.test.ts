@@ -11,7 +11,7 @@ import {
 } from '../src/evolution/auto-apply.js'
 import {
   maybeAutoApply, autoApplyRecheck, finalize, finalizeApply, finalizeApplied, heartbeat, markObservation, markSyncing, phase12Sync,
-  spawnProc, PUBLISH_WHITELIST, type ApplyCtx,
+  resetStoppingForTests, spawnProc, PUBLISH_WHITELIST, type ApplyCtx,
 } from '../src/evolution/evo-wrapper.js'
 import { failApply } from '../src/evolution/queue-apply.js'
 import { createEvoDb, setEvoDb, evolutionRuns, evolutionApplies, type EvoDb } from '../src/db/evo-db.js'
@@ -741,16 +741,60 @@ describe('wrapper: terminal writes are conditional on the claim', () => {
       expect(exit).not.toHaveBeenCalled()
     })
 
-    it.each(['run', 'apply'] as const)('%s: 0 rows → kills the sub-cli in flight and exits', async (mode) => {
+    // 0 rows: SIGTERM the sub-cli tree (its harness.stop ends the detached
+    // shell_exec groups), SIGKILL what is left after the grace, then exit.
+    const realSetTimeout = globalThis.setTimeout  // captured before vi.useFakeTimers
+    const realSleep = (ms: number) => new Promise((r) => realSetTimeout(r, ms))
+    const until = async (cond: () => boolean) => {
+      for (let i = 0; i < 200 && !cond(); i++) await realSleep(10)
+      return cond()
+    }
+    const logText = () => fs.readFileSync(path.join(tmp, 'log'), 'utf-8')
+    async function refuse(mode: 'run' | 'apply', script: string) {
       const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
-      onTestFinished(() => exit.mockRestore())
+      const kill = vi.spyOn(process, 'kill')
+      const pidFile = path.join(tmp, 'pgid')
+      let pgid = 0
+      onTestFinished(() => {
+        exit.mockRestore(); kill.mockRestore(); vi.useRealTimers(); resetStoppingForTests()
+        // A failing run must not leave the group behind (it leads its own).
+        try { if (pgid) process.kill(-pgid, 'SIGKILL') } catch { /* gone */ }
+      })
       db.insert(evolutionApplies).values({ id: 'a', workspacePath: ws, status: 'running', sourceRunIds: '["r"]', createdAt: 2, attempts: 2 }).run()
-      const child = spawnProc('sleep', ['30'], logFd)
-      await new Promise((r) => setTimeout(r, 50))
+      let settled = false
+      void spawnProc('sh', ['-c', `echo $$ > "$1"; ${script}`, 'x', pidFile], logFd).then(() => { settled = true })
+      await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf-8').trim() !== '')
+      pgid = Number(fs.readFileSync(pidFile, 'utf-8'))
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       heartbeat(mode, mode === 'run' ? 'r' : 'a', 1, logFd)  // re-claimed at 2
-      expect(exit).toHaveBeenCalledWith(1)
-      expect((await child).exitCode).not.toBe(0)
+      const signals = () => kill.mock.calls.filter(([pid]) => (pid as number) < 0).map(([, sig]) => sig)
+      return { exit, signals, settled: () => settled }
+    }
+
+    it.each(['run', 'apply'] as const)('%s: 0 rows → SIGTERM first, exit after the grace, no further db write', async (mode) => {
+      const { exit, signals, settled } = await refuse(mode, 'sleep 30')
+      expect(signals()).toEqual(['SIGTERM'])
+      expect(exit).not.toHaveBeenCalled()
+      expect(await until(() => logText().includes('signal=SIGTERM'))).toBe(true)
+      heartbeat(mode, mode === 'run' ? 'r' : 'a', 2, logFd)  // stopping: not even the owner's row is written
       expect(mode === 'run' ? runRow('r').heartbeatAt : applyRow('a').heartbeatAt).toBeNull()
+      vi.advanceTimersByTime(10_000)
+      expect(exit).toHaveBeenCalledWith(1)
+      expect(signals()).toEqual(['SIGTERM'])  // already gone: nothing to SIGKILL
+      expect(settled()).toBe(false)           // the phase never resumes
+    })
+
+    it('a sub-cli that ignores SIGTERM gets SIGKILL after the grace', async () => {
+      const { exit, signals } = await refuse('apply', 'trap "" TERM; sleep 30')
+      expect(signals()).toEqual(['SIGTERM'])
+      await realSleep(100)
+      expect(logText()).not.toContain('proc exit')
+      vi.advanceTimersByTime(9_999)
+      expect(signals()).toEqual(['SIGTERM'])
+      vi.advanceTimersByTime(1)
+      expect(signals()).toEqual(['SIGTERM', 'SIGKILL'])
+      expect(exit).toHaveBeenCalledWith(1)
+      expect(await until(() => logText().includes('signal=SIGKILL'))).toBe(true)
     })
   })
 

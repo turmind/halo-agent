@@ -41,7 +41,7 @@ Let agents draft and validate improvements to their own prompt surface by learni
               next user message uses patched rules
 ```
 
-All coordination via global db (`~/.halo/global/evo.db`). Wrapper heartbeats every 60s, only on its own claim (status + attempt); a heartbeat that finds the row re-claimed kills the sub-cli in flight and exits the wrapper, so it can't write on into the run / apply dir the new owner shares; ticker requeues a stale `running` row (→ `timeout` once `max_attempts` is spent). Detached process model: server restart doesn't kill in-flight wrappers.
+All coordination via global db (`~/.halo/global/evo.db`). Wrapper heartbeats every 60s, only on its own claim (status + attempt); a heartbeat that finds the row re-claimed stops writing, SIGTERMs the sub-cli in flight (its harness.stop ends the shell_exec groups it started), SIGKILLs what is left after 10s and exits the wrapper, so it can't write on into the run / apply dir the new owner shares; ticker requeues a stale `running` row (→ `timeout` once `max_attempts` is spent). Detached process model: server restart doesn't kill in-flight wrappers.
 
 ## Trigger and Enqueue Flow
 

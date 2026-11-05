@@ -203,6 +203,13 @@ interface CliResult {
 /** Kill switches of the sub-clis in flight (spawnProc registers each), for
  *  a heartbeat that finds the claim gone (see heartbeat). */
 const liveProcs = new Set<(signal: 'SIGTERM' | 'SIGKILL') => void>()
+/** SIGTERM → SIGKILL grace for a sub-cli tree: room for `halo cli`'s
+ *  harness.stop to end the shell_exec groups it started outside its own. */
+const KILL_GRACE_MS = 10_000
+/** Set once a heartbeat finds the claim gone: no more db writes, no new
+ *  sub-cli, and a sub-cli that exits doesn't hand control back to its phase. */
+let stopping = false
+export function resetStoppingForTests(): void { stopping = false }
 
 export function spawnProc(
   bin: string,
@@ -215,6 +222,10 @@ export function spawnProc(
   // When the prompt is passed via stdin (long briefs — see callers), no arg is
   // omitted; otherwise the last arg is the prompt and we elide it from the log.
   const loggedArgs = stdinInput === undefined ? args.slice(0, -1) : args
+  if (stopping) {
+    writeLog(logFd, `[wrapper] stopping (claim lost) — not spawning ${bin}\n`)
+    return new Promise(() => {})
+  }
   writeLog(logFd, `[wrapper] $ ${bin} ${loggedArgs.join(' ')}${stdinInput === undefined ? ' <last-arg-omitted>' : ' <prompt-on-stdin>'}${timeoutSec ? ` (timeout ${timeoutSec}s)` : ''}\n`)
   // tee both streams to a per-run sub-cli log when teePath is given. Caller
   // writes its own header into the file (phase markers etc.) before calling.
@@ -290,9 +301,9 @@ export function spawnProc(
           writeLog(logFd, `[wrapper] timeout ${timeoutSec}s — killing process group (SIGTERM)\n`)
           killTree('SIGTERM')
           sigkillTimer = setTimeout(() => {
-            writeLog(logFd, `[wrapper] still alive 10s after SIGTERM — SIGKILL\n`)
+            writeLog(logFd, `[wrapper] still alive ${KILL_GRACE_MS / 1000}s after SIGTERM — SIGKILL\n`)
             killTree('SIGKILL')
-          }, 10_000)
+          }, KILL_GRACE_MS)
           sigkillTimer.unref?.()
         }, timeoutSec * 1000)
       : null
@@ -311,6 +322,7 @@ export function spawnProc(
       const exitCode = timedOut ? 124 : (code ?? 1)
       writeLog(logFd, `[wrapper] proc exit code=${code} signal=${signal}${timedOut ? ' (timed out → 124)' : ''} stdout=${stdout.length}B stderr=${stderr.length}B\n`)
       tee?.end()
+      if (stopping) return  // the wrapper is exiting; the phase must not go on
       resolve({ exitCode, stdout, stderr })
     })
     child.on('error', (err) => {
@@ -320,6 +332,7 @@ export function spawnProc(
       writeLog(logFd, `[wrapper] spawn error: ${err.message}\n`)
       tee?.write(`\n[spawn error] ${err.message}\n`)
       tee?.end()
+      if (stopping) return
       resolve({ exitCode: 1, stdout, stderr: stderr + `\n[spawn error] ${err.message}` })
     })
   })
@@ -1444,6 +1457,7 @@ function ownsRun(id: string, attempts: number) {
  *  runDir / applyDir, so stop the sub-cli in flight (a scorer would write
  *  score.json there) and exit instead of writing on. */
 export function heartbeat(mode: Mode, id: string, attempts: number, logFd: number): void {
+  if (stopping) return
   let owned: boolean
   try {
     owned = mode === 'run'
@@ -1454,9 +1468,21 @@ export function heartbeat(mode: Mode, id: string, attempts: number, logFd: numbe
     return
   }
   if (owned) return
-  writeLog(logFd, `[wrapper] heartbeat refused: ${mode} ${id} is no longer this wrapper's claim (attempt ${attempts}) — killing ${liveProcs.size} sub-cli and exiting\n`)
-  for (const kill of liveProcs) kill('SIGKILL')
-  process.exit(1)
+  stopping = true
+  writeLog(logFd, `[wrapper] heartbeat refused: ${mode} ${id} is no longer this wrapper's claim (attempt ${attempts}) — stopping ${liveProcs.size} sub-cli and exiting\n`)
+  if (liveProcs.size === 0) {
+    process.exit(1)
+    return
+  }
+  // SIGTERM first, as the timeout path does: a full-access sub-cli's
+  // shell_exec runs in detached groups of its own (sandbox spawnGroupExec),
+  // outside the -pid group; only its harness.stop ends them. A bare SIGKILL
+  // would orphan them, still writing into the shared dir.
+  for (const kill of liveProcs) kill('SIGTERM')
+  setTimeout(() => {
+    for (const kill of liveProcs) kill('SIGKILL')  // still alive (exit removes)
+    process.exit(1)
+  }, KILL_GRACE_MS)
 }
 
 // ---------------------------------------------------------------------------
@@ -2087,9 +2113,9 @@ export async function phase12Sync(ctx: ApplyCtx, row: Pick<ApplyRow, 'attempts' 
  * is bracketed by a db checkpoint:
  *
  *   1. `phaseApplyPreflight`: walk sandbox, diff against main, snapshot
- *      pre-state to history/. Idempotent — if it half-finishes and we
- *      retry, MANIFEST.json gets overwritten with the same content,
- *      history files get re-copied. No main mutation.
+ *      pre-state to history/. No main mutation. A fresh claim rm's the
+ *      whole history dir and rewrites MANIFEST.json + backups (main is
+ *      still pre-apply then); a resume writes nothing there.
  *
  *   2. **db checkpoint**: `evolution_applies.status='syncing'`. From
  *      here on, if the wrapper dies, the ticker (on next tick or after
