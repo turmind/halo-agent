@@ -15,6 +15,8 @@ import { TokenLine } from '@/features/web/web-settings'
 type NodeAccount = Awaited<ReturnType<typeof api.nodes.listAccounts>>['accounts'][number]
 type Online = NonNullable<NodeAccount['online']>
 
+const RELEASES = 'https://github.com/turmind/halo-agent/releases'
+
 /**
  * Linked machines (`halo node`): pairing tokens per workspace + live online
  * state. Online starts from the list response, then follows `nodes:changed`
@@ -100,6 +102,15 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [token, setToken] = useState<string | null>(null)
+  const [version, setVersion] = useState<string | null>(null)
+
+  // Pin the halo-node download to this server's release tag; dev builds
+  // (x.y.z-<sha>[-dirty]) and a failed fetch have no tag, so use latest.
+  useEffect(() => {
+    api.health()
+      .then((h) => setVersion(typeof h?.version === 'string' ? h.version : null))
+      .catch(() => setVersion(null))
+  }, [])
 
   async function submit() {
     setError('')
@@ -112,20 +123,32 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
   }
 
   if (token) {
-    const command = `HALO_NODE_TOKEN=${token} halo node --server ${location.origin} --root <folder>`
+    const binBase = /^\d+\.\d+\.\d+$/.test(version ?? '') ? `${RELEASES}/download/v${version}` : `${RELEASES}/latest/download`
+    const run = `--server ${location.origin} --root <folder>`
+    const linux = [
+      `A=$(uname -m); case "$A" in x86_64) A=amd64;; aarch64|arm64) A=arm64;; armv7l|armv8l) A=armv7;; esac`,
+      `curl -fLo halo-node ${binBase}/halo-node-linux-$A && chmod +x halo-node`,
+      `HALO_NODE_TOKEN=${token} ./halo-node ${run}`,
+    ].join('\n')
+    const other = `HALO_NODE_TOKEN=${token} halo node ${run}`
     return (
       <ChannelDialog width="w-[480px]" onClose={onDone}>
         <h3 className="mb-3 text-sm font-medium text-[var(--foreground)]">{t('nodes.createSuccess')}</h3>
         <p className="mb-2 text-xs text-[var(--muted-foreground)]">{t('nodes.commandNotice')}</p>
-        <div className="flex items-center gap-2 rounded border border-[var(--border)] bg-[var(--card)] p-2">
-          <code className="flex-1 break-all font-mono text-xs text-[var(--foreground)]">{command}</code>
-          <button
-            onClick={() => navigator.clipboard.writeText(command)}
-            className="rounded p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-          >
-            <Copy className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        {[[t('nodes.commandLinux'), linux], [t('nodes.commandOther'), other]].map(([label, command]) => (
+          <div key={label} className="mt-2">
+            <p className="mb-1 text-[10px] font-medium text-[var(--muted-foreground)]">{label}</p>
+            <div className="flex items-start gap-2 rounded border border-[var(--border)] bg-[var(--card)] p-2">
+              <code className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-xs text-[var(--foreground)]">{command}</code>
+              <button
+                onClick={() => navigator.clipboard.writeText(command)}
+                className="rounded p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        ))}
         <p className="mt-2 text-[10px] text-[var(--muted-foreground)]">{t('nodes.commandHint')}</p>
         <div className="mt-4 flex justify-end">
           <button onClick={onDone} className="rounded bg-[var(--primary)] px-3 py-1.5 text-xs text-white">

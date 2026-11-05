@@ -199,8 +199,10 @@ export const en: Record<string, string> = {
   'nodes.cancel': 'Cancel',
   'nodes.addBtn': 'Create',
   'nodes.createSuccess': 'Machine added',
-  'nodes.commandNotice': 'Run this on the machine (the token is also on the list row). Drop --root to share the whole machine; add --allow-shell to let agents run commands.',
-  'nodes.commandHint': 'If this server sits behind a login proxy, use an address the machine can reach directly, or pass the proxy cookie with --header.',
+  'nodes.commandNotice': 'On the machine, download halo-node and run it (the token is also on the list row). Drop --root to share the whole machine; add --allow-shell to let agents run commands.',
+  'nodes.commandHint': "If this server sits behind a login proxy, use an address the machine can reach directly, or pass the proxy cookie with --header. If the machine can't reach GitHub, download the binary elsewhere and copy it over.",
+  'nodes.commandLinux': 'Linux (x86_64 / arm64 / armv7)',
+  'nodes.commandOther': 'macOS / Windows (npm i -g @turmind/halo)',
   'nodes.done': 'Done',
 
   // ── WeChat settings ──

@@ -1551,6 +1551,12 @@ async function cmdNode(argv: string[]): Promise<void> {
     if (i <= 0) fail(`invalid --header (expected "Name: value"): ${h}`)
     headers[h.slice(0, i).trim()] = h.slice(i + 1).trim()
   }
+  // Linux x64 / arm64 / arm have a release binary (packages/node-go); point at it, run on as usual.
+  const goArch = process.platform === 'linux' ? { x64: 'amd64', arm64: 'arm64', arm: 'armv7' }[process.arch as string] : undefined
+  if (goArch) {
+    const rel = /^\d+\.\d+\.\d+$/.test(VERSION) ? `download/v${VERSION}` : 'latest/download'
+    console.log(`[Node] tip: a standalone 7 MB binary replaces this command — https://github.com/turmind/halo-agent/releases/${rel}/halo-node-linux-${goArch} (guide: https://github.com/turmind/halo-agent/blob/main/.halo/docs/guide/node.md)`)
+  }
   const { runNode } = await import('@turmind/halo-server/nodes/node-client')
   let handle: ReturnType<typeof runNode>
   try {

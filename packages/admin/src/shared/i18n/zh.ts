@@ -199,8 +199,10 @@ export const zh: Record<string, string> = {
   'nodes.cancel': '取消',
   'nodes.addBtn': '创建',
   'nodes.createSuccess': '已添加机器',
-  'nodes.commandNotice': '在那台机器上运行以下命令（token 在列表行里也能复制）。去掉 --root 即共享整机；加 --allow-shell 允许 agent 执行命令。',
-  'nodes.commandHint': '如果服务器在需要登录的代理后面，请换成机器能直连的地址，或用 --header 带上代理 cookie。',
+  'nodes.commandNotice': '在那台机器上下载 halo-node 并运行（token 在列表行里也能复制）。去掉 --root 即共享整机；加 --allow-shell 允许 agent 执行命令。',
+  'nodes.commandHint': '如果服务器在需要登录的代理后面，请换成机器能直连的地址，或用 --header 带上代理 cookie。机器访问不了 GitHub 时，在别处下载二进制后拷过去。',
+  'nodes.commandLinux': 'Linux（x86_64 / arm64 / armv7）',
+  'nodes.commandOther': 'macOS / Windows（npm i -g @turmind/halo）',
   'nodes.done': '完成',
 
   // ── WeChat settings ──
