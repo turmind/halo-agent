@@ -17,6 +17,7 @@
 package jsregex
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -27,8 +28,17 @@ import (
 	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
 )
 
-// MatchTimeout bounds catastrophic backtracking (= the hub's non-run call timeout).
-const MatchTimeout = 120 * time.Second
+// MatchTimeout bounds one test() — catastrophic backtracking (D10). Under the
+// hub's 120s call timeout, so the agent gets ErrTimeout, not a cancelled call.
+// A var so tests can lower it (read at Compile).
+var MatchTimeout = 30 * time.Second
+
+// ErrTimeout: a test() ran past MatchTimeout (V8 would backtrack on).
+var ErrTimeout = errors.New("regex match timed out")
+
+// maxDepth caps group nesting: the parser recurses per group. V8 throws
+// `Stack overflow` (at test()) past roughly the same depth of capture groups.
+const maxDepth = 10000
 
 const maxCount = 1<<31 - 1
 
@@ -60,15 +70,19 @@ func Compile(src string) (*Regexp, error) {
 	return &Regexp{re}, nil
 }
 
-// Test is RegExp#test on s.
-func (r *Regexp) Test(s string) bool {
+// Test is RegExp#test on s; ErrTimeout past MatchTimeout.
+func (r *Regexp) Test(s string) (bool, error) {
 	var ok bool
+	var err error
 	if jsv.HasAstral(s) {
-		ok, _ = r.re.MatchRunes(jsv.Units16(s))
+		ok, err = r.re.MatchRunes(jsv.Units16(s))
 	} else {
-		ok, _ = r.re.MatchString(s)
+		ok, err = r.re.MatchString(s)
 	}
-	return ok
+	if err != nil { // regexp2's only match-time error; its text quotes the input
+		return false, ErrTimeout
+	}
+	return ok, nil
 }
 
 type kind int
@@ -136,10 +150,25 @@ func Translate(src string) (out string, err error) {
 			p.fail("Invalid named capture referenced")
 		}
 	}
-	for idx, name := range p.refs {
-		out = strings.Replace(out, refMarkL+strconv.Itoa(idx)+refMarkR, `(?:\`+strconv.Itoa(p.names[name])+`)`, 1)
+	if len(p.refs) == 0 {
+		return out, nil
 	}
-	return out, nil
+	// One pass over the marks (literal NULs are always emitted as \u0000).
+	var b strings.Builder
+	for {
+		i := strings.Index(out, refMarkL)
+		if i < 0 {
+			break
+		}
+		rest := out[i+len(refMarkL):]
+		j := strings.Index(rest, refMarkR)
+		idx, _ := strconv.Atoi(rest[:j])
+		b.WriteString(out[:i])
+		b.WriteString(`(?:\` + strconv.Itoa(p.names[p.refs[idx]]) + `)`)
+		out = rest[j+len(refMarkR):]
+	}
+	b.WriteString(out)
+	return b.String(), nil
 }
 
 // prescan: total capture count (for \N backreference vs octal) and whether any
@@ -385,6 +414,9 @@ func (p *parser) group() (string, kind) {
 	idx := p.capSeen
 	if prefix != "(" {
 		idx = 0
+	}
+	if len(p.open) >= maxDepth {
+		p.fail("Stack overflow")
 	}
 	p.open = append(p.open, openGroup{idx, name})
 	body, zero := p.disjunction()

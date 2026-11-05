@@ -316,6 +316,35 @@
       }
      }
     ]
+   },
+   {
+    "name": "grep skips an unreadable-size file",
+    "setup": [
+     {
+      "sparse": "root/huge/s600",
+      "size": 629145600
+     },
+     {
+      "file": "root/huge/a.txt",
+      "text": "xa\n"
+     }
+    ],
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "x",
+       "path": "huge"
+      }
+     },
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "x",
+       "path": "huge/s600"
+      }
+     }
+    ]
    }
   ]
  },

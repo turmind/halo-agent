@@ -199,6 +199,18 @@
       }
      }
     ]
+   },
+   {
+    "name": "whole read /dev/zero: unsized, over V8's string length",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "/dev/zero",
+       "offset": 1
+      }
+     }
+    ]
    }
   ]
  },

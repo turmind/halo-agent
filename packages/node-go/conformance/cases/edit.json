@@ -206,6 +206,44 @@
       }
      }
     ]
+   },
+   {
+    "name": "edit 600MB: over V8's string length",
+    "setup": [
+     {
+      "sparse": "root/huge/s600",
+      "size": 629145600
+     }
+    ],
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "huge/s600",
+       "old_string": "a",
+       "new_string": "b"
+      }
+     }
+    ]
+   },
+   {
+    "name": "edit 3GiB: over kIoMaxLength",
+    "setup": [
+     {
+      "sparse": "root/huge/s3g",
+      "size": 3221225472
+     }
+    ],
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "huge/s3g",
+       "old_string": "a",
+       "new_string": "b"
+      }
+     }
+    ]
    }
   ]
  },

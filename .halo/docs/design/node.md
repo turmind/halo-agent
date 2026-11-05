@@ -23,7 +23,7 @@ Not built in AgentCore mode (`nodeHub = AGENTCORE ? null : …`), the CLI / TUI 
 
 ### Go client: known differences from the TS client
 
-Accepted gaps between `halo-node` and `halo node`. In the conformance suite D1 is normalized away, D4's prefix is rewritten before comparing, and D5 is a `known` case that also asserts TS still differs; the rest have no case. The labels are the ones the test files use.
+Accepted gaps between `halo-node` and `halo node`. In the conformance suite D1 is normalized away, D4's prefix is rewritten before comparing, and D5 is a `known` case that also asserts TS still differs; D11 is pinned the same way by `known` vectors in `internal/jsregex/testdata/regex-regress.jsonl`; the rest have no case. The labels are the ones the test files use.
 
 | # | Difference | Why accepted |
 |---|---|---|
@@ -35,7 +35,10 @@ Accepted gaps between `halo-node` and `halo node`. In the conformance suite D1 i
 | D6, D7 | — (removed: `edit` with `old_string: []` and array `include` in `grep` now match TS) | |
 | D8 | `~/.halo/secrets/{config,settings}.yaml` aren't read: shell timeout only from `HALO_SHELL_TIMEOUT`, grep's 50 matches and the 5 MiB output cap fixed | matters only on a machine that also runs a halo server with those changed |
 | D9 | `mkdir -p` where the parent exists but mkdir keeps failing ENOENT (procfs, e.g. `/proc/sys/x/y.txt`): Node retries forever and TS never replies; Go returns the ENOENT | Go is right; whole-machine writes to procfs only; no case (TS hangs) |
-| D10 | Regex engine limits: V8 throws at `test()` (backtrack stack, `Regular expression too large`), regexp2 matches on; nested nullable quantifiers can backtrack exponentially in regexp2 where V8 prunes | pathological patterns on both sides; the fuzz only requires Go to compile them |
+| D10 | Regex engine limits: V8 throws at `test()` (backtrack stack, `Regular expression too large`), regexp2 matches on; nested nullable quantifiers can backtrack exponentially in regexp2 where V8 prunes. Go caps group nesting at 10000 (`Invalid regular expression: /…/: Stack overflow` at compile, so grep's `Invalid regex pattern` warning; V8 compiles it and throws the same text at `test()` past ~11000 capture / lookaround levels). One `test()` over 30s aborts the whole grep / glob with `regex match timed out after 30s on <file>:<line> — call aborted …`; V8 has no limit, so TS runs into the hub's 120s cancel and keeps spinning | pathological patterns on both sides; the fuzz only requires Go to compile them |
+| D11 | A capture inside a quantified group isn't reset per iteration: `/^(?:(a)\|b)+\1$/` (also `*`, `{2}`) — `"ab"` is true in V8, false in Go; `"aba"` the reverse. regexp2 keeps the last iteration's capture where ECMAScript clears it | backreference to an alternation's capture under a quantifier only; pinned by `known` vectors |
+| D12 | A lone surrogate escape in a request's JSON (`"\ud83d"`) arrives in Go as U+FFFD (`encoding/json`), in TS as the surrogate: `edit`'s `old_string` and grep's `pattern` can then match a U+FFFD the file decoded to, where TS finds nothing. A NUL byte in a path is `EINVAL: invalid argument, stat '…'` in Go, `ERR_INVALID_ARG_VALUE` (`…without null bytes`) in TS | off-schema input; same outcome (no match / error), different text |
+| D13 | `fs.readFile` limits by bytes, not decoded length: a file over 536870888 bytes (V8's string max) is `Invalid string length` in Go even when it is mostly multi-byte text Node could still hold; over 2 GiB both say `File size (<n>) is greater than 2 GiB` | ≥512 MiB of text through a node tool; byte count is a safe bound and Go never buffers past it |
 
 ## Two modes
 

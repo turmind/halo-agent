@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
 )
 
 // testdata/js-truth.json is produced by conformance/gen-regex-truth.mjs from
@@ -42,7 +40,7 @@ func TestMatchesJS(t *testing.T) {
 		}
 		for _, c := range m.Cases {
 			s, want := c[0].(string), c[1].(bool)
-			if got := re.Test(s); got != want {
+			if got, _ := re.Test(s); got != want {
 				t.Errorf("/%s/.test(%q) = %v, want %v", m.P, s, got, want)
 			}
 		}
@@ -69,7 +67,8 @@ func TestErrorsJS(t *testing.T) {
 // TestDifferential replays JSONL vectors from conformance/regex-fuzz.mjs —
 // {src, err} or {src, in, out} with out[i] = '1' when /src/.test(in[i]) — from
 // testdata/regex-regress.jsonl (minimised past mismatches, always) plus the
-// file named by JSREGEX_VECTORS (a fresh CI fuzz run, when set).
+// file named by JSREGEX_VECTORS (a fresh CI fuzz run, when set). A vector with
+// "known":"D<n>" pins an accepted difference: Go must still differ from out.
 func TestDifferential(t *testing.T) {
 	files := []string{"testdata/regex-regress.jsonl"}
 	if f := os.Getenv("JSREGEX_VECTORS"); f != "" {
@@ -88,11 +87,12 @@ func TestDifferential(t *testing.T) {
 				continue
 			}
 			var v struct {
-				Src string   `json:"src"`
-				Err *string  `json:"err"`
-				Rt  string   `json:"rt"`
-				In  []string `json:"in"`
-				Out string   `json:"out"`
+				Src   string   `json:"src"`
+				Err   *string  `json:"err"`
+				Rt    string   `json:"rt"`
+				In    []string `json:"in"`
+				Out   string   `json:"out"`
+				Known string   `json:"known"`
 			}
 			if err := json.Unmarshal(sc.Bytes(), &v); err != nil {
 				t.Fatalf("%s: %v", name, err)
@@ -103,6 +103,10 @@ func TestDifferential(t *testing.T) {
 				rt++
 				if _, err := Compile(v.Src); err != nil {
 					msg = "JS accepts, got " + err.Error()
+				}
+			} else if v.Known != "" { // design/node.md known differences
+				if m, _ := diff(v.Src, v.Err, v.In, v.Out); m == "" {
+					msg = "known difference " + v.Known + " no longer differs — drop the vector's known mark"
 				}
 			} else {
 				var timedOut bool
@@ -143,13 +147,7 @@ func diff(src string, wantErr *string, in []string, out string) (string, bool) {
 	re.re.MatchTimeout = diffTimeout
 	var got strings.Builder
 	for _, s := range in {
-		var ok bool
-		var merr error
-		if jsv.HasAstral(s) { // = Regexp.Test, but keeping the timeout error
-			ok, merr = re.re.MatchRunes(jsv.Units16(s))
-		} else {
-			ok, merr = re.re.MatchString(s)
-		}
+		ok, merr := re.Test(s)
 		if merr != nil {
 			return "", true
 		}
@@ -199,11 +197,51 @@ func TestSurrogates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: %v", c.p, err)
 		}
-		if got := re.Test(c.s); got != c.want {
+		if got, _ := re.Test(c.s); got != c.want {
 			t.Errorf("/%s/.test(%q) = %v, want %v", c.p, c.s, got, c.want)
 		}
 	}
 	if _, err := Compile("[\U0001F600-\U0001F602]"); err == nil || err.Error() != "Invalid regular expression: /[\U0001F600-\U0001F602]/: Range out of order in character class" {
 		t.Errorf("astral range: %v", err)
+	}
+}
+
+// The parser recurses per group: past maxDepth it is a SyntaxError, not a
+// goroutine stack overflow (V8: `Stack overflow` at test(), depth ~11000).
+func TestNestingDepth(t *testing.T) {
+	for _, open := range []string{"(", "(?:", "(?="} {
+		ok := strings.Repeat(open, maxDepth) + "a" + strings.Repeat(")", maxDepth)
+		if _, err := Compile(ok); err != nil {
+			t.Errorf("depth %d %q: %v", maxDepth, open, err)
+		}
+		deep := strings.Repeat(open, maxDepth+1) + "a" + strings.Repeat(")", maxDepth+1)
+		_, err := Compile(deep)
+		if se, isSE := err.(*SyntaxError); !isSE || se.Msg != "Stack overflow" {
+			t.Errorf("depth %d %q: %v", maxDepth+1, open, err)
+		}
+	}
+	src := strings.Repeat("(?:", 1_000_000) // unterminated, far past any recursion budget
+	if _, err := Compile(src); err == nil || !strings.HasSuffix(err.Error(), "/: Stack overflow") {
+		t.Errorf("1e6 deep: %v", err)
+	}
+}
+
+func TestMatchTimeout(t *testing.T) {
+	old := MatchTimeout
+	MatchTimeout = 200 * time.Millisecond
+	defer func() { MatchTimeout = old }()
+	re, err := Compile(`^(a+)+$`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if ok, err := re.Test(strings.Repeat("a", 40) + "!"); ok || err != ErrTimeout {
+		t.Fatalf("got %v, %v; want ErrTimeout", ok, err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("timed out after %v", d)
+	}
+	if ok, err := re.Test("aaa"); !ok || err != nil {
+		t.Errorf("plain match: %v, %v", ok, err)
 	}
 }

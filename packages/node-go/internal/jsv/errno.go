@@ -2,6 +2,7 @@ package jsv
 
 import (
 	"errors"
+	"strconv"
 	"syscall"
 )
 
@@ -33,6 +34,8 @@ var errnoText = map[syscall.Errno][2]string{
 	syscall.EOVERFLOW:    {"EOVERFLOW", "value too large for defined data type"},
 	syscall.EBADF:        {"EBADF", "bad file descriptor"},
 	syscall.ECANCELED:    {"ECANCELED", "operation canceled"},
+	syscall.ENODATA:      {"ENODATA", "no data available"},
+	syscall.ESPIPE:       {"ESPIPE", "invalid seek"},
 }
 
 // FsError renders err like a Node fs error: `CODE: desc, syscall 'path'`
@@ -44,7 +47,9 @@ func FsError(err error, sys, path string) error {
 	}
 	t, ok := errnoText[en]
 	if !ok {
-		t = [2]string{"E" + en.Error(), en.Error()}
+		// Not in libuv's map (EDQUOT included): Node prints `Unknown system error -<n>` as code and text.
+		u := "Unknown system error -" + strconv.Itoa(int(en))
+		t = [2]string{u, u}
 	}
 	msg := t[0] + ": " + t[1] + ", " + sys
 	if path != "" {

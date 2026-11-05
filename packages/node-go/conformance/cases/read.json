@@ -265,6 +265,60 @@
       }
      }
     ]
+   },
+   {
+    "name": "read 600MB in full",
+    "setup": [
+     {
+      "sparse": "root/huge/s600",
+      "size": 629145600
+     }
+    ],
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "huge/s600"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read 600MB range: over V8's string length",
+    "setup": [
+     {
+      "sparse": "root/huge/s600",
+      "size": 629145600
+     }
+    ],
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "huge/s600",
+       "offset": 1,
+       "limit": 5
+      }
+     }
+    ]
+   },
+   {
+    "name": "read 3GiB range: over kIoMaxLength",
+    "setup": [
+     {
+      "sparse": "root/huge/s3g",
+      "size": 3221225472
+     }
+    ],
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "huge/s3g",
+       "offset": 1
+      }
+     }
+    ]
    }
   ]
  },

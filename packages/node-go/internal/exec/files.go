@@ -43,7 +43,8 @@ func mkdirp(dir string) error {
 				return jsv.FsError(err, "mkdir", path)
 			}
 			if i := strings.LastIndexByte(path, '/'); i >= 0 {
-				stack = append(stack, path, path[:i])
+				// "/x": the parent is "/" (Node takes "", mkdir ENOENT, and loops — D9).
+				stack = append(stack, path, path[:max(i, 1)])
 				continue
 			}
 			if len(stack) > 0 {

@@ -1,27 +1,82 @@
 package exec
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"strconv"
 	"strings"
+	"unicode/utf8"
+	"unsafe"
 
 	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
 )
 
 const readHardLimit = 2 * 1024 * 1024
 
-// readFile is fs.readFile(p, 'utf-8') with Node's error text.
+// ioMaxLength is Node's kIoMaxLength: fs.readFile refuses a bigger regular file before reading.
+const ioMaxLength = 1<<31 - 1
+
+// v8StringMax is V8's String::kMaxLength in UTF-16 units (Node's
+// buffer.constants.MAX_STRING_LENGTH): (1<<29)-24 on 64-bit, (1<<28)-16 on
+// 32-bit. A var so tests can lower it.
+var v8StringMax int64 = 1<<29 - 24
+
+func init() {
+	if strconv.IntSize == 32 {
+		v8StringMax = 1<<28 - 16
+	}
+}
+
+// errStringLength is the RangeError fs.readFile throws once the decoded text
+// passes v8StringMax.
+var errStringLength = errors.New("Invalid string length")
+
+// readFile is fs.readFile(p, 'utf-8') with Node's error text. Capped at
+// v8StringMax bytes — a UTF-8 byte never decodes to more than one UTF-16
+// unit, so below that Node never throws; above it Node may still fit a
+// mostly multi-byte file, Go refuses it (D13).
 func readFile(p string) (string, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return "", jsv.FsError(err, "open", p)
 	}
 	defer f.Close()
-	b, err := io.ReadAll(f)
-	if err != nil {
-		return "", jsv.FsError(err, "read", "")
+	size := int64(0)
+	if st, err := f.Stat(); err == nil && st.Mode().IsRegular() {
+		size = st.Size()
+	}
+	if size > ioMaxLength {
+		return "", fmt.Errorf("File size (%d) is greater than 2 GiB", size)
+	}
+	if size > v8StringMax {
+		return "", errStringLength
+	}
+	// os.ReadFile's loop, with the cap: size 0 (a device, a pipe, procfs) reads
+	// until EOF, the buffer never growing past v8StringMax+1 (/dev/zero stops there).
+	b := make([]byte, 0, max(size+1, 512))
+	for {
+		n, err := f.Read(b[len(b):cap(b)])
+		b = b[:len(b)+n]
+		if int64(len(b)) > v8StringMax {
+			return "", errStringLength
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", jsv.FsError(err, "read", "")
+		}
+		if len(b) == cap(b) {
+			nb := make([]byte, len(b), min(2*int64(cap(b)), v8StringMax+1))
+			copy(nb, b)
+			b = nb
+		}
+	}
+	if utf8.Valid(b) {
+		return unsafe.String(unsafe.SliceData(b), len(b)), nil // b is never written again: no second copy of the file
 	}
 	return jsv.Decode(b), nil
 }

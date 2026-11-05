@@ -69,16 +69,31 @@ func walk(ctx context.Context, dir string, fn func(string) bool) bool {
 	return true
 }
 
-// cached compile of generated include / glob regexes (nil = invalid → no match).
-type reCache map[string]*jsregex.Regexp
-
-func (c reCache) test(src, s string) bool {
-	re, ok := c[src]
-	if !ok {
-		re, _ = jsregex.Compile(src)
-		c[src] = re
+// compileAll compiles generated include / glob regexes once (nil = invalid → no match).
+func compileAll(srcs []string) []*jsregex.Regexp {
+	res := make([]*jsregex.Regexp, len(srcs))
+	for i, src := range srcs {
+		res[i], _ = jsregex.Compile(src)
 	}
-	return re != nil && re.Test(s)
+	return res
+}
+
+// matchAny is matchInclude / matchGlob's `try { new RegExp(src).test(s) } catch { false }`;
+// a timeout (D10) is returned instead, to abort the whole call.
+func matchAny(res []*jsregex.Regexp, s string) (bool, error) {
+	for _, re := range res {
+		if re == nil {
+			continue
+		}
+		if ok, err := re.Test(s); ok || err != nil {
+			return ok, err
+		}
+	}
+	return false, nil
+}
+
+func matchTimedOut(at string) error {
+	return fmt.Errorf("regex match timed out after %v on %s — call aborted (catastrophic backtracking: simplify the pattern)", jsregex.MatchTimeout, at)
 }
 
 var braceRe = regexp.MustCompile(`\{([^}]+)\}`)
@@ -186,7 +201,14 @@ func (e *Executor) grep(ctx context.Context, searchDir string, args map[string]a
 	_, includeIsStr := includeV.(string)
 	_, includeIsArr := includeV.([]any)
 	useInclude := jsv.Truthy(includeV)
-	cache := reCache{}
+	var includeRes []*jsregex.Regexp
+	if useInclude {
+		var srcs []string
+		for _, part := range splitInclude(includeV) {
+			srcs = append(srcs, includeRegex(part))
+		}
+		includeRes = compileAll(srcs)
+	}
 
 	var results []string
 	var thrown error
@@ -199,13 +221,10 @@ func (e *Executor) grep(ctx context.Context, searchDir string, args map[string]a
 				thrown = errors.New("include is not iterable")
 				return false
 			}
-			name := filepath.Base(file)
-			hit := false
-			for _, part := range splitInclude(includeV) {
-				if cache.test(includeRegex(part), name) {
-					hit = true
-					break
-				}
+			hit, err := matchAny(includeRes, filepath.Base(file))
+			if err != nil {
+				thrown = matchTimedOut(nodepath.Rel(e.s.Base, file))
+				return false
 			}
 			if !hit {
 				return true
@@ -214,19 +233,24 @@ func (e *Executor) grep(ctx context.Context, searchDir string, args map[string]a
 		if isBinary(file) {
 			return true
 		}
-		b, err := os.ReadFile(file)
+		content, err := readFile(file) // TS: sandboxReadFile in a try → continue
 		if err != nil {
 			return true
 		}
 		rel := nodepath.Rel(e.s.Base, file)
-		for i, line := range strings.Split(jsv.Decode(b), "\n") {
+		for i, line := range strings.Split(content, "\n") {
 			if float64(len(results)) >= maxN {
 				break
 			}
-			if i&1023 == 0 && ctx.Err() != nil {
+			if ctx.Err() != nil {
 				return false
 			}
-			if re.Test(line) {
+			ok, err := re.Test(line)
+			if err != nil {
+				thrown = matchTimedOut(fmt.Sprintf("%s:%d", rel, i+1))
+				return false
+			}
+			if ok {
 				results = append(results, fmt.Sprintf("%s:%d:%s", rel, i+1, line))
 			}
 		}
@@ -252,7 +276,10 @@ var extRe = regexp.MustCompile(`(?i)\.[a-z0-9]+$`)
 func (e *Executor) glob(ctx context.Context, searchDir string, args map[string]any) (string, error) {
 	patV := jsv.Get(args, "pattern")
 	pattern, isStr := patV.(string)
-	cache := reCache{}
+	var globRes []*jsregex.Regexp
+	if isStr {
+		globRes = compileAll([]string{globRegex(pattern)})
+	}
 	var results []string
 	var thrown error
 	walk(ctx, searchDir, func(file string) bool {
@@ -271,7 +298,12 @@ func (e *Executor) glob(ctx context.Context, searchDir string, args map[string]a
 			return false
 		}
 		rel := nodepath.Rel(e.s.Base, file)
-		if cache.test(globRegex(pattern), strings.ReplaceAll(rel, `\`, "/")) {
+		ok, err := matchAny(globRes, strings.ReplaceAll(rel, `\`, "/"))
+		if err != nil {
+			thrown = matchTimedOut(rel)
+			return false
+		}
+		if ok {
 			results = append(results, rel)
 		}
 		return true
