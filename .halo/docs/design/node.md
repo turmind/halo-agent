@@ -30,7 +30,7 @@ Accepted gaps between `halo-node` and `halo node`. In the conformance suite D1 i
 | D1 | The text in `could not connect (…)` is Go's `net` error, not Node's (`dial tcp …: connection refused` vs `connect ECONNREFUSED …`). Also log-only: a frame over 8 MiB from the server is `connection lost (1006 …)` in Go, `(1009 …)` in TS; a reset before the welcome has no `(read ECONNRESET)` | log only |
 | D2 | A multi-byte character split across two `node_run` output chunks: TS decodes each chunk alone (two U+FFFD), Go joins them | Go is right; cases cover single-chunk output |
 | D3 | Killed by an outside signal mid-run, TS waits 500 ms more (`shutdownWithin`), Go doesn't | timing only, same output |
-| D4 | CLI errors start `halo-node:` instead of `halo node:` and HELP names the binary; unknown flags / positional args use Go `flag`'s wording. `--server` values WHATWG still parses but Go's `net/url` doesn't take as a host (`https:/h`, `http:h`, a leading space) are `Invalid URL` in Go; TS connects | local stderr only; these are typos of `https://h` |
+| D4 | CLI errors start `halo-node:` instead of `halo node:` and HELP names the binary; unknown flags / positional args use Go `flag`'s wording. `--server` values WHATWG still parses but Go's `net/url` doesn't take as a host (`https:/h`, `http:h`, a leading / trailing space) are `Invalid URL` in Go; TS connects | local stderr only; these are typos of `https://h` |
 | D5 | `node_write` content as an array with an array-like plain-object chunk (`[{length:2}]`): TS writes `0000` and succeeds, Go errors `…Received an instance of Object` | off-schema input (case `write D5 array-like object chunk`) |
 | D6, D7 | — (removed: `edit` with `old_string: []` and array `include` in `grep` now match TS) | |
 | D8 | `~/.halo/secrets/{config,settings}.yaml` aren't read: shell timeout only from `HALO_SHELL_TIMEOUT`, grep's 50 matches and the 5 MiB output cap fixed | matters only on a machine that also runs a halo server with those changed |
@@ -41,6 +41,7 @@ Accepted gaps between `halo-node` and `halo node`. In the conformance suite D1 i
 | D13 | `fs.readFile` limits by bytes, not decoded length: a file over 536870888 bytes (V8's string max) is `Invalid string length` in Go even when it is mostly multi-byte text Node could still hold; over 2 GiB both say `File size (<n>) is greater than 2 GiB` | ≥512 MiB of text through a node tool; byte count is a safe bound and Go never buffers past it |
 | D14 | `node_run`'s stdin is a pipe (FIFO), TS's a socketpair: reads and writes behave the same; only a test like `[ -S /dev/stdin ]` tells them apart | nothing writes to it either way |
 | D15 | Built with `CGO_ENABLED=0`, user lookup reads `/etc/passwd` only, not NSS: for an LDAP / SSSD user the name in the `--allow-shell` log line and the home used when `HOME` is unset can differ (TS asks libc) | log text / an unset `HOME` only |
+| D16 | A `res` goes out in 32 KiB WebSocket fragments, TS sends one frame: the server's `ws` reassembles before parsing, the 8 MiB cap is per message, and pings can interleave so a slow uplink doesn't starve the pong | wire framing only; pinned by the fragment-count proto check |
 
 ## Two modes
 

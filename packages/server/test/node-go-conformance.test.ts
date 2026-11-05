@@ -408,6 +408,7 @@ describe.skipIf(!GO_BIN)('node-go conformance', () => {
         ['header name not a token', () => ['--server', 'http://h', '--header', 'X Foo: v'], { HALO_NODE_TOKEN: 'x' }],
         ['header name empty after trim', () => ['--server', 'http://h', '--header', ' : v'], { HALO_NODE_TOKEN: 'x' }],
         ['header value with a control char', () => ['--server', 'http://h', '--header', 'X-A: a\x01b'], { HALO_NODE_TOKEN: 'x' }],
+        ['token with a trailing CR (CRLF env file)', () => ['--server', 'http://h'], { HALO_NODE_TOKEN: 'abc\r' }],
         ['root missing', (s) => ['--server', 'http://h', '--root', `${d(s)}/root/nope`], { HALO_NODE_TOKEN: 'x' }],
         ['root is a file', (s) => ['--server', 'http://h', '--root', `${d(s)}/root/f.txt`], { HALO_NODE_TOKEN: 'x' }],
       ]

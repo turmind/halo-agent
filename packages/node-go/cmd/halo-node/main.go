@@ -222,6 +222,10 @@ func main() {
 			fail(fmt.Sprintf("Invalid character in header content [\"%s\"]", name))
 		}
 	}
+	// TS spreads --header first, then sets `authorization: Bearer <token>`.
+	if !headerValue("Bearer " + tok) {
+		fail(`Invalid character in header content ["authorization"]`)
+	}
 
 	stop := make(chan struct{})
 	sig := make(chan os.Signal, 2)
