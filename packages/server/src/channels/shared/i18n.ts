@@ -136,6 +136,10 @@ const messages: Record<string, Record<Lang, string>> = {
   'evo.queued': { zh: '📝 已加入评估队列。完成后可在 admin 的 Evolution 页查看。', en: '📝 Queued for evaluation. Results will appear under the admin Evolution tab.' },
   'evo.snapshot_failed': { zh: '快照失败,请查 server 日志。', en: 'Snapshot failed — check server logs.' },
   'evo.queue_failed': { zh: '入队失败,请查 server 日志。', en: 'Failed to enqueue — check server logs.' },
+  // Auto-apply notice in the source session (evolution/notify.ts).
+  'evo.auto_applied': { zh: '✨ 自我进化已自动应用对 {files} 的修改（评分 {avg}，{confidence}）。可在 Evolution 页查看或回滚。', en: '✨ Self-evolution auto-applied a change to {files} (score {avg}, {confidence}). Review or roll back under Evolution.' },
+  'evo.auto_applied_files_more': { zh: '{files} 等 {count} 个文件', en: '{files} and {count} files in total' },
+  'evo.auto_applied_observation': { zh: '另附一条结构性建议：{preview}（详见 Evolution 页）', en: 'It also left a structural suggestion: {preview} (see the Evolution tab).' },
 
   // ── /agent verbs (list / switch / desc / delete) ──
   'agents.empty': { zh: '没有可用的 agent', en: 'No agents available' },

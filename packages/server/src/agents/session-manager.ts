@@ -11,7 +11,7 @@ import path from 'node:path'
 import type { AgentEvent, AnthropicMessage, ContentBlock, ToolDef } from './bedrock-agent.js'
 import type { ModelRuntime } from './model-runtime.js'
 import { loadScopeInstructions } from '../prompts/md-loader.js'
-import { config, modelSupportsImage, resolveEffectiveContext } from '../config.js'
+import { config, evoLevelRank, modelSupportsImage, resolveEffectiveContext } from '../config.js'
 import { repairConversationMessages } from './conversation-repair.js'
 import { classifyModelError, type ModelErrorKind } from './model-error.js'
 import { compactCut, localCompactMessages } from './compact.js'
@@ -1374,6 +1374,14 @@ export class SessionManager implements SessionManagerInternals {
 
   appendNotification(sessionId: string, text: string, agentName: string = 'System'): void {
     this.uiStore.appendNotification(sessionId, text, agentName)
+  }
+
+  /** Out-of-band one-liner into a session's chat, live AND persisted: unlike
+   *  appendNotification (log only), this goes through the event path, so an
+   *  open admin gets a `chat:system` frame now and a mid-turn channel
+   *  responder relays it. Used by the evo ticker's auto-apply notice. */
+  notifySystem(sessionId: string, text: string): void {
+    this.emitEvent(sessionId, { type: 'system', text })
   }
 
   replaceMessageLog(sessionId: string, messages: SessionMessage[]): void {
@@ -2897,7 +2905,7 @@ export class SessionManager implements SessionManagerInternals {
     // root agent's). Gate on parentId, the authoritative parent-link, not on
     // the legacy `id.includes('>')` heuristic.
     if (
-      config.evolution.level !== 'L1'
+      evoLevelRank(config.evolution.level) < 1
       || !config.evolution.triggers.preCompact
       || session.parentId
     ) return

@@ -265,8 +265,8 @@ describe('phaseApplyPreflight + phaseApplyPublish', () => {
     writeFile(sandboxHalo, 'halo.db', 'sqlite')
   }
 
-  async function preflightOk() {
-    const res = await phaseApplyPreflight(ctx)
+  async function preflightOk(isResume = false) {
+    const res = await phaseApplyPreflight(ctx, isResume)
     if (!res.ok) throw new Error(res.reason)
     return res.result
   }
@@ -277,7 +277,7 @@ describe('phaseApplyPreflight + phaseApplyPublish', () => {
   })
 
   it('fails when the sandbox is missing', async () => {
-    expect(await phaseApplyPreflight(ctx)).toEqual({ ok: false, reason: expect.stringMatching(/sandbox missing/) })
+    expect(await phaseApplyPreflight(ctx, false)).toEqual({ ok: false, reason: expect.stringMatching(/sandbox missing/) })
   })
 
   it('lists only publish-whitelisted files that differ from main', async () => {
@@ -303,9 +303,10 @@ describe('phaseApplyPreflight + phaseApplyPublish', () => {
     expect(manifest.applyId).toBe('ap1')
     expect(manifest.sourceRunIds).toEqual(['r1'])
     expect(manifest.files).toHaveLength(2)
+    // before / after sha256 feed rollback's conflict check (evo-rollback.test.ts)
     expect(manifest.files).toEqual(expect.arrayContaining([
-      { rel: 'INSTRUCTIONS.md', kind: 'overwrite' },
-      { rel: SKILL_REL, kind: 'new' },
+      { rel: 'INSTRUCTIONS.md', kind: 'overwrite', before: expect.stringMatching(/^[0-9a-f]{64}$/), after: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      { rel: SKILL_REL, kind: 'new', before: null, after: expect.stringMatching(/^[0-9a-f]{64}$/) },
     ]))
   })
 
@@ -324,7 +325,7 @@ describe('phaseApplyPreflight + phaseApplyPublish', () => {
     await preflightOk()
     // crash mid-publish: only INSTRUCTIONS.md reached main
     fs.copyFileSync(path.join(sandboxHalo, 'INSTRUCTIONS.md'), path.join(mainHalo, 'INSTRUCTIONS.md'))
-    const result = await preflightOk()
+    const result = await preflightOk(true)
     expect(result.changed.map((c) => c.rel)).toEqual([SKILL_REL])
     expect(read(historyDir, 'INSTRUCTIONS.md')).toBe(MAIN_INSTRUCTIONS)
     expect(readLog()).toContain('resume path, skipping history backup')

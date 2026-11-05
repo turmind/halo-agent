@@ -22,6 +22,9 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { evolutionApplies, evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { removeRunArtifacts, removeApplyArtifacts } from '../evolution/archive.js'
+import { queueApply } from '../evolution/queue-apply.js'
+import { inspectRollback, readPublishedFiles, rollbackApply } from '../evolution/rollback.js'
+import { AUTO_APPLY_FILE, extractLargerObservation } from '../evolution/auto-apply.js'
 import { wsEvoRunDir, evoWrapperLogFile } from '../paths.js'
 import { rawSqlite } from '../db/raw-sqlite.js'
 import { broadcast } from '../ws/broadcast.js'
@@ -54,6 +57,10 @@ interface RunListItem {
   /** Approved/applied runs may be linked to an apply row — surface the latest. */
   applyId?: string
   applyStatus?: string
+  /** 'reviewer' | 'auto' of that latest apply. */
+  applyApprovedBy?: string
+  /** Draft carries a `## Larger observation` (patch.md or .skip.md). */
+  hasObservation: boolean
 }
 
 export function createEvolutionRoutes(): Hono {
@@ -97,23 +104,23 @@ export function createEvolutionRoutes(): Hono {
     // page size = 20 this looks at ~20 ids regardless of how many applies
     // the workspace has accumulated. Was previously `select * from applies`
     // every call — fine at N=10 applies, dies at N=10k.
-    const applyByRunId = new Map<string, { id: string; status: string }>()
+    const applyByRunId = new Map<string, { id: string; status: string; approvedBy: string }>()
     if (rows.length > 0) {
       const sqlite = rawSqlite(db)
       const placeholders = rows.map(() => '?').join(',')
       const stmt = sqlite.prepare(`
-        SELECT a.id AS id, a.status AS status, a.created_at AS created_at, j.value AS run_id
+        SELECT a.id AS id, a.status AS status, a.approved_by AS approved_by, a.created_at AS created_at, j.value AS run_id
         FROM evolution_applies a, json_each(a.source_run_ids) j
         WHERE j.value IN (${placeholders})
         ORDER BY a.created_at DESC
       `)
-      const linkRows = stmt.all(...rows.map((r) => r.id)) as Array<{ id: string; status: string; run_id: string }>
+      const linkRows = stmt.all(...rows.map((r) => r.id)) as Array<{ id: string; status: string; approved_by: string; run_id: string }>
       for (const lr of linkRows) {
         // We walk in desc(createdAt) order, so the first apply seen for a
         // given run is the latest one — same "first-seen wins" semantics
         // as the old in-memory pass.
         if (!applyByRunId.has(lr.run_id)) {
-          applyByRunId.set(lr.run_id, { id: lr.id, status: lr.status })
+          applyByRunId.set(lr.run_id, { id: lr.id, status: lr.status, approvedBy: lr.approved_by })
         }
       }
     }
@@ -133,10 +140,12 @@ export function createEvolutionRoutes(): Hono {
         completedAt: r.completedAt,
         appliedAt: r.appliedAt,
         failureReason: r.failureReason,
-        attempts: r.attempts,
+        attempts: r.attempts - r.attemptsBase,
         archivedAt: r.archivedAt,
         applyId: apply?.id,
         applyStatus: apply?.status,
+        applyApprovedBy: apply?.approvedBy,
+        hasObservation: r.hasObservation,
       })
     }
 
@@ -209,11 +218,36 @@ export function createEvolutionRoutes(): Hono {
     // `approved` after a failed apply, per the regression-gate design) and
     // offer retry. Same json_each lookup the list endpoint uses, scoped to
     // this one id.
-    const latestApply = db.select({ id: evolutionApplies.id, status: evolutionApplies.status, failureReason: evolutionApplies.failureReason })
+    const latestApply = db.select({
+      id: evolutionApplies.id, status: evolutionApplies.status, failureReason: evolutionApplies.failureReason,
+      approvedBy: evolutionApplies.approvedBy, workspacePath: evolutionApplies.workspacePath,
+    })
       .from(evolutionApplies)
       .where(sql`exists (select 1 from json_each(${evolutionApplies.sourceRunIds}) where value = ${id})`)
       .orderBy(desc(evolutionApplies.createdAt))
       .get()
+
+    // L2/L3 verdict the wrapper wrote after scoring (absent below L2).
+    let autoApply: Record<string, unknown> | null = null
+    try {
+      autoApply = JSON.parse(await fs.readFile(path.join(dir, AUTO_APPLY_FILE), 'utf-8')) as Record<string, unknown>
+    } catch { /* below L2, or not scored yet */ }
+    // Same section the wrapper lifts for the notice; read from the draft so
+    // a skipped run (no auto-apply.json) has it too.
+    const observation = extractLargerObservation(patchMd ?? skipReasonMd ?? '')
+
+    // Rollback availability + per-file state, computed from the history
+    // manifest on disk — the same check the rollback route runs.
+    let rollback: { available: boolean; files: Array<{ rel: string; kind: string; state: string }> } | null = null
+    if (latestApply?.status === 'applied') {
+      const inspected = inspectRollback(latestApply.workspacePath, latestApply.id)
+      rollback = { available: inspected !== null, files: inspected?.files ?? [] }
+    }
+    // What phase 12 actually changed in main (the merged sandbox may differ
+    // from the run's), minus copies byte-equal to global.
+    const publishedFiles = latestApply?.status === 'applied' || latestApply?.status === 'rolled_back'
+      ? readPublishedFiles(latestApply.workspacePath, latestApply.id)
+      : null
 
     return c.json({
       run: {
@@ -228,11 +262,17 @@ export function createEvolutionRoutes(): Hono {
         completedAt: row.completedAt,
         appliedAt: row.appliedAt,
         failureReason: row.failureReason,
-        attempts: row.attempts,
+        attempts: row.attempts - row.attemptsBase,
         applyId: latestApply?.id,
         applyStatus: latestApply?.status,
         applyFailureReason: latestApply?.failureReason,
+        applyApprovedBy: latestApply?.approvedBy,
+        hasObservation: row.hasObservation,
       },
+      autoApply,
+      observation,
+      rollback,
+      publishedFiles,
       patchMd,
       scoreJson,
       skipReasonMd,
@@ -254,33 +294,21 @@ export function createEvolutionRoutes(): Hono {
     const db = getEvoDb()
     const row = db.select().from(evolutionRuns).where(eq(evolutionRuns.id, id)).get()
     if (!row) return c.json({ error: 'not found' }, 404)
-    if (row.status !== 'awaiting_review') {
-      return c.json({ error: `cannot approve run in status=${row.status}` }, 409)
+
+    // queueApply flips run → approved and inserts the apply row in one
+    // transaction, both conditional on the current state — a double click or
+    // a racing reject sees `state` and gets the 409 instead of a second apply.
+    const res = queueApply(db, { mode: 'reviewer', runId: id, reviewerHint })
+    if (!res.ok) {
+      const error = res.reason === 'state'
+        ? `cannot approve run in status=${row.status}`
+        : 'run already has an apply in flight or applied'
+      return c.json({ error }, 409)
     }
 
-    // Both writes in one transaction: "run approved" and "apply queued" are a
-    // single reviewer decision, and half of it (run flipped, apply missing)
-    // strands the run in a status the ticker will never advance.
-    const applyId = `apply-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-    db.transaction((tx) => {
-      tx.update(evolutionRuns)
-        .set({ status: 'approved' })
-        .where(eq(evolutionRuns.id, id))
-        .run()
-
-      tx.insert(evolutionApplies).values({
-        id: applyId,
-        workspacePath: row.workspacePath,
-        status: 'pending',
-        sourceRunIds: JSON.stringify([id]),
-        reviewerHint,
-        createdAt: Date.now(),
-      }).run()
-    })
-
     broadcast({ type: 'evolution:run_changed', id, status: 'approved' })
-    broadcast({ type: 'evolution:apply_changed', id: applyId, status: 'pending' })
-    return c.json({ ok: true, applyId })
+    broadcast({ type: 'evolution:apply_changed', id: res.applyId, status: 'pending' })
+    return c.json({ ok: true, applyId: res.applyId })
   })
 
   // POST /api/evolution/runs/:id/reject — flip status to rejected. No body.
@@ -292,10 +320,12 @@ export function createEvolutionRoutes(): Hono {
     if (row.status !== 'awaiting_review') {
       return c.json({ error: `cannot reject run in status=${row.status}` }, 409)
     }
-    db.update(evolutionRuns)
+    // Conditional on the state too: a concurrent approve may have won.
+    const res = db.update(evolutionRuns)
       .set({ status: 'rejected' })
-      .where(eq(evolutionRuns.id, id))
+      .where(and(eq(evolutionRuns.id, id), eq(evolutionRuns.status, 'awaiting_review')))
       .run()
+    if (res.changes === 0) return c.json({ error: 'run is no longer awaiting review' }, 409)
     broadcast({ type: 'evolution:run_changed', id, status: 'rejected' })
     return c.json({ ok: true })
   })
@@ -318,29 +348,44 @@ export function createEvolutionRoutes(): Hono {
   //
   // Reviewer-driven retry. Either the dry-run failed and they want another
   // shot, or the produced patch isn't satisfying and they want it redone
-  // with steering. Resets row to pending + zeroes attempts/heartbeat/
-  // failure_reason; the next ticker pass re-spawns the wrapper. Hint is
+  // with steering. Resets row to pending + clears heartbeat / failure_reason
+  // and restarts the retry budget (attempts_base = attempts); the next ticker pass re-spawns the wrapper. Hint is
   // required — same input + same context with no new direction would just
   // reproduce the same output. Replaces the existing user_hint (the new
   // run is a fresh attempt, the old hint was for the old patch).
   //
   // Allowed from any status except 'running' (which would race the live
-  // wrapper) and 'pending' (already queued — nothing to retry).
+  // wrapper), 'pending' (already queued — nothing to retry) and 'applied'
+  // (its change is live in main; roll it back first, which lands rolled_back).
+  // 'approved' only once its latest apply has failed / timed out — while that
+  // apply is queued or publishing, a reset would orphan it.
   router.post('/evolution/runs/:id/retry', async (c) => {
     const req = await readHintRequest(c)
     if ('error' in req) return c.json({ error: req.error }, req.status)
     const { id, hint, db, row } = req
-    if (row.status === 'running' || row.status === 'pending') {
+    if (row.status === 'running' || row.status === 'pending' || row.status === 'applied') {
       return c.json({ error: `cannot retry run in status=${row.status}` }, 409)
+    }
+    if (row.status === 'approved') {
+      const latest = db.select({ status: evolutionApplies.status }).from(evolutionApplies)
+        .where(sql`exists (select 1 from json_each(${evolutionApplies.sourceRunIds}) where value = ${id})`)
+        .orderBy(desc(evolutionApplies.createdAt))
+        .get()
+      if (latest?.status !== 'failed' && latest?.status !== 'timeout') {
+        return c.json({ error: `cannot retry an approved run whose apply is ${latest?.status ?? 'missing'}` }, 409)
+      }
     }
     db.update(evolutionRuns)
       .set({
         status: 'pending',
-        attempts: 0,
+        // attempts stays monotonic (wrapper claims compare it); the new
+        // round's retry budget counts from here.
+        attemptsBase: sql`${evolutionRuns.attempts}`,
         startedAt: null,
         heartbeatAt: null,
         completedAt: null,
         failureReason: null,
+        hasObservation: false,
         userHint: hint,
       })
       .where(eq(evolutionRuns.id, id))
@@ -416,6 +461,28 @@ export function createEvolutionRoutes(): Hono {
   // filtered server-side. Hard-limited to 200; once an installation has
   // more than that simultaneously in flight, the badge UI is the wrong
   // signal anyway.
+  // POST /api/evolution/applies/:id/rollback { force? }
+  // Restore main from the apply's history snapshot (evolution/rollback.ts).
+  // 409 with a reason code when it can't; `conflict` lists files edited since
+  // the publish — the client re-sends with force after the user confirms.
+  router.post('/evolution/applies/:id/rollback', async (c) => {
+    const id = c.req.param('id')
+    const body = await c.req.json().catch(() => ({})) as { force?: unknown }
+    const db = getEvoDb()
+    const res = rollbackApply(db, id, { force: body.force === true })
+    if (!res.ok) {
+      if (res.error === 'not_found') return c.json({ error: 'not found' }, 404)
+      const { ok: _ok, ...body } = res
+      return c.json(body, 409)
+    }
+    broadcast({ type: 'evolution:apply_changed', id, status: 'rolled_back' })
+    const apply = db.select({ sourceRunIds: evolutionApplies.sourceRunIds }).from(evolutionApplies).where(eq(evolutionApplies.id, id)).get()
+    for (const runId of JSON.parse(apply?.sourceRunIds ?? '[]') as string[]) {
+      broadcast({ type: 'evolution:run_changed', id: runId, status: 'rolled_back' })
+    }
+    return c.json(res)
+  })
+
   router.get('/evolution/applies', async (c) => {
     const db = getEvoDb()
     const rows = db.select().from(evolutionApplies)

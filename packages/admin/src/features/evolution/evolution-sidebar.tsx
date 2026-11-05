@@ -6,7 +6,7 @@
  * the same store.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { RefreshCw, Sparkles } from 'lucide-react'
+import { Lightbulb, RefreshCw, Sparkles } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
 import { cn, formatRelativeTime } from '@/shared/utils'
@@ -26,10 +26,12 @@ const MAX_RUNS = 300
 // `status` column, it's a flag derived from `archived_at`. Selecting it
 // fetches the archived list from the server (different endpoint param);
 // the other filters operate on the active list. Labels are translated
-// via the `evolution.filter.<key>` keys when rendering.
+// via the `evolution.filter.<key>` keys when rendering. `auto` and
+// `observation` are client-side pseudo-filters on the active list too:
+// auto-approved runs, and runs whose draft carries a Larger observation.
 const STATUS_FILTER_KEYS = [
   'all', 'awaiting_review', 'pending', 'running', 'approved', 'applied',
-  'skipped', 'rejected', 'failed', 'timeout', 'archived',
+  'skipped', 'rejected', 'failed', 'timeout', 'rolled_back', 'auto', 'observation', 'archived',
 ] as const
 
 export function EvolutionSidebar() {
@@ -109,6 +111,8 @@ export function EvolutionSidebar() {
 
   const filtered = useMemo(() => {
     if (filter === 'all' || filter === 'archived') return runs
+    if (filter === 'auto') return runs.filter((r) => r.applyApprovedBy === 'auto')
+    if (filter === 'observation') return runs.filter((r) => r.hasObservation)
     return runs.filter((r) => r.status === filter)
   }, [runs, filter])
 
@@ -208,13 +212,24 @@ function RunListRow({ run, selected, onClick }: { run: RunListItem; selected: bo
       <div className="flex items-center gap-2">
         <StatusBadge status={run.status} />
         {/* An approved run whose apply failed the regression gate stays
-            `approved` by design; flag it so it doesn't read as "stuck". */}
-        {run.status === 'approved' && (run.applyStatus === 'failed' || run.applyStatus === 'timeout') && (
+            `approved` by design; flag it so it doesn't read as "stuck". A
+            failed auto apply sends its run back to awaiting_review — same flag. */}
+        {(run.status === 'approved' || (run.status === 'awaiting_review' && run.applyApprovedBy === 'auto')) && (run.applyStatus === 'failed' || run.applyStatus === 'timeout') && (
           <span className="rounded bg-red-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-100">
             {t('evolution.list.applyFailed')}
           </span>
         )}
+        {run.applyApprovedBy === 'auto' && (
+          <span className="rounded bg-sky-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-100">
+            {t('evolution.list.auto')}
+          </span>
+        )}
         <span className="text-xs">{run.triggerKind}</span>
+        {run.hasObservation && (
+          <span title={t('evolution.list.observation')} className="ml-auto text-amber-400">
+            <Lightbulb className="h-3.5 w-3.5" />
+          </span>
+        )}
       </div>
       <div className="truncate text-xs text-[var(--muted-foreground)]">
         {run.userHint ?? <span className="italic">{t('evolution.list.noHint')}</span>}

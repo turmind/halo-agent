@@ -51,10 +51,10 @@ Onboarding guides at [guide/channels/](docs/guide/channels/), design at `design/
 
 ## Self-Evolution
 
-`/evo` (or pre-compact) runs `__evo_agent__` on a session to draft a prompt-file patch and dry-run it in a sandbox; `__score__` grades it against the baseline turn. A reviewer approves in the **Evolution** tab → `__apply_agent__` merges in a sandbox, regression is re-scored, then the patch publishes to the workspace's `.halo/`.
+`/evo` (or pre-compact) runs `__evo_agent__` on a session to draft a prompt-file patch and dry-run it in a sandbox; `__score__` grades it against the baseline turn. A reviewer approves in the **Evolution** tab → `__apply_agent__` merges in a sandbox, regression is re-scored, then the patch publishes to the workspace's `.halo/`. At L2 / L3 the wrapper approves it itself when the source session is `full`, the change is prompt-only (L2) or capability (L3), and the score clears the threshold + fixed floors; the source session gets one line. Any apply rolls back in one click from its hashed history snapshot.
 
 - Key state: `~/.halo/global/evo.db` (`evolution_runs` / `evolution_applies`), `~/.halo/global/internal-sessions/`, `<workspace>/.halo/evo/{runs,applies,history}/`
-- Code: `packages/server/src/evolution/` + `templates/agents/__{evo_agent,score,apply_agent}__/` · Doc: [design/evolution.md](docs/design/evolution.md)
+- Code: `packages/server/src/evolution/` (`auto-apply.ts` gates, `rollback.ts`) + `templates/agents/__{evo_agent,score,apply_agent}__/` · Doc: [design/evolution.md](docs/design/evolution.md)
 
 ## Cron Tasks
 

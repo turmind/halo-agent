@@ -23,6 +23,8 @@ import { eq, and, or, asc, isNull, sql } from 'drizzle-orm'
 import { config } from '../config.js'
 import { evolutionApplies, evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { broadcast } from '../ws/broadcast.js'
+import { failApply } from './queue-apply.js'
+import { notifyAutoApplied } from './notify.js'
 
 /**
  * Last-seen status snapshot for run/apply rows. Diff'd at the end of
@@ -87,15 +89,17 @@ function logTickError(err: unknown): void {
  * via the interval set up in `startEvoTicker`.
  */
 export async function runTick(): Promise<void> {
-  // No level gate here: the evolution.level (L0/L1) only decides how a run gets
-  // *enqueued* (L0 = manual /note only; L1 = also auto on pre-compact). Once a
-  // row is queued, processing it is level-independent — gating the ticker on L1
-  // used to silently starve manually-queued /note runs whenever the workspace
-  // sat at L0. An empty queue makes every step below a cheap no-op.
+  // No level gate here: evolution.level decides how a run gets *enqueued*
+  // (L0 = manual /evo only; L1+ = also auto on pre-compact) and, at L2/L3,
+  // whether the wrapper queues its apply itself — not whether queued rows are
+  // processed. Gating the ticker on the level used to silently starve
+  // manually-queued runs whenever the server sat at L0. An empty queue makes
+  // every step below a cheap no-op.
   markTimeouts()
   startPendingRuns()
   startPendingApplies()
   broadcastChanges()
+  notifyAutoApplied(getEvoDb())
 }
 
 /**
@@ -188,6 +192,7 @@ function broadcastChanges(): void {
  *
  * `attempts` is bumped on each `pending → running` claim (see claimRun /
  * claimApply), so the count we read here already includes the failed attempt.
+ * A run's budget counts from `attempts_base` (the latest reviewer retry).
  */
 function markTimeouts(): void {
   const db = getEvoDb()
@@ -204,6 +209,7 @@ function markTimeouts(): void {
     heartbeatAt: evolutionRuns.heartbeatAt,
     startedAt: evolutionRuns.startedAt,
     attempts: evolutionRuns.attempts,
+    attemptsBase: evolutionRuns.attemptsBase,
   })
     .from(evolutionRuns)
     .where(eq(evolutionRuns.status, 'running'))
@@ -211,18 +217,19 @@ function markTimeouts(): void {
   for (const r of runRows) {
     const lastSign = r.heartbeatAt ?? r.startedAt ?? 0
     if (lastSign < runCutoff) {
-      if (r.attempts >= maxAttempts) {
+      const used = r.attempts - r.attemptsBase
+      if (used >= maxAttempts) {
         db.update(evolutionRuns)
-          .set({ status: 'timeout', failureReason: `heartbeat lost (gave up after ${r.attempts} attempts)`, completedAt: now })
+          .set({ status: 'timeout', failureReason: `heartbeat lost (gave up after ${used} attempts)`, completedAt: now })
           .where(and(eq(evolutionRuns.id, r.id), eq(evolutionRuns.status, 'running')))
           .run()
-        console.warn(`[EvoTicker] run ${r.id} exhausted retries (${r.attempts}); marking timeout`)
+        console.warn(`[EvoTicker] run ${r.id} exhausted retries (${used}); marking timeout`)
       } else {
         db.update(evolutionRuns)
           .set({ status: 'pending', startedAt: null, heartbeatAt: null })
           .where(and(eq(evolutionRuns.id, r.id), eq(evolutionRuns.status, 'running')))
           .run()
-        console.warn(`[EvoTicker] run ${r.id} heartbeat lost (attempt ${r.attempts}/${maxAttempts}); requeued`)
+        console.warn(`[EvoTicker] run ${r.id} heartbeat lost (attempt ${used}/${maxAttempts}); requeued`)
       }
     }
   }
@@ -233,6 +240,7 @@ function markTimeouts(): void {
     heartbeatAt: evolutionApplies.heartbeatAt,
     startedAt: evolutionApplies.startedAt,
     attempts: evolutionApplies.attempts,
+    failureReason: evolutionApplies.failureReason,
   })
     .from(evolutionApplies)
     // Two states "look in-flight": 'running' (normal full apply pipeline)
@@ -253,13 +261,21 @@ function markTimeouts(): void {
         // resetting attempts and clearing heartbeat) or roll back from
         // history/.
         const newStatus = r.status === 'syncing' ? 'failed' : 'timeout'
+        // A syncing wrapper that failed on its own (preflight / publish threw)
+        // recorded why before releasing the row (evo-wrapper releaseSyncing);
+        // claimSyncingResume clears it, so a set one is this attempt's.
         const reason = r.status === 'syncing'
-          ? `heartbeat lost mid-publish (${r.attempts} attempts); main may be half-applied — see history/apply-${r.id}/`
+          ? `${r.failureReason ?? 'heartbeat lost mid-publish'} (${r.attempts} attempts); main may be half-applied — see history/apply-${r.id}/`
           : `heartbeat lost (gave up after ${r.attempts} attempts)`
-        db.update(evolutionApplies)
-          .set({ status: newStatus, failureReason: reason, completedAt: now })
-          .where(and(eq(evolutionApplies.id, r.id), eq(evolutionApplies.status, r.status)))
-          .run()
+        if (r.status === 'syncing') {
+          db.update(evolutionApplies)
+            .set({ status: newStatus, failureReason: reason, completedAt: now })
+            .where(and(eq(evolutionApplies.id, r.id), eq(evolutionApplies.status, r.status)))
+            .run()
+        } else {
+          // Main untouched — an auto apply's run goes back to the review queue.
+          failApply(db, r.id, { status: 'timeout', failureReason: reason, onlyIfStatus: 'running' })
+        }
         console.warn(`[EvoTicker] apply ${r.id} (${r.status}) exhausted retries (${r.attempts}); marking ${newStatus}`)
       } else if (r.status === 'syncing') {
         // Resume path: keep status='syncing', just clear started/heartbeat
@@ -443,6 +459,7 @@ function claimSyncingResume(id: string): boolean {
       startedAt: now,
       heartbeatAt: now,
       attempts: sql`${evolutionApplies.attempts} + 1`,
+      failureReason: null,
     })
     .where(and(
       eq(evolutionApplies.id, id),

@@ -1,7 +1,10 @@
 # Apply Agent (`__apply_agent__`)
 
 You merge N approved evolution patches into a wrapper-built sandbox. The
-wrapper invokes you (never a user directly).
+wrapper invokes you (never a user directly). "Approved" means either a
+reviewer clicked Approve, or — in a workspace with auto-apply on — the
+wrapper approved a high-scoring patch itself (`approved_by: auto`, no
+human has read it). Your job is the same either way.
 
 Building the sandbox, running dry-runs, and scoring the merged result are
 the wrapper's and `__score__`'s responsibilities — your scope is the
@@ -37,7 +40,7 @@ directory contains:
 
 For each `source_run_id Xi` you read on demand:
 - `<workspacePath>/.halo/evo/runs/Xi/patch.md` — the approved patch.
-  **Read the latest version** — the reviewer may have edited it after
+  **Read the latest version** — a reviewer may have edited it after
   approving; that's the contract you're working against now, not the
   state evo originally drafted.
 
@@ -152,8 +155,9 @@ b. **If the target doesn't exist in the sandbox yet** (it lives only
 c. **Apply each patch's intent** by `file_edit` (or `file_write` for
    new files). Keep the edits minimal and on-message — don't
    reformat surrounding sections, don't rename headings, don't fix
-   unrelated typos. The reviewer approved the patches as drafted; you
-   reflect them, not improve them.
+   unrelated typos. The patches were approved as drafted (by a
+   reviewer, or automatically on their score); you reflect them, not
+   improve them.
 
 d. **Re-read the result** to spot-check yaml validity (no broken
    frontmatter, no truncated lists). If you suspect the merge broke
@@ -179,7 +183,7 @@ conflicts: none
 
 If anything was conflict-skipped or hint-overridden, name it
 explicitly. The wrapper logs go elsewhere; this is the **apply
-agent's own audit trail** for the reviewer to read after the fact.
+agent's own audit trail** for whoever reviews the apply after the fact.
 
 ### 5. Exit
 
@@ -237,7 +241,7 @@ A few things shape clean output here:
   duplicates signal the reviewer would have to reconcile.
 - Patches can be edited after approval. Reading the **current disk
   version** of `patch.md` (not a cached text) makes the contract you're
-  working against match what the reviewer actually approved.
+  working against match what was actually approved.
 - `reviewer_hint` is binding, not advisory — it caps the patch scope. A
   hint that says "skip X" means X is skipped even when the patch.md body
   still describes the change.

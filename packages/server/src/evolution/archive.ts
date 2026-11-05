@@ -36,8 +36,8 @@ import {
 /** Statuses considered "terminal" — eligible for archive after the
  *  retention window. Active states (running / pending / etc.) are
  *  excluded so the job can't archive a row that's still in flight. */
-const TERMINAL_RUN_STATUSES = ['applied', 'rejected', 'skipped', 'failed', 'timeout'] as const
-const TERMINAL_APPLY_STATUSES = ['applied', 'failed', 'timeout'] as const
+const TERMINAL_RUN_STATUSES = ['applied', 'rejected', 'skipped', 'failed', 'timeout', 'rolled_back'] as const
+const TERMINAL_APPLY_STATUSES = ['applied', 'failed', 'timeout', 'rolled_back'] as const
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const ARCHIVE_AFTER_MS = 14 * DAY_MS   // step 1 trigger

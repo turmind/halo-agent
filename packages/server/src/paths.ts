@@ -141,6 +141,12 @@ export function wsEvoHistoryDir(workspacePath: string, applyId: string): string 
   return path.join(wsEvoDir(workspacePath), 'history', `apply-${applyId}`)
 }
 
+/** `<history dir>/rollback-pre` — main's files as they were right before a
+ *  rollback overwrote / removed them (evolution/rollback.ts). */
+export function wsEvoRollbackPreDir(workspacePath: string, applyId: string): string {
+  return path.join(wsEvoHistoryDir(workspacePath, applyId), 'rollback-pre')
+}
+
 // Artifact-dir-relative evo paths. Run mode and apply mode lay their sandbox /
 // regress dirs out identically inside their own artifact dir (buildEvoSandbox
 // is deliberately called with either), so these take the run-or-apply dir

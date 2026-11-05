@@ -1142,6 +1142,8 @@ export const api = {
           archivedAt: number | null
           applyId?: string
           applyStatus?: string
+          applyApprovedBy?: string
+          hasObservation: boolean
         }>
         hasMore: boolean
         nextCursor: number | null
@@ -1166,7 +1168,26 @@ export const api = {
           applyId?: string
           applyStatus?: string
           applyFailureReason?: string | null
+          applyApprovedBy?: string
+          hasObservation: boolean
         }
+        /** auto-apply.json — written at L2+ once the run is scored. */
+        autoApply: {
+          level: string
+          threshold: number
+          sourceAccess: string | null
+          category: string
+          files: Array<{ rel: string; category: string; reason?: string }>
+          auto: boolean
+          reason: string | null
+          score: { lint: number; behavior: number; scope: number; avg: number; confidence: string } | null
+          observation: string | null
+        } | null
+        observation: string | null
+        /** Present when the latest apply is `applied`. */
+        rollback: { available: boolean; files: Array<{ rel: string; kind: string; state: string }> } | null
+        /** Files the latest apply effectively changed (applied / rolled_back only). */
+        publishedFiles: string[] | null
         patchMd: string | null
         scoreJson: Record<string, unknown> | null
         skipReasonMd: string | null
@@ -1208,6 +1229,23 @@ export const api = {
       return request<{ ok: boolean }>(`/evolution/runs/${encodeURIComponent(id)}`, {
         method: 'DELETE',
       })
+    },
+
+    /** Restore main from the apply's snapshot. Resolves on a 409 instead of
+     *  throwing: `conflict` lists the files edited since the publish, which
+     *  the caller confirms before re-sending with `force`. */
+    async rollback(applyId: string, force = false): Promise<
+      | { ok: true; restored: string[]; removed: string[]; removedDirs: string[]; keptDirs: string[] }
+      | { ok: false; error: string; conflicts?: Array<{ rel: string; reason: string }>; files?: string[] }
+    > {
+      const res = await fetch(`${API_BASE}/evolution/applies/${encodeURIComponent(applyId)}/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      })
+      if (res.ok || res.status === 409) return res.json()
+      const body = await res.text().catch(() => '')
+      throw new Error(`API error ${res.status}: ${body || res.statusText}`)
     },
   },
 
