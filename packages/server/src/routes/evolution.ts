@@ -333,6 +333,7 @@ export function createEvolutionRoutes(): Hono {
         heartbeatAt: null,
         completedAt: null,
         failureReason: null,
+        hasObservation: false,
         userHint: hint,
       })
       .where(eq(evolutionRuns.id, id))

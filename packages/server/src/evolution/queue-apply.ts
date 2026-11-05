@@ -33,8 +33,10 @@ export function queueApply(db: EvoDb, input: QueueApplyInput): QueueApplyResult 
       const fromState = input.mode === 'reviewer'
         ? eq(evolutionRuns.status, 'awaiting_review')
         : and(eq(evolutionRuns.status, 'running'), eq(evolutionRuns.attempts, input.attempts))
+      // The wrapper's auto path skips finalize(), so it stamps completedAt
+      // itself — archive.ts only ages out runs that have one.
       const flipped = tx.update(evolutionRuns)
-        .set({ status: 'approved' })
+        .set(input.mode === 'auto' ? { status: 'approved', completedAt: Date.now(), failureReason: null } : { status: 'approved' })
         .where(and(eq(evolutionRuns.id, input.runId), fromState))
         .returning({ workspacePath: evolutionRuns.workspacePath })
         .all()
@@ -64,4 +66,41 @@ export function queueApply(db: EvoDb, input: QueueApplyInput): QueueApplyResult 
     if (err instanceof Blocked) return { ok: false, reason: err.reason }
     throw err
   }
+}
+
+/**
+ * Terminal failure of an apply. For an auto apply the source runs go back
+ * from approved to awaiting_review in the same transaction (plans/evo-l2-l3.md
+ * Q2): main is untouched, so the patch lands in the human queue instead of
+ * dying silently. Only for failures before publish — a syncing apply that
+ * gives up may have half-written main and keeps its run approved for the
+ * operator (ticker markTimeouts writes that case directly).
+ * `onlyIfStatus` guards against a state the caller didn't observe.
+ */
+export function failApply(db: EvoDb, applyId: string, input: {
+  status: 'failed' | 'timeout'
+  failureReason: string
+  onlyIfStatus?: string
+}): { failed: boolean; revertedRunIds: string[] } {
+  return db.transaction((tx) => {
+    const rows = tx.update(evolutionApplies)
+      .set({ status: input.status, failureReason: input.failureReason, completedAt: Date.now() })
+      .where(input.onlyIfStatus
+        ? and(eq(evolutionApplies.id, applyId), eq(evolutionApplies.status, input.onlyIfStatus))
+        : eq(evolutionApplies.id, applyId))
+      .returning({ approvedBy: evolutionApplies.approvedBy, sourceRunIds: evolutionApplies.sourceRunIds })
+      .all()
+    if (rows.length === 0) return { failed: false, revertedRunIds: [] }
+    const revertedRunIds: string[] = []
+    if (rows[0].approvedBy === 'auto') {
+      for (const runId of JSON.parse(rows[0].sourceRunIds) as string[]) {
+        const r = tx.update(evolutionRuns)
+          .set({ status: 'awaiting_review' })
+          .where(and(eq(evolutionRuns.id, runId), eq(evolutionRuns.status, 'approved')))
+          .run()
+        if (r.changes > 0) revertedRunIds.push(runId)
+      }
+    }
+    return { failed: true, revertedRunIds }
+  })
 }

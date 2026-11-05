@@ -23,6 +23,7 @@ import { eq, and, or, asc, isNull, sql } from 'drizzle-orm'
 import { config } from '../config.js'
 import { evolutionApplies, evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { broadcast } from '../ws/broadcast.js'
+import { failApply } from './queue-apply.js'
 
 /**
  * Last-seen status snapshot for run/apply rows. Diff'd at the end of
@@ -256,10 +257,15 @@ function markTimeouts(): void {
         const reason = r.status === 'syncing'
           ? `heartbeat lost mid-publish (${r.attempts} attempts); main may be half-applied — see history/apply-${r.id}/`
           : `heartbeat lost (gave up after ${r.attempts} attempts)`
-        db.update(evolutionApplies)
-          .set({ status: newStatus, failureReason: reason, completedAt: now })
-          .where(and(eq(evolutionApplies.id, r.id), eq(evolutionApplies.status, r.status)))
-          .run()
+        if (r.status === 'syncing') {
+          db.update(evolutionApplies)
+            .set({ status: newStatus, failureReason: reason, completedAt: now })
+            .where(and(eq(evolutionApplies.id, r.id), eq(evolutionApplies.status, r.status)))
+            .run()
+        } else {
+          // Main untouched — an auto apply's run goes back to the review queue.
+          failApply(db, r.id, { status: 'timeout', failureReason: reason, onlyIfStatus: 'running' })
+        }
         console.warn(`[EvoTicker] apply ${r.id} (${r.status}) exhausted retries (${r.attempts}); marking ${newStatus}`)
       } else if (r.status === 'syncing') {
         // Resume path: keep status='syncing', just clear started/heartbeat

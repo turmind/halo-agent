@@ -40,6 +40,10 @@ export const evolutionRuns = sqliteTable('evolution_runs', {
    *  while the run is active. Rows with archived_at >= 30 days ago are
    *  candidates for full deletion (zip + db row). */
   archivedAt: integer('archived_at'),
+  /** The draft carries a `## Larger observation` section (patch.md body or
+   *  .skip.md) — set by the wrapper after phase A so the admin list can flag
+   *  and filter it without reading every run dir. */
+  hasObservation: integer('has_observation', { mode: 'boolean' }).notNull().default(false),
 })
 
 export const evolutionApplies = sqliteTable('evolution_applies', {
@@ -79,7 +83,8 @@ CREATE TABLE IF NOT EXISTS evolution_runs (
   applied_at      INTEGER,
   failure_reason  TEXT,
   attempts        INTEGER NOT NULL DEFAULT 0,
-  archived_at     INTEGER
+  archived_at     INTEGER,
+  has_observation INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_evo_runs_status ON evolution_runs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_evo_runs_ws ON evolution_runs(workspace_path);
@@ -116,6 +121,7 @@ export const EVO_MIGRATIONS: Migration[] = [
     addColumnIfMissing(s, 'evolution_applies', 'approved_by', "TEXT NOT NULL DEFAULT 'reviewer'")
     addColumnIfMissing(s, 'evolution_applies', 'notified_at', 'INTEGER')
     addColumnIfMissing(s, 'evolution_applies', 'rolled_back_at', 'INTEGER')
+    addColumnIfMissing(s, 'evolution_runs', 'has_observation', 'INTEGER NOT NULL DEFAULT 0')
   },
 ]
 

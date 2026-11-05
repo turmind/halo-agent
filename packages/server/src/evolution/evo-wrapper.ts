@@ -48,10 +48,14 @@ import { createEvoDb, evolutionRuns, evolutionApplies, setEvoDb, getEvoDb } from
 import {
   wsHaloDir, wsEvoRunDir, wsEvoApplyDir, wsEvoHistoryDir,
   evoSandboxDir, evoSandboxHaloDir, evoRegressDir, evoRegressRunDir,
-  evoLogsDir, evoWrapperLogFile, evoApplyLogFile,
+  evoLogsDir, evoWrapperLogFile, evoApplyLogFile, globalDir,
 } from '../paths.js'
-import { config } from '../config.js'
+import { config, evoLevelRank } from '../config.js'
 import { cleanChildEnv } from '../child-env.js'
+import {
+  AUTO_APPLY_FILE, categoryGate, classifyChanges, collectChanges, evaluateSandbox, readObservation, readScore,
+} from './auto-apply.js'
+import { failApply, queueApply } from './queue-apply.js'
 
 type Mode = 'run' | 'apply'
 
@@ -139,6 +143,7 @@ function loadRunRow(id: string): {
   triggerKind: string
   sourceSession: string
   userHint: string | null
+  attempts: number
 } {
   const db = getEvoDb()
   const row = db.select({
@@ -147,6 +152,7 @@ function loadRunRow(id: string): {
     triggerKind: evolutionRuns.triggerKind,
     sourceSession: evolutionRuns.sourceSession,
     userHint: evolutionRuns.userHint,
+    attempts: evolutionRuns.attempts,
   }).from(evolutionRuns).where(eq(evolutionRuns.id, id)).get()
   if (!row) throw new Error(`evolution_runs row not found: ${id}`)
   return row
@@ -1314,6 +1320,7 @@ async function runMode(id: string, logFd: number): Promise<void> {
 
   try {
     const outcome = await phaseDraft(ctx)
+    markObservation(id, runDir, outcome, logFd)
     if (outcome === 'failed') {
       finalize(id, 'failed', 'phase A: draft incomplete (drafter exited non-zero, or patch.md / target file missing or unchanged) — see run log', logFd)
       return
@@ -1339,10 +1346,63 @@ async function runMode(id: string, logFd: number): Promise<void> {
       return
     }
 
+    if (maybeAutoApply({ runId: id, workspacePath: row.workspacePath, runDir, attempts: row.attempts, logFd })) return
     finalize(id, 'awaiting_review', null, logFd)
   } finally {
     clearInterval(hb)
   }
+}
+
+/** Record whether the draft carries a `## Larger observation` (patch.md body,
+ *  or .skip.md for a skipped run) so the admin list can flag it. */
+function markObservation(id: string, runDir: string, outcome: DraftOutcome, logFd: number): void {
+  // Always written: a re-run must not inherit the previous attempt's flag.
+  const has = outcome !== 'failed' && readObservation(path.join(runDir, outcome === 'skipped' ? '.skip.md' : 'patch.md')) !== null
+  getEvoDb().update(evolutionRuns).set({ hasObservation: has }).where(eq(evolutionRuns.id, id)).run()
+  if (has) writeLog(logFd, `[wrapper] draft carries a Larger observation\n`)
+}
+
+/**
+ * L2/L3 auto-apply (plans/evo-l2-l3.md §4.1), right after a successful score.
+ * Decides here rather than in the ticker so a run that auto-applies never
+ * enters awaiting_review — no window where a reviewer's click races it.
+ * Writes the verdict to auto-apply.json at L2+ either way (the admin shows
+ * why a run was not auto-applied). Returns true when the run left `running`
+ * (queued, or a re-claimed wrapper already owns it): the caller must not
+ * finalize. The ticker's broadcastChanges pushes running → approved.
+ */
+export function maybeAutoApply(args: { runId: string; workspacePath: string; runDir: string; attempts: number; logFd: number }): boolean {
+  const level = config.evolution.level
+  if (evoLevelRank(level) < 2) return false
+  let record: ReturnType<typeof evaluateSandbox>
+  try {
+    record = evaluateSandbox({
+      mainHalo: wsHaloDir(args.workspacePath),
+      globalHalo: globalDir(),
+      sandboxHalo: evoSandboxHaloDir(args.runDir),
+      entries: PUBLISH_WHITELIST,
+      level,
+      threshold: config.evolution.autoApplyThreshold,
+      score: readScore(path.join(args.runDir, 'score.json')),
+      observation: readObservation(path.join(args.runDir, 'patch.md')),
+    })
+    fs.writeFileSync(path.join(args.runDir, AUTO_APPLY_FILE), JSON.stringify(record, null, 2), 'utf-8')
+  } catch (err) {
+    // The patch itself is fine — a broken evaluation just means a human decides.
+    writeLog(args.logFd, `[autoApply] evaluation failed, leaving the run for review: ${err instanceof Error ? err.message : String(err)}\n`)
+    return false
+  }
+  writeLog(args.logFd, `[autoApply] level=${level} category=${record.category} auto=${record.auto}${record.reason ? ` reason=${record.reason}` : ''} files=${record.files.map((f) => `${f.rel}:${f.category}`).join(',')}\n`)
+  if (!record.auto) return false
+  const queued = queueApply(getEvoDb(), { mode: 'auto', runId: args.runId, attempts: args.attempts })
+  if (queued.ok) {
+    writeLog(args.logFd, `[autoApply] queued ${queued.applyId} (approved_by=auto)\n`)
+    return true
+  }
+  writeLog(args.logFd, `[autoApply] not queued: ${queued.reason}\n`)
+  // state = this wrapper no longer owns the run (re-claimed after a heartbeat
+  // gap) — leave it to the owner. apply_exists = hand it to a reviewer.
+  return queued.reason === 'state'
 }
 
 /** Single helper for the terminal db write at the end of run mode.
@@ -1392,6 +1452,8 @@ interface ApplyRow {
    *   - 'syncing' → previous wrapper crashed mid-cp. Skip A'/B' and
    *     resume directly at phase 12 publish. */
   status: string
+  /** 'reviewer' | 'auto' — auto applies get the phase-12 recheck. */
+  approvedBy: string
 }
 
 function loadApplyRow(id: string): ApplyRow {
@@ -1402,6 +1464,7 @@ function loadApplyRow(id: string): ApplyRow {
     sourceRunIds: evolutionApplies.sourceRunIds,
     reviewerHint: evolutionApplies.reviewerHint,
     status: evolutionApplies.status,
+    approvedBy: evolutionApplies.approvedBy,
   }).from(evolutionApplies).where(eq(evolutionApplies.id, id)).get()
   if (!row) throw new Error(`evolution_applies row not found: ${id}`)
   let sourceRunIds: string[]
@@ -1416,6 +1479,7 @@ function loadApplyRow(id: string): ApplyRow {
     sourceRunIds,
     reviewerHint: row.reviewerHint,
     status: row.status,
+    approvedBy: row.approvedBy,
   }
 }
 
@@ -1769,13 +1833,27 @@ async function phaseApplyRegress(ctx: ApplyCtx): Promise<{ allOk: boolean; outco
 /** Terminal "failed" db write for apply mode. (The "applied" side lives
  *  in `finalizeApplied` below, which sets appliedAt and the matching
  *  source-run rows.) */
-function finalizeApply(applyId: string, status: 'failed', failureReason: string | null, logFd: number): void {
-  const now = Date.now()
-  getEvoDb().update(evolutionApplies)
-    .set({ status, failureReason, completedAt: now })
-    .where(eq(evolutionApplies.id, applyId))
-    .run()
-  writeLog(logFd, `[wrapper] finalize apply: status=${status}${failureReason ? ` reason=${failureReason}` : ''}\n`)
+function finalizeApply(applyId: string, status: 'failed', failureReason: string, logFd: number): void {
+  // failApply also sends an auto apply's source run back to awaiting_review.
+  const { revertedRunIds } = failApply(getEvoDb(), applyId, { status, failureReason })
+  writeLog(logFd, `[wrapper] finalize apply: status=${status} reason=${failureReason}${revertedRunIds.length ? ` (auto: ${revertedRunIds.join(', ')} back to awaiting_review)` : ''}\n`)
+}
+
+/**
+ * Phase-12 recheck for an auto apply (plans/evo-l2-l3.md §4.3): classify what
+ * the MERGED sandbox would actually publish — the apply agent may touch files
+ * the run's sandbox didn't — against the level read now (the user may have
+ * lowered it since the run queued). The score gate isn't repeated: phase B'
+ * already held the merge to the regression floor. null = may publish.
+ */
+export function autoApplyRecheck(workspacePath: string, applyDir: string): string | null {
+  const cls = classifyChanges(collectChanges({
+    mainHalo: wsHaloDir(workspacePath),
+    globalHalo: globalDir(),
+    sandboxHalo: evoSandboxHaloDir(applyDir),
+    entries: PUBLISH_WHITELIST,
+  }))
+  return categoryGate(config.evolution.level, cls)
 }
 
 async function applyMode(id: string, logFd: number): Promise<void> {
@@ -1867,6 +1945,17 @@ async function applyMode(id: string, logFd: number): Promise<void> {
       if (!preflight.ok) {
         finalizeApply(id, 'failed', `phase 12 preflight: ${preflight.reason}`, logFd)
         return
+      }
+
+      // Auto applies only, before main is touched. Not on resume: that row
+      // passed this gate before it was marked syncing.
+      if (!isResume && row.approvedBy === 'auto') {
+        const blocked = autoApplyRecheck(ctx.workspacePath, applyDir)
+        if (blocked) {
+          finalizeApply(id, 'failed', `auto_recheck:${blocked}`, logFd)
+          return
+        }
+        writeLog(logFd, `[wrapper] auto-apply recheck passed\n`)
       }
 
       // Move into the danger zone: from this write onward, a crash leaves
