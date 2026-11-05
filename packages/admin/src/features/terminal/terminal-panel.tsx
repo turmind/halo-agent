@@ -425,6 +425,12 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
   // `terminal:snapshot` that follows. Ids already shown here (the reattach
   // sent at mount and the one sent on `_connected` both answer) are skipped.
   // If the server has none AND we have nothing locally, open a fresh one.
+  // That answer is the only trigger — no timer: the reply rides the same
+  // socket behind a page load's `subscribe` snapshot, which for a large
+  // session takes seconds on a slow link, and a 2 s fallback started a PTY
+  // beside the ones the late reply then listed (one more bash per refresh).
+  // A reattach sent while offline is queued and re-sent on `_connected`, so a
+  // reply follows every connection.
   // Wait for the workspace: split view mounts this panel on page load, before
   // workspace-layout's async resolve sets activeProject — a reattach then would
   // ask for workspace '' and miss every PTY.
@@ -450,26 +456,9 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
       })
     }
     sendReattach()
-
-    // Fallback: if still nothing 2s after the connection is up, create a fresh
-    // terminal so the tab isn't blank. Armed only once connected — the panel
-    // remounts on every disconnect, and a timer running through an outage
-    // would add a PTY that, now never expiring, piles up with each outage.
-    let fallback: ReturnType<typeof setTimeout> | undefined
-    const armFallback = () => {
-      if (fallback) return
-      fallback = setTimeout(() => {
-        if (instancesRef.current.size === 0) createTerminal()
-      }, 2000)
-    }
-    if (wsClient.connected) armFallback()
-    const unsubConnected = wsClient.on('_connected', () => {
-      sendReattach()
-      armFallback()
-    })
+    const unsubConnected = wsClient.on('_connected', sendReattach)
 
     return () => {
-      clearTimeout(fallback)
       unsubReattached()
       unsubConnected()
     }

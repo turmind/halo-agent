@@ -47,7 +47,7 @@ When the WS drops, the bottom panel remounts `TerminalPanel` (fresh key on `_dis
 
 - `terminal:reattached` / `terminal:opened`: a tab is added for each id not shown yet, named as the server says (the name the creating page gave in `terminal:start`).
 - `terminal:snapshot`: the local xterm (created if missing) is `reset()`, sized to the snapshot's `cols × rows`, given the snapshot, then fit to its container; the fitted size is reported with `terminal:resize`.
-- If 2 s after the connection is up the panel still has no terminal, it starts one (the timer is armed only while connected, so an outage doesn't add a PTY per remount).
+- A fresh terminal is started only when `terminal:reattached` comes back with an empty list and the panel shows none — the server's answer decides, never a timer. The reply rides the same socket behind the page load's `subscribe` snapshot, so for a large session on a slow link it can take seconds; the 2 s fallback that used to guess here started an extra bash on every refresh. A reattach sent while offline is queued and re-sent on `_connected`, so every connection gets a reply.
 
 ### Environment
 - Shell: `$SHELL` or `/bin/bash` (`ComSpec` / `powershell.exe` on Windows); bash / zsh / sh / fish start as login shells (`-l`)

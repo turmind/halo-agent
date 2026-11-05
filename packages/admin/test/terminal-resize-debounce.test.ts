@@ -65,9 +65,7 @@ beforeEach(() => {
     disconnect() {}
   })
   vi.spyOn(wsClient, 'send').mockImplementation((m) => { sent.push(m as { type: string }) })
-  // The panel's no-terminal fallback is armed only while connected.
-  vi.spyOn(wsClient, 'connected', 'get').mockReturnValue(true)
-  // The panel waits for the workspace before reattaching / falling back.
+  // The panel waits for the workspace before reattaching.
   useProjectStore.getState().openFolder('/ws')
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   container = document.createElement('div')
@@ -84,6 +82,8 @@ afterEach(() => {
 })
 
 const resizeFrames = () => sent.filter((m) => m.type === 'terminal:resize')
+// The server has no PTY for the workspace → the panel starts one.
+const replyNoTerminals = () => act(() => { wsClient['emit']('terminal:reattached', { terminals: [] }) })
 
 describe('terminal resize debounce', () => {
   it('reattaches only once the workspace is known (split view mounts before it resolves)', () => {
@@ -100,8 +100,7 @@ describe('terminal resize debounce', () => {
 
   it('fits on every observer callback but sends one resize frame per burst', () => {
     act(() => root.render(createElement(TerminalPanel)))
-    // Connected, no reattach reply → the 2s fallback spawns a terminal.
-    act(() => { vi.advanceTimersByTime(2000) })
+    replyNoTerminals()
     expect(sent.some((m) => m.type === 'terminal:start')).toBe(true)
     expect(fake.observers).toHaveLength(1)
     const onResize = fake.observers[0]
@@ -126,7 +125,7 @@ describe('terminal resize debounce', () => {
 
   it('sends another frame for a later, separate resize', () => {
     act(() => root.render(createElement(TerminalPanel)))
-    act(() => { vi.advanceTimersByTime(2000) })
+    replyNoTerminals()
     const onResize = fake.observers[0]
 
     onResize()
