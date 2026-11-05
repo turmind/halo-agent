@@ -125,11 +125,7 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
   if (token) {
     const binBase = /^\d+\.\d+\.\d+$/.test(version ?? '') ? `${RELEASES}/download/v${version}` : `${RELEASES}/latest/download`
     const run = `--server ${location.origin} --root <folder>`
-    const linux = [
-      `A=$(uname -m); case "$A" in x86_64) A=amd64;; aarch64|arm64) A=arm64;; armv7l|armv8l) A=armv7;; esac`,
-      `curl -fLo halo-node ${binBase}/halo-node-linux-$A && chmod +x halo-node`,
-      `HALO_NODE_TOKEN=${token} ./halo-node ${run}`,
-    ].join('\n')
+    const linux = `curl -fsSL ${binBase}/install.sh | sh\nHALO_NODE_TOKEN=${token} halo-node ${run}`
     const other = `HALO_NODE_TOKEN=${token} halo node ${run}`
     return (
       <ChannelDialog width="w-[480px]" onClose={onDone}>

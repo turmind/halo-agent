@@ -44,6 +44,7 @@ jobs:
       - run: pnpm --filter @turmind/halo-core build
       - name: go vet + go test
         run: cd packages/node-go && go vet ./... && go test ./...
+      - run: shellcheck packages/node-go/install.sh
       # rmguard vectors must still equal what the current TS assertRmSafe says (needs server's tsx).
       - run: node packages/node-go/conformance/gen-rmguard-vectors.mjs --check
       - name: regex differential fuzz (20k patterns, seed = run id)
@@ -83,4 +84,6 @@ jobs:
       # The only gate on release events (the test job doesn't run): fail → nothing attached.
       - run: cd packages/node-go && go vet ./... && go test ./...
       - run: cd packages/node-go && VER=${TAG#v} ./build.sh
-      - run: gh release upload "$TAG" packages/node-go/dist/halo-node-linux-* packages/node-go/dist/SHA256SUMS --clobber
+      # install.sh downloads this tag's binaries; it's the piped entry point, so not in SHA256SUMS.
+      - run: sed "s/__HALO_VERSION__/${TAG#v}/" packages/node-go/install.sh > packages/node-go/dist/install.sh
+      - run: gh release upload "$TAG" packages/node-go/dist/halo-node-linux-* packages/node-go/dist/SHA256SUMS packages/node-go/dist/install.sh --clobber
