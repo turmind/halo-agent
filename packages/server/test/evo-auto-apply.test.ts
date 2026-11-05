@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from 
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import {
   classifyChange, classifyChanges, collectChanges, decideAutoApply, scoreGate, categoryGate,
@@ -9,13 +10,13 @@ import {
   type FileChange, type EvoScore,
 } from '../src/evolution/auto-apply.js'
 import {
-  maybeAutoApply, autoApplyRecheck, finalize, finalizeApply, finalizeApplied, markObservation, markSyncing, phase12Sync,
-  PUBLISH_WHITELIST, type ApplyCtx,
+  maybeAutoApply, autoApplyRecheck, finalize, finalizeApply, finalizeApplied, heartbeat, markObservation, markSyncing, phase12Sync,
+  spawnProc, PUBLISH_WHITELIST, type ApplyCtx,
 } from '../src/evolution/evo-wrapper.js'
 import { failApply } from '../src/evolution/queue-apply.js'
 import { createEvoDb, setEvoDb, evolutionRuns, evolutionApplies, type EvoDb } from '../src/db/evo-db.js'
 import { config } from '../src/config.js'
-import { wsHaloDir, evoSandboxHaloDir, wsEvoRunDir, globalDir } from '../src/paths.js'
+import { wsHaloDir, evoSandboxHaloDir, wsEvoRunDir, wsEvoHistoryDir, globalDir } from '../src/paths.js'
 
 /**
  * L2/L3 auto-apply decision (plans/evo-l2-l3.md §3–§4): classification on the
@@ -688,6 +689,32 @@ describe('wrapper: terminal writes are conditional on the claim', () => {
       expect(runRow('r').status).toBe('applied')
     })
 
+    // F1: history/ is written before the checkpoint, so it needs the claim too.
+    it('a stale fresh claim reaching preflight writes no history', async () => {
+      insertApply('running', 4)
+      await phase12Sync(ctx, { attempts: 3, approvedBy: 'reviewer' }, false)
+      expect(fs.existsSync(wsEvoHistoryDir(ws, 'a'))).toBe(false)
+    })
+
+    it('a fresh claim rewrites a MANIFEST / backups an earlier wrapper left', async () => {
+      const hist = wsEvoHistoryDir(ws, 'a')
+      write(hist, 'MANIFEST.json', JSON.stringify({ applyId: 'a', sourceRunIds: ['r'], capturedAt: 'x', files: [{ rel: 'USER.md', kind: 'overwrite', before: 'b', after: 'c' }], createdDirs: [] }))
+      write(hist, 'USER.md', 'stale backup')
+      write(evoSandboxHaloDir(ctx.applyDir), 'agents/helper/AGENT.md', 'helper')
+      insertApply('running', 3)
+      await phase12Sync(ctx, { attempts: 3, approvedBy: 'reviewer' }, false)
+      const sha = (s: string) => crypto.createHash('sha256').update(s).digest('hex')
+      const m = JSON.parse(fs.readFileSync(path.join(hist, 'MANIFEST.json'), 'utf-8'))
+      expect(m.files.sort((x: { rel: string }, y: { rel: string }) => (x.rel < y.rel ? -1 : 1))).toEqual([
+        { rel: 'INSTRUCTIONS.md', kind: 'overwrite', before: sha('rules v1'), after: sha('rules v2') },
+        { rel: path.join('agents', 'helper', 'AGENT.md'), kind: 'new', before: null, after: sha('helper') },
+      ])
+      expect(m.createdDirs).toEqual([path.join('agents', 'helper'), 'agents'])
+      expect(fs.readFileSync(path.join(hist, 'INSTRUCTIONS.md'), 'utf-8')).toBe('rules v1')
+      expect(fs.existsSync(path.join(hist, 'USER.md'))).toBe(false)
+      expect(applyRow('a').status).toBe('applied')
+    })
+
     it('resume whose preflight fails releases the row now with the real reason (N-a)', async () => {
       insertApply('syncing', 2)
       fs.rmSync(evoSandboxHaloDir(ctx.applyDir), { recursive: true })
@@ -697,6 +724,33 @@ describe('wrapper: terminal writes are conditional on the claim', () => {
         failureReason: 'phase 12 preflight: sandbox missing — phase 11 must run first',
       })
       expect(runRow('r').status).toBe('approved')
+    })
+  })
+
+  // N-1: a re-claimed wrapper must not keep writing into the shared run /
+  // apply dir (a late scorer's score.json would be read by the new owner).
+  describe('heartbeat', () => {
+    it('lands on the claim (run running, apply running / syncing)', () => {
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+      onTestFinished(() => exit.mockRestore())
+      heartbeat('run', 'r', 2, logFd)
+      expect(runRow('r').heartbeatAt).toEqual(expect.any(Number))
+      db.insert(evolutionApplies).values({ id: 'a', workspacePath: ws, status: 'syncing', sourceRunIds: '["r"]', createdAt: 2, attempts: 1 }).run()
+      heartbeat('apply', 'a', 1, logFd)
+      expect(applyRow('a').heartbeatAt).toEqual(expect.any(Number))
+      expect(exit).not.toHaveBeenCalled()
+    })
+
+    it.each(['run', 'apply'] as const)('%s: 0 rows → kills the sub-cli in flight and exits', async (mode) => {
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+      onTestFinished(() => exit.mockRestore())
+      db.insert(evolutionApplies).values({ id: 'a', workspacePath: ws, status: 'running', sourceRunIds: '["r"]', createdAt: 2, attempts: 2 }).run()
+      const child = spawnProc('sleep', ['30'], logFd)
+      await new Promise((r) => setTimeout(r, 50))
+      heartbeat(mode, mode === 'run' ? 'r' : 'a', 1, logFd)  // re-claimed at 2
+      expect(exit).toHaveBeenCalledWith(1)
+      expect((await child).exitCode).not.toBe(0)
+      expect(mode === 'run' ? runRow('r').heartbeatAt : applyRow('a').heartbeatAt).toBeNull()
     })
   })
 

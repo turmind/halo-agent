@@ -41,7 +41,7 @@ Let agents draft and validate improvements to their own prompt surface by learni
               next user message uses patched rules
 ```
 
-All coordination via global db (`~/.halo/global/evo.db`). Wrapper heartbeats every 60s; ticker requeues a stale `running` row (→ `timeout` once `max_attempts` is spent). Detached process model: server restart doesn't kill in-flight wrappers.
+All coordination via global db (`~/.halo/global/evo.db`). Wrapper heartbeats every 60s, only on its own claim (status + attempt); a heartbeat that finds the row re-claimed kills the sub-cli in flight and exits the wrapper, so it can't write on into the run / apply dir the new owner shares; ticker requeues a stale `running` row (→ `timeout` once `max_attempts` is spent). Detached process model: server restart doesn't kill in-flight wrappers.
 
 ## Trigger and Enqueue Flow
 
@@ -83,7 +83,7 @@ Located: `/packages/server/src/evolution/ticker.ts`
 
 Four jobs per pass:
 
-1. **Mark timeouts**: `running` rows (applies: also `syncing`) with heartbeat older than `runTimeoutMinutes` (`applyTimeoutMinutes` for applies) → back to `pending` while `attempts < maxAttempts`; exhausted rows → terminal `timeout` (a `syncing` apply → `failed`).
+1. **Mark timeouts**: `running` rows (applies: also `syncing`) with heartbeat older than `runTimeoutMinutes` (`applyTimeoutMinutes` for applies) → back to `pending` while the attempts used are below `maxAttempts` (a run counts `attempts - attempts_base`, this round's; an apply has no retry, so `attempts`); exhausted rows → terminal `timeout` (a `syncing` apply → `failed`).
 2. **Start runs**: count current `running`, claim `pending` runs (oldest first, up to slot budget), spawn `evo-wrapper.js --mode=run --id=<X>`.
 3. **Start applies**: same shape, but with per-workspace mutex (only one apply per workspace at a time, since apply reads **current** main to build sandbox).
 4. **Broadcast**: diff in-flight run/apply statuses against the previous tick and push `evolution:run_changed` / `evolution:apply_changed` — wrappers are detached processes and can't reach the server's WS.
@@ -219,7 +219,7 @@ For each source_run_id:
 
 Four steps, with a checkpoint before the dangerous one:
 
-1. **Preflight** (idempotent): walk sandbox, diff against main, snapshot pre-apply files to `history/apply-<id>/` with `MANIFEST.json` (first preflight only — a resume keeps the original).
+1. **Preflight** (idempotent): walk sandbox, diff against main, snapshot pre-apply files to `history/apply-<id>/` with `MANIFEST.json`. A fresh claim (`running`) first confirms it still owns the row (heartbeat on `running` at its attempt; refused → exits, nothing written), then rewrites `history/apply-<id>/` from scratch: the row never reached `syncing`, so main is still pre-apply, and anything there came from an earlier attempt or a stale wrapper. A resume (`syncing`) keeps the original.
    - **Auto re-check** (`approved_by='auto'`, not on resume): the files preflight will publish are classified again against the live surface, and the level is read again (the user may have lowered it since). Blocked → apply `failed` with `auto_recheck:<reason>`, main untouched. See [Auto-apply](#auto-apply-l2--l3).
 2. **Checkpoint** (`markSyncing`): set `evolution_applies.status='syncing'` (a resume only refreshes the heartbeat). From here on, if wrapper crashes, ticker recovery resumes at step 3 (skip A'/B'/preflight to avoid re-running LLM phases).
 3. **Publish** (dangerous): cp each changed file from sandbox to main.
@@ -342,7 +342,7 @@ literals.
 
 Skill content NOT inlined (too large at scale); only listings. Both agents and skills include a `scope` tag (`workspace` | `global` | `builtin`).
 
-`MANIFEST.json` format (written on the first preflight, when the sandbox is final and main still pre-apply):
+`MANIFEST.json` format (written by a fresh claim's preflight, when the sandbox is final and main still pre-apply):
 
 ```json
 {
@@ -443,9 +443,9 @@ Realtime updates via WebSocket (`evolution:run_changed`, `evolution:apply_change
 
 **Server restart**: Ticker re-evaluates db on first pass. Old `running` rows timeout naturally; `pending` rows continue to be picked up. Applies in `syncing` state are treated as resume candidates — ticker clears heartbeat and spawns wrapper which sees `status='syncing'` on entry and skips LLM phases.
 
-**Wrapper crash**: Heartbeat expires after `runTimeoutMinutes` (default 12min). If `attempts < maxAttempts`, ticker moves row back to `pending` for retry. For applies in `syncing`, row stays `syncing` and ticker spawns recovery wrapper that runs phase 12 publish only.
+**Wrapper crash**: Heartbeat expires after `runTimeoutMinutes` (default 12min). If the attempts used are below `maxAttempts` (run: `attempts - attempts_base`), ticker moves row back to `pending` for retry. For applies in `syncing`, row stays `syncing` and ticker spawns recovery wrapper that runs phase 12 publish only.
 
-**Apply mid-publish crash**: Phase 12 preflight is idempotent; step 1 (diff + snapshot) is repeated harmlessly. Publish (`phaseApplyPublish`) is a simple file-by-file cp. If wrapper dies part-way through, main is half-applied, but `history/apply-<id>/` has the rollback. On recovery, wrapper re-runs publish (idempotent cp) to complete.
+**Apply mid-publish crash**: The resume's preflight only re-diffs (no snapshot), so the original backup survives. Publish (`phaseApplyPublish`) is a simple file-by-file cp. If wrapper dies part-way through, main is half-applied, but `history/apply-<id>/` has the rollback. On recovery, wrapper re-runs publish (idempotent cp) to complete.
 
 ## Patches and Test Scenarios
 

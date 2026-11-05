@@ -200,6 +200,10 @@ interface CliResult {
  * process group (detached) and signal the whole group, with a SIGKILL escalation
  * if it doesn't exit within the grace window.
  */
+/** Kill switches of the sub-clis in flight (spawnProc registers each), for
+ *  a heartbeat that finds the claim gone (see heartbeat). */
+const liveProcs = new Set<(signal: 'SIGTERM' | 'SIGKILL') => void>()
+
 export function spawnProc(
   bin: string,
   args: string[],
@@ -279,6 +283,7 @@ export function spawnProc(
         }
       } catch { /* group/tree already gone — nothing to kill */ }
     }
+    liveProcs.add(killTree)
     const killTimer = timeoutSec
       ? setTimeout(() => {
           timedOut = true
@@ -300,6 +305,7 @@ export function spawnProc(
       tee?.write(chunk)
     })
     child.on('exit', (code, signal) => {
+      liveProcs.delete(killTree)
       if (killTimer) clearTimeout(killTimer)
       if (sigkillTimer) clearTimeout(sigkillTimer)
       const exitCode = timedOut ? 124 : (code ?? 1)
@@ -308,6 +314,7 @@ export function spawnProc(
       resolve({ exitCode, stdout, stderr })
     })
     child.on('error', (err) => {
+      liveProcs.delete(killTree)
       if (killTimer) clearTimeout(killTimer)
       if (sigkillTimer) clearTimeout(sigkillTimer)
       writeLog(logFd, `[wrapper] spawn error: ${err.message}\n`)
@@ -1302,16 +1309,7 @@ async function runMode(row: RunRow, logFd: number): Promise<void> {
   // 60s interval; the ticker's default run timeout is 12min
   // (config.evolution.runTimeoutMinutes) so several missed heartbeats are
   // tolerated across a slow LLM call.
-  const hb = setInterval(() => {
-    try {
-      getEvoDb().update(evolutionRuns)
-        .set({ heartbeatAt: Date.now() })
-        .where(eq(evolutionRuns.id, id))
-        .run()
-    } catch (err) {
-      writeLog(logFd, `[wrapper] heartbeat failed: ${err instanceof Error ? err.message : String(err)}\n`)
-    }
-  }, 60_000)
+  const hb = setInterval(() => heartbeat('run', id, row.attempts, logFd), 60_000)
 
   const langHint = resolveLangHint()
   writeLog(logFd, `[wrapper] resolved langHint=${langHint}\n`)
@@ -1439,6 +1437,26 @@ export function finalize(id: string, attempts: number, status: 'awaiting_review'
  *  (attempts + 1) while this process lives on; its late writes must not land. */
 function ownsRun(id: string, attempts: number) {
   return and(eq(evolutionRuns.id, id), eq(evolutionRuns.status, 'running'), eq(evolutionRuns.attempts, attempts))
+}
+
+/** One heartbeat tick, landing only on this wrapper's claim. 0 rows = the
+ *  ticker re-claimed the row after a heartbeat gap: the new owner shares the
+ *  runDir / applyDir, so stop the sub-cli in flight (a scorer would write
+ *  score.json there) and exit instead of writing on. */
+export function heartbeat(mode: Mode, id: string, attempts: number, logFd: number): void {
+  let owned: boolean
+  try {
+    owned = mode === 'run'
+      ? getEvoDb().update(evolutionRuns).set({ heartbeatAt: Date.now() }).where(ownsRun(id, attempts)).run().changes > 0
+      : touchApply(id, attempts, ['running', 'syncing'])
+  } catch (err) {
+    writeLog(logFd, `[wrapper] heartbeat failed: ${err instanceof Error ? err.message : String(err)}\n`)
+    return
+  }
+  if (owned) return
+  writeLog(logFd, `[wrapper] heartbeat refused: ${mode} ${id} is no longer this wrapper's claim (attempt ${attempts}) — killing ${liveProcs.size} sub-cli and exiting\n`)
+  for (const kill of liveProcs) kill('SIGKILL')
+  process.exit(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -1911,16 +1929,7 @@ async function applyMode(id: string, logFd: number): Promise<void> {
 
   // Heartbeat loop covers both phases. Same cadence as run mode (60s
   // interval, 5min timeout default).
-  const hb = setInterval(() => {
-    try {
-      getEvoDb().update(evolutionApplies)
-        .set({ heartbeatAt: Date.now() })
-        .where(eq(evolutionApplies.id, id))
-        .run()
-    } catch (err) {
-      writeLog(logFd, `[wrapper] heartbeat (apply) failed: ${err instanceof Error ? err.message : String(err)}\n`)
-    }
-  }, 60_000)
+  const hb = setInterval(() => heartbeat('apply', id, row.attempts, logFd), 60_000)
 
   const ctx: ApplyCtx = {
     applyId: id,
@@ -2016,7 +2025,15 @@ async function applyMode(id: string, logFd: number): Promise<void> {
  */
 export async function phase12Sync(ctx: ApplyCtx, row: Pick<ApplyRow, 'attempts' | 'approvedBy'>, isResume: boolean): Promise<void> {
   const { applyId: id, logFd } = ctx
-  const preflight = await phaseApplyPreflight(ctx)
+  // A fresh claim rewrites history/: confirm the claim first, so a stale
+  // wrapper that woke after a re-claim can't leave its MANIFEST / backups
+  // for the new owner. The heartbeat it refreshes also holds the ticker off
+  // for a full apply_timeout while preflight runs. A resume writes none.
+  if (!isResume && !touchApply(id, row.attempts, ['running'])) {
+    writeLog(logFd, `[wrapper] phase 12: apply is no longer this wrapper's claim (attempt ${row.attempts}) — not writing history\n`)
+    return
+  }
+  const preflight = await phaseApplyPreflight(ctx, isResume)
   if (!preflight.ok) {
     const reason = `phase 12 preflight: ${preflight.reason}`
     // A resume's row is syncing (main may be half-published): the ticker
@@ -2093,7 +2110,7 @@ export interface PreflightResult {
   fileCount: number  // length of `changed`; 0 = no-op apply
 }
 
-export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
+export async function phaseApplyPreflight(ctx: ApplyCtx, isResume: boolean): Promise<
   { ok: true; result: PreflightResult }
   | { ok: false; reason: string }
 > {
@@ -2134,6 +2151,11 @@ export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
   }
   writeLog(ctx.logFd, `[preflight] ${changed.length} of ${filesToConsider.length} whitelisted files differ from main\n`)
 
+  // A fresh claim starts history/ over: its row never reached syncing, so
+  // main is still pre-apply, and whatever is there came from an earlier
+  // attempt — or a stale wrapper — of this apply, judged on another sandbox.
+  if (!isResume) fs.rmSync(historyDir, { recursive: true, force: true })
+
   if (changed.length === 0) {
     return { ok: true, result: { changed, historyDir, fileCount: 0 } }
   }
@@ -2141,16 +2163,15 @@ export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
   // Snapshot existing main files before touching them. NEW files (no main
   // counterpart) need no snapshot — rollback for them is just deletion.
   //
-  // Important: do this only on the FIRST preflight, never on a resume.
+  // Important: do this only on a fresh claim, never on a resume.
   // Reasoning: if we crashed mid-publish, some files in main are already
   // the new (sandbox) version. Re-backing them up now would write the
   // sandbox version into history/, destroying the pre-apply backup that
-  // rollback needs. We detect first-vs-resume by whether MANIFEST.json
-  // already exists in the history dir.
+  // rollback needs. Resume is the row's status (`syncing`), not whether
+  // MANIFEST.json exists: a stale wrapper may have written one.
   fs.mkdirSync(historyDir, { recursive: true })
   const manifestPath = path.join(historyDir, 'MANIFEST.json')
-  const isFirstPreflight = !fs.existsSync(manifestPath)
-  if (isFirstPreflight) {
+  if (!isResume) {
     for (const { rel, existsInMain } of changed) {
       if (!existsInMain) continue
       const mainPath = path.join(mainHalo, rel)
@@ -2160,7 +2181,7 @@ export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
     }
     // before / after hashes let rollback tell "still exactly what we
     // published" from "edited since" (evolution/rollback.ts). Taken here,
-    // on the first preflight only, when the sandbox is final and main is
+    // on a fresh claim only, when the sandbox is final and main is
     // still pre-apply — which is also why the dirs publish will create are
     // listed now: an agents/<id>/ (skills/, prompts/) dir that exists in the
     // workspace overrides global wholesale, so rollback must remove the ones
@@ -2182,7 +2203,7 @@ export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
     }
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8')
   } else {
-    writeLog(ctx.logFd, `[preflight] MANIFEST.json already exists — resume path, skipping history backup (the pre-apply state is already preserved from the first preflight)\n`)
+    writeLog(ctx.logFd, `[preflight] resume path, skipping history backup (the pre-apply state is already preserved from the fresh claim's preflight)\n`)
   }
   writeLog(ctx.logFd, `[preflight] history snapshot: ${historyDir} (${changed.filter((c) => c.existsInMain).length} backed up, ${changed.filter((c) => !c.existsInMain).length} new)\n`)
   return { ok: true, result: { changed, historyDir, fileCount: changed.length } }
@@ -2227,6 +2248,15 @@ function dirsCreatedBy(mainHalo: string, newFiles: string[]): string[] {
  *  ticker spawned it for (claimApply / claimSyncingResume bump attempts). */
 function ownsApply(id: string, status: 'running' | 'syncing', attempts: number) {
   return and(eq(evolutionApplies.id, id), eq(evolutionApplies.status, status), eq(evolutionApplies.attempts, attempts))
+}
+
+/** Heartbeat on this wrapper's apply claim in one of `statuses`.
+ *  false = re-claimed (or finished). */
+function touchApply(id: string, attempts: number, statuses: Array<'running' | 'syncing'>): boolean {
+  return getEvoDb().update(evolutionApplies)
+    .set({ heartbeatAt: Date.now() })
+    .where(and(eq(evolutionApplies.id, id), inArray(evolutionApplies.status, statuses), eq(evolutionApplies.attempts, attempts)))
+    .run().changes > 0
 }
 
 /** Mark the apply row entering the "publish" step — `running → syncing`,

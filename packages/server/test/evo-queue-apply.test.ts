@@ -234,6 +234,33 @@ describe('evo-db migration v1', () => {
   })
 })
 
+// N-2: a dev db stamped user_version 1 by a build whose v1 lacked source_access.
+describe('evo-db migration v2', () => {
+  it('re-adds the v1 columns a uv1 db is missing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-evo-mig2-'))
+    try {
+      const old = new Database(path.join(dir, 'evo.db'))
+      old.exec(`CREATE TABLE evolution_runs (
+        id TEXT PRIMARY KEY, workspace_path TEXT NOT NULL, status TEXT NOT NULL, trigger_kind TEXT NOT NULL,
+        source_session TEXT NOT NULL, user_hint TEXT, created_at INTEGER NOT NULL, started_at INTEGER,
+        heartbeat_at INTEGER, completed_at INTEGER, applied_at INTEGER, failure_reason TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0, archived_at INTEGER, has_observation INTEGER NOT NULL DEFAULT 0)`)
+      old.prepare(`INSERT INTO evolution_runs (id, workspace_path, status, trigger_kind, source_session, created_at)
+        VALUES ('r-dev', '/ws', 'awaiting_review', 'note', 's', 1)`).run()
+      old.pragma('user_version = 1')
+      old.close()
+
+      const migrated = createEvoDb(dir)
+      expect(migrated.select().from(evolutionRuns).where(eq(evolutionRuns.id, 'r-dev')).get()).toMatchObject({ sourceAccess: null, attemptsBase: 0 })
+      const raw = new Database(path.join(dir, 'evo.db'))
+      expect(raw.pragma('user_version', { simple: true })).toBe(2)
+      raw.close()
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('parseEvoLevel', () => {
   it('reads L0–L3, anything else is L0; ranks are ordered', () => {
     expect(['L0', 'L1', 'L2', 'L3'].map(parseEvoLevel)).toEqual(['L0', 'L1', 'L2', 'L3'])

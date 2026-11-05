@@ -265,8 +265,8 @@ describe('phaseApplyPreflight + phaseApplyPublish', () => {
     writeFile(sandboxHalo, 'halo.db', 'sqlite')
   }
 
-  async function preflightOk() {
-    const res = await phaseApplyPreflight(ctx)
+  async function preflightOk(isResume = false) {
+    const res = await phaseApplyPreflight(ctx, isResume)
     if (!res.ok) throw new Error(res.reason)
     return res.result
   }
@@ -277,7 +277,7 @@ describe('phaseApplyPreflight + phaseApplyPublish', () => {
   })
 
   it('fails when the sandbox is missing', async () => {
-    expect(await phaseApplyPreflight(ctx)).toEqual({ ok: false, reason: expect.stringMatching(/sandbox missing/) })
+    expect(await phaseApplyPreflight(ctx, false)).toEqual({ ok: false, reason: expect.stringMatching(/sandbox missing/) })
   })
 
   it('lists only publish-whitelisted files that differ from main', async () => {
@@ -325,7 +325,7 @@ describe('phaseApplyPreflight + phaseApplyPublish', () => {
     await preflightOk()
     // crash mid-publish: only INSTRUCTIONS.md reached main
     fs.copyFileSync(path.join(sandboxHalo, 'INSTRUCTIONS.md'), path.join(mainHalo, 'INSTRUCTIONS.md'))
-    const result = await preflightOk()
+    const result = await preflightOk(true)
     expect(result.changed.map((c) => c.rel)).toEqual([SKILL_REL])
     expect(read(historyDir, 'INSTRUCTIONS.md')).toBe(MAIN_INSTRUCTIONS)
     expect(readLog()).toContain('resume path, skipping history backup')

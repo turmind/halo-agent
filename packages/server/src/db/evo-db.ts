@@ -134,18 +134,23 @@ CREATE INDEX IF NOT EXISTS idx_evo_applies_archived ON evolution_applies(archive
 
 /** Ordered evo.db migrations (see migrate.ts). CREATE_SQL must always
  *  describe the full current shape; append a slot here for existing dbs. */
+// v1: L2/L3 auto-apply + rollback (plans/evo-l2-l3.md). Pre-existing applies
+// were all reviewer-approved, so the 'reviewer' default is exact for them.
+const addV1Columns: Migration = (s) => {
+  addColumnIfMissing(s, 'evolution_applies', 'approved_by', "TEXT NOT NULL DEFAULT 'reviewer'")
+  addColumnIfMissing(s, 'evolution_applies', 'notified_at', 'INTEGER')
+  addColumnIfMissing(s, 'evolution_applies', 'rolled_back_at', 'INTEGER')
+  addColumnIfMissing(s, 'evolution_runs', 'has_observation', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(s, 'evolution_runs', 'source_access', 'TEXT')
+}
+
 export const EVO_MIGRATIONS: Migration[] = [
-  // v1: L2/L3 auto-apply + rollback (plans/evo-l2-l3.md). Pre-existing applies
-  // were all reviewer-approved, so the 'reviewer' default is exact for them.
-  (s) => {
-    addColumnIfMissing(s, 'evolution_applies', 'approved_by', "TEXT NOT NULL DEFAULT 'reviewer'")
-    addColumnIfMissing(s, 'evolution_applies', 'notified_at', 'INTEGER')
-    addColumnIfMissing(s, 'evolution_applies', 'rolled_back_at', 'INTEGER')
-    addColumnIfMissing(s, 'evolution_runs', 'has_observation', 'INTEGER NOT NULL DEFAULT 0')
-    addColumnIfMissing(s, 'evolution_runs', 'source_access', 'TEXT')
-  },
+  addV1Columns,
   // v2: retry keeps attempts monotonic and records where the round started.
+  // Re-runs v1's adds (idempotent): dev builds stamped user_version 1 before
+  // v1 had all its columns (source_access).
   (s) => {
+    addV1Columns(s)
     addColumnIfMissing(s, 'evolution_runs', 'attempts_base', 'INTEGER NOT NULL DEFAULT 0')
   },
 ]

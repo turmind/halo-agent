@@ -34,7 +34,7 @@ const runRow = () => db.select().from(evolutionRuns).where(eq(evolutionRuns.id, 
 /** Publish INSTRUCTIONS.md (overwrite) + a new SKILL.md through the real phase 12. */
 async function publish(): Promise<void> {
   const ctx: ApplyCtx = { applyId: APPLY, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd }
-  const pre = await phaseApplyPreflight(ctx)
+  const pre = await phaseApplyPreflight(ctx, false)
   if (!pre.ok) throw new Error(pre.reason)
   await phaseApplyPublish(ctx, pre.result)
 }
@@ -87,7 +87,7 @@ describe('MANIFEST hashes (phase 12 preflight)', () => {
     try {
       write(sandboxHalo, 'agents/helper/AGENT.md', 'global persona — sharper')
       write(sandboxHalo, 'agents/helper/agent.yaml', 'name: Helper\n')
-      const pre = await phaseApplyPreflight({ applyId: A2, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd })
+      const pre = await phaseApplyPreflight({ applyId: A2, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd }, false)
       expect(pre.ok).toBe(true)
       const byRel = Object.fromEntries(JSON.parse(read(wsEvoHistoryDir(ws, A2), 'MANIFEST.json')).files.map((f: { rel: string }) => [f.rel, f]))
       expect(byRel[path.join('agents', 'helper', 'agent.yaml')].unchanged).toBe(true)
@@ -103,7 +103,7 @@ describe('MANIFEST hashes (phase 12 preflight)', () => {
   it('a resume preflight leaves the original manifest (hashes included) alone', async () => {
     const before = read(wsEvoHistoryDir(ws, APPLY), 'MANIFEST.json')
     write(sandboxHalo, 'INSTRUCTIONS.md', 'rules v3')
-    const pre = await phaseApplyPreflight({ applyId: APPLY, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd })
+    const pre = await phaseApplyPreflight({ applyId: APPLY, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd }, true)
     expect(pre.ok).toBe(true)
     expect(read(wsEvoHistoryDir(ws, APPLY), 'MANIFEST.json')).toBe(before)
   })
@@ -135,7 +135,7 @@ describe('rollbackApply', () => {
     write(sandboxHalo, 'agents/default/AGENT.md', 'global persona — sharper')
     write(sandboxHalo, 'agents/default/agent.yaml', 'name: Default\n')
     const ctx: ApplyCtx = { applyId: A2, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd }
-    const pre = await phaseApplyPreflight(ctx)
+    const pre = await phaseApplyPreflight(ctx, false)
     if (!pre.ok) throw new Error(pre.reason)
     await phaseApplyPublish(ctx, pre.result)
     db.insert(evolutionApplies).values({ id: A2, workspacePath: ws, status: 'applied', sourceRunIds: JSON.stringify([RUN]), createdAt: 3, completedAt: 4 }).run()
@@ -161,7 +161,7 @@ describe('rollbackApply', () => {
     fs.mkdirSync(path.join(mainHalo, 'prompts', 'all'), { recursive: true })
     write(sandboxHalo, 'prompts/all/20.md', 'rule')
     const ctx: ApplyCtx = { applyId: A3, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd }
-    const pre = await phaseApplyPreflight(ctx)
+    const pre = await phaseApplyPreflight(ctx, false)
     if (!pre.ok) throw new Error(pre.reason)
     await phaseApplyPublish(ctx, pre.result)
     db.insert(evolutionApplies).values({ id: A3, workspacePath: ws, status: 'applied', sourceRunIds: JSON.stringify([RUN]), createdAt: 3, completedAt: 4 }).run()
