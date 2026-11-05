@@ -315,7 +315,7 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   Downloads → /Applications — the classic post-install move. `buildCliLauncher()`
   in `main.cjs` therefore emits a script that checks `-x $NODE` / `-f $CLI`
   first and, when stale, retries at the standard location
-  (`/Applications/<AppName>.app/Contents/Resources/{node,cli-runtime/dist/index.js}`,
+  (`/Applications/<AppName>.app/Contents/Resources/{node,cli-runtime/bin/halo.js}`,
   derived from the *current* bundle's basename). Still missing → print
   "re-run Install 'halo' Command from the app menu" and `exit 127`, instead of
   exec's cryptic "no such file or directory". Dev (`!app.isPackaged`) keeps the

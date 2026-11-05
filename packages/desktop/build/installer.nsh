@@ -72,7 +72,7 @@
   ; relocatable. %* forwards all args (tui / cli "<prompt>" / setup / …).
   FileOpen $0 "$INSTDIR\halo.cmd" w
   FileWrite $0 "@echo off$\r$\n"
-  FileWrite $0 '"%~dp0resources\node.exe" "%~dp0resources\cli-runtime\dist\index.js" %*$\r$\n'
+  FileWrite $0 '"%~dp0resources\node.exe" "%~dp0resources\cli-runtime\bin\halo.js" %*$\r$\n'
   FileClose $0
 
   !insertmacro WritePathHelper

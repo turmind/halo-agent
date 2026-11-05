@@ -113,7 +113,7 @@ function resolveRuntimePaths() {
       adminOut: path.join(resRoot, 'admin-out'),
       nodeBin,
       helperScript,
-      cliEntry: path.join(resRoot, 'cli-runtime', 'dist', 'index.js'),
+      cliEntry: path.join(resRoot, 'cli-runtime', 'bin', 'halo.js'),
     }
   }
   const repoRoot = path.resolve(__dirname, '..', '..', '..')
@@ -894,7 +894,7 @@ function buildCliLauncher(nodeBin, cliEntry) {
   const appBundle = path.resolve(process.resourcesPath, '..', '..')
   const stdRes = path.join('/Applications', path.basename(appBundle), 'Contents', 'Resources')
   const stdNode = path.join(stdRes, path.basename(nodeBin))
-  const stdCli = path.join(stdRes, 'cli-runtime', 'dist', 'index.js')
+  const stdCli = path.join(stdRes, 'cli-runtime', 'bin', 'halo.js')
   return [
     '#!/bin/sh',
     `NODE="${nodeBin}"`,
