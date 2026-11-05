@@ -126,6 +126,14 @@ const globCmds = [
   'rm -rf *.log', 'rm -rf a*', 'rm -rf x', 'rm -rf "$PWD/x"', 'cd .. && rm -rf .', 'cd x && rm -rf ..',
 ]
 const globCdCmds = ['cd /srv/x[1] && rm -rf .', 'cd /srv/x[1] && rm -rf *', 'cd ~/* && rm -rf .', 'cd ~/p? && rm -rf ..', 'cd /tmp/* && rm -rf x']
+// a narrow glob is judged by its literal self (a quoted path is no pattern)
+const literalGlobCases = [
+  ['cd "/srv/proj [v2]" && rm -rf .', '/srv/proj [v2]'], ['rm -rf "/srv/proj [v2]"', '/srv/proj [v2]'], ['cd /srv && rm -rf "proj [v2]"', '/srv/proj [v2]'],
+  ['rm -rf "/srv/proj [v2]/x"', '/srv/proj [v2]'], ['rm -rf *.log', '/srv/proj [v2]'], ['rm -rf ../a[1]b', `${WS}/a[1]b`], ['rm -rf ../a?b', `${WS}/a[1]b`],
+  ['rm -rf "../a[1]b"/x', `${WS}/a[1]b`], ['rm -rf *.log', `${WS}/a[1]b`], ['rm -rf /usr/l*', WS], ['rm -rf "/usr/[x]"', WS], ['rm -rf /etc/ss?', WS],
+  ['rm -rf /home/*.bak', WS], ['rm -rf /var/log/*.gz', WS], ['rm -rf /u?r', WS], ['rm -rf /[t]mp', WS], ['rm -rf "/tmp/a*b"', WS],
+  ['rm -rf ~/projects/d?mo', WS], ['rm -rf ~/project?', WS], ['rm -rf ~/projects/[a-z]*', WS], ['rm -rf "~/projects/de[m]o"', WS],
+]
 
 const vectors = [
   ...[...new Set([...fromTest, ...combos, ...separators, ...misc])].map((cmd) => [cmd, WS]),
@@ -135,6 +143,7 @@ const vectors = [
   // glob chars in the workspace path are a name, not a pattern; the command's own globs still count
   ...globCwds.flatMap((cwd) => globCmds.map((cmd) => [cmd, cwd])),
   ...globCdCmds.map((cmd) => [cmd, WS]),
+  ...literalGlobCases,
 ]
 
 const check = await guardFor(HOME)
@@ -157,7 +166,9 @@ for (const home of ['/root', '/home/tester/', '/home/x$&y', "/home/x$'y", '/home
 const globHomeCmds = [...homeCmds, 'rm -rf ~/*', 'rm -rf $HOME/.*', 'cd && rm -rf *', 'rm -rf ~/*.log', 'cd ~/x && rm -rf ..']
 for (const home of ['/home/x[1]y', '/home/a?b', '/home/x*', '/srv/[h']) {
   const g = await guardFor(home)
-  for (const cmd of globHomeCmds) homes.push({ home, cmd, cwd: '/srv/ws', result: g(cmd, '/srv/ws') })
+  // …and the home written out literally (quoted: no pattern)
+  const literal = [`rm -rf "${home}"`, `cd "${home}" && rm -rf .`, `rm -rf "${home}/.halo"`, `rm -rf "${home}/z"`]
+  for (const cmd of [...globHomeCmds, ...literal]) homes.push({ home, cmd, cwd: '/srv/ws', result: g(cmd, '/srv/ws') })
 }
 
 const text = `{"home":${JSON.stringify(HOME)},"ws":${JSON.stringify(WS)},"vectors":[\n${rows.map((r) => JSON.stringify(r)).join(',\n')}\n],"homes":[\n${homes.map((r) => JSON.stringify(r)).join(',\n')}\n]}\n`

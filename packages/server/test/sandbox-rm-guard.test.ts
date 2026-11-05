@@ -153,8 +153,30 @@ describe('assertRmSafe', () => {
     expect(() => assertRmSafe('rm -rf ./*', WS)).toThrow(`"./*" resolves to ${WS}, which is the workspace root`)
     expect(() => assertRmSafe('cd ~/* && rm -rf .', WS)).toThrow(`"." resolves to ${HOME}, which is the home directory`)
     expect(() => assertRmSafe('rm -rf ..*', WS)).toThrow(`"..*" resolves to ${WS}, which is the workspace root`)
-    for (const cmd of ['rm -rf *.log', 'rm -rf a*', 'rm -rf /tmp/build-*', 'cd /srv/x[1] && rm -rf .']) {
+    for (const cmd of ['rm -rf *.log', 'rm -rf a*', 'rm -rf /tmp/build-*']) {
       expect(() => assertRmSafe(cmd, cwd), cmd).not.toThrow()
     }
+  })
+
+  // A narrow glob is still judged by its literal self: a quoted path is no pattern.
+  it('blocks a quoted cd into a glob-char workspace root, then rm -rf .', () => {
+    const cwd = '/srv/proj [v2]'
+    expect(() => assertRmSafe(`cd "${cwd}" && rm -rf .`, cwd)).toThrow(`"." resolves to ${cwd}, which is the workspace root or a parent of it.`)
+  })
+
+  it('blocks rm of a glob-char HOME written out literally', async () => {
+    vi.resetModules()
+    vi.stubEnv('HOME', '/home/x[1]y')
+    try {
+      const fresh = await import('../src/tools/sandbox.js')
+      expect(() => fresh.assertRmSafe('rm -rf "/home/x[1]y"', '/srv/ws')).toThrow('"/home/x[1]y" resolves to /home/x[1]y, which is the home directory or a parent of it.')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('still allows a narrow glob that is no protected path (rm -rf *.log in a[1]b)', () => {
+    allowed('rm -rf *.log')
+    expect(() => assertRmSafe('rm -rf *.log', path.join(WS, 'a[1]b'))).not.toThrow()
   })
 })

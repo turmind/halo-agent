@@ -924,14 +924,12 @@ export function assertRmSafe(command: string, workspaceRoot: string): void {
 
       const abs = path.resolve(cwd, word)
       // A glob that means "everything in X" (`*`, `.*`, `**`) is judged by X;
-      // narrower globs (`*.log`) are left alone.
+      // a narrower glob (`*.log`) only by its literal self — a quoted
+      // `cd "/srv/proj [v2]" && rm -rf .` is the workspace root, not a pattern.
       const parts = abs.split('/')
       const globAt = parts.findIndex((p) => /[*?[]/.test(p))
       let target = abs
-      if (globAt !== -1) {
-        if (!/^[.*?]+$/.test(parts[globAt])) continue
-        target = parts.slice(0, globAt).join('/') || '/'
-      }
+      if (globAt !== -1 && /^[.*?]+$/.test(parts[globAt])) target = parts.slice(0, globAt).join('/') || '/'
       target = unescapeGlob(target)
       const reason = rmProtectedReason(target, wsRoot)
       if (reason) {

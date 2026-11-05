@@ -151,7 +151,12 @@ func TestCheckEdges(t *testing.T) {
 		{"rm -rf $PWD", "/srv/a*b", home, `"$PWD" resolves to /srv/a*b, which is the workspace root`},
 		{"rm -rf ~/*", "/srv/ws", "/home/x?y", `"~/*" resolves to /home/x?y, which is the home directory`},
 		{"rm -rf *.log", "/srv/a[1]b", home, ""},
-		{"cd /srv/x[1] && rm -rf .", "/srv/ws", home, ""},
+		// a narrow glob is judged by its literal self
+		{`cd "/srv/proj [v2]" && rm -rf .`, "/srv/proj [v2]", home, `"." resolves to /srv/proj [v2], which is the workspace root`},
+		{`rm -rf "/home/x[1]y"`, "/srv/ws", "/home/x[1]y", `"/home/x[1]y" resolves to /home/x[1]y, which is the home directory`},
+		{"cd /srv/x[1] && rm -rf .", "/srv/ws", home, `"." resolves to /srv/x[1], which is a system directory`},
+		{"rm -rf /tmp/build-*", "/srv/a[1]b", home, ""},
+		{"rm -rf ~/*.log", "/srv/ws", "/home/x[1]y", ""},
 	} {
 		got := ""
 		if err := Check(c.cmd, c.cwd, c.home); err != nil {

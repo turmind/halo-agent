@@ -121,13 +121,11 @@ func Check(cmd, cwd, home string) error {
 
 			abs := resolve(dir, word)
 			// A glob that means "everything in X" (`*`, `.*`, `**`) is judged by X;
-			// narrower globs (`*.log`) are left alone.
+			// a narrower glob (`*.log`) only by its literal self — a quoted
+			// `cd "/srv/proj [v2]" && rm -rf .` is the workspace root, not a pattern.
 			parts := strings.Split(abs, "/")
 			target := abs
-			if k := slices.IndexFunc(parts, func(p string) bool { return strings.ContainsAny(p, "*?[") }); k != -1 {
-				if strings.Trim(parts[k], ".*?") != "" {
-					continue
-				}
+			if k := slices.IndexFunc(parts, func(p string) bool { return strings.ContainsAny(p, "*?[") }); k != -1 && strings.Trim(parts[k], ".*?") == "" {
 				if target = strings.Join(parts[:k], "/"); target == "" {
 					target = "/"
 				}
