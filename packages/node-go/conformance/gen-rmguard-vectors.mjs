@@ -14,13 +14,18 @@ import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const sandboxTs = path.join(here, '../../server/src/tools/sandbox.ts')
+const sandboxTs = pathToFileURL(path.join(here, '../../server/src/tools/sandbox.ts')).href
 const out = path.join(here, '../internal/rmguard/testdata/vectors.json')
-const { tsImport } = await import(pathToFileURL(createRequire(path.join(here, '../../server/package.json')).resolve('tsx/esm/api')).href)
+const { register } = await import(pathToFileURL(createRequire(path.join(here, '../../server/package.json')).resolve('tsx/esm/api')).href)
+register()
 
+// A fresh sandbox.ts per HOME via a query string: only that module is
+// re-evaluated (tsImport reloads the whole tree per call and slows to a hang
+// after ~6 calls).
+let loads = 0
 async function guardFor(home) {
   process.env.HOME = home
-  const { assertRmSafe } = await tsImport(sandboxTs, import.meta.url)
+  const { assertRmSafe } = await import(`${sandboxTs}?home=${loads++}`)
   return (cmd, cwd) => {
     try { assertRmSafe(cmd, cwd); return 'ok' } catch (e) { return e.message }
   }
@@ -114,12 +119,13 @@ const misc = [
 
 // ── a few of the above run from a different workspace root (node run's cwd) ──
 const cwdCmds = ['rm -rf .', 'rm -rf ..', 'rm -rf ../..', 'rm -rf *', 'rm -rf x', 'cd .. && rm -rf sub', 'rm -rf $PWD', 'rm -rf ~/projects/x']
-const cwds = [SUB, '/', HOME, `${WS}/a$&b`, `${WS}/a$'b`, `${WS}/x/../y/`, `${HOME}/démo`]
+const cwds = [SUB, '/', HOME, `${WS}/a$&b`, `${WS}/a$'b`, `${WS}/a$Xb`, `${WS}/x/../y/`, `${HOME}/démo`]
 
 const vectors = [
   ...[...new Set([...fromTest, ...combos, ...separators, ...misc])].map((cmd) => [cmd, WS]),
   ...cwds.flatMap((cwd) => cwdCmds.map((cmd) => [cmd, cwd])),
   ["cd '/tmp/$&x' && rm -rf $PWD", WS],
+  ["cd '/tmp/$Xy' && rm -rf $PWD", WS],
 ]
 
 const check = await guardFor(HOME)
@@ -131,10 +137,10 @@ const rows = vectors.map(([cmd, cwd]) => {
   return row
 })
 
-// ── odd HOME values: container root, trailing slash, `$&` (a replace pattern), / ──
+// ── odd HOME values: container root, trailing slash, `$&` / `$X` (inserted literally), / ──
 const homeCmds = ['rm -rf ~', 'rm -rf ~/x', 'rm -rf $HOME/x', 'rm -rf /root', 'rm -rf /root/x', 'cd && rm -rf .', 'cd && rm -rf x', 'rm -rf ~/.halo/x']
 const homes = []
-for (const home of ['/root', '/home/tester/', '/home/x$&y', "/home/x$'y", '/']) {
+for (const home of ['/root', '/home/tester/', '/home/x$&y', "/home/x$'y", '/home/u$X', '/']) {
   const g = await guardFor(home)
   for (const cmd of homeCmds) homes.push({ home, cmd, cwd: '/srv/ws', result: g(cmd, '/srv/ws') })
 }

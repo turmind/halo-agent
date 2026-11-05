@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
 import { assertRmSafe } from '../src/tools/sandbox.js'
@@ -90,5 +90,29 @@ describe('assertRmSafe', () => {
     allowed('cat <<EOF >a && cat <<EOF2 >b\nrm -rf ~\nEOF\nrm -rf /\nEOF2')
     blocked("cat > a.txt <<'EOF'\nhello\nEOF\nrm -rf ~")
     blocked('cat <<< "x"; rm -rf ~')
+  })
+
+  // HOME / cwd are inserted literally — a `$&` in a path is not a replace pattern.
+  it('blocks $PWD when the workspace path contains `$&` (or `$X`)', () => {
+    for (const dir of ['a$&b', 'a$Xb']) {
+      const cwd = path.join(WS, dir)
+      expect(() => assertRmSafe('rm -rf $PWD', cwd)).toThrow(`"$PWD" resolves to ${cwd}, which is the workspace root or a parent of it.`)
+    }
+  })
+
+  it('a cd into a `$&` path keeps $PWD on that path', () => {
+    allowed("cd '/tmp/$&x' && rm -rf $PWD")
+  })
+
+  it('names a `$&` HOME as the home directory', async () => {
+    // HOME is read at module load: re-import under the odd HOME.
+    vi.resetModules()
+    vi.stubEnv('HOME', '/home/x$&y')
+    try {
+      const fresh = await import('../src/tools/sandbox.js')
+      expect(() => fresh.assertRmSafe('rm -rf ~', '/srv/ws')).toThrow('"~" resolves to /home/x$&y, which is the home directory or a parent of it.')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })

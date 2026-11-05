@@ -9,8 +9,8 @@
 //   - the command is walked byte by byte; every character the TS compares
 //     against is ASCII, so copying UTF-8 bytes gives the same words as
 //     copying UTF-16 code units;
-//   - home / cwd are spliced in with String.prototype.replace semantics, so
-//     a `$&` / `$'` / “ $` “ / `$$` inside them is expanded like JS does.
+//   - home / cwd are inserted literally after the unset-variable pass, so a
+//     `$&` / `$X` inside them is just text.
 package rmguard
 
 import (
@@ -186,52 +186,15 @@ func resolve(base, p string) string {
 // or substitution becomes empty — its value when unset, which is how
 // `rm -rf "$DIR/"` goes wrong.
 func expandWord(w, cwd, home string) string {
+	// home / cwd go in last through NUL markers (as the TS): as-is, never
+	// re-scanned by the unset pass. NUL can't reach a shell, so no clash.
 	if w == "~" || strings.HasPrefix(w, "~/") {
-		w = substitution(home, w, 0, 1) + w[1:]
+		w = "\x00H" + w[1:]
 	}
-	w = replaceAll(homeRe, w, home)
-	w = replaceAll(pwdRe, w, cwd)
-	return unsetRe.ReplaceAllLiteralString(w, "")
-}
-
-// replaceAll is s.replace(re /g, repl).
-func replaceAll(re *regexp.Regexp, s, repl string) string {
-	var b strings.Builder
-	last := 0
-	for _, m := range re.FindAllStringIndex(s, -1) {
-		b.WriteString(s[last:m[0]])
-		b.WriteString(substitution(repl, s, m[0], m[1]))
-		last = m[1]
-	}
-	b.WriteString(s[last:])
-	return b.String()
-}
-
-// substitution is GetSubstitution for a group-less match s[start:end]:
-// `$$` `$&` “ $` “ `$'` are expanded, any other `$` stays literal.
-func substitution(repl, s string, start, end int) string {
-	var b strings.Builder
-	for i := 0; i < len(repl); i++ {
-		if repl[i] == '$' && i+1 < len(repl) {
-			switch repl[i+1] {
-			case '$':
-				b.WriteByte('$')
-			case '&':
-				b.WriteString(s[start:end])
-			case '`':
-				b.WriteString(s[:start])
-			case '\'':
-				b.WriteString(s[end:])
-			default:
-				b.WriteByte('$')
-				continue
-			}
-			i++
-			continue
-		}
-		b.WriteByte(repl[i])
-	}
-	return b.String()
+	w = homeRe.ReplaceAllLiteralString(w, "\x00H")
+	w = pwdRe.ReplaceAllLiteralString(w, "\x00P")
+	w = unsetRe.ReplaceAllLiteralString(w, "")
+	return strings.NewReplacer("\x00H", home, "\x00P", cwd).Replace(w)
 }
 
 // stripSubshellClose drops a subshell's closing `)` glued to the last word

@@ -840,11 +840,15 @@ function shellSegments(command: string): string[][] {
 /** `~` / $HOME / $PWD expanded; any other variable or substitution becomes
  *  empty — its value when unset, which is how `rm -rf "$DIR/"` goes wrong. */
 function expandRmWord(word: string, cwd: string): string {
+  // HOME / cwd go in last, through NUL markers and a function replacer: as-is,
+  // never read as a `$&` replace pattern nor re-scanned by the unset pass (a
+  // dir named `a$Xb`). NUL can't reach a shell, so a marker can't clash.
   return word
-    .replace(/^~(?=\/|$)/, HOME)
-    .replace(/\$\{HOME\}|\$HOME\b/g, HOME)
-    .replace(/\$\{PWD\}|\$PWD\b|\$\(pwd\)|`pwd`/g, cwd)
+    .replace(/^~(?=\/|$)/, '\0H')
+    .replace(/\$\{HOME\}|\$HOME\b/g, '\0H')
+    .replace(/\$\{PWD\}|\$PWD\b|\$\(pwd\)|`pwd`/g, '\0P')
     .replace(/\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$\d/g, '')
+    .replace(/\0([HP])/g, (_m, k: string) => (k === 'H' ? HOME : cwd))
 }
 
 /** Drop a subshell's closing `)` glued to the last word (`(rm -rf x)`),

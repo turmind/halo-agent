@@ -86,23 +86,19 @@ func TestUnhold(t *testing.T) {
 	}
 }
 
-// String.prototype.replace's $-patterns for a group-less match.
-func TestSubstitution(t *testing.T) {
-	for _, c := range []struct {
-		repl, s    string
-		start, end int
-		want       string
-	}{
-		{"/h", "~/x", 0, 1, "/h"},
-		{"a$&b", "~/x", 0, 1, "a~b"},
-		{"a$'b", "~/x", 0, 1, "a/xb"},
-		{"a$`b", "p$HOMEq", 1, 6, "apb"},
-		{"a$$b", "~", 0, 1, "a$b"},
-		{"a$1$<n>$", "~", 0, 1, "a$1$<n>$"},
-		{"$", "~", 0, 1, "$"},
+// HOME / cwd are inserted as-is: no `$&` / `$'` / `$$` pattern expansion.
+func TestExpandLiteral(t *testing.T) {
+	for _, c := range []struct{ w, cwd, home, want string }{
+		{"~", "/c", "/home/x$&y", "/home/x$&y"},
+		{"~/q", "/c", "/home/x$'y", "/home/x$'y/q"},
+		{"$HOME/${HOME}", "/c", "/h$$", "/h$$//h$$"},
+		{"a$PWD`pwd`$(pwd)${PWD}", "/w$&b$`", "/h", "a/w$&b$`/w$&b$`/w$&b$`/w$&b$`"},
+		{"$PWD/$X", "/w$1", "/h", "/w$1/"},
+		{"~", "/c", "/home/u$PWD$X", "/home/u$PWD$X"},
+		{"$(echo $(pwd))/", "/c", "/h", "/"}, // still expanded before the unset pass, as before
 	} {
-		if got := substitution(c.repl, c.s, c.start, c.end); got != c.want {
-			t.Errorf("substitution(%q, %q) = %q, want %q", c.repl, c.s, got, c.want)
+		if got := expandWord(c.w, c.cwd, c.home); got != c.want {
+			t.Errorf("expandWord(%q, %q, %q) = %q, want %q", c.w, c.cwd, c.home, got, c.want)
 		}
 	}
 }
