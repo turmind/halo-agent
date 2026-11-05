@@ -129,9 +129,12 @@ async function stopServer(): Promise<void> {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+/** Set by spawnSide when a machine binary can't be started at all; every wait fails on it at once. */
+let spawnFailure: Error | undefined
 async function until(cond: () => boolean, ms: number, what: string): Promise<void> {
   const end = Date.now() + ms * SLOW
   while (!cond()) {
+    if (spawnFailure) throw spawnFailure
     if (Date.now() > end) throw new Error(`timed out waiting for ${what}`)
     await sleep(20)
   }
@@ -147,6 +150,9 @@ function account(name: string, workspace = ws): { token: string; accountId: stri
 
 interface Proc { side: Side; child: ChildProcess; out: string[]; err: string; exit: Promise<number>; code?: number }
 
+/** Every machine process ever spawned; the outermost afterAll SIGKILLs the survivors, pass or fail. */
+const live = new Set<ChildProcess>()
+
 function spawnSide(side: Side, args: string[], env: Record<string, string>, cwd: string): Proc {
   const cmd = side === 'ts'
     ? [process.execPath, '--import', TSX, TS_MAIN, ...args]
@@ -156,8 +162,23 @@ function spawnSide(side: Side, args: string[], env: Record<string, string>, cwd:
     env: { PATH: process.env.PATH ?? '/usr/bin:/bin', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  const p: Proc = { side, child, out: [], err: '', exit: new Promise((r) => child.on('exit', (code, sig) => r(p.code = code ?? (sig ? 128 : -1)))) }
+  live.add(child)
   let partial = ''
+  const exit = new Promise<number>((resolve, reject) => {
+    // ENOENT / EACCES: no 'exit' ever comes. Reject `exit` and trip until(), so nothing waits out its timeout.
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      spawnFailure ??= new Error(`cannot start the ${side} machine (${cmd.slice(0, side === 'go' ? GO_EXEC.length + 1 : 1).join(' ')}): ${err.code ?? err.message} — check HALO_NODE_GO_BIN / HALO_NODE_GO_EXEC`)
+      reject(spawnFailure)
+    })
+    // 'close', not 'exit': stdout is drained by then, so an unterminated last line lands in `out` too.
+    child.on('close', (code, sig) => {
+      live.delete(child)
+      if (partial) p.out.push(partial)
+      resolve(p.code = code ?? (sig ? 128 : -1))
+    })
+  })
+  exit.catch(() => {}) // awaited by the tests; this only keeps an unawaited one from being "unhandled"
+  const p: Proc = { side, child, out: [], err: '', exit }
   child.stdout!.on('data', (d: Buffer) => {
     const lines = (partial + d.toString()).split('\n')
     partial = lines.pop()!
@@ -167,8 +188,12 @@ function spawnSide(side: Side, args: string[], env: Record<string, string>, cwd:
   return p
 }
 
+/** kill() on a spawn that failed but hasn't emitted 'error' yet (pid undefined) signals pid 0 —
+ *  this whole process group, vitest included. A child that never started has nothing to stop. */
+const signal = (c: ChildProcess, sig: NodeJS.Signals) => { if (c.pid !== undefined) c.kill(sig) }
+
 async function term(p: Proc): Promise<number> {
-  p.child.kill('SIGTERM')
+  signal(p.child, 'SIGTERM')
   return p.exit
 }
 
@@ -253,6 +278,10 @@ describe.skipIf(!GO_BIN)('node-go conformance', () => {
     await startServer()
   })
   afterAll(async () => {
+    // Whatever a failed test left running (the group afterAlls only SIGTERM their own pair).
+    const left = [...live]
+    for (const c of left) signal(c, 'SIGKILL')
+    await Promise.all(left.map((c) => new Promise((r) => c.exitCode !== null || c.signalCode !== null ? r(null) : c.once('close', r))))
     await stopServer()
     setNodeHub(null)
     if (tmp) { execFileSync('chmod', ['-R', 'u+rwx', tmp]); fs.rmSync(tmp, { recursive: true, force: true }) }
@@ -299,9 +328,11 @@ describe.skipIf(!GO_BIN)('node-go conformance', () => {
           dirty = !!c.setup || c.calls.some((x) => x.op === 'write' || x.op === 'edit' || x.op === 'run')
           const call = (side: Side, op: string, args: Record<string, unknown>) => callSide(side, machine(side), op, args)
           if (c.known) {
-            const go: Result[] = []
-            for (const x of c.calls) go.push(await call('go', x.op, x.args))
-            expect(go, `known difference ${c.known}`).toEqual(c.expectGo)
+            const res = { ts: [] as Result[], go: [] as Result[] }
+            for (const x of c.calls) for (const s of SIDES) res[s].push(await call(s, x.op, x.args))
+            expect(res.go, `known difference ${c.known}`).toEqual(c.expectGo)
+            // Still a difference: once TS changes to match Go, this goes red — drop the `known` mark then.
+            expect(res.ts, `known difference ${c.known} no longer differs`).not.toEqual(res.go)
             return
           }
           const mark = { ts: procs.ts.out.length, go: procs.go.out.length }
