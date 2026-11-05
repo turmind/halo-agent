@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,11 +8,11 @@ import {
   parseScore, extractLargerObservation, evaluateSandbox, OBSERVATION_MAX_CHARS,
   type FileChange, type EvoScore,
 } from '../src/evolution/auto-apply.js'
-import { maybeAutoApply, autoApplyRecheck, PUBLISH_WHITELIST } from '../src/evolution/evo-wrapper.js'
+import { maybeAutoApply, autoApplyRecheck, finalize, finalizeApply, markObservation, PUBLISH_WHITELIST } from '../src/evolution/evo-wrapper.js'
 import { failApply } from '../src/evolution/queue-apply.js'
 import { createEvoDb, setEvoDb, evolutionRuns, evolutionApplies, type EvoDb } from '../src/db/evo-db.js'
 import { config } from '../src/config.js'
-import { wsHaloDir, evoSandboxHaloDir, wsEvoRunDir } from '../src/paths.js'
+import { wsHaloDir, evoSandboxHaloDir, wsEvoRunDir, globalDir } from '../src/paths.js'
 
 /**
  * L2/L3 auto-apply decision (plans/evo-l2-l3.md §3–§4): classification on the
@@ -85,7 +85,7 @@ tools:
   - file_read
   - file_edit
   - shell_exec
-skills: []
+skills: [web-search, cron]
 team:
   - executor
 `
@@ -98,8 +98,7 @@ team:
     ['model.thinking added', (s: string) => s.replace('  maxTokens: 272000', '  maxTokens: 272000\n  thinking:\n    enabled: true')],
     ['tools removed', (s: string) => s.replace('  - shell_exec\n', '')],
     ['non-egress tool added', (s: string) => s.replace('  - file_edit', '  - file_edit\n  - grep')],
-    ['skills', (s: string) => s.replace('skills: []', 'skills:\n  - web-search')],
-    ['priority added', (s: string) => `${s}priority: 10\n`],
+    ['skills removed', (s: string) => s.replace('skills: [web-search, cron]', 'skills: [cron]')],
     ['context added', (s: string) => `${s}context:\n  maxTokens: 100000\n`],
     ['comments / key order only', (s: string) => `# note\n${s.replace('name: Default\ndescription: does things', 'description: does things\nname: Default')}`],
   ])('%s → capability', (_label, edit) => {
@@ -114,6 +113,9 @@ team:
     ['+a2a_send', (s: string) => s.replace('  - file_edit', '  - file_edit\n  - a2a_send'), 'agent_yaml:tools+a2a_send'],
     ['+node_list', (s: string) => s.replace('  - file_edit', '  - file_edit\n  - node_list'), 'agent_yaml:tools+node_list'],
     ['team', (s: string) => s.replace('  - executor', '  - executor\n  - deep-executor'), 'agent_yaml:team'],
+    ['priority added (routes new channel sessions / /new)', (s: string) => `${s}priority: 10\n`, 'agent_yaml:priority'],
+    ['skill added', (s: string) => s.replace('skills: [web-search, cron]', 'skills: [web-search, cron, send-file]'), 'agent_yaml:skills+send-file'],
+    ['skills not a list', (s: string) => s.replace('skills: [web-search, cron]', 'skills: all'), 'agent_yaml:skills'],
     ['internal', (s: string) => `${s}internal: true\n`, 'agent_yaml:internal'],
     ['name', (s: string) => s.replace('name: Default', 'name: Boss'), 'agent_yaml:name'],
     ['unknown key', (s: string) => `${s}sandbox: off\n`, 'agent_yaml:sandbox'],
@@ -477,16 +479,49 @@ describe('wrapper: maybeAutoApply / autoApplyRecheck / failApply', () => {
     expect(db.select().from(evolutionApplies).all()).toHaveLength(0)
   })
 
+  // What preflight hands the recheck: rel + sandbox path of every file publish writes.
+  const changedOf = (applyDir: string, ...rels: string[]) =>
+    rels.map((rel) => ({ rel: path.join(...rel.split('/')), full: path.join(evoSandboxHaloDir(applyDir), ...rel.split('/')), existsInMain: fs.existsSync(path.join(wsHaloDir(ws), ...rel.split('/'))) }))
+
   it('recheck: merged sandbox touching USER.md is blocked; lowering the level blocks too', () => {
     const applyDir = path.join(tmp, 'apply')
     write(evoSandboxHaloDir(applyDir), 'INSTRUCTIONS.md', 'rules v2')
     level('L2')
-    expect(autoApplyRecheck(ws, applyDir)).toBeNull()
+    expect(autoApplyRecheck(ws, applyDir, changedOf(applyDir, 'INSTRUCTIONS.md'))).toBeNull()
     level('L1')
-    expect(autoApplyRecheck(ws, applyDir)).toBe('level')
+    expect(autoApplyRecheck(ws, applyDir, changedOf(applyDir, 'INSTRUCTIONS.md'))).toBe('level')
     level('L3')
     write(evoSandboxHaloDir(applyDir), 'USER.md', 'the user likes…')
-    expect(autoApplyRecheck(ws, applyDir)).toMatch(/^category_manual:USER\.md/)
+    expect(autoApplyRecheck(ws, applyDir, changedOf(applyDir, 'INSTRUCTIONS.md', 'USER.md'))).toMatch(/^category_manual:USER\.md/)
+  })
+
+  it('recheck classifies what publish writes: a workspace file the merge dropped is not a deletion', () => {
+    const applyDir = path.join(tmp, 'apply')
+    write(wsHaloDir(ws), 'prompts/all/10.md', 'ws all')  // live, absent from the merged sandbox
+    write(evoSandboxHaloDir(applyDir), 'INSTRUCTIONS.md', 'rules v2')
+    level('L2')
+    expect(autoApplyRecheck(ws, applyDir, changedOf(applyDir, 'INSTRUCTIONS.md'))).toBeNull()
+    // Nothing preflight lists differs from live → no effective change.
+    expect(autoApplyRecheck(ws, applyDir, [])).toBe('no_effective_change')
+  })
+
+  it('recheck: global baseline for a new workspace override dir — copied files drop out, a hidden global file blocks', () => {
+    const applyDir = path.join(tmp, 'apply')
+    const g = globalDir()  // the per-file scratch HOME (setup-home.ts)
+    onTestFinished(() => fs.rmSync(path.join(g, 'agents', 'helper'), { recursive: true, force: true }))
+    write(g, 'agents/helper/AGENT.md', 'global persona')
+    write(g, 'agents/helper/agent.yaml', 'name: Helper\n')
+    write(g, 'agents/helper/notes.md', 'kept in global')
+    write(evoSandboxHaloDir(applyDir), 'agents/helper/AGENT.md', 'global persona — sharper')
+    write(evoSandboxHaloDir(applyDir), 'agents/helper/agent.yaml', 'name: Helper\n')
+    level('L2')
+    const changed = changedOf(applyDir, 'agents/helper/AGENT.md', 'agents/helper/agent.yaml')
+    expect(autoApplyRecheck(ws, applyDir, changed)).toBe('category_manual:agents/helper/notes.md(deleted)')
+    write(evoSandboxHaloDir(applyDir), 'agents/helper/notes.md', 'kept in global')
+    expect(autoApplyRecheck(ws, applyDir, [...changed, ...changedOf(applyDir, 'agents/helper/notes.md')])).toBeNull()
+    // A dir in neither workspace nor global is new → manual.
+    write(evoSandboxHaloDir(applyDir), 'agents/fresh/AGENT.md', 'hello')
+    expect(autoApplyRecheck(ws, applyDir, changedOf(applyDir, 'agents/fresh/AGENT.md'))).toMatch(/^category_manual:agents\/fresh\/AGENT\.md\(new_agent/)
   })
 
   it('failApply on an auto apply sends the run back to awaiting_review; reviewer applies keep it approved', () => {
@@ -507,5 +542,67 @@ describe('wrapper: maybeAutoApply / autoApplyRecheck / failApply', () => {
     db.insert(evolutionApplies).values({ id: 'a1', workspacePath: ws, status: 'syncing', sourceRunIds: JSON.stringify([RUN]), createdAt: 2, approvedBy: 'auto' }).run()
     expect(failApply(db, 'a1', { status: 'timeout', failureReason: 'x', onlyIfStatus: 'running' })).toEqual({ failed: false, revertedRunIds: [] })
     expect(db.select().from(evolutionApplies).where(eq(evolutionApplies.id, 'a1')).get()!.status).toBe('syncing')
+  })
+})
+
+// ── wrapper terminal writes only while it owns the claim (R4) ──────────────
+
+describe('wrapper: terminal writes are conditional on the claim', () => {
+  let tmp: string, ws: string, db: EvoDb, logFd: number
+  const runRow = (id: string) => db.select().from(evolutionRuns).where(eq(evolutionRuns.id, id)).get()!
+  const applyRow = (id: string) => db.select().from(evolutionApplies).where(eq(evolutionApplies.id, id)).get()!
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-evo-claim-'))
+    ws = path.join(tmp, 'ws')
+    db = createEvoDb(path.join(tmp, 'global'))
+    setEvoDb(db)
+    logFd = fs.openSync(path.join(tmp, 'log'), 'a')
+    db.insert(evolutionRuns).values({ id: 'r', workspacePath: ws, status: 'running', triggerKind: 'note', sourceSession: 's', createdAt: 1, attempts: 2 }).run()
+  })
+  afterEach(() => { fs.closeSync(logFd); fs.rmSync(tmp, { recursive: true, force: true }) })
+
+  it('finalize: owner writes; a stale wrapper (attempts moved on, or run left running) does not', () => {
+    finalize('r', 1, 'failed', 'stale', logFd)
+    expect(runRow('r')).toMatchObject({ status: 'running', failureReason: null })
+    finalize('r', 2, 'awaiting_review', null, logFd)
+    expect(runRow('r').status).toBe('awaiting_review')
+    finalize('r', 2, 'failed', 'late', logFd)
+    expect(runRow('r').status).toBe('awaiting_review')
+  })
+
+  it('markObservation: only the owner stamps hasObservation', () => {
+    const runDir = path.join(tmp, 'run')
+    fs.mkdirSync(runDir)
+    fs.writeFileSync(path.join(runDir, 'patch.md'), '---\ntarget: x\n---\n## Larger observation\nBig.\n')
+    markObservation('r', 1, runDir, 'drafted', logFd)
+    expect(runRow('r').hasObservation).toBe(false)
+    markObservation('r', 2, runDir, 'drafted', logFd)
+    expect(runRow('r').hasObservation).toBe(true)
+  })
+
+  it('finalizeApply: running claim → failed (+ auto revert); stale attempts or another status → untouched', () => {
+    db.update(evolutionRuns).set({ status: 'approved' }).where(eq(evolutionRuns.id, 'r')).run()
+    db.insert(evolutionApplies).values({ id: 'a', workspacePath: ws, status: 'running', sourceRunIds: '["r"]', createdAt: 2, attempts: 3, approvedBy: 'auto' }).run()
+    finalizeApply('a', 2, 'stale', logFd)
+    expect(applyRow('a').status).toBe('running')
+    expect(runRow('r').status).toBe('approved')
+    finalizeApply('a', 3, 'phase B\': regression', logFd)
+    expect(applyRow('a')).toMatchObject({ status: 'failed', failureReason: 'phase B\': regression' })
+    expect(runRow('r').status).toBe('awaiting_review')
+  })
+
+  it('finalizeApply leaves a syncing row (main may be half-published) to the ticker; the run stays approved', () => {
+    db.update(evolutionRuns).set({ status: 'approved' }).where(eq(evolutionRuns.id, 'r')).run()
+    db.insert(evolutionApplies).values({ id: 'a', workspacePath: ws, status: 'syncing', sourceRunIds: '["r"]', createdAt: 2, attempts: 2, approvedBy: 'auto' }).run()
+    finalizeApply('a', 2, 'phase 12 preflight: y', logFd)
+    expect(applyRow('a').status).toBe('syncing')
+    expect(runRow('r').status).toBe('approved')
+  })
+
+  it('failApply onlyIfAttempts guards a re-claimed row', () => {
+    db.insert(evolutionApplies).values({ id: 'a', workspacePath: ws, status: 'running', sourceRunIds: '["r"]', createdAt: 2, attempts: 4 }).run()
+    expect(failApply(db, 'a', { status: 'failed', failureReason: 'x', onlyIfStatus: 'running', onlyIfAttempts: 3 }).failed).toBe(false)
+    expect(failApply(db, 'a', { status: 'failed', failureReason: 'x', onlyIfStatus: 'running', onlyIfAttempts: 4 }).failed).toBe(true)
   })
 })

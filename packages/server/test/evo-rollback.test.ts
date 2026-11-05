@@ -149,6 +149,23 @@ describe('rollbackApply', () => {
     expect(fs.existsSync(path.join(mainHalo, 'prompts', 'all'))).toBe(true)
   })
 
+  it('files already back at their pre-apply state are skipped, not conflicts', () => {
+    write(mainHalo, 'INSTRUCTIONS.md', 'rules v1')   // hash = before
+    fs.rmSync(path.join(mainHalo, SKILL))            // new file already gone
+    expect(inspectRollback(ws, APPLY)!.files.map((f) => f.state)).toEqual(['reverted', 'reverted'])
+    const res = rollbackApply(db, APPLY)
+    expect(res).toMatchObject({ ok: true, restored: [], removed: [] })
+    expect(applyRow().status).toBe('rolled_back')
+  })
+
+  it('a backup that does not hash to `before` is never restored, even forced', () => {
+    write(wsEvoHistoryDir(ws, APPLY), 'INSTRUCTIONS.md', 'tampered')
+    expect(rollbackApply(db, APPLY, { force: true })).toEqual({ ok: false, error: 'backup_mismatch', files: ['INSTRUCTIONS.md'] })
+    expect(read(mainHalo, 'INSTRUCTIONS.md')).toBe('rules v2')
+    expect(fs.existsSync(path.join(mainHalo, SKILL))).toBe(true)
+    expect(applyRow().status).toBe('applied')
+  })
+
   it('a second rollback → not_applied', () => {
     rollbackApply(db, APPLY)
     expect(rollbackApply(db, APPLY)).toEqual({ ok: false, error: 'not_applied' })
@@ -156,12 +173,16 @@ describe('rollbackApply', () => {
 
   it('modified / missing → conflict, nothing touched', () => {
     write(mainHalo, 'INSTRUCTIONS.md', 'rules v2 + a human edit')
-    fs.rmSync(path.join(mainHalo, SKILL))
+    write(mainHalo, SKILL, 'skill edited after publish')
     const res = rollbackApply(db, APPLY)
     expect(res).toEqual({ ok: false, error: 'conflict', conflicts: expect.arrayContaining([
       { rel: 'INSTRUCTIONS.md', reason: 'modified' },
-      { rel: SKILL, reason: 'missing' },
+      { rel: SKILL, reason: 'modified' },
     ]) })
+    // An overwrite target deleted since is still a conflict (only a `new` file's absence is "already reverted").
+    fs.rmSync(path.join(mainHalo, 'INSTRUCTIONS.md'))
+    expect(rollbackApply(db, APPLY)).toMatchObject({ conflicts: expect.arrayContaining([{ rel: 'INSTRUCTIONS.md', reason: 'missing' }]) })
+    write(mainHalo, 'INSTRUCTIONS.md', 'rules v2 + a human edit')
     expect(read(mainHalo, 'INSTRUCTIONS.md')).toBe('rules v2 + a human edit')
     expect(applyRow().status).toBe('applied')
     expect(fs.existsSync(wsEvoRollbackPreDir(ws, APPLY))).toBe(false)

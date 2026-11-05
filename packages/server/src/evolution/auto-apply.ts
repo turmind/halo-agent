@@ -58,6 +58,62 @@ function walkFiles(root: string, rel: string, out: string[] = []): string[] {
   return out
 }
 
+const toPosix = (rel: string) => rel.split(path.sep).join('/')
+
+interface Baseline {
+  /** Live pre-patch file (null = none). */
+  file: string | null
+  newDir: boolean
+  /** `<top>/<id>` (native separators) when that dir's live copy is global. */
+  globalDir?: string
+}
+
+/** Where the live pre-patch version of native-separator `rel` sits. */
+function liveBaseline(dirs: { mainHalo: string; globalHalo: string }, rel: string): Baseline {
+  const parts = rel.split(path.sep)
+  if (!OVERRIDE_DIRS.has(parts[0]) || parts.length < 3) return { file: path.join(dirs.mainHalo, rel), newDir: false }
+  const dirRel = path.join(parts[0], parts[1])
+  if (isDir(path.join(dirs.mainHalo, dirRel))) return { file: path.join(dirs.mainHalo, rel), newDir: false }
+  if (isDir(path.join(dirs.globalHalo, dirRel))) return { file: path.join(dirs.globalHalo, rel), newDir: false, globalDir: dirRel }
+  return { file: null, newDir: true }
+}
+
+/** null when `after` is byte-equal to the live version. */
+function fileChange(rel: string, base: Baseline, after: Buffer): FileChange | null {
+  const before = base.file ? readOrNull(base.file) : null
+  if (before && before.equals(after)) return null
+  return { rel: toPosix(rel), before: before?.toString('utf-8') ?? null, after: after.toString('utf-8'), newDir: base.newDir }
+}
+
+/**
+ * Exactly what a publish will do (`files` = phase-12 preflight's `changed`:
+ * native-separator rel + sandbox path), each against its live baseline.
+ * Publish never deletes, so a workspace file the merge dropped is not a
+ * change here (collectChanges would report it). The one effective deletion
+ * publish does cause is kept: a new workspace override dir hides every
+ * global file in it the sandbox lacks.
+ */
+export function publishChanges(
+  dirs: { mainHalo: string; globalHalo: string; sandboxHalo: string },
+  files: ReadonlyArray<{ rel: string; full: string }>,
+): FileChange[] {
+  const out: FileChange[] = []
+  const globalBacked = new Set<string>()
+  for (const { rel, full } of files) {
+    const base = liveBaseline(dirs, rel)
+    if (base.globalDir) globalBacked.add(base.globalDir)
+    const c = fileChange(rel, base, fs.readFileSync(full))
+    if (c) out.push(c)
+  }
+  for (const dirRel of globalBacked) {
+    for (const rel of walkFiles(dirs.globalHalo, dirRel)) {
+      if (fs.existsSync(path.join(dirs.sandboxHalo, rel))) continue
+      out.push({ rel: toPosix(rel), before: fs.readFileSync(path.join(dirs.globalHalo, rel), 'utf-8'), after: null, newDir: false })
+    }
+  }
+  return out
+}
+
 /**
  * Effective changes of `sandboxHalo` against the live surface (`mainHalo`,
  * falling back to `globalHalo` for override dirs the workspace doesn't have).
@@ -75,7 +131,6 @@ export function collectChanges(dirs: {
   entries: readonly string[]
 }): FileChange[] {
   const out: FileChange[] = []
-  const toPosix = (rel: string) => rel.split(path.sep).join('/')
   const seen = new Set<string>()
   // `<top>/<id>` dirs whose baseline is global — the sandbox copy becomes a
   // whole-folder override, so a global file it lacks is effectively deleted.
@@ -84,21 +139,10 @@ export function collectChanges(dirs: {
   for (const top of dirs.entries) {
     for (const rel of walkFiles(dirs.sandboxHalo, top)) {
       seen.add(rel)
-      const after = fs.readFileSync(path.join(dirs.sandboxHalo, rel))
-      const parts = rel.split(path.sep)
-      let baseFile: string | null = path.join(dirs.mainHalo, rel)
-      let newDir = false
-      if (OVERRIDE_DIRS.has(parts[0]) && parts.length >= 3) {
-        const dirRel = path.join(parts[0], parts[1])
-        if (isDir(path.join(dirs.mainHalo, dirRel))) { /* workspace copy is live */ }
-        else if (isDir(path.join(dirs.globalHalo, dirRel))) {
-          baseFile = path.join(dirs.globalHalo, rel)
-          globalBacked.add(dirRel)
-        } else { baseFile = null; newDir = true }
-      }
-      const before = baseFile ? readOrNull(baseFile) : null
-      if (before && before.equals(after)) continue
-      out.push({ rel: toPosix(rel), before: before?.toString('utf-8') ?? null, after: after.toString('utf-8'), newDir })
+      const base = liveBaseline(dirs, rel)
+      if (base.globalDir) globalBacked.add(base.globalDir)
+      const c = fileChange(rel, base, fs.readFileSync(path.join(dirs.sandboxHalo, rel)))
+      if (c) out.push(c)
     }
     for (const rel of walkFiles(dirs.mainHalo, top)) {
       if (seen.has(rel)) continue
@@ -123,7 +167,9 @@ const PROMPT_SCOPES = new Set(['bootstrap', 'all', 'root'])
  *  evidence about them — such a change always goes to a human. */
 const EGRESS_TOOLS = new Set(['shell_exec', 'web_fetch', 'relay_send', 'a2a_send'])
 const isEgressTool = (t: string) => EGRESS_TOOLS.has(t) || t.startsWith('node_')
-const AGENT_CAPABILITY_KEYS = new Set(['description', 'system_prompt', 'priority', 'context', 'skills'])
+/** `priority` is not here: it picks the agent a channel's new session and
+ *  `/new` land on — routing, not capability. `skills` is handled below. */
+const AGENT_CAPABILITY_KEYS = new Set(['description', 'system_prompt', 'context'])
 /** model.provider / model.endpoint (where requests go) are not here. */
 const MODEL_CAPABILITY_KEYS = new Set(['id', 'maxTokens', 'promptCaching', 'thinking', 'verbosity'])
 const SKILL_PROMPT_KEYS = new Set(['name', 'description'])
@@ -166,6 +212,17 @@ function classifyAgentYaml(rel: string, before: string, after: string): FileClas
       const had = new Set((a.tools as unknown[] | undefined ?? []).map(String))
       const egress = (b.tools as unknown[] | undefined ?? []).map(String).find((t) => !had.has(t) && isEgressTool(t))
       if (egress) return manual(rel, `agent_yaml:tools+${egress}`)
+      continue
+    }
+    if (key === 'skills') {
+      // Dropping a skill only narrows the agent; granting one hands it that
+      // skill's instructions, scripts and verbs, unvetted by the dry-run.
+      if ((b.skills !== undefined && !Array.isArray(b.skills)) || (a.skills !== undefined && !Array.isArray(a.skills))) {
+        return manual(rel, 'agent_yaml:skills')
+      }
+      const had = new Set((a.skills as unknown[] | undefined ?? []).map(String))
+      const added = (b.skills as unknown[] | undefined ?? []).map(String).find((s) => !had.has(s))
+      if (added) return manual(rel, `agent_yaml:skills+${added}`)
       continue
     }
     if (key === 'model') {

@@ -75,19 +75,24 @@ export function queueApply(db: EvoDb, input: QueueApplyInput): QueueApplyResult 
  * dying silently. Only for failures before publish — a syncing apply that
  * gives up may have half-written main and keeps its run approved for the
  * operator (ticker markTimeouts writes that case directly).
- * `onlyIfStatus` guards against a state the caller didn't observe.
+ * `onlyIfStatus` / `onlyIfAttempts` guard against a state the caller didn't
+ * observe — a wrapper passes its claim so a re-claimed row isn't failed by
+ * the stale process.
  */
 export function failApply(db: EvoDb, applyId: string, input: {
   status: 'failed' | 'timeout'
   failureReason: string
   onlyIfStatus?: string
+  onlyIfAttempts?: number
 }): { failed: boolean; revertedRunIds: string[] } {
   return db.transaction((tx) => {
     const rows = tx.update(evolutionApplies)
       .set({ status: input.status, failureReason: input.failureReason, completedAt: Date.now() })
-      .where(input.onlyIfStatus
-        ? and(eq(evolutionApplies.id, applyId), eq(evolutionApplies.status, input.onlyIfStatus))
-        : eq(evolutionApplies.id, applyId))
+      .where(and(
+        eq(evolutionApplies.id, applyId),
+        input.onlyIfStatus !== undefined ? eq(evolutionApplies.status, input.onlyIfStatus) : undefined,
+        input.onlyIfAttempts !== undefined ? eq(evolutionApplies.attempts, input.onlyIfAttempts) : undefined,
+      ))
       .returning({ approvedBy: evolutionApplies.approvedBy, sourceRunIds: evolutionApplies.sourceRunIds })
       .all()
     if (rows.length === 0) return { failed: false, revertedRunIds: [] }

@@ -9,9 +9,11 @@
  * a workspace agents/<id>/ (skills/, prompts/) dir overrides global wholesale,
  * so an emptied one left behind would hide the global agent. A dir someone
  * has since put files in is kept and reported.
- * A main file that no longer hashes to the manifest's `after` was edited (or
- * deleted) since — a conflict, refused unless the caller forces it. Older
- * manifests carry no hashes, so every file there reads `unverified`.
+ * A main file already back at its pre-apply state (hash = `before`, or a
+ * `new` file that is gone) is skipped. One that no longer hashes to `after`
+ * was edited (or deleted) since — a conflict, refused unless the caller
+ * forces it. Older manifests carry no hashes, so their files read
+ * `unverified`. A backup that doesn't hash to `before` is never restored.
  *
  * All fs work is synchronous with no await in between, so the in-process
  * ticker can't interleave a spawn on the same workspace mid-rollback.
@@ -43,8 +45,9 @@ export interface ApplyManifest {
   createdDirs?: string[]
 }
 
-export type RollbackFileState = 'clean' | 'modified' | 'missing' | 'unverified'
-export type RollbackConflictState = Exclude<RollbackFileState, 'clean'>
+/** `reverted` = main already holds the pre-apply state; nothing to do. */
+export type RollbackFileState = 'clean' | 'reverted' | 'modified' | 'missing' | 'unverified'
+export type RollbackConflictState = Exclude<RollbackFileState, 'clean' | 'reverted'>
 export interface RollbackFile { rel: string; kind: ManifestFile['kind']; state: RollbackFileState }
 
 export type RollbackResult =
@@ -52,6 +55,7 @@ export type RollbackResult =
   | { ok: false; error: 'not_found' }
   | { ok: false; error: 'not_applied' | 'apply_in_flight' | 'no_snapshot' }
   | { ok: false; error: 'conflict'; conflicts: Array<{ rel: string; reason: RollbackConflictState }> }
+  | { ok: false; error: 'backup_mismatch'; files: string[] }
 
 export function sha256File(file: string): string {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -78,9 +82,13 @@ export function inspectRollback(workspacePath: string, applyId: string): { manif
     const target = path.resolve(mainHalo, f.rel)
     if (f.kind === 'overwrite' && !fs.existsSync(path.join(historyDir, f.rel))) return null
     let state: RollbackFileState
-    if (!fs.existsSync(target)) state = 'missing'
-    else if (typeof f.after !== 'string') state = 'unverified'
-    else state = sha256File(target) === f.after ? 'clean' : 'modified'
+    if (!fs.existsSync(target)) state = f.kind === 'new' ? 'reverted' : 'missing'
+    else {
+      const hash = typeof f.after === 'string' || typeof f.before === 'string' ? sha256File(target) : null
+      if (hash !== null && hash === f.after) state = 'clean'
+      else if (hash !== null && hash === f.before) state = 'reverted'
+      else state = typeof f.after === 'string' ? 'modified' : 'unverified'
+    }
     files.push({ rel: f.rel, kind: f.kind, state })
   }
   return { manifest, files }
@@ -102,17 +110,27 @@ export function rollbackApply(db: EvoDb, applyId: string, opts: { force?: boolea
   const inspected = inspectRollback(apply.workspacePath, applyId)
   if (!inspected) return { ok: false, error: 'no_snapshot' }
   const conflicts = inspected.files
-    .filter((f): f is RollbackFile & { state: RollbackConflictState } => f.state !== 'clean')
+    .filter((f): f is RollbackFile & { state: RollbackConflictState } => f.state !== 'clean' && f.state !== 'reverted')
     .map((f) => ({ rel: f.rel, reason: f.state }))
   if (conflicts.length > 0 && !opts.force) return { ok: false, error: 'conflict', conflicts }
 
   const mainHalo = wsHaloDir(apply.workspacePath)
   const historyDir = wsEvoHistoryDir(apply.workspacePath, applyId)
   const preDir = wsEvoRollbackPreDir(apply.workspacePath, applyId)
+  const todo = inspected.files.filter((f) => f.state !== 'reverted')
+  // A backup that isn't what main held before the publish would "restore"
+  // something else — refused even with force, before anything is written.
+  const beforeOf = new Map(inspected.manifest.files.map((f) => [f.rel, f.before]))
+  const badBackups = todo.filter((f) => {
+    const before = beforeOf.get(f.rel)
+    return f.kind === 'overwrite' && typeof before === 'string' && sha256File(path.join(historyDir, f.rel)) !== before
+  }).map((f) => f.rel)
+  if (badBackups.length > 0) return { ok: false, error: 'backup_mismatch', files: badBackups }
+
   // Keep what main holds right now before overwriting it — on a forced
   // rollback that is someone's later edit. First write wins, so a retry
   // after a crash mid-loop keeps the true pre-rollback state.
-  for (const f of inspected.files) {
+  for (const f of todo) {
     const src = path.join(mainHalo, f.rel)
     const dst = path.join(preDir, f.rel)
     if (!fs.existsSync(src) || fs.existsSync(dst)) continue
@@ -121,7 +139,7 @@ export function rollbackApply(db: EvoDb, applyId: string, opts: { force?: boolea
   }
   const restored: string[] = []
   const removed: string[] = []
-  for (const f of inspected.files) {
+  for (const f of todo) {
     const target = path.join(mainHalo, f.rel)
     if (f.kind === 'overwrite') {
       fs.mkdirSync(path.dirname(target), { recursive: true })
@@ -150,7 +168,7 @@ export function rollbackApply(db: EvoDb, applyId: string, opts: { force?: boolea
   fs.writeFileSync(path.join(historyDir, 'ROLLBACK.json'), JSON.stringify({
     rolledBackAt: new Date(now).toISOString(),
     force: !!opts.force,
-    files: inspected.files.map((f) => ({ ...f, action: f.kind === 'overwrite' ? 'restored' : 'removed' })),
+    files: inspected.files.map((f) => ({ ...f, action: f.state === 'reverted' ? 'skipped' : f.kind === 'overwrite' ? 'restored' : 'removed' })),
     removedDirs,
     keptDirs,
   }, null, 2), 'utf-8')

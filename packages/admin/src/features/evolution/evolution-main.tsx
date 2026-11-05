@@ -187,7 +187,11 @@ function RunDetailPane({ id }: { id: string }) {
         if (!(await confirmAction(t('evolution.rollback.confirmForce', { files })))) return
         res = await api.evolution.rollback(applyId, true)
       }
-      if (!res.ok) alert(t('evolution.rollback.failed', { error: res.error }))
+      if (!res.ok) {
+        alert(res.error === 'backup_mismatch'
+          ? t('evolution.rollback.backupMismatch', { files: (res.files ?? []).join('\n') })
+          : t('evolution.rollback.failed', { error: res.error }))
+      }
       await refresh()
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err))

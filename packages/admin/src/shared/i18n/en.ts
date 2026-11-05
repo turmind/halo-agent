@@ -859,6 +859,7 @@ export const en: Record<string, string> = {
   'evolution.rollback.state.missing': 'deleted',
   'evolution.rollback.state.unverified': 'unverified (older manifest)',
   'evolution.rollback.failed': 'Rollback failed: {error}',
+  'evolution.rollback.backupMismatch': 'Rollback refused: these backups no longer match what main held before the apply, so restoring them would write something else:\n{files}',
   'evolution.rollback.unavailable': 'Rollback unavailable — this apply has no usable snapshot.',
   // Shared relative-time labels (shared/utils formatRelativeTime)
   'time.justNow': 'just now',

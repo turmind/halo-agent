@@ -859,6 +859,7 @@ export const zh: Record<string, string> = {
   'evolution.rollback.state.missing': '已删除',
   'evolution.rollback.state.unverified': '无法校验（旧版清单）',
   'evolution.rollback.failed': '回滚失败：{error}',
+  'evolution.rollback.backupMismatch': '拒绝回滚：以下备份和应用前主工作区的内容对不上，恢复后写回的不是原内容：\n{files}',
   'evolution.rollback.unavailable': '无法回滚：这次应用没有可用的快照。',
   // 共享相对时间标签(shared/utils formatRelativeTime)
   'time.justNow': '刚刚',

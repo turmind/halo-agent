@@ -141,6 +141,24 @@ describe('evolution routes: conditional approve / reject / retry', () => {
     expect((await post('/evolution/runs/r-rb/retry', { hint: 'again' })).status).toBe(200)
     expect(runStatus('r-rb')).toBe('pending')
   })
+
+  it('retry of an approved run: 409 while its latest apply is queued / live; 200 once it failed or timed out', async () => {
+    insertRun('r-ap', 'approved')
+    const apply = (id: string, status: string, createdAt: number) => db.insert(evolutionApplies)
+      .values({ id, workspacePath: '/ws', status, sourceRunIds: '["r-ap"]', createdAt }).run()
+    expect((await post('/evolution/runs/r-ap/retry', { hint: 'again' })).status).toBe(409)  // no apply at all
+    for (const [i, s] of ['pending', 'running', 'syncing'].entries()) {
+      apply(`a-${s}`, s, 10 + i)
+      expect((await post('/evolution/runs/r-ap/retry', { hint: 'again' })).status).toBe(409)
+      expect(runStatus('r-ap')).toBe('approved')
+    }
+    apply('a-failed', 'failed', 20)
+    expect((await post('/evolution/runs/r-ap/retry', { hint: 'again' })).status).toBe(200)
+    expect(runStatus('r-ap')).toBe('pending')
+    insertRun('r-ap2', 'approved')
+    db.insert(evolutionApplies).values({ id: 'a-to', workspacePath: '/ws', status: 'timeout', sourceRunIds: '["r-ap2"]', createdAt: 1 }).run()
+    expect((await post('/evolution/runs/r-ap2/retry', { hint: 'again' })).status).toBe(200)
+  })
 })
 
 describe('evo-db migration v1', () => {

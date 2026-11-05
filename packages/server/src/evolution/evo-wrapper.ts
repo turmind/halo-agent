@@ -53,7 +53,7 @@ import {
 import { config, evoLevelRank } from '../config.js'
 import { cleanChildEnv } from '../child-env.js'
 import {
-  AUTO_APPLY_FILE, categoryGate, classifyChanges, collectChanges, evaluateSandbox, readObservation, readScore,
+  AUTO_APPLY_FILE, categoryGate, classifyChanges, evaluateSandbox, publishChanges, readObservation, readScore,
 } from './auto-apply.js'
 import { failApply, queueApply } from './queue-apply.js'
 import { sha256File, type ApplyManifest } from './rollback.js'
@@ -1228,6 +1228,9 @@ async function phaseScore(args: {
   // conversation context (and patch.md / dry-run-output.txt for what
   // was tested) — no session staging.
   const cliArgs = ['cli', '-a', '__score__', '-n', '-w', sandboxWs]
+  // Only the scorer may produce score.json: one already there (the drafter
+  // can write into runDir) would otherwise be read as the grade.
+  fs.rmSync(path.join(args.runDir, 'score.json'), { force: true })
   appendSubCliHeader(args.runDir, 'Phase C: __score__')
   const result = await spawnProc(
     resolveHaloCli(),
@@ -1323,9 +1326,9 @@ async function runMode(id: string, logFd: number): Promise<void> {
 
   try {
     const outcome = await phaseDraft(ctx)
-    markObservation(id, runDir, outcome, logFd)
+    markObservation(id, row.attempts, runDir, outcome, logFd)
     if (outcome === 'failed') {
-      finalize(id, 'failed', 'phase A: draft incomplete (drafter exited non-zero, or patch.md / target file missing or unchanged) — see run log', logFd)
+      finalize(id, row.attempts, 'failed', 'phase A: draft incomplete (drafter exited non-zero, or patch.md / target file missing or unchanged) — see run log', logFd)
       return
     }
     if (outcome === 'skipped') {
@@ -1333,24 +1336,24 @@ async function runMode(id: string, logFd: number): Promise<void> {
       // already exists in workspace). Skip phase B/C — no patch means
       // nothing to dry-run and nothing to score. Reviewer doesn't need
       // to approve / reject; the run is terminal.
-      finalize(id, 'skipped', null, logFd)
+      finalize(id, row.attempts, 'skipped', null, logFd)
       return
     }
 
     const dryRunOk = await phaseDryRun(ctx)
     if (!dryRunOk) {
-      finalize(id, 'failed', 'phase B: dry-run failed (fix budget exhausted)', logFd)
+      finalize(id, row.attempts, 'failed', 'phase B: dry-run failed (fix budget exhausted)', logFd)
       return
     }
 
     const scored = await phaseScore(ctx)
     if (!scored) {
-      finalize(id, 'failed', 'phase C: scorer did not produce score.json', logFd)
+      finalize(id, row.attempts, 'failed', 'phase C: scorer did not produce score.json', logFd)
       return
     }
 
     if (maybeAutoApply({ runId: id, workspacePath: row.workspacePath, runDir, attempts: row.attempts, sourceAccess: row.sourceAccess, logFd })) return
-    finalize(id, 'awaiting_review', null, logFd)
+    finalize(id, row.attempts, 'awaiting_review', null, logFd)
   } finally {
     clearInterval(hb)
   }
@@ -1358,10 +1361,10 @@ async function runMode(id: string, logFd: number): Promise<void> {
 
 /** Record whether the draft carries a `## Larger observation` (patch.md body,
  *  or .skip.md for a skipped run) so the admin list can flag it. */
-function markObservation(id: string, runDir: string, outcome: DraftOutcome, logFd: number): void {
+export function markObservation(id: string, attempts: number, runDir: string, outcome: DraftOutcome, logFd: number): void {
   // Always written: a re-run must not inherit the previous attempt's flag.
   const has = outcome !== 'failed' && readObservation(path.join(runDir, outcome === 'skipped' ? '.skip.md' : 'patch.md')) !== null
-  getEvoDb().update(evolutionRuns).set({ hasObservation: has }).where(eq(evolutionRuns.id, id)).run()
+  getEvoDb().update(evolutionRuns).set({ hasObservation: has }).where(ownsRun(id, attempts)).run()
   if (has) writeLog(logFd, `[wrapper] draft carries a Larger observation\n`)
 }
 
@@ -1414,14 +1417,26 @@ export function maybeAutoApply(args: { runId: string; workspacePath: string; run
  *   - 'awaiting_review' → patch produced, needs human approve/reject
  *   - 'skipped'         → evo decided no patch worth proposing (.skip.md)
  *   - 'failed'          → wrapper aborted (any phase couldn't produce
- *                          its expected outputs) */
-function finalize(id: string, status: 'awaiting_review' | 'skipped' | 'failed', failureReason: string | null, logFd: number): void {
+ *                          its expected outputs)
+ *  Written only while this wrapper still owns the run (see ownsRun). */
+export function finalize(id: string, attempts: number, status: 'awaiting_review' | 'skipped' | 'failed', failureReason: string | null, logFd: number): void {
   const now = Date.now()
-  getEvoDb().update(evolutionRuns)
+  const r = getEvoDb().update(evolutionRuns)
     .set({ status, failureReason, completedAt: now })
-    .where(eq(evolutionRuns.id, id))
+    .where(ownsRun(id, attempts))
     .run()
+  if (r.changes === 0) {
+    writeLog(logFd, `[wrapper] finalize skipped: run is no longer this wrapper's claim (re-claimed or moved on) — wanted status=${status}\n`)
+    return
+  }
   writeLog(logFd, `[wrapper] finalize: status=${status}${failureReason ? ` reason=${failureReason}` : ''}\n`)
+}
+
+/** This wrapper's claim on a run: still `running` at the attempt the ticker
+ *  spawned it for. A heartbeat gap lets the ticker requeue + re-claim the row
+ *  (attempts + 1) while this process lives on; its late writes must not land. */
+function ownsRun(id: string, attempts: number) {
+  return and(eq(evolutionRuns.id, id), eq(evolutionRuns.status, 'running'), eq(evolutionRuns.attempts, attempts))
 }
 
 // ---------------------------------------------------------------------------
@@ -1458,6 +1473,9 @@ interface ApplyRow {
   status: string
   /** 'reviewer' | 'auto' — auto applies get the phase-12 recheck. */
   approvedBy: string
+  /** The ticker's claim count for this spawn — part of the ownership check
+   *  on the terminal write. */
+  attempts: number
 }
 
 function loadApplyRow(id: string): ApplyRow {
@@ -1469,6 +1487,7 @@ function loadApplyRow(id: string): ApplyRow {
     reviewerHint: evolutionApplies.reviewerHint,
     status: evolutionApplies.status,
     approvedBy: evolutionApplies.approvedBy,
+    attempts: evolutionApplies.attempts,
   }).from(evolutionApplies).where(eq(evolutionApplies.id, id)).get()
   if (!row) throw new Error(`evolution_applies row not found: ${id}`)
   let sourceRunIds: string[]
@@ -1484,6 +1503,7 @@ function loadApplyRow(id: string): ApplyRow {
     reviewerHint: row.reviewerHint,
     status: row.status,
     approvedBy: row.approvedBy,
+    attempts: row.attempts,
   }
 }
 
@@ -1787,6 +1807,8 @@ async function phaseApplyRegress(ctx: ApplyCtx): Promise<{ allOk: boolean; outco
     // reasoning as the merge phase. The patched-and-merged prompt files
     // are already in there from phaseApplyMerge.
     const scoreSandboxWs = evoSandboxDir(ctx.applyDir)
+    // As in phase C: a score.json the apply agent left here is not a grade.
+    fs.rmSync(path.join(regressDir, 'score.json'), { force: true })
     const scoreRun = await spawnProc(
       resolveHaloCli(),
       ['cli', '-a', '__score__', '-n', '-w', scoreSandboxWs],
@@ -1834,13 +1856,20 @@ async function phaseApplyRegress(ctx: ApplyCtx): Promise<{ allOk: boolean; outco
   return { allOk, outcomes }
 }
 
-/** Terminal "failed" db write for apply mode. (The "applied" side lives
- *  in `finalizeApplied` below, which sets appliedAt and the matching
- *  source-run rows.) */
-function finalizeApply(applyId: string, status: 'failed', failureReason: string, logFd: number): void {
+/** Terminal "failed" db write for apply mode — only while the row is still
+ *  `running` at the attempt this wrapper was spawned on. A re-claimed row
+ *  belongs to the newer wrapper; a `syncing` one (a resume whose preflight
+ *  failed) may have half-written main, so it is left for the ticker's syncing
+ *  path, which fails it once retries run out and keeps the run approved.
+ *  (The "applied" side lives in `finalizeApplied` below.) */
+export function finalizeApply(applyId: string, attempts: number, failureReason: string, logFd: number): void {
   // failApply also sends an auto apply's source run back to awaiting_review.
-  const { revertedRunIds } = failApply(getEvoDb(), applyId, { status, failureReason })
-  writeLog(logFd, `[wrapper] finalize apply: status=${status} reason=${failureReason}${revertedRunIds.length ? ` (auto: ${revertedRunIds.join(', ')} back to awaiting_review)` : ''}\n`)
+  const { failed, revertedRunIds } = failApply(getEvoDb(), applyId, { status: 'failed', failureReason, onlyIfStatus: 'running', onlyIfAttempts: attempts })
+  if (!failed) {
+    writeLog(logFd, `[wrapper] finalize apply skipped: row is no longer running at attempt ${attempts} (re-claimed, or syncing — left to the ticker) — wanted failed: ${failureReason}\n`)
+    return
+  }
+  writeLog(logFd, `[wrapper] finalize apply: status=failed reason=${failureReason}${revertedRunIds.length ? ` (auto: ${revertedRunIds.join(', ')} back to awaiting_review)` : ''}\n`)
 }
 
 /**
@@ -1848,15 +1877,17 @@ function finalizeApply(applyId: string, status: 'failed', failureReason: string,
  * the MERGED sandbox would actually publish — the apply agent may touch files
  * the run's sandbox didn't — against the level read now (the user may have
  * lowered it since the run queued). The score gate isn't repeated: phase B'
- * already held the merge to the regression floor. null = may publish.
+ * already held the merge to the regression floor. Classifies the files
+ * preflight will publish (`changed`), not a fresh sandbox walk: publish never
+ * deletes, so a file the merge dropped must not read as a deletion.
+ * null = may publish.
  */
-export function autoApplyRecheck(workspacePath: string, applyDir: string): string | null {
-  const cls = classifyChanges(collectChanges({
+export function autoApplyRecheck(workspacePath: string, applyDir: string, changed: PreflightResult['changed']): string | null {
+  const cls = classifyChanges(publishChanges({
     mainHalo: wsHaloDir(workspacePath),
     globalHalo: globalDir(),
     sandboxHalo: evoSandboxHaloDir(applyDir),
-    entries: PUBLISH_WHITELIST,
-  }))
+  }, changed))
   return categoryGate(config.evolution.level, cls)
 }
 
@@ -1919,14 +1950,14 @@ async function applyMode(id: string, logFd: number): Promise<void> {
     if (!isResume) {
       const merged = await phaseApplyMerge(ctx)
       if (!merged.ok) {
-        finalizeApply(id, 'failed', `phase A': ${merged.reason}`, logFd)
+        finalizeApply(id, row.attempts, `phase A': ${merged.reason}`, logFd)
         return
       }
 
       const { allOk, outcomes } = await phaseApplyRegress(ctx)
       if (!allOk) {
         const regressedRuns = outcomes.filter((o) => o.regressed).map((o) => `${o.runId}(${o.reason ?? '?'})`).join('; ')
-        finalizeApply(id, 'failed', `phase B': regression in ${regressedRuns}`, logFd)
+        finalizeApply(id, row.attempts, `phase B': regression in ${regressedRuns}`, logFd)
         return
       }
     }
@@ -1947,16 +1978,16 @@ async function applyMode(id: string, logFd: number): Promise<void> {
     try {
       const preflight = await phaseApplyPreflight(ctx)
       if (!preflight.ok) {
-        finalizeApply(id, 'failed', `phase 12 preflight: ${preflight.reason}`, logFd)
+        finalizeApply(id, row.attempts, `phase 12 preflight: ${preflight.reason}`, logFd)
         return
       }
 
       // Auto applies only, before main is touched. Not on resume: that row
       // passed this gate before it was marked syncing.
       if (!isResume && row.approvedBy === 'auto') {
-        const blocked = autoApplyRecheck(ctx.workspacePath, applyDir)
+        const blocked = autoApplyRecheck(ctx.workspacePath, applyDir, preflight.result.changed)
         if (blocked) {
-          finalizeApply(id, 'failed', `auto_recheck:${blocked}`, logFd)
+          finalizeApply(id, row.attempts, `auto_recheck:${blocked}`, logFd)
           return
         }
         writeLog(logFd, `[wrapper] auto-apply recheck passed\n`)
@@ -2005,7 +2036,7 @@ async function applyMode(id: string, logFd: number): Promise<void> {
           .where(and(eq(evolutionApplies.id, id), eq(evolutionApplies.status, 'syncing')))
           .run()
       } else {
-        finalizeApply(id, 'failed', `phase 12: ${err instanceof Error ? err.message : String(err)}`, logFd)
+        finalizeApply(id, row.attempts, `phase 12: ${err instanceof Error ? err.message : String(err)}`, logFd)
       }
     }
   } finally {

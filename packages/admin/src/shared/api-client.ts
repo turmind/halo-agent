@@ -1233,8 +1233,8 @@ export const api = {
      *  throwing: `conflict` lists the files edited since the publish, which
      *  the caller confirms before re-sending with `force`. */
     async rollback(applyId: string, force = false): Promise<
-      | { ok: true; restored: string[]; removed: string[] }
-      | { ok: false; error: string; conflicts?: Array<{ rel: string; reason: string }> }
+      | { ok: true; restored: string[]; removed: string[]; removedDirs: string[]; keptDirs: string[] }
+      | { ok: false; error: string; conflicts?: Array<{ rel: string; reason: string }>; files?: string[] }
     > {
       const res = await fetch(`${API_BASE}/evolution/applies/${encodeURIComponent(applyId)}/rollback`, {
         method: 'POST',

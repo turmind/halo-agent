@@ -351,12 +351,23 @@ export function createEvolutionRoutes(): Hono {
   // Allowed from any status except 'running' (which would race the live
   // wrapper), 'pending' (already queued — nothing to retry) and 'applied'
   // (its change is live in main; roll it back first, which lands rolled_back).
+  // 'approved' only once its latest apply has failed / timed out — while that
+  // apply is queued or publishing, a reset would orphan it.
   router.post('/evolution/runs/:id/retry', async (c) => {
     const req = await readHintRequest(c)
     if ('error' in req) return c.json({ error: req.error }, req.status)
     const { id, hint, db, row } = req
     if (row.status === 'running' || row.status === 'pending' || row.status === 'applied') {
       return c.json({ error: `cannot retry run in status=${row.status}` }, 409)
+    }
+    if (row.status === 'approved') {
+      const latest = db.select({ status: evolutionApplies.status }).from(evolutionApplies)
+        .where(sql`exists (select 1 from json_each(${evolutionApplies.sourceRunIds}) where value = ${id})`)
+        .orderBy(desc(evolutionApplies.createdAt))
+        .get()
+      if (latest?.status !== 'failed' && latest?.status !== 'timeout') {
+        return c.json({ error: `cannot retry an approved run whose apply is ${latest?.status ?? 'missing'}` }, 409)
+      }
     }
     db.update(evolutionRuns)
       .set({
