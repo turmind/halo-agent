@@ -65,7 +65,7 @@ Two tabs:
 - **Chat**: the main chat panel
 - **Terminal**: xterm multi-tab terminal
 
-Current tab stored in `editorStore.bottomTab`.
+Current tab stored in `editorStore.bottomTab`, maximized state in `editorStore.bottomMaximized`; both persist in `localStorage` (`halo_bottom_tab`, `halo_bottom_maximized`) like the split view, so a refresh comes back on the same tab and still maximized.
 
 The middle of the tab bar shows the current tab's title — the session title on Chat ("New session" for a draft, "Untitled session" until it has one), the active terminal's name on Terminal. It is truncated with an ellipsis when it doesn't fit (full text on hover) and hidden when the bar is too narrow.
 

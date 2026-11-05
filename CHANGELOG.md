@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Bottom panel: a page refresh keeps the active tab (Chat or Terminal) and the maximized panel, instead of falling back to a docked Chat tab.
 - Chat path links: a CSV, Parquet or SQLite file outside the workspace now opens in its read-only tab instead of failing with "Path traversal not allowed".
 - Desktop: the `halo` command no longer prints Node's ExperimentalWarning (JSON modules) and punycode DeprecationWarning before its output. On Windows this applies after reinstalling or upgrading; on macOS re-run Install 'halo' Command from the app menu.
 

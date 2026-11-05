@@ -3,7 +3,8 @@ import { createElement, act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 /**
- * Contract (bottom panel split view): `bottomSplit` persists in localStorage;
+ * Contract (bottom panel split view): `bottomSplit` (and the active tab /
+ * maximized state) persist in localStorage;
  * the content width picks the split direction (< 720px stacks); entering the
  * split mounts the terminal; and toggling single ↔ split or flipping the
  * direction never remounts ChatPanel / TerminalPanel (chat state and the
@@ -99,6 +100,27 @@ describe('editor store bottomSplit', () => {
     store.getState().setBottomSplit(false)
     expect(localStorage.getItem('halo_bottom_split')).toBe('false')
     expect(createEditorStore().getState().bottomSplit).toBe(false)
+  })
+})
+
+describe('editor store bottomTab / bottomMaximized', () => {
+  it('default to chat / docked and persist in localStorage', async () => {
+    vi.resetModules()
+    const { createEditorStore } = await import('../src/shared/stores/editor-store')
+    const store = createEditorStore()
+    expect(store.getState().bottomTab).toBe('chat')
+    expect(store.getState().bottomMaximized).toBe(false)
+    store.getState().setBottomTab('terminal')
+    store.getState().setBottomMaximized(true)
+    expect(localStorage.getItem('halo_bottom_tab')).toBe('terminal')
+    expect(localStorage.getItem('halo_bottom_maximized')).toBe('true')
+    const restored = createEditorStore().getState()
+    expect(restored.bottomTab).toBe('terminal')
+    expect(restored.bottomMaximized).toBe(true)
+    store.getState().setBottomTab('chat')
+    store.getState().setBottomMaximized(false)
+    expect(createEditorStore().getState().bottomTab).toBe('chat')
+    expect(createEditorStore().getState().bottomMaximized).toBe(false)
   })
 })
 

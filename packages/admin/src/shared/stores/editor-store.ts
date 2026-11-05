@@ -121,6 +121,8 @@ interface EditorStore {
   fileTree: FileTreeNode | null
   modifiedPaths: Set<string>
   rejectedFile: string | null
+  /** Persisted in localStorage (`halo_bottom_tab`), like `bottomMaximized`
+   *  (`halo_bottom_maximized`) — a refresh keeps the panel as it was. */
   bottomTab: 'chat' | 'terminal'
   pendingTerminalCwd: string | null
   requestTerminalSpawn(cwd: string): void
@@ -291,10 +293,10 @@ export function createEditorStore() {
       fileTree: null,
       modifiedPaths: new Set(),
       rejectedFile: null,
-      bottomTab: 'chat',
+      bottomTab: typeof window !== 'undefined' && localStorage.getItem('halo_bottom_tab') === 'terminal' ? 'terminal' : 'chat',
       maximized: typeof window !== 'undefined' && localStorage.getItem('halo_editor_maximized') === 'true',
       bottomFloating: typeof window !== 'undefined' && sessionStorage.getItem('halo_bottom_floating') === 'true',
-      bottomMaximized: false,
+      bottomMaximized: typeof window !== 'undefined' && localStorage.getItem('halo_bottom_maximized') === 'true',
       pendingReveal: null,
       bottomSplit: typeof window !== 'undefined' && localStorage.getItem('halo_bottom_split') === 'true',
       bottomFloatRect: (() => {
@@ -630,6 +632,9 @@ export function createEditorStore() {
       },
 
       setBottomTab(tab) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('halo_bottom_tab', tab)
+        }
         set({ bottomTab: tab })
       },
 
@@ -668,6 +673,9 @@ export function createEditorStore() {
       },
 
       setBottomMaximized(value) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('halo_bottom_maximized', String(value))
+        }
         set({ bottomMaximized: value })
       },
 
