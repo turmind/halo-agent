@@ -192,6 +192,7 @@ function broadcastChanges(): void {
  *
  * `attempts` is bumped on each `pending → running` claim (see claimRun /
  * claimApply), so the count we read here already includes the failed attempt.
+ * A run's budget counts from `attempts_base` (the latest reviewer retry).
  */
 function markTimeouts(): void {
   const db = getEvoDb()
@@ -208,6 +209,7 @@ function markTimeouts(): void {
     heartbeatAt: evolutionRuns.heartbeatAt,
     startedAt: evolutionRuns.startedAt,
     attempts: evolutionRuns.attempts,
+    attemptsBase: evolutionRuns.attemptsBase,
   })
     .from(evolutionRuns)
     .where(eq(evolutionRuns.status, 'running'))
@@ -215,18 +217,19 @@ function markTimeouts(): void {
   for (const r of runRows) {
     const lastSign = r.heartbeatAt ?? r.startedAt ?? 0
     if (lastSign < runCutoff) {
-      if (r.attempts >= maxAttempts) {
+      const used = r.attempts - r.attemptsBase
+      if (used >= maxAttempts) {
         db.update(evolutionRuns)
-          .set({ status: 'timeout', failureReason: `heartbeat lost (gave up after ${r.attempts} attempts)`, completedAt: now })
+          .set({ status: 'timeout', failureReason: `heartbeat lost (gave up after ${used} attempts)`, completedAt: now })
           .where(and(eq(evolutionRuns.id, r.id), eq(evolutionRuns.status, 'running')))
           .run()
-        console.warn(`[EvoTicker] run ${r.id} exhausted retries (${r.attempts}); marking timeout`)
+        console.warn(`[EvoTicker] run ${r.id} exhausted retries (${used}); marking timeout`)
       } else {
         db.update(evolutionRuns)
           .set({ status: 'pending', startedAt: null, heartbeatAt: null })
           .where(and(eq(evolutionRuns.id, r.id), eq(evolutionRuns.status, 'running')))
           .run()
-        console.warn(`[EvoTicker] run ${r.id} heartbeat lost (attempt ${r.attempts}/${maxAttempts}); requeued`)
+        console.warn(`[EvoTicker] run ${r.id} heartbeat lost (attempt ${used}/${maxAttempts}); requeued`)
       }
     }
   }
@@ -237,6 +240,7 @@ function markTimeouts(): void {
     heartbeatAt: evolutionApplies.heartbeatAt,
     startedAt: evolutionApplies.startedAt,
     attempts: evolutionApplies.attempts,
+    failureReason: evolutionApplies.failureReason,
   })
     .from(evolutionApplies)
     // Two states "look in-flight": 'running' (normal full apply pipeline)
@@ -257,8 +261,11 @@ function markTimeouts(): void {
         // resetting attempts and clearing heartbeat) or roll back from
         // history/.
         const newStatus = r.status === 'syncing' ? 'failed' : 'timeout'
+        // A syncing wrapper that failed on its own (preflight / publish threw)
+        // recorded why before releasing the row (evo-wrapper releaseSyncing);
+        // claimSyncingResume clears it, so a set one is this attempt's.
         const reason = r.status === 'syncing'
-          ? `heartbeat lost mid-publish (${r.attempts} attempts); main may be half-applied — see history/apply-${r.id}/`
+          ? `${r.failureReason ?? 'heartbeat lost mid-publish'} (${r.attempts} attempts); main may be half-applied — see history/apply-${r.id}/`
           : `heartbeat lost (gave up after ${r.attempts} attempts)`
         if (r.status === 'syncing') {
           db.update(evolutionApplies)
@@ -452,6 +459,7 @@ function claimSyncingResume(id: string): boolean {
       startedAt: now,
       heartbeatAt: now,
       attempts: sql`${evolutionApplies.attempts} + 1`,
+      failureReason: null,
     })
     .where(and(
       eq(evolutionApplies.id, id),

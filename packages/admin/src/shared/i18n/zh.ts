@@ -837,6 +837,7 @@ export const zh: Record<string, string> = {
   'evolution.auto.failed': '已自动批准，但应用失败，主工作区未改动，run 已退回待审核。',
   'evolution.auto.notApplied': '未自动应用（{level}）：{reason}',
   'evolution.auto.reason.level': '能力类改动（agent.yaml / SKILL.md frontmatter）只在 L3 自动应用。',
+  'evolution.auto.reason.source_access_unrecorded': '入队时未记录源会话的权限（该 run 早于这项检查），只有 full 会话的对话内容才能不经审核改动提示词。',
   'evolution.auto.reason.source_access': '源会话不是 full 权限（{access}），只有 full 会话的对话内容才能不经审核改动提示词。',
   'evolution.auto.reason.no_effective_change': '与当前工作区相比没有实际改动。',
   'evolution.auto.reason.category_manual': '{detail} 必须人工审核。',
@@ -859,6 +860,7 @@ export const zh: Record<string, string> = {
   'evolution.rollback.state.missing': '已删除',
   'evolution.rollback.state.unverified': '无法校验（旧版清单）',
   'evolution.rollback.failed': '回滚失败：{error}',
+  'evolution.rollback.keptDirs': '已回滚。以下目录在应用之后被放进了其他文件，所以保留下来；它们会继续覆盖 global 中同名的 agent / skill / prompts：\n{dirs}',
   'evolution.rollback.backupMismatch': '拒绝回滚：以下备份和应用前主工作区的内容对不上，恢复后写回的不是原内容：\n{files}',
   'evolution.rollback.unavailable': '无法回滚：这次应用没有可用的快照。',
   // 共享相对时间标签(shared/utils formatRelativeTime)

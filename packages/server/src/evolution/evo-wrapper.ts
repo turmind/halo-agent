@@ -42,7 +42,7 @@ import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, inArray } from 'drizzle-orm'
 import YAML from 'yaml'
 import { createEvoDb, evolutionRuns, evolutionApplies, setEvoDb, getEvoDb } from '../db/evo-db.js'
 import {
@@ -138,7 +138,7 @@ function parseCli(argv: string[]): CliArgs {
 }
 
 /** Read the row's static metadata. The ticker has already set status=running. */
-function loadRunRow(id: string): {
+interface RunRow {
   id: string
   workspacePath: string
   triggerKind: string
@@ -146,7 +146,9 @@ function loadRunRow(id: string): {
   userHint: string | null
   attempts: number
   sourceAccess: string | null
-} {
+}
+
+function loadRunRow(id: string): RunRow {
   const db = getEvoDb()
   const row = db.select({
     id: evolutionRuns.id,
@@ -1287,8 +1289,8 @@ function resetRunArtifacts(runDir: string, logFd: number): void {
   }
 }
 
-async function runMode(id: string, logFd: number): Promise<void> {
-  const row = loadRunRow(id)
+async function runMode(row: RunRow, logFd: number): Promise<void> {
+  const { id } = row
   const runDir = wsEvoRunDir(row.workspacePath, id)
   fs.mkdirSync(runDir, { recursive: true })
   // A re-run (reviewer retry or heartbeat-timeout re-claim) reuses this
@@ -1976,42 +1978,7 @@ async function applyMode(id: string, logFd: number): Promise<void> {
     // load-bearing assumption phase 12 makes about the rest of the
     // system.
     try {
-      const preflight = await phaseApplyPreflight(ctx)
-      if (!preflight.ok) {
-        finalizeApply(id, row.attempts, `phase 12 preflight: ${preflight.reason}`, logFd)
-        return
-      }
-
-      // Auto applies only, before main is touched. Not on resume: that row
-      // passed this gate before it was marked syncing.
-      if (!isResume && row.approvedBy === 'auto') {
-        const blocked = autoApplyRecheck(ctx.workspacePath, applyDir, preflight.result.changed)
-        if (blocked) {
-          finalizeApply(id, row.attempts, `auto_recheck:${blocked}`, logFd)
-          return
-        }
-        writeLog(logFd, `[wrapper] auto-apply recheck passed\n`)
-      }
-
-      // Move into the danger zone: from this write onward, a crash leaves
-      // the row in 'syncing' state and ticker recovery does the rest.
-      // Skip when we're already a resume (no point flipping syncing →
-      // syncing); but harmless if we did.
-      if (!isResume) markSyncing(id, logFd)
-
-      await phaseApplyPublish(ctx, preflight.result)
-
-      // Mark source runs as applied. (Apply row already moves to
-      // 'applied' inside finalizeApplied below, with appliedAt.)
-      for (const runId of ctx.sourceRunIds) {
-        getEvoDb().update(evolutionRuns)
-          .set({ status: 'applied', appliedAt: Date.now() })
-          .where(eq(evolutionRuns.id, runId))
-          .run()
-      }
-      finalizeApplied(id, logFd)
-      writeLog(logFd, `[wrapper] phase 12: published ${preflight.result.fileCount} files to main; history snapshot at ${preflight.result.historyDir}\n`)
-      writeLog(logFd, `[wrapper] note: no explicit session-release step needed. Halo's SessionManager evicts every session from the in-memory cache as soon as its current message turn finishes (runSession's finally block). The next message — channel reply, web reload, /new — runs ensureSession → buildAgentInstance, which re-reads agent.yaml + INSTRUCTIONS.md + USER.md from disk. So the new prompts kick in on the next turn for free, and currently-running turns finish on the old prompts (which is the right behavior — we don't want to abort a user mid-conversation).\n`)
+      await phase12Sync(ctx, row, isResume)
     } catch (err) {
       // Read current status to decide what kind of failure this was. If
       // we already passed `markSyncing` (status='syncing'), main may be
@@ -2027,14 +1994,8 @@ async function applyMode(id: string, logFd: number): Promise<void> {
         .where(eq(evolutionApplies.id, id))
         .get()?.status
       if (currentStatus === 'syncing') {
-        writeLog(logFd, `[wrapper] phase 12 publish threw (${err instanceof Error ? err.message : String(err)}); leaving status='syncing' so ticker can resume — main may be half-applied\n`)
-        // Don't overwrite. Wrapper exits, heartbeat stops, ticker takes
-        // over. Bonus: clear started_at/heartbeat now so ticker doesn't
-        // have to wait the full timeout window before recovering.
-        getEvoDb().update(evolutionApplies)
-          .set({ startedAt: null, heartbeatAt: null })
-          .where(and(eq(evolutionApplies.id, id), eq(evolutionApplies.status, 'syncing')))
-          .run()
+        // Don't overwrite. Wrapper exits, heartbeat stops, ticker takes over.
+        releaseSyncing(id, row.attempts, `phase 12 publish: ${err instanceof Error ? err.message : String(err)}`, logFd)
       } else {
         finalizeApply(id, row.attempts, `phase 12: ${err instanceof Error ? err.message : String(err)}`, logFd)
       }
@@ -2042,6 +2003,50 @@ async function applyMode(id: string, logFd: number): Promise<void> {
   } finally {
     clearInterval(hb)
   }
+}
+
+/**
+ * Phase 12 tail of an apply (preflight → auto re-check → checkpoint →
+ * publish → finalize), for a fresh claim (`running`) or a resume
+ * (`syncing`). Every db write is conditional on this wrapper's claim
+ * (status + attempts): a wrapper that froze past apply_timeout and woke
+ * after a re-claim shares the applyDir with the new owner, so it must stop
+ * before touching main (the markSyncing write) and must not stamp the
+ * result (finalizeApplied).
+ */
+export async function phase12Sync(ctx: ApplyCtx, row: Pick<ApplyRow, 'attempts' | 'approvedBy'>, isResume: boolean): Promise<void> {
+  const { applyId: id, logFd } = ctx
+  const preflight = await phaseApplyPreflight(ctx)
+  if (!preflight.ok) {
+    const reason = `phase 12 preflight: ${preflight.reason}`
+    // A resume's row is syncing (main may be half-published): the ticker
+    // owns its terminal state, but needn't wait out the heartbeat.
+    if (isResume) releaseSyncing(id, row.attempts, reason, logFd)
+    else finalizeApply(id, row.attempts, reason, logFd)
+    return
+  }
+
+  // Auto applies only, before main is touched. Not on resume: that row
+  // passed this gate before it was marked syncing.
+  if (!isResume && row.approvedBy === 'auto') {
+    const blocked = autoApplyRecheck(ctx.workspacePath, ctx.applyDir, preflight.result.changed)
+    if (blocked) {
+      finalizeApply(id, row.attempts, `auto_recheck:${blocked}`, logFd)
+      return
+    }
+    writeLog(logFd, `[wrapper] auto-apply recheck passed\n`)
+  }
+
+  // Move into the danger zone: from this write onward, a crash leaves the
+  // row in 'syncing' state and ticker recovery does the rest. On a resume
+  // it only re-confirms the claim.
+  if (!markSyncing(id, isResume ? 'syncing' : 'running', row.attempts, logFd)) return
+
+  await phaseApplyPublish(ctx, preflight.result)
+
+  if (!finalizeApplied(id, row.attempts, ctx.sourceRunIds, logFd)) return
+  writeLog(logFd, `[wrapper] phase 12: published ${preflight.result.fileCount} files to main; history snapshot at ${preflight.result.historyDir}\n`)
+  writeLog(logFd, `[wrapper] note: no explicit session-release step needed. Halo's SessionManager evicts every session from the in-memory cache as soon as its current message turn finishes (runSession's finally block). The next message — channel reply, web reload, /new — runs ensureSession → buildAgentInstance, which re-reads agent.yaml + INSTRUCTIONS.md + USER.md from disk. So the new prompts kick in on the next turn for free, and currently-running turns finish on the old prompts (which is the right behavior — we don't want to abort a user mid-conversation).\n`)
 }
 
 /**
@@ -2218,15 +2223,41 @@ function dirsCreatedBy(mainHalo: string, newFiles: string[]): string[] {
   return [...dirs].sort((a, b) => b.split(path.sep).length - a.split(path.sep).length || (a < b ? -1 : 1))
 }
 
-/** Mark the apply row entering the "publish" step. After this write, a
- *  wrapper crash leaves the row in 'syncing' state; ticker recovery
- *  detects this and jumps a new wrapper to the publish step. */
-function markSyncing(applyId: string, logFd: number): void {
-  getEvoDb().update(evolutionApplies)
-    .set({ status: 'syncing' })
-    .where(eq(evolutionApplies.id, applyId))
+/** This wrapper's claim on an apply: still `status` at the attempt the
+ *  ticker spawned it for (claimApply / claimSyncingResume bump attempts). */
+function ownsApply(id: string, status: 'running' | 'syncing', attempts: number) {
+  return and(eq(evolutionApplies.id, id), eq(evolutionApplies.status, status), eq(evolutionApplies.attempts, attempts))
+}
+
+/** Mark the apply row entering the "publish" step — `running → syncing`,
+ *  or on a resume (`from: 'syncing'`) a heartbeat that re-confirms the
+ *  claim. After this write, a wrapper crash leaves the row in 'syncing'
+ *  state; ticker recovery jumps a new wrapper to the publish step.
+ *  false = not this wrapper's claim any more: main must not be touched. */
+export function markSyncing(applyId: string, from: 'running' | 'syncing', attempts: number, logFd: number): boolean {
+  const r = getEvoDb().update(evolutionApplies)
+    .set(from === 'running' ? { status: 'syncing', heartbeatAt: Date.now() } : { heartbeatAt: Date.now() })
+    .where(ownsApply(applyId, from, attempts))
     .run()
+  if (r.changes === 0) {
+    writeLog(logFd, `[wrapper] checkpoint refused: apply is no longer ${from} at attempt ${attempts} (re-claimed) — not publishing\n`)
+    return false
+  }
   writeLog(logFd, `[wrapper] checkpoint: status=syncing (publishing main)\n`)
+  return true
+}
+
+/** Hand a `syncing` row back to the ticker now instead of after the
+ *  heartbeat timeout: clear started/heartbeat (the resume pool's marker)
+ *  and record why, which the ticker keeps if retries run out. */
+function releaseSyncing(applyId: string, attempts: number, reason: string, logFd: number): void {
+  const r = getEvoDb().update(evolutionApplies)
+    .set({ startedAt: null, heartbeatAt: null, failureReason: reason })
+    .where(ownsApply(applyId, 'syncing', attempts))
+    .run()
+  writeLog(logFd, r.changes === 0
+    ? `[wrapper] ${reason}; row is no longer this wrapper's syncing claim — left alone\n`
+    : `[wrapper] ${reason}; leaving status='syncing' for the ticker to resume — main may be half-applied\n`)
 }
 
 /** Recursive directory walker — pushes relative paths (relative to the
@@ -2262,13 +2293,26 @@ function walkInto(absPath: string, relPath: string, out: Array<{ rel: string; fu
  *   - `rolled_back` — an `applied` row undone by the rollback route
  *                     (evolution/rollback.ts); its source runs follow
  */
-function finalizeApplied(applyId: string, logFd: number): void {
+export function finalizeApplied(applyId: string, attempts: number, sourceRunIds: string[], logFd: number): boolean {
   const now = Date.now()
-  getEvoDb().update(evolutionApplies)
-    .set({ status: 'applied', completedAt: now })
-    .where(eq(evolutionApplies.id, applyId))
-    .run()
-  writeLog(logFd, `[wrapper] finalize apply: status=applied\n`)
+  // One transaction, conditional on the claim: a wrapper re-claimed while
+  // it published must not stamp the apply or its runs.
+  const ok = getEvoDb().transaction((tx) => {
+    const r = tx.update(evolutionApplies)
+      .set({ status: 'applied', completedAt: now, failureReason: null })
+      .where(ownsApply(applyId, 'syncing', attempts))
+      .run()
+    if (r.changes === 0) return false
+    tx.update(evolutionRuns)
+      .set({ status: 'applied', appliedAt: now })
+      .where(and(inArray(evolutionRuns.id, sourceRunIds), eq(evolutionRuns.status, 'approved')))
+      .run()
+    return true
+  })
+  writeLog(logFd, ok
+    ? `[wrapper] finalize apply: status=applied\n`
+    : `[wrapper] finalize apply skipped: row is no longer syncing at attempt ${attempts} (re-claimed)\n`)
+  return ok
 }
 
 function writeLog(fd: number, msg: string): void {
@@ -2290,26 +2334,26 @@ async function main(): Promise<void> {
   const { fd, logPath } = openLogFor(mode, id)
   writeLog(fd, `\n=== ${new Date().toISOString()} wrapper start mode=${mode} id=${id} pid=${process.pid} ===\n`)
 
+  // The run claim this wrapper holds (null until the row is read).
+  let runAttempts: number | null = null
   try {
-    if (mode === 'run') await runMode(id, fd)
-    else await applyMode(id, fd)
+    if (mode === 'run') {
+      const row = loadRunRow(id)
+      runAttempts = row.attempts
+      await runMode(row, fd)
+    } else await applyMode(id, fd)
     writeLog(fd, `[wrapper] done; log: ${logPath}\n`)
     process.exit(0)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     writeLog(fd, `[wrapper] fatal: ${msg}\n`)
     try {
-      const now = Date.now()
-      // Run mode only. An apply-mode crash that escaped finalizeApply
-      // deliberately leaves the row in running/syncing: the ticker reclaims it
-      // on heartbeat loss (recovery delay = applyTimeoutMinutes) and that path
-      // also rolls the sandbox back, which a bare status flip here would skip.
-      if (mode === 'run') {
-        getEvoDb().update(evolutionRuns)
-          .set({ status: 'failed', failureReason: `wrapper crash: ${msg}`, completedAt: now })
-          .where(eq(evolutionRuns.id, id))
-          .run()
-      }
+      // Run mode only, and only while this wrapper still owns the run. An
+      // apply-mode crash that escaped finalizeApply deliberately leaves the
+      // row in running/syncing: the ticker reclaims it on heartbeat loss
+      // (recovery delay = applyTimeoutMinutes) and that path also rolls the
+      // sandbox back, which a bare status flip here would skip.
+      if (mode === 'run' && runAttempts !== null) finalize(id, runAttempts, 'failed', `wrapper crash: ${msg}`, fd)
     } catch { /* fall through */ }
     process.exit(1)
   }

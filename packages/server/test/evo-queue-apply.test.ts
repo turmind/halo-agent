@@ -6,6 +6,9 @@ import Database from 'better-sqlite3'
 import { eq } from 'drizzle-orm'
 import { createEvoDb, setEvoDb, evolutionRuns, evolutionApplies, type EvoDb } from '../src/db/evo-db.js'
 import { queueApply } from '../src/evolution/queue-apply.js'
+import { runTick, setEvoSpawner } from '../src/evolution/ticker.js'
+import { config } from '../src/config.js'
+import { vi } from 'vitest'
 import { createEvolutionRoutes } from '../src/routes/evolution.js'
 import { parseEvoLevel, evoLevelRank } from '../src/config.js'
 
@@ -159,6 +162,35 @@ describe('evolution routes: conditional approve / reject / retry', () => {
     db.insert(evolutionApplies).values({ id: 'a-to', workspacePath: '/ws', status: 'timeout', sourceRunIds: '["r-ap2"]', createdAt: 1 }).run()
     expect((await post('/evolution/runs/r-ap2/retry', { hint: 'again' })).status).toBe(200)
   })
+
+  it('retry keeps attempts monotonic (no ABA for a stale wrapper) and restarts the budget from attempts_base', async () => {
+    insertRun('r-t', 'timeout', 3)
+    expect((await post('/evolution/runs/r-t/retry', { hint: 'again' })).status).toBe(200)
+    const row = db.select().from(evolutionRuns).where(eq(evolutionRuns.id, 'r-t')).get()!
+    expect(row).toMatchObject({ status: 'pending', attempts: 3, attemptsBase: 3 })
+    // The UI's "N attempts" counts this round only.
+    const detail = await createEvolutionRoutes().request('/evolution/runs/r-t')
+    expect(((await detail.json()) as { run: { attempts: number } }).run.attempts).toBe(0)
+
+    // Each tick: claim (attempts + 1), then a dead heartbeat. The new round
+    // gets the full budget again (3), not 0 left.
+    vi.spyOn(config.evolution, 'maxAttempts', 'get').mockReturnValue(3)
+    vi.spyOn(config.evolution, 'runTimeoutMinutes', 'get').mockReturnValue(1)
+    const spawned: string[] = []
+    setEvoSpawner((_m, id) => {
+      spawned.push(id)
+      db.update(evolutionRuns).set({ startedAt: 1, heartbeatAt: 1 }).where(eq(evolutionRuns.id, id)).run()
+    })
+    try {
+      for (let i = 0; i < 4; i++) await runTick()
+      expect(spawned).toEqual(['r-t', 'r-t', 'r-t'])
+      expect(db.select().from(evolutionRuns).where(eq(evolutionRuns.id, 'r-t')).get()).toMatchObject({
+        status: 'timeout', attempts: 6, failureReason: 'heartbeat lost (gave up after 3 attempts)',
+      })
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
 })
 
 describe('evo-db migration v1', () => {
@@ -192,8 +224,9 @@ describe('evo-db migration v1', () => {
       const run = migrated.select().from(evolutionRuns).where(eq(evolutionRuns.id, 'r-old')).get()!
       expect(run.sourceAccess).toBeNull()
       expect(run.hasObservation).toBe(false)
+      expect(run.attemptsBase).toBe(0)  // v2
       const raw = new Database(path.join(dir, 'evo.db'))
-      expect(raw.pragma('user_version', { simple: true })).toBe(1)
+      expect(raw.pragma('user_version', { simple: true })).toBe(2)
       raw.close()
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })

@@ -8,7 +8,10 @@ import {
   parseScore, extractLargerObservation, evaluateSandbox, OBSERVATION_MAX_CHARS,
   type FileChange, type EvoScore,
 } from '../src/evolution/auto-apply.js'
-import { maybeAutoApply, autoApplyRecheck, finalize, finalizeApply, markObservation, PUBLISH_WHITELIST } from '../src/evolution/evo-wrapper.js'
+import {
+  maybeAutoApply, autoApplyRecheck, finalize, finalizeApply, finalizeApplied, markObservation, markSyncing, phase12Sync,
+  PUBLISH_WHITELIST, type ApplyCtx,
+} from '../src/evolution/evo-wrapper.js'
 import { failApply } from '../src/evolution/queue-apply.js'
 import { createEvoDb, setEvoDb, evolutionRuns, evolutionApplies, type EvoDb } from '../src/db/evo-db.js'
 import { config } from '../src/config.js'
@@ -145,7 +148,6 @@ describe('classifyChange — SKILL.md frontmatter split', () => {
     expect(sk(skill(BASE_FM.replace('name: web-search', 'name: websearch'))).category).toBe('prompt')
   })
   it.each([
-    ['command', `${BASE_FM}\ncommand: ws`],
     ['disable-model-invocation', `${BASE_FM}\ndisable-model-invocation: true`],
     ['user-invocable', `${BASE_FM}\nuser-invocable: false`],
     ['verbs edited', BASE_FM.replace('desc: search', 'desc: search the web')],
@@ -157,7 +159,19 @@ describe('classifyChange — SKILL.md frontmatter split', () => {
     ['new verb with requiresAccess', `${BASE_FM}\n  - name: admin\n    requiresAccess: readonly`, 'skill_fm:verbs.requiresAccess'],
     ['new verb without requiresAccess', `${BASE_FM}\n  - name: news`, 'skill_fm:verbs.requiresAccess'],
     ['unknown key', `${BASE_FM}\nallowed-tools: shell_exec`, 'skill_fm:allowed-tools'],
+    ['command added', `${BASE_FM}\ncommand: ws`, 'skill_fm:command'],
   ])('%s → manual', (_l, fm, reason) => { expect(sk(skill(fm))).toMatchObject({ category: 'manual', reason }) })
+
+  // Verb gates bind only to the object commands SUBCOMMAND_ROUTES knows; a
+  // renamed command falls through ungated — routing, so never automatic.
+  it.each(['agent', 'workspace'])('bundled %s skill: command renamed → manual', (id) => {
+    const before = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'templates', 'skills', id, 'SKILL.md'), 'utf-8')
+    const after = before.replace(`command: /${id}\n`, `command: /${id}s\n`)
+    expect(after).not.toBe(before)
+    expect(classifyChange(change(`skills/${id}/SKILL.md`, before, after))).toMatchObject({ category: 'manual', reason: 'skill_fm:command' })
+    // The body-only edit of the same file stays prompt.
+    expect(classifyChange(change(`skills/${id}/SKILL.md`, before, `${before}\nOne more rule.\n`)).category).toBe('prompt')
+  })
 
   describe('verb permissions compare the effective gate the router enforces', () => {
     const GATED = `${BASE_FM}\n  - name: admin\n    requiresAccess: full`
@@ -615,6 +629,75 @@ describe('wrapper: terminal writes are conditional on the claim', () => {
     finalizeApply('a', 2, 'phase 12 preflight: y', logFd)
     expect(applyRow('a').status).toBe('syncing')
     expect(runRow('r').status).toBe('approved')
+  })
+
+  // Phase 12: a wrapper that froze past apply_timeout and woke after the
+  // ticker re-claimed its row shares the applyDir with the new owner.
+  describe('phase 12 under a re-claim', () => {
+    const write = (root: string, rel: string, content: string) => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true })
+      fs.writeFileSync(path.join(root, rel), content)
+    }
+    let ctx: ApplyCtx
+    beforeEach(() => {
+      db.update(evolutionRuns).set({ status: 'approved' }).where(eq(evolutionRuns.id, 'r')).run()
+      const applyDir = path.join(tmp, 'apply')
+      write(wsHaloDir(ws), 'INSTRUCTIONS.md', 'rules v1')
+      write(evoSandboxHaloDir(applyDir), 'INSTRUCTIONS.md', 'rules v2')
+      ctx = { applyId: 'a', workspacePath: ws, applyDir, sourceRunIds: ['r'], reviewerHint: null, langHint: 'English', logFd }
+    })
+    const insertApply = (status: string, attempts: number) =>
+      db.insert(evolutionApplies).values({ id: 'a', workspacePath: ws, status, sourceRunIds: '["r"]', createdAt: 2, attempts, startedAt: 5, heartbeatAt: 5 }).run()
+    const mainRules = () => fs.readFileSync(path.join(wsHaloDir(ws), 'INSTRUCTIONS.md'), 'utf-8')
+
+    it('markSyncing / finalizeApplied with a stale attempts change 0 rows', () => {
+      insertApply('running', 3)
+      expect(markSyncing('a', 'running', 2, logFd)).toBe(false)
+      expect(applyRow('a').status).toBe('running')
+      expect(markSyncing('a', 'running', 3, logFd)).toBe(true)
+      expect(applyRow('a').status).toBe('syncing')
+      expect(finalizeApplied('a', 2, ['r'], logFd)).toBe(false)
+      expect(applyRow('a').status).toBe('syncing')
+      expect(runRow('r').status).toBe('approved')
+      expect(finalizeApplied('a', 3, ['r'], logFd)).toBe(true)
+      expect(applyRow('a').status).toBe('applied')
+      expect(runRow('r')).toMatchObject({ status: 'applied', appliedAt: expect.any(Number) })
+    })
+
+    it('fresh claim re-claimed before the checkpoint: main untouched, row left to the new owner', async () => {
+      insertApply('running', 4)  // the ticker re-claimed: this wrapper was spawned at 3
+      await phase12Sync(ctx, { attempts: 3, approvedBy: 'reviewer' }, false)
+      expect(mainRules()).toBe('rules v1')
+      expect(applyRow('a')).toMatchObject({ status: 'running', attempts: 4 })
+      expect(runRow('r').status).toBe('approved')
+    })
+
+    it('resume re-claimed by a newer resume: main untouched, nothing stamped', async () => {
+      insertApply('syncing', 5)
+      await phase12Sync(ctx, { attempts: 4, approvedBy: 'reviewer' }, true)
+      expect(mainRules()).toBe('rules v1')
+      expect(applyRow('a')).toMatchObject({ status: 'syncing', attempts: 5 })
+      expect(runRow('r').status).toBe('approved')
+    })
+
+    it('owner publishes and stamps apply + run in one go', async () => {
+      insertApply('running', 3)
+      await phase12Sync(ctx, { attempts: 3, approvedBy: 'reviewer' }, false)
+      expect(mainRules()).toBe('rules v2')
+      expect(applyRow('a').status).toBe('applied')
+      expect(runRow('r').status).toBe('applied')
+    })
+
+    it('resume whose preflight fails releases the row now with the real reason (N-a)', async () => {
+      insertApply('syncing', 2)
+      fs.rmSync(evoSandboxHaloDir(ctx.applyDir), { recursive: true })
+      await phase12Sync(ctx, { attempts: 2, approvedBy: 'auto' }, true)
+      expect(applyRow('a')).toMatchObject({
+        status: 'syncing', startedAt: null, heartbeatAt: null,
+        failureReason: 'phase 12 preflight: sandbox missing — phase 11 must run first',
+      })
+      expect(runRow('r').status).toBe('approved')
+    })
   })
 
   it('failApply onlyIfAttempts guards a re-claimed row', () => {

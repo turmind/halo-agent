@@ -191,6 +191,10 @@ function RunDetailPane({ id }: { id: string }) {
         alert(res.error === 'backup_mismatch'
           ? t('evolution.rollback.backupMismatch', { files: (res.files ?? []).join('\n') })
           : t('evolution.rollback.failed', { error: res.error }))
+      } else if (res.keptDirs.length > 0) {
+        // A non-empty workspace agents/<id>/ (skills/, prompts/) dir still
+        // overrides the global one wholesale — say so, it isn't visible otherwise.
+        alert(t('evolution.rollback.keptDirs', { dirs: res.keptDirs.map((d) => `• ${d}`).join('\n') }))
       }
       await refresh()
     } catch (err) {
@@ -503,7 +507,9 @@ function RunDetailPane({ id }: { id: string }) {
 function autoReasonText(t: ReturnType<typeof useT>, rec: AutoApplyRecord): string {
   const reason = rec.reason ?? ''
   const i = reason.indexOf(':')
-  const key = `evolution.auto.reason.${i < 0 ? reason : reason.slice(0, i)}`
+  // Runs queued before source_access existed have none recorded.
+  const code = i < 0 ? reason : reason.slice(0, i)
+  const key = `evolution.auto.reason.${code === 'source_access' && !rec.sourceAccess ? 'source_access_unrecorded' : code}`
   const text = t(key, {
     detail: i < 0 ? '' : reason.slice(i + 1),
     threshold: rec.threshold,

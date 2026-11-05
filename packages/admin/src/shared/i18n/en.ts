@@ -837,6 +837,7 @@ export const en: Record<string, string> = {
   'evolution.auto.failed': 'Auto-approved, but the apply failed and the main workspace was left unchanged — the run is back for review.',
   'evolution.auto.notApplied': 'Not auto-applied ({level}): {reason}',
   'evolution.auto.reason.level': 'capability changes (agent.yaml / SKILL.md frontmatter) auto-apply only at L3.',
+  'evolution.auto.reason.source_access_unrecorded': 'the source session\'s access level was not recorded at enqueue (a run queued before this check existed) — only a full session\'s conversation may change prompts without a reviewer.',
   'evolution.auto.reason.source_access': 'the source session was not full-access ({access}) — only a full session\'s conversation may change prompts without a reviewer.',
   'evolution.auto.reason.no_effective_change': 'no effective change against the live workspace.',
   'evolution.auto.reason.category_manual': '{detail} always needs a reviewer.',
@@ -859,6 +860,7 @@ export const en: Record<string, string> = {
   'evolution.rollback.state.missing': 'deleted',
   'evolution.rollback.state.unverified': 'unverified (older manifest)',
   'evolution.rollback.failed': 'Rollback failed: {error}',
+  'evolution.rollback.keptDirs': 'Rolled back. These folders were kept because files were added to them after the apply — they still override the global agent / skill / prompts of the same name:\n{dirs}',
   'evolution.rollback.backupMismatch': 'Rollback refused: these backups no longer match what main held before the apply, so restoring them would write something else:\n{files}',
   'evolution.rollback.unavailable': 'Rollback unavailable — this apply has no usable snapshot.',
   // Shared relative-time labels (shared/utils formatRelativeTime)

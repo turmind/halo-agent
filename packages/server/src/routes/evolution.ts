@@ -140,7 +140,7 @@ export function createEvolutionRoutes(): Hono {
         completedAt: r.completedAt,
         appliedAt: r.appliedAt,
         failureReason: r.failureReason,
-        attempts: r.attempts,
+        attempts: r.attempts - r.attemptsBase,
         archivedAt: r.archivedAt,
         applyId: apply?.id,
         applyStatus: apply?.status,
@@ -262,7 +262,7 @@ export function createEvolutionRoutes(): Hono {
         completedAt: row.completedAt,
         appliedAt: row.appliedAt,
         failureReason: row.failureReason,
-        attempts: row.attempts,
+        attempts: row.attempts - row.attemptsBase,
         applyId: latestApply?.id,
         applyStatus: latestApply?.status,
         applyFailureReason: latestApply?.failureReason,
@@ -348,8 +348,8 @@ export function createEvolutionRoutes(): Hono {
   //
   // Reviewer-driven retry. Either the dry-run failed and they want another
   // shot, or the produced patch isn't satisfying and they want it redone
-  // with steering. Resets row to pending + zeroes attempts/heartbeat/
-  // failure_reason; the next ticker pass re-spawns the wrapper. Hint is
+  // with steering. Resets row to pending + clears heartbeat / failure_reason
+  // and restarts the retry budget (attempts_base = attempts); the next ticker pass re-spawns the wrapper. Hint is
   // required — same input + same context with no new direction would just
   // reproduce the same output. Replaces the existing user_hint (the new
   // run is a fresh attempt, the old hint was for the old patch).
@@ -378,7 +378,9 @@ export function createEvolutionRoutes(): Hono {
     db.update(evolutionRuns)
       .set({
         status: 'pending',
-        attempts: 0,
+        // attempts stays monotonic (wrapper claims compare it); the new
+        // round's retry budget counts from here.
+        attemptsBase: sql`${evolutionRuns.attempts}`,
         startedAt: null,
         heartbeatAt: null,
         completedAt: null,

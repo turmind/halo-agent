@@ -185,7 +185,10 @@ const AGENT_CAPABILITY_KEYS = new Set(['description', 'system_prompt', 'context'
 /** model.provider / model.endpoint (where requests go) are not here. */
 const MODEL_CAPABILITY_KEYS = new Set(['id', 'maxTokens', 'promptCaching', 'thinking', 'verbosity'])
 const SKILL_PROMPT_KEYS = new Set(['name', 'description'])
-const SKILL_CAPABILITY_KEYS = new Set(['command', 'disable-model-invocation', 'disableModelInvocation', 'user-invocable', 'userInvocable'])
+/** `command` is not here: it is routing — verb gates apply only to the
+ *  object commands SUBCOMMAND_ROUTES knows (commands.ts tryRouteSubcommand),
+ *  so renaming `/agent` to `/agents` drops every verb's requiresAccess. */
+const SKILL_CAPABILITY_KEYS = new Set(['disable-model-invocation', 'disableModelInvocation', 'user-invocable', 'userInvocable'])
 
 const manual = (rel: string, reason: string): FileClass => ({ rel, category: 'manual', reason })
 

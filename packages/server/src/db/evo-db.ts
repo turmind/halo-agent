@@ -14,7 +14,8 @@
  *     awaiting_review → rejected
  *     approved → awaiting_review    (its auto apply failed — failApply)
  *     any but running / pending / applied → pending   (retry route; approved
- *                                   only once its latest apply failed)
+ *                                   only once its latest apply failed;
+ *                                   attempts kept, attempts_base = attempts)
  *   evolution_applies:
  *     pending → running → syncing → applied → rolled_back
  *     running | syncing → failed | timeout
@@ -44,6 +45,10 @@ export const evolutionRuns = sqliteTable('evolution_runs', {
    *  Bumped on each `pending → running` claim. When it crosses the configured
    *  retry budget, the ticker stops re-claiming after timeout/failure. */
   attempts: integer('attempts').notNull().default(0),
+  /** `attempts` when the latest reviewer retry reset the row. The retry
+   *  budget is `attempts - attempts_base`; attempts itself never goes back
+   *  down, so a stale wrapper's claim (ownsRun) can't match a later one. */
+  attemptsBase: integer('attempts_base').notNull().default(0),
   /** When archive job zipped the artifacts and deleted the run dir. Null
    *  while the run is active. Rows with archived_at >= 30 days ago are
    *  candidates for full deletion (zip + db row). */
@@ -98,7 +103,8 @@ CREATE TABLE IF NOT EXISTS evolution_runs (
   attempts        INTEGER NOT NULL DEFAULT 0,
   archived_at     INTEGER,
   has_observation INTEGER NOT NULL DEFAULT 0,
-  source_access   TEXT
+  source_access   TEXT,
+  attempts_base   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_evo_runs_status ON evolution_runs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_evo_runs_ws ON evolution_runs(workspace_path);
@@ -137,6 +143,10 @@ export const EVO_MIGRATIONS: Migration[] = [
     addColumnIfMissing(s, 'evolution_applies', 'rolled_back_at', 'INTEGER')
     addColumnIfMissing(s, 'evolution_runs', 'has_observation', 'INTEGER NOT NULL DEFAULT 0')
     addColumnIfMissing(s, 'evolution_runs', 'source_access', 'TEXT')
+  },
+  // v2: retry keeps attempts monotonic and records where the round started.
+  (s) => {
+    addColumnIfMissing(s, 'evolution_runs', 'attempts_base', 'INTEGER NOT NULL DEFAULT 0')
   },
 ]
 
