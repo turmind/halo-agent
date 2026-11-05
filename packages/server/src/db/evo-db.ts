@@ -17,7 +17,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core'
 import path from 'node:path'
 import fs from 'node:fs'
-import { runMigrations } from './migrate.js'
+import { runMigrations, addColumnIfMissing, type Migration } from './migrate.js'
 
 export const evolutionRuns = sqliteTable('evolution_runs', {
   id: text('id').primaryKey(),
@@ -56,6 +56,12 @@ export const evolutionApplies = sqliteTable('evolution_applies', {
   failureReason: text('failure_reason'),
   attempts: integer('attempts').notNull().default(0),
   archivedAt: integer('archived_at'),
+  /** 'reviewer' (Approve button) | 'auto' (L2/L3 auto-apply, evolution/auto-apply.ts). */
+  approvedBy: text('approved_by').notNull().default('reviewer'),
+  /** When the source session got the one-line "auto-applied" notice (ticker
+   *  notifyAutoApplied). Null = not yet sent; only auto applies are notified. */
+  notifiedAt: integer('notified_at'),
+  rolledBackAt: integer('rolled_back_at'),
 })
 
 const CREATE_SQL = `
@@ -91,12 +97,27 @@ CREATE TABLE IF NOT EXISTS evolution_applies (
   completed_at    INTEGER,
   failure_reason  TEXT,
   attempts        INTEGER NOT NULL DEFAULT 0,
-  archived_at     INTEGER
+  archived_at     INTEGER,
+  approved_by     TEXT NOT NULL DEFAULT 'reviewer',
+  notified_at     INTEGER,
+  rolled_back_at  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_evo_applies_status ON evolution_applies(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_evo_applies_ws ON evolution_applies(workspace_path);
 CREATE INDEX IF NOT EXISTS idx_evo_applies_archived ON evolution_applies(archived_at);
 `
+
+/** Ordered evo.db migrations (see migrate.ts). CREATE_SQL must always
+ *  describe the full current shape; append a slot here for existing dbs. */
+export const EVO_MIGRATIONS: Migration[] = [
+  // v1: L2/L3 auto-apply + rollback (plans/evo-l2-l3.md). Pre-existing applies
+  // were all reviewer-approved, so the 'reviewer' default is exact for them.
+  (s) => {
+    addColumnIfMissing(s, 'evolution_applies', 'approved_by', "TEXT NOT NULL DEFAULT 'reviewer'")
+    addColumnIfMissing(s, 'evolution_applies', 'notified_at', 'INTEGER')
+    addColumnIfMissing(s, 'evolution_applies', 'rolled_back_at', 'INTEGER')
+  },
+]
 
 export function createEvoDb(globalDir: string) {
   fs.mkdirSync(globalDir, { recursive: true })
@@ -104,8 +125,7 @@ export function createEvoDb(globalDir: string) {
   const sqlite = new Database(dbPath)
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(CREATE_SQL)
-  // No migrations yet — append here; CREATE_SQL must always describe the full current shape.
-  runMigrations(sqlite, [])
+  runMigrations(sqlite, EVO_MIGRATIONS)
   return drizzle(sqlite, { schema: { evolutionRuns, evolutionApplies } })
 }
 

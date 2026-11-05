@@ -300,6 +300,17 @@ export function getServerParam(namespaceId: string, key: string): string {
   return expandEnv(settingsValue(`${namespaceId}.params.${key}`))
 }
 
+/** Self-evolution capability ladder; each level includes the one below.
+ *  L1 = pre-compact drafting, L2 = auto-apply prompt changes, L3 = + capability. */
+export type EvoLevel = 'L0' | 'L1' | 'L2' | 'L3'
+const EVO_LEVELS: readonly EvoLevel[] = ['L0', 'L1', 'L2', 'L3']
+/** Unknown / missing values read as L0 (manual only). */
+export function parseEvoLevel(raw: unknown): EvoLevel {
+  return EVO_LEVELS.includes(raw as EvoLevel) ? raw as EvoLevel : 'L0'
+}
+export function evoLevelRank(level: EvoLevel): number {
+  return EVO_LEVELS.indexOf(level)
+}
 
 export const config = {
   // Goal entry points are retired, not the runtime. Internal/global-only, no UI:
@@ -481,9 +492,13 @@ export const config = {
   // Self-evolution (see plans/self-evolution.md). Getter-based so user edits
   // in settings.yaml take effect on the next ticker run without restart.
   evolution: {
-    get level(): 'L0' | 'L1' {
-      const raw = settingsStr('general.evolution.level', 'L0')
-      return raw === 'L1' ? 'L1' : 'L0'
+    get level(): EvoLevel {
+      return parseEvoLevel(settingsStr('general.evolution.level', 'L0'))
+    },
+    // Minimum average score for L2/L3 auto-apply (see evolution/auto-apply.ts
+    // for the extra fixed floors).
+    get autoApplyThreshold(): number {
+      return settingsInt('general.evolution.auto_apply_threshold', 80)
     },
     get maxConcurrentRun(): number {
       return settingsInt('general.evolution.max_concurrent_run', 1)

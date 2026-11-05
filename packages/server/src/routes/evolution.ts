@@ -22,6 +22,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { evolutionApplies, evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { removeRunArtifacts, removeApplyArtifacts } from '../evolution/archive.js'
+import { queueApply } from '../evolution/queue-apply.js'
 import { wsEvoRunDir, evoWrapperLogFile } from '../paths.js'
 import { rawSqlite } from '../db/raw-sqlite.js'
 import { broadcast } from '../ws/broadcast.js'
@@ -254,33 +255,21 @@ export function createEvolutionRoutes(): Hono {
     const db = getEvoDb()
     const row = db.select().from(evolutionRuns).where(eq(evolutionRuns.id, id)).get()
     if (!row) return c.json({ error: 'not found' }, 404)
-    if (row.status !== 'awaiting_review') {
-      return c.json({ error: `cannot approve run in status=${row.status}` }, 409)
+
+    // queueApply flips run → approved and inserts the apply row in one
+    // transaction, both conditional on the current state — a double click or
+    // a racing reject sees `state` and gets the 409 instead of a second apply.
+    const res = queueApply(db, { mode: 'reviewer', runId: id, reviewerHint })
+    if (!res.ok) {
+      const error = res.reason === 'state'
+        ? `cannot approve run in status=${row.status}`
+        : 'run already has an apply in flight or applied'
+      return c.json({ error }, 409)
     }
 
-    // Both writes in one transaction: "run approved" and "apply queued" are a
-    // single reviewer decision, and half of it (run flipped, apply missing)
-    // strands the run in a status the ticker will never advance.
-    const applyId = `apply-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-    db.transaction((tx) => {
-      tx.update(evolutionRuns)
-        .set({ status: 'approved' })
-        .where(eq(evolutionRuns.id, id))
-        .run()
-
-      tx.insert(evolutionApplies).values({
-        id: applyId,
-        workspacePath: row.workspacePath,
-        status: 'pending',
-        sourceRunIds: JSON.stringify([id]),
-        reviewerHint,
-        createdAt: Date.now(),
-      }).run()
-    })
-
     broadcast({ type: 'evolution:run_changed', id, status: 'approved' })
-    broadcast({ type: 'evolution:apply_changed', id: applyId, status: 'pending' })
-    return c.json({ ok: true, applyId })
+    broadcast({ type: 'evolution:apply_changed', id: res.applyId, status: 'pending' })
+    return c.json({ ok: true, applyId: res.applyId })
   })
 
   // POST /api/evolution/runs/:id/reject — flip status to rejected. No body.
@@ -292,10 +281,12 @@ export function createEvolutionRoutes(): Hono {
     if (row.status !== 'awaiting_review') {
       return c.json({ error: `cannot reject run in status=${row.status}` }, 409)
     }
-    db.update(evolutionRuns)
+    // Conditional on the state too: a concurrent approve may have won.
+    const res = db.update(evolutionRuns)
       .set({ status: 'rejected' })
-      .where(eq(evolutionRuns.id, id))
+      .where(and(eq(evolutionRuns.id, id), eq(evolutionRuns.status, 'awaiting_review')))
       .run()
+    if (res.changes === 0) return c.json({ error: 'run is no longer awaiting review' }, 409)
     broadcast({ type: 'evolution:run_changed', id, status: 'rejected' })
     return c.json({ ok: true })
   })
@@ -325,12 +316,13 @@ export function createEvolutionRoutes(): Hono {
   // run is a fresh attempt, the old hint was for the old patch).
   //
   // Allowed from any status except 'running' (which would race the live
-  // wrapper) and 'pending' (already queued — nothing to retry).
+  // wrapper), 'pending' (already queued — nothing to retry) and 'applied'
+  // (its change is live in main; roll it back first, which lands rolled_back).
   router.post('/evolution/runs/:id/retry', async (c) => {
     const req = await readHintRequest(c)
     if ('error' in req) return c.json({ error: req.error }, req.status)
     const { id, hint, db, row } = req
-    if (row.status === 'running' || row.status === 'pending') {
+    if (row.status === 'running' || row.status === 'pending' || row.status === 'applied') {
       return c.json({ error: `cannot retry run in status=${row.status}` }, 409)
     }
     db.update(evolutionRuns)
