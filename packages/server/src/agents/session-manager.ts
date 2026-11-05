@@ -252,7 +252,7 @@ interface AgentSession {
    *  mid-turn "let me check X" filler. Reset per turn alongside output. */
   finalOutput: string
   /** Set when the latest turn was terminated by an unrecoverable error (retry
-   *  budget exhausted or account-level failure) — holds the error text. Reset
+   *  budget exhausted, account-level failure, or a model refusal stop) — holds the error text. Reset
    *  per turn alongside output. tryReportToParent reads it to mark the
    *  auto-report as an abnormal termination, so the parent LLM can tell
    *  partial/empty output from a completed wrap-up. */
@@ -260,7 +260,9 @@ interface AgentSession {
   /** classifyModelError kind of `turnError`, set / reset alongside it (null
    *  exactly when turnError is). `'account'` (401/402/403, bad key, no
    *  balance) swaps the parent / relay report's "resume it" hint for "fix the
-   *  model config first" — a re-dispatch would fail the same way. */
+   *  model config first" — a re-dispatch would fail the same way. `'refusal'`
+   *  (set by the `stop` handler, not classifyModelError) swaps it for "start a
+   *  new session with a clean brief". */
   turnErrorKind: ModelErrorKind | null
   promise: Promise<string> | null
   abortController: AbortController | null
@@ -1600,6 +1602,11 @@ export class SessionManager implements SessionManagerInternals {
           const category = d?.category ? ` (${d.category})` : ''
           console.warn(`[SessionManager] Session ${session.id} model refused${category}: ${d?.explanation ?? 'no explanation'}`)
           this.emitEvent(session.id, { type: 'system', text: `⚠️ [${agentName}] Model declined to respond${category}: ${d?.explanation ?? 'no explanation given'}. The conversation content tripped the model's safety classifier — later turns on this history will likely be declined too; use /new to start clean.` })
+          // A refusal is an HTTP 200, so it never reaches the retry loop's
+          // catch — without this the parent / relay / goal / A2A reports took
+          // the turn as a normal wrap-up ("(no output)") and kept resuming it.
+          session.turnError = `Model declined to respond${category}: ${d?.explanation ?? 'no explanation given'}`
+          session.turnErrorKind = 'refusal'
         }
         break
       }
@@ -2104,10 +2111,14 @@ export class SessionManager implements SessionManagerInternals {
     if (session.turnError) {
       // An account error (401/402/403, bad key, no balance) fails identically
       // on every attempt — steer the parent to the model config, not a re-dispatch.
+      // A refusal sticks to the history itself — steer it to a fresh session.
       const next = session.turnErrorKind === 'account'
         ? `This is a model account / credential / balance / permission problem: retrying or re-dispatching will fail the same way. `
           + `Fix the model configuration first (or tell the user to fix it), and do not resume it with query_session("${session.id}", ...) until then.`
-        : `Re-dispatch with query_session("${session.id}", ...) to let it resume.`
+        : session.turnErrorKind === 'refusal'
+          ? `This session's conversation history tripped the model's safety classifier: resuming it with query_session("${session.id}", ...) or re-sending will be declined the same way. `
+            + `Do not resume it — start a NEW session with a clean brief instead, rewording the part that tripped the classifier.`
+          : `Re-dispatch with query_session("${session.id}", ...) to let it resume.`
       result = `[SUB-AGENT ABORTED: the last turn was terminated by an unrecoverable error, NOT completed. `
         + `Error: ${session.turnError}. The text below is a partial trace of the aborted turn — do not treat it as a finished result. `
         + `${next}]\n\n${result}`
@@ -3772,7 +3783,14 @@ export class SessionManager implements SessionManagerInternals {
       output = row?.output ?? ''
       lastActivityAt = row?.lastActivityAt ?? null
     }
-    return JSON.stringify({ code: 0, status, output: this.truncateOutputTail(output) || '(no output yet)', last_activity_at: lastActivityAt })
+    // turn_error: in-memory only, not persisted — so it shows only while the
+    // session is still loaded (runSession's finally releases it); the
+    // report's ABORTED marker is the durable signal.
+    return JSON.stringify({
+      code: 0, status, output: this.truncateOutputTail(output) || '(no output yet)',
+      ...(session?.turnError ? { turn_error: session.turnError } : {}),
+      last_activity_at: lastActivityAt,
+    })
   }
 
   /**

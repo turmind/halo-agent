@@ -111,7 +111,7 @@ Request handling: body ≤ 16 MB (10 MB of images as base64 plus text), else `-3
 |---|---|
 | `WORKING` | on create; no push for it |
 | `COMPLETED` | `runSession`'s finally → `deliverRelayReport`, under its quiet gate (root, no active children, empty queue), `turnError` null |
-| `FAILED` | the same hook with `turnError` set: `status.message` = "The last turn was terminated by an unrecoverable error, NOT completed. Error: … ", plus `metadata['halo/errorKind']: 'account'` and a "re-sending will fail the same way" hint for account errors. Also the dispatch-failure and restart cases |
+| `FAILED` | the same hook with `turnError` set: `status.message` = "The last turn was terminated by an unrecoverable error, NOT completed. Error: … ", plus `metadata['halo/errorKind']: 'account'` and a "re-sending will fail the same way" hint for account errors. A model refusal (`turnErrorKind === 'refusal'`) gets a "start a NEW conversation (omit the context id) with a clean message" hint instead, no `errorKind`. Also the dispatch-failure and restart cases |
 | `CANCELED` | CancelTask, or a local stop / delete / archive of the session |
 
 **Completion hook.** `deliverRelayReport` branches on `{ a2a }` right after the quiet gate: `completeTask` (terminal row + push) first, then `clearReplyTo`. A crash between the two re-fires at the next turn end, where the guarded UPDATE is a no-op. A `reply_to` naming a task that isn't in **this** server's `a2a.db` is left alone (dev and prod share workspace sqlite but not `a2a.db` — clearing would strand the owner's task at WORKING).

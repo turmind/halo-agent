@@ -330,6 +330,27 @@ describe('deliverGoalRound', () => {
     expect(text).toContain('Checking the logs…')   // partial trace still delivered
   })
 
+  it('refusal: same marker + error text, but "new worker session" instead of the re-dispatch hint', async () => {
+    seedGoal('goal_a', 'w1', (s) => { s.status = 'running'; s.startedAt = Date.now() })
+    const s0 = readGoalState(sm.getDb(), 'goal_a')!
+    s0.specHash = writeSpec('goal_a')
+    writeGoalState(sm.getDb(), 'goal_a', s0)
+
+    const host = stubHost()
+    await deliverGoalRound(host, workerShape('w1', {
+      finalOutput: '',
+      turnError: 'Model declined to respond (harmful): nope',
+      turnErrorKind: 'refusal',
+    }))
+    expect(host.deliveries).toHaveLength(1)
+    const text = host.deliveries[0].text
+    expect(text).toContain('[WORKER ABORTED')
+    expect(text).toContain('Error: Model declined to respond (harmful): nope.')
+    expect(text).toContain('tripped the model\'s safety classifier')
+    expect(text).toContain('this goal needs a NEW worker session')
+    expect(text).not.toContain('Re-dispatch with query_session to let the worker resume.')
+  })
+
   it('marks the empty-output shape too (the literal "(no output)" sample)', async () => {
     seedGoal('goal_a', 'w1', (s) => { s.status = 'running'; s.startedAt = Date.now() })
     const s0 = readGoalState(sm.getDb(), 'goal_a')!

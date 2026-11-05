@@ -196,9 +196,12 @@ export async function deliverRelayReport(
   if (session.turnError) {
     // An account error fails identically on every attempt — steer the caller
     // to the target's model config, not a re-send (mirrors tryReportToParent).
+    // A refusal sticks to the target's history — steer to a fresh session id.
     const next = session.turnErrorKind === 'account'
       ? 'This is a model account / credential / balance / permission problem in the target workspace: retrying or re-sending will fail the same way. Fix its model configuration first (or tell the user to fix it), and do not resume it with relay_send until then.'
-      : 'Re-send with relay_send to let it resume.'
+      : session.turnErrorKind === 'refusal'
+        ? 'The target session\'s conversation history tripped the model\'s safety classifier: re-sending to it with relay_send will be declined the same way. Do not resume it — relay_send to a NEW session id with a clean brief instead, rewording the part that tripped the classifier.'
+        : 'Re-send with relay_send to let it resume.'
     report = `[RELAY TARGET ABORTED: the last turn was terminated by an unrecoverable error, NOT completed. Error: ${session.turnError}. The text below is a partial trace — do not treat it as a finished result. ${next}]\n\n${report}`
   }
   const body = capReport(report, `relay_read("${host.workspaceRoot}", "${session.id}")`)

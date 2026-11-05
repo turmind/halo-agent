@@ -178,6 +178,24 @@ describe('deliverRelayReport', () => {
     expect(text).toContain('Checking the logs…')   // partial trace still delivered
   })
 
+  it('refusal: status: aborted header, body opens with the marker, "new session" hint instead of the re-send one', async () => {
+    seedSession(deptSm, 'dept-1')
+    writeReplyTo(deptSm.getDb(), 'dept-1', { workspace: callerWs, sessionId: 'sec-1' })
+    await deliverRelayReport(deptSm, sessionShape('dept-1', {
+      finalOutput: '', turnError: 'Model declined to respond (harmful): nope', turnErrorKind: 'refusal',
+    }))
+    expect(callerStub.sent).toHaveLength(1)
+    const text = callerStub.sent[0].text
+    const header = `[Relay report · workspace ${deptWs} · session dept-1 · status: aborted]`
+    expect(text.startsWith(header)).toBe(true)
+    expect(text.slice(header.length).trimStart().startsWith('[RELAY TARGET ABORTED')).toBe(true)
+    expect(text).toContain('Error: Model declined to respond (harmful): nope.')
+    expect(text).toContain('tripped the model\'s safety classifier')
+    expect(text).toContain('relay_send to a NEW session id with a clean brief')
+    expect(text).not.toContain('Re-send with relay_send to let it resume.')
+    expect(readReplyTo(deptSm.getDb(), 'dept-1')).toBeNull()
+  })
+
   it('ignores sub-sessions (parentId !== null)', async () => {
     seedSession(deptSm, 'dept-1')
     seedSession(deptSm, 'dept-1>child', 'default', 'dept-1')

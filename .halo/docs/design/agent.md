@@ -178,4 +178,4 @@ Two consumers apply the same chain: `buildModelRuntime` (session-agent-builder.t
 
 ## Error handling
 
-When a sub-agent session crashes, the error is auto-reported back to its parent from `runSession`'s finally (`tryReportToParent`, with a `[SUB-AGENT ABORTED …]` prefix when the turn died) — the parent never silently loses work.
+When a sub-agent session crashes, the error is auto-reported back to its parent from `runSession`'s finally (`tryReportToParent`, with a `[SUB-AGENT ABORTED …]` prefix when the turn died — including a model refusal stop, whose hint says to start a new session with a clean brief instead of resuming; see [session.md](session.md)) — the parent never silently loses work.

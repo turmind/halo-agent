@@ -7,9 +7,13 @@
  * Branch ORDER is the contract: first match wins.
  */
 
+/** `'refusal'` is never returned by classifyModelError: a model refusal is an
+ *  HTTP 200 stop, set as the turn's error kind by SessionManager's `stop`
+ *  handler, never thrown into the retry loop. */
 export type ModelErrorKind =
   | 'context_overflow' | 'account' | 'throttle' | 'server_error'
   | 'network' | 'empty_response' | 'corrupted' | 'multimodal_4xx' | 'fatal'
+  | 'refusal'
 
 /** Thrown in place of a model call whose provider credential still holds an
  *  unset `<<ENV>>` placeholder (session-agent-builder). Account-level: the

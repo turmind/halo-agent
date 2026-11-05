@@ -189,6 +189,16 @@ describe('task state machine', () => {
     expect(outbox().map((r) => r.event_key)).toEqual(['interim:1', 'state:failed'])
   })
 
+  it('refusal: FAILED with the "new conversation" hint instead of "send again on the same context"', () => {
+    const t = createTask({ workspace: '/w', contextId: 'a2a_acc_3', accountId: 'acc', messageId: null })
+    completeTask(t.id, { finalOutput: '', output: '', turnError: 'Model declined to respond (harmful): nope', turnErrorKind: 'refusal' })
+    const row = getTask(t.id)!
+    expect(row.state).toBe('failed')
+    expect(row.status_text).toContain('Error: Model declined to respond (harmful): nope.')
+    expect(row.status_text).toContain('Start a NEW conversation (omit the context id)')
+    expect(row.status_text).not.toContain('Send again on the same context')
+  })
+
   it('completed result = finalOutput || output; artifact "result"', () => {
     const t = createTask({ workspace: '/w', contextId: 'c', accountId: 'acc', messageId: null })
     completeTask(t.id, { finalOutput: '', output: 'whole turn text', turnError: null, turnErrorKind: null })

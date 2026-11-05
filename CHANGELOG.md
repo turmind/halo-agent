@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Terminal: refreshing the admin page (especially with the Terminal tab or the split view open) no longer starts an extra bash. A new terminal now starts only when the server reports none.
+- Sessions: when a sub-agent's model declines to respond (a safety-classifier refusal), the parent now gets an aborted report saying to start a new session with a clean brief, instead of "(no output)" or a half-finished narration it kept resuming. Relay, goal-mode and A2A reports mark it the same way, and `get_session_output` returns a `turn_error` field.
 
 ### Changed
 

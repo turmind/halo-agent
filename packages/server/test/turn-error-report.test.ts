@@ -6,6 +6,7 @@ import { SessionManager } from '../src/agents/session-manager.js'
 import type { ModelErrorKind } from '../src/agents/model-error.js'
 import { agentSessions } from '../src/db/schema.js'
 import { eq } from 'drizzle-orm'
+import { setRelayRegistry, writeReplyTo, type RelayTarget, type RelayRegistry } from '../src/agents/relay.js'
 
 /**
  * Coverage for the "aborted turn must not masquerade as a completed report"
@@ -260,5 +261,125 @@ describe('auto-report marks abnormal termination', () => {
     expect(report).toContain('[kimi] API error 401: Unauthorized')
     expect(report).toContain('do not resume it with query_session("p5>c1", ...) until then')
     expect(report).not.toContain('to let it resume')
+  })
+})
+
+// ── 4. a model refusal (HTTP 200 stop, never thrown) is an aborted turn too ──
+
+/** Agent stub whose first `refusals` calls end in a refusal stop (after an
+ *  optional narration text), later calls in one final text. `onCall` runs
+ *  inside the turn, where a tool callback (continue_task) would. */
+function refusalAgent(refusals: number, opts: { narration?: string; onCall?: (callNo: number) => void } = {}) {
+  const state = { calls: 0 }
+  return {
+    state,
+    messages: [] as unknown[],
+    async *run(): AsyncGenerator<Record<string, unknown>> {
+      state.calls++
+      opts.onCall?.(state.calls)
+      if (state.calls <= refusals) {
+        if (opts.narration) yield { type: 'text', text: opts.narration, final: false }
+        yield { type: 'stop', stopReason: 'refusal', stopDetails: { category: 'harmful', explanation: 'nope' } }
+        return
+      }
+      yield { type: 'text', text: 'clean result', final: true }
+    },
+  }
+}
+
+describe('model refusal marks the turn aborted', () => {
+  it('stamps turnError / turnErrorKind "refusal"; the next normal turn clears both', async () => {
+    seedRow('f1')
+    const session = fakeSession('f1', refusalAgent(1) as unknown as ReturnType<typeof stubAgent>)
+
+    await sm.runSession('f1', 'go')
+    expect(session.turnError).toBe('Model declined to respond (harmful): nope')
+    expect(session.turnErrorKind).toBe('refusal')
+
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('f1', session)
+    await sm.runSession('f1', 'go again')
+    expect(session.turnError).toBeNull()
+    expect(session.turnErrorKind).toBeNull()
+  })
+
+  it('end to end: the parent gets SUB-AGENT ABORTED with the "start a new session" hint, not the re-dispatch one', async () => {
+    seedRow('f2')
+    seedRow('f2>c1', { parentId: 'f2' })
+    fakeSession('f2>c1', refusalAgent(1) as unknown as ReturnType<typeof stubAgent>, { parentId: 'f2' })
+    const reported = new Promise<string>((resolve) => {
+      ;(sm as unknown as { querySession: unknown }).querySession =
+        async (_t: string, _s: string, message: string) => { resolve(message); return '{"code":0}' }
+    })
+
+    await sm.runSession('f2>c1', 'go')
+    const report = await reported
+
+    expect(report).toMatch(/^\[SUB-AGENT ABORTED/)
+    expect(report).toContain('Error: Model declined to respond (harmful): nope.')
+    expect(report).toContain('tripped the model\'s safety classifier')
+    expect(report).toContain('start a NEW session with a clean brief')
+    expect(report).not.toContain('Re-dispatch with query_session')
+    expect(report).toContain('(no output)')
+  })
+
+  it('get_session_output carries turn_error (before last_activity_at) while the session is loaded', async () => {
+    seedRow('f3')
+    const session = fakeSession('f3', refusalAgent(1) as unknown as ReturnType<typeof stubAgent>)
+    await sm.runSession('f3', 'go')
+
+    // In-memory only: runSession's finally released the session, so the
+    // row-read path has no turn_error.
+    expect(JSON.parse(sm.getSessionOutput('f3'))).not.toHaveProperty('turn_error')
+
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('f3', session)
+    const out = JSON.parse(sm.getSessionOutput('f3'))
+    expect(out.turn_error).toBe('Model declined to respond (harmful): nope')
+    expect(Object.keys(out)).toEqual(['code', 'status', 'output', 'turn_error', 'last_activity_at'])
+  })
+
+  it('a clean turn has no turn_error field', async () => {
+    seedRow('f4')
+    const session = fakeSession('f4', stubAgent(0, () => new Error('unused')))
+    await sm.runSession('f4', 'go')
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('f4', session)
+    expect(JSON.parse(sm.getSessionOutput('f4'))).not.toHaveProperty('turn_error')
+  })
+
+  it('relay root: a refused turn after continue_task sends no interim of its partial text; the final report is aborted', async () => {
+    seedRow('f5')
+    writeReplyTo(sm.getDb(), 'f5', { workspace: '/sec', sessionId: 'sec-1' })
+    const sent: string[] = []
+    const caller = {
+      workspaceRoot: '/sec',
+      getDb: () => { throw new Error('caller stub has no db') },
+      getSessionById: () => null,
+      createSession: async () => { throw new Error('not used') },
+      appendUserMessage: () => {},
+      sendUserMessage: async (_sid: string, text: string) => { sent.push(text); return 'running' as const },
+      interruptSession: () => {},
+      stopSession: async () => {},
+      getSessionOutput: () => '{}',
+      listSessions: () => ({ sessions: [] }),
+    } satisfies RelayTarget
+    setRelayRegistry({ getOrCreate: () => caller })
+    try {
+      // Call 1 (a relay follow-up after an interrupt) arms continue_task, then
+      // is refused; the kick turn is refused too.
+      const agent = refusalAgent(2, { narration: 'partial narration', onCall: (n) => { if (n === 1) sm.requestSelfKick('f5') } })
+      const session = fakeSession('f5', agent as unknown as ReturnType<typeof stubAgent>)
+      session.interruptRequested = true
+      session.messageQueue.push({ text: '[channel: relay | from: /sec]\n\nstatus?' })
+
+      await sm.runSession('f5', '')
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(agent.state.calls).toBe(2)
+      expect(sent).toHaveLength(1)   // no interim — only the final report
+      expect(sent[0]).toMatch(/^\[Relay report · workspace .* · session f5 · status: aborted\]/)
+      expect(sent[0]).toContain('[RELAY TARGET ABORTED')
+      expect(sent[0]).not.toContain('Relay interim report')
+    } finally {
+      setRelayRegistry(null as unknown as RelayRegistry)
+    }
   })
 })
