@@ -303,9 +303,10 @@ describe('phaseApplyPreflight + phaseApplyPublish', () => {
     expect(manifest.applyId).toBe('ap1')
     expect(manifest.sourceRunIds).toEqual(['r1'])
     expect(manifest.files).toHaveLength(2)
+    // before / after sha256 feed rollback's conflict check (evo-rollback.test.ts)
     expect(manifest.files).toEqual(expect.arrayContaining([
-      { rel: 'INSTRUCTIONS.md', kind: 'overwrite' },
-      { rel: SKILL_REL, kind: 'new' },
+      { rel: 'INSTRUCTIONS.md', kind: 'overwrite', before: expect.stringMatching(/^[0-9a-f]{64}$/), after: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      { rel: SKILL_REL, kind: 'new', before: null, after: expect.stringMatching(/^[0-9a-f]{64}$/) },
     ]))
   })
 

@@ -56,6 +56,7 @@ import {
   AUTO_APPLY_FILE, categoryGate, classifyChanges, collectChanges, evaluateSandbox, readObservation, readScore,
 } from './auto-apply.js'
 import { failApply, queueApply } from './queue-apply.js'
+import { sha256File, type ApplyManifest } from './rollback.js'
 
 type Mode = 'run' | 'apply'
 
@@ -2118,12 +2119,22 @@ export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
       fs.mkdirSync(path.dirname(histPath), { recursive: true })
       fs.copyFileSync(mainPath, histPath)
     }
-    fs.writeFileSync(manifestPath, JSON.stringify({
+    // before / after hashes let rollback tell "still exactly what we
+    // published" from "edited since" (evolution/rollback.ts). Taken here,
+    // on the first preflight only, when the sandbox is final and main is
+    // still pre-apply.
+    const manifest: ApplyManifest = {
       applyId: ctx.applyId,
       sourceRunIds: ctx.sourceRunIds,
       capturedAt: new Date().toISOString(),
-      files: changed.map((c) => ({ rel: c.rel, kind: c.existsInMain ? 'overwrite' : 'new' })),
-    }, null, 2), 'utf-8')
+      files: changed.map((c) => ({
+        rel: c.rel,
+        kind: c.existsInMain ? 'overwrite' : 'new',
+        before: c.existsInMain ? sha256File(path.join(mainHalo, c.rel)) : null,
+        after: sha256File(c.full),
+      })),
+    }
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8')
   } else {
     writeLog(ctx.logFd, `[preflight] MANIFEST.json already exists — resume path, skipping history backup (the pre-apply state is already preserved from the first preflight)\n`)
   }
