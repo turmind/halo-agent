@@ -120,12 +120,21 @@ const misc = [
 // ── a few of the above run from a different workspace root (node run's cwd) ──
 const cwdCmds = ['rm -rf .', 'rm -rf ..', 'rm -rf ../..', 'rm -rf *', 'rm -rf x', 'cd .. && rm -rf sub', 'rm -rf $PWD', 'rm -rf ~/projects/x']
 const cwds = [SUB, '/', HOME, `${WS}/a$&b`, `${WS}/a$'b`, `${WS}/a$Xb`, `${WS}/x/../y/`, `${HOME}/démo`]
+const globCwds = [`${WS}/a[1]b`, `${WS}/a?b`, `${WS}/a*b`, '/srv/proj [v2]', `${HOME}/p*/q`, '/srv/[x/y']
+const globCmds = [
+  'rm -rf .', 'rm -rf ..', 'rm -rf $PWD', 'rm -rf "$PWD"/*', 'rm -rf ./*', 'rm -rf *', 'rm -rf .*', 'rm -rf ..*', 'rm -rf ../*',
+  'rm -rf *.log', 'rm -rf a*', 'rm -rf x', 'rm -rf "$PWD/x"', 'cd .. && rm -rf .', 'cd x && rm -rf ..',
+]
+const globCdCmds = ['cd /srv/x[1] && rm -rf .', 'cd /srv/x[1] && rm -rf *', 'cd ~/* && rm -rf .', 'cd ~/p? && rm -rf ..', 'cd /tmp/* && rm -rf x']
 
 const vectors = [
   ...[...new Set([...fromTest, ...combos, ...separators, ...misc])].map((cmd) => [cmd, WS]),
   ...cwds.flatMap((cwd) => cwdCmds.map((cmd) => [cmd, cwd])),
   ["cd '/tmp/$&x' && rm -rf $PWD", WS],
   ["cd '/tmp/$Xy' && rm -rf $PWD", WS],
+  // glob chars in the workspace path are a name, not a pattern; the command's own globs still count
+  ...globCwds.flatMap((cwd) => globCmds.map((cmd) => [cmd, cwd])),
+  ...globCdCmds.map((cmd) => [cmd, WS]),
 ]
 
 const check = await guardFor(HOME)
@@ -143,6 +152,12 @@ const homes = []
 for (const home of ['/root', '/home/tester/', '/home/x$&y', "/home/x$'y", '/home/u$X', '/']) {
   const g = await guardFor(home)
   for (const cmd of homeCmds) homes.push({ home, cmd, cwd: '/srv/ws', result: g(cmd, '/srv/ws') })
+}
+// glob chars in HOME: a name, not a pattern
+const globHomeCmds = [...homeCmds, 'rm -rf ~/*', 'rm -rf $HOME/.*', 'cd && rm -rf *', 'rm -rf ~/*.log', 'cd ~/x && rm -rf ..']
+for (const home of ['/home/x[1]y', '/home/a?b', '/home/x*', '/srv/[h']) {
+  const g = await guardFor(home)
+  for (const cmd of globHomeCmds) homes.push({ home, cmd, cwd: '/srv/ws', result: g(cmd, '/srv/ws') })
 }
 
 const text = `{"home":${JSON.stringify(HOME)},"ws":${JSON.stringify(WS)},"vectors":[\n${rows.map((r) => JSON.stringify(r)).join(',\n')}\n],"homes":[\n${homes.map((r) => JSON.stringify(r)).join(',\n')}\n]}\n`

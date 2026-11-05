@@ -848,7 +848,18 @@ function expandRmWord(word: string, cwd: string): string {
     .replace(/\$\{HOME\}|\$HOME\b/g, '\0H')
     .replace(/\$\{PWD\}|\$PWD\b|\$\(pwd\)|`pwd`/g, '\0P')
     .replace(/\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$\d/g, '')
-    .replace(/\0([HP])/g, (_m, k: string) => (k === 'H' ? HOME : cwd))
+    .replace(/\0([HP])/g, (_m, k: string) => (k === 'H' ? escapeGlob(HOME) : cwd))
+}
+
+/** A runtime path's (HOME, the workspace root) glob chars as NUL escapes, so
+ *  the everything-glob check only sees globs the command itself wrote —
+ *  `/srv/proj [v2]` is a name, not a pattern. unescapeGlob restores them. */
+function escapeGlob(p: string): string {
+  return p.replace(/[*?[]/g, (c) => '\0' + '*?['.indexOf(c))
+}
+
+function unescapeGlob(p: string): string {
+  return p.replace(/\0([012])/g, (_m, k: string) => '*?['[Number(k)])
 }
 
 /** Drop a subshell's closing `)` glued to the last word (`(rm -rf x)`),
@@ -876,7 +887,8 @@ function rmProtectedReason(target: string, wsRoot: string): string | null {
  *  following any `cd` earlier in the same command line. */
 export function assertRmSafe(command: string, workspaceRoot: string): void {
   const wsRoot = path.resolve(workspaceRoot)
-  let cwd = wsRoot
+  // Glob-escaped (escapeGlob); a `cd` keeps the globs its own argument wrote.
+  let cwd = escapeGlob(wsRoot)
   for (const words of shellSegments(command)) {
     let i = 0
     let cmd = ''
@@ -893,7 +905,7 @@ export function assertRmSafe(command: string, workspaceRoot: string): void {
 
     if (cmd === 'cd') {
       const dest = words[i + 1]
-      if (dest === undefined) cwd = HOME
+      if (dest === undefined) cwd = escapeGlob(HOME)
       else if (dest !== '-') cwd = path.resolve(cwd, expandRmWord(stripSubshellClose(dest), cwd) || '.')
       continue
     }
@@ -920,6 +932,7 @@ export function assertRmSafe(command: string, workspaceRoot: string): void {
         if (!/^[.*?]+$/.test(parts[globAt])) continue
         target = parts.slice(0, globAt).join('/') || '/'
       }
+      target = unescapeGlob(target)
       const reason = rmProtectedReason(target, wsRoot)
       if (reason) {
         throw new Error(`[Sandbox] rm blocked: "${raw}" resolves to ${target}, which is ${reason}. Name the specific files or subdirectories to delete instead.`)

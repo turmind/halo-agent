@@ -115,4 +115,46 @@ describe('assertRmSafe', () => {
       vi.unstubAllEnvs()
     }
   })
+
+  // Glob chars in HOME / the workspace path are part of a name, not a pattern:
+  // only globs the command word itself wrote count.
+  it('blocks ., $PWD and ./* when the workspace path contains `[`', () => {
+    for (const cwd of ['/srv/proj [v2]', path.join(WS, 'a[1]b')]) {
+      for (const cmd of ['rm -rf .', 'rm -rf $PWD', 'rm -rf ./*']) {
+        expect(() => assertRmSafe(cmd, cwd), cmd).toThrow(`resolves to ${cwd}, which is the workspace root or a parent of it.`)
+      }
+    }
+  })
+
+  it('blocks ., $PWD and ./* when the workspace path contains `?` or `*`', () => {
+    for (const cwd of [path.join(WS, 'a?b'), path.join(WS, 'a*b')]) {
+      for (const cmd of ['rm -rf .', 'rm -rf $PWD', 'rm -rf ./*']) {
+        expect(() => assertRmSafe(cmd, cwd), cmd).toThrow(`resolves to ${cwd}, which is the workspace root or a parent of it.`)
+      }
+    }
+  })
+
+  it('names a glob-char HOME as the home directory', async () => {
+    vi.resetModules()
+    vi.stubEnv('HOME', '/home/x[1]y')
+    try {
+      const fresh = await import('../src/tools/sandbox.js')
+      for (const cmd of ['rm -rf ~', 'rm -rf ~/*', 'cd && rm -rf .']) {
+        expect(() => fresh.assertRmSafe(cmd, '/srv/ws'), cmd).toThrow('resolves to /home/x[1]y, which is the home directory or a parent of it.')
+      }
+      expect(() => fresh.assertRmSafe('rm -rf ~/*.log', '/srv/ws')).not.toThrow()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('still judges globs the command word writes (unchanged)', () => {
+    const cwd = path.join(WS, 'a[1]b')
+    expect(() => assertRmSafe('rm -rf ./*', WS)).toThrow(`"./*" resolves to ${WS}, which is the workspace root`)
+    expect(() => assertRmSafe('cd ~/* && rm -rf .', WS)).toThrow(`"." resolves to ${HOME}, which is the home directory`)
+    expect(() => assertRmSafe('rm -rf ..*', WS)).toThrow(`"..*" resolves to ${WS}, which is the workspace root`)
+    for (const cmd of ['rm -rf *.log', 'rm -rf a*', 'rm -rf /tmp/build-*', 'cd /srv/x[1] && rm -rf .']) {
+      expect(() => assertRmSafe(cmd, cwd), cmd).not.toThrow()
+    }
+  })
 })

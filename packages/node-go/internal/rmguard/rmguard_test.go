@@ -95,7 +95,9 @@ func TestExpandLiteral(t *testing.T) {
 		{"a$PWD`pwd`$(pwd)${PWD}", "/w$&b$`", "/h", "a/w$&b$`/w$&b$`/w$&b$`/w$&b$`"},
 		{"$PWD/$X", "/w$1", "/h", "/w$1/"},
 		{"~", "/c", "/home/u$PWD$X", "/home/u$PWD$X"},
-		{"$(echo $(pwd))/", "/c", "/h", "/"}, // still expanded before the unset pass, as before
+		{"$(echo $(pwd))/", "/c", "/h", "/"},                    // still expanded before the unset pass, as before
+		{"~/[a]*", "/c", "/h[1]?*", "/h\x0021]\x001\x000/[a]*"}, // home's globs escaped, the word's kept
+		{"$PWD/*", "/c\x002", "/h", "/c\x002/*"},                // cwd arrives already escaped
 	} {
 		if got := expandWord(c.w, c.cwd, c.home); got != c.want {
 			t.Errorf("expandWord(%q, %q, %q) = %q, want %q", c.w, c.cwd, c.home, got, c.want)
@@ -144,6 +146,12 @@ func TestCheckEdges(t *testing.T) {
 		{`rm -rf "/home/tëster"`, "/srv/ws", home, `"/home/tëster" resolves to /home/tëster, which is a system directory`},
 		{"rm -rf 日本/*", "/srv/ws", home, ""},
 		{`rm -rf \日`, "/srv/ws", home, ""},
+		// glob chars from cwd / home are literal; the word's own globs still count
+		{"rm -rf ./*", "/srv/proj [v2]", home, `"./*" resolves to /srv/proj [v2], which is the workspace root`},
+		{"rm -rf $PWD", "/srv/a*b", home, `"$PWD" resolves to /srv/a*b, which is the workspace root`},
+		{"rm -rf ~/*", "/srv/ws", "/home/x?y", `"~/*" resolves to /home/x?y, which is the home directory`},
+		{"rm -rf *.log", "/srv/a[1]b", home, ""},
+		{"cd /srv/x[1] && rm -rf .", "/srv/ws", home, ""},
 	} {
 		got := ""
 		if err := Check(c.cmd, c.cwd, c.home); err != nil {

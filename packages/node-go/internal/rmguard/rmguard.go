@@ -57,7 +57,8 @@ var (
 func Check(cmd, cwd, home string) error {
 	haloHome := filepath.Join(home, ".halo")
 	wsRoot := resolve("", cwd)
-	dir := wsRoot
+	// Glob-escaped (escapeGlob); a `cd` keeps the globs its own argument wrote.
+	dir := escapeGlob(wsRoot)
 	for _, words := range shellSegments(cmd) {
 		i := 0
 		name := ""
@@ -82,7 +83,7 @@ func Check(cmd, cwd, home string) error {
 
 		if name == "cd" {
 			if i+1 >= len(words) {
-				dir = home
+				dir = escapeGlob(home)
 			} else if dest := words[i+1]; dest != "-" {
 				w := expandWord(stripSubshellClose(dest), dir, home)
 				if w == "" {
@@ -131,6 +132,7 @@ func Check(cmd, cwd, home string) error {
 					target = "/"
 				}
 			}
+			target = unescapeGlob(target)
 			if reason := protectedReason(target, wsRoot, home, haloHome); reason != "" {
 				return errors.New(`[Sandbox] rm blocked: "` + raw + `" resolves to ` + target + ", which is " + reason + ". Name the specific files or subdirectories to delete instead.")
 			}
@@ -194,8 +196,19 @@ func expandWord(w, cwd, home string) string {
 	w = homeRe.ReplaceAllLiteralString(w, "\x00H")
 	w = pwdRe.ReplaceAllLiteralString(w, "\x00P")
 	w = unsetRe.ReplaceAllLiteralString(w, "")
-	return strings.NewReplacer("\x00H", home, "\x00P", cwd).Replace(w)
+	return strings.NewReplacer("\x00H", escapeGlob(home), "\x00P", cwd).Replace(w)
 }
+
+// A runtime path's (home, the workspace root) glob chars as NUL escapes, so
+// the everything-glob check only sees globs the command itself wrote —
+// `/srv/proj [v2]` is a name, not a pattern. unescapeGlob restores them.
+var (
+	globEscaper   = strings.NewReplacer("*", "\x000", "?", "\x001", "[", "\x002")
+	globUnescaper = strings.NewReplacer("\x000", "*", "\x001", "?", "\x002", "[")
+)
+
+func escapeGlob(p string) string   { return globEscaper.Replace(p) }
+func unescapeGlob(p string) string { return globUnescaper.Replace(p) }
 
 // stripSubshellClose drops a subshell's closing `)` glued to the last word
 // (`(rm -rf x)`), leaving balanced `$(...)` intact.
