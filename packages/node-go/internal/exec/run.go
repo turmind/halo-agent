@@ -16,6 +16,7 @@ import (
 
 	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
 	"github.com/turmind/halo-agent/packages/node-go/internal/nodepath"
+	"github.com/turmind/halo-agent/packages/node-go/internal/rmguard"
 )
 
 const (
@@ -69,7 +70,10 @@ func (e *Executor) run(ctx context.Context, command, cwd string) (string, error)
 	for _, m := range paramsRe.FindAllStringSubmatch(cmd, -1) {
 		e.s.Log(fmt.Sprintf("[WorkspaceTools] {{%s.params.%s}} rejected — namespace not in allowed list", m[1], m[2]))
 	}
-	// TODO(M2): port accidental-deletion guard from sandbox.ts assertRmSafe
+	// assertRmSafe: cwd is the tools' workspaceRoot as-is (no realpath, like TS).
+	if err := rmguard.Check(cmd, cwd, nodepath.Home()); err != nil {
+		return toolError + "\nCommand failed: " + err.Error() + "\n\n", nil
+	}
 
 	stdout, stderr, msg, aborted := spawnGroup(ctx, cmd, cwd, e.s.ShellTimeoutMs)
 	if aborted {

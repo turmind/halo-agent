@@ -54,3 +54,18 @@ func TestResolveExpand(t *testing.T) {
 		t.Error("Rel")
 	}
 }
+
+// os.homedir() with HOME set but empty is "" (no passwd fallback), so
+// `~/z` is path.join('', 'z') = the relative `z`, resolved against base.
+func TestEmptyHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	if h := Home(); h != "" {
+		t.Errorf(`Home() = %q, want ""`, h)
+	}
+	if got := ExpandHome("~/z"); got != "z" {
+		t.Errorf("ExpandHome(~/z) = %q, want z", got)
+	}
+	if got := Resolve("/b", "~/z"); got != "/b/z" {
+		t.Errorf("Resolve(/b, ~/z) = %q, want /b/z", got)
+	}
+}
