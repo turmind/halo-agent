@@ -16,6 +16,7 @@ type NodeAccount = Awaited<ReturnType<typeof api.nodes.listAccounts>>['accounts'
 type Online = NonNullable<NodeAccount['online']>
 
 const RELEASES = 'https://github.com/turmind/halo-agent/releases'
+const GUIDE = 'https://github.com/turmind/halo-agent/blob/main/.halo/docs/guide/node.md'
 
 /**
  * Linked machines (`halo node`): pairing tokens per workspace + live online
@@ -125,7 +126,8 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
   if (token) {
     const binBase = /^\d+\.\d+\.\d+$/.test(version ?? '') ? `${RELEASES}/download/v${version}` : `${RELEASES}/latest/download`
     const run = `--server ${location.origin} --root <folder>`
-    const linux = `curl -fsSL ${binBase}/install.sh | sh\nHALO_NODE_TOKEN=${token} halo-node ${run}`
+    // Non-root installs land in ~/.local/bin, which Debian-family shells only put on PATH at the next login.
+    const linux = `curl -fsSL ${binBase}/install.sh | sh\nPATH="$HOME/.local/bin:$PATH" HALO_NODE_TOKEN=${token} halo-node ${run}`
     const other = `HALO_NODE_TOKEN=${token} halo node ${run}`
     return (
       <ChannelDialog width="w-[480px]" onClose={onDone}>
@@ -145,7 +147,10 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
             </div>
           </div>
         ))}
-        <p className="mt-2 text-[10px] text-[var(--muted-foreground)]">{t('nodes.commandHint')}</p>
+        <p className="mt-2 text-[10px] text-[var(--muted-foreground)]">
+          {t('nodes.commandHint')}{' '}
+          <a href={GUIDE} target="_blank" rel="noreferrer" className="text-[var(--primary)] hover:underline">{t('nodes.guide')}</a>
+        </p>
         <div className="mt-4 flex justify-end">
           <button onClick={onDone} className="rounded bg-[var(--primary)] px-3 py-1.5 text-xs text-white">
             {t('nodes.done')}

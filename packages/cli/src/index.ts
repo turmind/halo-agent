@@ -1,7 +1,7 @@
 import './silence-warnings.js' // must be first — patches emitWarning before deps load
 import path from 'node:path'
 import fs from 'node:fs'
-import { homedir, userInfo } from 'node:os'
+import { homedir, machine, userInfo } from 'node:os'
 import { parseArgs } from 'node:util'
 import type { Harness } from './harness.js'
 import type { Lang } from '@turmind/halo-server/channels/shared/i18n'
@@ -1551,8 +1551,9 @@ async function cmdNode(argv: string[]): Promise<void> {
     if (i <= 0) fail(`invalid --header (expected "Name: value"): ${h}`)
     headers[h.slice(0, i).trim()] = h.slice(i + 1).trim()
   }
-  // Linux x64 / arm64 / arm have a release binary (packages/node-go); point at its installer, run on as usual.
-  if (process.platform === 'linux' && ['x64', 'arm64', 'arm'].includes(process.arch)) {
+  // Machines install.sh has a release binary for (packages/node-go): point at it, run on as usual.
+  // machine(), not process.arch: 'arm' also covers armv6, which has no build.
+  if (process.platform === 'linux' && ['x86_64', 'aarch64', 'armv7l', 'armv8l'].includes(machine())) {
     const rel = /^\d+\.\d+\.\d+$/.test(VERSION) ? `download/v${VERSION}` : 'latest/download'
     console.log(`[Node] tip: a standalone 7 MB binary replaces this command — curl -fsSL https://github.com/turmind/halo-agent/releases/${rel}/install.sh | sh (guide: https://github.com/turmind/halo-agent/blob/main/.halo/docs/guide/node.md)`)
   }

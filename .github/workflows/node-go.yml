@@ -6,12 +6,23 @@ name: node-go
 on:
   pull_request:
     branches: [main]
+    # The TS oracle's import closure that shapes results / logs (ts-node-main → node-client →
+    # node-exec → workspace-tools), plus the lockfile (Node / ws / yaml versions) and core (dist import).
     paths: &paths
       - packages/node-go/**
       - packages/server/src/nodes/**
       - packages/server/src/tools/workspace-tools.ts
       - packages/server/src/tools/sandbox.ts
       - packages/server/src/child-env.ts
+      - packages/server/src/config.ts
+      - packages/server/src/settings-schema.ts
+      - packages/server/src/agents/agent-loop.ts
+      - packages/server/src/channels/shared/media-store.ts
+      - packages/server/src/shutdown.ts
+      - packages/server/src/ws/upgrade-router.ts
+      - packages/server/src/middleware/brute-force.ts
+      - packages/core/src/**
+      - pnpm-lock.yaml
       - packages/server/test/node-go-conformance.test.ts
       - packages/server/test/helpers/ts-node-main.ts
       - .github/workflows/node-go.yml
@@ -85,5 +96,7 @@ jobs:
       - run: cd packages/node-go && go vet ./... && go test ./...
       - run: cd packages/node-go && VER=${TAG#v} ./build.sh
       # install.sh downloads this tag's binaries; it's the piped entry point, so not in SHA256SUMS.
-      - run: sed "s/__HALO_VERSION__/${TAG#v}/" packages/node-go/install.sh > packages/node-go/dist/install.sh
+      - run: |
+          sed "s/__HALO_VERSION__/${TAG#v}/" packages/node-go/install.sh > packages/node-go/dist/install.sh
+          if grep -n __HALO_VERSION__ packages/node-go/dist/install.sh; then echo "::error::install.sh not stamped"; exit 1; fi
       - run: gh release upload "$TAG" packages/node-go/dist/halo-node-linux-* packages/node-go/dist/SHA256SUMS packages/node-go/dist/install.sh --clobber
