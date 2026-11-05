@@ -647,7 +647,8 @@ function CronForm({ initial, onClose, onSaved }: {
       const common = {
         label: label || undefined,
         workspacePath, agentId, userPrompt,
-        timezone: timezone || undefined,
+        // Webhook mode hides the field (no timer to place): not sent.
+        timezone: mode === 'webhook' ? undefined : timezone || undefined,
         targets, enabled,
       }
       if (initial) {
@@ -746,7 +747,7 @@ function CronForm({ initial, onClose, onSaved }: {
             }}
             minWidth={280}
           />
-          <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>
+          {!stateless && mode !== 'webhook' && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>}
         </Field>
 
         <Field label={t('cron.form.folder')}>
