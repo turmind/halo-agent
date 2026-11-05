@@ -221,11 +221,11 @@ Four steps, with a checkpoint before the dangerous one:
 
 1. **Preflight** (idempotent): walk sandbox, diff against main, snapshot pre-apply files to `history/apply-<id>/` with `MANIFEST.json` (first preflight only — a resume keeps the original).
    - **Auto re-check** (`approved_by='auto'`, not on resume): the files preflight will publish are classified again against the live surface, and the level is read again (the user may have lowered it since). Blocked → apply `failed` with `auto_recheck:<reason>`, main untouched. See [Auto-apply](#auto-apply-l2--l3).
-2. **Checkpoint**: set `evolution_applies.status='syncing'`. From here on, if wrapper crashes, ticker recovery resumes at step 3 (skip A'/B'/preflight to avoid re-running LLM phases).
+2. **Checkpoint** (`markSyncing`): set `evolution_applies.status='syncing'` (a resume only refreshes the heartbeat). From here on, if wrapper crashes, ticker recovery resumes at step 3 (skip A'/B'/preflight to avoid re-running LLM phases).
 3. **Publish** (dangerous): cp each changed file from sandbox to main.
-4. Mark source_runs `applied`, finalize apply row `applied`.
+4. `finalizeApplied`, one transaction: apply row `applied`, its still-`approved` source runs `applied`.
 
-A wrapper's terminal writes (run `finalize` / `markObservation`, apply `finalizeApply`) only land while the row is still `running` at the attempt that wrapper was spawned on: a re-claimed row belongs to the newer wrapper, and a `syncing` row whose resume preflight failed is left to the ticker (which fails it once retries run out and keeps the run `approved`).
+A wrapper's terminal writes (run `finalize` / `markObservation`, apply `finalizeApply`) only land while the row is still `running` at the attempt that wrapper was spawned on: a re-claimed row belongs to the newer wrapper. Phase 12's own writes hold the same condition: the checkpoint lands only on `running` (resume: `syncing`) at this attempt, and refused, the wrapper exits without touching main; `finalizeApplied` lands only on `syncing` at this attempt. A resume whose preflight fails, or a publish that throws, releases the `syncing` row at once (clears started / heartbeat, records the reason in `failure_reason`) for the ticker, which re-resumes it and, once retries run out, fails it with that reason and keeps the run `approved`. A new resume claim clears the reason.
 
 Per-workspace mutex in ticker prevents two applies from racing on the same workspace — the assumption phase 12 leans on.
 
@@ -245,10 +245,10 @@ Code: `evolution/auto-apply.ts` (pure, no agent-loader import — it runs in the
 |---|---|
 | `INSTRUCTIONS.md`, `INDEX.md`, `agents/<id>/AGENT.md`, `prompts/{bootstrap,all,root}/*.md` | prompt |
 | `SKILL.md` body / `name` / `description` only | prompt |
-| `SKILL.md` `command` / `disable-model-invocation` / `user-invocable`; `verbs` with no `requiresAccess` change | capability |
+| `SKILL.md` `disable-model-invocation` / `user-invocable`; `verbs` with no `requiresAccess` change | capability |
 | `agent.yaml` `description` / `system_prompt` / `context`; `tools` removed or a non-egress tool added; `skills` removed; `model.id` / `maxTokens` / `promptCaching` / `thinking` / `verbosity` | capability |
 | `agent.yaml` `priority` (routing), `team` / `internal` / `name` / unknown keys, `model.provider` / `model.endpoint`, `tools` adding `shell_exec` / `web_fetch` / `relay_send` / `a2a_send` / `node_*`, `skills` adding one | manual |
-| `SKILL.md` `requiresAccess`, any verb's effective `requiresAccess` (own or object-level fallback; a verb added or removed counts), other frontmatter keys | manual |
+| `SKILL.md` `command` (routing: verb gates only apply to object commands `SUBCOMMAND_ROUTES` knows, so a rename drops them), `requiresAccess`, any verb's effective `requiresAccess` (own or object-level fallback; a verb added or removed counts), other frontmatter keys | manual |
 | `USER.md`; any other file in a skill / agent folder; a new agent / skill dir; a deleted file; an internal agent (live `agent.yaml` `internal: true`, or a `__` id); unrecognized paths | manual |
 
 Egress tools and `relay_send` / `node_*` are manual because the dry-run runs `--access workspace`, where they aren't even injected — a score is no evidence about them.
@@ -266,7 +266,7 @@ Egress tools and `relay_send` / `node_*` are manual because the dry-run runs `--
 1. Preconditions (409): apply `applied` (`not_applied`), no `pending` / `running` / `syncing` apply in the workspace (`apply_in_flight`), a readable MANIFEST whose paths stay inside `.halo/` with every `overwrite` backup present (`no_snapshot`).
 2. Per-file state against main now: `clean` (hash = `after`), `reverted` (already back: hash = `before`, or a `new` file that is gone — skipped, not a conflict), `modified`, `missing`, `unverified` (old manifest, no hashes). Any of the last three without `force` → 409 `conflict` with `conflicts[{rel, reason}]`.
 3. Then (conflicts cleared or forced): any `overwrite` backup that doesn't hash to `before` → 409 `backup_mismatch` with `files`, `force` or not — restoring it would write something else. Nothing has been written at this point.
-4. Copy what will be overwritten / removed to `rollback-pre/`, restore `overwrite` files, remove `new` ones, then `rmdir` each `createdDirs` entry deepest first. An emptied `agents/<id>/` (`skills/`, `prompts/`) dir must go: it would override the global one wholesale. A dir someone has since put files in is kept and reported in `keptDirs`.
+4. Copy what will be overwritten / removed to `rollback-pre/`, restore `overwrite` files, remove `new` ones, then `rmdir` each `createdDirs` entry deepest first. An emptied `agents/<id>/` (`skills/`, `prompts/`) dir must go: it would override the global one wholesale. A dir someone has since put files in is kept and reported in `keptDirs`; the UI lists them after the rollback, since each still overrides the global agent / skill / prompts of that name.
 5. Write `ROLLBACK.json`; in one transaction the apply and its `applied` source runs become `rolled_back`; broadcast.
 
 `200 { ok, restored, removed, removedDirs, keptDirs }`. A second call answers `not_applied`. Limits: an apply row is archived 14 days after it is terminal and purged 30 days later — no rollback entry after that; deleting the run deletes the snapshot too; rollback restores files, not session behaviour already shown.
@@ -431,7 +431,7 @@ Top-level "Evolution" tab shows:
 - **Detail**: patch.md (raw), score.json, the `.skip.md` reason, a snapshot summary (message count, first user / assistant message), wrapper log + sub-cli log. At L2+: the auto-applied banner (level, score, the files the apply effectively changed — `publishedFiles`) or the translated reason it wasn't auto-applied. The Larger observation block (see below), and a **Rollback** button while the latest apply is `applied`.
 - **Approve**: Opens an inline panel, optional reviewer_hint. Flips the run to `approved` **and** inserts the pending `evolution_applies` row **inside one `db.transaction`** — it's a single reviewer decision, and half of it (run flipped, apply missing) strands the run in a status the ticker never advances.
 - **Reject**: Sets status='rejected'.
-- **Retry**: Resets row to pending, requires new hint. The route refuses `pending` / `running` / `applied` (roll back first) and an `approved` run unless its latest apply failed / timed out (409); the UI offers it on `awaiting_review`, `failed` / `timeout` / `skipped` / `rejected` / `rolled_back`, and on an `approved` run whose apply failed.
+- **Retry**: Resets row to pending, requires new hint. `attempts` is not cleared (wrapper claims compare it, so a zeroed counter could hand a stale wrapper its claim back); `attempts_base = attempts` restarts the retry budget, and the API's `attempts` is `attempts - attempts_base`, this round's count. The route refuses `pending` / `running` / `applied` (roll back first) and an `approved` run unless its latest apply failed / timed out (409); the UI offers it on `awaiting_review`, `failed` / `timeout` / `skipped` / `rejected` / `rolled_back`, and on an `approved` run whose apply failed.
 - **Rollback**: see [Rollback](#rollback). On `conflict` the UI lists the files and asks again before retrying with `force`; `backup_mismatch` is shown as a refusal.
 - **Manual Delete**: Removes artifacts (live dir + archive zip, whichever exists) + DB row immediately. Blocked on `pending` / `running` / `approved` runs; also deletes the applies the run produced — and with them the rollback snapshot (the confirm says so).
 
