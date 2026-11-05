@@ -44,6 +44,8 @@ export interface PreviewProps {
   mtime?: number
   /** `path` is a bundle DIRECTORY: only bundle extensions are candidates. */
   bundle?: boolean
+  /** Read-only tab (a file outside the workspace): an extension host grants no `save`. */
+  readOnly?: boolean
 }
 
 export interface PreviewPlugin {

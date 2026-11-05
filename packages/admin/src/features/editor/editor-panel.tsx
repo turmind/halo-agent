@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useScopedEditorStore, useEditorStore as useGlobalEditorStore, disposeMonacoModels, monacoModelPath } from '@/shared/stores/editor-store'
+import { useScopedEditorStore, useEditorStore as useGlobalEditorStore, disposeMonacoModels, monacoModelPath, type EditorBuffer } from '@/shared/stores/editor-store'
 import { useFileTree, loadFileTree } from '@/features/explorer/use-file-tree'
 import { FileTree, setPathExpanded, isPathExpanded, collectVisiblePaths, type FileContextInfo } from '@/features/explorer/file-tree'
 import { FileContextMenu, type ContextMenuAction } from '@/features/explorer/file-context-menu'
@@ -96,6 +96,26 @@ function previewMeta(path: string, projectId: string, bundle: boolean): { downlo
 
 function baseName(path: string): string {
   return path.split('/').pop() ?? ''
+}
+
+/** Same cap as GET /files. */
+const MAX_TEXT_BYTES = 10 * 1024 * 1024
+
+/** The read-only buffer for a file outside the workspace (chat path link,
+ *  restore, Open as text), read through the absolute-path routes: text via
+ *  `/fs/raw`, previews from `/files/download`'s absolute branch. Sandbox-hidden
+ *  paths 404 server-side like a missing file. `asText` = Open as text on a
+ *  binary. 'missing' / 'tooLarge' = no tab. */
+async function externalBuffer(abs: string, projectId: string, stat: { size: number; modifiedAt: number }, asText = false): Promise<EditorBuffer | 'missing' | 'tooLarge'> {
+  const base = { path: abs, size: stat.size, mtime: stat.modifiedAt, readOnly: true }
+  if (!asText && await isBinaryExtension(abs.split('.').pop()?.toLowerCase() ?? '')) {
+    return { ...base, content: '', originalContent: '', language: '', preview: previewMeta(abs, projectId, false) }
+  }
+  if (stat.size > MAX_TEXT_BYTES) return 'tooLarge'
+  try {
+    const content = await api.fs.readText(abs)
+    return { ...base, content, originalContent: content, language: getLanguageFromPath(abs) }
+  } catch { return 'missing' }
 }
 
 interface EditorPanelProps {
@@ -263,7 +283,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       try {
         const parsed = JSON.parse(saved!) as {
           // New shape (multi-pane): { groups: [{ tabs: [{path, ...}], activeTab }], activeGroupIdx }
-          groups?: Array<{ tabs: Array<{ path: string; isPreview?: boolean; bundle?: boolean; language?: string }>; activeTab: string | null }>
+          groups?: Array<{ tabs: Array<{ path: string; isPreview?: boolean; bundle?: boolean; readOnly?: boolean; language?: string }>; activeTab: string | null }>
           activeGroupIdx?: number
           // Legacy shape: { tabs: [{path, ...}], activeTab }
           tabs?: Array<{ path: string; isPreview?: boolean; language?: string }>
@@ -271,7 +291,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         }
         // Normalize to the multi-pane shape so the rest of the function only
         // deals with one path. Old single-pane state becomes a 1-group restore.
-        const groupsToRestore: Array<{ tabs: Array<{ path: string; isPreview?: boolean; bundle?: boolean; language?: string }>; activeTab: string | null }> =
+        const groupsToRestore: Array<{ tabs: Array<{ path: string; isPreview?: boolean; bundle?: boolean; readOnly?: boolean; language?: string }>; activeTab: string | null }> =
           parsed.groups ?? (parsed.tabs ? [{ tabs: parsed.tabs, activeTab: parsed.activeTab ?? null }] : [])
         const restoredActiveGroupIdx = parsed.activeGroupIdx ?? 0
         if (groupsToRestore.length === 0) { setTabsRestored(true); return }
@@ -281,13 +301,24 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         const allPaths = Array.from(new Set(groupsToRestore.flatMap((g) => g.tabs.map((t) => t.path))))
         const langByPath = new Map<string, string | undefined>()
         const bundlePaths = new Set<string>()
+        const readOnlyPaths = new Set<string>()
         for (const g of groupsToRestore) for (const t of g.tabs) {
           if (!langByPath.has(t.path)) langByPath.set(t.path, t.language)
           if (t.bundle) bundlePaths.add(t.path)
+          if (t.readOnly) readOnlyPaths.add(t.path)
         }
 
         const fetched = await Promise.all(
           allPaths.map(async (path) => {
+            // Outside the workspace: reopen the way the path link opened it.
+            if (readOnlyPaths.has(path)) {
+              try {
+                const stat = await api.fs.stat(path)
+                if (stat.isDirectory) return null
+                const buf = await externalBuffer(path, projectId!, stat)
+                return typeof buf === 'string' ? null : buf
+              } catch { return null }
+            }
             const ext = path.split('.').pop()?.toLowerCase() ?? ''
             // A bundle tab is a directory: reopen it only while a bundle
             // extension that runs here still claims it, else drop the tab (the
@@ -373,14 +404,14 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   // Persist groups (multi-pane tab layout) to localStorage. Older saves
   // used `{ tabs, activeTab }`; restore() understands both shapes.
   // The pinned face tab is left out: the face toggle (face-store) restores it.
-  // So are read-only tabs from outside the workspace: restore reads through
-  // the workspace-only files API, where they'd only 403.
+  // Read-only tabs (outside the workspace) carry `readOnly`: restore reopens
+  // them through the absolute-path routes (externalBuffer), not /files.
   useEffect(() => {
     if (!projectId || !tabsRestored) return
     const persistedGroups = groups.map((g) => ({
-      tabs: g.tabs.filter((p) => p !== pinnedTab && !buffers[p]?.readOnly).map((p) => {
+      tabs: g.tabs.filter((p) => p !== pinnedTab).map((p) => {
         const buf = buffers[p]
-        return { path: p, isPreview: !!buf?.preview, ...(buf?.preview?.bundle ? { bundle: true } : {}), language: buf?.language }
+        return { path: p, isPreview: !!buf?.preview, ...(buf?.preview?.bundle ? { bundle: true } : {}), ...(buf?.readOnly ? { readOnly: true } : {}), language: buf?.language }
       }),
       activeTab: g.activeTab === pinnedTab ? null : g.activeTab,
     }))
@@ -575,6 +606,18 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
 
   const handleOpenAsText = useCallback(async (filePath: string) => {
     if (!projectId) return
+    // A file outside the workspace: the workspace-only GET /files would 403, so
+    // read it like a path-link open (absolute routes) — and say why when it can't.
+    if (useEditorStore.getState().buffers[filePath]?.readOnly) {
+      let buf: Awaited<ReturnType<typeof externalBuffer>>
+      try {
+        buf = await externalBuffer(filePath, projectId, await api.fs.stat(filePath), true)
+      } catch { buf = 'missing' }
+      if (typeof buf === 'string') { window.alert(t(`pathLink.${buf}`)); return }
+      useEditorStore.getState().closeTab(filePath)
+      useEditorStore.getState().openFile(filePath, buf.content, buf.language, buf.mtime, { size: buf.size, readOnly: true })
+      return
+    }
     try {
       const data = await api.files.read(filePath, projectId)
       const language = getLanguageFromPath(filePath)
@@ -584,7 +627,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     } catch (err) {
       console.error('[EditorPanel] Failed to open as text:', err)
     }
-  }, [projectId])
+  }, [projectId, t, useEditorStore])
 
   const handleContentChange = useCallback((path: string, content: string) => {
     useEditorStore.getState().updateContent(path, content)
@@ -960,16 +1003,10 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       if (stat.isDirectory) return 'outside'
       const abs = stat.path
       if (!store.buffers[abs]) {
-        if (await isBinaryExtension(abs.split('.').pop()?.toLowerCase() ?? '')) {
-          const { downloadUrl, viewUrl } = previewMeta(abs, projectId, false)
-          store.openPreview(abs, downloadUrl, viewUrl, { size: stat.size, mtime: stat.modifiedAt, readOnly: true })
-        } else {
-          // Same cap as GET /files.
-          if (stat.size > 10 * 1024 * 1024) return 'tooLarge'
-          let content: string
-          try { content = await api.fs.readText(abs) } catch { return 'missing' }
-          store.openFile(abs, content, getLanguageFromPath(abs), stat.modifiedAt, { size: stat.size, readOnly: true })
-        }
+        const buf = await externalBuffer(abs, projectId, stat)
+        if (typeof buf === 'string') return buf
+        if (buf.preview) store.openPreview(abs, buf.preview.downloadUrl, buf.preview.viewUrl, { size: buf.size, mtime: buf.mtime, readOnly: true })
+        else store.openFile(abs, buf.content, buf.language, buf.mtime, { size: buf.size, readOnly: true })
       } else store.setActiveTab(abs)
       if (ref.line && !useEditorStore.getState().buffers[abs]?.preview) store.requestReveal(abs, ref.line, ref.column)
       showCanvas(false)
@@ -1338,6 +1375,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                               bundle={t.preview!.bundle}
                               size={t.size}
                               mtime={t.mtime}
+                              readOnly={t.readOnly}
                               onOpenAsText={() => handleOpenAsText(t.path)}
                             />
                           </div>
@@ -1361,6 +1399,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                             bundle={paneFile.preview.bundle}
                             size={paneFile.size}
                             mtime={paneFile.mtime}
+                            readOnly={paneFile.readOnly}
                             onOpenAsText={() => handleOpenAsText(paneFile.path)}
                           />
                         </div>

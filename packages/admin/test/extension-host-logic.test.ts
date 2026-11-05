@@ -3,7 +3,7 @@ import type { ExtensionCapability, ExtensionClientFrame, ExtensionTheme } from '
 import {
   initialHostState, isClientFrame, onClientFrame, onLoaded, onPutResult, onConflictChoice,
   onFileChanged, onLangChange, onSaveRequest, onThemeChange, registerExtensionHost, getExtensionHost,
-  onFsResult, isBundlePath, isSystemPath, createKeyedQueue,
+  onFsResult, isBundlePath, isSystemPath, createKeyedQueue, grantedCapabilities,
   type HostState, type HostEffect, type HostContext,
 } from '../src/features/editor/previews/extension-host-logic'
 import { readThemeVars, schemeFromRgb } from '../src/shared/theme/palette'
@@ -495,6 +495,38 @@ describe('export', () => {
     for (const b of ['png bytes', new Uint8Array(4), null]) {
       expect(exportReply(onClientFrame(ready(), exportFrame('a.png', b), ctx).effects)).toMatchObject({ reason: 'invalid' })
     }
+  })
+})
+
+/**
+ * Contract (read-only tab = a file outside the workspace): the host grants
+ * the manifest's capabilities minus `save`, so init carries no `save` and
+ * `export: false`, and dirty / save / export never reach put or export I/O.
+ * `fs-read` and the rest stay; a writable tab gets the manifest as-is.
+ */
+describe('grantedCapabilities (read-only tab)', () => {
+  it('drops only save on a read-only tab; a writable tab keeps the manifest', () => {
+    const manifest: ExtensionCapability[] = ['save', 'fs-read', 'media']
+    expect(grantedCapabilities(manifest, true)).toEqual(['fs-read', 'media'])
+    expect(grantedCapabilities(manifest, false)).toBe(manifest)
+  })
+
+  it('a read-only host inits without save / export and refuses dirty, save and export', () => {
+    const s0 = initialHostState(grantedCapabilities(['save', 'fs-read'], true))
+    const hello = onClientFrame(s0, frame({ type: 'ready', protocol: 1 }), ctx)
+    const init = hello.effects[0]
+    expect(init.type === 'post' && init.frame.type === 'init' && init.frame.capabilities).toEqual(['fs-read'])
+    expect(init.type === 'post' && init.frame.type === 'init' && init.frame.view === 'file' && init.frame.export).toBe(false)
+    const s = { ...hello.state, mtime: 1 }
+    const dirty = onClientFrame(s, frame({ type: 'dirty', dirty: true }), ctx)
+    expect(dirty.state.dirty).toBe(false)
+    expect(types(dirty.effects)).toEqual(['warn'])
+    expect(onSaveRequest({ ...s, dirty: true }).effects).toEqual([])
+    const all = [
+      ...onClientFrame(s, frame({ type: 'save', buffer: buf() }), ctx).effects,
+      ...onClientFrame(s, { haloExt: 1, type: 'export', name: 'a.png', buffer: buf() } as unknown as ExtensionClientFrame, ctx).effects,
+    ]
+    expect(types(all).filter((t) => t === 'put' || t === 'export')).toEqual([])
   })
 })
 

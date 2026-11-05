@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Terminal: refreshing the admin page (especially with the Terminal tab or the split view open) no longer starts an extra bash. A new terminal now starts only when the server reports none.
 - Shell: the accidental-deletion guard now takes `~`, `$HOME` and `$PWD` as the literal path. A home or workspace path containing `$&`, `$'` or `$NAME` used to be rewritten while the guard worked out the target, so `rm -rf $PWD` in such a workspace could get past the workspace-root check.
+- Chat path links: read-only tabs for files outside the workspace now come back after a page refresh, still read-only. "Open as text" on one of them opens it as read-only text; before, clicking it did nothing. An extension viewer such as draw.io no longer shows Save or export there, so you can't hit a save error.
 - Sessions: when a sub-agent's model declines to respond (a safety-classifier refusal), the parent now gets an aborted report saying to start a new session with a clean brief, instead of "(no output)" or a half-finished narration it kept resuming. Relay, goal-mode and A2A reports mark it the same way, and so do OpenTelemetry (an ERROR turn span, `halo.turn.duration` `outcome=error`) and AgentCore (`HALO_RUN_STATUS=error`); a pending `continue_task` resume is skipped after a refusal or a model account error, since it would fail the same way.
 
 ### Changed

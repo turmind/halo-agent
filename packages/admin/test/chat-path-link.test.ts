@@ -96,7 +96,7 @@ describe('Explorer opener', () => {
     useProjectStore.getState().openFolder(ROOT)
     mount(createElement(EditorPanel, { projectId: ROOT, mode: 'tree-only' }))
     await settle()
-    return { store: useEditorStore, openPath, readText, isPathExpanded }
+    return { store: useEditorStore, openPath, readText, isPathExpanded, api, EditorPanel }
   }
 
   it('absolute inside the workspace → the relative, editable tab', async () => {
@@ -140,5 +140,69 @@ describe('Explorer opener', () => {
     expect(isPathExpanded('a')).toBe(true)
     expect(isPathExpanded('a/b')).toBe(true)
     expect(store.getState().tabs).toEqual([])
+  })
+
+  it('read-only tabs persist with readOnly and restore through /fs; a vanished one is dropped', async () => {
+    localStorage.setItem(`halo_tabs:${ROOT}`, JSON.stringify({
+      groups: [{
+        tabs: [
+          { path: 'docs/a.md' },
+          { path: '/etc/hosts.txt', readOnly: true },
+          { path: '/var/a.zip', isPreview: true, readOnly: true },
+          { path: '/var/gone.txt', readOnly: true },
+        ],
+        activeTab: '/etc/hosts.txt',
+      }],
+      activeGroupIdx: 0,
+    }))
+    const { store, api } = await setup({
+      [`${ROOT}/docs/a.md`]: { content: 'ws' },
+      '/etc/hosts.txt': { content: '127.0.0.1' },
+      '/var/a.zip': { size: 9 },
+    })
+    await act(async () => { await vi.waitFor(() => expect(store.getState().buffers['/etc/hosts.txt']).toBeTruthy()) })
+    const b = store.getState().buffers
+    expect(Object.keys(b).sort()).toEqual(['/etc/hosts.txt', '/var/a.zip', 'docs/a.md'])
+    expect(b['/etc/hosts.txt']).toMatchObject({ content: '127.0.0.1', readOnly: true })
+    expect(b['/var/a.zip']).toMatchObject({ readOnly: true, size: 9, preview: { viewUrl: expect.stringContaining(encodeURIComponent('/var/a.zip')) } })
+    expect(b['docs/a.md']).toMatchObject({ content: 'ws' })
+    expect(b['docs/a.md'].readOnly).toBeUndefined()
+    // The workspace-only /files API never sees an absolute path.
+    expect(vi.mocked(api.files.read).mock.calls.map(([p]) => p)).toEqual(['docs/a.md'])
+    expect(store.getState().activeTab).toBe('/etc/hosts.txt')
+
+    await settle()
+    const persisted = JSON.parse(localStorage.getItem(`halo_tabs:${ROOT}`)!) as { groups: Array<{ tabs: Array<{ path: string; readOnly?: boolean }> }> }
+    expect(persisted.groups[0].tabs.map((t) => [t.path, !!t.readOnly])).toEqual([
+      ['docs/a.md', false], ['/etc/hosts.txt', true], ['/var/a.zip', true],
+    ])
+  })
+
+  it('Open as text on an outside binary preview → read-only text via /fs/raw; too large → a visible hint', async () => {
+    const { store, openPath, readText, EditorPanel } = await setup({
+      '/var/a.zip': { size: 4, content: 'PK..' },
+      '/var/big.zip': { size: 11 * 1024 * 1024 },
+    })
+    const c = mount(createElement(EditorPanel, { projectId: ROOT, mode: 'editor-only' }))
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    const clickOpenAsText = () => act(async () => {
+      [...c.querySelectorAll('button')].find((n) => n.textContent === 'editor.openAsText')!.click()
+    })
+
+    expect(await openPath({ path: '/var/a.zip' })).toBe('ok')
+    await settle()
+    await clickOpenAsText()
+    await settle()
+    expect(store.getState().buffers['/var/a.zip']).toMatchObject({ content: 'PK..', readOnly: true })
+    expect(store.getState().buffers['/var/a.zip'].preview).toBeUndefined()
+    expect(readText).toHaveBeenCalledWith('/var/a.zip')
+
+    expect(await openPath({ path: '/var/big.zip' })).toBe('ok')
+    await settle()
+    await clickOpenAsText()
+    await settle()
+    expect(alert).toHaveBeenCalledWith('pathLink.tooLarge')
+    expect(store.getState().buffers['/var/big.zip'].preview).toBeTruthy()
+    expect(readText).not.toHaveBeenCalledWith('/var/big.zip')
   })
 })

@@ -14,7 +14,7 @@ import { extensionEntryUrl, getExtensionToken } from './extension-token'
 import { currentPlatform, isImmersiveViewer } from './registry'
 import { ImmersivePane, claimImmersive, createExitPill, exitImmersive, takeFullscreenArm, takeRefocus } from '../immersive'
 import {
-  createKeyedQueue, exportError, initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onFsResult, onLoaded,
+  createKeyedQueue, exportError, grantedCapabilities, initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onFsResult, onLoaded,
   isSystemPath, onLangChange, onPutResult, onSaveRequest, onThemeChange, pickResult, registerExtensionHost,
   type FsOutcome, type HostContext, type HostEffect, type HostState, type Step,
 } from './extension-host-logic'
@@ -131,7 +131,7 @@ interface Props extends PreviewProps {
  * transfers the bytes (§6). Protocol decisions live in extension-host-logic.ts;
  * this component only executes the effects it returns.
  */
-export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, size, onOpenAsText }: Props) {
+export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, size, onOpenAsText, readOnly }: Props) {
   const { t, lang } = useI18n()
   const useEditorStore = useScopedEditorStore()
   const { theme } = useTheme()
@@ -141,7 +141,8 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `theme` is the DOM-change signal, not an input
   const hostTheme = useMemo(() => readHostTheme(), [theme])
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const stateRef = useRef<HostState>(initialHostState(info.capabilities, info.bundle))
+  const capabilities = grantedCapabilities(info.capabilities, !!readOnly)
+  const stateRef = useRef<HostState>(initialHostState(capabilities, info.bundle))
   // Bundle write / append, serialized per file so appends land in request order (§3).
   const fsQueueRef = useRef(createKeyedQueue())
   // Bumped on every reload (retry / upgrade) so the iframe remounts.
@@ -198,10 +199,12 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
       case 'load':
         void (async () => {
           try {
-            // The mtime that comes with the bytes is the next save's baseline (§6.3).
+            // The mtime that comes with the bytes is the next save's baseline
+            // (§6.3) — none needed on a read-only tab, whose absolute path the
+            // workspace-only /files/stat would only 403.
             const [res, stat] = await Promise.all([
               fetch(viewUrl),
-              projectId ? api.files.stat(path, projectId).catch(() => null) : Promise.resolve(null),
+              projectId && !readOnly ? api.files.stat(path, projectId).catch(() => null) : Promise.resolve(null),
             ])
             if (!res.ok) throw new Error(`HTTP ${res.status}`)
             const buffer = await res.arrayBuffer()
@@ -348,7 +351,7 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
     // A confirmed "discard and reload" throws the iframe's edits away — the
     // tab's dirty dot goes with them.
     if (stateRef.current.dirty) useEditorStore.getState().clearModified(path)
-    stateRef.current = initialHostState(info.capabilities, info.bundle)
+    stateRef.current = initialHostState(grantedCapabilities(info.capabilities, !!readOnly), info.bundle)
     getExtensionToken().then((token) => {
       if (cancelled) return
       mountedVersionRef.current = info.version
@@ -552,7 +555,7 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
     }
   }, [immersive, frameLoads, pill])
 
-  const canSave = info.capabilities.includes('save')
+  const canSave = capabilities.includes('save')
   const toolbar = canSave ? (
     <ToolbarButton onClick={requestSave} title={t('editor.extension.save')}>
       <span>{t('editor.extension.save')}</span>

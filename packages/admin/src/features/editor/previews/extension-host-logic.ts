@@ -79,6 +79,14 @@ export interface Step {
   effects: HostEffect[]
 }
 
+/** What the host grants a file view: the manifest's capabilities, minus `save`
+ *  on a read-only tab (a file outside the workspace — the write-back routes are
+ *  workspace-only). Without `save` the protocol already refuses dirty / save /
+ *  export (`init.export: false`); `fs-read` stays. */
+export function grantedCapabilities(capabilities: ExtensionCapability[], readOnly: boolean): ExtensionCapability[] {
+  return readOnly ? capabilities.filter((c) => c !== 'save') : capabilities
+}
+
 export function initialHostState(capabilities: ExtensionCapability[], bundle = false): HostState {
   return { ready: false, dirty: false, mtime: null, saving: false, retried: false, capabilities, bundle }
 }
