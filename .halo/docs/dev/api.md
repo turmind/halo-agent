@@ -47,7 +47,7 @@ File: `packages/server/src/routes/files.ts`
 
 **Inline Content-Type** for images comes from core's shared extension→MIME table (`imageMimeFromExt`, `packages/core/src/media/mime.ts`) on both `/api/files/download?inline=1` and `/api/web/file`; each route keeps only its own non-image entries (pdf / html / video / audio) and falls back to `application/octet-stream`. That table is why `.bmp` now serves as `image/bmp` on both — the two routes used to carry their own copies and `/api/web/file` returned `application/octet-stream` for it. `.svg` / `.ico` / `.avif` get a real image Content-Type when served, but are deliberately not "photos" (they're outside `IMAGE_EXTS`) so they never reach a vision model or a channel's sendPhoto.
 
-All file operations validate the path stays inside the project root (prevents path traversal). The check (`validatePath` in `routes/workspace-path.ts`, shared with `data-preview.ts` and `git.ts`) realpaths both sides — longest existing ancestor plus the re-appended tail — so a symlink inside the workspace pointing outside it is rejected too, not just lexical `../`. One exception: `GET /api/files/download` (not `download-folder`) also accepts an absolute path anywhere on the host, with the same rules and trust boundary as `/api/fs/raw` (below), so chat media chips can preview / download agent files outside the active workspace.
+All file operations validate the path stays inside the project root (prevents path traversal). The check (`validatePath` in `routes/workspace-path.ts`, shared with `data-preview.ts` and `git.ts`) realpaths both sides — longest existing ancestor plus the re-appended tail — so a symlink inside the workspace pointing outside it is rejected too, not just lexical `../`. Exceptions: `GET /api/files/download` (not `download-folder`) and the read-only `GET /api/data-preview/*` routes (below) also accept an absolute path anywhere on the host, with the same rules and trust boundary as `/api/fs/raw` (below), so chat media chips and path-link tabs can preview / download agent files outside the active workspace.
 
 ### Filesystem browse (not project-scoped — for the workspace picker)
 
@@ -66,7 +66,7 @@ Absolute paths only. Purpose: Explorer's workspace picker and switching validati
 
 File: `packages/server/src/routes/data-preview.ts`
 
-Tabular file previews (Parquet / SQLite / CSV / TSV) for the Canvas editor — parsed server-side, returned as schema + one page of JSON-safe rows so large files never travel to the browser.
+Tabular file previews (Parquet / SQLite / CSV / TSV) for the Canvas editor — parsed server-side, returned as schema + one page of JSON-safe rows so large files never travel to the browser. `path` is workspace-relative, or absolute for a file outside the workspace (a chat path link's read-only tab) under `/api/fs/raw`'s rules: no `..` (400), realpath'd, hidden or missing → 404.
 
 | Method | Path | Purpose |
 |---|---|---|

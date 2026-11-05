@@ -309,7 +309,7 @@ Raw-bytes previews fetch via `GET /api/files/download?inline=1` which:
 - Supports HTTP `Range` (206 Partial Content) for video/audio seek + progressive load
 - Aborts the read when the client disconnects (tab closed / URL changed)
 
-Server-parsed previews fetch via `GET /api/data-preview/*` (schema + one page of rows, `projectId`-scoped like `/api/files/*`).
+Server-parsed previews fetch via `GET /api/data-preview/*` (schema + one page of rows; a workspace-relative path is `projectId`-scoped like `/api/files/*`, an absolute one — a read-only tab outside the workspace — follows `/api/fs/raw`'s rules).
 
 See [`dev/api.md`](api.md) for the route details.
 
