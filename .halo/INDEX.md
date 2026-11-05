@@ -58,10 +58,10 @@ Onboarding guides at [guide/channels/](docs/guide/channels/), design at `design/
 
 ## Cron Tasks
 
-Scheduled agent runs from the **Cron** tab: `(workspace, agent, prompt, schedule | runAt, targets, optional session / folder / stateless)`. Each fire spawns `halo cli` in the job's stable session (`cron-<jobId>`, or a picked root session), or in a fresh per-run session for a stateless job; stdout fans out to channels through a per-channel `cron-dispatcher.ts` registry, and UI updates are pushed over WS.
+Scheduled or webhook-triggered agent runs from the **Cron** tab: `(workspace, agent, prompt, schedule | runAt | webhook, targets, optional session / folder / stateless)`. Each fire runs in-process on the server's `SessionManager` in the job's stable session (`cron-<jobId>`, or a picked root session), or a fresh per-run session for a stateless job; a `reply_to = {cron: runId}` pointer collects the wrap-up, which fans out to channels through a per-channel `cron-dispatcher.ts` registry. A run cut off by a restart resumes through the run ledger; UI updates are pushed over WS.
 
-- Key state: `~/.halo/global/cron.db` (`cron_jobs`, `cron_runs`), `~/.halo/global/logs/cron/<runId>.log` (30 days)
-- Code: `packages/server/src/cron/` + `channels/<ch>/cron-dispatcher.ts` + `templates/skills/cron/` · Doc: [design/cron.md](docs/design/cron.md)
+- Key state: `~/.halo/global/cron.db` (`cron_jobs`, `cron_runs`, `cron_events` — webhook deliveries), workspace `agent_sessions.reply_to`
+- Code: `packages/server/src/cron/` + `routes/cron-hooks.ts` + `channels/<ch>/cron-dispatcher.ts` + `templates/skills/cron/` · Doc: [design/cron.md](docs/design/cron.md)
 
 ## Relay (cross-workspace dispatch)
 
@@ -79,14 +79,14 @@ A2A v1.0 (JSON-RPC only). **Inbound**: a workspace with `.halo/agent-card.json` 
 
 ## Linked machines (`halo node`)
 
-`halo node --server <url> [--root <dir>] [--allow-shell]` on a user's machine dials the server over WebSocket (token from Admin → Channels → Linked machines, bound to one workspace) and that workspace's full-access agents get eight `node_*` tools that run the local file tools — and opt-in `shell_exec`, unsandboxed — on the machine. Opt-in with `tools: [node_list]` (the default agent lists it); tool list and prompt are constant, online state only in `node_list`'s result. Cron runs reach it via a loopback relay. Server only.
+`halo node --server <url> [--root <dir>] [--allow-shell]` on a user's machine dials the server over WebSocket (token from Admin → Channels → Linked machines, bound to one workspace) and that workspace's full-access agents get eight `node_*` tools that run the local file tools — and opt-in `shell_exec`, unsandboxed — on the machine. Opt-in with `tools: [node_list]` (the default agent lists it); tool list and prompt are constant, online state only in `node_list`'s result. Server only (cron runs included).
 
 - Key state: `~/.halo/secrets/channels/channels.db` `channel_accounts` (`channel_type='node'`); live connections in memory only
 - Code: `packages/server/src/nodes/` + `packages/cli/src/index.ts` (`cmdNode`) + admin `features/nodes/` · Docs: [design/node.md](docs/design/node.md), [guide/node.md](docs/guide/node.md), [dev/tools.md](docs/dev/tools.md#node-tools), [dev/api.md](docs/dev/api.md#linked-machines-halo-node)
 
 ## Run Ledger
 
-`runSession` records each in-flight run in a global table and deletes it on exit, so rows left at boot are exactly the runs the previous process died in. The boot sweep sends one restart nudge per interrupted root (skipping cron, internal agents and goal-bound sessions).
+`runSession` records each in-flight run in a global table and deletes it on exit, so rows left at boot are exactly the runs the previous process died in. The boot sweep sends one restart nudge per interrupted root (skipping internal agents and goal-bound sessions; cron roots are nudged like any other).
 
 - Key state: `~/.halo/global/runs.db` (`running_sessions`)
 - Code: `packages/server/src/agents/run-ledger.ts` + `db/runs-db.ts` · Doc: [design/session.md](docs/design/session.md#run-ledger--restart-nudge-for-interrupted-roots-haloglobalrunsdb)

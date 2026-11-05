@@ -75,7 +75,7 @@ describe('initObservability', () => {
 })
 
 // Settings mapped onto env at server boot must not reach spawned children
-// (cron / evo `halo cli`): inherited, they'd beat the child's own fresh read of
+// (evo `halo cli`): inherited, they'd beat the child's own fresh read of
 // settings.yaml, so a changed / cleared endpoint never arrived until restart.
 describe('cleanChildEnv × initObservability', () => {
   /** otel.ts + the child-env.ts it registers keys with, from one module graph. */

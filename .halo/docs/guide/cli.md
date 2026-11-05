@@ -215,9 +215,9 @@ Attach files or images to your message with `@file` and `@image`, or pull a dire
 
 ## OpenTelemetry export
 
-`halo cli` and `halo tui` export traces, metrics and logs the same way the server does: when the global `general.observability.endpoint` setting is non-empty, each run registers the OTLP exporters at start and the agent loop emits the same GenAI spans (`invoke_agent` / `chat` / `execute_tool`). With no endpoint nothing is loaded and startup is unaffected. The scheduled runs of [Cron Tasks](../design/cron.md) and the evolution pipeline are spawned `halo cli` children, so they show up in the collector too (`session.id` `cron-<jobId>` or the internal agent's name).
+`halo cli` and `halo tui` export traces, metrics and logs the same way the server does: when the global `general.observability.endpoint` setting is non-empty, each run registers the OTLP exporters at start and the agent loop emits the same GenAI spans (`invoke_agent` / `chat` / `execute_tool`). With no endpoint nothing is loaded and startup is unaffected. The evolution pipeline's runs are spawned `halo cli` children, so they show up in the collector too (`session.id` = the internal agent's name); [Cron Tasks](../design/cron.md) run inside the server since 2.2 and export as the server.
 
-- **Telling processes apart**: they all share `service.name`; the `halo.process` resource attribute is `server`, `cli` or `tui`, and cron / evolution runs report `cli`.
+- **Telling processes apart**: they all share `service.name`; the `halo.process` resource attribute is `server`, `cli` or `tui`, evolution runs report `cli`, cron runs `server`.
 - **Flushed on exit**: the batched telemetry is sent before the process ends — on normal completion, TUI quit, an error, and on SIGINT / SIGTERM (after the graceful stop, still exiting 130 / 143). The flush is capped at 3 s, so an unreachable collector delays the exit by at most that and never hangs it.
 - `halo agents` and `halo sessions` only list and don't export.
 
@@ -361,7 +361,7 @@ Session prefix: `cli_`. Sessions are persisted to `<workspace>/.halo/sessions/` 
 
 `tui` / `cli` / `agents` / `sessions` refuse to run ("~/.halo/global/ not initialized. Run halo setup first.") until `halo setup` has seeded `~/.halo/global/`. Then the CLI replicates the server's init sequence (`initRuntime()` in `harness.ts`):
 1. `refreshTemplatesIfOutdated()` — the server's template startup check: when `~/.halo/global/.template-version` is behind the bundled `TEMPLATE_VERSION` (typically right after `halo upgrade`), re-seed `~/.halo/global/` before anything reads the models registry; logs `[CLI] Templates outdated (vX → vY), refreshing ~/.halo/global/` to stderr. Runs once per upgrade — afterwards the stamp matches and it's a single file read
-2. `initObservability()` — `tui` / `cli` only (the list-only `agents` / `sessions` skip it): when `general.observability.endpoint` is set, register OTel providers so this run's traces, metrics and logs reach the collector, tagged `halo.process=cli` or `tui`; a no-op otherwise. Cron jobs and evolution runs are spawned `halo cli` children, so they export too. See [OpenTelemetry export](#opentelemetry-export)
+2. `initObservability()` — `tui` / `cli` only (the list-only `agents` / `sessions` skip it): when `general.observability.endpoint` is set, register OTel providers so this run's traces, metrics and logs reach the collector, tagged `halo.process=cli` or `tui`; a no-op otherwise. Evolution runs are spawned `halo cli` children, so they export too. See [OpenTelemetry export](#opentelemetry-export)
 3. `initLogger()` — redirect console to stderr + file logger
 4. `initBwrapCheck()` — probe sandbox availability
 5. `setSandboxHiddenPaths()` — configure sandbox paths

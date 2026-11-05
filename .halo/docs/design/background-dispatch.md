@@ -64,7 +64,7 @@ Nothing is lost without a listener: `SessionUIStore.emitEvent` folds every event
 
 - **Which file**: `applyEvent` returns the log it touched. A root event writes the root's session file; a sub-agent event (`taskId` set) writes only that sub-session's **own** file from `subSessionLogs[taskId]` — the root's file isn't rewritten for sub-agent traffic. The sub log is dropped from memory at its `agent_done` (its file is complete by then).
 - **When**: `applyEvent`'s `persist` hint — `'flush'` writes now (`tool_call`, `tool_result`, `usage`, root `complete`, a sub's `agent_done`, `error`, `call_discarded`), `'debounce'` coalesces within 500 ms (`user` / `system` / `context` rows), absent = no write (the next write carries the change). Timers are keyed by the log's own id, so root and sub writes don't cancel each other.
-- **Dirty tracking**: a root event marks the root `uiStateDirty` until `persistLog` lands it. `isUIStateDirty(rootId)` is what the WS saves below gate on — a state only seeded from disk (viewing a session another process, e.g. a cron `halo cli` child, is driving) is clean and is never written back, so it can't overwrite that process's newer file.
+- **Dirty tracking**: a root event marks the root `uiStateDirty` until `persistLog` lands it. `isUIStateDirty(rootId)` is what the WS saves below gate on — a state only seeded from disk (viewing a session another process, e.g. a `halo cli -s` run, is driving) is clean and is never written back, so it can't overwrite that process's newer file.
 
 ### When save fires
 

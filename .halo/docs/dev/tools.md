@@ -449,7 +449,7 @@ A `bearer` remote's token is the settings secret `a2a.secrets.<remote>` (workspa
 
 **Enabling**: opt-in by the single name `a2a_send` in `agent.yaml`'s `tools:` — it brings `a2a_stop` / `a2a_read` / `a2a_list`; the other three names are not recognised on their own. Available at **every access level** (full, workspace, readonly, any channel) **except the A2A read-only profile** — an inbound A2A session at readonly never gets them, whatever its yaml lists, so a remote's readonly token can't make this server call third parties. The admin tool picker shows one `a2a_send` chip naming the set.
 
-**Server only**: in the CLI / TUI — and every cron run, which is a `halo cli` child — there is no push receiver; every A2A tool returns `{"code": 1, "error": "a2a is not available in the CLI / TUI — it only runs inside `halo server`, which receives the remote agent's push reports. This is permanent for this runtime, not a temporary outage: do not retry. …"}`. The tools are still listed there when the agent names `a2a_send`.
+**Server only**: in the CLI / TUI there is no push receiver; every A2A tool returns `{"code": 1, "error": "a2a is not available in the CLI / TUI — it only runs inside `halo server`, which receives the remote agent's push reports. This is permanent for this runtime, not a temporary outage: do not retry. …"}`. The tools are still listed there when the agent names `a2a_send`.
 
 **Retries**: each request has a 30 s timeout. An AgentCore `-32054` "… please retry" answer is retried after 0.5 / 1 / 2 / 4 / 8 s, and a halo AgentCore container's lease-busy answer (`-32603` "workspace is in use by another runtime session …") after 5 / 10 / 15 / 20 s; then the last answer is returned as the error. Stopping the turn ends the wait at once — for the RPC and for the agent-card fetch before it.
 
@@ -547,7 +547,7 @@ Act on the user's **linked machines** — computers running `halo node`, paired 
 
 **Paths**: a machine shares one folder (`--root`; `root` in `node_list`) — relative paths resolve against it, paths that resolve outside it (symlinks included) are refused: `"<p>" is outside this machine's shared folder (<root>) — node tools can only reach paths inside it`. A whole-machine node (`root: null, wholeMachine: true`) has no such check; relative paths resolve against its `base`.
 
-**Runtime**: in `halo server` calls go over the machine's WebSocket; cron runs (a `halo cli` child) reach it through the server's loopback relay. In the standalone CLI / TUI, the evo sandbox and AgentCore mode the tools are listed but every one — `node_list` included — returns `linked machines are not available in this runtime — only \`halo server\` accepts \`halo node\` connections. This is permanent for this runtime, not a temporary outage: do not retry. …`.
+**Runtime**: in `halo server` (cron runs included) calls go over the machine's WebSocket. In the standalone CLI / TUI, the evo sandbox and AgentCore mode the tools are listed but every one — `node_list` included — returns `linked machines are not available in this runtime — only \`halo server\` accepts \`halo node\` connections. This is permanent for this runtime, not a temporary outage: do not retry. …`.
 
 **Errors** (returned as the tool error text):
 

@@ -110,7 +110,7 @@ let sandboxWarned = false
 
 /**
  * `observe` = this process runs the agent loop (`halo cli` / `halo tui`, incl.
- * the cron / evo children, which are spawned `halo cli`): export OTel like the
+ * the evo children, which are spawned `halo cli`): export OTel like the
  * server does. The list-only commands (agents / sessions) pass nothing.
  */
 export async function initRuntime(observe?: 'cli' | 'tui'): Promise<void> {
