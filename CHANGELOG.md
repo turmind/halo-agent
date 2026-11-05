@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.1.4] - 2026-11-05
+
 ### Added
 
 - Models: Bedrock Mantle / bedrock-runtime OpenAI agents show the model's reasoning when Thinking is on — GPT-6 Sol / Astra stream their reasoning summaries, Kimi K3 its raw reasoning, into the thinking panel.
@@ -1188,7 +1190,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.3...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.4...HEAD
+[2.1.4]: https://github.com/turmind/halo-agent/compare/v2.1.3...v2.1.4
 [2.1.3]: https://github.com/turmind/halo-agent/compare/v2.1.2...v2.1.3
 [2.1.2]: https://github.com/turmind/halo-agent/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/turmind/halo-agent/compare/v2.1.0...v2.1.1
