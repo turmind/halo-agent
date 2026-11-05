@@ -1601,7 +1601,7 @@ export class SessionManager implements SessionManagerInternals {
           const d = event.stopDetails
           const category = d?.category ? ` (${d.category})` : ''
           console.warn(`[SessionManager] Session ${session.id} model refused${category}: ${d?.explanation ?? 'no explanation'}`)
-          this.emitEvent(session.id, { type: 'system', text: `⚠️ [${agentName}] Model declined to respond${category}: ${d?.explanation ?? 'no explanation given'}. The conversation content tripped the model's safety classifier — later turns on this history will likely be declined too; use /new to start clean.` })
+          this.emitEvent(session.id, { type: 'system', text: `⚠️ [${agentName}] Model declined to respond${category}: ${d?.explanation ?? 'no explanation given'}. The conversation content tripped the model's safety classifier — later turns on this history will likely be declined too; use /session new to start clean.` })
           // A refusal is an HTTP 200, so it never reaches the retry loop's
           // catch — without this the parent / relay / goal / A2A reports took
           // the turn as a normal wrap-up ("(no output)") and kept resuming it.

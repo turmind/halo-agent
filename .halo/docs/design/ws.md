@@ -119,7 +119,7 @@ Sub-agent text is root-tree noise on this wire: the listener is the root's (sub 
 
 `chat:thinking` / `chat:stream` / `chat:followup` / `agent:tool_call` / `agent:tool_result` additionally carry `replay: true` (plus `sessionId`) when synthesized by the reattach path (never on live events) — see [Reconnect flow](#reconnect-flow) step 6.
 
-`chat:system` producers (`session-manager.ts`'s `stop` event handling): a `max_tokens` stop emits `⚠️ [<agent>] Response truncated: output token limit reached.`; a `refusal` stop (Anthropic `stop_reason: "refusal"`, HTTP 200 — the model declined, not an error) emits `⚠️ [<agent>] Model declined to respond (<category>): <explanation> — …` suggesting `/new` (see [session.md](session.md#resilient-execution-loop)).
+`chat:system` producers (`session-manager.ts`'s `stop` event handling): a `max_tokens` stop emits `⚠️ [<agent>] Response truncated: output token limit reached.`; a `refusal` stop (Anthropic `stop_reason: "refusal"`, HTTP 200 — the model declined, not an error) emits `⚠️ [<agent>] Model declined to respond (<category>): <explanation> — …` suggesting `/session new` (see [session.md](session.md#resilient-execution-loop)).
 
 Server-internal flags on `AgentSessionEvent` that are **not** carried into the WS frame: `stream.final` (marks the turn's wrap-up text vs. pre-tool filler — consumed by channel responders and the cli, see [session.md](session.md#message-queue-and-drain)), `stream.streamed` / `thinking.streamed` (the text already went out as deltas — decides whether the whole event is forwarded at all). The admin renders every streamed block, so none is needed on the wire.
 
