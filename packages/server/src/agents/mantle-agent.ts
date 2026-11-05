@@ -18,7 +18,7 @@
  *   - tools are flat `{type:'function', name, ...}`, not nested under `function`
  *   - tool calls come back as `function_call` items in `output[]`, and results
  *     are fed back as `function_call_output` input items keyed by `call_id`
- *   - reasoning via `reasoning:{effort}`, text length via `text:{verbosity}`
+ *   - reasoning via `reasoning:{effort, summary:'auto'}`, text length via `text:{verbosity}`
  *   - assistant text lands in `output[].content[].output_text`
  *
  * Prompt caching is automatic on Bedrock-Mantle (prefix ≥ 1024 tokens, ~5min
@@ -91,7 +91,9 @@ export class MantleAgent extends AgentLoop {
     if (this.config.thinking?.enabled && this.config.thinking.effort) {
       const e = this.config.thinking.effort
       const valid = ['low', 'medium', 'high', 'xhigh', 'max']
-      body.reasoning = { effort: valid.includes(e) ? e : 'high' }
+      // summary: 'auto' makes OpenAI GPT models return reasoning summaries
+      // (without it summary[] stays empty); other models ignore it (probed 2026-11-05).
+      body.reasoning = { effort: valid.includes(e) ? e : 'high', summary: 'auto' }
     }
 
     const payload = JSON.stringify(body)
@@ -127,11 +129,14 @@ export class MantleAgent extends AgentLoop {
           }
         }
       } else if (itemType === 'reasoning') {
-        // Reasoning summary (when the model surfaces one). Often empty unless
-        // a summary was requested; capture whatever text is present.
-        const summary = (item.summary as Array<Record<string, unknown>> | undefined) ?? []
-        for (const part of summary) {
-          if (typeof part.text === 'string') thinking += part.text
+        // OpenAI GPT: summary[] of summary_text (requested via reasoning.summary).
+        // Kimi K3: raw content[] of reasoning_text, no summary. Grok: both empty.
+        const parts = [
+          ...((item.summary as Array<Record<string, unknown>> | undefined) ?? []),
+          ...((item.content as Array<Record<string, unknown>> | undefined) ?? []),
+        ]
+        for (const part of parts) {
+          if (typeof part.text === 'string' && part.text) thinking += (thinking ? '\n\n' : '') + part.text
         }
       } else if (itemType === 'function_call') {
         const callId = (item.call_id as string) ?? (item.id as string) ?? ''
@@ -328,8 +333,10 @@ export class MantleAgent extends AgentLoop {
 /** Responses API stream event — only the fields we consume. Every frame has `type`. */
 interface ResponsesStreamEvent {
   type: string
-  /** `response.output_text.delta` / `response.reasoning_summary_text.delta` / `response.function_call_arguments.delta` */
+  /** `response.output_text.delta` / `response.reasoning_summary_text.delta` / `response.reasoning.delta` / `response.function_call_arguments.delta` */
   delta?: string
+  /** `response.reasoning_summary_text.delta`: which summary part the delta belongs to. */
+  summary_index?: number
   /** `response.completed` / `response.incomplete` / `response.failed` carry the full final response object. */
   response?: Record<string, unknown>
   /** `error` event — bedrock-runtime nests the fields under `error`; the flat shape is the older form. */
@@ -364,6 +371,7 @@ async function readResponsesStream(
 
   let final: Record<string, unknown> | undefined
   let firstDeltaAt: number | undefined
+  let lastSummaryIndex: number | undefined
   // Every read is liveness for the idle timer — argument deltas, empty
   // summary deltas and comment frames included, which report nothing below.
   for await (const ev of readSseJson<ResponsesStreamEvent>(res.body, () => onDelta?.(ACTIVITY_DELTA))) {
@@ -373,7 +381,11 @@ async function readResponsesStream(
         if (ev.delta) onDelta?.({ type: 'text_delta', text: ev.delta })
         break
       case 'response.reasoning_summary_text.delta':
+      case 'response.reasoning.delta': // Kimi K3's raw reasoning_text
         firstDeltaAt ??= Date.now()
+        // A new summary part (summary_index) is a new section — keep the gap the final text has.
+        if (ev.summary_index !== undefined && lastSummaryIndex !== undefined && ev.summary_index !== lastSummaryIndex) onDelta?.({ type: 'thinking_delta', text: '\n\n' })
+        lastSummaryIndex = ev.summary_index ?? lastSummaryIndex
         if (ev.delta) onDelta?.({ type: 'thinking_delta', text: ev.delta })
         break
       case 'response.function_call_arguments.delta':

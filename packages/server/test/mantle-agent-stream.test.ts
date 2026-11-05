@@ -136,6 +136,41 @@ describe('MantleAgent streaming callModel', () => {
     expect(typeof r.ttftMs).toBe('number')
   })
 
+  it('thinking on → reasoning.summary auto; summary deltas stream as thinking, parts joined by a blank line', async () => {
+    const rs = { type: 'reasoning', id: 'rs_s', summary: [{ type: 'summary_text', text: '**A**\n\nfirst' }, { type: 'summary_text', text: '**B**' }] }
+    const captured = stubFetch(() => mantle([
+      { type: 'response.reasoning_summary_text.delta', item_id: 'rs_s', summary_index: 0, delta: '**A**\n\n' },
+      { type: 'response.reasoning_summary_text.delta', item_id: 'rs_s', summary_index: 0, delta: 'first' },
+      { type: 'response.reasoning_summary_text.delta', item_id: 'rs_s', summary_index: 1, delta: '**B**' },
+      ...textStream({ output: [rs, message] }),
+    ]))
+    const deltas: ModelDelta[] = []
+    const agent = new Probe({ modelId: 'm', endpoint: 'https://example.test/v1', apiKey: 'k', systemPrompt: 'sys', tools: [], thinking: { enabled: true, effort: 'medium' } })
+
+    const r = await agent.call(undefined, (d) => deltas.push(d))
+
+    expect((JSON.parse(captured.init!.body) as Record<string, unknown>).reasoning).toEqual({ effort: 'medium', summary: 'auto' })
+    expect(r.thinking).toBe('**A**\n\nfirst\n\n**B**')
+    expect(r.assistantBlocks[0]).toEqual({ type: 'thinking', thinking: r.thinking })
+    const thinkingLive = shownDeltas(deltas).filter((d) => d.type === 'thinking_delta').map((d) => (d as { text: string }).text).join('')
+    expect(thinkingLive).toBe(r.thinking)
+  })
+
+  it('Kimi-style raw reasoning: response.reasoning.delta streams, content[].reasoning_text becomes thinking', async () => {
+    const rs = { type: 'reasoning', id: 'rs_k', summary: [], content: [{ type: 'reasoning_text', text: '17 × 23' }] }
+    stubFetch(() => mantle([
+      { type: 'response.reasoning.delta', item_id: 'rs_k', content_index: 0, delta: '17 × ' },
+      { type: 'response.reasoning.delta', item_id: 'rs_k', content_index: 0, delta: '23' },
+      ...textStream({ output: [rs, message] }),
+    ]))
+    const deltas: ModelDelta[] = []
+
+    const r = await probe().call(undefined, (d) => deltas.push(d))
+
+    expect(r.thinking).toBe('17 × 23')
+    expect(shownDeltas(deltas).filter((d) => d.type === 'thinking_delta')).toEqual([{ type: 'thinking_delta', text: '17 × ' }, { type: 'thinking_delta', text: '23' }])
+  })
+
   it('bedrock-runtime host: trailing data: [DONE] folds identically', async () => {
     stubFetch(() => sseResponse(textStream()))
 
