@@ -220,8 +220,8 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
     })
 
     it('--schedule and --run-at: exactly one, a run-at in the future (ms or ISO)', () => {
-      expect(fails(create())).toMatch(/--schedule or --run-at required/)
-      expect(fails(create('--schedule', '  '))).toMatch(/--schedule or --run-at required/)
+      expect(fails(create())).toMatch(/--schedule, --run-at or --webhook required/)
+      expect(fails(create('--schedule', '  '))).toMatch(/--schedule, --run-at or --webhook required/)
       const future = Date.now() + DAY
       expect(fails(create('--schedule', '0 9 * * *', '--run-at', String(future)))).toMatch(/mutually exclusive/)
       expect(fails(create('--run-at', String(Date.now() - 60_000)))).toMatch(/--run-at must be in the future/)
@@ -340,10 +340,10 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       expect(job('cron-r')).toMatchObject({ schedule: '0 8 * * *', runAt: null })
 
       expect(fails(['update', 'cron-r', '--schedule', '0 7 * * *', '--run-at', String(future)])).toMatch(/mutually exclusive/)
-      expect(fails(['update', 'cron-r', '--schedule', ''])).toMatch(/neither/)
+      expect(fails(['update', 'cron-r', '--schedule', ''])).toMatch(/with none/)
       expect(fails(['update', 'cron-r', '--run-at', String(Date.now() - 60_000)])).toMatch(/must be in the future/)
       insertJob('cron-o', { schedule: '', runAt: future })
-      expect(fails(['update', 'cron-o', '--run-at', ''])).toMatch(/neither/)
+      expect(fails(['update', 'cron-o', '--run-at', ''])).toMatch(/with none/)
       expect(job('cron-r')).toMatchObject({ schedule: '0 8 * * *', runAt: null })
       expect(job('cron-o')).toMatchObject({ schedule: '', runAt: future })
 
@@ -561,6 +561,54 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
     })
   })
 
+  describe('webhook', () => {
+    it('create --webhook: secret generated, path + secret printed, no schedule; list / get show the path', () => {
+      const out = ok(...create('--id', 'cron-wh', '--webhook'))
+      expect(out).toMatchObject({ id: 'cron-wh', created: true, webhook: { path: '/cron-hooks/cron-wh' } })
+      expect(out.webhook.secret).toMatch(/^[A-Za-z0-9_-]{43}$/)
+      expect(job('cron-wh')).toMatchObject({ webhookSecret: out.webhook.secret, schedule: '', runAt: null })
+      expect(ok('get', 'cron-wh')).toMatchObject({ webhook_secret: out.webhook.secret, webhook_path: '/cron-hooks/cron-wh' })
+      ok(...create('--id', 'cron-plain', '--schedule', '0 9 * * *'))
+      expect(ok('get', 'cron-plain')).toMatchObject({ webhook_secret: null, webhook_path: null })
+    })
+
+    it('update --webhook on keeps an existing secret; a schedule switches away and drops it', () => {
+      insertJob('cron-u')
+      const on = ok('update', 'cron-u', '--webhook', 'on')
+      const secret = on.webhook.secret
+      expect(job('cron-u')).toMatchObject({ webhookSecret: secret, schedule: '', runAt: null })
+      expect(ok('update', 'cron-u', '--webhook', 'on').webhook.secret).toBe(secret)
+      expect(ok('update', 'cron-u', '--prompt', 'x').webhook.secret).toBe(secret)
+      expect(ok('update', 'cron-u', '--schedule', '0 8 * * *')).toEqual({ id: 'cron-u', updated: true })
+      expect(job('cron-u')).toMatchObject({ webhookSecret: null, schedule: '0 8 * * *' })
+    })
+
+    it('refused: with a schedule / run-at, a picked session, an active window; off alone leaves no trigger', () => {
+      expect(fails(create('--webhook', '--schedule', '0 9 * * *'))).toMatch(/mutually exclusive/)
+      expect(fails(create('--webhook', '--session', 'chat-1'))).toMatch(/not a picked --session/)
+      expect(fails(create('--webhook', '--active-until', '2999-01-01'))).toMatch(/not --webhook jobs/)
+      insertJob('cron-o', { schedule: '', webhookSecret: 's' })
+      expect(fails(['update', 'cron-o', '--webhook', 'off'])).toMatch(/would leave the job with none/)
+      expect(job('cron-o')!.webhookSecret).toBe('s')
+    })
+
+    it('runs / get show a null exit code (in-process runs) as "-"', () => {
+      insertJob('cron-e')
+      insertRun('2026-10-01T00-00-00-000Z-a', 'cron-e', { exitCode: null })
+      insertRun('2026-10-02T00-00-00-000Z-b', 'cron-e', { exitCode: 0 })
+      expect(ok('runs', 'cron-e').runs.map((r: { exit_code: unknown }) => r.exit_code)).toEqual([0, '-'])
+      expect(ok('get', 'cron-e').recentRuns.map((r: { exit_code: unknown }) => r.exit_code)).toEqual([0, '-'])
+    })
+
+    it('a cron.db not migrated to v7: --webhook asks for a restart, plain jobs still work', () => {
+      rawSqlite(cron).exec('ALTER TABLE cron_jobs DROP COLUMN webhook_secret')
+      expect(fails(create('--webhook'))).toMatch(/restart the halo server/)
+      const { id } = ok(...create('--schedule', '0 9 * * *'))
+      expect(ok('get', id)).toMatchObject({ webhook_secret: null, webhook_path: null })
+      expect(fails(['update', id, '--webhook', 'on'])).toMatch(/restart the halo server/)
+    })
+  })
+
   it('a cron.db the server has not migrated to v5: plain jobs still work, folder / stateless ask for a restart', () => {
     rawSqlite(cron).exec('ALTER TABLE cron_jobs DROP COLUMN working_dir; ALTER TABLE cron_jobs DROP COLUMN stateless')
     expect(fails(create('--schedule', '0 9 * * *', '--stateless'))).toMatch(/restart the halo server/)
@@ -583,8 +631,8 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       }
       const out: string[] = []
       for (const [k, v] of Object.entries(body)) {
-        if (k === 'stateless') {
-          if (stateless === 'create') { if (v) out.push('--stateless') } else out.push('--stateless', v ? 'on' : 'off')
+        if (k === 'stateless' || k === 'webhook') {
+          if (stateless === 'create') { if (v) out.push(`--${k}`) } else out.push(`--${k}`, v ? 'on' : 'off')
           continue
         }
         out.push(flag[k], v === null ? '' : String(v))
@@ -592,7 +640,8 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       return out
     }
     const RULE_COLS = ['schedule', 'runAt', 'timeoutSec', 'sessionId', 'workingDir', 'stateless', 'activeFrom', 'activeUntil', 'agentId', 'workspacePath'] as const
-    const ruleCols = (id: string) => Object.fromEntries(RULE_COLS.map((k) => [k, job(id)![k]]))
+    // Secrets are random on both sides: compare whether the job has one.
+    const ruleCols = (id: string) => ({ ...Object.fromEntries(RULE_COLS.map((k) => [k, job(id)![k]])), webhook: job(id)!.webhookSecret !== null })
 
     // [name, body over the base, accepted?]
     const createCases: Array<[string, Body, boolean]> = [
@@ -621,6 +670,12 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       ['window on a one-shot', { schedule: '', runAt: FUTURE, activeUntil: FUTURE + DAY }, false],
       ['session on another agent', { sessionId: 'chat-coder' }, false],
       ['session on the job agent', { sessionId: 'chat-coder', agentId: 'coder' }, true],
+      ['webhook only', { schedule: '', webhook: true }, true],
+      ['webhook + schedule', { webhook: true }, false],
+      ['webhook + runAt', { schedule: '', runAt: FUTURE, webhook: true }, false],
+      ['webhook + session', { schedule: '', webhook: true, sessionId: 'chat-free' }, false],
+      ['webhook + window', { schedule: '', webhook: true, activeUntil: FUTURE }, false],
+      ['webhook, stateless', { schedule: '', webhook: true, stateless: true }, true],
     ]
 
     it.each(createCases)('create: %s', async (_name, over, accepted) => {
@@ -653,6 +708,14 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       ['folder', {}, { workingDir: 'sub' }, true],
       ['folder cleared', { workingDir: 'sub' }, { workingDir: null }, true],
       ['folder missing', {}, { workingDir: 'missing' }, false],
+      ['to webhook', {}, { webhook: true }, true],
+      ['webhook + schedule', {}, { webhook: true, schedule: '0 8 * * *' }, false],
+      ['webhook back to recurring', { schedule: '', webhookSecret: 's' }, { schedule: '0 8 * * *' }, true],
+      ['webhook back to one-shot', { schedule: '', webhookSecret: 's' }, { runAt: FUTURE }, true],
+      ['webhook off alone', { schedule: '', webhookSecret: 's' }, { webhook: false }, false],
+      ['webhook over a stored window', { activeUntil: FUTURE + DAY }, { webhook: true }, false],
+      ['webhook over a picked session', { sessionId: 'chat-free' }, { webhook: true }, false],
+      ['edit a webhook job', { schedule: '', webhookSecret: 's' }, { userPrompt: 'x' }, true],
     ]
 
     it.each(updateCases)('update: %s', async (_name, start, change, accepted) => {
