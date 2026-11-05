@@ -243,35 +243,21 @@ List direct child sessions of the current session and their status.
 No arguments. Returns JSON:
 
 ```json
-{
-  "code": 0,
-  "sessions": [
-    {
-      "id": "root>sid_xxx",
-      "parentId": "root",
-      "agentId": "coder",
-      "agentName": "Coder",
-      "description": "Implement login page",
-      "status": "running",
-      "accessLevel": null,
-      "goalSessionId": null,
-      "createdAt": 1714000000000,
-      "updatedAt": 1714000005000,
-      "stoppedAt": null,
-      "archivedAt": null,
-      "title": "Implement login page",
-      "exchangeCount": 1,
-      "contextTokens": 12345,
-      "totalOutputTokens": 678
-    }
-  ],
-  "count": 1
-}
+{"code":0,"sessions":[{"id":"root>sid_xxx","agentId":"coder","agentName":"Coder","title":"Implement login page","status":"running","createdAt":1714000000000,"updatedAt":1714000005000,"exchangeCount":1}],"count":1}
 ```
 
 `status`: `running` / `idle` / `stopped`. Archived sessions are excluded.
 
-Each entry is the session's `SessionInfo` row. `title` is the human-assigned
+Each entry is a compact row, not the full `SessionInfo`, and the JSON has no
+indentation: the full pretty-printed rows overflowed the 8K tool-result cap at
+a couple dozen children. Always present: `id`, `agentId`, `agentName`, `title`,
+`status`, `createdAt`, `updatedAt` (the same set as `relay_list`). Present only
+when set: `goalSessionId` (bound to a goal), `workingDir`, `accessLevel`, and
+`exchangeCount` (only when > 0, i.e. someone has exchanged messages with it).
+Not included: `parentId` (always the caller), `description` (folded into
+`title`), `stoppedAt` (covered by `status`), `archivedAt`, and token counts.
+
+`title` is the human-assigned
 label (set by renaming the session in the admin sidebar) mirrored onto the row
 from the session file, so it matches what the UI shows. It falls back to
 `description` (the `start_session` task summary) when no title was set, so the

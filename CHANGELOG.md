@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `session_list` returns one compact row per child (no indentation, null fields and the duplicate description dropped), so a few dozen children fit in the tool-result cap instead of the tail being cut off.
+
 ## [2.1.5] - 2026-11-05
 
 ### Fixed

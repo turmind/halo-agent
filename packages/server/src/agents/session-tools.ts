@@ -157,11 +157,23 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       // `title` is the session file's header title mirrored onto the row; fall
       // back to `description` (the start_session task summary) when it's unset,
       // so the caller can always dispatch by the name the admin sidebar shows.
-      const enriched = sessions.map((s) => ({
-        ...s,
+      // Compact row (relay_list's field set): the full SessionInfo pretty-printed
+      // ran ~15K chars at 22 children, past the 8K tool-result cap. Optional
+      // fields are `undefined` when empty, which JSON.stringify drops.
+      const rows = sessions.map((s) => ({
+        id: s.id,
+        agentId: s.agentId,
+        agentName: s.agentName,
         title: s.title || s.description,
+        status: s.status,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        goalSessionId: s.goalSessionId ?? undefined,
+        workingDir: s.workingDir ?? undefined,
+        accessLevel: s.accessLevel ?? undefined,
+        exchangeCount: s.exchangeCount || undefined,
       }))
-      return JSON.stringify({ code: 0, sessions: enriched, count: enriched.length }, null, 2)
+      return JSON.stringify({ code: 0, sessions: rows, count: rows.length })
     },
   }
 
