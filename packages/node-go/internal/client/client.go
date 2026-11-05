@@ -10,10 +10,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	mrand "math/rand/v2"
 	"net/http"
 	"net/url"
-	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,10 +50,12 @@ type Options struct {
 	Log     func(string)
 }
 
-// WSURL is nodeWsUrl.
+// WSURL is nodeWsUrl. Stricter than new URL() for the special schemes: no
+// host after `//` (`http:h`, `https:/h`) is Invalid URL here, a host in WHATWG (D4).
 func WSURL(server string) (string, error) {
 	u, err := url.Parse(server)
-	if err != nil || u.Scheme == "" || u.Opaque == "" && u.Host == "" && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "ws" || u.Scheme == "wss") {
+	special := u != nil && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "ws" || u.Scheme == "wss")
+	if err != nil || u.Scheme == "" || special && (u.Opaque != "" || u.Host == "" || !validPort(u.Port())) {
 		return "", errors.New("Invalid URL") // new URL() TypeError text
 	}
 	switch u.Scheme {
@@ -70,6 +73,15 @@ func WSURL(server string) (string, error) {
 	return u.String(), nil
 }
 
+// validPort: url.Parse takes any digit run; WHATWG caps a port at 65535.
+func validPort(p string) bool {
+	if p == "" {
+		return true
+	}
+	n, err := strconv.Atoi(p)
+	return err == nil && n <= 65535
+}
+
 func uuid4() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
@@ -77,8 +89,6 @@ func uuid4() string {
 	b[8] = b[8]&0x3f | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
-
-var anotherProcess = regexp.MustCompile(`another process`)
 
 type node struct {
 	o        Options
@@ -90,7 +100,6 @@ type node struct {
 	stopping bool
 	running  map[string]*call
 	inflight sync.WaitGroup
-	nIn      int
 	conn     *websocket.Conn
 	dialStop context.CancelFunc
 	retry    *time.Timer
@@ -121,8 +130,13 @@ func Run(o Options, stop <-chan struct{}) (int, error) {
 	n := &node{
 		o: o, url: u, header: h, backoff: initialBackoff,
 		running: map[string]*call{}, done: make(chan int, 1),
-		// No proxy env (the TS `ws` client ignores HTTP(S)_PROXY, §9 Q6).
-		httpc: &http.Client{Transport: &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{}}},
+		// No proxy env (the TS `ws` client ignores HTTP(S)_PROXY, §9 Q6). No
+		// redirects (ws: followRedirects false): a 3xx is "server refused the
+		// connection (HTTP 3xx)", and the token never goes to the Location.
+		httpc: &http.Client{
+			Transport:     &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{}},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
 	go func() {
 		<-stop
@@ -257,6 +271,9 @@ func (n *node) connect() {
 	for {
 		typ, data, err := c.Read(context.Background())
 		if err != nil {
+			// A failed control frame or an over-limit frame leaves the TCP
+			// connection open; idempotent when the peer already closed it.
+			c.CloseNow()
 			wmu.Lock()
 			watchdog.Stop()
 			wmu.Unlock()
@@ -332,8 +349,7 @@ func dialErrText(err error) string {
 
 func (n *node) closed(status int, welcomed bool, code int, reason, lastError string) {
 	stopped := n.abortAll()
-	if n.isStopping() {
-		n.stopClosed()
+	if n.isStopping() { // stop() / fatal() own the exit
 		return
 	}
 	switch {
@@ -345,7 +361,7 @@ func (n *node) closed(status int, welcomed bool, code int, reason, lastError str
 		n.fatal(fmt.Sprintf("protocol mismatch with the server (426, this node speaks v%d) — upgrade halo here or on the server", protocol.Version))
 	case code == protocol.CloseRevoked:
 		n.fatal("token revoked on the server — this machine is no longer linked")
-	case status == 409 || (code == protocol.CloseReplaced && anotherProcess.MatchString(reason)):
+	case status == 409 || (code == protocol.CloseReplaced && strings.Contains(reason, "another process")):
 		n.scheduleRetry("this token is already connected from another process", 0)
 	case status == 429:
 		n.scheduleRetry("too many failed sign-ins from this address (429)", lockedOutRetry)
@@ -370,7 +386,15 @@ func (n *node) handleRequest(c *websocket.Conn, id string, f protocol.ServerFram
 	ctx, cancel := context.WithCancel(context.Background())
 	me := &call{cancel}
 	n.mu.Lock()
+	if n.stopping {
+		// stop / fatal is draining: an Add now could race inflight.Wait. No res
+		// can go out after a stop on either side, so dropping is invisible.
+		n.mu.Unlock()
+		cancel()
+		return
+	}
 	n.running[id] = me
+	n.inflight.Add(1)
 	n.mu.Unlock()
 	reply := func(ok bool, body string) {
 		n.mu.Lock()
@@ -393,7 +417,7 @@ func (n *node) handleRequest(c *websocket.Conn, id string, f protocol.ServerFram
 		}
 		jsv.WriteJSONString(&sb, body)
 		sb.WriteByte('}')
-		_ = c.Write(context.Background(), websocket.MessageText, []byte(sb.String()))
+		writeFragmented(c, sb.String())
 	}
 	var opV any
 	_ = json.Unmarshal(f.Op, &opV)
@@ -403,6 +427,7 @@ func (n *node) handleRequest(c *websocket.Conn, id string, f protocol.ServerFram
 			opV = jsv.Undefined
 		}
 		reply(false, fmt.Sprintf("unknown op \"%s\"", jsv.ToString(opV)))
+		n.inflight.Done()
 		return
 	}
 	args := map[string]any{}
@@ -414,7 +439,6 @@ func (n *node) handleRequest(c *websocket.Conn, id string, f protocol.ServerFram
 			}
 		}
 	}
-	n.inflight.Add(1)
 	go func() {
 		defer n.inflight.Done()
 		text, err := n.o.Exec.Exec(ctx, op, args)
@@ -458,8 +482,9 @@ func (n *node) stop() {
 			select {
 			case <-closed:
 			case <-time.After(stopCloseGrace):
-				c.CloseNow()
-				<-closed
+				// TS terminate(): give up on the handshake. Close() already holds
+				// the closing flag, so CloseNow would only wait for it (coder's own
+				// 5s); the exit that follows drops the socket.
 			}
 			<-drained
 			n.finish(0)
@@ -467,6 +492,23 @@ func (n *node) stop() {
 	})
 }
 
-// stopClosed: the read loop saw the close while stopping — nothing to do,
-// stop() owns the exit.
-func (n *node) stopClosed() {}
+// fragment bounds one data frame of a reply: a pong (writeControl, 5s to get
+// the frame lock) fits between fragments even on a slow uplink.
+const fragment = 32 * 1024
+
+// writeFragmented sends msg as one text message in fragment-sized frames
+// (RFC 6455 §5.4; `ws` reassembles them).
+func writeFragmented(c *websocket.Conn, msg string) {
+	w, err := c.Writer(context.Background(), websocket.MessageText)
+	if err != nil {
+		return
+	}
+	defer w.Close() // releases the message lock on every path
+	for len(msg) > 0 {
+		k := min(fragment, len(msg))
+		if _, err := io.WriteString(w, msg[:k]); err != nil {
+			return
+		}
+		msg = msg[k:]
+	}
+}

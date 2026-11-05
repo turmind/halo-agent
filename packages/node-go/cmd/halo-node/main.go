@@ -52,6 +52,31 @@ type headerList []string
 func (h *headerList) String() string     { return strings.Join(*h, ", ") }
 func (h *headerList) Set(v string) error { *h = append(*h, v); return nil }
 
+// httpToken is Node's checkIsHttpToken (RFC 7230 tchar+).
+func httpToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0) {
+			return false
+		}
+	}
+	return true
+}
+
+// headerValue is Node's checkInvalidHeaderChar inverted: HTAB, 0x20-0x7E and
+// 0x80-0xFF per UTF-16 unit (a code point above U+00FF is invalid too).
+func headerValue(s string) bool {
+	for _, r := range s {
+		if r != '\t' && (r < 0x20 || r == 0x7f || r > 0xff) {
+			return false
+		}
+	}
+	return true
+}
+
 func fail(msg string) {
 	fmt.Fprintf(os.Stderr, "halo-node: %s\n\n%s", msg, help)
 	os.Exit(1)
@@ -99,7 +124,9 @@ func main() {
 		}
 	})
 	tok := *token
-	if tok == "" {
+	tokenSet := false
+	fs.Visit(func(f *flag.Flag) { tokenSet = tokenSet || f.Name == "token" })
+	if !tokenSet { // TS `values.token ?? env`: an explicit --token "" stays ""
 		tok = os.Getenv("HALO_NODE_TOKEN")
 	}
 	_ = os.Unsetenv("HALO_NODE_TOKEN")
@@ -111,12 +138,19 @@ func main() {
 	}
 	hdr := http.Header{}
 	host := ""
+	// TS's `headers[name] = value` object: first-seen order, last value wins.
+	var hdrNames []string
+	hdrVals := map[string]string{}
 	for _, h := range headers {
 		i := strings.Index(h, ":")
 		if i <= 0 {
 			fail(fmt.Sprintf("invalid --header (expected \"Name: value\"): %s", h))
 		}
 		name, val := strings.TrimSpace(h[:i]), strings.TrimSpace(h[i+1:])
+		if _, seen := hdrVals[name]; !seen {
+			hdrNames = append(hdrNames, name)
+		}
+		hdrVals[name] = val
 		if strings.EqualFold(name, "host") {
 			host = val
 			continue
@@ -148,7 +182,7 @@ func main() {
 	timeout := shellTimeoutMs()
 	hostname, _ := os.Hostname()
 	info := protocol.NodeInfo{
-		Root: rootPath, Base: base, Shell: *allowShell, ShellTimeoutMs: int(timeout),
+		Root: rootPath, Base: base, Shell: *allowShell, ShellTimeoutMs: timeout,
 		OS: runtime.GOOS, Hostname: hostname, Version: version,
 	}
 	if whole {
@@ -177,6 +211,17 @@ func main() {
 		scopeRoot = base
 	}
 	ex := exec.New(exec.Scope{Root: scopeRoot, Base: base, AllowShell: *allowShell, ShellTimeoutMs: timeout, Log: logf})
+
+	// new WebSocket (in TS's runNode, after the log lines above) runs Node's
+	// validateHeaderName / Value per header and throws: exit 1, no retry.
+	for _, name := range hdrNames {
+		if !httpToken(name) {
+			fail(fmt.Sprintf("Header name must be a valid HTTP token [\"%s\"]", name))
+		}
+		if !headerValue(hdrVals[name]) {
+			fail(fmt.Sprintf("Invalid character in header content [\"%s\"]", name))
+		}
+	}
 
 	stop := make(chan struct{})
 	sig := make(chan os.Signal, 2)

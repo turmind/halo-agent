@@ -28,7 +28,7 @@ type NodeInfo struct {
 	Root           *string `json:"root"`
 	Base           string  `json:"base"`
 	Shell          bool    `json:"shell"`
-	ShellTimeoutMs int     `json:"shellTimeoutMs"`
+	ShellTimeoutMs int64   `json:"shellTimeoutMs"`
 	OS             string  `json:"os"`
 	Hostname       string  `json:"hostname"`
 	Version        string  `json:"version"`

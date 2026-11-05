@@ -72,13 +72,15 @@ let server: http.Server
 let port = 0
 let hub: ReturnType<typeof createNodeHub>
 let sockets = new Set<Socket>()
-/** Per bearer token: handshake headers, the close frame and the text frames each machine sent. */
-interface Seen { headers: http.IncomingHttpHeaders; close?: { code: number; reason: string }; texts: string[] }
+/** Per bearer token: handshake headers, the close frame and the text messages each machine sent
+ *  (`frames[i]`: how many frames text message i came in). */
+interface Seen { headers: http.IncomingHttpHeaders; close?: { code: number; reason: string }; texts: string[]; frames: number[] }
 const seen = new Map<string, Seen>()
 
-/** Client→server frames off the raw socket (masked, unfragmented, never compressed). */
+/** Client→server frames off the raw socket (masked, never compressed); fragments are reassembled. */
 function tapFrames(sock: Duplex, rec: Seen): void {
   let buf = Buffer.alloc(0)
+  let parts: Buffer[] | null = null // a text message whose FIN frame hasn't come yet
   sock.on('data', (d: Buffer) => {
     buf = Buffer.concat([buf, d])
     for (;;) {
@@ -93,8 +95,12 @@ function tapFrames(sock: Duplex, rec: Seen): void {
       const payload = Buffer.from(buf.subarray(off, off + len))
       if (mask) for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4]
       const opcode = buf[0] & 0x0f
+      const fin = (buf[0] & 0x80) !== 0
       if (opcode === 8) rec.close = { code: payload.length >= 2 ? payload.readUInt16BE(0) : 1005, reason: payload.subarray(2).toString() }
-      else if (opcode === 1) rec.texts.push(payload.toString('latin1'))
+      else if (opcode === 1 || (opcode === 0 && parts)) {
+        parts = [...(opcode === 1 ? [] : parts!), payload]
+        if (fin) { rec.texts.push(Buffer.concat(parts).toString('latin1')); rec.frames.push(parts.length); parts = null }
+      }
       buf = buf.subarray(off + len)
     }
   })
@@ -114,7 +120,7 @@ async function startServer(onPort = 0): Promise<void> {
   const handle = hub.handleUpgrade
   server.on('upgrade', createUpgradeRouter(new Map([[P.NODE_WS_PATH, (req: http.IncomingMessage, sock: Duplex, head: Buffer) => {
     const token = String(req.headers.authorization ?? '').replace(/^Bearer /, '')
-    const rec: Seen = { headers: req.headers, texts: [] }
+    const rec: Seen = { headers: req.headers, texts: [], frames: [] }
     seen.set(token, rec)
     tapFrames(sock, rec)
     handle(req, sock, head)
@@ -396,6 +402,12 @@ describe.skipIf(!GO_BIN)('node-go conformance', () => {
         ['ftp scheme', () => ['--server', 'ftp://x'], { HALO_NODE_TOKEN: 'x' }],
         ['no scheme', () => ['--server', 'localhost:9527'], { HALO_NODE_TOKEN: 'x' }],
         ['invalid URL', () => ['--server', 'http//x'], { HALO_NODE_TOKEN: 'x' }],
+        ['port over 65535', () => ['--server', 'http://h:65536'], { HALO_NODE_TOKEN: 'x' }],
+        ['empty --token does not fall back to env', () => ['--server', 'http://h', '--token', ''], { HALO_NODE_TOKEN: 'x' }],
+        // Thrown by new WebSocket (after the log lines), not by the arg parsing.
+        ['header name not a token', () => ['--server', 'http://h', '--header', 'X Foo: v'], { HALO_NODE_TOKEN: 'x' }],
+        ['header name empty after trim', () => ['--server', 'http://h', '--header', ' : v'], { HALO_NODE_TOKEN: 'x' }],
+        ['header value with a control char', () => ['--server', 'http://h', '--header', 'X-A: a\x01b'], { HALO_NODE_TOKEN: 'x' }],
         ['root missing', (s) => ['--server', 'http://h', '--root', `${d(s)}/root/nope`], { HALO_NODE_TOKEN: 'x' }],
         ['root is a file', (s) => ['--server', 'http://h', '--root', `${d(s)}/root/f.txt`], { HALO_NODE_TOKEN: 'x' }],
       ]
@@ -453,6 +465,22 @@ describe.skipIf(!GO_BIN)('node-go conformance', () => {
         await new Promise<void>((r) => fake.close(() => r()))
         expect(p.logs().go, String(status)).toEqual(p.logs().ts)
       }
+    }, T)
+
+    full('301 from the upgrade: not followed, logged as refused, retried', async () => {
+      const paths: string[] = []
+      const fake = http.createServer((req, res) => { paths.push(req.url ?? ''); res.end() })
+      fake.on('upgrade', (req, sock: Duplex) => {
+        paths.push(req.url ?? '')
+        sock.end(`HTTP/1.1 301 Moved\r\nLocation: /moved\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+      })
+      await new Promise<void>((r) => fake.listen(0, '127.0.0.1', r))
+      const p = pair({ server: `http://127.0.0.1:${(fake.address() as AddressInfo).port}`, tokens: { ts: 't', go: 'g' } })
+      await until(() => p.has(/HTTP 301\); reconnecting/), 10_000, '301 retry')
+      expect(await Promise.all(SIDES.map((s) => term(p.procs[s])))).toEqual([0, 0])
+      await new Promise<void>((r) => fake.close(() => r()))
+      expect(p.logs().go).toEqual(p.logs().ts)
+      expect(paths.filter((u) => u !== P.NODE_WS_PATH)).toEqual([])
     }, T)
 
     full('409 token held by another process: retry; the holder stays', async () => {
@@ -514,6 +542,10 @@ describe.skipIf(!GO_BIN)('node-go conformance', () => {
       }
       expect(tail('ts')).toContain(`aaaa\\ud83d\\n[Content truncated on the machine: ${total} chars total]"`)
       expect(tail('go')).toEqual(tail('ts'))
+      // Go sends a big reply in 32 KiB fragments, so a pong fits in between; ws sends one frame.
+      const frames = (s: Side) => { const r = seen.get(p.accts[s].token)!; return r.frames[r.texts.findIndex((t) => t.includes('Content truncated on the machine'))] }
+      expect(frames('ts')).toBe(1)
+      expect(frames('go')).toBeGreaterThan(8)
       expect(await Promise.all(SIDES.map((s) => term(p.procs[s])))).toEqual([0, 0])
     }, T)
 

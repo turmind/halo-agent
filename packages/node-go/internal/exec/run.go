@@ -150,8 +150,18 @@ func spawnGroup(ctx context.Context, cmd, cwd string, timeoutMs int64) (stdout, 
 	}
 	defer stdinW.Close()
 	c.Stdin = stdinR
-	outR, outW, _ := os.Pipe()
-	errR, errW, _ := os.Pipe()
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		stdinR.Close()
+		return "", "", err.Error(), false
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		stdinR.Close()
+		outR.Close()
+		outW.Close()
+		return "", "", err.Error(), false
+	}
 	c.Stdout, c.Stderr = outW, errW
 	if err := c.Start(); err != nil {
 		stdinR.Close()

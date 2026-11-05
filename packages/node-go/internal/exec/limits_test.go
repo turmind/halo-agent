@@ -123,10 +123,11 @@ func TestExecPanic(t *testing.T) {
 	}
 }
 
-// Each line takes ~0.5 s to fail: a cancel lands within one line, not after the file.
+// Each line takes ~15 ms to fail (~0.5 s under -race), the file ~60 s: a
+// cancel lands within one line, not after the file.
 func TestGrepCancel(t *testing.T) {
 	ex, root, _ := newEx(t)
-	_ = os.WriteFile(filepath.Join(root, "bt.txt"), []byte(strings.Repeat(strings.Repeat("a", 22)+"!\n", 100)), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "bt.txt"), []byte(strings.Repeat(strings.Repeat("a", 16)+"!\n", 4000)), 0o644)
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(300*time.Millisecond, cancel)
 	start := time.Now()
