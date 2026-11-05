@@ -182,12 +182,12 @@ func Less16(a, b string) bool {
 }
 
 // first code unit, then the low one for pairs sharing a high surrogate
-func key16(r rune) rune {
+func key16(r rune) uint32 {
 	if r >= 0x10000 {
 		r -= 0x10000
-		return (0xD800+(r>>10))<<16 | (0xDC00 + (r & 0x3FF))
+		return uint32(0xD800+(r>>10))<<16 | uint32(0xDC00+(r&0x3FF))
 	}
-	return r << 16
+	return uint32(r) << 16
 }
 
 func isJSSpace(r rune) bool {

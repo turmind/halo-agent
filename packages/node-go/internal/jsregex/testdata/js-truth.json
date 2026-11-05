@@ -1,0 +1,908 @@
+{
+ "node": "v22.23.4",
+ "match": [
+  {
+   "p": "foo.",
+   "cases": [
+    [
+     "foo\r",
+     false
+    ],
+    [
+     "foox",
+     true
+    ],
+    [
+     "foo\n",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "ab.cd",
+   "cases": [
+    [
+     "ab cd",
+     false
+    ],
+    [
+     "abxcd",
+     true
+    ],
+    [
+     "ab cd",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "[.]",
+   "cases": [
+    [
+     ".",
+     true
+    ],
+    [
+     "x",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "^.$",
+   "cases": [
+    [
+     "😀",
+     false
+    ],
+    [
+     "x",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "^..$",
+   "cases": [
+    [
+     "😀",
+     true
+    ],
+    [
+     "xy",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "😀",
+   "cases": [
+    [
+     "a😀b",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "[😀]",
+   "cases": [
+    [
+     "x",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "\\uD83D",
+   "cases": [
+    [
+     "😀",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "^[^x]$",
+   "cases": [
+    [
+     "😀",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "\\e",
+   "cases": [
+    [
+     "e",
+     true
+    ],
+    [
+     "\u001b",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "\\a",
+   "cases": [
+    [
+     "a",
+     true
+    ],
+    [
+     "\u0007",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "\\A",
+   "cases": [
+    [
+     "A",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\Z",
+   "cases": [
+    [
+     "Z",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\z",
+   "cases": [
+    [
+     "z",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\G",
+   "cases": [
+    [
+     "G",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\p{L}",
+   "cases": [
+    [
+     "p{L}",
+     true
+    ],
+    [
+     "a",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "\\P{L}",
+   "cases": [
+    [
+     "P{L}",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\p{L",
+   "cases": [
+    [
+     "p{L",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "a\\b",
+   "cases": [
+    [
+     "aé",
+     true
+    ],
+    [
+     "ab",
+     false
+    ],
+    [
+     "a",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\Bé",
+   "cases": [
+    [
+     "xé",
+     false
+    ],
+    [
+     "é",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "é\\b",
+   "cases": [
+    [
+     "é",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "[a-\\d]",
+   "cases": [
+    [
+     "-",
+     true
+    ],
+    [
+     "5",
+     true
+    ],
+    [
+     "b",
+     false
+    ],
+    [
+     "a",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "x{99999999999}",
+   "cases": [
+    [
+     "x",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "[\\d-z]",
+   "cases": [
+    [
+     "-",
+     true
+    ],
+    [
+     "z",
+     true
+    ],
+    [
+     "y",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "x\\sy",
+   "cases": [
+    [
+     "x y",
+     true
+    ],
+    [
+     "x y",
+     true
+    ],
+    [
+     "x﻿y",
+     true
+    ],
+    [
+     "x　y",
+     true
+    ],
+    [
+     "xy",
+     false
+    ],
+    [
+     "x᠎y",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "\\w\\d\\W",
+   "cases": [
+    [
+     "a1!",
+     true
+    ],
+    [
+     "é1!",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "\\1(a)",
+   "cases": [
+    [
+     "a",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "(a\\1)",
+   "cases": [
+    [
+     "a",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "(a)?\\1b",
+   "cases": [
+    [
+     "b",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\101",
+   "cases": [
+    [
+     "A",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "a\\0",
+   "cases": [
+    [
+     "a\u0000",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\8",
+   "cases": [
+    [
+     "8",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "[\\1]",
+   "cases": [
+    [
+     "\u0001",
+     true
+    ],
+    [
+     "1",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "\\x41",
+   "cases": [
+    [
+     "A",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\u0041",
+   "cases": [
+    [
+     "A",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\cI",
+   "cases": [
+    [
+     "\t",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "a[^]",
+   "cases": [
+    [
+     "a\n",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "[]",
+   "cases": [
+    [
+     "a",
+     false
+    ],
+    [
+     "",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "(?<=A)bc",
+   "cases": [
+    [
+     "Abc",
+     true
+    ],
+    [
+     "bc",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "(?<n>b)c",
+   "cases": [
+    [
+     "bc",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "(?<a>x)\\k<a>",
+   "cases": [
+    [
+     "xx",
+     true
+    ],
+    [
+     "x",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "a{,5}",
+   "cases": [
+    [
+     "a{,5}",
+     true
+    ],
+    [
+     "aaaaa",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "a{1,",
+   "cases": [
+    [
+     "a{1,",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "]",
+   "cases": [
+    [
+     "]",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "}",
+   "cases": [
+    [
+     "}",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "b{",
+   "cases": [
+    [
+     "b{",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "(?=a)*b",
+   "cases": [
+    [
+     "b",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "foo$",
+   "cases": [
+    [
+     "foo\r",
+     false
+    ],
+    [
+     "foo",
+     true
+    ],
+    [
+     "foo\n",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "^$",
+   "cases": [
+    [
+     "",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\k",
+   "cases": [
+    [
+     "k",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\c",
+   "cases": [
+    [
+     "\\c",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\c*",
+   "cases": [
+    [
+     "\\c*",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "[\\c*]",
+   "cases": [
+    [
+     "\\",
+     true
+    ],
+    [
+     "c",
+     true
+    ],
+    [
+     "*",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "(a)\\2",
+   "cases": [
+    [
+     "a\u0002",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\012",
+   "cases": [
+    [
+     "\n",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "\\u{3}",
+   "cases": [
+    [
+     "uuu",
+     true
+    ],
+    [
+     "u{3}",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "[\\b]",
+   "cases": [
+    [
+     "\b",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "[a-z-[aeiou]]",
+   "cases": [
+    [
+     "b]",
+     true
+    ],
+    [
+     "a]",
+     true
+    ],
+    [
+     "-]",
+     true
+    ],
+    [
+     "[]",
+     true
+    ],
+    [
+     "b",
+     false
+    ]
+   ]
+  },
+  {
+   "p": "\\k<a>",
+   "cases": [
+    [
+     "k<a>",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "[\\w-z]",
+   "cases": [
+    [
+     "-",
+     true
+    ],
+    [
+     "z",
+     true
+    ]
+   ]
+  },
+  {
+   "p": "[\\s\\S]",
+   "cases": [
+    [
+     "x",
+     true
+    ]
+   ]
+  }
+ ],
+ "errors": [
+  [
+   "(",
+   "Invalid regular expression: /(/: Unterminated group"
+  ],
+  [
+   "((a)",
+   "Invalid regular expression: /((a)/: Unterminated group"
+  ],
+  [
+   "(?:",
+   "Invalid regular expression: /(?:/: Unterminated group"
+  ],
+  [
+   "(?=",
+   "Invalid regular expression: /(?=/: Unterminated group"
+  ],
+  [
+   "(?!",
+   "Invalid regular expression: /(?!/: Unterminated group"
+  ],
+  [
+   "(?<=",
+   "Invalid regular expression: /(?<=/: Unterminated group"
+  ],
+  [
+   "(?<!",
+   "Invalid regular expression: /(?<!/: Unterminated group"
+  ],
+  [
+   "a/(",
+   "Invalid regular expression: /a/(/: Unterminated group"
+  ],
+  [
+   "a)",
+   "Invalid regular expression: /a)/: Unmatched ')'"
+  ],
+  [
+   "*a",
+   "Invalid regular expression: /*a/: Nothing to repeat"
+  ],
+  [
+   "+",
+   "Invalid regular expression: /+/: Nothing to repeat"
+  ],
+  [
+   "?",
+   "Invalid regular expression: /?/: Nothing to repeat"
+  ],
+  [
+   "{1}",
+   "Invalid regular expression: /{1}/: Nothing to repeat"
+  ],
+  [
+   "a**",
+   "Invalid regular expression: /a**/: Nothing to repeat"
+  ],
+  [
+   "a{1}{2}",
+   "Invalid regular expression: /a{1}{2}/: Nothing to repeat"
+  ],
+  [
+   "^*",
+   "Invalid regular expression: /^*/: Nothing to repeat"
+  ],
+  [
+   "$*",
+   "Invalid regular expression: /$*/: Nothing to repeat"
+  ],
+  [
+   "\\b*",
+   "Invalid regular expression: /\\b*/: Nothing to repeat"
+  ],
+  [
+   "a|*",
+   "Invalid regular expression: /a|*/: Nothing to repeat"
+  ],
+  [
+   "a{2,1}",
+   "Invalid regular expression: /a{2,1}/: numbers out of order in {} quantifier"
+  ],
+  [
+   "[a",
+   "Invalid regular expression: /[a/: Unterminated character class"
+  ],
+  [
+   "[z-a]",
+   "Invalid regular expression: /[z-a]/: Range out of order in character class"
+  ],
+  [
+   "[😀-😂]",
+   "Invalid regular expression: /[😀-😂]/: Range out of order in character class"
+  ],
+  [
+   "a\\",
+   "Invalid regular expression: /a\\/: \\ at end of pattern"
+  ],
+  [
+   "(?",
+   "Invalid regular expression: /(?/: Invalid group"
+  ],
+  [
+   "(?x)",
+   "Invalid regular expression: /(?x)/: Invalid group"
+  ],
+  [
+   "(?i)abc",
+   "Invalid regular expression: /(?i)abc/: Invalid group"
+  ],
+  [
+   "(?i:a)",
+   "Invalid regular expression: /(?i:a)/: Invalid group"
+  ],
+  [
+   "(?-i:a)",
+   "Invalid regular expression: /(?-i:a)/: Invalid group"
+  ],
+  [
+   "(?m)a",
+   "Invalid regular expression: /(?m)a/: Invalid group"
+  ],
+  [
+   "(?#c)a",
+   "Invalid regular expression: /(?#c)a/: Invalid group"
+  ],
+  [
+   "(?<a",
+   "Invalid regular expression: /(?<a/: Invalid capture group name"
+  ],
+  [
+   "(?<1a>x)",
+   "Invalid regular expression: /(?<1a>x)/: Invalid capture group name"
+  ],
+  [
+   "(?<a>.)\\k<a",
+   "Invalid regular expression: /(?<a>.)\\k<a/: Invalid capture group name"
+  ],
+  [
+   "(?<a>x)(?<a>y)",
+   "Invalid regular expression: /(?<a>x)(?<a>y)/: Duplicate capture group name"
+  ],
+  [
+   "\\k<b>(?<a>x)",
+   "Invalid regular expression: /\\k<b>(?<a>x)/: Invalid named capture referenced"
+  ],
+  [
+   "(?<a>x)\\k<b>",
+   "Invalid regular expression: /(?<a>x)\\k<b>/: Invalid named capture referenced"
+  ],
+  [
+   "(?<a>x)\\k",
+   "Invalid regular expression: /(?<a>x)\\k/: Invalid named reference"
+  ],
+  [
+   "(?<=a)*",
+   "Invalid regular expression: /(?<=a)*/: Invalid quantifier"
+  ],
+  [
+   "[a-\\d]",
+   null
+  ],
+  [
+   "(?=a)*",
+   null
+  ],
+  [
+   "x{99999999999}",
+   null
+  ],
+  [
+   "\\c",
+   null
+  ],
+  [
+   "\\u{",
+   null
+  ],
+  [
+   "\\p{L",
+   null
+  ],
+  [
+   "[]",
+   null
+  ],
+  [
+   "[^]",
+   null
+  ],
+  [
+   "a{,5}",
+   null
+  ],
+  [
+   "a{1,",
+   null
+  ]
+ ]
+}
