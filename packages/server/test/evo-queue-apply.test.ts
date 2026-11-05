@@ -156,6 +156,13 @@ describe('evo-db migration v1', () => {
         attempts INTEGER NOT NULL DEFAULT 0, archived_at INTEGER)`)
       old.prepare(`INSERT INTO evolution_applies (id, workspace_path, status, source_run_ids, created_at)
         VALUES ('a-old', '/ws', 'applied', '["r"]', 1)`).run()
+      old.exec(`CREATE TABLE evolution_runs (
+        id TEXT PRIMARY KEY, workspace_path TEXT NOT NULL, status TEXT NOT NULL, trigger_kind TEXT NOT NULL,
+        source_session TEXT NOT NULL, user_hint TEXT, created_at INTEGER NOT NULL, started_at INTEGER,
+        heartbeat_at INTEGER, completed_at INTEGER, applied_at INTEGER, failure_reason TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0, archived_at INTEGER)`)
+      old.prepare(`INSERT INTO evolution_runs (id, workspace_path, status, trigger_kind, source_session, created_at)
+        VALUES ('r-old', '/ws', 'awaiting_review', 'note', 's', 1)`).run()
       old.close()
 
       const migrated = createEvoDb(dir)
@@ -163,6 +170,10 @@ describe('evo-db migration v1', () => {
       expect(row.approvedBy).toBe('reviewer')
       expect(row.notifiedAt).toBeNull()
       expect(row.rolledBackAt).toBeNull()
+      // A run queued before the gate existed reads null → never auto-applied.
+      const run = migrated.select().from(evolutionRuns).where(eq(evolutionRuns.id, 'r-old')).get()!
+      expect(run.sourceAccess).toBeNull()
+      expect(run.hasObservation).toBe(false)
       const raw = new Database(path.join(dir, 'evo.db'))
       expect(raw.pragma('user_version', { simple: true })).toBe(1)
       raw.close()

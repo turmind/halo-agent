@@ -503,6 +503,7 @@ function autoReasonText(t: ReturnType<typeof useT>, rec: AutoApplyRecord): strin
   const text = t(key, {
     detail: i < 0 ? '' : reason.slice(i + 1),
     threshold: rec.threshold,
+    access: rec.sourceAccess ?? '—',
     avg: rec.score?.avg ?? '—',
     confidence: rec.score?.confidence ?? '—',
     behavior: rec.score?.behavior ?? '—',

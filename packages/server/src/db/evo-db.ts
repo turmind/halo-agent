@@ -44,6 +44,11 @@ export const evolutionRuns = sqliteTable('evolution_runs', {
    *  .skip.md) — set by the wrapper after phase A so the admin list can flag
    *  and filter it without reading every run dir. */
   hasObservation: integer('has_observation', { mode: 'boolean' }).notNull().default(false),
+  /** Access level of the source session at enqueue ('full' | 'workspace' |
+   *  'readonly'). Only a full source may be auto-applied (L2/L3): a lesser
+   *  session's conversation must not rewrite prompts without a reviewer.
+   *  Pre-existing rows read null → never auto-applied. */
+  sourceAccess: text('source_access'),
 })
 
 export const evolutionApplies = sqliteTable('evolution_applies', {
@@ -84,7 +89,8 @@ CREATE TABLE IF NOT EXISTS evolution_runs (
   failure_reason  TEXT,
   attempts        INTEGER NOT NULL DEFAULT 0,
   archived_at     INTEGER,
-  has_observation INTEGER NOT NULL DEFAULT 0
+  has_observation INTEGER NOT NULL DEFAULT 0,
+  source_access   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_evo_runs_status ON evolution_runs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_evo_runs_ws ON evolution_runs(workspace_path);
@@ -122,6 +128,7 @@ export const EVO_MIGRATIONS: Migration[] = [
     addColumnIfMissing(s, 'evolution_applies', 'notified_at', 'INTEGER')
     addColumnIfMissing(s, 'evolution_applies', 'rolled_back_at', 'INTEGER')
     addColumnIfMissing(s, 'evolution_runs', 'has_observation', 'INTEGER NOT NULL DEFAULT 0')
+    addColumnIfMissing(s, 'evolution_runs', 'source_access', 'TEXT')
   },
 ]
 

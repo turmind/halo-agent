@@ -395,6 +395,9 @@ export function enqueueEvoRun(input: EnqueueEvoRunInput): EnqueueEvoRunResult {
       sourceSession: sourceSessionId,
       userHint,
       createdAt: Date.now(),
+      // The persisted session gate; null (CLI / pre-channel sessions) is "no
+      // gate", i.e. full — the same reading session-agent-builder gives it.
+      sourceAccess: info.accessLevel ?? 'full',
     }).run()
   } catch (err) {
     // Clean up the orphan run dir — without a db row the ticker can't see

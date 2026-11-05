@@ -145,6 +145,7 @@ function loadRunRow(id: string): {
   sourceSession: string
   userHint: string | null
   attempts: number
+  sourceAccess: string | null
 } {
   const db = getEvoDb()
   const row = db.select({
@@ -154,6 +155,7 @@ function loadRunRow(id: string): {
     sourceSession: evolutionRuns.sourceSession,
     userHint: evolutionRuns.userHint,
     attempts: evolutionRuns.attempts,
+    sourceAccess: evolutionRuns.sourceAccess,
   }).from(evolutionRuns).where(eq(evolutionRuns.id, id)).get()
   if (!row) throw new Error(`evolution_runs row not found: ${id}`)
   return row
@@ -1347,7 +1349,7 @@ async function runMode(id: string, logFd: number): Promise<void> {
       return
     }
 
-    if (maybeAutoApply({ runId: id, workspacePath: row.workspacePath, runDir, attempts: row.attempts, logFd })) return
+    if (maybeAutoApply({ runId: id, workspacePath: row.workspacePath, runDir, attempts: row.attempts, sourceAccess: row.sourceAccess, logFd })) return
     finalize(id, 'awaiting_review', null, logFd)
   } finally {
     clearInterval(hb)
@@ -1372,7 +1374,7 @@ function markObservation(id: string, runDir: string, outcome: DraftOutcome, logF
  * (queued, or a re-claimed wrapper already owns it): the caller must not
  * finalize. The ticker's broadcastChanges pushes running → approved.
  */
-export function maybeAutoApply(args: { runId: string; workspacePath: string; runDir: string; attempts: number; logFd: number }): boolean {
+export function maybeAutoApply(args: { runId: string; workspacePath: string; runDir: string; attempts: number; sourceAccess: string | null; logFd: number }): boolean {
   const level = config.evolution.level
   if (evoLevelRank(level) < 2) return false
   let record: ReturnType<typeof evaluateSandbox>
@@ -1384,6 +1386,7 @@ export function maybeAutoApply(args: { runId: string; workspacePath: string; run
       entries: PUBLISH_WHITELIST,
       level,
       threshold: config.evolution.autoApplyThreshold,
+      sourceAccess: args.sourceAccess,
       score: readScore(path.join(args.runDir, 'score.json')),
       observation: readObservation(path.join(args.runDir, 'patch.md')),
     })
@@ -2122,7 +2125,10 @@ export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
     // before / after hashes let rollback tell "still exactly what we
     // published" from "edited since" (evolution/rollback.ts). Taken here,
     // on the first preflight only, when the sandbox is final and main is
-    // still pre-apply.
+    // still pre-apply — which is also why the dirs publish will create are
+    // listed now: an agents/<id>/ (skills/, prompts/) dir that exists in the
+    // workspace overrides global wholesale, so rollback must remove the ones
+    // this apply created, not just their files.
     const manifest: ApplyManifest = {
       applyId: ctx.applyId,
       sourceRunIds: ctx.sourceRunIds,
@@ -2133,6 +2139,7 @@ export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
         before: c.existsInMain ? sha256File(path.join(mainHalo, c.rel)) : null,
         after: sha256File(c.full),
       })),
+      createdDirs: dirsCreatedBy(mainHalo, changed.filter((c) => !c.existsInMain).map((c) => c.rel)),
     }
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8')
   } else {
@@ -2165,6 +2172,16 @@ export async function phaseApplyPublish(ctx: ApplyCtx, preflight: PreflightResul
     fs.copyFileSync(full, mainPath)
   }
   writeLog(ctx.logFd, `[publish] copied ${preflight.changed.length} files to ${mainHalo}\n`)
+}
+
+/** `.halo/`-relative dirs that don't exist in main yet but will once the
+ *  `newFiles` are published — every missing ancestor, deepest first. */
+function dirsCreatedBy(mainHalo: string, newFiles: string[]): string[] {
+  const dirs = new Set<string>()
+  for (const rel of newFiles) {
+    for (let d = path.dirname(rel); d !== '.' && !fs.existsSync(path.join(mainHalo, d)); d = path.dirname(d)) dirs.add(d)
+  }
+  return [...dirs].sort((a, b) => b.split(path.sep).length - a.split(path.sep).length || (a < b ? -1 : 1))
 }
 
 /** Mark the apply row entering the "publish" step. After this write, a

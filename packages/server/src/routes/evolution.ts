@@ -453,7 +453,8 @@ export function createEvolutionRoutes(): Hono {
     const res = rollbackApply(db, id, { force: body.force === true })
     if (!res.ok) {
       if (res.error === 'not_found') return c.json({ error: 'not found' }, 404)
-      return c.json(res.error === 'conflict' ? { error: res.error, conflicts: res.conflicts } : { error: res.error }, 409)
+      const { ok: _ok, ...body } = res
+      return c.json(body, 409)
     }
     broadcast({ type: 'evolution:apply_changed', id, status: 'rolled_back' })
     const apply = db.select({ sourceRunIds: evolutionApplies.sourceRunIds }).from(evolutionApplies).where(eq(evolutionApplies.id, id)).get()

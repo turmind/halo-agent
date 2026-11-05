@@ -9,6 +9,7 @@ import { phaseApplyPreflight, phaseApplyPublish, type ApplyCtx } from '../src/ev
 import { runArchivePass } from '../src/evolution/archive.js'
 import { createEvolutionRoutes } from '../src/routes/evolution.js'
 import { wsHaloDir, evoSandboxHaloDir, wsEvoHistoryDir, wsEvoRollbackPreDir, wsEvoRunDir } from '../src/paths.js'
+import { agentSourceDir } from '../src/agents/agent-loader.js'
 
 /**
  * One-click rollback (plans/evo-l2-l3.md §5), end-to-end on disk: the real
@@ -73,6 +74,11 @@ describe('MANIFEST hashes (phase 12 preflight)', () => {
     expect(byRel[SKILL]).toMatchObject({ kind: 'new', before: null, after: sha256File(path.join(mainHalo, SKILL)) })
   })
 
+  it('lists the dirs the publish created, deepest first; dirs main already had are not listed', () => {
+    const manifest = JSON.parse(read(wsEvoHistoryDir(ws, APPLY), 'MANIFEST.json'))
+    expect(manifest.createdDirs).toEqual([path.join('skills', 'new'), 'skills'])
+  })
+
   it('a resume preflight leaves the original manifest (hashes included) alone', async () => {
     const before = read(wsEvoHistoryDir(ws, APPLY), 'MANIFEST.json')
     write(sandboxHalo, 'INSTRUCTIONS.md', 'rules v3')
@@ -86,10 +92,13 @@ describe('rollbackApply', () => {
   it('clean: restores overwrites, removes new files, flips apply + run to rolled_back, writes ROLLBACK.json', () => {
     expect(inspectRollback(ws, APPLY)!.files.every((f) => f.state === 'clean')).toBe(true)
     const res = rollbackApply(db, APPLY)
-    expect(res).toEqual({ ok: true, restored: ['INSTRUCTIONS.md'], removed: [SKILL] })
+    expect(res).toEqual({ ok: true, restored: ['INSTRUCTIONS.md'], removed: [SKILL], removedDirs: [path.join('skills', 'new'), 'skills'], keptDirs: [] })
     expect(read(mainHalo, 'INSTRUCTIONS.md')).toBe('rules v1')
     expect(fs.existsSync(path.join(mainHalo, SKILL))).toBe(false)
-    expect(fs.existsSync(path.join(mainHalo, 'skills', 'new'))).toBe(true)  // emptied dir kept
+    // The dirs the publish created are gone — an empty workspace skills/new/
+    // would otherwise shadow a global skill of that id.
+    expect(fs.existsSync(path.join(mainHalo, 'skills'))).toBe(false)
+    expect(fs.existsSync(path.join(mainHalo, 'agents', 'a'))).toBe(true)
     expect(applyRow()).toMatchObject({ status: 'rolled_back' })
     expect(applyRow().rolledBackAt).not.toBeNull()
     expect(runRow().status).toBe('rolled_back')
@@ -98,6 +107,46 @@ describe('rollbackApply', () => {
     expect(log.files).toHaveLength(2)
     // pre-rollback copy of what main held
     expect(read(wsEvoRollbackPreDir(ws, APPLY), 'INSTRUCTIONS.md')).toBe('rules v2')
+  })
+
+  it('a global agent copied into the workspace: rollback removes the created dir, global serves the agent again', async () => {
+    const A2 = 'apply-test-2'
+    write(sandboxHalo, 'agents/default/AGENT.md', 'global persona — sharper')
+    write(sandboxHalo, 'agents/default/agent.yaml', 'name: Default\n')
+    const ctx: ApplyCtx = { applyId: A2, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd }
+    const pre = await phaseApplyPreflight(ctx)
+    if (!pre.ok) throw new Error(pre.reason)
+    await phaseApplyPublish(ctx, pre.result)
+    db.insert(evolutionApplies).values({ id: A2, workspacePath: ws, status: 'applied', sourceRunIds: JSON.stringify([RUN]), createdAt: 3, completedAt: 4 }).run()
+    const wsAgentDir = path.join(mainHalo, 'agents', 'default')
+    expect(agentSourceDir('default', ws)).toBe(wsAgentDir)
+    const res = rollbackApply(db, A2)
+    expect(res).toMatchObject({ ok: true, removedDirs: [path.join('agents', 'default')], keptDirs: [] })
+    expect(fs.existsSync(wsAgentDir)).toBe(false)
+    expect(agentSourceDir('default', ws)).not.toBe(wsAgentDir)
+    expect(fs.existsSync(path.join(mainHalo, 'agents', 'a', 'AGENT.md'))).toBe(true)
+  })
+
+  it('a created dir someone has since added a file to is kept and reported', () => {
+    write(mainHalo, 'skills/new/notes.md', 'mine')
+    const res = rollbackApply(db, APPLY)
+    expect(res).toMatchObject({ ok: true, removedDirs: [], keptDirs: [path.join('skills', 'new'), 'skills'] })
+    expect(read(mainHalo, 'skills/new/notes.md')).toBe('mine')
+    expect(JSON.parse(read(wsEvoHistoryDir(ws, APPLY), 'ROLLBACK.json')).keptDirs).toEqual([path.join('skills', 'new'), 'skills'])
+  })
+
+  it('a dir that existed before the publish is left even when emptied', async () => {
+    const A3 = 'apply-test-3'
+    fs.mkdirSync(path.join(mainHalo, 'prompts', 'all'), { recursive: true })
+    write(sandboxHalo, 'prompts/all/20.md', 'rule')
+    const ctx: ApplyCtx = { applyId: A3, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd }
+    const pre = await phaseApplyPreflight(ctx)
+    if (!pre.ok) throw new Error(pre.reason)
+    await phaseApplyPublish(ctx, pre.result)
+    db.insert(evolutionApplies).values({ id: A3, workspacePath: ws, status: 'applied', sourceRunIds: JSON.stringify([RUN]), createdAt: 3, completedAt: 4 }).run()
+    expect(JSON.parse(read(wsEvoHistoryDir(ws, A3), 'MANIFEST.json')).createdDirs).toEqual([])
+    expect(rollbackApply(db, A3)).toMatchObject({ ok: true, removedDirs: [] })
+    expect(fs.existsSync(path.join(mainHalo, 'prompts', 'all'))).toBe(true)
   })
 
   it('a second rollback → not_applied', () => {
@@ -177,7 +226,7 @@ describe('rollback route + detail', () => {
     expect(await r1.json()).toEqual({ error: 'conflict', conflicts: [{ rel: 'INSTRUCTIONS.md', reason: 'modified' }] })
     const r2 = await post({ force: true })
     expect(r2.status).toBe(200)
-    expect(await r2.json()).toEqual({ ok: true, restored: ['INSTRUCTIONS.md'], removed: [SKILL] })
+    expect(await r2.json()).toMatchObject({ ok: true, restored: ['INSTRUCTIONS.md'], removed: [SKILL] })
   })
 
   it('404 for an unknown apply; 409 not_applied after rollback', async () => {

@@ -4,7 +4,11 @@
  *
  * Source of truth is on disk: phase 12's `history/apply-<id>/MANIFEST.json`
  * plus the backed-up files next to it (evo-wrapper phaseApplyPreflight).
- * `overwrite` files get their backup copied back, `new` files are removed.
+ * `overwrite` files get their backup copied back, `new` files are removed,
+ * then the dirs the publish created (`createdDirs`) are removed while empty —
+ * a workspace agents/<id>/ (skills/, prompts/) dir overrides global wholesale,
+ * so an emptied one left behind would hide the global agent. A dir someone
+ * has since put files in is kept and reported.
  * A main file that no longer hashes to the manifest's `after` was edited (or
  * deleted) since — a conflict, refused unless the caller forces it. Older
  * manifests carry no hashes, so every file there reads `unverified`.
@@ -34,24 +38,31 @@ export interface ApplyManifest {
   sourceRunIds: string[]
   capturedAt: string
   files: ManifestFile[]
+  /** Dirs (relative to `.halo/`) the publish created, deepest first. Absent
+   *  in old manifests — their rollback leaves emptied dirs behind. */
+  createdDirs?: string[]
 }
 
 export type RollbackFileState = 'clean' | 'modified' | 'missing' | 'unverified'
+export type RollbackConflictState = Exclude<RollbackFileState, 'clean'>
 export interface RollbackFile { rel: string; kind: ManifestFile['kind']; state: RollbackFileState }
 
 export type RollbackResult =
-  | { ok: true; restored: string[]; removed: string[] }
+  | { ok: true; restored: string[]; removed: string[]; removedDirs: string[]; keptDirs: string[] }
   | { ok: false; error: 'not_found' }
   | { ok: false; error: 'not_applied' | 'apply_in_flight' | 'no_snapshot' }
-  | { ok: false; error: 'conflict'; conflicts: Array<{ rel: string; reason: Exclude<RollbackFileState, 'clean'> }> }
+  | { ok: false; error: 'conflict'; conflicts: Array<{ rel: string; reason: RollbackConflictState }> }
 
 export function sha256File(file: string): string {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
 
+const insideHalo = (mainHalo: string, rel: unknown): boolean =>
+  typeof rel === 'string' && path.resolve(mainHalo, rel).startsWith(mainHalo + path.sep)
+
 /** Manifest + per-file state against main now; null when there's nothing a
  *  rollback could restore from (no / unreadable manifest, an `overwrite`
- *  without its backup, a path escaping `.halo/`). */
+ *  without its backup, a file or dir path escaping `.halo/`). */
 export function inspectRollback(workspacePath: string, applyId: string): { manifest: ApplyManifest; files: RollbackFile[] } | null {
   const historyDir = wsEvoHistoryDir(workspacePath, applyId)
   const mainHalo = wsHaloDir(workspacePath)
@@ -60,11 +71,11 @@ export function inspectRollback(workspacePath: string, applyId: string): { manif
     manifest = JSON.parse(fs.readFileSync(path.join(historyDir, 'MANIFEST.json'), 'utf-8')) as ApplyManifest
   } catch { return null }
   if (!Array.isArray(manifest.files) || manifest.files.length === 0) return null
+  if (manifest.createdDirs !== undefined && (!Array.isArray(manifest.createdDirs) || !manifest.createdDirs.every((d) => insideHalo(mainHalo, d)))) return null
   const files: RollbackFile[] = []
   for (const f of manifest.files) {
-    if (typeof f.rel !== 'string' || (f.kind !== 'overwrite' && f.kind !== 'new')) return null
+    if (!insideHalo(mainHalo, f.rel) || (f.kind !== 'overwrite' && f.kind !== 'new')) return null
     const target = path.resolve(mainHalo, f.rel)
-    if (!target.startsWith(mainHalo + path.sep)) return null
     if (f.kind === 'overwrite' && !fs.existsSync(path.join(historyDir, f.rel))) return null
     let state: RollbackFileState
     if (!fs.existsSync(target)) state = 'missing'
@@ -91,7 +102,7 @@ export function rollbackApply(db: EvoDb, applyId: string, opts: { force?: boolea
   const inspected = inspectRollback(apply.workspacePath, applyId)
   if (!inspected) return { ok: false, error: 'no_snapshot' }
   const conflicts = inspected.files
-    .filter((f): f is RollbackFile & { state: Exclude<RollbackFileState, 'clean'> } => f.state !== 'clean')
+    .filter((f): f is RollbackFile & { state: RollbackConflictState } => f.state !== 'clean')
     .map((f) => ({ rel: f.rel, reason: f.state }))
   if (conflicts.length > 0 && !opts.force) return { ok: false, error: 'conflict', conflicts }
 
@@ -117,9 +128,22 @@ export function rollbackApply(db: EvoDb, applyId: string, opts: { force?: boolea
       fs.copyFileSync(path.join(historyDir, f.rel), target)
       restored.push(f.rel)
     } else {
-      // An emptied parent dir stays — the smallest change that undoes the file.
       fs.rmSync(target, { force: true })
       removed.push(f.rel)
+    }
+  }
+  // Deepest first, so a created parent empties once its created child is gone.
+  // Only dirs that didn't exist before the publish are listed — never one the
+  // workspace already had.
+  const removedDirs: string[] = []
+  const keptDirs: string[] = []
+  const depth = (d: string) => d.split(path.sep).length
+  for (const d of [...(inspected.manifest.createdDirs ?? [])].sort((a, b) => depth(b) - depth(a))) {
+    try {
+      fs.rmdirSync(path.join(mainHalo, d))
+      removedDirs.push(d)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') keptDirs.push(d)
     }
   }
   const now = Date.now()
@@ -127,6 +151,8 @@ export function rollbackApply(db: EvoDb, applyId: string, opts: { force?: boolea
     rolledBackAt: new Date(now).toISOString(),
     force: !!opts.force,
     files: inspected.files.map((f) => ({ ...f, action: f.kind === 'overwrite' ? 'restored' : 'removed' })),
+    removedDirs,
+    keptDirs,
   }, null, 2), 'utf-8')
 
   db.transaction((tx) => {
@@ -142,6 +168,6 @@ export function rollbackApply(db: EvoDb, applyId: string, opts: { force?: boolea
         .run()
     }
   })
-  console.log(`[Evo] rolled back ${applyId}: ${restored.length} restored, ${removed.length} removed${opts.force ? ' (forced)' : ''}`)
-  return { ok: true, restored, removed }
+  console.log(`[Evo] rolled back ${applyId}: ${restored.length} restored, ${removed.length} removed, ${removedDirs.length} dirs removed${keptDirs.length ? `, ${keptDirs.length} non-empty dirs kept` : ''}${opts.force ? ' (forced)' : ''}`)
+  return { ok: true, restored, removed, removedDirs, keptDirs }
 }

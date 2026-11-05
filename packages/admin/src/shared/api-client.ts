@@ -1175,6 +1175,7 @@ export const api = {
         autoApply: {
           level: string
           threshold: number
+          sourceAccess: string | null
           category: string
           files: Array<{ rel: string; category: string; reason?: string }>
           auto: boolean

@@ -185,15 +185,24 @@ function classifyAgentYaml(rel: string, before: string, after: string): FileClas
   return { rel, category: 'capability' }
 }
 
+/** YAML.parse that tells "threw" (undefined) from "parsed to a non-map" ({}). */
+function parseYamlLoose(text: string): Record<string, unknown> | undefined {
+  let v: unknown
+  try { v = YAML.parse(text) } catch { return undefined }
+  return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {}
+}
+
 /** SKILL.md → frontmatter fields + body, read the way parseSkillFrontmatter
  *  (agent-loader.ts) does: name / description / command by line regex (an
- *  unquoted colon-space mustn't lose them), the rest as YAML with a retry
- *  that drops those scalar lines. Null = frontmatter YAML unparsable. */
+ *  unquoted colon-space mustn't lose them), the rest as YAML — retried
+ *  without those scalar lines only when the first parse throws, and a
+ *  non-map parse reads as no fields, both like the loader. Null = the
+ *  frontmatter YAML is unparsable even after the retry. */
 function splitSkillMd(raw: string): { fm: Record<string, unknown>; body: string } | null {
   const m = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/)
   if (!m) return { fm: {}, body: raw.trim() }
   const block = m[1]
-  const fm = parseYamlRecord(block) ?? parseYamlRecord(block.replace(/^(name|description|command):.*$/gm, ''))
+  const fm = parseYamlLoose(block) ?? parseYamlLoose(block.replace(/^(name|description|command):.*$/gm, ''))
   if (!fm) return null
   for (const key of ['name', 'description', 'command']) {
     const lm = block.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))
@@ -201,6 +210,27 @@ function splitSkillMd(raw: string): { fm: Record<string, unknown>; body: string 
     else delete fm[key]
   }
   return { fm, body: raw.slice(m[0].length).trim() }
+}
+
+const normAccess = (v: unknown): string | null => {
+  const t = typeof v === 'string' ? v.trim() : ''
+  return t === 'full' || t === 'workspace' || t === 'readonly' ? t : null
+}
+
+/** `{ verb → effective requiresAccess }` the way the command router sees it
+ *  (parseSkillFrontmatter + commands.ts verbAccessMap): names trimmed, a
+ *  verb's own gate normalized, falling back to the object-level gate. A verb
+ *  added or dropped changes the key set — a dropped gated verb is no longer
+ *  checked by tryRouteSubcommand, so that is a permission change too. */
+function verbAccess(fm: Record<string, unknown>): Record<string, string | null> {
+  const objectAccess = normAccess(fm.requiresAccess)
+  const out: Record<string, string | null> = {}
+  for (const v of Array.isArray(fm.verbs) ? fm.verbs : []) {
+    const o = asRecord(v)
+    if (!o || typeof o.name !== 'string') continue
+    out[o.name.trim()] = normAccess(o.requiresAccess) ?? objectAccess
+  }
+  return out
 }
 
 function classifySkillMd(rel: string, before: string, after: string): FileClass {
@@ -212,15 +242,7 @@ function classifySkillMd(rel: string, before: string, after: string): FileClass 
     if (same(a.fm[key], b.fm[key]) || SKILL_PROMPT_KEYS.has(key)) continue
     if (SKILL_CAPABILITY_KEYS.has(key)) { category = 'capability'; continue }
     if (key === 'verbs') {
-      // A verb's requiresAccess decides which sessions may run it; any change
-      // to it (matched by verb name; a new verb counts against "unset") is a
-      // permission change, everything else in `verbs` is capability.
-      const accessByName = (v: unknown) => new Map((Array.isArray(v) ? v : [])
-        .map((x) => [String(asRecord(x)?.name), asRecord(x)?.requiresAccess ?? null] as const))
-      const va = accessByName(a.fm.verbs)
-      for (const [name, access] of accessByName(b.fm.verbs)) {
-        if (!same(va.get(name) ?? null, access)) return manual(rel, 'skill_fm:verbs.requiresAccess')
-      }
+      if (!same(verbAccess(a.fm), verbAccess(b.fm))) return manual(rel, 'skill_fm:verbs.requiresAccess')
       category = 'capability'
       continue
     }
@@ -333,6 +355,14 @@ export function categoryGate(level: EvoLevel, cls: Classification): string | nul
   return null
 }
 
+/** Only a full-access source session may teach an unreviewed change: a
+ *  readonly / workspace session's conversation (a channel guest's, say) must
+ *  not rewrite the prompts every session runs on without a human in the loop.
+ *  null (a run enqueued before the column existed) counts as not full. */
+export function sourceGate(sourceAccess: string | null): string | null {
+  return sourceAccess === 'full' ? null : 'source_access'
+}
+
 /** Does the score clear the bar? null = yes, else a reason code. */
 export function scoreGate(score: EvoScore | null, threshold: number): string | null {
   if (!score) return 'score_missing'
@@ -349,10 +379,15 @@ export function scoreGate(score: EvoScore | null, threshold: number): string | n
 export function decideAutoApply(input: {
   level: EvoLevel
   threshold: number
+  sourceAccess: string | null
   classification: Classification
   score: EvoScore | null
 }): { auto: boolean; reason: string | null } {
-  const reason = categoryGate(input.level, input.classification) ?? scoreGate(input.score, input.threshold)
+  // Level first (below L2 nothing auto-applies), then who the lesson came
+  // from, then what it changes, then how well it scored.
+  const reason = (evoLevelRank(input.level) >= 2 ? sourceGate(input.sourceAccess) : null)
+    ?? categoryGate(input.level, input.classification)
+    ?? scoreGate(input.score, input.threshold)
   return { auto: reason === null, reason }
 }
 
@@ -365,16 +400,18 @@ export function evaluateSandbox(input: {
   entries: readonly string[]
   level: EvoLevel
   threshold: number
+  sourceAccess: string | null
   score: EvoScore | null
   observation: string | null
 }): AutoApplyRecord {
   const classification = classifyChanges(collectChanges(input))
-  const { auto, reason } = decideAutoApply({ level: input.level, threshold: input.threshold, classification, score: input.score })
+  const { auto, reason } = decideAutoApply({ level: input.level, threshold: input.threshold, sourceAccess: input.sourceAccess, classification, score: input.score })
   const sc = input.score
   return {
     decidedAt: new Date().toISOString(),
     level: input.level,
     threshold: input.threshold,
+    sourceAccess: input.sourceAccess,
     category: classification.category,
     files: classification.files,
     auto,
@@ -389,6 +426,7 @@ export interface AutoApplyRecord {
   decidedAt: string
   level: EvoLevel
   threshold: number
+  sourceAccess: string | null
   category: Classification['category']
   files: FileClass[]
   auto: boolean

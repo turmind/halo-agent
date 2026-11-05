@@ -837,6 +837,7 @@ export const en: Record<string, string> = {
   'evolution.auto.failed': 'Auto-approved, but the apply failed and the main workspace was left unchanged — the run is back for review.',
   'evolution.auto.notApplied': 'Not auto-applied ({level}): {reason}',
   'evolution.auto.reason.level': 'capability changes (agent.yaml / SKILL.md frontmatter) auto-apply only at L3.',
+  'evolution.auto.reason.source_access': 'the source session was not full-access ({access}) — only a full session\'s conversation may change prompts without a reviewer.',
   'evolution.auto.reason.no_effective_change': 'no effective change against the live workspace.',
   'evolution.auto.reason.category_manual': '{detail} always needs a reviewer.',
   'evolution.auto.reason.score_missing': 'no usable score.',

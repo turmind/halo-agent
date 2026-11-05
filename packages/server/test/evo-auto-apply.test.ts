@@ -147,15 +147,48 @@ describe('classifyChange — SKILL.md frontmatter split', () => {
     ['disable-model-invocation', `${BASE_FM}\ndisable-model-invocation: true`],
     ['user-invocable', `${BASE_FM}\nuser-invocable: false`],
     ['verbs edited', BASE_FM.replace('desc: search', 'desc: search the web')],
-    ['verb added', `${BASE_FM}\n  - name: news`],
   ])('%s → capability', (_l, fm) => { expect(sk(skill(fm)).category).toBe('capability') })
 
   it.each([
     ['requiresAccess', `${BASE_FM}\nrequiresAccess: full`, 'skill_fm:requiresAccess'],
     ['verbs[].requiresAccess', BASE_FM.replace('desc: search', 'desc: search\n    requiresAccess: full'), 'skill_fm:verbs.requiresAccess'],
     ['new verb with requiresAccess', `${BASE_FM}\n  - name: admin\n    requiresAccess: readonly`, 'skill_fm:verbs.requiresAccess'],
+    ['new verb without requiresAccess', `${BASE_FM}\n  - name: news`, 'skill_fm:verbs.requiresAccess'],
     ['unknown key', `${BASE_FM}\nallowed-tools: shell_exec`, 'skill_fm:allowed-tools'],
   ])('%s → manual', (_l, fm, reason) => { expect(sk(skill(fm))).toMatchObject({ category: 'manual', reason }) })
+
+  describe('verb permissions compare the effective gate the router enforces', () => {
+    const GATED = `${BASE_FM}\n  - name: admin\n    requiresAccess: full`
+    const gated = (after: string) => sk(skill(after), skill(GATED))
+    it.each([
+      // A dropped verb leaves verbAccessMap, so tryRouteSubcommand stops gating it.
+      ['gated verb deleted', BASE_FM],
+      ['whole verbs list deleted', 'name: web-search\ndescription: Search the web: news, docs'],
+      ['renamed with a trailing space (the loader trims it back) and gate dropped', `${BASE_FM}\n  - name: "admin "`],
+      ['gate value no longer a valid level', GATED.replace('requiresAccess: full', 'requiresAccess: root')],
+    ])('%s → manual', (_l, after) => {
+      expect(gated(after)).toMatchObject({ category: 'manual', reason: 'skill_fm:verbs.requiresAccess' })
+    })
+
+    it('trailing space alone, gate kept → same effective map → capability', () => {
+      expect(gated(GATED.replace('name: admin', 'name: "admin "'))).toMatchObject({ category: 'capability' })
+    })
+
+    it('whitespace around the level normalizes away', () => {
+      expect(gated(GATED.replace('requiresAccess: full', 'requiresAccess: " full "'))).toMatchObject({ category: 'capability' })
+    })
+
+    it('own gate dropped while the object-level gate is the same → effective unchanged', () => {
+      const OBJ = `${GATED}\nrequiresAccess: full`
+      expect(sk(skill(OBJ.replace('    requiresAccess: full\n', '')), skill(OBJ))).toMatchObject({ category: 'capability' })
+      expect(sk(skill(OBJ.replace('  - name: admin\n    requiresAccess: full', '  - name: admin')), skill(OBJ)).category).toBe('capability')
+    })
+  })
+
+  it('frontmatter that parses to a non-map is read as no fields (like the loader), not unparsable', () => {
+    const before = '---\n- just\n- a list\n---\nbody\n'
+    expect(sk(before.replace('body', 'body v2'), before).category).toBe('prompt')
+  })
 
   it('frontmatter-less SKILL.md body edit → prompt', () => {
     expect(sk('just text v2', 'just text v1').category).toBe('prompt')
@@ -308,9 +341,20 @@ describe('scoreGate / decideAutoApply', () => {
   it('real data: run1 (INSTRUCTIONS 100/100/70 high) auto at L2; run2 (AGENT.md 100/70/100 medium) not', () => {
     const run1 = parseScore({ lint: 100, behavior: 100, scope: 70, confidence: 'high', checks: GOOD.checks })
     const run2 = parseScore({ lint: 100, behavior: 70, scope: 100, confidence: 'medium', checks: GOOD.checks })
-    expect(decideAutoApply({ level: 'L2', threshold: 80, classification: prompt, score: run1 })).toEqual({ auto: true, reason: null })
-    expect(decideAutoApply({ level: 'L2', threshold: 80, classification: classifyChanges([change('agents/default/AGENT.md', 'a', 'b')]), score: run2 }))
+    expect(decideAutoApply({ level: 'L2', threshold: 80, sourceAccess: 'full', classification: prompt, score: run1 })).toEqual({ auto: true, reason: null })
+    expect(decideAutoApply({ level: 'L2', threshold: 80, sourceAccess: 'full', classification: classifyChanges([change('agents/default/AGENT.md', 'a', 'b')]), score: run2 }))
       .toEqual({ auto: false, reason: 'confidence' })
+  })
+
+  it('source gate: only a full source session auto-applies; it is checked before category and score', () => {
+    const base = { level: 'L3' as const, threshold: 80, classification: prompt, score: GOOD }
+    expect(decideAutoApply({ ...base, sourceAccess: 'full' })).toEqual({ auto: true, reason: null })
+    for (const access of ['workspace', 'readonly', null]) {
+      expect(decideAutoApply({ ...base, sourceAccess: access })).toEqual({ auto: false, reason: 'source_access' })
+    }
+    expect(decideAutoApply({ ...base, sourceAccess: 'readonly', classification: classifyChanges([change('USER.md', 'a', 'b')]) }).reason).toBe('source_access')
+    // Below L2 the level is the reason, not the source.
+    expect(decideAutoApply({ ...base, level: 'L1', sourceAccess: 'readonly' }).reason).toBe('level')
   })
 })
 
@@ -339,7 +383,7 @@ describe('extractLargerObservation', () => {
     expect(extractLargerObservation(`## Larger observation\n${'x'.repeat(5000)}`)!.length).toBe(OBSERVATION_MAX_CHARS)
   })
   it('does not affect the verdict', () => {
-    const base = { mainHalo: '', globalHalo: '', sandboxHalo: '', entries: [] as string[], level: 'L2' as const, threshold: 80, score: GOOD }
+    const base = { mainHalo: '', globalHalo: '', sandboxHalo: '', entries: [] as string[], level: 'L2' as const, threshold: 80, sourceAccess: 'full', score: GOOD }
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-evo-obs-'))
     try {
       fs.mkdirSync(path.join(tmp, 'm')); fs.mkdirSync(path.join(tmp, 's'))
@@ -387,7 +431,7 @@ describe('wrapper: maybeAutoApply / autoApplyRecheck / failApply', () => {
     fs.rmSync(tmp, { recursive: true, force: true })
   })
   const level = (l: 'L0' | 'L1' | 'L2' | 'L3') => vi.spyOn(config.evolution, 'level', 'get').mockReturnValue(l)
-  const hook = (attempts = 1) => maybeAutoApply({ runId: RUN, workspacePath: ws, runDir, attempts, logFd })
+  const hook = (attempts = 1, sourceAccess: string | null = 'full') => maybeAutoApply({ runId: RUN, workspacePath: ws, runDir, attempts, sourceAccess, logFd })
 
   it('L1: no verdict file, run stays running for finalize', () => {
     level('L1')
@@ -414,6 +458,16 @@ describe('wrapper: maybeAutoApply / autoApplyRecheck / failApply', () => {
     expect(hook()).toBe(false)
     expect(record()).toMatchObject({ auto: false, reason: 'confidence' })
     expect(db.select().from(evolutionApplies).all()).toHaveLength(0)
+  })
+
+  it('L3 + passing patch from a workspace / readonly source: verdict source_access, nothing queued', () => {
+    level('L3')
+    for (const access of ['workspace', 'readonly']) {
+      expect(hook(1, access)).toBe(false)
+      expect(record()).toMatchObject({ auto: false, reason: 'source_access', sourceAccess: access })
+    }
+    expect(db.select().from(evolutionApplies).all()).toHaveLength(0)
+    expect(runRow().status).toBe('running')
   })
 
   it('stale wrapper (attempts moved on): nothing queued, caller must not finalize', () => {
