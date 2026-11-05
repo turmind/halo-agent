@@ -23,7 +23,7 @@ Not built in AgentCore mode (`nodeHub = AGENTCORE ? null : …`), the CLI / TUI 
 
 ### Go client: known differences from the TS client
 
-Accepted gaps between `halo-node` and `halo node`. The conformance suite normalizes them, or pins Go's side with a `known` case that also asserts TS still differs. Numbering matches the case files.
+Accepted gaps between `halo-node` and `halo node`. In the conformance suite D1 is normalized away, D4's prefix is rewritten before comparing, and D5 is a `known` case that also asserts TS still differs; the rest have no case. The labels are the ones the test files use.
 
 | # | Difference | Why accepted |
 |---|---|---|

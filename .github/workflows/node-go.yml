@@ -16,6 +16,7 @@ on:
       - packages/server/src/child-env.ts
       - packages/server/src/config.ts
       - packages/server/src/settings-schema.ts
+      - packages/server/src/prompts/md-vars.ts
       - packages/server/src/agents/agent-loop.ts
       - packages/server/src/channels/shared/media-store.ts
       - packages/server/src/shutdown.ts

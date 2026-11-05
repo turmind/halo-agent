@@ -149,7 +149,7 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
         ))}
         <p className="mt-2 text-[10px] text-[var(--muted-foreground)]">
           {t('nodes.commandHint')}{' '}
-          <a href={GUIDE} target="_blank" rel="noreferrer" className="text-[var(--primary)] hover:underline">{t('nodes.guide')}</a>
+          <a href={GUIDE} target="_blank" rel="noreferrer" className="whitespace-nowrap text-[var(--primary)] hover:underline">{t('nodes.guide')}</a>
         </p>
         <div className="mt-4 flex justify-end">
           <button onClick={onDone} className="rounded bg-[var(--primary)] px-3 py-1.5 text-xs text-white">
