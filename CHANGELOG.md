@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Linked machines: a Linux machine can now run the standalone `halo-node` binary (~7 MB, amd64 / arm64 / armv7, attached to each GitHub release) in place of `npm i -g @turmind/halo` — no Node.js needed, same flags and behaviour as `halo node`. The admin's connect command now downloads it, pinned to the server's version; macOS / Windows keep using `halo node`, which on Linux prints a one-line tip pointing at the binary.
+- Linked machines: a Linux machine can now run the standalone `halo-node` binary (~7 MB, amd64 / arm64 / armv7, attached to each GitHub release) in place of `npm i -g @turmind/halo` — no Node.js needed, same flags and behaviour as `halo node`. Install it with `curl -fsSL …/install.sh | sh`: the script checks the SHA256, installs to `/usr/local/bin` (root) or `~/.local/bin`, and upgrades in place when re-run. The admin's connect command now uses this, pinned to the server's version. macOS / Windows keep using `halo node`; on Linux, `halo node` prints a one-line tip with the install command.
 
 ### Fixed
 

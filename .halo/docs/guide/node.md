@@ -19,24 +19,39 @@ Supported: **Linux and macOS**. Windows works on a best-effort basis (not regula
 
 ## 1. Create a token
 
-Admin → **Channels → Linked machines** → **Add machine**. Pick the workspace and a machine name (`a-z 0-9 -`, e.g. `mbp`; unique within the workspace — the agent uses it to address the machine). The dialog shows two commands to copy: one downloads and runs `halo-node` on Linux, the other runs `halo node` on macOS / Windows. The download link points at the server's own release, so the machine and the server come from the same version.
+Admin → **Channels → Linked machines** → **Add machine**. Pick the workspace and a machine name (`a-z 0-9 -`, e.g. `mbp`; unique within the workspace — the agent uses it to address the machine). The dialog shows two commands to copy: one installs and runs `halo-node` on Linux, the other runs `halo node` on macOS / Windows. The install link points at the server's own release, so the machine and the server come from the same version.
 
 The token stays on the list row (copy button). Deleting the row revokes it at once and disconnects the machine.
 
 ## 2. Run it on the machine
 
-**Linux** — download the binary once:
+**Linux** — install once with the release's install script, then run:
+
+```bash
+curl -fsSL https://github.com/turmind/halo-agent/releases/latest/download/install.sh | sh
+export HALO_NODE_TOKEN=<token>                 # better than --token: flags show up in ps / shell history
+halo-node --server https://halo.example.com --root ~/proj
+```
+
+What the script does (`sh`, busybox included; curl or wget):
+
+- picks `halo-node-linux-{amd64,arm64,armv7}` from `uname -m` (`armv8l`, a 64-bit kernel with 32-bit userland, gets armv7). Any other architecture, or not Linux, stops with a message.
+- downloads that release's binary and checks it against the release's `SHA256SUMS` (`sha256sum` or `shasum`). A mismatch stops with an error and leaves nothing behind. With neither tool installed it warns and skips the check.
+- installs to `/usr/local/bin/halo-node` when run as root, otherwise to `~/.local/bin/halo-node`. If that directory isn't in `PATH`, it says so; run it by full path or add the directory to `PATH`.
+- replaces an existing `halo-node` in place, even one that is running (that process keeps the old file until it restarts). **Re-run the script to upgrade.**
+- needs no token, starts nothing, and writes no service file.
+
+Each release's `install.sh` installs that release's binary. The admin's command uses the server's own version (`releases/download/v<version>/install.sh`); `latest` installs the newest release. `halo-node --version` prints the version.
+
+**Manual download** — if you'd rather not pipe a script into `sh`, have only wget (`wget -qO- <url>/install.sh | sh` also works), or the machine can't reach GitHub (download on another machine, copy it over):
 
 ```bash
 A=$(uname -m); case "$A" in x86_64) A=amd64;; aarch64|arm64) A=arm64;; armv7l|armv8l) A=armv7;; *) echo "no halo-node build for $A — use npm" >&2;; esac
 curl -fLo halo-node "https://github.com/turmind/halo-agent/releases/latest/download/halo-node-linux-$A" && chmod +x halo-node
 # optional: verify
 curl -fsL https://github.com/turmind/halo-agent/releases/latest/download/SHA256SUMS | grep "halo-node-linux-$A\$" | sed "s/halo-node-linux-$A/halo-node/" | sha256sum -c
-export HALO_NODE_TOKEN=<token>                 # better than --token: flags show up in ps / shell history
 ./halo-node --server https://halo.example.com --root ~/proj
 ```
-
-To match a specific server version, use `releases/download/v<version>/` in place of `releases/latest/download/`; the admin's command already does this. `armv8l` (a 64-bit kernel with 32-bit userland) runs the armv7 build. If the machine can't reach GitHub, download the file on another machine and copy it over. `./halo-node --version` prints the version.
 
 **macOS / Windows**:
 
@@ -46,7 +61,7 @@ export HALO_NODE_TOKEN=<token>
 halo node --server https://halo.example.com --root ~/proj
 ```
 
-On Linux, `halo node` still works, and prints one `[Node] tip:` line pointing at the binary.
+On Linux, `halo node` still works, and prints one `[Node] tip:` line with the install command.
 
 Either one runs in the foreground and logs each call (`[Node] read src/app.ts`, `[Node] refused write ../x: outside root`). Ctrl-C stops it. It reconnects by itself after network drops or a server restart; it exits (code 1) on a bad / revoked token or when the workspace is gone.
 
@@ -95,7 +110,7 @@ After=network-online.target
 User=alice
 WorkingDirectory=/home/alice                 # whole-machine mode: relative paths start here
 EnvironmentFile=/home/alice/.halo-node.env   # HALO_NODE_TOKEN=…   (chmod 600)
-ExecStart=/usr/local/bin/halo-node --server https://halo.example.com --root /home/alice/proj
+ExecStart=/usr/local/bin/halo-node --server https://halo.example.com --root /home/alice/proj   # installed as root; as alice: /home/alice/.local/bin/halo-node
 Restart=on-failure
 RestartSec=10
 RestartPreventExitStatus=1                   # 1 = bad / revoked token or workspace gone: restarting won't help
@@ -105,7 +120,7 @@ RestartPreventExitStatus=1                   # 1 = bad / revoked token or worksp
 WantedBy=multi-user.target
 ```
 
-Network drops, server restarts, a busy token (409) and a lockout (429) are handled inside the process, which keeps running, so `on-failure` is enough. Don't use `Restart=always`: it keeps restarting after a revoked token, and each restart is a failed login. After 5 failures in 15 minutes the server locks out that IP address, which blocks every machine connecting from it. For the npm client, set `ExecStart=/usr/bin/halo node …`.
+Network drops, server restarts, a busy token (409) and a lockout (429) are handled inside the process, which keeps running, so `on-failure` is enough. Don't use `Restart=always`: it keeps restarting after a revoked token, and each restart is a failed login. After 5 failures in 15 minutes the server locks out that IP address, which blocks every machine connecting from it. ExecStart takes the path the install script printed. For the npm client, set `ExecStart=/usr/bin/halo node …`. After upgrading with the install script, `systemctl restart halo-node` to run the new binary.
 
 ### Settings on the machine
 
