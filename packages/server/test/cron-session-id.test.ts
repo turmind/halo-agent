@@ -6,59 +6,42 @@ import { spawn } from 'node:child_process'
 import { eq } from 'drizzle-orm'
 import { createCronDb, setCronDb, cronJobs, cronRuns, CRON_MIGRATIONS, type CronDb } from '../src/db/cron-db.js'
 import { rawSqlite } from '../src/db/raw-sqlite.js'
-import { getWorkspaceDb } from '../src/db/index.js'
-import { agentSessions } from '../src/db/schema.js'
-import {
-  runJob, sweepOrphanRuns, stopCronDaemon, setCronSessionRegistry,
-  _inflight, _inflightSessions, type CronSessionHost,
-} from '../src/cron/runner.js'
+import { runJob, recoverRuns, _inflight } from '../src/cron/runner.js'
 import { createCronRoutes } from '../src/routes/cron.js'
+import { installCronHarness, teardownCronHarness, until, type CronHarness } from './helpers/cron-harness.js'
 
 /**
  * Per-job session (`cron_jobs.session_id`):
  *   - nullable; NULL = the job's own session (the job id; `cron-<id>` for an
  *     unprefixed custom id — migration v4 pins pre-fix jobs to `cron-cron-…`)
  *   - REST validates a root session id (no `>`), blank = null, PUT null clears
- *   - runner passes `-s <session>`, keeps the session's access level, skips a
- *     fire while the server is mid-turn on the session or another job's cli
- *     already holds it, and drops the server's stale cache after the cli exits
- *   - orphan sweep fingerprints the effective session id
+ *   - runner runs in that session (in-process, helpers/cron-harness.ts),
+ *     keeps its access level, skips a fire while a turn runs in it or another
+ *     job's run is owed there
+ *   - legacy (cli-child) recovery fingerprints the effective session id
  */
 
 const realHome = process.env.HOME
-const realCli = process.env.HALO_CLI
 
 let tmpHome: string
 let wsDir: string
 let db: CronDb
+let h: CronHarness
 const app = createCronRoutes()
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-cron-session-'))
-  // Keep runJob's logsDir() writes out of the real home.
+  tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'halo-cron-session-')))
   process.env.HOME = tmpHome
   wsDir = path.join(tmpHome, 'ws')
   fs.mkdirSync(wsDir)
   db = createCronDb(path.join(tmpHome, 'global'))
   setCronDb(db)
-  _inflight.clear()
-  _inflightSessions.clear()
-  // Fake cli: echoes its argv (after an optional delay) so the run's output
-  // shows exactly what the runner spawned.
-  const cli = path.join(tmpHome, 'fake-halo')
-  fs.writeFileSync(cli, '#!/bin/sh\nsleep "${FAKE_CLI_DELAY:-0}"\necho "ARGS $*"\n', { mode: 0o755 })
-  process.env.HALO_CLI = cli
+  h = installCronHarness(wsDir)
 })
 
 afterEach(() => {
-  stopCronDaemon()
-  setCronSessionRegistry(null)
+  teardownCronHarness()
   process.env.HOME = realHome
-  if (realCli === undefined) delete process.env.HALO_CLI
-  else process.env.HALO_CLI = realCli
-  delete process.env.FAKE_CLI_DELAY
-  _inflight.clear()
-  _inflightSessions.clear()
   fs.rmSync(tmpHome, { recursive: true, force: true })
 })
 
@@ -94,15 +77,11 @@ function insertJob(id: string, sessionId: string | null): void {
   }).run()
 }
 
-function stubHost(busy: boolean) {
-  const forgot: string[] = []
-  const host: CronSessionHost = {
-    hasActiveWorkInTree: () => busy,
-    forgetExternalWrite: (id) => { forgot.push(id); return !busy },
-    deleteSession: async (id) => [id],
-  }
-  setCronSessionRegistry({ peek: () => host })
-  return forgot
+/** Run a job to its end (runJob returns once the prompt is in). */
+async function runToEnd(jobId: string) {
+  const runId = await runJob(jobId, 'manual')
+  await until(() => getRun(runId).status !== 'running' && !_inflight.has(jobId))
+  return getRun(runId)
 }
 
 describe('cron session_id — REST', () => {
@@ -195,35 +174,32 @@ describe('cron session_id — REST', () => {
 })
 
 describe.skipIf(process.platform === 'win32')('cron session_id — runner', () => {
-  it('spawns on the default cron-<jobId> session without --access when the session is new', async () => {
+  it('runs on the default cron-<jobId> session, created at full access', async () => {
     insertJob('job-a', null)
-    const run = getRun(await runJob('job-a', 'manual'))
-    expect(run.status).toBe('succeeded')
-    expect(run.output).toContain('-s cron-job-a')
-    expect(run.output).not.toContain('--access')
+    const run = await runToEnd('job-a')
+    expect(run).toMatchObject({ status: 'succeeded', sessionId: 'cron-job-a' })
+    expect(h.created).toEqual([expect.objectContaining({ id: 'cron-job-a', accessLevel: null })])
   })
 
   it('a cron- prefixed job id is its own session id (no doubled prefix)', async () => {
     insertJob('cron-xxx', null)
-    const run = getRun(await runJob('cron-xxx', 'manual'))
+    const run = await runToEnd('cron-xxx')
     expect(run.status).toBe('succeeded')
-    expect(run.output).toMatch(/-s cron-xxx(\s|$)/)
-    expect(run.output).not.toContain('cron-cron-')
+    expect(run.sessionId).toBe('cron-xxx')
   })
 
-  it('a job pinned by migration v4 keeps resuming its cron-cron- session; orphan sweep matches it', async () => {
+  it('a job pinned by migration v4 keeps resuming its cron-cron- session; legacy recovery matches it', async () => {
     // After v4 a pre-fix job carries session_id = 'cron-cron-old' explicitly.
     insertJob('cron-old', 'cron-cron-old')
-    const run = getRun(await runJob('cron-old', 'manual'))
-    expect(run.output).toMatch(/-s cron-cron-old(\s|$)/)
+    expect((await runToEnd('cron-old')).sessionId).toBe('cron-cron-old')
 
-    // An orphan spawned by the previous build (always-prefix rule) carries
-    // `-s cron-cron-old` — the sweep must still recognize and reap it.
+    // An orphan spawned by a cli-child build (always-prefix rule) carries
+    // `-s cron-cron-old` — recovery must still recognize and reap it.
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', '-s', 'cron-cron-old'], { stdio: 'ignore' })
     const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()))
     await new Promise((r) => setTimeout(r, 150))
     db.insert(cronRuns).values({ id: 'run-old', jobId: 'cron-old', triggerKind: 'scheduled', status: 'running', startedAt: Date.now(), pid: child.pid! }).run()
-    sweepOrphanRuns({ graceMs: 500 })
+    await recoverRuns({ graceMs: 500 })
     expect(getRun('run-old').failureReason).toContain('SIGTERM sent')
     await exited
     await new Promise((r) => setTimeout(r, 600))
@@ -231,48 +207,44 @@ describe.skipIf(process.platform === 'win32')('cron session_id — runner', () =
   })
 
   it('runs in the picked session and keeps its stored access level', async () => {
-    const now = Date.now()
-    getWorkspaceDb(wsDir).db.insert(agentSessions).values({
-      id: 'chat-ro', agentId: 'default', accessLevel: 'readonly', createdAt: now, updatedAt: now,
-    }).run()
+    h.seedSession('chat-ro', { accessLevel: 'readonly' })
     insertJob('job-b', 'chat-ro')
-    const run = getRun(await runJob('job-b', 'manual'))
-    expect(run.status).toBe('succeeded')
-    expect(run.output).toContain('-s chat-ro')
-    expect(run.output).toContain('--access readonly')
+    const run = await runToEnd('job-b')
+    expect(run).toMatchObject({ status: 'succeeded', sessionId: 'chat-ro' })
+    expect(h.created).toEqual([])
+    expect(h.sm.getSessionById('chat-ro')).toMatchObject({ accessLevel: 'readonly' })
   })
 
-  it('skips while the server is mid-turn on the session, without spawning', async () => {
-    const forgot = stubHost(true)
+  it('skips while a turn is running in the session, without sending', async () => {
+    let open!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    h.seedSession('chat-busy')
+    void h.sm.sendUserMessage('chat-busy', 'hi')
+    await until(() => h.inputs.length === 1)
     insertJob('job-c', 'chat-busy')
     const run = getRun(await runJob('job-c', 'scheduled'))
     expect(run.status).toBe('skipped')
     expect(run.failureReason).toContain('a turn is running')
-    expect(forgot).toEqual([])
+    expect(h.inputs).toHaveLength(1)
     expect(_inflight.has('job-c')).toBe(false)
+    open()
   })
 
-  it('drops the server cache for the session after the cli exits', async () => {
-    const forgot = stubHost(false)
-    insertJob('job-d', 'chat-idle')
-    const run = getRun(await runJob('job-d', 'manual'))
-    expect(run.status).toBe('succeeded')
-    expect(forgot).toEqual(['chat-idle'])
-  })
-
-  it('skips a second job on the same session while the first cli runs', async () => {
-    process.env.FAKE_CLI_DELAY = '0.4'
+  it('skips a second job on the same session while the first run is owed there', async () => {
+    let open!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    h.seedSession('shared')
     insertJob('job-e1', 'shared')
     insertJob('job-e2', 'shared')
-    const first = runJob('job-e1', 'manual')
+    const first = await runJob('job-e1', 'manual')
     const second = getRun(await runJob('job-e2', 'manual'))
     expect(second.status).toBe('skipped')
-    expect(second.failureReason).toContain('another cron run')
-    expect(getRun(await first).status).toBe('succeeded')
-    expect(_inflightSessions.size).toBe(0)
+    expect(second.failureReason).toContain(`owed to cron run ${first}`)
+    open()
+    await until(() => getRun(first).status === 'succeeded')
   })
 
-  it('orphan sweep fingerprints the picked session and blocks other jobs on it', async () => {
+  it('legacy recovery fingerprints the picked session and blocks other jobs on it', async () => {
     insertJob('job-f1', 'picked-sess')
     insertJob('job-f2', 'picked-sess')
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', '-s', 'picked-sess'], { stdio: 'ignore' })
@@ -280,16 +252,16 @@ describe.skipIf(process.platform === 'win32')('cron session_id — runner', () =
     await new Promise((r) => setTimeout(r, 150))
     db.insert(cronRuns).values({ id: 'run-f', jobId: 'job-f1', triggerKind: 'scheduled', status: 'running', startedAt: Date.now(), pid: child.pid! }).run()
 
-    sweepOrphanRuns({ graceMs: 500 })
+    await recoverRuns({ graceMs: 500 })
     expect(getRun('run-f').failureReason).toContain('SIGTERM sent')
 
-    // The other job on the same session can't spawn while the orphan lives.
+    // The other job on the same session can't run while the orphan lives.
     const blocked = getRun(await runJob('job-f2', 'manual'))
     expect(blocked.status).toBe('skipped')
+    expect(blocked.failureReason).toContain('another cron run')
 
     await exited
     await new Promise((r) => setTimeout(r, 600))
     expect(_inflight.has('job-f1')).toBe(false)
-    expect(_inflightSessions.size).toBe(0)
   })
 })

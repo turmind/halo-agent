@@ -7,10 +7,10 @@
  *
  * Lifecycle:
  *   cron_jobs:  enabled (cron schedule active) | disabled (paused)
- *   cron_runs:  pending → running → succeeded | failed | timeout
+ *   cron_runs:  running → succeeded | failed | timeout; skipped (never ran)
  *
- * Job execution itself happens in `cron/runner.ts` (croner schedules +
- * spawned `halo cli` children). DB only persists state.
+ * Job execution itself happens in `cron/runner.ts` (its own fire timers +
+ * the server's SessionManager, in-process). DB only persists state.
  */
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
@@ -41,18 +41,19 @@ export const cronJobs = sqliteTable('cron_jobs', {
   runAt: integer('run_at'),
   /** IANA timezone name; null = host timezone. */
   timezone: text('timezone'),
-  /** Max seconds a single cron-fired cli may run before the runner kills
-   *  it. NULL = default 3600 (runner.ts CLI_TIMEOUT_SEC). Range 60–21600,
+  /** Max wall-clock seconds a single cron run may take (a server restart
+   *  included) before the runner stops its session. NULL = default 3600
+   *  (runner.ts RUN_TIMEOUT_SEC). Range 60–21600,
    *  enforced at the write points (REST routes / skill helper). */
   timeoutSec: integer('timeout_sec'),
-  /** Root session id the cli runs in. NULL = the job's own session (id =
+  /** Root session id the job runs in. NULL = the job's own session (id =
    *  the job id; `cron-<id>` for a custom id without that prefix). A
    *  stateful job's agent is fixed once its session exists; to change it,
    *  delete that session or switch the job to a new session every run
    *  (`stateless`) — enforced at the write points. */
   sessionId: text('session_id'),
   /** Folder the run focuses on (workspace-relative, NULL = workspace root),
-   *  passed as `halo cli --dir` on every run — same semantics as a
+   *  applied to the session on every run — same semantics as a
    *  sub-agent's working_dir. Validated (inside the workspace, existing
    *  directory) at the write points and again at fire time. */
   workingDir: text('working_dir'),
@@ -89,27 +90,30 @@ export const cronRuns = sqliteTable('cron_runs', {
   status: text('status').notNull(),
   startedAt: integer('started_at').notNull(),
   completedAt: integer('completed_at'),
-  /** Captured stdout (final assistant text from cli) — what gets sent to channels. */
+  /** The run's final reply (+ `ℹ️` notice lines) — what gets sent to channels. */
   output: text('output'),
-  /** Cli exit code. 0 = success; 124 = timeout from `timeout(1)` wrapper. */
+  /** Exit code of a cli-child run (rows from before in-process cron: 0 =
+   *  success, 124 = timeout). NULL on in-process runs — `status` says it. */
   exitCode: integer('exit_code'),
   /** Free-form error/diagnostic. */
   failureReason: text('failure_reason'),
-  /** Path to the per-run log file (cli stdout+stderr tee). Lives at
-   *  `~/.halo/global/logs/cron/<runId>.log`. */
+  /** Path to a cli-child run's log file (stdout+stderr tee) at
+   *  `~/.halo/global/logs/cron/<runId>.log`. NULL on in-process runs: the
+   *  session is the log. */
   logPath: text('log_path'),
   /** Per-target dispatch outcomes — JSON array of `{channelType, accountId, ok, error?}`.
    *  Lets the UI show "sent to telegram (1234), wechat failed: no chatId". */
   dispatchResults: text('dispatch_results'),
-  /** OS pid of the spawned cli child, written right after spawn. Lets the
-   *  boot-time orphan sweep (cron/runner.ts sweepOrphanRuns) identify and
-   *  reap a previous server generation's still-running cli — identity is
-   *  re-verified against the process command line before any kill, so a
-   *  reused pid is never killed by mistake. */
+  /** OS pid of a cli-child run (builds before in-process cron). Lets boot
+   *  recovery (cron/runner.ts recoverRuns, legacy branch) identify and reap a
+   *  previous server generation's still-running cli — identity is re-verified
+   *  against the process command line before any kill, so a reused pid is
+   *  never killed by mistake. NULL on in-process runs. */
   pid: integer('pid'),
-  /** Session this run's cli was spawned on (`-s`). The orphan sweep's
-   *  fingerprint — a stateless job's per-run id can't be re-derived from
-   *  the job row. NULL on skipped rows and rows from before the column. */
+  /** Session this run ran in. Boot recovery reads its `reply_to` (and a
+   *  legacy cli's fingerprint) — a stateless job's per-run id can't be
+   *  re-derived from the job row. NULL on skipped rows and rows from before
+   *  the column. */
   sessionId: text('session_id'),
   /** Workspace the run fired against (the job's at fire time) — where a
    *  stateless run's session lives, even after the job moves workspace or is

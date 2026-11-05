@@ -1,19 +1,23 @@
 /**
  * Cron runner — schedules jobs from `cron_jobs` (croner computes the fire
- * times, the timers are the runner's own), executes each fire by spawning
- * a fresh `halo cli` child, captures stdout for channel dispatch, and
- * persists a `cron_runs` audit row.
+ * times, the timers are the runner's own), executes each fire in-process on
+ * the server's own SessionManager, dispatches the run's final reply to the
+ * job's channel targets, and persists a `cron_runs` audit row.
  *
- * Same shape as the evo wrapper:
- *   - `spawn(halo cli, [-a <agent>, -n, -w <workspace>, <prompt>])`
- *   - stdout/stderr tee'd live to `~/.halo/global/logs/cron/<runId>.log`
- *   - per-job timeout (`timeout_sec`, default 3600s) via a Node timer
- *   - in-memory state is rebuilt from the db on every server boot
- *     (durable schedule survives restart)
+ *   - a fire appends + sends the prompt to the job's session and stamps the
+ *     session's `reply_to` with `{ cron: runId }`; the run ends at relay's
+ *     turn-end hook once the subtree is quiet (`finishRun`) — the same gate
+ *     relay / A2A / `/invocations` use, so a fan-out run reports once
+ *   - per-job timeout (`timeout_sec`, default 3600s) via a Node timer that
+ *     stops the session (`stopSession`)
+ *   - in-memory state is rebuilt from the db on every server boot: schedules
+ *     from `cron_jobs`, in-flight runs from `cron_runs` + the session's
+ *     `reply_to` — a run cut off by a restart resumes through the run ledger's
+ *     nudge and finishes normally (`recoverRuns`)
  *
- * Each job runs in one stable session (`-s`): its own (id = the job id,
- * see effectiveSessionId) by default, or an existing root session picked on the job (`session_id`) —
- * see runJob's session strategy for the shared-session guards.
+ * Each job runs in one stable session: its own (id = the job id, see
+ * effectiveSessionId) by default, or an existing root session picked on the
+ * job (`session_id`); a stateless job gets a fresh one per fire.
  */
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -29,35 +33,39 @@ import { agentSessions } from '../db/schema.js'
 import { findAndDeleteSessionFile } from '../sessions/session-store.js'
 import { dispatchToTargets, type CronTarget, type DispatchResult } from './dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
-import { cleanChildEnv } from '../child-env.js'
-import { getNodeHub } from '../nodes/hub.js'
 import { resolveWorkingDir } from '../agents/working-dir.js'
+import { readReplyTo, takeReplyTo, clearReplyTo, setCronRunDoor, type ReplyTo } from '../agents/relay.js'
+import { nudgesSettled } from '../agents/run-ledger.js'
+import type { AgentSessionEvent } from '../agents/agent-events.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-/** Default cap on how long a single cron-fired cli may run, in seconds.
- *  Used when the job doesn't set its own `timeout_sec` (nullable column;
- *  jobs can pick 60–21600s via the routes / admin form). Long enough for a
- *  deep multi-step run, short enough that a truly stuck child still gets
- *  reaped within the hour. Concurrency overlap of the same job is blocked
- *  up-front by `_inflight` (see runJob), so this no longer needs to be
- *  tight. Enforced by a Node timer that kills the child and reports exit
- *  code 124 (cross-platform; no dependency on the Linux-only `timeout(1)`
- *  binary). */
-const CLI_TIMEOUT_SEC = 3600
+/** Default cap on how long a single cron run may take, in seconds — wall
+ *  clock from its start, a server restart included. Used when the job doesn't
+ *  set its own `timeout_sec` (nullable column; jobs can pick 60–21600s via the
+ *  routes / admin form). Overlap of the same job is blocked up-front (see
+ *  runJob), so this needn't be tight. */
+const RUN_TIMEOUT_SEC = 3600
 
-/** Grace window between the timeout's SIGTERM (which the cli handles by
- *  finishing the in-flight tool, repairing the conversation and flushing the
- *  session to disk before exiting 143) and the SIGKILL tree-reap. Long enough
- *  for one in-flight tool to finish, short enough to reap a stuck child
- *  promptly. */
+/** How long a timed-out run waits for `stopSession` to land before giving up
+ *  on it: the run is already recorded `timeout` and its `reply_to` cleared, so
+ *  a tool that ignores its abort signal only keeps its own turn alive — later
+ *  fires see the session busy and skip. (The cli-child runner could SIGKILL
+ *  here; in-process there is nothing to kill — accepted, plans/cron-in-process.md R1.) */
+const STOP_SETTLE_MS = 30_000
+
+/** Legacy (cli-child) runs only: grace between the boot sweep's SIGTERM to a
+ *  previous generation's still-running `halo cli` and the SIGKILL tree-reap.
+ *  Remove with the legacy branch of recoverRuns (one minor release after
+ *  in-process cron). */
 const KILL_GRACE_SEC = 30
 
-/** Stamped ahead of every job prompt on the cli's stdin. Cron runs are
- *  unattended by construction, but nothing in the model's view says so — the
- *  `cron-*` session id is invisible to it, and prompts typed into the admin
- *  Cron form don't carry the preamble the `cron` skill used to ask the agent
- *  to prepend. Mirrors the "Unattended runs" wording in prompts/all/RUNTIME.md. */
+/** Stamped ahead of every job prompt on the model-bound text (the UI row
+ *  shows the prompt alone). Cron runs are unattended by construction, but
+ *  nothing in the model's view says so — the `cron-*` session id is invisible
+ *  to it, and prompts typed into the admin Cron form don't carry the
+ *  preamble the `cron` skill used to ask the agent to prepend. Mirrors the
+ *  "Unattended runs" wording in prompts/all/RUNTIME.md. */
 const UNATTENDED_PREAMBLE = '[Unattended cron run — nobody will answer questions. Deliver the result directly; if genuinely blocked, state what\'s blocked in one line and stop.]'
 
 /** How many `cron_runs` rows to keep per job. The oldest get pruned every
@@ -76,17 +84,10 @@ const STATELESS_RUNS_PER_JOB_KEEP = 10
  *  disk usage, the row is cheap. */
 const LOG_RETENTION_DAYS = 30
 
-/** Resolve the `halo` cli executable. Override via $HALO_CLI for dev.
- *  On Windows we return the explicit `halo.cmd`, not the bare `halo`:
- *  the desktop NSIS installer drops `halo.cmd` (cli launcher) and
- *  `Halo.exe` (the GUI) into the same $INSTDIR, both on PATH. PATHEXT
- *  ranks `.EXE` above `.CMD`, so a bare `halo` resolves to the GUI —
- *  which relaunches the app and grabs the global server.lock instead of
- *  running the cli. The `.cmd` suffix forces PATH to the launcher. */
-function resolveHaloCli(): string {
-  if (process.env.HALO_CLI) return process.env.HALO_CLI
-  return process.platform === 'win32' ? 'halo.cmd' : 'halo'
-}
+// ── Legacy cli-child reaping (recoverRuns' pid branch only) ─────────────
+// A run row with a pid was spawned by a pre-in-process build as a `halo cli`
+// child; outside systemd's cgroup kill it can outlive the server it came from.
+// Remove these helpers with that branch (one minor release after in-process cron).
 
 /** POSIX: list every live descendant of `rootPid` (children, grandchildren, …)
  *  from one `ps` snapshot. A ppid walk — NOT a process-group kill — because the
@@ -216,29 +217,59 @@ export function jobChangedFields(job: typeof cronJobs.$inferSelect): { workingDi
   return { workingDir: job.workingDir, stateless: job.stateless === 1, sessionAgentId: sessionAgentIdFor(job) }
 }
 
-/** `_inflightSessions` key. Realpath so two spellings of one workspace
- *  collide; a missing workspace falls back to the resolved path (its run
- *  fails on the existence check anyway). */
+/** `_inflightSessions` key (legacy pid branch only). Realpath so two
+ *  spellings of one workspace collide; a missing workspace falls back to the
+ *  resolved path (its run fails on the existence check anyway). */
 function sessionKeyFor(workspacePath: string, sessionId: string): string {
   let ws: string
   try { ws = fs.realpathSync(workspacePath) } catch { ws = path.resolve(workspacePath) }
   return `${ws}\n${sessionId}`
 }
 
-/** What the runner needs from the server's SessionManager registry to share
- *  a session with it. Structural — the registry's `peek` (cache lookup only,
- *  never constructs a manager) satisfies it; tests pass a stub. */
+/** What the runner needs from a workspace's SessionManager to run a job in
+ *  it. Structural — SessionManager satisfies it; tests pass a stub. */
 export interface CronSessionHost {
   hasActiveWorkInTree(rootId: string): boolean
-  forgetExternalWrite(rootId: string): boolean
   deleteSession(rootId: string): Promise<string[]>
+  getDb(): HaloDb
+  getSessionById(sessionId: string): { agentId: string } | null
+  createSession(agentId: string, parentId: null, description: string, agentName?: string, explicitId?: string, workingDir?: string | null, accessLevel?: 'readonly' | 'workspace' | null): Promise<string>
+  setWorkingDir(sessionId: string, workingDir: string | null): unknown
+  appendUserMessage(sessionId: string, text: string): string
+  sendUserMessage(sessionId: string, message: string, images?: undefined, accessLevel?: undefined, stamp?: string): Promise<'running' | 'queued'>
+  stopSession(sessionId: string): Promise<void>
+  registerEventListener(rootSessionId: string, handler: (event: AgentSessionEvent) => void): () => void
 }
-export interface CronSessionRegistry { peek(workspacePath: string): CronSessionHost | undefined }
+export interface CronSessionRegistry {
+  /** Cache lookup only — never constructs a manager (whose constructor runs
+   *  the boot reconcile as a side effect). Prune / recovery paths. */
+  peek(workspacePath: string): CronSessionHost | undefined
+  /** The fire path: a run needs a manager. */
+  getOrCreate(workspacePath: string): CronSessionHost
+}
 
 let _sessionRegistry: CronSessionRegistry | null = null
-/** index.ts sets this once with the server registry. Unset (tests, CLI)
- *  = no server-side sessions to guard. */
+/** index.ts sets this once with the server registry. Unset (tests that don't
+ *  run jobs, CLI) = no sessions to run in: a fire fails with a clear reason. */
 export function setCronSessionRegistry(r: CronSessionRegistry | null): void { _sessionRegistry = r }
+
+/** A run in flight in this process: what finishRun / the timeout need that
+ *  the db can't hold (a timer, a listener). Everything else — status, job,
+ *  targets, the owed pointer — is read from cron.db / the session row, so a
+ *  lost entry (restart) is rebuilt by recoverRuns, never needed for truth. */
+interface RunCtx {
+  runId: string
+  jobId: string
+  sessionId: string
+  workspacePath: string
+  host: CronSessionHost
+  /** Root `system` notices seen during the run (retries, compaction,
+   *  truncation…) — prefixed to the dispatched text the way `halo cli`
+   *  prints them, so a recipient can tell why a reply looks off. */
+  notices: string[]
+  timer: ReturnType<typeof setTimeout> | null
+  unlisten: () => void
+}
 
 /** Longest single timer hop toward a fire target. Same 30s cap croner uses:
  *  the wall clock is re-read at least every 30s, so a target holds across
@@ -258,23 +289,26 @@ interface ActiveSchedule {
  *  timer). Drives `start/stopAll` + hot-reload after CRUD operations. */
 const _active = new Map<string, ActiveSchedule>()
 
-/** Set of jobIds currently executing in this server process. Same job
- *  firing again (whether croner-scheduled or a manual run-now click) while
- *  the previous run is still in-flight is rejected immediately with a
- *  `skipped` cron_runs row — the cli child uses a stable session id
- *  (effectiveSessionId), so two overlapping runs would double-write the same
- *  on-disk session state. SessionManager's per-session lock is
- *  in-process, but cron spawns a fresh cli child per fire, so the lock
- *  never sees the contention; this set is the cheapest place to enforce
- *  serialization without touching the cli or session layer. Lost on
- *  process restart by design — no stale-entry cleanup needed (the
- *  boot-time sweepOrphanRuns re-registers jobs whose previous-generation
- *  cli may still be alive). Exported for tests only. */
+/** jobIds with a fire in progress in this process — from the guard in runJob
+ *  until the run is recorded (finishRun / timeout / cancel / a failed start).
+ *  Same job firing again (a dense schedule, an overrun, a run-now click) gets
+ *  a `skipped` row. Session-level overlap (two jobs on one picked session, a
+ *  relay / A2A owner) is the session's `reply_to`, which lives in the db.
+ *  Lost on restart; recoverRuns re-enters resumed runs before the schedules
+ *  are re-armed. Exported for tests only. */
 export const _inflight = new Set<string>()
 
-/** Same guard one level up: `sessionKeyFor(workspace, sessionId)` of every
- *  cli in flight. Two jobs may pick the same session — the later fire is
- *  skipped exactly like a same-job overlap. Exported for tests only. */
+/** In-flight runs by runId (see RunCtx). Exported for tests only. */
+export const _runs = new Map<string, RunCtx>()
+
+/** runIds whose finishRun has passed its synchronous part (row claimed,
+ *  pointer cleared) and is awaiting dispatch — recoverRuns must not judge
+ *  them "not resumed". */
+const _finishing = new Set<string>()
+
+/** Legacy (cli-child) only: session keys of orphaned pre-in-process cli runs
+ *  still being reaped by recoverRuns. A fire on such a session is skipped
+ *  until the orphan is gone. Remove with the legacy branch. Exported for tests only. */
 export const _inflightSessions = new Set<string>()
 
 /** Per-jobId fingerprint of the schedule we last instantiated croner with.
@@ -288,13 +322,10 @@ const _fingerprint = new Map<string, string>()
  *  "handled", not "lost". */
 const _expired = new Set<string>()
 
-/** Resolves `~/.halo/global/logs/cron/`. Created on first use. */
+/** `~/.halo/global/logs/cron/`: run logs of the cli-child runner. New runs
+ *  write none (the session is the log); old files age out via pruneOldLogs. */
 function logsDir(): string {
   return path.join(homedir(), '.halo', 'global', 'logs', 'cron')
-}
-
-function logPathFor(runId: string): string {
-  return path.join(logsDir(), `${runId}.log`)
 }
 
 function newRunId(): string {
@@ -302,123 +333,300 @@ function newRunId(): string {
 }
 
 /**
- * Boot-time orphan sweep — reap the previous server generation's leftover
- * cron cli children.
+ * Boot-time recovery of the `cron_runs` rows still `running` — every one is a
+ * previous server generation's (the rows are read before this process fires
+ * anything). The db is the only input: the run row, its session's `reply_to`,
+ * the run ledger.
  *
- * Why: `_inflight` (the overlap guard) is in-memory and croner schedules are
- * rebuilt from db on boot. If the previous server died hard (SIGKILL), its
- * attached cli children reparent to init on POSIX and keep running — and the
- * restarted server's next fire would spawn a second writer on the same
- * stable session. Per project rule, the sweep trusts ONLY the
- * db: any `cron_runs` row still 'running' at boot must be a previous
- * generation's leftover (this process hasn't run anything yet).
+ * In-process run (no pid): it is still owed iff its session's `reply_to` is
+ * `{ cron: runId }`. Owed + the run ledger's boot nudge resumed the session
+ * (index.ts builds those managers before startCronDaemon) → re-enter it: the
+ * job guard, the timeout's wall-clock remainder (already past → it times out
+ * now), the notice listener; its turn end finishes it like any run. Owed but
+ * not resumed — ledger off (a HALO_BADGE=DEV server), runtime owned by
+ * another live process, archived, internal agent, killed before the ledger
+ * row — → failed, pointer cleared. Not owed (died before the pointer, or
+ * superseded) → failed.
  *
- * Per row:
- *   a. register jobId in `_inflight` FIRST — the core invariant: while an
- *      orphan may be alive, no new cli is spawned for that job.
- *   b. POSIX + recorded pid: verify identity via the process command line
- *      (must carry the job's effectiveSessionId as an argv token — guarding
- *      against pid reuse), then
- *      SIGTERM (cli handles it gracefully) with a SIGKILL-tree escalation
- *      after the grace window — same two-phase contract as the in-run
- *      timeout path.
- *   c. no pid / already dead / identity mismatch: no kill, log only.
- *      Windows: never kill — there's no cheap way to verify the pid still
- *      belongs to our cli (no `ps -o args=`; WMI/PowerShell are heavyweight),
- *      so with pid reuse a `taskkill /T /F` risks taking down an unrelated
- *      process tree. Mis-kill risk outweighs the double-write risk we accept.
- *   d. mark the row 'failed' regardless so the UI drops the ghost 'running';
- *      a one-shot's job row too (enabled=0, 'failed'), as finalize would.
- *   e. release `_inflight` once the orphan is confirmed dead (or immediately
- *      when there was nothing to kill).
+ * Legacy run (pid set — spawned by a pre-in-process build as a `halo cli`
+ * child, which can outlive its server outside a systemd cgroup): reaped as
+ * before — identity check on the process command line (pid reuse), SIGTERM,
+ * SIGKILL tree after the grace window, job + session blocked meanwhile;
+ * never killed on Windows (identity can't be verified cheaply). Marked
+ * failed regardless. Remove this branch one minor release after in-process cron.
  *
- * Non-blocking: the synchronous part only queries, registers and marks rows;
- * the kill grace runs on an unref'd async timer.
- *
- * `graceMs` is a test-only override of the SIGTERM→SIGKILL grace window.
+ * `graceMs` is a test-only override of the legacy SIGTERM→SIGKILL grace.
  */
-export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
+export async function recoverRuns(opts?: { graceMs?: number }): Promise<void> {
   const graceMs = opts?.graceMs ?? KILL_GRACE_SEC * 1000
   const db = getCronDb()
   const rows = db.select().from(cronRuns).where(eq(cronRuns.status, 'running')).all()
-  const now = Date.now()
+    .filter((row) => !_runs.has(row.id) && !_finishing.has(row.id))
+  // Synchronous, before the first await: block every job with a row to judge,
+  // so a schedule firing while an earlier row awaits its nudge can't take a
+  // session a resumed run still owns. Each row's handler releases its own.
+  for (const row of rows) _inflight.add(row.jobId)
   for (const row of rows) {
-    const { id: runId, jobId, pid } = row
-    // The session the orphan was spawned on: recorded on the run row (the
-    // only source for a stateless job's per-run id). Rows from before that
-    // column fall back to the job row (a job deleted since: its default); if
-    // that job's session was re-pointed after the spawn, the fingerprint
-    // below won't match and the orphan is left alone — the safe direction.
-    const job = db.select().from(cronJobs).where(eq(cronJobs.id, jobId)).get()
-    const sessionId = row.sessionId ?? effectiveSessionId(job ?? { id: jobId, sessionId: null })
-    const sessionKey = job ? sessionKeyFor(job.workspacePath, sessionId) : null
-    // (a) Block new fires for this job — and any other job on its session —
-    // while its orphan may still be alive.
-    _inflight.add(jobId)
-    if (sessionKey) _inflightSessions.add(sessionKey)
-    const release = () => {
-      _inflight.delete(jobId)
-      if (sessionKey) _inflightSessions.delete(sessionKey)
-    }
-
-    let needsKill = false
-    let disposition: string
-    if (process.platform === 'win32') {
-      disposition = pid == null
-        ? 'no pid recorded'
-        : `pid ${pid} not killed (Windows: cannot verify process identity)`
-    } else if (pid == null) {
-      disposition = 'no pid recorded'
-    } else if (!isCronCliProcess(pid, sessionId)) {
-      disposition = `pid ${pid} already dead (or pid reused by another process); not killed`
-    } else {
-      needsKill = true
-      disposition = `pid ${pid} still alive — SIGTERM sent, SIGKILL tree after ${Math.round(graceMs / 1000)}s if needed`
-    }
-
-    // (d) Mark the row failed regardless — the UI must not show a ghost
-    // 'running' row from a dead server generation.
-    db.update(cronRuns).set({
-      status: 'failed',
-      failureReason: `orphaned by server restart: ${disposition}`,
-      completedAt: now,
-    }).where(eq(cronRuns.id, runId)).run()
-    broadcast({ type: 'cron:run_changed', jobId, runId, status: 'failed' })
-    console.log(`[Cron] orphan sweep: run ${runId} (job ${jobId}) — ${disposition}`)
-    // A one-shot's job row gets the terminal state finalize would have
-    // written — its one fire is over, so it must not sit enabled past runAt.
-    if (job?.runAt) {
-      db.update(cronJobs).set({ enabled: 0, lastRunStatus: 'failed', lastRunAt: now, lastRunId: runId, updatedAt: now }).where(eq(cronJobs.id, jobId)).run()
-      broadcast({ type: 'cron:job_changed', jobId, lastRunStatus: 'failed', lastRunAt: now, ...jobChangedFields(job) })
-    }
-
-    if (!needsKill || pid == null) {
-      // (e) Nothing alive to wait for — release immediately.
-      release()
+    const job = db.select().from(cronJobs).where(eq(cronJobs.id, row.jobId)).get()
+    if (row.pid != null) {
+      reapLegacyRun(row, job, graceMs)
       continue
     }
-
-    // (b) Two-phase kill. SIGTERM the verified orphan (the cli finishes its
-    // in-flight tool, repairs + flushes the session, exits 143); if it's
-    // still alive after the grace window, SIGKILL the whole descendant tree.
-    try { process.kill(pid, 'SIGTERM') } catch { /* died between check and kill */ }
-    const timer = setTimeout(() => {
-      // Re-verify identity before the hard kill — the pid may have been
-      // recycled during the grace window.
-      if (isCronCliProcess(pid, sessionId)) {
-        console.log(`[Cron] orphan sweep: pid ${pid} (job ${jobId}) survived SIGTERM — SIGKILL tree`)
-        killTreeHard(pid)
-      }
-      // (e) Orphan gone (SIGKILL is immediate; graceful exit already
-      // happened otherwise) — let the job fire again.
-      release()
-    }, graceMs)
-    // Best effort: don't hold the process open for a pending grace timer.
-    // If the server dies inside the window the row is already marked and
-    // the SIGTERM'd cli exits on its own in all but wedged cases.
-    timer.unref()
+    // Released unless the run resumes (then its end releases it).
+    let resumed = false
+    try {
+      resumed = await recoverInProcessRun(row, job)
+    } catch (err) {
+      failRecovered(row, `interrupted by server restart (recovery failed: ${err instanceof Error ? err.message : String(err)})`)
+    } finally {
+      if (!resumed) _inflight.delete(row.jobId)
+    }
   }
 }
+
+async function recoverInProcessRun(row: typeof cronRuns.$inferSelect, job: typeof cronJobs.$inferSelect | undefined): Promise<boolean> {
+  const ws = row.workspacePath ?? job?.workspacePath
+  const sid = row.sessionId
+  if (!ws || !fs.existsSync(ws)) {
+    failRecovered(row, `interrupted by server restart (workspace not found: ${ws ?? '?'})`)
+    return false
+  }
+  if (!sid) {
+    failRecovered(row, 'interrupted by server restart (before the run reached its session)')
+    return false
+  }
+  // peek, not getOrCreate: a manager the boot sweep didn't build (runtime
+  // owned elsewhere, no ledger row) must not be cached here as a non-owner.
+  const host = _sessionRegistry?.peek(ws)
+  const sdb = host?.getDb() ?? (fs.existsSync(path.join(ws, '.halo', 'halo.db')) ? getWorkspaceDb(ws).db : null)
+  const to = sdb ? readReplyTo(sdb, sid) : null
+  if (!to || !('cron' in to) || to.cron !== row.id) {
+    failRecovered(row, 'interrupted by server restart (before the run reached its session)')
+    return false
+  }
+  // Keyed by the manager's realpath'd root (run-ledger inFlightNudges).
+  if (host) await nudgesSettled(fs.realpathSync(ws))
+  // The nudge's turn may have ended (finishRun claimed the row) during the await.
+  if (_finishing.has(row.id) || !isRunning(row.id)) return false
+  if (!host || !host.hasActiveWorkInTree(sid)) {
+    clearOwnPointer(sdb!, sid, row.id)
+    failRecovered(row, 'interrupted by server restart (not resumed: this server does not own the workspace runtime, or the session could not be woken)')
+    return false
+  }
+  const timeoutSec = job?.timeoutSec ?? RUN_TIMEOUT_SEC
+  trackRun({ runId: row.id, jobId: row.jobId, sessionId: sid, workspacePath: ws, host }, row.startedAt + timeoutSec * 1000 - Date.now(), timeoutSec)
+  console.log(`[Cron] recovered run ${row.id} (job ${row.jobId}): resumed in ${sid} after the restart`)
+  return true
+}
+
+function failRecovered(row: typeof cronRuns.$inferSelect, reason: string): void {
+  // Guarded: a run that finished meanwhile (its resumed turn ended) stays as recorded.
+  if (finalize(row.id, row.jobId, { status: 'failed', output: null, exitCode: null, failureReason: reason, dispatchResults: [] })) {
+    console.log(`[Cron] recovery: run ${row.id} (job ${row.jobId}) — ${reason}`)
+  }
+}
+
+/** See recoverRuns' legacy branch. */
+function reapLegacyRun(row: typeof cronRuns.$inferSelect, job: typeof cronJobs.$inferSelect | undefined, graceMs: number): void {
+  const { id: runId, jobId, pid } = row
+  // The session the orphan was spawned on: recorded on the run row (the
+  // only source for a stateless job's per-run id). Rows from before that
+  // column fall back to the job row (a job deleted since: its default); if
+  // that job's session was re-pointed after the spawn, the fingerprint
+  // below won't match and the orphan is left alone — the safe direction.
+  const sessionId = row.sessionId ?? effectiveSessionId(job ?? { id: jobId, sessionId: null })
+  const sessionKey = job ? sessionKeyFor(job.workspacePath, sessionId) : null
+  // Block new fires for this job — and any other job on its session — while
+  // its orphan may still be alive.
+  _inflight.add(jobId)
+  if (sessionKey) _inflightSessions.add(sessionKey)
+  const release = () => {
+    _inflight.delete(jobId)
+    if (sessionKey) _inflightSessions.delete(sessionKey)
+  }
+
+  let needsKill = false
+  let disposition: string
+  if (process.platform === 'win32') {
+    disposition = `pid ${pid} not killed (Windows: cannot verify process identity)`
+  } else if (!isCronCliProcess(pid!, sessionId)) {
+    disposition = `pid ${pid} already dead (or pid reused by another process); not killed`
+  } else {
+    needsKill = true
+    disposition = `pid ${pid} still alive — SIGTERM sent, SIGKILL tree after ${Math.round(graceMs / 1000)}s if needed`
+  }
+  // Mark the row failed regardless — the UI must not show a ghost 'running'
+  // row from a dead server generation; a one-shot's job row too.
+  failRecovered(row, `orphaned by server restart: ${disposition}`)
+
+  if (!needsKill || pid == null) {
+    release()
+    return
+  }
+  // Two-phase kill. SIGTERM the verified orphan (the cli finishes its
+  // in-flight tool, repairs + flushes the session, exits 143); if it's
+  // still alive after the grace window, SIGKILL the whole descendant tree.
+  try { process.kill(pid, 'SIGTERM') } catch { /* died between check and kill */ }
+  const timer = setTimeout(() => {
+    // Re-verify identity before the hard kill — the pid may have been
+    // recycled during the grace window.
+    if (isCronCliProcess(pid, sessionId)) {
+      console.log(`[Cron] recovery: pid ${pid} (job ${jobId}) survived SIGTERM — SIGKILL tree`)
+      killTreeHard(pid)
+    }
+    release()
+  }, graceMs)
+  // Don't hold the process open for a pending grace timer.
+  timer.unref()
+}
+
+// ── In-flight runs (this process) ───────────────────────────────────────
+
+/** Register a run that has reached its session (runJob) or resumed in it
+ *  after a restart (recoverRuns): job guard, notice listener, and a timer for
+ *  what is left of the wall-clock budget (≤ 0 → it times out right away). */
+function trackRun(base: Pick<RunCtx, 'runId' | 'jobId' | 'sessionId' | 'workspacePath' | 'host'>, remainingMs: number, timeoutSec: number): void {
+  const ctx: RunCtx = { ...base, notices: [], timer: null, unlisten: () => {} }
+  _runs.set(ctx.runId, ctx)
+  _inflight.add(ctx.jobId)
+  // Same filter as `halo cli` (cli.ts): root notices only — not a
+  // sub-session's (taskId) nor the drain-time sibling-status line (agentName).
+  ctx.unlisten = ctx.host.registerEventListener(ctx.sessionId, (e) => {
+    if (e.type === 'system' && e.text && !e.taskId && !e.agentName) ctx.notices.push(e.text)
+  })
+  ctx.timer = setTimeout(() => {
+    timeoutRun(ctx, timeoutSec).catch((err) => console.warn(`[Cron] run ${ctx.runId}: timeout handling failed: ${err instanceof Error ? err.message : String(err)}`))
+  }, Math.max(0, remainingMs))
+}
+
+/** Drop a run's process-local state (timer, listener). The job guard
+ *  (`_inflight`) is the caller's to release once the outcome is recorded. */
+function untrackRun(runId: string): RunCtx | undefined {
+  const ctx = _runs.get(runId)
+  if (!ctx) return undefined
+  if (ctx.timer) clearTimeout(ctx.timer)
+  ctx.unlisten()
+  _runs.delete(runId)
+  return ctx
+}
+
+/** Clear the session's reply_to only while it still names this run — a newer
+ *  owner's pointer is not ours to drop. */
+function clearOwnPointer(db: HaloDb, sessionId: string, runId: string): void {
+  const to = readReplyTo(db, sessionId)
+  if (to && 'cron' in to && to.cron === runId) clearReplyTo(db, sessionId)
+}
+
+function isRunning(runId: string): boolean {
+  return getCronDb().select({ status: cronRuns.status }).from(cronRuns).where(eq(cronRuns.id, runId)).get()?.status === 'running'
+}
+
+/** The run outlived its budget. The outcome is recorded first — pointer
+ *  cleared, row `timeout`, nothing dispatched — then the session is stopped,
+ *  so the stop's own turn end finds no pointer. A stop that doesn't settle (a
+ *  tool ignoring its abort signal) leaves only that turn running; the job
+ *  stays blocked for STOP_SETTLE_MS, after that later fires see the session
+ *  busy and skip. */
+async function timeoutRun(ctx: RunCtx, timeoutSec: number): Promise<void> {
+  if (_runs.get(ctx.runId) !== ctx || _finishing.has(ctx.runId)) return
+  untrackRun(ctx.runId)
+  try {
+    clearOwnPointer(ctx.host.getDb(), ctx.sessionId, ctx.runId)
+    finalize(ctx.runId, ctx.jobId, { status: 'timeout', output: null, exitCode: null, failureReason: `run exceeded ${timeoutSec}s timeout`, dispatchResults: [] })
+    let settle: ReturnType<typeof setTimeout> | undefined
+    const stopped = await Promise.race([
+      ctx.host.stopSession(ctx.sessionId).then(() => true, (err) => {
+        console.warn(`[Cron] run ${ctx.runId}: stopping session ${ctx.sessionId} failed: ${err instanceof Error ? err.message : String(err)}`)
+        return true
+      }),
+      new Promise<boolean>((resolve) => { settle = setTimeout(() => resolve(false), STOP_SETTLE_MS) }),
+    ])
+    clearTimeout(settle)
+    if (!stopped) console.warn(`[Cron] run ${ctx.runId}: stopSession did not settle in ${STOP_SETTLE_MS / 1000}s; the turn keeps running detached`)
+    await pruneOldRuns(ctx.jobId)
+  } finally {
+    _inflight.delete(ctx.jobId)
+  }
+}
+
+/** The door's `finish`: the run's session ended a turn with its subtree quiet
+ *  (relay's deliverRelayReport). What it decides on is in the db — the run row,
+ *  the job row (targets read now), the session's final reply; the RunCtx only
+ *  adds the notices and the timer to clear, so a run resumed after a restart
+ *  finishes the same way. Synchronous up to the dispatch: the run is claimed
+ *  (`_finishing`) and its pointer cleared before anything can race it. */
+async function finishRun(runId: string, db: HaloDb, session: { id: string; finalOutput: string; output: string; turnError: string | null }): Promise<void> {
+  if (_finishing.has(runId)) return
+  const row = getCronDb().select({ jobId: cronRuns.jobId, status: cronRuns.status, workspacePath: cronRuns.workspacePath })
+    .from(cronRuns).where(eq(cronRuns.id, runId)).get()
+  if (row?.status !== 'running') return
+  _finishing.add(runId)
+  const ctx = untrackRun(runId)
+  try {
+    clearOwnPointer(db, session.id, runId)
+    // What `halo cli` printed: the notices, a blank line, the final reply
+    // (`finalOutput || output`, as tryReportToParent / finishInvocation).
+    const answer = (session.finalOutput || session.output).trim()
+    const notices = ctx?.notices ?? []
+    const text = (notices.length > 0 ? notices.map((n) => `ℹ️ ${n}`).join('\n') + (answer ? '\n\n' : '') : '') + answer
+    // Empty output is a failure — most cron use cases (daily report,
+    // broadcast) rely on there being something to dispatch.
+    let status: 'succeeded' | 'failed' = 'succeeded'
+    let failureReason: string | null = null
+    if (session.turnError) {
+      status = 'failed'
+      failureReason = session.turnError.slice(0, 500)
+    } else if (!text) {
+      status = 'failed'
+      failureReason = 'run produced no output (nothing to dispatch)'
+    }
+    // Dispatch only on success. Raw output goes down as-is; dispatchToTargets
+    // splits off the agent's `MEDIA:<path>` markers per target. The media
+    // sandbox root is the run's workspace (where it produced its files), not
+    // the target account's.
+    const job = getCronDb().select().from(cronJobs).where(eq(cronJobs.id, row.jobId)).get()
+    const targets = job ? parseTargets(job.targets) : []
+    let dispatchResults: DispatchResult[] = []
+    if (job && status === 'succeeded' && targets.length > 0) {
+      dispatchResults = await dispatchToTargets(text, targets, row.workspacePath ?? job.workspacePath)
+      // Every dispatch failed → the run failed, so the UI surfaces it.
+      if (dispatchResults.length > 0 && dispatchResults.every((r) => !r.ok)) {
+        status = 'failed'
+        failureReason = `all ${dispatchResults.length} target(s) failed: ${dispatchResults.map((r) => `${r.channelType}:${r.error ?? '?'}`).join('; ')}`
+      }
+    }
+    finalize(runId, row.jobId, { status, output: text || null, exitCode: null, failureReason, dispatchResults })
+    await pruneOldRuns(row.jobId)
+  } finally {
+    _finishing.delete(runId)
+    _inflight.delete(row.jobId)
+  }
+}
+
+/** The door's `cancel`: the run's session was stopped / deleted / archived
+ *  here, or a new owner took its pointer — failed, nothing dispatched. */
+function cancelRun(runId: string, db: HaloDb, sessionId: string, reason: string): void {
+  // Already ending (its pointer is gone, so no caller should get here).
+  if (_finishing.has(runId)) return
+  const jobId = getCronDb().select({ jobId: cronRuns.jobId }).from(cronRuns).where(eq(cronRuns.id, runId)).get()?.jobId
+  untrackRun(runId)
+  clearOwnPointer(db, sessionId, runId)
+  if (!jobId) return
+  if (finalize(runId, jobId, { status: 'failed', output: null, exitCode: null, failureReason: reason, dispatchResults: [] })) {
+    console.log(`[Cron] run ${runId} (job ${jobId}): ${reason}`)
+  }
+  _inflight.delete(jobId)
+  pruneOldRuns(jobId).catch((err) => console.warn(`[Cron] prune after run ${runId} failed: ${err instanceof Error ? err.message : String(err)}`))
+}
+
+// relay.ts reaches a `{ cron: runId }` pointer's owner through this door (it
+// can't import the runner: the runner imports relay). `owns` reads cron.db, so
+// a run of another process (dev and prod share workspace dbs) is never ours.
+setCronRunDoor({
+  owns: isRunning,
+  finish: finishRun,
+  cancel: cancelRun,
+})
 
 /**
  * Start every enabled job in `cron_jobs`. Idempotent — schedules already
@@ -431,12 +639,11 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
 let _daemonTimers: NodeJS.Timeout[] = []
 
 export function startCronDaemon(): void {
-  fs.mkdirSync(logsDir(), { recursive: true })
-  // Reap the previous server generation's leftovers BEFORE croner is
-  // rebuilt — sweepOrphanRuns registers surviving orphans' jobIds in
-  // _inflight, so a schedule that fires immediately after reloadAll can't
-  // double-write a session an orphan cli is still holding.
-  sweepOrphanRuns()
+  // Recover the previous server generation's runs BEFORE croner is rebuilt:
+  // recoverRuns' synchronous first slice blocks (`_inflight`) every job with a
+  // `running` row, so a schedule that fires right after reloadAll is skipped
+  // while its run is judged / resumed.
+  recoverRuns().catch((err) => console.warn(`[Cron] run recovery failed: ${err instanceof Error ? err.message : String(err)}`))
   reloadAll()
   // Daily log prune. Cheap; keep WAL bloat down.
   _daemonTimers.push(setInterval(() => {
@@ -458,6 +665,9 @@ export function stopCronDaemon(): void {
   }
   _active.clear()
   _expired.clear()
+  // In-flight runs keep their `running` row and session pointer: the next
+  // boot's recoverRuns picks them up. Only the process-local handles go.
+  for (const id of [..._runs.keys()]) untrackRun(id)
 }
 
 /**
@@ -726,9 +936,11 @@ export function reconcileFromDb(): void {
 }
 
 /**
- * Execute a job once. Persists a `cron_runs` row, spawns the cli, captures
- * stdout, dispatches to targets, then finalizes the row. Used by both
- * scheduled fires and the run-now button in the admin UI.
+ * Execute a job once, in-process: persists a `cron_runs` row, appends + sends
+ * the prompt to the job's session and points the session's `reply_to` at the
+ * run. Returns as soon as the prompt is in — the run ends at its session's
+ * turn end (finishRun), its timeout, or a local stop. Used by both scheduled
+ * fires and the run-now button in the admin UI.
  *
  * Returns the runId so the run-now route can return it.
  */
@@ -739,30 +951,11 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
 
   const runId = newRunId()
   const startedAt = Date.now()
-  const logPath = logPathFor(runId)
-  fs.mkdirSync(logsDir(), { recursive: true })
 
   // Stateless: a fresh session per fire (never shared, so the session-level
   // guards below can't hit; the job-level `_inflight` still serializes).
   const sessionId = job.stateless ? perRunSessionId(job, startedAt) : effectiveSessionId(job)
-  const sessionKey = sessionKeyFor(job.workspacePath, sessionId)
-  // The server's live manager for this workspace, if it has one. peek only
-  // — building a manager here would run its boot reconcile as a side effect.
-  const host = _sessionRegistry?.peek(job.workspacePath)
-
-  // Concurrency guards, all recorded as a 'skipped' audit row so the UI
-  // surfaces them, then bail without spawning anything:
-  //  - same job already running in this process (cron expression too dense /
-  //    previous run overran / run-now click mid-run);
-  //  - another job's cli already on the same session;
-  //  - the server itself is mid-turn on that session tree (someone chatting
-  //    in the picked session) — a cli spawned now would be a second writer
-  //    on the same files.
-  const skipReason = _inflight.has(jobId) ? 'previous run still in progress'
-    : _inflightSessions.has(sessionKey) ? `session ${sessionId} busy: another cron run is in progress`
-    : host?.hasActiveWorkInTree(sessionId) ? `session ${sessionId} busy: a turn is running in it`
-    : null
-  if (skipReason) {
+  const skip = (reason: string): string => {
     db.insert(cronRuns).values({
       id: runId,
       jobId,
@@ -772,7 +965,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
       completedAt: startedAt,
       output: null,
       exitCode: null,
-      failureReason: skipReason,
+      failureReason: reason,
       logPath: null,
       dispatchResults: null,
       workspacePath: job.workspacePath,
@@ -780,266 +973,139 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     broadcast({ type: 'cron:run_changed', jobId, runId, status: 'skipped' })
     return runId
   }
+  const fail = (reason: string): string => {
+    finalize(runId, jobId, { status: 'failed', output: null, exitCode: null, failureReason: reason, dispatchResults: [] })
+    return runId
+  }
+
+  // Concurrency guards, each recorded as a 'skipped' audit row so the UI
+  // surfaces it:
+  //  - same job already running in this process (cron expression too dense /
+  //    previous run overran / run-now click mid-run);
+  //  - (legacy) a pre-in-process cli orphan still being reaped on the session.
+  // The session-level ones (owed to another run / relay / A2A, or a turn
+  // running in it) need its manager and run below.
+  if (_inflight.has(jobId)) return skip('previous run still in progress')
+  if (_inflightSessions.has(sessionKeyFor(job.workspacePath, sessionId))) return skip(`session ${sessionId} busy: another cron run is in progress`)
   _inflight.add(jobId)
-  _inflightSessions.add(sessionKey)
+  let tracked = false
   try {
+    // Session-level guards. A fire is only ever skipped, never injected into a
+    // busy session: its folder can't change mid-turn, its timeout would stop
+    // the other turn, and the reply would be whose? Picked sessions only — a
+    // job's own session can only be busy if someone chats in it.
+    let host: CronSessionHost | null = null
+    let hostError: string | null = null
+    if (fs.existsSync(job.workspacePath) && _sessionRegistry) {
+      // A workspace whose db can't be opened fails the run (below), recorded.
+      try { host = _sessionRegistry.getOrCreate(job.workspacePath) }
+      catch (err) { hostError = `could not open workspace ${job.workspacePath}: ${err instanceof Error ? err.message : String(err)}` }
+      const busy = host && sessionBusy(host, sessionId)
+      if (busy) return skip(busy)
+    }
 
-  // Persist a 'running' row up front so the UI sees the run mid-flight.
-  db.insert(cronRuns).values({
-    id: runId,
-    jobId,
-    triggerKind,
-    status: 'running',
-    startedAt,
-    completedAt: null,
-    output: null,
-    exitCode: null,
-    failureReason: null,
-    logPath,
-    dispatchResults: null,
-    sessionId,
-    workspacePath: job.workspacePath,
-  }).run()
-  broadcast({ type: 'cron:run_changed', jobId, runId, status: 'running' })
-
-  const targets: CronTarget[] = parseTargets(job.targets)
-
-  // Workspace existence check. If the user moved/deleted the workspace
-  // since creating the job, fail loudly rather than letting cli crash
-  // with a less obvious error.
-  if (!fs.existsSync(job.workspacePath)) {
-    finalize(runId, jobId, {
-      status: 'failed',
+    // Persist a 'running' row up front so the UI sees the run mid-flight.
+    db.insert(cronRuns).values({
+      id: runId,
+      jobId,
+      triggerKind,
+      status: 'running',
+      startedAt,
+      completedAt: null,
       output: null,
       exitCode: null,
-      failureReason: `workspace not found: ${job.workspacePath}`,
-      dispatchResults: [],
-    })
-    return runId
-  }
-  // Same for the job folder: moved / deleted since the job was saved.
-  if (job.workingDir) {
+      failureReason: null,
+      logPath: null,
+      dispatchResults: null,
+      sessionId,
+      workspacePath: job.workspacePath,
+    }).run()
+    broadcast({ type: 'cron:run_changed', jobId, runId, status: 'running' })
+
+    // Workspace existence check. If the user moved/deleted the workspace
+    // since creating the job, fail loudly.
+    if (!fs.existsSync(job.workspacePath)) return fail(`workspace not found: ${job.workspacePath}`)
+    // Same for the job folder: moved / deleted since the job was saved.
+    let folderAbs: string | null = null
+    if (job.workingDir) {
+      try {
+        folderAbs = await resolveWorkingDir(job.workspacePath, job.workingDir)
+      } catch (err) {
+        return fail(`folder not found: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    if (hostError) return fail(hostError)
+    // No registry = no SessionManager to run in (tests that don't run jobs).
+    if (!host) return fail('no session host: the cron runner is not attached to a server')
+
+    // Session strategy: a stateful job runs in one stable session — its own
+    // (effectiveSessionId) unless the job picked an existing root session.
+    // The first fire creates it with the job's agent (access: full, the
+    // default); later fires resume it, so the conversation accumulates and the
+    // user can review it in the Sessions tab, and keep its access level. The
+    // write points keep the job's agent equal to an existing session's; a
+    // hand-edited mismatch fails the run. A stateless job gets a new session
+    // every fire. The job folder applies in place on a resumed session.
+    const existing = host.getSessionById(sessionId)
+    if (existing && existing.agentId !== job.agentId) {
+      return fail(`session ${sessionId} runs agent ${existing.agentId}, not the job's ${job.agentId}; delete that session or turn on "new session every run" to change the agent`)
+    }
     try {
-      await resolveWorkingDir(job.workspacePath, job.workingDir)
+      if (existing) host.setWorkingDir(sessionId, folderAbs)
+      else await host.createSession(job.agentId, null, `Cron: ${job.label || job.id}`, undefined, sessionId, folderAbs, null)
     } catch (err) {
-      finalize(runId, jobId, {
-        status: 'failed',
-        output: null,
-        exitCode: null,
-        failureReason: `folder not found: ${err instanceof Error ? err.message : String(err)}`,
-        dispatchResults: [],
-      })
-      return runId
+      return fail(err instanceof Error ? err.message : String(err))
     }
-  }
-
-  // Spawn the cli under a Node-timer timeout (job's timeout_sec, default
-  // 3600s) so a runaway model can't burn forever. tee stdout AND stderr
-  // into the per-run log; stdout is also captured to memory because we
-  // feed it into the channel dispatcher.
-  //
-  // Session strategy: a stateful job runs in one stable session — its own
-  // (effectiveSessionId) unless the job picked an existing root session. First
-  // fire creates it (cli's `-s` is create-on-missing, with the job's agent);
-  // subsequent fires resume it, so the conversation accumulates and the user
-  // can review it in the Sessions tab. The write points keep the job's agent
-  // equal to an existing session's; a hand-edited mismatch makes the cli
-  // refuse (its stderr lands in failureReason). A stateless job gets a new
-  // session every fire. `--dir` always passes the job folder ('.' = root),
-  // so the cli applies it in place on a resumed session too. One `--dir=`
-  // token: a folder starting with `-` would read as a flag otherwise.
-  const cli = resolveHaloCli()
-  // Prompt goes on stdin (not argv) so a long cron prompt can't overflow the
-  // Windows command-line limit; the cli reads stdin when it's not a TTY.
-  const args = ['cli', '-a', job.agentId, '-s', sessionId, '-w', job.workspacePath, `--dir=${job.workingDir ?? '.'}`]
-  // Keep an existing session's access level. The cli defaults to full, and
-  // sendUserMessage persists any level that differs from the session's — so
-  // without this a cron run would silently promote a restricted session. A
-  // read error therefore fails the run instead of spawning at full.
-  let accessLevel: ReturnType<typeof readSessionAccessLevel>
-  try {
-    accessLevel = readSessionAccessLevel(job.workspacePath, sessionId)
-  } catch (err) {
-    finalize(runId, jobId, {
-      status: 'failed',
-      output: null,
-      exitCode: null,
-      failureReason: err instanceof Error ? err.message : String(err),
-      dispatchResults: [],
-    })
+    // Re-check past the awaits (a chat turn or another owner may have taken
+    // the session meanwhile). From here to the pointer write it is synchronous.
+    const busy = sessionBusy(host, sessionId)
+    if (busy) return fail(busy)
+    // Recorded meanwhile by another cron.db writer: nothing to run for.
+    if (!isRunning(runId)) return runId
+    takeReplyTo(host.getDb(), sessionId, { cron: runId }, `cron:${runId}`)
+    // Tracked before the send: the turn can end (finishRun) before
+    // sendUserMessage resolves, and the notice listener must see it all.
+    // Per-job timeout override (cron_jobs.timeout_sec, validated 60–21600 at
+    // the write points); NULL falls back to the 3600s default.
+    const timeoutSec = job.timeoutSec ?? RUN_TIMEOUT_SEC
+    trackRun({ runId, jobId, sessionId, workspacePath: job.workspacePath, host }, startedAt + timeoutSec * 1000 - Date.now(), timeoutSec)
+    tracked = true
+    try {
+      // The UI row shows the prompt alone; the model also gets the preamble:
+      // nothing else in its view says nobody will answer (the `cron-*` id is
+      // invisible to it, prompts typed into the admin form don't carry one).
+      const stamp = host.appendUserMessage(sessionId, job.userPrompt)
+      // accessLevel undefined: the session keeps its own level.
+      await host.sendUserMessage(sessionId, `${UNATTENDED_PREAMBLE}\n\n${job.userPrompt}`, undefined, undefined, stamp)
+    } catch (err) {
+      untrackRun(runId)
+      tracked = false
+      clearOwnPointer(host.getDb(), sessionId, runId)
+      return fail(err instanceof Error ? err.message : String(err))
+    }
+    console.log(`[Cron] run ${runId} (job ${jobId}, ${triggerKind}) → ${sessionId}`)
     return runId
-  }
-  if (accessLevel) args.push('--access', accessLevel)
-  // Windows can't spawn a `.cmd` directly (Node ≥21.7 → EINVAL). Route through
-  // `cmd.exe /c`, which Node docs recommend for batch files and quotes
-  // space-containing argv itself (a plain `shell:true` word-splits the path).
-  const [spawnBin, spawnArgs] = process.platform === 'win32' && cli.endsWith('.cmd')
-    ? ['cmd.exe', ['/c', cli, ...args]]
-    : [cli, args]
-
-  // Per-job timeout override (cron_jobs.timeout_sec, validated 60–21600 at
-  // the write points); NULL falls back to the 3600s default.
-  const timeoutSec = job.timeoutSec ?? CLI_TIMEOUT_SEC
-
-  // Append a header so a single tail of the log file shows job context
-  // before the cli's own output starts.
-  const teeStream = fs.createWriteStream(logPath, { flags: 'a' })
-  teeStream.write(`=== ${new Date().toISOString()} cron run ${runId} job=${jobId} trigger=${triggerKind} ===\n`)
-  teeStream.write(`agent=${job.agentId} session=${sessionId}${job.stateless ? ' (stateless)' : ''}${accessLevel ? ` access=${accessLevel}` : ''} workspace=${job.workspacePath} dir=${job.workingDir ?? '.'} schedule=${job.schedule}\n`)
-  teeStream.write(`prompt: ${job.userPrompt}\n\n`)
-
-  let stdout = ''
-  let stderr = ''
-  const result = await new Promise<{ exitCode: number }>((resolve) => {
-    // Spawn the cli directly (not via the Linux-only `timeout(1)` binary) and
-    // enforce the limit with a Node timer that kills the child and reports exit
-    // code 124 — same contract as `timeout`, but cross-platform (Windows has no
-    // equivalent `timeout` command).
-    const child = spawn(spawnBin, spawnArgs, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      // + the loopback relay, so the child's node_* tools reach the hub (nodes/tools.ts).
-      env: { ...cleanChildEnv(), ...getNodeHub()?.relayEnv() },
-      // Suppress the console window the `cmd.exe /c` wrapper would otherwise
-      // pop up on Windows (CREATE_NO_WINDOW). No-op on macOS/Linux.
-      windowsHide: true,
-    })
-    // Persist the child pid onto the running row so a future server
-    // generation's boot-time orphan sweep can find (and verify + reap) this
-    // cli if we die before finalize — on POSIX a SIGKILL'd server leaves the
-    // child alive (reparented to init), where it would race the restarted
-    // server's next fire as a second writer on the same session.
-    if (child.pid !== undefined) {
-      db.update(cronRuns).set({ pid: child.pid }).where(eq(cronRuns.id, runId)).run()
-    }
-    // Guard stdin: if the child exits/closes before reading the whole prompt,
-    // the write raises EPIPE — an unhandled stream error would crash the server.
-    child.stdin?.on('error', () => { /* child closed stdin early; ignore */ })
-    // The model never sees that the session id is `cron-*`, and prompts typed
-    // into the admin Cron form don't carry the skill's "runs unattended"
-    // preamble — so the runner stamps it here, unconditionally.
-    child.stdin?.write(`${UNATTENDED_PREAMBLE}\n\n${job.userPrompt}`)
-    child.stdin?.end()
-    let timedOut = false
-    // Two-phase kill on timeout: SIGTERM the direct child only — the cli
-    // handles it gracefully (finishes the in-flight tool, repairs + flushes
-    // the session, kills its own shell_exec process groups on the way out,
-    // exits 143). If it hasn't exited when the grace timer fires (wedged LLM
-    // stream, SIGTERM-ignoring child), SIGKILL the whole descendant tree so
-    // no grandchild survives to double-write the workspace on the next fire.
-    let graceTimer: ReturnType<typeof setTimeout> | null = null
-    const killTimer = setTimeout(() => {
-      timedOut = true
-      teeStream.write(`\n[runner] timeout ${timeoutSec}s — SIGTERM, grace ${KILL_GRACE_SEC}s\n`)
-      try { child.kill('SIGTERM') } catch { /* already dead */ }
-      graceTimer = setTimeout(() => {
-        teeStream.write(`[runner] still alive ${KILL_GRACE_SEC}s after SIGTERM — SIGKILL tree\n`)
-        if (child.pid) killTreeHard(child.pid)
-      }, KILL_GRACE_SEC * 1000)
-    }, timeoutSec * 1000)
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf-8')
-      teeStream.write(chunk)
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf-8')
-      teeStream.write(chunk)
-    })
-    child.on('exit', (code) => {
-      clearTimeout(killTimer)
-      if (graceTimer) clearTimeout(graceTimer)
-      const exitCode = timedOut ? 124 : (code ?? 1)
-      teeStream.write(`\n[runner] exit code=${code}${timedOut ? ' (timed out → 124)' : ''}\n`)
-      teeStream.end()
-      resolve({ exitCode })
-    })
-    child.on('error', (err) => {
-      clearTimeout(killTimer)
-      if (graceTimer) clearTimeout(graceTimer)
-      teeStream.write(`\n[runner] spawn error: ${err.message}\n`)
-      teeStream.end()
-      resolve({ exitCode: 1 })
-    })
-  })
-
-  // The cli wrote the session files behind the server's back. Drop the
-  // server's idle cached copy so the next view / message re-reads disk
-  // instead of saving its stale snapshot over the cron turn. Re-peek: the
-  // manager may have been built during the run (someone opened the session).
-  const hostAfter = _sessionRegistry?.peek(job.workspacePath)
-  if (hostAfter && !hostAfter.forgetExternalWrite(sessionId)) {
-    // A turn started in the session while the cli ran (the guard above only
-    // covers turns already running at spawn). Both processes wrote it; the
-    // last save wins — the accepted cost of sharing a session with a job.
-    console.warn(`[Cron] ${jobId}: session ${sessionId} had a server-side turn running when the cli exited; one of the two turns may be missing from its history`)
-  }
-
-  // Decide success vs. failure. Empty stdout on a success exit is treated
-  // as failure — most cron use cases (daily report, broadcast) rely on
-  // there being something to dispatch.
-  const trimmedOut = stdout.trim()
-  let status: 'succeeded' | 'failed' | 'timeout'
-  let failureReason: string | null = null
-  if (result.exitCode === 124) {
-    status = 'timeout'
-    failureReason = `cli exceeded ${timeoutSec}s timeout`
-  } else if (result.exitCode !== 0) {
-    status = 'failed'
-    failureReason = stderr.slice(-500).trim() || `cli exited ${result.exitCode}`
-  } else if (trimmedOut.length === 0) {
-    status = 'failed'
-    failureReason = 'cli produced no output (nothing to dispatch)'
-  } else {
-    status = 'succeeded'
-  }
-
-  // Dispatch only on success. Failed/timeout → skip channels (the user
-  // is going to check the log anyway, no point pinging them with broken
-  // output).
-  //
-  // Raw output goes down as-is; `dispatchToTargets` splits off the agent's
-  // `MEDIA:<path>` markers per target (media-capable channels get files,
-  // the rest keep the marker lines as visible text). The workspacePath is
-  // the media sandbox root = the JOB's workspace (where the run produced
-  // its files), not the target account's — the two differ whenever a job
-  // pushes into a channel account bound elsewhere.
-  let dispatchResults: DispatchResult[] = []
-  if (status === 'succeeded' && targets.length > 0) {
-    dispatchResults = await dispatchToTargets(trimmedOut, targets, job.workspacePath)
-    // If every dispatch failed, downgrade the run status to 'failed' so
-    // the UI surfaces the issue and the user notices.
-    if (dispatchResults.length > 0 && dispatchResults.every((r) => !r.ok)) {
-      status = 'failed'
-      failureReason = `all ${dispatchResults.length} target(s) failed: ${dispatchResults.map((r) => `${r.channelType}:${r.error ?? '?'}`).join('; ')}`
-    }
-  }
-
-  finalize(runId, jobId, {
-    status,
-    output: trimmedOut.length > 0 ? trimmedOut : null,
-    exitCode: result.exitCode,
-    failureReason,
-    dispatchResults,
-  })
-
-  // Per-job retention: keep the most recent N rows.
-  await pruneOldRuns(jobId)
-
-  return runId
   } finally {
-    _inflight.delete(jobId)
-    _inflightSessions.delete(sessionKey)
+    // A tracked run releases the job when it ends (finishRun / timeout / cancel).
+    if (!tracked) _inflight.delete(jobId)
   }
 }
 
-/** Access level stored on an existing session's row, for the cli's
- *  `--access` (null column = full). Null when there's nothing to preserve:
- *  the session (or the workspace db) doesn't exist yet — the cli creates it at
- *  its full default, as before. Throws on a read error: a restricted session
- *  must never fall back to full. */
-function readSessionAccessLevel(workspacePath: string, sessionId: string): 'full' | 'workspace' | 'readonly' | null {
-  const row = readSessionRow(workspacePath, sessionId)
-  if (!row) return null
-  return row.accessLevel === 'workspace' || row.accessLevel === 'readonly' ? row.accessLevel : 'full'
+/** Why a fire can't take `sessionId` now, or null. reply_to = someone is owed
+ *  this session's wrap-up (another cron run, a relay caller, an A2A task, an
+ *  /invocations job); it lives in the db, so it holds across restarts. */
+function sessionBusy(host: CronSessionHost, sessionId: string): string | null {
+  const to = readReplyTo(host.getDb(), sessionId)
+  if (to) return `session ${sessionId} busy: owed to ${ownerLabel(to)}`
+  if (host.hasActiveWorkInTree(sessionId)) return `session ${sessionId} busy: a turn is running in it`
+  return null
+}
+
+function ownerLabel(to: ReplyTo): string {
+  if ('cron' in to) return `cron run ${to.cron}`
+  if ('a2a' in to) return `A2A task ${to.a2a}`
+  if ('invocation' in to) return `invocation ${to.invocation}`
+  return `relay from ${to.sessionId}`
 }
 
 type SessionRow = { agentId: string; accessLevel: string | null }
@@ -1091,10 +1157,13 @@ interface FinalizeArgs {
   dispatchResults: DispatchResult[]
 }
 
-function finalize(runId: string, jobId: string, a: FinalizeArgs): void {
+/** Record a run's outcome. Only a `running` row is written: the turn end, the
+ *  timeout, a local stop / supersede and boot recovery can race to end one run,
+ *  and the first one wins. Returns whether this call recorded it. */
+function finalize(runId: string, jobId: string, a: FinalizeArgs): boolean {
   const db = getCronDb()
   const completedAt = Date.now()
-  db.update(cronRuns)
+  const { changes } = db.update(cronRuns)
     .set({
       status: a.status,
       output: a.output,
@@ -1103,8 +1172,9 @@ function finalize(runId: string, jobId: string, a: FinalizeArgs): void {
       dispatchResults: JSON.stringify(a.dispatchResults),
       completedAt,
     })
-    .where(eq(cronRuns.id, runId))
+    .where(and(eq(cronRuns.id, runId), eq(cronRuns.status, 'running')))
     .run()
+  if (changes === 0) return false
   // Auto-disable one-shot (at-mode) jobs after they complete so they don't
   // re-fire on the next reload pass. We keep the row (history + run-now
   // remains usable) — only the schedule is paused. The runner's reconcile
@@ -1122,6 +1192,7 @@ function finalize(runId: string, jobId: string, a: FinalizeArgs): void {
   // sessionAgentId is read after the run, so a first fire's push already
   // carries the agent of the session it just created.
   broadcast({ type: 'cron:job_changed', jobId, lastRunStatus: a.status, lastRunAt: completedAt, ...(job ? jobChangedFields(job) : {}) })
+  return true
 }
 
 function parseTargets(raw: string): CronTarget[] {
@@ -1203,9 +1274,9 @@ export async function deleteOrphanRuns(): Promise<void> {
 /** Delete `cron_runs` rows; a stateless run's session goes with its row.
  *  Sessions first, rows after: a crash in between leaves the rows, and the
  *  next prune retries (deleting a gone session is a no-op). A row whose
- *  session delete threw stays for the same retry, and so does a stateless run
- *  still in progress — the prune after its finalize takes it with its
- *  session. A stateless run is recognised by its row alone — `session_id` is
+ *  session delete threw stays for the same retry, and so does any run still
+ *  in progress — the prune after its finalize takes it (with its session, if
+ *  stateless). A stateless run is recognised by its row alone — `session_id` is
  *  exactly `perRunSessionId(job, started_at)` (runJob derives both from one
  *  timestamp) — so a stateful job's own session or a picked one never
  *  matches, whatever mode the job is in now. */
@@ -1227,12 +1298,15 @@ async function deleteRuns(runs: DoomedRun[]): Promise<void> {
   const keptRows = new Set<string>()
   let deleted = 0
   for (const run of runs) {
-    if (run.sessionId !== perRunSessionId({ id: run.jobId }, run.startedAt)) continue
+    // Any run still in progress keeps its row: the row is how its turn end
+    // (relay's cron door) knows the run is this server's, and the prune after
+    // its finalize takes it — with its session, for a stateless run.
     if (run.status === 'running' || run.completedAt === null) {
       keptRows.add(run.id)
-      console.log(`[Cron] run ${run.id}: still in progress, kept with its session ${run.sessionId}`)
+      console.log(`[Cron] run ${run.id}: still in progress, row kept until it ends`)
       continue
     }
+    if (run.sessionId !== perRunSessionId({ id: run.jobId }, run.startedAt)) continue
     try {
       // The session is in the workspace the run fired against; rows from
       // before cron_runs.workspace_path fall back to the job's current one.
@@ -1263,7 +1337,7 @@ type FinishedRun = DoomedRun & { sessionId: string; completedAt: number }
  *  in it, or it was continued after the run: any row of the tree has
  *  `updated_at` past the run's `completed_at`. `updated_at` moves only when a
  *  turn ends (or a goal record is written), never on a view, rename or stop;
- *  the cron cli exits only once every session of its tree is idle, so
+ *  a run ends only at a turn end with its subtree quiet (finishRun), so
  *  sub-agent reports landing in the root during the run stay before
  *  `completed_at`. */
 async function deleteRunSession({ workspacePath, db }: RunWorkspace, run: FinishedRun): Promise<boolean> {

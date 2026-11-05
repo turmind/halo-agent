@@ -40,10 +40,28 @@ export interface RelayTarget {
 }
 export interface RelayRegistry { getOrCreate(workspacePath: string): RelayTarget }
 /** `reply_to` = who this root owes its wrap-up: a relay caller session on this
- *  server, an inbound A2A task (plans/a2a.md §2), or an AgentCore
- *  `/invocations` job (a2a/invocations.ts) — same quiet gate, same interim
- *  doors, one column. */
-export type ReplyTo = { workspace: string; sessionId: string } | { a2a: string } | { invocation: string }
+ *  server, an inbound A2A task (plans/a2a.md §2), an AgentCore `/invocations`
+ *  job (a2a/invocations.ts), or a cron run (cron/runner.ts) — same quiet gate,
+ *  same interim doors, one column. */
+export type ReplyTo = { workspace: string; sessionId: string } | { a2a: string } | { invocation: string } | { cron: string }
+
+/** The cron runner's end of a `{ cron: runId }` pointer. A door rather than an
+ *  import: cron/runner.ts already imports this module (ReplyTo I/O). Set by the
+ *  runner at module load, so any process that loaded the runner has it — that
+ *  is not the same as owning the run: each call checks the run is in THIS
+ *  process's cron.db (dev shares prod's workspace dbs, not its cron.db). */
+export interface CronRunDoor {
+  /** The run is a `running` row in this process's cron.db. */
+  owns(runId: string): boolean
+  /** Turn end with the subtree quiet: record the outcome, dispatch. Clears the
+   *  session's reply_to itself, in its synchronous part. */
+  finish(runId: string, db: HaloDb, session: { id: string; finalOutput: string; output: string; turnError: string | null }): Promise<void>
+  /** Local stop / delete / archive, or a new owner took the pointer: end the
+   *  run failed with `reason`, nothing dispatched; clears the pointer. */
+  cancel(runId: string, db: HaloDb, sessionId: string, reason: string): void
+}
+let _cronDoor: CronRunDoor | null = null
+export function setCronRunDoor(d: CronRunDoor | null): void { _cronDoor = d }
 /** Prefix relay_send stamps on the model-bound text. SessionManager.drainQueue
  *  matches it to tell a relay message (owed an interim report) from local chat. */
 export const RELAY_CHANNEL_PREFIX = '[channel: relay | from: '
@@ -85,6 +103,9 @@ export function writeReplyTo(db: HaloDb, sessionId: string, to: ReplyTo): void {
 export function takeReplyTo(db: HaloDb, sessionId: string, to: ReplyTo, by: string): void {
   const cur = readReplyTo(db, sessionId)
   if (cur && 'invocation' in cur && getA2ADb()) supersedeInvocation(cur.invocation, by)
+  // A cron run still owed here ends failed (no dispatch) instead of losing its
+  // pointer and sitting `running` until the boot recovery.
+  if (cur && 'cron' in cur && _cronDoor?.owns(cur.cron)) _cronDoor.cancel(cur.cron, db, sessionId, `superseded by ${by}`)
   writeReplyTo(db, sessionId, to)
 }
 
@@ -126,19 +147,28 @@ export function capReport(report: string, fullTextCall: string): string {
 }
 
 /** Local end of a session's work (stop / delete / archive) while it owes an
- *  inbound A2A task: the task is CANCELED, not COMPLETED — stopSession's abort
- *  path never sets turnError, so the turn-end hook alone would report the
- *  partial output as a success. Interrupts never come here (they resume). */
-export function cancelA2AForSession(db: HaloDb, sessionId: string, reason: string): void {
-  if (!getA2ADb()) return
+ *  inbound A2A task or a cron run: the task is CANCELED / the run failed, not
+ *  completed — stopSession's abort path never sets turnError, so the turn-end
+ *  hook alone would report the partial output as a success. Interrupts never
+ *  come here (they resume). */
+export function cancelOwedForSession(db: HaloDb, sessionId: string, kind: 'stop' | 'delete' | 'archive'): void {
   const to = readReplyTo(db, sessionId)
-  if (!to || !('a2a' in to)) return
+  if (!to) return
+  if ('cron' in to) {
+    // Another process's run (dev / prod share workspace dbs): leave it intact.
+    if (!_cronDoor?.owns(to.cron)) return
+    _cronDoor.cancel(to.cron, db, sessionId, CRON_CANCEL_REASON[kind])
+    return
+  }
+  if (!('a2a' in to) || !getA2ADb()) return
   // The pointer may name a task in ANOTHER server's a2a.db (dev shares prod's
   // workspace sqlite but not its a2a.db): not ours to end — leave it intact.
   if (!getTask(to.a2a)) return
-  transition(to.a2a, 'canceled', { statusText: reason })
+  transition(to.a2a, 'canceled', { statusText: A2A_CANCEL_REASON[kind] })
   clearReplyTo(db, sessionId)
 }
+const A2A_CANCEL_REASON = { stop: 'Stopped on the remote side.', delete: 'Session deleted on the remote side.', archive: 'Session archived on the remote side.' } as const
+const CRON_CANCEL_REASON = { stop: 'session stopped before the run finished', delete: 'session deleted before the run finished', archive: 'session archived before the run finished' } as const
 
 // ── Delivery point ───────────────────────────────────────────────────
 
@@ -171,6 +201,15 @@ export async function deliverRelayReport(
     if (!getTask(to.a2a)) { console.warn(`[A2A] task ${to.a2a} for ${session.id} is not in this server's a2a.db — left for its owner`); return }
     completeTask(to.a2a, session)
     clearReplyTo(db, session.id)
+    return
+  }
+
+  if ('cron' in to) {
+    // Cron run: the door records the outcome, clears the pointer and
+    // dispatches. Not this process's run (dev vs prod, or a CLI that never
+    // loaded the runner): leave the pointer for its owner.
+    if (!_cronDoor?.owns(to.cron)) { console.warn(`[Cron] run ${to.cron} for ${session.id} is not running in this server's cron.db — left for its owner`); return }
+    await _cronDoor.finish(to.cron, db, session)
     return
   }
 
@@ -236,8 +275,9 @@ export async function deliverRelayInterim(host: RelayTarget, sessionId: string, 
     if (getA2ADb()) interim(to.a2a, body)
     return
   }
-  // An /invocations job notifies its final reply only (what `halo cli` prints).
-  if ('invocation' in to) return
+  // An /invocations job notifies its final reply only (what `halo cli` prints);
+  // so does a cron run (its targets get one message per run).
+  if ('invocation' in to || 'cron' in to) return
   const registry = getRelayRegistry()
   if (!registry) { console.warn(`[Relay] no registry — cannot deliver interim report for ${sessionId} to ${to.workspace}`); return }
   let caller: RelayTarget

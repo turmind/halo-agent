@@ -114,7 +114,7 @@ describe('sweepInterruptedRuns', () => {
     expect(host.nudges.map((n) => n.via)).toEqual(['append', 'send', 'append', 'send'])
   })
 
-  it('skips goal G, cron-*, archived, internal-agent and missing roots', () => {
+  it('skips goal G, archived, internal-agent and missing roots', () => {
     // G carries a running goal record; sweepActiveGoals owns its nudge.
     seedSession('w1')
     seedSession('goal_a', 'goal')
@@ -126,21 +126,23 @@ describe('sweepInterruptedRuns', () => {
     writeAgent(ws, 'hidden', ['internal: true'])
     seedSession('h1', 'hidden')
     seedSession('plain')
-    for (const id of ['goal_a', 'cron-job1', 'arch>kid', 'h1', 'ghost>kid', 'plain>kid']) insertRunning(ws, id)
+    for (const id of ['goal_a', 'arch>kid', 'h1', 'ghost>kid', 'plain>kid']) insertRunning(ws, id)
     const host = stubHost()
     sweepInterruptedRuns(host)
     expect(host.nudges.filter((n) => n.via === 'send').map((n) => n.id)).toEqual(['plain'])
     expect(ledgerRows()).toHaveLength(0)
   })
 
-  it('a cron-* root with a reply_to (an /invocations job on a cron session id) is nudged; one without stays skipped', () => {
+  it('cron-* roots are nudged like any other — a cron run (in-process) or an /invocations job owes its wrap-up', () => {
     seedSession('cron-cron-19fc5f6fc06-93ng7q')
     writeReplyTo(sm.getDb(), 'cron-cron-19fc5f6fc06-93ng7q', { invocation: 'inv-1' })
+    seedSession('cron-job1')
+    writeReplyTo(sm.getDb(), 'cron-job1', { cron: 'run-1' })
     seedSession('cron-plain')
-    for (const id of ['cron-cron-19fc5f6fc06-93ng7q', 'cron-plain']) insertRunning(ws, id)
+    for (const id of ['cron-cron-19fc5f6fc06-93ng7q', 'cron-job1', 'cron-plain']) insertRunning(ws, id)
     const host = stubHost()
     sweepInterruptedRuns(host)
-    expect(host.nudges.filter((n) => n.via === 'send').map((n) => n.id)).toEqual(['cron-cron-19fc5f6fc06-93ng7q'])
+    expect(host.nudges.filter((n) => n.via === 'send').map((n) => n.id).sort()).toEqual(['cron-cron-19fc5f6fc06-93ng7q', 'cron-job1', 'cron-plain'])
     expect(ledgerRows()).toHaveLength(0)
   })
 

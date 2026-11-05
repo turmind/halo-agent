@@ -16,7 +16,7 @@ import type { SessionManagerRegistry } from '../src/agents/session-manager-regis
 import type { SessionManager } from '../src/agents/session-manager.js'
 import { SessionManager as RealSessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
-import { writeReplyTo, readReplyTo, deliverRelayReport, cancelA2AForSession, type RelayTarget } from '../src/agents/relay.js'
+import { writeReplyTo, readReplyTo, deliverRelayReport, cancelOwedForSession, type RelayTarget } from '../src/agents/relay.js'
 
 /**
  * Review fixes (A2A phase 2):
@@ -181,7 +181,7 @@ describe('S2: reply_to naming a task not in this a2a.db is left for its owner', 
 
   it('local stop: foreign task id → reply_to kept', () => {
     writeReplyTo(sm.getDb(), 'a2a_acc_x', { a2a: 'task-owned-by-prod' })
-    cancelA2AForSession(sm.getDb(), 'a2a_acc_x', 'stopped')
+    cancelOwedForSession(sm.getDb(), 'a2a_acc_x', 'stop')
     expect(readReplyTo(sm.getDb(), 'a2a_acc_x')).toEqual({ a2a: 'task-owned-by-prod' })
   })
 

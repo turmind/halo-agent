@@ -456,8 +456,9 @@ if (!OWNS_RUNTIMES) {
   logAlways('[Server] HALO_BADGE=DEV: workspace runtime.lock left to the owning server — no claim, no boot cleanup')
 }
 setRelayRegistry(registry)
-// Cron jobs may run in a user-picked session; the runner peeks the live
-// managers to skip busy sessions and drop stale caches after a cli run.
+// Cron runs execute in-process on these managers (getOrCreate on a fire,
+// peek for prune / boot recovery). Set before the ledger sweep below: the
+// sweep's nudges resume cut-off cron runs, and recoverRuns re-enters them.
 setCronSessionRegistry(registry)
 
 // Run ledger eager sweep: build the SessionManager NOW for every workspace
