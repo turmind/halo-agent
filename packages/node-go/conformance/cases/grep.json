@@ -1,0 +1,382 @@
+[
+ {
+  "group": "grep",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "probe",
+  "cases": [
+   {
+    "name": "grep basic",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "export"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "grep include brace",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": ".",
+       "include": "*.{ts,tsx}"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "grep include list",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "e",
+       "include": "*.txt, *.tsx"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep file target",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "b",
+       "path": "a.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep missing dir",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "x",
+       "path": "nope"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep dot vs CR",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "foo.",
+       "path": "sub"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep $ vs CR",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "foo$",
+       "path": "sub"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep \\s nbsp",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "a\\sb",
+       "path": "sub"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep lookahead",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "export(?= const c)"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "grep backref",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "(x) = 1\\n?",
+       "path": "dup.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep backref2",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "(l)\\1",
+       "path": "."
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep invalid (",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "("
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "grep invalid *",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "*a"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep invalid [",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "[a"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep invalid )",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "a)"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep identity escape \\e",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "\\e",
+       "path": "a.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep max 0",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "a",
+       "max_results": 0
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep max \"2\"",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "a",
+       "max_results": "2"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep max 2",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "a",
+       "max_results": 2
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep no pattern",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "path": "sub"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep include number",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "a",
+       "include": 5
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep no match",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "qqqq"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep include array",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "a",
+       "include": [
+        "*.ts"
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep include array, \",\" element",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "e",
+       "include": [
+        "*.txt",
+        ",",
+        "*.tsx"
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep include object",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "a",
+       "include": {}
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "group": "grep-2",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "probe2",
+  "cases": [
+   {
+    "name": "grep into noperm",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "x",
+       "path": "noperm"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep pattern number",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": 5,
+       "path": "u.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep max NaN",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "f",
+       "path": "c500",
+       "max_results": "abc"
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep max -1",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "a",
+       "path": "a.txt",
+       "max_results": -1
+      }
+     }
+    ]
+   }
+  ]
+ }
+]

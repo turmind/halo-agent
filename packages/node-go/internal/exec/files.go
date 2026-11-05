@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,43 +14,61 @@ import (
 	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
 )
 
-// mkdirp is fs.mkdir(dir, {recursive:true}) with Node's error text.
+// mkdirp is fs.mkdir(dir, {recursive:true}): a port of Node's MKDirpAsync
+// (src/node_file.cc) — mkdir the top of a path stack; ENOENT pushes the
+// dirname; EACCES / ENOSPC / ENOTDIR / EPERM end it; any other error is
+// replaced by a stat of the same path (so EROFS on a missing dir reads ENOENT,
+// EEXIST on a dangling link ENOENT / ENOTDIR). The error names the last path tried.
 func mkdirp(dir string) error {
-	st, err := os.Stat(dir)
-	if err == nil {
-		if st.IsDir() {
-			return nil
-		}
-		return jsv.FsError(syscall.EEXIST, "mkdir", dir)
-	}
-	// Walk up to the deepest existing ancestor, then create downwards.
-	var missing []string
-	p := dir
+	stack := []string{dir}
+	parentOK := false // the path just popped is a child of a dir that mkdir said EEXIST for
 	for {
-		if _, err := os.Lstat(p); err == nil {
-			break
+		path := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		childOfDir := parentOK
+		parentOK = false
+		err := syscall.Mkdir(path, 0o777)
+		switch err {
+		case nil:
+			if len(stack) == 0 {
+				return nil
+			}
+			continue
+		case syscall.EACCES, syscall.ENOSPC, syscall.ENOTDIR, syscall.EPERM:
+			return jsv.FsError(err, "mkdir", path)
+		case syscall.ENOENT:
+			// Node re-tries this forever when the parent exists yet mkdir still
+			// says ENOENT (procfs: /proc/sys/x) — TS never answers; Go reports it (D9).
+			if childOfDir {
+				return jsv.FsError(err, "mkdir", path)
+			}
+			if i := strings.LastIndexByte(path, '/'); i >= 0 {
+				stack = append(stack, path, path[:i])
+				continue
+			}
+			if len(stack) > 0 {
+				continue
+			}
+			err = syscall.EEXIST
 		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			break
+		var st syscall.Stat_t
+		serr := syscall.Stat(path, &st)
+		isDir := serr == nil && st.Mode&syscall.S_IFMT == syscall.S_IFDIR
+		if err == syscall.EEXIST && len(stack) > 0 {
+			if isDir {
+				parentOK = true
+				continue
+			}
+			return jsv.FsError(syscall.ENOTDIR, "mkdir", path)
 		}
-		missing = append(missing, p)
-		p = parent
+		if serr != nil {
+			return jsv.FsError(serr, "mkdir", path)
+		}
+		if !isDir {
+			return jsv.FsError(syscall.EEXIST, "mkdir", path)
+		}
+		return nil
 	}
-	if st, err := os.Stat(p); err == nil && !st.IsDir() {
-		return jsv.FsError(syscall.ENOTDIR, "mkdir", dir)
-	} else if err != nil { // dangling symlink ancestor
-		if len(missing) == 0 {
-			return jsv.FsError(syscall.ENOENT, "mkdir", dir)
-		}
-		return jsv.FsError(syscall.ENOTDIR, "mkdir", p)
-	}
-	for i := len(missing) - 1; i >= 0; i-- {
-		if err := os.Mkdir(missing[i], 0o777); err != nil && !errors.Is(err, os.ErrExist) {
-			return jsv.FsError(unwrapPathErr(err), "mkdir", missing[i])
-		}
-	}
-	return nil
 }
 
 func writeString(full, content string) error {
@@ -66,6 +85,14 @@ func writeString(full, content string) error {
 		return jsv.FsError(unwrapPathErr(cerr), "close", "")
 	}
 	return nil
+}
+
+// toUint8 is a Uint8Array element store: NaN / ±Inf → 0, else truncate, mod 256.
+func toUint8(f float64) byte {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0
+	}
+	return byte(int64(math.Mod(math.Trunc(f), 256)) & 0xff)
 }
 
 // describe is Node's ERR_INVALID_ARG_TYPE "Received …" tail.
@@ -98,17 +125,25 @@ func (e *Executor) write(full, placed string, args map[string]any) (string, erro
 			return "", err
 		}
 	case []any:
-		// Node writes an iterable chunk by chunk; a non-string chunk throws
-		// after the earlier ones landed (D5; nested arrays not replicated).
+		// Node writes an iterable chunk by chunk (Buffer.from(chunk)): a string
+		// as UTF-8, an array as bytes (ToUint8 of each element); any other chunk
+		// throws after the earlier ones landed. Plain-object chunks (array-like
+		// / {type:'Buffer'}) are not replicated (D5).
 		var sb strings.Builder
 		var bad any = jsv.Undefined
 		for _, el := range c {
-			s, ok := el.(string)
+			if s, ok := el.(string); ok {
+				sb.WriteString(s)
+				continue
+			}
+			arr, ok := el.([]any)
 			if !ok {
 				bad = el
 				break
 			}
-			sb.WriteString(s)
+			for _, x := range arr {
+				sb.WriteByte(toUint8(jsv.ToNumber(x)))
+			}
 		}
 		if err := writeString(full, sb.String()); err != nil {
 			return "", err
@@ -127,9 +162,6 @@ func (e *Executor) edit(full, placed string, args map[string]any) (string, error
 	oldV, newV := jsv.Get(args, "old_string"), jsv.Get(args, "new_string")
 	if s, ok := oldV.(string); ok && s == "" {
 		return toolWarn + "\nError: old_string is empty. Provide the exact text to replace.", nil
-	}
-	if arr, ok := oldV.([]any); ok && jsv.ToString(arr) == "" {
-		return toolWarn + "\nError: old_string is empty. Provide the exact text to replace.", nil // D6
 	}
 	if jsv.StrictEqual(oldV, newV) {
 		return toolWarn + "\nError: old_string and new_string are identical — nothing to change.", nil

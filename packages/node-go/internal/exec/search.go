@@ -89,23 +89,36 @@ func braces(s string) string {
 	})
 }
 
-func splitInclude(include string) []string {
+// splitIncludeList: `for (const ch of include)` — a string by code point, an
+// array (off-schema, but a model may send one) by whole element, where only an
+// element that is exactly the string "{" / "}" / "," is structural.
+func splitInclude(include any) []string {
+	var chars []any
+	switch v := include.(type) {
+	case string:
+		for _, r := range v {
+			chars = append(chars, string(r))
+		}
+	case []any:
+		chars = v
+	}
 	var parts []string
 	depth := 0
 	var cur strings.Builder
-	for _, ch := range include {
+	for _, el := range chars {
+		ch, _ := el.(string)
 		switch {
-		case ch == '{':
+		case ch == "{":
 			depth++
-			cur.WriteRune(ch)
-		case ch == '}':
+			cur.WriteString(ch)
+		case ch == "}":
 			depth = max(0, depth-1)
-			cur.WriteRune(ch)
-		case ch == ',' && depth == 0:
+			cur.WriteString(ch)
+		case ch == "," && depth == 0:
 			parts = append(parts, cur.String())
 			cur.Reset()
 		default:
-			cur.WriteRune(ch)
+			cur.WriteString(jsv.ToString(el))
 		}
 	}
 	parts = append(parts, cur.String())
@@ -170,7 +183,8 @@ func (e *Executor) grep(ctx context.Context, searchDir string, args map[string]a
 		return toolWarn + "\nError: Invalid regex pattern: " + err.Error(), nil
 	}
 	includeV := jsv.Get(args, "include")
-	include, includeIsStr := includeV.(string)
+	_, includeIsStr := includeV.(string)
+	_, includeIsArr := includeV.([]any)
 	useInclude := jsv.Truthy(includeV)
 	cache := reCache{}
 
@@ -181,13 +195,13 @@ func (e *Executor) grep(ctx context.Context, searchDir string, args map[string]a
 			return false
 		}
 		if useInclude {
-			if !includeIsStr {
+			if !includeIsStr && !includeIsArr {
 				thrown = errors.New("include is not iterable")
 				return false
 			}
 			name := filepath.Base(file)
 			hit := false
-			for _, part := range splitInclude(include) {
+			for _, part := range splitInclude(includeV) {
 				if cache.test(includeRegex(part), name) {
 					hit = true
 					break

@@ -1,0 +1,335 @@
+[
+ {
+  "group": "edit",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "probe",
+  "cases": [
+   {
+    "name": "edit basic",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "noeol.txt",
+       "old_string": "two",
+       "new_string": "TWO"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ],
+    "after": [
+     "root/noeol.txt"
+    ]
+   },
+   {
+    "name": "edit empty old",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "a.txt",
+       "old_string": "",
+       "new_string": "x"
+      }
+     }
+    ]
+   },
+   {
+    "name": "edit identical",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "nope.txt",
+       "old_string": "a",
+       "new_string": "a"
+      }
+     }
+    ]
+   },
+   {
+    "name": "edit missing file",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "nope.txt",
+       "old_string": "a",
+       "new_string": "b"
+      }
+     }
+    ]
+   },
+   {
+    "name": "edit not found",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "a.txt",
+       "old_string": "zzz",
+       "new_string": "b"
+      }
+     }
+    ]
+   },
+   {
+    "name": "edit multiple",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "dup.txt",
+       "old_string": "x = 1",
+       "new_string": "y"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ],
+    "after": [
+     "root/dup.txt"
+    ]
+   },
+   {
+    "name": "edit replace_all",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "dup.txt",
+       "old_string": "x = 1",
+       "new_string": "y",
+       "replace_all": true
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ],
+    "after": [
+     "root/dup.txt"
+    ]
+   },
+   {
+    "name": "edit dollar",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "dollar.txt",
+       "old_string": "P",
+       "new_string": "$&$'$1"
+      }
+     }
+    ],
+    "after": [
+     "root/dollar.txt"
+    ]
+   },
+   {
+    "name": "edit bad utf8 rewrite",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "bad-utf8.txt",
+       "old_string": "a",
+       "new_string": "A"
+      }
+     }
+    ],
+    "after": [
+     "root/bad-utf8.txt"
+    ]
+   },
+   {
+    "name": "edit missing old_string",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "a.txt",
+       "new_string": "b"
+      }
+     }
+    ]
+   },
+   {
+    "name": "edit replace_all \"yes\"",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "crlf.txt",
+       "old_string": "r",
+       "new_string": "R",
+       "replace_all": "yes"
+      }
+     }
+    ],
+    "after": [
+     "root/crlf.txt"
+    ]
+   },
+   {
+    "name": "edit bom kept",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "bom.txt",
+       "old_string": "hi",
+       "new_string": "HI"
+      }
+     }
+    ],
+    "after": [
+     "root/bom.txt"
+    ]
+   },
+   {
+    "name": "edit on dir",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "sub",
+       "old_string": "a",
+       "new_string": "b"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "group": "edit-2",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "probe2",
+  "cases": [
+   {
+    "name": "edit old_string number unique",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "u.txt",
+       "old_string": 5,
+       "new_string": "six"
+      }
+     }
+    ],
+    "after": [
+     "root/u.txt"
+    ]
+   },
+   {
+    "name": "edit new_string number",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "a.txt",
+       "old_string": "beta",
+       "new_string": 7
+      }
+     }
+    ],
+    "after": [
+     "root/a.txt"
+    ]
+   },
+   {
+    "name": "edit missing new_string",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "a.txt",
+       "old_string": "alpha"
+      }
+     }
+    ],
+    "after": [
+     "root/a.txt"
+    ]
+   },
+   {
+    "name": "edit replace_all missing new_string",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "u.txt",
+       "old_string": "e",
+       "replace_all": true
+      }
+     }
+    ],
+    "after": [
+     "root/u.txt"
+    ]
+   },
+   {
+    "name": "edit old_string null",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "n.txt",
+       "old_string": null,
+       "new_string": "x"
+      }
+     }
+    ],
+    "setup": [
+     {
+      "file": "root/n.txt",
+      "text": "a null b\n"
+     }
+    ]
+   },
+   {
+    "name": "edit old_string []",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "a.txt",
+       "old_string": [],
+       "new_string": "x"
+      }
+     }
+    ]
+   },
+   {
+    "name": "edit old_string [x] unique",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "u.txt",
+       "old_string": [
+        "five"
+       ],
+       "new_string": "FIVE"
+      }
+     }
+    ],
+    "after": [
+     "root/u.txt"
+    ]
+   }
+  ]
+ }
+]

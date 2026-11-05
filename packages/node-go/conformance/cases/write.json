@@ -1,0 +1,451 @@
+[
+ {
+  "group": "write",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "probe",
+  "cases": [
+   {
+    "name": "write new nested",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "new/deep/n.txt",
+       "content": "hi"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ],
+    "after": [
+     "root/new/deep/n.txt"
+    ]
+   },
+   {
+    "name": "write abs inside",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "<ROOT>/abs.txt",
+       "content": "x"
+      }
+     }
+    ],
+    "after": [
+     "root/abs.txt"
+    ]
+   },
+   {
+    "name": "write via link-to-sub",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "link-to-sub/w.txt",
+       "content": "x"
+      }
+     }
+    ],
+    "after": [
+     "root/sub/w.txt"
+    ]
+   },
+   {
+    "name": "write missing content",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "mc.txt"
+      }
+     }
+    ],
+    "after": [
+     "root/mc.txt"
+    ]
+   },
+   {
+    "name": "write content number",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "num.txt",
+       "content": 5
+      }
+     }
+    ],
+    "after": [
+     "root/num.txt"
+    ]
+   },
+   {
+    "name": "write onto dir",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "sub",
+       "content": "x"
+      }
+     }
+    ]
+   },
+   {
+    "name": "write parent is file",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "a.txt/x.txt",
+       "content": "x"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "write astral + lone surrogate",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "astral.txt",
+       "content": "a😀b\ud83dc"
+      }
+     }
+    ],
+    "after": [
+     "root/astral.txt"
+    ]
+   }
+  ]
+ },
+ {
+  "group": "write-2",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "probe2",
+  "cases": [
+   {
+    "name": "write deeper under file",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "a.txt/y/x.txt",
+       "content": "x"
+      }
+     }
+    ]
+   },
+   {
+    "name": "write content array",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "arr.txt",
+       "content": [
+        "a",
+        "b"
+       ]
+      }
+     }
+    ],
+    "after": [
+     "root/arr.txt"
+    ]
+   },
+   {
+    "name": "write content null",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "n.txt",
+       "content": null
+      }
+     }
+    ],
+    "after": [
+     "root/n.txt"
+    ]
+   },
+   {
+    "name": "write content object",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "o.txt",
+       "content": {}
+      }
+     }
+    ],
+    "after": [
+     "root/o.txt"
+    ]
+   },
+   {
+    "name": "write content bool",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "b.txt",
+       "content": true
+      }
+     }
+    ],
+    "after": [
+     "root/b.txt"
+    ]
+   },
+   {
+    "name": "write readonly file",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "ro.txt",
+       "content": "x"
+      }
+     }
+    ],
+    "after": [
+     "root/ro.txt"
+    ]
+   },
+   {
+    "name": "write mkdir under noperm",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "noperm/sub/x.txt",
+       "content": "x"
+      }
+     }
+    ]
+   },
+   {
+    "name": "write array: string then number",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "mixed.txt",
+       "content": [
+        "a",
+        1
+       ]
+      }
+     }
+    ],
+    "after": [
+     "root/mixed.txt"
+    ]
+   },
+   {
+    "name": "write array: nested byte arrays",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "nested.txt",
+       "content": [
+        "a",
+        [
+         "b"
+        ],
+        [
+         65,
+         321,
+         -1,
+         1.9,
+         "67",
+         null,
+         true
+        ]
+       ]
+      }
+     }
+    ],
+    "after": [
+     "root/nested.txt"
+    ]
+   },
+   {
+    "name": "write array: empty",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "empty-arr.txt",
+       "content": []
+      }
+     }
+    ],
+    "after": [
+     "root/empty-arr.txt"
+    ]
+   },
+   {
+    "name": "write D5 array-like object chunk",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "obj.txt",
+       "content": [
+        {
+         "length": 2
+        }
+       ]
+      }
+     }
+    ],
+    "known": "D5",
+    "expectGo": [
+     {
+      "ok": false,
+      "error": "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received an instance of Object"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "group": "write-errno",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "empty",
+  "cases": [
+   {
+    "name": "write ELOOP parent",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "loop/x.txt",
+       "content": "x"
+      }
+     }
+    ],
+    "setup": [
+     {
+      "symlink": "root/loop",
+      "to": "loop"
+     }
+    ]
+   },
+   {
+    "name": "write ELOOP deep",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "loop/a/b/x.txt",
+       "content": "x"
+      }
+     }
+    ],
+    "setup": [
+     {
+      "symlink": "root/loop",
+      "to": "loop"
+     }
+    ]
+   },
+   {
+    "name": "edit ELOOP",
+    "calls": [
+     {
+      "op": "edit",
+      "args": {
+       "path": "loop/x.txt",
+       "old_string": "a",
+       "new_string": "b"
+      }
+     }
+    ],
+    "setup": [
+     {
+      "symlink": "root/loop",
+      "to": "loop"
+     }
+    ]
+   },
+   {
+    "name": "write ENAMETOOLONG dir",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn/x.txt",
+       "content": "x"
+      }
+     }
+    ]
+   },
+   {
+    "name": "write ENAMETOOLONG file",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+       "content": "x"
+      }
+     }
+    ]
+   },
+   {
+    "name": "write ENAMETOOLONG path>4096",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/x.txt",
+       "content": "x"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read ENAMETOOLONG",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+      }
+     }
+    ]
+   },
+   {
+    "name": "list ENAMETOOLONG",
+    "calls": [
+     {
+      "op": "list",
+      "args": {
+       "path": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+      }
+     }
+    ]
+   }
+  ]
+ }
+]

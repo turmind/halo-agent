@@ -27,6 +27,28 @@ node conformance/gen-regex-truth.mjs   # → internal/jsregex/testdata/js-truth.
 node conformance/gen-jsv-truth.mjs     # → internal/jsv/testdata/js-truth.json
 ```
 
+Regex differential fuzz (CI: 20k patterns, seed = run id; minimized diffs go into
+`internal/jsregex/testdata/regex-regress.jsonl` via `--eval`):
+
+```sh
+node conformance/regex-fuzz.mjs --n 20000 --seed 1 > /tmp/re.jsonl
+JSREGEX_VECTORS=/tmp/re.jsonl go test ./internal/jsregex -run Differential -count=1
+```
+
+## Conformance
+
+`conformance/cases/*.json` (plan §3.3) run against a real hub, the TS `runNode` as the
+live oracle and this binary side by side, every result compared. The TS side imports
+`@turmind/halo-core` from `dist/`, so build core first:
+
+```sh
+pnpm --filter @turmind/halo-core build && ./build.sh
+HALO_NODE_GO_BIN=$PWD/dist/halo-node-linux-amd64 \
+  pnpm --filter @turmind/halo-server exec vitest run test/node-go-conformance.test.ts
+# arm under qemu-user, smoke subset:
+#   HALO_NODE_GO_BIN=$PWD/dist/halo-node-linux-arm64 HALO_NODE_GO_EXEC=qemu-aarch64-static HALO_NODE_GO_SMOKE=1
+```
+
 ## Run
 
 ```sh

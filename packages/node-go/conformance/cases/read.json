@@ -1,0 +1,304 @@
+[
+ {
+  "group": "read",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "probe",
+  "cases": [
+   {
+    "name": "read basic",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "a.txt"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "read noeol",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "noeol.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read empty",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "empty.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read crlf",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "crlf.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read bom",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "bom.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read bad utf8",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "bad-utf8.txt"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "read offset/limit",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "a.txt",
+       "offset": 2,
+       "limit": 1
+      }
+     }
+    ]
+   },
+   {
+    "name": "read offset past end",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "a.txt",
+       "offset": 9
+      }
+     }
+    ]
+   },
+   {
+    "name": "read offset \"2\" string",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "a.txt",
+       "offset": "2"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read offset 1.7",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "a.txt",
+       "offset": 1.7,
+       "limit": 1
+      }
+     }
+    ]
+   },
+   {
+    "name": "read offset \"abc\"",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "a.txt",
+       "offset": "abc"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read offset null",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "a.txt",
+       "offset": null
+      }
+     }
+    ]
+   },
+   {
+    "name": "read limit 0",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "a.txt",
+       "limit": 0
+      }
+     }
+    ]
+   },
+   {
+    "name": "read tie 2.25MB",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "tie.bin"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read big 3MB",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "big.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read big with limit",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "big.txt",
+       "limit": 1
+      }
+     }
+    ]
+   },
+   {
+    "name": "read dir",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "sub"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read missing",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "nope.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read no path",
+    "calls": [
+     {
+      "op": "read",
+      "args": {}
+     }
+    ]
+   },
+   {
+    "name": "read empty path",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": ""
+      }
+     }
+    ]
+   },
+   {
+    "name": "read huge truncation",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "huge.txt"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "read binary",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "bin.dat"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "group": "read-2",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "probe2",
+  "cases": [
+   {
+    "name": "read noperm",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "noperm/x"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read width 2",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "c500/f000",
+       "offset": 1
+      }
+     }
+    ]
+   }
+  ]
+ }
+]

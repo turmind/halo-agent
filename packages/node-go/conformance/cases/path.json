@@ -1,0 +1,240 @@
+[
+ {
+  "group": "path",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "probe",
+  "cases": [
+   {
+    "name": "read outside (..)",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "../outside/o.txt"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "read via link-out",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "link-out/hostname"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read via link-to-sub",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "link-to-sub/b.ts"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read abs outside",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "<TMP>/outside/o.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read ~ outside",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "~/h.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "list outside",
+    "calls": [
+     {
+      "op": "list",
+      "args": {
+       "path": ".."
+      }
+     }
+    ]
+   },
+   {
+    "name": "grep outside",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "out",
+       "path": "<TMP>/outside"
+      }
+     }
+    ]
+   },
+   {
+    "name": "write outside",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "../outside/w.txt",
+       "content": "x"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "group": "whole",
+  "config": {
+   "mode": "whole",
+   "shell": true
+  },
+  "tree": "probe",
+  "cases": [
+   {
+    "name": "read whole abs outside",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "<TMP>/outside/o.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "read whole relative",
+    "calls": [
+     {
+      "op": "read",
+      "args": {
+       "path": "a.txt"
+      }
+     }
+    ]
+   },
+   {
+    "name": "write + read whole ~",
+    "calls": [
+     {
+      "op": "write",
+      "args": {
+       "path": "~/h.txt",
+       "content": "home"
+      }
+     },
+     {
+      "op": "read",
+      "args": {
+       "path": "~/h.txt"
+      }
+     }
+    ],
+    "after": [
+     "home/h.txt"
+    ]
+   },
+   {
+    "name": "grep whole abs outside",
+    "calls": [
+     {
+      "op": "grep",
+      "args": {
+       "pattern": "out",
+       "path": "<TMP>/outside"
+      }
+     }
+    ]
+   },
+   {
+    "name": "glob whole outside",
+    "calls": [
+     {
+      "op": "glob",
+      "args": {
+       "pattern": "**/*.txt",
+       "path": "<TMP>/outside"
+      }
+     }
+    ]
+   },
+   {
+    "name": "run whole cwd abs",
+    "calls": [
+     {
+      "op": "run",
+      "args": {
+       "command": "pwd",
+       "cwd": "<TMP>/outside"
+      }
+     }
+    ]
+   },
+   {
+    "name": "run whole cwd default",
+    "calls": [
+     {
+      "op": "run",
+      "args": {
+       "command": "pwd"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "group": "noshell",
+  "config": {
+   "mode": "folder",
+   "shell": false
+  },
+  "tree": "empty",
+  "cases": [
+   {
+    "name": "run shell disabled",
+    "calls": [
+     {
+      "op": "run",
+      "args": {
+       "command": "echo hi"
+      }
+     }
+    ],
+    "tags": [
+     "smoke"
+    ]
+   },
+   {
+    "name": "run shell disabled + empty",
+    "calls": [
+     {
+      "op": "run",
+      "args": {
+       "command": ""
+      }
+     }
+    ]
+   }
+  ]
+ }
+]
