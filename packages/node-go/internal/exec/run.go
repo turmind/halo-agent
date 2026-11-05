@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	osexec "os/exec"
 	"regexp"
@@ -197,7 +198,11 @@ func spawnGroup(ctx context.Context, cmd, cwd string, timeoutMs int64) (stdout, 
 	}()
 	var timer <-chan time.Time
 	if timeoutMs != 0 { // `opts.timeout ? … : null`
-		t := time.NewTimer(time.Duration(max(timeoutMs, 0)) * time.Millisecond)
+		d := timeoutMs
+		if d < 1 || d > math.MaxInt32 { // Node setTimeout: out-of-range delays run after 1ms
+			d = 1
+		}
+		t := time.NewTimer(time.Duration(d) * time.Millisecond)
 		defer t.Stop()
 		timer = t.C
 	}
