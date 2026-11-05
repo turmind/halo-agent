@@ -4,11 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
 import { createEvoDb, setEvoDb, evolutionRuns, evolutionApplies, type EvoDb } from '../src/db/evo-db.js'
-import { rollbackApply, inspectRollback, sha256File } from '../src/evolution/rollback.js'
+import { rollbackApply, inspectRollback, readPublishedFiles, sha256File } from '../src/evolution/rollback.js'
 import { phaseApplyPreflight, phaseApplyPublish, type ApplyCtx } from '../src/evolution/evo-wrapper.js'
 import { runArchivePass } from '../src/evolution/archive.js'
 import { createEvolutionRoutes } from '../src/routes/evolution.js'
-import { wsHaloDir, evoSandboxHaloDir, wsEvoHistoryDir, wsEvoRollbackPreDir, wsEvoRunDir } from '../src/paths.js'
+import { wsHaloDir, evoSandboxHaloDir, wsEvoHistoryDir, wsEvoRollbackPreDir, wsEvoRunDir, globalDir } from '../src/paths.js'
 import { agentSourceDir } from '../src/agents/agent-loader.js'
 
 /**
@@ -77,6 +77,27 @@ describe('MANIFEST hashes (phase 12 preflight)', () => {
   it('lists the dirs the publish created, deepest first; dirs main already had are not listed', () => {
     const manifest = JSON.parse(read(wsEvoHistoryDir(ws, APPLY), 'MANIFEST.json'))
     expect(manifest.createdDirs).toEqual([path.join('skills', 'new'), 'skills'])
+  })
+
+  it('copies byte-equal to the global file they now override are marked unchanged and not listed as published', async () => {
+    const A2 = 'apply-global-copy'
+    const g = path.join(globalDir(), 'agents', 'helper')
+    write(g, 'AGENT.md', 'global persona')
+    write(g, 'agent.yaml', 'name: Helper\n')
+    try {
+      write(sandboxHalo, 'agents/helper/AGENT.md', 'global persona — sharper')
+      write(sandboxHalo, 'agents/helper/agent.yaml', 'name: Helper\n')
+      const pre = await phaseApplyPreflight({ applyId: A2, workspacePath: ws, applyDir, sourceRunIds: [RUN], reviewerHint: null, langHint: 'English', logFd })
+      expect(pre.ok).toBe(true)
+      const byRel = Object.fromEntries(JSON.parse(read(wsEvoHistoryDir(ws, A2), 'MANIFEST.json')).files.map((f: { rel: string }) => [f.rel, f]))
+      expect(byRel[path.join('agents', 'helper', 'agent.yaml')].unchanged).toBe(true)
+      expect(byRel[path.join('agents', 'helper', 'AGENT.md')].unchanged).toBeUndefined()
+      // Rollback still removes the copy (it is part of the override dir).
+      expect(Object.keys(byRel).sort()).toEqual([path.join('agents', 'helper', 'AGENT.md'), path.join('agents', 'helper', 'agent.yaml')])
+      expect(readPublishedFiles(ws, A2)).toEqual(['agents/helper/AGENT.md'])
+    } finally {
+      fs.rmSync(g, { recursive: true, force: true })
+    }
   })
 
   it('a resume preflight leaves the original manifest (hashes included) alone', async () => {

@@ -23,7 +23,7 @@ import path from 'node:path'
 import { evolutionApplies, evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { removeRunArtifacts, removeApplyArtifacts } from '../evolution/archive.js'
 import { queueApply } from '../evolution/queue-apply.js'
-import { inspectRollback, rollbackApply } from '../evolution/rollback.js'
+import { inspectRollback, readPublishedFiles, rollbackApply } from '../evolution/rollback.js'
 import { AUTO_APPLY_FILE, extractLargerObservation } from '../evolution/auto-apply.js'
 import { wsEvoRunDir, evoWrapperLogFile } from '../paths.js'
 import { rawSqlite } from '../db/raw-sqlite.js'
@@ -243,6 +243,11 @@ export function createEvolutionRoutes(): Hono {
       const inspected = inspectRollback(latestApply.workspacePath, latestApply.id)
       rollback = { available: inspected !== null, files: inspected?.files ?? [] }
     }
+    // What phase 12 actually changed in main (the merged sandbox may differ
+    // from the run's), minus copies byte-equal to global.
+    const publishedFiles = latestApply?.status === 'applied' || latestApply?.status === 'rolled_back'
+      ? readPublishedFiles(latestApply.workspacePath, latestApply.id)
+      : null
 
     return c.json({
       run: {
@@ -267,6 +272,7 @@ export function createEvolutionRoutes(): Hono {
       autoApply,
       observation,
       rollback,
+      publishedFiles,
       patchMd,
       scoreJson,
       skipReasonMd,

@@ -13,8 +13,9 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { config } from '../config.js'
 import { evolutionApplies, evolutionRuns, type EvoDb } from '../db/evo-db.js'
 import { t } from '../channels/shared/i18n.js'
-import { wsEvoHistoryDir, wsEvoRunDir } from '../paths.js'
+import { wsEvoRunDir } from '../paths.js'
 import { AUTO_APPLY_FILE, type AutoApplyRecord } from './auto-apply.js'
+import { readPublishedFiles } from './rollback.js'
 
 /** What the notice needs from the session layer — the server's
  *  SessionManagerRegistry, injected by index.ts like the cron one. */
@@ -74,10 +75,9 @@ export function notifyAutoApplied(db: EvoDb): void {
       if (run && fs.existsSync(path.join(a.workspacePath, '.halo'))) {
         const sm = registry.getOrCreate(a.workspacePath)
         if (sm.getSessionById(run.sourceSession)) {
-          const manifest = readJson<{ files?: Array<{ rel: string }> }>(path.join(wsEvoHistoryDir(a.workspacePath, a.id), 'MANIFEST.json'))
           const verdict = readJson<AutoApplyRecord>(path.join(wsEvoRunDir(a.workspacePath, run.id), AUTO_APPLY_FILE))
           sm.notifySystem(run.sourceSession, formatAutoAppliedNotice({
-            files: (manifest?.files ?? []).map((f) => f.rel.split(path.sep).join('/')),
+            files: readPublishedFiles(a.workspacePath, a.id) ?? [],
             avg: verdict?.score?.avg ?? null,
             confidence: verdict?.score?.confidence ?? null,
             observation: verdict?.observation ?? null,

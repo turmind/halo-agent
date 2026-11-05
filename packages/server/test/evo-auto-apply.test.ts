@@ -276,6 +276,23 @@ describe('collectChanges — baseline is the live pre-patch surface', () => {
     expect(collect()).toEqual([{ rel: 'INSTRUCTIONS.md', before: 'ws rules', after: null, newDir: false }])
   })
 
+  it('internal agent by the live agent.yaml flag, not just the `__` prefix (goal)', () => {
+    write(global, 'agents/goal/agent.yaml', 'name: Goal\ninternal: true\n')
+    write(global, 'agents/goal/AGENT.md', 'goal persona')
+    write(sandbox, 'agents/goal/agent.yaml', 'name: Goal\ninternal: true\n')
+    write(sandbox, 'agents/goal/AGENT.md', 'goal persona — sharper')
+    const changes = collect()
+    expect(changes).toEqual([{ rel: 'agents/goal/AGENT.md', before: 'goal persona', after: 'goal persona — sharper', newDir: false, internalAgent: true }])
+    expect(classifyChanges(changes).files[0]).toMatchObject({ category: 'manual', reason: 'internal_agent' })
+    // A workspace copy is the live one: without the flag it is a plain agent.
+    write(main, 'agents/goal/agent.yaml', 'name: Goal\n')
+    write(main, 'agents/goal/AGENT.md', 'goal persona')
+    write(sandbox, 'agents/goal/agent.yaml', 'name: Goal\n')
+    expect(classifyChanges(collect()).category).toBe('prompt')
+    // `__` ids stay internal even when a copy lost the flag.
+    expect(classifyChange(change('agents/__score__/AGENT.md', 'a', 'b'))).toMatchObject({ category: 'manual', reason: 'internal_agent' })
+  })
+
   it('docs is not compared (never published)', () => {
     write(sandbox, 'docs/x.md', 'notes')
     expect(collect()).toEqual([])

@@ -850,7 +850,7 @@ export const en: Record<string, string> = {
   'evolution.observation.issue': 'Open a GitHub issue:',
   'evolution.observation.issueWorkspace': 'this workspace ({repo})',
   'evolution.observation.issueHalo': 'Halo ({repo})',
-  'evolution.observation.privacy': 'Opens a prefilled form on github.com; nothing is sent until you submit it there. Check the text first — it may quote your workspace files.',
+  'evolution.observation.privacy': 'Opens a prefilled form on github.com; nothing is sent until you submit it there. Check the text first — it may quote your workspace files or your conversation.',
   'evolution.observation.truncated': '\n\n… (truncated — full text in the Evolution tab, run {id})',
   'evolution.action.rollback': 'Roll back',
   'evolution.rollback.confirm': 'Roll back this apply? The files it published get their pre-apply content back (files it added are removed), and the run becomes rolled back.',

@@ -59,6 +59,12 @@ describe('issueTitle', () => {
     expect(t).toBe(`[evo] ${'改'.repeat(80)}…`)
     expect(issueTitle('x'.repeat(80))).toBe(`[evo] ${'x'.repeat(80)}`)
   })
+
+  it('counts and cuts by grapheme: a ZWJ family or e + combining accent is one', () => {
+    const family = '👨‍👩‍👧'
+    expect(issueTitle(family.repeat(100))).toBe(`[evo] ${family.repeat(80)}…`)
+    expect(issueTitle('e\u0301'.repeat(81))).toBe(`[evo] ${'e\u0301'.repeat(80)}…`)
+  })
 })
 
 describe('buildIssueUrl', () => {
@@ -73,6 +79,16 @@ describe('buildIssueUrl', () => {
     expect(body).toContain('avg 88 · confidence high')
     expect(body).toContain('Halo: 1.9.0')
     expect(body).not.toContain('truncated')
+  })
+
+  it('lists at most 20 files and counts the rest', () => {
+    const files = Array.from({ length: 23 }, (_, i) => `f${i}.md`)
+    const { body } = params(buildIssueUrl(HALO_REPO, input('obs', { files })))
+    expect(body).toContain('`f19.md` …and 3 more')
+    expect(body).not.toContain('`f20.md`')
+    const { body: exact } = params(buildIssueUrl(HALO_REPO, input('obs', { files: files.slice(0, 20) })))
+    expect(exact).toContain('`f19.md`\n')
+    expect(exact).not.toContain('more')
   })
 
   it('missing score / version / files render as placeholders', () => {
@@ -108,5 +124,14 @@ describe('buildIssueUrl', () => {
     const url = buildIssueUrl(HALO_REPO, input(obs))
     expect(url.length).toBeLessThanOrEqual(ISSUE_URL_MAX)
     expect(() => decodeURIComponent(url)).not.toThrow()
+  })
+
+  it('never splits a grapheme cluster when cutting the observation', () => {
+    const family = '👨‍👩‍👧'
+    const url = buildIssueUrl(HALO_REPO, input(family.repeat(1000)))
+    expect(url.length).toBeLessThanOrEqual(ISSUE_URL_MAX)
+    const kept = params(url).body.split(NOTE)[0]
+    expect(kept.length % family.length).toBe(0)
+    expect(kept.split(family).join('')).toBe('')
   })
 })

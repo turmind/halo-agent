@@ -2159,7 +2159,9 @@ export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
     // still pre-apply — which is also why the dirs publish will create are
     // listed now: an agents/<id>/ (skills/, prompts/) dir that exists in the
     // workspace overrides global wholesale, so rollback must remove the ones
-    // this apply created, not just their files.
+    // this apply created, not just their files. `unchanged` marks the
+    // byte-equal copies such a dir pulls from global (not a real change).
+    const effective = new Set(publishChanges({ mainHalo, globalHalo: globalDir(), sandboxHalo }, changed).map((c) => c.rel))
     const manifest: ApplyManifest = {
       applyId: ctx.applyId,
       sourceRunIds: ctx.sourceRunIds,
@@ -2169,6 +2171,7 @@ export async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
         kind: c.existsInMain ? 'overwrite' : 'new',
         before: c.existsInMain ? sha256File(path.join(mainHalo, c.rel)) : null,
         after: sha256File(c.full),
+        ...(effective.has(c.rel.split(path.sep).join('/')) ? {} : { unchanged: true as const }),
       })),
       createdDirs: dirsCreatedBy(mainHalo, changed.filter((c) => !c.existsInMain).map((c) => c.rel)),
     }
@@ -2244,7 +2247,8 @@ function walkInto(absPath: string, relPath: string, out: Array<{ rel: string; fu
  * Final db write after phase 12 succeeds.
  *
  * Status semantics for evolution_applies:
- *   - `pending`     — created by the approve handler, not yet picked up
+ *   - `pending`     — created by the approve handler (or the L2/L3 auto
+ *                     path, approved_by='auto'), not yet picked up
  *   - `running`     — ticker claimed; phases A' / B' in flight
  *   - `syncing`     — phase 12 publish in flight (checkpoint set BEFORE
  *                     main is mutated; ticker can resume on crash)
@@ -2255,6 +2259,8 @@ function walkInto(absPath: string, relPath: string, out: Array<{ rel: string; fu
  *                     is the rollback artifact in that case)
  *   - `timeout`     — wrapper heartbeat lost beyond max_attempts on a
  *                     non-syncing row
+ *   - `rolled_back` — an `applied` row undone by the rollback route
+ *                     (evolution/rollback.ts); its source runs follow
  */
 function finalizeApplied(applyId: string, logFd: number): void {
   const now = Date.now()

@@ -1186,6 +1186,8 @@ export const api = {
         observation: string | null
         /** Present when the latest apply is `applied`. */
         rollback: { available: boolean; files: Array<{ rel: string; kind: string; state: string }> } | null
+        /** Files the latest apply effectively changed (applied / rolled_back only). */
+        publishedFiles: string[] | null
         patchMd: string | null
         scoreJson: Record<string, unknown> | null
         skipReasonMd: string | null

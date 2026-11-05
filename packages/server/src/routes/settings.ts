@@ -277,6 +277,27 @@ export function createSettingsRoutes() {
     return dottedKeys.find((k) => globalOnly.has(k)) ?? null
   }
 
+  /** Range check for schema fields declaring `min` / `max`. Returns the
+   *  400 message for the first value outside its bounds, else null. Empty /
+   *  null values are skipped — they read as unset (fieldFor). */
+  function rejectOutOfRange(entries: Array<[string, unknown]>): string | null {
+    const bounded = new Map<string, SchemaField>()
+    for (const section of loadSettingsSchema()) {
+      for (const f of section.fields) {
+        if (f.min === undefined && f.max === undefined) continue
+        bounded.set(section.namespaceId === 'general' ? `general.${f.key}` : `${section.namespaceId}.${f.kind}s.${f.key}`, f)
+      }
+    }
+    for (const [key, value] of entries) {
+      const f = bounded.get(key)
+      if (!f || value == null || value === '') continue
+      const n = Number(value)
+      if (Number.isFinite(n) && (f.min === undefined || n >= f.min) && (f.max === undefined || n <= f.max)) continue
+      return `${key} must be a number between ${f.min ?? '-∞'} and ${f.max ?? '∞'}`
+    }
+    return null
+  }
+
   /** Settings file for a write: workspace scope → `<project>/.halo/settings.yaml`
    *  (same projectId contract as files.ts: an absolute path that exists on
    *  disk — without it a write lands in `<anything>/.halo/settings.yaml`),
@@ -317,6 +338,8 @@ export function createSettingsRoutes() {
       const offending = rejectGlobalOnlyAtWorkspace('workspace', flattenDotted(body.settings))
       if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
     }
+    const outOfRange = rejectOutOfRange(flattenDotted(body.settings).map((k) => [k, readLeaf(body.settings, k)]))
+    if (outOfRange) return c.json({ error: outOfRange }, 400)
     await writeSettingsFile(resolved.filePath, body.settings)
 
     notifySettingsChange()
@@ -336,6 +359,8 @@ export function createSettingsRoutes() {
     if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
     const offending = rejectGlobalOnlyAtWorkspace(body.scope, [body.key])
     if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
+    const outOfRange = rejectOutOfRange([[body.key, body.value]])
+    if (outOfRange) return c.json({ error: outOfRange }, 400)
     const { filePath } = resolved
 
     const current = await readSettingsFile(filePath)

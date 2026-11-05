@@ -89,11 +89,12 @@ function logTickError(err: unknown): void {
  * via the interval set up in `startEvoTicker`.
  */
 export async function runTick(): Promise<void> {
-  // No level gate here: the evolution.level (L0/L1) only decides how a run gets
-  // *enqueued* (L0 = manual /note only; L1 = also auto on pre-compact). Once a
-  // row is queued, processing it is level-independent — gating the ticker on L1
-  // used to silently starve manually-queued /note runs whenever the workspace
-  // sat at L0. An empty queue makes every step below a cheap no-op.
+  // No level gate here: evolution.level decides how a run gets *enqueued*
+  // (L0 = manual /evo only; L1+ = also auto on pre-compact) and, at L2/L3,
+  // whether the wrapper queues its apply itself — not whether queued rows are
+  // processed. Gating the ticker on the level used to silently starve
+  // manually-queued runs whenever the server sat at L0. An empty queue makes
+  // every step below a cheap no-op.
   markTimeouts()
   startPendingRuns()
   startPendingApplies()

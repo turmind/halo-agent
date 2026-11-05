@@ -33,6 +33,9 @@ export interface ManifestFile {
   before?: string | null
   /** sha256 of what was published. Absent in old manifests. */
   after?: string
+  /** Byte-equal to the global file it now overrides: copied only to complete
+   *  a new workspace override dir, not an effective change. */
+  unchanged?: true
 }
 
 export interface ApplyManifest {
@@ -92,6 +95,15 @@ export function inspectRollback(workspacePath: string, applyId: string): { manif
     files.push({ rel: f.rel, kind: f.kind, state })
   }
   return { manifest, files }
+}
+
+/** Posix rels an apply effectively changed — MANIFEST minus `unchanged`
+ *  copies. null = no readable manifest. */
+export function readPublishedFiles(workspacePath: string, applyId: string): string[] | null {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(wsEvoHistoryDir(workspacePath, applyId), 'MANIFEST.json'), 'utf-8')) as ApplyManifest
+    return m.files.filter((f) => !f.unchanged).map((f) => f.rel.split(path.sep).join('/'))
+  } catch { return null }
 }
 
 const IN_FLIGHT_APPLY_STATUSES = ['pending', 'running', 'syncing']

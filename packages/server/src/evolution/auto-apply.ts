@@ -25,8 +25,9 @@ export type ChangeCategory = 'prompt' | 'capability' | 'manual'
  *  the live pre-patch content (null = none), `after` the sandbox content
  *  (null = the sandbox dropped a file that is live). `newDir` = the file's
  *  agent / skill / prompts-scope dir exists neither in the workspace nor in
- *  global, i.e. the patch creates it. */
-export interface FileChange { rel: string; before: string | null; after: string | null; newDir: boolean }
+ *  global, i.e. the patch creates it. `internalAgent` = an `agents/<id>/`
+ *  file whose live agent.yaml says `internal: true`. */
+export interface FileChange { rel: string; before: string | null; after: string | null; newDir: boolean; internalAgent?: boolean }
 export interface FileClass { rel: string; category: ChangeCategory; reason?: string }
 export interface Classification { category: ChangeCategory | 'none'; files: FileClass[] }
 
@@ -66,6 +67,13 @@ interface Baseline {
   newDir: boolean
   /** `<top>/<id>` (native separators) when that dir's live copy is global. */
   globalDir?: string
+  internalAgent?: boolean
+}
+
+/** The live agent dir's agent.yaml has `internal: true` (unreadable → no). */
+function isInternalAgentDir(dir: string): boolean {
+  const raw = readOrNull(path.join(dir, 'agent.yaml'))
+  return raw !== null && parseYamlLoose(raw.toString('utf-8'))?.internal === true
 }
 
 /** Where the live pre-patch version of native-separator `rel` sits. */
@@ -73,8 +81,9 @@ function liveBaseline(dirs: { mainHalo: string; globalHalo: string }, rel: strin
   const parts = rel.split(path.sep)
   if (!OVERRIDE_DIRS.has(parts[0]) || parts.length < 3) return { file: path.join(dirs.mainHalo, rel), newDir: false }
   const dirRel = path.join(parts[0], parts[1])
-  if (isDir(path.join(dirs.mainHalo, dirRel))) return { file: path.join(dirs.mainHalo, rel), newDir: false }
-  if (isDir(path.join(dirs.globalHalo, dirRel))) return { file: path.join(dirs.globalHalo, rel), newDir: false, globalDir: dirRel }
+  const internal = (root: string) => parts[0] === 'agents' && isInternalAgentDir(path.join(root, dirRel))
+  if (isDir(path.join(dirs.mainHalo, dirRel))) return { file: path.join(dirs.mainHalo, rel), newDir: false, internalAgent: internal(dirs.mainHalo) }
+  if (isDir(path.join(dirs.globalHalo, dirRel))) return { file: path.join(dirs.globalHalo, rel), newDir: false, globalDir: dirRel, internalAgent: internal(dirs.globalHalo) }
   return { file: null, newDir: true }
 }
 
@@ -82,7 +91,10 @@ function liveBaseline(dirs: { mainHalo: string; globalHalo: string }, rel: strin
 function fileChange(rel: string, base: Baseline, after: Buffer): FileChange | null {
   const before = base.file ? readOrNull(base.file) : null
   if (before && before.equals(after)) return null
-  return { rel: toPosix(rel), before: before?.toString('utf-8') ?? null, after: after.toString('utf-8'), newDir: base.newDir }
+  return {
+    rel: toPosix(rel), before: before?.toString('utf-8') ?? null, after: after.toString('utf-8'), newDir: base.newDir,
+    ...(base.internalAgent ? { internalAgent: true } : {}),
+  }
 }
 
 /**
@@ -320,9 +332,10 @@ export function classifyChange(c: FileChange): FileClass {
     return manual(c.rel, 'unrecognized')
   }
   if (top === 'agents' && parts.length >= 3) {
-    // Internal agents include the scorer and the apply agent — evo must never
-    // auto-edit the pipeline that grades it.
-    if (id.startsWith('__')) return manual(c.rel, 'internal_agent')
+    // Internal agents (live `internal: true`: the evo pipeline, which must
+    // never auto-edit what grades it, and goal) — plus any `__` id, the
+    // platform's naming for them, in case a copy lost the flag.
+    if (c.internalAgent || id.startsWith('__')) return manual(c.rel, 'internal_agent')
     if (c.newDir) return manual(c.rel, 'new_agent')
     if (parts.length === 3 && parts[2] === 'AGENT.md') return { rel: c.rel, category: 'prompt' }
     if (parts.length === 3 && parts[2] === 'agent.yaml') {

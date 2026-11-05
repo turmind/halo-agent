@@ -68,6 +68,16 @@ describe('notifyAutoApplied', () => {
     expect(sent).toHaveLength(1)
   })
 
+  it('lists only effectively changed files (MANIFEST `unchanged` copies dropped)', () => {
+    seedApply('a1')
+    fs.writeFileSync(path.join(wsEvoHistoryDir(ws, 'a1'), 'MANIFEST.json'), JSON.stringify({ files: [
+      { rel: path.join('agents', 'helper', 'agent.yaml'), kind: 'new', unchanged: true },
+      { rel: path.join('agents', 'helper', 'AGENT.md'), kind: 'new' },
+    ] }))
+    notifyAutoApplied(db)
+    expect(sent[0].text).toContain('a change to agents/helper/AGENT.md (score')
+  })
+
   it('after a "restart" (fresh db handle, fresh registry) nothing is re-sent', () => {
     seedApply('a1')
     notifyAutoApplied(db)

@@ -92,6 +92,10 @@ export interface SchemaField {
   restartRequired?: boolean
   /** UI hint: render inside the collapsed "Advanced" area. */
   advanced?: boolean
+  /** For `type: 'int' | 'float'` — inclusive bounds; PUT / PATCH reject a
+   *  value outside them with 400. */
+  min?: number
+  max?: number
 }
 
 export interface SchemaSection {
@@ -176,7 +180,7 @@ function generalSection(): SchemaSection {
       // global-only — the worker / ticker live in the server process and
       // would have to reload mid-flight if a workspace could override them.
       { key: 'evolution.level', type: 'enum', options: ['L0', 'L1', 'L2', 'L3'], globalOnly: true, description: 'Self-evolution capability ladder. L0: manual only — drafts via /evo, manual approve/reject. L1: L0 plus automatic drafting on pre-compact. L2: L1 plus auto-applying prompt-only changes that score above evolution.auto_apply_threshold. L3: L2 plus auto-applying capability changes (agent.yaml tools / model, skill invocation). Auto-applied changes still pass the regression check and can be rolled back from the Evolution tab. Queued runs always execute regardless of level.', description_zh: '自我进化等级。L0：仅手动——通过 /evo 起草，手动 approve/reject。L1：在 L0 基础上，压缩前（pre-compact）自动起草。L2：在 L1 基础上，对评分超过 evolution.auto_apply_threshold 的纯提示词改动自动应用。L3：在 L2 基础上，对能力类改动（agent.yaml 的工具/模型、skill 调用方式）也自动应用。自动应用照样过回归检查，可在 Evolution 页回滚。已排队的 run 不受等级影响，始终执行。', default: 'L0' },
-      { key: 'evolution.auto_apply_threshold', type: 'int', globalOnly: true, description: 'Minimum average score (0–100) for auto-apply at L2/L3. Also required: confidence high, behavior ≥ 70, lint 100, all sandbox checks passed. Ignored at L0/L1.', description_zh: 'L2/L3 自动应用要求的最低平均分（0–100）。另需同时满足：confidence 为 high、behavior ≥ 70、lint 为 100、沙箱检查全部通过。L0/L1 下忽略。', default: '80' },
+      { key: 'evolution.auto_apply_threshold', type: 'int', min: 0, max: 100, globalOnly: true, description: 'Minimum average score (0–100) for auto-apply at L2/L3. Also required: confidence high, behavior ≥ 70, lint 100, all sandbox checks passed. Ignored at L0/L1.', description_zh: 'L2/L3 自动应用要求的最低平均分（0–100）。另需同时满足：confidence 为 high、behavior ≥ 70、lint 为 100、沙箱检查全部通过。L0/L1 下忽略。', default: '80' },
       { key: 'evolution.max_concurrent_run', type: 'int', globalOnly: true, description: 'Max concurrent evo run wrappers (drafting patches).', description_zh: '同时运行的 evo run wrapper 上限（起草 patch）。', default: '1' },
       { key: 'evolution.max_concurrent_apply', type: 'int', globalOnly: true, description: 'Max concurrent evo apply wrappers (merging patches).', description_zh: '同时运行的 evo apply wrapper 上限（合并 patch）。', default: '1' },
       { key: 'evolution.run_timeout_minutes', type: 'int', globalOnly: true, description: 'Heartbeat timeout for run wrappers. The wrapper writes a heartbeat every 60s for as long as it lives, so exceeding this means the wrapper process died — the row is requeued (or marked timeout past max_attempts). This is dead-wrapper detection latency, NOT a budget for slow models; the per-phase model budget is the wrapper-internal cap (draft 60min, other phases 45min).', description_zh: 'run wrapper 心跳超时（分钟）。wrapper 存活期间每 60 秒写一次心跳，超时即视为 wrapper 进程已死，任务重排（超过 max_attempts 则标 timeout）。这是死 wrapper 的检测延迟，不是慢模型的运行预算——单阶段模型预算是 wrapper 内部的上限（起草 60 分钟，其余阶段 45 分钟）。', default: '12' },

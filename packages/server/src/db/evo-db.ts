@@ -6,11 +6,19 @@
  * patches, sandboxes) live under `<ws>/.halo/evo/` on disk and are
  * referenced from these rows by id + workspace_path.
  *
- * Lifecycle (single source of truth — see plans/self-evolution.md):
- *   evolution_runs:    pending → running → awaiting_review → approved → applied
- *                                                          → rejected
- *                                                          → failed | timeout
- *   evolution_applies: pending → running → complete | failed | timeout
+ * Lifecycle (design/evolution.md):
+ *   evolution_runs:
+ *     pending → running → awaiting_review → approved → applied → rolled_back
+ *     running → approved            (L2/L3 auto: the wrapper queues the apply)
+ *     running → failed | timeout
+ *     awaiting_review → rejected
+ *     approved → awaiting_review    (its auto apply failed — failApply)
+ *     any but running / pending / applied → pending   (retry route; approved
+ *                                   only once its latest apply failed)
+ *   evolution_applies:
+ *     pending → running → syncing → applied → rolled_back
+ *     running | syncing → failed | timeout
+ *     approved_by: 'reviewer' (approve route) | 'auto' (wrapper)
  */
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'

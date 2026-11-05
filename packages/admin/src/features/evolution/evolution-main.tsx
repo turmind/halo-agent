@@ -100,7 +100,7 @@ function RunDetailPane({ id }: { id: string }) {
   if (error) return <EmptyState label={t('cron.error', { error })} />
   if (!detail) return <EmptyState label={t('evolution.list.noRun')} />
 
-  const { run, autoApply, observation, rollback, patchMd, scoreJson, skipReasonMd, snapshotSummary, wrapperLog, subCliLog } = detail
+  const { run, autoApply, observation, rollback, publishedFiles, patchMd, scoreJson, skipReasonMd, snapshotSummary, wrapperLog, subCliLog } = detail
   const isAwaiting = run.status === 'awaiting_review'
   // An approved run whose apply hit the regression gate (or timed out) stays
   // `approved` by design — the run row never moves. Without surfacing the
@@ -273,7 +273,7 @@ function RunDetailPane({ id }: { id: string }) {
               })}
             </div>
             <div className="mt-1">
-              {t('evolution.auto.files')} <span className="font-mono">{autoApply.files.map((f) => f.rel).join(', ')}</span>
+              {t('evolution.auto.files')} <span className="font-mono">{(publishedFiles ?? autoApply.files.map((f) => f.rel)).join(', ')}</span>
             </div>
           </div>
         )}
@@ -474,7 +474,7 @@ function RunDetailPane({ id }: { id: string }) {
       )}
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
-        {observation && <ObservationBlock run={run} observation={observation} autoApply={autoApply} scoreJson={scoreJson} />}
+        {observation && <ObservationBlock run={run} observation={observation} autoApply={autoApply} publishedFiles={publishedFiles} scoreJson={scoreJson} />}
         {skipReasonMd && (
           <div className="mb-4">
             <div className="mb-2 text-sm font-medium">{t('evolution.skip.title')}</div>
@@ -527,10 +527,11 @@ function haloVersion(): Promise<string | null> {
 
 /** The draft's Larger observation, plus prefilled GitHub-issue links: the
  *  workspace's own repo (origin on github.com) and Halo's. */
-function ObservationBlock({ run, observation, autoApply, scoreJson }: {
+function ObservationBlock({ run, observation, autoApply, publishedFiles, scoreJson }: {
   run: RunDetail['run']
   observation: string
   autoApply: RunDetail['autoApply']
+  publishedFiles: RunDetail['publishedFiles']
   scoreJson: RunDetail['scoreJson']
 }) {
   const t = useT()
@@ -557,7 +558,7 @@ function ObservationBlock({ run, observation, autoApply, scoreJson }: {
   const issueUrl = (repo: GithubRepo) => buildIssueUrl(repo, {
     observation,
     runId: run.id,
-    files: autoApply?.files.map((f) => f.rel) ?? [],
+    files: publishedFiles ?? autoApply?.files.map((f) => f.rel) ?? [],
     score,
     haloVersion: version,
     truncatedNote: t('evolution.observation.truncated', { id: run.id }),

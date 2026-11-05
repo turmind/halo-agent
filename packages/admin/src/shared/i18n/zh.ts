@@ -850,7 +850,7 @@ export const zh: Record<string, string> = {
   'evolution.observation.issue': '提交 GitHub issue：',
   'evolution.observation.issueWorkspace': '本工作区仓库（{repo}）',
   'evolution.observation.issueHalo': 'Halo（{repo}）',
-  'evolution.observation.privacy': '会在 github.com 打开预填好的表单，在那里提交之前不会发出任何内容。提交前请检查文本，其中可能引用了工作区文件的内容。',
+  'evolution.observation.privacy': '会在 github.com 打开预填好的表单，在那里提交之前不会发出任何内容。提交前请检查文本，其中可能引用了工作区文件或对话的内容。',
   'evolution.observation.truncated': '\n\n…（已截断，全文见 Evolution 页 run {id}）',
   'evolution.action.rollback': '回滚',
   'evolution.rollback.confirm': '回滚这次应用？它发布的文件会恢复成应用前的内容（新增的文件会被删除），run 状态变为已回滚。',
