@@ -22,8 +22,7 @@
  * array, or changes the array length. The cache is keyed by file path and
  * validated against the file's ino / size / mtime at the write itself — an
  * append / tail write checks the fstat of the fd it writes through, a full
- * rewrite stats first — so a write by another process (cron `halo cli` child,
- * CLI/TUI) forces a full rewrite from this process's memory, the same
+ * rewrite stats first — so a write by another process (CLI / TUI) forces a full rewrite from this process's memory, the same
  * last-writer-wins as 1.x. A save with nothing new touches nothing, so that
  * rewrite lands with this process's next real change, not its next save.
  */

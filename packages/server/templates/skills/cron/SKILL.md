@@ -57,7 +57,7 @@ Sensible defaults if user didn't say:
 | workspace  | the user's current workspace (`pwd` / `/workspace` output)    |
 | agent      | `default`                                                     |
 | timezone   | leave unset (host time)                                       |
-| targets    | none (log only — the run shows in admin Cron tab)             |
+| targets    | none (not pushed — the result is in the run history and session) |
 | label      | summarize from prompt + schedule                              |
 | timeout    | leave unset (3600s) — see `--timeout-sec` below               |
 | session    | leave unset (the job's own session) — see `--session` below   |
@@ -100,7 +100,9 @@ again in the admin Cron tab and `get`. A GitHub webhook uses it as its
 secret (`X-Hub-Signature-256`); other senders send
 `Authorization: Bearer <secret>`. Each request body becomes a message
 in the job's session, marked as data; events that arrive while a run is
-in flight join that run. Excludes `--session` and an active window. On
+in flight join that run. Tell the sender to set `X-GitHub-Delivery` (GitHub
+does) or `Idempotency-Key`: without one, the same body is processed only
+once per 10 minutes. A repeat of an event whose run failed runs again. Excludes `--session` and an active window. On
 `update`: `--webhook on` switches to it (an existing secret is kept),
 `--schedule …` / `--run-at …` switches away (the secret is dropped).
 
@@ -226,8 +228,8 @@ digest", construct the target with `{{channel.chat_id}}`:
 **Admin-UI cron jobs.** When invoked from the admin web UI there's no
 chat context (`{{channel.*}}` is empty). Either:
   - Tell the user "the cron will run silently — its result shows up in
-    the cron log but won't be pushed anywhere. Add a target if you want
-    a notification."
+    the run history and the job's session but won't be pushed anywhere.
+    Add a target if you want a notification."
   - Or ask for a chatId explicitly and pass it as a target.
 
 ### 4. Apply the change
@@ -248,7 +250,7 @@ shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
   --targets {{channel.type}}:{{channel.account_id}}:{{channel.chat_id}}
 ```
 
-**Create (silent — no push, just appears in the cron log):**
+**Create (silent — not pushed; the result is in the run history and session):**
 ```bash
 shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
   --label "Nightly index rebuild" \

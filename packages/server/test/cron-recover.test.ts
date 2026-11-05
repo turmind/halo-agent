@@ -142,12 +142,12 @@ describe('recoverRuns — in-process runs', () => {
     expect(getRun('run-ar').failureReason).toContain('not resumed')
   })
 
-  it('died before the pointer was written → failed "before the run reached its session"', async () => {
+  it('died before the pointer was written → failed "interrupted by server restart"', async () => {
     insertJob('cron-np')
     leftover('run-np', 'cron-np', 'cron-np', { pointer: false, ledger: false })
     boot()
     await recoverRuns()
-    expect(getRun('run-np')).toMatchObject({ status: 'failed', failureReason: 'interrupted by server restart (before the run reached its session)' })
+    expect(getRun('run-np')).toMatchObject({ status: 'failed', failureReason: 'interrupted by server restart' })
   })
 
   it('pointer superseded by a newer owner → failed, the newer pointer untouched', async () => {
@@ -156,7 +156,7 @@ describe('recoverRuns — in-process runs', () => {
     writeReplyTo(getWorkspaceDb(ws).db, 'cron-ss', { a2a: 'task-1' })
     boot()
     await recoverRuns()
-    expect(getRun('run-ss').failureReason).toContain('before the run reached its session')
+    expect(getRun('run-ss').failureReason).toBe('interrupted by server restart')
     expect(readReplyTo(getWorkspaceDb(ws).db, 'cron-ss')).toEqual({ a2a: 'task-1' })
   })
 

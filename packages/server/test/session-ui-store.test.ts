@@ -216,7 +216,7 @@ describe('SessionUIStore UIState access', () => {
 
 describe('SessionUIStore dirty flag (cron-session UI-log truncation guard)', () => {
   /** Host whose db knows the session and whose disk has an existing log —
-   *  the shape of subscribing to a session a cron `halo cli` child drives. */
+   *  the shape of subscribing to a session another process (TUI / `halo cli -s`) drives. */
   function makeSeededHost(over: Partial<Host> = {}) {
     diskMessages.value = [
       { id: 'm1', type: 'user', role: 'user', content: 'from cli', timestamp: 1 } satisfies SessionMessage,
@@ -230,7 +230,7 @@ describe('SessionUIStore dirty flag (cron-session UI-log truncation guard)', () 
   it('a state seeded from disk for viewing is NOT dirty — the WS detach save must skip it', () => {
     const { host } = makeSeededHost()
     const store = new SessionUIStore(host)
-    // Subscribe path for a session this process isn't driving (cron cli child).
+    // Subscribe path for a session this process isn't driving (TUI / `halo cli -s`).
     const state = store.prepareForView('cron-1', false)
     expect(state.messageLog).toHaveLength(1)  // seed really happened
     // Clean: writing this snapshot back would overwrite the cli's newer

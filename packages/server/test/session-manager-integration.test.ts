@@ -165,7 +165,7 @@ describe('query store wired into the real manager (second knife)', () => {
   })
 })
 
-describe('forgetExternalWrite — drop stale in-memory copies after a cron cli write', () => {
+describe('forgetExternalWrite — drop stale in-memory copies after another process\'s write', () => {
   /** Minimal in-memory session stub — canDropTree only reads these. */
   function putSession(id: string, busy = false): void {
     ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, {
@@ -181,7 +181,7 @@ describe('forgetExternalWrite — drop stale in-memory copies after a cron cli w
     putSession('rootE>sub')
     putSession('rootEx')  // prefix-alike but a different tree — must survive
 
-    // A second process (the cron `halo cli` child) appends a turn to the same file.
+    // A second process (TUI / `halo cli -s`) appends a turn to the same file.
     const other = new SessionManager(ws)
     other.getUIState('rootE')
     other.appendUserMessage('rootE', 'from cron')

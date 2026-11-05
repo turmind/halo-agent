@@ -18,7 +18,7 @@
  * skillSourceDir; writers still only ever write global or workspace.
  *
  * Read from disk on every call, never from the server's in-memory extension
- * registry, so CLI / TUI / cron child processes see exactly what the server
+ * registry, so CLI / TUI processes see exactly what the server
  * sees. Kept free of agent-loader imports: settings-schema needs this, and
  * agent-loader → agent-loop → config → settings-schema would close a cycle.
  */

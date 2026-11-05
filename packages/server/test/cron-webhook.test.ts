@@ -8,7 +8,7 @@ import { createCronDb, setCronDb, cronEvents, cronJobs, cronRuns, type CronDb } 
 import { createRunsDb, setRunsDb, insertRunning } from '../src/db/runs-db.js'
 import { getWorkspaceDb } from '../src/db/index.js'
 import { agentSessions } from '../src/db/schema.js'
-import { readReplyTo, writeReplyTo } from '../src/agents/relay.js'
+import { clearReplyTo, readReplyTo, writeReplyTo } from '../src/agents/relay.js'
 import { registerCronDispatcher, type DispatchResult } from '../src/cron/dispatcher.js'
 import { recoverRuns, scheduleJob, _inflight, _runs } from '../src/cron/runner.js'
 import { MAX_PENDING_EVENTS } from '../src/cron/events.js'
@@ -142,6 +142,38 @@ describe('POST /cron-hooks/:jobId — receiver', () => {
     expect(eventsOf('cron-d')).toHaveLength(2)
   })
 
+  it('without a delivery id the same body is a duplicate for 10 minutes only', async () => {
+    insertJob('cron-win')
+    const auth = { authorization: `Bearer ${SECRET}` }
+    expect((await post('cron-win', '{"w":1}', auth)).status).toBe(202)
+    await until(() => settled('cron-win'))
+    expect(await (await post('cron-win', '{"w":1}', auth)).json()).toMatchObject({ duplicate: true })
+    expect(eventsOf('cron-win')[0].deliveryId).toMatch(/^sha256:[0-9a-f]{64}#\d+$/)
+    // 10 min 1 s later: a new event.
+    db.update(cronEvents).set({ receivedAt: Date.now() - 601_000 }).where(eq(cronEvents.jobId, 'cron-win')).run()
+    expect((await post('cron-win', '{"w":1}', auth)).status).toBe(202)
+    await until(() => runsOf('cron-win').length === 2 && settled('cron-win'))
+    expect(eventsOf('cron-win').map((e) => e.state)).toEqual(['done', 'done'])
+  })
+
+  it('a failure before the run reaches its session fails the events (not left pending); a redelivery of a failed event runs again', async () => {
+    insertJob('cron-gone', { workspacePath: path.join(tmpHome, 'missing') })
+    const auth = { authorization: `Bearer ${SECRET}` }
+    expect((await post('cron-gone', '{"g":1}', { ...auth, 'x-github-delivery': 'g1' })).status).toBe(202)
+    await until(() => settled('cron-gone'))
+    expect(runsOf('cron-gone')).toEqual([expect.objectContaining({ status: 'failed', failureReason: expect.stringContaining('workspace not found') })])
+    expect(eventsOf('cron-gone')).toEqual([expect.objectContaining({ state: 'failed', runId: runsOf('cron-gone')[0].id })])
+    db.update(cronJobs).set({ workspacePath: ws }).where(eq(cronJobs.id, 'cron-gone')).run()
+    const again = await post('cron-gone', '{"g":1}', { ...auth, 'x-github-delivery': 'g1' })
+    expect(again.status).toBe(202)
+    expect(await again.json()).toMatchObject({ redelivered: true, eventId: eventsOf('cron-gone')[0].id })
+    await until(() => runsOf('cron-gone').length === 2 && settled('cron-gone'))
+    expect(eventsOf('cron-gone')).toEqual([expect.objectContaining({ state: 'done' })])
+    expect(h.inputs[0]).toContain('delivery g1')
+    // Done now: a repeat is a duplicate again.
+    expect(await (await post('cron-gone', '{"g":1}', { ...auth, 'x-github-delivery': 'g1' })).json()).toMatchObject({ duplicate: true })
+  })
+
   it('pending cap: past MAX_PENDING_EVENTS → 429', async () => {
     insertJob('cron-cap', { enabled: 1 })
     // Another owner holds the session, so everything stays pending.
@@ -175,6 +207,31 @@ describe('startOrInject — batching', () => {
     expect(eventsOf('cron-batch').map((e) => e.state)).toEqual(['done', 'done'])
     expect(new Set(eventsOf('cron-batch').map((e) => e.runId)).size).toBe(1)
     expect(sent).toEqual(['first\n\nboth handled'])
+  })
+
+  it('three events, the third arriving during the merged turn: every turn\'s reply is dispatched (batch-boundary complete is not an idle point)', async () => {
+    insertJob('cron-three')
+    let release1!: () => void
+    let release2!: () => void
+    h.turns.push(
+      { gate: new Promise<void>((r) => { release1 = r }), reply: 'first' },
+      { gate: new Promise<void>((r) => { release2 = r }), reply: 'second' },
+      { reply: 'third' },
+    )
+    const auth = { authorization: `Bearer ${SECRET}` }
+    expect((await post('cron-three', '{"n":1}', { ...auth, 'x-request-id': 't1' })).status).toBe(202)
+    await until(() => h.inputs.length === 1)
+    expect((await post('cron-three', '{"n":2}', { ...auth, 'x-request-id': 't2' })).status).toBe(202)
+    await until(() => eventsOf('cron-three').every((e) => e.state === 'injected' && e.stamp))
+    release1()
+    await until(() => h.inputs.length === 2)
+    expect((await post('cron-three', '{"n":3}', { ...auth, 'x-request-id': 't3' })).status).toBe(202)
+    await until(() => eventsOf('cron-three').length === 3 && eventsOf('cron-three').every((e) => e.state === 'injected' && e.stamp))
+    release2()
+    await until(() => settled('cron-three'))
+    expect(h.inputs[2]).toContain('delivery t3')
+    expect(runsOf('cron-three')).toEqual([expect.objectContaining({ status: 'succeeded', output: 'first\n\nsecond\n\nthird' })])
+    expect(eventsOf('cron-three').map((e) => e.state)).toEqual(['done', 'done', 'done'])
   })
 
   it('an event waking a run that waits on a sub-agent keeps the reply it had given', async () => {
@@ -227,6 +284,20 @@ describe('startOrInject — batching', () => {
     expect(h.inputs[0]).toContain('delivery o1')
     expect(h.inputs[0]).toContain('delivery o2')
     expect(eventsOf('cron-own').map((e) => e.state)).toEqual(['done', 'done'])
+  })
+
+  it('the owner releasing the session (clearReplyTo) starts the waiting events\' run — no new event needed', async () => {
+    insertJob('cron-rel')
+    h.seedSession('cron-rel')
+    writeReplyTo(h.sm.getDb(), 'cron-rel', { a2a: 'task-1' })
+    expect((await post('cron-rel', '{"n":1}', { authorization: `Bearer ${SECRET}`, 'x-request-id': 'r1' })).status).toBe(202)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(eventsOf('cron-rel')[0].state).toBe('pending')
+    clearReplyTo(h.sm.getDb(), 'cron-rel')
+    await until(() => settled('cron-rel'))
+    expect(runsOf('cron-rel')).toEqual([expect.objectContaining({ triggerKind: 'webhook', status: 'succeeded' })])
+    expect(h.inputs[0]).toContain('delivery r1')
+    expect(eventsOf('cron-rel')[0].state).toBe('done')
   })
 
   it('events arriving after a run ended its turn start the next run (kickPendingEvents)', async () => {
@@ -364,6 +435,22 @@ describe('REST: webhook mode', () => {
     expect(row()).toMatchObject({ webhookSecret: null, schedule: '0 8 * * *' })
     expect((await json('POST', `/cron/jobs/${id}/webhook-secret`)).status).toBe(400)
     expect((await json('PUT', `/cron/jobs/${id}`, { webhook: true, schedule: '0 8 * * *' })).status).toBe(400)
+  })
+
+  it('disabling the job, or switching it to a schedule, fails its waiting events', async () => {
+    insertJob('cron-dis')
+    insertJob('cron-mode')
+    for (const id of ['cron-dis', 'cron-mode']) {
+      h.seedSession(id)
+      writeReplyTo(h.sm.getDb(), id, { a2a: 'busy' })
+      expect((await post(id, '{}', { authorization: `Bearer ${SECRET}` })).status).toBe(202)
+    }
+    await new Promise((r) => setTimeout(r, 50))
+    expect([...eventsOf('cron-dis'), ...eventsOf('cron-mode')].map((e) => e.state)).toEqual(['pending', 'pending'])
+    expect((await json('PUT', '/cron/jobs/cron-dis', { enabled: false })).status).toBe(200)
+    expect((await json('PUT', '/cron/jobs/cron-mode', { schedule: '0 8 * * *' })).status).toBe(200)
+    expect([...eventsOf('cron-dis'), ...eventsOf('cron-mode')].map((e) => e.state)).toEqual(['failed', 'failed'])
+    expect(runsOf('cron-dis')).toEqual([])
   })
 
   it('deleting the job drops its events (pending ones too)', async () => {

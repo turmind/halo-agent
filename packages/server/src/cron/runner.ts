@@ -42,7 +42,7 @@ import { resolveWorkingDir } from '../agents/working-dir.js'
 import { readReplyTo, takeReplyTo, clearReplyTo, setCronRunDoor, type ReplyTo } from '../agents/relay.js'
 import { nudgesSettled } from '../agents/run-ledger.js'
 import type { AgentSessionEvent } from '../agents/agent-events.js'
-import { claimPendingEvents, countPendingEvents, eventText, jobsWithPendingEvents, requeueEvents, runEvents, settleRunEvents, stampEvents, type CronEvent } from './events.js'
+import { claimPendingEvents, countPendingEvents, eventText, failPendingEvents, jobsWithPendingEvents, requeueEvents, runEvents, settleRunEvents, stampEvents, type CronEvent } from './events.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -387,19 +387,21 @@ export async function recoverRuns(opts?: { graceMs?: number }): Promise<void> {
   for (const row of rows) _inflight.add(row.jobId)
   for (const row of rows) {
     const job = db.select().from(cronJobs).where(eq(cronJobs.id, row.jobId)).get()
+    // remove after 2.3.0 (legacy pid rows: see reapLegacyRun)
     if (row.pid != null) {
       reapLegacyRun(row, job, graceMs)
       continue
     }
-    // Released unless the run resumes (then its end releases it); its
-    // webhook events go back to pending for the next run.
-    let resumed = false
+    // Released (its webhook events back to pending for the next run) unless
+    // the run resumed or already ended by its own path — then that path
+    // (finishRun / cancelRun) settles the events and releases the job.
+    let outcome: 'resumed' | 'ended' | 'failed' = 'failed'
     try {
-      resumed = await recoverInProcessRun(row, job)
+      outcome = await recoverInProcessRun(row, job)
     } catch (err) {
       failRecovered(row, `interrupted by server restart (recovery failed: ${err instanceof Error ? err.message : String(err)})`)
     } finally {
-      if (!resumed) {
+      if (outcome === 'failed') {
         requeueEvents({ runId: row.id })
         _inflight.delete(row.jobId)
       }
@@ -412,34 +414,37 @@ export async function recoverRuns(opts?: { graceMs?: number }): Promise<void> {
   }
 }
 
-async function recoverInProcessRun(row: typeof cronRuns.$inferSelect, job: typeof cronJobs.$inferSelect | undefined): Promise<boolean> {
+async function recoverInProcessRun(row: typeof cronRuns.$inferSelect, job: typeof cronJobs.$inferSelect | undefined): Promise<'resumed' | 'ended' | 'failed'> {
+  // An earlier row's await let this run's nudged turn end (finishRun).
+  if (_finishing.has(row.id) || !isRunning(row.id)) return 'ended'
   const ws = row.workspacePath ?? job?.workspacePath
   const sid = row.sessionId
   if (!ws || !fs.existsSync(ws)) {
     failRecovered(row, `interrupted by server restart (workspace not found: ${ws ?? '?'})`)
-    return false
+    return 'failed'
   }
   if (!sid) {
     failRecovered(row, 'interrupted by server restart (before the run reached its session)')
-    return false
+    return 'failed'
   }
   // peek, not getOrCreate: a manager the boot sweep didn't build (runtime
   // owned elsewhere, no ledger row) must not be cached here as a non-owner.
   const host = _sessionRegistry?.peek(ws)
   const sdb = host?.getDb() ?? (fs.existsSync(path.join(ws, '.halo', 'halo.db')) ? getWorkspaceDb(ws).db : null)
   const to = sdb ? readReplyTo(sdb, sid) : null
+  // Not (or no longer) its pointer: cut off before takeReplyTo, or superseded.
   if (!to || !('cron' in to) || to.cron !== row.id) {
-    failRecovered(row, 'interrupted by server restart (before the run reached its session)')
-    return false
+    failRecovered(row, 'interrupted by server restart')
+    return 'failed'
   }
   // Keyed by the manager's realpath'd root (run-ledger inFlightNudges).
   if (host) await nudgesSettled(fs.realpathSync(ws))
   // The nudge's turn may have ended (finishRun claimed the row) during the await.
-  if (_finishing.has(row.id) || !isRunning(row.id)) return false
+  if (_finishing.has(row.id) || !isRunning(row.id)) return 'ended'
   if (!host || !host.hasActiveWorkInTree(sid)) {
     clearOwnPointer(sdb!, sid, row.id)
     failRecovered(row, 'interrupted by server restart (not resumed: this server does not own the workspace runtime, or the session could not be woken)')
-    return false
+    return 'failed'
   }
   const timeoutSec = job?.timeoutSec ?? RUN_TIMEOUT_SEC
   const ctx = trackRun({ runId: row.id, jobId: row.jobId, sessionId: sid, workspacePath: ws, host }, row.startedAt + timeoutSec * 1000 - Date.now(), timeoutSec)
@@ -453,7 +458,7 @@ async function recoverInProcessRun(row: typeof cronRuns.$inferSelect, job: typeo
       console.warn(`[Cron] run ${row.id}: redelivering webhook event ${ev.id} failed: ${err instanceof Error ? err.message : String(err)}`)
     })
   }
-  return true
+  return 'resumed'
 }
 
 function failRecovered(row: typeof cronRuns.$inferSelect, reason: string): void {
@@ -463,7 +468,7 @@ function failRecovered(row: typeof cronRuns.$inferSelect, reason: string): void 
   }
 }
 
-/** See recoverRuns' legacy branch. */
+/** See recoverRuns' legacy branch. // remove after 2.3.0 */
 function reapLegacyRun(row: typeof cronRuns.$inferSelect, job: typeof cronJobs.$inferSelect | undefined, graceMs: number): void {
   const { id: runId, jobId, pid } = row
   // The session the orphan was spawned on: recorded on the run row (the
@@ -537,7 +542,10 @@ function trackRun(base: Pick<RunCtx, 'runId' | 'jobId' | 'sessionId' | 'workspac
     }
     // A retried model call: what it streamed is dropped.
     else if (e.type === 'call_discarded') ctx.turnFinal = ''
-    else if (e.type === 'complete') {
+    // A batch-boundary complete (drainQueue: another merged turn follows) is
+    // no idle point — the next `queued_message` decides whether this turn's
+    // reply is kept.
+    else if (e.type === 'complete' && !e.batchBoundary) {
       ctx.idleFinal = ctx.turnFinal.trim()
       ctx.turnFinal = ''
       ctx.injected = 0
@@ -693,7 +701,29 @@ setCronRunDoor({
   owns: isRunning,
   finish: finishRun,
   cancel: cancelRun,
+  released: kickWaitingOn,
 })
+
+/** A session's owner let go (clearReplyTo — relay, A2A, /invocations, a cron
+ *  run): a webhook job whose events wait on that session starts their run.
+ *  Deferred and caught: clearReplyTo's callers sit in other subsystems' end
+ *  paths, and a process may load the runner without a cron.db. A kick of the
+ *  job whose own run just cleared it is a no-op (`_inflight`). */
+function kickWaitingOn(sessionId: string): void {
+  setImmediate(() => {
+    try {
+      const ids = jobsWithPendingEvents()
+      if (ids.length === 0) return
+      const jobs = getCronDb().select({ id: cronJobs.id, sessionId: cronJobs.sessionId, stateless: cronJobs.stateless, webhookSecret: cronJobs.webhookSecret })
+        .from(cronJobs).where(inArray(cronJobs.id, ids)).all()
+      for (const job of jobs) {
+        if (job.webhookSecret && !job.stateless && effectiveSessionId(job) === sessionId) kickPendingEvents(job.id)
+      }
+    } catch (err) {
+      console.warn(`[Cron] session ${sessionId} released: kicking pending webhook events failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })
+}
 
 /**
  * A webhook job's events are waiting (the receiver stored one, a run ended
@@ -720,8 +750,11 @@ export async function startOrInject(jobId: string): Promise<void> {
   }
   if (_inflight.has(jobId)) return
   const job = getCronDb().select({ webhookSecret: cronJobs.webhookSecret, enabled: cronJobs.enabled }).from(cronJobs).where(eq(cronJobs.id, jobId)).get()
-  // Switched off webhook mode / disabled since: the events wait.
-  if (!job?.webhookSecret || job.enabled !== 1) return
+  // Switched off webhook mode / disabled since: no run will take the events.
+  if (!job?.webhookSecret || job.enabled !== 1) {
+    if (job) failPendingEvents(jobId)
+    return
+  }
   await runJob(jobId, 'webhook')
 }
 
@@ -736,8 +769,8 @@ async function injectEvent(ctx: RunCtx, ev: CronEvent, redelivered: boolean): Pr
     ctx.answers.push(ctx.idleFinal)
     ctx.idleFinal = ''
   }
-  ctx.injected++
   const stamp = ctx.host.appendUserMessage(ctx.sessionId, ui)
+  ctx.injected++
   stampEvents([ev.id], stamp)
   await ctx.host.sendUserMessage(ctx.sessionId, model, undefined, undefined, stamp)
 }
@@ -892,6 +925,8 @@ export function scheduleJob(jobId: string): void {
     _fingerprint.set(jobId, jobFingerprint(job))
     return
   }
+  // Switched off webhook mode: events still waiting have no run to go to.
+  failPendingEvents(jobId)
 
   let cron: Cron | null = null
   let target: Date | null
@@ -955,8 +990,10 @@ export function scheduleJob(jobId: string): void {
   console.log(`[Cron] ${jobId} scheduled (${sched})${window} next=${target?.toISOString() ?? 'n/a'}`)
 }
 
-/** Cancel a single job's schedule. Doesn't touch the db row. */
+/** Cancel a single job's schedule (disabled / deleted). Doesn't touch the job
+ *  row; its webhook events still waiting fail (no run will take them). */
 export function unscheduleJob(jobId: string): void {
+  failPendingEvents(jobId)
   if (_expired.delete(jobId)) _fingerprint.delete(jobId)
   const existing = _active.get(jobId)
   if (!existing) return
@@ -1104,8 +1141,15 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
     broadcast({ type: 'cron:run_changed', jobId, runId, status: 'skipped' })
     return runId
   }
-  const fail = (reason: string): string => {
+  const fail = (reason: string, eventsWait = false): string => {
     finalize(runId, jobId, { status: 'failed', output: null, exitCode: null, failureReason: reason, dispatchResults: [] })
+    // A webhook fire's events fail with it — the ones it had claimed and the
+    // ones still pending (not retried: a broken workspace would loop; the
+    // sender may redeliver a failed event).
+    if (triggerKind === 'webhook' && !eventsWait) {
+      claimPendingEvents(jobId, runId, sessionId)
+      settleRunEvents(runId, false)
+    }
     return runId
   }
 
@@ -1199,7 +1243,9 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
     // Re-check past the awaits (a chat turn or another owner may have taken
     // the session meanwhile). From here to the pointer write it is synchronous.
     const busy = sessionBusy(host, sessionId, webhook)
-    if (busy) return fail(busy)
+    // Webhook: another owner took the session meanwhile — its events wait for
+    // it as at the first check (its release kicks them).
+    if (busy) return fail(busy, webhook)
     // Recorded meanwhile by another cron.db writer: nothing to run for.
     if (!isRunning(runId)) return runId
     takeReplyTo(host.getDb(), sessionId, { cron: runId }, `cron:${runId}`)
@@ -1227,7 +1273,6 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       untrackRun(runId)
       tracked = false
       clearOwnPointer(host.getDb(), sessionId, runId)
-      requeueEvents({ runId })
       return fail(err instanceof Error ? err.message : String(err))
     }
     console.log(`[Cron] run ${runId} (job ${jobId}, ${triggerKind}) → ${sessionId}`)
@@ -1262,7 +1307,7 @@ type SessionRow = { agentId: string; accessLevel: string | null }
  *  so it never goes through getWorkspaceDb (realpath + ensureWorkspaceHalo:
  *  ~10 mkdirs and a template compare per call, and a GET must not scaffold).
  *  The handle is never the writer, so `data_version` moves on every commit
- *  anyone makes — a cli child creating the session (finalize reads it right
+ *  anyone makes — a run creating the session (finalize reads it right
  *  after), a Sessions-tab delete, another process — and a moved version
  *  drops the workspace's rows. */
 const _sessionRows = new Map<string, { db: Database.Database; version: number; rows: Map<string, SessionRow | null> }>()

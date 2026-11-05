@@ -59,6 +59,9 @@ export interface CronRunDoor {
   /** Local stop / delete / archive, or a new owner took the pointer: end the
    *  run failed with `reason`, nothing dispatched; clears the pointer. */
   cancel(runId: string, db: HaloDb, sessionId: string, reason: string): void
+  /** The session's reply_to was cleared (any owner let go): webhook events
+   *  waiting for it may start their run. */
+  released(sessionId: string): void
 }
 let _cronDoor: CronRunDoor | null = null
 export function setCronRunDoor(d: CronRunDoor | null): void { _cronDoor = d }
@@ -114,6 +117,7 @@ export function clearReplyTo(db: HaloDb, sessionId: string): void {
     .set({ replyTo: null })
     .where(eq(agentSessions.id, sessionId))
     .run()
+  _cronDoor?.released(sessionId)
 }
 
 /** A session's still-running (non-stopped, non-archived) children, from the db
@@ -294,7 +298,7 @@ export async function deliverRelayInterim(host: RelayTarget, sessionId: string, 
 
 function jsonErr(error: string): string { return JSON.stringify({ code: 1, error }) }
 
-/** No registry = CLI / TUI (and cron's `halo cli` child). Worded so the model
+/** No registry = CLI / TUI. Worded so the model
  *  relays it as permanent + actionable — the bare "server only" string got
  *  paraphrased to users as a transient outage. */
 const RELAY_UNAVAILABLE = 'relay is not available in the CLI / TUI — it only runs inside `halo server`. This is permanent for this runtime, not a temporary outage: do not retry. Tell the user to send this request from the admin UI or an IM / Web channel connected to the server, or to open the target workspace directly with `halo tui -w <workspace path>`.'

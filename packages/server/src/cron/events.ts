@@ -55,6 +55,13 @@ export function settleRunEvents(runId: string, ok: boolean): void {
   getCronDb().update(cronEvents).set({ state: ok ? 'done' : 'failed' }).where(and(eq(cronEvents.runId, runId), eq(cronEvents.state, 'injected'))).run()
 }
 
+/** The job was disabled or left webhook mode: no run will take its waiting
+ *  events (a redelivery can revive one — routes/cron-hooks.ts). */
+export function failPendingEvents(jobId: string): void {
+  const { changes } = getCronDb().update(cronEvents).set({ state: 'failed' }).where(pendingWhere(jobId)).run()
+  if (changes > 0) console.log(`[Cron] ${jobId}: ${changes} pending webhook event(s) failed — the job is disabled or no longer a webhook job`)
+}
+
 /** Back to pending — the run they were handed to will not process them (not
  *  resumed after a restart, or the hand-over itself failed); the next run
  *  takes them. */

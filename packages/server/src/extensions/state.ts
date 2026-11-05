@@ -15,7 +15,7 @@
  * that drops an id the same way; it can't import this.)
  *
  * Read from disk, cached by (inode, mtime, size): the scanner, skill-sources (also
- * in CLI / cron children) and the routes all see the same switch without
+ * in CLI / TUI processes) and the routes all see the same switch without
  * sharing memory. A file that isn't a JSON object reads as "everything on"
  * (warned once per change) and is never overwritten — writes refuse.
  */

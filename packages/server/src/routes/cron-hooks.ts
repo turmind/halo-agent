@@ -9,18 +9,20 @@
  *     job, non-webhook job or a bad credential → 404 alike
  *   - body ≤ 1 MB (413), stored as received; GitHub `ping` → 200, no run
  *   - dedupe per job on X-GitHub-Delivery / Idempotency-Key / X-Request-Id,
- *     else sha256(body) → 200 `{duplicate:true}`
+ *     else sha256(body) within 10 minutes → 200 `{duplicate:true}`; a repeat
+ *     of an event whose run failed is processed again (202 `{redelivered:true}`)
  *   - disabled job → 409; MAX_PENDING_EVENTS pending → 429
  */
 import crypto from 'node:crypto'
 import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
-import { and, eq } from 'drizzle-orm'
+import { and, desc, eq, gte, like } from 'drizzle-orm'
 import { cronEvents, cronJobs, getCronDb } from '../db/cron-db.js'
 import { countPendingEvents, MAX_PENDING_EVENTS } from '../cron/events.js'
 import { startOrInject } from '../cron/runner.js'
 
 const MAX_HOOK_BODY = 1024 * 1024
+const BODY_DEDUPE_MS = 10 * 60 * 1000
 
 function safeEqual(a: string, b: string): boolean {
   const x = Buffer.from(a)
@@ -45,15 +47,31 @@ export function createCronHookRoutes(): Hono {
     const eventType = c.req.header('x-github-event') || c.req.header('x-gitlab-event') || null
     if (eventType === 'ping') return c.json({ ok: true, ping: true })
     if (job.enabled !== 1) return c.json({ error: 'job disabled' }, 409)
-    const deliveryId = c.req.header('x-github-delivery') || c.req.header('idempotency-key') || c.req.header('x-request-id')
-      || crypto.createHash('sha256').update(body).digest('hex')
+    const now = Date.now()
+    const headerId = c.req.header('x-github-delivery') || c.req.header('idempotency-key') || c.req.header('x-request-id')
+    // Without a delivery id the body hash dedupes for BODY_DEDUPE_MS only (a
+    // sender's retry burst) — the same body later is a new event. The receipt
+    // time in the key keeps it clear of the UNIQUE(job_id, delivery_id).
+    const bodyKey = headerId ? null : `sha256:${crypto.createHash('sha256').update(body).digest('hex')}#`
+    const deliveryId = headerId || `${bodyKey}${now}`
     const db = getCronDb()
-    const seen = db.select({ id: cronEvents.id }).from(cronEvents).where(and(eq(cronEvents.jobId, jobId), eq(cronEvents.deliveryId, deliveryId))).get()
-    if (seen) return c.json({ ok: true, duplicate: true, eventId: seen.id })
+    const seen = db.select({ id: cronEvents.id, state: cronEvents.state }).from(cronEvents).where(and(eq(cronEvents.jobId, jobId), bodyKey
+      ? and(like(cronEvents.deliveryId, `${bodyKey}%`), gte(cronEvents.receivedAt, now - BODY_DEDUPE_MS))
+      : eq(cronEvents.deliveryId, deliveryId))).orderBy(desc(cronEvents.receivedAt)).get()
+    if (seen && seen.state !== 'failed') return c.json({ ok: true, duplicate: true, eventId: seen.id })
     if (countPendingEvents(jobId) >= MAX_PENDING_EVENTS) return c.json({ error: `too many pending events (${MAX_PENDING_EVENTS})` }, 429)
-    const eventId = `ev-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`
+    if (seen) {
+      // A redelivery of an event whose run failed: processed again.
+      const { changes } = db.update(cronEvents).set({ state: 'pending', runId: null, sessionId: null, stamp: null })
+        .where(and(eq(cronEvents.id, seen.id), eq(cronEvents.state, 'failed'))).run()
+      if (changes === 0) return c.json({ ok: true, duplicate: true, eventId: seen.id })
+      console.log(`[Cron] ${jobId}: webhook event ${seen.id} redelivered after a failed run`)
+      startOrInject(jobId).catch((err) => console.warn(`[Cron] ${jobId}: handling webhook event ${seen.id} failed: ${err instanceof Error ? err.message : String(err)}`))
+      return c.json({ ok: true, eventId: seen.id, redelivered: true }, 202)
+    }
+    const eventId = `ev-${now.toString(36)}-${crypto.randomBytes(4).toString('hex')}`
     const { changes } = db.insert(cronEvents).values({
-      id: eventId, jobId, deliveryId, eventType, receivedAt: Date.now(), state: 'pending', payload: body.toString('utf-8'),
+      id: eventId, jobId, deliveryId, eventType, receivedAt: now, state: 'pending', payload: body.toString('utf-8'),
     }).onConflictDoNothing().run()
     // The same delivery raced in on another request.
     if (changes === 0) return c.json({ ok: true, duplicate: true })

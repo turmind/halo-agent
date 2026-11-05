@@ -41,10 +41,10 @@ interface CreateBody {
    *  no active window, no picked session. */
   webhook?: boolean
   timezone?: string
-  /** Max seconds one cron-fired cli may run (60–21600). Unset/null = the
+  /** Max seconds one cron run may take (60–21600). Unset/null = the
    *  runner's default 3600. */
   timeoutSec?: number
-  /** Root session the cli runs in. Unset/null/'' = the job's own session
+  /** Root session the run goes to. Unset/null/'' = the job's own session
    *  (id = the job id). An existing session keeps its own agent. */
   sessionId?: string
   /** Active window (epoch ms; unset/null = unbounded), recurring jobs only:
@@ -106,9 +106,9 @@ function validateTimezone(v: unknown): string | null {
   }
 }
 
-/** Per-job cli timeout bounds (seconds). Lower bound keeps a fat-fingered
+/** Per-job run timeout bounds (seconds). Lower bound keeps a fat-fingered
  *  "1" from killing every run instantly; upper bound (6h) keeps a stuck
- *  child from squatting `_inflight` for days. */
+ *  run from squatting `_inflight` for days. */
 const TIMEOUT_SEC_MIN = 60
 const TIMEOUT_SEC_MAX = 21600
 
@@ -209,7 +209,7 @@ export function createCronRoutes(): Hono {
       // `nextRun` is computed live from the schedule — cheap and avoids a
       // stale-value problem when the db row hasn't been touched recently.
       nextRunAt: computeNextRun(r),
-      // The session the cli actually runs in (picked or the job's own) —
+      // The session the run actually goes to (picked or the job's own) —
       // the runner's rule, so the admin never re-derives it.
       effectiveSessionId: effectiveSessionId(r),
       // Agent of that session once it exists (null: stateless / not yet
@@ -354,7 +354,7 @@ export function createCronRoutes(): Hono {
     // the folder against the (possibly new) workspace, and the agent of an
     // existing stateful session. The agent rule only when this body changes
     // one of its inputs: a job saved before the rule (session on another
-    // agent, every run now refused by the cli) must still take an
+    // agent, every run now refused by the runner) must still take an
     // unrelated edit such as `{enabled:false}`.
     const merged = {
       id,

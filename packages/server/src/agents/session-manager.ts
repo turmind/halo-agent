@@ -1263,7 +1263,7 @@ export class SessionManager implements SessionManagerInternals {
   /** Whether a root's cached UIState holds local mutations not yet persisted.
    *  The WS save paths gate on this — a clean state (pure disk seed, or
    *  already flushed) must not be written back over a file that another
-   *  process (cron `halo cli` child) may have advanced since. */
+   *  process (the TUI, a manual `halo cli -s`) may have advanced since. */
   isUIStateDirty(rootSessionId: string): boolean {
     return this.uiStore.isUIStateDirty(rootSessionId)
   }
@@ -1284,7 +1284,7 @@ export class SessionManager implements SessionManagerInternals {
    * hold the same model-visible content. Running only (`promise !== null`,
    * subs too): an idle session's history is already on disk (every path that
    * changes it saves on the spot), and its in-memory copy may be stale — a
-   * cron `halo cli` / TUI run may have written the same session since, and
+   * `halo cli` / TUI run may have written the same session since, and
    * a write here would replace that run's turns with the old copy (stamp
    * mismatch → full rewrite). Doesn't end anything: no abort, no
    * repair, no release, the run ledger untouched — the runs go on until the
@@ -1337,7 +1337,7 @@ export class SessionManager implements SessionManagerInternals {
     return this.uiStore.appendUserMessage(sessionId, text, opts)
   }
 
-  /** Another process — a cron `halo cli`, the TUI, a manual `halo cli -s` —
+  /** Another process — the TUI, a manual `halo cli -s` —
    *  may have written the tree since this process cached its idle copies: the
    *  root's UIState (kept past release, see releaseSession) and an
    *  AgentSession a view loaded. One stat per cached copy against its writer
@@ -1382,7 +1382,7 @@ export class SessionManager implements SessionManagerInternals {
     this.uiStore.dropUIState(sessionId)
   }
 
-  /** Another process (a cron `halo cli` child) just wrote this root session's
+  /** Another process (the TUI, a manual `halo cli -s`) just wrote this root session's
    *  files. Drop the idle in-memory copies — the tree's AgentSessions (raw
    *  history, loaded by any view via ensureSession and never evicted while
    *  idle) and the root's UIState — WITHOUT saving, so the next view/message
