@@ -179,4 +179,40 @@ describe('assertRmSafe', () => {
     allowed('rm -rf *.log')
     expect(() => assertRmSafe('rm -rf *.log', path.join(WS, 'a[1]b'))).not.toThrow()
   })
+
+  // An everything-glob after a glob-looking literal segment is still judged by its parent.
+  it('blocks cd "<glob-char root>" && rm -rf * / ./* / .* / "$PWD"/*', () => {
+    const ws = '/srv/proj [v2]'
+    for (const word of ['*', './*', '.*', '"$PWD"/*']) {
+      expect(() => assertRmSafe(`cd "${ws}" && rm -rf ${word}`, ws), word).toThrow(`resolves to ${ws}, which is the workspace root or a parent of it.`)
+    }
+  })
+
+  it('blocks "<glob-char root>"/* written out, quoted or backslashed', () => {
+    const ws = '/srv/proj [v2]'
+    for (const cmd of [`rm -rf "${ws}"/*`, 'rm -rf /srv/proj\\ \\[v2\\]/*']) {
+      expect(() => assertRmSafe(cmd, ws), cmd).toThrow(`"/srv/proj [v2]/*" resolves to ${ws}, which is the workspace root or a parent of it.`)
+    }
+  })
+
+  it('blocks ../* from a subdir of a glob-char root', () => {
+    const ws = '/srv/proj [v2]'
+    expect(() => assertRmSafe(`cd "${ws}/sub" && rm -rf ../*`, ws)).toThrow(`"../*" resolves to ${ws}, which is the workspace root or a parent of it.`)
+  })
+
+  it('blocks "<glob-char HOME>"/*', async () => {
+    vi.resetModules()
+    vi.stubEnv('HOME', '/home/x[1]y')
+    try {
+      const fresh = await import('../src/tools/sandbox.js')
+      expect(() => fresh.assertRmSafe('rm -rf "/home/x[1]y"/*', '/srv/ws')).toThrow('"/home/x[1]y/*" resolves to /home/x[1]y, which is the home directory or a parent of it.')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('still allows /tmp/foo/* and *.log under a glob-char root', () => {
+    allowed('rm -rf /tmp/foo/*')
+    allowed(`cd "${WS}/a[1]b" && rm -rf *.log`)
+  })
 })

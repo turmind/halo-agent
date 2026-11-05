@@ -120,19 +120,27 @@ func Check(cmd, cwd, home string) error {
 			}
 
 			abs := resolve(dir, word)
-			// A glob that means "everything in X" (`*`, `.*`, `**`) is judged by X;
-			// a narrower glob (`*.log`) only by its literal self — a quoted
-			// `cd "/srv/proj [v2]" && rm -rf .` is the workspace root, not a pattern.
+			// Two candidates, the first protected one blocks: for an "everything in
+			// X" segment (`*`, `.*`, `**` — even after a narrow-looking `proj [v2]/`)
+			// X, then the path read literally (a narrow glob like `*.log` is judged
+			// by itself; a quoted `cd "/srv/proj [v2]" && rm -rf .` is the workspace
+			// root, not a pattern).
 			parts := strings.Split(abs, "/")
-			target := abs
-			if k := slices.IndexFunc(parts, func(p string) bool { return strings.ContainsAny(p, "*?[") }); k != -1 && strings.Trim(parts[k], ".*?") == "" {
-				if target = strings.Join(parts[:k], "/"); target == "" {
-					target = "/"
+			candidates := []string{abs}
+			if k := slices.IndexFunc(parts, func(p string) bool {
+				return strings.Trim(p, ".*?") == "" && strings.ContainsAny(p, "*?")
+			}); k != -1 {
+				prefix := strings.Join(parts[:k], "/")
+				if prefix == "" {
+					prefix = "/"
 				}
+				candidates = []string{prefix, abs}
 			}
-			target = unescapeGlob(target)
-			if reason := protectedReason(target, wsRoot, home, haloHome); reason != "" {
-				return errors.New(`[Sandbox] rm blocked: "` + raw + `" resolves to ` + target + ", which is " + reason + ". Name the specific files or subdirectories to delete instead.")
+			for _, c := range candidates {
+				target := unescapeGlob(c)
+				if reason := protectedReason(target, wsRoot, home, haloHome); reason != "" {
+					return errors.New(`[Sandbox] rm blocked: "` + raw + `" resolves to ` + target + ", which is " + reason + ". Name the specific files or subdirectories to delete instead.")
+				}
 			}
 		}
 	}

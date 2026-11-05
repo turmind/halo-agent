@@ -157,6 +157,14 @@ func TestCheckEdges(t *testing.T) {
 		{"cd /srv/x[1] && rm -rf .", "/srv/ws", home, `"." resolves to /srv/x[1], which is a system directory`},
 		{"rm -rf /tmp/build-*", "/srv/a[1]b", home, ""},
 		{"rm -rf ~/*.log", "/srv/ws", "/home/x[1]y", ""},
+		// an everything-glob after a glob-looking literal segment is judged by its parent
+		{`cd "/srv/proj [v2]" && rm -rf *`, "/srv/proj [v2]", home, `"*" resolves to /srv/proj [v2], which is the workspace root`},
+		{`rm -rf /srv/proj\ \[v2\]/*`, "/srv/proj [v2]", home, `"/srv/proj [v2]/*" resolves to /srv/proj [v2], which is the workspace root`},
+		{`cd "/srv/proj [v2]/sub" && rm -rf ../*`, "/srv/proj [v2]", home, `"../*" resolves to /srv/proj [v2], which is the workspace root`},
+		{`rm -rf "/home/x[1]y"/*`, "/srv/ws", "/home/x[1]y", `"/home/x[1]y/*" resolves to /home/x[1]y, which is the home directory`},
+		{"rm -rf /srv/build-*/*", "/srv/ws", home, `"/srv/build-*/*" resolves to /srv/build-*, which is a system directory`},
+		{"rm -rf /tmp/foo/*", "/srv/ws", home, ""},
+		{`cd "/srv/a[1]b" && rm -rf *.log`, "/srv/ws", home, ""},
 	} {
 		got := ""
 		if err := Check(c.cmd, c.cwd, c.home); err != nil {

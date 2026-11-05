@@ -923,17 +923,20 @@ export function assertRmSafe(command: string, workspaceRoot: string): void {
       if (!word) continue
 
       const abs = path.resolve(cwd, word)
-      // A glob that means "everything in X" (`*`, `.*`, `**`) is judged by X;
-      // a narrower glob (`*.log`) only by its literal self — a quoted
-      // `cd "/srv/proj [v2]" && rm -rf .` is the workspace root, not a pattern.
+      // Two candidates, the first protected one blocks: for an "everything in
+      // X" segment (`*`, `.*`, `**` — even after a narrow-looking `proj [v2]/`)
+      // X, then the path read literally (a narrow glob like `*.log` is judged
+      // by itself; a quoted `cd "/srv/proj [v2]" && rm -rf .` is the workspace
+      // root, not a pattern).
       const parts = abs.split('/')
-      const globAt = parts.findIndex((p) => /[*?[]/.test(p))
-      let target = abs
-      if (globAt !== -1 && /^[.*?]+$/.test(parts[globAt])) target = parts.slice(0, globAt).join('/') || '/'
-      target = unescapeGlob(target)
-      const reason = rmProtectedReason(target, wsRoot)
-      if (reason) {
-        throw new Error(`[Sandbox] rm blocked: "${raw}" resolves to ${target}, which is ${reason}. Name the specific files or subdirectories to delete instead.`)
+      const allAt = parts.findIndex((p) => /^[.*?]+$/.test(p) && /[*?]/.test(p))
+      const candidates = allAt === -1 ? [abs] : [parts.slice(0, allAt).join('/') || '/', abs]
+      for (const escaped of candidates) {
+        const target = unescapeGlob(escaped)
+        const reason = rmProtectedReason(target, wsRoot)
+        if (reason) {
+          throw new Error(`[Sandbox] rm blocked: "${raw}" resolves to ${target}, which is ${reason}. Name the specific files or subdirectories to delete instead.`)
+        }
       }
     }
   }

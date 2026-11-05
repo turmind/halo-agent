@@ -134,6 +134,16 @@ const literalGlobCases = [
   ['rm -rf /home/*.bak', WS], ['rm -rf /var/log/*.gz', WS], ['rm -rf /u?r', WS], ['rm -rf /[t]mp', WS], ['rm -rf "/tmp/a*b"', WS],
   ['rm -rf ~/projects/d?mo', WS], ['rm -rf ~/project?', WS], ['rm -rf ~/projects/[a-z]*', WS], ['rm -rf "~/projects/de[m]o"', WS],
 ]
+// an everything-glob after a glob-looking literal segment is judged by its parent
+const allAfterLiteral = ['*', './*', '.*', '**', '"$PWD"/*', '"$PWD"/.*']
+const allAfterLiteralCases = [
+  ...[WS, '/srv/proj [v2]'].flatMap((cwd) => allAfterLiteral.map((w) => [`cd "/srv/proj [v2]" && rm -rf ${w}`, cwd])),
+  ...['rm -rf "/srv/proj [v2]"/*', 'rm -rf /srv/proj\\ \\[v2\\]/*', "rm -rf '/srv/proj [v2]'/.*", 'rm -rf "/srv/proj [v2]"/**', 'cd "/srv/proj [v2]/sub" && rm -rf ../*',
+    'cd "/srv/proj [v2]/sub" && rm -rf ../.*', 'rm -rf "/srv/proj [v2]/sub"/*', 'rm -rf "/srv/proj [v2]"/*.log', 'rm -rf "/srv/proj [v2]"/*/x'].map((cmd) => [cmd, '/srv/proj [v2]']),
+  [`cd "${WS}/a[1]b" && rm -rf *`, WS], [`cd "${WS}/a[1]b" && rm -rf *.log`, WS], [`rm -rf "${WS}/a[1]b"/*`, WS], [`cd "${WS}/a[1]b" && rm -rf ../*`, WS],
+  ['rm -rf /srv/build-*/*', WS], ['rm -rf /srv/build-*', WS], ['rm -rf /tmp/foo/*', WS], ['rm -rf /tmp/a[1]/*', WS], ['rm -rf "/tmp/x [1]"/**', WS],
+  ['rm -rf /usr/l*/*', WS], ['rm -rf ~/p[1]/*', WS], [`rm -rf "${HOME}/projects/de[m]o"/*`, WS],
+]
 
 const vectors = [
   ...[...new Set([...fromTest, ...combos, ...separators, ...misc])].map((cmd) => [cmd, WS]),
@@ -144,6 +154,7 @@ const vectors = [
   ...globCwds.flatMap((cwd) => globCmds.map((cmd) => [cmd, cwd])),
   ...globCdCmds.map((cmd) => [cmd, WS]),
   ...literalGlobCases,
+  ...allAfterLiteralCases,
 ]
 
 const check = await guardFor(HOME)
@@ -167,7 +178,8 @@ const globHomeCmds = [...homeCmds, 'rm -rf ~/*', 'rm -rf $HOME/.*', 'cd && rm -r
 for (const home of ['/home/x[1]y', '/home/a?b', '/home/x*', '/srv/[h']) {
   const g = await guardFor(home)
   // …and the home written out literally (quoted: no pattern)
-  const literal = [`rm -rf "${home}"`, `cd "${home}" && rm -rf .`, `rm -rf "${home}/.halo"`, `rm -rf "${home}/z"`]
+  const literal = [`rm -rf "${home}"`, `cd "${home}" && rm -rf .`, `rm -rf "${home}/.halo"`, `rm -rf "${home}/z"`,
+    `rm -rf "${home}"/*`, `rm -rf "${home}"/.*`, `cd "${home}" && rm -rf *`, `cd "${home}/x" && rm -rf ../*`, `rm -rf "${home}/z"/*`, `rm -rf "${home}"/*.log`]
   for (const cmd of [...globHomeCmds, ...literal]) homes.push({ home, cmd, cwd: '/srv/ws', result: g(cmd, '/srv/ws') })
 }
 
