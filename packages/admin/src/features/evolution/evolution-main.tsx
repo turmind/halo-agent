@@ -11,15 +11,17 @@
  * both panes.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Check, MessageSquarePlus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Check, MessageSquarePlus, RefreshCw, Trash2, Undo2, X } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
 import { cn, confirmAction } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import { useEvolutionStore } from './evolution-store'
 import { StatusBadge } from './status-badge'
+import { buildIssueUrl, HALO_REPO, parseGithubRepo, type GithubRepo } from './github-issue'
 
 type RunDetail = Awaited<ReturnType<typeof api.evolution.getRun>>
+type AutoApplyRecord = NonNullable<RunDetail['autoApply']>
 
 export function EvolutionMain() {
   const t = useT()
@@ -98,13 +100,17 @@ function RunDetailPane({ id }: { id: string }) {
   if (error) return <EmptyState label={t('cron.error', { error })} />
   if (!detail) return <EmptyState label={t('evolution.list.noRun')} />
 
-  const { run, patchMd, scoreJson, skipReasonMd, snapshotSummary, wrapperLog, subCliLog } = detail
+  const { run, autoApply, observation, rollback, patchMd, scoreJson, skipReasonMd, snapshotSummary, wrapperLog, subCliLog } = detail
   const isAwaiting = run.status === 'awaiting_review'
   // An approved run whose apply hit the regression gate (or timed out) stays
   // `approved` by design — the run row never moves. Without surfacing the
   // apply's terminal status it reads as "stuck on approved". Treat it as a
   // retry-able failure so the user gets both the explanation and the button.
   const applyFailed = run.status === 'approved' && (run.applyStatus === 'failed' || run.applyStatus === 'timeout')
+  // A failed auto apply hands its run back to awaiting_review instead. Gated on
+  // this round's verdict so a retried run doesn't show an older apply's failure.
+  const isAuto = run.applyApprovedBy === 'auto' && autoApply?.auto === true
+  const autoFailed = isAuto && isAwaiting && (run.applyStatus === 'failed' || run.applyStatus === 'timeout')
 
   const onApprove = async () => {
     setBusy(true)
@@ -168,6 +174,28 @@ function RunDetailPane({ id }: { id: string }) {
     }
   }
 
+  const onRollback = async () => {
+    const applyId = run.applyId
+    if (!applyId || !(await confirmAction(t('evolution.rollback.confirm')))) return
+    setBusy(true)
+    try {
+      let res = await api.evolution.rollback(applyId)
+      if (!res.ok && res.error === 'conflict') {
+        const files = (res.conflicts ?? [])
+          .map((c) => `• ${c.rel} — ${t(`evolution.rollback.state.${c.reason}`)}`)
+          .join('\n')
+        if (!(await confirmAction(t('evolution.rollback.confirmForce', { files })))) return
+        res = await api.evolution.rollback(applyId, true)
+      }
+      if (!res.ok) alert(t('evolution.rollback.failed', { error: res.error }))
+      await refresh()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const onDelete = async () => {
     if (!(await confirmAction(t('evolution.action.confirmDelete')))) return
     setBusy(true)
@@ -222,12 +250,32 @@ function RunDetailPane({ id }: { id: string }) {
             {t('evolution.detail.skipped')}
           </div>
         )}
-        {applyFailed && (
+        {(applyFailed || autoFailed) && (
           <div className="mt-2 rounded bg-red-900/30 p-2 text-xs text-red-200">
-            <div className="font-medium">{t('evolution.detail.applyFailed')}</div>
+            <div className="font-medium">{t(autoFailed ? 'evolution.auto.failed' : 'evolution.detail.applyFailed')}</div>
             {run.applyFailureReason && (
               <div className="mt-1 whitespace-pre-wrap">{run.applyFailureReason}</div>
             )}
+          </div>
+        )}
+        {isAuto && (run.status === 'approved' || run.status === 'applied' || run.status === 'rolled_back') && autoApply.score && (
+          <div className="mt-2 rounded bg-sky-900/30 p-2 text-xs text-sky-100">
+            <div className="font-medium">
+              {t('evolution.auto.applied', {
+                level: autoApply.level,
+                avg: autoApply.score.avg,
+                threshold: autoApply.threshold,
+                confidence: autoApply.score.confidence,
+              })}
+            </div>
+            <div className="mt-1">
+              {t('evolution.auto.files')} <span className="font-mono">{autoApply.files.map((f) => f.rel).join(', ')}</span>
+            </div>
+          </div>
+        )}
+        {autoApply && !autoApply.auto && autoApply.reason && (
+          <div className="mt-2 rounded bg-[var(--accent)] p-2 text-xs text-[var(--muted-foreground)]">
+            {t('evolution.auto.notApplied', { level: autoApply.level, reason: autoReasonText(t, autoApply) })}
           </div>
         )}
       </div>
@@ -267,9 +315,9 @@ function RunDetailPane({ id }: { id: string }) {
       )}
 
       {/* Retry on terminal-but-not-awaiting states (failed / timeout / skipped
-          / rejected), plus an approved run whose apply failed the regression
+          / rejected / rolled_back), plus an approved run whose apply failed the regression
           gate (run stays approved by design, but the patch needs steering). */}
-      {!isAwaiting && (run.status === 'failed' || run.status === 'timeout' || run.status === 'skipped' || run.status === 'rejected' || applyFailed) && (
+      {!isAwaiting && (run.status === 'failed' || run.status === 'timeout' || run.status === 'skipped' || run.status === 'rejected' || run.status === 'rolled_back' || applyFailed) && (
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] bg-sky-950/20 px-4 py-2">
           <button
             disabled={busy}
@@ -279,6 +327,22 @@ function RunDetailPane({ id }: { id: string }) {
           >
             <RefreshCw className="h-3.5 w-3.5" /> {t('evolution.action.retryWithHint')}
           </button>
+        </div>
+      )}
+
+      {run.status === 'applied' && rollback && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-4 py-2">
+          {rollback.available
+            ? (
+              <button
+                disabled={busy}
+                onClick={() => { void onRollback() }}
+                className="flex items-center gap-1 rounded bg-violet-800 px-2 py-1 text-xs text-violet-50 hover:bg-violet-700 disabled:opacity-50"
+              >
+                <Undo2 className="h-3.5 w-3.5" /> {t('evolution.action.rollback')}
+              </button>
+            )
+            : <span className="text-xs text-[var(--muted-foreground)]">{t('evolution.rollback.unavailable')}</span>}
         </div>
       )}
 
@@ -406,6 +470,7 @@ function RunDetailPane({ id }: { id: string }) {
       )}
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
+        {observation && <ObservationBlock run={run} observation={observation} autoApply={autoApply} scoreJson={scoreJson} />}
         {skipReasonMd && (
           <div className="mb-4">
             <div className="mb-2 text-sm font-medium">{t('evolution.skip.title')}</div>
@@ -425,6 +490,95 @@ function RunDetailPane({ id }: { id: string }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/** autoApply.reason short code → sentence. Codes: evolution/auto-apply.ts
+ *  categoryGate / scoreGate (`code` or `code:detail`); unknown → raw. */
+function autoReasonText(t: ReturnType<typeof useT>, rec: AutoApplyRecord): string {
+  const reason = rec.reason ?? ''
+  const i = reason.indexOf(':')
+  const key = `evolution.auto.reason.${i < 0 ? reason : reason.slice(0, i)}`
+  const text = t(key, {
+    detail: i < 0 ? '' : reason.slice(i + 1),
+    threshold: rec.threshold,
+    avg: rec.score?.avg ?? '—',
+    confidence: rec.score?.confidence ?? '—',
+    behavior: rec.score?.behavior ?? '—',
+    lint: rec.score?.lint ?? '—',
+  })
+  return text === key ? reason : text
+}
+
+// One /api/health per page load — the version only changes on a restart.
+let haloVersionPromise: Promise<string | null> | null = null
+function haloVersion(): Promise<string | null> {
+  haloVersionPromise ??= api.health()
+    .then((h: { version?: unknown }) => (typeof h?.version === 'string' ? h.version : null))
+    .catch(() => null)
+  return haloVersionPromise
+}
+
+/** The draft's Larger observation, plus prefilled GitHub-issue links: the
+ *  workspace's own repo (origin on github.com) and Halo's. */
+function ObservationBlock({ run, observation, autoApply, scoreJson }: {
+  run: RunDetail['run']
+  observation: string
+  autoApply: RunDetail['autoApply']
+  scoreJson: RunDetail['scoreJson']
+}) {
+  const t = useT()
+  const [version, setVersion] = useState<string | null>(null)
+  const [wsRepo, setWsRepo] = useState<GithubRepo | null>(null)
+
+  useEffect(() => {
+    let live = true
+    void haloVersion().then((v) => { if (live) setVersion(v) })
+    // Non-repo workspaces answer [] — no workspace link then.
+    api.git.remotes(run.workspacePath)
+      .then((r) => {
+        const origin = r.remotes.find((x) => x.name === 'origin')
+        if (live) setWsRepo(origin ? parseGithubRepo(origin.url) : null)
+      })
+      .catch(() => { if (live) setWsRepo(null) })
+    return () => { live = false }
+  }, [run.workspacePath])
+
+  const score = autoApply?.score
+    ?? (typeof scoreJson?.avg === 'number' && typeof scoreJson.confidence === 'string'
+      ? { avg: scoreJson.avg, confidence: scoreJson.confidence }
+      : null)
+  const issueUrl = (repo: GithubRepo) => buildIssueUrl(repo, {
+    observation,
+    runId: run.id,
+    files: autoApply?.files.map((f) => f.rel) ?? [],
+    score,
+    haloVersion: version,
+    truncatedNote: t('evolution.observation.truncated', { id: run.id }),
+  })
+  const links: Array<{ label: string; repo: GithubRepo }> = [
+    ...(wsRepo ? [{ label: t('evolution.observation.issueWorkspace', { repo: `${wsRepo.owner}/${wsRepo.repo}` }), repo: wsRepo }] : []),
+    { label: t('evolution.observation.issueHalo', { repo: `${HALO_REPO.owner}/${HALO_REPO.repo}` }), repo: HALO_REPO },
+  ]
+
+  return (
+    <div className="mb-4 rounded border border-amber-700/50 bg-amber-950/20 p-3">
+      <div className="mb-2 text-sm font-medium">{t('evolution.observation.title')}</div>
+      <pre className="whitespace-pre-wrap text-xs leading-relaxed">{observation}</pre>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-[var(--muted-foreground)]">{t('evolution.observation.issue')}</span>
+        {links.map((l) => (
+          <a
+            key={l.label}
+            href={issueUrl(l.repo)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded bg-[var(--accent)] px-2 py-0.5 text-[var(--foreground)] hover:bg-[var(--accent)]/80"
+          >{l.label}</a>
+        ))}
+      </div>
+      <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('evolution.observation.privacy')}</div>
     </div>
   )
 }

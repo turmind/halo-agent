@@ -24,4 +24,6 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: 'bg-red-700 text-red-50',
   failed: 'bg-red-800 text-red-100',
   timeout: 'bg-orange-700 text-orange-100',
+  // Undone by a reviewer after it was live — muted violet, apart from rejected's red.
+  rolled_back: 'bg-violet-900 text-violet-200',
 }
