@@ -309,7 +309,7 @@ Read the text of an agent session's reply to its **most recent message** — the
 |---|---|---|---|
 | `session_id` | string | yes | Session to read |
 
-**Output (JSON string)**: `{ "code": 0, "status": "running" | "idle" | "stopped", "output": "...", "turn_error"?: "...", "last_activity_at": "<ISO>" | null }`. `turn_error` is present only when the latest turn was terminated abnormally (unrecoverable error, account error, or a model refusal — e.g. `Model declined to respond (<category>): <explanation>`); it is read from the in-memory session, not persisted, so it shows while the session is still loaded and is absent once it has been released (the auto-report's ABORTED marker is the durable signal). `status` is `running` while a turn is in flight (`promise !== null`), `stopped` when the row carries `stopped_at` (sub-agent reported / user stopped), otherwise `idle`. `last_activity_at` is the wall-clock time of the turn's most recent text / `tool_call` / `tool_result` event (reset to `null` at each turn start) — together with `status` it tells the caller whether a long-running session is still alive or has silently stalled. Unknown / out-of-tree id → `{"code": 1, "error": "session <id> not found"}`.
+**Output (JSON string)**: `{ "code": 0, "status": "running" | "idle" | "stopped", "output": "...", "last_activity_at": "<ISO>" | null }`. `status` is `running` while a turn is in flight (`promise !== null`), `stopped` when the row carries `stopped_at` (sub-agent reported / user stopped), otherwise `idle`. `last_activity_at` is the wall-clock time of the turn's most recent text / `tool_call` / `tool_result` event (reset to `null` at each turn start) — together with `status` it tells the caller whether a long-running session is still alive or has silently stalled. Unknown / out-of-tree id → `{"code": 1, "error": "session <id> not found"}`.
 
 **Truncation keeps the tail.** When `output` exceeds `limits.toolResultMax` (minus 500 chars of envelope headroom) it is cut **head-first** with a `[Output truncated: N chars total, showing LAST M. Earlier text omitted.]` marker up front — the conclusion lives at the end, and the generic head-keep tool-result cap used to eat exactly that (plus the trailing JSON fields). The auto-report's cut is the opposite (head-kept, see [start_session](#start_session)), so the two are complementary: report shows the opening, `get_session_output` shows the ending. (Before 1.2.0 the tool returned the bare output string with no status and the generic head-keep truncation.)
 
@@ -414,7 +414,7 @@ Cascades `stopSession` on the target session and its sub-agents. If the target w
 
 ### relay_read
 
-The target workspace's [get_session_output](#get_session_output) — same `{ code, status, output, turn_error?, last_activity_at }` shape and tail-keeping truncation. Use it to check on progress or to fetch the full text after a truncated relay report.
+The target workspace's [get_session_output](#get_session_output) — same `{ code, status, output, last_activity_at }` shape and tail-keeping truncation. Use it to check on progress or to fetch the full text after a truncated relay report.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|

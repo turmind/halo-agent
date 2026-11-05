@@ -2117,7 +2117,7 @@ export class SessionManager implements SessionManagerInternals {
           + `Fix the model configuration first (or tell the user to fix it), and do not resume it with query_session("${session.id}", ...) until then.`
         : session.turnErrorKind === 'refusal'
           ? `This session's conversation history tripped the model's safety classifier: resuming it with query_session("${session.id}", ...) or re-sending will be declined the same way. `
-            + `Do not resume it — start a NEW session with a clean brief instead, rewording the part that tripped the classifier.`
+            + `Do not resume it — start a NEW session with start_session and a clean brief instead, rewording the part that tripped the classifier.`
           : `Re-dispatch with query_session("${session.id}", ...) to let it resume.`
       result = `[SUB-AGENT ABORTED: the last turn was terminated by an unrecoverable error, NOT completed. `
         + `Error: ${session.turnError}. The text below is a partial trace of the aborted turn — do not treat it as a finished result. `
@@ -2278,7 +2278,11 @@ export class SessionManager implements SessionManagerInternals {
       // deliverRelayReport fire, and so the batchBoundary complete below gives
       // it its own bubble.
       if (session.messageQueue.length === 0) {
-        if (session.selfKick && !session.interruptRequested) {
+        // A refusal / account error fails the same way on the same history /
+        // config — a kick turn would only burn one more model call. Other
+        // turnErrors (e.g. throttle retries exhausted) may clear, so they kick.
+        const deterministicFail = session.turnErrorKind === 'refusal' || session.turnErrorKind === 'account'
+        if (session.selfKick && !session.interruptRequested && !deterministicFail) {
           const kickStamp = nextTurnStamp()
           session.messageQueue.push({ text: CONTINUE_TASK_KICK, stamp: kickStamp })
           // The kick is a raw user turn, so it needs a UI user row too — otherwise
@@ -3783,14 +3787,7 @@ export class SessionManager implements SessionManagerInternals {
       output = row?.output ?? ''
       lastActivityAt = row?.lastActivityAt ?? null
     }
-    // turn_error: in-memory only, not persisted — so it shows only while the
-    // session is still loaded (runSession's finally releases it); the
-    // report's ABORTED marker is the durable signal.
-    return JSON.stringify({
-      code: 0, status, output: this.truncateOutputTail(output) || '(no output yet)',
-      ...(session?.turnError ? { turn_error: session.turnError } : {}),
-      last_activity_at: lastActivityAt,
-    })
+    return JSON.stringify({ code: 0, status, output: this.truncateOutputTail(output) || '(no output yet)', last_activity_at: lastActivityAt })
   }
 
   /**

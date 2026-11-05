@@ -82,7 +82,7 @@ One per turn — the root span, opened by `beginTurn` and closed by `endTurn`.
 | `gen_ai.task.output` | | final assistant text |
 | `gen_ai.system_instructions` | | system prompt, capped 8 KB — once per turn here, not on every `chat` |
 
-On error: status `ERROR` + the error message, plus a low-cardinality `error.type` attribute (parsed `<ErrName>Error/Exception` prefix, else `_OTHER`).
+On error: status `ERROR` + the error message, plus a low-cardinality `error.type` attribute (parsed `<ErrName>Error/Exception` prefix, else `_OTHER`). A turn that ends in a model refusal (`stop_reason: "refusal"`) counts as an error too: ERROR span with `error.type=_OTHER`, and `halo.turn.duration` records `outcome=error`.
 
 ### `chat <modelId>`
 

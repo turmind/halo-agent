@@ -264,7 +264,8 @@ The job ends exactly like an A2A task: relay's turn-end hook
 (`deliverRelayReport`, after the quiet gate — the root's whole subtree idle)
 calls `finishInvocation`, then clears `reply_to`. `finishInvocation` is a
 guarded UPDATE on `running` (first writer wins): it stores `state` (`error`
-when the turn ended in an error, else `ok`), `finished_at`, `result` and
+when the turn ended in an error — a model refusal included, so the hook sees
+`HALO_RUN_STATUS=error` — else `ok`), `finished_at`, `result` and
 `result_files` in one statement, wakes the waiters, then starts the hook.
 Interim reports are not sent — a job notifies its final reply only.
 

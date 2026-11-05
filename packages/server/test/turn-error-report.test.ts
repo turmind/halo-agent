@@ -317,35 +317,12 @@ describe('model refusal marks the turn aborted', () => {
     expect(report).toMatch(/^\[SUB-AGENT ABORTED/)
     expect(report).toContain('Error: Model declined to respond (harmful): nope.')
     expect(report).toContain('tripped the model\'s safety classifier')
-    expect(report).toContain('start a NEW session with a clean brief')
+    expect(report).toContain('start a NEW session with start_session and a clean brief')
     expect(report).not.toContain('Re-dispatch with query_session')
     expect(report).toContain('(no output)')
   })
 
-  it('get_session_output carries turn_error (before last_activity_at) while the session is loaded', async () => {
-    seedRow('f3')
-    const session = fakeSession('f3', refusalAgent(1) as unknown as ReturnType<typeof stubAgent>)
-    await sm.runSession('f3', 'go')
-
-    // In-memory only: runSession's finally released the session, so the
-    // row-read path has no turn_error.
-    expect(JSON.parse(sm.getSessionOutput('f3'))).not.toHaveProperty('turn_error')
-
-    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('f3', session)
-    const out = JSON.parse(sm.getSessionOutput('f3'))
-    expect(out.turn_error).toBe('Model declined to respond (harmful): nope')
-    expect(Object.keys(out)).toEqual(['code', 'status', 'output', 'turn_error', 'last_activity_at'])
-  })
-
-  it('a clean turn has no turn_error field', async () => {
-    seedRow('f4')
-    const session = fakeSession('f4', stubAgent(0, () => new Error('unused')))
-    await sm.runSession('f4', 'go')
-    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('f4', session)
-    expect(JSON.parse(sm.getSessionOutput('f4'))).not.toHaveProperty('turn_error')
-  })
-
-  it('relay root: a refused turn after continue_task sends no interim of its partial text; the final report is aborted', async () => {
+  it('relay root: a refused turn after continue_task sends no interim and no kick; the final report is aborted', async () => {
     seedRow('f5')
     writeReplyTo(sm.getDb(), 'f5', { workspace: '/sec', sessionId: 'sec-1' })
     const sent: string[] = []
@@ -354,7 +331,7 @@ describe('model refusal marks the turn aborted', () => {
       getDb: () => { throw new Error('caller stub has no db') },
       getSessionById: () => null,
       createSession: async () => { throw new Error('not used') },
-      appendUserMessage: () => {},
+      appendUserMessage: () => '',
       sendUserMessage: async (_sid: string, text: string) => { sent.push(text); return 'running' as const },
       interruptSession: () => {},
       stopSession: async () => {},
@@ -364,7 +341,7 @@ describe('model refusal marks the turn aborted', () => {
     setRelayRegistry({ getOrCreate: () => caller })
     try {
       // Call 1 (a relay follow-up after an interrupt) arms continue_task, then
-      // is refused; the kick turn is refused too.
+      // is refused — the kick would be refused on the same history, so none runs.
       const agent = refusalAgent(2, { narration: 'partial narration', onCall: (n) => { if (n === 1) sm.requestSelfKick('f5') } })
       const session = fakeSession('f5', agent as unknown as ReturnType<typeof stubAgent>)
       session.interruptRequested = true
@@ -373,7 +350,7 @@ describe('model refusal marks the turn aborted', () => {
       await sm.runSession('f5', '')
       await new Promise((r) => setTimeout(r, 0))
 
-      expect(agent.state.calls).toBe(2)
+      expect(agent.state.calls).toBe(1)   // no kick turn
       expect(sent).toHaveLength(1)   // no interim — only the final report
       expect(sent[0]).toMatch(/^\[Relay report · workspace .* · session f5 · status: aborted\]/)
       expect(sent[0]).toContain('[RELAY TARGET ABORTED')
@@ -381,5 +358,53 @@ describe('model refusal marks the turn aborted', () => {
     } finally {
       setRelayRegistry(null as unknown as RelayRegistry)
     }
+  })
+})
+
+// ── 5. continue_task kick after a terminal turn error ──
+
+describe('continue_task kick after an aborted turn', () => {
+  /** Call 1 arms continue_task (inside the turn), then throws `error`; later
+   *  calls yield one final text. */
+  function kickThenThrow(id: string, error: () => Error) {
+    const state = { calls: 0 }
+    return {
+      state,
+      messages: [] as unknown[],
+      async *run(): AsyncGenerator<{ type: string; text?: string; final?: boolean }> {
+        state.calls++
+        if (state.calls === 1) { sm.requestSelfKick(id); throw error() }
+        yield { type: 'text', text: 'resumed', final: true }
+      },
+    }
+  }
+  /** Drain-path turn after an interrupt — the only turn that can arm the kick. */
+  function interruptedSession(id: string, agent: ReturnType<typeof kickThenThrow>) {
+    const session = fakeSession(id, agent as unknown as ReturnType<typeof stubAgent>)
+    session.interruptRequested = true
+    session.messageQueue.push({ text: 'status?' })
+    return session
+  }
+
+  it('an account error does not kick (the same config fails again)', async () => {
+    seedRow('k1')
+    const agent = kickThenThrow('k1', () => new Error('[kimi] API error 401: Unauthorized'))
+    const session = interruptedSession('k1', agent)
+
+    await sm.runSession('k1', '')
+
+    expect(agent.state.calls).toBe(1)
+    expect(session.turnErrorKind).toBe('account')
+  })
+
+  it('any other turn error still kicks', async () => {
+    seedRow('k2')
+    const agent = kickThenThrow('k2', () => new Error('boom strange failure'))
+    const session = interruptedSession('k2', agent)
+
+    await sm.runSession('k2', '')
+
+    expect(agent.state.calls).toBe(2)   // fatal turn, then the kick turn
+    expect(session.turnError).toBeNull()   // the kick turn reset and finished cleanly
   })
 })
