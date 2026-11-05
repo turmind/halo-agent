@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.1.6] - 2026-11-05
+
 ### Added
 
 - Linked machines: a Linux machine can now run the standalone `halo-node` binary (~7 MB, amd64 / arm64 / armv7, attached to each GitHub release) instead of `npm i -g @turmind/halo` — no Node.js, same flags and behaviour as `halo node`. `curl -fsSL …/install.sh | sh` verifies the SHA256, test-runs the binary, installs to `/usr/local/bin` (root) or `~/.local/bin`, and upgrades in place when re-run. The admin's connect command uses it, pinned to the server's version; its second line prefixes `PATH="$HOME/.local/bin:$PATH"`, so a non-root install runs right away (Debian / Ubuntu add that directory to PATH only at the next login). macOS / Windows keep using `halo node`; on Linux, `halo node` prints a one-line tip with the install command.
@@ -1213,7 +1215,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.5...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.6...HEAD
+[2.1.6]: https://github.com/turmind/halo-agent/compare/v2.1.5...v2.1.6
 [2.1.5]: https://github.com/turmind/halo-agent/compare/v2.1.4...v2.1.5
 [2.1.4]: https://github.com/turmind/halo-agent/compare/v2.1.3...v2.1.4
 [2.1.3]: https://github.com/turmind/halo-agent/compare/v2.1.2...v2.1.3
