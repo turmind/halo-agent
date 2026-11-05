@@ -1150,10 +1150,10 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       claimPendingEvents(jobId, runId, sessionId)
       settleRunEvents(runId, false)
     }
-    // A run-now that never reached its turn: events that arrived during it
-    // (startOrInject saw the job in flight) get their own run. That one
-    // failing settles them failed and kicks nothing — no loop.
-    if (triggerKind === 'manual') kickPendingEvents(jobId)
+    // A run-now / timer fire that never reached its turn: events that arrived
+    // during it (startOrInject saw the job in flight) get their own run. That
+    // one failing settles them failed and kicks nothing — no loop.
+    if (triggerKind !== 'webhook') kickPendingEvents(jobId)
     return runId
   }
 

@@ -10,7 +10,7 @@ import { getWorkspaceDb } from '../src/db/index.js'
 import { agentSessions } from '../src/db/schema.js'
 import { clearReplyTo, readReplyTo, writeReplyTo } from '../src/agents/relay.js'
 import { registerCronDispatcher, type DispatchResult } from '../src/cron/dispatcher.js'
-import { recoverRuns, scheduleJob, _inflight, _runs } from '../src/cron/runner.js'
+import { recoverRuns, runJob, scheduleJob, _inflight, _runs } from '../src/cron/runner.js'
 import { MAX_PENDING_EVENTS } from '../src/cron/events.js'
 import { createCronHookRoutes } from '../src/routes/cron-hooks.js'
 import { createCronRoutes } from '../src/routes/cron.js'
@@ -254,8 +254,10 @@ describe('startOrInject — batching', () => {
 
   it('a user turn running when the job has a folder: the webhook run still queues (folder left for a later run), events done', async () => {
     fs.mkdirSync(path.join(ws, 'sub'))
+    fs.mkdirSync(path.join(ws, 'old'))
     insertJob('cron-dir', { workingDir: 'sub' })
-    h.seedSession('cron-dir')
+    h.seedSession('cron-dir', { workingDir: 'old' })
+    const dirOf = () => h.sm.getDb().select({ d: agentSessions.workingDir }).from(agentSessions).where(eq(agentSessions.id, 'cron-dir')).get()!.d
     let release!: () => void
     h.turns.push({ gate: new Promise<void>((r) => { release = r }), reply: 'user reply' }, { reply: 'event done' })
     await h.sm.sendUserMessage('cron-dir', 'hello')
@@ -269,6 +271,13 @@ describe('startOrInject — batching', () => {
     await until(() => settled('cron-dir'))
     expect(runsOf('cron-dir')[0]).toMatchObject({ status: 'succeeded', output: 'event done' })
     expect(eventsOf('cron-dir')[0].state).toBe('done')
+    // Left as it was by the busy fire …
+    expect(dirOf()).toBe('old')
+    // … and moved by the next fire on the idle session.
+    expect((await post('cron-dir', '{"q":2}', { authorization: `Bearer ${SECRET}` })).status).toBe(202)
+    await until(() => runsOf('cron-dir').length === 2 && settled('cron-dir'))
+    expect(runsOf('cron-dir').map((r) => r.status)).toEqual(['succeeded', 'succeeded'])
+    expect(dirOf()).toBe('sub')
   })
 
   it('another owner taking the session during the fire\'s awaits: no run row, events pending, its release starts the run', async () => {
@@ -336,6 +345,21 @@ describe('startOrInject — batching', () => {
     expect(byKind.manual).toMatchObject({ status: 'failed', failureReason: 'create blew up' })
     expect(byKind.webhook).toMatchObject({ status: 'succeeded' })
     expect(eventsOf('cron-now-fail')[0]).toMatchObject({ state: 'done', runId: byKind.webhook.id })
+  })
+
+  it('a scheduled fire failing before its turn with events pending: they get their own run', async () => {
+    // A webhook job has no timer; the scheduled path is driven directly (a
+    // fire armed just before a switch to webhook mode lands here).
+    insertJob('cron-sch-fail')
+    db.insert(cronEvents).values({ id: 'ev-sch', jobId: 'cron-sch-fail', deliveryId: 'sch1', receivedAt: 1, state: 'pending', payload: '{}' }).run()
+    vi.spyOn(h.sm, 'createSession').mockRejectedValueOnce(new Error('create blew up'))
+    await runJob('cron-sch-fail', 'scheduled')
+    await until(() => runsOf('cron-sch-fail').length === 2 && settled('cron-sch-fail'))
+    const byKind = Object.fromEntries(runsOf('cron-sch-fail').map((r) => [r.triggerKind, r]))
+    expect(byKind.scheduled).toMatchObject({ status: 'failed', failureReason: 'create blew up' })
+    expect(byKind.webhook).toMatchObject({ status: 'succeeded' })
+    expect(h.inputs[0]).toContain('delivery sch1')
+    expect(eventsOf('cron-sch-fail')[0]).toMatchObject({ state: 'done', runId: byKind.webhook.id })
   })
 
   it('a user turn in the session: the webhook run queues behind it instead of skipping', async () => {
