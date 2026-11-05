@@ -1,6 +1,6 @@
 id: aws-bedrock-openai
 runtime: bedrock-mantle
-revision: 2026110402
+revision: 2026110501
 displayName: AWS Bedrock OpenAI-compatible (GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3 · GLM 5.3)
 displayName_zh: AWS Bedrock OpenAI 兼容接口（GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3 · GLM 5.3）
 description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6.1 (Sol / Terra), GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.7 / 4.6, Moonshot Kimi K3, Z.AI GLM 5.3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).
@@ -56,12 +56,17 @@ secrets:
 #     field (model default) — it does not send `none`. Good thing too: on this
 #     host GPT-6 Astra and GPT-6.1 Sol 400 on `none` while every other GPT
 #     accepts it.
-#   - reasoning summaries: returned when requested — with reasoning.summary=
-#     detailed, output[].reasoning.summary carries summary_text (live-probed
-#     2026-10-22 on us.openai.gpt-6-astra, same as GPT on Mantle; the GPT-6.x /
-#     5.6 Bedrock model cards list Reasoning Summaries for bedrock-runtime
-#     Responses). MantleAgent sends only reasoning.effort, never
-#     reasoning.summary, so no thinking text shows in the UI.
+#   - reasoning text: with Thinking on MantleAgent sends reasoning: { effort,
+#     summary: 'auto' } and shows what the reasoning item carries in the
+#     thinking panel — summary[] summary_text (GPT, streamed as
+#     response.reasoning_summary_text.delta) or content[] reasoning_text (Kimi
+#     K3's raw reasoning, no summary, streamed as response.reasoning.delta).
+#     Live-probed 2026-11-05 (effort low, a trivial prompt): GPT-6 Sol returns
+#     a summary (one `detailed` run came back empty, hence `auto`), Kimi K3 its
+#     reasoning_text; GPT-6 Luna and Grok 4.7 / 4.6 answer 200 with no text —
+#     it may be empty on simple prompts, not "never". GLM 5.3 untested (429).
+#     The GPT-6.x / 5.6 Bedrock model cards list Reasoning Summaries for
+#     bedrock-runtime Responses.
 models:
   # OpenAI GPT-6.1 / GPT-6 / GPT-5.6 — the same eight models as
   # aws-bedrock-mantle.yaml (see that file for the per-model background:

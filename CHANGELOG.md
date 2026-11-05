@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Models: Bedrock Mantle / bedrock-runtime OpenAI agents show the model's reasoning when Thinking is on — GPT-6 Sol / Astra stream their reasoning summaries, Kimi K3 its raw reasoning, into the thinking panel.
+
 ## [2.1.3] - 2026-11-04
 
 ### Added

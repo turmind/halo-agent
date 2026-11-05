@@ -1,6 +1,6 @@
 id: aws-bedrock-mantle
 runtime: bedrock-mantle
-revision: 2026110402
+revision: 2026110501
 displayName: AWS Bedrock Mantle (OpenAI GPT-6.1 / 6 / 5.6)
 displayName_zh: AWS Bedrock Mantle（OpenAI GPT-6.1 / 6 / 5.6）
 description: OpenAI GPT-6.1 (Sol / Terra), GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna) on Amazon Bedrock via the bedrock-mantle endpoint (OpenAI Responses API only — not Converse/InvokeModel). Region-split — GPT-6.1 Sol / Terra and GPT-6 Sol / Luna are on us-east-1 only, Astra on us-east-1 and us-west-2.
@@ -66,13 +66,18 @@ secrets:
 #     max works in practice but isn't on the official list. It is NOT silently
 #     downgraded: measured ~6% more reasoning_tokens than xhigh on identical
 #     prompts, so the tier reaches the model — a nudge, not a doubling.
-#   - reasoning summaries: returned when requested — with reasoning.summary=
-#     detailed, output[].reasoning.summary carries summary_text (live-probed
-#     2026-10-22 on gpt-6-astra; every GPT-6.x / 5.6 Bedrock model card lists
-#     "Reasoning Summaries (Responses API only)" for bedrock-mantle). Without
-#     the field the summary stays empty while reasoning_tokens > 0. MantleAgent
-#     sends only reasoning.effort, never reasoning.summary, so no thinking text
-#     shows in the UI — a request-side choice, not an upstream limit.
+#   - reasoning summaries: with Thinking on MantleAgent sends reasoning:
+#     { effort, summary: 'auto' } and shows output[].reasoning.summary
+#     (summary_text) in the thinking panel, streamed live from
+#     response.reasoning_summary_text.delta. Without the field the summary
+#     stays empty while reasoning_tokens > 0. Live-probed 2026-11-05 (effort
+#     low, a trivial prompt): GPT-6 Sol and Astra (us-east-1) return a summary;
+#     GPT-6.1 Terra and GPT-5.6 Luna answer 200 with an empty one — it may be
+#     empty on simple prompts, not "never". `auto` rather than `detailed`: one
+#     detailed run (bedrock-runtime GPT-6 Sol) came back empty. A reply that
+#     needs no reasoning ("hi") shows no thinking panel. Every GPT-6.x / 5.6
+#     Bedrock model card lists "Reasoning Summaries (Responses API only)" for
+#     bedrock-mantle.
 #   - maxOutputTokens for the 5.6 variants: not disclosed in the 5.6 model card —
 #     conservatively carried over from GPT-5.5's 64000.
 models:
