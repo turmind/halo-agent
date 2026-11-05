@@ -4,7 +4,8 @@
 //
 // The front end parses the pattern itself (code units, ES Annex B grammar) and
 // emits only constructs whose regexp2 semantics equal JS's:
-//   - R1 `.` → [^\n\r\u2028\u2029]; `$` → (?![\s\S]) (.NET `$` also matches before a final \n)
+//   - R1 `.` → [^\n\r\u2028\u2029]; `$` → (?![\s\S]) (.NET's default `$` also matches before a
+//     final \n; ECMAScript mode already doesn't — pinned here so it never hinges on that option)
 //   - R2 every literal is emitted per code unit (\uXXXX), lines with astral chars are fed as code units
 //   - R3 unknown escapes are identity escapes (literal)
 //   - R4 `(?i)` / `(?#` / … are rejected ("Invalid group")
