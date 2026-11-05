@@ -1,0 +1,86 @@
+name: node-go
+
+# halo-node (packages/node-go): Go rewrite of `halo node`. The TS executor is the
+# live oracle — any PR that touches either side runs the conformance suite.
+# Release: attaches the three linux binaries + SHA256SUMS to the GitHub release.
+on:
+  pull_request:
+    branches: [main]
+    paths: &paths
+      - packages/node-go/**
+      - packages/server/src/nodes/**
+      - packages/server/src/tools/workspace-tools.ts
+      - packages/server/src/tools/sandbox.ts
+      - packages/server/src/child-env.ts
+      - packages/server/test/node-go-conformance.test.ts
+      - packages/server/test/helpers/ts-node-main.ts
+      - .github/workflows/node-go.yml
+  push:
+    branches: [main]
+    paths: *paths
+  release:
+    types: [published]
+  # Re-run the attach for an already-published tag that contains packages/node-go/
+  # (e.g. the release event run failed). Tags before the Go port can't build.
+  workflow_dispatch:
+    inputs:
+      tag: { required: true, description: "v2.2.0" }
+
+permissions: { contents: read }
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: packages/node-go/go.mod, cache-dependency-path: packages/node-go/go.sum }
+      - run: corepack enable
+      - uses: actions/setup-node@v7
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      # The TS side of the conformance run imports @turmind/halo-core from dist/.
+      - run: pnpm --filter @turmind/halo-core build
+      - name: go vet + go test
+        run: cd packages/node-go && go vet ./... && go test ./...
+      # rmguard vectors must still equal what the current TS assertRmSafe says (needs server's tsx).
+      - run: node packages/node-go/conformance/gen-rmguard-vectors.mjs --check
+      - name: regex differential fuzz (20k patterns, seed = run id)
+        run: |
+          node packages/node-go/conformance/regex-fuzz.mjs --n 20000 --seed ${{ github.run_id }} > /tmp/re.jsonl
+          cd packages/node-go && JSREGEX_VECTORS=/tmp/re.jsonl go test ./internal/jsregex -run Differential -v -count=1
+      - run: cd packages/node-go && VER=dev-${GITHUB_SHA::7} ./build.sh
+      - name: conformance (amd64, full)
+        run: pnpm --filter @turmind/halo-server exec vitest run test/node-go-conformance.test.ts
+        env: { HALO_NODE_GO_BIN: "${{ github.workspace }}/packages/node-go/dist/halo-node-linux-amd64" }
+      - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      - name: conformance (arm64 under qemu, smoke)
+        run: pnpm --filter @turmind/halo-server exec vitest run test/node-go-conformance.test.ts
+        env:
+          HALO_NODE_GO_BIN: "${{ github.workspace }}/packages/node-go/dist/halo-node-linux-arm64"
+          HALO_NODE_GO_EXEC: qemu-aarch64-static
+          HALO_NODE_GO_SMOKE: "1"
+      - name: conformance (armv7 under qemu, smoke)
+        run: pnpm --filter @turmind/halo-server exec vitest run test/node-go-conformance.test.ts
+        env:
+          HALO_NODE_GO_BIN: "${{ github.workspace }}/packages/node-go/dist/halo-node-linux-armv7"
+          HALO_NODE_GO_EXEC: qemu-arm-static
+          HALO_NODE_GO_SMOKE: "1"
+
+  release:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { ref: "${{ env.TAG }}" }
+      - uses: actions/setup-go@v7
+        with: { go-version-file: packages/node-go/go.mod, cache-dependency-path: packages/node-go/go.sum }
+      # The only gate on release events (the test job doesn't run): fail → nothing attached.
+      - run: cd packages/node-go && go vet ./... && go test ./...
+      - run: cd packages/node-go && VER=${TAG#v} ./build.sh
+      - run: gh release upload "$TAG" packages/node-go/dist/halo-node-linux-* packages/node-go/dist/SHA256SUMS --clobber
