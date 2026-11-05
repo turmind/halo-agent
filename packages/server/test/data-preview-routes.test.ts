@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { createDataPreviewRoutes } from '../src/routes/data-preview.js'
+import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES, setSandboxHiddenPaths } from '../src/tools/sandbox.js'
 
 /**
  * Contract: /data-preview/* parses parquet + sqlite + csv/tsv server-side and
@@ -44,6 +45,15 @@ describe('data-preview routes', () => {
     ws = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-data-preview-'))
     outside = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-data-preview-outside-'))
     fs.writeFileSync(path.join(outside, 'secret.db'), 'outside the workspace')
+    // Real data files outside the workspace — the admin's read-only external
+    // tabs pass them by absolute path.
+    fs.writeFileSync(path.join(outside, 'ext.csv'), 'k,v\na,1\nb,2\n')
+    const extDb = new Database(path.join(outside, 'ext.db'))
+    extDb.exec(`CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1), (2), (3)`)
+    extDb.close()
+    fs.mkdirSync(path.join(outside, 'hidden'))
+    fs.writeFileSync(path.join(outside, 'hidden', 'h.csv'), 'a\n1\n')
+    fs.symlinkSync(path.join(outside, 'hidden', 'h.csv'), path.join(outside, 'h-link.csv'))
 
     fs.copyFileSync(FIXTURE_PARQUET, path.join(ws, 'sample.parquet'))
     fs.writeFileSync(path.join(ws, 'fake.parquet'), 'not really a parquet file at all')
@@ -351,6 +361,37 @@ describe('data-preview routes', () => {
       const { status, body } = await get(route, { path: escape, projectId: ws, table: 'items' })
       expect(status).toBe(403)
       expect(body.error).toBe('Path traversal not allowed')
+    }
+  })
+
+  it('absolute path outside the workspace (read-only external tab) reads csv and sqlite', async () => {
+    const csv = await get('/data-preview/csv', { path: path.join(outside, 'ext.csv'), projectId: ws })
+    expect(csv.status).toBe(200)
+    expect(csv.body.rows).toEqual([['a', '1'], ['b', '2']])
+    const tables = await get('/data-preview/sqlite/tables', { path: path.join(outside, 'ext.db'), projectId: ws })
+    expect(tables.status).toBe(200)
+    expect(tables.body.tables).toEqual([{ name: 't', rowCount: 3 }])
+    const rows = await get('/data-preview/sqlite/rows', { path: path.join(outside, 'ext.db'), projectId: ws, table: 't' })
+    expect(rows.status).toBe(200)
+    expect(rows.body.rows).toEqual([[1], [2], [3]])
+  })
+
+  it('absolute path with a .. segment → 400', async () => {
+    const { status, body } = await get('/data-preview/csv', { path: `${ws}/../${path.basename(outside)}/ext.csv`, projectId: ws })
+    expect(status).toBe(400)
+    expect(body.error).toBe('absolute path without .. required')
+  })
+
+  it('sandbox-hidden absolute paths (direct or via a symlink) answer exactly like a missing file', async () => {
+    setSandboxHiddenPaths([path.join(outside, 'hidden')], [])
+    try {
+      for (const p of [path.join(outside, 'hidden', 'h.csv'), path.join(outside, 'h-link.csv'), path.join(outside, 'nope.csv')]) {
+        const { status, body } = await get('/data-preview/csv', { path: p, projectId: ws })
+        expect(status, p).toBe(404)
+        expect(body).toEqual({ error: 'File not found' })
+      }
+    } finally {
+      setSandboxHiddenPaths(DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES)
     }
   })
 

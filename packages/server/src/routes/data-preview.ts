@@ -5,7 +5,7 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { asyncBufferFromFile, parquetMetadataAsync, parquetSchema, parquetReadObjects } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
-import { resolveProjectPath, validatePath } from './workspace-path.js'
+import { readableRealPath, resolveProjectPath, systemPath, validatePath } from './workspace-path.js'
 
 /**
  * Tabular data previews (Parquet / SQLite / CSV / TSV) for the admin editor.
@@ -284,7 +284,13 @@ function errText(err: unknown): string {
 export function createDataPreviewRoutes() {
   const app = new Hono()
 
-  // Same (projectId, path) resolution + traversal guard as files.ts.
+  // Same (projectId, path) resolution as files.ts /files/download. Relative
+  // path → confined to the workspace. Absolute path → anywhere on the host
+  // under /fs/raw's rules (no `..`, judged by realpath, hidden lists answer
+  // like a missing file): the admin's read-only tabs for files outside the
+  // workspace (chat path links). Same trust boundary as /fs/raw — admin cookie
+  // only (not in PUBLIC_PATHS), and every endpoint here is read-only (sqlite
+  // opens `readonly`).
   async function resolveDataFile(
     projectId: string | undefined,
     filePath: string | undefined,
@@ -292,8 +298,21 @@ export function createDataPreviewRoutes() {
     if (!filePath || !projectId) return { error: 'path and projectId are required', status: 400 }
     const projectPath = await resolveProjectPath(projectId)
     if (!projectPath) return { error: 'Project not found', status: 404 }
-    if (!validatePath(filePath, projectPath)) return { error: 'Path traversal not allowed', status: 403 }
-    const absolutePath = path.resolve(projectPath, filePath)
+    let absolutePath: string
+    if (path.isAbsolute(filePath)) {
+      const target = systemPath(filePath)
+      if (!target) return { error: 'absolute path without .. required', status: 400 }
+      try {
+        absolutePath = await readableRealPath(target)
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === 'EACCES' || code === 'EPERM') return { error: (err as Error).message, status: 403 }
+        return { error: 'File not found', status: 404 }
+      }
+    } else {
+      if (!validatePath(filePath, projectPath)) return { error: 'Path traversal not allowed', status: 403 }
+      absolutePath = path.resolve(projectPath, filePath)
+    }
     try {
       const stat = await fs.stat(absolutePath)
       if (stat.isDirectory()) return { error: 'Path is a directory', status: 400 }

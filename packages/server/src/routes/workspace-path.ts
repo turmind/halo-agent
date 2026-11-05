@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import { existsSync, realpathSync } from 'node:fs'
 import path from 'node:path'
+import { isHiddenHostPath } from '../tools/sandbox.js'
 
 /**
  * Shared (projectId, path) → filesystem resolution for /api routes that read
@@ -62,6 +63,27 @@ export function validatePath(filePath: string, projectPath: string): boolean {
   const resolved = realpathBounded(path.resolve(projectPath, filePath))
   const proj = realpathBounded(projectPath)
   return resolved === proj || resolved.startsWith(proj + path.sep)
+}
+
+// Host paths by absolute path — used by /files/download's absolute branch, the
+// /fs/* routes and /data-preview/* (read-only external tabs). Absolute only,
+// no `..` segment.
+export function systemPath(target: string | undefined): string | null {
+  if (!target || !path.isAbsolute(target) || target.split(/[\\/]/).includes('..')) return null
+  return path.resolve(target)
+}
+
+// Halo's own secrets (the sandbox hidden lists: ~/.halo/secrets, ~/.ssh,
+// .git-credentials, the global dbs …) are judged by realpath — so a symlink
+// can't reach them — and answer exactly like a missing file.
+export function hiddenAsMissing(syscall: string, target: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`ENOENT: no such file or directory, ${syscall} '${target}'`), { code: 'ENOENT' })
+}
+
+export async function readableRealPath(target: string): Promise<string> {
+  const real = await fs.realpath(target)
+  if (isHiddenHostPath(real)) throw hiddenAsMissing('realpath', target)
+  return real
 }
 
 /**

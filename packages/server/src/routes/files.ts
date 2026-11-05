@@ -5,7 +5,7 @@ import { Readable } from 'node:stream'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { imageMimeFromExt, type FileTreeNode } from '@turmind/halo-core'
-import { resolveProjectPath, validatePath } from './workspace-path.js'
+import { hiddenAsMissing, readableRealPath, resolveProjectPath, systemPath, validatePath } from './workspace-path.js'
 import { isHiddenHostPath } from '../tools/sandbox.js'
 import { DEFAULT_FOLDER_ZIP_LIMITS, FolderZipError, planFolderZip, planSummary, streamFolderZip, type FolderZipLimits } from './folder-zip.js'
 
@@ -481,26 +481,11 @@ export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {
     wasm: 'application/wasm',
   }
 
-  // Host paths by absolute path — used by /files/download's absolute branch and
-  // the /fs/* routes below. Absolute only, no `..` segment.
-  function systemPath(target: string | undefined): string | null {
-    if (!target || !path.isAbsolute(target) || target.split(/[\\/]/).includes('..')) return null
-    return path.resolve(target)
-  }
+  // Absolute host paths: systemPath / readableRealPath / hiddenAsMissing live
+  // in workspace-path.ts (shared with /data-preview/*).
   const fsErrorStatus = (err: unknown) => {
     const code = (err as NodeJS.ErrnoException).code
     return code === 'ENOENT' || code === 'ENOTDIR' ? 404 : code === 'EACCES' || code === 'EPERM' ? 403 : 500
-  }
-  // Halo's own secrets (the sandbox hidden lists: ~/.halo/secrets, ~/.ssh,
-  // .git-credentials, the global dbs …) are judged by realpath — so a symlink
-  // can't reach them — and answer exactly like a missing file.
-  function hiddenAsMissing(syscall: string, target: string): NodeJS.ErrnoException {
-    return Object.assign(new Error(`ENOENT: no such file or directory, ${syscall} '${target}'`), { code: 'ENOENT' })
-  }
-  async function readableRealPath(target: string): Promise<string> {
-    const real = await fs.realpath(target)
-    if (isHiddenHostPath(real)) throw hiddenAsMissing('realpath', target)
-    return real
   }
 
   // GET /files/download?path=xxx&projectId=xxx&inline=1 - Download or view a file
@@ -814,7 +799,8 @@ export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {
   // ── Read-only file access by absolute path (extension capability fs-read,
   // `scope: 'system'`). Same admin-cookie trust as /fs/browse and the
   // terminal; never a PUBLIC_PATHS entry. Path rules: systemPath /
-  // readableRealPath above (shared with /files/download's absolute branch).
+  // readableRealPath in workspace-path.ts (shared with /files/download's
+  // absolute branch).
 
   // GET /fs/stat?path=/abs → { path, realPath, size, modifiedAt, isDirectory }
   app.get('/fs/stat', async (c) => {
