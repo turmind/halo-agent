@@ -112,21 +112,9 @@ func (e *Executor) prepare(op string, args map[string]any) (call, error) {
 	return nil, fmt.Errorf("unknown op %q", op)
 }
 
-// testPanic, when set, runs at the start of every Exec (tests inject a panic).
-var testPanic func(op string)
-
 // Exec runs op. The error's message is what goes into `{ok:false,error}`.
-// A panic (a bug in a port) becomes that error instead of killing the process.
-func (e *Executor) Exec(ctx context.Context, op string, args map[string]any) (text string, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			e.s.Log(fmt.Sprintf("[Node] %s crashed: %v", op, r)) // no args: they may hold file content
-			text, err = "", fmt.Errorf("halo-node crashed running %s: %v", op, r)
-		}
-	}()
-	if testPanic != nil {
-		testPanic(op)
-	}
+// A panic propagates: the client's call goroutine recovers it (and reply's).
+func (e *Executor) Exec(ctx context.Context, op string, args map[string]any) (string, error) {
 	lbl := label(op, args)
 	c, err := e.prepare(op, args)
 	if err != nil {
@@ -137,7 +125,7 @@ func (e *Executor) Exec(ctx context.Context, op string, args map[string]any) (te
 		return "", err
 	}
 	e.s.Log("[Node] " + lbl)
-	text, err = c(ctx)
+	text, err := c(ctx)
 	if err != nil {
 		return "", err
 	}

@@ -1,12 +1,15 @@
 package jsv
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"math"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -19,6 +22,7 @@ type truth struct {
 	ParseInts [][2]any    `json:"parseInts"`
 	SortIn    []string    `json:"sortIn"`
 	Sorted    []string    `json:"sorted"`
+	Errno     [][3]any    `json:"errno"`
 }
 
 func load(t *testing.T) truth {
@@ -159,5 +163,56 @@ func TestUTF16(t *testing.T) {
 	}
 	if Truncate16(s, 5) != s[:len(s)-1] || Truncate16(s, 3) != "aaa" {
 		t.Error("Truncate16 boundaries")
+	}
+}
+
+// Invalid bytes become 3-byte U+FFFD: the output is sized up front, so a
+// decode allocates the result once — no doubling buffer next to it.
+func TestDecodeAllocatesOnce(t *testing.T) {
+	b := bytes.Repeat([]byte{0xff, 'a', 0xe2, 0x82}, 16<<20) // 64 MiB, all of it invalid but the 'a's
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	s := Decode(b)
+	runtime.ReadMemStats(&m1)
+	if want := 16 << 20 * 7; len(s) != want { // FFFD a FFFD
+		t.Fatalf("len %d, want %d", len(s), want)
+	}
+	if got := m1.TotalAlloc - m0.TotalAlloc; float64(got) > 1.2*float64(len(s)) {
+		t.Errorf("allocated %d bytes for a %d-byte result", got, len(s))
+	}
+}
+
+// FsError's code / text per errno is Node's (util.getSystemErrorMap()); a code
+// libuv doesn't map prints as `Unknown system error -<n>` (Node 22, measured with
+// an LD_PRELOAD shim: EDQUOT, 200).
+func TestFsErrorErrno(t *testing.T) {
+	tr := load(t)
+	if runtime.GOOS != "linux" {
+		t.Skip("errno numbers are Linux's")
+	}
+	if len(tr.Errno) < 60 {
+		t.Fatalf("truth has %d errnos", len(tr.Errno))
+	}
+	for _, e := range tr.Errno {
+		n, code, text := int(e[0].(float64)), e[1].(string), e[2].(string)
+		want := code + ": " + text + ", open '/p'"
+		if got := FsError(syscall.Errno(n), "open", "/p").Error(); got != want {
+			t.Errorf("errno %d: %q, want %q", n, got, want)
+		}
+	}
+	for _, c := range []struct {
+		en   syscall.Errno
+		want string
+	}{
+		{syscall.EMLINK, "EMLINK: too many links, mkdir '/p'"},
+		{syscall.ETIMEDOUT, "ETIMEDOUT: connection timed out, mkdir '/p'"},
+		{syscall.EILSEQ, "EILSEQ: illegal byte sequence, mkdir '/p'"},
+		{syscall.ENOTSUP, "ENOTSUP: operation not supported on socket, mkdir '/p'"},
+		{syscall.EDQUOT, "Unknown system error -122: Unknown system error -122, mkdir '/p'"},
+		{200, "Unknown system error -200: Unknown system error -200, mkdir '/p'"},
+	} {
+		if got := FsError(c.en, "mkdir", "/p").Error(); got != c.want {
+			t.Errorf("%d: %q, want %q", c.en, got, c.want)
+		}
 	}
 }

@@ -103,23 +103,24 @@ func TestReadFileStreamCap(t *testing.T) {
 	}
 }
 
-func TestExecPanic(t *testing.T) {
-	testPanic = func(op string) {
-		if op == "read" {
-			panic("boom")
-		}
+// A panic in an output reader stops the read and the command, and surfaces
+// from Exec (the client's call goroutine turns it into the error reply).
+func TestRunPumpPanic(t *testing.T) {
+	testPumpChunk = func() { panic("boom") }
+	defer func() { testPumpChunk = nil }()
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	ex := New(Scope{Root: root, Base: root, AllowShell: true, ShellTimeoutMs: 60000, Log: func(string) {}})
+	start := time.Now()
+	got := func() (r any) {
+		defer func() { r = recover() }()
+		_, _ = ex.Exec(context.Background(), "run", map[string]any{"command": "echo hi; sleep 30"})
+		return nil
+	}()
+	if got != "boom" {
+		t.Errorf("panic %v, want boom", got)
 	}
-	defer func() { testPanic = nil }()
-	ex, root, logs := newEx(t)
-	_ = os.WriteFile(filepath.Join(root, "a.txt"), []byte("a\n"), 0o644)
-	if got := run1(ex, "read", map[string]any{"path": "a.txt", "content": "secret"}); got != "ERR halo-node crashed running read: boom" {
-		t.Errorf("got %q", got)
-	}
-	if strings.Join(*logs, "\n") != "[Node] read crashed: boom" {
-		t.Errorf("logs %q", *logs)
-	}
-	if got := run1(ex, "list", map[string]any{}); got != "📄 a.txt" {
-		t.Errorf("after the panic: %q", got)
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("returned after %v: the command wasn't stopped", d)
 	}
 }
 

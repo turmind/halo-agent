@@ -79,7 +79,7 @@ func compileAll(srcs []string) []*jsregex.Regexp {
 }
 
 // matchAny is matchInclude / matchGlob's `try { new RegExp(src).test(s) } catch { false }`;
-// a timeout (D10) is returned instead, to abort the whole call.
+// a timeout / engine error (D10) is returned instead, to abort the whole call.
 func matchAny(res []*jsregex.Regexp, s string) (bool, error) {
 	for _, re := range res {
 		if re == nil {
@@ -92,8 +92,12 @@ func matchAny(res []*jsregex.Regexp, s string) (bool, error) {
 	return false, nil
 }
 
-func matchTimedOut(at string) error {
-	return fmt.Errorf("regex match timed out after %v on %s — call aborted (catastrophic backtracking: simplify the pattern)", jsregex.MatchTimeout, at)
+// matchFailed: the error a failed test() aborts grep / glob with.
+func matchFailed(err error, at string) error {
+	if err == jsregex.ErrTimeout {
+		return fmt.Errorf("regex match timed out after %v on %s — call aborted (catastrophic backtracking: simplify the pattern)", jsregex.MatchTimeout, at)
+	}
+	return fmt.Errorf("%v on %s — call aborted", err, at)
 }
 
 var braceRe = regexp.MustCompile(`\{([^}]+)\}`)
@@ -223,7 +227,7 @@ func (e *Executor) grep(ctx context.Context, searchDir string, args map[string]a
 			}
 			hit, err := matchAny(includeRes, filepath.Base(file))
 			if err != nil {
-				thrown = matchTimedOut(nodepath.Rel(e.s.Base, file))
+				thrown = matchFailed(err, nodepath.Rel(e.s.Base, file))
 				return false
 			}
 			if !hit {
@@ -247,7 +251,7 @@ func (e *Executor) grep(ctx context.Context, searchDir string, args map[string]a
 			}
 			ok, err := re.Test(line)
 			if err != nil {
-				thrown = matchTimedOut(fmt.Sprintf("%s:%d", rel, i+1))
+				thrown = matchFailed(err, fmt.Sprintf("%s:%d", rel, i+1))
 				return false
 			}
 			if ok {
@@ -300,7 +304,7 @@ func (e *Executor) glob(ctx context.Context, searchDir string, args map[string]a
 		rel := nodepath.Rel(e.s.Base, file)
 		ok, err := matchAny(globRes, strings.ReplaceAll(rel, `\`, "/"))
 		if err != nil {
-			thrown = matchTimedOut(rel)
+			thrown = matchFailed(err, rel)
 			return false
 		}
 		if ok {

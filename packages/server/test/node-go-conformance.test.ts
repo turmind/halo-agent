@@ -46,7 +46,7 @@ type Entry =
   | { symlink: string; to: string }
   | { seq: string; pad: number; count: number; text: string }
   | { chmod: string; mode: string }
-  | { sparse: string; size: number }
+  | { sparse: string; size: number; text?: string }
 interface Case {
   name: string
   calls: { op: string; args: Record<string, unknown> }[]
@@ -251,9 +251,10 @@ function resetTree(side: Side, entries: Entry[]): void {
       fs.mkdirSync(path.dirname(at(e.seq) as string), { recursive: true })
       for (let i = 0; i < e.count; i++) fs.writeFileSync(`${at(e.seq) as string}${String(i).padStart(e.pad, '0')}`, e.text)
     } else if ('sparse' in e) {
-      // A hole of `size` bytes: past fs.readFile's limits without the disk or the write.
+      // `text`, then a hole up to `size` bytes: past fs.readFile's limits without the
+      // disk or the write. A text head of ≥512 bytes gets it past isBinary (no NUL in the first 512).
       fs.mkdirSync(path.dirname(at(e.sparse) as string), { recursive: true })
-      fs.writeFileSync(at(e.sparse), '')
+      fs.writeFileSync(at(e.sparse), e.text ?? '')
       fs.truncateSync(at(e.sparse) as string, e.size)
     } else chmods.push([at(e.chmod) as string, parseInt(e.mode, 8)])
   }

@@ -244,4 +244,9 @@ func TestMatchTimeout(t *testing.T) {
 	if ok, err := re.Test("aaa"); !ok || err != nil {
 		t.Errorf("plain match: %v, %v", ok, err)
 	}
+	// regexp2's timeout text is what Test keys on; keep it pinned across upgrades.
+	_, err = re.re.MatchString(strings.Repeat("a", 40) + "!")
+	if err == nil || !strings.HasPrefix(err.Error(), "match timeout after ") {
+		t.Errorf("regexp2 timeout error: %v", err)
+	}
 }

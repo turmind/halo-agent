@@ -3,6 +3,7 @@ package jsv
 import (
 	"strings"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // Decoder is a streaming WHATWG UTF-8 decoder (maximal-subpart U+FFFD
@@ -20,7 +21,7 @@ func Decode(b []byte) string {
 		return string(b)
 	}
 	var d Decoder
-	return d.Write(b) + d.Flush()
+	return d.decode(b, true)
 }
 
 // Write decodes a chunk, keeping an unfinished trailing sequence for the next.
@@ -28,16 +29,44 @@ func (d *Decoder) Write(b []byte) string {
 	if d.needed == 0 && utf8.Valid(b) {
 		return string(b)
 	}
-	var sb strings.Builder
+	return d.decode(b, false)
+}
+
+// decode sizes the output with a counting pass, then fills one exact
+// allocation: every invalid byte can become 3 (U+FFFD), so a growing buffer
+// would hold up to ~2× the result while it doubles. flush ends the stream.
+func (d *Decoder) decode(b []byte, flush bool) string {
 	if d.lower == 0 {
 		d.lower, d.upper = 0x80, 0xBF
 	}
+	saved := *d
+	n := d.run(b, nil, flush)
+	*d = saved
+	out := make([]byte, n)
+	d.run(b, out, flush)
+	return unsafe.String(unsafe.SliceData(out), n)
+}
+
+// put writes r at out[n:] (just counts when out is nil); returns the new length.
+func put(out []byte, n int, r rune) int {
+	if out == nil {
+		return n + utf8.RuneLen(r)
+	}
+	return n + utf8.EncodeRune(out[n:], r)
+}
+
+// run is the WHATWG state machine over b, writing into out (nil: count only).
+func (d *Decoder) run(b, out []byte, flush bool) int {
+	n := 0
 	for i := 0; i < len(b); i++ {
 		c := b[i]
 		if d.needed == 0 {
 			switch {
 			case c <= 0x7F:
-				sb.WriteByte(c)
+				if out != nil {
+					out[n] = c
+				}
+				n++
 			case c >= 0xC2 && c <= 0xDF:
 				d.needed, d.cp = 1, rune(c&0x1F)
 			case c >= 0xE0 && c <= 0xEF:
@@ -55,13 +84,13 @@ func (d *Decoder) Write(b []byte) string {
 				}
 				d.needed, d.cp = 3, rune(c&0x07)
 			default:
-				sb.WriteRune(utf8.RuneError)
+				n = put(out, n, utf8.RuneError)
 			}
 			continue
 		}
 		if c < d.lower || c > d.upper {
 			d.reset()
-			sb.WriteRune(utf8.RuneError)
+			n = put(out, n, utf8.RuneError)
 			i-- // reprocess this byte as a lead
 			continue
 		}
@@ -69,11 +98,15 @@ func (d *Decoder) Write(b []byte) string {
 		d.cp = d.cp<<6 | rune(c&0x3F)
 		d.seen++
 		if d.seen == d.needed {
-			sb.WriteRune(d.cp)
+			n = put(out, n, d.cp)
 			d.reset()
 		}
 	}
-	return sb.String()
+	if flush && d.needed != 0 { // = Flush
+		d.reset()
+		n = put(out, n, utf8.RuneError)
+	}
+	return n
 }
 
 // Flush ends the stream: an unfinished sequence becomes one U+FFFD.

@@ -36,6 +36,10 @@ var MatchTimeout = 30 * time.Second
 // ErrTimeout: a test() ran past MatchTimeout (V8 would backtrack on).
 var ErrTimeout = errors.New("regex match timed out")
 
+// ErrEngine: regexp2 failed inside a match for any other reason ("unknown
+// state in regex runner" — a regexp2 bug, never seen in the fuzz).
+var ErrEngine = errors.New("regex engine error")
+
 // maxDepth caps group nesting: the parser recurses per group. V8 throws
 // `Stack overflow` (at test()) past roughly the same depth of capture groups.
 const maxDepth = 10000
@@ -79,8 +83,11 @@ func (r *Regexp) Test(s string) (bool, error) {
 	} else {
 		ok, err = r.re.MatchString(s)
 	}
-	if err != nil { // regexp2's only match-time error; its text quotes the input
-		return false, ErrTimeout
+	if err != nil { // regexp2 has no sentinel: tell its timeout by text (which quotes the input — never passed on)
+		if strings.HasPrefix(err.Error(), "match timeout after ") {
+			return false, ErrTimeout
+		}
+		return false, ErrEngine
 	}
 	return ok, nil
 }

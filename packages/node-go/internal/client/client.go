@@ -441,7 +441,12 @@ func (n *node) handleRequest(c *websocket.Conn, id string, f protocol.ServerFram
 	}
 	go func() {
 		defer n.inflight.Done()
-		text, err := n.o.Exec.Exec(ctx, op, args)
+		defer func() { // reply panicked: the call may be half on the wire, send nothing more
+			if r := recover(); r != nil {
+				n.log(crashLog(op, r))
+			}
+		}()
+		text, err := n.exec(ctx, op, args)
 		if err != nil {
 			reply(false, err.Error())
 		} else {
@@ -449,6 +454,20 @@ func (n *node) handleRequest(c *websocket.Conn, id string, f protocol.ServerFram
 		}
 	}()
 }
+
+// exec is Exec with a panic (a bug in a port) turned into the call's error
+// instead of killing the process; logged without args (they may hold file content).
+func (n *node) exec(ctx context.Context, op string, args map[string]any) (text string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			n.log(crashLog(op, r))
+			text, err = "", fmt.Errorf("halo-node crashed running %s: %v", op, r)
+		}
+	}()
+	return n.o.Exec.Exec(ctx, op, args)
+}
+
+func crashLog(op string, r any) string { return fmt.Sprintf("[Node] %s crashed: %v", op, r) }
 
 // stop: abort calls, close(1000), exit 0 once closed and drained.
 func (n *node) stop() {

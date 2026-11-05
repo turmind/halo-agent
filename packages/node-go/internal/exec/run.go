@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -93,20 +94,33 @@ func (e *Executor) run(ctx context.Context, command, cwd string) (string, error)
 }
 
 type outBuf struct {
-	mu   sync.Mutex
-	dec  jsv.Decoder
-	sb   strings.Builder
-	n16  int
-	over func()
+	mu    sync.Mutex
+	dec   jsv.Decoder
+	sb    strings.Builder
+	n16   int
+	over  func()
+	crash atomic.Pointer[any] // a panic in pump; mu may still be held then
 }
+
+// testPumpChunk, when set, runs on every chunk under mu (tests inject a panic).
+var testPumpChunk func()
 
 func (b *outBuf) pump(r io.Reader, wg *sync.WaitGroup) {
 	defer wg.Done()
+	defer func() {
+		if p := recover(); p != nil { // stop reading, stop the command; spawnGroup re-panics
+			b.crash.Store(&p)
+			b.over()
+		}
+	}()
 	buf := make([]byte, 64*1024)
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
 			b.mu.Lock()
+			if testPumpChunk != nil {
+				testPumpChunk()
+			}
 			s := b.dec.Write(buf[:n])
 			b.sb.WriteString(s)
 			b.n16 += jsv.Len16(s)
@@ -248,6 +262,13 @@ loop:
 	if forced { // escaped group: stop reading, the pipes may never close
 		outR.Close()
 		errR.Close()
+	}
+	for _, b := range []*outBuf{&so, &se} {
+		if p := b.crash.Load(); p != nil {
+			outR.Close()
+			errR.Close()
+			panic(*p) // before String(): mu may be held. The call goroutine reports it.
+		}
 	}
 	stdout, stderr = so.String(), se.String()
 	switch {
