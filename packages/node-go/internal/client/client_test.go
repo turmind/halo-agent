@@ -10,6 +10,8 @@ func TestWSURL(t *testing.T) {
 		{"ws://h", "ws://h/api/nodes/connect", ""},
 		{"wss://h:1/p", "wss://h:1/p/api/nodes/connect", ""},
 		{"ftp://x", "", "--server must be http(s):// or ws(s)://, got ftp://x"},
+		{"localhost:9527", "", "--server must be http(s):// or ws(s)://, got localhost:9527"},
+		{"http//x", "", "Invalid URL"},
 	} {
 		got, err := WSURL(c.in)
 		if c.err != "" {

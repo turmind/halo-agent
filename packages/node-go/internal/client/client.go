@@ -52,11 +52,8 @@ type Options struct {
 // WSURL is nodeWsUrl.
 func WSURL(server string) (string, error) {
 	u, err := url.Parse(server)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		if err == nil {
-			err = errors.New("Invalid URL")
-		}
-		return "", fmt.Errorf("Invalid URL: %s", server)
+	if err != nil || u.Scheme == "" || u.Opaque == "" && u.Host == "" && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "ws" || u.Scheme == "wss") {
+		return "", errors.New("Invalid URL") // new URL() TypeError text
 	}
 	switch u.Scheme {
 	case "http":
