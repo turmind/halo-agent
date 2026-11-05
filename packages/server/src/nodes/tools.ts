@@ -4,20 +4,18 @@
  * db, env or the machine list at build time. Online state reaches the model
  * only through node_list's RESULT. Design: .halo/docs/design/node.md.
  */
-import http from 'node:http'
 import type { ToolDef } from '../agents/agent-loop.js'
-import { config } from '../config.js'
 import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { getNodeHub } from './hub.js'
-import { HEADER_RELAY, type NodeOp } from './protocol.js'
+import type { NodeOp } from './protocol.js'
 
-/** Not `halo server` (CLI / TUI, evo sandbox, AgentCore) — or cron's child
- *  without the relay env. Worded as permanent, like RELAY_UNAVAILABLE. */
+/** Not `halo server` (CLI / TUI, evo sandbox, AgentCore). Worded as
+ *  permanent, like RELAY_UNAVAILABLE. */
 export const NODES_UNAVAILABLE = 'linked machines are not available in this runtime — only `halo server` accepts `halo node` connections. This is permanent for this runtime, not a temporary outage: do not retry. Tell the user to run this from the admin UI or a channel connected to the server.'
 
 export const NODE_TOOL_NAMES = ['node_list', 'node_read', 'node_write', 'node_edit', 'node_list_dir', 'node_grep', 'node_glob', 'node_run'] as const
 
-/** Relay body op: a NodeOp, or 'nodes' = node_list. */
+/** dispatch op: a NodeOp, or 'nodes' = node_list. */
 export type RelayOp = NodeOp | 'nodes'
 
 const LIST_DESCRIPTION = [
@@ -72,45 +70,10 @@ function schemas(): Map<string, Record<string, unknown>> {
   return _schemas
 }
 
-/** POST to the server's loopback relay (cron's `halo cli` child). node:http,
- *  not fetch: undici's fixed 300s headersTimeout would cut a node_run whose
- *  shell timeout is over ~285s with a misleading "could not reach". The hub
- *  times every call out itself (120s; node_run: shell timeout + 15s) — this
- *  explicit timeout is only the backstop above it. */
-function relayCall(url: string, secret: string, body: { workspace: string; node?: string; op: RelayOp; args?: Record<string, unknown> }, signal?: AbortSignal): Promise<string> {
-  const timeoutMs = Math.max(config.timeout.shellExec, 120_000) + 30_000
-  return new Promise((resolve, reject) => {
-    const req = http.request(url, { method: 'POST', headers: { 'content-type': 'application/json', [HEADER_RELAY]: secret }, signal, timeout: timeoutMs }, (res) => {
-      let raw = ''
-      res.setEncoding('utf-8')
-      res.on('data', (chunk: string) => { raw += chunk })
-      res.on('error', reject)
-      res.on('end', () => {
-        const data = ((): { ok?: boolean; text?: string; error?: string } | null => {
-          try { return JSON.parse(raw) } catch { return null }   // non-JSON → refused below
-        })()
-        const status = res.statusCode ?? 0
-        if (status < 200 || status >= 300 || !data) return reject(new Error(`machine relay refused the call (HTTP ${status}${data?.error ? `: ${data.error}` : ''})`))
-        if (!data.ok) return reject(new Error(data.error ?? 'failed on the machine'))
-        resolve(data.text ?? '')
-      })
-    })
-    req.on('timeout', () => req.destroy(new Error(`no answer within ${Math.round(timeoutMs / 1000)}s`)))
-    req.on('error', (err) => {
-      if (signal?.aborted) return reject(err)
-      reject(new Error(`could not reach the server's machine relay (${err.message})`))
-    })
-    req.end(JSON.stringify(body))
-  })
-}
-
-/** In the server process: the hub. In cron's child: the loopback relay. Else unavailable. */
+/** In the server process (cron runs included): the hub. Else unavailable. */
 function dispatch(workspace: string, op: RelayOp, node: string | undefined, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   const hub = getNodeHub()
   if (hub) return op === 'nodes' ? Promise.resolve(hub.list(workspace)) : hub.call(workspace, node ?? '', op, args, signal)
-  const url = process.env.HALO_NODE_RELAY_URL
-  const secret = process.env.HALO_NODE_RELAY_TOKEN
-  if (url && secret) return relayCall(url, secret, { workspace, node, op, args }, signal)
   return Promise.reject(new Error(NODES_UNAVAILABLE))
 }
 

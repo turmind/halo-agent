@@ -52,7 +52,7 @@ async function startServer(onPort?: number, hubOpts: { callTimeoutMs?: number } 
   server.on('connection', (s: Socket) => { sockets.add(s); s.on('close', () => sockets.delete(s)) })
   await new Promise<void>((r) => server.listen(onPort ?? 0, '127.0.0.1', r))
   port = (server.address() as AddressInfo).port
-  hub = createNodeHub({ db, port, ...hubOpts })
+  hub = createNodeHub({ db, ...hubOpts })
   setNodeHub(hub)
   app = new Hono()
   app.route('/api', createNodeRoutes({ db, hub }))
@@ -138,8 +138,6 @@ afterEach(async () => {
   await stopServer()
   setNodeHub(null)
   clearFailures('node-token', '127.0.0.1')
-  delete process.env.HALO_NODE_RELAY_URL
-  delete process.env.HALO_NODE_RELAY_TOKEN
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
@@ -328,41 +326,15 @@ describe('connection lifecycle', () => {
   })
 })
 
-describe('cron relay + runtimes without a hub', () => {
-  it('POST /api/nodes/call: wrong secret 403; right secret forwards a call and the `nodes` list', async () => {
-    startNode()
-    await until(() => onlineNames().includes('e2e-box'))
-    const { HALO_NODE_RELAY_URL: url, HALO_NODE_RELAY_TOKEN: secret } = hub.relayEnv()
-    expect(url).toBe(`http://127.0.0.1:${port}${P.NODE_CALL_PATH}`)
-    const post = (s: string, body: unknown) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', [P.HEADER_RELAY]: s }, body: JSON.stringify(body) })
-    const bad = await post('wrong', { workspace: ws, op: 'nodes' })
-    expect(bad.status).toBe(403)
-    expect(await bad.json()).toEqual({ error: 'forbidden' })
-    expect(await (await post(secret, { workspace: ws, node: 'e2e-box', op: 'read', args: { path: 'hello.txt' } })).json()).toEqual({ ok: true, text: '1\thello-from-node' })
-    const listed = await (await post(secret, { workspace: ws, op: 'nodes' })).json() as { ok: boolean; text: string }
-    expect(JSON.parse(listed.text).nodes[0]).toMatchObject({ name: 'e2e-box', online: true })
-    expect(await (await post(secret, { workspace: ws, node: 'zz', op: 'read', args: { path: 'x' } })).json()).toMatchObject({ ok: false, error: expect.stringMatching(/unknown machine "zz"/) })
-  })
-
-  it('the node tools use the relay env when the process has no hub (cron child)', async () => {
-    startNode()
-    await until(() => onlineNames().includes('e2e-box'))
-    Object.assign(process.env, hub.relayEnv())
-    setNodeHub(null)
-    const tools = new Map(buildNodeTools(ws).map((t) => [t.name, t]))
-    expect(await tools.get('node_read')!.callback({ node: 'e2e-box', path: 'hello.txt' })).toBe('1\thello-from-node')
-    expect(JSON.parse(await tools.get('node_list')!.callback({}) as string).nodes[0].name).toBe('e2e-box')
-    await expect(Promise.resolve(tools.get('node_read')!.callback({ node: 'zz', path: 'x' }))).rejects.toThrow(/unknown machine "zz"/)
-    // cleanChildEnv strips the relay pair (grandchildren never see it) and a node's pairing token.
+describe('runtimes without a hub', () => {
+  it('cleanChildEnv strips a node\'s pairing token', () => {
     process.env.HALO_NODE_TOKEN = 't'
     const env = cleanChildEnv()
     delete process.env.HALO_NODE_TOKEN
-    expect(env.HALO_NODE_RELAY_URL).toBeUndefined()
-    expect(env.HALO_NODE_RELAY_TOKEN).toBeUndefined()
     expect(env.HALO_NODE_TOKEN).toBeUndefined()
   })
 
-  it('no hub and no relay env → NODES_UNAVAILABLE, node_list included', async () => {
+  it('no hub → NODES_UNAVAILABLE, node_list included', async () => {
     setNodeHub(null)
     const tools = buildNodeTools(ws)
     expect(tools.map((t) => t.name)).toEqual(['node_list', 'node_read', 'node_write', 'node_edit', 'node_list_dir', 'node_grep', 'node_glob', 'node_run'])

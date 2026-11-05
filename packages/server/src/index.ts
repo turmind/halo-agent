@@ -411,7 +411,7 @@ setChannelDb(channelDb)
 // Linked machines (`halo node`): the hub holds the online set in memory and
 // forwards node_* calls. AgentCore has no WS surface, so node tools report
 // "not available" there, as in the CLI.
-const nodeHub = AGENTCORE ? null : createNodeHub({ db: channelDb, port: PORT })
+const nodeHub = AGENTCORE ? null : createNodeHub({ db: channelDb })
 setNodeHub(nodeHub)
 // Self-evolution global db. Stash the instance in a module-level singleton
 // so dispatcher code (`/note` handler etc.) can reach it without threading
@@ -512,7 +512,7 @@ if (!AGENTCORE) {
   // long-poll/SSE runners, mounts admin routes. Adding a new channel =
   // add an entry to `defaultChannelDescriptors`; this block stays untouched.
   bootChannels(app, defaultChannelDescriptors, { registry, db: channelDb })
-  // Not a channel: pairing-token CRUD + cron's loopback relay.
+  // Not a channel: linked-machine pairing-token CRUD.
   app.route('/api', createNodeRoutes({ db: channelDb, hub: nodeHub! }))
 
   // Cron daemon runs after channels boot so every cron dispatcher is

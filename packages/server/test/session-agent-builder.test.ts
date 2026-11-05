@@ -331,7 +331,7 @@ describe('linked machines — node_list grants the fixed node_* set to full-acce
       { accountId: 'a2', name: 'walrus-nas', workspace: ws, root: null, shell: false, os: 'linux', since: 2 },
     ]
     setNodeHub({
-      handleUpgrade: () => {}, online: () => online, relayEnv: () => ({}), isRelaySecret: () => false,
+      handleUpgrade: () => {}, online: () => online,
       list: () => JSON.stringify({ code: 0, nodes: online }), call: async () => 'x', disconnect: () => {}, close: () => {},
     })
     await sm.getSessionContext('s_two')
