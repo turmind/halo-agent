@@ -159,7 +159,7 @@ export function CronSidebar() {
                     ) : null}
                   </div>
                   <div className="mt-1 flex items-center justify-between gap-2 text-[var(--muted-foreground)]">
-                    <span className="font-mono">{j.runAt ? new Date(j.runAt).toLocaleString() : j.schedule}</span>
+                    <span className="font-mono">{j.webhookPath ? t('cron.form.mode.webhook') : j.runAt ? new Date(j.runAt).toLocaleString() : j.schedule}</span>
                     <span>{j.agentId}</span>
                   </div>
                   <div className="mt-0.5 truncate text-[var(--muted-foreground)]">{j.workspacePath}</div>

@@ -6,13 +6,14 @@ import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { eq } from 'drizzle-orm'
 import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src/db/cron-db.js'
-import { sweepOrphanRuns, runJob, reloadAll, stopCronDaemon, _inflight } from '../src/cron/runner.js'
+import { recoverRuns, runJob, reloadAll, stopCronDaemon, _inflight } from '../src/cron/runner.js'
 
 /**
- * Contract: boot-time orphan sweep (`sweepOrphanRuns`) — a previous server
- * generation's leftover `cron_runs` rows in status 'running' are the ONLY
- * signal (db is the truth, in-memory state died with the old process). Per
- * row the sweep must:
+ * Contract: boot recovery's legacy branch (`recoverRuns`, rows with a pid —
+ * spawned as a `halo cli` child by a build before in-process cron) — a
+ * previous server generation's leftover `cron_runs` rows in status 'running'
+ * are the ONLY signal (db is the truth, in-memory state died with the old
+ * process). Per row the sweep must:
  *   - register the jobId in `_inflight` so a croner fire during the sweep
  *     window cannot spawn a second writer on the same `cron-<jobId>` session
  *   - kill a still-alive orphan only after verifying identity via its
@@ -91,7 +92,7 @@ function spawnFakeOrphan(jobId: string, ignoreSigterm: boolean) {
 }
 
 describe('sweepOrphanRuns', () => {
-  it('marks a running row with a dead pid as failed without killing anything', () => {
+  it('marks a running row with a dead pid as failed without killing anything', async () => {
     // A pid that definitely belonged to a dead process (spawnSync fully
     // reaps before returning). Even under instant pid reuse the identity
     // check fails (no `cron-<jobId>` in argv) and lands in the same branch.
@@ -99,7 +100,7 @@ describe('sweepOrphanRuns', () => {
     insertJob('job-dead')
     insertRunningRun('run-dead', 'job-dead', deadPid)
 
-    sweepOrphanRuns({ graceMs: 100 })
+    await recoverRuns({ graceMs: 100 })
 
     const row = getRun('run-dead')
     expect(row?.status).toBe('failed')
@@ -109,15 +110,15 @@ describe('sweepOrphanRuns', () => {
     expect(_inflight.has('job-dead')).toBe(false)
   })
 
-  it('marks a running row with no pid as failed and releases immediately', () => {
+  it('a running row with no pid is an in-process run: no session recorded → failed, released', async () => {
     insertJob('job-nopid')
     insertRunningRun('run-nopid', 'job-nopid', null)
 
-    sweepOrphanRuns({ graceMs: 100 })
+    await recoverRuns({ graceMs: 100 })
 
     const row = getRun('run-nopid')
     expect(row?.status).toBe('failed')
-    expect(row?.failureReason).toContain('no pid recorded')
+    expect(row?.failureReason).toBe('interrupted by server restart (before the run reached its session)')
     expect(row?.completedAt).not.toBeNull()
     expect(_inflight.has('job-nopid')).toBe(false)
   })
@@ -131,7 +132,7 @@ describe('sweepOrphanRuns', () => {
       await delay(150)
       insertRunningRun('run-live', 'job-live', child.pid!)
 
-      sweepOrphanRuns({ graceMs: 500 })
+      await recoverRuns({ graceMs: 500 })
 
       // Row is marked immediately; job is blocked while the orphan lives.
       expect(getRun('run-live')?.status).toBe('failed')
@@ -161,7 +162,7 @@ describe('sweepOrphanRuns', () => {
       await delay(150)
       insertRunningRun('run-term', 'job-term', child.pid!)
 
-      sweepOrphanRuns({ graceMs: 400 })
+      await recoverRuns({ graceMs: 400 })
       expect(_inflight.has('job-term')).toBe(true)
 
       // Dies on the sweep's SIGTERM, well before the grace window ends.
@@ -174,7 +175,7 @@ describe('sweepOrphanRuns', () => {
   )
 
   it.skipIf(process.platform === 'win32')(
-    'a one-shot with a live orphan: its job row is finalized failed + disabled, the boot reload arms nothing',
+    'a one-shot with a live orphan: its job row is finalized failed + disabled, the boot reload arms nothing (a recurring job stays enabled)',
     async () => {
       const now = Date.now()
       db.insert(cronJobs).values({
@@ -190,8 +191,8 @@ describe('sweepOrphanRuns', () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const timer = vi.spyOn(globalThis, 'setTimeout')
       try {
-        // Boot order (startCronDaemon): sweep, then reload.
-        sweepOrphanRuns({ graceMs: 300 })
+        // Boot order (startCronDaemon): recovery, then reload.
+        await recoverRuns({ graceMs: 300 })
         expect(_inflight.has('job-once')).toBe(true)
         timer.mockClear()
         reloadAll()
@@ -199,7 +200,8 @@ describe('sweepOrphanRuns', () => {
         const job = (id: string) => db.select().from(cronJobs).where(eq(cronJobs.id, id)).get()!
         expect(job('job-once')).toMatchObject({ enabled: 0, lastRunStatus: 'failed', lastRunId: 'run-once' })
         expect(job('job-once').lastRunAt).toBe(getRun('run-once')?.completedAt)
-        expect(job('job-rec')).toMatchObject({ enabled: 1, lastRunStatus: null, lastRunId: null })
+        // Recurring: stays enabled; its failed run is its last run now.
+        expect(job('job-rec')).toMatchObject({ enabled: 1, lastRunStatus: 'failed', lastRunId: 'run-rec' })
         expect(warn.mock.calls.some((c) => String(c[0]).includes('marking missed'))).toBe(false)
         // Only job-rec is armed by the reload; job-once gets no timer.
         expect(timer).toHaveBeenCalledTimes(1)

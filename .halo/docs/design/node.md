@@ -1,6 +1,6 @@
 # Linked machines (`halo node`)
 
-> User guide: [guide/node.md](../guide/node.md). Tool reference: [dev/tools.md → Node tools](../dev/tools.md#node-tools). API: [dev/api.md → Linked machines](../dev/api.md#linked-machines-halo-node). Code: `packages/server/src/nodes/` (wired in `index.ts`, `session-agent-builder.ts`, `cron/runner.ts`), CLI `packages/cli/src/index.ts` (`cmdNode`), Go client `packages/node-go/`, admin `features/nodes/`.
+> User guide: [guide/node.md](../guide/node.md). Tool reference: [dev/tools.md → Node tools](../dev/tools.md#node-tools). API: [dev/api.md → Linked machines](../dev/api.md#linked-machines-halo-node). Code: `packages/server/src/nodes/` (wired in `index.ts`, `session-agent-builder.ts`), CLI `packages/cli/src/index.ts` (`cmdNode`), Go client `packages/node-go/`, admin `features/nodes/`.
 
 ## Problem
 
@@ -12,8 +12,8 @@ The server's agents work on the server's filesystem. Users also want them to tou
 |---|---|---|
 | Accounts | `nodes/accounts.ts` | Pairing tokens in `~/.halo/secrets/channels/channels.db` `channel_accounts` (`channel_type='node'`, `label` = machine name, `config` = `{ token }`, `access_level` = `'full'`). Name `^[a-z0-9][a-z0-9-]{0,31}$`, unique per workspace (realpath compare) → 409 |
 | Hub | `nodes/hub.ts` | Server side. `noServer` `WebSocketServer` on `/api/nodes/connect`; one live connection per account; request/response correlation, timeouts, cancel, heartbeat; `nodes:changed` broadcast. Process singleton via `setNodeHub` / `getNodeHub` |
-| Tools | `nodes/tools.ts` | `buildNodeTools(workspaceRoot)` → the fixed 8 tools. Dispatch: hub (in-process) → loopback relay (cron child) → `NODES_UNAVAILABLE` |
-| Routes | `nodes/routes.ts` | Admin CRUD (`/api/nodes/accounts`) + the cron relay (`POST /api/nodes/call`) |
+| Tools | `nodes/tools.ts` | `buildNodeTools(workspaceRoot)` → the fixed 8 tools. Dispatch: hub (in-process) → `NODES_UNAVAILABLE` |
+| Routes | `nodes/routes.ts` | Admin CRUD (`/api/nodes/accounts`) |
 | Client | `nodes/node-client.ts` | `runNode()` — the `halo node` process: connect, reconnect with backoff, execute requests |
 | Executor | `nodes/node-exec.ts` + `node-path.ts` | Machine side. Wraps the **same** `createWorkspaceTools(base, { accessLevel: 'full' })` the server's agents use; adds the root check |
 | Go client | `packages/node-go/` | `halo-node`: a static Go binary (linux amd64 / arm64 / armv7, no cgo, ~7 MB) speaking the same protocol v1 with the same flags. It ports the client, the executor and the parts of `workspace-tools.ts` / `sandbox.ts` it needs (the seven ops, rm guard, process-group kill), with JS value, UTF-16 and V8 regex semantics (`internal/jsv`, `internal/jsregex` over regexp2). Ships as release assets via `.github/workflows/node-go.yml`, not npm |
@@ -100,16 +100,9 @@ When `halo node` itself exits — Ctrl-C (`stop`) or a fatal refusal such as a r
 
 Offline vs unknown are distinct errors: `machine "<n>" is offline (…). Do not retry in a loop — tell the user to start it.` vs `unknown machine "<n>" — machines linked to this workspace: a, b (see node_list)`.
 
-## Cron relay
+## Cron runs
 
-A cron run is a `halo cli` child — no hub in that process. `cron/runner.ts` spawns it with `{ ...cleanChildEnv(), ...getNodeHub()?.relayEnv() }`:
-
-- `HALO_NODE_RELAY_URL` = `http://127.0.0.1:<port>/api/nodes/call`
-- `HALO_NODE_RELAY_TOKEN` = a 32-byte hex secret generated per server boot (never persisted)
-
-The child's node tools POST `{ workspace, node, op, args }` there (`op: 'nodes'` = node_list) with header `x-halo-node-relay`. The route is in `PUBLIC_PATHS` and gated by loopback source **and** a `timingSafeEqual` match on the secret — the secret is the real gate (a same-host reverse proxy is loopback too). The secret is **server-wide, not bound to a workspace**: the body's `workspace` picks the machines, so whoever holds it can reach every workspace's machines. `child-env.ts` strips `HALO_NODE_RELAY_URL` / `HALO_NODE_RELAY_TOKEN` / `HALO_NODE_TOKEN` from every other child (shell_exec and the rest of `cleanChildEnv`'s users), so they don't appear in agent subprocess env. That is env hygiene, not a boundary: a full-level command runs unsandboxed (no bwrap) as the same user and can read that user's processes and files — the cron child's environment included — anyway.
-
-The relay request carries its own timeout (`max(shell timeout, 120 s) + 30 s`, node:http — fetch's fixed 300 s headers timeout would cut a long node_run first); the hub's per-call timeout normally answers well before it.
+Cron runs execute in the server process since 2.2 ([cron.md](cron.md#execution-runjob)), so their node tools reach the hub directly like any other server-side session. The loopback relay the old `halo cli` child used (`POST /api/nodes/call`, a per-boot secret in `HALO_NODE_RELAY_URL` / `HALO_NODE_RELAY_TOKEN`) is gone. `child-env.ts` still strips `HALO_NODE_TOKEN` from every child it builds, so a `halo node`'s own `node_run` commands don't see its pairing token — env hygiene, not a boundary: a full-level command runs unsandboxed as the same user and can read that user's processes and files anyway.
 
 ## Prompt-cache invariant
 

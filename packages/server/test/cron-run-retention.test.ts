@@ -6,13 +6,13 @@ import { eq } from 'drizzle-orm'
 import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src/db/cron-db.js'
 import { getWorkspaceDb } from '../src/db/index.js'
 import { agentSessions } from '../src/db/schema.js'
-import { SessionManager } from '../src/agents/session-manager.js'
 import { rawSqlite } from '../src/db/raw-sqlite.js'
 import {
-  runJob, pruneOldLogs, perRunSessionId, stopCronDaemon, setCronSessionRegistry, deleteOrphanRuns, reconcileFromDb,
-  _inflight, _inflightSessions, _sessionRowCache,
+  runJob, pruneOldLogs, perRunSessionId, deleteOrphanRuns, reconcileFromDb,
+  _inflight, _sessionRowCache,
 } from '../src/cron/runner.js'
 import { createCronRoutes } from '../src/routes/cron.js'
+import { installCronHarness, teardownCronHarness, until, type CronHarness } from './helpers/cron-harness.js'
 
 /**
  * Run retention + stateless run sessions:
@@ -22,6 +22,7 @@ import { createCronRoutes } from '../src/routes/cron.js'
  *     and the job DELETE route
  *   - a user-continued session survives (only its row goes); a run still in
  *     progress keeps its row too, so the prune after its finalize takes both
+ *   - the per-run prune runs when a run ends (finishRun), not when it starts
  *   - the session is looked up in the run's own workspace (cron_runs.
  *     workspace_path), not the job's current one; a NULL one (rows from
  *     before the column) falls back to the job's
@@ -30,35 +31,27 @@ import { createCronRoutes } from '../src/routes/cron.js'
  */
 
 const realHome = process.env.HOME
-const realCli = process.env.HALO_CLI
 
 let tmpHome: string
 let wsDir: string
 let db: CronDb
+let h: CronHarness
 const app = createCronRoutes()
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-cron-retention-'))
+  tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'halo-cron-retention-')))
   process.env.HOME = tmpHome
   wsDir = path.join(tmpHome, 'ws')
   fs.mkdirSync(wsDir)
   db = createCronDb(path.join(tmpHome, 'global'))
   setCronDb(db)
-  _inflight.clear()
-  _inflightSessions.clear()
-  const cli = path.join(tmpHome, 'fake-halo')
-  fs.writeFileSync(cli, '#!/bin/sh\necho "ARGS $*"\n', { mode: 0o755 })
-  process.env.HALO_CLI = cli
+  // The server's live manager for the workspace: fires run on it, prunes delete through it.
+  h = installCronHarness(wsDir)
 })
 
 afterEach(() => {
-  stopCronDaemon()
-  setCronSessionRegistry(null)
+  teardownCronHarness()
   process.env.HOME = realHome
-  if (realCli === undefined) delete process.env.HALO_CLI
-  else process.env.HALO_CLI = realCli
-  _inflight.clear()
-  _inflightSessions.clear()
   for (const e of _sessionRowCache.values()) e.db.close()
   _sessionRowCache.clear()
   fs.rmSync(tmpHome, { recursive: true, force: true })
@@ -113,8 +106,17 @@ function seedStatelessRun(jobId: string, startedAt: number, fields: Partial<type
 
 const sessionRow = (id: string) => wsDb().select().from(agentSessions).where(eq(agentSessions.id, id)).get()
 const fileExists = (id: string) => fs.existsSync(path.join(sessionDir(), `${id.split('>').pop()}.json`))
+/** Either format: a session a run resumed in-process was converted to 2.x jsonl. */
+const sessionFileExists = (id: string) => fileExists(id) || fs.readdirSync(sessionDir()).some((f) => f.startsWith(`${id.split('>').pop()}.`) && f.endsWith('.jsonl'))
 const archExists = (id: string) => fs.existsSync(path.join(sessionDir(), `${id.split('>').pop()}.arch.1.json.gz`))
 const runRows = (jobId: string) => db.select().from(cronRuns).where(eq(cronRuns.jobId, jobId)).all()
+
+/** Fire a job and wait for its end — the per-run prune runs there. */
+async function runToEnd(jobId: string): Promise<string> {
+  const runId = await runJob(jobId, 'manual')
+  await until(() => !_inflight.has(jobId) && db.select().from(cronRuns).where(eq(cronRuns.id, runId)).get()?.status !== 'running')
+  return runId
+}
 
 function expectTreeGone(sessionId: string): void {
   for (const id of [sessionId, childOf(sessionId)]) {
@@ -137,7 +139,7 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     const base = Date.now() - 60_000
     const old = Array.from({ length: 12 }, (_, i) => seedStatelessRun('cron-sl', base + i * 1000))
 
-    const runId = await runJob('cron-sl', 'manual')
+    const runId = await runToEnd('cron-sl')
     const kept = runRows('cron-sl').map((r) => r.id)
     expect(kept).toHaveLength(10)
     expect(kept).toContain(runId)
@@ -158,10 +160,11 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     for (let i = 0; i < 101; i++) insertRun('cron-sf', base + i * 1000, { sessionId: 'cron-sf' })
     seedSession('cron-sf', base)
 
-    await runJob('cron-sf', 'manual')
+    await runToEnd('cron-sf')
     expect(runRows('cron-sf')).toHaveLength(100)
     expect(sessionRow('cron-sf')).toBeDefined()
-    expect(fileExists('cron-sf')).toBe(true)
+    // The run resumed it in-process, which converts the seeded 1.x file.
+    expect(sessionFileExists('cron-sf')).toBe(true)
   })
 
   it('a picked-session job is untouched: rows prune at 100, the picked session stays', async () => {
@@ -170,10 +173,10 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     for (let i = 0; i < 101; i++) insertRun('cron-pk', base + i * 1000, { sessionId: 'chat-1' })
     seedSession('chat-1', base)
 
-    await runJob('cron-pk', 'manual')
+    await runToEnd('cron-pk')
     expect(runRows('cron-pk')).toHaveLength(100)
     expect(sessionRow('chat-1')).toBeDefined()
-    expect(fileExists('chat-1')).toBe(true)
+    expect(sessionFileExists('chat-1')).toBe(true)
   })
 
   it('a job switched from stateful to stateless prunes at 10 but never deletes its old stable session', async () => {
@@ -182,7 +185,7 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     for (let i = 0; i < 12; i++) insertRun('cron-sw', base + i * 1000, { sessionId: 'cron-sw' })
     seedSession('cron-sw', base)
 
-    await runJob('cron-sw', 'manual')
+    await runToEnd('cron-sw')
     expect(runRows('cron-sw')).toHaveLength(10)
     expect(sessionRow('cron-sw')).toBeDefined()
   })
@@ -196,7 +199,7 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     // Run 1: the user's follow-up dispatched a sub-agent, whose turn ended later.
     wsDb().update(agentSessions).set({ updatedAt: Date.now() }).where(eq(agentSessions.id, childOf(runs[1].sessionId))).run()
 
-    await runJob('cron-uc', 'manual')
+    await runToEnd('cron-uc')
     const kept = runRows('cron-uc').map((r) => r.id)
     expect(kept).not.toContain(runs[0].runId)
     expect(kept).not.toContain(runs[1].runId)
@@ -212,15 +215,12 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     db.update(cronRuns).set({ status: 'running', completedAt: null }).where(eq(cronRuns.id, runs[0].runId)).run()
     const busy = runs[1].sessionId
     const deleted: string[] = []
-    setCronSessionRegistry({
-      peek: () => ({
-        hasActiveWorkInTree: (id) => id === busy,
-        forgetExternalWrite: () => true,
-        deleteSession: async (id) => { deleted.push(id); return [] },
-      }),
-    })
+    const realBusy = h.sm.hasActiveWorkInTree.bind(h.sm)
+    vi.spyOn(h.sm, 'hasActiveWorkInTree').mockImplementation((id) => id === busy || realBusy(id))
+    const realDelete = h.sm.deleteSession.bind(h.sm)
+    vi.spyOn(h.sm, 'deleteSession').mockImplementation(async (id) => { deleted.push(id); return realDelete(id) })
 
-    await runJob('cron-rn', 'manual')
+    await runToEnd('cron-rn')
     expectTreeKept(runs[0].sessionId)
     expectTreeKept(busy)
     expect(deleted).toEqual([runs[2].sessionId])
@@ -239,7 +239,7 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     fs.mkdirSync(ws2)
     db.update(cronJobs).set({ workspacePath: ws2 }).where(eq(cronJobs.id, 'cron-mv')).run()
 
-    const runId = await runJob('cron-mv', 'manual')
+    const runId = await runToEnd('cron-mv')
     expect(db.select().from(cronRuns).where(eq(cronRuns.id, runId)).get()!.workspacePath).toBe(ws2)
     const kept = runRows('cron-mv').map((r) => r.id)
     expect(kept).toHaveLength(10)
@@ -254,14 +254,11 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     insertJob('cron-sm', { stateless: 1 })
     const base = Date.now() - 60_000
     const runs = Array.from({ length: 11 }, (_, i) => seedStatelessRun('cron-sm', base + i * 1000))
-    const sm = new SessionManager(fs.realpathSync(wsDir))
-    setCronSessionRegistry({ peek: () => sm })
-
-    await runJob('cron-sm', 'manual')
+    await runToEnd('cron-sm')
     expectTreeGone(runs[0].sessionId)
     expectTreeGone(runs[1].sessionId)
-    expect(sm.isSessionDeleted(runs[0].sessionId)).toBe(true)
-    expect(sm.isSessionDeleted(childOf(runs[0].sessionId))).toBe(true)
+    expect(h.sm.isSessionDeleted(runs[0].sessionId)).toBe(true)
+    expect(h.sm.isSessionDeleted(childOf(runs[0].sessionId))).toBe(true)
     expectTreeKept(runs[2].sessionId)
   })
 
@@ -272,7 +269,7 @@ describe.skipIf(process.platform === 'win32')('cron run retention — per-run pr
     for (let i = 1; i < 11; i++) insertRun('cron-gn', base + i * 1000)
     seedSession('keep-me', base)
 
-    await runJob('cron-gn', 'manual')
+    await runToEnd('cron-gn')
     expect(runRows('cron-gn')).toHaveLength(10)
     expect(sessionRow('keep-me')).toBeDefined()
   })
@@ -325,29 +322,25 @@ describe('cron run retention — DELETE /cron/jobs/:id', () => {
     expect(sessionRow('cron-dsf')).toBeDefined()
   })
 
-  it.skipIf(process.platform === 'win32')('deleted mid-run: the running row and its session stay, then go with the run\'s finalize', async () => {
-    const gate = path.join(tmpHome, 'gate')
-    const cli = path.join(tmpHome, 'gated-halo')
-    fs.writeFileSync(cli, `#!/bin/sh\nwhile [ ! -f "${gate}" ]; do sleep 0.05; done\necho done\n`, { mode: 0o755 })
-    process.env.HALO_CLI = cli
+  it('deleted mid-run: the running row and its session stay, then go with the run\'s finalize', async () => {
+    let open!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
     insertJob('cron-mid', { stateless: 1 })
 
-    const pending = runJob('cron-mid', 'manual')
+    const runId = await runJob('cron-mid', 'manual')
     const [row] = runRows('cron-mid')
     expect(row.status).toBe('running')
-    // What the cli would have written by now.
-    seedSession(row.sessionId!, Date.now())
-    seedSession(childOf(row.sessionId!), Date.now())
+    await until(() => h.inputs.length === 1)
 
     expect((await app.request('/cron/jobs/cron-mid', { method: 'DELETE' })).status).toBe(200)
     expect(db.select().from(cronJobs).where(eq(cronJobs.id, 'cron-mid')).get()).toBeUndefined()
-    expect(runRows('cron-mid').map((r) => r.id)).toEqual([row.id])
-    expectTreeKept(row.sessionId!)
+    expect(runRows('cron-mid').map((r) => r.id)).toEqual([runId])
+    expect(sessionRow(row.sessionId!)).toBeDefined()
 
-    fs.writeFileSync(gate, '')
-    await pending
+    open()
+    await until(() => !_inflight.has('cron-mid'))
     expect(runRows('cron-mid')).toHaveLength(0)
-    expectTreeGone(row.sessionId!)
+    expect(sessionRow(row.sessionId!)).toBeUndefined()
   })
 })
 

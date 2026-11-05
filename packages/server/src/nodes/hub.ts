@@ -4,7 +4,6 @@
  * server restart, the db rows are the truth for "which machines exist"), and
  * forwards node_* tool calls to them. Design: .halo/docs/design/node.md.
  */
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import type { IncomingMessage } from 'node:http'
 import { WebSocketServer, WebSocket } from 'ws'
@@ -15,7 +14,7 @@ import { config } from '../config.js'
 import { clearFailures, isLockedOut, recordFailure } from '../middleware/brute-force.js'
 import { getNodeAccountByToken, listWorkspaceNodes, realWorkspace, type NodeAccount } from './accounts.js'
 import {
-  CLOSE_REPLACED, CLOSE_REVOKED, HEADER_INFO, HEADER_INSTANCE, HEADER_PROTOCOL, MAX_FRAME_BYTES, NODE_CALL_PATH,
+  CLOSE_REPLACED, CLOSE_REVOKED, HEADER_INFO, HEADER_INSTANCE, HEADER_PROTOCOL, MAX_FRAME_BYTES,
   NODE_PROTOCOL, decodeNodeInfo, type NodeFrame, type NodeInfo, type NodeOp, type ServerFrame,
 } from './protocol.js'
 
@@ -38,9 +37,6 @@ export interface NodeHub {
   /** Token deleted → close(4001); the machine exits. */
   disconnect(accountId: string): void
   online(): NodeOnline[]
-  /** Env for cron's `halo cli` child: the loopback relay URL + this boot's secret. */
-  relayEnv(): Record<string, string>
-  isRelaySecret(value: string | undefined): boolean
   /** Graceful shutdown → close(1001); machines reconnect. */
   close(): void
 }
@@ -92,11 +88,10 @@ function abortError(): Error {
 
 const wentOffline = (name: string) => new Error(`machine "${name}" went offline during the call (connection lost). The operation may or may not have completed on the machine — check its state before retrying.`)
 
-export function createNodeHub(deps: { db: ChannelDb; port: number; callTimeoutMs?: number; runGraceMs?: number }): NodeHub {
+export function createNodeHub(deps: { db: ChannelDb; callTimeoutMs?: number; runGraceMs?: number }): NodeHub {
   const { db } = deps
   const callTimeoutMs = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
   const runGraceMs = deps.runGraceMs ?? DEFAULT_RUN_GRACE_MS
-  const relaySecret = crypto.randomBytes(32).toString('hex')
   const byAccount = new Map<string, Conn>()
   const handshakes = new WeakMap<IncomingMessage, Handshake>()
 
@@ -273,18 +268,6 @@ export function createNodeHub(deps: { db: ChannelDb; port: number; callTimeoutMs
     },
 
     online,
-
-    relayEnv: () => ({
-      HALO_NODE_RELAY_URL: `http://127.0.0.1:${deps.port}${NODE_CALL_PATH}`,
-      HALO_NODE_RELAY_TOKEN: relaySecret,
-    }),
-
-    isRelaySecret(value) {
-      if (!value) return false
-      const a = Buffer.from(value)
-      const b = Buffer.from(relaySecret)
-      return a.length === b.length && crypto.timingSafeEqual(a, b)
-    },
 
     close() {
       for (const c of [...byAccount.values()]) drop(c, 1001, 'server shutting down')

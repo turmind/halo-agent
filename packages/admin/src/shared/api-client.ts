@@ -1239,7 +1239,7 @@ export const api = {
           createdAt: number
           updatedAt: number
           nextRunAt: number | null
-          /** Session the cli runs in — `sessionId`, else the job's own (a stateless job: a new one each run). */
+          /** Session the job runs in — `sessionId`, else the job's own (a stateless job: a new one each run). */
           effectiveSessionId: string
           /** Folder the run focuses on (workspace-relative), null = the root. */
           workingDir: string | null
@@ -1247,6 +1247,10 @@ export const api = {
           stateless: boolean
           /** Agent of the job's existing session (null: stateless / not created yet) — locks the agent field. */
           sessionAgentId: string | null
+          /** Non-null = a webhook job (fired by POST <origin><webhookPath>). */
+          webhookSecret: string | null
+          /** Relative hook path (`/cron-hooks/<id>`), null when not a webhook job. */
+          webhookPath: string | null
         }>
         hasMore: boolean
         nextCursor: number | null
@@ -1260,6 +1264,7 @@ export const api = {
       userPrompt: string
       schedule: string
       runAt?: number
+      webhook?: boolean
       timezone?: string
       timeoutSec?: number
       sessionId?: string
@@ -1283,6 +1288,7 @@ export const api = {
       userPrompt: string
       schedule: string
       runAt: number | null
+      webhook: boolean
       timezone: string
       timeoutSec: number | null
       sessionId: string | null
@@ -1310,6 +1316,13 @@ export const api = {
       })
     },
 
+    rotateWebhookSecret(id: string) {
+      return request<{ ok: boolean; webhookSecret: string }>(`/cron/jobs/${encodeURIComponent(id)}/webhook-secret`, {
+        method: 'POST',
+        body: '{}',
+      })
+    },
+
     listRuns(jobId: string, opts?: { limit?: number; before?: string }) {
       const qs = new URLSearchParams()
       if (opts?.limit) qs.set('limit', String(opts.limit))
@@ -1328,8 +1341,12 @@ export const api = {
           failureReason: string | null
           logPath: string | null
           dispatchResults: Array<{ channelType: string; accountId: string; chatId?: string; ok: boolean; error?: string }> | null
-          /** Session this run's cli used (null: skipped / before the column). */
+          /** Session this run ran in (null: skipped / before the column). */
           sessionId: string | null
+          /** Workspace it ran in (null: rows from before the column). */
+          workspacePath: string | null
+          /** Webhook events this run took in. */
+          eventCount: number
         }>
         hasMore: boolean
         nextCursor: string | null

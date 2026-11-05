@@ -7,10 +7,10 @@
  *
  * Lifecycle:
  *   cron_jobs:  enabled (cron schedule active) | disabled (paused)
- *   cron_runs:  pending → running → succeeded | failed | timeout
+ *   cron_runs:  running → succeeded | failed | timeout; skipped (never ran)
  *
- * Job execution itself happens in `cron/runner.ts` (croner schedules +
- * spawned `halo cli` children). DB only persists state.
+ * Job execution itself happens in `cron/runner.ts` (its own fire timers +
+ * the server's SessionManager, in-process). DB only persists state.
  */
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
@@ -41,18 +41,24 @@ export const cronJobs = sqliteTable('cron_jobs', {
   runAt: integer('run_at'),
   /** IANA timezone name; null = host timezone. */
   timezone: text('timezone'),
-  /** Max seconds a single cron-fired cli may run before the runner kills
-   *  it. NULL = default 3600 (runner.ts CLI_TIMEOUT_SEC). Range 60–21600,
+  /** Non-null = a webhook job: fired by `POST /cron-hooks/<id>` (HMAC
+   *  `X-Hub-Signature-256` or `Authorization: Bearer` with this secret), never
+   *  by a timer — `schedule` is '' and `runAt` NULL. Stored in clear: HMAC
+   *  verification needs it (plans/cron-in-process.md Q3). */
+  webhookSecret: text('webhook_secret'),
+  /** Max wall-clock seconds a single cron run may take (a server restart
+   *  included) before the runner stops its session. NULL = default 3600
+   *  (runner.ts RUN_TIMEOUT_SEC). Range 60–21600,
    *  enforced at the write points (REST routes / skill helper). */
   timeoutSec: integer('timeout_sec'),
-  /** Root session id the cli runs in. NULL = the job's own session (id =
+  /** Root session id the job runs in. NULL = the job's own session (id =
    *  the job id; `cron-<id>` for a custom id without that prefix). A
    *  stateful job's agent is fixed once its session exists; to change it,
    *  delete that session or switch the job to a new session every run
    *  (`stateless`) — enforced at the write points. */
   sessionId: text('session_id'),
   /** Folder the run focuses on (workspace-relative, NULL = workspace root),
-   *  passed as `halo cli --dir` on every run — same semantics as a
+   *  applied to the session on every run — same semantics as a
    *  sub-agent's working_dir. Validated (inside the workspace, existing
    *  directory) at the write points and again at fire time. */
   workingDir: text('working_dir'),
@@ -83,39 +89,61 @@ export const cronJobs = sqliteTable('cron_jobs', {
 export const cronRuns = sqliteTable('cron_runs', {
   id: text('id').primaryKey(),
   jobId: text('job_id').notNull(),
-  /** 'manual' for run-now button; 'scheduled' for croner-fired. Lets the UI
-   *  distinguish ad-hoc tests from real schedule executions. */
+  /** 'manual' for run-now button; 'scheduled' for croner-fired; 'webhook'
+   *  for a run started by webhook events (cron_events.run_id names them). */
   triggerKind: text('trigger_kind').notNull(),
   status: text('status').notNull(),
   startedAt: integer('started_at').notNull(),
   completedAt: integer('completed_at'),
-  /** Captured stdout (final assistant text from cli) — what gets sent to channels. */
+  /** The run's final reply (+ `ℹ️` notice lines) — what gets sent to channels. */
   output: text('output'),
-  /** Cli exit code. 0 = success; 124 = timeout from `timeout(1)` wrapper. */
+  /** Exit code of a cli-child run (rows from before in-process cron: 0 =
+   *  success, 124 = timeout). NULL on in-process runs — `status` says it. */
   exitCode: integer('exit_code'),
   /** Free-form error/diagnostic. */
   failureReason: text('failure_reason'),
-  /** Path to the per-run log file (cli stdout+stderr tee). Lives at
-   *  `~/.halo/global/logs/cron/<runId>.log`. */
+  /** Path to a cli-child run's log file (stdout+stderr tee) at
+   *  `~/.halo/global/logs/cron/<runId>.log`. NULL on in-process runs: the
+   *  session is the log. */
   logPath: text('log_path'),
   /** Per-target dispatch outcomes — JSON array of `{channelType, accountId, ok, error?}`.
    *  Lets the UI show "sent to telegram (1234), wechat failed: no chatId". */
   dispatchResults: text('dispatch_results'),
-  /** OS pid of the spawned cli child, written right after spawn. Lets the
-   *  boot-time orphan sweep (cron/runner.ts sweepOrphanRuns) identify and
-   *  reap a previous server generation's still-running cli — identity is
-   *  re-verified against the process command line before any kill, so a
-   *  reused pid is never killed by mistake. */
+  /** OS pid of a cli-child run (builds before in-process cron). Lets boot
+   *  recovery (cron/runner.ts recoverRuns, legacy branch) identify and reap a
+   *  previous server generation's still-running cli — identity is re-verified
+   *  against the process command line before any kill, so a reused pid is
+   *  never killed by mistake. NULL on in-process runs. */
   pid: integer('pid'),
-  /** Session this run's cli was spawned on (`-s`). The orphan sweep's
-   *  fingerprint — a stateless job's per-run id can't be re-derived from
-   *  the job row. NULL on skipped rows and rows from before the column. */
+  /** Session this run ran in. Boot recovery reads its `reply_to` (and a
+   *  legacy cli's fingerprint) — a stateless job's per-run id can't be
+   *  re-derived from the job row. NULL on skipped rows and rows from before
+   *  the column. */
   sessionId: text('session_id'),
   /** Workspace the run fired against (the job's at fire time) — where a
    *  stateless run's session lives, even after the job moves workspace or is
    *  deleted. NULL on rows from before the column whose job was already gone
    *  (deleteRuns falls back to the job row). */
   workspacePath: text('workspace_path'),
+})
+
+/** One webhook delivery. pending (received, not yet in a run) → injected
+ *  (handed to run `run_id`'s session, `stamp` = its UI row / raw turn key) →
+ *  done | failed with that run's outcome. Deduped per job on `delivery_id`. */
+export const cronEvents = sqliteTable('cron_events', {
+  id: text('id').primaryKey(),
+  jobId: text('job_id').notNull(),
+  /** X-GitHub-Delivery / Idempotency-Key / X-Request-Id, else sha256(body). */
+  deliveryId: text('delivery_id').notNull(),
+  /** X-GitHub-Event / X-Gitlab-Event — display only. */
+  eventType: text('event_type'),
+  receivedAt: integer('received_at').notNull(),
+  state: text('state').notNull(),
+  runId: text('run_id'),
+  sessionId: text('session_id'),
+  stamp: text('stamp'),
+  /** The request body as received (utf-8). */
+  payload: text('payload').notNull(),
 })
 
 const CREATE_SQL = `
@@ -128,6 +156,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   schedule        TEXT NOT NULL,
   run_at          INTEGER,
   timezone        TEXT,
+  webhook_secret  TEXT,
   timeout_sec     INTEGER,
   session_id      TEXT,
   working_dir     TEXT,
@@ -163,6 +192,22 @@ CREATE TABLE IF NOT EXISTS cron_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_cron_runs_status ON cron_runs(status);
+
+CREATE TABLE IF NOT EXISTS cron_events (
+  id          TEXT PRIMARY KEY,
+  job_id      TEXT NOT NULL,
+  delivery_id TEXT NOT NULL,
+  event_type  TEXT,
+  received_at INTEGER NOT NULL,
+  state       TEXT NOT NULL,
+  run_id      TEXT,
+  session_id  TEXT,
+  stamp       TEXT,
+  payload     TEXT NOT NULL,
+  UNIQUE(job_id, delivery_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cron_events_job ON cron_events(job_id, state);
+CREATE INDEX IF NOT EXISTS idx_cron_events_run ON cron_events(run_id);
 `
 
 /** Ordered cron.db migrations (see migrate.ts). CREATE_SQL must always
@@ -213,6 +258,9 @@ export const CRON_MIGRATIONS: Migration[] = [
       WHERE workspace_path IS NULL
     `)
   },
+  // v7: webhook jobs — `webhook_secret` + the `cron_events` table (CREATE_SQL
+  // already made it; the IF NOT EXISTS there covers an existing db).
+  (s) => addColumnIfMissing(s, 'cron_jobs', 'webhook_secret', 'TEXT'),
 ]
 
 export function createCronDb(globalDir: string) {
@@ -222,7 +270,7 @@ export function createCronDb(globalDir: string) {
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(CREATE_SQL)
   runMigrations(sqlite, CRON_MIGRATIONS)
-  return drizzle(sqlite, { schema: { cronJobs, cronRuns } })
+  return drizzle(sqlite, { schema: { cronJobs, cronRuns, cronEvents } })
 }
 
 export type CronDb = ReturnType<typeof createCronDb>

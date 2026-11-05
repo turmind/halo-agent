@@ -137,6 +137,6 @@ export function createA2ADb(globalDir: string): A2ADb {
 
 let _a2aDb: A2ADb | null = null
 export function setA2ADb(db: A2ADb | null): void { _a2aDb = db }
-/** null outside `halo server` (CLI / TUI / cron child never set it) — every
+/** null outside `halo server` (CLI / TUI never set it) — every
  *  A2A entry point treats that as "A2A unavailable here". */
 export function getA2ADb(): A2ADb | null { return _a2aDb }

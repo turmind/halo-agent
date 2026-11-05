@@ -192,7 +192,7 @@ Opt-in by the single name `a2a_send` in `agent.yaml` `tools:`; it brings `a2a_st
 - `a2a_read { remote, task_id }` → GetTask: `{ state, status, result }` with the full, uncapped result text (images saved again on each read). **It is the way to check on a task**: the tool description tells the agent to call it once when the user asks how a dispatched task is going or a report seems overdue — never in a loop.
 - `a2a_list {}` → the configured remotes (card name, description, skills) plus this workspace's pending dispatches (newest 50) — `working`, `input-required` and `auth-required` rows, each with its `state`.
 
-**Server only.** `index.ts` sets the a2a db and the outbound registry; the CLI / TUI (and every cron run, a `halo cli` child) don't, so every call there returns the permanent `A2A_UNAVAILABLE` error ("… only runs inside `halo server`, which receives the remote agent's push reports … do not retry"). As with relay, the builder doesn't check this before injecting: the tools are still listed there.
+**Server only.** `index.ts` sets the a2a db and the outbound registry; the CLI / TUI don't, so every call there returns the permanent `A2A_UNAVAILABLE` error ("… only runs inside `halo server`, which receives the remote agent's push reports … do not retry"). As with relay, the builder doesn't check this before injecting: the tools are still listed there.
 
 ### Webhook receiver
 
@@ -287,7 +287,7 @@ a2a_dispatches(id PK, workspace, session_id, remote, push_id, push_token, rpc_ur
                -- idx (push_id), (state), (workspace, remote, remote_context_id)
 ```
 
-`getA2ADb()` is null outside `halo server` (CLI / TUI / cron child), which every A2A entry point treats as "unavailable here".
+`getA2ADb()` is null outside `halo server` (CLI / TUI), which every A2A entry point treats as "unavailable here".
 
 ## AgentCore
 
@@ -300,7 +300,7 @@ a2a_dispatches(id PK, workspace, session_id, remote, push_id, push_token, rpc_ur
 - **A push that beats the dispatch row is refused.** `a2a_send` writes its `a2a_dispatches` row only once SendMessage has answered. A push arriving before that — the remote finished (or, on a reused webhook, started and finished a new task) faster than the caller processed the answer — gets 404, which a sender treats as permanent. The window is narrow: the insert runs synchronously right after the answer is parsed, and a terminal SendMessage answer is delivered directly. A push that is lost this way leaves the row `working` until the next boot reconcile GetTasks it; until then, `a2a_read` is the only check.
 - **Interims need the remote's GetTask to carry them.** The receiver reads interims only from the fetched `status.message`. A non-halo remote that pushes interims only in `statusUpdate` bodies produces no interim reports; its final report is unaffected.
 - **No task history.** GetTask accepts `historyLength` but returns no `history`; the session transcript on the remote is the record.
-- **Server only.** The CLI / TUI and cron runs (a `halo cli` child) can't use the tools — no push receiver there; every call returns `A2A_UNAVAILABLE`.
+- **Server only.** The CLI / TUI can't use the tools — no push receiver there; every call returns `A2A_UNAVAILABLE`.
 - No non-image file parts and no `data` parts (`-32005`); no client-chosen `contextId`s; no `GetExtendedAgentCard`; no 0.3 compatibility. No admin UI for remotes or their secrets.
 
 ## Tests

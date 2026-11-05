@@ -50,6 +50,7 @@ import { createAgentCoreA2A, type WorkspaceLease } from './a2a/agentcore.js'
 import { FRONT_URL_ENV, postToFront } from './a2a/agentcore-notify.js'
 import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
+import { createCronHookRoutes } from './routes/cron-hooks.js'
 import { createExtensionRoutes } from './routes/extensions.js'
 import { createUpdateRoutes } from './routes/updates.js'
 import { start as startExtensionsWatcher, stop as stopExtensionsWatcher } from './extensions/watcher.js'
@@ -411,7 +412,7 @@ setChannelDb(channelDb)
 // Linked machines (`halo node`): the hub holds the online set in memory and
 // forwards node_* calls. AgentCore has no WS surface, so node tools report
 // "not available" there, as in the CLI.
-const nodeHub = AGENTCORE ? null : createNodeHub({ db: channelDb, port: PORT })
+const nodeHub = AGENTCORE ? null : createNodeHub({ db: channelDb })
 setNodeHub(nodeHub)
 // Self-evolution global db. Stash the instance in a module-level singleton
 // so dispatcher code (`/note` handler etc.) can reach it without threading
@@ -456,8 +457,9 @@ if (!OWNS_RUNTIMES) {
   logAlways('[Server] HALO_BADGE=DEV: workspace runtime.lock left to the owning server — no claim, no boot cleanup')
 }
 setRelayRegistry(registry)
-// Cron jobs may run in a user-picked session; the runner peeks the live
-// managers to skip busy sessions and drop stale caches after a cli run.
+// Cron runs execute in-process on these managers (getOrCreate on a fire,
+// peek for prune / boot recovery). Set before the ledger sweep below: the
+// sweep's nudges resume cut-off cron runs, and recoverRuns re-enters them.
 setCronSessionRegistry(registry)
 
 // Run ledger eager sweep: build the SessionManager NOW for every workspace
@@ -511,8 +513,12 @@ if (!AGENTCORE) {
   // long-poll/SSE runners, mounts admin routes. Adding a new channel =
   // add an entry to `defaultChannelDescriptors`; this block stays untouched.
   bootChannels(app, defaultChannelDescriptors, { registry, db: channelDb })
-  // Not a channel: pairing-token CRUD + cron's loopback relay.
+  // Not a channel: linked-machine pairing-token CRUD.
   app.route('/api', createNodeRoutes({ db: channelDb, hub: nodeHub! }))
+
+  // Cron webhook receiver /cron-hooks/:jobId: outside /api/* (the job's
+  // secret is its auth, no admin cookie), before serveStatic / the SPA fallback.
+  app.route('/', createCronHookRoutes())
 
   // Cron daemon runs after channels boot so every cron dispatcher is
   // registered before the first scheduled fire could happen.

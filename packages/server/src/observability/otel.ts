@@ -20,9 +20,9 @@ import type { Provider } from './otel-sdk.js'
 const SCOPE = 'opentelemetry.instrumentation.halo'
 
 /** Which halo process is exporting — the `halo.process` resource attribute.
- *  Cron / evolution children are spawned `halo cli` runs, so they report `cli`
- *  (their `session.id` — `cron-<jobId>`, or the `__evo_agent__`-style agent
- *  name — tells them apart from a hand-run cli). */
+ *  Evolution children are spawned `halo cli` runs, so they report `cli`
+ *  (their `session.id` — the `__evo_agent__`-style agent name — tells them
+ *  apart from a hand-run cli); cron runs in the server and reports `server`. */
 export type HaloProcess = 'server' | 'cli' | 'tui'
 
 /** Cap on the exit-time flush. A healthy collector acks an OTLP POST in tens

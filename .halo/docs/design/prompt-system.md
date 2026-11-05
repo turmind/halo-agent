@@ -388,7 +388,7 @@ Schema declared by each package + values stored centrally is the same model VSCo
 ## working_dir behaviour
 
 - `start_session` accepts a `working_dir` argument (absolute or workspace-relative)
-- A root session takes one too: `halo cli` / `halo tui --dir <path>` (a cron job's folder rides on it), same checks; on a resumed session it re-points the stored value via `SessionManager.setWorkingDir` (`--dir .` = back to the root), refused while the session is running
+- A root session takes one too: `halo cli` / `halo tui --dir <path>`, or a cron job's folder (the runner passes it to `createSession` / `setWorkingDir` directly), same checks; on a resumed session it re-points the stored value via `SessionManager.setWorkingDir` (`--dir .` = back to the root), refused while the session is running
 - `/session new` (server-side `execNew`) gives the new session the folder of the issuing session's root, re-validated (gone → root)
 - Default: `workspaceRoot`
 - Enforced inside workspace (path traversal is rejected)

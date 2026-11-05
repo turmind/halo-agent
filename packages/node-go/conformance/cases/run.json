@@ -7,8 +7,6 @@
    "env": {
     "HALO_PASSWORD": "p",
     "HALO_JWT_SECRET": "j",
-    "HALO_NODE_RELAY_URL": "u",
-    "HALO_NODE_RELAY_TOKEN": "r",
     "KEEP_ME": "k"
    }
   },
@@ -81,7 +79,7 @@
      {
       "op": "run",
       "args": {
-       "command": "echo \"[${HALO_NODE_TOKEN-unset}][${HALO_PASSWORD-unset}][${HALO_JWT_SECRET-unset}][${HALO_NODE_RELAY_URL-unset}][${HALO_NODE_RELAY_TOKEN-unset}][${KEEP_ME-unset}]\""
+       "command": "echo \"[${HALO_NODE_TOKEN-unset}][${HALO_PASSWORD-unset}][${HALO_JWT_SECRET-unset}][${KEEP_ME-unset}]\""
       }
      }
     ]

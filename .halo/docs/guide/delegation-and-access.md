@@ -114,7 +114,7 @@ Extra rules:
 | Channel account (Web / Telegram / Slack / Feishu / WeCom / WeChat, and the ACP adapter via its Web token) | The account's `accessLevel`: `full` → full, `workspace` → workspace, `readonly` and `observer` → readonly. New accounts default to **readonly**. | Re-applied on every inbound message. Changing an account's level takes effect on the next message. |
 | Channel `/session new` | The account's level | — |
 | `start_session` (sub-agent) | **Parent's level at creation time** | Kept. A later change on the parent doesn't reach existing children; start a new child to get the new level. |
-| Cron job | Full (the `halo cli` default) | Keeps its stored level (passed through as `--access`) |
+| Cron job | Full | Keeps its stored level (the run passes none) |
 | `halo cli` / TUI | `--access`, default `full` | `--access` value (a different level is persisted) |
 | `relay_send` into another workspace | Full | Keeps its stored level |
 | A2A inbound (`/a2a/<path>`, a web-channel token bound to that workspace) | The token's `accessLevel`, mapped like a channel account. A `readonly` / `observer` token gets the fixed A2A read-only profile: `file_read` / `view_image` / `file_list` / `grep` / `glob` + `continue_task`, even with an OS sandbox — no shell, write or fetch, no delegation, no relay / a2a tools | Re-applied on every inbound message |

@@ -51,7 +51,7 @@ Slack-specific config JSON fields: `botToken`, `appToken`, `botUserId`, `teamId`
 The slack cron-dispatcher (`channels/slack/cron-dispatcher.ts`) registers itself with `cron/dispatcher.ts`'s registry at boot and **requires an explicit `chatId`** (format: `D0123` for a DM, `C0123` for a channel, `C0123:1700.0` for a thread):
 
 - Cron jobs created from inside a Slack chat via the `cron` skill auto-pin the current chat as `chatId`.
-- Admin-UI cron jobs that don't specify a target run silently — the result shows in the cron log, nothing is pushed.
+- Admin-UI cron jobs that don't specify a target run silently — nothing is pushed; the result is in the run history and the job's session.
 - Slack has no "fan out to whitelist" model; every push needs an explicit destination.
 
 ## Modules

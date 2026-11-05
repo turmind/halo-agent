@@ -12,7 +12,7 @@
  * collapsed.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Clock, Edit3, Play, Trash2 } from 'lucide-react'
+import { Clock, Copy, Edit3, MessageSquare, Play, RefreshCw, Trash2 } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
 import { cn, confirmAction } from '@/shared/utils'
@@ -20,6 +20,7 @@ import { useProjectStore } from '@/shared/stores/project-store'
 import { useT } from '@/shared/i18n'
 import { useInfiniteScroll } from '@/shared/use-infinite-scroll'
 import { Combobox } from '@/shared/components/combobox'
+import { openTab } from '@/features/chat/chat-tabs'
 import { useCronStore } from './cron-store'
 
 type Job = Awaited<ReturnType<typeof api.cron.listJobs>>['jobs'][number]
@@ -165,6 +166,12 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
     return off
   }, [job.id, refresh])
 
+  const activeProject = useProjectStore((s) => s.activeProject)
+  const onOpenSession = useCallback((sessionId: string) => {
+    openTab(sessionId)
+    window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer' } }))
+  }, [])
+
   const onShowLog = useCallback(async (runId: string) => {
     setLogRunId(runId)
     setLogBody(null)
@@ -201,7 +208,9 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
           </div>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--muted-foreground)]">
-          {job.runAt
+          {job.webhookPath
+            ? <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.webhook')}</span> <span className="font-mono">{location.origin + job.webhookPath}</span></div>
+            : job.runAt
             ? <div><span className="text-[var(--foreground)]">{t('cron.field.runAt')}</span> <span className="font-mono">{new Date(job.runAt).toLocaleString()}{job.timezone ? ` (${job.timezone})` : ''}</span></div>
             : <div><span className="text-[var(--foreground)]">{t('cron.field.schedule')}</span> <span className="font-mono">{job.schedule}{job.timezone ? ` (${job.timezone})` : ''}</span></div>}
           <div><span className="text-[var(--foreground)]">{t('cron.field.agent')}</span> {job.agentId}</div>
@@ -242,9 +251,18 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
                       <span className="text-[var(--muted-foreground)]">{new Date(r.startedAt).toLocaleString()}</span>
                       <span className="text-[var(--muted-foreground)]">·</span>
                       <span className="text-[var(--muted-foreground)]">{r.triggerKind}</span>
+                      {r.eventCount > 0 && <span className="text-[var(--muted-foreground)]">{t('cron.run.events', { n: r.eventCount })}</span>}
                       {r.sessionId && <span className="truncate font-mono text-[10px] text-[var(--muted-foreground)]" title={t('cron.run.session')}>{r.sessionId}</span>}
                     </div>
-                    <button onClick={() => { void onShowLog(r.id) }} className="rounded bg-[var(--accent)] px-2 py-0.5 text-[10px] hover:opacity-90">Log</button>
+                    {/* Pre-in-process runs have a log file; newer ones ran in a session (live in chat).
+                        Chat tabs belong to the open workspace, so only its sessions can be opened here. */}
+                    {r.logPath
+                      ? <button onClick={() => { void onShowLog(r.id) }} className="rounded bg-[var(--accent)] px-2 py-0.5 text-[10px] hover:opacity-90">Log</button>
+                      : r.sessionId && (r.workspacePath ?? job.workspacePath) === activeProject?.path && (
+                        <button onClick={() => onOpenSession(r.sessionId!)} className="flex shrink-0 items-center gap-1 rounded bg-[var(--accent)] px-2 py-0.5 text-[10px] hover:opacity-90">
+                          <MessageSquare className="h-3 w-3" /> {t('cron.run.openSession')}
+                        </button>
+                      )}
                   </div>
                   {r.failureReason && <div className="mt-1 text-red-400">{friendlyDispatchError(r.failureReason, t)}</div>}
                   {r.dispatchResults && r.dispatchResults.length > 0 && (
@@ -358,9 +376,13 @@ function CronForm({ initial, onClose, onSaved }: {
   // A job saved before the rule can hold a session on another agent: never
   // switch the field silently — say so, the user picks the fix.
   const agentMismatch = lockedAgent !== null && lockedAgent !== agentId
-  // Trigger mode: cron expression vs. one-shot (at-mode). For an existing
-  // job, infer from runAt presence; new jobs default to recurring.
-  const [mode, setMode] = useState<'recurring' | 'oneShot'>(initial?.runAt ? 'oneShot' : 'recurring')
+  // Trigger mode: cron expression vs. one-shot (at-mode) vs. webhook. For an
+  // existing job, infer from its secret / runAt; new jobs default to recurring.
+  const [mode, setMode] = useState<'recurring' | 'oneShot' | 'webhook'>(initial?.webhookSecret ? 'webhook' : initial?.runAt ? 'oneShot' : 'recurring')
+  // Shown + rotated in webhook mode; a saved webhook job's only (a new one's
+  // is generated by the server on save).
+  const [webhookSecret, setWebhookSecret] = useState(initial?.webhookSecret ?? null)
+  const [rotating, setRotating] = useState(false)
   const [schedule, setSchedule] = useState(initial?.schedule || '0 9 * * *')
   // datetime-local always emits/accepts `YYYY-MM-DDTHH:mm`. Default to one
   // hour from now in the host TZ so the input is editable from the start.
@@ -524,6 +546,18 @@ function CronForm({ initial, onClose, onSaved }: {
     return asUtc - offset
   }, [])
 
+  const onRotate = useCallback(async () => {
+    if (!initial || !(await confirmAction(t('cron.form.webhook.rotateConfirm')))) return
+    setRotating(true)
+    try {
+      setWebhookSecret((await api.cron.rotateWebhookSecret(initial.id)).webhookSecret)
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRotating(false)
+    }
+  }, [initial, t])
+
   const onSubmit = useCallback(async () => {
     setFormError(null)
     if (!workspacePath.trim()) { setFormError(t('cron.form.err.workspace')); return }
@@ -613,7 +647,8 @@ function CronForm({ initial, onClose, onSaved }: {
       const common = {
         label: label || undefined,
         workspacePath, agentId, userPrompt,
-        timezone: timezone || undefined,
+        // Webhook mode hides the field (no timer to place): not sent.
+        timezone: mode === 'webhook' ? undefined : timezone || undefined,
         targets, enabled,
       }
       if (initial) {
@@ -621,25 +656,28 @@ function CronForm({ initial, onClose, onSaved }: {
           ...common,
           schedule: mode === 'recurring' ? schedule : '',
           runAt: mode === 'oneShot' ? runAtMs : null,
+          // true keeps an existing secret; false drops it (server-side).
+          webhook: mode === 'webhook',
           // null explicitly clears a previously-set timeout back to default.
           timeoutSec: timeoutSec ?? null,
           // '' = default session; null clears a previously-picked one.
-          // Stateless excludes a picked session (server rejects both).
-          sessionId: stateless ? null : (sessionId || null),
+          // Stateless / webhook exclude a picked session (server rejects both).
+          sessionId: stateless || mode === 'webhook' ? null : (sessionId || null),
           workingDir: workingDir.trim() || null,
           stateless,
-          // Untouched bounds are left out (server keeps them); one-shot
-          // mode always clears them (server rejects a window with runAt).
-          ...(mode === 'oneShot' || activeFromLocal !== null ? { activeFrom } : {}),
-          ...(mode === 'oneShot' || activeUntilLocal !== null ? { activeUntil } : {}),
+          // Untouched bounds are left out (server keeps them); one-shot /
+          // webhook mode always clears them (server rejects a window there).
+          ...(mode !== 'recurring' || activeFromLocal !== null ? { activeFrom } : {}),
+          ...(mode !== 'recurring' || activeUntilLocal !== null ? { activeUntil } : {}),
         })
       } else {
         await api.cron.createJob({
           ...common,
           schedule: mode === 'recurring' ? schedule : '',
           runAt: mode === 'oneShot' ? runAtMs : undefined,
+          webhook: mode === 'webhook' || undefined,
           timeoutSec,
-          sessionId: stateless ? undefined : (sessionId || undefined),
+          sessionId: stateless || mode === 'webhook' ? undefined : (sessionId || undefined),
           workingDir: workingDir.trim() || undefined,
           stateless,
           activeFrom: activeFrom ?? undefined,
@@ -694,9 +732,9 @@ function CronForm({ initial, onClose, onSaved }: {
 
         <Field label={t('cron.form.session')}>
           <Combobox
-            value={stateless ? '' : sessionId}
-            disabled={stateless}
-            placeholder={stateless ? t('cron.form.session.stateless') : t('cron.form.session.placeholder')}
+            value={stateless || mode === 'webhook' ? '' : sessionId}
+            disabled={stateless || mode === 'webhook'}
+            placeholder={stateless ? t('cron.form.session.stateless') : mode === 'webhook' ? t('cron.form.session.webhook') : t('cron.form.session.placeholder')}
             presets={committedPath ? sessionOptions : []}
             onCommit={(next) => {
               const id = next.trim()
@@ -709,7 +747,7 @@ function CronForm({ initial, onClose, onSaved }: {
             }}
             minWidth={280}
           />
-          <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>
+          {!stateless && mode !== 'webhook' && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>}
         </Field>
 
         <Field label={t('cron.form.folder')}>
@@ -727,10 +765,39 @@ function CronForm({ initial, onClose, onSaved }: {
               <input type="radio" name="cron-mode" value="oneShot" checked={mode === 'oneShot'} onChange={() => setMode('oneShot')} />
               <span>{t('cron.form.mode.oneShot')}</span>
             </label>
+            <label className="flex cursor-pointer items-center gap-1">
+              <input type="radio" name="cron-mode" value="webhook" checked={mode === 'webhook'} onChange={() => setMode('webhook')} />
+              <span>{t('cron.form.mode.webhook')}</span>
+            </label>
           </div>
         </Field>
 
-        {mode === 'recurring' ? (
+        {mode === 'webhook' ? (
+          <Field label={t('cron.form.webhook')}>
+            {initial?.webhookPath && webhookSecret ? (
+              <div className="space-y-1">
+                {([
+                  ['cron.form.webhook.url', location.origin + initial.webhookPath],
+                  ['cron.form.webhook.secret', webhookSecret],
+                ] as const).map(([labelKey, value]) => (
+                  <div key={labelKey} className="flex items-center gap-2">
+                    <span className="w-14 shrink-0 text-[var(--muted-foreground)]">{t(labelKey)}</span>
+                    <code className="flex-1 break-all rounded bg-[var(--accent)] px-2 py-1 font-mono">{value}</code>
+                    <button type="button" onClick={() => { void navigator.clipboard.writeText(value) }} className="rounded p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)]" title={t('cron.form.webhook.copy')}>
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <button type="button" onClick={() => { void onRotate() }} disabled={rotating} className="flex items-center gap-1 rounded bg-[var(--accent)] px-2 py-1 hover:opacity-90 disabled:opacity-50">
+                  <RefreshCw className="h-3 w-3" /> {t('cron.form.webhook.rotate')}
+                </button>
+              </div>
+            ) : (
+              <div className="text-[var(--muted-foreground)]">{t('cron.form.webhook.onSave')}</div>
+            )}
+            <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.webhook.hint')}</div>
+          </Field>
+        ) : mode === 'recurring' ? (
           <Field label={t('cron.form.schedule')}>
             <input value={schedule} onChange={(e) => setSchedule(e.target.value)} className="input-base font-mono" placeholder={t('cron.form.schedule.placeholder')} />
             <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.schedule.hint')}</div>
@@ -747,7 +814,7 @@ function CronForm({ initial, onClose, onSaved }: {
           </Field>
         )}
 
-        <Field label={t('cron.form.timezone')}>
+        {mode !== 'webhook' && <Field label={t('cron.form.timezone')}>
           {/*
             ~600 IANA timezones — a flat <select> is unusable. Reuse the
             shared Combobox (same component the agent picker uses): users
@@ -767,7 +834,7 @@ function CronForm({ initial, onClose, onSaved }: {
             }}
             minWidth={280}
           />
-        </Field>
+        </Field>}
 
         {mode === 'recurring' && (
           <div>

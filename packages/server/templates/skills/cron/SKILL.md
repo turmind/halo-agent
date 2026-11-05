@@ -1,6 +1,6 @@
 ---
 name: cron
-description: Manage scheduled cron jobs that run a halo agent on a schedule and optionally push the result to a chat channel (telegram / wechat / slack / feishu / wecom). Activate when the user asks to add / list / edit / pause / delete a recurring agent task.
+description: Manage scheduled cron jobs that run a halo agent on a schedule (or on each incoming webhook) and optionally push the result to a chat channel (telegram / wechat / slack / feishu / wecom). Activate when the user asks to add / list / edit / pause / delete a recurring or webhook-triggered agent task.
 command: /cron
 requiresAccess: full
 verbs:
@@ -57,7 +57,7 @@ Sensible defaults if user didn't say:
 | workspace  | the user's current workspace (`pwd` / `/workspace` output)    |
 | agent      | `default`                                                     |
 | timezone   | leave unset (host time)                                       |
-| targets    | none (log only — the run shows in admin Cron tab)             |
+| targets    | none (not pushed — the result is in the run history and session) |
 | label      | summarize from prompt + schedule                              |
 | timeout    | leave unset (3600s) — see `--timeout-sec` below               |
 | session    | leave unset (the job's own session) — see `--session` below   |
@@ -90,9 +90,26 @@ of the two switches the job's mode and clears the other; never pass both.
 
 Ambiguous time ("morning")? Ask once for the exact hour.
 
-**Max run time (`--timeout-sec`, optional)** — each fire runs as a cli child
-that the server kills after `timeout_sec` seconds (integer, 60–21600). Unset
-= default 3600. Only set it when the user says so: a quick push job that
+**Webhook trigger (`--webhook`)** — the third mode, instead of `--schedule` /
+`--run-at`: the job fires when something POSTs to `/cron-hooks/<id>` on the
+server (GitHub / CI / any HTTP sender). Use it for "when X happens, run
+this". The helper generates the secret and prints `webhook: {path, secret}`
+— give the user the full URL (the server's public origin, i.e. the admin
+address, + `path`) and the secret, and say once that the secret is shown
+again in the admin Cron tab and `get`. A GitHub webhook uses it as its
+secret (`X-Hub-Signature-256`); other senders send
+`Authorization: Bearer <secret>`. Each request body becomes a message
+in the job's session, marked as data; events that arrive while a run is
+in flight join that run. Tell the sender to set `X-GitHub-Delivery` (GitHub
+does) or `Idempotency-Key`: without one, the same body is processed only
+once per 10 minutes. A repeat of an event whose run failed runs again. Excludes `--session` and an active window. On
+`update`: `--webhook on` switches to it (an existing secret is kept),
+`--schedule …` / `--run-at …` switches away (the secret is dropped).
+
+**Max run time (`--timeout-sec`, optional)** — each fire runs inside the
+server as a turn in the job's session; the server stops it after
+`timeout_sec` seconds (integer, 60–21600) and records the run as
+`timeout`, with nothing pushed. Unset = default 3600. Only set it when the user says so: a quick push job that
 should fail fast ("kill it after 5 minutes" → `--timeout-sec 300`), or a
 heavy analysis run that needs more than an hour (`--timeout-sec 7200`). On
 `update`, pass `--timeout-sec ""` to clear back to the default.
@@ -106,8 +123,8 @@ agent then sees that session's history). Rules the user should hear once:
 - the session keeps **its own agent and access level** — `--agent` must
   match an existing session's agent (the helper refuses otherwise);
 - a fire is **skipped** while a turn is already running in that session;
-- if the user chats in that session while a run is in flight, one of the two
-  turns may be missing from its history afterwards.
+- if the user chats in that session while a run is in flight, the message
+  joins the run, and the run pushes the reply of its last turn.
 
 Root session ids only (no `>` sub-session paths). You don't know session ids
 yourself — ask the user (admin → Sessions) rather than guessing. On `update`,
@@ -211,8 +228,8 @@ digest", construct the target with `{{channel.chat_id}}`:
 **Admin-UI cron jobs.** When invoked from the admin web UI there's no
 chat context (`{{channel.*}}` is empty). Either:
   - Tell the user "the cron will run silently — its result shows up in
-    the cron log but won't be pushed anywhere. Add a target if you want
-    a notification."
+    the run history and the job's session but won't be pushed anywhere.
+    Add a target if you want a notification."
   - Or ask for a chatId explicitly and pass it as a target.
 
 ### 4. Apply the change
@@ -233,7 +250,7 @@ shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
   --targets {{channel.type}}:{{channel.account_id}}:{{channel.chat_id}}
 ```
 
-**Create (silent — no push, just appears in the cron log):**
+**Create (silent — not pushed; the result is in the run history and session):**
 ```bash
 shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
   --label "Nightly index rebuild" \
@@ -246,6 +263,16 @@ shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
 ```bash
 shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py update <id> \
   --schedule "0 10 * * 1"
+```
+
+**Webhook job (fires on each POST, e.g. a GitHub push):**
+```bash
+shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
+  --label "Review pushes" \
+  --workspace /home/ubuntu/sa-agent \
+  --prompt "Summarize the pushed commits and flag risky changes." \
+  --webhook \
+  --targets {{channel.type}}:{{channel.account_id}}:{{channel.chat_id}}
 ```
 
 **Stateless job focused on a sub-folder:**

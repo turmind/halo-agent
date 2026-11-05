@@ -5,8 +5,6 @@
  */
 
 export const NODE_WS_PATH = '/api/nodes/connect'
-/** Loopback relay for cron's `halo cli` child (routes.ts, tools.ts). */
-export const NODE_CALL_PATH = '/api/nodes/call'
 export const NODE_PROTOCOL = 1
 /** ws maxPayload on both ends. */
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024
@@ -20,8 +18,6 @@ export const NODE_OPS: ReadonlySet<string> = new Set<NodeOp>(['read', 'write', '
 export const HEADER_PROTOCOL = 'x-halo-node-protocol'
 export const HEADER_INSTANCE = 'x-halo-node-instance'
 export const HEADER_INFO = 'x-halo-node-info'
-/** Relay secret header on NODE_CALL_PATH. */
-export const HEADER_RELAY = 'x-halo-node-relay'
 
 /** Close codes beyond the standard 1000 (normal) / 1001 (server going away). */
 export const CLOSE_REVOKED = 4001

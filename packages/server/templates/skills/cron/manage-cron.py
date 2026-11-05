@@ -38,11 +38,17 @@ only inside [from, until); fires outside it are skipped silently. Accepts
 YYYY-MM-DD, ISO-8601 or unix ms; a time without offset is read in the job's
 timezone. A bare date means that day 00:00 for --active-from and the NEXT
 day 00:00 for --active-until (so the date itself is included). `""` clears.
+
+`--webhook` (create) / `--webhook on|off` (update): the job fires on
+`POST <server origin>/cron-hooks/<id>` instead of a schedule — the third
+trigger mode next to --schedule / --run-at. The secret is generated here
+and printed with the path (`webhook: {path, secret}`).
 """
 import argparse
 import json
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import time
@@ -210,6 +216,24 @@ def require_v5_columns(conn: sqlite3.Connection):
             'once so it migrates cron.db, then retry')
 
 
+def require_v7_columns(conn: sqlite3.Connection):
+    """cron.db gains webhook_secret via the server's boot migration."""
+    cols = {r[1] for r in conn.execute('PRAGMA table_info(cron_jobs)').fetchall()}
+    if 'webhook_secret' not in cols:
+        die('cron.db has no webhook_secret column yet — restart the halo server '
+            'once so it migrates cron.db, then retry')
+
+
+WEBHOOK_SESSION_ERR = ('a --webhook job runs in its own session (or a new one every run, '
+                       '--stateless), not a picked --session')
+
+
+def webhook_info(job_id: str, secret: str) -> dict:
+    """What a webhook sender needs. The path goes after the server's public
+    origin (the admin URL); the script doesn't know it."""
+    return {'path': f'/cron-hooks/{job_id}', 'secret': secret}
+
+
 def parse_run_at(raw: str | None) -> int | None:
     """Accepts ISO-8601 (`2026-05-24T09:00:00`) or a unix-ms integer; returns
     epoch ms or None. Local time without offset is parsed as host TZ —
@@ -283,13 +307,16 @@ def parse_active_bound(flag: str, raw: str, tz_name: str | None) -> int | None:
     return int(dt.timestamp() * 1000)
 
 
-def validate_active_window(run_at, active_from, active_until, new_until: bool):
+def validate_active_window(run_at, active_from, active_until, new_until: bool, webhook: bool = False):
     """Same rules as the admin REST routes, on the merged row: recurring jobs
     only; a newly set --active-until must be in the future and after from."""
     if active_from is None and active_until is None:
         return
     if run_at is not None:
         die('--active-from/--active-until only apply to recurring jobs, not --run-at one-shots '
+            '(on update, clear them with --active-from "" --active-until "")')
+    if webhook:
+        die('--active-from/--active-until only apply to recurring jobs, not --webhook jobs '
             '(on update, clear them with --active-from "" --active-until "")')
     if new_until and active_until is not None and active_until <= now_ms():
         die('--active-until must be in the future')
@@ -332,7 +359,17 @@ def row_to_job(row: sqlite3.Row) -> dict:
     for k in ('active_from', 'active_until'):
         j.setdefault(k, None)
         j[f'{k}_iso'] = ms_to_iso(j[k], j.get('timezone'))
+    # Webhook trigger (pre-v7 dbs: none).
+    j.setdefault('webhook_secret', None)
+    j['webhook_path'] = f'/cron-hooks/{j["id"]}' if j['webhook_secret'] else None
     return j
+
+
+def show_exit_code(run: dict) -> dict:
+    """In-process runs record no exit code (null) — shown as `-`."""
+    if run.get('exit_code') is None:
+        run['exit_code'] = '-'
+    return run
 
 
 # ── subcommand impls ──────────────────────────────────────────────────
@@ -373,7 +410,7 @@ def cmd_get(args):
         ' FROM cron_runs WHERE job_id = ? ORDER BY id DESC LIMIT 5',
         (args.id,),
     ).fetchall()
-    job['recentRuns'] = [dict(r) for r in runs]
+    job['recentRuns'] = [show_exit_code(dict(r)) for r in runs]
     print(json.dumps(job, ensure_ascii=False, indent=2))
 
 
@@ -384,18 +421,22 @@ def cmd_create(args):
         die('--prompt required')
     has_schedule = bool(args.schedule and args.schedule.strip())
     run_at_ms = parse_run_at(args.run_at)
-    if not has_schedule and run_at_ms is None:
-        die('--schedule or --run-at required')
+    if not has_schedule and run_at_ms is None and not args.webhook:
+        die('--schedule, --run-at or --webhook required')
     if has_schedule and run_at_ms is not None:
         die('--schedule and --run-at are mutually exclusive')
+    if args.webhook and (has_schedule or run_at_ms is not None):
+        die('--webhook and --schedule / --run-at are mutually exclusive')
     if run_at_ms is not None and run_at_ms <= now_ms():
         die('--run-at must be in the future')
     timeout_sec = parse_timeout_sec(args.timeout_sec)
     session_id = parse_session(args.session)
+    if args.webhook and session_id:
+        die(WEBHOOK_SESSION_ERR)
     working_dir = parse_dir(args.workspace, args.dir)
     active_from = parse_active_bound('--active-from', args.active_from or '', args.timezone)
     active_until = parse_active_bound('--active-until', args.active_until or '', args.timezone)
-    validate_active_window(run_at_ms, active_from, active_until, new_until=True)
+    validate_active_window(run_at_ms, active_from, active_until, new_until=True, webhook=args.webhook)
 
     # A custom id becomes the job's own session id (`cron-<id>`), so it takes
     # the session-id charset: a `>` would make it a sub-session path.
@@ -440,12 +481,19 @@ def cmd_create(args):
         require_active_columns(conn)
         values['active_from'] = active_from
         values['active_until'] = active_until
+    if args.webhook:
+        require_v7_columns(conn)
+        # Same shape as the REST route's randomBytes(32).toString('base64url').
+        values['webhook_secret'] = secrets.token_urlsafe(32)
     conn.execute(
         f'INSERT INTO cron_jobs({", ".join(values)}) VALUES ({", ".join("?" for _ in values)})',
         list(values.values()),
     )
     conn.commit()
-    print(json.dumps({'id': job_id, 'created': True}, ensure_ascii=False))
+    out: dict[str, object] = {'id': job_id, 'created': True}
+    if args.webhook:
+        out['webhook'] = webhook_info(job_id, values['webhook_secret'])
+    print(json.dumps(out, ensure_ascii=False))
 
 
 def cmd_update(args):
@@ -462,16 +510,32 @@ def cmd_update(args):
     # Recurring vs one-shot, same as the REST PUT: both in one call is an
     # error; one side alone is a mode switch that clears the other (else the
     # runner prefers run_at and its post-fire auto-disable kills the schedule).
+    # Webhook is the third mode: `--webhook on` switches to it (an existing
+    # secret is kept), `off` leaves it, a --schedule / --run-at alone
+    # switches away from it.
     has_schedule = bool(args.schedule and args.schedule.strip())
     run_at_ms = parse_run_at(args.run_at) if args.run_at is not None else None
+    set_webhook = args.webhook == 'on'
     if run_at_ms is not None and run_at_ms <= now_ms():
         die('--run-at must be in the future')
     if has_schedule and run_at_ms is not None:
         die('--schedule and --run-at are mutually exclusive')
+    if set_webhook and (has_schedule or run_at_ms is not None):
+        die('--webhook and --schedule / --run-at are mutually exclusive')
     if args.schedule is not None: sets.append(('schedule', args.schedule))
-    elif run_at_ms is not None: sets.append(('schedule', ''))
+    elif run_at_ms is not None or set_webhook: sets.append(('schedule', ''))
     if args.run_at is not None: sets.append(('run_at', run_at_ms))
-    elif has_schedule: sets.append(('run_at', None))
+    elif has_schedule or set_webhook: sets.append(('run_at', None))
+    if args.webhook is not None:
+        require_v7_columns(conn)
+    cur_secret = dict(row).get('webhook_secret')
+    if set_webhook:
+        next_secret = cur_secret or secrets.token_urlsafe(32)
+    elif args.webhook == 'off' or has_schedule or run_at_ms is not None:
+        next_secret = None
+    else:
+        next_secret = cur_secret
+    if next_secret != cur_secret: sets.append(('webhook_secret', next_secret))
     if args.timezone is not None: sets.append(('timezone', args.timezone))
     if args.timeout_sec is not None:
         # `--timeout-sec ""` clears back to the runner default (NULL),
@@ -513,21 +577,26 @@ def cmd_update(args):
     # Window rules on the merged row (also catches --run-at on a job that
     # still has a window).
     merged = {**cur, **dict(sets)}
-    if not (merged.get('schedule') or '').strip() and merged.get('run_at') is None:
-        die('--schedule or --run-at required (this update would leave the job with neither)')
+    if not (merged.get('schedule') or '').strip() and merged.get('run_at') is None and not next_secret:
+        die('--schedule, --run-at or --webhook required (this update would leave the job with none)')
+    if next_secret and merged.get('session_id'):
+        die(WEBHOOK_SESSION_ERR)
     validate_active_window(
         merged.get('run_at'), merged.get('active_from'), merged.get('active_until'),
-        new_until=bool(args.active_until and args.active_until.strip()),
+        new_until=bool(args.active_until and args.active_until.strip()), webhook=bool(next_secret),
     )
-    if not sets:
-        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--timezone/--timeout-sec/--session/--dir/--stateless/--targets/--active-from/--active-until')
+    if not sets and args.webhook is None:
+        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--webhook/--timezone/--timeout-sec/--session/--dir/--stateless/--targets/--active-from/--active-until')
     sets.append(('updated_at', now_ms()))
 
     placeholders = ', '.join(f'{k} = ?' for k, _ in sets)
     values = [v for _, v in sets] + [args.id]
     conn.execute(f'UPDATE cron_jobs SET {placeholders} WHERE id = ?', values)
     conn.commit()
-    print(json.dumps({'id': args.id, 'updated': True}, ensure_ascii=False))
+    out: dict[str, object] = {'id': args.id, 'updated': True}
+    if next_secret:
+        out['webhook'] = webhook_info(args.id, next_secret)
+    print(json.dumps(out, ensure_ascii=False))
 
 
 def cmd_enable(args):
@@ -633,7 +702,7 @@ def cmd_runs(args):
             d['dispatch_results'] = json.loads(d['dispatch_results']) if d['dispatch_results'] else None
         except Exception:
             pass
-        runs.append(d)
+        runs.append(show_exit_code(d))
     out = {
         'runs': runs,
         'hasMore': has_more,
@@ -667,6 +736,9 @@ def main():
     c.add_argument('--schedule', help='5-field cron expression (recurring); mutually exclusive with --run-at')
     c.add_argument('--run-at', dest='run_at',
                    help='one-shot fire time, ISO-8601 (e.g. 2026-05-24T09:00) or unix ms — auto-disables after fire')
+    c.add_argument('--webhook', action='store_true',
+                   help='fire on POST /cron-hooks/<id> instead of a schedule; prints the path + generated secret. '
+                        'Excludes --schedule / --run-at / --session / an active window')
     c.add_argument('--timezone', help='IANA tz, e.g. Asia/Shanghai')
     c.add_argument('--timeout-sec', dest='timeout_sec',
                    help='max run time in seconds, 60–21600 (default: unset = 3600)')
@@ -697,6 +769,9 @@ def main():
     u.add_argument('--prompt')
     u.add_argument('--schedule')
     u.add_argument('--run-at', dest='run_at')
+    u.add_argument('--webhook', choices=['on', 'off'],
+                   help='on = switch to the webhook trigger (keeps an existing secret; prints path + secret); '
+                        'off = leave it (pass --schedule / --run-at too)')
     u.add_argument('--timezone')
     u.add_argument('--timeout-sec', dest='timeout_sec',
                    help='max run time in seconds, 60–21600; pass "" to clear back to default 3600')

@@ -26,7 +26,7 @@ import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools, buildContinueTaskTool } from './session-tools.js'
 import { GOAL_AGENT_ID, deliverGoalRound, sweepActiveGoals, buildGoalTools, dissolveGoalBindingsFor } from './goal-mode.js'
-import { deliverRelayReport, deliverRelayInterim, readReplyTo, listActiveChildren, buildRelayTools, RELAY_CHANNEL_PREFIX, A2A_CHANNEL_PREFIX, cancelA2AForSession } from './relay.js'
+import { deliverRelayReport, deliverRelayInterim, readReplyTo, listActiveChildren, buildRelayTools, RELAY_CHANNEL_PREFIX, A2A_CHANNEL_PREFIX, cancelOwedForSession } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
 import { resolveWorkingDir as resolveWorkingDirIn } from './working-dir.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
@@ -1265,7 +1265,7 @@ export class SessionManager implements SessionManagerInternals {
   /** Whether a root's cached UIState holds local mutations not yet persisted.
    *  The WS save paths gate on this — a clean state (pure disk seed, or
    *  already flushed) must not be written back over a file that another
-   *  process (cron `halo cli` child) may have advanced since. */
+   *  process (the TUI, a manual `halo cli -s`) may have advanced since. */
   isUIStateDirty(rootSessionId: string): boolean {
     return this.uiStore.isUIStateDirty(rootSessionId)
   }
@@ -1286,7 +1286,7 @@ export class SessionManager implements SessionManagerInternals {
    * hold the same model-visible content. Running only (`promise !== null`,
    * subs too): an idle session's history is already on disk (every path that
    * changes it saves on the spot), and its in-memory copy may be stale — a
-   * cron `halo cli` / TUI run may have written the same session since, and
+   * `halo cli` / TUI run may have written the same session since, and
    * a write here would replace that run's turns with the old copy (stamp
    * mismatch → full rewrite). Doesn't end anything: no abort, no
    * repair, no release, the run ledger untouched — the runs go on until the
@@ -1339,7 +1339,7 @@ export class SessionManager implements SessionManagerInternals {
     return this.uiStore.appendUserMessage(sessionId, text, opts)
   }
 
-  /** Another process — a cron `halo cli`, the TUI, a manual `halo cli -s` —
+  /** Another process — the TUI, a manual `halo cli -s` —
    *  may have written the tree since this process cached its idle copies: the
    *  root's UIState (kept past release, see releaseSession) and an
    *  AgentSession a view loaded. One stat per cached copy against its writer
@@ -1384,7 +1384,7 @@ export class SessionManager implements SessionManagerInternals {
     this.uiStore.dropUIState(sessionId)
   }
 
-  /** Another process (a cron `halo cli` child) just wrote this root session's
+  /** Another process (the TUI, a manual `halo cli -s`) just wrote this root session's
    *  files. Drop the idle in-memory copies — the tree's AgentSessions (raw
    *  history, loaded by any view via ensureSession and never evicted while
    *  idle) and the root's UIState — WITHOUT saving, so the next view/message
@@ -1454,6 +1454,21 @@ export class SessionManager implements SessionManagerInternals {
     } catch (err) {
       console.error(`[SessionManager] refreshStaleHistory failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  /** Whether the session's model history holds the user text stamped `stamp`
+   *  (`[<stamp>] …`, runAgentTurn / batchInput) — the message reached a turn,
+   *  not only the queue, which a restart drops. Cron's boot recovery checks
+   *  the webhook events it handed to a resumed run with it. */
+  rawHasStamp(sessionId: string, stamp: string): boolean {
+    const live = this.sessions.get(sessionId)
+    const agentId = live?.agentId ?? this.getSessionById(sessionId)?.agentId
+    if (!agentId) return false
+    const raw = (live ? live.agent.messages : this.loadAgentState(sessionId, agentId)) as AnthropicMessage[]
+    const tag = `[${stamp}]`
+    return raw.some((m) => m.role === 'user' && (typeof m.content === 'string'
+      ? m.content.startsWith(tag)
+      : m.content.some((b) => b.type === 'text' && b.text.startsWith(tag))))
   }
 
   // ── Loop detection ──────────────────────────────────────────────────
@@ -2518,7 +2533,7 @@ export class SessionManager implements SessionManagerInternals {
   async stopSession(sessionId: string): Promise<void> {
     // An owed inbound A2A task ends CANCELED, before the abort's turn-end hook
     // could report the partial output as completed.
-    cancelA2AForSession(this.db, sessionId, 'Stopped on the remote side.')
+    cancelOwedForSession(this.db, sessionId, 'stop')
     // Collect the full descendant tree so stop cascades — otherwise sub-agents
     // started via start_session keep burning tokens after the parent is stopped.
     const allIds: string[] = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
@@ -3633,7 +3648,7 @@ export class SessionManager implements SessionManagerInternals {
    * Order: delete_log first (needs SQLite to find children), then deleteSession.
    */
   async deleteSession(sessionId: string): Promise<string[]> {
-    cancelA2AForSession(this.db, sessionId, 'Session deleted on the remote side.')
+    cancelOwedForSession(this.db, sessionId, 'delete')
     // Stop if running
     const session = this.sessions.get(sessionId)
     if (session) {
@@ -3721,7 +3736,7 @@ export class SessionManager implements SessionManagerInternals {
    * SQLite records and log files are preserved — archivedAt is set by the caller.
    */
   async archiveSession(sessionId: string): Promise<void> {
-    cancelA2AForSession(this.db, sessionId, 'Session archived on the remote side.')
+    cancelOwedForSession(this.db, sessionId, 'archive')
     const session = this.sessions.get(sessionId)
     if (session) {
       if (session.abortController) {
@@ -3864,7 +3879,7 @@ export class SessionManager implements SessionManagerInternals {
    *  doesn't discard it. */
   stopUserSession(sessionId: string): void {
     // The admin Stop button: same A2A outcome as stopSession (CANCELED).
-    cancelA2AForSession(this.db, sessionId, 'Stopped on the remote side.')
+    cancelOwedForSession(this.db, sessionId, 'stop')
     const session = this.sessions.get(sessionId)
     if (!session) return
     const queued = session.messageQueue

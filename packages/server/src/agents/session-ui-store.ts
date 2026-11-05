@@ -103,9 +103,9 @@ export class SessionUIStore {
    *  notification appended, log replaced) **not yet persisted** — marked on
    *  every mutation, cleared once persistLog lands the snapshot. A state
    *  not in this set adds nothing to what's on disk: either it's a pure disk
-   *  seed (built to *view* a session another process may be driving — a cron
-   *  `halo cli` child shares the workspace's session files and keeps appending
-   *  after the seed), or its mutations were already flushed. The WS
+   *  seed (built to *view* a session another process may be driving — the
+   *  TUI or a `halo cli -s` shares the workspace's session files and keeps
+   *  appending after the seed), or its mutations were already flushed. The WS
    *  detach/switch saves gate on `isUIStateDirty`: writing a clean state back
    *  would overwrite the other process's newer messages with this process's
    *  frozen snapshot (the cron-session UI-log truncation incident). */

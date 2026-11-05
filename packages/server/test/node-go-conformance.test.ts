@@ -113,7 +113,7 @@ async function startServer(onPort = 0): Promise<void> {
   server.on('connection', (s: Socket) => { sockets.add(s); s.on('close', () => sockets.delete(s)) })
   await new Promise<void>((r) => server.listen(onPort, '127.0.0.1', r))
   port = (server.address() as AddressInfo).port
-  hub = createNodeHub({ db, port })
+  hub = createNodeHub({ db })
   setNodeHub(hub)
   app = new Hono()
   app.route('/api', createNodeRoutes({ db, hub }))

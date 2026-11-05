@@ -149,7 +149,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     if (!state) return
     // Only write back a state THIS process has mutated and not yet flushed.
     // A clean state is either a pure disk seed — the subscribe built it to
-    // view a session a cron `halo cli` child is driving, and that child keeps
+    // view a session another process (TUI / `halo cli -s`) is driving, and it keeps
     // appending to the file after our seed — or already persisted by the
     // store's own flush. Writing it here would clobber the fresher file with
     // a frozen snapshot (the cron-session UI-log truncation incident: the

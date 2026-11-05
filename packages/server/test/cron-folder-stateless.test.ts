@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import { eq } from 'drizzle-orm'
 
@@ -21,28 +20,29 @@ import { rawSqlite } from '../src/db/raw-sqlite.js'
 import { getWorkspaceDb } from '../src/db/index.js'
 import { agentSessions } from '../src/db/schema.js'
 import {
-  runJob, sweepOrphanRuns, stopCronDaemon, perRunSessionId, sessionAgentIdFor, reconcileFromDb,
-  _inflight, _inflightSessions, _sessionRowCache,
+  runJob, recoverRuns, perRunSessionId, sessionAgentIdFor, reconcileFromDb, setCronSessionRegistry,
+  _inflight, _sessionRowCache,
 } from '../src/cron/runner.js'
+import { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
+import { SessionManager } from '../src/agents/session-manager.js'
 import { createCronRoutes } from '../src/routes/cron.js'
-
-const require = createRequire(import.meta.url)
+import { installCronHarness, teardownCronHarness, until, type CronHarness } from './helpers/cron-harness.js'
 
 /**
- * Per-job folder (`cron_jobs.working_dir` → `halo cli --dir`) and stateless
+ * Per-job folder (`cron_jobs.working_dir` → the session's working dir) and stateless
  * mode (`cron_jobs.stateless` → a fresh `cron-<id>-<base36 ms>` session every
  * fire, recorded on `cron_runs.session_id`):
  *   - REST validates the folder against the workspace, rejects stateless +
  *     sessionId, and keeps a stateful job's agent equal to its existing
  *     session's (evaluated on the merged row)
- *   - runner passes `--dir=<folder or .>`, fails a run whose folder vanished,
- *     records the run's session
- *   - orphan sweep fingerprints the run's recorded session
+ *   - runner applies the folder (or the root) to the session, fails a run
+ *     whose folder vanished, records the run's session (in-process,
+ *     helpers/cron-harness.ts)
+ *   - legacy (cli-child) recovery fingerprints the run's recorded session
  *   - the session-agent lookup is cached, read-only and never scaffolds
  */
 
 const realHome = process.env.HOME
-const realCli = process.env.HALO_CLI
 
 let tmpHome: string
 let wsDir: string
@@ -50,27 +50,18 @@ let db: CronDb
 const app = createCronRoutes()
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-cron-folder-'))
+  tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'halo-cron-folder-')))
   process.env.HOME = tmpHome
   wsDir = path.join(tmpHome, 'ws')
   fs.mkdirSync(path.join(wsDir, 'sub', 'deep'), { recursive: true })
   fs.writeFileSync(path.join(wsDir, 'a-file'), 'x')
   db = createCronDb(path.join(tmpHome, 'global'))
   setCronDb(db)
-  _inflight.clear()
-  _inflightSessions.clear()
-  const cli = path.join(tmpHome, 'fake-halo')
-  fs.writeFileSync(cli, '#!/bin/sh\necho "ARGS $*"\n', { mode: 0o755 })
-  process.env.HALO_CLI = cli
 })
 
 afterEach(() => {
-  stopCronDaemon()
+  teardownCronHarness()
   process.env.HOME = realHome
-  if (realCli === undefined) delete process.env.HALO_CLI
-  else process.env.HALO_CLI = realCli
-  _inflight.clear()
-  _inflightSessions.clear()
   for (const e of _sessionRowCache.values()) e.db.close()
   _sessionRowCache.clear()
   fs.rmSync(tmpHome, { recursive: true, force: true })
@@ -99,6 +90,13 @@ async function createdId(res: Response): Promise<string> {
 
 const getJob = (id: string) => db.select().from(cronJobs).where(eq(cronJobs.id, id)).get()!
 const getRun = (runId: string) => db.select().from(cronRuns).where(eq(cronRuns.id, runId)).get()!
+
+/** Run a job to its end (runJob returns once the prompt is in). */
+async function runToEnd(jobId: string) {
+  const runId = await runJob(jobId, 'manual')
+  await until(() => getRun(runId).status !== 'running' && !_inflight.has(jobId))
+  return getRun(runId)
+}
 
 function insertSession(id: string, agentId: string): void {
   const now = Date.now()
@@ -290,80 +288,88 @@ describe('perRunSessionId', () => {
 })
 
 describe.skipIf(process.platform === 'win32')('cron folder / stateless — runner', () => {
-  it('passes --dir <folder> and records the stable session on the run row', async () => {
+  let h: CronHarness
+  beforeEach(() => { h = installCronHarness(wsDir) })
+  const sessionRow = (id: string) => h.sm.getDb().select().from(agentSessions).where(eq(agentSessions.id, id)).get()
+
+  it('creates the session in the job folder and records the stable session on the run row', async () => {
     insertJob('job-a', { workingDir: 'sub' })
-    const run = getRun(await runJob('job-a', 'manual'))
+    const run = await runToEnd('job-a')
     expect(run.status).toBe('succeeded')
-    expect(run.output).toMatch(/-s cron-job-a -w \S+ --dir=sub(\s|$)/)
     expect(run.sessionId).toBe('cron-job-a')
+    expect(sessionRow('cron-job-a')?.workingDir).toBe('sub')
   })
 
-  it('passes --dir=. when the job has no folder (so a resumed session is re-pointed at the root)', async () => {
-    insertJob('job-b')
-    expect(getRun(await runJob('job-b', 'manual')).output).toMatch(/--dir=\.(\s|$)/)
+  it('a resumed session is re-pointed: at the job folder, or back at the root when the job has none', async () => {
+    h.seedSession('cron-job-b', { workingDir: 'sub/deep' })
+    insertJob('job-b', { workingDir: 'sub' })
+    await runToEnd('job-b')
+    expect(sessionRow('cron-job-b')?.workingDir).toBe('sub')
+    db.update(cronJobs).set({ workingDir: null }).where(eq(cronJobs.id, 'job-b')).run()
+    await runToEnd('job-b')
+    expect(sessionRow('cron-job-b')?.workingDir).toBeNull()
   })
 
-  it('a folder starting with `-` stays one --dir= token', async () => {
+  it('a folder starting with `-` is just a folder', async () => {
     fs.mkdirSync(path.join(wsDir, '-odd'))
     insertJob('job-e', { workingDir: '-odd' })
-    expect(getRun(await runJob('job-e', 'manual')).output).toMatch(/--dir=-odd(\s|$)/)
+    expect((await runToEnd('job-e')).status).toBe('succeeded')
+    expect(sessionRow('cron-job-e')?.workingDir).toBe('-odd')
   })
 
-  it('fails the run with a clear reason when the folder vanished, without spawning', async () => {
+  it('fails the run with a clear reason when the folder vanished, without sending', async () => {
     insertJob('job-c', { workingDir: 'gone' })
     const run = getRun(await runJob('job-c', 'manual'))
     expect(run.status).toBe('failed')
     expect(run.failureReason).toContain('folder not found')
     expect(run.output).toBeNull()
+    expect(h.inputs).toEqual([])
   })
 
-  it('stateless: each fire spawns on a fresh per-run session and records it', async () => {
+  it('stateless: each fire runs on a fresh per-run session and records it', async () => {
     insertJob('cron-sl', { stateless: 1 })
-    const first = getRun(await runJob('cron-sl', 'manual'))
+    const first = await runToEnd('cron-sl')
     await new Promise((r) => setTimeout(r, 5))
-    const second = getRun(await runJob('cron-sl', 'manual'))
+    const second = await runToEnd('cron-sl')
     for (const run of [first, second]) {
       expect(run.status).toBe('succeeded')
       expect(run.sessionId).toMatch(/^cron-sl-[0-9a-z]+$/)
-      expect(run.output).toContain(`-s ${run.sessionId} `)
+      expect(sessionRow(run.sessionId!)).toBeDefined()
     }
     expect(first.sessionId).not.toBe(second.sessionId)
-    expect(_inflightSessions.size).toBe(0)
   })
 
-  it('a hand-edited agent mismatch reaches the cli, whose stderr becomes the failureReason', async () => {
-    const cli = path.join(tmpHome, 'refusing-halo')
-    fs.writeFileSync(cli, '#!/bin/sh\necho "session cron-job-d runs agent coder; omit -a to resume it" >&2\nexit 1\n', { mode: 0o755 })
-    process.env.HALO_CLI = cli
+  it('a hand-edited agent mismatch fails the run with the agent in the reason', async () => {
+    h.seedSession('cron-job-d', { agentId: 'coder' })
     insertJob('job-d')
     const run = getRun(await runJob('job-d', 'manual'))
     expect(run.status).toBe('failed')
     expect(run.failureReason).toContain('runs agent coder')
+    expect(h.inputs).toEqual([])
   })
 
-  it('orphan sweep fingerprints the run\'s recorded per-run session (stateless)', async () => {
+  it('legacy recovery fingerprints the run\'s recorded per-run session (stateless)', async () => {
     insertJob('cron-orph', { stateless: 1 })
     const perRun = 'cron-orph-abc123'
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', '-s', perRun], { stdio: 'ignore' })
     const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()))
     await new Promise((r) => setTimeout(r, 150))
     db.insert(cronRuns).values({ id: 'run-o', jobId: 'cron-orph', triggerKind: 'scheduled', status: 'running', startedAt: Date.now(), pid: child.pid!, sessionId: perRun }).run()
-    sweepOrphanRuns({ graceMs: 500 })
+    await recoverRuns({ graceMs: 500 })
     expect(getRun('run-o').failureReason).toContain('SIGTERM sent')
     await exited
     await new Promise((r) => setTimeout(r, 600))
     expect(_inflight.has('cron-orph')).toBe(false)
-    expect(_inflightSessions.size).toBe(0)
   })
 
-  it('orphan sweep leaves a process alone whose argv carries the job id but not the recorded session', async () => {
+  it('legacy recovery leaves a process alone whose argv carries the job id but not the recorded session', async () => {
     insertJob('cron-orph2', { stateless: 1 })
     // The old derivation (effectiveSessionId) would have looked for `cron-orph2`.
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', '-s', 'cron-orph2'], { stdio: 'ignore' })
     await new Promise((r) => setTimeout(r, 150))
     try {
       db.insert(cronRuns).values({ id: 'run-o2', jobId: 'cron-orph2', triggerKind: 'scheduled', status: 'running', startedAt: Date.now(), pid: child.pid!, sessionId: 'cron-orph2-zzz' }).run()
-      sweepOrphanRuns({ graceMs: 200 })
+      await recoverRuns({ graceMs: 200 })
       expect(getRun('run-o2').failureReason).toContain('not killed')
       expect(child.exitCode).toBeNull()
     } finally {
@@ -371,14 +377,14 @@ describe.skipIf(process.platform === 'win32')('cron folder / stateless — runne
     }
   })
 
-  it('orphan sweep on a stateful job uses the session recorded on the run row, not one re-derived from the job', async () => {
+  it('legacy recovery on a stateful job uses the session recorded on the run row, not one re-derived from the job', async () => {
     // The job now points at `chat-new`; the orphaned run was spawned on its old session.
     insertJob('cron-orph3', { sessionId: 'chat-new' })
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', '-s', 'chat-old'], { stdio: 'ignore' })
     const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()))
     await new Promise((r) => setTimeout(r, 150))
     db.insert(cronRuns).values({ id: 'run-o3', jobId: 'cron-orph3', triggerKind: 'scheduled', status: 'running', startedAt: Date.now(), pid: child.pid!, sessionId: 'chat-old' }).run()
-    sweepOrphanRuns({ graceMs: 500 })
+    await recoverRuns({ graceMs: 500 })
     expect(getRun('run-o3').failureReason).toContain('SIGTERM sent')
     await exited
     await new Promise((r) => setTimeout(r, 600))
@@ -411,24 +417,14 @@ describe.skipIf(process.platform === 'win32')('cron session-agent lookup — cac
   })
 
   it('a run that creates the job\'s session: finalize\'s push and the next GET carry its agent (cached null is not served)', async () => {
-    // Fake cli that creates the session row in the workspace db, as the real cli does on first fire.
-    const bs = path.dirname(require.resolve('better-sqlite3/package.json'))
-    const cli = path.join(tmpHome, 'creating-halo.cjs')
-    fs.writeFileSync(cli, `#!${process.execPath}
-const Database = require(${JSON.stringify(bs)})
-const a = process.argv.slice(2); const s = a[a.indexOf('-s') + 1]; const w = a[a.indexOf('-w') + 1]
-const db = new Database(require('path').join(w, '.halo', 'halo.db'))
-db.prepare('INSERT INTO agent_sessions (id, agent_id, created_at, updated_at) VALUES (?, ?, 1, 1)').run(s, a[a.indexOf('-a') + 1])
-console.log('ok')
-`, { mode: 0o755 })
-    process.env.HALO_CLI = cli
     getWorkspaceDb(wsDir) // the workspace db exists, the session doesn't yet
     insertJob('cron-f')
     expect((await listJob('cron-f')).sessionAgentId).toBeNull() // cached miss
+    installCronHarness(wsDir) // the run creates the session row (another connection than the cache's)
     const pushes: Array<Record<string, unknown>> = []
     const off = onBroadcastForTest((e) => { if (e.type === 'cron:job_changed') pushes.push(e) })
     try {
-      expect(getRun(await runJob('cron-f', 'manual')).status).toBe('succeeded')
+      expect((await runToEnd('cron-f')).status).toBe('succeeded')
     } finally { off() }
     expect(pushes.at(-1)).toMatchObject({ jobId: 'cron-f', sessionAgentId: 'default' })
     expect((await listJob('cron-f')).sessionAgentId).toBe('default')
@@ -441,28 +437,27 @@ console.log('ok')
       fs.writeFileSync(path.join(wsDir, '.halo', 'halo.db'), 'not a sqlite file '.repeat(64))
     }
 
-    it('fire: the run fails with the read error and no child is spawned (no fallback to full access)', async () => {
+    it('fire: the run fails with the read error and nothing is sent (no fallback to full access)', async () => {
       corruptDb()
-      const marker = path.join(tmpHome, 'spawned')
-      const cli = path.join(tmpHome, 'marking-halo')
-      fs.writeFileSync(cli, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\necho ok\n`, { mode: 0o755 })
-      process.env.HALO_CLI = cli
+      // The server's registry opens the job's workspace on the fire: its db is unreadable.
+      const send = vi.spyOn(SessionManager.prototype, 'sendUserMessage')
+      setCronSessionRegistry(new SessionManagerRegistry())
       insertJob('cron-ro')
       const run = getRun(await runJob('cron-ro', 'manual'))
       expect(run.status).toBe('failed')
-      expect(run.failureReason).toMatch(new RegExp(`^could not read session cron-ro from ${wsDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: `))
+      expect(run.failureReason).toMatch(new RegExp(`^could not open workspace ${wsDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: `))
       expect(run.output).toBeNull()
-      expect(fs.existsSync(marker)).toBe(false)
+      expect(send).not.toHaveBeenCalled()
       expect(_inflight.has('cron-ro')).toBe(false)
-      expect(_inflightSessions.size).toBe(0)
     })
 
-    it('fire: a workspace db that does not exist yet still spawns (the cli creates the session)', async () => {
+    it('fire: a workspace db that does not exist yet still runs (the session is created)', async () => {
       insertJob('cron-new')
       expect(fs.existsSync(path.join(wsDir, '.halo', 'halo.db'))).toBe(false)
-      const run = getRun(await runJob('cron-new', 'manual'))
+      const h = installCronHarness(wsDir)
+      const run = await runToEnd('cron-new')
       expect(run.status).toBe('succeeded')
-      expect(run.output).not.toContain('--access')
+      expect(h.created).toEqual([expect.objectContaining({ id: 'cron-new', accessLevel: null })])
     })
 
     it('GET reads it as unknown (null); a write that the agent rule checks is refused with the read error', async () => {

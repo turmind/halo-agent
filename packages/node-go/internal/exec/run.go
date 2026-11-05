@@ -30,7 +30,7 @@ var paramsRe = regexp.MustCompile(`\{\{\s*([\w-]+)\.params\.([\w-][\w.-]*)\s*\}\
 
 // child-env.ts cleanChildEnv.
 var strippedEnv = map[string]bool{
-	"HALO_PASSWORD": true, "HALO_JWT_SECRET": true, "HALO_NODE_RELAY_URL": true, "HALO_NODE_RELAY_TOKEN": true, "HALO_NODE_TOKEN": true,
+	"HALO_PASSWORD": true, "HALO_JWT_SECRET": true, "HALO_NODE_TOKEN": true,
 }
 
 func cleanEnv() []string {
