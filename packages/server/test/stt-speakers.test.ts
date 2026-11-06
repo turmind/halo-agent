@@ -21,7 +21,6 @@ describe('speaker tracker', () => {
     expect(t.assign(at(80), 3)).toBe(1)
     // Centroid of 0 is now at 15°: 60° is cos 0.71 from it, 20° from 1.
     expect(t.assign(at(60), 3)).toBe(1)
-    expect(t.count).toBe(2)
     expect(SPEAKER_MATCH_THRESHOLD).toBeLessThan(Math.cos(Math.PI / 4))
   })
 
@@ -75,6 +74,21 @@ describe('splitBySpeakerRuns', () => {
     // A token just before a run (nearest) → that piece starts at the token.
     const gap: SpeakerRun[] = [{ start: 0, end: 1, speaker: 0 }, { start: 2, end: 3, speaker: 1 }]
     expect(splitBySpeakerRuns('ab', ['a', 'b'], [0.5, 1.9], gap, 3).map((p) => [p.start, p.end])).toEqual([[0, 1.9], [1.9, 3]])
+  })
+
+  it('a piece that would span zero seconds merges into its neighbour (no zero-length finals)', () => {
+    // `b` sits only in run 1 (later-starting, overlapping run 0). Its piece
+    // clamps to its own token (the `，` before it has the same time) and `c`'s
+    // piece clamps there too: [1.2, 1.2]. Merged → one speaker-0 piece.
+    const overlap: SpeakerRun[] = [{ start: 0, end: 3, speaker: 0 }, { start: 1.1, end: 1.3, speaker: 1 }]
+    const pieces = splitBySpeakerRuns('a，bc', ['a', '，', 'b', 'c'], [0.5, 1.2, 1.2, 2], overlap, 3)
+    expect(pieces).toEqual([{ start: 0, end: 3, text: 'a，bc', speaker: 0 }])
+    // Same with a third speaker after: the zero piece folds left, boundaries kept.
+    const three: SpeakerRun[] = [...overlap, { start: 2.5, end: 3, speaker: 2 }]
+    expect(splitBySpeakerRuns('a，bcd', ['a', '，', 'b', 'c', 'd'], [0.5, 1.2, 1.2, 2, 2.8], three, 3).map((p) => [p.start, p.end, p.text, p.speaker])).toEqual([
+      [0, 2.5, 'a，bc', 0],
+      [2.5, 3, 'd', 2],
+    ])
   })
 
   it('a later run reusing the same speaker merges with consecutive same-speaker tokens', () => {

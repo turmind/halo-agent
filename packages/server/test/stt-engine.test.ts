@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createSttEngine, MAX_PENDING_AUDIO_S, MAX_QUEUED_SEGMENTS, PAD_AFTER_S, PAD_BEFORE_S, SttError, type SherpaDiarSegment, type SherpaModule, type SherpaResult, type SttFinal } from '../src/stt/engine.js'
 
 /**
@@ -12,7 +12,9 @@ import { createSttEngine, MAX_PENDING_AUDIO_S, MAX_QUEUED_SEGMENTS, PAD_AFTER_S,
  *  - abort drops the stream's queued segments; a load failure → engine;
  *  - `speakers`: diarizer loaded lazily, once; finals split per speaker run
  *    with per-connection labels; short clusters join the nearest speaker;
- *    token/text mismatch and no diarization fall back to one final.
+ *    token/text mismatch and no diarization fall back to one final; a
+ *    diarization that never settles times out without wedging the queue;
+ *    end() / abort() with a diarization job in flight.
  */
 
 const SR = 16000
@@ -26,7 +28,11 @@ const levelOf = (x: number) => Math.round(x * 32768 / 1000)
  *  vector at k × 60° (neighbours cos 0.5, below the match threshold). */
 function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResult = () => ({ text: 'x', lang: '<|zh|>' })) {
   const decodes: Array<{ samples: number; release: () => void }> = []
-  const diar = { ctor: 0, calls: 0, embeds: [] as number[], fail: null as Error | null, failProcess: null as Error | null, segments: null as SherpaDiarSegment[] | null }
+  const diar = {
+    ctor: 0, calls: 0, embeds: [] as number[], fail: null as Error | null, failProcess: null as Error | null, segments: null as SherpaDiarSegment[] | null,
+    /** `hold`: process() waits for `releases[i]()`; `hang`: it never settles (sherpa 1.13.8 on a native error). */
+    hold: false, hang: false, releases: [] as Array<() => void>, onEmbed: null as (() => void) | null,
+  }
   let manual = false
   const mod: SherpaModule = {
     OfflineRecognizer: {
@@ -76,6 +82,7 @@ function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResu
       }
       compute(s: { wave: Float32Array }) {
         diar.embeds.push(s.wave.length)
+        diar.onEmbed?.()
         const k = levelOf(s.wave.find((x) => x !== 0) ?? 0)
         return Float32Array.from([Math.cos(k * Math.PI / 3), Math.sin(k * Math.PI / 3)])
       }
@@ -83,6 +90,8 @@ function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResu
     async offlineSpeakerDiarizationProcessAsync(_handle, samples, progress) {
       expect(typeof progress).toBe('function')
       diar.calls++
+      if (diar.hang) return new Promise<never>(() => {})
+      if (diar.hold) await new Promise<void>((r) => diar.releases.push(r))
       if (diar.failProcess) throw diar.failProcess
       if (diar.segments) return diar.segments
       const out: SherpaDiarSegment[] = []
@@ -370,5 +379,85 @@ describe('stt engine speakers', () => {
     await stream.end()
     expect(finals).toEqual([])
     expect(errors.map((e) => [e.code, e.message])).toEqual([['engine', 'speaker diarization failed: onnx run failed']])
+  })
+
+  describe('with a diarization job in flight', () => {
+    afterEach(() => { vi.useRealTimers() })
+
+    it('a diarization that never settles times out → engine error; the queue keeps going', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const fake = fakeSherpa(toneTokens)
+      fake.diar.hang = true
+      const a = await open(fake, true)
+      const other: SttFinal[] = []
+      const b = a.engine.open({ onFinal: (f) => other.push(f), onError: () => {} })
+      a.stream.write(voices([[1, 1]]))
+      b.write(speech(1))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fake.diar.calls).toBe(1)
+      expect(fake.decodes).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(59_000)
+      expect(a.errors).toEqual([])
+      expect(other).toEqual([])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(a.errors.map((e) => [e.code, e.message])).toEqual([['engine', 'speaker diarization failed: timed out']])
+      expect(a.finals).toEqual([])
+      // The other stream's segment, queued behind the hung one, decodes.
+      await b.end()
+      expect(fake.decodes).toHaveLength(2)
+      expect(other).toHaveLength(1)
+    })
+
+    it('end() waits for it, then resolves with its finals', async () => {
+      const fake = fakeSherpa(toneTokens)
+      fake.diar.hold = true
+      const { stream, finals } = await open(fake, true)
+      stream.write(voices([[1.5, 1], [1.5, 2]]))
+      let ended = false
+      const end = stream.end().then(() => { ended = true })
+      await vi.waitFor(() => expect(fake.diar.releases).toHaveLength(1))
+      await new Promise((r) => setTimeout(r, 20))
+      expect(ended).toBe(false)
+      fake.diar.releases[0]()
+      await end
+      expect(finals.map((f) => f.speaker)).toEqual(['0', '1'])
+    })
+
+    it('abort() drops its result and the stream\'s queued segments; the next stream runs', async () => {
+      const fake = fakeSherpa(toneTokens)
+      fake.diar.hold = true
+      const { engine, stream, finals, errors } = await open(fake, true)
+      stream.write(voices([[1, 1]]))
+      stream.write(voices([[1, 2]]))
+      await vi.waitFor(() => expect(fake.diar.releases).toHaveLength(1))
+      stream.abort()
+      fake.diar.releases[0]()
+      const other: SttFinal[] = []
+      const s2 = engine.open({ onFinal: (f) => other.push(f), onError: () => {} })
+      s2.write(speech(1))
+      await s2.end()
+      expect(finals).toEqual([])
+      expect(errors).toEqual([])
+      expect(fake.diar.calls).toBe(1)
+      expect(fake.diar.embeds).toEqual([])
+      expect(fake.decodes).toHaveLength(2)
+      expect(other).toHaveLength(1)
+    })
+
+    it('abort() during the embedding loop stops before the next embedding', async () => {
+      const fake = fakeSherpa(toneTokens)
+      const { engine, stream, finals } = await open(fake, true)
+      fake.diar.onEmbed = () => stream.abort()
+      stream.write(voices([[1.5, 1], [1.5, 2]]))
+      // abort() resolves end() at once; a stream queued behind the job ends
+      // only after the job (and its embedding loop) has finished.
+      const s2 = engine.open({ onFinal: () => {}, onError: () => {} })
+      s2.write(speech(1))
+      await stream.end()
+      await s2.end()
+      // Two clusters, one embedding: the loop saw `stopped` after its yield.
+      expect(fake.diar.embeds).toHaveLength(1)
+      expect(finals).toEqual([])
+    })
   })
 })

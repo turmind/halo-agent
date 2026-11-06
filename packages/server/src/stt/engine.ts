@@ -64,6 +64,17 @@ const DIAR_MIN_OFF_S = 0.5
 /** Audio fed to one CAM++ embedding: `compute` is sync on the event loop
  *  (~9 ms per 0.5 s, ~94 ms per 10 s), so this bounds the block. */
 const EMBED_MAX_S = 6
+/** Ceiling for one native diarization call (~1 s per 17 s of audio measured).
+ *  sherpa-onnx-node 1.13.8's SpeakerDiarizationProcessWorker has no OnError,
+ *  so a native failure never settles its promise and would wedge the global
+ *  queue (all on-device STT) until restart; the real fix belongs upstream. */
+const DIAR_TIMEOUT_MS = 60_000
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timed out')), ms) })
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer))
+}
 
 export type SttErrorCode = 'model' | 'engine' | 'busy' | 'bad-request' | 'io'
 
@@ -260,7 +271,7 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
         let diar: SherpaDiarSegment[] | null = null
         if (job.owner.wantsSpeakers() && (result.text ?? '').trim()) {
           phase = 'speaker diarization'
-          diar = await sherpa!.offlineSpeakerDiarizationProcessAsync(diarizer!.handle, job.samples, () => {})
+          diar = await withTimeout(sherpa!.offlineSpeakerDiarizationProcessAsync(diarizer!.handle, job.samples, () => {}), DIAR_TIMEOUT_MS)
         }
         await job.owner.done(job, result, diar)
       } catch (err) {
@@ -338,11 +349,12 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
      *  someone to join (wire labels are numbered at send time, not here).
      *  Nothing diarized → the whole segment is one run. Yields before each
      *  (sync) embedding, so one segment blocks the loop for one embedding at
-     *  a time, not all of them back to back. */
-    async function speakerRuns(samples: Float32Array, diar: SherpaDiarSegment[]): Promise<SpeakerRun[]> {
+     *  a time, not all of them back to back; `null` = the stream stopped
+     *  (abort / failure) during a yield — the rest isn't computed. */
+    async function speakerRuns(samples: Float32Array, diar: SherpaDiarSegment[]): Promise<SpeakerRun[] | null> {
       const duration = samples.length / SAMPLE_RATE
-      const tick = () => new Promise<void>((r) => setImmediate(r))
-      if (diar.length === 0) { await tick(); return [{ start: 0, end: duration, speaker: speakers!.assign(embed(samples), duration) }] }
+      const tick = async () => { await new Promise<void>((r) => setImmediate(r)); return !stopped }
+      if (diar.length === 0) return await tick() ? [{ start: 0, end: duration, speaker: speakers!.assign(embed(samples), duration) }] : null
       const clusters = new Map<number, SherpaDiarSegment[]>()
       for (const d of [...diar].sort((a, b) => a.start - b.start)) clusters.set(d.speaker, [...(clusters.get(d.speaker) ?? []), d])
       const seconds = (segs: SherpaDiarSegment[]) => segs.reduce((n, d) => n + d.end - d.start, 0)
@@ -353,7 +365,7 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
         const audio = new Float32Array(Math.min(parts.reduce((n, p) => n + p.length, 0), EMBED_MAX_S * SAMPLE_RATE))
         let at = 0
         for (const p of parts) { if (at >= audio.length) break; audio.set(p.subarray(0, audio.length - at), at); at += p.length }
-        await tick()
+        if (!await tick()) return null
         const speaker = speakers!.assign(embed(audio), seconds(segs))
         for (const d of segs) runs.push({ start: d.start, end: d.end, speaker })
       }
@@ -369,7 +381,8 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
         let pieces: SpeakerPiece[] | null = null
         if (text && diar && !stopped) {
           try {
-            pieces = splitBySpeakerRuns(text, result.tokens, result.timestamps, await speakerRuns(job.samples, diar), job.samples.length / SAMPLE_RATE)
+            const runs = await speakerRuns(job.samples, diar)
+            if (runs) pieces = splitBySpeakerRuns(text, result.tokens, result.timestamps, runs, job.samples.length / SAMPLE_RATE)
           } catch (err) {
             failStream(new SttError('engine', `speaker labelling failed: ${errMsg(err)}`))
           }

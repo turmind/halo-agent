@@ -9,7 +9,8 @@
  * with its pinned size — only a size+sha256-verified `.part` is ever renamed
  * into place, so boot never re-hashes.
  *
- * Per file: sources in order (HF pinned commit, then ModelScope), resuming
+ * Per file: sources in order (HF pinned commit, then ModelScope, then for
+ * CAM++ the GitHub release), resuming
  * `<file>.part` with `Range: bytes=<have>-` (206 → append, 200 → rewrite from
  * zero), hashing while writing. A size / sha mismatch deletes the `.part` and
  * moves on; a timeout or HTTP error keeps it (the next source resumes it —

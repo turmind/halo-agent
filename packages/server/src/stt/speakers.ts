@@ -10,7 +10,8 @@
  */
 
 /** Cosine to a connection speaker's centroid at or above this = same speaker.
- *  CAM++ on four.wav: same speaker 0.59–0.78, different 0.40–0.50. */
+ *  CAM++ on four.wav, pairwise over its reference turns (all ≥ 1 s, each
+ *  embedding capped at 6 s): same speaker 0.75–0.83, different 0.03–0.52. */
 export const SPEAKER_MATCH_THRESHOLD = 0.55
 /** A local cluster with less audio than this never founds a new speaker once
  *  one exists — too little audio for a trustworthy embedding; it joins the
@@ -71,7 +72,6 @@ export function createSpeakerTracker(threshold = SPEAKER_MATCH_THRESHOLD) {
       }
       return best
     },
-    get count() { return centroids.length },
   }
 }
 
@@ -98,7 +98,9 @@ const WORD = /[\p{L}\p{N}]/u
  * tokens stay with the current piece (a piece never starts with `，`). Piece
  * k > 0 starts where its speaker's run starts, clamped between the previous
  * piece's last token and its own first token; the first starts at 0, the last
- * ends at `duration`. `runs` must be non-empty. Tokens that don't spell out
+ * ends at `duration`. A piece that would span zero seconds (runs overlap, so
+ * its start clamps onto its only token) is merged into its neighbour.
+ * `runs` must be non-empty. Tokens that don't spell out
  * `text` (or no timestamps) → the whole text under the speaker with the most
  * audio — the same rule as the Transcribe proxy's `splitBySpeaker`.
  */
@@ -119,6 +121,21 @@ export function splitBySpeakerRuns(text: string, tokens: string[] | undefined, t
     pieces.push(cur
       ? { speaker: run.speaker, first: i, last: i, at: Math.min(Math.max(run.start, timestamps[cur.last]), timestamps[i]) }
       : { speaker: run.speaker, first: 0, last: i, at: 0 })
+  }
+  // Zero-length piece (its start == its end, the next one's start) → its
+  // tokens go to the previous piece (the first piece's to the next, which
+  // then starts at 0); every boundary stays where it was.
+  for (let k = pieces.length - 1; k >= 0 && pieces.length > 1; k--) {
+    if ((pieces[k + 1]?.at ?? duration) > pieces[k].at) continue
+    if (k > 0) pieces[k - 1].last = pieces[k].last
+    else Object.assign(pieces[1], { first: pieces[0].first, at: 0 })
+    pieces.splice(k, 1)
+  }
+  // Merging can leave two same-speaker neighbours.
+  for (let k = pieces.length - 1; k > 0; k--) {
+    if (pieces[k].speaker !== pieces[k - 1].speaker) continue
+    pieces[k - 1].last = pieces[k].last
+    pieces.splice(k, 1)
   }
   if (pieces.length === 0) return whole
   return pieces.map((p, k) => ({

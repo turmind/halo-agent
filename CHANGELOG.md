@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 - On-device speech-to-text: speaker labels (`/api/stt/stream?…&speakers=1`), so the htrans meeting recorder can use the on-device SenseVoice engine with "Identify speakers". The shared STT model download grows by ~30 MB (pyannote segmentation + CAM++), for dictation-only installs too.
+- Upgrade note: on-device STT (dictation included) needs the two new model files before it works again after the upgrade. Online installs fetch them automatically on boot (~30 MB); installs that placed the model files by hand must add `pyannote-segmentation-3-0/model.int8.onnx` and `campplus-zh-en-advanced/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx` under `~/.halo/global/stt-models/` (sizes / sha256 in design/stt-local.md).
 - Linked machines: standalone `halo-node-windows-amd64.exe`, with native Windows path handling, cmd.exe process-tree cleanup, CI coverage and Task Scheduler setup instructions.
 
 ## [2.2.1] - 2026-11-06
