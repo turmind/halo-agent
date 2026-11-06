@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Admin: the panel's hashed scripts and styles (`/_next/static/`) are now sent with `Cache-Control: public, max-age=31536000, immutable`, so the browser (and a CDN in front of the server) keeps them instead of downloading them all again on every page load. `index.html`, the Monaco editor files and unknown paths are not cached this way. A file missing under `/_next/static/` (an open tab asking for another build's chunk) now gets a 404 instead of the panel's `index.html`, so a CDN doesn't keep that page as the chunk.
+
 ## [2.2.0] - 2026-11-06
 
 ### Added

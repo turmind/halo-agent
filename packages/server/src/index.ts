@@ -580,10 +580,24 @@ function resolveFrontendDir(): string {
 const FRONTEND_DIR = resolveFrontendDir()
 
 if (!AGENTCORE) {
-  app.use('/*', serveStatic({ root: path.relative(process.cwd(), FRONTEND_DIR) }))
+  app.use('/*', serveStatic({
+    root: path.relative(process.cwd(), FRONTEND_DIR),
+    // Next's `/_next/static/` files are content-hashed (under a buildId dir),
+    // so they can be cached forever. Only on a found file — the SPA fallback
+    // below must stay uncached, or a missing chunk caches index.html as js.
+    // `c.res.headers`, not `c.header`: node-server calls onFound after the
+    // body is built, so only c.res (merged into the result by compose) lands.
+    onFound: (_path, c) => {
+      if (c.req.path.startsWith('/_next/static/')) c.res.headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+    },
+  }))
 
   // SPA fallback: serve index.html for any non-API route that didn't match a static file
   app.get('/*', (c) => {
+    // A missing hashed asset (an old tab asking for another build's chunk)
+    // must 404, not get index.html as a 200: a CDN caches that 200 for its
+    // default TTL, and the chunk stays broken there after switching back.
+    if (c.req.path.startsWith('/_next/static/')) return c.notFound()
     const indexPath = path.join(FRONTEND_DIR, 'index.html')
     try {
       const html = fs.readFileSync(indexPath, 'utf-8')
