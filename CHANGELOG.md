@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-11-06
+
 - On-device speech-to-text: speaker labels (`/api/stt/stream?…&speakers=1`), so the htrans meeting recorder can use the on-device SenseVoice engine with "Identify speakers". The shared STT model download grows by ~30 MB (pyannote segmentation + CAM++), for dictation-only installs too.
 - Upgrade note: on-device STT (dictation included) needs the two new model files before it works again after the upgrade. Online installs fetch them automatically on boot (~30 MB); installs that placed the model files by hand must add `pyannote-segmentation-3-0/model.int8.onnx` and `campplus-zh-en-advanced/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx` under `~/.halo/global/stt-models/` (sizes / sha256 in design/stt-local.md).
 - Linked machines: standalone `halo-node-windows-amd64.exe`, with native Windows path handling, cmd.exe process-tree cleanup, CI coverage and Task Scheduler setup instructions.
@@ -1251,7 +1253,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.2...HEAD
+[2.2.2]: https://github.com/turmind/halo-agent/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/turmind/halo-agent/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/turmind/halo-agent/compare/v2.1.6...v2.2.0
 [2.1.6]: https://github.com/turmind/halo-agent/compare/v2.1.5...v2.1.6
