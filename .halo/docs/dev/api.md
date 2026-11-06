@@ -1105,6 +1105,7 @@ It does not remove session files. The full delete (rows + JSON + archive segment
 | `chat:queued` | `reason: 'compact'`, `message`, `sessionId` | Message queued behind a compact |
 | `chat:ack` | `clientMsgId` | Chat appended to the session log (or re-acked on resend) |
 | `listener:released` | `sessionId` | Event listener reclaimed — re-send `subscribe` (see above) |
+| `exchange:deleted` | `sessionId`, `deletedIds`, `userOrdinal` | An `exchange:delete` this connection sent landed: ids of every soft-deleted row of the active log, plus the ordinal of the turn just deleted (the sender's own reply only — no full `state:snapshot` follows) |
 | `skills:changed` | — | A skill was created / deleted / toggled, or a workspace skill folder changed on disk — re-fetch skill lists and `/api/commands`. Workspace-scoped changes reach only that workspace's sockets (see [Skills](#skills)) |
 | `nodes:changed` | `online: [{accountId, root \| null, shell, os, since}]` | A `halo node` connected / disconnected — full snapshot of online machines (global broadcast; `root: null` = whole machine). See [Linked machines](#linked-machines-halo-node) |
 
