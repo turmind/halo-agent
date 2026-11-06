@@ -123,8 +123,8 @@ team:
     ['internal', (s: string) => `${s}internal: true\n`, 'agent_yaml:internal'],
     ['name', (s: string) => s.replace('name: Default', 'name: Boss'), 'agent_yaml:name'],
     ['unknown key', (s: string) => `${s}sandbox: off\n`, 'agent_yaml:sandbox'],
-    ['tools not a list', (s: string) => s.replace(/tools:\n(  - .*\n)+/, 'tools: all\n'), 'agent_yaml:tools'],
-    ['model not a map', (s: string) => s.replace(/model:\n(  .*\n)+/, 'model: opus\n'), 'agent_yaml:model'],
+    ['tools not a list', (s: string) => s.replace(/tools:\n( {2}- .*\n)+/, 'tools: all\n'), 'agent_yaml:tools'],
+    ['model not a map', (s: string) => s.replace(/model:\n( {2}.*\n)+/, 'model: opus\n'), 'agent_yaml:model'],
   ])('%s → manual (%s)', (_label, edit, reason) => {
     expect(yaml(edit)).toEqual({ rel: 'agents/default/agent.yaml', category: 'manual', reason })
   })
