@@ -1,0 +1,25 @@
+name: Halo Reviewer (GPT)
+description: Same role as reviewer (read-only Halo reviewer, same AGENT.md) on GPT-6 Astra via Bedrock Mantle.
+  Use for diffs touching process control / path confinement / command execution that Claude's classifier declines.
+model:
+  provider: aws-bedrock-mantle
+  id: openai.gpt-6-astra
+  endpoint: https://bedrock-mantle.us-east-1.api.aws/openai/v1
+  promptCaching: 5m
+  thinking:
+    enabled: true
+    effort: xhigh
+  verbosity: medium
+context:
+  maxTokens: 272000
+  compressAt: 0.9
+priority: 54
+tools:
+  - file_read
+  - file_list
+  - view_image
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+skills: []

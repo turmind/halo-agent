@@ -1,0 +1,28 @@
+name: Halo Dev (GPT)
+description: Same role as dev (Halo-codebase implementer, same AGENT.md) on GPT-6 Astra via Bedrock Mantle.
+  Use when a dev task touches process control / path confinement / command execution and Claude's
+  classifier declines it.
+model:
+  provider: aws-bedrock-mantle
+  id: openai.gpt-6-astra
+  endpoint: https://bedrock-mantle.us-east-1.api.aws/openai/v1
+  promptCaching: 5m
+  thinking:
+    enabled: true
+    effort: xhigh
+  verbosity: medium
+context:
+  maxTokens: 272000
+  compressAt: 0.9
+priority: 59
+tools:
+  - file_read
+  - file_write
+  - file_edit
+  - file_list
+  - view_image
+  - shell_exec
+  - grep
+  - glob
+  - web_fetch
+skills: []

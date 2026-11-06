@@ -31,7 +31,9 @@ tools:
 team:
   - default
   - dev
+  - dev-gpt
   - reviewer
+  - reviewer-gpt
   - release
   - executor
   - deep-executor
