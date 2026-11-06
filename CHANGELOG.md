@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Cron: webhook-triggered jobs. A job can fire on each incoming `POST /cron-hooks/<jobId>` (GitHub `X-Hub-Signature-256` or `Authorization: Bearer <secret>`) instead of on a schedule; the event payload is handed to the agent as data, deliveries are de-duplicated by delivery id, and events that arrive while a run is going join that run. Pick "Webhook" as the trigger in the Cron tab, or `manage-cron.py --webhook` in the `cron` skill.
+- Self-evolution: levels L2 and L3 (Settings → `evolution.level`). At L2 a prompt-only change learned from a full-access session is applied without a reviewer when it passes the gates (average score ≥ `evolution.auto_apply_threshold`, default 80, plus fixed floors on confidence, behaviour, lint and the sandbox checks); L3 also auto-applies capability changes. An auto apply still goes through the regression re-score, posts one line in the source session, and goes back to awaiting review if anything fails.
+- Self-evolution: one-click rollback of an applied change from the Evolution tab, restoring the files from the pre-apply snapshot; a file edited since the apply is reported as a conflict unless you force it.
+- Self-evolution: a draft may end with a "Larger observation" — something bigger than one prompt patch — shown in the run's detail with a link to open it as a GitHub issue.
+
+### Changed
+
+- Cron: runs execute inside the server as a turn in the job's session, instead of spawning a separate `halo cli` process per fire — they show up live in the Sessions tab, and a run cut off by a restart resumes on the next boot. A model refusal on a job that keeps one session now says how to start clean (delete the session, or turn on "new session every run").
+
 ## [2.1.6] - 2026-11-05
 
 ### Added
