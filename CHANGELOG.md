@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-06
+
 ### Added
 
 - Cron: webhook-triggered jobs. A job can fire on each incoming `POST /cron-hooks/<jobId>` (GitHub `X-Hub-Signature-256` or `Authorization: Bearer <secret>`) instead of on a schedule; the event payload is handed to the agent as data, deliveries are de-duplicated by delivery id, and events that arrive while a run is going join that run. Pick "Webhook" as the trigger in the Cron tab, or `manage-cron.py --webhook` in the `cron` skill.
@@ -1229,7 +1231,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.1.6...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/turmind/halo-agent/compare/v2.1.6...v2.2.0
 [2.1.6]: https://github.com/turmind/halo-agent/compare/v2.1.5...v2.1.6
 [2.1.5]: https://github.com/turmind/halo-agent/compare/v2.1.4...v2.1.5
 [2.1.4]: https://github.com/turmind/halo-agent/compare/v2.1.3...v2.1.4
