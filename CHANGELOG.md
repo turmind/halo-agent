@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-11-06
+
 ### Added
 
 - Cron: a webhook job can run in an existing root session picked in the form (`--session` in the cron skill), like a scheduled job. An event that arrives while that session is held by another run, a relay or an A2A task waits and runs once the session is free; one that arrives during a user's turn there joins that turn.
@@ -1245,7 +1247,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.1...HEAD
+[2.2.1]: https://github.com/turmind/halo-agent/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/turmind/halo-agent/compare/v2.1.6...v2.2.0
 [2.1.6]: https://github.com/turmind/halo-agent/compare/v2.1.5...v2.1.6
 [2.1.5]: https://github.com/turmind/halo-agent/compare/v2.1.4...v2.1.5
