@@ -639,8 +639,17 @@ const server = serve({
 })
 
 // noServer: handshakes reach it through the `upgrade` router below.
+// permessage-deflate: subscribe snapshots of a long session run to MBs of JSON
+// (~4x smaller at level 1). Level 1 keeps the CPU cost low (~15 ms per 2 MB),
+// and the 1 KB threshold leaves stream deltas raw. Memory per connection is
+// ~300 KB of zlib state (256 KB deflate + 32 KB inflate window at the defaults),
+// allocated on the first compressed frame. Admin connections are a handful,
+// so context takeover stays on: ws only reset()s the stream under
+// serverNoContextTakeover, it doesn't free it, so that would cost ratio and
+// save no memory.
 const wss = new WebSocketServer({
   noServer: true,
+  perMessageDeflate: { zlibDeflateOptions: { level: 1 }, threshold: 1024 },
   verifyClient: (info, callback) => {
     // Authenticate WebSocket connections via cookie
     const token = getTokenFromCookieHeader(info.req.headers.cookie)

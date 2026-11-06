@@ -386,6 +386,10 @@ export interface ChatStore {
   dropOptimisticSend(clientMsgId: string): void
   setSessionId(id: string): void
   setMessages(messages: ChatMessage[]): void
+  /** `exchange:deleted`: flag the rows the server soft-deleted — by id, plus
+   *  the span of the `userOrdinal` turn (rows this tab created live carry
+   *  client ids the server log doesn't). Only hit rows get a new object. */
+  markDeleted(deletedIds: string[], userOrdinal: number): void
   setTokenUsage(context: number, output: number): void
   setMaxContextTokens(max: number): void
   setCompacting(v: boolean): void
@@ -724,6 +728,31 @@ const chatStoreState = (ix: StoreLocals, settled: () => void): StateCreator<Chat
     // A loaded log is history — its markers must never fire.
     ix.roundStart = messages.length
     set({ messages })
+  },
+
+  markDeleted(deletedIds: string[], userOrdinal: number) {
+    const { messages } = get()
+    const ids = new Set(deletedIds)
+    // The ordinal counts user rows without taskId — the server's
+    // deleteExchange count; its span runs to the next user row of any kind.
+    let start = -1
+    for (let i = 0, seen = -1; i < messages.length; i++) {
+      if (messages[i].role !== 'user' || messages[i].taskId) continue
+      if (++seen === userOrdinal) { start = i; break }
+    }
+    let end = start
+    if (start !== -1) {
+      end = start + 1
+      while (end < messages.length && messages[end].role !== 'user') end++
+    }
+    let changed = false
+    // Element-replace in place — positions don't move, the indexes stay valid.
+    const next = messages.map((m, i) => {
+      if (m.deleted || (!(i >= start && i < end) && !ids.has(m.id))) return m
+      changed = true
+      return { ...m, deleted: true }
+    })
+    if (changed) set({ messages: next })
   },
 
   setTokenUsage(context: number, output: number) {

@@ -9,6 +9,7 @@
 import path from 'node:path'
 import type { WebSocket, WebSocketServer } from 'ws'
 import type { WsClientMessage, WsServerMessage } from '@turmind/halo-core/protocol'
+import { inferMessageType, type SessionMessage } from '../sessions/session-types.js'
 import { SessionManager, type SessionInfo } from '../agents/session-manager.js'
 import { getSandboxBackend } from '../tools/sandbox.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
@@ -47,6 +48,17 @@ const CLIENT_SILENCE_LIMIT_MS = 3 * 60_000
 
 /** Wire shape lives in @turmind/halo-core/protocol (shared with the admin). */
 type ClientMessage = WsClientMessage
+
+/** The admin's subscribe / reattach snapshot rows: the log minus its
+ *  `tool_call` / `tool_result` rows — the bulk of a long session's bytes, yet
+ *  the chat never renders them (the assistant row's contentBlocks carry each
+ *  tool call + output). Usage / context rows stay (debug mode shows them). */
+function adminSnapshotRows(rows: readonly SessionMessage[]): SessionMessage[] {
+  return rows.filter((m) => {
+    const t = inferMessageType(m)
+    return t !== 'tool_call' && t !== 'tool_result'
+  })
+}
 
 interface ConnectedClient {
   ws: WebSocket
@@ -222,14 +234,15 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     if (result === 'raw_unmatched') { sendJson(ws, { type: 'error', code: 'raw_unmatched', error: 'This turn can\'t be deleted on its own: it is a compaction summary, or the model\'s copy of it was merged with other messages or can\'t be located. Nothing was deleted.', sessionId: targetSessionId }); return }
     if (result === 'not_found' || result === 'no_exchange') { sendJson(ws, { type: 'error', error: 'Exchange not found', sessionId: targetSessionId }); return }
 
-    // Push the refreshed log to the subscribed client (this connection) when one
-    // of its chat tabs holds the very session that changed. A different
-    // session open in the Sessions tab picks the change up via the existing
-    // `.halo/sessions/` file watcher instead — no extra message needed.
+    // Tell the subscribed client (this connection) which rows are now deleted
+    // when one of its chat tabs holds the very session that changed — ids
+    // only, never the whole log (a multi-MB frame for a long session). A
+    // different session open in the Sessions tab picks the change up via the
+    // existing `.halo/sessions/` file watcher instead — no extra message needed.
     if (client.subscriptions.has(targetSessionId)) {
       const state = getState(client, targetSessionId)
-      const messages = state ? [...createSaveSnapshot(state)] : []
-      sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: targetSessionId } })
+      const deletedIds = state ? state.messageLog.filter((m) => m.deleted).map((m) => m.id) : []
+      sendJson(ws, { type: 'exchange:deleted', sessionId: targetSessionId, deletedIds, userOrdinal: msg.userOrdinal })
     }
   }
 
@@ -848,7 +861,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         // While running, the in-flight turn rides the `replay: true` synthesis
         // below — keep createSaveSnapshot's temp in-flight message OUT of the
         // snapshot, or a client that applies it renders the turn twice.
-        const messages = state ? (running ? [...state.messageLog] : [...createSaveSnapshot(state)]) : []
+        const messages = state ? adminSnapshotRows(running ? state.messageLog : createSaveSnapshot(state)) : []
         const detachedSession = sm.getSessionById(sid)
         sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: sid, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId, archiveCount: archiveCountFor(client, sid, detachedSession?.agentId), accessLevel: detachedSession?.accessLevel ?? null } })
         if (state && state.contextTokens > 0) {
@@ -918,7 +931,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       }
 
       const state = sid ? getState(client, sid) : null
-      const messages = state ? [...createSaveSnapshot(state)] : []
+      const messages = state ? adminSnapshotRows(createSaveSnapshot(state)) : []
       sendJson(ws, { type: 'state:snapshot', snapshot: { recentMessages: messages, sessionId: sid, maxContextTokens, agentId, archiveCount: sid ? archiveCountFor(client, sid, agentId) : 0, accessLevel } })
       if (state && state.contextTokens > 0) {
         sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens, sessionId: sid })

@@ -2,6 +2,7 @@ import type { WsClient } from '../ws-client-types'
 import { getActiveChatStore, isStaleStreamingPlaceholder } from '@/features/chat/chat-store'
 import { getLoadedStore, noteTabSnapshot, releaseSessionTab, storeForFrame } from '@/features/chat/chat-tabs'
 import { noteArchiveAnchor } from '@/features/chat/archive-store'
+import { reconcileMessages } from '@/shared/reconcile-messages'
 import { refreshGoal } from '@/features/chat/goal-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { bumpSessionBus } from '@/shared/session-bus'
@@ -77,7 +78,9 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
       }
       if (!inFlight) {
         if (snapshotMessages && snapshotMessages.length > 0) {
-          chat.setMessages(snapshotMessages)
+          // Keep the objects of rows that didn't change (a re-subscribe of a
+          // loaded tab), so their memoized rows skip re-render.
+          chat.setMessages(reconcileMessages(store.getState().messages, snapshotMessages))
         }
       } else {
         console.debug('[state-handlers] skipping snapshot replace — streaming in flight')
@@ -85,6 +88,14 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
       if (typeof snapshot.maxContextTokens === 'number' && snapshot.maxContextTokens > 0) {
         chat.setMaxContextTokens(snapshot.maxContextTokens)
       }
+    }),
+  )
+
+  // An exchange:delete this connection sent landed — flag the rows in place
+  // (the server sends ids, not the whole log). Not news: no unread dot.
+  unsubs.push(
+    wsClient.on('exchange:deleted', ({ sessionId, deletedIds, userOrdinal }) => {
+      storeForFrame(sessionId, false)?.getState().markDeleted(deletedIds, userOrdinal)
     }),
   )
 

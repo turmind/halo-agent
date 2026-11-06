@@ -14,72 +14,13 @@ import { wsClient } from '@/shared/ws-client'
 import { onWsReconnect } from '@/shared/ws-reconnect'
 import type { ChatMessage } from '@/shared/types'
 import { MessageList } from '@/shared/components/message-list'
+import { reconcileMessages } from '@/shared/reconcile-messages'
 import { timeAgo } from '@/shared/components/session-list-dropdown'
 import { useT } from '@/shared/i18n'
 import { Bot, Bug, FileText, ListFilter, Loader2, X, Copy, Check } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { useStickToBottom } from '@/shared/stick-to-bottom'
 import { isMainConversationMessage, isDebugMessage, inferMessageType } from '@/shared/types'
-
-/**
- * Reuse previous message object identities for entries whose content is
- * unchanged, so MessageList's memoized exchange rows skip re-render. The
- * refetch below fires on every write to the selected session's file —
- * including rewrites that change no messages (e.g. a title PATCH) — and a
- * wholesale array replace hands every row a brand-new object, re-running
- * ReactMarkdown across the whole conversation: the detail-panel flash.
- *
- * Session logs are append-only: settled rows never change bytes, the only
- * in-place mutation is the LAST row absorbing updates (tool results landing,
- * streaming text growing) — plus rare wholesale rewrites (compact, exchange
- * soft-delete). So deep-comparing every row on every write (previously two
- * JSON.stringify passes over a multi-MB transcript per file:changed event)
- * buys nothing: reuse the prefix by reference outright, deep-compare only
- * the boundary row where appends land, and fall back to the positional
- * deep-compare walk only when the tail probe says the prefix shifted.
- * When nothing changed at all, return `prev` so the store set is a no-op.
- */
-function reconcileMessages(prev: ChatMessage[] | null, next: ChatMessage[]): ChatMessage[] {
-  if (!prev || prev.length === 0) return next
-
-  // Append fast path. Settled rows never change bytes EXCEPT the `deleted`
-  // flag, which exchange soft-delete flips on mid-array rows in place
-  // (server deleteExchange keeps array length). So the prefix check is a
-  // cheap scalar probe — id + deleted, no serialization — and only the last
-  // 2 overlap rows (where streaming text / tool results / usage still land)
-  // get the deep compare. Anything off-shape falls to the full walk.
-  const overlap = Math.min(prev.length, next.length)
-  const deepFrom = Math.max(0, prev.length - 2)
-  let appendShape = next.length >= prev.length
-  for (let i = 0; appendShape && i < deepFrom; i++) {
-    if (prev[i].id !== next[i].id || prev[i].deleted !== next[i].deleted) appendShape = false
-  }
-  if (appendShape) {
-    let reusedAll = prev.length === next.length
-    const out = next.slice()
-    for (let i = 0; i < deepFrom; i++) out[i] = prev[i]
-    for (let i = deepFrom; i < overlap; i++) {
-      if (JSON.stringify(prev[i]) === JSON.stringify(next[i])) {
-        out[i] = prev[i]
-      } else {
-        reusedAll = false
-      }
-    }
-    return reusedAll ? prev : out
-  }
-
-  // Non-append rewrite (compact, soft-delete, repair): positional
-  // deep-compare, reusing whatever still matches so unchanged rows keep
-  // identity for the memo comparator.
-  let reusedAll = prev.length === next.length
-  const out = next.map((m, i) => {
-    const old = prev[i]
-    if (old && JSON.stringify(old) === JSON.stringify(m)) return old
-    reusedAll = false
-    return m
-  })
-  return reusedAll ? prev : out
-}
 
 const NO_MESSAGES: ChatMessage[] = []
 const noSubscribe = () => () => {}
@@ -165,7 +106,7 @@ export function SessionChatPanel({ visible }: { visible: boolean }) {
           const view = useSessionViewStore.getState()
           const selected = view.selectedSessionId === sid
           const prev = getCachedView(sid)?.messages ?? null
-          const next = reconcileMessages(prev, fresh)
+          const next = reconcileMessages(prev, fresh, { settledPrefix: true })
           putCachedView(sid, next, archiveCount)
           if (!selected) return
           // A compact that fires while the session is on screen rewrites the
