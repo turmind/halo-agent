@@ -241,8 +241,12 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     // existing `.halo/sessions/` file watcher instead — no extra message needed.
     if (client.subscriptions.has(targetSessionId)) {
       const state = getState(client, targetSessionId)
-      const deletedIds = state ? state.messageLog.filter((m) => m.deleted).map((m) => m.id) : []
-      sendJson(ws, { type: 'exchange:deleted', sessionId: targetSessionId, deletedIds, userOrdinal: msg.userOrdinal })
+      const log = state?.messageLog ?? []
+      const deletedIds = log.filter((m) => m.deleted).map((m) => m.id)
+      // The user-turn count deleteExchange's ordinal runs over — the client
+      // checks its own count against it before trusting the ordinal.
+      const userRows = log.filter((m) => m.role === 'user' && !m.taskId).length
+      sendJson(ws, { type: 'exchange:deleted', sessionId: targetSessionId, deletedIds, userOrdinal: msg.userOrdinal, userRows })
     }
   }
 

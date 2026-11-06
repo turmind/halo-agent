@@ -388,8 +388,11 @@ export interface ChatStore {
   setMessages(messages: ChatMessage[]): void
   /** `exchange:deleted`: flag the rows the server soft-deleted — by id, plus
    *  the span of the `userOrdinal` turn (rows this tab created live carry
-   *  client ids the server log doesn't). Only hit rows get a new object. */
-  markDeleted(deletedIds: string[], userOrdinal: number): void
+   *  client ids the server log doesn't). Only hit rows get a new object.
+   *  The span is used only while this log holds the server's `userRows`
+   *  user-turn count; otherwise the ordinal points elsewhere here, and false
+   *  tells the caller to re-fetch the log. */
+  markDeleted(deletedIds: string[], userOrdinal: number, userRows: number): boolean
   setTokenUsage(context: number, output: number): void
   setMaxContextTokens(max: number): void
   setCompacting(v: boolean): void
@@ -730,16 +733,20 @@ const chatStoreState = (ix: StoreLocals, settled: () => void): StateCreator<Chat
     set({ messages })
   },
 
-  markDeleted(deletedIds: string[], userOrdinal: number) {
+  markDeleted(deletedIds: string[], userOrdinal: number, userRows: number) {
     const { messages } = get()
     const ids = new Set(deletedIds)
     // The ordinal counts user rows without taskId — the server's
     // deleteExchange count; its span runs to the next user row of any kind.
-    let start = -1
-    for (let i = 0, seen = -1; i < messages.length; i++) {
-      if (messages[i].role !== 'user' || messages[i].taskId) continue
-      if (++seen === userOrdinal) { start = i; break }
+    // A count that differs from the server's (a turn another connection sent
+    // with localEcho never reaches this tab; a sendFailed row the server never
+    // got stays here) means the ordinal can't be mapped: ids only.
+    const userIdx: number[] = []
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].role === 'user' && !messages[i].taskId) userIdx.push(i)
     }
+    const aligned = userIdx.length === userRows
+    const start = aligned ? (userIdx[userOrdinal] ?? -1) : -1
     let end = start
     if (start !== -1) {
       end = start + 1
@@ -753,6 +760,7 @@ const chatStoreState = (ix: StoreLocals, settled: () => void): StateCreator<Chat
       return { ...m, deleted: true }
     })
     if (changed) set({ messages: next })
+    return aligned
   },
 
   setTokenUsage(context: number, output: number) {

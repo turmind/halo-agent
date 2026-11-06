@@ -12,11 +12,12 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
 
 /**
  * The admin's view of a session over WS stays small:
- *  - the subscribe snapshot leaves out `tool_call` / `tool_result` rows (the
+ *  - the subscribe / reattach snapshot leaves out `tool_call` / `tool_result` rows (the
  *    chat renders tool calls from the assistant row's contentBlocks), keeping
  *    usage / context rows;
  *  - a landed `exchange:delete` answers with `exchange:deleted` (the ids of
- *    every soft-deleted row + the ordinal), never a whole-log `state:snapshot`.
+ *    every soft-deleted row, the ordinal + the log's user-turn count), never
+ *    a whole-log `state:snapshot`.
  */
 describe('WS admin snapshot + exchange:deleted frame', () => {
   const SID = 'root'
@@ -29,7 +30,7 @@ describe('WS admin snapshot + exchange:deleted frame', () => {
   let realHome: string | undefined
   let tmpHome: string
 
-  type Frame = { type?: string; sessionId?: string; deletedIds?: string[]; userOrdinal?: number; snapshot?: { sessionId?: string; recentMessages?: SessionMessage[] } }
+  type Frame = { type?: string; sessionId?: string; replay?: boolean; deletedIds?: string[]; userOrdinal?: number; userRows?: number; snapshot?: { sessionId?: string; recentMessages?: SessionMessage[] } }
 
   function connect(): Promise<{ ws: WebSocket; frames: Frame[] }> {
     return new Promise((resolve, reject) => {
@@ -113,14 +114,40 @@ describe('WS admin snapshot + exchange:deleted frame', () => {
 
     ws.send(JSON.stringify({ type: 'exchange:delete', sessionId: SID, projectId: workspace, userOrdinal: 0, archiveCount: 0 }))
     const del = await waitFor(frames, (f) => f.type === 'exchange:deleted')
-    expect(del).toEqual({ type: 'exchange:deleted', sessionId: SID, deletedIds: ['u0', 'tc0', 'tr0', 'a0', 'us0'], userOrdinal: 0 })
+    // userRows counts every user row without taskId, deleted ones included —
+    // the same rows deleteExchange's ordinal runs over.
+    expect(del).toEqual({ type: 'exchange:deleted', sessionId: SID, deletedIds: ['u0', 'tc0', 'tr0', 'a0', 'us0'], userOrdinal: 0, userRows: 2 })
 
     // Idempotent: a second delete lists every deleted row of the log so far.
     ws.send(JSON.stringify({ type: 'exchange:delete', sessionId: SID, projectId: workspace, userOrdinal: 1, archiveCount: 0 }))
     const del2 = await waitFor(frames, (f) => f.type === 'exchange:deleted' && f.userOrdinal === 1)
     expect(del2.deletedIds).toEqual(['u0', 'tc0', 'tr0', 'a0', 'us0', 'u1', 'a1'])
+    expect(del2.userRows).toBe(2)
 
     await new Promise((r) => setTimeout(r, 50))
     expect(frames.slice(before).filter((f) => f.type === 'state:snapshot')).toEqual([])
+  })
+
+  it('reattach snapshot of a running session drops tool rows too', async () => {
+    const first = await connect()
+    first.ws.send(JSON.stringify({ type: 'subscribe', sessionId: SID, projectId: workspace }))
+    await waitFor(first.frames, (f) => f.type === 'state:snapshot' && f.snapshot?.sessionId === SID)
+
+    // Mark the session running (as ws-abandoned-listener-reclaim does), so the
+    // close parks it as detached and the next subscribe takes the reattach
+    // branch — whose running case sends the settled messageLog.
+    const sessions = (registry.getOrCreate(workspace) as unknown as { sessions: Map<string, unknown> }).sessions
+    sessions.set(SID, { promise: Promise.resolve(), isCompacting: false, messageQueue: [], contextConfig: { maxTokens: 1000, compressAt: 800 } })
+    await new Promise<void>((resolve) => { first.ws.once('close', () => resolve()); first.ws.close() })
+    await new Promise((r) => setTimeout(r, 50))
+
+    const second = await connect()
+    second.ws.send(JSON.stringify({ type: 'subscribe', sessionId: SID, projectId: workspace }))
+    const snap = await waitFor(second.frames, (f) => f.type === 'state:snapshot' && f.snapshot?.sessionId === SID)
+    // The replay-flagged followup only comes from the reattach path.
+    await waitFor(second.frames, (f) => f.type === 'chat:followup' && f.replay === true)
+    expect(snap.snapshot!.recentMessages!.map((m) => m.id)).toEqual(['ctx', 'u0', 'a0', 'us0', 'u1', 'a1'])
+    // Not running any more: the teardown close saves instead of detaching again.
+    sessions.delete(SID)
   })
 })

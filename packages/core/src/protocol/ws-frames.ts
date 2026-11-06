@@ -127,8 +127,10 @@ export type WsServerMessage =
   | { type: 'state:snapshot'; snapshot: WsStateSnapshot }
   // An `exchange:delete` landed: `deletedIds` lists EVERY soft-deleted row of
   // the active log (idempotent), `userOrdinal` the turn just deleted — rows the
-  // tab created live carry client ids the server log doesn't know.
-  | { type: 'exchange:deleted'; sessionId: string; deletedIds: string[]; userOrdinal: number }
+  // tab created live carry client ids the server log doesn't know. `userRows`:
+  // the log's user rows without taskId (the ordinal's count) — a client whose
+  // count differs can't map the ordinal onto its own rows.
+  | { type: 'exchange:deleted'; sessionId: string; deletedIds: string[]; userOrdinal: number; userRows: number }
   | { type: 'session:deleted'; sessionId: string }
   // A command (`switchTo`) or a goal-mode divert moved the conversation to
   // `sessionId`; the server has already added it to the connection's set.

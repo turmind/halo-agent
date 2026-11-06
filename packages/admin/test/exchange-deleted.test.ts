@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useChatStore } from '../src/features/chat/chat-store'
 import { reconcileMessages } from '../src/shared/reconcile-messages'
+import { registerStateHandlers } from '../src/shared/ws-handlers/state-handlers'
+import { useProjectStore } from '../src/shared/stores/project-store'
 import type { ChatMessage } from '../src/shared/types'
+import type { WsClient } from '../src/shared/ws-client-types'
 
 /**
  * `exchange:deleted` flags rows in place instead of replacing the log, and a
@@ -22,7 +25,7 @@ describe('chat-store markDeleted', () => {
   it('flags the rows by id and leaves every other object untouched', () => {
     const log = [msg('u0', 'user'), msg('a0', 'assistant'), msg('u1', 'user'), msg('a1', 'assistant')]
     useChatStore.getState().setMessages(log)
-    useChatStore.getState().markDeleted(['u1', 'a1'], -1)
+    expect(useChatStore.getState().markDeleted(['u1', 'a1'], -1, 2)).toBe(true)
     const out = useChatStore.getState().messages
     expect(out[0]).toBe(log[0])
     expect(out[1]).toBe(log[1])
@@ -42,18 +45,79 @@ describe('chat-store markDeleted', () => {
       msg('u2', 'user'),
     ]
     useChatStore.getState().setMessages(log)
-    useChatStore.getState().markDeleted(['server-u', 'server-a'], 1)
+    expect(useChatStore.getState().markDeleted(['server-u', 'server-a'], 1, 3)).toBe(true)
     const out = useChatStore.getState().messages
     expect(out.map((m) => !!m.deleted)).toEqual([false, false, false, true, true, true, false])
     expect(out[0]).toBe(log[0])
     expect(out[6]).toBe(log[6])
   })
 
+  it('flags by id only, and reports false, when the user-turn count differs from the server', () => {
+    // A sendFailed bubble the server never got: this tab counts 3 user turns,
+    // the server 2 — ordinal 1 here is the failed bubble, not the server's turn.
+    const log = [
+      msg('u0', 'user'), msg('a0', 'assistant'),
+      msg('failed', 'user', { sendFailed: true }),
+      msg('u1', 'user'), msg('a1', 'assistant'),
+    ]
+    useChatStore.getState().setMessages(log)
+    expect(useChatStore.getState().markDeleted(['u1', 'a1'], 1, 2)).toBe(false)
+    const out = useChatStore.getState().messages
+    expect(out.map((m) => !!m.deleted)).toEqual([false, false, false, true, true])
+    expect(out[2]).toBe(log[2])
+  })
+
   it('is a no-op when nothing new is hit', () => {
     useChatStore.getState().setMessages([msg('u0', 'user', { deleted: true }), msg('a0', 'assistant')])
     const before = useChatStore.getState().messages
-    useChatStore.getState().markDeleted(['u0', 'missing'], 5)
+    expect(useChatStore.getState().markDeleted(['u0', 'missing'], 5, 1)).toBe(true)
     expect(useChatStore.getState().messages).toBe(before)
+  })
+})
+
+describe('exchange:deleted handler', () => {
+  const PROJECT = '/ws/exdel'
+
+  function fakeWsClient(): { client: WsClient; emit: (type: string, data: Record<string, unknown>) => void; sent: object[] } {
+    const handlers = new Map<string, Array<(data: Record<string, unknown>) => void>>()
+    const sent: object[] = []
+    const client = {
+      on(type: string, h: (data: Record<string, unknown>) => void) {
+        handlers.set(type, [...(handlers.get(type) ?? []), h])
+        return () => handlers.set(type, (handlers.get(type) ?? []).filter((x) => x !== h))
+      },
+      send(message: object) { sent.push(message) },
+    } as unknown as WsClient
+    return { client, emit: (type, data) => (handlers.get(type) ?? []).forEach((h) => h(data)), sent }
+  }
+
+  const log = () => [msg('u0', 'user'), msg('client-a0', 'assistant'), msg('u1', 'user'), msg('a1', 'assistant')]
+
+  beforeEach(() => {
+    localStorage.clear()
+    useProjectStore.setState({ activeProject: null, folderPath: '', projects: [] })
+    useProjectStore.getState().openFolder(PROJECT)
+    useChatStore.getState().setSessionId('sess_x')
+    useChatStore.getState().setMessages(log())
+  })
+
+  it('counts agree: flags the ordinal span, sends nothing', () => {
+    const { client, emit, sent } = fakeWsClient()
+    const unregister = registerStateHandlers(client)
+    emit('exchange:deleted', { sessionId: 'sess_x', deletedIds: ['u0', 'a0'], userOrdinal: 0, userRows: 2 })
+    expect(useChatStore.getState().messages.map((m) => !!m.deleted)).toEqual([true, true, false, false])
+    expect(sent).toEqual([])
+    unregister()
+  })
+
+  it('counts differ: no ordinal span, re-subscribes the session', () => {
+    const { client, emit, sent } = fakeWsClient()
+    const unregister = registerStateHandlers(client)
+    emit('exchange:deleted', { sessionId: 'sess_x', deletedIds: ['u0', 'a0'], userOrdinal: 0, userRows: 3 })
+    // id hit only: the client-id reply row stays until the snapshot corrects it.
+    expect(useChatStore.getState().messages.map((m) => !!m.deleted)).toEqual([true, false, false, false])
+    expect(sent).toEqual([{ type: 'subscribe', sessionId: 'sess_x', projectId: PROJECT }])
+    unregister()
   })
 })
 

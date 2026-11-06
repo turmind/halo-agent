@@ -92,10 +92,16 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
   )
 
   // An exchange:delete this connection sent landed — flag the rows in place
-  // (the server sends ids, not the whole log). Not news: no unread dot.
+  // (the server sends ids, not the whole log). Not news: no unread dot. When
+  // this tab's user-turn count disagrees with the server's, the ordinal can't
+  // be trusted here: re-subscribe (idempotent) and the snapshot that comes
+  // back corrects the log, unchanged rows keeping their objects (reconcile).
   unsubs.push(
-    wsClient.on('exchange:deleted', ({ sessionId, deletedIds, userOrdinal }) => {
-      storeForFrame(sessionId, false)?.getState().markDeleted(deletedIds, userOrdinal)
+    wsClient.on('exchange:deleted', ({ sessionId, deletedIds, userOrdinal, userRows }) => {
+      const store = storeForFrame(sessionId, false)
+      if (!store || store.getState().markDeleted(deletedIds, userOrdinal, userRows)) return
+      const projectId = useProjectStore.getState().activeProject?.id
+      if (projectId) wsClient.send({ type: 'subscribe', sessionId, projectId })
     }),
   )
 
