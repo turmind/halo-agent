@@ -42,6 +42,7 @@ import { resolveWorkingDir } from '../agents/working-dir.js'
 import { readReplyTo, takeReplyTo, clearReplyTo, setCronRunDoor, type ReplyTo } from '../agents/relay.js'
 import { nudgesSettled } from '../agents/run-ledger.js'
 import type { AgentSessionEvent } from '../agents/agent-events.js'
+import type { ModelErrorKind } from '../agents/model-error.js'
 import { claimPendingEvents, countPendingEvents, eventText, failPendingEvents, jobsWithPendingEvents, requeueEvents, runEvents, settleRunEvents, stampEvents, type CronEvent } from './events.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -622,7 +623,7 @@ async function timeoutRun(ctx: RunCtx, timeoutSec: number): Promise<void> {
  *  adds the notices and the timer to clear, so a run resumed after a restart
  *  finishes the same way. Synchronous up to the dispatch: the run is claimed
  *  (`_finishing`) and its pointer cleared before anything can race it. */
-async function finishRun(runId: string, db: HaloDb, session: { id: string; finalOutput: string; output: string; turnError: string | null }): Promise<void> {
+async function finishRun(runId: string, db: HaloDb, session: { id: string; finalOutput: string; output: string; turnError: string | null; turnErrorKind: ModelErrorKind | null }): Promise<void> {
   if (_finishing.has(runId)) return
   const row = getCronDb().select({ jobId: cronRuns.jobId, status: cronRuns.status, workspacePath: cronRuns.workspacePath })
     .from(cronRuns).where(eq(cronRuns.id, runId)).get()
@@ -657,6 +658,11 @@ async function finishRun(runId: string, db: HaloDb, session: { id: string; final
     // sandbox root is the run's workspace (where it produced its files), not
     // the target account's.
     const job = getCronDb().select().from(cronJobs).where(eq(cronJobs.id, row.jobId)).get()
+    // A refusal sticks to the session history, and a stateful job resumes that
+    // session every fire — say how to get out of it (relay's refusal hint).
+    if (session.turnErrorKind === 'refusal' && failureReason && job && !job.stateless) {
+      failureReason += ` — the job's session history tripped the model's safety classifier, so later runs on it will likely be declined too: delete session ${session.id} or turn on "new session every run"`
+    }
     const targets = job ? parseTargets(job.targets) : []
     let dispatchResults: DispatchResult[] = []
     if (job && status === 'succeeded' && targets.length > 0) {

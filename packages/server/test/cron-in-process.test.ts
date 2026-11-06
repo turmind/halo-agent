@@ -137,6 +137,26 @@ describe('in-process cron run — happy path', () => {
     expect(sent).toEqual([])
   })
 
+  it('a model refusal fails the run, nothing dispatched; a stateful job says how to get a clean session', async () => {
+    h.turns.push({ stream: 'partial narration', refusal: true })
+    insertJob('cron-r', { targets: JSON.stringify([{ channelType: 'test-ch', accountId: 'acc1' }]) })
+    const runId = await runJob('cron-r', 'manual')
+    await settled(runId)
+    const run = getRun(runId)
+    expect(run.status).toBe('failed')
+    expect(run.failureReason).toMatch(/^Model declined to respond \(harmful\): nope — .*delete session cron-r or turn on "new session every run"$/)
+    expect(sent).toEqual([])
+    expect(readReplyTo(h.sm.getDb(), 'cron-r')).toBeNull()
+  })
+
+  it('a stateless job\'s refusal fails the run without the session hint (the next run starts clean)', async () => {
+    h.turns.push({ refusal: true })
+    insertJob('cron-rs', { stateless: 1 })
+    const runId = await runJob('cron-rs', 'manual')
+    await settled(runId)
+    expect(getRun(runId)).toMatchObject({ status: 'failed', failureReason: 'Model declined to respond (harmful): nope' })
+  })
+
   it('an empty reply fails the run: nothing to dispatch', async () => {
     h.turns.push({ reply: '' })
     insertJob('cron-g')

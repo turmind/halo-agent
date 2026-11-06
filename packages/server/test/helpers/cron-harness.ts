@@ -26,6 +26,8 @@ export interface StubTurn {
   error?: string
   /** stopReason 'max_tokens' → a root `system` notice (Response truncated). */
   truncated?: boolean
+  /** stopReason 'refusal' (an HTTP 200 stop) instead of a reply → turnErrorKind 'refusal'. */
+  refusal?: boolean
   /** Hold the turn until this resolves (an abort ends it early). */
   gate?: Promise<void>
 }
@@ -68,6 +70,10 @@ function stubAgent(h: CronHarness) {
       }
       if (turn.error) throw new Error(turn.error)
       if (turn.truncated) yield { type: 'stop', stopReason: 'max_tokens' }
+      if (turn.refusal) {
+        yield { type: 'stop', stopReason: 'refusal', stopDetails: { category: 'harmful', explanation: 'nope' } }
+        return
+      }
       const reply = turn.reply ?? `ok: ${h.inputs.length}`
       if (reply) yield { type: 'text', text: reply, final: true }
     },

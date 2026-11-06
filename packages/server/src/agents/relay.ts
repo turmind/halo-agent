@@ -55,7 +55,7 @@ export interface CronRunDoor {
   owns(runId: string): boolean
   /** Turn end with the subtree quiet: record the outcome, dispatch. Clears the
    *  session's reply_to itself, in its synchronous part. */
-  finish(runId: string, db: HaloDb, session: { id: string; finalOutput: string; output: string; turnError: string | null }): Promise<void>
+  finish(runId: string, db: HaloDb, session: { id: string; finalOutput: string; output: string; turnError: string | null; turnErrorKind: ModelErrorKind | null }): Promise<void>
   /** Local stop / delete / archive, or a new owner took the pointer: end the
    *  run failed with `reason`, nothing dispatched; clears the pointer. */
   cancel(runId: string, db: HaloDb, sessionId: string, reason: string): void
