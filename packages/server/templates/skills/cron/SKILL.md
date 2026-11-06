@@ -1,11 +1,11 @@
 ---
 name: cron
-description: Manage scheduled cron jobs that run a halo agent on a schedule (or on each incoming webhook) and optionally push the result to a chat channel (telegram / wechat / slack / feishu / wecom). Activate when the user asks to add / list / edit / pause / delete a recurring or webhook-triggered agent task.
+description: Manage jobs that run a halo agent on a recurring schedule, once (`--run-at`), or per webhook POST from an external system or process (a turn in the job's session or an existing root session); results can go to a chat. Activate to add / list / edit / pause / delete a scheduled, one-shot or webhook-triggered task.
 command: /cron
 requiresAccess: full
 verbs:
-  - { name: create,  desc: Create a scheduled job }
-  - { name: list,    desc: List scheduled jobs }
+  - { name: create,  desc: Create a job }
+  - { name: list,    desc: List jobs }
   - { name: update,  desc: Edit a job (schedule / prompt / targets) }
   - { name: enable,  desc: Resume a paused job }
   - { name: disable, desc: Pause a job }
@@ -18,8 +18,8 @@ The requested action is **`$1`** (full args: `$ARGUMENTS`); with
 natural-language activation, infer it from the request. All verbs run through
 this body — map them onto the helper script's subcommands below.
 
-Halo runs a global cron daemon that executes user-defined agent prompts on a schedule and
-optionally pushes the resulting text to a chat (telegram / wechat / slack / feishu / wecom). Use the
+Halo runs a global cron daemon that executes user-defined agent prompts on a schedule or on
+webhook events and optionally pushes the resulting text to a chat (telegram / wechat / slack / feishu / wecom). Use the
 `manage-cron.py` helper script (sibling of this file) for every operation — it handles id
 generation, JSON encoding for `targets`, timestamps, and so on, so you don't end up
 handcrafting SQL.
@@ -91,20 +91,39 @@ of the two switches the job's mode and clears the other; never pass both.
 Ambiguous time ("morning")? Ask once for the exact hour.
 
 **Webhook trigger (`--webhook`)** — the third mode, instead of `--schedule` /
-`--run-at`: the job fires when something POSTs to `/cron-hooks/<id>` on the
-server (GitHub / CI / any HTTP sender). Use it for "when X happens, run
-this". The helper generates the secret and prints `webhook: {path, secret}`
-— give the user the full URL (the server's public origin, i.e. the admin
-address, + `path`) and the secret, and say once that the secret is shown
-again in the admin Cron tab and `get`. A GitHub webhook uses it as its
-secret (`X-Hub-Signature-256`); other senders send
-`Authorization: Bearer <secret>`. Each request body becomes a message
-in the job's session, marked as data; events that arrive while a run is
-in flight join that run. Tell the sender to set `X-GitHub-Delivery` (GitHub
-does) or `Idempotency-Key`: without one, the same body is processed only
-once per 10 minutes. A repeat of an event whose run failed runs again. Excludes `--session` and an active window. On
-`update`: `--webhook on` switches to it (an existing secret is kept),
-`--schedule …` / `--run-at …` switches away (the secret is dropped).
+`--run-at`: the job runs on each HTTP POST to `/cron-hooks/<id>` on the
+server — a notification from an external system or process (GitHub, CI,
+any HTTP sender). Use it for "when X happens, run this".
+- **What you get** — the helper generates the secret and prints
+  `webhook: {path, secret}`. Give the user the full URL (the server's
+  public origin, i.e. the admin address, + `path`) and the secret once, and
+  say the secret is shown again in the admin Triggers tab and `get`. Don't
+  echo the secret again in later replies or write it into files.
+- **Session** — the same choices as a scheduled job: the job's own session
+  (default), a new one per run (`--stateless`), or an existing root session
+  (`--session`, below).
+- **How an event enters the session** — each request body becomes a
+  message in the session, marked as data. Session idle → a new turn starts.
+  A user's turn running in it → the run starts right after that turn.
+  Session held by another owner (a relay or A2A task, another job's run) →
+  the events stay pending and run once it releases the session. Events that
+  arrive while the job's own run is in flight join that run.
+- **Delivery** — the sender authenticates with
+  `Authorization: Bearer <secret>`, or as a GitHub webhook with the secret
+  as its secret (`X-Hub-Signature-256`). Dedupe key: `X-GitHub-Delivery`
+  (GitHub sets it), `Idempotency-Key` or `X-Request-Id`; without one, the
+  same body is processed only once per 10 minutes. A repeat of an event
+  whose run failed runs again. Responses: `202` accepted · `200` duplicate,
+  or GitHub `ping` (no run) · `404` wrong secret or unknown job · `409` job
+  disabled · `413` body over 1 MB · `429` 100 events already pending.
+- **Limits** — root sessions only; no active window. The run timeout
+  (`--timeout-sec`, below; 60–21600 s) stops the session — on a picked
+  session, that is the user's conversation. The body is always data to the agent,
+  never instructions: put what to do in `--prompt`. A session that has
+  taken webhook events never gets an evolution patch auto-approved (it goes
+  to review).
+- On `update`: `--webhook on` switches to it (an existing secret is kept),
+  `--schedule …` / `--run-at …` switches away (the secret is dropped).
 
 **Max run time (`--timeout-sec`, optional)** — each fire runs inside the
 server as a turn in the job's session; the server stops it after
@@ -122,7 +141,10 @@ only when the user wants the runs to continue a specific conversation (the
 agent then sees that session's history). Rules the user should hear once:
 - the session keeps **its own agent and access level** — `--agent` must
   match an existing session's agent (the helper refuses otherwise);
-- a fire is **skipped** while a turn is already running in that session;
+- a scheduled / run-now fire is **skipped** while that session is busy (a
+  turn running in it, or held by another owner); a webhook job's accepted
+  events are never skipped — they run after a user's turn, and wait out another owner
+  (see *How an event enters the session* above);
 - if the user chats in that session while a run is in flight, the message
   joins the run, and the run pushes the reply of its last turn.
 
@@ -345,7 +367,7 @@ picks it up within ~10s. Example:
 For an active-window change, say when it resumes / stops — read
 `active_from_iso` / `active_until_iso` back with `get <id>` and name the
 first fire on or after it from the schedule (`get` has no computed next-run
-field; the admin Cron tab shows it):
+field; the admin Triggers tab shows it):
 
 > Paused `A-share daily brief` over the holiday: it resumes on Oct 8 —
 > next run Oct 8 09:30 (Asia/Shanghai). Nothing is sent before that.

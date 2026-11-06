@@ -661,8 +661,8 @@ function CronForm({ initial, onClose, onSaved }: {
           // null explicitly clears a previously-set timeout back to default.
           timeoutSec: timeoutSec ?? null,
           // '' = default session; null clears a previously-picked one.
-          // Stateless / webhook exclude a picked session (server rejects both).
-          sessionId: stateless || mode === 'webhook' ? null : (sessionId || null),
+          // Stateless excludes a picked session (server rejects both).
+          sessionId: stateless ? null : (sessionId || null),
           workingDir: workingDir.trim() || null,
           stateless,
           // Untouched bounds are left out (server keeps them); one-shot /
@@ -677,7 +677,7 @@ function CronForm({ initial, onClose, onSaved }: {
           runAt: mode === 'oneShot' ? runAtMs : undefined,
           webhook: mode === 'webhook' || undefined,
           timeoutSec,
-          sessionId: stateless || mode === 'webhook' ? undefined : (sessionId || undefined),
+          sessionId: stateless ? undefined : (sessionId || undefined),
           workingDir: workingDir.trim() || undefined,
           stateless,
           activeFrom: activeFrom ?? undefined,
@@ -732,9 +732,9 @@ function CronForm({ initial, onClose, onSaved }: {
 
         <Field label={t('cron.form.session')}>
           <Combobox
-            value={stateless || mode === 'webhook' ? '' : sessionId}
-            disabled={stateless || mode === 'webhook'}
-            placeholder={stateless ? t('cron.form.session.stateless') : mode === 'webhook' ? t('cron.form.session.webhook') : t('cron.form.session.placeholder')}
+            value={stateless ? '' : sessionId}
+            disabled={stateless}
+            placeholder={stateless ? t('cron.form.session.stateless') : t('cron.form.session.placeholder')}
             presets={committedPath ? sessionOptions : []}
             onCommit={(next) => {
               const id = next.trim()
@@ -747,7 +747,7 @@ function CronForm({ initial, onClose, onSaved }: {
             }}
             minWidth={280}
           />
-          {!stateless && mode !== 'webhook' && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>}
+          {!stateless && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>}
         </Field>
 
         <Field label={t('cron.form.folder')}>

@@ -38,7 +38,7 @@ interface CreateBody {
   runAt?: number
   /** Webhook job: fired by `POST /cron-hooks/<id>` events instead of a
    *  timer; the server generates the secret. Exclusive with schedule / runAt;
-   *  no active window, no picked session. */
+   *  no active window. */
   webhook?: boolean
   timezone?: string
   /** Max seconds one cron run may take (60–21600). Unset/null = the
@@ -73,8 +73,6 @@ type UpdateBody = Partial<Omit<CreateBody, 'runAt' | 'timeoutSec' | 'sessionId'>
 function newWebhookSecret(): string {
   return crypto.randomBytes(32).toString('base64url')
 }
-
-const WEBHOOK_SESSION_ERR = 'a webhook job runs in its own session (or a new one every run), not a picked sessionId'
 
 function newJobId(): string {
   return `cron-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -259,7 +257,6 @@ export function createCronRoutes(): Hono {
     if (body.stateless !== undefined && typeof body.stateless !== 'boolean') return c.json({ error: 'stateless must be a boolean' }, 400)
     const stateless = body.stateless === true
     if (stateless && session.sessionId) return c.json({ error: STATELESS_SESSION_ERR }, 400)
-    if (webhook && session.sessionId) return c.json({ error: WEBHOOK_SESSION_ERR }, 400)
     const folder = await parseWorkingDir(body.workspacePath, body.workingDir)
     if ('error' in folder) return c.json({ error: folder.error }, 400)
     for (const k of ['activeFrom', 'activeUntil'] as const) {
@@ -405,7 +402,6 @@ export function createCronRoutes(): Hono {
     if (!nextWebhookSecret && nextSchedule.trim().length === 0 && typeof nextRunAt !== 'number') {
       return c.json({ error: 'schedule, runAt or webhook required' }, 400)
     }
-    if (nextWebhookSecret && merged.sessionId) return c.json({ error: WEBHOOK_SESSION_ERR }, 400)
     // Active window: same partial-body contract (undefined = untouched,
     // null = clear), cross-field rules checked on the merged row — so a
     // mode switch to runAt has to clear a stored window in the same body.

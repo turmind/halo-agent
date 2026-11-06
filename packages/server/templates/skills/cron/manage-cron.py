@@ -224,10 +224,6 @@ def require_v7_columns(conn: sqlite3.Connection):
             'once so it migrates cron.db, then retry')
 
 
-WEBHOOK_SESSION_ERR = ('a --webhook job runs in its own session (or a new one every run, '
-                       '--stateless), not a picked --session')
-
-
 def webhook_info(job_id: str, secret: str) -> dict:
     """What a webhook sender needs. The path goes after the server's public
     origin (the admin URL); the script doesn't know it."""
@@ -431,8 +427,6 @@ def cmd_create(args):
         die('--run-at must be in the future')
     timeout_sec = parse_timeout_sec(args.timeout_sec)
     session_id = parse_session(args.session)
-    if args.webhook and session_id:
-        die(WEBHOOK_SESSION_ERR)
     working_dir = parse_dir(args.workspace, args.dir)
     active_from = parse_active_bound('--active-from', args.active_from or '', args.timezone)
     active_until = parse_active_bound('--active-until', args.active_until or '', args.timezone)
@@ -579,8 +573,6 @@ def cmd_update(args):
     merged = {**cur, **dict(sets)}
     if not (merged.get('schedule') or '').strip() and merged.get('run_at') is None and not next_secret:
         die('--schedule, --run-at or --webhook required (this update would leave the job with none)')
-    if next_secret and merged.get('session_id'):
-        die(WEBHOOK_SESSION_ERR)
     validate_active_window(
         merged.get('run_at'), merged.get('active_from'), merged.get('active_until'),
         new_until=bool(args.active_until and args.active_until.strip()), webhook=bool(next_secret),
