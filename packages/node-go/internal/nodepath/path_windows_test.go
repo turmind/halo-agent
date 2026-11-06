@@ -19,6 +19,8 @@ func TestWindowsResolve(t *testing.T) {
 		{`C:\root`, `/absolute/file`, `C:\absolute\file`},
 		{`C:\root`, `\absolute\file`, `C:\absolute\file`},
 		{`C:\root`, `c:child`, `C:\root\child`},
+		{`C:\root`, `C:.`, `C:\root`},
+		{`C:\root`, `C:..`, `C:\`},
 		{`C:\root`, `D:\other`, `D:\other`},
 		{`C:\root`, `~/file`, `C:\Users\tester\file`},
 		{`C:\root`, `~\file`, `C:\root\~\file`}, // TS only expands ~/.
@@ -50,7 +52,7 @@ func TestWindowsSupported(t *testing.T) {
 			t.Errorf("Realpath accepted %q", p)
 		}
 	}
-	for _, p := range []string{`C:\root\file.txt`, `.\sub\..\file`, `a b\file`, `a.b\file`, `\\server\share\file`} {
+	for _, p := range []string{`C:.`, `C:..`, `C:\root\file.txt`, `.\sub\..\file`, `a b\file`, `a.b\file`, `\\server\share\file`} {
 		if !Supported(p) {
 			t.Errorf("refused %q", p)
 		}
@@ -73,6 +75,8 @@ func TestWindowsInRoot(t *testing.T) {
 		inside bool
 	}{
 		{".", true}, {"sub/new/file", true}, {`sub\new\file`, true},
+		{filepath.VolumeName(root) + ".", true}, {filepath.VolumeName(root) + "..", false},
+		{filepath.VolumeName(root) + "inside.", false},
 		{strings.ToUpper(root) + `\SUB\new`, true},
 		{`..\outside\file`, false}, {"../outside/file", false}, {`..\Root-other\file`, false},
 		{`Z:\other\file`, false}, {`\\localhost\absent-share\file`, false},

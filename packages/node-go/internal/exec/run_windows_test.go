@@ -25,7 +25,7 @@ func TestWindowsShell(t *testing.T) {
 		{"echo hello", "hello\r\n", "", ""},
 		{"echo 中文", "中文\r\n", "", ""},
 		{"echo %HALO_TEST_UNICODE%", "中文\r\n", "", ""},
-		{"echo !literal!", "!literal!\r\n", "", ""},
+		{"echo 100%", "100%\r\n", "", ""},
 		{"echo a&echo b", "a\r\nb\r\n", "", ""},
 		{"echo a^&b", "a&b\r\n", "", ""},
 		{"echo hi|findstr hi", "hi\r\n", "", ""},

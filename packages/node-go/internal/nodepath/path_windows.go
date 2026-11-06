@@ -19,6 +19,7 @@ func Supported(p string) bool {
 	if strings.HasPrefix(p, `\\?\`) || strings.HasPrefix(p, `\\.\`) {
 		return false
 	}
+	p = p[len(filepath.VolumeName(p)):]
 	for _, part := range strings.Split(p, `\`) {
 		if part != "." && part != ".." && (strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ")) {
 			return false

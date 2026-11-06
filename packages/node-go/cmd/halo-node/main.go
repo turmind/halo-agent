@@ -179,8 +179,14 @@ func main() {
 		}
 		rootPath, base = &real, real
 	} else {
-		wd, _ := os.Getwd()
-		base, _ = nodepath.Realpath(wd)
+		wd, err := os.Getwd()
+		if err != nil {
+			fail(fmt.Sprintf("current directory: %v", err))
+		}
+		base, err = nodepath.Realpath(wd)
+		if err != nil {
+			fail(fmt.Sprintf("current directory %s: %v", wd, err))
+		}
 	}
 	timeout := shellTimeoutMs()
 	hostname, _ := os.Hostname()
