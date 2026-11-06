@@ -27,6 +27,11 @@ func TestWindowsStartupHelper(t *testing.T) {
 	if i < 0 {
 		t.Fatal("missing CLI arguments")
 	}
+	// CreateProcess rejects this namespace cwd as a startup parameter, but
+	// SetCurrentDirectory can enter it in the helper before invoking the CLI.
+	if err := os.Chdir(os.Getenv("HALO_TEST_STARTUP_CWD")); err != nil {
+		t.Fatal(err)
+	}
 	os.Args = append(os.Args[:1], os.Args[i+1:]...)
 	main()
 }
@@ -63,8 +68,8 @@ func TestWindowsStartupPaths(t *testing.T) {
 				args = append(args, "--root", c.rootArg)
 			}
 			cmd := exec.CommandContext(ctx, os.Args[0], args...)
-			cmd.Env = append(os.Environ(), "HALO_TEST_STARTUP=1")
-			cmd.Dir = c.cwd
+			cmd.Env = append(os.Environ(), "HALO_TEST_STARTUP=1", "HALO_TEST_STARTUP_CWD="+c.cwd)
+			cmd.Dir = root
 			out, err := cmd.CombinedOutput()
 			var exit *exec.ExitError
 			if !errors.As(err, &exit) || exit.ExitCode() != 1 || ctx.Err() != nil {
