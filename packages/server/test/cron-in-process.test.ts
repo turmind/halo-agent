@@ -170,6 +170,18 @@ describe('in-process cron run — happy path', () => {
     expect(readReplyTo(h.sm.getDb(), 'cron-r')).toBeNull()
   })
 
+  it('a refusal on a picked (user) session points at the job\'s session setting, not at deleting it', async () => {
+    h.seedSession('chat-mine')
+    h.turns.push({ refusal: true })
+    insertJob('job-rp', { sessionId: 'chat-mine' })
+    const runId = await runJob('job-rp', 'manual')
+    await settled(runId)
+    const run = getRun(runId)
+    expect(run.status).toBe('failed')
+    expect(run.failureReason).toMatch(/^Model declined to respond \(harmful\): nope — session chat-mine's history .*: pick another session or clear the job's picked session, or turn on "new session every run"$/)
+    expect(run.failureReason).not.toContain('delete session')
+  })
+
   it('a stateless job\'s refusal fails the run without the session hint (the next run starts clean)', async () => {
     h.turns.push({ refusal: true })
     insertJob('cron-rs', { stateless: 1 })

@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Cron: runs execute inside the server as a turn in the job's session, instead of spawning a separate `halo cli` process per fire — they show up live in the Sessions tab, and a run cut off by a restart resumes on the next boot. A model refusal on a job that keeps one session now says how to start clean (delete the session, or turn on "new session every run").
+- Cron: runs execute inside the server as a turn in the job's session, instead of spawning a separate `halo cli` process per fire — they show up live in the Sessions tab, and a run cut off by a restart resumes on the next boot. A model refusal on a job that keeps one session now says how to start clean (delete the job's session — or, for a session you picked, pick another or clear the pick — or turn on "new session every run").
 
 ## [2.1.6] - 2026-11-05
 

@@ -661,8 +661,12 @@ async function finishRun(runId: string, db: HaloDb, session: { id: string; final
     const job = getCronDb().select().from(cronJobs).where(eq(cronJobs.id, row.jobId)).get()
     // A refusal sticks to the session history, and a stateful job resumes that
     // session every fire — say how to get out of it (relay's refusal hint).
+    // A picked session is the user's own: point at the job's settings, not at
+    // deleting their conversation.
     if (session.turnErrorKind === 'refusal' && failureReason && job && !job.stateless) {
-      failureReason += ` — the job's session history tripped the model's safety classifier, so later runs on it will likely be declined too: delete session ${session.id} or turn on "new session every run"`
+      failureReason += job.sessionId
+        ? ` — session ${session.id}'s history tripped the model's safety classifier, so later runs on it will likely be declined too: pick another session or clear the job's picked session, or turn on "new session every run"`
+        : ` — the job's session history tripped the model's safety classifier, so later runs on it will likely be declined too: delete session ${session.id} or turn on "new session every run"`
     }
     const targets = job ? parseTargets(job.targets) : []
     let dispatchResults: DispatchResult[] = []
