@@ -20,22 +20,15 @@ import (
 
 func TestWindowsShell(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("HALO_TEST_UNICODE", "echo 中文")
-	for _, command := range []string{
-		`chcp 65001 >nul & %HALO_TEST_UNICODE%`,
-		`chcp 65001 >nul & !HALO_TEST_UNICODE!`,
-		`chcp 65001 >nul & cmd /d /s /c "!HALO_TEST_UNICODE!"`,
-		`chcp 65001 >nul & cmd /d /s /c "%HALO_TEST_UNICODE%"`,
-	} {
-		c := shellCommand("")
-		c.SysProcAttr.CreationFlags = windows.CREATE_NEW_CONSOLE
-		c.SysProcAttr.CmdLine = `cmd.exe /d /v:on /s /c "` + command + `"`
-		out, err := c.CombinedOutput()
-		t.Logf("probe %q: %q err=%v", command, out, err)
-	}
+	t.Setenv("HALO_TEST_UNICODE", "中文")
 	for _, c := range []struct{ command, out, stderr, msg string }{
 		{"echo hello", "hello\r\n", "", ""},
 		{"echo 中文", "中文\r\n", "", ""},
+		{"echo %HALO_TEST_UNICODE%", "中文\r\n", "", ""},
+		{"echo !literal!", "!literal!\r\n", "", ""},
+		{"echo a&echo b", "a\r\nb\r\n", "", ""},
+		{"echo a^&b", "a&b\r\n", "", ""},
+		{"echo hi|findstr hi", "hi\r\n", "", ""},
 		{"echo err >&2", "", "err \r\n", ""},
 		{"cd", root + "\r\n", "", ""},
 		{"exit /b 3", "", "", "Command failed: exit /b 3"},

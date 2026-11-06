@@ -96,7 +96,6 @@ var testPumpChunk func()
 func spawnGroup(ctx context.Context, cmd, cwd string, timeoutMs int64) (stdout, stderr, msg string, aborted bool) {
 	c := shellCommand(cmd)
 	c.Dir = cwd
-	c.Env = cleanEnv()
 	// stdin: a pipe nobody writes or closes (Node's default 'pipe'): `cat` waits.
 	stdinR, stdinW, err := os.Pipe()
 	if err != nil {

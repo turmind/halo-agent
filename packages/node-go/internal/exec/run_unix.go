@@ -17,6 +17,7 @@ func checkCommand(cmd, cwd string) error {
 func shellCommand(cmd string) *osexec.Cmd {
 	c := osexec.Command("/bin/sh", "-c", cmd)
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	c.Env = cleanEnv()
 	return c
 }
 
