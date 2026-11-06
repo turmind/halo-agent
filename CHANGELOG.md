@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Cron: a webhook job can run in an existing root session picked in the form (`--session` in the cron skill), like a scheduled job. An event that arrives while that session is busy with another run, a relay or an A2A task waits and runs once the session is free.
+- Cron: a webhook job can run in an existing root session picked in the form (`--session` in the cron skill), like a scheduled job. An event that arrives while that session is held by another run, a relay or an A2A task waits and runs once the session is free; one that arrives during a user's turn there joins that turn.
 - Cron: a webhook job's prompt is optional. Left empty, each run opens with the events alone; scheduled and one-shot jobs still need one. Run-now on an empty-prompt webhook job is recorded as skipped, since it carries no event.
 
 ### Changed
