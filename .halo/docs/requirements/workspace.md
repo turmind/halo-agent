@@ -37,12 +37,12 @@ The Bottom Panel (Chat + Terminal) can also be **floated** into a draggable wind
 | Zap | Skills | Skill list | SkillsMain (full height) | — |
 | MessageCircle | Channels | Channel list | Channel config editor | — |
 | Sparkles | Evolution | Run list + status / auto / observation filters | Evolution main (run/apply review, auto-apply verdict, rollback, observation → GitHub issue) | — |
-| Clock | Cron | Job list | Cron job detail / form + run audit | — |
+| Clock | Triggers (触发器) | Job list | Cron job detail / form + run audit | — |
 | Settings2 | Settings | — | Settings panel | — |
 
-The Source Control entry is hidden in workspaces that are not git repos.
+The Source Control entry is hidden in workspaces that are not git repos. The Triggers tab is the UI name for cron jobs (schedule, one-shot and webhook); code, API, routes and the `cron` skill keep the `cron` name.
 
-**Extension entries.** An installed [canvas extension](../design/canvas-extensions.md#activity-bar-entries) whose manifest declares `activity` adds one button after Cron (several sort by the manifest's `order`, then id; the built-in tabs never move). It uses the extension's icon (tinted like the built-in icons; a puzzle piece when it has none) and its title / description in the hover drawer, in the admin's language. Clicking it shows the extension's page full-width in the main area with no sidebar, like Agents / Settings; leaving the tab closes the page (anything it was playing or refreshing stops). The last-used page is restored after a reload; if that extension has been removed, or doesn't run on this device, the workspace opens on Explorer instead. With no such extension installed, the bar is unchanged.
+**Extension entries.** An installed [canvas extension](../design/canvas-extensions.md#activity-bar-entries) whose manifest declares `activity` adds one button after Triggers (several sort by the manifest's `order`, then id; the built-in tabs never move). It uses the extension's icon (tinted like the built-in icons; a puzzle piece when it has none) and its title / description in the hover drawer, in the admin's language. Clicking it shows the extension's page full-width in the main area with no sidebar, like Agents / Settings; leaving the tab closes the page (anything it was playing or refreshing stops). The last-used page is restored after a reload; if that extension has been removed, or doesn't run on this device, the workspace opens on Explorer instead. With no such extension installed, the bar is unchanged.
 
 **Short windows.** When the window is too short for every view button, the upper group (built-in views + extension entries) scrolls (no visible scrollbar); Settings and the quick-toggles entry stay pinned at the bottom.
 
