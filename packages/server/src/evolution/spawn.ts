@@ -40,8 +40,7 @@ export function spawnEvoWrapper(wrapperPath: string, mode: WrapperMode, id: stri
       env: cleanChildEnv(),
       // Without this, a detached console process on Windows gets a freshly
       // allocated console window (a black box pops up for every evo/score/apply
-      // run). cron doesn't hit this — it spawns the cli inline, not via a
-      // detached wrapper. No-op on macOS/Linux.
+      // run). No-op on macOS/Linux.
       windowsHide: true,
     })
   } finally {

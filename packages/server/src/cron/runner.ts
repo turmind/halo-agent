@@ -173,7 +173,7 @@ function isCronCliProcess(pid: number, sessionId: string): boolean {
   }
 }
 
-/** The session a job's cli runs in: the picked root session, else its own —
+/** The session a job runs in: the picked root session, else its own —
  *  the job id itself (generated ids are already `cron-<ts>-<rand>`), or
  *  `cron-<id>` for a custom id without the prefix. Jobs that ran under the
  *  old always-prefix rule were pinned to their `cron-cron-…` session by

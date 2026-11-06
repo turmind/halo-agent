@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Cron: runs execute inside the server as a turn in the job's session, instead of spawning a separate `halo cli` process per fire — they show up live in the Sessions tab, and a run cut off by a restart resumes on the next boot. A model refusal on a job that keeps one session now says how to start clean (delete the job's session — or, for a session you picked, pick another or clear the pick — or turn on "new session every run").
+- Cron: stopping, deleting or archiving a cron job's session while a run is going ends that run as failed; the partial output is not dispatched.
+- Cron: new runs have no log file, so the run's log link is gone; open the run's session instead — it is the record of the run.
+- Cron: runs take the observability settings (`general.observability.*`) the server started with; restart the server after changing them.
 
 ## [2.1.6] - 2026-11-05
 

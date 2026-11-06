@@ -422,7 +422,7 @@ async function attachSignalHandlers(harness: Harness): Promise<void> {
       void exitAfterFlush(130)
     })
   })
-  // SIGTERM (e.g. the cron runner's timeout) — same graceful shape as the
+  // SIGTERM (e.g. the evo wrapper's phase kill) — same graceful shape as the
   // first-SIGINT branch: harness.stop() routes to SessionManager.stopSession,
   // which waits for the in-flight tool, aborts, repairs the conversation and
   // flushes to disk. One shot is enough — the parent escalates to SIGKILL if
@@ -430,7 +430,7 @@ async function attachSignalHandlers(harness: Harness): Promise<void> {
   // convention). Windows note: child.kill('SIGTERM') there terminates the
   // process without delivering a catchable signal, so this handler simply
   // never runs on Windows — acceptable, no workaround. The flush's 3s cap
-  // sits inside the cron runner's 30s / evo wrapper's 10s SIGKILL grace.
+  // sits inside the evo wrapper's 10s SIGKILL grace.
   process.on('SIGTERM', () => {
     harness.stop().finally(() => {
       harness.destroy()
