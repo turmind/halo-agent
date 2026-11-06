@@ -27,8 +27,8 @@ func TestWindowsStartupHelper(t *testing.T) {
 	if i < 0 {
 		t.Fatal("missing CLI arguments")
 	}
-	// CreateProcess rejects this namespace cwd as a startup parameter, but
-	// SetCurrentDirectory can enter it in the helper before invoking the CLI.
+	// Enter the namespace spelling in-process so CreateProcess cannot normalize
+	// the working directory before the CLI's own validation sees it.
 	if err := os.Chdir(os.Getenv("HALO_TEST_STARTUP_CWD")); err != nil {
 		t.Fatal(err)
 	}
@@ -41,11 +41,7 @@ func TestWindowsStartupPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsupported := `\\?\` + filepath.Join(root, "inside.")
-	if err := os.Mkdir(unsupported, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Remove(unsupported) })
+	unsupported := `\\?\` + root
 	for _, c := range []struct {
 		name, cwd, rootArg string
 		connect            bool
