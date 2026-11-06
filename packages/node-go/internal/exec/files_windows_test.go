@@ -4,15 +4,52 @@ package exec
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
-	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/turmind/halo-agent/packages/node-go/internal/nodepath"
+	"golang.org/x/sys/windows"
 )
+
+// Set a mount-point reparse target directly: mklink's parser rejects namespaced
+// targets, but the regression needs the exact trailing-dot/space object.
+func testJunction(t *testing.T, link, target string) {
+	t.Helper()
+	if err := os.Mkdir(link, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(name, windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(h)
+	substitute, err := windows.UTF16FromString(`\??\` + strings.TrimPrefix(target, `\\?\`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// REPARSE_DATA_BUFFER: 8-byte header, 8-byte mount-point offsets, then
+	// a NUL-terminated substitute name and an empty print name.
+	buf := make([]byte, 16+2*len(substitute)+2)
+	binary.LittleEndian.PutUint32(buf, windows.IO_REPARSE_TAG_MOUNT_POINT)
+	binary.LittleEndian.PutUint16(buf[4:], uint16(len(buf)-8))
+	binary.LittleEndian.PutUint16(buf[10:], uint16(2*(len(substitute)-1)))
+	binary.LittleEndian.PutUint16(buf[12:], uint16(2*len(substitute)))
+	for i, ch := range substitute {
+		binary.LittleEndian.PutUint16(buf[16+2*i:], ch)
+	}
+	var returned uint32
+	if err := windows.DeviceIoControl(h, windows.FSCTL_SET_REPARSE_POINT, &buf[0], uint32(len(buf)), nil, 0, &returned, nil); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestWindowsMkdirp(t *testing.T) {
 	root := t.TempDir()
@@ -76,10 +113,7 @@ func TestWindowsAmbiguousPaths(t *testing.T) {
 			for _, link := range []struct{ name, target string }{
 				{"inside", outside}, {"alias", special},
 			} {
-				out, err := osexec.Command("cmd.exe", "/d", "/c", "mklink", "/J", filepath.Join(root, link.name), link.target).CombinedOutput()
-				if err != nil {
-					t.Fatalf("junction: %v: %s", err, out)
-				}
+				testJunction(t, filepath.Join(root, link.name), link.target)
 			}
 			for _, rejectedRoot := range []string{special, filepath.Join(root, "inside"+suffix), filepath.Join(root, "alias")} {
 				if real, err := nodepath.Realpath(rejectedRoot); err == nil {
