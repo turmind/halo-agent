@@ -6,7 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Cron: a webhook job can run in an existing root session picked in the form (`--session` in the cron skill), like a scheduled job. An event that arrives while that session is busy with another run, a relay or an A2A task waits and runs once the session is free.
+- Cron: a webhook job's prompt is optional. Left empty, each run opens with the events alone; scheduled and one-shot jobs still need one. Run-now on an empty-prompt webhook job is recorded as skipped, since it carries no event.
+
 ### Changed
+
+- Admin: the Cron tab is now called Triggers (触发器). Only the name changed — job ids, the API, the database and the `cron` skill stay the same.
 
 - Admin: the panel's hashed scripts and styles (`/_next/static/`) are now sent with `Cache-Control: public, max-age=31536000, immutable`, so the browser (and a CDN in front of the server) keeps them instead of downloading them all again on every page load. `index.html`, the Monaco editor files and unknown paths are not cached this way. A file missing under `/_next/static/` (an open tab asking for another build's chunk) now gets a 404 instead of the panel's `index.html`, so a CDN doesn't keep that page as the chunk.
 - Chat: deleting a turn greys it out right away, also in long sessions. The server now sends only the ids of the deleted rows (`exchange:deleted`) instead of the whole session log again, and the panel re-renders only the rows that changed.
