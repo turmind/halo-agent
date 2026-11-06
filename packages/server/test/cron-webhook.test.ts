@@ -447,6 +447,34 @@ describe('startOrInject — batching', () => {
   })
 })
 
+describe('webhook job without a prompt', () => {
+  beforeEach(() => { h = installCronHarness(ws) })
+
+  it('the opening message is the events alone (UI row) / preamble + events (model), no empty part', async () => {
+    insertJob('cron-np', { userPrompt: '' })
+    const ui: string[] = []
+    const append = h.sm.appendUserMessage.bind(h.sm)
+    vi.spyOn(h.sm, 'appendUserMessage').mockImplementation((sid, text, opts) => { ui.push(text); return append(sid, text, opts) })
+    expect((await post('cron-np', '{"n":1}', { authorization: `Bearer ${SECRET}`, 'x-request-id': 'r-1' })).status).toBe(202)
+    await until(() => settled('cron-np'))
+    expect(runsOf('cron-np')).toEqual([expect.objectContaining({ triggerKind: 'webhook', status: 'succeeded' })])
+    expect(ui).toHaveLength(1)
+    expect(ui[0]).toMatch(/^\[Webhook event · delivery r-1 · received [^\]]+\]\n\{"n":1\}$/)
+    // (The session manager prefixes the arrival stamp.)
+    expect(h.inputs[0]).toMatch(/^(\[[^\]]+\] )?\[Unattended cron run — [^\n]+\]\n\n\[Webhook event · delivery r-1 · /)
+    expect(h.inputs[0]).not.toContain('\n\n\n')
+    expect(h.inputs[0].trimEnd()).toMatch(/\{"n":1\}$/)
+  })
+
+  it('run-now has nothing to run: recorded skipped, no turn', async () => {
+    insertJob('cron-np2', { userPrompt: '' })
+    expect((await Promise.resolve(rest.request('/cron/jobs/cron-np2/run-now', { method: 'POST' }))).status).toBe(200)
+    await until(() => runsOf('cron-np2').length === 1)
+    expect(runsOf('cron-np2')[0]).toMatchObject({ triggerKind: 'manual', status: 'skipped', failureReason: expect.stringMatching(/^nothing to run/) })
+    expect(h.inputs).toEqual([])
+  })
+})
+
 describe('webhook job on a picked session', () => {
   beforeEach(() => { h = installCronHarness(ws) })
   const auth = { authorization: `Bearer ${SECRET}` }
@@ -603,6 +631,31 @@ describe('REST: webhook mode', () => {
     const { id: t } = await (await json('POST', '/cron/jobs', { workspacePath: ws, agentId: 'default', userPrompt: 'p', schedule: '0 9 * * *', sessionId: 'chat-1' })).json() as { id: string }
     expect((await json('PUT', `/cron/jobs/${t}`, { webhook: true })).status).toBe(200)
     expect(db.select().from(cronJobs).where(eq(cronJobs.id, t)).get()).toMatchObject({ sessionId: 'chat-1', schedule: '' })
+  })
+
+  it('userPrompt: optional on a webhook job only; leaving webhook mode needs one in the same body', async () => {
+    const row = (id: string) => db.select().from(cronJobs).where(eq(cronJobs.id, id)).get()!
+    const r = await json('POST', '/cron/jobs', { workspacePath: ws, agentId: 'default', webhook: true })
+    expect(r.status).toBe(200)
+    const { id } = await r.json() as { id: string }
+    expect(row(id).userPrompt).toBe('')
+    expect((await json('POST', '/cron/jobs', { workspacePath: ws, agentId: 'default', userPrompt: '', webhook: true })).status).toBe(200)
+    const timed = await json('POST', '/cron/jobs', { workspacePath: ws, agentId: 'default', schedule: '0 9 * * *' })
+    expect(timed.status).toBe(400)
+    expect((await timed.json() as { error: string }).error).toBe('userPrompt required')
+    expect((await json('POST', '/cron/jobs', { workspacePath: ws, agentId: 'default', userPrompt: '', runAt: Date.now() + 60_000 })).status).toBe(400)
+    // An unrelated edit keeps the empty prompt; leaving webhook mode without one → 400.
+    expect((await json('PUT', `/cron/jobs/${id}`, { label: 'x' })).status).toBe(200)
+    const sw = await json('PUT', `/cron/jobs/${id}`, { schedule: '0 9 * * *' })
+    expect(sw.status).toBe(400)
+    expect((await sw.json() as { error: string }).error).toMatch(/^userPrompt required/)
+    expect((await json('PUT', `/cron/jobs/${id}`, { webhook: false, schedule: '0 9 * * *', userPrompt: '' })).status).toBe(400)
+    expect(row(id)).toMatchObject({ schedule: '', webhookSecret: expect.any(String) })
+    expect((await json('PUT', `/cron/jobs/${id}`, { schedule: '0 9 * * *', userPrompt: 'now timed' })).status).toBe(200)
+    expect(row(id)).toMatchObject({ schedule: '0 9 * * *', webhookSecret: null, userPrompt: 'now timed' })
+    // A timed job can't have its prompt emptied.
+    expect((await json('PUT', `/cron/jobs/${id}`, { userPrompt: '' })).status).toBe(400)
+    expect(row(id).userPrompt).toBe('now timed')
   })
 
   it('PUT switches modes (secret kept while webhook), rotate replaces it, runs list counts events', async () => {

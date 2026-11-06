@@ -1175,6 +1175,9 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
   //  - (legacy) a pre-in-process cli orphan still being reaped on the session.
   // The session-level ones (owed to another run / relay / A2A, or a turn
   // running in it) need its manager and run below.
+  // Run-now carries no webhook events: a webhook job without a prompt would
+  // open an empty turn.
+  if (triggerKind === 'manual' && !job.userPrompt) return skip('nothing to run: the job has no prompt, and run-now carries no webhook events')
   if (_inflight.has(jobId)) return skip('previous run still in progress')
   if (_inflightSessions.has(sessionKeyFor(job.workspacePath, sessionId))) return skip(`session ${sessionId} busy: another cron run is in progress`)
   _inflight.add(jobId)
@@ -1290,11 +1293,12 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       // The UI row shows the prompt alone; the model also gets the preamble:
       // nothing else in its view says nobody will answer (the `cron-*` id is
       // invisible to it, prompts typed into the admin form don't carry one).
+      // A webhook job's prompt may be empty: the events alone open the turn.
       const texts = events.map((ev) => eventText(ev, job.workspacePath, false))
-      const stamp = host.appendUserMessage(sessionId, [job.userPrompt, ...texts.map((t) => t.ui)].join('\n\n'))
+      const stamp = host.appendUserMessage(sessionId, [job.userPrompt, ...texts.map((t) => t.ui)].filter(Boolean).join('\n\n'))
       stampEvents(events.map((ev) => ev.id), stamp)
       // accessLevel undefined: the session keeps its own level.
-      await host.sendUserMessage(sessionId, [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].join('\n\n'), undefined, undefined, stamp)
+      await host.sendUserMessage(sessionId, [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].filter(Boolean).join('\n\n'), undefined, undefined, stamp)
     } catch (err) {
       untrackRun(runId)
       tracked = false

@@ -591,6 +591,19 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       expect(job('cron-o')!.webhookSecret).toBe('s')
     })
 
+    it('--prompt is optional on a webhook job only; leaving webhook mode needs one', () => {
+      ok('create', '--workspace', ws, '--id', 'cron-np', '--webhook')
+      expect(job('cron-np')).toMatchObject({ userPrompt: '', schedule: '' })
+      expect(fails(['create', '--workspace', ws, '--schedule', '0 9 * * *'])).toMatch(/--prompt required/)
+      expect(fails(['update', 'cron-np', '--schedule', '0 9 * * *'])).toMatch(/--prompt required/)
+      expect(job('cron-np')!.schedule).toBe('')
+      ok('update', 'cron-np', '--label', 'still webhook')
+      insertJob('cron-plain2')
+      expect(fails(['update', 'cron-plain2', '--prompt', ''])).toMatch(/--prompt required/)
+      ok('update', 'cron-np', '--schedule', '0 9 * * *', '--prompt', 'now timed')
+      expect(job('cron-np')).toMatchObject({ userPrompt: 'now timed', schedule: '0 9 * * *', webhookSecret: null })
+    })
+
     it('runs / get show a null exit code (in-process runs) as "-"', () => {
       insertJob('cron-e')
       insertRun('2026-10-01T00-00-00-000Z-a', 'cron-e', { exitCode: null })

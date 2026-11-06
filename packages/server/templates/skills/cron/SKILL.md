@@ -103,7 +103,9 @@ any HTTP sender). Use it for "when X happens, run this".
   (default), a new one per run (`--stateless`), or an existing root session
   (`--session`, below).
 - **How an event enters the session** — each request body becomes a
-  message in the session, marked as data. Session idle → a new turn starts.
+  message in the session, marked as data. `--prompt` is optional on a
+  webhook job: left out, a run delivers the events alone (and run-now has
+  nothing to run). Session idle → a new turn starts.
   A user's turn running in it → the run starts right after that turn.
   Session held by another owner (a relay or A2A task, another job's run) →
   the events stay pending and run once it releases the session. Events that

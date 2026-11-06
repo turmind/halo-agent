@@ -29,7 +29,8 @@ interface CreateBody {
   label?: string
   workspacePath: string
   agentId: string
-  userPrompt: string
+  /** Required except on a webhook job (omitted / '' = its events alone). */
+  userPrompt?: string
   /** 5-field cron expression. Empty when this is a one-shot (`runAt`). */
   schedule: string
   /** One-shot fire time (epoch ms). When set, `schedule` is ignored and
@@ -226,7 +227,7 @@ export function createCronRoutes(): Hono {
   router.post('/cron/jobs', async (c) => {
     const body = await c.req.json().catch(() => null) as CreateBody | null
     if (!body) return c.json({ error: 'invalid body' }, 400)
-    for (const k of ['workspacePath', 'agentId', 'userPrompt'] as const) {
+    for (const k of ['workspacePath', 'agentId'] as const) {
       if (!body[k] || typeof body[k] !== 'string') return c.json({ error: `${k} required` }, 400)
     }
     // Recurring vs at-mode vs webhook: exactly one of `schedule` / `runAt` /
@@ -235,6 +236,10 @@ export function createCronRoutes(): Hono {
     const hasSchedule = typeof body.schedule === 'string' && body.schedule.trim().length > 0
     const hasRunAt = typeof body.runAt === 'number' && Number.isFinite(body.runAt)
     const webhook = body.webhook === true
+    // A webhook job's prompt is optional (its events are the message); stored '' when omitted.
+    const userPrompt = body.userPrompt ?? ''
+    if (typeof userPrompt !== 'string') return c.json({ error: 'userPrompt must be a string' }, 400)
+    if (!userPrompt && !webhook) return c.json({ error: 'userPrompt required' }, 400)
     if (!hasSchedule && !hasRunAt && !webhook) return c.json({ error: 'schedule, runAt or webhook required' }, 400)
     if (hasSchedule && hasRunAt) return c.json({ error: 'schedule and runAt are mutually exclusive' }, 400)
     if (webhook && (hasSchedule || hasRunAt)) return c.json({ error: 'webhook and schedule / runAt are mutually exclusive' }, 400)
@@ -280,7 +285,7 @@ export function createCronRoutes(): Hono {
       label: body.label && body.label.trim().length > 0 ? body.label.trim() : null,
       workspacePath: body.workspacePath,
       agentId: body.agentId,
-      userPrompt: body.userPrompt,
+      userPrompt,
       schedule: hasSchedule ? body.schedule : '',
       runAt: hasRunAt ? body.runAt! : null,
       webhookSecret: webhook ? newWebhookSecret() : null,
@@ -402,6 +407,15 @@ export function createCronRoutes(): Hono {
     if (!nextWebhookSecret && nextSchedule.trim().length === 0 && typeof nextRunAt !== 'number') {
       return c.json({ error: 'schedule, runAt or webhook required' }, 400)
     }
+    // Only a webhook job may have an empty prompt: switching one away from
+    // webhook, or emptying a timed job's, needs a prompt in the same body.
+    // Checked only when the body touches the prompt or leaves webhook mode, so
+    // an unrelated edit of an older empty-prompt row passes.
+    if (body.userPrompt !== undefined && typeof body.userPrompt !== 'string') return c.json({ error: 'userPrompt must be a string' }, 400)
+    const nextPrompt = body.userPrompt ?? existing.userPrompt
+    if (!nextWebhookSecret && !nextPrompt && (body.userPrompt !== undefined || existing.webhookSecret !== null)) {
+      return c.json({ error: 'userPrompt required (only a webhook job may leave it empty)' }, 400)
+    }
     // Active window: same partial-body contract (undefined = untouched,
     // null = clear), cross-field rules checked on the merged row — so a
     // mode switch to runAt has to clear a stored window in the same body.
@@ -424,7 +438,7 @@ export function createCronRoutes(): Hono {
     if (body.label !== undefined) patch.label = body.label?.trim() || null
     if (body.workspacePath !== undefined) patch.workspacePath = body.workspacePath
     if (body.agentId !== undefined) patch.agentId = body.agentId
-    if (body.userPrompt !== undefined) patch.userPrompt = body.userPrompt
+    if (body.userPrompt !== undefined) patch.userPrompt = nextPrompt
     if (body.schedule !== undefined || clearSchedule) patch.schedule = nextSchedule
     if (body.runAt !== undefined || clearRunAt) patch.runAt = nextRunAt
     if (nextWebhookSecret !== existing.webhookSecret) patch.webhookSecret = nextWebhookSecret

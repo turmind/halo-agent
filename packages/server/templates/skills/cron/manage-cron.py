@@ -413,10 +413,11 @@ def cmd_get(args):
 def cmd_create(args):
     if not args.workspace:
         die('--workspace required')
-    if not args.prompt:
-        die('--prompt required')
     has_schedule = bool(args.schedule and args.schedule.strip())
     run_at_ms = parse_run_at(args.run_at)
+    # A webhook job's prompt is optional (its events are the message).
+    if not args.prompt and not args.webhook:
+        die('--prompt required (only a --webhook job may leave it out)')
     if not has_schedule and run_at_ms is None and not args.webhook:
         die('--schedule, --run-at or --webhook required')
     if has_schedule and run_at_ms is not None:
@@ -454,7 +455,7 @@ def cmd_create(args):
         'label': args.label,
         'workspace_path': args.workspace,
         'agent_id': args.agent or 'default',
-        'user_prompt': args.prompt,
+        'user_prompt': args.prompt or '',
         'schedule': args.schedule or '',
         'run_at': run_at_ms,
         'timezone': args.timezone,
@@ -573,6 +574,10 @@ def cmd_update(args):
     merged = {**cur, **dict(sets)}
     if not (merged.get('schedule') or '').strip() and merged.get('run_at') is None and not next_secret:
         die('--schedule, --run-at or --webhook required (this update would leave the job with none)')
+    # Same rule as the REST PUT: only a webhook job may have an empty prompt —
+    # checked when this update touches the prompt or leaves webhook mode.
+    if not next_secret and not merged.get('user_prompt') and (args.prompt is not None or cur_secret):
+        die('--prompt required (only a webhook job may leave it empty)')
     validate_active_window(
         merged.get('run_at'), merged.get('active_from'), merged.get('active_until'),
         new_until=bool(args.active_until and args.active_until.strip()), webhook=bool(next_secret),
@@ -724,13 +729,13 @@ def main():
     c.add_argument('--label')
     c.add_argument('--workspace', required=True, help='absolute workspace path')
     c.add_argument('--agent', help="agent id (default: 'default')")
-    c.add_argument('--prompt', required=True)
+    c.add_argument('--prompt', help='the task each run is given; optional with --webhook (then the events alone)')
     c.add_argument('--schedule', help='5-field cron expression (recurring); mutually exclusive with --run-at')
     c.add_argument('--run-at', dest='run_at',
                    help='one-shot fire time, ISO-8601 (e.g. 2026-05-24T09:00) or unix ms — auto-disables after fire')
     c.add_argument('--webhook', action='store_true',
                    help='fire on POST /cron-hooks/<id> instead of a schedule; prints the path + generated secret. '
-                        'Excludes --schedule / --run-at / --session / an active window')
+                        'Excludes --schedule / --run-at / an active window')
     c.add_argument('--timezone', help='IANA tz, e.g. Asia/Shanghai')
     c.add_argument('--timeout-sec', dest='timeout_sec',
                    help='max run time in seconds, 60–21600 (default: unset = 3600)')

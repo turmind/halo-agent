@@ -226,7 +226,7 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
         </div>
         <div className="mt-2">
           <div className="text-xs font-medium text-[var(--foreground)]">{t('cron.field.prompt')}</div>
-          <pre className="mt-1 whitespace-pre-wrap rounded bg-[var(--accent)] p-2 text-xs">{job.userPrompt}</pre>
+          <pre className="mt-1 whitespace-pre-wrap rounded bg-[var(--accent)] p-2 text-xs">{job.userPrompt || t('cron.field.promptEmpty')}</pre>
         </div>
       </div>
 
@@ -564,7 +564,7 @@ function CronForm({ initial, onClose, onSaved }: {
     if (!agentId.trim()) { setFormError(t('cron.form.err.agent')); return }
     if (mode === 'recurring' && !schedule.trim()) { setFormError(t('cron.form.err.schedule')); return }
     if (mode === 'oneShot' && !runAtLocal) { setFormError(t('cron.form.err.runAt')); return }
-    if (!userPrompt.trim()) { setFormError(t('cron.form.err.prompt')); return }
+    if (mode !== 'webhook' && !userPrompt.trim()) { setFormError(t('cron.form.err.prompt')); return }
     const tzForRunAt = timezone || hostTz
     const runAtMs = mode === 'oneShot' ? computeRunAtMs(runAtLocal, tzForRunAt) : undefined
     if (mode === 'oneShot' && runAtMs !== undefined && runAtMs <= Date.now()) {
@@ -881,8 +881,9 @@ function CronForm({ initial, onClose, onSaved }: {
           <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.timeoutSec.hint')}</div>
         </Field>
 
-        <Field label={t('cron.form.userPrompt')}>
+        <Field label={t(mode === 'webhook' ? 'cron.form.userPrompt.optional' : 'cron.form.userPrompt')}>
           <textarea value={userPrompt} onChange={(e) => setUserPrompt(e.target.value)} rows={5} className="input-base" placeholder={t('cron.form.userPrompt.placeholder')} />
+          {mode === 'webhook' && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.userPrompt.webhookHint')}</div>}
         </Field>
 
         <Field label={t('cron.form.targets')}>
