@@ -474,7 +474,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     { id: 'skills', icon: Zap, label: 'Skills' },
     { id: 'channels', icon: MessageCircle, label: t('nav.channels') },
     { id: 'evolution', icon: Sparkles, label: 'Evolution' },
-    { id: 'cron', icon: Clock, label: 'Cron' },
+    { id: 'cron', icon: Clock, label: t('nav.cron') },
     { id: 'settings', icon: Settings2, label: t('nav.settings'), position: 'bottom' },
   ] as const).map(({ icon: Icon, ...tab }) => ({ ...tab, icon: <Icon className="h-5 w-5" />, desc: t(`nav.desc.${tab.id}`) }))
 

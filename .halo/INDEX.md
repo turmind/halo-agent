@@ -58,7 +58,7 @@ Onboarding guides at [guide/channels/](docs/guide/channels/), design at `design/
 
 ## Cron Tasks
 
-Scheduled or webhook-triggered agent runs from the **Cron** tab: `(workspace, agent, prompt, schedule | runAt | webhook, targets, optional session / folder / stateless)`. Each fire runs in-process on the server's `SessionManager` in the job's stable session (`cron-<jobId>`, or a picked root session), or a fresh per-run session for a stateless job; a `reply_to = {cron: runId}` pointer collects the wrap-up, which fans out to channels through a per-channel `cron-dispatcher.ts` registry. A run cut off by a restart resumes through the run ledger; UI updates are pushed over WS.
+Scheduled or webhook-triggered agent runs from the **Triggers** tab (触发器): `(workspace, agent, prompt, schedule | runAt | webhook, targets, optional session / folder / stateless)`. Each fire runs in-process on the server's `SessionManager` in the job's stable session (`cron-<jobId>`, or a picked root session), or a fresh per-run session for a stateless job; a `reply_to = {cron: runId}` pointer collects the wrap-up, which fans out to channels through a per-channel `cron-dispatcher.ts` registry. A run cut off by a restart resumes through the run ledger; UI updates are pushed over WS.
 
 - Key state: `~/.halo/global/cron.db` (`cron_jobs`, `cron_runs`, `cron_events` — webhook deliveries), workspace `agent_sessions.reply_to`
 - Code: `packages/server/src/cron/` + `routes/cron-hooks.ts` + `channels/<ch>/cron-dispatcher.ts` + `templates/skills/cron/` · Doc: [design/cron.md](docs/design/cron.md)

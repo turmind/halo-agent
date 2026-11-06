@@ -29,7 +29,8 @@ interface CreateBody {
   label?: string
   workspacePath: string
   agentId: string
-  userPrompt: string
+  /** Required except on a webhook job (omitted / '' = its events alone). */
+  userPrompt?: string
   /** 5-field cron expression. Empty when this is a one-shot (`runAt`). */
   schedule: string
   /** One-shot fire time (epoch ms). When set, `schedule` is ignored and
@@ -38,7 +39,7 @@ interface CreateBody {
   runAt?: number
   /** Webhook job: fired by `POST /cron-hooks/<id>` events instead of a
    *  timer; the server generates the secret. Exclusive with schedule / runAt;
-   *  no active window, no picked session. */
+   *  no active window. */
   webhook?: boolean
   timezone?: string
   /** Max seconds one cron run may take (60–21600). Unset/null = the
@@ -73,8 +74,6 @@ type UpdateBody = Partial<Omit<CreateBody, 'runAt' | 'timeoutSec' | 'sessionId'>
 function newWebhookSecret(): string {
   return crypto.randomBytes(32).toString('base64url')
 }
-
-const WEBHOOK_SESSION_ERR = 'a webhook job runs in its own session (or a new one every run), not a picked sessionId'
 
 function newJobId(): string {
   return `cron-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -228,7 +227,7 @@ export function createCronRoutes(): Hono {
   router.post('/cron/jobs', async (c) => {
     const body = await c.req.json().catch(() => null) as CreateBody | null
     if (!body) return c.json({ error: 'invalid body' }, 400)
-    for (const k of ['workspacePath', 'agentId', 'userPrompt'] as const) {
+    for (const k of ['workspacePath', 'agentId'] as const) {
       if (!body[k] || typeof body[k] !== 'string') return c.json({ error: `${k} required` }, 400)
     }
     // Recurring vs at-mode vs webhook: exactly one of `schedule` / `runAt` /
@@ -237,6 +236,10 @@ export function createCronRoutes(): Hono {
     const hasSchedule = typeof body.schedule === 'string' && body.schedule.trim().length > 0
     const hasRunAt = typeof body.runAt === 'number' && Number.isFinite(body.runAt)
     const webhook = body.webhook === true
+    // A webhook job's prompt is optional (its events are the message); stored '' when omitted.
+    const userPrompt = body.userPrompt ?? ''
+    if (typeof userPrompt !== 'string') return c.json({ error: 'userPrompt must be a string' }, 400)
+    if (!userPrompt && !webhook) return c.json({ error: 'userPrompt required' }, 400)
     if (!hasSchedule && !hasRunAt && !webhook) return c.json({ error: 'schedule, runAt or webhook required' }, 400)
     if (hasSchedule && hasRunAt) return c.json({ error: 'schedule and runAt are mutually exclusive' }, 400)
     if (webhook && (hasSchedule || hasRunAt)) return c.json({ error: 'webhook and schedule / runAt are mutually exclusive' }, 400)
@@ -259,7 +262,6 @@ export function createCronRoutes(): Hono {
     if (body.stateless !== undefined && typeof body.stateless !== 'boolean') return c.json({ error: 'stateless must be a boolean' }, 400)
     const stateless = body.stateless === true
     if (stateless && session.sessionId) return c.json({ error: STATELESS_SESSION_ERR }, 400)
-    if (webhook && session.sessionId) return c.json({ error: WEBHOOK_SESSION_ERR }, 400)
     const folder = await parseWorkingDir(body.workspacePath, body.workingDir)
     if ('error' in folder) return c.json({ error: folder.error }, 400)
     for (const k of ['activeFrom', 'activeUntil'] as const) {
@@ -283,7 +285,7 @@ export function createCronRoutes(): Hono {
       label: body.label && body.label.trim().length > 0 ? body.label.trim() : null,
       workspacePath: body.workspacePath,
       agentId: body.agentId,
-      userPrompt: body.userPrompt,
+      userPrompt,
       schedule: hasSchedule ? body.schedule : '',
       runAt: hasRunAt ? body.runAt! : null,
       webhookSecret: webhook ? newWebhookSecret() : null,
@@ -405,7 +407,15 @@ export function createCronRoutes(): Hono {
     if (!nextWebhookSecret && nextSchedule.trim().length === 0 && typeof nextRunAt !== 'number') {
       return c.json({ error: 'schedule, runAt or webhook required' }, 400)
     }
-    if (nextWebhookSecret && merged.sessionId) return c.json({ error: WEBHOOK_SESSION_ERR }, 400)
+    // Only a webhook job may have an empty prompt: switching one away from
+    // webhook, or emptying a timed job's, needs a prompt in the same body.
+    // Checked only when the body touches the prompt or leaves webhook mode, so
+    // an unrelated edit of an older empty-prompt row passes.
+    if (body.userPrompt !== undefined && typeof body.userPrompt !== 'string') return c.json({ error: 'userPrompt must be a string' }, 400)
+    const nextPrompt = body.userPrompt ?? existing.userPrompt
+    if (!nextWebhookSecret && !nextPrompt && (body.userPrompt !== undefined || existing.webhookSecret !== null)) {
+      return c.json({ error: 'userPrompt required (only a webhook job may leave it empty)' }, 400)
+    }
     // Active window: same partial-body contract (undefined = untouched,
     // null = clear), cross-field rules checked on the merged row — so a
     // mode switch to runAt has to clear a stored window in the same body.
@@ -428,7 +438,7 @@ export function createCronRoutes(): Hono {
     if (body.label !== undefined) patch.label = body.label?.trim() || null
     if (body.workspacePath !== undefined) patch.workspacePath = body.workspacePath
     if (body.agentId !== undefined) patch.agentId = body.agentId
-    if (body.userPrompt !== undefined) patch.userPrompt = body.userPrompt
+    if (body.userPrompt !== undefined) patch.userPrompt = nextPrompt
     if (body.schedule !== undefined || clearSchedule) patch.schedule = nextSchedule
     if (body.runAt !== undefined || clearRunAt) patch.runAt = nextRunAt
     if (nextWebhookSecret !== existing.webhookSecret) patch.webhookSecret = nextWebhookSecret

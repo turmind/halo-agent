@@ -583,13 +583,25 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       expect(job('cron-u')).toMatchObject({ webhookSecret: null, schedule: '0 8 * * *' })
     })
 
-    it('refused: with a schedule / run-at, a picked session, an active window; off alone leaves no trigger', () => {
+    it('refused: with a schedule / run-at, an active window; off alone leaves no trigger', () => {
       expect(fails(create('--webhook', '--schedule', '0 9 * * *'))).toMatch(/mutually exclusive/)
-      expect(fails(create('--webhook', '--session', 'chat-1'))).toMatch(/not a picked --session/)
       expect(fails(create('--webhook', '--active-until', '2999-01-01'))).toMatch(/not --webhook jobs/)
       insertJob('cron-o', { schedule: '', webhookSecret: 's' })
       expect(fails(['update', 'cron-o', '--webhook', 'off'])).toMatch(/would leave the job with none/)
       expect(job('cron-o')!.webhookSecret).toBe('s')
+    })
+
+    it('--prompt is optional on a webhook job only; leaving webhook mode needs one', () => {
+      ok('create', '--workspace', ws, '--id', 'cron-np', '--webhook')
+      expect(job('cron-np')).toMatchObject({ userPrompt: '', schedule: '' })
+      expect(fails(['create', '--workspace', ws, '--schedule', '0 9 * * *'])).toMatch(/--prompt required/)
+      expect(fails(['update', 'cron-np', '--schedule', '0 9 * * *'])).toMatch(/--prompt required/)
+      expect(job('cron-np')!.schedule).toBe('')
+      ok('update', 'cron-np', '--label', 'still webhook')
+      insertJob('cron-plain2')
+      expect(fails(['update', 'cron-plain2', '--prompt', ''])).toMatch(/--prompt required/)
+      ok('update', 'cron-np', '--schedule', '0 9 * * *', '--prompt', 'now timed')
+      expect(job('cron-np')).toMatchObject({ userPrompt: 'now timed', schedule: '0 9 * * *', webhookSecret: null })
     })
 
     it('runs / get show a null exit code (in-process runs) as "-"', () => {
@@ -673,7 +685,11 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       ['webhook only', { schedule: '', webhook: true }, true],
       ['webhook + schedule', { webhook: true }, false],
       ['webhook + runAt', { schedule: '', runAt: FUTURE, webhook: true }, false],
-      ['webhook + session', { schedule: '', webhook: true, sessionId: 'chat-free' }, false],
+      ['webhook + session', { schedule: '', webhook: true, sessionId: 'chat-free' }, true],
+      ['webhook + session on another agent', { schedule: '', webhook: true, sessionId: 'chat-coder' }, false],
+      ['webhook + session on the job agent', { schedule: '', webhook: true, sessionId: 'chat-coder', agentId: 'coder' }, true],
+      ['webhook + sub-session id', { schedule: '', webhook: true, sessionId: 'a>b' }, false],
+      ['webhook + stateless + session', { schedule: '', webhook: true, stateless: true, sessionId: 'chat-free' }, false],
       ['webhook + window', { schedule: '', webhook: true, activeUntil: FUTURE }, false],
       ['webhook, stateless', { schedule: '', webhook: true, stateless: true }, true],
     ]
@@ -714,11 +730,15 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       ['webhook back to one-shot', { schedule: '', webhookSecret: 's' }, { runAt: FUTURE }, true],
       ['webhook off alone', { schedule: '', webhookSecret: 's' }, { webhook: false }, false],
       ['webhook over a stored window', { activeUntil: FUTURE + DAY }, { webhook: true }, false],
-      ['webhook over a picked session', { sessionId: 'chat-free' }, { webhook: true }, false],
+      ['webhook over a picked session', { sessionId: 'chat-free' }, { webhook: true }, true],
+      ['webhook job picks a session', { schedule: '', webhookSecret: 's' }, { sessionId: 'chat-free' }, true],
+      ['webhook job picks a session on another agent', { schedule: '', webhookSecret: 's' }, { sessionId: 'chat-coder2' }, false],
+      ['webhook job, stateless over a picked session', { schedule: '', webhookSecret: 's', sessionId: 'chat-free' }, { stateless: true }, false],
       ['edit a webhook job', { schedule: '', webhookSecret: 's' }, { userPrompt: 'x' }, true],
     ]
 
     it.each(updateCases)('update: %s', async (_name, start, change, accepted) => {
+      seedSession(ws, 'chat-coder2', 'coder')
       for (const id of ['cron-rest', 'cron-py']) {
         seedSession(ws, id, 'coder')
         insertJob(id, start)

@@ -226,7 +226,7 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
         </div>
         <div className="mt-2">
           <div className="text-xs font-medium text-[var(--foreground)]">{t('cron.field.prompt')}</div>
-          <pre className="mt-1 whitespace-pre-wrap rounded bg-[var(--accent)] p-2 text-xs">{job.userPrompt}</pre>
+          <pre className="mt-1 whitespace-pre-wrap rounded bg-[var(--accent)] p-2 text-xs">{job.userPrompt || t('cron.field.promptEmpty')}</pre>
         </div>
       </div>
 
@@ -564,7 +564,7 @@ function CronForm({ initial, onClose, onSaved }: {
     if (!agentId.trim()) { setFormError(t('cron.form.err.agent')); return }
     if (mode === 'recurring' && !schedule.trim()) { setFormError(t('cron.form.err.schedule')); return }
     if (mode === 'oneShot' && !runAtLocal) { setFormError(t('cron.form.err.runAt')); return }
-    if (!userPrompt.trim()) { setFormError(t('cron.form.err.prompt')); return }
+    if (mode !== 'webhook' && !userPrompt.trim()) { setFormError(t('cron.form.err.prompt')); return }
     const tzForRunAt = timezone || hostTz
     const runAtMs = mode === 'oneShot' ? computeRunAtMs(runAtLocal, tzForRunAt) : undefined
     if (mode === 'oneShot' && runAtMs !== undefined && runAtMs <= Date.now()) {
@@ -661,8 +661,8 @@ function CronForm({ initial, onClose, onSaved }: {
           // null explicitly clears a previously-set timeout back to default.
           timeoutSec: timeoutSec ?? null,
           // '' = default session; null clears a previously-picked one.
-          // Stateless / webhook exclude a picked session (server rejects both).
-          sessionId: stateless || mode === 'webhook' ? null : (sessionId || null),
+          // Stateless excludes a picked session (server rejects both).
+          sessionId: stateless ? null : (sessionId || null),
           workingDir: workingDir.trim() || null,
           stateless,
           // Untouched bounds are left out (server keeps them); one-shot /
@@ -677,7 +677,7 @@ function CronForm({ initial, onClose, onSaved }: {
           runAt: mode === 'oneShot' ? runAtMs : undefined,
           webhook: mode === 'webhook' || undefined,
           timeoutSec,
-          sessionId: stateless || mode === 'webhook' ? undefined : (sessionId || undefined),
+          sessionId: stateless ? undefined : (sessionId || undefined),
           workingDir: workingDir.trim() || undefined,
           stateless,
           activeFrom: activeFrom ?? undefined,
@@ -732,9 +732,9 @@ function CronForm({ initial, onClose, onSaved }: {
 
         <Field label={t('cron.form.session')}>
           <Combobox
-            value={stateless || mode === 'webhook' ? '' : sessionId}
-            disabled={stateless || mode === 'webhook'}
-            placeholder={stateless ? t('cron.form.session.stateless') : mode === 'webhook' ? t('cron.form.session.webhook') : t('cron.form.session.placeholder')}
+            value={stateless ? '' : sessionId}
+            disabled={stateless}
+            placeholder={stateless ? t('cron.form.session.stateless') : t('cron.form.session.placeholder')}
             presets={committedPath ? sessionOptions : []}
             onCommit={(next) => {
               const id = next.trim()
@@ -747,7 +747,7 @@ function CronForm({ initial, onClose, onSaved }: {
             }}
             minWidth={280}
           />
-          {!stateless && mode !== 'webhook' && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>}
+          {!stateless && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.session.hint')}</div>}
         </Field>
 
         <Field label={t('cron.form.folder')}>
@@ -881,8 +881,9 @@ function CronForm({ initial, onClose, onSaved }: {
           <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.timeoutSec.hint')}</div>
         </Field>
 
-        <Field label={t('cron.form.userPrompt')}>
+        <Field label={t(mode === 'webhook' ? 'cron.form.userPrompt.optional' : 'cron.form.userPrompt')}>
           <textarea value={userPrompt} onChange={(e) => setUserPrompt(e.target.value)} rows={5} className="input-base" placeholder={t('cron.form.userPrompt.placeholder')} />
+          {mode === 'webhook' && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.userPrompt.webhookHint')}</div>}
         </Field>
 
         <Field label={t('cron.form.targets')}>
