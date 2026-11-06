@@ -11,11 +11,17 @@
  * - The recognizer stays resident (~400 MB RSS) once loaded: dropping it +
  *   `global.gc()` gave back only 13–119 MB of ~325 MB in measurements and a
  *   reload climbs back to ~400 MB, so there is no idle release.
+ * - Speaker labels (`open(…, { speakers: true })`): the diarizer (pyannote
+ *   segmentation + CAM++) and a CAM++ extractor are created on the first
+ *   `load({ speakers: true })` only, then stay resident like the recognizer.
+ *   Each segment is diarized inside the same FIFO job, right after its
+ *   decode, so per-stream final order holds (stt/speakers.ts).
  *
  * Spec: .halo/docs/design/stt-local.md
  */
 import os from 'node:os'
-import { SENSE_VOICE_MODEL, SENSE_VOICE_TOKENS, SILERO_VAD_MODEL, sttModels, type SttModelManager } from './models.js'
+import { CAMPLUS_MODEL, PYANNOTE_SEG_MODEL, SENSE_VOICE_MODEL, SENSE_VOICE_TOKENS, SILERO_VAD_MODEL, sttModels, type SttModelManager } from './models.js'
+import { createSpeakerTracker, splitBySpeakerRuns, type SpeakerPiece, type SpeakerRun } from './speakers.js'
 
 export const SAMPLE_RATE = 16000
 /** Silero v4 window at 16 kHz; sherpa wants exactly this per acceptWaveform. */
@@ -50,6 +56,15 @@ export const MAX_PENDING_AUDIO_S = 60
 /** Half the cores, 1–4: a decode is bursty, the rest of the server keeps half. */
 const NUM_THREADS = Math.min(4, Math.max(1, Math.floor(os.availableParallelism() / 2)))
 
+/** pyannote clustering inside one segment (unknown speaker count): 0.6
+ *  reproduced sherpa's reference labels on its 4-speaker test file. */
+const DIAR_CLUSTER_THRESHOLD = 0.6
+const DIAR_MIN_ON_S = 0.3
+const DIAR_MIN_OFF_S = 0.5
+/** Audio fed to one CAM++ embedding: `compute` is sync on the event loop
+ *  (~9 ms per 0.5 s, ~94 ms per 10 s), so this bounds the block. */
+const EMBED_MAX_S = 6
+
 export type SttErrorCode = 'model' | 'engine' | 'busy' | 'bad-request' | 'io'
 
 export class SttError extends Error {
@@ -63,15 +78,32 @@ export class SttError extends Error {
 export interface SherpaModule {
   OfflineRecognizer: { createAsync(config: Record<string, unknown>): Promise<SherpaRecognizer> }
   Vad: new (config: Record<string, unknown>, bufferSizeInSeconds: number) => SherpaVad
+  OfflineSpeakerDiarization: new (config: Record<string, unknown>) => { handle: unknown }
+  SpeakerEmbeddingExtractor: new (config: Record<string, unknown>) => SherpaEmbeddingExtractor
+  /** From `addon.js` — the class only has a sync `process()`. Exactly 3 args. */
+  offlineSpeakerDiarizationProcessAsync(handle: unknown, samples: Float32Array, progress: () => void): Promise<SherpaDiarSegment[]>
 }
 export interface SherpaRecognizer {
   createStream(): SherpaStream
   decodeAsync(stream: SherpaStream): Promise<unknown>
-  getResult(stream: SherpaStream): { text?: string; lang?: string }
+  getResult(stream: SherpaStream): SherpaResult
+}
+export interface SherpaResult {
+  text?: string
+  lang?: string
+  /** Per token; `timestamps` in seconds from the decoded samples' start. */
+  tokens?: string[]
+  timestamps?: number[]
 }
 export interface SherpaStream {
   acceptWaveform(wave: { samples: Float32Array; sampleRate: number }): void
 }
+export interface SherpaEmbeddingExtractor {
+  createStream(): SherpaStream & { inputFinished(): void }
+  compute(stream: SherpaStream, enableExternalBuffer?: boolean): Float32Array
+}
+/** Seconds from the processed samples' start; `speaker` is local to that call. */
+export interface SherpaDiarSegment { start: number; end: number; speaker: number }
 export interface SherpaVad {
   acceptWaveform(samples: Float32Array): void
   isEmpty(): boolean
@@ -88,6 +120,10 @@ export interface SttFinal {
   text: string
   /** `zh` / `en` / `yue` / `ja` / `ko` (SenseVoice's `<|…|>` stripped). */
   lang: string
+  /** `speakers` streams only: `"0"`, `"1"`… per connection, in order of
+   *  first appearance. A segment several people spoke in arrives as one
+   *  final per speaker run. */
+  speaker?: string
 }
 
 export interface SttStream {
@@ -98,17 +134,26 @@ export interface SttStream {
   end(): Promise<void>
   /** Client gone: drop this stream's segments that haven't started decoding. */
   abort(): void
-  stats(): { segments: number; audioSeconds: number }
+  /** `speakers`: distinct speakers labelled so far (`speakers` streams only). */
+  stats(): { segments: number; audioSeconds: number; speakers?: number }
 }
 
 export interface SttEngine {
-  /** Import sherpa + create the recognizer once; rejects with `SttError('engine')`. */
-  load(): Promise<void>
-  /** Requires a resolved `load()`. Throws `SttError('engine')` if the VAD can't be created. */
-  open(handlers: { onFinal(final: SttFinal): void; onError(err: SttError): void }): SttStream
+  /** Import sherpa + create the recognizer once (+ the diarizer once, with
+   *  `speakers`); rejects with `SttError('engine')`. */
+  load(opts?: { speakers?: boolean }): Promise<void>
+  /** Requires a resolved `load()` (with `speakers` if asked here). Throws
+   *  `SttError('engine')` if the VAD can't be created. */
+  open(handlers: { onFinal(final: SttFinal): void; onError(err: SttError): void }, opts?: { speakers?: boolean }): SttStream
 }
 
-const defaultLoadSherpa = async (): Promise<SherpaModule> => (await import('sherpa-onnx-node')).default as SherpaModule
+// The async diarization entry point exists only on the native addon (the
+// class wraps the sync one); the package has no `exports` map, so the subpath
+// resolves. Both are the same CJS instance (shared require cache).
+const defaultLoadSherpa = async (): Promise<SherpaModule> => {
+  const [m, addon] = await Promise.all([import('sherpa-onnx-node'), import('sherpa-onnx-node/addon.js')])
+  return { ...m.default, offlineSpeakerDiarizationProcessAsync: addon.default.offlineSpeakerDiarizationProcessAsync } as SherpaModule
+}
 
 const errMsg = (err: unknown) => err instanceof Error ? err.message : String(err)
 const round3 = (s: number) => Math.round(s * 1000) / 1000
@@ -120,7 +165,11 @@ interface Job {
   end: number
 }
 interface Owner {
-  done(job: Job, result: { text?: string; lang?: string }): void
+  /** Live: a `speakers` stream that hasn't stopped — worth diarizing for. */
+  wantsSpeakers(): boolean
+  /** `diar`: this job's diarization (`wantsSpeakers()` + non-empty text only).
+   *  Awaited by the queue, so a stream's finals stay in segment order. */
+  done(job: Job, result: SherpaResult, diar: SherpaDiarSegment[] | null): Promise<void>
   fail(err: SttError): void
 }
 
@@ -130,15 +179,48 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
   let sherpa: SherpaModule | null = null
   let recognizer: SherpaRecognizer | null = null
   let loading: Promise<void> | null = null
+  let diarizer: { handle: unknown } | null = null
+  let extractor: SherpaEmbeddingExtractor | null = null
+  let diarLoading: Promise<void> | null = null
   const queue: Job[] = []
   let decoding = false
 
-  function load(): Promise<void> {
-    if (recognizer) return Promise.resolve()
+  async function load(opts: { speakers?: boolean } = {}): Promise<void> {
     // Not cached on failure: the next stream retries (a broken native install
     // fails fast again; a transient one recovers).
-    loading ??= doLoad().finally(() => { loading = null })
-    return loading
+    if (!recognizer) await (loading ??= doLoad().finally(() => { loading = null }))
+    if (opts.speakers && !diarizer) await (diarLoading ??= doLoadDiarizer().finally(() => { diarLoading = null }))
+  }
+
+  /** Sync constructors (~0.3 s each, once per process): sherpa has no async
+   *  factory for either. */
+  async function doLoadDiarizer(): Promise<void> {
+    const t0 = Date.now()
+    try {
+      const embedding = { model: models.filePath(CAMPLUS_MODEL), numThreads: NUM_THREADS, provider: 'cpu', debug: 0 }
+      const d = new sherpa!.OfflineSpeakerDiarization({
+        segmentation: { pyannote: { model: models.filePath(PYANNOTE_SEG_MODEL) }, numThreads: NUM_THREADS, provider: 'cpu', debug: 0 },
+        embedding,
+        clustering: { numClusters: -1, threshold: DIAR_CLUSTER_THRESHOLD },
+        minDurationOn: DIAR_MIN_ON_S,
+        minDurationOff: DIAR_MIN_OFF_S,
+      })
+      extractor = new sherpa!.SpeakerEmbeddingExtractor(embedding)
+      diarizer = d
+      console.log(`[STT] speaker diarizer loaded in ${Date.now() - t0}ms`)
+    } catch (err) {
+      console.log(`[STT] speaker diarizer load failed: ${errMsg(err)}`)
+      throw new SttError('engine', `speaker labelling unavailable: ${errMsg(err)}`)
+    }
+  }
+
+  /** CAM++ embedding of `samples`, at most EMBED_MAX_S of them. */
+  function embed(samples: Float32Array): Float32Array {
+    const s = extractor!.createStream()
+    s.acceptWaveform({ samples: samples.subarray(0, EMBED_MAX_S * SAMPLE_RATE), sampleRate: SAMPLE_RATE })
+    s.inputFinished()
+    // Copy (false): Electron forbids external buffers.
+    return extractor!.compute(s, false)
   }
 
   async function doLoad(): Promise<void> {
@@ -169,20 +251,33 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
     decoding = true
     while (queue.length > 0) {
       const job = queue.shift()!
+      let phase = 'decode'
       try {
         const stream = recognizer.createStream()
         stream.acceptWaveform({ samples: job.samples, sampleRate: SAMPLE_RATE })
         await recognizer.decodeAsync(stream)
-        job.owner.done(job, recognizer.getResult(stream))
+        const result = recognizer.getResult(stream)
+        let diar: SherpaDiarSegment[] | null = null
+        if (job.owner.wantsSpeakers() && (result.text ?? '').trim()) {
+          phase = 'speaker diarization'
+          diar = await sherpa!.offlineSpeakerDiarizationProcessAsync(diarizer!.handle, job.samples, () => {})
+        }
+        await job.owner.done(job, result, diar)
       } catch (err) {
-        job.owner.fail(new SttError('engine', `decode failed: ${errMsg(err)}`))
+        job.owner.fail(new SttError('engine', `${phase} failed: ${errMsg(err)}`))
       }
     }
     decoding = false
   }
 
-  function open(handlers: { onFinal(final: SttFinal): void; onError(err: SttError): void }): SttStream {
+  function open(handlers: { onFinal(final: SttFinal): void; onError(err: SttError): void }, opts: { speakers?: boolean } = {}): SttStream {
     if (!sherpa) throw new SttError('engine', 'speech engine not loaded')
+    if (opts.speakers && !diarizer) throw new SttError('engine', 'speaker labelling not loaded')
+    const speakers = opts.speakers ? createSpeakerTracker() : null
+    /** Tracker index → wire label, assigned when first sent ("0", "1"…), so
+     *  labels number in order of appearance even if a tracked speaker never
+     *  ends up owning any text. */
+    const labels = new Map<number, string>()
     let vad: SherpaVad
     try {
       vad = new sherpa.Vad({
@@ -238,15 +333,61 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
       handlers.onError(err)
       checkDrain()
     }
+    /** One segment's local clusters → connection speakers → time runs.
+     *  Longest cluster first, so a short one in the same segment already has
+     *  someone to join (wire labels are numbered at send time, not here).
+     *  Nothing diarized → the whole segment is one run. Yields before each
+     *  (sync) embedding, so one segment blocks the loop for one embedding at
+     *  a time, not all of them back to back. */
+    async function speakerRuns(samples: Float32Array, diar: SherpaDiarSegment[]): Promise<SpeakerRun[]> {
+      const duration = samples.length / SAMPLE_RATE
+      const tick = () => new Promise<void>((r) => setImmediate(r))
+      if (diar.length === 0) { await tick(); return [{ start: 0, end: duration, speaker: speakers!.assign(embed(samples), duration) }] }
+      const clusters = new Map<number, SherpaDiarSegment[]>()
+      for (const d of [...diar].sort((a, b) => a.start - b.start)) clusters.set(d.speaker, [...(clusters.get(d.speaker) ?? []), d])
+      const seconds = (segs: SherpaDiarSegment[]) => segs.reduce((n, d) => n + d.end - d.start, 0)
+      const runs: SpeakerRun[] = []
+      for (const segs of [...clusters.values()].sort((a, b) => seconds(b) - seconds(a))) {
+        // Its runs' audio back to back, capped (embed() caps again).
+        const parts = segs.map((d) => samples.subarray(Math.round(d.start * SAMPLE_RATE), Math.round(d.end * SAMPLE_RATE)))
+        const audio = new Float32Array(Math.min(parts.reduce((n, p) => n + p.length, 0), EMBED_MAX_S * SAMPLE_RATE))
+        let at = 0
+        for (const p of parts) { if (at >= audio.length) break; audio.set(p.subarray(0, audio.length - at), at); at += p.length }
+        await tick()
+        const speaker = speakers!.assign(embed(audio), seconds(segs))
+        for (const d of segs) runs.push({ start: d.start, end: d.end, speaker })
+      }
+      return runs
+    }
+
     const owner: Owner = {
-      done(job, result) {
+      wantsSpeakers: () => speakers !== null && !stopped,
+      async done(job, result, diar) {
+        const text = (result.text ?? '').trim()
+        // Labelled before inFlight drops: end() must not resolve while this
+        // segment's finals are still being computed.
+        let pieces: SpeakerPiece[] | null = null
+        if (text && diar && !stopped) {
+          try {
+            pieces = splitBySpeakerRuns(text, result.tokens, result.timestamps, await speakerRuns(job.samples, diar), job.samples.length / SAMPLE_RATE)
+          } catch (err) {
+            failStream(new SttError('engine', `speaker labelling failed: ${errMsg(err)}`))
+          }
+        }
         pendingSamples -= job.samples.length
         inFlight--
         if (!stopped) {
           segments++
           decodedSamples += job.samples.length
-          const text = (result.text ?? '').trim()
-          if (text) handlers.onFinal({ start: round3(job.start / SAMPLE_RATE), end: round3(job.end / SAMPLE_RATE), text, lang: (result.lang ?? '').replace(/<\|([^|]*)\|>/g, '$1') })
+          const lang = (result.lang ?? '').replace(/<\|([^|]*)\|>/g, '$1')
+          const start = job.start / SAMPLE_RATE
+          const end = job.end / SAMPLE_RATE
+          if (pieces) {
+            for (const p of pieces) {
+              if (!labels.has(p.speaker)) labels.set(p.speaker, String(labels.size))
+              handlers.onFinal({ start: round3(start + p.start), end: round3(Math.min(start + p.end, end)), text: p.text, lang, speaker: labels.get(p.speaker)! })
+            }
+          } else if (text) handlers.onFinal({ start: round3(start), end: round3(end), text, lang })
         }
         checkDrain()
       },
@@ -330,7 +471,7 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
         dropQueued()
         checkDrain()
       },
-      stats: () => ({ segments, audioSeconds: round3(decodedSamples / SAMPLE_RATE) }),
+      stats: () => ({ segments, audioSeconds: round3(decodedSamples / SAMPLE_RATE), ...(speakers ? { speakers: labels.size } : {}) }),
     }
   }
 

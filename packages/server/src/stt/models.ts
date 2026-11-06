@@ -1,6 +1,7 @@
 /**
  * On-device STT model files (`stt-local`): SenseVoice-Small int8 + Silero VAD
- * v4 under `~/.halo/global/stt-models/`, downloaded on demand.
+ * v4 + the speaker-diarization pair (pyannote segmentation 3.0 int8, CAM++)
+ * under `~/.halo/global/stt-models/`, downloaded on demand as one set.
  *
  * State machine: `missing` → `downloading` (received / total) → `ready`, or
  * `error` once every source of some file failed; the next trigger (a WS
@@ -55,6 +56,9 @@ function httpGet(url: string, headers: Record<string, string>, signal: AbortSign
 export const SENSE_VOICE_MODEL = 'sense-voice-zh-en-ja-ko-yue-2024-07-17/model.int8.onnx'
 export const SENSE_VOICE_TOKENS = 'sense-voice-zh-en-ja-ko-yue-2024-07-17/tokens.txt'
 export const SILERO_VAD_MODEL = 'silero-vad-v4/silero_vad.onnx'
+/** Speaker diarization (`speakers=1` streams only): pyannote segmentation + CAM++ embeddings. */
+export const PYANNOTE_SEG_MODEL = 'pyannote-segmentation-3-0/model.int8.onnx'
+export const CAMPLUS_MODEL = 'campplus-zh-en-advanced/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx'
 
 export interface SttModelFile {
   /** Path relative to the models dir. */
@@ -97,6 +101,25 @@ export const STT_MODEL_FILES: SttModelFile[] = [
     sources: [
       { name: 'huggingface', url: 'https://huggingface.co/csukuangfj/vad/resolve/fba88cd2e921609e7675c3aaf51e0b9b295da4bc/silero_vad.onnx' },
       { name: 'modelscope', url: 'https://www.modelscope.cn/api/v1/models/pengzhendong/silero-vad/repo?Revision=master&FilePath=v4/silero_vad.onnx' },
+    ],
+  },
+  {
+    path: PYANNOTE_SEG_MODEL,
+    size: 1540506,
+    sha256: 'd582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d',
+    sources: [
+      { name: 'huggingface', url: 'https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/9403a6902bb58e3d5ae8c7e77c3422de279db2e0/model.int8.onnx' },
+      { name: 'modelscope', url: 'https://www.modelscope.cn/api/v1/models/pengzhendong/sherpa-onnx-pyannote-segmentation-3-0/repo?Revision=master&FilePath=model.int8.onnx' },
+    ],
+  },
+  {
+    path: CAMPLUS_MODEL,
+    size: 28281164,
+    sha256: 'aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2',
+    sources: [
+      { name: 'huggingface', url: 'https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx' },
+      { name: 'modelscope', url: 'https://www.modelscope.cn/api/v1/models/lijiu09/speaker-embedding-models/repo?Revision=master&FilePath=3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx' },
+      { name: 'github', url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx' },
     ],
   },
 ]

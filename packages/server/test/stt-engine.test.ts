@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createSttEngine, MAX_PENDING_AUDIO_S, MAX_QUEUED_SEGMENTS, PAD_AFTER_S, PAD_BEFORE_S, SttError, type SherpaModule, type SttFinal } from '../src/stt/engine.js'
+import { createSttEngine, MAX_PENDING_AUDIO_S, MAX_QUEUED_SEGMENTS, PAD_AFTER_S, PAD_BEFORE_S, SttError, type SherpaDiarSegment, type SherpaModule, type SherpaResult, type SttFinal } from '../src/stt/engine.js'
 
 /**
  * stt-local engine queue + segment handling with a fake sherpa module (no
@@ -9,22 +9,32 @@ import { createSttEngine, MAX_PENDING_AUDIO_S, MAX_QUEUED_SEGMENTS, PAD_AFTER_S,
  *  - segments padded PAD_BEFORE_S / PAD_AFTER_S (clamped to the stream);
  *  - `<|zh|>` → `zh`, empty text dropped;
  *  - > MAX_QUEUED_SEGMENTS waiting or > MAX_PENDING_AUDIO_S per stream → busy;
- *  - abort drops the stream's queued segments; a load failure → engine.
+ *  - abort drops the stream's queued segments; a load failure → engine;
+ *  - `speakers`: diarizer loaded lazily, once; finals split per speaker run
+ *    with per-connection labels; short clusters join the nearest speaker;
+ *    token/text mismatch and no diarization fall back to one final.
  */
 
 const SR = 16000
 
-/** Fake sherpa: VAD emits a segment when a run of non-zero windows ends (or on flush). */
-function fakeSherpa(results: (samples: number) => { text: string; lang: string } = () => ({ text: 'x', lang: '<|zh|>' })) {
+/** Speaker of a fake sample: tones are written at amplitude 1000 × level. */
+const levelOf = (x: number) => Math.round(x * 32768 / 1000)
+
+/** Fake sherpa: VAD emits a segment when a run of non-zero windows ends (or on flush).
+ *  Diarizer: one local cluster per tone level (numbered high level first, so
+ *  local ids differ from the connection's); embedding of level k = the unit
+ *  vector at k × 60° (neighbours cos 0.5, below the match threshold). */
+function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResult = () => ({ text: 'x', lang: '<|zh|>' })) {
   const decodes: Array<{ samples: number; release: () => void }> = []
+  const diar = { ctor: 0, calls: 0, embeds: [] as number[], fail: null as Error | null, failProcess: null as Error | null, segments: null as SherpaDiarSegment[] | null }
   let manual = false
   const mod: SherpaModule = {
     OfflineRecognizer: {
       async createAsync() {
         return {
           createStream() {
-            let n = 0
-            return { acceptWaveform: (w: { samples: Float32Array }) => { n = w.samples.length }, get n() { return n } } as never
+            let wave = new Float32Array(0)
+            return { acceptWaveform: (w: { samples: Float32Array }) => { wave = w.samples }, get n() { return wave.length }, get wave() { return wave } } as never
           },
           decodeAsync(stream: { n: number }) {
             return new Promise<void>((resolve) => {
@@ -32,7 +42,7 @@ function fakeSherpa(results: (samples: number) => { text: string; lang: string }
               if (!manual) resolve()
             })
           },
-          getResult: (stream: { n: number }) => results(stream.n),
+          getResult: (stream: { n: number; wave: Float32Array }) => results(stream.n, stream.wave),
         } as never
       },
     },
@@ -52,8 +62,68 @@ function fakeSherpa(results: (samples: number) => { text: string; lang: string }
       pop() { this.out.shift() }
       flush() { if (this.runStart >= 0) this.close() }
     } as never,
+    OfflineSpeakerDiarization: class {
+      handle = { fake: true }
+      constructor() {
+        diar.ctor++
+        if (diar.fail) throw diar.fail
+      }
+    } as never,
+    SpeakerEmbeddingExtractor: class {
+      createStream() {
+        let wave = new Float32Array(0)
+        return { acceptWaveform: (w: { samples: Float32Array }) => { wave = w.samples }, inputFinished() {}, get wave() { return wave } }
+      }
+      compute(s: { wave: Float32Array }) {
+        diar.embeds.push(s.wave.length)
+        const k = levelOf(s.wave.find((x) => x !== 0) ?? 0)
+        return Float32Array.from([Math.cos(k * Math.PI / 3), Math.sin(k * Math.PI / 3)])
+      }
+    } as never,
+    async offlineSpeakerDiarizationProcessAsync(_handle, samples, progress) {
+      expect(typeof progress).toBe('function')
+      diar.calls++
+      if (diar.failProcess) throw diar.failProcess
+      if (diar.segments) return diar.segments
+      const out: SherpaDiarSegment[] = []
+      for (let i = 0; i < samples.length;) {
+        const k = levelOf(samples[i])
+        let j = i
+        while (j < samples.length && levelOf(samples[j]) === k) j++
+        if (k > 0) out.push({ start: i / SR, end: j / SR, speaker: 9 - k })
+        i = j
+      }
+      return out
+    },
   }
-  return { mod, decodes, hold: () => { manual = true } }
+  return { mod, decodes, diar, hold: () => { manual = true } }
+}
+
+/** Fake SenseVoice for tone input: one token per 0.25 s of tone — `a` for
+ *  level 1, `b` for 2… — timed at the quarter's middle (where its level is
+ *  read), then `。`. */
+function toneTokens(_n: number, wave: Float32Array): SherpaResult {
+  const tokens: string[] = []
+  const timestamps: number[] = []
+  for (let i = SR / 8; i < wave.length; i += SR / 4) {
+    const k = levelOf(wave[i])
+    if (k > 0) { tokens.push(String.fromCharCode(96 + k)); timestamps.push(i / SR) }
+  }
+  tokens.push('。')
+  timestamps.push(wave.length / SR - 0.1)
+  return { text: tokens.join(''), lang: '<|zh|>', tokens, timestamps }
+}
+
+/** Back-to-back tones `[seconds, level]` (one VAD segment), then `gap` s of silence. */
+function voices(parts: Array<[number, number]>, gap = 1): Buffer {
+  const total = parts.reduce((n, [s]) => n + s, 0)
+  const b = Buffer.alloc(Math.round((total + gap) * SR) * 2)
+  let at = 0
+  for (const [s, k] of parts) {
+    for (let i = 0; i < Math.round(s * SR); i++) b.writeInt16LE(1000 * k, (at + i) * 2)
+    at += Math.round(s * SR)
+  }
+  return b
 }
 
 /** `seconds` of tone then `gap` s of silence, as s16le. */
@@ -63,12 +133,12 @@ function speech(seconds: number, gap = 1): Buffer {
   return b
 }
 
-async function open(fake = fakeSherpa()) {
+async function open(fake = fakeSherpa(), speakers = false) {
   const engine = createSttEngine({ loadSherpa: async () => fake.mod, models: { filePath: (p) => p } })
-  await engine.load()
+  await engine.load({ speakers })
   const finals: SttFinal[] = []
   const errors: SttError[] = []
-  const stream = engine.open({ onFinal: (f) => finals.push(f), onError: (e) => errors.push(e) })
+  const stream = engine.open({ onFinal: (f) => finals.push(f), onError: (e) => errors.push(e) }, { speakers })
   return { engine, stream, finals, errors, fake }
 }
 
@@ -169,5 +239,136 @@ describe('stt engine', () => {
     fail = false
     await engine.load()
     expect(() => engine.open({ onFinal: () => {}, onError: () => {} })).not.toThrow()
+  })
+})
+
+describe('stt engine speakers', () => {
+  it('without speakers: no diarizer, finals carry no speaker (even on a speakers-loaded engine)', async () => {
+    const fake = fakeSherpa(toneTokens)
+    const plain = await open(fake)
+    plain.stream.write(voices([[1.5, 1], [1.5, 2]]))
+    await plain.stream.end()
+    expect(fake.diar.ctor).toBe(0)
+    expect(plain.finals).toHaveLength(1)
+    expect(Object.keys(plain.finals[0]).sort()).toEqual(['end', 'lang', 'start', 'text'])
+    expect(plain.stream.stats()).not.toHaveProperty('speakers')
+
+    await plain.engine.load({ speakers: true })
+    const finals: SttFinal[] = []
+    const s = plain.engine.open({ onFinal: (f) => finals.push(f), onError: () => {} })
+    s.write(voices([[1.5, 1], [1.5, 2]]))
+    await s.end()
+    expect(fake.diar.calls).toBe(0)
+    expect(finals.map((f) => f.speaker)).toEqual([undefined])
+  })
+
+  it('loads the diarizer lazily, once; open({speakers}) before that is an engine error', async () => {
+    const fake = fakeSherpa()
+    const engine = createSttEngine({ loadSherpa: async () => fake.mod, models: { filePath: (p) => p } })
+    await engine.load()
+    expect(fake.diar.ctor).toBe(0)
+    expect(() => engine.open({ onFinal: () => {}, onError: () => {} }, { speakers: true })).toThrow(SttError)
+    await Promise.all([engine.load({ speakers: true }), engine.load({ speakers: true })])
+    await engine.load({ speakers: true })
+    expect(fake.diar.ctor).toBe(1)
+    expect(() => engine.open({ onFinal: () => {}, onError: () => {} }, { speakers: true })).not.toThrow()
+  })
+
+  it('a diarizer load failure is an engine error on that stream only, retried next time', async () => {
+    const fake = fakeSherpa()
+    fake.diar.fail = new Error('model.int8.onnx: no such file')
+    const engine = createSttEngine({ loadSherpa: async () => fake.mod, models: { filePath: (p) => p } })
+    await expect(engine.load({ speakers: true })).rejects.toMatchObject({ code: 'engine', message: expect.stringContaining('no such file') })
+    // The recognizer did load: plain streams keep working.
+    expect(() => engine.open({ onFinal: () => {}, onError: () => {} })).not.toThrow()
+    fake.diar.fail = null
+    await engine.load({ speakers: true })
+    expect(fake.diar.ctor).toBe(2)
+  })
+
+  it('splits a segment into one final per speaker run, labels in order of appearance', async () => {
+    const { stream, finals, errors } = await open(fakeSherpa(toneTokens), true)
+    stream.write(voices([[1.5, 1], [1.5, 2], [1.5, 1]]))
+    await stream.end()
+    expect(errors).toEqual([])
+    // One VAD segment (from 0, so no pre-pad) → three non-overlapping finals.
+    expect(finals.map(({ speaker, text }) => ({ speaker, text }))).toEqual([
+      { speaker: '0', text: 'aaaaaa' },
+      { speaker: '1', text: 'bbbbbb' },
+      { speaker: '0', text: 'aaaaaa。' },
+    ])
+    expect(finals.map((f) => [f.start, f.end])).toEqual([[0, 1.5], [1.5, 3], [3, finals[2].end]])
+    expect(finals[2].end).toBeGreaterThan(4.5)
+    expect(finals.every((f) => f.lang === 'zh')).toBe(true)
+    expect(stream.stats().speakers).toBe(2)
+  })
+
+  it('keeps labels across segments of one connection; a new connection starts over', async () => {
+    const { engine, stream, finals } = await open(fakeSherpa(toneTokens), true)
+    stream.write(voices([[2, 2]]))
+    stream.write(voices([[2, 1], [2, 2]]))
+    await stream.end()
+    // Letter = tone level; the later segment's pre-pad shifts the fake's
+    // 0.25 s token grid, so counts aren't asserted.
+    const shape = (fs: SttFinal[]) => fs.map((f) => `${f.speaker}:${f.text.replace(/(.)\1+/g, '$1')}`)
+    expect(shape(finals)).toEqual(['0:b。', '1:a', '0:b。'])
+    const other: SttFinal[] = []
+    const s2 = engine.open({ onFinal: (f) => other.push(f), onError: () => {} }, { speakers: true })
+    s2.write(voices([[2, 1]]))
+    await s2.end()
+    expect(other.map((f) => f.speaker)).toEqual(['0'])
+  })
+
+  it('a cluster under 1 s joins the nearest speaker instead of founding one', async () => {
+    const { stream, finals } = await open(fakeSherpa(toneTokens), true)
+    stream.write(voices([[3, 1], [0.5, 3]]))
+    stream.write(voices([[3, 1], [1.5, 3]]))
+    await stream.end()
+    // The short `c` cluster stays with speaker 0; a long one founds speaker 1.
+    expect(finals.map((f) => f.speaker)).toEqual(['0', '0', '1'])
+    expect(finals[0].text).toBe('aaaaaaaaaaaacc。')
+    expect(finals[1].text).toMatch(/^a+c?$/)
+    expect(finals[2].text).toMatch(/^c+。$/)
+  })
+
+  it('tokens that do not spell the text → whole text under the speaker with the most audio', async () => {
+    const { stream, finals } = await open(fakeSherpa(() => ({ text: ' 你好，世界。 ', lang: '<|zh|>', tokens: ['你', '好'], timestamps: [0.1, 0.5] })), true)
+    stream.write(voices([[1, 1], [2, 2]]))
+    await stream.end()
+    expect(finals).toHaveLength(1)
+    expect(finals[0]).toMatchObject({ start: 0, text: '你好，世界。', speaker: '0' })
+    expect(finals[0].end).toBeGreaterThan(3)
+  })
+
+  it('nothing diarized → the whole segment is one final under one speaker', async () => {
+    const fake = fakeSherpa(toneTokens)
+    fake.diar.segments = []
+    const { stream, finals } = await open(fake, true)
+    stream.write(voices([[1.5, 1], [1.5, 2]]))
+    await stream.end()
+    expect(finals.map((f) => [f.speaker, f.text])).toEqual([['0', 'aaaaaabbbbbb。']])
+  })
+
+  it('caps the audio fed to one embedding at 6 s; skips diarization for empty text', async () => {
+    let text = true
+    const fake = fakeSherpa((n, w) => (text ? toneTokens(n, w) : { text: '', lang: '<|nospeech|>' }))
+    const { stream, finals } = await open(fake, true)
+    stream.write(voices([[10, 1]]))
+    await vi.waitFor(() => expect(finals).toHaveLength(1))
+    expect(fake.diar.embeds).toEqual([6 * SR])
+    text = false
+    stream.write(voices([[1, 1]]))
+    await stream.end()
+    expect(fake.diar.calls).toBe(1)
+  })
+
+  it('a diarization failure fails the stream with engine', async () => {
+    const fake = fakeSherpa(toneTokens)
+    fake.diar.failProcess = new Error('onnx run failed')
+    const { stream, finals, errors } = await open(fake, true)
+    stream.write(voices([[1, 1]]))
+    await stream.end()
+    expect(finals).toEqual([])
+    expect(errors.map((e) => [e.code, e.message])).toEqual([['engine', 'speaker diarization failed: onnx run failed']])
   })
 })

@@ -1,5 +1,8 @@
 /**
- * On-device speech-to-text — WS `/api/stt/stream?ext=<id>`.
+ * On-device speech-to-text — WS `/api/stt/stream?ext=<id>[&speakers=1]`.
+ * With `speakers=1` (only that value) every `final` carries `speaker`
+ * ("0", "1"… per connection) and a segment spoken by several people arrives
+ * as one `final` per speaker run; without it frames are unchanged.
  *
  * A canvas extension declaring capability `stt-local` streams raw PCM
  * (s16le mono 16 kHz) here; the server cuts it with Silero VAD and decodes
@@ -54,7 +57,10 @@ export function createSttProxy(deps: { models?: Pick<SttModelManager, 'status' |
   })
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    const extId = parseQuery(req).get('ext')!
+    const q = parseQuery(req)
+    const extId = q.get('ext')!
+    // Speaker labels only on exactly `1`: anything else is today's frames.
+    const speakers = q.get('speakers') === '1'
     const openedAt = Date.now()
     let closed = false
     let failed = false
@@ -83,13 +89,13 @@ export function createSttProxy(deps: { models?: Pick<SttModelManager, 'status' |
 
     async function startEngine(): Promise<void> {
       try {
-        await engine.load()
+        await engine.load({ speakers })
         if (closed || failed || ended) return
         stream = engine.open({
           // Recognized text goes to the client only — never to the log.
           onFinal: (f) => send({ type: 'final', ...f }),
           onError: (err) => fail(err.code, err.message),
-        })
+        }, { speakers })
       } catch (err) {
         if (err instanceof SttError) fail(err.code, err.message)
         else fail('io', err instanceof Error ? err.message : String(err))
@@ -111,7 +117,7 @@ export function createSttProxy(deps: { models?: Pick<SttModelManager, 'status' |
       else if (s.state === 'error') fail('model', s.message ?? 'model download failed')
     }
 
-    console.log(`[STT] stream open ext=${extId}`)
+    console.log(`[STT] stream open ext=${extId}${speakers ? ' speakers=1' : ''}`)
 
     ws.on('message', (data, isBinary) => {
       if (ended || failed) return
@@ -140,7 +146,7 @@ export function createSttProxy(deps: { models?: Pick<SttModelManager, 'status' |
       // Client gone → its segments that haven't started decoding are dropped.
       stream?.abort()
       const st = stream?.stats()
-      console.log(`[STT] stream closed after ${((Date.now() - openedAt) / 1000).toFixed(1)}s ext=${extId}${st ? ` segments=${st.segments} audio=${st.audioSeconds.toFixed(1)}s` : ''}`)
+      console.log(`[STT] stream closed after ${((Date.now() - openedAt) / 1000).toFixed(1)}s ext=${extId}${st ? ` segments=${st.segments} audio=${st.audioSeconds.toFixed(1)}s${st.speakers !== undefined ? ` speakers=${st.speakers}` : ''}` : ''}`)
     })
 
     const initial = models.status()

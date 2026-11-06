@@ -53,15 +53,16 @@ const models = {
 }
 
 // ── engine stub ──
-interface StubStream { bytes: number; ended: boolean; aborted: boolean; onFinal: (f: Final) => void; onError: (e: InstanceType<typeof SttError>) => void }
+interface StubStream { bytes: number; ended: boolean; aborted: boolean; speakers?: boolean; onFinal: (f: Final) => void; onError: (e: InstanceType<typeof SttError>) => void }
 let streams: StubStream[]
 let loadResult: () => Promise<void>
+let loadOpts: Array<{ speakers?: boolean } | undefined>
 /** Finals the stub emits on end() (one decode tick apart), before resolving. */
 let finalsOnEnd: Final[]
 const engine: Engine = {
-  load: () => loadResult(),
-  open(handlers) {
-    const s: StubStream = { bytes: 0, ended: false, aborted: false, ...handlers }
+  load: (opts) => { loadOpts.push(opts); return loadResult() },
+  open(handlers, opts) {
+    const s: StubStream = { bytes: 0, ended: false, aborted: false, speakers: opts?.speakers, ...handlers }
     streams.push(s)
     return {
       write: (pcm) => { s.bytes += pcm.length },
@@ -103,6 +104,7 @@ beforeEach(() => {
   onEnsure = () => pushModel({ state: 'downloading', received: 0, total: 100 })
   streams = []
   loadResult = async () => {}
+  loadOpts = []
   finalsOnEnd = []
 })
 
@@ -288,5 +290,35 @@ describe('stt streaming', () => {
     await vi.waitFor(() => expect(streams[0].aborted).toBe(true))
     const r = await run(connect(), (f, s) => { if (f.type === 'ready') s.send(END) })
     expect(r.code).toBe(1000)
+  })
+})
+
+describe('stt speakers query', () => {
+  it('speakers=1 → engine loaded and opened with speakers; speaker forwarded on finals', async () => {
+    finalsOnEnd = [{ ...final1, speaker: '0' }, { ...final2, speaker: '1' }]
+    const { frames, code } = await run(connect('ext=voice&speakers=1'), (f, s) => { if (f.type === 'ready') s.send(END) })
+    expect(code).toBe(1000)
+    expect(loadOpts).toEqual([{ speakers: true }])
+    expect(streams[0].speakers).toBe(true)
+    expect(frames.slice(2)).toEqual([
+      { type: 'final', ...final1, speaker: '0' },
+      { type: 'final', ...final2, speaker: '1' },
+    ])
+  })
+
+  it.each(['ext=voice', 'ext=voice&speakers=0', 'ext=voice&speakers=true', 'ext=voice&speakers='])('%s → no speakers', async (query) => {
+    finalsOnEnd = [final1]
+    const { frames } = await run(connect(query), (f, s) => { if (f.type === 'ready') s.send(END) })
+    expect(loadOpts).toEqual([{ speakers: false }])
+    expect(streams[0].speakers).toBe(false)
+    expect(frames.at(-1)).toEqual({ type: 'final', ...final1 })
+  })
+
+  it('a diarizer load failure on speakers=1 → error engine + 1011', async () => {
+    loadResult = async () => { throw new SttError('engine', 'speaker labelling unavailable: no such file') }
+    const { frames, code } = await run(connect('ext=voice&speakers=1'))
+    expect(code).toBe(1011)
+    expect(frames.at(-1)).toEqual({ type: 'error', code: 'engine', message: 'speaker labelling unavailable: no such file' })
+    expect(streams).toHaveLength(0)
   })
 })
