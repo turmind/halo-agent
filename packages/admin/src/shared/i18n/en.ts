@@ -745,7 +745,7 @@ export const en: Record<string, string> = {
   'cron.form.active.hint': 'Fires only inside this window (chosen timezone; until is exclusive). Fires outside it are skipped silently. To pause until a date, set “from”. Run now ignores it.',
   'cron.form.session': 'Session',
   'cron.form.session.placeholder': "Empty = the job's own session (same id as the job)",
-  'cron.form.session.hint': "Pick an existing session to continue its conversation: it keeps its own agent and access level (the Agent above is locked to it). A scheduled run is skipped while that session is busy; a webhook job's events run after a turn in progress, and wait while a relay / A2A task or another job's run holds the session; a message you send there mid-run joins the run, which pushes the reply of its last turn.",
+  'cron.form.session.hint': "Pick an existing session to continue its conversation: it keeps its own agent and access level (the Agent above is locked to it). A scheduled run is skipped while that session is busy; a webhook job's events join a turn in progress (its reply is what gets pushed), and wait while a relay / A2A task or another job's run holds the session; a message you send there mid-run joins the run, which pushes the reply of its last turn.",
   'cron.form.agent.locked': 'Session {id} already ran with {agent}. Delete it or turn on "new session every run" to change the agent.',
   'cron.form.agent.mismatch': 'This job\'s session {id} runs agent {agent}; runs will fail until you pick agent {agent}, a new session, or "new session every run".',
   'cron.form.stateless': 'Session mode',

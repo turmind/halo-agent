@@ -106,7 +106,8 @@ any HTTP sender). Use it for "when X happens, run this".
   message in the session, marked as data. `--prompt` is optional on a
   webhook job: left out, a run delivers the events alone (and run-now has
   nothing to run). Session idle → a new turn starts.
-  A user's turn running in it → the run starts right after that turn.
+  A user's turn running in it → the events join that turn at its next step,
+  and its reply is what the run pushes.
   Session held by another owner (a relay or A2A task, another job's run) →
   the events stay pending and run once it releases the session. Events that
   arrive while the job's own run is in flight join that run.
@@ -145,7 +146,7 @@ agent then sees that session's history). Rules the user should hear once:
   match an existing session's agent (the helper refuses otherwise);
 - a scheduled / run-now fire is **skipped** while that session is busy (a
   turn running in it, or held by another owner); a webhook job's accepted
-  events are never skipped — they run after a user's turn, and wait out another owner
+  events are never skipped — they join a user's turn in progress, and wait out another owner
   (see *How an event enters the session* above);
 - if the user chats in that session while a run is in flight, the message
   joins the run, and the run pushes the reply of its last turn.

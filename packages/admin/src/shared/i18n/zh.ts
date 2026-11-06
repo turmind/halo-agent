@@ -745,7 +745,7 @@ export const zh: Record<string, string> = {
   'cron.form.active.hint': '只在这个时间段内按调度触发（按所选时区，止时刻不含）；段外的触发静默跳过。想暂停到某天，就把「生效起」设成那天。「立即运行」不受限制。',
   'cron.form.session': '会话',
   'cron.form.session.placeholder': '留空 = 任务自己的会话（id 与任务 id 相同）',
-  'cron.form.session.hint': '选一个已有会话，任务就在其中继续对话：沿用该会话自己的 agent 和访问级别（上面的 Agent 会锁定为它）。该会话忙时定时运行会跳过；webhook 任务的事件会排在正在跑的回合之后，会话被 relay / A2A 任务或别的任务的运行占着时则等它释放；运行期间你在里面发的消息会并入本次运行，推送的是最后一轮的回复。',
+  'cron.form.session.hint': '选一个已有会话，任务就在其中继续对话：沿用该会话自己的 agent 和访问级别（上面的 Agent 会锁定为它）。该会话忙时定时运行会跳过；webhook 任务的事件会并入正在跑的回合（推送的是那一轮的回复），会话被 relay / A2A 任务或别的任务的运行占着时则等它释放；运行期间你在里面发的消息会并入本次运行，推送的是最后一轮的回复。',
   'cron.form.agent.locked': '会话 {id} 已用 {agent} 运行过。删除该会话或开启「每次运行新建会话」后才能更换 Agent。',
   'cron.form.agent.mismatch': '此任务的会话 {id} 运行的是 Agent {agent}；在改选 Agent {agent}、换一个会话或开启「每次运行新建会话」之前，每次运行都会失败。',
   'cron.form.stateless': '会话模式',
