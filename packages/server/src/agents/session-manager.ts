@@ -1381,7 +1381,7 @@ export class SessionManager implements SessionManagerInternals {
    *  open admin gets a `chat:system` frame now and a mid-turn channel
    *  responder relays it. Used by the evo ticker's auto-apply notice. */
   notifySystem(sessionId: string, text: string): void {
-    this.emitEvent(sessionId, { type: 'system', text })
+    this.emitEvent(sessionId, { type: 'system', text, outOfBand: true })
   }
 
   replaceMessageLog(sessionId: string, messages: SessionMessage[]): void {
@@ -2909,6 +2909,11 @@ export class SessionManager implements SessionManagerInternals {
       || !config.evolution.triggers.preCompact
       || session.parentId
     ) return
+    // A cron run's turn (reply_to `{cron}`) teaches nothing: nobody took part
+    // in it — a stored job prompt and what the run fetched — yet as a full
+    // session it would clear the L2/L3 source gate. /evo on it still works.
+    const owed = readReplyTo(this.db, session.id)
+    if (owed && 'cron' in owed) return
     try {
       const result = enqueueEvoRun({
         sm: this,

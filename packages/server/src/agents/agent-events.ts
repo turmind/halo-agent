@@ -86,6 +86,11 @@ export interface AgentSessionEvent {
    *  `compacted` event; this is the WS layer's cue to emit the matching
    *  `compact:done` for the fallback, so the admin leaves its compacting state. */
   compactEnd?: boolean
+  /** For `system` events: an out-of-band notice from outside the session's
+   *  turn (`notifySystem` — the evo ticker's auto-apply line). Chat UIs and
+   *  channel responders show it like any notice; a cron run and `halo cli`
+   *  leave it out of the turn's printed / dispatched text. */
+  outOfBand?: boolean
 }
 
 /** @deprecated Use AgentSessionEvent — kept as alias during migration */

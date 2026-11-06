@@ -58,9 +58,10 @@ export const evolutionRuns = sqliteTable('evolution_runs', {
    *  and filter it without reading every run dir. */
   hasObservation: integer('has_observation', { mode: 'boolean' }).notNull().default(false),
   /** Access level of the source session at enqueue ('full' | 'workspace' |
-   *  'readonly'). Only a full source may be auto-applied (L2/L3): a lesser
-   *  session's conversation must not rewrite prompts without a reviewer.
-   *  Pre-existing rows read null → never auto-applied. */
+   *  'readonly'), or 'webhook' for a session that took webhook events. Only
+   *  a full source may be auto-applied (L2/L3): a lesser session's (or an
+   *  outside payload's) conversation must not rewrite prompts without a
+   *  reviewer. Pre-existing rows read null → never auto-applied. */
   sourceAccess: text('source_access'),
 })
 

@@ -62,7 +62,7 @@ Server flow (synchronous, ~10ms):
    - Write `source-snapshot.json` (frozen `session.agent.messages`)
    - Write `tool-flow.md` (tool_result-stripped Markdown view for skimming)
    - Write `meta.json` (metadata: id, triggerKind, sourceSession, userHint, workspacePath, createdAt)
-   - Record the source session's persisted access level in `evolution_runs.source_access` (null → `full`, the session-agent-builder default) — the L2/L3 source gate reads it
+   - Record the source session's persisted access level in `evolution_runs.source_access` (null → `full`, the session-agent-builder default) — the L2/L3 source gate reads it. A session that was ever handed a cron webhook event (a `cron_events` row with its `session_id`, any state) records `webhook` instead, at any access level
    - Write `evo-context.json` (snapshot of prompt surface at trigger time: assembled system prompt, all prompt files, agent/skill listings)
 4. INSERT `evolution_runs` row with `status='pending'`, `trigger_kind='note'` (internal trigger id keeps the old name; only the user-visible command was renamed to `/evo`).
 5. Reply via `chat:system`: "📝 Queued for evaluation".
@@ -73,7 +73,7 @@ Server flow (synchronous, ~10ms):
 
 Compaction only sets a per-session `compactedThisTurn` flag; `SessionManager.enqueueEvoForCompactedTurn()` consumes it once the compact is done — at the end of `runSession` for auto-compact (mid-turn or turn-end), right after the summary lands for manual `/compact`. A turn that compacts several times therefore enqueues one run.
 
-1. Checks: `evolution.level` ≥ L1, `evolution.triggers.pre_compact` on, root session (`parentId` null).
+1. Checks: `evolution.level` ≥ L1, `evolution.triggers.pre_compact` on, root session (`parentId` null), and the session's `reply_to` is not `{cron}` — a cron run's own turn (a stored job prompt plus what the run fetched, nobody in the loop) teaches nothing and would otherwise pass the source gate as a full session. The flag is still consumed. `/evo` on that session is not affected.
 2. `enqueueEvoRun()` with `trigger='pre-compact'` snapshots the session's current `rawMessages`. Because the enqueue is deferred, that is the already-compacted history (summary + kept tail), not the pre-compact one.
 3. INSERT `evolution_runs` row.
 
@@ -237,7 +237,7 @@ Code: `evolution/auto-apply.ts` (pure, no agent-loader import — it runs in the
 
 **Three gates**, checked in this order; the first that fails is the recorded `reason`:
 
-1. **Source access** — the run's `source_access` must be `full`. A `workspace` / `readonly` session's conversation (a channel guest's, say) must not rewrite prompts every session runs on without a reviewer. Rows from before the column read null → never auto-applied. Reason `source_access`.
+1. **Source access** — the run's `source_access` must be `full`. A `workspace` / `readonly` session's conversation (a channel guest's, say) must not rewrite prompts every session runs on without a reviewer. Rows from before the column read null → never auto-applied. Reason `source_access`. A run recorded `webhook` (its session took cron webhook events — payloads from outside, see enqueue above) never auto-applies either, reason `source_webhook`, whichever trigger enqueued it.
 2. **Change category** — the sandbox is diffed against the live pre-patch surface (workspace file, else global for `agents/` / `skills/` / `prompts/` dirs the workspace doesn't override; byte-equal copies of a global folder drop out). Each changed file is `prompt`, `capability` or `manual`; the strictest wins. Prompt needs L2, capability L3, manual never. Reasons `level`, `no_effective_change`, `category_manual:<rel>(<why>)`.
 3. **Score** — `avg ≥ auto_apply_threshold`, `confidence: high`, `behavior ≥ 70`, `lint = 100`, all four `checks` passed (`patchInSandbox: pass`, `usedInDryRun: yes`, `probe: valid`, `probeLanguage: same`). The behavior floor matters: 100/50/100 averages 83. Reasons `score_missing`, `below_threshold`, `confidence`, `behavior_floor`, `lint_floor`, `checks:<name>`.
 

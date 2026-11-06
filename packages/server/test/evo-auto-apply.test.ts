@@ -390,6 +390,14 @@ describe('scoreGate / decideAutoApply', () => {
     // Below L2 the level is the reason, not the source.
     expect(decideAutoApply({ ...base, level: 'L1', sourceAccess: 'readonly' }).reason).toBe('level')
   })
+
+  it('source gate: a source that took webhook events never auto-applies, with its own reason', () => {
+    const base = { threshold: 80, classification: prompt, score: GOOD }
+    for (const level of ['L2', 'L3'] as const) {
+      expect(decideAutoApply({ ...base, level, sourceAccess: 'webhook' })).toEqual({ auto: false, reason: 'source_webhook' })
+    }
+    expect(decideAutoApply({ ...base, level: 'L1', sourceAccess: 'webhook' }).reason).toBe('level')
+  })
 })
 
 // ── Larger observation ─────────────────────────────────────────────────────
@@ -500,6 +508,14 @@ describe('wrapper: maybeAutoApply / autoApplyRecheck / failApply', () => {
       expect(hook(1, access)).toBe(false)
       expect(record()).toMatchObject({ auto: false, reason: 'source_access', sourceAccess: access })
     }
+    expect(db.select().from(evolutionApplies).all()).toHaveLength(0)
+    expect(runRow().status).toBe('running')
+  })
+
+  it('L3 + passing patch from a source that took webhook events: verdict source_webhook, nothing queued', () => {
+    level('L3')
+    expect(hook(1, 'webhook')).toBe(false)
+    expect(record()).toMatchObject({ auto: false, reason: 'source_webhook', sourceAccess: 'webhook' })
     expect(db.select().from(evolutionApplies).all()).toHaveLength(0)
     expect(runRow().status).toBe('running')
   })

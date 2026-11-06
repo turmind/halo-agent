@@ -855,6 +855,7 @@ export const en: Record<string, string> = {
   'evolution.auto.reason.level': 'capability changes (agent.yaml / SKILL.md frontmatter) auto-apply only at L3.',
   'evolution.auto.reason.source_access_unrecorded': 'the source session\'s access level was not recorded at enqueue (a run queued before this check existed) — only a full session\'s conversation may change prompts without a reviewer.',
   'evolution.auto.reason.source_access': 'the source session was not full-access ({access}) — only a full session\'s conversation may change prompts without a reviewer.',
+  'evolution.auto.reason.source_webhook': 'the source session took webhook events (a cron webhook job\'s) — its history carries payloads from outside, so a reviewer must see what it would change.',
   'evolution.auto.reason.no_effective_change': 'no effective change against the live workspace.',
   'evolution.auto.reason.category_manual': '{detail} always needs a reviewer.',
   'evolution.auto.reason.score_missing': 'no usable score.',

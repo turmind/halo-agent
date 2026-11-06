@@ -50,6 +50,12 @@ export function runEvents(runId: string): CronEvent[] {
   return getCronDb().select().from(cronEvents).where(and(eq(cronEvents.runId, runId), eq(cronEvents.state, 'injected'))).orderBy(asc(cronEvents.receivedAt)).all()
 }
 
+/** Was this session ever handed a webhook event (any state)? By session id
+ *  alone — an id shared across workspaces errs toward "yes". */
+export function sessionTookEvents(sessionId: string): boolean {
+  return getCronDb().select({ id: cronEvents.id }).from(cronEvents).where(eq(cronEvents.sessionId, sessionId)).limit(1).get() !== undefined
+}
+
 /** The run ended: its events end with it. */
 export function settleRunEvents(runId: string, ok: boolean): void {
   getCronDb().update(cronEvents).set({ state: ok ? 'done' : 'failed' }).where(and(eq(cronEvents.runId, runId), eq(cronEvents.state, 'injected'))).run()

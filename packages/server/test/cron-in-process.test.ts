@@ -120,6 +120,27 @@ describe('in-process cron run — happy path', () => {
     expect(JSON.parse(run.dispatchResults!)).toEqual([expect.objectContaining({ accountId: 'acc1', ok: true })])
   })
 
+  it('an out-of-band notice landing mid-run (evo auto-apply line) stays in chat, out of the output and the dispatch', async () => {
+    let release!: () => void
+    h.turns.push({ reply: 'the report', truncated: true, gate: new Promise<void>((r) => { release = r }) })
+    insertJob('cron-n', { targets: JSON.stringify([{ channelType: 'test-ch', accountId: 'acc1' }]) })
+    const seen: Array<{ text?: string; outOfBand?: boolean }> = []
+    h.seedSession('cron-n')
+    const off = h.sm.registerEventListener('cron-n', (e) => { if (e.type === 'system') seen.push({ text: e.text, outOfBand: e.outOfBand }) })
+    const runId = await runJob('cron-n', 'manual')
+    await until(() => h.inputs.length === 1)
+    h.sm.notifySystem('cron-n', '✨ Self-evolution auto-applied a change')
+    release()
+    await settled(runId)
+    off()
+    const run = getRun(runId)
+    expect(run.status).toBe('succeeded')
+    expect(run.output).toMatch(/^ℹ️ ⚠️ \[default\] Response truncated: output token limit reached\.\n\nthe report$/)
+    expect(sent).toEqual([{ accountId: 'acc1', text: run.output }])
+    // Still a live system event for the admin / channel responders.
+    expect(seen).toContainEqual({ text: '✨ Self-evolution auto-applied a change', outOfBand: true })
+  })
+
   it('every target failing downgrades the run to failed', async () => {
     insertJob('cron-e', { targets: JSON.stringify([{ channelType: 'test-ch', accountId: 'broken' }]) })
     const runId = await runJob('cron-e', 'manual')

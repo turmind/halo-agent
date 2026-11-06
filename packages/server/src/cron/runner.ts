@@ -535,8 +535,9 @@ function trackRun(base: Pick<RunCtx, 'runId' | 'jobId' | 'sessionId' | 'workspac
   ctx.unlisten = ctx.host.registerEventListener(ctx.sessionId, (e) => {
     if (e.taskId) return
     // Same filter as `halo cli` (cli.ts): root notices only — not a
-    // sub-session's (taskId) nor the drain-time sibling-status line (agentName).
-    if (e.type === 'system' && e.text && !e.agentName) ctx.notices.push(e.text)
+    // sub-session's (taskId) nor the drain-time sibling-status line (agentName)
+    // nor an out-of-band one landing mid-run (the evo auto-apply line).
+    if (e.type === 'system' && e.text && !e.agentName && !e.outOfBand) ctx.notices.push(e.text)
     else if (e.type === 'stream') {
       ctx.idleFinal = ''
       if (e.final && e.text) ctx.turnFinal += e.text

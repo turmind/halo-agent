@@ -855,6 +855,7 @@ export const zh: Record<string, string> = {
   'evolution.auto.reason.level': '能力类改动（agent.yaml / SKILL.md frontmatter）只在 L3 自动应用。',
   'evolution.auto.reason.source_access_unrecorded': '入队时未记录源会话的权限（该 run 早于这项检查），只有 full 会话的对话内容才能不经审核改动提示词。',
   'evolution.auto.reason.source_access': '源会话不是 full 权限（{access}），只有 full 会话的对话内容才能不经审核改动提示词。',
+  'evolution.auto.reason.source_webhook': '源会话接收过 webhook 事件（cron webhook 任务），历史里有外部传入的内容，改动必须人工审核。',
   'evolution.auto.reason.no_effective_change': '与当前工作区相比没有实际改动。',
   'evolution.auto.reason.category_manual': '{detail} 必须人工审核。',
   'evolution.auto.reason.score_missing': '没有可用的评分。',

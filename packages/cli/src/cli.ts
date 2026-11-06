@@ -170,8 +170,9 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
         }
         // Skip the drain-time sibling-status line (the only system event that
         // carries agentName): root bookkeeping, one per sub-agent report —
-        // a cron push from a fan-out director would fill up with them.
-        if (!event.taskId && !event.agentName) notices.push(event.text)
+        // a cron push from a fan-out director would fill up with them. An
+        // out-of-band notice (SessionManager.notifySystem) isn't this turn's.
+        if (!event.taskId && !event.agentName && !event.outOfBand) notices.push(event.text)
         break
       case 'complete':
         stopSpinner()

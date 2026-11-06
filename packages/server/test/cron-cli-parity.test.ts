@@ -122,6 +122,19 @@ describe('in-process cron output = halo cli stdout for the same events', () => {
     expect(run.output).toMatch(/^ℹ️ .+\n\nThe report\.$/)
   })
 
+  it('an out-of-band notice mid-run (notifySystem): left out by both', async () => {
+    let release!: () => void
+    h.turns.push({ reply: 'The report.', gate: new Promise<void>((r) => { release = r }) })
+    const { run, events } = await runInProcess('cron-p6', async () => {
+      await until(() => h.inputs.length === 1)
+      h.sm.notifySystem('cron-p6', 'evo applied something')
+      release()
+    })
+    expect(events.some((e) => e.type === 'system' && e.outOfBand)).toBe(true)
+    await expectSameText(run, events)
+    expect(run.output).toBe('The report.')
+  })
+
   it('a message queued mid-run: the drained turn resets, the last turn\'s reply', async () => {
     let release!: () => void
     h.turns.push({ reply: 'first answer', gate: new Promise<void>((r) => { release = r }) }, { reply: 'second answer' })
