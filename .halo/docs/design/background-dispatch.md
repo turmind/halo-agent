@@ -95,7 +95,7 @@ subscribe handler
     │                                              (other subscriptions untouched)
     ├─ Load UIState from SessionManager (or from file if not in memory)
     │
-    └─ Send state:snapshot carrying the full messageLog
+    └─ Send state:snapshot carrying the messageLog (minus tool_call / tool_result rows)
 ```
 
 ## When disconnect happens while background is still running

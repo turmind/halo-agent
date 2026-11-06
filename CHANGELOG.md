@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Admin: the panel's hashed scripts and styles (`/_next/static/`) are now sent with `Cache-Control: public, max-age=31536000, immutable`, so the browser (and a CDN in front of the server) keeps them instead of downloading them all again on every page load. `index.html`, the Monaco editor files and unknown paths are not cached this way. A file missing under `/_next/static/` (an open tab asking for another build's chunk) now gets a 404 instead of the panel's `index.html`, so a CDN doesn't keep that page as the chunk.
 - Chat: deleting a turn greys it out right away, also in long sessions. The server now sends only the ids of the deleted rows (`exchange:deleted`) instead of the whole session log again, and the panel re-renders only the rows that changed.
 - Admin: the WebSocket connection is compressed (permessage-deflate), and opening a session no longer sends its separate tool-call / tool-result rows — the chat already shows each tool call inside the reply. Opening a long session sends far less data. The session files on disk and the other channels are unchanged.
-- Admin: re-opening or re-loading a chat keeps the rows that didn't change instead of re-drawing the whole conversation.
+- Admin: when an open chat reconnects (or re-subscribes after a network drop), the rows that didn't change are kept instead of re-drawing the whole conversation. A chat tab already open from before the upgrade needs a reload to grey out deleted turns.
 
 ## [2.2.0] - 2026-11-06
 
