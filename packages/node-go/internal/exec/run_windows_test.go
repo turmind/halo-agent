@@ -104,12 +104,22 @@ func TestWindowsTreeHelper(t *testing.T) {
 	if mode == "" {
 		return
 	}
-	if mode == "parent" {
+	if mode == "parent" || mode == "background" {
 		child := osexec.Command(os.Args[0], "-test.run=^TestWindowsTreeHelper$")
 		child.Env = append(os.Environ(), "HALO_TEST_TREE=child")
 		child.Stdout, child.Stderr = os.Stdout, os.Stderr
 		if err := child.Start(); err != nil {
 			os.Exit(2)
+		}
+		if mode == "background" {
+			// Let the test retain a handle to the live child before this process
+			// and both shells exit. The child keeps both output pipes open.
+			for {
+				if _, err := os.Stat(os.Getenv("HALO_TEST_RELEASE")); err == nil {
+					os.Exit(0)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 		}
 		_ = child.Wait()
 		os.Exit(0)

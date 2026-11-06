@@ -162,8 +162,7 @@ func spawnGroup(ctx context.Context, cmd, cwd string, timeoutMs int64) (stdout, 
 	// 'close': process exited AND both pipes hit EOF.
 	closed := make(chan error, 1)
 	go func() {
-		wg.Wait()
-		closed <- c.Wait()
+		closed <- waitGroup(c, &wg, closeGroup)
 	}()
 	var timer <-chan time.Time
 	if timeoutMs != 0 { // `opts.timeout ? … : null`

@@ -25,15 +25,24 @@ func shellCommand(cmd string) *osexec.Cmd {
 	// cmd caches its output codepage at startup. Start a second cmd after chcp
 	// in the hidden console; pass Unicode via the environment so the bootstrap
 	// parser cannot lose it. Delayed expansion inserts metacharacters verbatim,
-	// and the inner /v:off /s /c parses the user's command exactly once (D17).
+	// and the inner /s /c parses the user's command exactly once (D17).
 	c.SysProcAttr = &syscall.SysProcAttr{
-		CmdLine: syscall.EscapeArg(shell) + ` /d /v:on /s /c "chcp 65001 >nul 2>&1 & "` + shell + `" /d /v:off /s /c "!HALO_NODE_COMMAND!""`,
+		CmdLine: syscall.EscapeArg(shell) + ` /d /v:on /s /c "chcp 65001 >nul 2>&1 & "` + shell + `" /d /s /c "!HALO_NODE_COMMAND!""`,
 		// chcp needs a console even under Task Scheduler. Hide a new console,
 		// rather than CREATE_NO_WINDOW (which silently leaves echo in OEM).
 		CreationFlags: windows.CREATE_SUSPENDED | windows.CREATE_NEW_CONSOLE,
 		HideWindow:    true,
 	}
 	return c
+}
+
+// c uses file handles, not os/exec copy goroutines: Wait observes shell exit
+// independently of pipe EOF. Close the job first so inherited pipes can drain.
+func waitGroup(c *osexec.Cmd, pumps *sync.WaitGroup, closeGroup func()) error {
+	err := c.Wait()
+	closeGroup()
+	pumps.Wait()
+	return err
 }
 
 func startGroup(c *osexec.Cmd) (stop func(bool), closeGroup func(), err error) {

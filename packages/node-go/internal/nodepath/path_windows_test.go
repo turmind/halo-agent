@@ -38,6 +38,25 @@ func TestWindowsResolve(t *testing.T) {
 	}
 }
 
+func TestWindowsSupported(t *testing.T) {
+	for _, p := range []string{`\\?\C:\root`, `//?/C:/root`, `\\.\C:\root`, `//./C:/root`, `inside.\file`, `inside \file`, `C:inside.`, `inside.\..\file`} {
+		if Supported(p) {
+			t.Errorf("accepted %q", p)
+		}
+		if InRoot(t.TempDir(), p) != "" {
+			t.Errorf("InRoot accepted %q", p)
+		}
+		if _, err := Realpath(p); err == nil {
+			t.Errorf("Realpath accepted %q", p)
+		}
+	}
+	for _, p := range []string{`C:\root\file.txt`, `.\sub\..\file`, `a b\file`, `a.b\file`, `\\server\share\file`} {
+		if !Supported(p) {
+			t.Errorf("refused %q", p)
+		}
+	}
+}
+
 func TestWindowsInRoot(t *testing.T) {
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

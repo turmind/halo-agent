@@ -166,6 +166,9 @@ func main() {
 	var rootPath *string
 	base := ""
 	if !whole {
+		if !nodepath.Supported(*root) {
+			fail(fmt.Sprintf("--root %s: unsupported Windows path", *root))
+		}
 		abs, _ := filepath.Abs(*root)
 		real, err := nodepath.Realpath(abs)
 		if err != nil {

@@ -19,7 +19,30 @@ func ExpandHome(p string) string {
 // root (already realpath'd): realpath of the longest existing prefix (lstat
 // walk-up, so a dangling symlink is refused) plus the missing tail.
 func InRoot(root, p string) string {
-	prefix := Resolve(root, p)
+	full := canonical(root, p)
+	if full == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(root, full)
+	if err != nil {
+		return ""
+	}
+	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)) {
+		return full
+	}
+	return ""
+}
+
+// canonical resolves the longest existing prefix without admitting spellings
+// that Windows would normalize differently when the checked path is opened.
+func canonical(base, p string) string {
+	if !Supported(base) || !Supported(p) {
+		return ""
+	}
+	prefix := Resolve(base, p)
+	if !Supported(prefix) {
+		return ""
+	}
 	var tail []string
 	for {
 		if _, err := os.Lstat(prefix); err == nil {
@@ -37,12 +60,8 @@ func InRoot(root, p string) string {
 		return ""
 	}
 	full := filepath.Join(append([]string{real}, tail...)...)
-	rel, err := filepath.Rel(root, full)
-	if err != nil {
+	if !Supported(full) {
 		return ""
 	}
-	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)) {
-		return full
-	}
-	return ""
+	return full
 }

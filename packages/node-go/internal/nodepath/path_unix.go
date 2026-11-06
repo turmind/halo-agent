@@ -8,6 +8,12 @@ import (
 	"path/filepath"
 )
 
+// Unix paths have no Win32 normalization restrictions.
+func Supported(string) bool { return true }
+
+// WholePath preserves the original unconstrained Unix path behavior.
+func WholePath(base, p string) string { return Resolve(base, p) }
+
 // Realpath resolves existing paths like Node's fs.realpathSync.native.
 func Realpath(p string) (string, error) { return filepath.EvalSymlinks(p) }
 

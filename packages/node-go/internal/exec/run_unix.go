@@ -4,6 +4,7 @@ package exec
 
 import (
 	osexec "os/exec"
+	"sync"
 	"syscall"
 
 	"github.com/turmind/halo-agent/packages/node-go/internal/nodepath"
@@ -19,6 +20,12 @@ func shellCommand(cmd string) *osexec.Cmd {
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	c.Env = cleanEnv()
 	return c
+}
+
+// Unix retains its original EOF-before-Wait process-group semantics.
+func waitGroup(c *osexec.Cmd, pumps *sync.WaitGroup, _ func()) error {
+	pumps.Wait()
+	return c.Wait()
 }
 
 func startGroup(c *osexec.Cmd) (stop func(bool), closeGroup func(), err error) {
