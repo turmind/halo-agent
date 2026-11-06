@@ -1,3 +1,6 @@
+//go:build !windows
+
+// The rm guard is not used on Windows; these vectors describe POSIX shells / paths.
 package rmguard
 
 import (

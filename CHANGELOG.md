@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Linked machines: standalone `halo-node-windows-amd64.exe`, with native Windows path handling, cmd.exe process-tree cleanup, CI coverage and Task Scheduler setup instructions.
+
 ## [2.2.1] - 2026-11-06
 
 ### Added

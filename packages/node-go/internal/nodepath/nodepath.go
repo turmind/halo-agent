@@ -3,22 +3,9 @@ package nodepath
 
 import (
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 )
-
-// Home is os.homedir(): $HOME when set — even to "" (then `~/x` → relative
-// `x`, like path.join("", "x")) — else the passwd entry.
-func Home() string {
-	if h, ok := os.LookupEnv("HOME"); ok {
-		return h
-	}
-	if u, err := user.Current(); err == nil {
-		return u.HomeDir
-	}
-	return "/"
-}
 
 // ExpandHome expands a leading `~/` only.
 func ExpandHome(p string) string {
@@ -28,20 +15,34 @@ func ExpandHome(p string) string {
 	return p
 }
 
-// Resolve is path.resolve(base, expandHome(p)).
-func Resolve(base, p string) string {
-	p = ExpandHome(p)
-	if filepath.IsAbs(p) {
-		return filepath.Clean(p)
-	}
-	return filepath.Join(base, p)
-}
-
 // InRoot returns the absolute in-root path for p, or "" when p lands outside
 // root (already realpath'd): realpath of the longest existing prefix (lstat
 // walk-up, so a dangling symlink is refused) plus the missing tail.
 func InRoot(root, p string) string {
-	prefix := Resolve(root, p)
+	full := canonical(root, p)
+	if full == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(root, full)
+	if err != nil {
+		return ""
+	}
+	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)) {
+		return full
+	}
+	return ""
+}
+
+// canonical resolves the longest existing prefix without admitting spellings
+// that Windows would normalize differently when the checked path is opened.
+func canonical(base, p string) string {
+	if !Supported(base) || !Supported(p) {
+		return ""
+	}
+	prefix := Resolve(base, p)
+	if !Supported(prefix) {
+		return ""
+	}
 	var tail []string
 	for {
 		if _, err := os.Lstat(prefix); err == nil {
@@ -54,26 +55,13 @@ func InRoot(root, p string) string {
 		tail = append([]string{filepath.Base(prefix)}, tail...)
 		prefix = parent
 	}
-	real, err := filepath.EvalSymlinks(prefix)
+	real, err := Realpath(prefix)
 	if err != nil {
 		return ""
 	}
 	full := filepath.Join(append([]string{real}, tail...)...)
-	rel, err := filepath.Rel(root, full)
-	if err != nil {
+	if !Supported(full) {
 		return ""
 	}
-	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)) {
-		return full
-	}
-	return ""
-}
-
-// Rel is path.relative(from, to) for absolute paths ("" when equal).
-func Rel(from, to string) string {
-	r, err := filepath.Rel(from, to)
-	if err != nil || r == "." {
-		return ""
-	}
-	return r
+	return full
 }

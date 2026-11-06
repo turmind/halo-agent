@@ -67,10 +67,15 @@ func label(op string, args map[string]any) string {
 // place: the path to hand the tool; refuses paths outside the root.
 func (e *Executor) place(p string) (string, error) {
 	plain := nodepath.Resolve(e.s.Base, p)
+	var full string
 	if e.s.Root == "" {
+		full = nodepath.WholePath(e.s.Base, p)
+		if full == "" {
+			return "", &refusal{fmt.Sprintf("%q is not a supported path on this machine — node tools cannot use Windows namespace paths or components ending in a dot or space", p), "unsupported path"}
+		}
 		return p, nil
 	}
-	full := nodepath.InRoot(e.s.Root, p)
+	full = nodepath.InRoot(e.s.Root, p)
 	if full == "" {
 		return "", &refusal{fmt.Sprintf("%q is outside this machine's shared folder (%s) — node tools can only reach paths inside it", p, e.s.Root), "outside root"}
 	}

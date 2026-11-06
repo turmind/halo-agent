@@ -1,6 +1,6 @@
 # halo-node (Go)
 
-Single static binary that speaks the `halo node` v1 protocol — a drop-in for the
+Single standalone binary for Linux (amd64 / arm64 / armv7) and Windows amd64 that speaks the `halo node` v1 protocol — a drop-in for the
 TS `halo node` (same flags, same output text). Design and the accepted differences from
 the TS client: `.halo/docs/design/node.md` ("Go client: known differences from the TS client").
 
@@ -9,8 +9,8 @@ Needs Go 1.27 (`go.mod` pins `toolchain go1.27.3`). No cgo.
 ## Build
 
 ```sh
-./build.sh                    # dist/halo-node-linux-{amd64,arm64,armv7} + SHA256SUMS, VER=dev-<sha>
-VER=2.2.0 ./build.sh          # release build
+./build.sh                    # dist/ Linux binaries + halo-node-windows-amd64.exe + SHA256SUMS
+VER=2.2.1 ./build.sh          # release build
 go build -o dist/halo-node ./cmd/halo-node   # host-only dev build
 ```
 
@@ -55,7 +55,7 @@ HALO_NODE_GO_BIN=$PWD/dist/halo-node-linux-amd64 \
 `install.sh` (POSIX sh) is what users pipe into `sh`: the release job stamps the tag into
 `__HALO_VERSION__` and uploads it next to the binaries. It picks the arch, verifies against
 `SHA256SUMS`, smoke-runs `--version`, and renames into `/usr/local/bin` (root) or `~/.local/bin`.
-CI runs `shellcheck` on it.
+Linux-only; CI runs `shellcheck` on it. Windows users download the exe directly.
 
 ## Run
 
@@ -63,6 +63,17 @@ CI runs `shellcheck` on it.
 HALO_NODE_TOKEN=hn_… ./dist/halo-node --server https://halo.example.com --root ~/work [--allow-shell]
 ./dist/halo-node --help
 ```
+
+On Windows (PowerShell):
+
+```powershell
+$env:HALO_NODE_TOKEN = 'hn_…'
+.\dist\halo-node-windows-amd64.exe --server https://halo.example.com --root 'C:\work'
+```
+
+`--allow-shell` uses cmd.exe with UTF-8 / GBK decoding and a Job Object to stop the entire command tree on cancel / timeout. Folder confinement handles Windows drives, case-insensitive paths and junctions. `~/` uses `USERPROFILE`.
+
+Native `windows-latest` CI runs vet, tests (paths / junctions, mkdir, cmd, tree stop, decoding, errno) and builds / smoke-runs the exe. The Linux TS-oracle conformance suite remains unchanged; its POSIX shell / filesystem fixtures are not run on Windows. The rm guard is POSIX-only in both clients. See `.halo/docs/guide/node.md` for downloads, checksums and a hidden Task Scheduler startup recipe (S4U, no stored password, no 72-hour limit).
 
 ## Layout
 
