@@ -20,11 +20,18 @@ import (
 
 func TestWindowsShell(t *testing.T) {
 	root := t.TempDir()
-	out, stderr, msg, _ := spawnGroup(context.Background(), "chcp & chcp 65001 & chcp & echo 中文", root, 10000)
-	t.Logf("codepage probe: out=%q stderr=%q msg=%q", out, stderr, msg)
-	if node, err := osexec.LookPath("node"); err == nil {
-		b, err := osexec.Command(node, "-e", `require('child_process').exec('chcp 65001 >nul 2>&1 & echo 中文', {encoding:'buffer'}, (e,o,s)=>console.log(JSON.stringify({error:e?.message,out:o.toString('hex'),err:s.toString('hex')})))`).CombinedOutput()
-		t.Logf("Node oracle: %s (%v)", b, err)
+	t.Setenv("HALO_TEST_UNICODE", "echo 中文")
+	for _, command := range []string{
+		`chcp 65001 >nul & %HALO_TEST_UNICODE%`,
+		`chcp 65001 >nul & !HALO_TEST_UNICODE!`,
+		`chcp 65001 >nul & cmd /d /s /c "!HALO_TEST_UNICODE!"`,
+		`chcp 65001 >nul & cmd /d /s /c "%HALO_TEST_UNICODE%"`,
+	} {
+		c := shellCommand("")
+		c.SysProcAttr.CreationFlags = windows.CREATE_NEW_CONSOLE
+		c.SysProcAttr.CmdLine = `cmd.exe /d /v:on /s /c "` + command + `"`
+		out, err := c.CombinedOutput()
+		t.Logf("probe %q: %q err=%v", command, out, err)
 	}
 	for _, c := range []struct{ command, out, stderr, msg string }{
 		{"echo hello", "hello\r\n", "", ""},
@@ -43,7 +50,7 @@ func TestWindowsShell(t *testing.T) {
 	if err := os.WriteFile(script, []byte("@echo %~1\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, _, msg, _ = spawnGroup(context.Background(), `"`+script+`" "a b"`, root, 10000)
+	out, _, msg, _ := spawnGroup(context.Background(), `"`+script+`" "a b"`, root, 10000)
 	if out != "a b\r\n" || msg != "" {
 		t.Fatalf("quoted script: %q, %q", out, msg)
 	}

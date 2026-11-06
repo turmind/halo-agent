@@ -162,7 +162,7 @@ func (e *Executor) edit(full, placed string, args map[string]any) (string, error
 func (e *Executor) list(ctx context.Context, full string, args map[string]any) (string, error) {
 	recursive := jsv.Get(args, "recursive") == true
 	if !recursive {
-		entries, err := os.ReadDir(full)
+		entries, err := readDir(full)
 		if err != nil {
 			return "", jsv.FsError(err, "scandir", full)
 		}

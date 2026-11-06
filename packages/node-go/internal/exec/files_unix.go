@@ -3,10 +3,14 @@
 package exec
 
 import (
-	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
+	"os"
 	"strings"
 	"syscall"
+
+	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
 )
+
+func readDir(dir string) ([]os.DirEntry, error) { return os.ReadDir(dir) }
 
 // mkdirp is fs.mkdir(dir, {recursive:true}): a port of Node's MKDirpAsync
 // (src/node_file.cc) — mkdir the top of a path stack; ENOENT pushes the

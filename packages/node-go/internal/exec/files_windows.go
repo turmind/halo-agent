@@ -6,10 +6,24 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"syscall"
 
 	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
 )
+
+// Open without os.ReadDir's O_DIRECTORY so a file's ENOTDIR retains the
+// readdir operation instead of becoming indistinguishable from a missing path.
+func readDir(dir string) ([]os.DirEntry, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	entries, err := f.ReadDir(-1)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	return entries, err
+}
 
 // mkdirp keeps volume / UNC roots intact while walking missing parents. Stat
 // follows junctions, like Node's recursive mkdir; errors name the attempted dir.
