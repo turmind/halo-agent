@@ -10,16 +10,16 @@ halo-node --root ~/proj ──WebSocket──────▶ halo server ── 
 
 Two clients do the same job, with the same flags and the same behaviour:
 
-- **Linux (x86_64 / arm64 / armv7)**: `halo-node`, a single ~7 MB binary attached to every GitHub release. It needs no Node.js and idles at about 9 MB of memory.
-- **macOS / Windows** (or a Linux box that already has the npm package): `halo node` from `npm install -g @turmind/halo`.
+- **Linux (x86_64 / arm64 / armv7) and Windows (amd64)**: `halo-node`, a single binary attached to every GitHub release. It needs no Node.js. The Linux build is ~7 MB and idles at about 9 MB of memory.
+- **macOS** (or a Linux / Windows machine that already has the npm package): `halo node` from `npm install -g @turmind/halo`.
 
 Neither needs `halo setup` or model keys, and neither writes anything under `~/.halo/`.
 
-Supported: **Linux and macOS**. Windows works on a best-effort basis (not regularly tested; `node_run` commands go to `cmd.exe`).
+Supported: **Linux, macOS and Windows amd64**. The Go client is tested natively on Linux and Windows CI; macOS uses npm. Windows `node_run` commands go to `cmd.exe`, with UTF-8 output and a GBK fallback.
 
 ## 1. Create a token
 
-Admin → **Channels → Linked machines** → **Add machine**. Pick the workspace and a machine name (`a-z 0-9 -`, e.g. `mbp`; unique within the workspace — the agent uses it to address the machine). The dialog shows two commands to copy: one installs `halo-node` on Linux and runs it with `~/.local/bin` prepended to `PATH` (where a non-root install lands), the other runs `halo node` on macOS / Windows. The install link points at the server's own release, so the machine and the server come from the same version.
+Admin → **Channels → Linked machines** → **Add machine**. Pick the workspace and a machine name (`a-z 0-9 -`, e.g. `mbp`; unique within the workspace — the agent uses it to address the machine). The dialog shows two commands to copy: one installs `halo-node` on Linux and runs it with `~/.local/bin` prepended to `PATH` (where a non-root install lands), the other runs the npm `halo node` client. On Windows, use the standalone exe below instead. The install link points at the server's own release, so the machine and the server come from the same version.
 
 The token stays on the list row (copy button). Deleting the row revokes it at once and disconnects the machine.
 
@@ -55,7 +55,18 @@ curl -fsL https://github.com/turmind/halo-agent/releases/latest/download/SHA256S
 ./halo-node --server https://halo.example.com --root ~/proj
 ```
 
-**macOS / Windows**:
+### Windows (amd64)
+
+Download `halo-node-windows-amd64.exe` from the [GitHub release](https://github.com/turmind/halo-agent/releases/latest) matching your server (no npm or Node.js needed). Put it in e.g. `C:\halo-node`. In PowerShell:
+
+```powershell
+$env:HALO_NODE_TOKEN = '<token>'
+& 'C:\halo-node\halo-node-windows-amd64.exe' --server https://halo.example.com --root 'C:\Users\alice\proj'
+```
+
+The release's `SHA256SUMS` includes the exe; compare its entry with `Get-FileHash C:\halo-node\halo-node-windows-amd64.exe -Algorithm SHA256`. Use either `/` or `\` in paths; `~/` expands from `USERPROFILE`. Folder mode resolves symlinks and junctions before checking the root. Add `--allow-shell` only if you want commands as this Windows user. Stop the process before replacing the exe during an upgrade.
+
+**macOS (npm)**:
 
 ```bash
 npm install -g @turmind/halo                   # once
@@ -97,7 +108,7 @@ Neither client follows `HTTP(S)_PROXY`. To reach the server through a forward pr
 
 ### TLS certificates (`https://` servers)
 
-`halo-node` trusts the system's CA store (`/etc/ssl/certs/…`; `SSL_CERT_FILE` / `SSL_CERT_DIR` point it elsewhere). It falls back to a built-in Mozilla root set only on a system with no CA bundle at all. For a private or corporate CA, install it into the system store, or set `SSL_CERT_FILE`. `halo node` (Node.js) does the opposite: it uses Node's built-in roots plus `NODE_EXTRA_CA_CERTS`, and ignores the system store.
+`halo-node` trusts the system's CA store (the Windows certificate store on Windows; `/etc/ssl/certs/…` on Linux, where `SSL_CERT_FILE` / `SSL_CERT_DIR` can point it elsewhere). It falls back to a built-in Mozilla root set only on a system with no CA bundle at all. For a private or corporate CA, install it into the system store, or on Linux set `SSL_CERT_FILE`. `halo node` (Node.js) does the opposite: it uses Node's built-in roots plus `NODE_EXTRA_CA_CERTS`, and ignores the system store.
 
 ### Run it as a service (systemd)
 
@@ -128,6 +139,34 @@ WantedBy=multi-user.target
 ```
 
 Network drops, server restarts, a busy token (409) and a lockout (429) are handled inside the process, which keeps running, so `on-failure` is enough. Don't use `Restart=always`: it keeps restarting after a revoked token, and each restart is a failed login. After 5 failures in 15 minutes the server locks out that IP address, which blocks every machine connecting from it. ExecStart takes the path the install script printed. For the npm client, set `ExecStart=/usr/bin/halo node …`. After upgrading with the install script, `systemctl restart halo-node` to run the new binary.
+
+### Start at boot on Windows (Task Scheduler)
+
+Create `C:\halo-node\start.cmd` (replace the token, server and shared folder). Restrict this directory and wrapper to your account, Administrators and SYSTEM: it contains a plaintext token, and the log can contain file paths. The wrapper keeps the token out of the task's command line and appends logs:
+
+```bat
+@echo off
+setlocal
+set "HALO_NODE_TOKEN=<token>"
+"C:\halo-node\halo-node-windows-amd64.exe" --server https://halo.example.com --root "C:\Users\alice\proj" >>"C:\halo-node\halo-node.log" 2>&1
+exit /b %errorlevel%
+```
+
+Run PowerShell **as administrator** once to register a startup task. Set `$user` to the account that owns the shared files (not necessarily the administrator registering the task):
+
+```powershell
+$user = "$env:COMPUTERNAME\alice"
+$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument '/d /c "C:\halo-node\start.cmd"' -WorkingDirectory 'C:\halo-node'
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName 'halo-node' -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+Start-ScheduledTask -TaskName 'halo-node'
+```
+
+S4U runs hidden without a logged-in desktop or a stored password. It cannot use that user's network credentials (mapped drives / authenticated SMB) or EFS-encrypted files; use a local shared folder. Outbound HTTPS with the Halo token still works. `ExecutionTimeLimit` **must be zero**: Task Scheduler's default stops a task after 72 hours. Do not enable restart-on-failure: exit 1 means a rejected token / other permanent refusal, and restarting repeats failed logins. Network failures already retry inside halo-node.
+
+If your server is reached through **Tailscale**, enable Tailscale's **Run unattended** on Windows so it connects before login. halo-node retries until the network is ready. Inspect `C:\halo-node\halo-node.log` and `Get-ScheduledTaskInfo halo-node`; after replacing the token or upgrading the exe, stop and start the task. The append-only log is yours to rotate.
 
 ### Settings on the machine
 

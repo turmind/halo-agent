@@ -81,13 +81,16 @@ func TestReadFileStreamCap(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(root, "at"), []byte(strings.Repeat("a", 1<<20)), 0o644)
 	_ = os.WriteFile(filepath.Join(root, "over"), []byte(strings.Repeat("a", 1<<20+1)), 0o644)
 	_ = os.WriteFile(filepath.Join(root, "small.txt"), []byte("x1\n"), 0o644)
-	whole := New(Scope{Base: root, Log: func(string) {}})
-	var got string
-	if n := allocated(func() { got = run1(whole, "read", map[string]any{"path": "/dev/zero", "offset": float64(1)}) }); n > 4<<20 {
-		t.Errorf("/dev/zero: allocated %d bytes", n)
-	}
-	if got != "ERR Invalid string length" {
-		t.Errorf("/dev/zero: %q", got)
+	// /dev/zero is a Unix device; keep the regular-file cap checks on Windows.
+	if runtime.GOOS != "windows" {
+		whole := New(Scope{Base: root, Log: func(string) {}})
+		var got string
+		if n := allocated(func() { got = run1(whole, "read", map[string]any{"path": "/dev/zero", "offset": float64(1)}) }); n > 4<<20 {
+			t.Errorf("/dev/zero: allocated %d bytes", n)
+		}
+		if got != "ERR Invalid string length" {
+			t.Errorf("/dev/zero: %q", got)
+		}
 	}
 	if got := run1(ex, "read", map[string]any{"path": "at", "limit": float64(1)}); !strings.HasPrefix(got, "1\taaaa") {
 		t.Errorf("at the cap: %.40q", got)
@@ -113,7 +116,11 @@ func TestRunPumpPanic(t *testing.T) {
 	start := time.Now()
 	got := func() (r any) {
 		defer func() { r = recover() }()
-		_, _ = ex.Exec(context.Background(), "run", map[string]any{"command": "echo hi; sleep 30"})
+		command := "echo hi; sleep 30"
+		if runtime.GOOS == "windows" {
+			command = "echo hi & ping -n 30 127.0.0.1 >nul"
+		}
+		_, _ = ex.Exec(context.Background(), "run", map[string]any{"command": command})
 		return nil
 	}()
 	if got != "boom" {

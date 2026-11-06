@@ -3,22 +3,9 @@ package nodepath
 
 import (
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 )
-
-// Home is os.homedir(): $HOME when set — even to "" (then `~/x` → relative
-// `x`, like path.join("", "x")) — else the passwd entry.
-func Home() string {
-	if h, ok := os.LookupEnv("HOME"); ok {
-		return h
-	}
-	if u, err := user.Current(); err == nil {
-		return u.HomeDir
-	}
-	return "/"
-}
 
 // ExpandHome expands a leading `~/` only.
 func ExpandHome(p string) string {
@@ -26,15 +13,6 @@ func ExpandHome(p string) string {
 		return filepath.Join(Home(), p[2:])
 	}
 	return p
-}
-
-// Resolve is path.resolve(base, expandHome(p)).
-func Resolve(base, p string) string {
-	p = ExpandHome(p)
-	if filepath.IsAbs(p) {
-		return filepath.Clean(p)
-	}
-	return filepath.Join(base, p)
 }
 
 // InRoot returns the absolute in-root path for p, or "" when p lands outside
@@ -63,17 +41,8 @@ func InRoot(root, p string) string {
 	if err != nil {
 		return ""
 	}
-	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)) {
+	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)) {
 		return full
 	}
 	return ""
-}
-
-// Rel is path.relative(from, to) for absolute paths ("" when equal).
-func Rel(from, to string) string {
-	r, err := filepath.Rel(from, to)
-	if err != nil || r == "." {
-		return ""
-	}
-	return r
 }

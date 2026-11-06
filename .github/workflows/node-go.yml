@@ -2,7 +2,7 @@ name: node-go
 
 # halo-node (packages/node-go): Go rewrite of `halo node`. The TS executor is the
 # live oracle — any PR that touches either side runs the conformance suite.
-# Release: attaches the three linux binaries + SHA256SUMS to the GitHub release.
+# Release: attaches Linux / Windows binaries + SHA256SUMS to the GitHub release.
 on:
   pull_request:
     branches: [main]
@@ -81,6 +81,23 @@ jobs:
           HALO_NODE_GO_EXEC: qemu-arm
           HALO_NODE_GO_SMOKE: "1"
 
+  windows:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: packages/node-go
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: packages/node-go/go.mod, cache-dependency-path: packages/node-go/go.sum }
+      - run: go vet ./...
+      - run: go test -v ./...
+      - run: go build -trimpath -o dist/halo-node-windows-amd64.exe ./cmd/halo-node
+      - run: ./dist/halo-node-windows-amd64.exe --version
+
   release:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -100,4 +117,4 @@ jobs:
       - run: |
           sed "s/__HALO_VERSION__/${TAG#v}/" packages/node-go/install.sh > packages/node-go/dist/install.sh
           if grep -n __HALO_VERSION__ packages/node-go/dist/install.sh; then echo "::error::install.sh not stamped"; exit 1; fi
-      - run: gh release upload "$TAG" packages/node-go/dist/halo-node-linux-* packages/node-go/dist/SHA256SUMS packages/node-go/dist/install.sh --clobber
+      - run: gh release upload "$TAG" packages/node-go/dist/halo-node-linux-* packages/node-go/dist/halo-node-windows-amd64.exe packages/node-go/dist/SHA256SUMS packages/node-go/dist/install.sh --clobber

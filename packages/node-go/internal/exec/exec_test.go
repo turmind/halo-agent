@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -38,18 +39,18 @@ func TestOps(t *testing.T) {
 		{"read range", ex, "read", map[string]any{"path": "a.txt", "offset": float64(2), "limit": float64(1)}, res{text: "2\tbeta\n... 2 more line(s) — use `offset=3` to continue."}},
 		{"read past end", ex, "read", map[string]any{"path": "a.txt", "offset": float64(9)}, res{text: "(empty: file has 4 lines, offset=9 is past end)"}},
 		{"read dir", ex, "read", map[string]any{"path": "sub"}, res{err: "EISDIR: illegal operation on a directory, read"}},
-		{"read missing", ex, "read", map[string]any{"path": "nope.txt"}, res{err: "ENOENT: no such file or directory, stat '" + root + "/nope.txt'"}},
+		{"read missing", ex, "read", map[string]any{"path": "nope.txt"}, res{err: "ENOENT: no such file or directory, stat '" + filepath.Join(root, "nope.txt") + "'"}},
 		{"read no path", ex, "read", map[string]any{}, res{err: "`path` is required"}},
 		{"read outside", ex, "read", map[string]any{"path": "../x"}, res{err: `"../x" is outside this machine's shared folder (` + root + `) — node tools can only reach paths inside it`}},
 		{"write", ex, "write", map[string]any{"path": "new/deep/n.txt", "content": "hi"}, res{text: "File written: new/deep/n.txt"}},
 		{"write number", ex, "write", map[string]any{"path": "n.txt", "content": float64(5)}, res{err: `The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (5)`}},
-		{"write parent file", ex, "write", map[string]any{"path": "a.txt/x.txt", "content": "x"}, res{err: "EEXIST: file already exists, mkdir '" + root + "/a.txt'"}},
+		{"write parent file", ex, "write", map[string]any{"path": "a.txt/x.txt", "content": "x"}, res{err: "EEXIST: file already exists, mkdir '" + filepath.Join(root, "a.txt") + "'"}},
 		{"edit multiple", ex, "edit", map[string]any{"path": "dup.txt", "old_string": "x = 1", "new_string": "y"}, res{text: "__TOOL_WARN__\nError: old_string appears more than once in dup.txt. Either expand it with surrounding context until it's unique, or pass replace_all: true."}},
 		{"edit replace_all", ex, "edit", map[string]any{"path": "dup.txt", "old_string": "x = 1", "new_string": "y", "replace_all": true}, res{text: "File edited: dup.txt"}},
 		{"edit identical", ex, "edit", map[string]any{"path": "nope", "old_string": "a", "new_string": "a"}, res{text: "__TOOL_WARN__\nError: old_string and new_string are identical — nothing to change."}},
 		{"list", ex, "list", map[string]any{"path": "sub"}, res{text: "📄 b.ts\n📄 c.tsx"}},
 		{"list recursive", ex, "list", map[string]any{"path": "new", "recursive": true}, res{text: "📁 deep/\n📄 deep/n.txt"}},
-		{"list missing", ex, "list", map[string]any{"path": "nope"}, res{err: "ENOENT: no such file or directory, scandir '" + root + "/nope'"}},
+		{"list missing", ex, "list", map[string]any{"path": "nope"}, res{err: "ENOENT: no such file or directory, scandir '" + filepath.Join(root, "nope") + "'"}},
 		{"grep", ex, "grep", map[string]any{"pattern": "export"}, res{text: "sub/b.ts:1:export const b = 1\nsub/c.tsx:1:export const c = 2"}},
 		{"grep CR", ex, "grep", map[string]any{"pattern": "foo$", "path": "sub"}, res{text: `No matches found for pattern "foo$"`}},
 		{"grep invalid", ex, "grep", map[string]any{"pattern": "("}, res{text: "__TOOL_WARN__\nError: Invalid regex pattern: Invalid regular expression: /(/: Unterminated group"}},
@@ -66,6 +67,14 @@ func TestOps(t *testing.T) {
 		{"unknown args type", ex, "list", map[string]any{"path": float64(1)}, res{text: strings.Join([]string{"📄 a.txt", "📁 dist", "📄 dup.txt", "📁 new", "📁 sub"}, "\n")}},
 	}
 	for _, c := range cases {
+		// These commands and exact LF outputs are POSIX shell fixtures;
+		// run_windows_test.go covers cmd.exe and its CRLF output natively.
+		if runtime.GOOS == "windows" && (c.name == "run" || c.name == "run fail" || c.name == "run cwd" || c.name == "run timeout") {
+			continue
+		}
+		if runtime.GOOS == "windows" && (c.name == "grep" || c.name == "glob") {
+			c.want.text = strings.ReplaceAll(c.want.text, "/", `\`)
+		}
 		text, err := c.ex.Exec(context.Background(), c.op, c.args)
 		got := res{text: text}
 		if err != nil {

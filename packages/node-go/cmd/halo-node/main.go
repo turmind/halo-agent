@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 
@@ -183,7 +182,7 @@ func main() {
 	hostname, _ := os.Hostname()
 	info := protocol.NodeInfo{
 		Root: rootPath, Base: base, Shell: *allowShell, ShellTimeoutMs: timeout,
-		OS: runtime.GOOS, Hostname: hostname, Version: version,
+		OS: nodeOS, Hostname: hostname, Version: version,
 	}
 	if whole {
 		if !rootSet {

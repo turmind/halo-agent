@@ -6,9 +6,7 @@ import (
 	"syscall"
 )
 
-// errnoText (libuv's text per errno) is generated: errno_linux.go. Release
-// builds are Linux-only; elsewhere the map is empty and every errno prints as
-// Node's unmapped form.
+// errnoText holds libuv's code / text per platform errno (generated on Linux).
 
 // FsError renders err like a Node fs error: `CODE: desc, syscall 'path'`
 // (path omitted when ""). Non-errno errors pass through.

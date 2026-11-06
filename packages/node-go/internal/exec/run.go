@@ -4,20 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
-	osexec "os/exec"
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
 	"github.com/turmind/halo-agent/packages/node-go/internal/nodepath"
-	"github.com/turmind/halo-agent/packages/node-go/internal/rmguard"
 )
 
 const (
@@ -72,7 +67,7 @@ func (e *Executor) run(ctx context.Context, command, cwd string) (string, error)
 		e.s.Log(fmt.Sprintf("[WorkspaceTools] {{%s.params.%s}} rejected — namespace not in allowed list", m[1], m[2]))
 	}
 	// assertRmSafe: cwd is the tools' workspaceRoot as-is (no realpath, like TS).
-	if err := rmguard.Check(cmd, cwd, nodepath.Home()); err != nil {
+	if err := checkCommand(cmd, cwd); err != nil {
 		return toolError + "\nCommand failed: " + err.Error() + "\n\n", nil
 	}
 
@@ -93,70 +88,15 @@ func (e *Executor) run(ctx context.Context, command, cwd string) (string, error)
 	return toolError + "\nCommand failed: " + msg + "\n" + stdout + "\n" + stderr, nil
 }
 
-type outBuf struct {
-	mu    sync.Mutex
-	dec   jsv.Decoder
-	sb    strings.Builder
-	n16   int
-	over  func()
-	crash atomic.Pointer[any] // a panic in pump; mu may still be held then
-}
-
 // testPumpChunk, when set, runs on every chunk under mu (tests inject a panic).
 var testPumpChunk func()
 
-func (b *outBuf) pump(r io.Reader, wg *sync.WaitGroup) {
-	defer wg.Done()
-	defer func() {
-		if p := recover(); p != nil { // stop reading, stop the command; spawnGroup re-panics
-			b.crash.Store(&p)
-			b.over()
-		}
-	}()
-	buf := make([]byte, 64*1024)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			b.mu.Lock()
-			if testPumpChunk != nil {
-				testPumpChunk()
-			}
-			s := b.dec.Write(buf[:n])
-			b.sb.WriteString(s)
-			b.n16 += jsv.Len16(s)
-			if b.n16 > maxBuffer {
-				t := jsv.Truncate16(b.sb.String(), maxBuffer)
-				b.sb.Reset()
-				b.sb.WriteString(t)
-				b.n16 = maxBuffer
-				b.mu.Unlock()
-				b.over()
-			} else {
-				b.mu.Unlock()
-			}
-		}
-		if err != nil {
-			b.mu.Lock()
-			b.sb.WriteString(b.dec.Flush())
-			b.mu.Unlock()
-			return
-		}
-	}
-}
-
-func (b *outBuf) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.sb.String()
-}
-
-// spawnGroup runs `/bin/sh -c cmd` as its own process-group leader. msg is ""
+// spawnGroup runs the platform shell in a process group / job. msg is ""
 // on exit 0, else the error message; aborted = the ctx was cancelled.
 func spawnGroup(ctx context.Context, cmd, cwd string, timeoutMs int64) (stdout, stderr, msg string, aborted bool) {
-	c := osexec.Command("/bin/sh", "-c", cmd)
+	c := shellCommand(cmd)
 	c.Dir = cwd
 	c.Env = cleanEnv()
-	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	// stdin: a pipe nobody writes or closes (Node's default 'pipe'): `cat` waits.
 	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
@@ -177,7 +117,8 @@ func spawnGroup(ctx context.Context, cmd, cwd string, timeoutMs int64) (stdout, 
 		return "", "", err.Error(), false
 	}
 	c.Stdout, c.Stderr = outW, errW
-	if err := c.Start(); err != nil {
+	stop, closeGroup, err := startGroup(c)
+	if err != nil {
 		stdinR.Close()
 		outR.Close()
 		outW.Close()
@@ -188,24 +129,25 @@ func spawnGroup(ctx context.Context, cmd, cwd string, timeoutMs int64) (stdout, 
 	stdinR.Close()
 	outW.Close()
 	errW.Close()
-	pid := c.Process.Pid
+	defer closeGroup()
+	defer outR.Close()
+	defer errR.Close()
 
 	var mu sync.Mutex
 	killReason := ""
 	var escalation *time.Timer
 	settleNow := make(chan struct{})
 	var settleOnce sync.Once
-	killGroup := func(sig syscall.Signal) { _ = syscall.Kill(-pid, sig) }
 	escalate := func(reason string) {
 		mu.Lock()
 		defer mu.Unlock()
 		killReason = reason
-		killGroup(syscall.SIGTERM)
+		stop(false)
 		if escalation != nil {
 			return
 		}
 		escalation = time.AfterFunc(killGrace, func() {
-			killGroup(syscall.SIGKILL)
+			stop(true)
 			time.AfterFunc(forceSettle, func() { settleOnce.Do(func() { close(settleNow) }) })
 		})
 	}
