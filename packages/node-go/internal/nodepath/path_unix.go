@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 )
 
+// Realpath resolves existing paths like Node's fs.realpathSync.native.
+func Realpath(p string) (string, error) { return filepath.EvalSymlinks(p) }
+
 // Home is os.homedir(): $HOME when set — even to "" (then `~/x` → relative
 // `x`, like path.join("", "x")) — else the passwd entry.
 func Home() string {

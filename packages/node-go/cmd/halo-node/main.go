@@ -20,6 +20,7 @@ import (
 	"github.com/turmind/halo-agent/packages/node-go/internal/client"
 	"github.com/turmind/halo-agent/packages/node-go/internal/exec"
 	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
+	"github.com/turmind/halo-agent/packages/node-go/internal/nodepath"
 	"github.com/turmind/halo-agent/packages/node-go/internal/protocol"
 )
 
@@ -166,7 +167,7 @@ func main() {
 	base := ""
 	if !whole {
 		abs, _ := filepath.Abs(*root)
-		real, err := filepath.EvalSymlinks(abs)
+		real, err := nodepath.Realpath(abs)
 		if err != nil {
 			fail(fmt.Sprintf("--root %s: no such directory", *root))
 		}
@@ -176,7 +177,7 @@ func main() {
 		rootPath, base = &real, real
 	} else {
 		wd, _ := os.Getwd()
-		base, _ = filepath.EvalSymlinks(wd)
+		base, _ = nodepath.Realpath(wd)
 	}
 	timeout := shellTimeoutMs()
 	hostname, _ := os.Hostname()

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 	"unsafe"
 
@@ -45,8 +46,15 @@ func readFile(p string) (string, error) {
 	}
 	defer f.Close()
 	size := int64(0)
-	if st, err := f.Stat(); err == nil && st.Mode().IsRegular() {
-		size = st.Size()
+	if st, err := f.Stat(); err == nil {
+		// Windows ReadFile on a directory yields ERROR_INVALID_FUNCTION;
+		// recognize the directory at the file boundary, like Node readFile.
+		if st.IsDir() {
+			return "", jsv.FsError(syscall.EISDIR, "read", "")
+		}
+		if st.Mode().IsRegular() {
+			size = st.Size()
+		}
 	}
 	if size > ioMaxLength {
 		return "", fmt.Errorf("File size (%d) is greater than 2 GiB", size)

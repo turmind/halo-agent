@@ -7,7 +7,39 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/windows"
 )
+
+// Realpath uses the same handle-based native resolution as Node, including
+// junctions. EvalSymlinks can leave mount-point reparse paths unchanged.
+func Realpath(p string) (string, error) {
+	name, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		return "", err
+	}
+	h, err := windows.CreateFile(name, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(h)
+	buf := make([]uint16, 512)
+	for {
+		n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
+		if err != nil {
+			return "", err
+		}
+		if int(n) >= len(buf) {
+			buf = make([]uint16, n+1)
+			continue
+		}
+		real := windows.UTF16ToString(buf[:n])
+		if strings.HasPrefix(real, `\\?\UNC\`) {
+			return `\\` + real[8:], nil
+		}
+		return strings.TrimPrefix(real, `\\?\`), nil
+	}
+}
 
 // Home is Node's os.homedir() on Windows, independent of a POSIX shell's HOME.
 func Home() string {

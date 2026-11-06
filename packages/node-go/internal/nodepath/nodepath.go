@@ -32,7 +32,7 @@ func InRoot(root, p string) string {
 		tail = append([]string{filepath.Base(prefix)}, tail...)
 		prefix = parent
 	}
-	real, err := filepath.EvalSymlinks(prefix)
+	real, err := Realpath(prefix)
 	if err != nil {
 		return ""
 	}

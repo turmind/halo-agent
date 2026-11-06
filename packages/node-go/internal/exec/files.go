@@ -164,7 +164,7 @@ func (e *Executor) list(ctx context.Context, full string, args map[string]any) (
 	if !recursive {
 		entries, err := os.ReadDir(full)
 		if err != nil {
-			return "", jsv.FsError(unwrapPathErr(err), "scandir", full)
+			return "", jsv.FsError(err, "scandir", full)
 		}
 		var out []string
 		for _, en := range entries {

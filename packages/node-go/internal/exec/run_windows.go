@@ -24,8 +24,10 @@ func shellCommand(cmd string) *osexec.Cmd {
 	// cmd.exe uses different quoting from CommandLineToArgvW; Node uses /d /s /c
 	// with one enclosing pair of quotes, not Go's default argument escaping.
 	c.SysProcAttr = &syscall.SysProcAttr{
-		CmdLine:       syscall.EscapeArg(shell) + ` /d /s /c "chcp 65001 >nul 2>&1 & ` + cmd + `"`,
-		CreationFlags: windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW,
+		CmdLine: syscall.EscapeArg(shell) + ` /d /s /c "chcp 65001 >nul 2>&1 & ` + cmd + `"`,
+		// chcp needs a console even under Task Scheduler. Hide a new console,
+		// rather than CREATE_NO_WINDOW (which silently leaves echo in OEM).
+		CreationFlags: windows.CREATE_SUSPENDED | windows.CREATE_NEW_CONSOLE,
 		HideWindow:    true,
 	}
 	return c

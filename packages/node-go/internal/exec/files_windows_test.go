@@ -37,4 +37,8 @@ func TestWindowsMkdirp(t *testing.T) {
 	if err := mkdirp(file); err == nil || !strings.HasPrefix(err.Error(), "EEXIST: file already exists, mkdir '") {
 		t.Fatalf("file: %v", err)
 	}
+	ex := New(Scope{Base: root, Log: func(string) {}})
+	if got := run1(ex, "list", map[string]any{"path": "file"}); got != "ERR ENOTDIR: not a directory, scandir '"+file+"'" {
+		t.Fatalf("list file: %s", got)
+	}
 }
