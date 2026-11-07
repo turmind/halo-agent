@@ -185,6 +185,10 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
   // falling back to the whole turn when it ended without one (e.g. stopped
   // right after a tool call) so a consumer still gets something.
   const answer = turnFinal || turnAll
+  // A root turn can fail without an `error` event — a model refusal is an
+  // HTTP 200 stop that only emits a system notice — so the root's last-turn
+  // turnError decides too. An `error` event's text keeps precedence.
+  const failure = errorText || harness.lastTurnError || ''
   if (opts.format === 'text') {
     if (notices.length > 0) {
       process.stdout.write(notices.map(n => `ℹ️ ${n}`).join('\n') + (answer ? '\n\n' : '\n'))
@@ -208,10 +212,10 @@ export async function runCli(harness: Harness, message: string, opts: CliOptions
         cacheReadInputTokens: usage.cacheReadInputTokens,
         modelId: usage.modelId,
       } : null,
-      error: errorText || null,
+      error: failure || null,
     }
     process.stdout.write(JSON.stringify(result, null, 2) + '\n')
   }
 
-  return errorText ? 1 : 0
+  return failure ? 1 : 0
 }

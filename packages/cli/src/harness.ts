@@ -43,6 +43,10 @@ export interface Harness {
   readonly lang: Lang
   /** Whether the *current* workspace's agent supports image input. */
   readonly supportsImage: boolean
+  /** The root session's `turnError` for the last root turn the latest `run()`
+   *  saw end — set for a model refusal, an account error, or an unrecoverable
+   *  error; null when that turn ended normally. Sub-agent turns never count. */
+  readonly lastTurnError: string | null
 
   run(message: string, images?: Array<{ data: string; mimeType: string }>): AsyncGenerator<AgentSessionEvent>
   /**
@@ -269,6 +273,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
 
   // Initial bind
   let state: Binding = await bindWorkspace(initialPath, opts.sessionId, opts.newSession ?? false, { agent: opts.agentId, dir: opts.dir })
+  let lastTurnError: string | null = null
 
   async function send(message: string, images?: Array<{ data: string; mimeType: string }>): Promise<'running' | 'queued'> {
     const stamp = state.sm.appendUserMessage(state.sessionId, message)
@@ -305,11 +310,17 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     const sm = state.sm
     const sessionId = state.sessionId
     const accessLevel = state.accessLevel
+    lastTurnError = null
     const unsubscribe = sm.registerEventListener(sessionId, (event: AgentSessionEvent) => {
       queue.push(event)
       if (resolve) { resolve(); resolve = null }
-      if (event.type === 'complete' && !event.taskId && !sm.hasRunningSessions()) {
-        done = true
+      if (event.type === 'complete' && !event.taskId) {
+        // turnError is in-memory only; this listener runs synchronously inside
+        // the emit, and runSession's finally emits `complete` before it
+        // releases the session — so it is still readable here. A refusal emits
+        // no `error` event (only a system notice), so this is its only signal.
+        lastTurnError = sm.getSession(sessionId)?.turnError ?? null
+        if (!sm.hasRunningSessions()) done = true
       }
     })
 
@@ -448,6 +459,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     get workspace() { return state.workspace },
     get agentId() { return state.agentId },
     get supportsImage() { return state.supportsImage },
+    get lastTurnError() { return lastTurnError },
     lang,
     run,
     send,
