@@ -9,6 +9,7 @@ import {
 } from '../sessions/session-store.js'
 import { uiLogExists, uiLogPath } from '../sessions/session-log.js'
 import { countArchiveSegments } from '../sessions/session-archive.js'
+import { adminSnapshotRows } from '../sessions/session-types.js'
 import { findLatestGoal } from '../agents/goal-mode.js'
 import { broadcast } from '../ws/broadcast.js'
 import { isSafeIdSegment } from './workspace-path.js'
@@ -293,9 +294,12 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
 
     const agentName = row.agentName || row.agentId
     // Only convert rawMessages when the UI log is empty (sub-agent sessions
-    // that were only tracked via session-manager).
+    // that were only tracked via session-manager). Either way no tool_call /
+    // tool_result rows, as in the WS snapshot: the UI log drops them here,
+    // the conversion never builds them (user / assistant rows only — tool
+    // calls fold into the assistant row's contentBlocks).
     const messages = view.messages.length > 0 || view.rawMessages.length === 0
-      ? view.messages
+      ? adminSnapshotRows(view.messages)
       : convertRawMessages(view.rawMessages as RawMessage[], agentName)
     return c.json({
       id: row.id,
@@ -306,6 +310,7 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
       ...(row.parentId ? { parentSessionId: row.parentId } : {}),
       createdAt: new Date(row.createdAt).toISOString(),
       updatedAt: new Date(row.updatedAt).toISOString(),
+      // The active UI log's full length, tool rows included (not `messages.length`).
       messageCount: view.messages.length,
       exchangeCount: row.exchangeCount ?? 0,
       contextTokens: row.contextTokens ?? 0,

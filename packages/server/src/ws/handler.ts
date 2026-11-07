@@ -9,7 +9,7 @@
 import path from 'node:path'
 import type { WebSocket, WebSocketServer } from 'ws'
 import type { WsClientMessage, WsServerMessage } from '@turmind/halo-core/protocol'
-import { inferMessageType, type SessionMessage } from '../sessions/session-types.js'
+import { adminSnapshotRows } from '../sessions/session-types.js'
 import { SessionManager, type SessionInfo } from '../agents/session-manager.js'
 import { getSandboxBackend } from '../tools/sandbox.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
@@ -48,17 +48,6 @@ const CLIENT_SILENCE_LIMIT_MS = 3 * 60_000
 
 /** Wire shape lives in @turmind/halo-core/protocol (shared with the admin). */
 type ClientMessage = WsClientMessage
-
-/** The admin's subscribe / reattach snapshot rows: the log minus its
- *  `tool_call` / `tool_result` rows — the bulk of a long session's bytes, yet
- *  the chat never renders them (the assistant row's contentBlocks carry each
- *  tool call + output). Usage / context rows stay (debug mode shows them). */
-function adminSnapshotRows(rows: readonly SessionMessage[]): SessionMessage[] {
-  return rows.filter((m) => {
-    const t = inferMessageType(m)
-    return t !== 'tool_call' && t !== 'tool_result'
-  })
-}
 
 interface ConnectedClient {
   ws: WebSocket

@@ -8,6 +8,9 @@ import { setupWebSocketHandler } from '../src/ws/handler.js'
 import { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
 import { agentSessions } from '../src/db/schema.js'
 import { replaceUILog, replaceRawLog, uiLogPath, rawLogPath } from '../src/sessions/session-log.js'
+import { writeArchiveSegment } from '../src/sessions/session-archive.js'
+import { createSessionRoutes } from '../src/routes/sessions.js'
+import { createSessionArchiveRoutes } from '../src/routes/session-archive.js'
 import type { SessionMessage } from '../src/sessions/session-types.js'
 
 /**
@@ -17,7 +20,9 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
  *    usage / context rows;
  *  - a landed `exchange:delete` answers with `exchange:deleted` (the ids of
  *    every soft-deleted row, the ordinal + the log's user-turn count), never
- *    a whole-log `state:snapshot`.
+ *    a whole-log `state:snapshot`;
+ *  - the REST reads of the same log (`GET /sessions/logs/:id`, its archive
+ *    segments) drop the tool rows the same way.
  */
 describe('WS admin snapshot + exchange:deleted frame', () => {
   const SID = 'root'
@@ -149,5 +154,29 @@ describe('WS admin snapshot + exchange:deleted frame', () => {
     expect(snap.snapshot!.recentMessages!.map((m) => m.id)).toEqual(['ctx', 'u0', 'a0', 'us0', 'u1', 'a1'])
     // Not running any more: the teardown close saves instead of detaching again.
     sessions.delete(SID)
+  })
+
+  it('GET /sessions/logs/:id drops tool rows from messages; messageCount stays the log length', async () => {
+    const res = await createSessionRoutes(registry).request(`/sessions/logs/${SID}?projectId=${encodeURIComponent(workspace)}`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { messages: SessionMessage[]; messageCount: number; rawMessages: unknown[] }
+    expect(body.messages.map((m) => m.id)).toEqual(['ctx', 'u0', 'a0', 'us0', 'u1', 'a1'])
+    expect(body.messageCount).toBe(log.length)
+    expect(body.rawMessages).toHaveLength(4)
+  })
+
+  it('GET /sessions/logs/:id/archive/:n drops tool rows from the segment', async () => {
+    const dir = path.join(workspace, '.halo', 'sessions', 'default')
+    writeArchiveSegment(dir, SID, 1, [
+      { id: 'old-u', role: 'user', type: 'user', content: 'older', timestamp: 900 },
+      { id: 'old-tc', role: 'system', type: 'tool_call', content: '', toolName: 'file_read', toolInput: { path: 'a' }, timestamp: 900 },
+      // Legacy row without `type`: inferred as tool_result from toolOutput.
+      { id: 'old-tr', role: 'system', content: '', toolOutput: 'x', timestamp: 900 },
+      { id: 'old-a', role: 'assistant', type: 'assistant', content: 'older reply', timestamp: 900 },
+    ])
+    const res = await createSessionArchiveRoutes(registry).request(`/sessions/logs/${SID}/archive/1?projectId=${encodeURIComponent(workspace)}`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { messages: SessionMessage[] }
+    expect(body.messages.map((m) => m.id)).toEqual(['old-u', 'old-a'])
   })
 })

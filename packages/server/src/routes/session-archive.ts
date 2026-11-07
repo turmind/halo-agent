@@ -3,6 +3,7 @@ import { getWorkspaceDb } from '../db/index.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import { getSessionDir, fileSegment } from '../sessions/session-store.js'
 import { readArchiveSegment } from '../sessions/session-archive.js'
+import { adminSnapshotRows } from '../sessions/session-types.js'
 import { isSafeIdSegment } from './workspace-path.js'
 
 /**
@@ -42,7 +43,8 @@ export function createSessionArchiveRoutes(smRegistry?: SessionManagerRegistry) 
     const messages = readArchiveSegment(dir, seg, n)
     if (!messages) return c.json({ error: 'Segment not found' }, 404)
 
-    return c.json({ messages })
+    // Same rows as the WS snapshot: no tool_call / tool_result rows.
+    return c.json({ messages: adminSnapshotRows(messages) })
   })
 
   return app
