@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/dlclark/regexp2"
 	"github.com/turmind/halo-agent/packages/node-go/internal/jsv"
@@ -57,7 +58,11 @@ func (e *SyntaxError) Error() string {
 }
 
 // Regexp is a compiled JS regex.
-type Regexp struct{ re *regexp2.Regexp }
+type Regexp struct {
+	re      *regexp2.Regexp
+	literal string
+	plain   bool
+}
 
 // Compile is `new RegExp(src)`.
 func Compile(src string) (*Regexp, error) {
@@ -71,11 +76,17 @@ func Compile(src string) (*Regexp, error) {
 		return nil, &SyntaxError{src, "jsregex: " + cerr.Error()}
 	}
 	re.MatchTimeout = MatchTimeout
-	return &Regexp{re}, nil
+	return &Regexp{re: re, literal: src, plain: utf8.ValidString(src) && !strings.ContainsAny(src, `\^$.*+?()[]{}|`)}, nil
 }
 
 // Test is RegExp#test on s; ErrTimeout past MatchTimeout.
 func (r *Regexp) Test(s string) (bool, error) {
+	// A no-flags regex with no syntax is a substring search, also for astral
+	// literals. Avoid regexp2's whole-line []rune allocation for this common
+	// case. Invalid UTF-8 must retain the engine's replacement-character path.
+	if r.plain && utf8.ValidString(s) {
+		return strings.Contains(s, r.literal), nil
+	}
 	var ok bool
 	var err error
 	if jsv.HasAstral(s) {

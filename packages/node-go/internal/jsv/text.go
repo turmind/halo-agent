@@ -179,7 +179,7 @@ func ByteOffset16(s string, u int) int {
 
 // Units16 widens s to UTF-16 code units, one rune each.
 func Units16(s string) []rune {
-	out := make([]rune, 0, len(s))
+	out := make([]rune, 0, Len16(s))
 	for _, r := range s {
 		if r >= 0x10000 {
 			r -= 0x10000
