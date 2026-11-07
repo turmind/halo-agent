@@ -10,6 +10,7 @@ import { createSttEngine, MAX_PENDING_AUDIO_S, MAX_QUEUED_SEGMENTS, PAD_AFTER_S,
  *  - `<|zh|>` → `zh`, empty text dropped;
  *  - > MAX_QUEUED_SEGMENTS waiting or > MAX_PENDING_AUDIO_S per stream → busy;
  *  - abort drops the stream's queued segments; a load failure → engine;
+ *  - a closed stream's VAD is reset and pooled (once), not re-created;
  *  - `speakers`: diarizer loaded lazily, once; finals split per speaker run
  *    with per-connection labels; short clusters join the nearest speaker;
  *    token/text mismatch and no diarization fall back to one final; a
@@ -34,6 +35,7 @@ function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResu
     hold: false, hang: false, releases: [] as Array<() => void>, onEmbed: null as (() => void) | null,
   }
   let manual = false
+  const vads = { ctor: 0 }
   const mod: SherpaModule = {
     OfflineRecognizer: {
       async createAsync() {
@@ -56,6 +58,7 @@ function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResu
       pos = 0
       runStart = -1
       out: Array<{ start: number; samples: Float32Array }> = []
+      constructor() { vads.ctor++ }
       acceptWaveform(w: Float32Array) {
         const speech = w.some((x) => x !== 0)
         if (speech && this.runStart < 0) this.runStart = this.pos
@@ -67,6 +70,7 @@ function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResu
       front() { return this.out[0] }
       pop() { this.out.shift() }
       flush() { if (this.runStart >= 0) this.close() }
+      reset() { this.pos = 0; this.runStart = -1; this.out = [] }
     } as never,
     OfflineSpeakerDiarization: class {
       handle = { fake: true }
@@ -105,7 +109,7 @@ function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResu
       return out
     },
   }
-  return { mod, decodes, diar, hold: () => { manual = true } }
+  return { mod, decodes, diar, vads, hold: () => { manual = true } }
 }
 
 /** Fake SenseVoice for tone input: one token per 0.25 s of tone — `a` for
@@ -237,6 +241,32 @@ describe('stt engine', () => {
     expect(fake.decodes).toHaveLength(2)
     expect(finals).toEqual([])
     expect(other).toHaveLength(1)
+  })
+
+  it('a closed stream\'s VAD is reset and reused; only concurrent streams create one', async () => {
+    const { engine, stream, fake } = await open()
+    const open2 = (finals: SttFinal[] = []) => engine.open({ onFinal: (f) => finals.push(f), onError: () => {} })
+    // Aborted mid-speech: the VAD has an open run + 2 s of position.
+    stream.write(Buffer.alloc(SR * 2))
+    stream.write(speech(1, 0))
+    stream.abort()
+    const finals: SttFinal[] = []
+    const b = open2(finals)
+    const c = open2()
+    expect(fake.vads.ctor).toBe(2)
+    // Reset: one segment, at b's own 0.5 s (no leftover run, no carried position).
+    b.write(Buffer.alloc(SR)) // 0.5 s silence
+    b.write(speech(1))
+    await b.end()
+    b.abort() // the WS route aborts on close after end(): must not pool it twice
+    expect(finals).toHaveLength(1)
+    expect(finals[0].start).toBeCloseTo(Math.floor(SR / 2 / 512) * 512 / SR - PAD_BEFORE_S, 3)
+    await c.end()
+    open2()
+    open2()
+    expect(fake.vads.ctor).toBe(2)
+    open2()
+    expect(fake.vads.ctor).toBe(3)
   })
 
   it('a sherpa load failure is an engine error and is retried on the next load()', async () => {

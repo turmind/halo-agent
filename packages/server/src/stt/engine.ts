@@ -121,6 +121,7 @@ export interface SherpaVad {
   front(enableExternalBuffer?: boolean): { start: number; samples: Float32Array }
   pop(): void
   flush(): void
+  reset(): void
 }
 
 export interface SttFinal {
@@ -195,6 +196,11 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
   let diarLoading: Promise<void> | null = null
   const queue: Job[] = []
   let decoding = false
+  /** Reset VADs of finished streams. A `new Vad` per stream left each one's
+   *  native onnx session + buffer (~4.6 MB) to a GC finalizer the small JS
+   *  heap rarely runs: +690 MB RSS over 150 streams, flat with `gc()`. Grows
+   *  to the peak number of open streams. */
+  const vadPool: SherpaVad[] = []
 
   async function load(opts: { speakers?: boolean } = {}): Promise<void> {
     // Not cached on failure: the next stream retries (a broken native install
@@ -291,7 +297,7 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
     const labels = new Map<number, string>()
     let vad: SherpaVad
     try {
-      vad = new sherpa.Vad({
+      vad = vadPool.pop() ?? new sherpa.Vad({
         sileroVad: {
           model: models.filePath(SILERO_VAD_MODEL),
           threshold: VAD_THRESHOLD,
@@ -323,6 +329,14 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
     let decodedSamples = 0
     let stopped = false
     let drained: (() => void) | null = null
+    /** end() flushed it or abort(): nothing feeds this VAD any more. */
+    let vadReleased = false
+    const releaseVad = () => {
+      if (vadReleased) return
+      vadReleased = true
+      vad.reset()
+      vadPool.push(vad)
+    }
 
     const checkDrain = () => {
       if (drained && (stopped || inFlight === 0)) { const d = drained; drained = null; d() }
@@ -449,7 +463,7 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
 
     return {
       write(pcm) {
-        if (stopped) return
+        if (stopped || vadReleased) return
         try {
           const bytes = carry ? Buffer.concat([carry, pcm]) : pcm
           const n = bytes.length >> 1
@@ -466,7 +480,7 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
         }
       },
       end() {
-        if (!stopped) {
+        if (!stopped && !vadReleased) {
           try {
             // Last partial window: zero-filled for the VAD only (the ring keeps
             // the real samples; padding is clamped to `total`).
@@ -477,10 +491,13 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
             failStream(new SttError('engine', `VAD failed: ${errMsg(err)}`))
           }
         }
+        // Segments are already copied out of the ring: the VAD is done.
+        releaseVad()
         return new Promise<void>((resolve) => { drained = resolve; checkDrain() })
       },
       abort() {
         stopped = true
+        releaseVad()
         dropQueued()
         checkDrain()
       },
