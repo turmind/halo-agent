@@ -215,7 +215,7 @@ function recordModelCall(session: SpanSessionContext, turn: TurnState, event: Ag
       'gen_ai.request.model': model,
       'gen_ai.usage.input_tokens': event.usage?.inputTokens ?? 0,
       'gen_ai.usage.output_tokens': event.usage?.outputTokens ?? 0,
-      'gen_ai.response.finish_reasons': [turn.cycleToolCalls.length > 0 ? 'tool_use' : 'end_turn'],
+      ...(event.stopReason ? { 'gen_ai.response.finish_reasons': [event.stopReason] } : {}),
       'session.id': session.id,
       ...(event.ttftMs != null ? { 'halo.ttft_ms': event.ttftMs } : {}),
     },

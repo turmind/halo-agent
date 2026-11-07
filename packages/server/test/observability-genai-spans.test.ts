@@ -67,14 +67,14 @@ function runOneToolTurn(session: SpanSessionContext, toolResult = 'file-a\nfile-
   ] })
   onAgentEvent(session, { type: 'text', text: 'Let me look.', final: false })
   onAgentEvent(session, { type: 'tool_call', toolName: 'shell_exec', toolUseId: 'tu_1', toolInput: { command: 'ls' } })
-  onAgentEvent(session, { type: 'usage', usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 }, durationMs: 800, ttftMs: 250 })
+  onAgentEvent(session, { type: 'usage', usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 }, durationMs: 800, ttftMs: 250, stopReason: 'tool_use' })
   // tool runs
   onAgentEvent(session, { type: 'tool_result', toolName: 'shell_exec', toolUseId: 'tu_1', toolResult, durationMs: 50 })
   session.agent.messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: toolResult }] })
   // model call 2: wrap-up
   session.agent.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Two files.' }] })
   onAgentEvent(session, { type: 'text', text: 'Two files.', final: true })
-  onAgentEvent(session, { type: 'usage', usage: { inputTokens: 150, outputTokens: 10, totalTokens: 160 }, durationMs: 600 })
+  onAgentEvent(session, { type: 'usage', usage: { inputTokens: 150, outputTokens: 10, totalTokens: 160 }, durationMs: 600, stopReason: 'end_turn' })
   onAgentEvent(session, { type: 'stop', stopReason: 'end_turn' } as AgentEvent)
   endTurn(session, {})
 }
@@ -240,6 +240,16 @@ describe('genai-spans: span tree', () => {
     onAgentEvent(session, { type: 'text', text: 'late' })
     endTurn(session, {})
     expect(spanExporter.getFinishedSpans()).toHaveLength(spans.length)
+  })
+
+  it('(e2) finish_reasons carries the model call\'s own stop reason (truncation / refusal are not end_turn)', () => {
+    const session = makeSession()
+    beginTurn(session, 'go')
+    onAgentEvent(session, { type: 'usage', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, durationMs: 10, stopReason: 'max_tokens' })
+    onAgentEvent(session, { type: 'usage', usage: { inputTokens: 1, outputTokens: 0, totalTokens: 1 }, durationMs: 10, stopReason: 'refusal' })
+    endTurn(session, {})
+    const chats = byOp(spanExporter.getFinishedSpans(), 'chat')
+    expect(chats.map((c) => c.attributes['gen_ai.response.finish_reasons'])).toEqual([['max_tokens'], ['refusal']])
   })
 
   it('(f) metrics: recordRetry increments halo.model.retries; a turn records token / duration histograms', async () => {

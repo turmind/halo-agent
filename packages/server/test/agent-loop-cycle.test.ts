@@ -274,7 +274,7 @@ describe('AgentLoop tool cycle', () => {
     expect(loop.calls).toBe(1)
     expect(echo).not.toHaveBeenCalled()
     expect(events).toEqual([
-      { type: 'usage', usage, durationMs: undefined },
+      { type: 'usage', usage, durationMs: undefined, stopReason: 'refusal' },
       { type: 'stop', stopReason: 'refusal', stopDetails },
     ])
     // Partial output discarded: no assistant message pushed, so the next run()

@@ -121,6 +121,7 @@ export interface AgentEvent {
   durationMs?: number
   /** For 'usage' events: time to first streamed chunk (streaming providers only). */
   ttftMs?: number
+  /** On 'stop' and 'usage' events: the model call's stop reason. */
   stopReason?: StopReason
   /** For 'stop' events with stopReason 'refusal': Anthropic's stop_details. */
   stopDetails?: StopDetails
@@ -334,7 +335,7 @@ export abstract class AgentLoop {
         // orphaned and get an "[interrupted]" tool_result synthesized by
         // conversation-repair next turn) and don't announce tool_calls that will
         // never run. Surface usage + the stop so the SessionManager can tell the user.
-        yield { type: 'usage', usage: result.usage, durationMs: result.durationMs, ttftMs: result.ttftMs }
+        yield { type: 'usage', usage: result.usage, durationMs: result.durationMs, ttftMs: result.ttftMs, stopReason: 'refusal' }
         yield { type: 'stop', stopReason: 'refusal', stopDetails: result.stopDetails }
         return
       }
@@ -368,6 +369,7 @@ export abstract class AgentLoop {
         usage: result.usage,
         durationMs: result.durationMs,
         ttftMs: result.ttftMs,
+        stopReason: result.stopReason as StopReason,
       }
 
       const toolUseBlocks = result.assistantBlocks.filter(
