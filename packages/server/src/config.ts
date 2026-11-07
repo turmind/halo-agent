@@ -312,6 +312,29 @@ export function evoLevelRank(level: EvoLevel): number {
   return EVO_LEVELS.indexOf(level)
 }
 
+/** A `general.*` value with the workspace layer on top: `<ws>/.halo/settings.yaml`
+ *  > global settings.yaml (> the caller's schema-default fallback). Same order
+ *  as getServerSecret; '' / null read as unset at either layer. */
+function generalValueFor(workspaceRoot: string, dotPath: string): string | undefined {
+  const ws = readYamlValue(getWorkspaceSettings(workspaceRoot), dotPath)
+  if (ws != null && String(ws) !== '') return String(ws)
+  return settingsValue(dotPath)
+}
+
+/** `general.evolution.level` for a workspace — the one setting evo reads per
+ *  workspace (with the threshold), so an open workspace can sit at L0 while a
+ *  private one auto-applies. */
+export function evoLevelFor(workspaceRoot: string): EvoLevel {
+  return parseEvoLevel(generalValueFor(workspaceRoot, 'general.evolution.level') ?? schemaDefault('general.evolution.level', 'L0'))
+}
+
+/** `general.evolution.auto_apply_threshold` for a workspace (see evoLevelFor);
+ *  the minimum average score for L2/L3 auto-apply (auto-apply.ts adds fixed floors). */
+export function autoApplyThresholdFor(workspaceRoot: string): number {
+  const n = parseInt(generalValueFor(workspaceRoot, 'general.evolution.auto_apply_threshold') ?? '', 10)
+  return isNaN(n) ? settingsInt('general.evolution.auto_apply_threshold', 80) : n
+}
+
 export const config = {
   // Goal entry points are retired, not the runtime. Internal/global-only, no UI:
   // set general.goal_mode_enabled in ~/.halo/secrets/settings.yaml, then restart.
@@ -490,16 +513,10 @@ export const config = {
   },
 
   // Self-evolution (see plans/self-evolution.md). Getter-based so user edits
-  // in settings.yaml take effect on the next ticker run without restart.
+  // in settings.yaml take effect on the next ticker run without restart. The
+  // level and auto-apply threshold are per workspace: evoLevelFor /
+  // autoApplyThresholdFor.
   evolution: {
-    get level(): EvoLevel {
-      return parseEvoLevel(settingsStr('general.evolution.level', 'L0'))
-    },
-    // Minimum average score for L2/L3 auto-apply (see evolution/auto-apply.ts
-    // for the extra fixed floors).
-    get autoApplyThreshold(): number {
-      return settingsInt('general.evolution.auto_apply_threshold', 80)
-    },
     get maxConcurrentRun(): number {
       return settingsInt('general.evolution.max_concurrent_run', 1)
     },

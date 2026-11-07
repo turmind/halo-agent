@@ -15,7 +15,6 @@ import {
 } from '../src/evolution/evo-wrapper.js'
 import { failApply } from '../src/evolution/queue-apply.js'
 import { createEvoDb, setEvoDb, evolutionRuns, evolutionApplies, type EvoDb } from '../src/db/evo-db.js'
-import { config } from '../src/config.js'
 import { wsHaloDir, evoSandboxHaloDir, wsEvoRunDir, wsEvoHistoryDir, globalDir } from '../src/paths.js'
 
 /**
@@ -391,12 +390,11 @@ describe('scoreGate / decideAutoApply', () => {
     expect(decideAutoApply({ ...base, level: 'L1', sourceAccess: 'readonly' }).reason).toBe('level')
   })
 
-  it('source gate: a source that took webhook events never auto-applies, with its own reason', () => {
+  it('source gate: a run recorded with the retired source_access \'webhook\' reads as not full (no migration)', () => {
     const base = { threshold: 80, classification: prompt, score: GOOD }
     for (const level of ['L2', 'L3'] as const) {
-      expect(decideAutoApply({ ...base, level, sourceAccess: 'webhook' })).toEqual({ auto: false, reason: 'source_webhook' })
+      expect(decideAutoApply({ ...base, level, sourceAccess: 'webhook' })).toEqual({ auto: false, reason: 'source_access' })
     }
-    expect(decideAutoApply({ ...base, level: 'L1', sourceAccess: 'webhook' }).reason).toBe('level')
   })
 })
 
@@ -465,14 +463,22 @@ describe('wrapper: maybeAutoApply / autoApplyRecheck / failApply', () => {
     write(runDir, 'score.json', JSON.stringify({ lint: 100, behavior: 100, scope: 70, confidence: 'high', avg: 90, checks: GOOD.checks }))
     write(runDir, 'patch.md', '---\ntarget: .halo/INSTRUCTIONS.md\n---\nbody\n\n## Larger observation\nMerge two agents.\n')
     db.insert(evolutionRuns).values({ id: RUN, workspacePath: ws, status: 'running', triggerKind: 'note', sourceSession: 's', createdAt: 1, attempts: 1 }).run()
-    vi.spyOn(config.evolution, 'autoApplyThreshold', 'get').mockReturnValue(80)
   })
   afterEach(() => {
     vi.restoreAllMocks()
     fs.closeSync(logFd)
     fs.rmSync(tmp, { recursive: true, force: true })
   })
-  const level = (l: 'L0' | 'L1' | 'L2' | 'L3') => vi.spyOn(config.evolution, 'level', 'get').mockReturnValue(l)
+  // The level is read per workspace (evoLevelFor): set it in this workspace's
+  // settings.yaml (threshold: the schema default 80). Each write gets its own
+  // mtime — the settings cache keys on it, and two writes inside one timestamp
+  // tick would read as unchanged.
+  let tick = 0
+  const level = (l: 'L0' | 'L1' | 'L2' | 'L3') => {
+    write(wsHaloDir(ws), 'settings.yaml', `general:\n  evolution:\n    level: ${l}\n`)
+    const t = new Date(Date.now() + ++tick * 1000)
+    fs.utimesSync(path.join(wsHaloDir(ws), 'settings.yaml'), t, t)
+  }
   const hook = (attempts = 1, sourceAccess: string | null = 'full') => maybeAutoApply({ runId: RUN, workspacePath: ws, runDir, attempts, sourceAccess, logFd })
 
   it('L1: no verdict file, run stays running for finalize', () => {
@@ -508,14 +514,6 @@ describe('wrapper: maybeAutoApply / autoApplyRecheck / failApply', () => {
       expect(hook(1, access)).toBe(false)
       expect(record()).toMatchObject({ auto: false, reason: 'source_access', sourceAccess: access })
     }
-    expect(db.select().from(evolutionApplies).all()).toHaveLength(0)
-    expect(runRow().status).toBe('running')
-  })
-
-  it('L3 + passing patch from a source that took webhook events: verdict source_webhook, nothing queued', () => {
-    level('L3')
-    expect(hook(1, 'webhook')).toBe(false)
-    expect(record()).toMatchObject({ auto: false, reason: 'source_webhook', sourceAccess: 'webhook' })
     expect(db.select().from(evolutionApplies).all()).toHaveLength(0)
     expect(runRow().status).toBe('running')
   })

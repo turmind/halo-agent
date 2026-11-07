@@ -38,8 +38,6 @@ import { homedir } from 'node:os'
 import { evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { wsEvoRunDir } from '../paths.js'
 import { listSkillDirs } from '../agents/skill-sources.js'
-import { sessionTookEvents } from '../cron/events.js'
-import { SOURCE_WEBHOOK } from './auto-apply.js'
 import type { SessionManager } from '../agents/session-manager.js'
 
 export type EvoTrigger = 'note' | 'pre-compact'
@@ -399,9 +397,7 @@ export function enqueueEvoRun(input: EnqueueEvoRunInput): EnqueueEvoRunResult {
       createdAt: Date.now(),
       // The persisted session gate; null (CLI / pre-channel sessions) is "no
       // gate", i.e. full — the same reading session-agent-builder gives it.
-      // A session that took webhook events reads 'webhook' instead (the
-      // L2/L3 source gate's own reason), at any access level.
-      sourceAccess: sessionTookEvents(sourceSessionId) ? SOURCE_WEBHOOK : (info.accessLevel ?? 'full'),
+      sourceAccess: info.accessLevel ?? 'full',
     }).run()
   } catch (err) {
     // Clean up the orphan run dir — without a db row the ticker can't see

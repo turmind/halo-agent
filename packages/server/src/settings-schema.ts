@@ -129,9 +129,12 @@ function generalSection(): SchemaSection {
     displayName_zh: '常规',
     description: 'Server behavior parameters (session limits, compaction, sandbox, logging).',
     description_zh: '服务端行为参数（会话限制、压缩、沙箱、日志）。',
-    // Every general.* field is globalOnly: config.ts reads them via
-    // settingsValue() from the global settings.yaml only. Per-workspace
-    // layering exists solely for namespaced params/secrets (getServerSecret).
+    // Every general.* field is globalOnly — config.ts reads them via
+    // settingsValue() from the global settings.yaml only; per-workspace
+    // layering is for namespaced params/secrets (getServerSecret) — except
+    // evolution.level and evolution.auto_apply_threshold: how far evo may act
+    // on its own is a property of the workspace (an open one at L0, a private
+    // one at L2/L3), read per workspace by evoLevelFor / autoApplyThresholdFor.
     fields: ([
       // system-wide language preference. Read by internal agents (evo, score)
       // that don't load INSTRUCTIONS.md, and available to anything else that
@@ -177,11 +180,13 @@ function generalSection(): SchemaSection {
       // a workspace must not widen; public_url names this server to peers.
       { key: 'a2a.public_url', type: 'string', globalOnly: true, description: 'Origin peers use to reach this server for A2A (e.g. http://myhost.tailnet.ts.net:9527): the agent card\'s interface URL and the webhook URL given to remotes. Empty = derived from the request Host. Env HALO_A2A_PUBLIC_URL overrides.', description_zh: '对端访问本服务的 A2A 源地址（如 http://myhost.tailnet.ts.net:9527）：用于 agent card 的接口 URL 和交给远端的 webhook URL。留空则按请求 Host 推导。环境变量 HALO_A2A_PUBLIC_URL 优先。', default: '' },
       { key: 'a2a.url_allowlist', type: 'string', globalOnly: true, description: 'Comma-separated CIDRs / host patterns A2A may reach besides public https (push webhooks, remote cards and RPC). Private / loopback ranges are refused unless listed; plain http is allowed only to listed hosts / ranges. Link-local (169.254.0.0/16, fe80::/10) is always refused.', description_zh: 'A2A 除公网 https 之外允许访问的 CIDR / 主机模式（逗号分隔，用于 push webhook、远端 card 和 RPC）。私网 / 回环地址必须列出才允许；明文 http 只允许列出的主机 / 网段。链路本地地址（169.254.0.0/16、fe80::/10）始终拒绝。', default: DEFAULT_A2A_URL_ALLOWLIST },
-      // self-evolution (see plans/self-evolution.md). All evo settings are
-      // global-only — the worker / ticker live in the server process and
-      // would have to reload mid-flight if a workspace could override them.
-      { key: 'evolution.level', type: 'enum', options: ['L0', 'L1', 'L2', 'L3'], globalOnly: true, description: 'Self-evolution capability ladder. L0: manual only — drafts via /evo, manual approve/reject. L1: L0 plus automatic drafting on pre-compact. L2: L1 plus auto-applying prompt-only changes that score above evolution.auto_apply_threshold. L3: L2 plus auto-applying capability changes (agent.yaml tools / model, skill invocation). Auto-applied changes still pass the regression check and can be rolled back from the Evolution tab. Queued runs always execute regardless of level.', description_zh: '自我进化等级。L0：仅手动——通过 /evo 起草，手动 approve/reject。L1：在 L0 基础上，压缩前（pre-compact）自动起草。L2：在 L1 基础上，对评分超过 evolution.auto_apply_threshold 的纯提示词改动自动应用。L3：在 L2 基础上，对能力类改动（agent.yaml 的工具/模型、skill 调用方式）也自动应用。自动应用照样过回归检查，可在 Evolution 页回滚。已排队的 run 不受等级影响，始终执行。', default: 'L0' },
-      { key: 'evolution.auto_apply_threshold', type: 'int', min: 0, max: 100, globalOnly: true, description: 'Minimum average score (0–100) for auto-apply at L2/L3. Also required: confidence high, behavior ≥ 70, lint 100, all sandbox checks passed. Ignored at L0/L1.', description_zh: 'L2/L3 自动应用要求的最低平均分（0–100）。另需同时满足：confidence 为 high、behavior ≥ 70、lint 为 100、沙箱检查全部通过。L0/L1 下忽略。', default: '80' },
+      // self-evolution (see plans/self-evolution.md). The level and the
+      // auto-apply threshold are per workspace (read where a run's workspace is
+      // known: the pre-compact trigger, the wrapper's auto-apply verdict and
+      // recheck). The rest stays global-only: the ticker's slots, timeouts and
+      // retries are server-wide, and pre-compact snapshots are a server switch.
+      { key: 'evolution.level', type: 'enum', options: ['L0', 'L1', 'L2', 'L3'], description: 'Self-evolution capability ladder. L0: manual only — drafts via /evo, manual approve/reject. L1: L0 plus automatic drafting on pre-compact. L2: L1 plus auto-applying prompt-only changes that score above evolution.auto_apply_threshold. L3: L2 plus auto-applying capability changes (agent.yaml tools / model, skill invocation). Auto-applied changes still pass the regression check and can be rolled back from the Evolution tab. Queued runs always execute regardless of level.', description_zh: '自我进化等级。L0：仅手动——通过 /evo 起草，手动 approve/reject。L1：在 L0 基础上，压缩前（pre-compact）自动起草。L2：在 L1 基础上，对评分超过 evolution.auto_apply_threshold 的纯提示词改动自动应用。L3：在 L2 基础上，对能力类改动（agent.yaml 的工具/模型、skill 调用方式）也自动应用。自动应用照样过回归检查，可在 Evolution 页回滚。已排队的 run 不受等级影响，始终执行。', default: 'L0' },
+      { key: 'evolution.auto_apply_threshold', type: 'int', min: 0, max: 100, description: 'Minimum average score (0–100) for auto-apply at L2/L3. Also required: confidence high, behavior ≥ 70, lint 100, all sandbox checks passed. Ignored at L0/L1.', description_zh: 'L2/L3 自动应用要求的最低平均分（0–100）。另需同时满足：confidence 为 high、behavior ≥ 70、lint 为 100、沙箱检查全部通过。L0/L1 下忽略。', default: '80' },
       { key: 'evolution.max_concurrent_run', type: 'int', globalOnly: true, description: 'Max concurrent evo run wrappers (drafting patches).', description_zh: '同时运行的 evo run wrapper 上限（起草 patch）。', default: '1' },
       { key: 'evolution.max_concurrent_apply', type: 'int', globalOnly: true, description: 'Max concurrent evo apply wrappers (merging patches).', description_zh: '同时运行的 evo apply wrapper 上限（合并 patch）。', default: '1' },
       { key: 'evolution.run_timeout_minutes', type: 'int', globalOnly: true, description: 'Heartbeat timeout for run wrappers. The wrapper writes a heartbeat every 60s for as long as it lives, so exceeding this means the wrapper process died — the row is requeued (or marked timeout past max_attempts). This is dead-wrapper detection latency, NOT a budget for slow models; the per-phase model budget is the wrapper-internal cap (draft 60min, other phases 45min).', description_zh: 'run wrapper 心跳超时（分钟）。wrapper 存活期间每 60 秒写一次心跳，超时即视为 wrapper 进程已死，任务重排（超过 max_attempts 则标 timeout）。这是死 wrapper 的检测延迟，不是慢模型的运行预算——单阶段模型预算是 wrapper 内部的上限（起草 60 分钟，其余阶段 45 分钟）。', default: '12' },

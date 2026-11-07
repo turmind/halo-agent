@@ -11,7 +11,7 @@ import path from 'node:path'
 import type { AgentEvent, AnthropicMessage, ContentBlock, ToolDef } from './bedrock-agent.js'
 import type { ModelRuntime } from './model-runtime.js'
 import { loadScopeInstructions } from '../prompts/md-loader.js'
-import { config, evoLevelRank, modelSupportsImage, resolveEffectiveContext } from '../config.js'
+import { config, evoLevelFor, evoLevelRank, modelSupportsImage, resolveEffectiveContext } from '../config.js'
 import { repairConversationMessages } from './conversation-repair.js'
 import { classifyModelError, type ModelErrorKind } from './model-error.js'
 import { compactCut, localCompactMessages } from './compact.js'
@@ -2905,7 +2905,7 @@ export class SessionManager implements SessionManagerInternals {
     // root agent's). Gate on parentId, the authoritative parent-link, not on
     // the legacy `id.includes('>')` heuristic.
     if (
-      evoLevelRank(config.evolution.level) < 1
+      evoLevelRank(evoLevelFor(this.workspaceRoot)) < 1
       || !config.evolution.triggers.preCompact
       || session.parentId
     ) return

@@ -433,14 +433,8 @@ export function categoryGate(level: EvoLevel, cls: Classification): string | nul
  *  not rewrite the prompts every session runs on without a human in the loop.
  *  null (a run enqueued before the column existed) counts as not full. */
 export function sourceGate(sourceAccess: string | null): string | null {
-  if (sourceAccess === SOURCE_WEBHOOK) return 'source_webhook'
   return sourceAccess === 'full' ? null : 'source_access'
 }
-
-/** `source_access` of a run whose source session was handed webhook events
- *  (enqueue.ts): its history carries payloads from outside, whatever the
- *  session's access level, so a reviewer always sees what it teaches. */
-export const SOURCE_WEBHOOK = 'webhook'
 
 /** Does the score clear the bar? null = yes, else a reason code. */
 export function scoreGate(score: EvoScore | null, threshold: number): string | null {

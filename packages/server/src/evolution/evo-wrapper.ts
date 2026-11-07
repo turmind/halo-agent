@@ -50,7 +50,7 @@ import {
   evoSandboxDir, evoSandboxHaloDir, evoRegressDir, evoRegressRunDir,
   evoLogsDir, evoWrapperLogFile, evoApplyLogFile, globalDir,
 } from '../paths.js'
-import { config, evoLevelRank } from '../config.js'
+import { autoApplyThresholdFor, config, evoLevelFor, evoLevelRank } from '../config.js'
 import { cleanChildEnv } from '../child-env.js'
 import {
   AUTO_APPLY_FILE, categoryGate, classifyChanges, evaluateSandbox, publishChanges, readObservation, readScore,
@@ -1391,7 +1391,7 @@ export function markObservation(id: string, attempts: number, runDir: string, ou
  * finalize. The ticker's broadcastChanges pushes running → approved.
  */
 export function maybeAutoApply(args: { runId: string; workspacePath: string; runDir: string; attempts: number; sourceAccess: string | null; logFd: number }): boolean {
-  const level = config.evolution.level
+  const level = evoLevelFor(args.workspacePath)
   if (evoLevelRank(level) < 2) return false
   let record: ReturnType<typeof evaluateSandbox>
   try {
@@ -1401,7 +1401,7 @@ export function maybeAutoApply(args: { runId: string; workspacePath: string; run
       sandboxHalo: evoSandboxHaloDir(args.runDir),
       entries: PUBLISH_WHITELIST,
       level,
-      threshold: config.evolution.autoApplyThreshold,
+      threshold: autoApplyThresholdFor(args.workspacePath),
       sourceAccess: args.sourceAccess,
       score: readScore(path.join(args.runDir, 'score.json')),
       observation: readObservation(path.join(args.runDir, 'patch.md')),
@@ -1934,7 +1934,7 @@ export function autoApplyRecheck(workspacePath: string, applyDir: string, change
     globalHalo: globalDir(),
     sandboxHalo: evoSandboxHaloDir(applyDir),
   }, changed))
-  return categoryGate(config.evolution.level, cls)
+  return categoryGate(evoLevelFor(workspacePath), cls)
 }
 
 async function applyMode(id: string, logFd: number): Promise<void> {

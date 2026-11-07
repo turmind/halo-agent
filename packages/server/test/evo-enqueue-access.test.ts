@@ -12,7 +12,8 @@ import type { SessionManager } from '../src/agents/session-manager.js'
  * enqueueEvoRun stamps the source session's access level on the run — the
  * L2/L3 source gate (auto-apply.ts sourceGate) reads it. Both triggers go
  * through here: pre-compact (session-manager) and /evo (commands.ts execNote).
- * A session that was handed webhook events reads 'webhook' instead.
+ * A session that was handed webhook events keeps its own level (the level is
+ * per workspace — an open workspace sits at L0).
  */
 
 let tmp: string, ws: string, db: EvoDb, cronDb: CronDb
@@ -59,20 +60,11 @@ describe('enqueueEvoRun: a session that took webhook events', () => {
     return db.select().from(evolutionRuns).where(eq(evolutionRuns.id, res.runId)).get()!.sourceAccess
   }
 
-  it.each(['pending', 'injected', 'done', 'failed'] as const)('one cron_events row (%s) on the session → run.sourceAccess webhook, any access level, both triggers', (state) => {
-    cronDb.insert(cronEvents).values({ id: 'ev1', jobId: 'cron-w', deliveryId: 'd1', receivedAt: 1, state, runId: 'run-1', sessionId: 's1', payload: '{}' }).run()
-    for (const access of ['full', null, 'workspace'] as const) {
-      expect(sourceAccessOf(access, 'pre-compact')).toBe('webhook')
-      expect(sourceAccessOf(access, 'note')).toBe('webhook')
+  it('a cron_events row on the session leaves its access level as is, both triggers', () => {
+    cronDb.insert(cronEvents).values({ id: 'ev1', jobId: 'cron-w', deliveryId: 'd1', receivedAt: 1, state: 'done', runId: 'run-1', sessionId: 's1', payload: '{}' }).run()
+    for (const [access, want] of [['full', 'full'], [null, 'full'], ['workspace', 'workspace']] as const) {
+      expect(sourceAccessOf(access, 'pre-compact')).toBe(want)
+      expect(sourceAccessOf(access, 'note')).toBe(want)
     }
-  })
-
-  it('events on another session (or none claimed yet) leave the access level as is', () => {
-    cronDb.insert(cronEvents).values([
-      { id: 'ev1', jobId: 'cron-w', deliveryId: 'd1', receivedAt: 1, state: 'done', runId: 'run-1', sessionId: 'other', payload: '{}' },
-      { id: 'ev2', jobId: 'cron-w', deliveryId: 'd2', receivedAt: 2, state: 'pending', payload: '{}' },
-    ]).run()
-    expect(sourceAccessOf('full', 'note')).toBe('full')
-    expect(sourceAccessOf(null, 'pre-compact')).toBe('full')
   })
 })

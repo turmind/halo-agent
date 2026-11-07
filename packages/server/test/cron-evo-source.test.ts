@@ -1,9 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
-import { config } from '../src/config.js'
 import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src/db/cron-db.js'
 import { createEvoDb, setEvoDb, evolutionRuns, type EvoDb } from '../src/db/evo-db.js'
 import { createCronHookRoutes } from '../src/routes/cron-hooks.js'
@@ -12,10 +11,10 @@ import { installCronHarness, teardownCronHarness, until, type CronHarness } from
 
 /**
  * Cron × self-evolution: a cron run's own turn never enqueues a pre-compact
- * evo run (reply_to `{cron}`), and a session that was handed webhook events
- * enqueues with source_access 'webhook' — never auto-applied at L2/L3. Real
- * SessionManager + stub agent; a compaction is simulated by setting the
- * session's `compactedThisTurn` while its turn is held.
+ * evo run (reply_to `{cron}`); a session that was handed webhook events
+ * enqueues with its own access level (the level is per workspace — an open
+ * workspace sits at L0). Real SessionManager + stub agent; a compaction is
+ * simulated by setting the session's `compactedThisTurn` while its turn is held.
  */
 
 let tmpHome: string
@@ -34,7 +33,8 @@ beforeEach(() => {
   setCronDb(db)
   evoDb = createEvoDb(path.join(tmpHome, 'global'))
   setEvoDb(evoDb)
-  vi.spyOn(config.evolution, 'level', 'get').mockReturnValue('L3')
+  fs.mkdirSync(path.join(ws, '.halo'), { recursive: true })
+  fs.writeFileSync(path.join(ws, '.halo', 'settings.yaml'), 'general:\n  evolution:\n    level: L3\n')
   h = installCronHarness(ws)
 })
 
@@ -104,14 +104,14 @@ describe('pre-compact evo vs cron runs', () => {
 })
 
 describe('evo source of a session that took webhook events', () => {
-  it('a user turn compacting after a webhook run: run enqueued with source_access webhook', async () => {
+  it('a user turn compacting after a webhook run: run enqueued with the session\'s own access', async () => {
     insertJob('cron-w', { schedule: '', webhookSecret: 'hook-secret' })
     const res = await hooks.request('/cron-hooks/cron-w', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer hook-secret' }, body: '{"n":1}' })
     expect(res.status).toBe(202)
     await until(() => db.select().from(cronRuns).all().length === 1 && runSettled(db.select().from(cronRuns).all()[0].id))
     await userTurnCompacting('cron-w')
     await until(() => evoRuns().length === 1)
-    expect(evoRuns()[0]).toMatchObject({ sourceSession: 'cron-w', sourceAccess: 'webhook' })
+    expect(evoRuns()[0]).toMatchObject({ sourceSession: 'cron-w', sourceAccess: 'full' })
   })
 
   it('a scheduled job\'s session (no events) enqueues as full', async () => {
