@@ -78,9 +78,9 @@ Per VAD segment, inside the same FIFO job as its decode (so a stream's finals st
 
 Thresholds: CAM++ cosine on four.wav, pairwise over its nine reference turns (all ≥ 1 s, each embedding capped at 6 s), was 0.75–0.83 for the same speaker (6 pairs) and 0.03–0.52 between different ones (30 pairs); in the engine every match threshold from 0.45 to 0.7 gave the same labels, so 0.55 sits in the gap. **Acceptance** (sherpa's 4-speaker zh test `four.wav`, 56.9 s, 16 kHz mono, converted to s16le and streamed through `createSttEngine()` with the real models in 100 ms frames, `speakers` on): 8 finals labelled `0 1 2 | 0 | 3 | 3 | 2 | 0`, matching the reference (`A B B C | A | D | D | C | A`, sherpa's two S1 runs fall in one piece here) up to renaming, the first segment split at 7.03 s and 13.78 s into its three speakers' sentences. Total 3.4 s for 57 s of audio (1.8 s without speakers); longest event-loop gap 70 ms.
 
-### VAD (one per stream)
+### VAD (one per open stream, pooled)
 
-Silero v4, 512-sample windows at 16 kHz, internal buffer 30 s. Constants in `engine.ts`:
+Silero v4, 512-sample windows at 16 kHz, internal buffer 30 s. Each open stream holds one; on `end()` (after the flush) or `abort()` it is `reset()` and goes back to a per-engine pool that `open()` draws from first, so the pool only grows to the most streams ever open at once and pooled VADs are never freed (~4.6 MB native each). A `new Vad` per stream left that native memory to a GC finalizer the small JS heap rarely runs: +150 MB RSS over 150 streams through the engine (+690 MB for raw new-and-feed), flat with `gc()`. The per-segment recognizer / CAM++ streams are still finalizer-freed (the addon has no release call), ≈ 0.2 MB per decode. Constants in `engine.ts`:
 
 | Constant | Value | Why |
 |---|---|---|

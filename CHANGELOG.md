@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Cron: a job's prompt is trimmed when saved, so a whitespace-only prompt is rejected on a timed job and a pasted prompt loses stray leading / trailing newlines.
 - Admin: `GET /api/sessions/logs/:id` and the archive segment route no longer return `tool_call` / `tool_result` rows, same as the WebSocket snapshot — the chat already shows each tool call inside the reply. `messageCount` still counts the full log.
 - Observability: the OTel `chat` span's `gen_ai.response.finish_reasons` is the call's real stop reason (`end_turn`, `tool_use`, `max_tokens`, `stop_sequence`, `refusal`); a truncated or refused call is no longer recorded as `end_turn`.
+- On-device speech-to-text: a finished dictation / recording stream hands its voice detector back for the next one instead of leaving its ~4.6 MB of native memory for the garbage collector, which rarely ran. The server's memory no longer climbs by ~150 MB after a hundred or so streams (it levels off ~30 MB above the start).
 - Linked machines: `halo-node` grep searches a plain literal pattern directly instead of widening each line to UTF-16, so a very long single line needs far less memory (64 MiB line: peak RSS 327 → 71 MiB).
 
 ## [2.2.2] - 2026-11-06

@@ -1,6 +1,7 @@
 /**
  * On-device STT engine (`stt-local`): one SenseVoice recognizer for the whole
- * server, one Silero VAD per stream, one global decode queue.
+ * server, one Silero VAD per open stream (pooled, reset on reuse), one global
+ * decode queue.
  *
  * - `sherpa-onnx-node` is imported on first `load()` — a missing native
  *   binary / unsupported platform is an `engine` error on that stream, never a
