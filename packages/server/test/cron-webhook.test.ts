@@ -656,6 +656,13 @@ describe('REST: webhook mode', () => {
     // A timed job can't have its prompt emptied.
     expect((await json('PUT', `/cron/jobs/${id}`, { userPrompt: '' })).status).toBe(400)
     expect(row(id).userPrompt).toBe('now timed')
+    // Whitespace-only counts as empty; a prompt is stored trimmed (POST and PUT).
+    expect((await json('PUT', `/cron/jobs/${id}`, { userPrompt: '  \n ' })).status).toBe(400)
+    expect((await json('PUT', `/cron/jobs/${id}`, { userPrompt: '  edited \n' })).status).toBe(200)
+    expect(row(id).userPrompt).toBe('edited')
+    expect((await json('POST', '/cron/jobs', { workspacePath: ws, agentId: 'default', userPrompt: ' \t', schedule: '0 9 * * *' })).status).toBe(400)
+    const { id: p } = await (await json('POST', '/cron/jobs', { workspacePath: ws, agentId: 'default', userPrompt: '\n hi \n', schedule: '0 9 * * *' })).json() as { id: string }
+    expect(row(p).userPrompt).toBe('hi')
   })
 
   it('PUT switches modes (secret kept while webhook), rotate replaces it, runs list counts events', async () => {

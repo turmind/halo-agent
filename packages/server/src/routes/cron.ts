@@ -237,8 +237,9 @@ export function createCronRoutes(): Hono {
     const hasRunAt = typeof body.runAt === 'number' && Number.isFinite(body.runAt)
     const webhook = body.webhook === true
     // A webhook job's prompt is optional (its events are the message); stored '' when omitted.
-    const userPrompt = body.userPrompt ?? ''
-    if (typeof userPrompt !== 'string') return c.json({ error: 'userPrompt must be a string' }, 400)
+    const rawPrompt = body.userPrompt ?? ''
+    if (typeof rawPrompt !== 'string') return c.json({ error: 'userPrompt must be a string' }, 400)
+    const userPrompt = rawPrompt.trim()
     if (!userPrompt && !webhook) return c.json({ error: 'userPrompt required' }, 400)
     if (!hasSchedule && !hasRunAt && !webhook) return c.json({ error: 'schedule, runAt or webhook required' }, 400)
     if (hasSchedule && hasRunAt) return c.json({ error: 'schedule and runAt are mutually exclusive' }, 400)
@@ -412,7 +413,7 @@ export function createCronRoutes(): Hono {
     // Checked only when the body touches the prompt or leaves webhook mode, so
     // an unrelated edit of an older empty-prompt row passes.
     if (body.userPrompt !== undefined && typeof body.userPrompt !== 'string') return c.json({ error: 'userPrompt must be a string' }, 400)
-    const nextPrompt = body.userPrompt ?? existing.userPrompt
+    const nextPrompt = body.userPrompt?.trim() ?? existing.userPrompt
     if (!nextWebhookSecret && !nextPrompt && (body.userPrompt !== undefined || existing.webhookSecret !== null)) {
       return c.json({ error: 'userPrompt required (only a webhook job may leave it empty)' }, 400)
     }
