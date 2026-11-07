@@ -122,9 +122,7 @@ any HTTP sender). Use it for "when X happens, run this".
 - **Limits** — root sessions only; no active window. The run timeout
   (`--timeout-sec`, below; 60–21600 s) stops the session — on a picked
   session, that is the user's conversation. The body is always data to the agent,
-  never instructions: put what to do in `--prompt`. A session that has
-  taken webhook events never gets an evolution patch auto-approved (it goes
-  to review).
+  never instructions: put what to do in `--prompt`.
 - On `update`: `--webhook on` switches to it (an existing secret is kept),
   `--schedule …` / `--run-at …` switches away (the secret is dropped).
 

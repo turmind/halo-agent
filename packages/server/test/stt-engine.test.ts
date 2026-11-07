@@ -35,7 +35,7 @@ function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResu
     hold: false, hang: false, releases: [] as Array<() => void>, onEmbed: null as (() => void) | null,
   }
   let manual = false
-  const vads = { ctor: 0 }
+  const vads = { ctor: 0, resetFail: null as Error | null }
   const mod: SherpaModule = {
     OfflineRecognizer: {
       async createAsync() {
@@ -70,7 +70,7 @@ function fakeSherpa(results: (samples: number, wave: Float32Array) => SherpaResu
       front() { return this.out[0] }
       pop() { this.out.shift() }
       flush() { if (this.runStart >= 0) this.close() }
-      reset() { this.pos = 0; this.runStart = -1; this.out = [] }
+      reset() { if (vads.resetFail) throw vads.resetFail; this.pos = 0; this.runStart = -1; this.out = [] }
     } as never,
     OfflineSpeakerDiarization: class {
       handle = { fake: true }
@@ -267,6 +267,17 @@ describe('stt engine', () => {
     expect(fake.vads.ctor).toBe(2)
     open2()
     expect(fake.vads.ctor).toBe(3)
+  })
+
+  it('a VAD whose reset() throws is dropped, not pooled, and abort() still settles the stream', async () => {
+    const { engine, stream, fake } = await open()
+    fake.vads.resetFail = new Error('alloc failed')
+    stream.write(speech(1, 0))
+    expect(() => stream.abort()).not.toThrow()
+    await stream.end()
+    fake.vads.resetFail = null
+    engine.open({ onFinal: () => {}, onError: () => {} })
+    expect(fake.vads.ctor).toBe(2)
   })
 
   it('a sherpa load failure is an engine error and is retried on the next load()', async () => {

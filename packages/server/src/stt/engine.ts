@@ -335,8 +335,9 @@ export function createSttEngine(deps: { loadSherpa?: () => Promise<SherpaModule>
     const releaseVad = () => {
       if (vadReleased) return
       vadReleased = true
-      vad.reset()
-      vadPool.push(vad)
+      // A reset that throws (native alloc) drops this VAD instead of pooling it;
+      // end() / abort() run in WS callbacks, where a throw would kill the process.
+      try { vad.reset(); vadPool.push(vad) } catch (err) { console.log(`[STT] VAD reset failed, not pooled: ${errMsg(err)}`) }
     }
 
     const checkDrain = () => {
