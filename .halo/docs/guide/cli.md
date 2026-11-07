@@ -84,7 +84,7 @@ To list agents or sessions without running a prompt, use the dedicated subcomman
   ```
   [ 17:23:02  in 0.0K  out 0.1K  ctx 5.8K  read 5.3K  write 0.3K  cache 94%  e2e 3.3s  think medium  claude-sonnet-4-6 ]
   ```
-- **json format**: Single JSON object on stdout after completion (`text` has the same final-answer semantics as text format; `notices` holds the same root system notices as an array of strings, without the `ℹ️ ` prefix):
+- **json format**: Single JSON object on stdout after completion (`text` has the same final-answer semantics as text format; `notices` holds the same root system notices as an array of strings, without the `ℹ️ ` prefix; `error` is `null` on success, else the reason — an error event's text, or the root's last-turn error such as a model refusal):
 
 ```json
 {
@@ -106,9 +106,11 @@ halo cli -w /path/to/review-ws "review the diff" --format json | jq '.text'
 # Pipe content in
 git diff HEAD~1 | halo cli -w /path/to/review-ws "review this diff"
 
-# Exit code: 0 = success, 1 = error, 130 = SIGINT, 143 = SIGTERM (graceful: session repaired + flushed before exit)
+# Exit code: 0 = success, 1 = error (including a model refusal on the root's last turn), 130 = SIGINT, 143 = SIGTERM (graceful: session repaired + flushed before exit)
 halo cli "check for issues" && echo "OK" || echo "FAILED"
 ```
+
+A refusal on a sub-agent's turn does not change the exit code — it reaches the root as an aborted report, and the run exits 0 if the root then wraps up normally. A later root turn that ends normally clears an earlier refusal.
 
 When stdin is not a TTY, piped input is appended after the positional prompt. With a positional prompt, stdin is only read if its first data arrives within 0.5 s — then to EOF, however long it takes. Otherwise it's ignored, so an open-but-idle stdin (scripts, CI, cron, `ssh host 'halo cli …'` without `-t`) no longer hangs the run. A producer that takes longer than that to print anything gets ignored too; capture it first (`out=$(slow-cmd); halo cli "summarize" <<<"$out"`). Without a positional prompt, stdin *is* the prompt: `halo cli` waits for EOF, and after 1 s of silence prints one `waiting for the prompt on stdin` hint to stderr.
 

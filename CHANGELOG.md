@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-11-07
+
+- Evolution: `evolution.level` and `evolution.auto_apply_threshold` can be set per workspace (`<ws>/.halo/settings.yaml` overrides global; editable in the workspace Settings view); sessions that took cron webhook events are no longer held back from L2 / L3 auto-apply. The other `evolution.*` settings stay global.
+- CLI: `halo cli` exits 1 when the root session's last turn ends in a model refusal, and `--format json` puts the reason in `error`. Before, a refusal showed up only as a notice and the run exited 0. A refusal on a sub-agent's turn doesn't change the exit code.
+- Cron: a job's prompt is trimmed when saved, so a whitespace-only prompt is rejected on a timed job and a pasted prompt loses stray leading / trailing newlines.
+- Admin: `GET /api/sessions/logs/:id` and the archive segment route no longer return `tool_call` / `tool_result` rows, same as the WebSocket snapshot — the chat already shows each tool call inside the reply. `messageCount` still counts the full log.
+- Observability: the OTel `chat` span's `gen_ai.response.finish_reasons` is the call's real stop reason (`end_turn`, `tool_use`, `max_tokens`, `stop_sequence`, `refusal`); a truncated or refused call is no longer recorded as `end_turn`.
+- Linked machines: `halo-node` grep searches a plain literal pattern directly instead of widening each line to UTF-16, so a very long single line needs far less memory (64 MiB line: peak RSS 327 → 71 MiB).
+
 ## [2.2.2] - 2026-11-06
 
 - On-device speech-to-text: speaker labels (`/api/stt/stream?…&speakers=1`), so the htrans meeting recorder can use the on-device SenseVoice engine with "Identify speakers". The shared STT model download grows by ~30 MB (pyannote segmentation + CAM++), for dictation-only installs too.
@@ -1253,7 +1262,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.2...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.3...HEAD
+[2.2.3]: https://github.com/turmind/halo-agent/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/turmind/halo-agent/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/turmind/halo-agent/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/turmind/halo-agent/compare/v2.1.6...v2.2.0

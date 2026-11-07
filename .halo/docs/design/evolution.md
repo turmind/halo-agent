@@ -62,7 +62,7 @@ Server flow (synchronous, ~10ms):
    - Write `source-snapshot.json` (frozen `session.agent.messages`)
    - Write `tool-flow.md` (tool_result-stripped Markdown view for skimming)
    - Write `meta.json` (metadata: id, triggerKind, sourceSession, userHint, workspacePath, createdAt)
-   - Record the source session's persisted access level in `evolution_runs.source_access` (null → `full`, the session-agent-builder default) — the L2/L3 source gate reads it. A session that was ever handed a cron webhook event (a `cron_events` row with its `session_id`, any state) records `webhook` instead, at any access level
+   - Record the source session's persisted access level in `evolution_runs.source_access` (null → `full`, the session-agent-builder default) — the L2/L3 source gate reads it
    - Write `evo-context.json` (snapshot of prompt surface at trigger time: assembled system prompt, all prompt files, agent/skill listings)
 4. INSERT `evolution_runs` row with `status='pending'`, `trigger_kind='note'` (internal trigger id keeps the old name; only the user-visible command was renamed to `/evo`).
 5. Reply via `chat:system`: "📝 Queued for evaluation".
@@ -73,7 +73,7 @@ Server flow (synchronous, ~10ms):
 
 Compaction only sets a per-session `compactedThisTurn` flag; `SessionManager.enqueueEvoForCompactedTurn()` consumes it once the compact is done — at the end of `runSession` for auto-compact (mid-turn or turn-end), right after the summary lands for manual `/compact`. A turn that compacts several times therefore enqueues one run.
 
-1. Checks: `evolution.level` ≥ L1, `evolution.triggers.pre_compact` on, root session (`parentId` null), and the session's `reply_to` is not `{cron}` — a cron run's own turn (a stored job prompt plus what the run fetched, nobody in the loop) teaches nothing and would otherwise pass the source gate as a full session. The flag is still consumed. `/evo` on that session is not affected.
+1. Checks: `evolution.level` ≥ L1 (read for the session's own workspace — `evoLevelFor`, see [Settings Schema](#settings-schema)), `evolution.triggers.pre_compact` on, root session (`parentId` null), and the session's `reply_to` is not `{cron}` — a cron run's own turn (a stored job prompt plus what the run fetched, nobody in the loop) teaches nothing and would otherwise pass the source gate as a full session. The flag is still consumed. `/evo` on that session is not affected.
 2. `enqueueEvoRun()` with `trigger='pre-compact'` snapshots the session's current `rawMessages`. Because the enqueue is deferred, that is the already-compacted history (summary + kept tail), not the pre-compact one.
 3. INSERT `evolution_runs` row.
 
@@ -220,7 +220,7 @@ For each source_run_id:
 Four steps, with a checkpoint before the dangerous one:
 
 1. **Preflight** (idempotent): walk sandbox, diff against main, snapshot pre-apply files to `history/apply-<id>/` with `MANIFEST.json`. A fresh claim (`running`) first confirms it still owns the row (heartbeat on `running` at its attempt; refused → exits, nothing written), then rewrites `history/apply-<id>/` from scratch: the row never reached `syncing`, so main is still pre-apply, and anything there came from an earlier attempt or a stale wrapper. A resume (`syncing`) keeps the original.
-   - **Auto re-check** (`approved_by='auto'`, not on resume): the files preflight will publish are classified again against the live surface, and the level is read again (the user may have lowered it since). Blocked → apply `failed` with `auto_recheck:<reason>`, main untouched. See [Auto-apply](#auto-apply-l2--l3).
+   - **Auto re-check** (`approved_by='auto'`, not on resume): the files preflight will publish are classified again against the live surface, and the workspace's level is read again (the user may have lowered it since). Blocked → apply `failed` with `auto_recheck:<reason>`, main untouched. See [Auto-apply](#auto-apply-l2--l3).
 2. **Checkpoint** (`markSyncing`): set `evolution_applies.status='syncing'` (a resume only refreshes the heartbeat). From here on, if wrapper crashes, ticker recovery resumes at step 3 (skip A'/B'/preflight to avoid re-running LLM phases).
 3. **Publish** (dangerous): cp each changed file from sandbox to main.
 4. `finalizeApplied`, one transaction: apply row `applied`, its still-`approved` source runs `applied`.
@@ -237,7 +237,7 @@ Code: `evolution/auto-apply.ts` (pure, no agent-loader import — it runs in the
 
 **Three gates**, checked in this order; the first that fails is the recorded `reason`:
 
-1. **Source access** — the run's `source_access` must be `full`. A `workspace` / `readonly` session's conversation (a channel guest's, say) must not rewrite prompts every session runs on without a reviewer. Rows from before the column read null → never auto-applied. Reason `source_access`. A run recorded `webhook` (its session took cron webhook events — payloads from outside, see enqueue above) never auto-applies either, reason `source_webhook`, whichever trigger enqueued it.
+1. **Source access** — the run's `source_access` must be `full`. A `workspace` / `readonly` session's conversation (a channel guest's, say) must not rewrite prompts every session runs on without a reviewer. Rows from before the column read null → never auto-applied. Reason `source_access`. A session that took cron webhook events is not treated differently — it is gated by its own access level like any other (there is no webhook gate). Older runs may still hold `source_access = 'webhook'` (stored before the gate was dropped); they read as not `full` — reason `source_access` — and are not migrated; the admin keeps the `source_webhook` label for their old verdicts.
 2. **Change category** — the sandbox is diffed against the live pre-patch surface (workspace file, else global for `agents/` / `skills/` / `prompts/` dirs the workspace doesn't override; byte-equal copies of a global folder drop out). Each changed file is `prompt`, `capability` or `manual`; the strictest wins. Prompt needs L2, capability L3, manual never. Reasons `level`, `no_effective_change`, `category_manual:<rel>(<why>)`.
 3. **Score** — `avg ≥ auto_apply_threshold`, `confidence: high`, `behavior ≥ 70`, `lint = 100`, all four `checks` passed (`patchInSandbox: pass`, `usedInDryRun: yes`, `probe: valid`, `probeLanguage: same`). The behavior floor matters: 100/50/100 averages 83. Reasons `score_missing`, `below_threshold`, `confidence`, `behavior_floor`, `lint_floor`, `checks:<name>`.
 
@@ -253,7 +253,7 @@ Code: `evolution/auto-apply.ts` (pure, no agent-loader import — it runs in the
 
 Egress tools and `relay_send` / `node_*` are manual because the dry-run runs `--access workspace`, where they aren't even injected — a score is no evidence about them.
 
-**Phase-12 re-check.** An auto apply is gated again before `markSyncing`: the files preflight will publish are classified against the live surface and the level is re-read (the apply agent may touch files the run didn't; the user may have lowered the level). Publish never deletes, so a workspace file the merge dropped is not a change here; a new override dir that would hide a global file the sandbox lacks still is. The score gate isn't repeated — phase B' already held the merge to the regression floor. Blocked → `auto_recheck:<reason>`, main untouched.
+**Phase-12 re-check.** An auto apply is gated again before `markSyncing`: the files preflight will publish are classified against the live surface and the workspace's level is re-read (the apply agent may touch files the run didn't; the user may have lowered the level). Publish never deletes, so a workspace file the merge dropped is not a change here; a new override dir that would hide a global file the sandbox lacks still is. The score gate isn't repeated — phase B' already held the merge to the regression floor. Blocked → `auto_recheck:<reason>`, main untouched.
 
 **Failure.** Any failure of an auto apply (merge, regress, re-check, timeout) fails the apply and sends its run back to `awaiting_review` in the same transaction (`failApply`), so a reviewer can approve it by hand. Reviewer applies keep their run `approved`.
 
@@ -421,7 +421,7 @@ general:
       pre_compact: true
 ```
 
-L0 = manual drafting only (`/evo`); L1 also enables pre-compact triggering; L2 also auto-applies prompt-only changes that pass the gates; L3 also auto-applies capability changes. The level only decides how runs are enqueued and whether the wrapper queues an apply itself — runs already queued always finish. All evolution keys are global-only. Defaults conservative; tune if machine handles more.
+L0 = manual drafting only (`/evo`); L1 also enables pre-compact triggering; L2 also auto-applies prompt-only changes that pass the gates; L3 also auto-applies capability changes. The level only decides how runs are enqueued and whether the wrapper queues an apply itself — runs already queued always finish. `level` and `auto_apply_threshold` can also be set per workspace: `<ws>/.halo/settings.yaml` overrides the global `settings.yaml`, which overrides the schema default (`evoLevelFor` / `autoApplyThresholdFor` in `config.ts`, read at the pre-compact trigger and at the wrapper's auto-apply verdict and recheck, each with the run's workspace) — an open workspace can sit at L0 while a private one auto-applies; the workspace Settings view edits them. The other evolution keys (slots, timeouts, retries, `triggers.pre_compact`) are global-only: they govern server-wide resources. Defaults conservative; tune if machine handles more.
 
 ## Admin UI Integration
 

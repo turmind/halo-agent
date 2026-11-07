@@ -94,7 +94,7 @@ Child of `invoke_agent`, one per model call — created retroactively on the `us
 | `gen_ai.request.model` | ✓ | |
 | `gen_ai.usage.input_tokens` | ✓ | |
 | `gen_ai.usage.output_tokens` | ✓ | |
-| `gen_ai.response.finish_reasons` | `["tool_use"]` or `["end_turn"]` | |
+| `gen_ai.response.finish_reasons` | `[<stop reason>]` — that call's own stop reason, already normalized by the provider: `end_turn`, `tool_use`, `max_tokens`, `stop_sequence` or `refusal` (a truncated or refused call is no longer exported as `end_turn`); omitted if the call reported none | |
 | `halo.ttft_ms` | streamed calls only — ms from request start to the first delta (text / thinking / tool-args), same number as the admin `ttft` badge | |
 | `gen_ai.input.messages` | | semconv JSON (see below) — **delta only**: messages appended since this turn's previous `chat` span (first call → the user message; later calls → that cycle's `tool_result`s) |
 | `gen_ai.output.messages` | | semconv JSON, only the trailing assistant message |

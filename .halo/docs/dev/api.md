@@ -130,7 +130,7 @@ Unified session log API — list + read session files across all agents.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/sessions/logs?projectId=` | List session metadata, keyset-paginated. Default returns each top-level row + all descendants (sidebar tree); `rootOnly=1` returns roots only (chat-panel session tabs). A `projectId` with no `.halo/` (plain or missing directory) returns `{sessions: [], nextCursor: null}` without scaffolding it — a list never turns a directory into a workspace |
-| GET | `/api/sessions/logs/:id?projectId=` | Full session log — the **active** file only; archived history is a separate call. `projectId` is required: the row names the session's directory (404 without it) |
+| GET | `/api/sessions/logs/:id?projectId=` | Full session log — the **active** file only, without `tool_call` / `tool_result` rows; archived history is a separate call. `projectId` is required: the row names the session's directory (404 without it) |
 | GET | `/api/sessions/logs/:id/archive/:n?projectId=` | One archived UI-log segment — see [detail](#get-apisessionslogsidarchivenprojectidabs) |
 | DELETE | `/api/sessions/logs/:id?projectId=` | Permanently delete the session and all its descendants — log files (with archive segments) and `agent_sessions` rows. Returns `{ok, deleted}` |
 | PATCH | `/api/sessions/logs/:id?projectId=` | Rename a session (admin-only; body `{title}`) — updates `agent_sessions.title` only (the row is the title's only home; no file is touched — an internal-agent session's title lives in the global internal-sessions row). 400 without `projectId` / `title`, 404 for an unknown id. Accepts any session id (root or sub-agent); the sidebar exposes the rename affordance on every row |
@@ -857,7 +857,7 @@ Rows are served from the `agent_sessions` metadata columns (`title` / `exchange_
 
 ### GET `/api/sessions/logs/:id?projectId=<abs>`
 
-The session's `agent_sessions` row (metadata) plus its **active** UI log and model history. Older exchanges that archiving moved out are fetched per-segment via [the archive endpoint](#get-apisessionslogsidarchivenprojectidabs). If the UI log is empty and only raw history exists (sub-agent sessions from SessionManager), `convertRawMessages()` transforms it into the display `messages` array on the fly. `projectId` is required: the row names the session's directory (404 without it, or with no row / no UI log). Opening a 1.x session here migrates it; the response then carries the back-filled row.
+The session's `agent_sessions` row (metadata) plus its **active** UI log and model history. Older exchanges that archiving moved out are fetched per-segment via [the archive endpoint](#get-apisessionslogsidarchivenprojectidabs). `messages` leaves out the log's `tool_call` / `tool_result` rows — the same rows as the WS subscribe / reattach snapshot (`adminSnapshotRows`, see [ws.md](../design/ws.md)); each tool call and its output ride on the assistant row's `contentBlocks`. If the UI log is empty and only raw history exists (sub-agent sessions from SessionManager), `convertRawMessages()` transforms it into the display `messages` array on the fly (user / assistant rows only, so nothing to filter). `projectId` is required: the row names the session's directory (404 without it, or with no row / no UI log). Opening a 1.x session here migrates it; the response then carries the back-filled row.
 
 ```json
 // 200
@@ -874,24 +874,24 @@ The session's `agent_sessions` row (metadata) plus its **active** UI log and mod
   "contextTokens": 5975,
   "totalOutputTokens": 6058,
   "archiveCount": 2,
-  "messages": [ /* SessionMessage[] — see design/storage.md */ ],
+  "messages": [ /* SessionMessage[] without tool_call / tool_result rows — see design/storage.md */ ],
   "rawMessages": [ /* model history */ ],
   "output": "...",                   // when set
   "lastActivityAt": "..."            // when set
 }
 ```
 
-`messageCount` is the active UI log's length (shrinks on archive); `exchangeCount` is the row's lifetime count, as in the list endpoint. `archiveCount` = committed segments on disk. The 1.x `version` field is gone.
+`messageCount` is the active UI log's full length, `tool_call` / `tool_result` rows included — so it can exceed `messages.length` (shrinks on archive); `exchangeCount` is the row's lifetime count, as in the list endpoint. `archiveCount` = committed segments on disk. The 1.x `version` field is gone.
 
 ### GET `/api/sessions/logs/:id/archive/:n?projectId=<abs>`
 
 Source: `packages/server/src/routes/session-archive.ts`
 
-One archived UI-log segment, gunzipped server-side. Works for root and sub-sessions alike: a sub-session's segment is addressed by its full id, URL-encoded (`r1>c1` → `r1%3Ec1`). `n` counts up from 1; the client gets its anchor from `archiveCount` on the `state:snapshot` of subscribe/reattach ([ws.md](../design/ws.md)) and walks **down** from it. Segments are immutable once committed, so a client caches what it pulled and never re-requests. Admin-cookie gated (not in `PUBLIC_PATHS`).
+One archived UI-log segment, gunzipped server-side, with the `tool_call` / `tool_result` rows left out (`adminSnapshotRows`, as in the session log above). Works for root and sub-sessions alike: a sub-session's segment is addressed by its full id, URL-encoded (`r1>c1` → `r1%3Ec1`). `n` counts up from 1; the client gets its anchor from `archiveCount` on the `state:snapshot` of subscribe/reattach ([ws.md](../design/ws.md)) and walks **down** from it. Segments are immutable once committed, so a client caches what it pulled and never re-requests. Admin-cookie gated (not in `PUBLIC_PATHS`).
 
 ```json
 // 200
-{ "messages": [ /* SessionMessage[] — oldest-first within the segment */ ] }
+{ "messages": [ /* SessionMessage[] without tool rows — oldest-first within the segment */ ] }
 ```
 
 Failure modes, in the order checked:
