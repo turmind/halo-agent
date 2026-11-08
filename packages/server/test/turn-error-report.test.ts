@@ -316,7 +316,7 @@ describe('model refusal marks the turn aborted', () => {
 
     expect(report).toMatch(/^\[SUB-AGENT ABORTED/)
     expect(report).toContain('Error: Model declined to respond (harmful): nope.')
-    expect(report).toContain('tripped the model\'s safety classifier')
+    expect(report).toContain('tripped the provider\'s safety / content filter')
     expect(report).toContain('start a NEW session with start_session and a clean brief')
     expect(report).not.toContain('Re-dispatch with query_session')
     expect(report).toContain('(no output)')

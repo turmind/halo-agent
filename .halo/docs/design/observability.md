@@ -82,7 +82,7 @@ One per turn — the root span, opened by `beginTurn` and closed by `endTurn`.
 | `gen_ai.task.output` | | final assistant text |
 | `gen_ai.system_instructions` | | system prompt, capped 8 KB — once per turn here, not on every `chat` |
 
-On error: status `ERROR` + the error message, plus a low-cardinality `error.type` attribute (parsed `<ErrName>Error/Exception` prefix, else `_OTHER`). A turn that ends in a model refusal (`stop_reason: "refusal"`) counts as an error too: ERROR span with `error.type=_OTHER`, and `halo.turn.duration` records `outcome=error`.
+On error: status `ERROR` + the error message, plus a low-cardinality `error.type` attribute (parsed `<ErrName>Error/Exception` prefix, else `_OTHER`). A turn that ends in a model refusal (stop reason `refusal` — Anthropic's refusal or an OpenAI-format provider's content-filter stop) counts as an error too: ERROR span with `error.type=_OTHER`, and `halo.turn.duration` records `outcome=error`.
 
 ### `chat <modelId>`
 
@@ -94,7 +94,7 @@ Child of `invoke_agent`, one per model call — created retroactively on the `us
 | `gen_ai.request.model` | ✓ | |
 | `gen_ai.usage.input_tokens` | ✓ | |
 | `gen_ai.usage.output_tokens` | ✓ | |
-| `gen_ai.response.finish_reasons` | `[<stop reason>]` — that call's own stop reason, already normalized by the provider: `end_turn`, `tool_use`, `max_tokens`, `stop_sequence` or `refusal` (a truncated or refused call is no longer exported as `end_turn`); omitted if the call reported none | |
+| `gen_ai.response.finish_reasons` | `[<stop reason>]` — that call's own stop reason, already normalized by the provider: `end_turn`, `tool_use`, `max_tokens`, `stop_sequence` or `refusal` (a truncated or refused call is no longer exported as `end_turn`). `refusal` covers Anthropic's `stop_reason: "refusal"` and the OpenAI-format providers' content-filter stops (finish_reason `content_filter` / `sensitive`, Responses `incomplete_details.reason: "content_filter"` or a `refusal` content part); omitted if the call reported none | |
 | `halo.ttft_ms` | streamed calls only — ms from request start to the first delta (text / thinking / tool-args), same number as the admin `ttft` badge | |
 | `gen_ai.input.messages` | | semconv JSON (see below) — **delta only**: messages appended since this turn's previous `chat` span (first call → the user message; later calls → that cycle's `tool_result`s) |
 | `gen_ai.output.messages` | | semconv JSON, only the trailing assistant message |

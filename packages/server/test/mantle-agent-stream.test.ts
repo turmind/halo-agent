@@ -192,6 +192,51 @@ describe('MantleAgent streaming callModel', () => {
     expect(r.text).toBe('你好, world')
   })
 
+  it('response.incomplete with reason content_filter → refusal, category content_filter', async () => {
+    const events = textStream({ status: 'incomplete', incomplete_details: { reason: 'content_filter' } })
+    events[events.length - 1] = { ...events[events.length - 1], type: 'response.incomplete' }
+    stubFetch(() => mantle(events))
+
+    const r = await probe().call(undefined)
+
+    expect(r.stopReason).toBe('refusal')
+    expect(r.stopDetails).toEqual({ category: 'content_filter', explanation: null })
+  })
+
+  it('content_filter with an empty output[] → refusal, not the MantleEmptyResponse retry', async () => {
+    stubFetch(() => mantle([
+      { type: 'response.incomplete', response: { id: 'resp_6', status: 'incomplete', incomplete_details: { reason: 'content_filter' }, output: [], usage } },
+    ]))
+
+    const r = await probe().call(undefined)
+
+    expect(r.stopReason).toBe('refusal')
+    expect(r.stopDetails).toEqual({ category: 'content_filter', explanation: null })
+  })
+
+  it('a refusal content part → refusal, its text as the explanation', async () => {
+    const refused = { ...message, content: [{ type: 'refusal', refusal: "I can't help with that." }] }
+    stubFetch(() => mantle([
+      { type: 'response.completed', response: { id: 'resp_7', status: 'completed', incomplete_details: null, output: [refused], usage } },
+    ]))
+
+    const r = await probe().call(undefined)
+
+    expect(r.stopReason).toBe('refusal')
+    expect(r.stopDetails).toEqual({ category: 'refusal', explanation: "I can't help with that." })
+  })
+
+  it('an unknown incomplete reason stays end_turn, no stopDetails', async () => {
+    const events = textStream({ status: 'incomplete', incomplete_details: { reason: 'some_new_reason' } })
+    events[events.length - 1] = { ...events[events.length - 1], type: 'response.incomplete' }
+    stubFetch(() => mantle(events))
+
+    const r = await probe().call(undefined)
+
+    expect(r.stopReason).toBe('end_turn')
+    expect(r.stopDetails).toBeUndefined()
+  })
+
   it('response.failed → rejects "API error in stream"', async () => {
     stubFetch(() => mantle([
       { type: 'response.created', response: { id: 'resp_3', status: 'in_progress', output: [] } },

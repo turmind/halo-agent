@@ -62,6 +62,17 @@ export function toChatTools(tools: ToolDef[]): Array<Record<string, unknown>> {
 }
 
 /**
+ * finish_reason values the providers document as "output blocked by the
+ * content filter / safety review" — an HTTP 200 like Anthropic's refusal, so
+ * it maps to stopReason 'refusal' (category = the raw value):
+ *   content_filter — OpenAI, DeepSeek, Doubao, Hunyuan (TokenHub)
+ *   sensitive      — Zhipu (also Hunyuan's native API)
+ * Any other unknown value stays end_turn: a missed block beats a normal reply
+ * misread as one.
+ */
+const CONTENT_FILTER_FINISH_REASONS = new Set(['content_filter', 'sensitive'])
+
+/**
  * Folded reply → `ModelCallResult`. `usage` is the provider's own mapping
  * (inputTokens already net of cached tokens); totalTokens is input + output,
  * cacheReadInputTokens is reported only when non-zero. reasoning_content
@@ -93,13 +104,16 @@ export function chatCompletionResult(
     assistantBlocks.push({ type: 'text', text })
   }
 
+  const filtered = CONTENT_FILTER_FINISH_REASONS.has(folded.finishReason ?? '')
   const stopReason = folded.finishReason === 'tool_calls' ? 'tool_use'
     : folded.finishReason === 'length' ? 'max_tokens'
+    : filtered ? 'refusal'
     : 'end_turn'
 
   return {
     assistantBlocks,
     stopReason,
+    ...(filtered ? { stopDetails: { category: folded.finishReason ?? null, explanation: null } } : {}),
     text,
     thinking,
     toolCalls,

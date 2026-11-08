@@ -116,6 +116,7 @@ export class MantleAgent extends AgentLoop {
 
     let text = ''
     let thinking = ''
+    let refusal: string | undefined
     const toolCalls: Array<{ id: string; name: string; input: unknown }> = []
     const assistantBlocks: ModelCallResult['assistantBlocks'] = []
 
@@ -126,6 +127,8 @@ export class MantleAgent extends AgentLoop {
         for (const part of content) {
           if (part.type === 'output_text' && typeof part.text === 'string') {
             text += part.text
+          } else if (part.type === 'refusal') {
+            refusal = (refusal ?? '') + (typeof part.refusal === 'string' ? part.refusal : '')
           }
         }
       } else if (itemType === 'reasoning') {
@@ -155,7 +158,10 @@ export class MantleAgent extends AgentLoop {
     // runAgentTurn's retry loop handle it rather than silently ending the turn.
     // Guard on output.length to avoid misfiring on a legitimately-empty-text
     // turn that still carried tool calls or a (possibly empty) message item.
-    if (output.length === 0 && !text && toolCalls.length === 0) {
+    // A content-filter cut-off may also come with an empty output[] — that's
+    // a refusal, not the glitch, so it skips the retry.
+    const incompleteReason = (data.incomplete_details as Record<string, unknown> | undefined)?.reason as string | undefined
+    if (output.length === 0 && !text && toolCalls.length === 0 && incompleteReason !== 'content_filter') {
       throw new Error('MantleEmptyResponse: Bedrock-Mantle returned an empty output[] (status=completed); transient, retrying')
     }
 
@@ -167,10 +173,16 @@ export class MantleAgent extends AgentLoop {
     }
 
     // Responses API status drives stop reason. `incomplete` with reason
-    // `max_output_tokens` → max_tokens; otherwise tool calls → tool_use; else end.
+    // `content_filter` ("the server-side safety filter activated and cut off
+    // the response") or a `refusal` content part (the model's safety refusal)
+    // → refusal, same handling as Anthropic's; `max_output_tokens` →
+    // max_tokens; otherwise tool calls → tool_use; else end.
     const status = data.status as string | undefined
-    const incompleteReason = (data.incomplete_details as Record<string, unknown> | undefined)?.reason as string | undefined
-    const stopReason = incompleteReason === 'max_output_tokens' ? 'max_tokens'
+    const category = incompleteReason === 'content_filter' ? 'content_filter'
+      : refusal !== undefined ? 'refusal'
+      : undefined
+    const stopReason = category ? 'refusal'
+      : incompleteReason === 'max_output_tokens' ? 'max_tokens'
       : toolCalls.length > 0 ? 'tool_use'
       : 'end_turn'
     void status
@@ -183,6 +195,7 @@ export class MantleAgent extends AgentLoop {
     return {
       assistantBlocks,
       stopReason,
+      ...(category ? { stopDetails: { category, explanation: refusal || null } } : {}),
       text,
       thinking,
       toolCalls,

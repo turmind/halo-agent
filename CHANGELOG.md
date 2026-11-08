@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-11-08
+
+- Models: when an OpenAI-format provider's content filter blocks a reply, Halo now treats it as a model refusal, like Claude's. This covers OpenAI, DeepSeek, Doubao, Hunyuan and Zhipu on chat/completions (finish_reason `content_filter` / `sensitive`, also from any other OpenAI-compatible endpoint that reports them) and Bedrock Mantle / Bedrock OpenAI on the Responses API. The chat shows "Model declined to respond (content_filter)", the turn counts as failed (parent / relay / cron / A2A see it as aborted), `halo cli` exits 1, and OTel records `refusal`. Before, it looked like an empty reply that finished normally.
+
 ## [2.2.3] - 2026-11-07
 
 - Evolution: `evolution.level` and `evolution.auto_apply_threshold` can be set per workspace (`<ws>/.halo/settings.yaml` overrides global; editable in the workspace Settings view); sessions that took cron webhook events are no longer held back from L2 / L3 auto-apply. The other `evolution.*` settings stay global.
@@ -1263,7 +1267,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.3...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.4...HEAD
+[2.2.4]: https://github.com/turmind/halo-agent/compare/v2.2.3...v2.2.4
 [2.2.3]: https://github.com/turmind/halo-agent/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/turmind/halo-agent/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/turmind/halo-agent/compare/v2.2.0...v2.2.1

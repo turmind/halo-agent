@@ -1624,7 +1624,7 @@ export class SessionManager implements SessionManagerInternals {
           const d = event.stopDetails
           const category = d?.category ? ` (${d.category})` : ''
           console.warn(`[SessionManager] Session ${session.id} model refused${category}: ${d?.explanation ?? 'no explanation'}`)
-          this.emitEvent(session.id, { type: 'system', text: `⚠️ [${agentName}] Model declined to respond${category}: ${d?.explanation ?? 'no explanation given'}. The conversation content tripped the model's safety classifier — later turns on this history will likely be declined too; use /session new to start clean.` })
+          this.emitEvent(session.id, { type: 'system', text: `⚠️ [${agentName}] Model declined to respond${category}: ${d?.explanation ?? 'no explanation given'}. The conversation content tripped the provider's safety / content filter — later turns on this history will likely be declined too; use /session new to start clean.` })
           // A refusal is an HTTP 200, so it never reaches the retry loop's
           // catch — without this the parent / relay / goal / A2A reports took
           // the turn as a normal wrap-up ("(no output)") and kept resuming it.
@@ -2139,8 +2139,8 @@ export class SessionManager implements SessionManagerInternals {
         ? `This is a model account / credential / balance / permission problem: retrying or re-dispatching will fail the same way. `
           + `Fix the model configuration first (or tell the user to fix it), and do not resume it with query_session("${session.id}", ...) until then.`
         : session.turnErrorKind === 'refusal'
-          ? `This session's conversation history tripped the model's safety classifier: resuming it with query_session("${session.id}", ...) or re-sending will be declined the same way. `
-            + `Do not resume it — start a NEW session with start_session and a clean brief instead, rewording the part that tripped the classifier.`
+          ? `This session's conversation history tripped the provider's safety / content filter: resuming it with query_session("${session.id}", ...) or re-sending will be declined the same way. `
+            + `Do not resume it — start a NEW session with start_session and a clean brief instead, rewording the part that tripped the filter.`
           : `Re-dispatch with query_session("${session.id}", ...) to let it resume.`
       result = `[SUB-AGENT ABORTED: the last turn was terminated by an unrecoverable error, NOT completed. `
         + `Error: ${session.turnError}. The text below is a partial trace of the aborted turn — do not treat it as a finished result. `

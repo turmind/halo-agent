@@ -106,7 +106,7 @@ halo cli -w /path/to/review-ws "review the diff" --format json | jq '.text'
 # Pipe content in
 git diff HEAD~1 | halo cli -w /path/to/review-ws "review this diff"
 
-# Exit code: 0 = success, 1 = error (including a model refusal on the root's last turn), 130 = SIGINT, 143 = SIGTERM (graceful: session repaired + flushed before exit)
+# Exit code: 0 = success, 1 = error (including a model refusal on the root's last turn — Anthropic's refusal or an OpenAI-format provider's content-filter block), 130 = SIGINT, 143 = SIGTERM (graceful: session repaired + flushed before exit)
 halo cli "check for issues" && echo "OK" || echo "FAILED"
 ```
 

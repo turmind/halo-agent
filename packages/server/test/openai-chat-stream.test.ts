@@ -8,6 +8,7 @@ import { ZhipuAgent } from '../src/agents/zhipu-agent.js'
 import { DoubaoAgent } from '../src/agents/doubao-agent.js'
 import { HunyuanAgent } from '../src/agents/hunyuan-agent.js'
 import { classifyModelError, type ModelErrorKind } from '../src/agents/model-error.js'
+import { chatCompletionResult } from '../src/agents/openai-chat-format.js'
 import { sseResponse } from './helpers/sse-response.js'
 import { shownDeltas } from './helpers/model-deltas.js'
 
@@ -367,5 +368,39 @@ describe('OpenAI-family agents over the stream transport', () => {
 
       await expect(callOf(make())).rejects.toThrow(OPENAI_STREAM_TRUNCATED)
     })
+
+    it(`${tag}: finish_reason content_filter → refusal with the raw value as category`, async () => {
+      stubFetch(() => sseResponse([chunk({ content: 'par' }), chunk({}, 'content_filter')]))
+
+      const result = await callOf(make())
+
+      expect(result.stopReason).toBe('refusal')
+      expect(result.stopDetails).toEqual({ category: 'content_filter', explanation: null })
+    })
   }
+})
+
+describe('chatCompletionResult finish_reason → stopReason', () => {
+  const fold = (finishReason: string) => chatCompletionResult({ message: { content: 'x' }, finishReason, usage: undefined }, { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0 }, Date.now())
+
+  it.each<[string, string]>([
+    ['stop', 'end_turn'],
+    ['tool_calls', 'tool_use'],
+    ['length', 'max_tokens'],
+    // Not documented as a filter block by any provider — stays a normal end.
+    ['some_new_reason', 'end_turn'],
+  ])('%s → %s, no stopDetails', (finishReason, stopReason) => {
+    const r = fold(finishReason)
+    expect(r.stopReason).toBe(stopReason)
+    expect(r.stopDetails).toBeUndefined()
+  })
+
+  it.each([
+    'content_filter', // OpenAI / DeepSeek / Doubao / Hunyuan TokenHub
+    'sensitive', // Zhipu
+  ])('%s → refusal, category = the raw value', (finishReason) => {
+    const r = fold(finishReason)
+    expect(r.stopReason).toBe('refusal')
+    expect(r.stopDetails).toEqual({ category: finishReason, explanation: null })
+  })
 })
