@@ -665,8 +665,8 @@ async function finishRun(runId: string, db: HaloDb, session: { id: string; final
     // deleting their conversation.
     if (session.turnErrorKind === 'refusal' && failureReason && job && !job.stateless) {
       failureReason += job.sessionId
-        ? ` — session ${session.id}'s history tripped the model's safety classifier, so later runs on it will likely be declined too: pick another session or clear the job's picked session, or turn on "new session every run"`
-        : ` — the job's session history tripped the model's safety classifier, so later runs on it will likely be declined too: delete session ${session.id} or turn on "new session every run"`
+        ? ` — session ${session.id}'s history tripped the provider's safety / content filter, so later runs on it will likely be declined too: pick another session or clear the job's picked session, or turn on "new session every run"`
+        : ` — the job's session history tripped the provider's safety / content filter, so later runs on it will likely be declined too: delete session ${session.id} or turn on "new session every run"`
     }
     const targets = job ? parseTargets(job.targets) : []
     let dispatchResults: DispatchResult[] = []

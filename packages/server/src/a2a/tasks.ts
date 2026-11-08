@@ -152,7 +152,7 @@ export function completeTask(taskId: string, s: { finalOutput: string; output: s
     const next = s.turnErrorKind === 'account'
       ? 'This is a model account / credential / balance / permission problem on the remote: re-sending will fail the same way until its model configuration is fixed.'
       : s.turnErrorKind === 'refusal'
-        ? 'This conversation\'s history on the remote tripped its model\'s safety classifier: sending again on the same context will be declined the same way. Start a NEW conversation (omit the context id) with a clean message instead, rewording the part that tripped the classifier.'
+        ? 'This conversation\'s history on the remote tripped its provider\'s safety / content filter: sending again on the same context will be declined the same way. Start a NEW conversation (omit the context id) with a clean message instead, rewording the part that tripped the filter.'
         : 'Send again on the same context to let it resume.'
     const partial = s.output ? attach(s.output) : null
     transition(taskId, 'failed', {

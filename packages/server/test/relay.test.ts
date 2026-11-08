@@ -190,7 +190,7 @@ describe('deliverRelayReport', () => {
     expect(text.startsWith(header)).toBe(true)
     expect(text.slice(header.length).trimStart().startsWith('[RELAY TARGET ABORTED')).toBe(true)
     expect(text).toContain('Error: Model declined to respond (harmful): nope.')
-    expect(text).toContain('tripped the model\'s safety classifier')
+    expect(text).toContain('tripped the provider\'s safety / content filter')
     expect(text).toContain('relay_send to a NEW session id with a clean brief')
     expect(text).not.toContain('Re-send with relay_send to let it resume.')
     expect(readReplyTo(deptSm.getDb(), 'dept-1')).toBeNull()

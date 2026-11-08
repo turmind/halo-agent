@@ -346,7 +346,7 @@ describe('deliverGoalRound', () => {
     const text = host.deliveries[0].text
     expect(text).toContain('[WORKER ABORTED')
     expect(text).toContain('Error: Model declined to respond (harmful): nope.')
-    expect(text).toContain('tripped the model\'s safety classifier')
+    expect(text).toContain('tripped the provider\'s safety / content filter')
     expect(text).toContain('1) /goal clear, 2) /session new, 3) /goal create in that new session (intake runs again)')
     expect(text).not.toContain('Re-dispatch with query_session to let the worker resume.')
   })

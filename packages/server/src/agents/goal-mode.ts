@@ -369,9 +369,9 @@ export async function deliverGoalRound(
       ? `This is a model account / credential / balance / permission problem: retrying or re-dispatching will fail the same way. `
         + `Fix the model configuration first (or tell the user to fix it), and do not resume the worker with query_session until then.`
       : worker.turnErrorKind === 'refusal'
-        ? `The worker's conversation history tripped the model's safety classifier: re-dispatching with query_session will be declined the same way. `
+        ? `The worker's conversation history tripped the provider's safety / content filter: re-dispatching with query_session will be declined the same way. `
           + `Do not resume the worker — tell the user this goal needs a NEW worker session, in this order: 1) /goal clear, 2) /session new, `
-          + `3) /goal create in that new session (intake runs again), with a clean goal description that rewords the part that tripped the classifier.`
+          + `3) /goal create in that new session (intake runs again), with a clean goal description that rewords the part that tripped the filter.`
         : `Re-dispatch with query_session to let the worker resume.`
     report = `[WORKER ABORTED: this round was terminated by an unrecoverable error, NOT a normal wrap-up. `
       + `Error: ${worker.turnError}. The text below is a partial trace of the aborted turn — judge this as an `
