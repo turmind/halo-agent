@@ -129,7 +129,7 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
     // Non-root installs land in ~/.local/bin, which Debian-family shells only put on PATH at the next login.
     const unix = `curl -fsSL ${binBase}/install.sh | sh\nPATH="$HOME/.local/bin:$PATH" HALO_NODE_TOKEN=${token} halo-node ${run}`
     // PowerShell, as in guide/node.md's Windows section; run from the folder the exe was downloaded to.
-    const windows = `Invoke-WebRequest ${binBase}/halo-node-windows-amd64.exe -OutFile halo-node-windows-amd64.exe\n$env:HALO_NODE_TOKEN = '${token}'\n.\\halo-node-windows-amd64.exe ${run}`
+    const windows = `Invoke-WebRequest -UseBasicParsing ${binBase}/halo-node-windows-amd64.exe -OutFile halo-node-windows-amd64.exe\n$env:HALO_NODE_TOKEN = '${token}'\n.\\halo-node-windows-amd64.exe ${run}`
     return (
       <ChannelDialog width="w-[480px]" onClose={onDone}>
         <h3 className="mb-3 text-sm font-medium text-[var(--foreground)]">{t('nodes.createSuccess')}</h3>
