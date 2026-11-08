@@ -1,9 +1,19 @@
 /**
  * The one HTTP client A2A egress uses (push webhooks, remote cards, outbound
- * RPC, inbound `url` image parts): node:http(s) with the URL policy's guarded
- * `lookup`, so the address that was checked is the address that gets
- * connected (no DNS rebinding gap). Redirects are not followed — a 3xx is
- * just a non-2xx status to the caller.
+ * RPC, inbound `url` image parts).
+ *
+ * Direct requests: node:http(s) with the URL policy's guarded `lookup`, so
+ * the check and the connect use the same resolution (no DNS rebinding gap).
+ *
+ * Only outbound remote card / RPC requests (`viaProxy`, outbound.ts) may go
+ * through the outbound proxy: checkUrl runs on our own resolution first, then
+ * the proxy resolves and connects the target — the two resolutions aren't
+ * guaranteed to agree, and a target only the proxy can resolve isn't
+ * supported (it fails our check). Turning the proxy on means trusting the
+ * proxy and its egress policy. A no_proxy target takes the direct path above;
+ * push webhooks and inbound image downloads always do.
+ *
+ * Neither path follows redirects — a 3xx is just a non-2xx status to the caller.
  */
 import http from 'node:http'
 import https from 'node:https'
@@ -23,18 +33,24 @@ interface RequestOpts { method: 'GET' | 'POST'; headers?: Record<string, string>
 /** Through the outbound proxy (Settings → outbound proxy). The proxy resolves
  *  the name, so `lookup` can't guard the connect: the same allowlist check
  *  runs on our own resolution first (checkUrl) — a resolver answering the
- *  proxy differently isn't caught, the price of routing via a proxy. */
+ *  proxy differently isn't caught, the price of routing via a proxy.
+ *  `timeoutMs` bounds the whole request, the proxy's CONNECT included. */
 async function proxiedRequest(rawUrl: string, opts: RequestOpts & { maxBytes: number }, dispatcher: Dispatcher): Promise<HttpBufferResult> {
   const verdict = await checkUrl(rawUrl)
   if (verdict) throw Object.assign(new Error(verdict), { code: 'A2A_URL_REFUSED' })
+  const signal = AbortSignal.timeout(opts.timeoutMs)
   const { request } = await import('undici')
-  const res = await request(rawUrl, {
-    dispatcher,
-    method: opts.method,
-    headers: opts.headers,
-    body: opts.body,
-    headersTimeout: opts.timeoutMs,
-    bodyTimeout: opts.timeoutMs,
+  // undici 6's request() doesn't act on `signal` while it still waits for the
+  // proxy's CONNECT answer (it only records it, and aborts once the tunnel is
+  // up), so the race settles that phase; the CONNECT itself ends on its own
+  // (the proxy's answer, or undici's 300 s headers timeout). After it the
+  // signal aborts the headers / body wait.
+  const res = await new Promise<Dispatcher.ResponseData>((resolve, reject) => {
+    const onAbort = () => reject(new Error(`timeout after ${opts.timeoutMs}ms`))
+    signal.addEventListener('abort', onAbort, { once: true })
+    request(rawUrl, { dispatcher, method: opts.method, headers: opts.headers, body: opts.body, signal })
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', onAbort))
   })
   const chunks: Buffer[] = []
   let size = 0

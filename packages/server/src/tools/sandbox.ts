@@ -40,22 +40,23 @@ function decodeWinOutput(buf: Buffer): string {
   }
 }
 
-function stripBwrapArgs(msg: string): string {
-  const marker = '--die-with-parent -- '
-  const markerIdx = msg.indexOf(marker)
-  if (markerIdx === -1) return msg
-  const bwrapIdx = msg.lastIndexOf('bwrap', markerIdx)
-  if (bwrapIdx === -1) return msg
-  return msg.slice(0, bwrapIdx) + msg.slice(markerIdx + marker.length)
-}
-
-async function bwrapExec(args: string[], opts?: { timeout?: number; maxBuffer?: number; signal?: AbortSignal }): Promise<{ stdout: string; stderr: string }> {
+/** Run `inner` under bwrap with the `prefix` options. execFile quotes the
+ *  whole argv (mounts, `--setenv` values — the proxy credential among them)
+ *  in an exit failure's message, in `cmd` on every error and in a spawn
+ *  error's `spawnargs`; all three are rebuilt from `inner` alone, so nothing
+ *  from the prefix reaches a tool result or log. */
+async function bwrapExec(prefix: string[], inner: string[], opts?: { timeout?: number; maxBuffer?: number; signal?: AbortSignal }): Promise<{ stdout: string; stderr: string }> {
   try {
-    const r = await execFileAsync('bwrap', args, opts)
+    const r = await execFileAsync('bwrap', [...prefix, '--', ...inner], opts)
     return { stdout: String(r.stdout), stderr: String(r.stderr) }
   } catch (err: unknown) {
-    const e = err as Error & { stdout?: string; stderr?: string; code?: number | string }
-    e.message = stripBwrapArgs(e.message)
+    const e = err as Error & { stdout?: string; stderr?: string; code?: number | string; cmd?: string; spawnargs?: string[] }
+    const shown = inner.join(' ')
+    // execFile's exit failure is exactly `Command failed: <cmd>\n<stderr>`;
+    // its other errors (abort, spawn, maxBuffer) carry no argv.
+    if (e.message.startsWith('Command failed: ')) e.message = `Command failed: ${shown}\n${e.stderr ?? ''}`
+    if (e.cmd !== undefined) e.cmd = shown
+    if (e.spawnargs !== undefined) e.spawnargs = inner
     throw e
   }
 }
@@ -102,7 +103,7 @@ function spawnGroupExec(
     // own auth secrets — a shell command never needs to mint admin cookies.
     const child = opts.argv
       ? spawn(opts.argv[0], opts.argv.slice(1), { detached: true, cwd: opts.cwd, env: opts.env ?? cleanChildEnv() })
-      : spawn(command, { shell: true, detached: true, cwd: opts.cwd, env: cleanChildEnv() })
+      : spawn(command, { shell: true, detached: true, cwd: opts.cwd, env: opts.env ?? cleanChildEnv() })
     let stdout = ''
     let stderr = ''
     let killReason: 'timeout' | 'abort' | null = null
@@ -588,9 +589,6 @@ export function buildBwrapArgs(opts: SandboxOptions): string[] {
   args.push('--setenv', 'HOME', HOME)
   args.push('--setenv', 'TERM', 'xterm-256color')
   for (const [k, v] of Object.entries(gitIdentityEnv())) args.push('--setenv', k, v)
-  // --clearenv drops cleanChildEnv's proxy vars too. Network isn't unshared,
-  // so a proxy on the host's 127.0.0.1 stays reachable from inside.
-  for (const [k, v] of Object.entries(outboundProxyEnv())) args.push('--setenv', k, v)
 
   args.push('--die-with-parent')
 
@@ -703,7 +701,7 @@ export function buildSeatbeltProfile(opts: SandboxOptions): string {
  *  --clearenv + --setenv. ~/.gitconfig and ~/.npmrc are denied by the
  *  profile; pointing git/npm at /dev/null keeps them from erroring on it.
  *  Exported for tests — sandbox-exec can't run in CI. */
-export function seatbeltEnv(): NodeJS.ProcessEnv {
+export function seatbeltEnv(proxyEnv: Record<string, string> = outboundProxyEnv()): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     PATH: `${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin`,
     HOME,
@@ -713,7 +711,7 @@ export function seatbeltEnv(): NodeJS.ProcessEnv {
     ...gitIdentityEnv(),
     // Not built from cleanChildEnv(), so the proxy vars are added here. The
     // profile has no network rules, loopback included.
-    ...outboundProxyEnv(),
+    ...proxyEnv,
   }
   for (const k of ['TMPDIR', 'USER', 'LOGNAME', 'LANG', 'LC_ALL']) {
     if (process.env[k]) env[k] = process.env[k]
@@ -958,8 +956,11 @@ export function noSandboxMessage(reason: SandboxUnavailableReason | null = getSa
   return `Access denied: shell_exec at workspace/readonly access needs an OS sandbox (bubblewrap on Linux, sandbox-exec on macOS) and none works on this host. Switch the session to Full, or ${fix}.`
 }
 
-export async function sandboxExec(command: string, opts: SandboxOptions): Promise<SandboxResult> {
+/** `proxyEnv`: the command's outbound proxy vars — shell_exec passes the
+ *  snapshot it also masks the output against; default = read now. */
+export async function sandboxExec(command: string, opts: SandboxOptions & { proxyEnv?: Record<string, string> }): Promise<SandboxResult> {
   opts = normalizeOptsForPlatform(opts)
+  const proxyEnv = opts.proxyEnv ?? outboundProxyEnv()
   // cmd syntax differs and Windows has no rm; the guard is POSIX-only.
   if (process.platform !== 'win32') assertRmSafe(command, opts.workspaceRoot)
   if (opts.accessLevel === 'full') {
@@ -972,7 +973,7 @@ export async function sandboxExec(command: string, opts: SandboxOptions): Promis
       // hides chcp's own banner.
       const result = await execAsync(`chcp 65001 >nul 2>&1 & ${command}`, {
         cwd: opts.workspaceRoot,
-        env: cleanChildEnv(),
+        env: cleanChildEnv(proxyEnv),
         timeout: opts.timeout,
         maxBuffer: opts.maxBuffer,
         signal: opts.signal,
@@ -991,6 +992,7 @@ export async function sandboxExec(command: string, opts: SandboxOptions): Promis
       timeout: opts.timeout,
       maxBuffer: opts.maxBuffer,
       signal: opts.signal,
+      env: cleanChildEnv(proxyEnv),
     })
   }
 
@@ -1002,15 +1004,19 @@ export async function sandboxExec(command: string, opts: SandboxOptions): Promis
       maxBuffer: opts.maxBuffer,
       signal: opts.signal,
       argv: [SANDBOX_EXEC, '-p', buildSeatbeltProfile(opts), ...buildExecScriptArgs(opts.workspaceRoot, command)],
-      env: seatbeltEnv(),
+      env: seatbeltEnv(proxyEnv),
     })
   }
 
   const bwrapOk = await isBwrapAvailable()
   if (!bwrapOk) throw new Error(noSandboxMessage())
 
-  const bwrapArgs = buildBwrapArgs(opts)
-  return bwrapExec([...bwrapArgs, '--', ...buildExecScriptArgs(opts.workspaceRoot, command)], {
+  // Only the user's command gets the proxy vars (the file helpers below
+  // never touch the network). After buildBwrapArgs' --clearenv, or bwrap
+  // would wipe them; network isn't unshared, so a proxy on the host's
+  // 127.0.0.1 stays reachable from inside.
+  const prefix = [...buildBwrapArgs(opts), ...Object.entries(proxyEnv).flatMap(([k, v]) => ['--setenv', k, v])]
+  return bwrapExec(prefix, buildExecScriptArgs(opts.workspaceRoot, command), {
     timeout: opts.timeout,
     maxBuffer: opts.maxBuffer,
     signal: opts.signal,
@@ -1031,8 +1037,7 @@ export async function sandboxReadFile(filePath: string, opts: SandboxOptions): P
     return readFile(safe, 'utf-8')
   }
 
-  const bwrapArgs = buildBwrapArgs(opts)
-  const result = await bwrapExec([...bwrapArgs, '--', 'cat', filePath], {
+  const result = await bwrapExec(buildBwrapArgs(opts), ['cat', filePath], {
     maxBuffer: opts.maxBuffer ?? 10 * 1024 * 1024,
   })
   return result.stdout
@@ -1078,7 +1083,7 @@ export async function sandboxReadBinaryFile(filePath: string, opts: SandboxOptio
         if (!child.killed) child.kill('SIGKILL')
         fn()
       }
-      const fail = (msg: string) => finish(() => reject(new Error(stripBwrapArgs(msg))))
+      const fail = (msg: string) => finish(() => reject(new Error(msg)))
       const onAbort = () => fail('bwrap cat aborted')
 
       if (opts.signal) {
@@ -1100,7 +1105,7 @@ export async function sandboxReadBinaryFile(filePath: string, opts: SandboxOptio
         if (settled) return
         if (code !== 0) {
           finish(() => {
-            const err = new Error(stripBwrapArgs(stderr || `bwrap cat exited ${code}`))
+            const err = new Error(stderr || `bwrap cat exited ${code}`)
             ;(err as Error & { code?: number }).code = code ?? undefined
             reject(err)
           })
@@ -1130,8 +1135,7 @@ export async function sandboxWriteFile(filePath: string, content: string, opts: 
     return
   }
 
-  const bwrapArgs = buildBwrapArgs(opts)
-  await bwrapExec([...bwrapArgs, '--', ...buildWriteScriptArgs(filePath, content)], {
+  await bwrapExec(buildBwrapArgs(opts), buildWriteScriptArgs(filePath, content), {
     maxBuffer: opts.maxBuffer ?? 10 * 1024 * 1024,
   })
 }
@@ -1152,8 +1156,7 @@ export async function sandboxStat(filePath: string, opts: SandboxOptions): Promi
     return { isDirectory: s.isDirectory(), isFile: s.isFile(), size: s.size }
   }
 
-  const bwrapArgs = buildBwrapArgs(opts)
-  const result = await bwrapExec([...bwrapArgs, '--', 'stat', '--printf', '%F\\n%s', filePath])
+  const result = await bwrapExec(buildBwrapArgs(opts), ['stat', '--printf', '%F\\n%s', filePath])
   const lines = result.stdout.split('\n')
   const fileType = lines[0] ?? ''
   const size = parseInt(lines[1] ?? '0', 10)
@@ -1180,11 +1183,10 @@ export async function sandboxReaddir(dirPath: string, opts: SandboxOptions): Pro
     return entries.map((e) => ({ name: e.name, isDirectory: e.isDirectory() }))
   }
 
-  const bwrapArgs = buildBwrapArgs(opts)
   // -1ap (no -L): annotate entry types via lstat. Following symlinks would
   // let a workspace-internal symlink resolve to a path outside the bind
   // mount and leak its type into readdir results.
-  const result = await bwrapExec([...bwrapArgs, '--', ...buildReaddirScriptArgs(dirPath)])
+  const result = await bwrapExec(buildBwrapArgs(opts), buildReaddirScriptArgs(dirPath))
   return result.stdout.split('\n').filter(Boolean).filter((n) => n !== './' && n !== '../').map((name) => {
     const isDir = name.endsWith('/')
     return { name: isDir ? name.slice(0, -1) : name, isDirectory: isDir }

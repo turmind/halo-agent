@@ -14,7 +14,8 @@ import { sandboxExec, sandboxReadFile, sandboxReadBinaryFile, sandboxWriteFile, 
 import type { AccessLevel, SandboxOptions } from './sandbox.js'
 import { loadMergedSettings } from '../prompts/md-vars.js'
 import { loadSettingsSchema } from '../settings-schema.js'
-import { outboundProxy, proxyDispatcher } from '../outbound-proxy.js'
+import { maskProxyCredential, outboundProxy, routedDispatcher } from '../outbound-proxy.js'
+import { outboundProxyEnv } from '../child-env.js'
 import { inferImageMime } from '../channels/shared/media-store.js'
 import { TOOL_ERROR_MARKER, TOOL_WARN_MARKER } from '../agents/agent-loop.js'
 import { isShuttingDown, shutdownWithin, trackShellExec } from '../shutdown.js'
@@ -704,8 +705,9 @@ export function createWorkspaceTools(
       : await substituteSecrets(input.command.trim(), workspaceRoot, allowedNamespaces)
     // The outbound proxy credential rides in the child's http(s)_proxy — keep
     // it out of the stored tool result when a command echoes it (env, curl -v).
-    const secrets = [...paramSecrets, ...(outboundProxy()?.secrets ?? [])]
-    const mask = (s: string) => secrets.length > 0 ? maskSecrets(s, secrets) : s
+    // One snapshot for both, so a save mid-command can't split them.
+    const proxy = outboundProxy()
+    const mask = (s: string) => maskSecrets(maskProxyCredential(s, proxy), paramSecrets)
 
     try {
       const { stdout, stderr } = await sandboxExec(cmd, {
@@ -713,6 +715,7 @@ export function createWorkspaceTools(
         timeout: config.timeout.shellExec,
         maxBuffer: config.limits.shellOutputBuffer,
         signal,
+        proxyEnv: outboundProxyEnv(proxy),
       })
       return mask((stdout + (stderr ? `\nSTDERR: ${stderr}` : '')).trim() || '(no output)')
     } catch (err: unknown) {
@@ -914,6 +917,13 @@ export function createWorkspaceTools(
       const input = _input as { url: string; method?: string; headers?: Record<string, string> }
       const MAX_BODY_SIZE = config.limits.webFetchMaxBody
 
+      // The proxy's own credential goes on the CONNECT; a caller's would reach
+      // the target itself on a no_proxy hop, so it's refused up front.
+      const proxy = outboundProxy()
+      if (proxy && Object.keys(input.headers ?? {}).some((h) => h.toLowerCase() === 'proxy-authorization')) {
+        return `${TOOL_ERROR_MARKER}\nError: a Proxy-Authorization header is not allowed while the outbound proxy is on (Settings → General → outbound_proxy)`
+      }
+
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), config.timeout.webFetch)
       const onExternalAbort = () => controller.abort()
@@ -922,12 +932,13 @@ export function createWorkspaceTools(
 
       try {
         // `dispatcher` is undici's extension of fetch's init (not in the DOM
-        // RequestInit type); undefined = direct, as before.
+        // RequestInit type); undefined = direct, as before. The router picks
+        // proxy vs direct per redirect hop.
         const response = await fetch(input.url, {
           method: input.method ?? 'GET',
           headers: input.headers,
           signal: controller.signal,
-          dispatcher: await proxyDispatcher(input.url),
+          dispatcher: await routedDispatcher(proxy),
         } as RequestInit)
 
         const contentType = response.headers.get('content-type') ?? 'unknown'

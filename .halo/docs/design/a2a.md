@@ -148,7 +148,9 @@ A `: keepalive` comment every 15 s. A dropped client only unsubscribes, so the S
 
 **URL policy** (`url-policy.ts`) — applied to push URLs at create **and** at send, to inbound `url` image parts, and to every outbound card / RPC URL:
 - `http` / `https` only, no userinfo.
-- `http.ts` sends through `node:http(s).request({ lookup: guardedLookup })`: every resolved IP is checked **inside** the lookup, so the checked address is the connected one (no DNS-rebinding gap). An IP literal is checked up front. Redirects are not followed.
+- `http.ts` sends direct requests through `node:http(s).request({ lookup: guardedLookup })`: every resolved IP is checked **inside** the lookup, so the check and the connect use the same resolution (no DNS-rebinding gap). An IP literal is checked up front.
+- **Outbound proxy** (Settings → `general.outbound_proxy.*`, [requirements/settings.md](../requirements/settings.md#outbound-proxy)): only outbound remote card / RPC requests may go through it. That path runs `checkUrl` on the server's own resolution first, then the proxy resolves and connects the target — the two resolutions aren't guaranteed to agree, and a target only the proxy can resolve isn't supported. Turning the proxy on means trusting the proxy and its egress policy. The request's `timeoutMs` bounds the proxy's CONNECT too. A target in no_proxy takes the direct path above; push webhooks and inbound image downloads always do.
+- Neither path follows redirects — a 3xx is just a non-2xx status.
 - **Always refused**, even when listed: link-local (`169.254.0.0/16` incl. the metadata IP, `fe80::/10`), multicast, unspecified.
 - Each IP must be public **or** inside a listed CIDR; private, loopback and CGNAT ranges are refused unless listed.
 - https is fine anywhere allowed; plain http only when the host matches a listed host pattern or every IP is inside a listed CIDR.

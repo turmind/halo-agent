@@ -124,15 +124,23 @@ For a machine whose way out is a local proxy (e.g. Hiddify / Clash in system-pro
 
 **Not covered**: model provider calls, channel connections (Telegram / Slack / Feishu …), the hub / update checks.
 
-**no_proxy**: `localhost,127.0.0.1,::1`, plus whatever `NO_PROXY` / `no_proxy` the server process itself inherited, deduped. A child gets that list. web_fetch / A2A skip the proxy for a host equal to an entry or a subdomain of it (`.corp.example` / `corp.example` / `*.corp.example`; `*` = everything).
+**no_proxy**: `localhost,127.0.0.1,::1`, plus whatever `NO_PROXY` / `no_proxy` the server process itself inherited, deduped (an inherited `*` makes the list just `*`). A child gets that list. web_fetch / A2A match it the way curl 8.x does, so in-process requests and a child's curl route alike:
+- a host name matches an entry equal to it or to a parent domain, case-insensitive, a leading dot ignored — `corp.example` and `.corp.example` both match `corp.example` and `a.corp.example`, not `notcorp.example`;
+- an IP address (v4, or v6 as in `http://[fd00::1]/`) matches an entry that is that address or a CIDR containing it — `10.0.0.0/8`, `fd00::/8`; an IP entry never matches a host name;
+- `*` alone matches everything;
+- nothing else is a pattern: `*.corp.example` is compared literally (matches no real host), and an entry with a port (`host:8080`) never matches — ports play no part.
+
+web_fetch applies this per redirect hop: a redirect into a no_proxy host connects directly, one out of it goes through the proxy.
 
 **Off** = Halo sets no proxy variables at all. Proxy variables the server process inherited from its own environment are not removed — they are the operator's.
 
 **Token transport** — Basic auth both ways, `base64(user:password)`:
 - children: in the proxy URL's user-info, percent-encoded (`http://<user>:<pass>@host:port`) — the one form curl, git and pip all read;
-- web_fetch / A2A: the `Proxy-Authorization` header (on the CONNECT for https and http alike). A caller-supplied `Proxy-Authorization` header in web_fetch is refused while the proxy is on.
+- web_fetch / A2A: the `Proxy-Authorization` header (on the CONNECT for https and http alike). While the proxy is on, a web_fetch call carrying its own `Proxy-Authorization` header (any case) is refused with a tool error before any request — no_proxy targets included.
 
-The credential never appears in logs (only the user-info-free origin is printed: `[OutboundProxy] on: http://host:port (with token)`), and its raw / percent-encoded / base64 forms are masked as `***` in `shell_exec` results (e.g. `env` output).
+`<<ENV_NAME>>` in the token expands from the server's environment, as in any secret; an unset variable stays literal.
+
+The credential never appears in logs (only the user-info-free origin is printed: `[OutboundProxy] on: http://host:port (with token)`). In `shell_exec` results (e.g. `env` output) its URL form `<user:pass>@` (percent-encoded or not) and its base64 are masked at any length; the bare token / encoded user-info on their own only from 4 characters (shorter strings would mangle ordinary output). In bwrap sessions only the command itself gets the proxy variables, not the file tools' helper processes.
 
 **Terminals** get their env when they are opened: a Terminal already open keeps the old setting, a newly opened one picks up the change.
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { extractApiError } from '@/shared/api-client'
 
 /**
  * JSON-endpoint sibling of use-preview-fetch: run an abortable async fetcher,
@@ -49,17 +50,4 @@ export function useDataFetch<T>(
   }, deps)
 
   return { data, error, loading }
-}
-
-/** api-client throws `API error 400: {"error":"..."}` — surface just the message. */
-function extractApiError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err)
-  const jsonStart = msg.indexOf('{')
-  if (jsonStart !== -1) {
-    try {
-      const parsed = JSON.parse(msg.slice(jsonStart)) as { error?: string }
-      if (parsed.error) return parsed.error
-    } catch { /* not JSON — fall through to raw message */ }
-  }
-  return msg
 }

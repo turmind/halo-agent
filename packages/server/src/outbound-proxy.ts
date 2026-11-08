@@ -13,8 +13,9 @@
  * cached on the settings object), so a save applies to the next spawn /
  * request without a restart. Only `url` (userinfo-free) may be logged.
  */
+import { BlockList, isIP } from 'node:net'
 import type { Dispatcher } from 'undici'
-import { getSettings } from './settings-file.js'
+import { expandEnv, getSettings } from './settings-file.js'
 
 const DEFAULT_NO_PROXY = ['localhost', '127.0.0.1', '::1']
 
@@ -27,8 +28,11 @@ export interface OutboundProxy {
   authorization: string
   /** no_proxy entries: the loopback defaults + the server's inherited NO_PROXY / no_proxy. */
   noProxy: string[]
-  /** Forms of the credential a child's output can echo (raw, URL-encoded, base64), for output masking. */
-  secrets: string[]
+  /** The credential's forms a child's output can echo, for maskProxyCredential
+   *  (null without a token): `raw` as configured (`<<ENV>>` expanded), `plain`
+   *  its `user:pass`, `userinfo` that percent-encoded (the env URLs carry
+   *  `<userinfo>@`), `basic` the base64 in Proxy-Authorization. */
+  credential: { raw: string; plain: string; userinfo: string; basic: string } | null
 }
 
 /** null = usable proxy URL, else why not. Never echoes the URL (it may carry credentials). */
@@ -62,55 +66,124 @@ function resolve(settings: Record<string, unknown>): OutboundProxy | null {
     return null
   }
   const url = new URL(raw).origin
-  const cred = cfg?.token == null ? '' : String(cfg.token).trim()
+  // `<<ENV>>` expands like any secret; an unset variable stays literal.
+  const cred = cfg?.token == null ? '' : expandEnv(String(cfg.token)).trim()
   const colon = cred.indexOf(':')
   const user = colon < 0 ? cred : cred.slice(0, colon)
   const pass = colon < 0 ? '' : cred.slice(colon + 1)
   const userinfo = `${encodeURIComponent(user)}:${encodeURIComponent(pass)}`
   const basic = Buffer.from(`${user}:${pass}`).toString('base64')
   const inherited = [process.env.NO_PROXY, process.env.no_proxy].flatMap((v) => (v ?? '').split(','))
-  const noProxy = [...new Set([...DEFAULT_NO_PROXY, ...inherited.map((s) => s.trim()).filter(Boolean)])]
+  const merged = [...new Set([...DEFAULT_NO_PROXY, ...inherited.map((s) => s.trim()).filter(Boolean)])]
+  // curl honours `*` only as the whole list, and ours always holds the
+  // defaults — so an inherited `*` collapses it, for children and in-process alike.
+  const noProxy = merged.includes('*') ? ['*'] : merged
   console.log(`[OutboundProxy] on: ${url}${cred ? ' (with token)' : ''}`)
   return {
     url,
     envUrl: cred ? url.replace('://', `://${userinfo}@`) : url,
     authorization: cred ? `Basic ${basic}` : '',
     noProxy,
-    secrets: cred ? [...new Set([cred, userinfo, basic])] : [],
+    credential: cred ? { raw: cred, plain: `${user}:${pass}`, userinfo, basic } : null,
   }
 }
 
-/** True when `hostname` matches a no_proxy entry: exact, or a subdomain of
- *  it (`example.com` / `.example.com` / `*.example.com`); `*` matches all. */
+/** Mask `proxy`'s credential in a child's output (shell_exec's result). Its URL
+ *  forms — `<user:pass>@`, percent-encoded or not, which covers every proxy
+ *  URL carrying it — and its base64 go whatever their length. The token / its
+ *  encoded user-info on their own only from 4 chars, like maskSecrets:
+ *  replacing a shorter string everywhere mangles ordinary output (token `ab`
+ *  would eat every "ab"), and without the URL around it a 1–3 char string
+ *  isn't recognisably the token. */
+export function maskProxyCredential(text: string, proxy: OutboundProxy | null): string {
+  const c = proxy?.credential
+  if (!c) return text
+  let out = text
+  for (const form of new Set([`${c.userinfo}@`, `${c.plain}@`])) out = out.replaceAll(form, '***@')
+  out = out.replaceAll(c.basic, '***')
+  for (const form of new Set([c.raw, c.userinfo])) if (form.length >= 4) out = out.replaceAll(form, '***')
+  return out
+}
+
+/** curl 8.x's no_proxy match (lib/noproxy.c), so in-process requests route
+ *  the way a child's curl does:
+ *  - a hostname matches an entry equal to it or to a parent domain of it,
+ *    case-insensitive, one leading / trailing dot ignored
+ *    (`corp.example` = `.corp.example`, matching `a.corp.example` too);
+ *  - an IP literal matches an entry that is that address, or a CIDR holding
+ *    it (`10.0.0.0/8`, `fd00::/8`);
+ *  - `*` as the whole list matches everything;
+ *  - nothing else is a pattern: `*.corp.example` is compared literally, and an
+ *    entry with a `:port` never matches (ports play no part). */
 export function bypassesProxy(hostname: string, noProxy: string[]): boolean {
-  const host = hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase()
+  if (noProxy.length === 1 && noProxy[0].trim() === '*') return true
+  const bare = hostname.replace(/^\[(.*)\]$/, '$1')
+  const family = isIP(bare)
+  const host = family ? bare : bare.replace(/\.$/, '').toLowerCase()
   return noProxy.some((raw) => {
-    const entry = raw.toLowerCase().replace(/^\[|\]$/g, '').replace(/^\*?\./, '')
-    return entry === '*' || host === entry || host.endsWith(`.${entry}`)
+    const entry = raw.trim().toLowerCase()
+    if (family) return ipMatches(host, family, entry)
+    const name = entry.replace(/\.$/, '').replace(/^\./, '')
+    return name !== '' && (host === name || host.endsWith(`.${name}`))
   })
 }
 
-let _agent: { key: string; agent: Dispatcher } | null = null
+function ipMatches(ip: string, family: number, entry: string): boolean {
+  const [net, prefix, extra] = entry.split('/')
+  if (extra !== undefined || isIP(net) !== family) return false
+  const type = family === 6 ? 'ipv6' : 'ipv4'
+  const bits = prefix === undefined ? 0 : Number(prefix)
+  if (!Number.isInteger(bits) || bits < 0 || bits > (family === 6 ? 128 : 32)) return false
+  const list = new BlockList()
+  // curl: no prefix (or /0) = that one address.
+  if (bits === 0) list.addAddress(net, type)
+  else list.addSubnet(net, bits, type)
+  return list.check(ip, type)
+}
 
-/** Dispatcher for one in-process request to `target`: the ProxyAgent while
- *  the proxy is on and `target` isn't in no_proxy, else undefined (direct).
- *  undici is imported on first use, so a proxy-less process never loads it. */
+/** The dispatchers for one proxy config, rebuilt when it changes. `router`
+ *  is web_fetch's: it picks direct vs proxy per dispatch — every redirect hop
+ *  is a dispatch to its own origin, so a hop into no_proxy goes direct and
+ *  one out of it goes through the proxy. */
+let _agents: { key: string; proxied: Dispatcher; direct: Dispatcher; router: Dispatcher } | null = null
+
+/** undici is imported on first use, so a proxy-less process never loads it. */
+async function agentsFor(proxy: OutboundProxy | null): Promise<typeof _agents> {
+  const key = proxy ? `${proxy.url}\0${proxy.authorization}\0${proxy.noProxy.join(',')}` : null
+  if (_agents?.key === key) return _agents
+  const undici = proxy ? await import('undici') : null
+  if (_agents?.key === key) return _agents
+  // close() lets requests already on the old agents finish.
+  if (_agents) for (const d of [_agents.proxied, _agents.direct]) void d.close().catch(() => {})
+  _agents = null
+  if (!proxy || !undici || key === null) return null
+  const proxied = new undici.ProxyAgent({ uri: proxy.url, ...(proxy.authorization ? { token: proxy.authorization } : {}) })
+  const direct = new undici.Agent()
+  const noProxy = proxy.noProxy
+  class Router extends undici.Dispatcher {
+    dispatch(opts: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandlers): boolean {
+      const host = new URL(String(opts.origin)).hostname
+      return (bypassesProxy(host, noProxy) ? direct : proxied).dispatch(opts, handler)
+    }
+  }
+  _agents = { key, proxied, direct, router: new Router() }
+  return _agents
+}
+
+/** A2A's dispatcher for one request to `target`: the ProxyAgent while the
+ *  proxy is on and `target` isn't in no_proxy, else undefined (direct — A2A
+ *  doesn't follow redirects, so the first URL decides). */
 export async function proxyDispatcher(target: string | URL): Promise<Dispatcher | undefined> {
   const proxy = outboundProxy()
-  if (!proxy) {
-    if (_agent) { void _agent.agent.close().catch(() => {}); _agent = null }
-    return undefined
-  }
+  const agents = await agentsFor(proxy)
+  if (!agents || !proxy) return undefined
   let host: string
   try { host = new URL(target).hostname } catch { return undefined }
-  if (bypassesProxy(host, proxy.noProxy)) return undefined
-  const key = `${proxy.url}\0${proxy.authorization}`
-  if (_agent?.key === key) return _agent.agent
-  const { ProxyAgent } = await import('undici')
-  if (_agent?.key !== key) {
-    // close() lets requests already on the old agent finish.
-    void _agent?.agent.close().catch(() => {})
-    _agent = { key, agent: new ProxyAgent({ uri: proxy.url, ...(proxy.authorization ? { token: proxy.authorization } : {}) }) }
-  }
-  return _agent.agent
+  return bypassesProxy(host, proxy.noProxy) ? undefined : agents.proxied
+}
+
+/** web_fetch's dispatcher under the `proxy` snapshot: the per-hop router
+ *  while on, undefined (fetch's own default, direct) while off. */
+export async function routedDispatcher(proxy: OutboundProxy | null): Promise<Dispatcher | undefined> {
+  return (await agentsFor(proxy))?.router
 }

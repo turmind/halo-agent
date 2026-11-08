@@ -9,7 +9,7 @@ import { homedir } from 'node:os'
 import { loadSettingsSchema, DEFAULT_A2A_URL_ALLOWLIST } from './settings-schema.js'
 import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
 import { loadProviders } from './models/registry.js'
-import { getSettings, loadYamlFile } from './settings-file.js'
+import { ENV_PATTERN, expandEnv, getSettings, loadYamlFile } from './settings-file.js'
 
 export { DEFAULT_A2A_URL_ALLOWLIST }
 
@@ -201,25 +201,6 @@ function systemString(envKey: string, configPath: string, fallback: string | nul
   const cv = configValue(configPath)
   if (typeof cv === 'string') return cv
   return fallback
-}
-
-const ENV_PATTERN = /<<([A-Z_][A-Z0-9_]*)>>/g
-
-/**
- * Resolve `<<ENV_NAME>>` placeholders inside a settings.yaml string value.
- *
- * If the env var isn't set, **keep the literal placeholder** rather than
- * silently substituting an empty string, so the misconfiguration stays
- * detectable downstream (`missingEnvRefs`). An empty substitution would look
- * like "not configured" and silently fall back (e.g. AWS creds → the SDK
- * credential chain). Don't count on the provider to name the variable: a
- * literal key just gets a generic 401 (MiniMax: "login fail"). Model provider
- * credentials are therefore checked before the call (session-agent-builder),
- * and the Settings page flags fields whose variable is unset.
- */
-function expandEnv(raw: string | undefined): string {
-  if (!raw) return ''
-  return raw.replace(ENV_PATTERN, (m, name: string) => process.env[name] ?? m)
 }
 
 /** Names of the `<<X>>` placeholders in `raw` whose env var is unset in this

@@ -1,17 +1,26 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import http from 'node:http'
-import type { AddressInfo, Socket } from 'node:net'
+import net, { type AddressInfo, type Socket } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import { cleanChildEnv } from '../src/child-env.js'
-import { outboundProxy, bypassesProxy } from '../src/outbound-proxy.js'
-import { buildBwrapArgs, getSandboxBackend, initBwrapCheck, seatbeltEnv } from '../src/tools/sandbox.js'
+import { outboundProxy, bypassesProxy, maskProxyCredential, type OutboundProxy } from '../src/outbound-proxy.js'
+import { buildBwrapArgs, getSandboxBackend, initBwrapCheck, sandboxExec, seatbeltEnv } from '../src/tools/sandbox.js'
 import { createWorkspaceTools } from '../src/tools/workspace-tools.js'
 import { createSettingsRoutes } from '../src/routes/settings.js'
 import { send } from '../src/a2a/outbound.js'
 import { policyRequest } from '../src/a2a/http.js'
+import { config } from '../src/config.js'
+
+// Pass-through, so a test can make one outboundProxy() read differ from the
+// next (a settings save landing mid-command) — see the snapshot test.
+const hook = vi.hoisted(() => ({ next: null as null | (() => unknown) }))
+vi.mock('../src/outbound-proxy.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../src/outbound-proxy.js')>()
+  return { ...orig, outboundProxy: () => (hook.next ? hook.next() : orig.outboundProxy()) }
+})
 
 /**
  * Settings → outbound proxy (`general.outbound_proxy.*`): spawned children get
@@ -117,28 +126,59 @@ describe('cleanChildEnv × outbound proxy', () => {
     } finally { warn.mockRestore() }
   })
 
-  it('the bwrap (--clearenv) and Seatbelt envs carry the same vars', () => {
+  it('the Seatbelt env carries the same vars; the shared bwrap prefix (file helpers too) carries none', () => {
     proxySettings({ enabled: true, url: 'http://127.0.0.1:12334', token: 'tok' })
-    const args = buildBwrapArgs({ workspaceRoot: tmpdir(), accessLevel: 'workspace' })
-    const set = new Map<string, string>()
-    for (let i = 0; i < args.length; i++) if (args[i] === '--setenv') set.set(args[i + 1], args[i + 2])
     const sb = seatbeltEnv()
-    for (const k of PROXY_VARS) {
-      expect(set.get(k)).toBe(cleanChildEnv()[k])
-      expect(sb[k]).toBe(cleanChildEnv()[k])
-    }
-    // --setenv comes after --clearenv, or bwrap would wipe it.
-    expect(args.indexOf('--clearenv')).toBeLessThan(args.indexOf('http_proxy'))
+    for (const k of PROXY_VARS) expect(sb[k]).toBe(cleanChildEnv()[k])
+    // sandboxExec appends them for the user's command only — the bwrap
+    // shell_exec run below is the proof that they arrive.
+    expect(buildBwrapArgs({ workspaceRoot: tmpdir(), accessLevel: 'workspace' }).join(' ')).not.toMatch(/_proxy|127\.0\.0\.1:12334/i)
     proxySettings({ enabled: false })
-    expect(buildBwrapArgs({ workspaceRoot: tmpdir(), accessLevel: 'workspace' })).not.toContain('http_proxy')
     expect(seatbeltEnv()).not.toHaveProperty('http_proxy')
   })
 
-  it('bypassesProxy: exact, subdomain, leading-dot and * entries', () => {
-    const list = ['localhost', '127.0.0.1', '::1', '.corp.example', 'svc.local']
-    for (const h of ['localhost', '127.0.0.1', '[::1]', 'a.corp.example', 'svc.local', 'x.svc.local']) expect(bypassesProxy(h, list)).toBe(true)
-    for (const h of ['example.com', '127.0.0.2', 'notsvc.local', 'corp.example.org']) expect(bypassesProxy(h, list)).toBe(false)
+  it('bypassesProxy follows curl: domain + subdomains, one leading dot ignored, IPs and CIDRs, lone *', () => {
+    const list = ['localhost', '127.0.0.1', '::1', '.corp.example', 'svc.local', '10.0.0.0/8', 'fd00::/8', '192.168.1.5']
+    for (const h of ['localhost', '127.0.0.1', '[::1]', 'corp.example', 'a.corp.example', 'A.Corp.Example.', 'svc.local', 'x.svc.local',
+      '10.1.2.3', '[fd12::1]', '192.168.1.5']) expect(bypassesProxy(h, list), h).toBe(true)
+    for (const h of ['example.com', '127.0.0.2', 'notsvc.local', 'corp.example.org', '11.0.0.1', '[fe80::1]', '192.168.1.6', '[::2]']) expect(bypassesProxy(h, list), h).toBe(false)
+    // `*.x` is no wildcard and `host:port` never matches — curl does the same.
+    expect(bypassesProxy('a.corp.example', ['*.corp.example'])).toBe(false)
+    expect(bypassesProxy('corp.example', ['corp.example:8080'])).toBe(false)
+    expect(bypassesProxy('10.0.0.1', ['10.0.0.1:80'])).toBe(false)
+    // An IP entry never matches a name, a bracketed v6 entry matches nothing.
+    expect(bypassesProxy('localhost', ['127.0.0.1'])).toBe(false)
+    expect(bypassesProxy('[::1]', ['[::1]'])).toBe(false)
     expect(bypassesProxy('anything', ['*'])).toBe(true)
+    expect(bypassesProxy('anything', ['localhost', '*'])).toBe(false)
+  })
+
+  it('an inherited NO_PROXY=* stays a lone * (curl ignores * inside a list)', () => {
+    process.env.NO_PROXY = '*'
+    proxySettings({ enabled: true, url: 'http://127.0.0.1:12334' })
+    expect(cleanChildEnv().NO_PROXY).toBe('*')
+    expect(bypassesProxy('example.com', outboundProxy()!.noProxy)).toBe(true)
+  })
+
+  it('a <<ENV>> token expands to the variable; an unset one stays literal', () => {
+    process.env.HALO_TEST_PROXY_TOKEN = 'envuser:envpass'
+    try {
+      proxySettings({ enabled: true, url: 'http://127.0.0.1:12334', token: '<<HALO_TEST_PROXY_TOKEN>>' })
+      expect(cleanChildEnv().http_proxy).toBe('http://envuser:envpass@127.0.0.1:12334')
+      expect(outboundProxy()!.authorization).toBe(`Basic ${Buffer.from('envuser:envpass').toString('base64')}`)
+      delete process.env.HALO_TEST_PROXY_TOKEN
+      proxySettings({ enabled: true, url: 'http://127.0.0.1:12334', token: '<<HALO_TEST_PROXY_TOKEN>>' })
+      expect(outboundProxy()!.credential!.raw).toBe('<<HALO_TEST_PROXY_TOKEN>>')
+    } finally { delete process.env.HALO_TEST_PROXY_TOKEN }
+  })
+
+  it('maskProxyCredential: a short token\'s URL and base64 forms go at any length; alone it needs 4 chars', () => {
+    proxySettings({ enabled: true, url: 'http://127.0.0.1:12334', token: 'ab' })
+    const p = outboundProxy()
+    const b64 = Buffer.from('ab:').toString('base64')
+    expect(maskProxyCredential(`x=http://ab:@127.0.0.1:12334 auth=Basic ${b64} about`, p)).toBe('x=http://***@127.0.0.1:12334 auth=Basic *** about')
+    proxySettings({ enabled: true, url: 'http://127.0.0.1:12334', token: 'longer-tok' })
+    expect(maskProxyCredential('echo longer-tok', outboundProxy())).toBe('echo ***')
   })
 })
 
@@ -186,8 +226,10 @@ interface Seen { method: string; target: string; auth?: string }
 let proxy: http.Server
 let inner: http.Server
 let direct: http.Server
+let silent: net.Server
 let proxyPort: number
 let directPort: number
+let silentPort: number
 const seen: Seen[] = []
 const sockets = new Set<Socket>()
 
@@ -202,10 +244,17 @@ await initBwrapCheck()
 beforeAll(async () => {
   // Absolute-URI GET (curl's plain-http form) answers itself; CONNECT (undici,
   // curl for https) is handed to `inner` as if the tunnel reached the target.
-  inner = http.createServer((_req, res) => res.end('via-proxy'))
+  // `/hop` (through the tunnel) redirects into no_proxy, `/out` (a direct
+  // hit) out of it — web_fetch must re-route each hop.
+  inner = http.createServer((req, res) => {
+    if (req.url === '/hop') { res.writeHead(302, { location: `http://127.0.0.1:${proxyPort}/landed` }); res.end(); return }
+    res.end('via-proxy')
+  })
   proxy = http.createServer((req, res) => {
     seen.push({ method: req.method ?? '', target: req.url ?? '', auth: req.headers['proxy-authorization'] })
-    res.end('via-proxy')
+    // Its own host: a tunnel to TARGET left open by an earlier test would be reused.
+    if (req.url === '/out') { res.writeHead(302, { location: 'http://halo-proxy-out.invalid/' }); res.end(); return }
+    res.end(req.url === '/landed' ? 'landed-direct' : 'via-proxy')
   })
   proxy.on('connect', (req: http.IncomingMessage, sock: Socket) => {
     seen.push({ method: 'CONNECT', target: req.url ?? '', auth: req.headers['proxy-authorization'] })
@@ -214,14 +263,17 @@ beforeAll(async () => {
     inner.emit('connection', sock)
   })
   direct = http.createServer((_req, res) => res.end('direct'))
+  // A proxy that accepts the TCP connection and never answers the CONNECT.
+  silent = net.createServer((s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); s.resume() })
   proxyPort = await listen(proxy, '127.0.0.1')
   directPort = await listen(direct, '127.0.0.2')
+  silentPort = await new Promise((r) => silent.listen(0, '127.0.0.1', () => r((silent.address() as AddressInfo).port)))
 })
 
 afterAll(async () => {
   writeSettings({})
   for (const s of sockets) s.destroy()
-  await Promise.all([proxy, inner, direct].map((s) => new Promise((r) => s.close(r))))
+  await Promise.all([proxy, inner, direct, silent].map((s) => new Promise((r) => s.close(r))))
 })
 
 describe('through the proxy, for real', () => {
@@ -235,6 +287,10 @@ describe('through the proxy, for real', () => {
   const tool = (level: 'full' | 'workspace', name: string) => {
     const t = createWorkspaceTools(ws, { accessLevel: level, supportsVision: false }).find((x) => x.name === name)!
     return async (input: unknown) => String(await (t.callback as (i: unknown) => Promise<unknown>)(input))
+  }
+  const rejection = async (p: Promise<unknown>) => {
+    try { await p } catch (err) { return err as Error & { cmd?: string; spawnargs?: string[] } }
+    throw new Error('expected a rejection')
   }
   const on = (token?: string) => proxySettings({ enabled: true, url: `http://127.0.0.1:${proxyPort}`, ...(token ? { token } : {}) })
 
@@ -261,7 +317,54 @@ describe('through the proxy, for real', () => {
       expect(off).toMatch(/resolve host/i)
       expect(seen).toEqual([])
     }, 30_000)
+
+    it.skipIf(level === 'workspace' && getSandboxBackend() !== 'bwrap')(`shell_exec (${level}): a 2-char token is masked in env output, on success and on failure`, async () => {
+      // Not alphanumeric, so it can't turn up in the mkdtemp path an error quotes.
+      on('q!')
+      const ok = await tool(level, 'shell_exec')({ command: 'env | grep -i _proxy' })
+      const failed = await tool(level, 'shell_exec')({ command: 'env | grep -i _proxy; echo "$HTTPS_PROXY" >&2; exit 3' })
+      expect(failed).toContain('__TOOL_ERROR__')
+      for (const out of [ok, failed]) {
+        expect(out).toContain(`http_proxy=http://***@127.0.0.1:${proxyPort}`)
+        expect(out).not.toContain('q!')
+        expect(out).not.toContain(Buffer.from('q!:').toString('base64'))
+      }
+    }, 30_000)
   }
+
+  it('shell_exec takes one proxy snapshot: a save landing mid-command can\'t put an unmasked credential in the env', async () => {
+    on('first-token')
+    const first = outboundProxy()
+    proxySettings({ enabled: true, url: `http://127.0.0.1:${proxyPort}`, token: 'second-token' })
+    const second = outboundProxy()
+    let reads = 0
+    hook.next = () => (reads++ === 0 ? first : second) as OutboundProxy
+    try {
+      const out = await tool('full', 'shell_exec')({ command: 'env | grep -i _proxy' })
+      expect(out).toContain(`http_proxy=http://***@127.0.0.1:${proxyPort}`)
+      expect(out).not.toMatch(/first-token|second-token/)
+    } finally { hook.next = null }
+  }, 30_000)
+
+  it.skipIf(getSandboxBackend() !== 'bwrap')('a bwrap failure\'s error never carries the bwrap argv — file_read and shell_exec, credential containing "bwrap"', async () => {
+    const token = 'bwrap:s3cr3t-bwrap-pw'
+    on(token)
+    const proxyEnv = Object.fromEntries(PROXY_VARS.map((k) => [k, cleanChildEnv()[k]!]))
+    expect(proxyEnv.http_proxy).toContain('s3cr3t')
+    const leaks = (e: { message: string; cmd?: string; spawnargs?: string[] }) =>
+      [e.message, e.cmd ?? '', (e.spawnargs ?? []).join(' ')].join('\n')
+    const readErr = await rejection(tool('workspace', 'file_read')({ path: 'missing.txt' }))
+    const execErr = await rejection(sandboxExec('echo boom >&2; exit 3', { workspaceRoot: ws, accessLevel: 'workspace', proxyEnv }))
+    for (const e of [readErr, execErr]) {
+      expect(leaks(e)).not.toMatch(/s3cr3t|--setenv|--ro-bind|--clearenv/)
+      expect(e.message).toMatch(/^Command failed: /)
+    }
+    expect(execErr.message).toBe(`Command failed: bash -c cd "$1" && shift && echo boom >&2; exit 3 bash ${ws}\nboom\n`)
+    expect(readErr.message).toContain('missing.txt')
+    // The tool result says the same, masked on top.
+    const shell = await tool('workspace', 'shell_exec')({ command: 'exit 3' })
+    expect(shell).not.toMatch(/s3cr3t|--setenv/)
+  }, 30_000)
 
   it('web_fetch: through the proxy (Proxy-Authorization) when on, fails when off; no_proxy hosts go direct', async () => {
     on(TOKEN)
@@ -279,6 +382,52 @@ describe('through the proxy, for real', () => {
     expect(await tool('full', 'web_fetch')({ url: TARGET })).toContain('__TOOL_ERROR__')
     expect(seen).toEqual([])
   }, 30_000)
+
+  it('web_fetch re-routes every redirect hop: into no_proxy goes direct, out of it through the proxy', async () => {
+    on(TOKEN)
+    const into = await tool('full', 'web_fetch')({ url: `${TARGET}hop` })
+    expect(into).toContain('landed-direct')
+    expect(seen.map((s) => `${s.method} ${s.target}`)).toEqual(['CONNECT halo-proxy-test.invalid:80', 'GET /landed'])
+
+    seen.length = 0
+    const out = await tool('full', 'web_fetch')({ url: `http://127.0.0.1:${proxyPort}/out` })
+    expect(out).toContain('via-proxy')
+    expect(seen.map((s) => `${s.method} ${s.target}`)).toEqual(['GET /out', 'CONNECT halo-proxy-out.invalid:80'])
+  }, 30_000)
+
+  it('web_fetch refuses a caller Proxy-Authorization (any case) while the proxy is on — no_proxy hosts included', async () => {
+    on(TOKEN)
+    const out = await tool('full', 'web_fetch')({ url: `http://127.0.0.1:${proxyPort}/loop`, headers: { 'proxy-AUTHORIZATION': 'Basic x' } })
+    expect(out).toContain('__TOOL_ERROR__')
+    expect(out).toContain('Proxy-Authorization')
+    expect(seen).toEqual([])
+    proxySettings({ enabled: false, url: `http://127.0.0.1:${proxyPort}` })
+    expect(await tool('full', 'web_fetch')({ url: `http://127.0.0.1:${proxyPort}/loop`, headers: { 'Proxy-Authorization': 'Basic x' } })).toContain('Status: 200')
+  }, 30_000)
+
+  it('a <<ENV>> token reaches the proxy as the variable\'s value', async () => {
+    process.env.HALO_TEST_PROXY_TOKEN = 'envuser:envpass'
+    try {
+      on('<<HALO_TEST_PROXY_TOKEN>>')
+      expect(await tool('full', 'web_fetch')({ url: TARGET })).toContain('via-proxy')
+      expect(seen[0].auth).toBe(`Basic ${Buffer.from('envuser:envpass').toString('base64')}`)
+    } finally { delete process.env.HALO_TEST_PROXY_TOKEN }
+  }, 30_000)
+
+  it('a proxy that never answers the CONNECT: A2A gives up at timeoutMs, and so does web_fetch', async () => {
+    proxySettings({ enabled: true, url: `http://127.0.0.1:${silentPort}` }, { a2a: { url_allowlist: '127.0.0.0/8' } })
+    let t = Date.now()
+    await expect(policyRequest(`http://127.0.0.2:${directPort}/card`, { method: 'GET', timeoutMs: 400, viaProxy: true })).rejects.toThrow(/timeout after 400ms/)
+    expect(Date.now() - t).toBeLessThan(2500)
+
+    const saved = config.timeout.webFetch
+    config.timeout.webFetch = 400
+    try {
+      t = Date.now()
+      expect(await tool('full', 'web_fetch')({ url: TARGET })).toContain('timed out')
+      expect(Date.now() - t).toBeLessThan(2500)
+    } finally { config.timeout.webFetch = saved }
+  }, 10_000)
 
   it('A2A: requests to a remote go via the proxy; the url_allowlist check still applies; push stays direct', async () => {
     const remote = { name: 'peer', card: `http://127.0.0.2:${directPort}/card`, auth: 'bearer' as const }

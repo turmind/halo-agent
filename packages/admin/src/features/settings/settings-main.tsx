@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
-import { api } from '@/shared/api-client'
+import { api, extractApiError } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound, Puzzle, AlertTriangle, X, ChevronRight, SlidersHorizontal, Network } from 'lucide-react'
 import { cn } from '@/shared/utils'
@@ -46,6 +46,9 @@ export function SettingsMain() {
   // Dotted keys of saved boot-only settings (`restartRequired`) — shown in a
   // notice until dismissed, since the running server won't pick them up.
   const [restartKeys, setRestartKeys] = useState<string[]>([])
+  // A rejected save (400: out of range, proxy URL with credentials …), shown
+  // under its field until the next save / reset.
+  const [saveError, setSaveError] = useState<{ dotPath: string; message: string } | null>(null)
 
   const projectId = scope === 'workspace' ? activeProject?.path : undefined
 
@@ -87,10 +90,11 @@ export function SettingsMain() {
 
   async function handleSave(namespaceId: string, field: Field, rawValue: string) {
     setSaving(true)
+    setSaveError(null)
+    const dotPath = namespaceId === 'general'
+      ? `general.${field.key}`
+      : `${namespaceId}.${field.kind}s.${field.key}`
     try {
-      const dotPath = namespaceId === 'general'
-        ? `general.${field.key}`
-        : `${namespaceId}.${field.kind}s.${field.key}`
       if (rawValue === '') {
         // Empty string → delete the leaf so the value reverts to lower scope / unset.
         await api.settings.remove(scope, dotPath, projectId)
@@ -112,8 +116,7 @@ export function SettingsMain() {
       void refreshTheme()
     } catch (err) {
       console.error('[Settings] save failed:', err)
-      // A 400 names what's wrong (out of range, proxy URL with credentials) — show it.
-      window.alert(err instanceof Error ? err.message : String(err))
+      setSaveError({ dotPath, message: extractApiError(err) })
     } finally {
       setSaving(false)
     }
@@ -121,6 +124,7 @@ export function SettingsMain() {
 
   async function handleResetField(namespaceId: string, field: Field) {
     setSaving(true)
+    setSaveError(null)
     try {
       const dotPath = namespaceId === 'general'
         ? `general.${field.key}`
@@ -255,6 +259,7 @@ export function SettingsMain() {
               section={activeSection}
               scope={scope}
               saving={saving}
+              saveError={saveError}
               onSave={(field, value) => handleSave(activeSection.namespaceId, field, value)}
               onReset={(field) => handleResetField(activeSection.namespaceId, field)}
             />
@@ -404,11 +409,12 @@ function NavGroup({
 // Section content
 
 function SectionView({
-  section, scope, saving, onSave, onReset,
+  section, scope, saving, saveError, onSave, onReset,
 }: {
   section: Section
   scope: 'global' | 'workspace'
   saving: boolean
+  saveError: { dotPath: string; message: string } | null
   onSave: (field: Field, value: string) => void
   onReset: (field: Field) => void
 }) {
@@ -425,6 +431,7 @@ function SectionView({
       field={f}
       scope={scope}
       saving={saving}
+      saveError={saveError}
       onSave={(v) => onSave(f, v)}
       onReset={() => onReset(f)}
     />
@@ -490,12 +497,13 @@ function SectionView({
 }
 
 function FieldRow({
-  namespaceId, field, scope, saving, onSave, onReset,
+  namespaceId, field, scope, saving, saveError, onSave, onReset,
 }: {
   namespaceId: string
   field: Field
   scope: 'global' | 'workspace'
   saving: boolean
+  saveError: { dotPath: string; message: string } | null
   onSave: (value: string) => void
   onReset: () => void
 }) {
@@ -555,6 +563,7 @@ function FieldRow({
           <span>{t('settings.field.envMissing', { names: field.envMissing.join(', ') })}</span>
         </p>
       )}
+      {saveError?.dotPath === dotPath && <p className="mt-1 text-[10px] text-red-400">{saveError.message}</p>}
     </div>
   )
 }

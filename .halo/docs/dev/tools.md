@@ -80,7 +80,7 @@ Run a shell command. Full shell access.
 
 Timeout 120 s (`HALO_SHELL_TIMEOUT`). Max output 5 MB. The tool description surfaces the effective timeout to the agent and advises backgrounding (`nohup … &` + log polling) for longer tasks.
 
-**Outbound proxy.** With Settings → General → `outbound_proxy.enabled` on and a `url` set, every access level's command gets `http_proxy` / `https_proxy` / `HTTP_PROXY` / `HTTPS_PROXY` (credential in the URL's user-info) plus `no_proxy` / `NO_PROXY` (`localhost,127.0.0.1,::1` + the server's own), so curl / git / pip go through it. It is read at each command, no restart. bwrap / Seatbelt sessions get the same vars. Their network isn't isolated, so a proxy on the host's 127.0.0.1 is reachable. The credential is masked as `***` in the tool result. See [requirements/settings.md → Outbound proxy](../requirements/settings.md#outbound-proxy).
+**Outbound proxy.** With Settings → General → `outbound_proxy.enabled` on and a `url` set, every access level's command gets `http_proxy` / `https_proxy` / `HTTP_PROXY` / `HTTPS_PROXY` (credential in the URL's user-info) plus `no_proxy` / `NO_PROXY` (`localhost,127.0.0.1,::1` + the server's own), so curl / git / pip go through it. It is read at each command, no restart. bwrap / Seatbelt sessions get the same vars (in bwrap only the command, not the file tools' helpers). Their network isn't isolated, so a proxy on the host's 127.0.0.1 is reachable. The credential is masked as `***` in the tool result — its URL and base64 forms at any length, the bare token from 4 characters. See [requirements/settings.md → Outbound proxy](../requirements/settings.md#outbound-proxy).
 
 **Server shutdown** (server only — the CLI / TUI never enter shutdown). A command killed by a signal halo didn't send while the server is shutting down (a systemd stop signals the whole cgroup, the command with it) returns `[Command cut off by a server restart — it was still running when the server shut down, so it may or may not have taken effect. Check before re-running it.]` followed by `Output so far:` and the partial stdout (`STDERR:` appended when there is any), instead of `Command failed: …`. A command issued after shutdown began is not run: `Error: command not run — the server is shutting down. Safe to re-issue after the restart if still needed.` Normal exits read as before. See [session.md → Shutdown](../design/session.md#boot-reconcile-of-crash-orphans-reconcileorphansonboot).
 
@@ -122,7 +122,7 @@ HTTP request.
 
 Timeout 10 s. Max body 50 KB (truncated if larger). Returns status + content-type + response body.
 
-With the outbound proxy on (Settings → General → `outbound_proxy.*`), the request goes through it, the credential sent as `Proxy-Authorization`. Hosts in no_proxy (`localhost` / `127.0.0.1` / `::1` + the server's `NO_PROXY`) connect directly. Model provider calls are not affected. A caller-supplied `Proxy-Authorization` header is refused while the proxy is on.
+With the outbound proxy on (Settings → General → `outbound_proxy.*`), the request goes through it, the credential sent as `Proxy-Authorization`. Hosts in no_proxy (`localhost` / `127.0.0.1` / `::1` + the server's `NO_PROXY`, matched like curl: domain + subdomains, IPs, CIDRs) connect directly, decided per redirect hop. Model provider calls are not affected. A caller-supplied `Proxy-Authorization` header (any case) is refused with a tool error while the proxy is on, no_proxy targets included.
 
 ## Security
 

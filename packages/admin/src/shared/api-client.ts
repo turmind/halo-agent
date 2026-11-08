@@ -29,6 +29,19 @@ export function withDeadline<T>(ms: number, call: (signal: AbortSignal) => Promi
   })
 }
 
+/** request() throws `API error 400: {"error":"..."}` — surface just the message. */
+export function extractApiError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  const jsonStart = msg.indexOf('{')
+  if (jsonStart !== -1) {
+    try {
+      const parsed = JSON.parse(msg.slice(jsonStart)) as { error?: string }
+      if (parsed.error) return parsed.error
+    } catch { /* not JSON — fall through to raw message */ }
+  }
+  return msg
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: {
