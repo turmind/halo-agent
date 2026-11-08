@@ -19,10 +19,11 @@ export function cleanChildEnv(proxyEnv: Record<string, string> = outboundProxyEn
   const env = { ...process.env }
   delete env.HALO_PASSWORD
   delete env.HALO_JWT_SECRET
-  // Linked machines: a `halo node`'s pairing token (its node_run commands spawn
-  // through here too) — kept out of agent subprocess env. Not a boundary for
-  // full-level commands: they run unsandboxed as the same user and can read
-  // that user's processes and files anyway.
+  // Linked machines: a `halo-node`'s pairing token (halo-node strips it from its
+  // own node_run commands too, internal/exec/run.go) — kept out of agent
+  // subprocess env. Not a boundary for full-level commands: they run
+  // unsandboxed as the same user and can read that user's processes and files
+  // anyway.
   delete env.HALO_NODE_TOKEN
   for (const key of settingsOtelEnvKeys) delete env[key]
   return Object.assign(env, proxyEnv)

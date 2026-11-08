@@ -5,13 +5,16 @@ name: node-go
 on:
   pull_request:
     branches: [main]
-    # node-go itself, plus what the rm-guard vector --check imports (sandbox.ts → child-env.ts,
-    # through the lockfile's tsx) and the protocol.ts the internal/protocol drift test reads.
+    # node-go itself, plus what the rm-guard vector --check imports (sandbox.ts → child-env.ts →
+    # outbound-proxy.ts → settings-file.ts, through the lockfile's tsx) and the protocol.ts the
+    # internal/protocol drift test reads.
     paths: &paths
       - packages/node-go/**
       - packages/server/src/nodes/protocol.ts
       - packages/server/src/tools/sandbox.ts
       - packages/server/src/child-env.ts
+      - packages/server/src/outbound-proxy.ts
+      - packages/server/src/settings-file.ts
       - pnpm-lock.yaml
       - .github/workflows/node-go.yml
   push:
