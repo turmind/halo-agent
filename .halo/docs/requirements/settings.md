@@ -102,11 +102,39 @@ An installed canvas extension declares its own config in its manifest: `"setting
 
 ### General — built-in
 
-Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `theme`, `agent.max_retries`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `observability.*` (read once at boot — restart the server to apply; cron / evolution runs pick a change up on their next run), `evolution.*`, `limits.*`. All `general.*` keys are `globalOnly` except `evolution.level` and `evolution.auto_apply_threshold`: `config.ts` resolves the `globalOnly` ones through `settingsValue()` against `~/.halo/secrets/settings.yaml` only, so a workspace `settings.yaml` cannot override them. Per-workspace layering applies to namespaced `params` / `secrets` (`getServerSecret(ns, key, workspaceRoot)`, `substituteSecrets`).
+Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `theme`, `agent.max_retries`, `server.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `observability.*` (read once at boot — restart the server to apply; cron / evolution runs pick a change up on their next run), `outbound_proxy.*`, `evolution.*`, `limits.*`. All `general.*` keys are `globalOnly` except `evolution.level` and `evolution.auto_apply_threshold`: `config.ts` resolves the `globalOnly` ones through `settingsValue()` against `~/.halo/secrets/settings.yaml` only, so a workspace `settings.yaml` cannot override them. Per-workspace layering applies to namespaced `params` / `secrets` (`getServerSecret(ns, key, workspaceRoot)`, `substituteSecrets`).
 
 `server.trust_proxy` (boolean, default `false`, `globalOnly`): whether the brute-force rate limiter (`middleware/brute-force.ts` `getClientIp`) trusts the `x-forwarded-for` header for client IP resolution. Direct-connect deployments leave it `false` and get the socket address. Behind a reverse proxy (nginx / Cloudflare / etc.), set it to `true` so the real client IP is honored instead of the proxy's — but only when that proxy is one you control and rewrites the header itself, otherwise a client can forge XFF to dodge lockouts.
 
 `sandbox.hidden_dirs` / `sandbox.hidden_files` / `sandbox.writable_dirs` are `globalOnly` — they define the security boundary agents run inside, so a workspace `settings.yaml` cannot override them (a workspace overriding them could lift its own sandbox constraints). `hidden_dirs` / `hidden_files` hold **extra** entries: the effective list is the built-in default (`DEFAULT_HIDDEN_DIRS` / `DEFAULT_HIDDEN_FILES` in `tools/sandbox.ts`, the single source — `~/.halo/secrets`, `~/.aws`, `~/.ssh`, `~/.gnupg`, `~/.docker`, `~/.config/gh`, `~/.halo/global/internal-sessions`, `~/.halo/global/logs`; `~/.npmrc`, `~/.bash_history`, `~/.gitconfig`, `~/.git-credentials`, `~/.netrc`, the global `evo` / `cron` / `runs` databases + `-wal` / `-shm`) plus the user's entries, deduped (`config.ts` `resolveSandboxPaths()`, used by both the server and the CLI). A default entry cannot be removed from the list in settings. The lists apply only to workspace / readonly sessions (bwrap / Seatbelt, or `assertPathAllowed` without an OS sandbox); Full sessions, the admin file explorer (`validatePath`, workspace-bound only) and the terminal never consult them. The schema `default` is empty so the placeholder doesn't suggest copying the built-ins; the field description names them. `writable_dirs` is a plain list (no built-ins).
+
+#### Outbound proxy
+
+For a machine whose way out is a local proxy (e.g. Hiddify / Clash in system-proxy mode on `127.0.0.1:12334`). Command-line tools ignore the OS proxy setting, so without this they connect directly. Three `globalOnly` fields, all read live (the mtime-cached settings, one `stat` per spawn / request) — no restart:
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `outbound_proxy.enabled` | boolean | `false` | Master switch. On with an empty `url` = off, no error |
+| `outbound_proxy.url` | string | `''` (placeholder `http://127.0.0.1:12334`) | Proxy address. Must parse with scheme `http:` or `https:` and carry **no user-info** — `PUT` / `PATCH` reject `user:pass@…` with 400 (`… put them in Token …`) so a credential never lands in a plain-text field. A hand-edited bad value is ignored at read time (proxy off, one `[OutboundProxy]` warning that never echoes the URL) |
+| `outbound_proxy.token` | string, **secret** | `''` | Optional credential: `user:password`, or a bare token (= user name, empty password). Masked in `GET /api/settings/schema` like any secret |
+
+**What goes through it** (when on):
+- **Spawned children** — `shell_exec` at every access level, Terminals, notebook kernels, evolution runs. `cleanChildEnv()` (`child-env.ts`) adds `http_proxy`, `https_proxy`, `HTTP_PROXY`, `HTTPS_PROXY`, `no_proxy`, `NO_PROXY`. The bwrap (`--clearenv` + `--setenv`) and macOS Seatbelt (allowlisted env) paths add the same vars from the same function. Neither isolates the network, so a proxy on the host's loopback is reachable from inside.
+- **web_fetch** and **A2A requests to remotes** (agent card + JSON-RPC, `a2a/outbound.ts`) — an undici `ProxyAgent` passed per request. It is never the global dispatcher: model provider calls share the global `fetch` and keep their own route. A2A's `general.a2a.url_allowlist` check still runs on the target before the request goes to the proxy. A2A push webhooks to callers and inbound image URL fetches stay direct.
+
+**Not covered**: model provider calls, channel connections (Telegram / Slack / Feishu …), the hub / update checks.
+
+**no_proxy**: `localhost,127.0.0.1,::1`, plus whatever `NO_PROXY` / `no_proxy` the server process itself inherited, deduped. A child gets that list. web_fetch / A2A skip the proxy for a host equal to an entry or a subdomain of it (`.corp.example` / `corp.example` / `*.corp.example`; `*` = everything).
+
+**Off** = Halo sets no proxy variables at all. Proxy variables the server process inherited from its own environment are not removed — they are the operator's.
+
+**Token transport** — Basic auth both ways, `base64(user:password)`:
+- children: in the proxy URL's user-info, percent-encoded (`http://<user>:<pass>@host:port`) — the one form curl, git and pip all read;
+- web_fetch / A2A: the `Proxy-Authorization` header (on the CONNECT for https and http alike). A caller-supplied `Proxy-Authorization` header in web_fetch is refused while the proxy is on.
+
+The credential never appears in logs (only the user-info-free origin is printed: `[OutboundProxy] on: http://host:port (with token)`), and its raw / percent-encoded / base64 forms are masked as `***` in `shell_exec` results (e.g. `env` output).
+
+**Terminals** get their env when they are opened: a Terminal already open keeps the old setting, a newly opened one picks up the change.
 
 `evolution.*` controls the self-evolution subsystem (see [design/evolution.md](../design/evolution.md)). `evolution.level` and `evolution.auto_apply_threshold` can be set **per workspace**: `<workspace>/.halo/settings.yaml` overrides `~/.halo/secrets/settings.yaml`, which overrides the schema default (an open workspace can sit at L0 while a private one auto-applies), and the workspace Settings page edits them like any non-`globalOnly` field. The rest of `evolution.*` is `globalOnly` — it lives in `~/.halo/secrets/settings.yaml` only, not workspace settings. Notable knobs: `evolution.level` (`L0` = manual only: `/evo` drafts, a reviewer approves; `L1` = L0 plus automatic drafting on pre-compact; `L2` = L1 plus auto-applying prompt-only changes that pass the gates; `L3` = L2 plus auto-applying capability changes — auto-applied changes still pass the regression check and can be rolled back from the Evolution tab; only changes learned from a `full`-access session auto-apply; a cron run's own turn never drafts on pre-compact), `evolution.auto_apply_threshold` (int 0–100, default 80 — minimum average score at L2/L3, on top of the fixed floors confidence high / behavior ≥ 70 / lint 100 / all sandbox checks; a save outside 0–100 is rejected with 400), `evolution.max_concurrent_run` / `max_concurrent_apply` (wrapper concurrency caps), `evolution.run_timeout_minutes` / `apply_timeout_minutes` (heartbeat timeouts), `evolution.max_attempts` (per-row retry cap), `evolution.triggers.pre_compact` (snapshot session before compaction).
 
@@ -134,6 +162,7 @@ There is no "default provider" setting: a newly created agent's `model:` is a co
 | `options` / `optionLabels` | no | For `type: enum`: the allowed values, and optional display labels parallel to them |
 | `description` | no | English description rendered as help text |
 | `description_zh` | no | Chinese description (UI picks based on lang) |
+| `placeholder` | no | Example shown in an empty text input, display only — unlike `default` it is not a value anything falls back to (e.g. `outbound_proxy.url`). Built-in `general` section only |
 | `default` | no | Placeholder shown when the value is unset; supports `<<ENV>>`. For provider / skill / agent fields it is display-only: an unset param's `{{<id>.params.<key>}}` stays literal at substitution, so the consumer applies its own fallback (the `extension` skill's `ext.sh` treats `{{…}}` as "use the default hub"; `web-search`'s `search.py` as "use the default region") |
 | `secret` | no | `true` → masked in API responses + password input in UI |
 | `restartRequired` | no | `true` → read once at server start; the Settings page shows a restart notice after saving it. Built-in `general` section only |

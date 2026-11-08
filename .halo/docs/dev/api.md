@@ -930,6 +930,7 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:`, `skills/<id>/confi
           "description": "...",
           "description_zh": "...",
           "default": "...",                        // schema-default placeholder; omitted when the schema declares none
+          "placeholder": "...",                    // general.* only: example for an empty input, never a fallback value (e.g. outbound_proxy.url)
           "secret": true,                          // UI masks input + value
           "globalOnly": false,                     // general.* only: workspace overrides ignored, workspace writes 400
           "restartRequired": false,                // general.* only: read once at boot — UI shows a restart notice after saving
@@ -966,7 +967,7 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:`, `skills/<id>/confi
 { "ok": true }
 ```
 
-PUT replaces the full scope; PUT / PATCH / DELETE with `scope: "workspace"` reject a `globalOnly` key with 400 (`<key> is global-only and cannot be set per workspace`) and an unresolvable `projectId` with 404 `Project not found`. DELETE takes `{scope, projectId, key}` and removes the key. PUT / PATCH / DELETE fire the server's `onSettingsChange` listeners (e.g. the sandbox hidden-paths reload); a DELETE of an already-absent key is a no-op — `{ ok: true }`, no file write, no notify. The Settings page uses DELETE for both Reset (current scope removed → falls back to lower scope / unset) and orphan Remove.
+PUT replaces the full scope; PUT / PATCH / DELETE with `scope: "workspace"` reject a `globalOnly` key with 400 (`<key> is global-only and cannot be set per workspace`) and an unresolvable `projectId` with 404 `Project not found`. PUT / PATCH also 400 a value outside a field's `min` / `max`, and a `general.outbound_proxy.url` that isn't `http(s)://` or carries `user:pass@` (`general.outbound_proxy.url: credentials are not allowed in the URL — put them in Token (general.outbound_proxy.token)`; the message never echoes the URL), file untouched. DELETE takes `{scope, projectId, key}` and removes the key. PUT / PATCH / DELETE fire the server's `onSettingsChange` listeners (e.g. the sandbox hidden-paths reload); a DELETE of an already-absent key is a no-op — `{ ok: true }`, no file write, no notify. The Settings page uses DELETE for both Reset (current scope removed → falls back to lower scope / unset) and orphan Remove.
 
 ### POST `/api/wechat/login/start`
 
