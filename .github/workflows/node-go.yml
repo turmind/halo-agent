@@ -6,9 +6,10 @@ on:
   pull_request:
     branches: [main]
     # node-go itself, plus what the rm-guard vector --check imports (sandbox.ts → child-env.ts,
-    # through the lockfile's tsx).
+    # through the lockfile's tsx) and the protocol.ts the internal/protocol drift test reads.
     paths: &paths
       - packages/node-go/**
+      - packages/server/src/nodes/protocol.ts
       - packages/server/src/tools/sandbox.ts
       - packages/server/src/child-env.ts
       - pnpm-lock.yaml

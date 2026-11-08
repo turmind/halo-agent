@@ -10,9 +10,11 @@ export const NODE_PROTOCOL = 1
 /** ws maxPayload on both ends. */
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024
 /** The machine truncates a result to this many chars before sending it. */
+// protocol constants mirrored by Go; checked by internal/protocol drift test
 export const NODE_RESULT_MAX_CHARS = 256 * 1024
 
 export type NodeOp = 'read' | 'write' | 'edit' | 'list' | 'grep' | 'glob' | 'run'
+// protocol constants mirrored by Go; checked by internal/protocol drift test
 export const NODE_OPS: ReadonlySet<string> = new Set<NodeOp>(['read', 'write', 'edit', 'list', 'grep', 'glob', 'run'])
 
 /** Handshake headers (not the query string — keeps the token out of proxy logs). */
