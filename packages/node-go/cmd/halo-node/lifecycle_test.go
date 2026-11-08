@@ -166,7 +166,7 @@ func TestFatalRefusal(t *testing.T) {
 	}{
 		{401, "[Node] token rejected by the server (401) — check --token / HALO_NODE_TOKEN, or create a new one in Admin → Channels → Linked machines\n"},
 		{404, "[Node] the workspace this token is bound to no longer exists on the server (404)\n"},
-		{426, "[Node] protocol mismatch with the server (426, this node speaks v1) — upgrade halo here or on the server\n"},
+		{426, "[Node] protocol mismatch with the server (426, this node speaks v1) — upgrade halo-node here or halo on the server, whichever is older\n"},
 	} {
 		t.Run(strconv.Itoa(c.status), func(t *testing.T) {
 			var mu sync.Mutex

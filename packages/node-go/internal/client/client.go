@@ -365,7 +365,7 @@ func (n *node) closed(status int, welcomed bool, code int, reason, lastError str
 	case status == 404:
 		n.fatal("the workspace this token is bound to no longer exists on the server (404)")
 	case status == 426:
-		n.fatal(fmt.Sprintf("protocol mismatch with the server (426, this node speaks v%d) — upgrade halo here or on the server", protocol.Version))
+		n.fatal(fmt.Sprintf("protocol mismatch with the server (426, this node speaks v%d) — upgrade halo-node here or halo on the server, whichever is older", protocol.Version))
 	case code == protocol.CloseRevoked:
 		n.fatal("token revoked on the server — this machine is no longer linked")
 	case status == 409 || (code == protocol.CloseReplaced && strings.Contains(reason, "another process")):

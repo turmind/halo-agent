@@ -214,7 +214,7 @@ Then just ask: "list my machines", "read `notes/todo.md` on mbp", "run the tests
 |---|---|
 | `token rejected by the server (401)` | Wrong / deleted token — create a new one. 5 bad tries in 15 min lock the address out for a while (429). |
 | `the workspace this token is bound to no longer exists (404)` | The workspace folder was removed on the server. |
-| `protocol mismatch (426)` | Client and server versions too far apart — upgrade the older side. |
+| `protocol mismatch (426)` | `halo-node` and the server speak different protocol versions — upgrade the older one: re-run `install.sh` (or download the server's release) here, or `halo upgrade` on the server. |
 | `this token is already connected from another process` | Another `halo-node` with the same token is running; this one keeps retrying until that one stops. Also normal right after the machine rebooted or woke from sleep: the server needs 40–60 s to notice the old connection is dead, so the new process backs off and can take up to ~90 s to come online. |
 | agent: `machine "mbp" is offline` | `halo-node` isn't running / connected. |
 | agent: `went offline during the call` | The connection dropped mid-call; the operation may or may not have happened. Running commands on the machine were stopped. |
