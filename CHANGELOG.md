@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [2.2.4] - 2026-11-08
 
 - Models: when an OpenAI-format provider's content filter blocks a reply, Halo now treats it as a model refusal, like Claude's. This covers OpenAI, DeepSeek, Doubao, Hunyuan and Zhipu on chat/completions (finish_reason `content_filter` / `sensitive`, also from any other OpenAI-compatible endpoint that reports them) and Bedrock Mantle / Bedrock OpenAI on the Responses API. The chat shows "Model declined to respond (content_filter)", the turn counts as failed (parent / relay / cron / A2A see it as aborted), `halo cli` exits 1, and OTel records `refusal`. Before, it looked like an empty reply that finished normally.
+- Models: Kimi K3.1 on Amazon Bedrock (`global.moonshotai.kimi-k3.1`, OpenAI-compatible provider) joins the bundled model list ahead of Kimi K3: 1M context, image input, reasoning effort none through max (default XHigh), implicit prompt caching. Bedrock's model card for this id is titled "Kimi K3.1 Pro - Highspeed". It is Bedrock-runtime only, not on Mantle. An account whose Bedrock token-per-minute quota for it is 0 gets a 429 on every call until the quota is raised.
 
 ## [2.2.3] - 2026-11-07
 

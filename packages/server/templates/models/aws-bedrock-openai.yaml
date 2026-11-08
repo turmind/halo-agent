@@ -1,10 +1,10 @@
 id: aws-bedrock-openai
 runtime: bedrock-mantle
-revision: 2026110501
-displayName: AWS Bedrock OpenAI-compatible (GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3 · GLM 5.3)
-displayName_zh: AWS Bedrock OpenAI 兼容接口（GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3 · GLM 5.3）
-description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6.1 (Sol / Terra), GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.7 / 4.6, Moonshot Kimi K3, Z.AI GLM 5.3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).
-description_zh: 通过 bedrock-runtime 端点的 OpenAI Responses API（/openai/v1）调用 Bedrock 上的前沿模型——OpenAI GPT-6.1（Sol / Terra）、GPT-6（Astra / Sol / Luna）与 GPT-5.6（Sol / Terra / Luna）、xAI Grok 4.7 / 4.6、月之暗面 Kimi K3、智谱 GLM 5.3。仅支持跨区域推理 profile（global.*）——每个区域都能调所有模型，无区域分裂。不支持服务端 web_search（那是 Mantle 独有）。
+revision: 2026110801
+displayName: AWS Bedrock OpenAI-compatible (GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3.1 / K3 · GLM 5.3)
+displayName_zh: AWS Bedrock OpenAI 兼容接口（GPT-6.1 / 6 / 5.6 · Grok 4.7 / 4.6 · Kimi K3.1 / K3 · GLM 5.3）
+description: Frontier models on Amazon Bedrock via the bedrock-runtime endpoint's OpenAI Responses API (/openai/v1) — OpenAI GPT-6.1 (Sol / Terra), GPT-6 (Astra / Sol / Luna) and GPT-5.6 (Sol / Terra / Luna), xAI Grok 4.7 / 4.6, Moonshot Kimi K3.1 / K3, Z.AI GLM 5.3. Cross-Region inference profiles (global.*) only — every region serves every model, no region split. No server-side web_search (that is Mantle-only).
+description_zh: 通过 bedrock-runtime 端点的 OpenAI Responses API（/openai/v1）调用 Bedrock 上的前沿模型——OpenAI GPT-6.1（Sol / Terra）、GPT-6（Astra / Sol / Luna）与 GPT-5.6（Sol / Terra / Luna）、xAI Grok 4.7 / 4.6、月之暗面 Kimi K3.1 / K3、智谱 GLM 5.3。仅支持跨区域推理 profile（global.*）——每个区域都能调所有模型，无区域分裂。不支持服务端 web_search（那是 Mantle 独有）。
 # Why a second Bedrock/OpenAI provider next to aws-bedrock-mantle: this is the
 # bedrock-runtime host (https://bedrock-runtime.<region>.amazonaws.com/openai/v1),
 # which AWS now recommends for new applications; bedrock-mantle is the legacy
@@ -12,8 +12,11 @@ description_zh: 通过 bedrock-runtime 端点的 OpenAI Responses API（/openai/
 # class (MantleAgent), different rules:
 #   - model ids MUST be cross-Region inference profiles (`global.*` / `us.*`);
 #     the bare foundation-model id 400s with "on-demand throughput isn't
-#     supported". Kimi K3 isn't on Mantle at all; Grok 4.6 is Mantle us-west-2
-#     only — here everything is reachable from any region.
+#     supported". Kimi K3.1 / K3 aren't on Mantle at all (the K3.1 card marks
+#     bedrock-mantle unsupported; live /v1/models in us-east-1 / us-east-2 /
+#     us-west-2, 2026-11-08: only kimi-k2.5 and kimi-k2-thinking, and the
+#     K3.1 / K3 ids 404 there); Grok 4.6 is Mantle us-west-2 only — here
+#     everything is reachable from any region.
 #   - live-probed 2026-09-24 with SigV4: all nine global.* ids below return
 #     200 (gpt-6.1-sol probed 2026-09-30) in us-east-1 / us-west-2 /
 #     eu-west-1 / ap-northeast-1 alike, so the endpoint is purely a latency /
@@ -419,6 +422,77 @@ models:
           - { value: medium, label: Medium }
           - { value: high, label: High }
           - { value: xhigh, label: XHigh }
+      verbosity:
+        default: medium
+        presets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+
+  # Kimi K3.1 (Bedrock card launch 2026-11-04, startOfLifeTime 2026-11-06;
+  # INFERENCE_PROFILE only — global. / us. profiles, no in-Region id). The
+  # Bedrock model card for moonshotai.kimi-k3.1 is titled "Kimi K3.1 Pro -
+  # Highspeed" (the control plane just says "Kimi K3.1"; there is no plain
+  # "Kimi K3.1 Pro" card), so by the card this is Moonshot's
+  # kimi-k3.1-pro-highspeed (same intelligence as K3.1 Pro in kimi.yaml, ~2-3x
+  # output speed per Moonshot's K3.1 Pro quickstart); nothing beyond the card
+  # title confirms the mapping. 1M context: input + max_output_tokens is
+  # accepted up to exactly 1048576 (input 21 + 1048555 → 200, + 1048556 →
+  # 400; K3 identical), matching Moonshot's native K3.1 Pro context_length, so
+  # maxContextWindow 1048576. That bound is the context, not an output cap —
+  # 131072 / 131073 / 262144 / 1000000 all return 200 — so 131072 stays
+  # Moonshot's official default output (as K3.1 Pro / K3), not endpoint-proven.
+  # Global CRIS $4 / $20 per 1M (cache read $0.20, cache write 30 min $5; US
+  # CRIS $4.40 / $22); output tokens burn 10x of the TPM quota.
+  # Live-probed 2026-11-08 via /openai/v1 Responses, SigV4: reasoning.effort
+  # accepts none/low/medium/high/xhigh/max (the validation error lists them;
+  # "Is 9991 prime?" reasoning_tokens 0 / 54 / 73 / 64 / 88 / 79 — advisory,
+  # within noise like K3). Thinking off omits the field and the model still
+  # reasons (88 tokens; the card's default is max), so `none` gets no preset.
+  # text.verbosity low/medium/high accepted, no visible effect on a short
+  # prompt. Image input OK (64×64 red PNG → "Red", blue → "Blue"; the card
+  # wants images placed before text; a 1×1 red PNG came back "Black"). Tools:
+  # no-arg function → function_call ping{} (auto and required), get_weather
+  # {"city":"Paris"}. Streaming emits response.reasoning.delta (raw
+  # reasoning_text, no summary) like K3. Implicit caching OK (an ~8.6K-token
+  # system sent 3x: run 1 cached_tokens 0, runs 2-3 cached_tokens 8600 of 8607);
+  # the card's explicit checkpoints (>=256 tokens, >=30 min) aren't sent by
+  # MantleAgent, so the single 5m preset is a form hint only.
+  # ACCOUNT QUOTA CAVEAT: the card default for "Global cross-region model
+  # inference tokens per minute for Moonshot AI Kimi K3.1" is 1M, but this
+  # probing account's applied value is 0 in us-east-1 / us-east-2 / us-west-2
+  # / eu-west-1 / ap-northeast-1 (K3 and GLM 5.3 too), where every call —
+  # even a bogus-value request — answers 429 "Too many tokens, please wait".
+  # That is the quota, not the model. So the probes ran in ap-southeast-1
+  # (everything above), eu-north-1 (plain, image, no-arg tool) and eu-west-3
+  # (plain), where the quota is 1M; the four presets above weren't verified
+  # for K3.1 from this account, though list-inference-profiles shows
+  # global.moonshotai.kimi-k3.1 ACTIVE in all of them (us.* in us-east-1 / 2
+  # and us-west-2). A 429 on every call = request a quota increase.
+  - id: global.moonshotai.kimi-k3.1
+    displayName: Kimi K3.1
+    maxOutputTokens: 131072
+    contextWindow: 272000
+    maxContextWindow: 1048576
+    compressAt: 0.9
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: xhigh
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
       verbosity:
         default: medium
         presets:
