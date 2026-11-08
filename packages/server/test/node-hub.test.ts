@@ -18,7 +18,7 @@ const { createNodeHub, setNodeHub } = await import('../src/nodes/hub.js')
 const { createNodeRoutes } = await import('../src/nodes/routes.js')
 const { buildNodeTools, NODES_UNAVAILABLE } = await import('../src/nodes/tools.js')
 const { createUpgradeRouter } = await import('../src/ws/upgrade-router.js')
-const { isLockedOut, clearFailures } = await import('../src/middleware/brute-force.js')
+const { isLockedOut, recordFailure, clearFailures } = await import('../src/middleware/brute-force.js')
 const { cleanChildEnv } = await import('../src/child-env.js')
 const P = await import('../src/nodes/protocol.js')
 
@@ -76,11 +76,13 @@ async function until(cond: () => boolean, ms = 3000, what = 'condition'): Promis
 const onlineNames = () => hub.online().map((o) => o.name)
 
 /** The machine end of protocol v1, driven by hand: handshake headers, frames recorded, `onFrame` answers. */
-function peer(opts: { instance?: string; token?: string; info?: Partial<NodeInfo>; onFrame?: (f: Frame, sock: WebSocket) => void } = {}) {
+/** `headers` overrides the handshake headers; an `undefined` value drops that header. */
+function peer(opts: { instance?: string; token?: string; info?: Partial<NodeInfo>; headers?: Record<string, string | undefined>; onFrame?: (f: Frame, sock: WebSocket) => void } = {}) {
   const frames: Frame[] = []
   const info = P.encodeNodeInfo({ root: nodeRoot, base: nodeRoot, shell: false, shellTimeoutMs: 120_000, os: 'linux', hostname: 'peer', version: 'test', ...opts.info })
+  const headers = { authorization: `Bearer ${opts.token ?? token}`, [P.HEADER_PROTOCOL]: String(P.NODE_PROTOCOL), [P.HEADER_INSTANCE]: opts.instance ?? 'i-1', [P.HEADER_INFO]: info, ...opts.headers }
   const sock = new WebSocket(`ws://127.0.0.1:${port}${P.NODE_WS_PATH}`, {
-    headers: { authorization: `Bearer ${opts.token ?? token}`, [P.HEADER_PROTOCOL]: '1', [P.HEADER_INSTANCE]: opts.instance ?? 'i-1', [P.HEADER_INFO]: info },
+    headers: Object.fromEntries(Object.entries(headers).filter((e): e is [string, string] => e[1] !== undefined)),
   })
   peers.push(sock)
   let status = 0
@@ -127,6 +129,39 @@ describe('handshake', () => {
     await until(() => runs.every((r) => r.status() !== 0), 3000, 'all refused')
     expect(runs.map((r) => r.status())).toEqual([401, 401, 401, 401, 401])
     expect(isLockedOut('node-token', '127.0.0.1')).toBe(true)
+  })
+
+  it('a locked-out address is refused (429) before the token is looked at', async () => {
+    for (let i = 0; i < 5; i++) recordFailure('node-token', '127.0.0.1')
+    const c = peer()
+    await until(() => c.status() !== 0, 3000, 'refused')
+    expect(c.status()).toBe(429)
+    expect(onlineNames()).toEqual([])
+  })
+
+  it('the workspace bound to the token is gone: 404', async () => {
+    const gone = path.join(tmp, 'gone-ws')
+    fs.mkdirSync(gone)
+    const r = insertNodeAccount(db, { workspacePath: gone, name: 'gone-box' })
+    if ('error' in r) throw new Error(r.error)
+    fs.rmSync(gone, { recursive: true })
+    const c = peer({ token: r.token })
+    await until(() => c.status() !== 0, 3000, 'refused')
+    expect(c.status()).toBe(404)
+    expect(isLockedOut('node-token', '127.0.0.1')).toBe(false)
+  })
+
+  it('another protocol version: 426, even with a valid token', async () => {
+    const c = peer({ headers: { [P.HEADER_PROTOCOL]: String(P.NODE_PROTOCOL + 1) } })
+    await until(() => c.status() !== 0, 3000, 'refused')
+    expect(c.status()).toBe(426)
+  })
+
+  it('no info header: 400', async () => {
+    const c = peer({ headers: { [P.HEADER_INFO]: undefined } })
+    await until(() => c.status() !== 0, 3000, 'refused')
+    expect(c.status()).toBe(400)
+    expect(onlineNames()).toEqual([])
   })
 
   it('connects: welcome, online() lists it, nodes:changed is broadcast, a call round-trips', async () => {
