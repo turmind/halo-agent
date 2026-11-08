@@ -29,12 +29,9 @@ func TestMainHelper(t *testing.T) {
 	main()
 }
 
-// runMain runs halo-node in a child process with a clean proxy env plus env,
-// killed after `within`. Returns exit code (-1 = killed) and stdout + stderr.
-func runMain(t *testing.T, within time.Duration, env []string, args ...string) (int, string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), within)
-	defer cancel()
+// mainCmd is halo-node as a child process (TestMainHelper) with a clean proxy
+// env plus env.
+func mainCmd(ctx context.Context, env []string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestMainHelper$", "--"}, args...)...)
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
@@ -45,7 +42,16 @@ func runMain(t *testing.T, within time.Duration, env []string, args ...string) (
 		}
 	}
 	cmd.Env = append(append(cmd.Env, "HALO_TEST_MAIN=1"), env...)
-	out, err := cmd.CombinedOutput()
+	return cmd
+}
+
+// runMain runs halo-node (mainCmd) killed after `within`. Returns exit code
+// (-1 = killed) and stdout + stderr.
+func runMain(t *testing.T, within time.Duration, env []string, args ...string) (int, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	defer cancel()
+	out, err := mainCmd(ctx, env, args...).CombinedOutput()
 	var exit *exec.ExitError
 	switch {
 	case err == nil:

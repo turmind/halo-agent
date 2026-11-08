@@ -48,6 +48,12 @@ jobs:
           node packages/node-go/testgen/regex-fuzz.mjs --n 20000 --seed ${{ github.run_id }} > /tmp/re.jsonl
           cd packages/node-go && JSREGEX_VECTORS=/tmp/re.jsonl go test ./internal/jsregex -run Differential -v -count=1
       - run: cd packages/node-go && VER=dev-${GITHUB_SHA::7} ./build.sh
+      # -static registers binfmt: the tests re-exec their own (arm) binary, which -exec can't wrap.
+      - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      - name: go test (arm64 under qemu)
+        run: cd packages/node-go && GOARCH=arm64 go test ./...
+      - name: go test (armv7 under qemu)
+        run: cd packages/node-go && GOARCH=arm GOARM=7 go test ./...
 
   windows:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
