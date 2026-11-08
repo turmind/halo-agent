@@ -410,7 +410,7 @@ startModelsWatcher()
 
 const channelDb = createChannelDb(path.join(HALO_HOME, 'secrets'))
 setChannelDb(channelDb)
-// Linked machines (`halo node`): the hub holds the online set in memory and
+// Linked machines (`halo-node`): the hub holds the online set in memory and
 // forwards node_* calls. AgentCore has no WS surface, so node tools report
 // "not available" there, as in the CLI.
 const nodeHub = AGENTCORE ? null : createNodeHub({ db: channelDb })

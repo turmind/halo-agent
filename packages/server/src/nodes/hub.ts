@@ -1,5 +1,5 @@
 /**
- * NodeHub — the server end of `halo node`: accepts machine connections on
+ * NodeHub — the server end of `halo-node`: accepts machine connections on
  * NODE_WS_PATH, keeps the online set (memory only — machines reconnect after a
  * server restart, the db rows are the truth for "which machines exist"), and
  * forwards node_* tool calls to them. Design: .halo/docs/design/node.md.
@@ -227,7 +227,7 @@ export function createNodeHub(deps: { db: ChannelDb; callTimeoutMs?: number; run
       })
       return JSON.stringify(nodes.length > 0
         ? { code: 0, nodes }
-        : { code: 0, nodes, hint: 'No machines linked — create a token in Admin → Channels → Linked machines, then run `halo node` on the machine.' })
+        : { code: 0, nodes, hint: 'No machines linked — create a token in Admin → Channels → Linked machines, then run `halo-node` on the machine.' })
     },
 
     call(workspace, name, op, args, signal) {
@@ -236,7 +236,7 @@ export function createNodeHub(deps: { db: ChannelDb; callTimeoutMs?: number; run
       if (!conn) {
         const names = listWorkspaceNodes(db, ws).map((a) => a.name)
         return Promise.reject(new Error(names.includes(name)
-          ? `machine "${name}" is offline (\`halo node\` is not connected). Do not retry in a loop — tell the user to start it.`
+          ? `machine "${name}" is offline (\`halo-node\` is not connected). Do not retry in a loop — tell the user to start it.`
           : `unknown machine "${name}" — machines linked to this workspace: ${names.join(', ') || '(none)'} (see node_list)`))
       }
       const id = String(++conn.seq)

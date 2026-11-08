@@ -152,7 +152,7 @@ describe('handshake', () => {
   })
 
   it('offline and unknown machines get different errors; an empty workspace gets a hint', async () => {
-    await expect(hub.call(ws, 'e2e-box', 'read', { path: 'x' })).rejects.toThrow('machine "e2e-box" is offline (`halo node` is not connected). Do not retry in a loop — tell the user to start it.')
+    await expect(hub.call(ws, 'e2e-box', 'read', { path: 'x' })).rejects.toThrow('machine "e2e-box" is offline (`halo-node` is not connected). Do not retry in a loop — tell the user to start it.')
     await expect(hub.call(ws, 'nope', 'read', { path: 'x' })).rejects.toThrow('unknown machine "nope" — machines linked to this workspace: e2e-box (see node_list)')
     expect(JSON.parse(hub.list(ws)).nodes).toEqual([{ name: 'e2e-box', online: false }])
     const empty = JSON.parse(hub.list(tmp))

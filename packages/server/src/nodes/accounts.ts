@@ -2,7 +2,7 @@
  * Linked-machine pairing tokens: `channel_accounts` rows with
  * `channel_type='node'`, `label` = machine name, `config` = `{ token }`.
  * Not a channel (no descriptor, never booted) — the rows only gate the
- * `halo node` handshake and name the machines of a workspace.
+ * `halo-node` handshake and name the machines of a workspace.
  */
 import crypto from 'node:crypto'
 import fs from 'node:fs'

@@ -1,5 +1,5 @@
 /**
- * The node_* tools (agent side of `halo node`). Prompt-cache invariant: names,
+ * The node_* tools (agent side of `halo-node`). Prompt-cache invariant: names,
  * descriptions and schemas are constants of the code — never read the hub, the
  * db, env or the machine list at build time. Online state reaches the model
  * only through node_list's RESULT. Design: .halo/docs/design/node.md.
@@ -11,7 +11,7 @@ import type { NodeOp } from './protocol.js'
 
 /** Not `halo server` (CLI / TUI, evo sandbox, AgentCore). Worded as
  *  permanent, like RELAY_UNAVAILABLE. */
-export const NODES_UNAVAILABLE = 'linked machines are not available in this runtime — only `halo server` accepts `halo node` connections. This is permanent for this runtime, not a temporary outage: do not retry. Tell the user to run this from the admin UI or a channel connected to the server.'
+export const NODES_UNAVAILABLE = 'linked machines are not available in this runtime — only `halo server` accepts `halo-node` connections. This is permanent for this runtime, not a temporary outage: do not retry. Tell the user to run this from the admin UI or a channel connected to the server.'
 
 export const NODE_TOOL_NAMES = ['node_list', 'node_read', 'node_write', 'node_edit', 'node_list_dir', 'node_grep', 'node_glob', 'node_run'] as const
 
@@ -19,11 +19,11 @@ export const NODE_TOOL_NAMES = ['node_list', 'node_read', 'node_write', 'node_ed
 export type RelayOp = NodeOp | 'nodes'
 
 const LIST_DESCRIPTION = [
-  'List the user\'s linked machines (computers running `halo node`, paired with this workspace) and whether each is online.',
+  'List the user\'s linked machines (computers running `halo-node`, paired with this workspace) and whether each is online.',
   'The other node_* tools act on one machine, named by `node` (a name from this list): node_read / node_write / node_edit / node_list_dir / node_grep / node_glob / node_run work like file_read / file_write / file_edit / file_list / grep / glob / shell_exec — same arguments, same output.',
   'A machine shares one folder (`root`), or everything when `wholeMachine` is true. Relative paths resolve against `root` (or `base`); paths outside `root` are refused.',
   'node_run needs `shell: true`.',
-  'Offline machine: don\'t retry — ask the user to start `halo node`. "went offline during the call": the operation may or may not have taken effect — check before redoing it.',
+  'Offline machine: don\'t retry — ask the user to start `halo-node`. "went offline during the call": the operation may or may not have taken effect — check before redoing it.',
 ].join('\n')
 
 const NODE_PROP = { type: 'string', description: 'Machine name from node_list.' }

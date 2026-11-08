@@ -19,8 +19,8 @@ const (
 	toolError = "__TOOL_ERROR__"
 )
 
-// ShellDisabled is node-exec.ts SHELL_DISABLED (kept verbatim, §9 Q16).
-const ShellDisabled = "node_run is disabled on this machine — the user must restart `halo node` with --allow-shell to allow commands"
+// ShellDisabled is node_run's refusal when --allow-shell wasn't given.
+const ShellDisabled = "node_run is disabled on this machine — the user must restart `halo-node` with --allow-shell to allow commands"
 
 // Scope: Root "" = whole-machine mode. Base = where relative paths resolve.
 type Scope struct {

@@ -1,5 +1,5 @@
 /**
- * `halo node` wire protocol (v1): one WS per linked machine, JSON text frames.
+ * `halo-node` wire protocol (v1): one WS per linked machine, JSON text frames.
  * The server hub (hub.ts) speaks it with the machine-side client, halo-node
  * (packages/node-go, `internal/protocol` mirrors this file).
  * Design: .halo/docs/design/node.md.
