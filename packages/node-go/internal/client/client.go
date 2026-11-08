@@ -44,7 +44,8 @@ type Options struct {
 	Server  string // as given on the command line (logged verbatim)
 	Token   string
 	Headers http.Header
-	Host    string // `--header Host: …` (http.Header ignores Host)
+	Host    string   // `--header Host: …` (http.Header ignores Host)
+	Proxy   *url.URL // `--proxy`: used alone; nil = HTTPS_PROXY / HTTP_PROXY / NO_PROXY
 	Info    protocol.NodeInfo
 	Exec    Executor
 	Log     func(string)
@@ -117,6 +118,10 @@ func Run(o Options, stop <-chan struct{}) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	proxy := http.ProxyFromEnvironment
+	if o.Proxy != nil {
+		proxy = http.ProxyURL(o.Proxy)
+	}
 	h := http.Header{}
 	for k, vs := range o.Headers {
 		for _, v := range vs {
@@ -130,11 +135,13 @@ func Run(o Options, stop <-chan struct{}) (int, error) {
 	n := &node{
 		o: o, url: u, header: h, backoff: initialBackoff,
 		running: map[string]*call{}, done: make(chan int, 1),
-		// No proxy env (the TS `ws` client ignores HTTP(S)_PROXY, §9 Q6). No
-		// redirects (ws: followRedirects false): a 3xx is "server refused the
+		// --proxy, else HTTPS_PROXY / HTTP_PROXY / NO_PROXY as Go reads them
+		// (loopback hosts never proxied). A wss:// server goes through CONNECT,
+		// so the token stays inside TLS; user:pass@ in the proxy URL becomes
+		// Proxy-Authorization. No redirects: a 3xx is "server refused the
 		// connection (HTTP 3xx)", and the token never goes to the Location.
 		httpc: &http.Client{
-			Transport:     &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{}},
+			Transport:     &http.Transport{Proxy: proxy, TLSClientConfig: &tls.Config{}},
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}

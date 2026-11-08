@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"os/user"
@@ -25,7 +26,7 @@ import (
 
 var version = "dev"
 
-const help = `Usage: halo-node --server <url> [--root <dir>] [--token <t>] [--allow-shell] [--header "Name: value"]
+const help = `Usage: halo-node --server <url> [--root <dir>] [--token <t>] [--allow-shell] [--proxy <url>] [--header "Name: value"]
 
 Link this machine to a workspace on a halo server, so that workspace's
 full-access agents can read, write and search files here (node_* tools) and,
@@ -42,6 +43,9 @@ Flags:
                      shell history.
   --allow-shell      let the agent run commands (node_run), as this user and
                      not sandboxed; their cwd stays inside --root. Off by default.
+  --proxy <url>      http(s):// forward proxy for the connection, e.g.
+                     --proxy http://127.0.0.1:12334 (user:pass@ allowed). When
+                     given, HTTPS_PROXY / HTTP_PROXY / NO_PROXY are ignored.
   --header "N: v"    optional, repeatable. Extra header on the connection, for
                      an auth proxy in front of the server (cookie, CF-Access-*).
 `
@@ -99,6 +103,7 @@ func main() {
 	root := fs.String("root", "", "")
 	token := fs.String("token", "", "")
 	allowShell := fs.Bool("allow-shell", false, "")
+	proxyArg := fs.String("proxy", "", "")
 	showVersion := fs.Bool("version", false, "")
 	var headers headerList
 	fs.Var(&headers, "header", "")
@@ -159,6 +164,18 @@ func main() {
 	if _, err := client.WSURL(*server); err != nil {
 		fail(err.Error())
 	}
+	var proxy *url.URL
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name != "proxy" {
+			return
+		}
+		// The value is never echoed: it may carry user:pass@.
+		u, err := url.Parse(*proxyArg)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || u.Host == "" {
+			fail("--proxy must be an http:// or https:// URL with a host, e.g. http://127.0.0.1:12334")
+		}
+		proxy = u
+	})
 
 	logf := func(s string) { os.Stdout.WriteString(s + "\n") }
 	whole := !rootSet || *root == "/"
@@ -203,6 +220,9 @@ func main() {
 	} else {
 		logf(fmt.Sprintf("[Node] sharing %s → %s", base, *server))
 	}
+	if proxy != nil {
+		logf("[Node] connecting through proxy " + proxy.Redacted())
+	}
 	if *allowShell {
 		name := os.Getenv("USER")
 		if u, err := user.Current(); err == nil {
@@ -239,7 +259,7 @@ func main() {
 	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sig; close(stop) }()
-	code, err := client.Run(client.Options{Server: *server, Token: tok, Headers: hdr, Host: host, Info: info, Exec: ex, Log: logf}, stop)
+	code, err := client.Run(client.Options{Server: *server, Token: tok, Headers: hdr, Host: host, Proxy: proxy, Info: info, Exec: ex, Log: logf}, stop)
 	if err != nil {
 		fail(err.Error())
 	}
