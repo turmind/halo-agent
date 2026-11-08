@@ -38,11 +38,13 @@ func runPid(t *testing.T, pidFile string) int {
 	return pid
 }
 
-func waitGone(t *testing.T, pid int) {
+// groupAlive: any process left in the run's process group (the shell is its
+// leader, Setsid). A just-killed member can be a zombie for a moment.
+func groupAlive(pgid int) bool { return !errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH) }
+
+func waitGone(t *testing.T, pgid int) {
 	t.Helper()
-	until(t, 5*time.Second, "the run's shell to exit", func() bool {
-		return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
-	})
+	until(t, 5*time.Second, "the run's process group to exit", func() bool { return !groupAlive(pgid) })
 }
 
 // 4001 while a command runs: the command is killed, then exit 1.
@@ -138,5 +140,92 @@ func TestSigtermWhileRetrying(t *testing.T) {
 	}
 	if n := attempts(); n != 1 {
 		t.Errorf("%d attempts", n)
+	}
+}
+
+// cancel from the hub: that call's process group is killed, nothing is sent
+// for it, and the node stays connected and keeps answering.
+func TestCancelKillsRun(t *testing.T) {
+	ready := make(chan *hubConn, 1)
+	server, attempts := fakeHub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
+		h := accept(t, w, r)
+		h.send(t, welcome)
+		h.send(t, runReq)
+		ready <- h
+		<-h.done
+	})
+	p, pidFile := startRun(t, server)
+	h := <-ready
+	pid := runPid(t, pidFile)
+	h.send(t, `{"t":"cancel","id":"r1"}`)
+	waitGone(t, pid)
+	h.send(t, `{"t":"req","id":"r2","op":"read","args":{"path":"hello.txt"}}`)
+	until(t, 5*time.Second, "the read reply", func() bool { return len(h.received()) == 1 })
+	if got, want := h.received()[0], `{"t":"res","id":"r2","ok":true,"text":"1\thello\n2\t"}`; got != want {
+		t.Errorf("reply %s\nwant  %s", got, want)
+	}
+	select {
+	case <-p.done:
+		t.Fatalf("exited %d, output:\n%s", p.code, p.output())
+	default:
+	}
+	if n := attempts(); n != 1 || strings.Contains(p.output(), "connection lost") {
+		t.Errorf("%d attempts, output:\n%s", n, p.output())
+	}
+}
+
+// A command that ignores SIGTERM: SIGTERM, 4001 and cancel each escalate to
+// SIGKILL (killGrace, 2s) and only exit / settle once the group is gone.
+func TestTermIgnorerEscalates(t *testing.T) {
+	const ignorer = `{"t":"req","id":"r1","op":"run","args":{"command":"trap '' TERM; echo $$ > run.pid; sleep 30"}}`
+	for _, path := range []string{"SIGTERM", "4001", "cancel"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			ready := make(chan *hubConn, 1)
+			server, _ := fakeHub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
+				h := accept(t, w, r)
+				h.send(t, welcome)
+				h.send(t, ignorer)
+				ready <- h
+				<-h.done
+			})
+			p, pidFile := startRun(t, server)
+			h := <-ready
+			pid := runPid(t, pidFile)
+			t0 := time.Now()
+			switch path {
+			case "SIGTERM":
+				_ = p.cmd.Process.Signal(syscall.SIGTERM)
+			case "4001":
+				_ = h.Close(4001, "token revoked")
+			case "cancel":
+				h.send(t, `{"t":"cancel","id":"r1"}`)
+			}
+			time.Sleep(time.Second)
+			if !groupAlive(pid) {
+				t.Fatal("the group died of SIGTERM: the trap didn't hold")
+			}
+			if path == "cancel" {
+				waitGone(t, pid)
+				if len(h.received()) != 0 {
+					t.Errorf("frames for the cancelled call: %q", h.received())
+				}
+				select {
+				case <-p.done:
+					t.Fatalf("exited %d, output:\n%s", p.code, p.output())
+				default:
+				}
+			} else {
+				want := map[string]int{"SIGTERM": 0, "4001": 1}[path]
+				if code := p.wait(10 * time.Second); code != want {
+					t.Fatalf("exit %d, output:\n%s", code, p.output())
+				}
+				// Exited only after the SIGKILL: the group is gone (bar a zombie being reaped).
+				until(t, time.Second, "the group gone right after exit", func() bool { return !groupAlive(pid) })
+			}
+			if d := time.Since(t0); d < 1800*time.Millisecond || d > 8*time.Second {
+				t.Errorf("took %v, want about killGrace (2s)", d)
+			}
+		})
 	}
 }

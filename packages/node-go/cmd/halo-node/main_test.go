@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -191,5 +192,60 @@ func TestProxyFlag(t *testing.T) {
 				t.Errorf("password in output:\n%s", out)
 			}
 		})
+	}
+}
+
+// Argument errors: the reason on stderr's first line, exit 1, no connection
+// attempt. The header / token checks run after the startup lines.
+func TestCLIErrors(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server, attempts := fakeHub(t, func(_ int, w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) })
+	for _, c := range []struct {
+		name string
+		env  []string
+		args []string
+		want string
+	}{
+		{"no --server", []string{"HALO_NODE_TOKEN=x"}, nil, "--server is required"},
+		{"no token", nil, []string{"--server", server}, "--token (or HALO_NODE_TOKEN) is required"},
+		{"empty --token does not fall back to env", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "--token", ""}, "--token (or HALO_NODE_TOKEN) is required"},
+		{"bad header", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "--header", "novalue"}, `invalid --header (expected "Name: value"): novalue`},
+		{"header leading colon", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "--header", ": v"}, `invalid --header (expected "Name: value"): : v`},
+		{"ftp scheme", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", "ftp://x"}, "--server must be http(s):// or ws(s)://, got ftp://x"},
+		{"no scheme", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", "localhost:9527"}, "--server must be http(s):// or ws(s)://, got localhost:9527"},
+		{"invalid URL", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", "http//x"}, "Invalid URL"},
+		{"port over 65535", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", "http://h:65536"}, "Invalid URL"},
+		{"unknown flag", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "--bogus"}, "flag provided but not defined: -bogus"},
+		{"positional argument", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "extra"}, "unexpected argument 'extra'"},
+		{"root missing", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "--root", filepath.Join(dir, "nope")}, "--root " + filepath.Join(dir, "nope") + ": no such directory"},
+		{"root is a file", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "--root", file}, "--root " + file + ": not a directory"},
+		{"header name not a token", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "--header", "X Foo: v"}, `Header name must be a valid HTTP token ["X Foo"]`},
+		{"header name empty after trim", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "--header", " : v"}, `Header name must be a valid HTTP token [""]`},
+		{"header value with a control char", []string{"HALO_NODE_TOKEN=x"}, []string{"--server", server, "--header", "X-A: a\x01b"}, `Invalid character in header content ["X-A"]`},
+		{"token with a trailing CR (CRLF env file)", []string{"HALO_NODE_TOKEN=abc\r"}, []string{"--server", server}, `Invalid character in header content ["authorization"]`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := mainCmd(ctx, c.env, c.args...)
+			cmd.Dir = dir
+			var stderr strings.Builder
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+				t.Fatalf("%v, stderr:\n%s", err, stderr.String())
+			}
+			if first, _, _ := strings.Cut(stderr.String(), "\n"); first != "halo-node: "+c.want {
+				t.Errorf("stderr %q\nwant   %q", first, "halo-node: "+c.want)
+			}
+		})
+	}
+	if n := attempts(); n != 0 {
+		t.Errorf("%d connection attempts", n)
 	}
 }
