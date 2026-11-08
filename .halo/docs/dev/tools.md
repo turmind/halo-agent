@@ -551,17 +551,17 @@ Act on the user's **linked machines** — computers running `halo-node`, paired 
 
 **Paths**: a machine shares one folder (`--root`; `root` in `node_list`) — relative paths resolve against it, paths that resolve outside it (symlinks included) are refused: `"<p>" is outside this machine's shared folder (<root>) — node tools can only reach paths inside it`. A whole-machine node (`root: null, wholeMachine: true`) has no such check; relative paths resolve against its `base`.
 
-**Runtime**: in `halo server` (cron runs included) calls go over the machine's WebSocket. In the standalone CLI / TUI, the evo sandbox and AgentCore mode the tools are listed but every one — `node_list` included — returns `linked machines are not available in this runtime — only \`halo server\` accepts \`halo node\` connections. This is permanent for this runtime, not a temporary outage: do not retry. …`.
+**Runtime**: in `halo server` (cron runs included) calls go over the machine's WebSocket. In the standalone CLI / TUI, the evo sandbox and AgentCore mode the tools are listed but every one — `node_list` included — returns `linked machines are not available in this runtime — only \`halo server\` accepts \`halo-node\` connections. This is permanent for this runtime, not a temporary outage: do not retry. …`.
 
 **Errors** (returned as the tool error text):
 
 | Case | Message |
 |---|---|
-| Machine linked but not connected | `machine "<n>" is offline (\`halo node\` is not connected). Do not retry in a loop — tell the user to start it.` |
+| Machine linked but not connected | `machine "<n>" is offline (\`halo-node\` is not connected). Do not retry in a loop — tell the user to start it.` |
 | Name not linked to this workspace | `unknown machine "<n>" — machines linked to this workspace: <a, b \| (none)> (see node_list)` |
 | Link dropped mid-call | `machine "<n>" went offline during the call (connection lost). The operation may or may not have completed on the machine — check its state before retrying.` |
 | No answer in time (120 s; node_run: shell timeout + 15 s) | `machine "<n>" did not answer within <s>s — the call was cancelled; it may or may not have taken effect.` |
-| node_run without `--allow-shell` | `node_run is disabled on this machine — the user must restart \`halo node\` with --allow-shell to allow commands` |
+| node_run without `--allow-shell` | `node_run is disabled on this machine — the user must restart \`halo-node\` with --allow-shell to allow commands` |
 | Request over 8 MB | `request too large to send to the machine (<x> MB > 8 MB limit)` |
 
 Results over 256K chars are cut on the machine (`[Content truncated on the machine: N chars total]`); the usual tool-result budget then applies.
@@ -575,7 +575,7 @@ Returns `{ "code": 0, "nodes": [...] }`, one entry per linked machine:
 - offline: `{ "name": "nas", "online": false }`
 - online: `{ "name": "mbp", "online": true, "root": "/Users/a/proj", "shell": true, "shellTimeoutSec": 120, "os": "darwin", "since": "<ISO>" }` — whole-machine: `"root": null, "wholeMachine": true, "base": "<start dir>"`; `shellTimeoutSec` only when `shell` is true.
 
-No machines at all → `"nodes": []` plus `"hint": "No machines linked — create a token in Admin → Channels → Linked machines, then run \`halo node\` on the machine."`.
+No machines at all → `"nodes": []` plus `"hint": "No machines linked — create a token in Admin → Channels → Linked machines, then run \`halo-node\` on the machine."`.
 
 ### node_run
 

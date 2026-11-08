@@ -10,7 +10,7 @@ halo-node --root ~/proj ──WebSocket──────▶ halo server ── 
 
 The machine runs `halo-node`, a single binary attached to every GitHub release for **Linux (x86_64 / arm64 / armv7)**, **macOS (Apple silicon / Intel)** and **Windows (amd64)**. It needs no Node.js, no `halo setup` and no model keys, and writes nothing under `~/.halo/`. The Linux build is ~7 MB and idles at about 9 MB of memory.
 
-Supported: Linux and Windows run vet and the tests natively in CI. The macOS builds are only cross-compiled — not tested on a Mac; on macOS, file errors from the agent's tools can read `Unknown system error -<n>` instead of the usual `ENOENT: no such file or directory` text. Windows `node_run` commands go to `cmd.exe`, with UTF-8 output and a GBK fallback.
+Supported: Linux and Windows run vet and the tests in CI (Linux arm64 / armv7 under qemu). The macOS builds are only cross-compiled — not tested on a Mac; on macOS, file errors from the agent's tools can read `Unknown system error -<n>` instead of the usual `ENOENT: no such file or directory` text. Windows `node_run` commands go to `cmd.exe`, with UTF-8 output and a GBK fallback.
 
 > `halo node` (the npm client from `npm install -g @turmind/halo`) was removed in 2.2.4; use `halo-node`. Same flags, same token.
 
@@ -53,6 +53,8 @@ curl -fsL https://github.com/turmind/halo-agent/releases/latest/download/SHA256S
 ./halo-node --server https://halo.example.com --root ~/proj
 ```
 
+On macOS, a binary downloaded in a browser is quarantined and Gatekeeper blocks it (the builds aren't notarized); clear that once before running it: `xattr -d com.apple.quarantine ./halo-node-darwin-*` (or whatever you renamed it to). `curl` / `wget` downloads — including `install.sh` — aren't quarantined.
+
 ### Windows (amd64)
 
 Download `halo-node-windows-amd64.exe` from the [GitHub release](https://github.com/turmind/halo-agent/releases/latest) matching your server (no Node.js needed; the admin's command does it with `Invoke-WebRequest` into the current folder). Put it in e.g. `C:\halo-node`. In PowerShell:
@@ -92,7 +94,7 @@ Prefer `--root` unless you really mean the whole machine.
 
 ### `--allow-shell`
 
-Off by default — `node_run` then refuses with "restart `halo node` with --allow-shell" (the message still says `halo node`; it means `halo-node`). With it, agents can run **any command as your user, not sandboxed**. In folder mode only the command's working directory is held inside the folder; the command itself (`cat ~/.ssh/...`, `curl ...`) can reach anything your user can. Turn it on only for agents and workspaces you trust. Commands are killed after the shell timeout (120 s, or `HALO_SHELL_TIMEOUT` in ms on the machine).
+Off by default — `node_run` then refuses with "restart `halo-node` with --allow-shell". With it, agents can run **any command as your user, not sandboxed**. In folder mode only the command's working directory is held inside the folder; the command itself (`cat ~/.ssh/...`, `curl ...`) can reach anything your user can. Turn it on only for agents and workspaces you trust. Commands are killed after the shell timeout (120 s, or `HALO_SHELL_TIMEOUT` in ms on the machine).
 
 ### What the agent can see
 
