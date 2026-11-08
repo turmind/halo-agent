@@ -534,7 +534,7 @@ Returns `{ "code": 0, "remotes": [{ name, agent, description, skills }], "pendin
 
 File: `packages/server/src/nodes/tools.ts` (`buildNodeTools`). Design notes in [design/node.md](../design/node.md); user guide [guide/node.md](../guide/node.md).
 
-Act on the user's **linked machines** — computers running `halo node`, paired with this workspace in Admin → Channels → Linked machines. Each node tool mirrors one local workspace tool and runs **that same tool** on the machine (same arguments, same output), plus a required `node` argument naming the machine:
+Act on the user's **linked machines** — computers running `halo-node`, paired with this workspace in Admin → Channels → Linked machines. Each node tool mirrors one local workspace tool and runs **that same tool** on the machine (same arguments, same output), plus a required `node` argument naming the machine:
 
 | Tool | Mirrors | Extra / different args |
 |---|---|---|

@@ -26,7 +26,7 @@ Aimed at Halo end-users. Pick the doc that matches your situation.
 
 ## Linked machines
 
-[node.md](node.md) — run `halo node` on your own computer so a workspace's agents can work on files there.
+[node.md](node.md) — run `halo-node` on your own computer so a workspace's agents can work on files there.
 
 ## Related docs
 

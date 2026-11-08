@@ -343,7 +343,7 @@ SSE responses (`/api/web/chat`, `/api/web/subscribe`) carry an SSE comment line 
 
 See [design/web.md](../design/web.md).
 
-## Linked machines (`halo node`)
+## Linked machines (`halo-node`)
 
 File: `packages/server/src/nodes/routes.ts` (+ `hub.ts` for the WebSocket). Not mounted in AgentCore mode. Design: [design/node.md](../design/node.md).
 
@@ -1108,6 +1108,6 @@ It does not remove session files. The full delete (rows + JSON + archive segment
 | `listener:released` | `sessionId` | Event listener reclaimed — re-send `subscribe` (see above) |
 | `exchange:deleted` | `sessionId`, `deletedIds`, `userOrdinal`, `userRows` | An `exchange:delete` this connection sent landed: ids of every soft-deleted row of the active log, the ordinal of the turn just deleted, and the log's user-turn count (without `taskId`) that ordinal runs over (the sender's own reply only — no full `state:snapshot` follows) |
 | `skills:changed` | — | A skill was created / deleted / toggled, or a workspace skill folder changed on disk — re-fetch skill lists and `/api/commands`. Workspace-scoped changes reach only that workspace's sockets (see [Skills](#skills)) |
-| `nodes:changed` | `online: [{accountId, root \| null, shell, os, since}]` | A `halo node` connected / disconnected — full snapshot of online machines (global broadcast; `root: null` = whole machine). See [Linked machines](#linked-machines-halo-node) |
+| `nodes:changed` | `online: [{accountId, root \| null, shell, os, since}]` | A `halo-node` connected / disconnected — full snapshot of online machines (global broadcast; `root: null` = whole machine). See [Linked machines](#linked-machines-halo-node) |
 
 Events with `taskId` set belong to sub-agent turns (nested sessions); events without are the root agent's. Session-scoped frames carry `sessionId` (the root session they belong to); the admin routes each one to the tab holding that session, and a frame without one goes to the tab on screen. Full list in [design/ws.md](../design/ws.md).

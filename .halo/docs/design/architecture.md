@@ -40,7 +40,7 @@
 │    /api/feishu/*      (feishu descriptor)                           │
 │    /api/wecom/*       (wecom descriptor)                            │
 │    /api/nodes/*       → createNodeRoutes() (linked machines)        │
-│    /api/nodes/connect → NodeHub.handleUpgrade (halo node WS)        │
+│    /api/nodes/connect → NodeHub.handleUpgrade (halo-node WS)        │
 │    /ws                → setupWebSocketHandler({wss,registry})       │
 │    /*                 → static frontend (Next.js out/)              │
 │    /ping, POST / (A2A) → a2a/agentcore.ts (agentcore-a2a mode)      │

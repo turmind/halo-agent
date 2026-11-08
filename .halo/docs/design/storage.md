@@ -674,7 +674,7 @@ All channel types (telegram, web, wechat, slack, feishu, wecom) share one table,
 | Column | Type | Notes |
 |---|---|---|
 | account_id | TEXT PK | Channel-specific ID (e.g. `halo_agent_bot`, `abc-im-bot`, `e718bb7b`) |
-| channel_type | TEXT NOT NULL | `'telegram'`, `'web'`, `'wechat'`, `'slack'`, `'feishu'`, `'wecom'`, or `'node'` (a `halo node` pairing token) |
+| channel_type | TEXT NOT NULL | `'telegram'`, `'web'`, `'wechat'`, `'slack'`, `'feishu'`, `'wecom'`, or `'node'` (a `halo-node` pairing token) |
 | workspace_path | TEXT NOT NULL | Absolute path of the bound workspace |
 | label | TEXT | User-chosen name |
 | enabled | INTEGER | 1 = active, 0 = disabled |
