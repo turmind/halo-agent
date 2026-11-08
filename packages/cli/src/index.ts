@@ -1545,11 +1545,20 @@ async function main(): Promise<void> {
     return
   }
 
+  // Every command has its own help page, so HELP_BY_CMD is the command list.
+  // Checked first: an unknown command (e.g. the removed `halo node`) must not
+  // reach the setup gate or the harness flag parser and fail there instead.
+  if (!Object.hasOwn(HELP_BY_CMD, cmd)) {
+    process.stderr.write(`Unknown command: ${cmd}\n\n${HELP_TOP}`)
+    process.exitCode = 1
+    return
+  }
+
   const subArgs = argv.slice(1)
 
   // `halo <cmd> --help` / `-h` — print that command's own help.
   if (subArgs.includes('--help') || subArgs.includes('-h')) {
-    const text = HELP_BY_CMD[cmd] ?? HELP_TOP
+    const text = HELP_BY_CMD[cmd]!
     process.stderr.write(text)
     return
   }
