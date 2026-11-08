@@ -24,7 +24,7 @@ func TestWSURL(t *testing.T) {
 		{"ftp://x", "", "--server must be http(s):// or ws(s)://, got ftp://x"},
 		{"localhost:9527", "", "--server must be http(s):// or ws(s)://, got localhost:9527"},
 		{"http//x", "", "Invalid URL"},
-		{"http:h", "", "Invalid URL"}, // WHATWG: host h; Go: opaque — refused (D4)
+		{"http:h", "", "Invalid URL"}, // WHATWG: host h; Go: opaque — refused
 		{"https:/h", "", "Invalid URL"},
 		{"http://h:65536", "", "Invalid URL"},
 		{"http://h:99999999999999999999", "", "Invalid URL"},

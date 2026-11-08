@@ -13,7 +13,8 @@ import (
 )
 
 // Supported rejects spellings whose namespace / trailing characters ordinary
-// Win32 calls would reinterpret after confinement (D18). Check before Clean.
+// Win32 calls would reinterpret after confinement (opening a different
+// object than the one checked). Check before Clean.
 func Supported(p string) bool {
 	p = strings.ReplaceAll(p, "/", `\`)
 	if strings.HasPrefix(p, `\\?\`) || strings.HasPrefix(p, `\\.\`) {

@@ -25,7 +25,7 @@ func shellCommand(cmd string) *osexec.Cmd {
 	// cmd caches its output codepage at startup. Start a second cmd after chcp
 	// in the hidden console; pass Unicode via the environment so the bootstrap
 	// parser cannot lose it. Delayed expansion inserts metacharacters verbatim,
-	// and the inner /s /c parses the user's command exactly once (D17).
+	// and the inner /s /c parses the user's command exactly once.
 	c.SysProcAttr = &syscall.SysProcAttr{
 		CmdLine: syscall.EscapeArg(shell) + ` /d /v:on /s /c "chcp 65001 >nul 2>&1 & "` + shell + `" /d /s /c "!HALO_NODE_COMMAND!""`,
 		// chcp needs a console even under Task Scheduler. Hide a new console,

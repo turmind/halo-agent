@@ -86,7 +86,7 @@ func fail(msg string) {
 }
 
 // shellTimeoutMs is config.timeout.shellExec: HALO_SHELL_TIMEOUT via parseInt,
-// default 120000 (settings yaml not read — D8).
+// default 120000 (~/.halo/secrets settings yaml isn't read on the machine).
 func shellTimeoutMs() int64 {
 	if v, ok := os.LookupEnv("HALO_SHELL_TIMEOUT"); ok {
 		if n, ok := jsv.ParseInt(v); ok {

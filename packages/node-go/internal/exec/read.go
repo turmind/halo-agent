@@ -38,7 +38,7 @@ var errStringLength = errors.New("Invalid string length")
 // readFile is fs.readFile(p, 'utf-8') with Node's error text. Capped at
 // v8StringMax bytes — a UTF-8 byte never decodes to more than one UTF-16
 // unit, so below that Node never throws; above it Node may still fit a
-// mostly multi-byte file, Go refuses it (D13).
+// mostly multi-byte file, Go refuses it (half a GiB of text: not a tool read).
 func readFile(p string) (string, error) {
 	f, err := os.Open(p)
 	if err != nil {

@@ -70,7 +70,7 @@ func (e *Executor) write(full, placed string, args map[string]any) (string, erro
 		// Node writes an iterable chunk by chunk (Buffer.from(chunk)): a string
 		// as UTF-8, an array as bytes (ToUint8 of each element); any other chunk
 		// throws after the earlier ones landed. Plain-object chunks (array-like
-		// / {type:'Buffer'}) are not replicated (D5).
+		// / {type:'Buffer'}) are off-schema and not replicated.
 		var sb strings.Builder
 		var bad any = jsv.Undefined
 		for _, el := range c {

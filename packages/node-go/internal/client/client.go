@@ -52,7 +52,7 @@ type Options struct {
 }
 
 // WSURL is nodeWsUrl. Stricter than new URL() for the special schemes: no
-// host after `//` (`http:h`, `https:/h`) is Invalid URL here, a host in WHATWG (D4).
+// host after `//` (`http:h`, `https:/h`) is Invalid URL here, a host in WHATWG — typos of `https://h`.
 func WSURL(server string) (string, error) {
 	u, err := url.Parse(server)
 	special := u != nil && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "ws" || u.Scheme == "wss")

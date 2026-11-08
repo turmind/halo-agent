@@ -85,7 +85,7 @@ func TestWindowsMkdirp(t *testing.T) {
 	}
 }
 
-// D18: validating inside. then opening it without the namespace would follow
+// Validating inside. then opening it without the namespace would follow
 // the distinct inside junction. Both spellings must be refused, never emulated.
 func TestWindowsAmbiguousPaths(t *testing.T) {
 	for _, suffix := range []string{".", " "} {

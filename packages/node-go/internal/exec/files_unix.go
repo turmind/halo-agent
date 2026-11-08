@@ -36,12 +36,12 @@ func mkdirp(dir string) error {
 			return jsv.FsError(err, "mkdir", path)
 		case syscall.ENOENT:
 			// Node re-tries this forever when the parent exists yet mkdir still
-			// says ENOENT (procfs: /proc/sys/x) — TS never answers; Go reports it (D9).
+			// says ENOENT (procfs: /proc/sys/x) — that would never answer; Go reports it.
 			if childOfDir {
 				return jsv.FsError(err, "mkdir", path)
 			}
 			if i := strings.LastIndexByte(path, '/'); i >= 0 {
-				// "/x": the parent is "/" (Node takes "", mkdir ENOENT, and loops — D9).
+				// "/x": the parent is "/" (Node takes "", mkdir ENOENT, and loops).
 				stack = append(stack, path, path[:max(i, 1)])
 				continue
 			}

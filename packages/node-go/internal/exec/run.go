@@ -18,7 +18,7 @@ import (
 const (
 	killGrace   = 2000 * time.Millisecond
 	forceSettle = 200 * time.Millisecond
-	maxBuffer   = 5 * 1024 * 1024 // general.limits.shell_output_bytes default (D8)
+	maxBuffer   = 5 * 1024 * 1024 // general.limits.shell_output_bytes default; settings yaml isn't read here
 )
 
 var paramsRe = regexp.MustCompile(`\{\{\s*([\w-]+)\.params\.([\w-][\w.-]*)\s*\}\}`)
