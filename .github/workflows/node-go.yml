@@ -33,7 +33,9 @@ permissions: { contents: read }
 jobs:
   test:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
-    runs-on: ubuntu-latest
+    # Pinned: on ubuntu-latest (26.04) qemu-user-static is only a virtual package, so the
+    # qemu step below fails; move off 24.04 once the binfmt install is ported to 26.04's packages.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
