@@ -1,5 +1,5 @@
 // Package jsv reproduces the bits of JavaScript value / string semantics the
-// TS node executor leans on (ToString / ToNumber / truthiness on JSON args,
+// server's own file tools lean on (ToString / ToNumber / truthiness on JSON args,
 // WHATWG UTF-8 decoding, UTF-16 lengths, String.prototype.trim, toFixed, Node
 // fs error text), so the Go node answers byte-for-byte like the server's tools.
 package jsv

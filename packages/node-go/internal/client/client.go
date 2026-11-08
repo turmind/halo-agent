@@ -51,8 +51,9 @@ type Options struct {
 	Log     func(string)
 }
 
-// WSURL is nodeWsUrl. Stricter than new URL() for the special schemes: no
-// host after `//` (`http:h`, `https:/h`) is Invalid URL here, a host in WHATWG — typos of `https://h`.
+// WSURL maps --server to the hub's WS URL. Stricter than WHATWG for the
+// special schemes: no host after `//` (`http:h`, `https:/h`) is Invalid URL
+// here, a host in WHATWG — typos of `https://h`.
 func WSURL(server string) (string, error) {
 	u, err := url.Parse(server)
 	special := u != nil && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "ws" || u.Scheme == "wss")
@@ -508,7 +509,7 @@ func (n *node) stop() {
 			select {
 			case <-closed:
 			case <-time.After(stopCloseGrace):
-				// TS terminate(): give up on the handshake. Close() already holds
+				// Give up on the closing handshake. Close() already holds
 				// the closing flag, so CloseNow would only wait for it (coder's own
 				// 5s); the exit that follows drops the socket.
 			}

@@ -140,7 +140,7 @@ func main() {
 	tok := *token
 	tokenSet := false
 	fs.Visit(func(f *flag.Flag) { tokenSet = tokenSet || f.Name == "token" })
-	if !tokenSet { // TS `values.token ?? env`: an explicit --token "" stays ""
+	if !tokenSet { // the env only when --token is absent: an explicit --token "" stays ""
 		tok = os.Getenv("HALO_NODE_TOKEN")
 	}
 	_ = os.Unsetenv("HALO_NODE_TOKEN")
@@ -152,7 +152,7 @@ func main() {
 	}
 	hdr := http.Header{}
 	host := ""
-	// TS's `headers[name] = value` object: first-seen order, last value wins.
+	// Repeated --header names: first-seen order, last value wins.
 	var hdrNames []string
 	hdrVals := map[string]string{}
 	for _, h := range headers {
@@ -253,8 +253,8 @@ func main() {
 	}
 	ex := exec.New(exec.Scope{Root: scopeRoot, Base: base, AllowShell: *allowShell, ShellTimeoutMs: timeout, Log: logf})
 
-	// Node's validateHeaderName / Value per header (the TS client's checks,
-	// after the log lines above): exit 1, no retry.
+	// Node's validateHeaderName / Value rules per header (checked after the
+	// startup lines above): exit 1, no retry.
 	for _, name := range hdrNames {
 		if !httpToken(name) {
 			fail(fmt.Sprintf("Header name must be a valid HTTP token [\"%s\"]", name))
@@ -263,7 +263,7 @@ func main() {
 			fail(fmt.Sprintf("Invalid character in header content [\"%s\"]", name))
 		}
 	}
-	// TS spreads --header first, then sets `authorization: Bearer <token>`.
+	// The token goes out as `authorization: Bearer <token>`, after the --header values.
 	if !headerValue("Bearer " + tok) {
 		fail(`Invalid character in header content ["authorization"]`)
 	}
