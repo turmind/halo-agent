@@ -1,4 +1,4 @@
-// Package nodepath is node-path.ts: `~/` expansion and folder-mode confinement.
+// Package nodepath: `~/` expansion and folder-mode confinement.
 package nodepath
 
 import (

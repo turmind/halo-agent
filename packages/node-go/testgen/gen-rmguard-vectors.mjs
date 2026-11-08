@@ -2,7 +2,7 @@
 // TS assertRmSafe (sandbox.ts, loaded through tsx) over ~400 commands. Unlike
 // the js-truth files these vectors track the codebase, so CI re-runs this with
 // --check: exit 1 when the TS no longer produces the committed file.
-//   node packages/node-go/conformance/gen-rmguard-vectors.mjs [--check]
+//   node packages/node-go/testgen/gen-rmguard-vectors.mjs [--check]
 //
 // HOME is pinned (sandbox.ts reads os.homedir() at import), so the output
 // doesn't depend on who runs it. In `vectors` the home and workspace paths are

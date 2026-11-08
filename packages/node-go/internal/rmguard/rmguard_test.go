@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// testdata/vectors.json: conformance/gen-rmguard-vectors.mjs (the TS
+// testdata/vectors.json: testgen/gen-rmguard-vectors.mjs (the TS
 // assertRmSafe is the oracle; CI re-runs it with --check).
 type vectors struct {
 	Home    string `json:"home"`

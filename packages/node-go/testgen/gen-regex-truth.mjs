@@ -1,6 +1,6 @@
 // Regenerates internal/jsregex/testdata/js-truth.json from the running Node's
 // RegExp (the oracle): R1–R7 match tables (§2.9) + V8 syntax-error text.
-//   node packages/node-go/conformance/gen-regex-truth.mjs
+//   node packages/node-go/testgen/gen-regex-truth.mjs
 import fs from 'node:fs'
 import path from 'node:path'
 

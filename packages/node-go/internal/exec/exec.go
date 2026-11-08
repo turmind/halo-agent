@@ -1,6 +1,6 @@
-// Package exec is node-exec.ts + the slice of workspace-tools.ts / sandbox.ts
-// it delegates to (full access): one request in, the exact text (or error
-// message) the TS node would send back.
+// Package exec ports the slice of the server's workspace-tools.ts / sandbox.ts
+// a node request needs (full access): one request in, the exact text (or error
+// message) the server's own tool would produce.
 package exec
 
 import (

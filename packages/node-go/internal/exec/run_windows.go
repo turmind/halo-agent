@@ -12,7 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// The TS client also skips the POSIX rm guard on win32.
+// The POSIX rm guard is not applied on Windows (as sandbox.ts on win32).
 func checkCommand(cmd, cwd string) error { return nil }
 
 func shellCommand(cmd string) *osexec.Cmd {

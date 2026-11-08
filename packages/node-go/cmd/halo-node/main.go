@@ -1,6 +1,5 @@
-// halo-node: the standalone `halo node` client (same flags, same wire v1, same
-// tool output as the TS one). Design and accepted differences from the TS client:
-// .halo/docs/design/node.md ("Go client: known differences from the TS client").
+// halo-node: the linked-machine client (wire v1, tool output like the server's
+// own file tools). Design: .halo/docs/design/node.md.
 package main
 
 import (
@@ -221,8 +220,8 @@ func main() {
 	}
 	ex := exec.New(exec.Scope{Root: scopeRoot, Base: base, AllowShell: *allowShell, ShellTimeoutMs: timeout, Log: logf})
 
-	// new WebSocket (in TS's runNode, after the log lines above) runs Node's
-	// validateHeaderName / Value per header and throws: exit 1, no retry.
+	// Node's validateHeaderName / Value per header (the TS client's checks,
+	// after the log lines above): exit 1, no retry.
 	for _, name := range hdrNames {
 		if !httpToken(name) {
 			fail(fmt.Sprintf("Header name must be a valid HTTP token [\"%s\"]", name))

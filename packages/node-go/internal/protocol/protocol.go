@@ -23,7 +23,7 @@ const (
 // Ops is NODE_OPS.
 var Ops = map[string]bool{"read": true, "write": true, "edit": true, "list": true, "grep": true, "glob": true, "run": true}
 
-// NodeInfo — field order matters: it is the JSON the TS client sends.
+// NodeInfo — field order matters: it follows protocol.ts NodeInfo.
 type NodeInfo struct {
 	Root           *string `json:"root"`
 	Base           string  `json:"base"`

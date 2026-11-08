@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-// testdata/js-truth.json: conformance/gen-jsv-truth.mjs (Node is the oracle).
+// testdata/js-truth.json: testgen/gen-jsv-truth.mjs (Node is the oracle).
 type truth struct {
 	Numbers   [][3]any    `json:"numbers"`
 	Decoded   [][2]string `json:"decoded"`

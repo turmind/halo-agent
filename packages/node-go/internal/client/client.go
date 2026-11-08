@@ -1,4 +1,4 @@
-// Package client is node-client.ts: one WS to the hub, requests fanned out to
+// Package client: one WS to the hub, requests fanned out to
 // the executor, idle watchdog, jittered reconnect, close classification, and
 // the stop / fatal exit paths (drain in-flight calls first).
 package client

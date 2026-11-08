@@ -1,7 +1,7 @@
 #!/bin/sh
 # halo-node installer: curl -fsSL https://github.com/turmind/halo-agent/releases/download/v<ver>/install.sh | sh
-# Installs the halo-node binary of this release (SHA256-checked) into /usr/local/bin (root)
-# or ~/.local/bin, replacing any previous one in place. Re-run to upgrade. POSIX sh.
+# Installs the halo-node binary of this release (Linux / macOS, SHA256-checked) into /usr/local/bin
+# (root) or ~/.local/bin, replacing any previous one in place. Re-run to upgrade. POSIX sh.
 set -eu
 
 VERSION=__HALO_VERSION__ # the release workflow stamps the tag (minus "v") here before uploading
@@ -13,16 +13,27 @@ die() { printf 'halo-node install: %s\n' "$*" >&2; exit 1; }
 # All work happens in main, called on the last line: a download cut short by
 # `curl | sh` defines nothing and runs nothing.
 main() {
-  if [ "$(uname -s)" != Linux ]; then
-    die "no halo-node build for $(uname -s) — on macOS / Windows run: npm i -g @turmind/halo, then halo node"
-  fi
-  case "$(uname -m)" in
-    x86_64) ARCH=amd64 ;;
-    aarch64 | arm64) ARCH=arm64 ;;
-    armv7l | armv8l) ARCH=armv7 ;;
-    *) die "unsupported architecture: $(uname -m) (halo-node is built for x86_64, arm64, armv7)" ;;
+  case "$(uname -s)" in
+    Linux)
+      OS=linux
+      case "$(uname -m)" in
+        x86_64) ARCH=amd64 ;;
+        aarch64 | arm64) ARCH=arm64 ;;
+        armv7l | armv8l) ARCH=armv7 ;;
+        *) die "unsupported architecture: $(uname -m) (halo-node is built for x86_64, arm64, armv7)" ;;
+      esac
+      ;;
+    Darwin)
+      OS=darwin
+      case "$(uname -m)" in
+        arm64) ARCH=arm64 ;;
+        x86_64) ARCH=amd64 ;;
+        *) die "unsupported architecture: $(uname -m) (halo-node for macOS is built for arm64, x86_64)" ;;
+      esac
+      ;;
+    *) die "no halo-node build for $(uname -s) — on Windows download halo-node-windows-amd64.exe from $BASE" ;;
   esac
-  ASSET="halo-node-linux-$ARCH"
+  ASSET="halo-node-$OS-$ARCH"
 
   if command -v curl >/dev/null 2>&1; then
     fetch() { curl -fsSL -o "$2" "$1"; }

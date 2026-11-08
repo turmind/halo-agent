@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// Expected strings are the TS executor's output for the same tree (spike
-// probe ts-probe.ts / ts-probe2.ts); the full set runs as conformance in M2.
+// Expected strings are the TS executor's output for the same tree (captured
+// when the TS client still existed).
 func TestOps(t *testing.T) {
 	tmp, _ := filepath.EvalSymlinks(t.TempDir())
 	root := filepath.Join(tmp, "root")

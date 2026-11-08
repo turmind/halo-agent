@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// testdata/js-truth.json is produced by conformance/gen-regex-truth.mjs from
+// testdata/js-truth.json is produced by testgen/gen-regex-truth.mjs from
 // Node's own RegExp — the oracle for §2.9 R1–R7 and the V8 error text.
 type truth struct {
 	Match []struct {
@@ -64,7 +64,7 @@ func TestErrorsJS(t *testing.T) {
 	}
 }
 
-// TestDifferential replays JSONL vectors from conformance/regex-fuzz.mjs —
+// TestDifferential replays JSONL vectors from testgen/regex-fuzz.mjs —
 // {src, err} or {src, in, out} with out[i] = '1' when /src/.test(in[i]) — from
 // testdata/regex-regress.jsonl (minimised past mismatches, always) plus the
 // file named by JSREGEX_VECTORS (a fresh CI fuzz run, when set). A vector with

@@ -2,8 +2,8 @@
 // patterns from a grammar, evaluated by this Node's own RegExp. One JSONL line
 // per pattern — {src, err} or {src, in, out} (out: '0'/'1' per input) — read
 // by `go test ./internal/jsregex -run Differential` via JSREGEX_VECTORS.
-//   node packages/node-go/conformance/regex-fuzz.mjs --n 20000 --seed 42 > /tmp/re.jsonl
-//   node packages/node-go/conformance/regex-fuzz.mjs --eval cases.jsonl   # {src, in?} lines → full vectors (regress entries)
+//   node packages/node-go/testgen/regex-fuzz.mjs --n 20000 --seed 42 > /tmp/re.jsonl
+//   node packages/node-go/testgen/regex-fuzz.mjs --eval cases.jsonl   # {src, in?} lines → full vectors (regress entries)
 import fs from 'node:fs'
 
 const argv = process.argv.slice(2)
