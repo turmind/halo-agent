@@ -7,6 +7,7 @@ import type { AddressInfo, Socket } from 'node:net'
 import { Hono } from 'hono'
 import { createAdaptorServer } from '@hono/node-server'
 import { WebSocket } from 'ws'
+import type { NodeInfo } from '../src/nodes/protocol.js'
 
 vi.mock('../src/ws/broadcast.js', async (orig) => ({ ...(await orig<typeof import('../src/ws/broadcast.js')>()), broadcast: vi.fn() }))
 
@@ -15,7 +16,6 @@ const { createChannelDb } = await import('../src/db/channel-db.js')
 const { insertNodeAccount, deleteNodeAccount } = await import('../src/nodes/accounts.js')
 const { createNodeHub, setNodeHub } = await import('../src/nodes/hub.js')
 const { createNodeRoutes } = await import('../src/nodes/routes.js')
-const { runNode } = await import('../src/nodes/node-client.js')
 const { buildNodeTools, NODES_UNAVAILABLE } = await import('../src/nodes/tools.js')
 const { createUpgradeRouter } = await import('../src/ws/upgrade-router.js')
 const { isLockedOut, clearFailures } = await import('../src/middleware/brute-force.js')
@@ -23,12 +23,13 @@ const { cleanChildEnv } = await import('../src/child-env.js')
 const P = await import('../src/nodes/protocol.js')
 
 type Hub = ReturnType<typeof createNodeHub>
-type Handle = ReturnType<typeof runNode>
+type Frame = Record<string, unknown>
 
 /**
- * NodeHub ↔ `halo node` over a real socket (design/node.md): handshake
- * outcomes, call round trip, disconnect / cancel / timeout semantics,
- * replacement, revocation, reconnect after a server restart, the cron relay.
+ * NodeHub ↔ a minimal protocol peer (`peer()`, speaks protocol.ts by hand)
+ * over a real socket (design/node.md): handshake outcomes, call round trip,
+ * disconnect / cancel / timeout semantics, replacement, revocation, a server
+ * restart. The machine side itself (halo-node) is tested in packages/node-go.
  */
 
 let tmp: string
@@ -41,8 +42,7 @@ let server: http.Server
 let port: number
 let hub: Hub
 let sockets: Set<Socket>
-const handles: Handle[] = []
-const rawClients: WebSocket[] = []
+const peers: WebSocket[] = []
 
 async function startServer(onPort?: number, hubOpts: { callTimeoutMs?: number } = {}): Promise<void> {
   let app: Hono | null = null
@@ -65,16 +65,6 @@ async function stopServer(): Promise<void> {
   await new Promise<void>((r) => server.close(() => r()))
 }
 
-function startNode(extra: Partial<Parameters<typeof runNode>[0]> = {}): { h: Handle; lines: string[] } {
-  const lines: string[] = []
-  const h = runNode({
-    server: `http://127.0.0.1:${port}`, token, root: nodeRoot,
-    initialBackoffMs: 50, maxBackoffMs: 200, log: (l) => lines.push(l), ...extra,
-  })
-  handles.push(h)
-  return { h, lines }
-}
-
 async function until(cond: () => boolean, ms = 3000, what = 'condition'): Promise<void> {
   const end = Date.now() + ms
   while (!cond()) {
@@ -85,35 +75,27 @@ async function until(cond: () => boolean, ms = 3000, what = 'condition'): Promis
 
 const onlineNames = () => hub.online().map((o) => o.name)
 
-async function pidGone(pid: number, ms: number): Promise<boolean> {
-  const end = Date.now() + ms
-  while (Date.now() < end) {
-    try { process.kill(pid, 0) } catch { return true }
-    await new Promise((r) => setTimeout(r, 50))
-  }
-  return false
-}
-
-async function readPid(file: string): Promise<number> {
-  await until(() => fs.existsSync(file) && fs.readFileSync(file, 'utf-8').trim() !== '', 3000, 'pidfile')
-  return Number(fs.readFileSync(file, 'utf-8').trim())
-}
-
-/** A hand-driven protocol client (no node-exec) for frame-level assertions. */
-function rawClient(instance: string, opts: { onFrame?: (f: Record<string, unknown>, sock: WebSocket) => void } = {}) {
-  const frames: Record<string, unknown>[] = []
-  const info = P.encodeNodeInfo({ root: nodeRoot, base: nodeRoot, shell: false, shellTimeoutMs: 120_000, os: 'linux', hostname: 'raw', version: 'test' })
+/** The machine end of protocol v1, driven by hand: handshake headers, frames recorded, `onFrame` answers. */
+function peer(opts: { instance?: string; token?: string; info?: Partial<NodeInfo>; onFrame?: (f: Frame, sock: WebSocket) => void } = {}) {
+  const frames: Frame[] = []
+  const info = P.encodeNodeInfo({ root: nodeRoot, base: nodeRoot, shell: false, shellTimeoutMs: 120_000, os: 'linux', hostname: 'peer', version: 'test', ...opts.info })
   const sock = new WebSocket(`ws://127.0.0.1:${port}${P.NODE_WS_PATH}`, {
-    headers: { authorization: `Bearer ${token}`, [P.HEADER_PROTOCOL]: '1', [P.HEADER_INSTANCE]: instance, [P.HEADER_INFO]: info },
+    headers: { authorization: `Bearer ${opts.token ?? token}`, [P.HEADER_PROTOCOL]: '1', [P.HEADER_INSTANCE]: opts.instance ?? 'i-1', [P.HEADER_INFO]: info },
   })
-  rawClients.push(sock)
+  peers.push(sock)
   let status = 0
   let closeCode = 0
   sock.on('unexpected-response', (_q, res) => { status = res.statusCode ?? 0; sock.terminate() })
   sock.on('error', () => {})
-  sock.on('message', (d) => { const f = JSON.parse(d.toString()); frames.push(f); opts.onFrame?.(f, sock) })
+  sock.on('message', (d) => { const f = JSON.parse(d.toString()) as Frame; frames.push(f); opts.onFrame?.(f, sock) })
   sock.on('close', (code) => { closeCode = code })
-  return { sock, frames, status: () => status, closeCode: () => closeCode }
+  const reqs = () => frames.filter((f) => f.t === 'req')
+  return { sock, frames, reqs, status: () => status, closeCode: () => closeCode }
+}
+
+/** onFrame: answer every req with `<op> <args JSON>`. */
+const echo = (f: Frame, sock: WebSocket): void => {
+  if (f.t === 'req') sock.send(JSON.stringify({ t: 'res', id: f.id, ok: true, text: `${String(f.op)} ${JSON.stringify(f.args)}` }))
 }
 
 beforeEach(async () => {
@@ -122,7 +104,6 @@ beforeEach(async () => {
   nodeRoot = path.join(tmp, 'machine')
   fs.mkdirSync(ws)
   fs.mkdirSync(nodeRoot)
-  fs.writeFileSync(path.join(nodeRoot, 'hello.txt'), 'hello-from-node')
   db = createChannelDb(path.join(tmp, 'secrets'))
   const r = insertNodeAccount(db, { workspacePath: ws, name: 'e2e-box' })
   if ('error' in r) throw new Error(r.error)
@@ -133,8 +114,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await Promise.all(handles.splice(0).map((h) => h.stop()))
-  for (const c of rawClients.splice(0)) c.terminate()
+  for (const c of peers.splice(0)) c.terminate()
   await stopServer()
   setNodeHub(null)
   clearFailures('node-token', '127.0.0.1')
@@ -142,34 +122,33 @@ afterEach(async () => {
 })
 
 describe('handshake', () => {
-  it('a wrong token is fatal (401, no retry) and counts toward the sign-in lockout', async () => {
-    token = 'not-a-token'
-    const runs = Array.from({ length: 5 }, () => startNode())
-    const results = await Promise.all(runs.map((r) => r.h.done))
-    expect(results.every((r) => r.exitCode === 1)).toBe(true)
-    expect(runs[0].lines.some((l) => l.includes('token rejected by the server (401)'))).toBe(true)
-    expect(runs[0].lines.some((l) => l.includes('reconnecting'))).toBe(false)
+  it('a wrong token is refused (401) and counts toward the sign-in lockout', async () => {
+    const runs = Array.from({ length: 5 }, () => peer({ token: 'not-a-token' }))
+    await until(() => runs.every((r) => r.status() !== 0), 3000, 'all refused')
+    expect(runs.map((r) => r.status())).toEqual([401, 401, 401, 401, 401])
     expect(isLockedOut('node-token', '127.0.0.1')).toBe(true)
   })
 
-  it('connects: online() lists it, nodes:changed is broadcast, read round-trips', async () => {
-    const { lines } = startNode()
+  it('connects: welcome, online() lists it, nodes:changed is broadcast, a call round-trips', async () => {
+    const c = peer({ onFrame: echo })
     await until(() => onlineNames().includes('e2e-box'), 3000, 'online')
-    await until(() => lines.some((l) => l.includes('connected as "e2e-box"')))
+    await until(() => c.frames.length > 0, 3000, 'welcome')
+    expect(c.frames[0]).toEqual({ t: 'welcome', name: 'e2e-box', workspace: ws })
     expect(vi.mocked(broadcast)).toHaveBeenCalledWith({
       type: 'nodes:changed',
       online: [expect.objectContaining({ accountId, root: nodeRoot, shell: false })],
     })
-    expect(await hub.call(ws, 'e2e-box', 'read', { path: 'hello.txt' })).toBe('1\thello-from-node')
+    expect(await hub.call(ws, 'e2e-box', 'read', { path: 'hello.txt' })).toBe('read {"path":"hello.txt"}')
+    expect(c.reqs()).toEqual([{ t: 'req', id: expect.any(String), op: 'read', args: { path: 'hello.txt' } }])
     const listed = JSON.parse(hub.list(ws))
     expect(listed.nodes).toEqual([expect.objectContaining({ name: 'e2e-box', online: true, root: nodeRoot, shell: false })])
   })
 
   it('whole-machine mode: node_list shows root null + wholeMachine + base', async () => {
-    startNode({ root: undefined })
+    peer({ info: { root: null, base: nodeRoot } })
     await until(() => onlineNames().includes('e2e-box'))
     const n = JSON.parse(hub.list(ws)).nodes[0]
-    expect(n).toMatchObject({ name: 'e2e-box', online: true, root: null, wholeMachine: true, base: fs.realpathSync(process.cwd()) })
+    expect(n).toMatchObject({ name: 'e2e-box', online: true, root: null, wholeMachine: true, base: nodeRoot })
   })
 
   it('offline and unknown machines get different errors; an empty workspace gets a hint', async () => {
@@ -183,97 +162,58 @@ describe('handshake', () => {
 })
 
 describe('call semantics', () => {
-  it.skipIf(process.platform === 'win32')('server drops the socket mid-run: "went offline during the call" within 1s, the command is killed, nothing retried', async () => {
-    const { lines } = startNode({ allowShell: true })
+  it('server drops the socket mid-call: "went offline during the call" within 1s; a reconnect gets nothing replayed', async () => {
+    const c = peer()   // never answers
     await until(() => onlineNames().includes('e2e-box'))
-    const pidFile = path.join(nodeRoot, 'run.pid')
-    const p = hub.call(ws, 'e2e-box', 'run', { command: 'echo $$ > run.pid; sleep 30; echo done > late.txt' })
-    const pid = await readPid(pidFile)
+    const p = hub.call(ws, 'e2e-box', 'run', { command: 'sleep 30' })
+    await until(() => c.reqs().length === 1, 3000, 'req')
     const t0 = Date.now()
     for (const s of sockets) s.destroy()
     await expect(p).rejects.toThrow('machine "e2e-box" went offline during the call (connection lost). The operation may or may not have completed on the machine — check its state before retrying.')
     expect(Date.now() - t0).toBeLessThan(1000)
-    expect(await pidGone(pid, 3000)).toBe(true)
-    await until(() => lines.some((l) => /connection lost .*stopped 1 running call\(s\)/.test(l)))
-    expect(lines.filter((l) => l.startsWith('[Node] run')).length).toBe(1)
-    expect(fs.existsSync(path.join(nodeRoot, 'late.txt'))).toBe(false)
+    await until(() => c.closeCode() !== 0, 3000, 'peer closed')
+    const again = peer()
+    await until(() => again.frames.some((f) => f.t === 'welcome'), 3000, 'reconnected')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(again.reqs()).toEqual([])
   })
 
-  it.skipIf(process.platform === 'win32')('the node stopping mid-call fails the pending call; later calls see "offline"', async () => {
-    const { h } = startNode({ allowShell: true })
+  it('the node closing mid-call fails the pending call; later calls see "offline"', async () => {
+    const c = peer()
     await until(() => onlineNames().includes('e2e-box'))
     const failed = expect(hub.call(ws, 'e2e-box', 'run', { command: 'sleep 30' })).rejects.toThrow(/went offline during the call/)
-    await new Promise((r) => setTimeout(r, 200))
-    await h.stop()
+    await until(() => c.reqs().length === 1, 3000, 'req')
+    c.sock.close(1000, 'node stopped')
     await failed
     await until(() => onlineNames().length === 0)
     await expect(hub.call(ws, 'e2e-box', 'read', { path: 'hello.txt' })).rejects.toThrow(/is offline/)
   })
 
-  it.skipIf(process.platform === 'win32')('an aborted call sends cancel; the machine kills the command', async () => {
-    startNode({ allowShell: true })
+  it('an aborted call sends cancel for its id; the machine stays online', async () => {
+    const c = peer()
     await until(() => onlineNames().includes('e2e-box'))
     const ctrl = new AbortController()
-    const p = hub.call(ws, 'e2e-box', 'run', { command: 'echo $$ > c.pid; sleep 30; touch marker' }, ctrl.signal)
-    const pid = await readPid(path.join(nodeRoot, 'c.pid'))
+    const p = hub.call(ws, 'e2e-box', 'run', { command: 'sleep 30' }, ctrl.signal)
+    await until(() => c.reqs().length === 1, 3000, 'req')
     ctrl.abort()
     await expect(p).rejects.toMatchObject({ name: 'AbortError' })
-    expect(await pidGone(pid, 3000)).toBe(true)
-    expect(fs.existsSync(path.join(nodeRoot, 'marker'))).toBe(false)
+    await until(() => c.frames.some((f) => f.t === 'cancel'), 3000, 'cancel')
+    expect(c.frames.find((f) => f.t === 'cancel')).toEqual({ t: 'cancel', id: c.reqs()[0].id })
     expect(onlineNames()).toEqual(['e2e-box'])
-  })
-
-  // The SIGKILL follow-up to SIGTERM is a timer in the node process; `halo
-  // node` exits right after `done`, so `done` must wait for the group to die.
-  // `trap "" TERM` is inherited by `sleep` (SIG_IGN survives exec).
-  const TERM_PROOF = 'trap "" TERM; echo $$ > t.pid; sleep 4; touch marker'
-  async function groupGone(pgid: number, ms: number): Promise<boolean> {
-    const end = Date.now() + ms
-    for (;;) {
-      try { process.kill(-pgid, 0) } catch { return true }
-      if (Date.now() > end) return false
-      await new Promise((r) => setTimeout(r, 20))
-    }
-  }
-
-  it.skipIf(process.platform === 'win32')('stop(): done settles only after a TERM-ignoring command\'s process group is dead', async () => {
-    const { h } = startNode({ allowShell: true })
-    await until(() => onlineNames().includes('e2e-box'))
-    const failed = expect(hub.call(ws, 'e2e-box', 'run', { command: TERM_PROOF })).rejects.toThrow(/went offline during the call/)
-    const pgid = await readPid(path.join(nodeRoot, 't.pid'))
-    await h.stop()
-    // Only reaping slack for the reparented `sleep` — the bug left it alive ~2s.
-    expect(await groupGone(pgid, 300)).toBe(true)
-    expect((await h.done).exitCode).toBe(0)
-    await failed
-    expect(fs.existsSync(path.join(nodeRoot, 'marker'))).toBe(false)
-  })
-
-  it.skipIf(process.platform === 'win32')('revoked (4001): exit 1 only after a TERM-ignoring command\'s process group is dead', async () => {
-    const { h } = startNode({ allowShell: true })
-    await until(() => onlineNames().includes('e2e-box'))
-    const failed = expect(hub.call(ws, 'e2e-box', 'run', { command: TERM_PROOF })).rejects.toThrow(/went offline during the call/)
-    const pgid = await readPid(path.join(nodeRoot, 't.pid'))
-    deleteNodeAccount(db, accountId)
-    hub.disconnect(accountId)
-    expect((await h.done).exitCode).toBe(1)
-    expect(await groupGone(pgid, 300)).toBe(true)
-    await failed
   })
 
   it('a server-side timeout rejects the call and sends cancel', async () => {
     await stopServer()
     await startServer(undefined, { callTimeoutMs: 200 })
-    const c = rawClient('i-1')   // never answers
+    const c = peer()   // never answers
     await until(() => onlineNames().includes('e2e-box'))
     await expect(hub.call(ws, 'e2e-box', 'read', { path: 'x' })).rejects.toThrow('machine "e2e-box" did not answer within 1s — the call was cancelled; it may or may not have taken effect.')
     await until(() => c.frames.some((f) => f.t === 'cancel'))
-    const req = c.frames.find((f) => f.t === 'req')!
-    expect(c.frames.find((f) => f.t === 'cancel')).toEqual({ t: 'cancel', id: req.id })
+    expect(c.frames.find((f) => f.t === 'cancel')).toEqual({ t: 'cancel', id: c.reqs()[0].id })
   })
 
   it('a result for an unknown / cancelled id is dropped; a request over 8 MB is refused before sending', async () => {
-    const c = rawClient('i-1', {
+    const c = peer({
       onFrame: (f, sock) => {
         if (f.t !== 'req') return
         sock.send(JSON.stringify({ t: 'res', id: 'bogus', ok: true, text: 'stray' }))
@@ -284,45 +224,51 @@ describe('call semantics', () => {
     await until(() => onlineNames().includes('e2e-box'))
     await expect(hub.call(ws, 'e2e-box', 'read', { path: 'x' })).rejects.toThrow('boom on the machine')
     await expect(hub.call(ws, 'e2e-box', 'write', { path: 'big', content: 'x'.repeat(P.MAX_FRAME_BYTES) })).rejects.toThrow(/request too large to send to the machine \(\d+\.\d MB > 8 MB limit\)/)
-    expect(c.frames.filter((f) => f.t === 'req').length).toBe(1)
+    expect(c.reqs().length).toBe(1)
   })
 })
 
 describe('connection lifecycle', () => {
   it('same instance reconnecting replaces the old socket (4009); another instance gets 409 and the first stays', async () => {
-    const a = rawClient('inst-a')
+    const a = peer({ instance: 'inst-a' })
     await until(() => onlineNames().includes('e2e-box'))
-    const a2 = rawClient('inst-a')
+    const a2 = peer({ instance: 'inst-a' })
     await until(() => a.closeCode() === P.CLOSE_REPLACED, 3000, 'old socket replaced')
     await until(() => a2.frames.some((f) => f.t === 'welcome'))
     expect(onlineNames()).toEqual(['e2e-box'])
 
-    const { lines } = startNode()
-    await until(() => lines.some((l) => l.includes('already connected from another process')), 3000, '409 retry')
+    const b = peer({ instance: 'inst-b' })
+    await until(() => b.status() !== 0, 3000, '409')
+    expect(b.status()).toBe(409)
     expect(a2.sock.readyState).toBe(WebSocket.OPEN)
     expect(hub.online()).toHaveLength(1)
   })
 
-  it('deleting the token disconnects with 4001: the node exits 1 and does not reconnect', async () => {
-    const { h, lines } = startNode()
+  it('deleting the token disconnects with 4001 and fails the pending call; the token is then refused (401)', async () => {
+    const c = peer()
     await until(() => onlineNames().includes('e2e-box'))
+    const failed = expect(hub.call(ws, 'e2e-box', 'run', { command: 'sleep 30' })).rejects.toThrow(/went offline during the call/)
+    await until(() => c.reqs().length === 1, 3000, 'req')
     deleteNodeAccount(db, accountId)
     hub.disconnect(accountId)
-    expect((await h.done).exitCode).toBe(1)
-    expect(lines.some((l) => l.includes('token revoked'))).toBe(true)
-    await new Promise((r) => setTimeout(r, 300))
-    expect(lines.some((l) => l.includes('reconnecting'))).toBe(false)
+    await failed
+    await until(() => c.closeCode() === P.CLOSE_REVOKED, 3000, '4001')
+    expect(onlineNames()).toEqual([])
+    const again = peer()
+    await until(() => again.status() !== 0, 3000, 'refused')
+    expect(again.status()).toBe(401)
   })
 
-  it('reconnects after the server restarts on the same port', async () => {
-    const { lines } = startNode()
+  it('a server restart closes with 1001; the same instance reconnects to the new hub on the same port', async () => {
+    const c = peer({ onFrame: echo })
     await until(() => onlineNames().includes('e2e-box'))
     const samePort = port
     await stopServer()
-    await until(() => lines.some((l) => l.includes('connection lost (1001')), 3000, '1001 seen')
+    await until(() => c.closeCode() === 1001, 3000, '1001 seen')
     await startServer(samePort)
+    peer({ onFrame: echo })
     await until(() => onlineNames().includes('e2e-box'), 5000, 'reconnected')
-    expect(await hub.call(ws, 'e2e-box', 'read', { path: 'hello.txt' })).toBe('1\thello-from-node')
+    expect(await hub.call(ws, 'e2e-box', 'read', { path: 'hello.txt' })).toBe('read {"path":"hello.txt"}')
   })
 })
 

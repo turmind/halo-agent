@@ -176,10 +176,10 @@ export const en: Record<string, string> = {
   'web.namePlaceholder': 'e.g. SA Demo',
   'web.addBtn': 'Create',
 
-  // ── Linked machines (halo node) ──
+  // ── Linked machines (halo-node) ──
   'channels.nodes': 'Linked machines',
   'nodes.title': 'Linked machines',
-  'nodes.desc': 'Pair a machine running `halo node` with a workspace — its full-access agents get node_* tools to work on files there.',
+  'nodes.desc': 'Pair a machine running `halo-node` with a workspace — its full-access agents get node_* tools to work on files there.',
   'nodes.add': 'Add machine',
   'nodes.loading': 'Loading...',
   'nodes.empty': 'No machines yet. Click Add above to create a pairing token.',
@@ -199,11 +199,11 @@ export const en: Record<string, string> = {
   'nodes.cancel': 'Cancel',
   'nodes.addBtn': 'Create',
   'nodes.createSuccess': 'Machine added',
-  'nodes.commandNotice': 'On the machine, run the install script, then run halo-node (the token is also on the list row). Drop --root to share the whole machine; add --allow-shell to let agents run commands.',
+  'nodes.commandNotice': 'On the machine, install halo-node (Linux / macOS: the install script; Windows: download the exe), then run it (the token is also on the list row). Drop --root to share the whole machine; add --allow-shell to let agents run commands.',
   'nodes.commandHint': "If this server sits behind a login proxy, use an address the machine can reach directly, or pass the proxy cookie with --header. If the machine can't reach GitHub, or you'd rather not pipe curl into sh, download the binary by hand — see the",
   'nodes.guide': 'halo-node guide ↗',
-  'nodes.commandLinux': 'Linux (x86_64 / arm64 / armv7)',
-  'nodes.commandOther': 'macOS / Windows (npm i -g @turmind/halo)',
+  'nodes.commandUnix': 'Linux (x86_64 / arm64 / armv7) / macOS (Apple silicon / Intel)',
+  'nodes.commandWindows': 'Windows (amd64, PowerShell)',
   'nodes.done': 'Done',
 
   // ── WeChat settings ──

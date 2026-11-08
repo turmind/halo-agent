@@ -19,7 +19,7 @@ const RELEASES = 'https://github.com/turmind/halo-agent/releases'
 const GUIDE = 'https://github.com/turmind/halo-agent/blob/main/.halo/docs/guide/node.md'
 
 /**
- * Linked machines (`halo node`): pairing tokens per workspace + live online
+ * Linked machines (`halo-node`): pairing tokens per workspace + live online
  * state. Online starts from the list response, then follows `nodes:changed`
  * pushes (full snapshots); a WS reconnect re-fetches the frames it may have
  * missed. No polling.
@@ -127,13 +127,14 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
     const binBase = /^\d+\.\d+\.\d+$/.test(version ?? '') ? `${RELEASES}/download/v${version}` : `${RELEASES}/latest/download`
     const run = `--server ${location.origin} --root <folder>`
     // Non-root installs land in ~/.local/bin, which Debian-family shells only put on PATH at the next login.
-    const linux = `curl -fsSL ${binBase}/install.sh | sh\nPATH="$HOME/.local/bin:$PATH" HALO_NODE_TOKEN=${token} halo-node ${run}`
-    const other = `HALO_NODE_TOKEN=${token} halo node ${run}`
+    const unix = `curl -fsSL ${binBase}/install.sh | sh\nPATH="$HOME/.local/bin:$PATH" HALO_NODE_TOKEN=${token} halo-node ${run}`
+    // PowerShell, as in guide/node.md's Windows section; run from the folder the exe was downloaded to.
+    const windows = `Invoke-WebRequest ${binBase}/halo-node-windows-amd64.exe -OutFile halo-node-windows-amd64.exe\n$env:HALO_NODE_TOKEN = '${token}'\n.\\halo-node-windows-amd64.exe ${run}`
     return (
       <ChannelDialog width="w-[480px]" onClose={onDone}>
         <h3 className="mb-3 text-sm font-medium text-[var(--foreground)]">{t('nodes.createSuccess')}</h3>
         <p className="mb-2 text-xs text-[var(--muted-foreground)]">{t('nodes.commandNotice')}</p>
-        {[[t('nodes.commandLinux'), linux], [t('nodes.commandOther'), other]].map(([label, command]) => (
+        {[[t('nodes.commandUnix'), unix], [t('nodes.commandWindows'), windows]].map(([label, command]) => (
           <div key={label} className="mt-2">
             <p className="mb-1 text-[10px] font-medium text-[var(--muted-foreground)]">{label}</p>
             <div className="flex items-start gap-2 rounded border border-[var(--border)] bg-[var(--card)] p-2">

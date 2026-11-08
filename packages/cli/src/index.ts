@@ -1,7 +1,7 @@
 import './silence-warnings.js' // must be first — patches emitWarning before deps load
 import path from 'node:path'
 import fs from 'node:fs'
-import { homedir, machine, userInfo } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { parseArgs } from 'node:util'
 import type { Harness } from './harness.js'
 import type { Lang } from '@turmind/halo-server/channels/shared/i18n'
@@ -37,7 +37,6 @@ Commands:
   sessions             List recent sessions (or \`migrate v1 v2\` the 1.x files)
   models               Install / list hub model provider configs
   acp                  Bridge a halo server to an ACP client (stdio)
-  node                 Link this machine to a server workspace (no setup needed)
   --help, -h           Show this help
   --version            Show version
 
@@ -311,27 +310,6 @@ Exit codes: 0 = ok (refusals are listed in the summary), 1 = error,
 3 = endpoint changes need --yes (nothing written).
 `
 
-const HELP_NODE = `Usage: halo node --server <url> [--root <dir>] [--token <t>] [--allow-shell] [--header "Name: value"]
-
-Link this machine to a workspace on a halo server, so that workspace's
-full-access agents can read, write and search files here (node_* tools) and,
-with --allow-shell, run commands. Runs in the foreground; Ctrl-C to stop.
-Needs no \`halo setup\` and no model keys on this machine.
-
-Flags:
-  --server <url>     http(s)://host:port of the server (ws(s):// also accepted)
-  --root <dir>       folder to share — every path the agent uses must stay
-                     inside it. Omit it for whole-machine mode: any path this
-                     user can reach, relative paths from the current dir.
-  --token <t>        pairing token (Admin → Channels → Linked machines). Prefer
-                     the HALO_NODE_TOKEN env var: a flag shows up in ps and
-                     shell history.
-  --allow-shell      let the agent run commands (node_run), as this user and
-                     not sandboxed; their cwd stays inside --root. Off by default.
-  --header "N: v"    optional, repeatable. Extra header on the connection, for
-                     an auth proxy in front of the server (cookie, CF-Access-*).
-`
-
 const HELP_BY_CMD: Record<string, string> = {
   setup: HELP_SETUP,
   upgrade: HELP_UPGRADE,
@@ -342,7 +320,6 @@ const HELP_BY_CMD: Record<string, string> = {
   agents: HELP_AGENTS,
   sessions: HELP_SESSIONS,
   acp: HELP_ACP,
-  node: HELP_NODE,
   models: HELP_MODELS,
 }
 
@@ -1520,57 +1497,6 @@ async function cmdAcp(argv: string[]): Promise<void> {
   mod.main(argv)
 }
 
-// ---------------------------------------------------------------------------
-// `halo node` — link this machine to a server workspace. The client lives in
-// `@turmind/halo-server/nodes/node-client`; nothing it loads needs ~/.halo/.
-// ---------------------------------------------------------------------------
-
-async function cmdNode(argv: string[]): Promise<void> {
-  const { values } = parseArgs({
-    args: argv,
-    allowPositionals: false,
-    options: {
-      server: { type: 'string' },
-      root: { type: 'string' },
-      token: { type: 'string' },
-      'allow-shell': { type: 'boolean', default: false },
-      header: { type: 'string', multiple: true },
-    },
-  })
-  const fail = (msg: string): never => {
-    process.stderr.write(`halo node: ${msg}\n\n${HELP_NODE}`)
-    process.exit(1)
-  }
-  const token = values.token ?? process.env.HALO_NODE_TOKEN
-  if (!values.server) fail('--server is required')
-  if (!token) fail('--token (or HALO_NODE_TOKEN) is required')
-  // Split on the FIRST colon — values may contain colons (`Cookie: a=b:c`).
-  const headers: Record<string, string> = {}
-  for (const h of values.header ?? []) {
-    const i = h.indexOf(':')
-    if (i <= 0) fail(`invalid --header (expected "Name: value"): ${h}`)
-    headers[h.slice(0, i).trim()] = h.slice(i + 1).trim()
-  }
-  // Machines install.sh has a release binary for (packages/node-go): point at it, run on as usual.
-  // machine(), not process.arch: 'arm' also covers armv6, which has no build.
-  if (process.platform === 'linux' && ['x86_64', 'aarch64', 'armv7l', 'armv8l'].includes(machine())) {
-    const rel = /^\d+\.\d+\.\d+$/.test(VERSION) ? `download/v${VERSION}` : 'latest/download'
-    console.log(`[Node] tip: a standalone 7 MB binary replaces this command — curl -fsSL https://github.com/turmind/halo-agent/releases/${rel}/install.sh | sh (guide: https://github.com/turmind/halo-agent/blob/main/.halo/docs/guide/node.md)`)
-  }
-  const { runNode } = await import('@turmind/halo-server/nodes/node-client')
-  let handle: ReturnType<typeof runNode>
-  try {
-    handle = runNode({ server: values.server!, token: token!, root: values.root, allowShell: values['allow-shell'], headers })
-  } catch (err) {
-    return fail(err instanceof Error ? err.message : String(err))
-  }
-  const stop = (): void => { void handle.stop() }
-  process.on('SIGINT', stop)
-  process.on('SIGTERM', stop)
-  const { exitCode } = await handle.done
-  process.exit(exitCode)
-}
-
 async function cmdServerLogs(argv: string[]): Promise<void> {
   const { values } = parseArgs({
     args: argv,
@@ -1658,13 +1584,6 @@ async function main(): Promise<void> {
   // talks to a remote halo server over HTTP. Skip the local setup gate.
   if (cmd === 'acp') {
     await cmdAcp(subArgs)
-    return
-  }
-
-  // `halo node` runs on the user's machine against a remote server — no
-  // ~/.halo/, no model keys. Skip the local setup gate.
-  if (cmd === 'node') {
-    await cmdNode(subArgs)
     return
   }
 

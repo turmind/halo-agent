@@ -176,10 +176,10 @@ export const zh: Record<string, string> = {
   'web.namePlaceholder': '比如：SA Demo',
   'web.addBtn': '创建',
 
-  // ── 关联机器 (halo node) ──
+  // ── 关联机器 (halo-node) ──
   'channels.nodes': '关联机器',
   'nodes.title': '关联机器',
-  'nodes.desc': '把运行 `halo node` 的机器绑定到工作区，该工作区的 full 权限 agent 即可用 node_* 工具操作那台机器上的文件。',
+  'nodes.desc': '把运行 `halo-node` 的机器绑定到工作区，该工作区的 full 权限 agent 即可用 node_* 工具操作那台机器上的文件。',
   'nodes.add': '添加机器',
   'nodes.loading': '加载中...',
   'nodes.empty': '还没有机器。点击上方「添加机器」生成配对 token。',
@@ -199,11 +199,11 @@ export const zh: Record<string, string> = {
   'nodes.cancel': '取消',
   'nodes.addBtn': '创建',
   'nodes.createSuccess': '已添加机器',
-  'nodes.commandNotice': '在那台机器上先运行安装脚本，再运行 halo-node（token 在列表行里也能复制）。去掉 --root 即共享整机；加 --allow-shell 允许 agent 执行命令。',
+  'nodes.commandNotice': '在那台机器上先安装 halo-node（Linux / macOS 用安装脚本，Windows 下载 exe），再运行它（token 在列表行里也能复制）。去掉 --root 即共享整机；加 --allow-shell 允许 agent 执行命令。',
   'nodes.commandHint': '如果服务器在需要登录的代理后面，请换成机器能直连的地址，或用 --header 带上代理 cookie。机器访问不了 GitHub，或者不想用 curl | sh，可以手动下载二进制，详见',
   'nodes.guide': 'halo-node 使用指南 ↗',
-  'nodes.commandLinux': 'Linux（x86_64 / arm64 / armv7）',
-  'nodes.commandOther': 'macOS / Windows（npm i -g @turmind/halo）',
+  'nodes.commandUnix': 'Linux（x86_64 / arm64 / armv7）/ macOS（Apple 芯片 / Intel）',
+  'nodes.commandWindows': 'Windows（amd64，PowerShell）',
   'nodes.done': '完成',
 
   // ── WeChat settings ──
