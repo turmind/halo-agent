@@ -128,8 +128,8 @@ func TestProxyFlag(t *testing.T) {
 		if g := envGot(); len(g) != 0 {
 			t.Errorf("HTTP_PROXY proxy saw %+v", g)
 		}
-		if !strings.Contains(out, "[Node] connecting through proxy http://alice:xxxxx@"+flagProxy+"\n") {
-			t.Errorf("no redacted proxy line:\n%s", out)
+		if !strings.Contains(out, "[Node] connecting through proxy http://"+flagProxy+"\n") {
+			t.Errorf("no proxy line without userinfo:\n%s", out)
 		}
 		if strings.Contains(out, secret) {
 			t.Errorf("password in output:\n%s", out)
@@ -138,16 +138,14 @@ func TestProxyFlag(t *testing.T) {
 
 	t.Run("https server: CONNECT through --proxy; the could-not-connect retry line has no password", func(t *testing.T) {
 		flagProxy, flagGot := fakeProxy(t)
-		code, out := runMain(t, 2*time.Second, []string{"HALO_NODE_TOKEN=t"},
+		p := startMain(t, []string{"HALO_NODE_TOKEN=t"},
 			"--server", "https://halo.invalid", "--proxy", "http://alice:"+secret+"@"+flagProxy)
-		if code != -1 || !strings.Contains(out, "[Node] could not connect (") {
-			t.Fatalf("exit %d, output:\n%s", code, out)
+		p.waitOutput("; reconnecting in ", 10*time.Second)
+		if out := p.output(); !strings.Contains(out, "[Node] could not connect (") || strings.Contains(out, secret) {
+			t.Errorf("output:\n%s", out)
 		}
 		if g := flagGot(); len(g) == 0 || g[0].line != "CONNECT halo.invalid:443" || g[0].auth != basic {
 			t.Errorf("--proxy saw %+v", g)
-		}
-		if strings.Contains(out, secret) {
-			t.Errorf("password in output:\n%s", out)
 		}
 	})
 
@@ -166,7 +164,24 @@ func TestProxyFlag(t *testing.T) {
 		}
 	})
 
-	for _, bad := range []string{"socks5://alice:" + secret + "@127.0.0.1:1080", "ftp://127.0.0.1:21", "127.0.0.1:12334", "http://", "http:alice:" + secret, "://x", ""} {
+	t.Run("a bare user (an API key as userinfo) is never output", func(t *testing.T) {
+		flagProxy, flagGot := fakeProxy(t)
+		code, out := runMain(t, 10*time.Second, []string{"HALO_NODE_TOKEN=t"},
+			"--server", "http://halo.invalid", "--proxy", "http://sk-live-"+secret+"@"+flagProxy+"/")
+		if code != 1 || !strings.Contains(out, "[Node] connecting through proxy http://"+flagProxy+"\n") || strings.Contains(out, secret) {
+			t.Fatalf("exit %d, output:\n%s", code, out)
+		}
+		if g := flagGot(); len(g) != 1 || g[0].auth != "Basic "+base64.StdEncoding.EncodeToString([]byte("sk-live-"+secret+":")) {
+			t.Errorf("--proxy saw %+v", g)
+		}
+	})
+
+	for _, bad := range []string{
+		"socks5://alice:" + secret + "@127.0.0.1:1080", "ftp://127.0.0.1:21", "127.0.0.1:12334", "http://", "http:alice:" + secret, "://x", "",
+		// A raw / ? # in the password ends the authority: host alice:1234, the rest path / query / fragment.
+		"http://alice:1234/" + secret + "@proxy.example:3128", "http://alice:1234?" + secret + "@proxy.example:3128", "http://alice:1234#" + secret + "@proxy.example:3128",
+		"http://:1", "http://proxy.example:99999", "http://proxy.example:0",
+	} {
 		t.Run("refused: "+strings.ReplaceAll(bad, secret, "…"), func(t *testing.T) {
 			code, out := runMain(t, 10*time.Second, []string{"HALO_NODE_TOKEN=t"}, "--server", "http://halo.invalid", "--proxy", bad)
 			if code != 1 || !strings.HasPrefix(out, "halo-node: --proxy must be an http:// or https:// URL with a host, e.g. http://127.0.0.1:12334\n") {

@@ -123,6 +123,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_CLI` | `halo` (`halo.cmd` on Windows) | — | `halo` cli executable the evolution wrapper spawns — a dev override (cron runs in-process since 2.2 and no longer uses it) |
 | `HALO_VERSION` | `dev` | — | Version string reported by `GET /api/health` and the cli; stamped by the bundle / desktop launcher, so normally not set by hand |
 | `HALO_NODE_TOKEN` | (none) | — | `halo-node` only (on the linked machine): pairing token, used when `--token` isn't given — preferred over the flag, which shows up in `ps` / shell history. Stripped from child-process env (see [design/node.md](../design/node.md)) |
+| `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | (none) | — | `halo-node` only (on the linked machine): forward proxy for an `https://` / `http://` server and the hosts that bypass it (Go `ProxyFromEnvironment`; lowercase names too; `localhost` / loopback never proxied). Ignored when `--proxy <url>` is given — the flag wins (see [guide/node.md](../guide/node.md#through-a-forward-proxy)) |
 | `HALO_PROMPT` | (none) | — | `plain` makes `halo setup` use numbered-menu prompts instead of the raw-mode TUI |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | (none) | `settings.yaml general.observability.capture_content` | `true` / `false` / `1` / `0` (any case) overrides `capture_content` either way; unset or any other value → the setting. Read at process start (see [design/observability.md](../design/observability.md)) |
 

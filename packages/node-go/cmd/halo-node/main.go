@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -78,6 +79,15 @@ func headerValue(s string) bool {
 		}
 	}
 	return true
+}
+
+// proxyPort: absent, or 1-65535 (url.Parse takes any digit run).
+func proxyPort(p string) bool {
+	if p == "" {
+		return true
+	}
+	n, err := strconv.Atoi(p)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 func fail(msg string) {
@@ -169,9 +179,12 @@ func main() {
 		if f.Name != "proxy" {
 			return
 		}
-		// The value is never echoed: it may carry user:pass@.
+		// The value is never echoed: it may carry user:pass@. A password with a
+		// raw / ? # ends the authority early (`http://u:1234/x@h` parses as host
+		// u:1234, path /x@h), so anything after the host is refused.
 		u, err := url.Parse(*proxyArg)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || u.Host == "" {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || u.Hostname() == "" ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || !proxyPort(u.Port()) {
 			fail("--proxy must be an http:// or https:// URL with a host, e.g. http://127.0.0.1:12334")
 		}
 		proxy = u
@@ -220,8 +233,8 @@ func main() {
 	} else {
 		logf(fmt.Sprintf("[Node] sharing %s → %s", base, *server))
 	}
-	if proxy != nil {
-		logf("[Node] connecting through proxy " + proxy.Redacted())
+	if proxy != nil { // never the userinfo, in any form (Redacted keeps a bare user)
+		logf("[Node] connecting through proxy " + proxy.Scheme + "://" + proxy.Host)
 	}
 	if *allowShell {
 		name := os.Getenv("USER")

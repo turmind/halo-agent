@@ -117,13 +117,15 @@ To send the connection out through a local or corporate proxy (Hiddify / Clash s
 halo-node --server https://halo.example.com --root ~/proj --proxy http://127.0.0.1:12334
 ```
 
-`http://` and `https://` proxies only, `user:pass@` allowed (`--proxy http://alice:pw@proxy.corp:3128` — sent as `Proxy-Authorization`, never printed; the startup line shows `xxxxx` for the password). Without `--proxy`, halo-node reads the usual environment variables — `HTTPS_PROXY` for an `https://` server, `HTTP_PROXY` for `http://`, `NO_PROXY` for exceptions:
+`http://` and `https://` proxies only, `user:pass@` allowed (`--proxy http://alice:pw@proxy.corp:3128` — sent as `Proxy-Authorization`, never printed; the startup line shows only `scheme://host:port`). Percent-encode a `/`, `?`, `#` or `@` in the user or password (`%2F`, `%3F`, `%23`, `%40`); a URL with anything after the host is refused. Without `--proxy`, halo-node reads the usual environment variables — `HTTPS_PROXY` for an `https://` server, `HTTP_PROXY` for `http://`, `NO_PROXY` for exceptions:
 
 ```bash
 HTTPS_PROXY=http://127.0.0.1:12334 halo-node --server https://halo.example.com --root ~/proj
 ```
 
-`--proxy` wins: when it's given, all three variables are ignored. A server on `localhost` / `127.0.0.1` is never proxied through the variables. Most system-proxy apps don't set these variables for the terminal, so pass one of the two explicitly.
+`--proxy` wins: when it's given, all three variables are ignored. A server on `localhost` / `127.0.0.1` is never proxied through the variables. Most system-proxy apps don't set these variables for the terminal, so pass one of the two explicitly. Conversely, a machine whose shell sets `HTTPS_PROXY` / `HTTP_PROXY` for other tools but reaches the server directly needs the server's host in `NO_PROXY` (halo-node before 2.2.4 ignored the variables).
+
+Use a `https://` server through a proxy. An `https://` (wss) connection is tunnelled with `CONNECT`, so the proxy sees only the host and the token stays inside TLS. An `http://` (ws) server is requested from the proxy as a plain absolute-form `GET` — the token passes through the proxy in clear text, and a proxy that doesn't forward the WebSocket `Upgrade` can't connect at all.
 
 ### TLS certificates (`https://` servers)
 
