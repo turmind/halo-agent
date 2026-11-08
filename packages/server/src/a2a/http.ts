@@ -8,7 +8,9 @@
 import http from 'node:http'
 import https from 'node:https'
 import { isIP } from 'node:net'
-import { checkUrlShape, checkAddress, currentAllowlist, guardedLookup } from './url-policy.js'
+import type { Dispatcher } from 'undici'
+import { checkUrl, checkUrlShape, checkAddress, currentAllowlist, guardedLookup } from './url-policy.js'
+import { proxyDispatcher } from '../outbound-proxy.js'
 
 export interface HttpResult { status: number; headers: http.IncomingHttpHeaders; body: string }
 export interface HttpBufferResult { status: number; headers: http.IncomingHttpHeaders; body: Buffer }
@@ -17,6 +19,32 @@ export interface HttpBufferResult { status: number; headers: http.IncomingHttpHe
 const MAX_BODY = 16 * 1024 * 1024
 
 interface RequestOpts { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: string; timeoutMs: number }
+
+/** Through the outbound proxy (Settings → outbound proxy). The proxy resolves
+ *  the name, so `lookup` can't guard the connect: the same allowlist check
+ *  runs on our own resolution first (checkUrl) — a resolver answering the
+ *  proxy differently isn't caught, the price of routing via a proxy. */
+async function proxiedRequest(rawUrl: string, opts: RequestOpts & { maxBytes: number }, dispatcher: Dispatcher): Promise<HttpBufferResult> {
+  const verdict = await checkUrl(rawUrl)
+  if (verdict) throw Object.assign(new Error(verdict), { code: 'A2A_URL_REFUSED' })
+  const { request } = await import('undici')
+  const res = await request(rawUrl, {
+    dispatcher,
+    method: opts.method,
+    headers: opts.headers,
+    body: opts.body,
+    headersTimeout: opts.timeoutMs,
+    bodyTimeout: opts.timeoutMs,
+  })
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const c of res.body as AsyncIterable<Buffer>) {
+    size += c.length
+    if (size > opts.maxBytes) { res.body.destroy(); throw new Error(`response larger than ${opts.maxBytes} bytes`) }
+    chunks.push(c)
+  }
+  return { status: res.statusCode, headers: res.headers as http.IncomingHttpHeaders, body: Buffer.concat(chunks) }
+}
 
 function requestBuffer(rawUrl: string, opts: RequestOpts & { maxBytes: number }): Promise<HttpBufferResult> {
   const shape = checkUrlShape(rawUrl)
@@ -54,8 +82,13 @@ function requestBuffer(rawUrl: string, opts: RequestOpts & { maxBytes: number })
   })
 }
 
-export async function policyRequest(rawUrl: string, opts: RequestOpts): Promise<HttpResult> {
-  const res = await requestBuffer(rawUrl, { ...opts, maxBytes: MAX_BODY })
+/** `viaProxy`: go through the outbound proxy while it's on and the host isn't
+ *  in its no_proxy — set by outbound.ts (cards + RPC to remotes) only. */
+export async function policyRequest(rawUrl: string, opts: RequestOpts & { viaProxy?: boolean }): Promise<HttpResult> {
+  const dispatcher = opts.viaProxy ? await proxyDispatcher(rawUrl) : undefined
+  const res = dispatcher
+    ? await proxiedRequest(rawUrl, { ...opts, maxBytes: MAX_BODY }, dispatcher)
+    : await requestBuffer(rawUrl, { ...opts, maxBytes: MAX_BODY })
   return { ...res, body: res.body.toString('utf8') }
 }
 

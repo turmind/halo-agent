@@ -185,7 +185,7 @@ export async function send(
   const tries = { conflict: 0, lease: 0 }
   for (;;) {
     const headers = await authHeaders(workspace, remote, { method, url, headers: base, body })
-    const res = await policyRequest(url, { method, headers, body, timeoutMs: TIMEOUT_MS })
+    const res = await policyRequest(url, { method, headers, body, timeoutMs: TIMEOUT_MS, viaProxy: true })
     const kind = isRetryableConflict(res.body) ? 'conflict' : isLeaseBusy(res.body) ? 'lease' : null
     if (!kind || tries[kind] >= RETRY_MS[kind].length || signal?.aborted) return res
     const ms = RETRY_MS[kind][tries[kind]++]

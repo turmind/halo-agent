@@ -1084,6 +1084,7 @@ export const api = {
             description?: string
             description_zh?: string
             default?: string
+            placeholder?: string
             secret?: boolean
             globalOnly?: boolean
             restartRequired?: boolean

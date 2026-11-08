@@ -10,7 +10,7 @@ import { promisify } from 'node:util'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { cleanChildEnv } from '../child-env.js'
+import { cleanChildEnv, outboundProxyEnv } from '../child-env.js'
 
 const execAsync = promisify(exec)
 const execFileAsync = promisify(execFile)
@@ -588,6 +588,9 @@ export function buildBwrapArgs(opts: SandboxOptions): string[] {
   args.push('--setenv', 'HOME', HOME)
   args.push('--setenv', 'TERM', 'xterm-256color')
   for (const [k, v] of Object.entries(gitIdentityEnv())) args.push('--setenv', k, v)
+  // --clearenv drops cleanChildEnv's proxy vars too. Network isn't unshared,
+  // so a proxy on the host's 127.0.0.1 stays reachable from inside.
+  for (const [k, v] of Object.entries(outboundProxyEnv())) args.push('--setenv', k, v)
 
   args.push('--die-with-parent')
 
@@ -698,8 +701,9 @@ export function buildSeatbeltProfile(opts: SandboxOptions): string {
 
 /** Minimal env for the Seatbelt child — the macOS counterpart of bwrap's
  *  --clearenv + --setenv. ~/.gitconfig and ~/.npmrc are denied by the
- *  profile; pointing git/npm at /dev/null keeps them from erroring on it. */
-function seatbeltEnv(): NodeJS.ProcessEnv {
+ *  profile; pointing git/npm at /dev/null keeps them from erroring on it.
+ *  Exported for tests — sandbox-exec can't run in CI. */
+export function seatbeltEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     PATH: `${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin`,
     HOME,
@@ -707,6 +711,9 @@ function seatbeltEnv(): NodeJS.ProcessEnv {
     GIT_CONFIG_GLOBAL: '/dev/null',
     NPM_CONFIG_USERCONFIG: '/dev/null',
     ...gitIdentityEnv(),
+    // Not built from cleanChildEnv(), so the proxy vars are added here. The
+    // profile has no network rules, loopback included.
+    ...outboundProxyEnv(),
   }
   for (const k of ['TMPDIR', 'USER', 'LOGNAME', 'LANG', 'LC_ALL']) {
     if (process.env[k]) env[k] = process.env[k]
@@ -965,6 +972,7 @@ export async function sandboxExec(command: string, opts: SandboxOptions): Promis
       // hides chcp's own banner.
       const result = await execAsync(`chcp 65001 >nul 2>&1 & ${command}`, {
         cwd: opts.workspaceRoot,
+        env: cleanChildEnv(),
         timeout: opts.timeout,
         maxBuffer: opts.maxBuffer,
         signal: opts.signal,

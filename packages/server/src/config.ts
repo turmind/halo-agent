@@ -6,26 +6,16 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
-import YAML from 'yaml'
 import { loadSettingsSchema, DEFAULT_A2A_URL_ALLOWLIST } from './settings-schema.js'
 import { DEFAULT_HIDDEN_DIRS, DEFAULT_HIDDEN_FILES } from './tools/sandbox.js'
 import { loadProviders } from './models/registry.js'
+import { getSettings, loadYamlFile } from './settings-file.js'
 
 export { DEFAULT_A2A_URL_ALLOWLIST }
 
 export const HALO_HOME = path.join(homedir(), '.halo')
 export const HALO_GLOBAL_DIR = path.join(HALO_HOME, 'global')
 export const HALO_SECRETS_DIR = path.join(HALO_HOME, 'secrets')
-
-/** Load a YAML file synchronously at startup */
-function loadYamlFile(filePath: string): Record<string, unknown> {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8')
-    return YAML.parse(raw) ?? {}
-  } catch {
-    return {}
-  }
-}
 
 /** The models registry: `{global}/models/*.yaml` merged with the hub-installed
  *  `{global}/models.d/*.yaml` (rule in models/registry.ts). Each entry is one
@@ -64,20 +54,6 @@ function getSystemConfig(): Record<string, unknown> {
     _systemConfigCache = { mtimeMs, data: loadYamlFile(SYSTEM_CONFIG_PATH) }
   }
   return _systemConfigCache.data
-}
-
-/** Lazy + mtime-watched settings cache. UI saves rewrite the file; bumping
- *  the mtime triggers a reparse on the next read so the server picks up new
- *  secrets without a restart. */
-const SETTINGS_PATH = path.join(HALO_SECRETS_DIR, 'settings.yaml')
-let _settingsCache: { mtimeMs: number; data: Record<string, unknown> } | null = null
-function getSettings(): Record<string, unknown> {
-  let mtimeMs = 0
-  try { mtimeMs = fs.statSync(SETTINGS_PATH).mtimeMs } catch { /* missing → mtime 0 */ }
-  if (!_settingsCache || _settingsCache.mtimeMs !== mtimeMs) {
-    _settingsCache = { mtimeMs, data: loadYamlFile(SETTINGS_PATH) }
-  }
-  return _settingsCache.data
 }
 
 /**

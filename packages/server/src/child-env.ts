@@ -2,8 +2,10 @@
  * Env for spawned child processes (evo wrapper + its sub-clis, terminals, tools).
  * Children inherit everything (model API keys etc.) EXCEPT server-only auth
  * secrets — a child never needs to verify logins or mint JWTs, so don't hand
- * it the keys — and the OTEL_* keys in `settingsOtelEnvKeys`.
+ * it the keys — and the OTEL_* keys in `settingsOtelEnvKeys`. Adds the
+ * outbound proxy vars while that setting is on.
  */
+import { outboundProxy } from './outbound-proxy.js'
 
 /** OTEL_* keys observability/otel.ts set from settings (unset before it ran).
  *  Stripped from children: inherited from boot they'd win the child's own
@@ -21,5 +23,16 @@ export function cleanChildEnv(): NodeJS.ProcessEnv {
   // that user's processes and files anyway.
   delete env.HALO_NODE_TOKEN
   for (const key of settingsOtelEnvKeys) delete env[key]
-  return env
+  return Object.assign(env, outboundProxyEnv())
+}
+
+/** Proxy vars for a spawned child while Settings → outbound proxy is on, {}
+ *  while off — off never touches proxy vars a child inherits (the operator's
+ *  own env). The one source for every spawn path: cleanChildEnv() above and
+ *  the sandbox's own envs (bwrap --clearenv + --setenv, the Seatbelt allowlist). */
+export function outboundProxyEnv(): Record<string, string> {
+  const proxy = outboundProxy()
+  if (!proxy) return {}
+  const noProxy = proxy.noProxy.join(',')
+  return { http_proxy: proxy.envUrl, https_proxy: proxy.envUrl, HTTP_PROXY: proxy.envUrl, HTTPS_PROXY: proxy.envUrl, no_proxy: noProxy, NO_PROXY: noProxy }
 }

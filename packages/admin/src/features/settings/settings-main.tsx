@@ -112,6 +112,8 @@ export function SettingsMain() {
       void refreshTheme()
     } catch (err) {
       console.error('[Settings] save failed:', err)
+      // A 400 names what's wrong (out of range, proxy URL with credentials) — show it.
+      window.alert(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
     }
@@ -583,7 +585,7 @@ function renderFieldControl(field: Field, saving: boolean, onSave: (value: strin
       return <EnumInput value={field.value} options={field.options ?? []} optionLabels={field.optionLabels} placeholder={field.default ?? ''} saving={saving} onCommit={onSave} />
     case 'string':
     default:
-      return <TextInput initial={field.value ?? ''} placeholder={field.default ?? ''} saving={saving} onCommit={onSave} />
+      return <TextInput initial={field.value ?? ''} placeholder={field.default ?? ''} hint={field.placeholder} saving={saving} onCommit={onSave} />
   }
 }
 
@@ -634,10 +636,12 @@ const ENV_PATTERN = /^<<[A-Z_][A-Z0-9_]*>>$/
 /** Text input for `type: string`, and (with `type="number"` + `step`) for
  *  `type: int | float`. */
 function TextInput({
-  initial, placeholder, type = 'text', step, saving, onCommit,
+  initial, placeholder, hint, type = 'text', step, saving, onCommit,
 }: {
   initial: string
   placeholder?: string
+  /** Schema `placeholder`: an example shown only while the input is empty — not a default. */
+  hint?: string
   type?: 'text' | 'number'
   step?: number
   saving: boolean
@@ -669,7 +673,7 @@ function TextInput({
       type={type}
       step={step}
       value={display}
-      placeholder={placeholder}
+      placeholder={placeholder || hint}
       onFocus={() => {
         if (isUsingDefault) setLocal('')  // start fresh; don't carry the default into the actual value
         setEditing(true)

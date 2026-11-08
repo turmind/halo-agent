@@ -14,6 +14,7 @@ import { sandboxExec, sandboxReadFile, sandboxReadBinaryFile, sandboxWriteFile, 
 import type { AccessLevel, SandboxOptions } from './sandbox.js'
 import { loadMergedSettings } from '../prompts/md-vars.js'
 import { loadSettingsSchema } from '../settings-schema.js'
+import { outboundProxy, proxyDispatcher } from '../outbound-proxy.js'
 import { inferImageMime } from '../channels/shared/media-store.js'
 import { TOOL_ERROR_MARKER, TOOL_WARN_MARKER } from '../agents/agent-loop.js'
 import { isShuttingDown, shutdownWithin, trackShellExec } from '../shutdown.js'
@@ -698,9 +699,12 @@ export function createWorkspaceTools(
     // `<<ENV>>` placeholders pass through as literals, so a readonly agent
     // can't borrow a more-privileged agent's keys via shell_exec. The cmd
     // simply fails (401 / unknown auth) — that's the desired behavior.
-    const { cmd, secrets } = accessLevel === 'readonly'
+    const { cmd, secrets: paramSecrets } = accessLevel === 'readonly'
       ? { cmd: input.command.trim(), secrets: [] as string[] }
       : await substituteSecrets(input.command.trim(), workspaceRoot, allowedNamespaces)
+    // The outbound proxy credential rides in the child's http(s)_proxy — keep
+    // it out of the stored tool result when a command echoes it (env, curl -v).
+    const secrets = [...paramSecrets, ...(outboundProxy()?.secrets ?? [])]
     const mask = (s: string) => secrets.length > 0 ? maskSecrets(s, secrets) : s
 
     try {
@@ -917,11 +921,14 @@ export function createWorkspaceTools(
       if (externalSignal?.aborted) controller.abort()
 
       try {
+        // `dispatcher` is undici's extension of fetch's init (not in the DOM
+        // RequestInit type); undefined = direct, as before.
         const response = await fetch(input.url, {
           method: input.method ?? 'GET',
           headers: input.headers,
           signal: controller.signal,
-        })
+          dispatcher: await proxyDispatcher(input.url),
+        } as RequestInit)
 
         const contentType = response.headers.get('content-type') ?? 'unknown'
         let body = await response.text()

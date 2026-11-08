@@ -81,6 +81,9 @@ export interface SchemaField {
   description_zh?: string
   /** Default placeholder shown when value is empty. May contain `<<ENV>>`. */
   default?: string
+  /** Example shown as the empty input's hint — unlike `default`, not a value
+   *  anything falls back to. */
+  placeholder?: string
   /** UI hint: render as password input + mask value in API responses. */
   secret?: boolean
   /** True when the field is read from the global settings only — workspace
@@ -180,6 +183,11 @@ function generalSection(): SchemaSection {
       // a workspace must not widen; public_url names this server to peers.
       { key: 'a2a.public_url', type: 'string', globalOnly: true, description: 'Origin peers use to reach this server for A2A (e.g. http://myhost.tailnet.ts.net:9527): the agent card\'s interface URL and the webhook URL given to remotes. Empty = derived from the request Host. Env HALO_A2A_PUBLIC_URL overrides.', description_zh: '对端访问本服务的 A2A 源地址（如 http://myhost.tailnet.ts.net:9527）：用于 agent card 的接口 URL 和交给远端的 webhook URL。留空则按请求 Host 推导。环境变量 HALO_A2A_PUBLIC_URL 优先。', default: '' },
       { key: 'a2a.url_allowlist', type: 'string', globalOnly: true, description: 'Comma-separated CIDRs / host patterns A2A may reach besides public https (push webhooks, remote cards and RPC). Private / loopback ranges are refused unless listed; plain http is allowed only to listed hosts / ranges. Link-local (169.254.0.0/16, fe80::/10) is always refused.', description_zh: 'A2A 除公网 https 之外允许访问的 CIDR / 主机模式（逗号分隔，用于 push webhook、远端 card 和 RPC）。私网 / 回环地址必须列出才允许；明文 http 只允许列出的主机 / 网段。链路本地地址（169.254.0.0/16、fe80::/10）始终拒绝。', default: DEFAULT_A2A_URL_ALLOWLIST },
+      // Outbound proxy (outbound-proxy.ts). Global-only: a machine's way out,
+      // not a workspace's. Read per spawn / request — no restart.
+      { key: 'outbound_proxy.enabled', type: 'boolean', globalOnly: true, description: 'Route outbound traffic through the proxy below: shell_exec, newly opened Terminals, notebook kernels and evolution runs get http_proxy / https_proxy (and the upper-case forms) in their env, and web_fetch and A2A requests to remotes go through it. localhost / 127.0.0.1 / ::1 always connect directly. Off = Halo sets no proxy vars (any the server inherited still pass). Applies on the next command / request; a Terminal already open keeps its env.', description_zh: '让出站流量走下面的代理：shell_exec、新开的 Terminal、notebook 内核和 evolution 运行的环境变量里会设上 http_proxy / https_proxy（大写形式也一起设），web_fetch 和发往 A2A 远端的请求也走代理。localhost / 127.0.0.1 / ::1 始终直连。关闭后 Halo 不设任何代理变量（服务进程本身继承的照常传下去）。下一条命令 / 请求即生效；已经打开的 Terminal 保持原来的环境。', default: 'false' },
+      { key: 'outbound_proxy.url', type: 'string', globalOnly: true, description: 'Proxy address, http:// or https:// (e.g. http://127.0.0.1:12334 for a local Hiddify / Clash). No user:pass@ in the URL — put credentials in Token. Empty = proxy off even when enabled.', description_zh: '代理地址，http:// 或 https://（如本地 Hiddify / Clash 的 http://127.0.0.1:12334）。URL 里不能带 user:pass@，凭证填到 Token。留空时即使打开开关也不走代理。', default: '', placeholder: 'http://127.0.0.1:12334' },
+      { key: 'outbound_proxy.token', type: 'string', secret: true, globalOnly: true, description: 'Optional proxy credential: user:password, or a bare token (sent as the user name, empty password). Sent as Basic auth — in the proxy URL\'s user-info for child processes (the form curl / git / pip read), as Proxy-Authorization for web_fetch and A2A. Leave empty for a proxy without auth.', description_zh: '可选的代理凭证：user:password，或单独一个 token（作为用户名，密码为空）。以 Basic 认证发送——子进程放在代理 URL 的 user-info 里（curl / git / pip 都认这种写法），web_fetch 和 A2A 用 Proxy-Authorization 头。代理不需要鉴权就留空。', default: '' },
       // self-evolution (see plans/self-evolution.md). The level and the
       // auto-apply threshold are per workspace (read where a run's workspace is
       // known: the pre-compact trigger, the wrapper's auto-apply verdict and

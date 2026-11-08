@@ -6,6 +6,7 @@ import YAML from 'yaml'
 import { extensionOffNamespaces, loadSettingsSchema, type SchemaSection, type SchemaField } from '../settings-schema.js'
 import { resolveProjectPath } from './workspace-path.js'
 import { missingEnvRefs } from '../config.js'
+import { checkProxyUrl } from '../outbound-proxy.js'
 
 const GLOBAL_SETTINGS_PATH = path.join(homedir(), '.halo', 'secrets', 'settings.yaml')
 
@@ -95,6 +96,8 @@ interface ResolvedField {
   description?: string
   description_zh?: string
   default?: string
+  /** Example for the empty input — display only, never a fallback value. */
+  placeholder?: string
   secret?: boolean
   /** Field is only honored at the global layer; workspace overrides ignored
    *  at runtime. UI should disable the workspace input. */
@@ -180,6 +183,7 @@ function fieldFor(
     description: f.description,
     description_zh: f.description_zh,
     default: f.default,
+    placeholder: f.placeholder,
     secret: f.secret,
     globalOnly: f.globalOnly,
     restartRequired: f.restartRequired,
@@ -298,6 +302,18 @@ export function createSettingsRoutes() {
     return null
   }
 
+  /** `general.outbound_proxy.url` must parse as http(s) with no userinfo —
+   *  credentials go in the secret `token` field, not a plain-text one. 400
+   *  message (never echoing the URL) or null; empty reads as unset. */
+  function rejectBadProxyUrl(entries: Array<[string, unknown]>): string | null {
+    for (const [key, value] of entries) {
+      if (key !== 'general.outbound_proxy.url' || value == null || String(value).trim() === '') continue
+      const bad = checkProxyUrl(String(value).trim())
+      if (bad) return `${key}: ${bad}`
+    }
+    return null
+  }
+
   /** Settings file for a write: workspace scope → `<project>/.halo/settings.yaml`
    *  (same projectId contract as files.ts: an absolute path that exists on
    *  disk — without it a write lands in `<anything>/.halo/settings.yaml`),
@@ -338,8 +354,9 @@ export function createSettingsRoutes() {
       const offending = rejectGlobalOnlyAtWorkspace('workspace', flattenDotted(body.settings))
       if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
     }
-    const outOfRange = rejectOutOfRange(flattenDotted(body.settings).map((k) => [k, readLeaf(body.settings, k)]))
-    if (outOfRange) return c.json({ error: outOfRange }, 400)
+    const entries: Array<[string, unknown]> = flattenDotted(body.settings).map((k) => [k, readLeaf(body.settings, k)])
+    const invalid = rejectOutOfRange(entries) ?? rejectBadProxyUrl(entries)
+    if (invalid) return c.json({ error: invalid }, 400)
     await writeSettingsFile(resolved.filePath, body.settings)
 
     notifySettingsChange()
@@ -359,8 +376,8 @@ export function createSettingsRoutes() {
     if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
     const offending = rejectGlobalOnlyAtWorkspace(body.scope, [body.key])
     if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
-    const outOfRange = rejectOutOfRange([[body.key, body.value]])
-    if (outOfRange) return c.json({ error: outOfRange }, 400)
+    const invalid = rejectOutOfRange([[body.key, body.value]]) ?? rejectBadProxyUrl([[body.key, body.value]])
+    if (invalid) return c.json({ error: invalid }, 400)
     const { filePath } = resolved
 
     const current = await readSettingsFile(filePath)
