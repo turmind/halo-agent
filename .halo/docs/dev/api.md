@@ -121,6 +121,12 @@ Install / update / switch / uninstall don't broadcast themselves — the resulti
 
 Types: `packages/core/src/protocol/update-types.ts`.
 
+**Model sync** (`routes/updates.ts` + `models/hub-update.ts`; cookie; not mounted in AgentCore mode). Backs Settings → Model providers → Sync latest models. Plans and writes with the same `planModelsInstall` / `applyModelsInstall` as `halo models install` — rules: [design/storage.md → Model registry format](../design/storage.md#model-registry-format). No frame of its own: a write trips the `models.d/` watcher, which pushes `models:changed`.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/models/update` | cookie | Body `{ confirm?: boolean }` — only `true` counts as consent. The hub is `extension.params.hub_repo` (empty = turmind/halo-hub; `owner/repo` or `https://github.com/<owner>/<repo>` only). Lists its releases (`api.github.com/repos/<owner>/<repo>/releases?per_page=100`, anonymous: **60 requests/hour per IP**, no token is sent), takes the newest non-draft, non-prerelease `models-v<digit>…` release with a `.zip` asset, unpacks its `*.yaml` (basename only, flat) into a temp dir and plans it against the copies in effect. 200 `{hub, release, needsConfirm, written: string[], summary: string \| null, entries}`, one entry per yaml `{file, id?, action: 'install' \| 'up-to-date' \| 'skip' \| 'refuse', reason?, revision?, current?: {source: 'bundled' \| 'hub', revision}, endpointChanges: string[], needsConfirm?}`. `needsConfirm: true` = an install adds an endpoint and `confirm` wasn't `true`: **nothing is written**, `written: []`, `summary: null`; re-POST `{ confirm: true }` fetches and plans again (nothing cached between calls), then writes. Otherwise `written` = the ids written to `models.d/` and `summary` = the CLI's summary line. 400 `{error}` `hub_repo` isn't GitHub (use `/extension models`); 409 `{error: 'A model sync is already running'}` (one at a time, in-process); 502 `{error}` the hub / network is at fault — release API non-200 (rate-limited, private or wrong repo), invalid JSON, no matching release, download failure, not a zip, two yamls with one basename, no yaml in it, over the size cap (list 2 MB, zip 10 MB), timeout / network error; 500 otherwise (e.g. `models.d/` not writable) |
+
 ## Session Logs (unified)
 
 File: `packages/server/src/routes/sessions.ts`

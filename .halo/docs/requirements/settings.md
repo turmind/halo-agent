@@ -235,6 +235,17 @@ A malicious skill that tries `curl -H "Bearer {{aws-bedrock-claude-invoke.secret
 
 Groups top to bottom: **System** (General · A2A remotes — only while a2a-remotes.yaml has a bearer remote · Security · Extensions, each with a leading icon), **Extension settings**, **Model providers**, **Agents**, **Skills**, and **Orphans** when there are any. Each group header is a quiet toggle (chevron + smaller muted label) that collapses its items; all groups start expanded, and the collapsed ones are remembered per browser (`localStorage` `halo_settings_navCollapsed`, collapsed ids only — so a group that appears later starts expanded).
 
+## Sync latest models
+
+The **Model providers** group ends with a **Sync latest models** row (refresh icon, styled like the nav items, opens no page). One click has the server fetch the hub's newest `models-v*` release and install the provider yamls in it that are newer than the copy in effect — the same rules as `/extension models` ([design/storage.md → Model registry format](../design/storage.md#model-registry-format), API [dev/api.md → Model sync](../dev/api.md#canvas-preview-extensions)).
+
+- **Running**: the row reads "Syncing…" with a spinning icon and is disabled until the request returns.
+- **Confirm**: when an install would send requests to a URL the provider didn't use before (a new provider, a changed default endpoint / presets, an added model endpoint), nothing is written yet. A "Confirm endpoint changes" dialog lists each such provider with its endpoint change lines; **Cancel** (or a click outside) sends nothing more, **Install** re-checks the hub and writes.
+- **Result**: a "Models synced (<release>)" dialog with the summary line and one row per provider yaml — installed / up to date / skipped / refused, plus the reason (e.g. "needs a newer halo").
+- **Failure**: a "Model sync failed" dialog with the server's error text (rate-limited, no release, network…), not the raw HTTP status.
+- **GitHub hubs only**: the hub is the extension skill's `hub_repo` (Settings → Skills → extension; empty = turmind/halo-hub). Requests are anonymous, 60 per hour per IP. For a Gitea / Forgejo / GitLab hub the server refuses with a pointer to `/extension models` in a chat, which handles those.
+- The provider list and model pickers refresh from the `models:changed` push — no reload, no polling. Existing agents keep the model / endpoint in their own `agent.yaml`.
+
 ## Extensions view and update notices
 
 **Settings → Extensions** (System group) lists the installed canvas preview extensions — on and off in one list sorted by id, plus refused directories as red rows — with **Install from zip** in the header. Each valid row offers:

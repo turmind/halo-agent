@@ -18,7 +18,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   │   └── AGENT.md                   # Agent personality
 │   ├── models/                        # Model registry, bundled — one file per provider, overwritten on template refresh
 │   │   └── <providerId>.yaml          # e.g. aws-bedrock-claude-invoke.yaml
-│   ├── models.d/                      # Hub-installed provider yamls (`/extension models`); never touched by seeding
+│   ├── models.d/                      # Hub-installed provider yamls (`/extension models`, Settings → Sync latest models); never touched by seeding
 │   │   └── <providerId>.yaml          # merged with models/ by revision (see Model registry format)
 │   ├── skills/<id>/
 │   │   └── SKILL.md                   # Skill definition (frontmatter + body)
@@ -463,11 +463,13 @@ Values present in `settings.yaml` whose namespace isn't currently declared by an
 
 ## Model registry format
 
-Paths: `~/.halo/global/models/<providerId>.yaml` (bundled, seeded from `templates/models/` and overwritten on every template refresh) and `~/.halo/global/models.d/<providerId>.yaml` (hub-installed by `halo models install` / `/extension models`; seeding and refresh never touch it) — one file per provider. Both dirs are read on first access and merged into the in-memory registry. The same yaml also declares the provider's required server-side credentials (`secrets:` section), which the Settings page renders.
+Paths: `~/.halo/global/models/<providerId>.yaml` (bundled, seeded from `templates/models/` and overwritten on every template refresh) and `~/.halo/global/models.d/<providerId>.yaml` (hub-installed by `halo models install` / `/extension models` or Settings → Sync latest models; seeding and refresh never touch it) — one file per provider. Both dirs are read on first access and merged into the in-memory registry. The same yaml also declares the provider's required server-side credentials (`secrets:` section), which the Settings page renders.
 
 **Merge rule** (one implementation, `packages/server/src/models/registry.ts` `loadProviders`, behind the server registry, the Settings secrets forms, `halo setup` and the hub installer): per provider `id` the copy with the higher `revision` wins; on a tie the `models.d` copy wins; a yaml without `revision` counts as 0 (users' own custom yamls in `models/`). A `models.d` copy whose `runtime:` this build doesn't know is skipped with a `[Config]` log, so the bundled copy stays in effect. `halo setup` merges the package's `templates/models/` with `models.d/` the same way.
 
 **Hub install** (`halo models install <dir> [--yes]`, `models/install.ts`): plan, then write `models.d/<id>.yaml` via tmp + rename. A yaml is refused (others still go ahead) for an unknown `runtime:` ("needs a newer halo"), a missing / non-integer `revision`, a `secrets[].default` other than empty / `<<ENV_NAME>>`, or bad model fields — `contextWindow` / `maxContextWindow` not positive integers, `contextWindow` > `maxContextWindow`, `compressAt` outside (0, 1], `endpoints` not a list of `https://` URLs (reason shaped `models.<id>.<field> …`). An older revision than the copy in effect is skipped, an identical one is up to date. **Consent**: the whole run writes nothing and needs `--yes` (exit 3) when an installed provider is new, its `defaultEndpoint` / `endpointPresets` change, or a model's `endpoints:` gains a URL the provider didn't use anywhere before (not in its old `defaultEndpoint`, presets or any model's list). Removed URLs, and added ones the provider already used, are listed but need no consent.
+
+**Two writers, one rule set.** `models.d/` is written by `halo models install` (what `/extension models` runs after `ext.sh` downloads the release) and by Settings → Sync latest models (`POST /api/models/update`, `models/hub-update.ts`). The latter fetches the GitHub hub's newest `models-v*` release zip itself (≤ 10 MB), unpacks its `*.yaml` flat by basename into a temp dir, then calls the same `planModelsInstall` / `applyModelsInstall`, so refusals, skips, consent and the tmp + rename write are identical; consent is a re-POST with `{confirm: true}` instead of `--yes`, and nothing is cached between the two calls. GitHub hubs only — other platforms stay with `/extension models`. API: [dev/api.md → Model sync](../dev/api.md#canvas-preview-extensions).
 
 **Live reload**: `models/watcher.ts` watches `models.d/` (non-recursive, 300 ms debounce; created at boot), drops the registry cache and broadcasts `models:changed` when the merged view changed; admin pages re-fetch `/agent-configs/models` and the settings schema. `models/` isn't watched — only template refresh writes it, before the registry is first read.
 
