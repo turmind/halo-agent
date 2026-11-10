@@ -261,7 +261,7 @@ SQLite only holds metadata indexes; all content lives on the filesystem.
 | `~/.halo/secrets/settings.yaml` | SettingsRoutes | Global settings |
 | `<project>/.halo/settings.yaml` | SettingsRoutes | Per-project overrides |
 | `~/.halo/global/models/<provider>.yaml` | Template refresh (overwritten) | Model registry, bundled — one file per provider, read on first access; its `runtime:` field picks the implementation class |
-| `~/.halo/global/models.d/<provider>.yaml` | `halo models install` (`/extension models`) | Hub-installed provider yamls; per id the higher `revision` wins over `models/` (tie → `models.d`); watched, applied without restart |
+| `~/.halo/global/models.d/<provider>.yaml` | `halo models install` (`/extension models`), Settings → Sync latest models (`POST /api/models/update`) | Hub-installed provider yamls; per id the higher `revision` wins over `models/` (tie → `models.d`); watched, applied without restart |
 | `~/.halo/global/prompts/{bootstrap,all,root}/*.md` | init.ts seed + user | System prompts |
 | `~/.halo/global/logs/server.log` | Logger | Server logs (10 MB rotation) |
 | `~/.halo/secrets/channels/channels.db` | All channels, NodeRoutes | Unified channel accounts (Web, Telegram, WeChat, Slack, Feishu, WeCom) and Linked machines tokens (`channel_type='node'`) — see [storage.md](storage.md#channel_accounts) |

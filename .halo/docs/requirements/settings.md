@@ -92,7 +92,7 @@ params:
 secrets: []
 ```
 
-Built-in skills declare theirs the same way — today `extension`, with plain `hub_base` (the https base URL holding each hub extension's `<id>/update.json`, read by `/extension install <id>` and the admin's update check; point it at a mirror; empty = the GitHub raw `extensions/` directory of `hub_repo`) and `hub_repo` (the hub `/extension models` pulls release zips from, and where the default `hub_base` comes from; empty = turmind/halo-hub) params, and `web-search`, with plain `fast_region` / `deep_region` params (AWS regions for its two Bedrock gears; empty = us-east-1 fast, us-west-2 deep / us-east-1 for sol). `halo setup` asks only for built-in skills' `secret: true` params; plain params are configured in Settings → Skills only.
+Built-in skills declare theirs the same way — today `extension`, with plain `hub_base` (the https base URL holding each hub extension's `<id>/update.json`, read by `/extension install <id>` and the admin's update check; point it at a mirror; empty = the GitHub raw `extensions/` directory of `hub_repo`) and `hub_repo` (the hub `/extension models` and the Sync latest models button pull release zips from, and where the default `hub_base` comes from; empty = turmind/halo-hub) params, and `web-search`, with plain `fast_region` / `deep_region` params (AWS regions for its two Bedrock gears; empty = us-east-1 fast, us-west-2 deep / us-east-1 for sol). `halo setup` asks only for built-in skills' `secret: true` params; plain params are configured in Settings → Skills only.
 
 Global agents declare theirs the same way in `agents/<agent-id>/agent-config.yaml` (same `params:` / `secrets:` lists; shown under Settings → Agents).
 
