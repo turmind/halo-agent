@@ -34,7 +34,7 @@ const bedrock: Registry['providers'][number] = {
       capabilities: {
         image: true, video: false, audio: false,
         promptCaching: { default: '1h', ttlPresets: [{ value: '5m', label: '5min' }, { value: '1h', label: '1hour' }] },
-        thinking: { mode: 'adaptive', defaultEnabled: true, default: 'xhigh', effortPresets: [{ value: 'low', label: 'Low' }, { value: 'max', label: 'Max' }] },
+        thinking: { mode: 'adaptive', defaultEnabled: true, default: 'max', effortPresets: [{ value: 'low', label: 'Low' }, { value: 'max', label: 'Max' }] },
       },
     },
     {
@@ -80,6 +80,11 @@ describe('Settings → provider → Models', () => {
     expect(region(fable!, 'us-east-1').className).toContain('text-[var(--primary)]')
     expect(region(fable!, 'us-west-2').className).not.toContain('text-[var(--primary)]')
     expect(region(fable!, 'us-east-1').title).toContain('https://bedrock-runtime.us-east-1.amazonaws.com')
+    // Preset lists: the default emphasized (thinking max, cache 1h), the others not.
+    const emphasized = [...fable!.querySelectorAll('span.font-semibold')].map((s) => s.textContent)
+    expect(emphasized).toEqual(['max', '1h'])
+    expect(fable!.textContent).toContain('low / max')
+    expect(fable!.textContent).toContain('5m / 1h')
 
     // Sonnet: default tag; its own endpoints list wins → only us-west-2 (and it is that model's default).
     expect(chipTexts(sonnet!)).toContain('settings.models.default')

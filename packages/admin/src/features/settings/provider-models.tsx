@@ -11,7 +11,21 @@ type Provider = Awaited<ReturnType<typeof api.agentConfigs.models>>['providers']
 type Model = Provider['models'][number]
 
 const CHIP = 'inline-flex items-center gap-1 rounded bg-[var(--secondary)] px-1.5 py-0.5 text-[10px] text-[var(--foreground)]/80'
-const values = (presets: Array<{ value: string }> | undefined) => (presets ?? []).map((p) => p.value).join(' / ')
+
+/** `low / medium / high` with the default one emphasized (only when there is a choice). */
+function Presets({ presets, value }: { presets: Array<{ value: string }> | undefined; value?: string }) {
+  const list = presets ?? []
+  return (
+    <span>
+      {list.map((p, i) => (
+        <span key={p.value}>
+          {i > 0 && ' / '}
+          <span className={cn(list.length > 1 && p.value === value && 'font-semibold text-[var(--primary)]')}>{p.value}</span>
+        </span>
+      ))}
+    </span>
+  )
+}
 
 /**
  * Settings → a model provider's page, below its credentials: read-only view of
@@ -98,28 +112,23 @@ function ModelCard({ provider, model, isDefault }: { provider: Provider; model: 
         {caps.audio && <span className={CHIP}><AudioLines className="h-2.5 w-2.5" />{t('settings.models.cap.audio')}</span>}
         {!caps.image && !caps.video && !caps.audio && <span className={CHIP}>{t('settings.models.cap.textOnly')}</span>}
         {thinking && (
-          <span className={CHIP}>
+          <span className={CHIP} title={thinking.mode !== 'manual' && thinking.default ? t('settings.models.cap.defaultValue', { value: thinking.default }) : undefined}>
             <Brain className="h-2.5 w-2.5" />
             {thinking.mode === 'manual'
               ? t('settings.models.cap.thinkingBudget', { budget: formatTokens(thinking.defaultBudgetTokens ?? 8192) })
-              : t('settings.models.cap.thinking', { presets: values(thinking.effortPresets) })}
-            {thinking.mode !== 'manual' && thinking.default && <span className="text-[var(--muted-foreground)]">{t('settings.models.cap.defaultValue', { value: thinking.default })}</span>}
-            {thinking.defaultEnabled && <span className="text-[var(--muted-foreground)]">{t('settings.models.cap.onByDefault')}</span>}
+              : <>{t('settings.models.cap.thinking')} <Presets presets={thinking.effortPresets} value={thinking.default} /></>}
+            {thinking.defaultEnabled && <span className="text-[var(--muted-foreground)]">· {t('settings.models.cap.onByDefault')}</span>}
           </span>
         )}
         {caps.promptCaching && (
-          <span className={CHIP}>
+          <span className={CHIP} title={caps.promptCaching.default ? t('settings.models.cap.defaultValue', { value: caps.promptCaching.default }) : undefined}>
             <Zap className="h-2.5 w-2.5" />
-            {t('settings.models.cap.cache', { presets: values(caps.promptCaching.ttlPresets) })}
-            {(caps.promptCaching.ttlPresets?.length ?? 0) > 1 && caps.promptCaching.default && (
-              <span className="text-[var(--muted-foreground)]">{t('settings.models.cap.defaultValue', { value: caps.promptCaching.default })}</span>
-            )}
+            {t('settings.models.cap.cache')} <Presets presets={caps.promptCaching.ttlPresets} value={caps.promptCaching.default} />
           </span>
         )}
         {caps.verbosity && (
-          <span className={CHIP}>
-            {t('settings.models.cap.verbosity', { presets: values(caps.verbosity.presets) })}
-            {caps.verbosity.default && <span className="text-[var(--muted-foreground)]">{t('settings.models.cap.defaultValue', { value: caps.verbosity.default })}</span>}
+          <span className={CHIP} title={caps.verbosity.default ? t('settings.models.cap.defaultValue', { value: caps.verbosity.default }) : undefined}>
+            {t('settings.models.cap.verbosity')} <Presets presets={caps.verbosity.presets} value={caps.verbosity.default} />
           </span>
         )}
       </div>
