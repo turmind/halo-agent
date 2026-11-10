@@ -198,6 +198,24 @@ models:
 - `capabilities.thinking.effortPresets` → renders the Thinking effort dropdown
 - Omit either block → the UI hides that control for this model
 
+**What users see in Settings.** A provider's Settings page lists its models read-only below the credential fields ([requirements/settings.md → Models browse](../requirements/settings.md#models-browse-provider-pages)). The view only displays — it changes nothing at runtime — but it is where users compare models, so these fields are user-visible:
+
+| yaml field | Shown as |
+|---|---|
+| `runtime`, `revision` | provider line: "Runtime · Revision" |
+| `defaultModelId` | provider line "Default model" + the card's Default tag; absent → the first model |
+| `models[].displayName`, `models[].id` | card title (absent → the id) and the copyable mono id under it |
+| `models[].contextWindow`, `maxContextWindow` | "Context 272K (max 1M)" — the max only when it differs |
+| `models[].compressAt` | tooltip on the context: "Compacts at 90% of the context" |
+| `models[].maxOutputTokens` | "Output 128K" |
+| `capabilities.image` / `video` / `audio` | Image / Video / Audio chips; all three false → "Text only" |
+| `capabilities.thinking` | "Thinking low / … / max" from `effortPresets[].value` with `default` bold; `mode: manual` → "Thinking budget 4K" from `defaultBudgetTokens` (8192 when absent); `defaultEnabled: true` → "· on by default" |
+| `capabilities.promptCaching` | "Cache 5m / 1h" from `ttlPresets[].value`, `default` bold |
+| `capabilities.verbosity` | "Verbosity low / medium / high" from `presets[].value`, `default` bold |
+| `models[].endpoints`, `endpointPresets`, `defaultEndpoint` | endpoint chips via `resolveModelEndpoints` (the default first if the presets omit it): `bedrock-runtime.<region>.amazonaws.com` / `bedrock-mantle.<region>.api.aws` → the region, any other URL → its host; the default highlighted |
+
+Chips show preset `value`s, not their `label`s. Sizes read as K / M (a power-of-two size binary: 262144 → 256K). The provider's `displayName` / `description` head the page from the settings schema, and `secrets:` are the form above.
+
 **Context fields** — `contextWindow` is the *recommended* window, written into a new agent's `context.maxTokens`: the official figure, capped at 272000 (1M-class models bill input past 272K at long-context rates); `maxContextWindow` is the model's true limit; `compressAt` the new agent's compaction ratio. Read through `resolveModelContext()` / `resolveEffectiveContext()` in [config.ts](../../../packages/server/src/config.ts). At runtime a session's budget (compaction threshold, token ring) is agent.yaml `context.maxTokens` / `compressAt`, else the global defaults (`config.model.maxContextTokens` 272K capped at the model's max, `general.compact.compress_at` 0.9), then clamped to the model's max — the same chain for live sessions (`buildModelRuntime`, session-agent-builder.ts) and cold ones (`getContextConfig()`, session-manager.ts). The registry's recommended `contextWindow` / `compressAt` and `capabilities.verbosity.default` are **scaffold-only**: written into agent.yaml when an agent is created or the form switches model, never read at runtime for an existing agent. A new agent's compressAt is the explicitly set global `compress_at`, else the model's `compressAt`, else 0.9. Declare all three on every model entry; without `maxContextWindow` / `contextWindow` a small-window model (e.g. 128K) runs at 272K and overflows before compaction kicks in. Details: [design/storage.md#model-registry-format](../design/storage.md#model-registry-format).
 
 Shape source: [packages/server/templates/models/aws-bedrock-claude-invoke.yaml](../../../packages/server/templates/models/aws-bedrock-claude-invoke.yaml) and [design/storage.md#model-registry-format](../design/storage.md#model-registry-format).

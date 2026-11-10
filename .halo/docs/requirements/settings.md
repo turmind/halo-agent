@@ -246,6 +246,18 @@ The **Model providers** group ends with a **Sync latest models** row (refresh ic
 - **GitHub hubs only**: the hub is the extension skill's `hub_repo` (Settings → Skills → extension; empty = turmind/halo-hub). Requests are anonymous, 60 per hour per IP. For a Gitea / Forgejo / GitLab hub the server refuses with a pointer to `/extension models` in a chat, which handles those.
 - The provider list and model pickers refresh from the `models:changed` push — no reload, no polling. Existing agents keep the model / endpoint in their own `agent.yaml`.
 
+## Models browse (provider pages)
+
+A model provider's page shows a **Models** section below its credential fields: a read-only view of the provider config in effect (the bundled or hub copy that wins by `revision`), so you can see which models are wired up and where each one can be called without opening the yaml. Nothing here is editable — an agent's model and endpoint are picked in the agent editor. The section header (chevron + "Models" + model count) starts expanded and collapses on click; the state isn't persisted. Shown at both global and workspace scope (the provider config is global). A provider whose yaml declares no `secrets:` has no Settings page, so no browse either (every bundled provider declares some).
+
+- **Provider line**: runtime · revision · default model (`defaultModelId`, else the first model; shown by its display name), then a one-line read-only hint.
+- **One card per model**, in yaml order:
+  - display name (else the id), with a "Default" tag on the default model; under it the model id in mono, click to copy (a check mark confirms);
+  - right side: "Context 272K (max 1M)" — `contextWindow`, plus `maxContextWindow` when it differs — and "Output 128K" (`maxOutputTokens`); hovering the context shows the compaction ratio ("Compacts at 90% of the context"). Sizes read as K / M; a power-of-two size reads binary (262144 → 256K, 1048576 → 1M);
+  - capability chips: Image / Video / Audio input (none of the three → "Text only"); Thinking with its effort values (`low / medium / high / xhigh / max`), or "Thinking budget 4K" for a budget-mode model, plus "· on by default" when thinking starts on; Cache with its TTL values (`5m / 1h`); Verbosity with its values. In a list with more than one value the default is bold in the accent color, and the chip's tooltip names it;
+  - endpoint chips (map-pin icon): where the model can be called — its own `endpoints:` list, else the provider's `endpointPresets`, with the provider's `defaultEndpoint` listed first when the presets leave it out. An AWS host carrying a region (`bedrock-runtime.<region>.amazonaws.com[.cn]`, `bedrock-mantle.<region>.api.aws`) shows as the region (`us-east-1`); any other URL as its host in mono (`api.deepseek.com`). URLs with the same label share one chip. The default endpoint's chip is highlighted; the tooltip lists the full URL(s).
+- **Data**: `GET /api/agent-configs/models` (the merged registry the agent form also reads), fetched when Settings opens and again on every `models:changed` push (a hub sync or `/extension models`) or WS reconnect — no polling. The yaml is never shown raw.
+
 ## Extensions view and update notices
 
 **Settings → Extensions** (System group) lists the installed canvas preview extensions — on and off in one list sorted by id, plus refused directories as red rows — with **Install from zip** in the header. Each valid row offers:
