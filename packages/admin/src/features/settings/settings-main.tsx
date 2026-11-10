@@ -10,6 +10,7 @@ import { useTheme } from '@/shared/theme'
 import { SecurityView } from './security-view'
 import { ExtensionsView } from './extensions-view'
 import { CoreUpdate } from './core-update'
+import { ModelsSync } from './models-sync'
 import { useModelsBus } from '@/shared/models-bus'
 import { getExtensionsSnapshot, subscribe as subscribeExtensions } from '@/features/editor/previews/registry'
 
@@ -312,7 +313,9 @@ function NavList({
         </NavItem>
       </NavGroup>
       <NavGroup {...group('extensions', t('settings.nav.extensionSettings'))} items={grouped.extensions} active={active} onPick={onPick} />
-      <NavGroup {...group('providers', t('settings.nav.providers'))} items={grouped.providers} active={active} onPick={onPick} />
+      <NavGroup {...group('providers', t('settings.nav.providers'))} items={grouped.providers} active={active} onPick={onPick}>
+        <ModelsSync />
+      </NavGroup>
       <NavGroup {...group('agents', t('settings.nav.agents'))} items={grouped.agents} active={active} onPick={onPick} />
       <NavGroup {...group('skills', t('settings.nav.skills'))} items={grouped.skills} active={active} onPick={onPick} />
       {orphans.length > 0 && (

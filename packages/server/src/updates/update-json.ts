@@ -67,10 +67,17 @@ export function haloBaseVersion(haloVersion: string): string | null {
  * base explicitly.
  */
 export function defaultHubBase(hubRepo: string): string | null {
+  const gh = githubHubRepo(hubRepo)
+  return gh ? `https://raw.githubusercontent.com/${gh.owner}/${gh.repo}/main/extensions` : null
+}
+
+/** The GitHub repo a `hub_repo` setting names (normalization above), or null
+ *  for a non-GitHub hub. Also the source of Settings' model sync (models/hub-update.ts). */
+export function githubHubRepo(hubRepo: string): { owner: string; repo: string } | null {
   let h = hubRepo.trim()
   if (h === '' || h.startsWith('{{')) h = DEFAULT_HUB_REPO
   const m = /^(?:https:\/\/github\.com\/)?([A-Za-z0-9][A-Za-z0-9_.-]*)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(h)
-  return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/main/extensions` : null
+  return m ? { owner: m[1], repo: m[2] } : null
 }
 
 /** Where extension `id`'s update.json lives: its manifest `source`, else

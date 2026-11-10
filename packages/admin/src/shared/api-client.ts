@@ -3,6 +3,27 @@ import type { CoreUpdateStatus, ExtensionInfo, ExtensionsSnapshot, ExtensionsUpd
 
 const API_BASE = '/api'
 
+/** POST /api/models/update — mirrors the server's models/install.ts PlanEntry (minus `raw`). */
+export interface ModelsSyncEntry {
+  file: string
+  id?: string
+  action: 'install' | 'up-to-date' | 'skip' | 'refuse'
+  reason?: string
+  revision?: number
+  current?: { source: 'bundled' | 'hub'; revision: number }
+  endpointChanges: string[]
+  needsConfirm?: boolean
+}
+
+export interface ModelsSyncResult {
+  hub: string
+  release: string
+  needsConfirm: boolean
+  written: string[]
+  summary: string | null
+  entries: ModelsSyncEntry[]
+}
+
 /** Expired sign-in on a request fetched with `redirect: 'manual'`: Halo's own
  *  auth answers 401; a proxy in front of it (midway / CloudFront, oauth2-proxy,
  *  Cloudflare Access) redirects to its login page, which `manual` surfaces as an
@@ -783,6 +804,12 @@ export const api = {
     },
     checkExtensions() {
       return request<ExtensionsUpdateStatus>('/updates/check', { method: 'POST', body: JSON.stringify({ scope: 'extensions' }) })
+    },
+    /** Sync provider yamls from the hub's newest models-v* release. A plan that
+     *  adds an endpoint answers `needsConfirm` and writes nothing until it is
+     *  retried with `confirm`; the registry reload arrives as `models:changed`. */
+    syncModels(confirm = false) {
+      return request<ModelsSyncResult>('/models/update', { method: 'POST', body: JSON.stringify({ confirm }) })
     },
   },
 
