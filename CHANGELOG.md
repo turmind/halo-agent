@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 - Models: Claude Fable 5.2 on Amazon Bedrock (`global.anthropic.claude-fable-5-2`, Claude Invoke provider) joins the bundled model list ahead of Fable 5.1: 1M context, 128K output, image input, adaptive thinking with effort low through max (default XHigh), 5m / 1h prompt caching. Bedrock treats it as a Covered Model, so a Region whose account data-retention mode is `inherit` answers 400 until the mode is set for that Region; the provider's endpoint presets other than us-east-1 may hit this. Claude Mythos 5.2 is not included (approved organisations only).
+- Settings: "Sync latest models" button at the bottom of Model Providers — pulls the hub's newest `models-v*` release and installs the provider configs in place, no restart and no chat needed (same rules as `/extension models`: a newer revision installs, an older one is skipped, a provider needing a newer Halo is refused). If the update would send requests to a new endpoint, a dialog lists the changes and nothing is written until you confirm. GitHub hubs only (the extension skill's `hub_repo`, default turmind/halo-hub); for Gitea / Forgejo / GitLab hubs keep using `/extension models`.
 
 ## [2.2.4] - 2026-11-08
 
