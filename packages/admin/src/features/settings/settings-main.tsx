@@ -11,6 +11,7 @@ import { SecurityView } from './security-view'
 import { ExtensionsView } from './extensions-view'
 import { CoreUpdate } from './core-update'
 import { ModelsSync } from './models-sync'
+import { ProviderModels } from './provider-models'
 import { useModelsBus } from '@/shared/models-bus'
 import { getExtensionsSnapshot, subscribe as subscribeExtensions } from '@/features/editor/previews/registry'
 
@@ -75,6 +76,11 @@ export function SettingsMain() {
   const modelsVersion = useModelsBus((s) => s.version)
   const extensionsSnapshot = useSyncExternalStore(subscribeExtensions, getExtensionsSnapshot, getExtensionsSnapshot)
   useEffect(() => { refresh() }, [refresh, modelsVersion, extensionsSnapshot])
+  // Provider pages also browse the provider's models (the merged registry in effect).
+  const [modelsRegistry, setModelsRegistry] = useState<Awaited<ReturnType<typeof api.agentConfigs.models>> | null>(null)
+  useEffect(() => {
+    api.agentConfigs.models().then(setModelsRegistry).catch((err) => console.error('[Settings] models registry load failed:', err))
+  }, [modelsVersion])
 
   // App version — fetched once from /api/health (server stamps it at bundle
   // time via esbuild define; 'dev' under tsx). Shown at the sidebar foot.
@@ -261,6 +267,7 @@ export function SettingsMain() {
               scope={scope}
               saving={saving}
               saveError={saveError}
+              provider={activeSection.source === 'provider' ? modelsRegistry?.providers.find((p) => p.id === activeSection.namespaceId) : undefined}
               onSave={(field, value) => handleSave(activeSection.namespaceId, field, value)}
               onReset={(field) => handleResetField(activeSection.namespaceId, field)}
             />
@@ -412,12 +419,14 @@ function NavGroup({
 // Section content
 
 function SectionView({
-  section, scope, saving, saveError, onSave, onReset,
+  section, scope, saving, saveError, provider, onSave, onReset,
 }: {
   section: Section
   scope: 'global' | 'workspace'
   saving: boolean
   saveError: { dotPath: string; message: string } | null
+  /** Model provider pages: its registry entry, browsed below the credentials. */
+  provider?: Awaited<ReturnType<typeof api.agentConfigs.models>>['providers'][number]
   onSave: (field: Field, value: string) => void
   onReset: (field: Field) => void
 }) {
@@ -495,6 +504,8 @@ function SectionView({
           {secrets.map(renderRow)}
         </div>
       )}
+
+      {provider && <ProviderModels provider={provider} />}
     </div>
   )
 }

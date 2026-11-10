@@ -562,10 +562,13 @@ export const api = {
       return request<{
         providers: Array<{
           id: string
+          runtime?: string
+          revision?: number
           displayName?: string
           description?: string
           defaultEndpoint?: string
           endpointPresets?: string[]
+          defaultModelId?: string
           models: Array<{
             id: string
             displayName?: string
@@ -578,8 +581,14 @@ export const api = {
               image?: boolean
               video?: boolean
               audio?: boolean
-              promptCaching?: { ttlPresets?: Array<{ value: string; label: string }> }
-              thinking?: { effortPresets?: Array<{ value: string; label: string }> }
+              promptCaching?: { default?: string; ttlPresets?: Array<{ value: string; label: string }> }
+              thinking?: {
+                mode?: 'adaptive' | 'manual'
+                defaultEnabled?: boolean
+                default?: string
+                defaultBudgetTokens?: number
+                effortPresets?: Array<{ value: string; label: string }>
+              }
               verbosity?: { default?: string; presets?: Array<{ value: string; label: string }> }
             }
           }>
