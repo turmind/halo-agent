@@ -1,6 +1,6 @@
 id: aws-bedrock-claude-invoke
 runtime: bedrock-invoke
-revision: 2026110401
+revision: 2026111001
 displayName: AWS Bedrock Claude (Invoke API)
 displayName_zh: AWS Bedrock Claude（Invoke API）
 description: Invokes Bedrock via InvokeModelWithResponseStream (streaming), sends raw Anthropic Messages API format
@@ -31,12 +31,73 @@ secrets:
     default: <<AWS_SECRET_ACCESS_KEY>>
     secret: true
 
+# Claude Mythos 5.2 (anthropic.claude-mythos-5-2) is deliberately not listed:
+# the same model as Fable 5.2 but a Preview limited to organisations approved
+# by Anthropic's Cyber / Life Sciences Verification Programs. It is absent
+# from list-foundation-models, and its anthropic. / global. / us. ids all
+# answer "provided model identifier is invalid", on this account (2026-11-10).
+
 # capability defaults (per model):
 #   promptCaching.default      → auto-on value when toggled / on provider switch
 #   thinking.defaultEnabled    → start with Thinking checked for new agents
 #   thinking.default           → effort selected when Thinking is on (adaptive)
 #   thinking.defaultBudgetTokens → budget selected when Thinking is on (manual)
 models:
+  # Claude Fable 5.2 (launch 2026-11-09; global. / us. profiles only, no
+  # in-Region id; the card lists bedrock-runtime only, and Mantle /v1/models in
+  # us-east-1 / us-east-2 / us-west-2 (2026-11-10) has no 5.2 — us-east-1
+  # carries only anthropic.claude-fable-5). Live-probed 2026-11-10 via
+  # InvokeModel, us-east-1 (global.*; us.* plain call only).
+  # DATA RETENTION: the card says to opt in to `aws_review` (a Covered Model).
+  # What was observed: us-east-1 here is set to provider_data_share and answers
+  # 200; eu-west-1 / ap-northeast-1 / us-west-2 are `inherit` and answer 400
+  # "data retention mode 'default' is not available for this model" (Fable 5.1
+  # does the same in eu-west-1, Opus 5.5 does not). Other modes weren't tried —
+  # account settings were left alone. Set the mode per Region
+  # (put-account-data-retention) before pointing an endpoint preset at one.
+  # Behaviour matches 5.1, re-probed: an invalid output_config.effort lists
+  # low/medium/high/xhigh/max and all five return 200; thinking is adaptive
+  # only — thinking.type enabled (budget_tokens) and disabled both 400, an
+  # omitted thinking field still thinks (the card's default effort is high;
+  # xhigh stays our pick, as for 5.1). Image OK (64×64 red PNG → "Red", blue →
+  # "Blue"). tool_use OK ({"city":"Paris"}, no-arg ping{}), but tool_choice
+  # any / tool 400 — only auto, which Halo sends. temperature other than 1 and
+  # top_p below 0.99 / any top_k 400 as deprecated (bedrock-agent.ts forwards
+  # them only if an agent sets them). Streaming events: message_start,
+  # content_block_start (thinking / text), thinking_delta + signature_delta,
+  # text_delta, content_block_stop, message_delta, message_stop. Prompt caching
+  # 5m and 1h both honoured (a ~19K-token system: 1h write 18913 in the 1h
+  # bucket, then 18913 read; 5m the same in the 5m bucket). max_tokens 128000
+  # → 200, 128001 → 400 "maximum allowed number of output tokens". 1M context:
+  # a 404K-token prompt → 200 (past our 272K default), 1,042,065 → 400
+  # "prompt is too long: … > 1000000 maximum", so maxContextWindow 1000000; a
+  # prompt near the limit wasn't sent (cost).
+  - id: global.anthropic.claude-fable-5-2
+    displayName: Claude Fable 5.2
+    maxOutputTokens: 128000
+    contextWindow: 272000
+    maxContextWindow: 1000000
+    compressAt: 0.9
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        mode: adaptive
+        defaultEnabled: true
+        default: xhigh
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+
   - id: global.anthropic.claude-fable-5-1
     displayName: Claude Fable 5.1
     maxOutputTokens: 128000

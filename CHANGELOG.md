@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Models: Claude Fable 5.2 on Amazon Bedrock (`global.anthropic.claude-fable-5-2`, Claude Invoke provider) joins the bundled model list ahead of Fable 5.1: 1M context, 128K output, image input, adaptive thinking with effort low through max (default XHigh), 5m / 1h prompt caching. Bedrock treats it as a Covered Model, so a Region whose account data-retention mode is `inherit` answers 400 until the mode is set for that Region; the provider's endpoint presets other than us-east-1 may hit this. Claude Mythos 5.2 is not included (approved organisations only).
+
 ## [2.2.4] - 2026-11-08
 
 - Settings: outbound proxy (General → `outbound_proxy`: on/off switch, proxy address such as `http://127.0.0.1:12334`, optional token). While it's on, `shell_exec` commands (curl, git, pip…), newly opened Terminals, `web_fetch` and A2A requests to remote agents go through the proxy, and switching it off connects directly again — no restart either way. Model provider calls are not affected. localhost / 127.0.0.1 always connect directly. The token is stored as a secret and masked in the UI; a proxy address with `user:pass@` in it is rejected — put the credential in Token. A Terminal that is already open keeps its old setting until reopened.
