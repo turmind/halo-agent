@@ -53,6 +53,31 @@ Nginx is **not required**. Use it only for domain routing, SSL termination, or w
 - pnpm 11 — source builds only (pinned by the root `packageManager`; `corepack enable` picks it up)
 - AWS credentials — optional, only for the Bedrock providers (`~/.aws/credentials`, env vars, or an instance role)
 - bubblewrap (Linux) — needed for the `workspace` / `readonly` access levels: `sudo apt install bubblewrap`; on Ubuntu 23.10+ / 24.04 also the [AppArmor profile](#bubblewrap-on-ubuntu-2310-and-2404-apparmor)
+- RAM — 1 GB recommended; a 0.5 GB box only with a 1 GB swap file persisted in `/etc/fstab` ([Memory and swap](#memory-and-swap)). Disk: about 330 MB for the install, plus about 450 MB of npm cache
+
+### Memory and swap
+
+Measured on Halo 2.2.5, fresh Ubuntu 24.04 arm64 EC2 (t4g.nano 0.5 GB, t4g.micro 1 GB), 2026-11:
+
+| What | RAM |
+|---|---|
+| `npm install -g @turmind/halo` | peak ≈ 540 MB (dependency resolution) |
+| Server, idle | ≈ 160 MB (≈ 250 MB for a few seconds at startup) |
+| Server, typical use (admin, editor, terminal, two parallel sub-sessions) | ≈ 210 MB |
+| Each `halo` CLI call (`--version`, `server status`, the `server start -d` launcher) | ≈ 170 MB more while it runs |
+| Local speech-to-text (voice input, meeting recorder), once used | ≈ 400 MB more, resident until restart; ≈ 100 MB more with speaker labels ([stt-local.md](../design/stt-local.md#engine)) |
+
+Agent `shell_exec` work (builds, scripts) comes on top of these.
+
+- **1 GB (t4g.micro)**: the recommended minimum. Install and typical use passed with no swap and at least 390 MB still available. With local speech-to-text, add swap or use 2 GB.
+- **0.5 GB (t4g.nano)**: only with a 1 GB swap file. Without it, `apt-get install nodejs` and `npm install -g` are OOM-killed, and an installed server is killed by any ~60 MB transient (a `halo` CLI call, the SSM agent's document worker). With swap everything ran at micro's speed, except the first page load / editor open after idle (+0.7–1 s). Fit for a single-user trial, not a deployment.
+- CPU is not the limit: idle is ≈ 0.03 % of one vCPU; startup costs 3–4 s of CPU once.
+
+```bash
+sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # without this line swap is gone after a reboot
+```
 
 ### bubblewrap on Ubuntu 23.10 and 24.04 (AppArmor)
 
@@ -327,7 +352,7 @@ Use only for a new public release; the retained details here are not extra prepa
 
 **npm token gotcha**: `npm publish` on this package needs a granular access token created with **"Bypass 2FA"** checked — scope / permission alone yields `403 Two-factor authentication or granular access token with bypass 2fa enabled is required`. `npm whoami` and `npm token list` succeed with a non-bypass token, so neither is a valid pre-flight; check `GET https://registry.npmjs.org/-/npm/v1/tokens` (with the token as bearer) and look for `"bypass_2fa": true` on the token in use before starting a release.
 
-The published package contains a single bundled JS entry (`dist/index.js`, ~1.7 MB) plus the evo wrapper the server spawns as its own process (`dist/evo-wrapper.js`, ~130 KB; `build-bundle.mjs` fails without it), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint is about 280 MB on disk (`du`; mostly `node_modules`).
+The published package contains a single bundled JS entry (`dist/index.js`, ~1.7 MB) plus the evo wrapper the server spawns as its own process (`dist/evo-wrapper.js`, ~130 KB; `build-bundle.mjs` fails without it), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint is about 330 MB on disk (`du`, 2.2.5; mostly `node_modules`); npm's own cache adds about 450 MB.
 
 Two log files: `~/.halo/logs/server.log` is the stdout/stderr capture of `halo server start -d`, whether the user unit or the off-systemd supervisor runs it (what `halo server logs` tails; the supervisor's `[respawn]` lines appear only off systemd; a system unit logs to the journal instead); `~/.halo/global/logs/server.log` is the server's structured, rotated log (level `general.logging.level`, default `warn`).
 

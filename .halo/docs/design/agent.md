@@ -158,7 +158,6 @@ Source: `packages/server/src/config.ts`
 | `model.maxContextTokens` | 272,000 | Global-default context window (env: `HALO_MAX_CONTEXT_TOKENS`) — the last tier of the resolution chain below |
 | `model.compressAt` | 0.9 | Auto-compact threshold (90%) |
 | `agent.maxRetries` | 5 | Max retry count (settings: `general.agent.max_retries`) |
-| `session.maxCachedSessions` | 50 | In-memory session cache (env: `HALO_MAX_CACHED_SESSIONS`) |
 | `session.maxQueueSize` | 256 | inter-session message queue cap (settings: `general.session.max_queue_size`) |
 | `session.maxNestingDepth` | 16 | Max session nesting depth (settings: `general.session.max_nesting_depth`) |
 
