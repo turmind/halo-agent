@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Download, Pencil, Trash2, FilePlus, FolderPlus, Terminal, SplitSquareHorizontal, FolderOpen, FolderSearch } from 'lucide-react'
 import { isBundleName } from '@/features/editor/previews/registry'
+import { useT } from '@/shared/i18n'
 
 export interface ContextMenuAction {
   type: 'download' | 'rename' | 'delete' | 'new-file' | 'new-folder' | 'open-terminal' | 'open-to-side' | 'open-as-workspace' | 'reveal-in-file-manager'
@@ -25,6 +26,7 @@ interface FileContextMenuProps {
 }
 
 export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onAction, onClose }: FileContextMenuProps) {
+  const t = useT()
   const menuRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ x, y })
 
@@ -74,7 +76,7 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
     return (
       <div ref={menuRef} style={style} className="min-w-[140px] rounded-md border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg">
         <div className="truncate border-b border-[var(--border)] px-3 py-1.5 text-[10px] text-[var(--muted-foreground)]">
-          {selectedCount} items selected
+          {t('explorer.menu.selectedItems', { n: selectedCount })}
         </div>
         <button
           onClick={() => {
@@ -84,7 +86,7 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
           className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--secondary)]"
         >
           <Download className="h-3.5 w-3.5" />
-          Download {selectedCount} items
+          {t('explorer.menu.downloadItems', { n: selectedCount })}
         </button>
         <button
           onClick={() => {
@@ -94,7 +96,7 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
           className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-red-400 transition-colors hover:bg-[var(--secondary)] hover:text-red-300"
         >
           <Trash2 className="h-3.5 w-3.5" />
-          Delete {selectedCount} items
+          {t('explorer.menu.deleteItems', { n: selectedCount })}
         </button>
       </div>
     )

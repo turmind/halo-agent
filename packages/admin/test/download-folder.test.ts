@@ -168,11 +168,15 @@ describe('Explorer folder download', () => {
 })
 
 describe('Explorer multi-select download', () => {
-  it('the bulk menu offers Download {n} items above Delete, handed to onAction like bulk delete', () => {
+  it('the bulk menu (translated) offers Download {n} items above Delete, handed to onAction like bulk delete', async () => {
+    const t = vi.fn((key: string, params?: Record<string, string | number>) => `${key}${params ? JSON.stringify(params) : ''}`)
+    const i18n = await import('../src/shared/i18n/context')
+    vi.spyOn(i18n, 'useT').mockReturnValue(t)
     const onAction = vi.fn()
     act(() => root.render(createElement(FileContextMenu, { x: 0, y: 0, path: 'a.txt', name: 'a.txt', isDir: false, selectedCount: 3, onAction, onClose: () => {} })))
-    expect([...container.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Download 3 items', 'Delete 3 items'])
-    act(() => button('Download 3 items')!.click())
+    expect(container.textContent).toContain('explorer.menu.selectedItems{"n":3}')
+    expect([...container.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['explorer.menu.downloadItems{"n":3}', 'explorer.menu.deleteItems{"n":3}'])
+    act(() => button('explorer.menu.downloadItems{"n":3}')!.click())
     expect(onAction).toHaveBeenCalledWith({ type: 'download', path: 'a.txt', isDir: false })
   })
 

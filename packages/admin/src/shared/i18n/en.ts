@@ -659,6 +659,10 @@ export const en: Record<string, string> = {
   'explorer.download.include': 'Include node_modules, .git and other build/cache folders',
   'explorer.download.cancel': 'Cancel',
   'explorer.download.confirm': 'Download',
+  // ── Explorer: multi-selection context menu ──
+  'explorer.menu.selectedItems': '{n} items selected',
+  'explorer.menu.downloadItems': 'Download {n} items',
+  'explorer.menu.deleteItems': 'Delete {n} items',
   // ── Explorer: directory listing failure row ──
   'explorer.tree.loadFailed': 'Failed to load',
   'explorer.tree.retry': 'Retry',
