@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Triggers: a scheduled or webhook run now pushes only the agent's reply to its chat targets. Internal notices from the run (repeated-tool-call warnings, context compaction, retries, truncated output) are no longer added to the top of the message; they are still kept in the run's output in the run history. A run that ends with notices but no reply is now recorded as failed ("run produced no output") and nothing is pushed, where before it succeeded and pushed only the notices.
 - Explorer: select several files / folders (Ctrl/Cmd+click or Shift+click) and right-click → "Download N items" to get them as one zip, with the same estimate + confirm as a folder download. Entries are relative to the selection's nearest common folder (picked from one folder: just their names) and the zip is named `<that folder>-selection.zip` (workspace root: the workspace dir name). Same rules as a folder download: `.env` files, secrets and Halo session data are always left out and listed in `_halo-excluded.txt`, the 200,000-file / 10 s limits count the whole selection, and an item inside another selected folder is counted once. A selection too long for one download link asks you to download the parent folder instead. `GET /api/files/download-folder` accepts `path` repeated for this; a single `path` works as before.
 
 ## [2.2.5] - 2026-11-10

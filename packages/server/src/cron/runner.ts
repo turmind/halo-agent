@@ -273,8 +273,8 @@ interface RunCtx {
   workspacePath: string
   host: CronSessionHost
   /** Root `system` notices seen during the run (retries, compaction,
-   *  truncation…) — prefixed to the dispatched text the way `halo cli`
-   *  prints them, so a recipient can tell why a reply looks off. */
+   *  truncation…) — prefixed to the run record's output the way `halo cli`
+   *  prints them; never dispatched (targets get the reply alone). */
   notices: string[]
   /** Webhook runs: final replies of turns an injected event cut short — the
    *  event's follow-up turn resets the per-turn output finishRun reads, so the
@@ -633,20 +633,21 @@ async function finishRun(runId: string, db: HaloDb, session: { id: string; final
   const ctx = untrackRun(runId)
   try {
     clearOwnPointer(db, session.id, runId)
-    // What `halo cli` printed: the notices, a blank line, the final reply
-    // (`finalOutput || output`, as tryReportToParent / finishInvocation) —
-    // after a webhook run's replies to events its later turns cut short.
+    // The reply: the final one (`finalOutput || output`, as tryReportToParent
+    // / finishInvocation) after a webhook run's replies to events its later
+    // turns cut short. The run record keeps what `halo cli` printed — the
+    // notices, a blank line, the reply; targets get the reply alone.
     const answer = [...(ctx?.answers ?? []), (session.finalOutput || session.output).trim()].filter(Boolean).join('\n\n')
     const notices = ctx?.notices ?? []
     const text = (notices.length > 0 ? notices.map((n) => `ℹ️ ${n}`).join('\n') + (answer ? '\n\n' : '') : '') + answer
-    // Empty output is a failure — most cron use cases (daily report,
-    // broadcast) rely on there being something to dispatch.
+    // No reply is a failure, notices alone included — most cron use cases
+    // (daily report, broadcast) rely on there being something to dispatch.
     let status: 'succeeded' | 'failed' = 'succeeded'
     let failureReason: string | null = null
     if (session.turnError) {
       status = 'failed'
       failureReason = session.turnError.slice(0, 500)
-    } else if (!text) {
+    } else if (!answer) {
       status = 'failed'
       failureReason = 'run produced no output (nothing to dispatch)'
     }
@@ -654,10 +655,10 @@ async function finishRun(runId: string, db: HaloDb, session: { id: string; final
     // dispatch below doesn't change that. Settled before the await, so boot
     // recovery's requeue can't race it.
     settleRunEvents(runId, status === 'succeeded')
-    // Dispatch only on success. Raw output goes down as-is; dispatchToTargets
-    // splits off the agent's `MEDIA:<path>` markers per target. The media
-    // sandbox root is the run's workspace (where it produced its files), not
-    // the target account's.
+    // Dispatch only on success, and only the reply — the notices stay in the
+    // run record. The reply goes down as-is; dispatchToTargets splits off the
+    // agent's `MEDIA:<path>` markers per target. The media sandbox root is the
+    // run's workspace (where it produced its files), not the target account's.
     const job = getCronDb().select().from(cronJobs).where(eq(cronJobs.id, row.jobId)).get()
     // A refusal sticks to the session history, and a stateful job resumes that
     // session every fire — say how to get out of it (relay's refusal hint).
@@ -671,7 +672,7 @@ async function finishRun(runId: string, db: HaloDb, session: { id: string; final
     const targets = job ? parseTargets(job.targets) : []
     let dispatchResults: DispatchResult[] = []
     if (job && status === 'succeeded' && targets.length > 0) {
-      dispatchResults = await dispatchToTargets(text, targets, row.workspacePath ?? job.workspacePath)
+      dispatchResults = await dispatchToTargets(answer, targets, row.workspacePath ?? job.workspacePath)
       // Every dispatch failed → the run failed, so the UI surfaces it.
       if (dispatchResults.length > 0 && dispatchResults.every((r) => !r.ok)) {
         status = 'failed'

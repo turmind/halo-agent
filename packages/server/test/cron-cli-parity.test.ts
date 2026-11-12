@@ -13,8 +13,9 @@ import { installCronHarness, teardownCronHarness, until, type CronHarness } from
 
 /**
  * In-process cron vs `halo cli` (plans/cron-in-process.md §9): the text a run
- * records and dispatches must be what the old cli child printed for the same
- * turn. Each case runs a job in-process, records every root event the
+ * records must be what the old cli child printed for the same turn; what it
+ * dispatches is the reply alone (root notices stay in the run record). Each
+ * case runs a job in-process, records every root event the
  * SessionManager emitted, replays that stream through the cli's `runCli`
  * (piped stdout = what the cli runner dispatched) and compares.
  */
@@ -91,13 +92,14 @@ async function cliOutput(events: AgentSessionEvent[]): Promise<{ stdout: string;
   }
 }
 
-/** The cli runner trimmed stdout before recording / dispatching it. */
-async function expectSameText(run: ReturnType<typeof getRun>, events: AgentSessionEvent[]) {
+/** The cli runner trimmed stdout before recording it. Without notices the
+ *  dispatched text is the whole output; with them, pass the reply alone. */
+async function expectSameText(run: ReturnType<typeof getRun>, events: AgentSessionEvent[], dispatched = run.output) {
   const cli = await cliOutput(events)
   expect(cli.code).toBe(0)
   expect(run.status).toBe('succeeded')
   expect(run.output).toBe(cli.stdout.trim())
-  expect(sent).toEqual([run.output])
+  expect(sent).toEqual([dispatched])
 }
 
 describe('in-process cron output = halo cli stdout for the same events', () => {
@@ -115,11 +117,21 @@ describe('in-process cron output = halo cli stdout for the same events', () => {
     expect(run.output).toBe('Only filler.')
   })
 
-  it('a root notice: ℹ️ line, blank line, the reply', async () => {
+  it('a root notice: ℹ️ line, blank line, the reply — the reply alone dispatched', async () => {
     h.turns.push({ reply: 'The report.', truncated: true })
     const { run, events } = await runInProcess('cron-p3')
-    await expectSameText(run, events)
+    await expectSameText(run, events, 'The report.')
     expect(run.output).toMatch(/^ℹ️ .+\n\nThe report\.$/)
+    expect(sent).toEqual(['The report.'])
+  })
+
+  it('a root notice and no reply: the run fails, nothing dispatched, the notice recorded', async () => {
+    h.turns.push({ reply: '', truncated: true })
+    const { run } = await runInProcess('cron-p7')
+    expect(run.status).toBe('failed')
+    expect(run.failureReason).toBe('run produced no output (nothing to dispatch)')
+    expect(run.output).toMatch(/^ℹ️ .+Response truncated.+$/)
+    expect(sent).toEqual([])
   })
 
   it('an out-of-band notice mid-run (notifySystem): left out by both', async () => {

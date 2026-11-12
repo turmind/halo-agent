@@ -108,7 +108,7 @@ describe('in-process cron run — happy path', () => {
     expect(h.created.map((c) => c.id)).toEqual([getRun(a).sessionId, getRun(b).sessionId])
   })
 
-  it('dispatches the reply to the targets; notices ride along with the ℹ️ prefix', async () => {
+  it('dispatches the reply to the targets; notices stay in the output with the ℹ️ prefix', async () => {
     h.turns.push({ reply: 'the report', truncated: true })
     insertJob('cron-d', { targets: JSON.stringify([{ channelType: 'test-ch', accountId: 'acc1' }]) })
     const runId = await runJob('cron-d', 'manual')
@@ -116,7 +116,7 @@ describe('in-process cron run — happy path', () => {
     const run = getRun(runId)
     expect(run.status).toBe('succeeded')
     expect(run.output).toMatch(/^ℹ️ ⚠️ \[default\] Response truncated: output token limit reached\.\n\nthe report$/)
-    expect(sent).toEqual([{ accountId: 'acc1', text: run.output }])
+    expect(sent).toEqual([{ accountId: 'acc1', text: 'the report' }])
     expect(JSON.parse(run.dispatchResults!)).toEqual([expect.objectContaining({ accountId: 'acc1', ok: true })])
   })
 
@@ -136,7 +136,7 @@ describe('in-process cron run — happy path', () => {
     const run = getRun(runId)
     expect(run.status).toBe('succeeded')
     expect(run.output).toMatch(/^ℹ️ ⚠️ \[default\] Response truncated: output token limit reached\.\n\nthe report$/)
-    expect(sent).toEqual([{ accountId: 'acc1', text: run.output }])
+    expect(sent).toEqual([{ accountId: 'acc1', text: 'the report' }])
     // Still a live system event for the admin / channel responders.
     expect(seen).toContainEqual({ text: '✨ Self-evolution auto-applied a change', outOfBand: true })
   })
