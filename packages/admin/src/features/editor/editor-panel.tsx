@@ -152,8 +152,8 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     return renderModeByGroup[groupId] ?? true
   }
   const [ctxMenu, setCtxMenu] = useState<FileContextInfo | null>(null)
-  /** Folder whose Download confirm is open ('' = workspace root). */
-  const [downloadFolder, setDownloadFolder] = useState<string | null>(null)
+  /** Folder ('' = workspace root) or multi-selection whose Download confirm is open. */
+  const [downloadFolder, setDownloadFolder] = useState<string[] | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [lastAnchor, setLastAnchor] = useState<string | null>(null)
   // VSCode-style inline create/rename. When set, FileTree renders an input
@@ -839,10 +839,15 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       }
 
       if (action.type === 'download') {
-        // A folder (incl. the workspace root) goes through the estimate +
-        // confirm dialog, which then starts the zip download itself.
+        // A folder (incl. the workspace root) or a multi-selection (same rule
+        // as bulk delete below) goes through the estimate + confirm dialog,
+        // which then starts the zip download itself.
+        if (selectedPaths.size > 1 && selectedPaths.has(action.path)) {
+          setDownloadFolder(Array.from(selectedPaths))
+          return
+        }
         if (action.isDir) {
-          setDownloadFolder(action.path)
+          setDownloadFolder([action.path])
           return
         }
         const url = api.files.downloadUrl(action.path, projectId)
@@ -1214,7 +1219,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
           />
         )}
         {downloadFolder !== null && projectId && (
-          <DownloadFolderDialog path={downloadFolder} projectId={projectId} onClose={() => setDownloadFolder(null)} />
+          <DownloadFolderDialog paths={downloadFolder} projectId={projectId} onClose={() => setDownloadFolder(null)} />
         )}
       </div>
     )
@@ -1502,7 +1507,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         />
       )}
       {downloadFolder !== null && projectId && (
-        <DownloadFolderDialog path={downloadFolder} projectId={projectId} onClose={() => setDownloadFolder(null)} />
+        <DownloadFolderDialog paths={downloadFolder} projectId={projectId} onClose={() => setDownloadFolder(null)} />
       )}
     </div>
   )

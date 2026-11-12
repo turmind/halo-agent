@@ -12,30 +12,38 @@ type Estimate = Awaited<ReturnType<typeof api.files.downloadFolderEstimate>>
  *  of the server's IGNORED_SEGMENTS list is folded into "other …". */
 const NAMED_IGNORED = ['node_modules', '.git']
 
+/** Past this the multi-select URL risks proxy / server URL caps — refused here. */
+const MAX_URL_LENGTH = 8000
+
 /**
- * Confirm for Explorer → Download on a folder: fetches the walk-only
- * estimate, shows `≈ size · n files` and what is left out by default, and on
- * confirm starts a plain `<a href>` download of the streamed zip (the browser
- * / Electron save flow takes it from there). The include checkbox re-fetches.
- * A 413 (too many files / too slow to scan) shows the server's message.
+ * Confirm for Explorer → Download on a folder (`paths` = [folder]) or on a
+ * multi-selection (`paths` = the selected files / folders, one zip): fetches
+ * the walk-only estimate, shows `≈ size · n files` and what is left out by
+ * default, and on confirm starts a plain `<a href>` download of the streamed
+ * zip (the browser / Electron save flow takes it from there). The include
+ * checkbox re-fetches. A 413 (too many files / too slow to scan) shows the
+ * server's message; a selection too long for one URL is refused up front.
  */
-export function DownloadFolderDialog({ path, projectId, onClose }: { path: string; projectId: string; onClose: () => void }) {
+export function DownloadFolderDialog({ paths, projectId, onClose }: { paths: string[]; projectId: string; onClose: () => void }) {
   const t = useT()
   const [includeExcluded, setIncludeExcluded] = useState(false)
   // The result is stored with the request it answers; a different key (the
   // checkbox flipped, another folder) reads as loading — no reset in the effect.
-  const key = `${projectId}\n${path}\n${includeExcluded}`
+  const key = `${projectId}\n${paths.join('\n')}\n${includeExcluded}`
   const [fetched, setFetched] = useState<{ key: string; result: Estimate } | null>(null)
+  const tooLong = api.files.downloadFolderUrl(paths, projectId, includeExcluded).length > MAX_URL_LENGTH
   const estimate = fetched?.key === key ? fetched.result : null
-  const ready = estimate?.ok === true
+  const ready = !tooLong && estimate?.ok === true
   const cancelRef = useRef<HTMLButtonElement>(null)
   const downloadRef = useRef<HTMLButtonElement>(null)
   // Same name as the zip: the folder, or the workspace dir for the root.
-  const name = path.split('/').pop() || projectId.split(/[\\/]/).filter(Boolean).pop() || t('explorer.download.workspace')
+  const name = paths[0].split('/').pop() || projectId.split(/[\\/]/).filter(Boolean).pop() || t('explorer.download.workspace')
+  const title = paths.length > 1 ? t('explorer.download.titleItems', { n: paths.length }) : t('explorer.download.title', { name })
 
   useEffect(() => {
+    if (tooLong) return
     const ctrl = new AbortController()
-    api.files.downloadFolderEstimate(path, projectId, includeExcluded, ctrl.signal)
+    api.files.downloadFolderEstimate(paths, projectId, includeExcluded, ctrl.signal)
       .then((result) => {
         if (!ctrl.signal.aborted) setFetched({ key, result })
       })
@@ -44,7 +52,7 @@ export function DownloadFolderDialog({ path, projectId, onClose }: { path: strin
         setFetched({ key, result: { ok: false, status: 0, message: err instanceof Error ? err.message : String(err) } })
       })
     return () => ctrl.abort()
-  }, [key, path, projectId, includeExcluded])
+  }, [key, tooLong, paths, projectId, includeExcluded])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -68,7 +76,7 @@ export function DownloadFolderDialog({ path, projectId, onClose }: { path: strin
 
   function handleDownload(): void {
     const a = document.createElement('a')
-    a.href = api.files.downloadFolderUrl(path, projectId, includeExcluded)
+    a.href = api.files.downloadFolderUrl(paths, projectId, includeExcluded)
     // Empty = keep the server's Content-Disposition name (root → workspace dir name).
     a.download = ''
     document.body.appendChild(a)
@@ -88,19 +96,21 @@ export function DownloadFolderDialog({ path, projectId, onClose }: { path: strin
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
         role="dialog"
-        aria-label={t('explorer.download.title', { name })}
+        aria-label={title}
         className="w-[420px] rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
-          <h3 className="truncate text-sm font-medium text-[var(--foreground)]">{t('explorer.download.title', { name })}</h3>
+          <h3 className="truncate text-sm font-medium text-[var(--foreground)]">{title}</h3>
           <button onClick={onClose} className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)]">
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <div className="flex flex-col gap-3 px-4 py-4 text-xs">
-          {!estimate ? (
+          {tooLong ? (
+            <p data-testid="download-folder-error" className="text-red-400">{t('explorer.download.tooManyItems')}</p>
+          ) : !estimate ? (
             <p className="flex items-center gap-2 text-[var(--muted-foreground)]">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               {t('explorer.download.estimating')}

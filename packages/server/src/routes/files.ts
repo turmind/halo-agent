@@ -7,7 +7,7 @@ import { homedir } from 'node:os'
 import { imageMimeFromExt, type FileTreeNode } from '@turmind/halo-core'
 import { hiddenAsMissing, readableRealPath, resolveProjectPath, systemPath, validatePath } from './workspace-path.js'
 import { isHiddenHostPath } from '../tools/sandbox.js'
-import { DEFAULT_FOLDER_ZIP_LIMITS, FolderZipError, planFolderZip, planSummary, streamFolderZip, type FolderZipLimits } from './folder-zip.js'
+import { DEFAULT_FOLDER_ZIP_LIMITS, FolderZipError, planFolderZip, planSelectionZip, planSummary, streamFolderZip, type FolderZipLimits, type FolderZipPlan } from './folder-zip.js'
 
 /** Guard shared by the single-path handlers: projectId → workspace root,
  *  then `filePath` must resolve inside it. */
@@ -589,25 +589,45 @@ export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {
   // (and its 413 limits) runs before any header goes out; `estimate=1` returns
   // just the walk's counts. Unlike /files/download: no absolute-path branch — the
   // path must be a directory inside the project ('' = workspace root).
+  // `path` repeated = Explorer multi-select: files and folders, each inside the
+  // project, zipped relative to their nearest common parent as
+  // `<parent>-selection.zip` (planSelectionZip).
   app.get('/files/download-folder', async (c) => {
-    const relPath = c.req.query('path') ?? ''
+    const relPaths = c.req.queries('path') ?? []
+    const relPath = relPaths[0] ?? ''
     const projectId = c.req.query('projectId')
     if (!projectId) return c.json({ error: 'projectId is required' }, 400)
     const signal = c.req.raw.signal
+    const planOpts = { includeIgnored: c.req.query('include') === 'excluded', limits: folderZipLimits, signal }
     try {
-      const resolved = await resolveProjectFile(projectId, relPath)
-      if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
-      const { projectPath, absolutePath } = resolved
-      if (!(await fs.stat(absolutePath)).isDirectory()) return c.json({ error: 'Not a directory' }, 400)
-
-      const plan = await planFolderZip(absolutePath, projectPath, {
-        includeIgnored: c.req.query('include') === 'excluded',
-        limits: folderZipLimits,
-        signal,
-      })
+      let plan: FolderZipPlan
+      let folderName: string
+      if (relPaths.length > 1) {
+        let projectPath = ''
+        const rels: string[] = []
+        for (const p of relPaths) {
+          const resolved = await resolveProjectFile(projectId, p)
+          if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+          projectPath = resolved.projectPath
+          // validatePath judges the realpath; an outside link pointing in passes
+          // it, but its `../` entry name can't go in a zip — no absolute branch here.
+          const rel = path.relative(projectPath, resolved.absolutePath)
+          if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return c.json({ error: 'Path traversal not allowed' }, 403)
+          rels.push(rel.split(path.sep).join('/'))
+        }
+        const selection = await planSelectionZip(rels, projectPath, planOpts)
+        plan = selection.plan
+        folderName = `${path.basename(path.resolve(projectPath, selection.parent)) || 'workspace'}-selection`
+      } else {
+        const resolved = await resolveProjectFile(projectId, relPath)
+        if ('error' in resolved) return c.json({ error: resolved.error }, resolved.status)
+        const { projectPath, absolutePath } = resolved
+        if (!(await fs.stat(absolutePath)).isDirectory()) return c.json({ error: 'Not a directory' }, 400)
+        plan = await planFolderZip(absolutePath, projectPath, planOpts)
+        folderName = path.basename(absolutePath) || 'workspace'
+      }
       if (c.req.query('estimate') === '1') return c.json(planSummary(plan))
 
-      const folderName = path.basename(absolutePath) || 'workspace'
       const fileName = `${folderName}.zip`
       const asciiName = fileName.replace(/[^\x20-\x7e]|["\\]/g, '_')
       const encodedName = encodeURIComponent(fileName).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)

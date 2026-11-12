@@ -646,6 +646,8 @@ export const en: Record<string, string> = {
   'editor.annotate.failed': "Couldn't render the annotated image. Please try again.",
   // ── Explorer: download a folder as a zip ──
   'explorer.download.title': 'Download "{name}" as zip',
+  'explorer.download.titleItems': 'Download {n} items as zip',
+  'explorer.download.tooManyItems': 'Too many items selected — download the parent folder instead',
   'explorer.download.workspace': 'workspace',
   'explorer.download.estimating': 'Counting files…',
   'explorer.download.file': '{n} file',

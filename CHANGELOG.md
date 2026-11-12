@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Explorer: select several files / folders (Ctrl/Cmd+click or Shift+click) and right-click → "Download N items" to get them as one zip, with the same estimate + confirm as a folder download. Entries are relative to the selection's nearest common folder (picked from one folder: just their names) and the zip is named `<that folder>-selection.zip` (workspace root: the workspace dir name). Same rules as a folder download: `.env` files, secrets and Halo session data are always left out and listed in `_halo-excluded.txt`, the 200,000-file / 10 s limits count the whole selection, and an item inside another selected folder is counted once. A selection too long for one download link asks you to download the parent folder instead. `GET /api/files/download-folder` accepts `path` repeated for this; a single `path` works as before.
+
 ## [2.2.5] - 2026-11-10
 
 - Models: Claude Fable 5.2 on Amazon Bedrock (`global.anthropic.claude-fable-5-2`, Claude Invoke provider) joins the bundled model list ahead of Fable 5.1: 1M context, 128K output, image input, adaptive thinking with effort low through max (default XHigh), 5m / 1h prompt caching. Bedrock treats it as a Covered Model, so a Region whose account data-retention mode is `inherit` answers 400 until the mode is set for that Region; the provider's endpoint presets other than us-east-1 may hit this. Claude Mythos 5.2 is not included (approved organisations only).

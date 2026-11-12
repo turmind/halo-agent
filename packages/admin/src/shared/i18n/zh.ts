@@ -646,6 +646,8 @@ export const zh: Record<string, string> = {
   'editor.annotate.failed': '标注图片生成失败，请重试。',
   // ── 资源管理器：文件夹打包下载 ──
   'explorer.download.title': '将「{name}」打包为 zip 下载',
+  'explorer.download.titleItems': '将 {n} 项打包为 zip 下载',
+  'explorer.download.tooManyItems': '选中的项目太多 — 请改为下载上级文件夹',
   'explorer.download.workspace': '工作区',
   'explorer.download.estimating': '正在统计文件…',
   'explorer.download.file': '{n} 个文件',

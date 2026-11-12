@@ -159,6 +159,8 @@ function isBlockedPath(real: string, wsReal: string): boolean {
   return isHiddenWorkspacePath(real, base) || real === path.join(base, '.halo', 'settings.yaml')
 }
 
+type PlanOpts = { includeIgnored: boolean; limits: FolderZipLimits; signal?: AbortSignal }
+
 /**
  * Walk `root` (an existing directory inside `projectPath`) without reading
  * contents. Directory symlinks are never followed; a file symlink is kept
@@ -166,14 +168,48 @@ function isBlockedPath(real: string, wsReal: string): boolean {
  * the blocked checks. Throws FolderZipError past the limits, and the signal's
  * AbortError when the client goes away mid-walk.
  */
-export async function planFolderZip(
-  root: string,
-  projectPath: string,
-  opts: { includeIgnored: boolean; limits: FolderZipLimits; signal?: AbortSignal },
-): Promise<FolderZipPlan> {
+export async function planFolderZip(root: string, projectPath: string, opts: PlanOpts): Promise<FolderZipPlan> {
   const [rootReal, wsReal] = await Promise.all([fs.realpath(root), fs.realpath(projectPath)])
   if (isBlockedPath(rootReal, wsReal)) throw new FolderZipError(403, 'Path is not accessible')
+  const planner = createPlanner(wsReal, opts)
+  await planner.walk(rootReal, '')
+  return planner.plan
+}
 
+/**
+ * Multi-select download: `rels` are workspace-relative POSIX paths (files or
+ * folders) already validated to stay inside `projectPath`. Duplicates and
+ * items under another selected folder are dropped; zip entries are relative
+ * to the selection's nearest common parent (`parent`, '' = workspace root).
+ * A selected folder is walked like planFolderZip's root (its own name is never
+ * pruned as ignored — it was picked explicitly); a selected file or link gets
+ * the walk's per-entry checks. The limits count the whole selection.
+ */
+export async function planSelectionZip(rels: string[], projectPath: string, opts: PlanOpts): Promise<{ plan: FolderZipPlan; parent: string }> {
+  const selected = new Set(rels)
+  const kept = [...selected]
+    .filter((rel) => rel === '' || !rel.split('/').some((_, i, segs) => selected.has(segs.slice(0, i).join('/'))))
+    .sort()
+  let common = kept[0].split('/').slice(0, -1)
+  for (const rel of kept) {
+    const segs = rel.split('/').slice(0, -1)
+    let i = 0
+    while (i < common.length && common[i] === segs[i]) i++
+    common = common.slice(0, i)
+  }
+  const parent = common.join('/')
+  const wsReal = await fs.realpath(projectPath)
+  const planner = createPlanner(wsReal, opts)
+  for (const rel of kept) {
+    // Real parent + own name: an intermediate dir link can't dodge the blocked
+    // checks, while a selected link stays a link (addSymlink judges it).
+    const real = rel ? path.join(await fs.realpath(path.join(wsReal, path.dirname(rel))), path.basename(rel)) : wsReal
+    await planner.addSelected(real, parent ? rel.slice(parent.length + 1) : rel)
+  }
+  return { plan: planner.plan, parent }
+}
+
+function createPlanner(wsReal: string, opts: PlanOpts) {
   const { includeIgnored, limits, signal } = opts
   const deadline = Date.now() + limits.maxWalkMs
   const plan: FolderZipPlan = { items: [], files: 0, bytes: 0, excluded: new ExcludedLog() }
@@ -269,8 +305,29 @@ export async function planFolderZip(
     return nonEmpty
   }
 
-  await walk(rootReal, '')
-  return plan
+  /** One selected item (planSelectionZip): `real` is its real parent + own
+   *  name, `rel` its zip entry. Same per-entry rules as the walk above. */
+  async function addSelected(real: string, rel: string): Promise<void> {
+    signal?.throwIfAborted()
+    if (Date.now() > deadline) throw walkTimeout()
+    const name = path.basename(real)
+    const st = await fs.lstat(real)
+    if (rel.split('/').some((seg, i) => isZipUnsafeName(seg, i === 0))) {
+      excluded.add('unreadable', `${rel}${st.isDirectory() ? '/' : ''} (name not valid in a zip)`)
+    } else if (st.isSymbolicLink()) {
+      await addSymlink(real, rel, name)
+    } else if (st.isDirectory()) {
+      if (isBlockedPath(real, wsReal)) excluded.add('blocked', `${rel}/`)
+      else if (!(await walk(real, rel)) && rel) plan.items.push({ rel, mtimeMs: st.mtimeMs })
+    } else if (st.isFile()) {
+      if (isEnvName(name) || isBlockedPath(real, wsReal)) excluded.add('blocked', rel)
+      else addFile(rel, real, st)
+    } else {
+      excluded.add('unreadable', `${rel} (not a regular file)`)
+    }
+  }
+
+  return { plan, walk, addSelected }
 }
 
 /** The `estimate=1` JSON body. */

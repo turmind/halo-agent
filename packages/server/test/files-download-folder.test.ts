@@ -310,6 +310,125 @@ describe('GET /files/download-folder', () => {
   })
 })
 
+describe('GET /files/download-folder with repeated path (Explorer multi-select)', () => {
+  let sel: string
+  beforeAll(() => {
+    sel = path.join(tmp, 'sel-ws')
+    write(path.join(sel, 'docs', 'one.txt'), 'one')
+    write(path.join(sel, 'docs', 'two.md'), 'two two')
+    write(path.join(sel, 'docs', 'dir', 'inner.txt'), 'inner')
+    write(path.join(sel, 'docs', 'dir', 'deep', 'x.txt'), 'x')
+    write(path.join(sel, 'docs', '.env'), 'TOKEN=1')
+    write(path.join(sel, 'other', 'y.txt'), 'yy')
+    write(path.join(sel, 'other', 'node_modules', 'z.js'), 'z')
+    write(path.join(sel, 'a', 'b', 'c', 'p.txt'), 'p')
+    write(path.join(sel, 'a', 'b', 'd', 'q.txt'), 'q')
+    write(path.join(sel, '.halo', 'sessions', 's.json'), '{}')
+    fs.symlinkSync(path.join(sel, 'docs', 'dir'), path.join(sel, 'docs', 'link-dir'))
+    fs.symlinkSync(path.join(sel, 'docs', 'one.txt'), path.join(sel, 'docs', 'link-one'))
+  })
+
+  const multiUrl = (paths: string[], extra = '') =>
+    `/api/files/download-folder?${paths.map((p) => `path=${encodeURIComponent(p)}`).join('&')}&projectId=${encodeURIComponent(sel)}${extra}`
+  const getMulti = (paths: string[], extra = '') => app.request(multiUrl(paths, extra), { headers: { Cookie: cookie } })
+  async function downloadMulti(paths: string[], extra = ''): Promise<{ zip: JSZip; disposition: string }> {
+    const res = await getMulti(paths, extra)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/zip')
+    return { zip: await JSZip.loadAsync(await res.arrayBuffer()), disposition: res.headers.get('content-disposition')! }
+  }
+  async function estimateMulti(paths: string[], extra = ''): Promise<Estimate> {
+    const res = await getMulti(paths, `${extra}&estimate=1`)
+    expect(res.status).toBe(200)
+    return await res.json() as Estimate
+  }
+
+  it('two files and a folder in one dir: entries are basenames / the folder name prefix, zip named <parent>-selection', async () => {
+    const { zip, disposition } = await downloadMulti(['docs/one.txt', 'docs/two.md', 'docs/dir'])
+    expect(fileNames(zip)).toEqual(['dir/deep/x.txt', 'dir/inner.txt', 'one.txt', 'two.md'])
+    expect(await zip.file('dir/inner.txt')!.async('string')).toBe('inner')
+    expect(disposition).toContain(`filename*=UTF-8''docs-selection.zip`)
+    expect(zip.file(EXCLUDED_LIST_NAME)).toBeNull()
+  })
+
+  it('drops duplicates and items under another selected folder', async () => {
+    const paths = ['docs/dir', 'docs/dir/inner.txt', 'docs/dir/deep', 'docs/dir/', './docs/dir']
+    const { zip, disposition } = await downloadMulti(paths)
+    expect(fileNames(zip)).toEqual(['dir/deep/x.txt', 'dir/inner.txt'])
+    expect(disposition).toContain(`filename*=UTF-8''docs-selection.zip`)
+    expect((await estimateMulti(paths)).files).toBe(2)
+  })
+
+  it('items in different dirs: entries relative to the nearest common parent; the workspace root is named after the workspace dir', async () => {
+    const top = await downloadMulti(['docs/one.txt', 'other/y.txt'])
+    expect(fileNames(top.zip)).toEqual(['docs/one.txt', 'other/y.txt'])
+    expect(top.disposition).toContain(`filename*=UTF-8''sel-ws-selection.zip`)
+    const deep = await downloadMulti(['a/b/c/p.txt', 'a/b/d'])
+    expect(fileNames(deep.zip)).toEqual(['c/p.txt', 'd/q.txt'])
+    expect(deep.disposition).toContain(`filename*=UTF-8''b-selection.zip`)
+  })
+
+  it('a selected .env, blocked folder or folder link is left out and listed in _halo-excluded.txt; a file link inside the workspace is kept', async () => {
+    const paths = ['docs/.env', 'docs/one.txt', 'docs/link-dir', 'docs/link-one']
+    const { zip } = await downloadMulti(paths)
+    expect(fileNames(zip)).toEqual([EXCLUDED_LIST_NAME, 'link-one', 'one.txt'])
+    expect(await zip.file('link-one')!.async('string')).toBe('one')
+    const text = (await excludedText(zip))!
+    expect(text.split('\n')[0]).toBe('Left out of docs-selection.zip (paths relative to docs-selection/)')
+    expect(text.slice(text.indexOf('## Always excluded'), text.indexOf('## Skipped symlinks')).split('\n')).toContain('.env')
+    expect(text.slice(text.indexOf('## Skipped symlinks')).split('\n')).toContain('link-dir/')
+    expect(await estimateMulti(paths)).toMatchObject({ files: 2, excluded: { blocked: 1, symlink: 1 } })
+
+    const runtime = await downloadMulti(['.halo/sessions', 'other/y.txt'], '&include=excluded')
+    expect(fileNames(runtime.zip)).toEqual([EXCLUDED_LIST_NAME, 'other/y.txt'])
+    expect((await excludedText(runtime.zip))!.split('\n')).toContain('.halo/sessions/')
+  })
+
+  it('a path outside the project fails the whole request with resolveProjectFile\'s status', async () => {
+    expect((await getMulti(['docs/one.txt', '../workspace/src/a.txt'])).status).toBe(403)
+    expect((await getMulti(['docs/one.txt', path.join(tmp, 'outside', 'secret.txt')], '&estimate=1')).status).toBe(403)
+    // An outside path whose realpath lands inside still has no in-zip name.
+    const linkIn = path.join(tmp, 'outside', 'link-into-sel')
+    fs.symlinkSync(path.join(sel, 'docs', 'one.txt'), linkIn)
+    try {
+      expect((await getMulti(['docs/two.md', linkIn])).status).toBe(403)
+    } finally {
+      fs.rmSync(linkIn)
+    }
+    expect((await getMulti(['docs/one.txt', 'docs/missing.txt'])).status).toBe(404)
+    const noProject = await app.request(`/api/files/download-folder?path=a&path=b&projectId=${encodeURIComponent(path.join(tmp, 'no-such-ws'))}`, { headers: { Cookie: cookie } })
+    expect(noProject.status).toBe(404)
+  })
+
+  it('the file cap counts the whole selection: 413 before any zip header', async () => {
+    const capped = new Hono().route('/api', createFileRoutes({ folderZipLimits: { maxFiles: 3, maxWalkMs: 10_000 } }))
+    const paths = ['docs/one.txt', 'docs/two.md', 'docs/dir']
+    for (const extra of ['&estimate=1', '']) {
+      const res = await capped.request(multiUrl(paths, extra))
+      expect(res.status).toBe(413)
+      expect(((await res.json()) as { error: string }).error).toMatch(/more than 3 files/)
+    }
+    expect((await capped.request(multiUrl(['docs/one.txt', 'docs/dir'], '&estimate=1'))).status).toBe(200)
+  })
+
+  it('estimate counts match the zip entries, with and without include=excluded', async () => {
+    const paths = ['docs/one.txt', 'other']
+    const def = await estimateMulti(paths)
+    expect(def).toEqual({ files: 2, bytes: 5, excluded: { ignored: 1 }, ignoredNames: { node_modules: 1 } })
+    expect(fileNames((await downloadMulti(paths)).zip)).toEqual([EXCLUDED_LIST_NAME, 'docs/one.txt', 'other/y.txt'])
+    const all = await estimateMulti(paths, '&include=excluded')
+    expect(all).toEqual({ files: 3, bytes: 6, excluded: {}, ignoredNames: {} })
+    expect(fileNames((await downloadMulti(paths, '&include=excluded')).zip)).toEqual(['docs/one.txt', 'other/node_modules/z.js', 'other/y.txt'])
+  })
+
+  it('a single path keeps the folder behaviour: <folder>.zip, entries relative to it, files refused', async () => {
+    const { zip, disposition } = await downloadMulti(['docs'])
+    expect(disposition).toContain(`filename*=UTF-8''docs.zip`)
+    expect(fileNames(zip)).toEqual([EXCLUDED_LIST_NAME, 'dir/deep/x.txt', 'dir/inner.txt', 'link-one', 'one.txt', 'two.md'])
+    expect((await getMulti(['docs/one.txt'])).status).toBe(400)
+  })
+})
+
 describe('folder zip stream (planFolderZip + streamFolderZip)', () => {
   const plan = (root: string, signal?: AbortSignal) =>
     planFolderZip(root, root, { includeIgnored: false, limits: DEFAULT_FOLDER_ZIP_LIMITS, signal })

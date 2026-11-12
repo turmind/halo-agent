@@ -69,13 +69,23 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
 
   const isBulk = selectedCount !== undefined && selectedCount > 1
 
-  // Bulk mode: only show delete
+  // Bulk mode: download (one zip of the selection) and delete
   if (isBulk) {
     return (
       <div ref={menuRef} style={style} className="min-w-[140px] rounded-md border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg">
         <div className="truncate border-b border-[var(--border)] px-3 py-1.5 text-[10px] text-[var(--muted-foreground)]">
           {selectedCount} items selected
         </div>
+        <button
+          onClick={() => {
+            onAction({ type: 'download', path, isDir })
+            onClose()
+          }}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--secondary)]"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Download {selectedCount} items
+        </button>
         <button
           onClick={() => {
             onAction({ type: 'delete', path, isDir })

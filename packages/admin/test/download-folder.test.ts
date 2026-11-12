@@ -51,7 +51,7 @@ function menuItems(path: string, isDir: boolean): string[] {
 const jsonResponse = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const estimateBody = (files: number) => ({ files, bytes: 2048, excluded: {}, ignoredNames: {} })
 const render = (path: string, onClose: () => void = () => {}) =>
-  act(() => root.render(createElement(DownloadFolderDialog, { path, projectId: '/home/me/my-ws', onClose })))
+  act(() => root.render(createElement(DownloadFolderDialog, { paths: [path], projectId: '/home/me/my-ws', onClose })))
 
 describe('Explorer folder download', () => {
   it('the context menu offers Download on files, folders and the workspace root', () => {
@@ -72,7 +72,7 @@ describe('Explorer folder download', () => {
       .mockResolvedValueOnce(jsonResponse(200, { files: 1234, bytes: 5 * 1024 * 1024, excluded: { ignored: 3, blocked: 2 }, ignoredNames: { node_modules: 2, '.git': 1 } }))
       .mockResolvedValueOnce(jsonResponse(200, { files: 9000, bytes: 50 * 1024 * 1024, excluded: { blocked: 2 }, ignoredNames: {} }))
     const onClose = vi.fn()
-    act(() => root.render(createElement(DownloadFolderDialog, { path: 'app/src', projectId: '/ws', onClose })))
+    act(() => root.render(createElement(DownloadFolderDialog, { paths: ['app/src'], projectId: '/ws', onClose })))
     await flush()
     expect(fetchMock.mock.calls[0][0]).toBe('/api/files/download-folder?path=app%2Fsrc&projectId=%2Fws&estimate=1')
     const summary = container.querySelector('[data-testid="download-folder-summary"]')!.textContent
@@ -99,7 +99,7 @@ describe('Explorer folder download', () => {
 
   it('a 413 shows the server message and disables Download', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(413, { error: 'This folder has more than 200,000 files — download a subfolder instead.' }))
-    act(() => root.render(createElement(DownloadFolderDialog, { path: '', projectId: '/ws', onClose: () => {} })))
+    act(() => root.render(createElement(DownloadFolderDialog, { paths: [''], projectId: '/ws', onClose: () => {} })))
     await flush()
     expect(container.querySelector('[data-testid="download-folder-error"]')!.textContent).toContain('download a subfolder instead')
     expect(container.querySelector('[data-testid="download-folder-summary"]')).toBeNull()
@@ -164,5 +164,39 @@ describe('Explorer folder download', () => {
     render('')
     await flush()
     expect(container.querySelector('[role="dialog"]')!.getAttribute('aria-label')).toBe('explorer.download.title{"name":"my-ws"}')
+  })
+})
+
+describe('Explorer multi-select download', () => {
+  it('the bulk menu offers Download {n} items above Delete, handed to onAction like bulk delete', () => {
+    const onAction = vi.fn()
+    act(() => root.render(createElement(FileContextMenu, { x: 0, y: 0, path: 'a.txt', name: 'a.txt', isDir: false, selectedCount: 3, onAction, onClose: () => {} })))
+    expect([...container.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Download 3 items', 'Delete 3 items'])
+    act(() => button('Download 3 items')!.click())
+    expect(onAction).toHaveBeenCalledWith({ type: 'download', path: 'a.txt', isDir: false })
+  })
+
+  it('repeats path per item in the estimate and download URLs; titled with the item count', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, estimateBody(4)))
+    const t = vi.fn((key: string, params?: Record<string, string | number>) => `${key}${params ? JSON.stringify(params) : ''}`)
+    const i18n = await import('../src/shared/i18n/context')
+    vi.spyOn(i18n, 'useT').mockReturnValue(t)
+    act(() => root.render(createElement(DownloadFolderDialog, { paths: ['docs/a.txt', 'docs/b c.md', 'docs/dir'], projectId: '/ws', onClose: () => {} })))
+    await flush()
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/files/download-folder?path=docs%2Fa.txt&path=docs%2Fb%20c.md&path=docs%2Fdir&projectId=%2Fws&estimate=1')
+    expect(container.querySelector('[role="dialog"]')!.getAttribute('aria-label')).toBe('explorer.download.titleItems{"n":3}')
+    const clicks: HTMLAnchorElement[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicks.push(this) })
+    act(() => button('explorer.download.confirm')!.click())
+    expect(clicks[0].getAttribute('href')).toBe('/api/files/download-folder?path=docs%2Fa.txt&path=docs%2Fb%20c.md&path=docs%2Fdir&projectId=%2Fws')
+  })
+
+  it('a selection whose URL passes 8000 chars sends no request, says so and disables Download', async () => {
+    const paths = Array.from({ length: 400 }, (_, i) => `some/long/folder/name/file-${String(i).padStart(4, '0')}.txt`)
+    act(() => root.render(createElement(DownloadFolderDialog, { paths, projectId: '/ws', onClose: () => {} })))
+    await flush()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-testid="download-folder-error"]')!.textContent).toBe('explorer.download.tooManyItems')
+    expect(button('explorer.download.confirm')!.disabled).toBe(true)
   })
 })

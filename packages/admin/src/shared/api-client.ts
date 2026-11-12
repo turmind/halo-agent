@@ -297,20 +297,22 @@ export const api = {
       return `/api/files/download?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}&inline=1`
     },
 
-    /** Folder → zip, streamed. `path` '' = workspace root. */
-    downloadFolderUrl(path: string, projectId: string, includeExcluded: boolean) {
-      return `/api/files/download-folder?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}${includeExcluded ? '&include=excluded' : ''}`
+    /** Folder → zip, streamed. `paths` one folder ('' = workspace root), or
+     *  an Explorer multi-select of files / folders (one zip of the selection). */
+    downloadFolderUrl(paths: string[], projectId: string, includeExcluded: boolean) {
+      const pathParams = paths.map((p) => `path=${encodeURIComponent(p)}`).join('&')
+      return `/api/files/download-folder?${pathParams}&projectId=${encodeURIComponent(projectId)}${includeExcluded ? '&include=excluded' : ''}`
     },
 
     /** Walk-only estimate for the download-folder confirm. Resolves instead of
      *  throwing on 413 (too many files / too slow to scan) — the dialog shows
      *  the server's message in place of the numbers. A 200 whose body isn't
      *  the estimate JSON throws (the dialog shows it as an error). */
-    async downloadFolderEstimate(path: string, projectId: string, includeExcluded: boolean, signal?: AbortSignal): Promise<
+    async downloadFolderEstimate(paths: string[], projectId: string, includeExcluded: boolean, signal?: AbortSignal): Promise<
       | { ok: true; files: number; bytes: number; excluded: Record<string, number>; ignoredNames: Record<string, number> }
       | { ok: false; status: number; message: string }
     > {
-      const res = await fetch(`${api.files.downloadFolderUrl(path, projectId, includeExcluded)}&estimate=1`, { signal })
+      const res = await fetch(`${api.files.downloadFolderUrl(paths, projectId, includeExcluded)}&estimate=1`, { signal })
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string }
         return { ok: false, status: res.status, message: body.error ?? res.statusText }
