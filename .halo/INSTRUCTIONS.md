@@ -63,7 +63,7 @@ When you catch yourself doing any of these, stop and reconsider:
   - Root npm installs use `umask 022`; run `halo --version` as the actual service user before restart. Keep secret/log umask 077 out of package installation (root-only directories cause non-root service 203/EXEC).
   - Only when running inside the target service, use an independent systemd task to carry restart/basic checks. From dev or another service, operate directly; no complex runner framework.
   - **Docs before release (fixed step)**: before handing a release to `release` (Halo or a halo-hub extension), check every change in it against the doc mapping below and update the affected docs in the release itself — never publish first and ask about docs afterwards. Nothing affected → say so in the release summary.
-- **Remind to sync docs after code changes**: After landing changes, identify affected docs and **remind the user** (don't edit directly) — let the user decide whether to update now, after acceptance, or not at all. Exception: changes about to be released get their docs updated before the release, without asking (see Packaging / release). Typical mappings:
+- **Sync docs in the same task**: After landing changes, identify affected docs and update them in the same task — same worker session, a separate commit so it can be dropped on its own — and list the updated docs in the report. Ask first only when the change is an experiment the user has not accepted yet. Typical mappings:
   - API / tool / command schema or behavior changes → `.halo/docs/dev/api.md` · `tools.md` · `requirements/command.md`
   - Architecture / data flow / WS protocol / storage format → `.halo/docs/design/`
   - User-visible features (UI behavior, interactions) → `.halo/docs/requirements/`
@@ -71,7 +71,7 @@ When you catch yourself doing any of these, stop and reconsider:
   - New capabilities, subsystems, channels → add a short INDEX entry (2–4 sentences + Key state / Code / doc links); details go in design doc — INDEX is injected every turn
   - Architectural decisions or gotchas → write to `.halo/memory/YYYY-MM-DD-topic.md`
 
-  Reminder format example: "This change affects the `get_session_output` section in `dev/tools.md` and session output semantics in `design/session.md` — want to update them now?"
+  Ask-first format example (unaccepted experiments only): "This change affects the `get_session_output` section in `dev/tools.md` and session output semantics in `design/session.md` — want to update them now?"
 - **Persistent operations must not depend on in-memory state**: Delete/cleanup operations involving disk/database must query DB/filesystem directly to determine what to clean — never rely on in-memory cache objects (e.g., orchestrator Map). In-memory state can be lost at any time due to refresh, reconnection, or process restart
 - **Code changes must not introduce new bugs**: Consider upstream/downstream impact holistically before changing. Check all consumers when changing data flow, check all call sites when changing interface signatures, check all read/write points when changing state lifecycle
 
@@ -100,7 +100,7 @@ Who does what:
 - Fix that follows an investigation → the same worker session, via `query_session`.
 - Later work on ground a worker already mapped (same files, same call sites) → `query_session` that worker first, before re-reading it yourself or briefing a fresh one.
 - Independent pieces → parallel sessions, partitioned by file.
-- Locating before a fix brief: up to ~5 reads / greps (root cause, files, line ranges, pattern to copy). Beyond that, the locating is itself an investigation. At the limit, brief what you have and hand the rest over.
+- Locating before a fix brief: up to ~5 reads / greps (root cause, files, line ranges, pattern to copy). Beyond that, the locating is itself an investigation. At the limit, brief what you have and hand the rest over. Count as you go: the sixth read / grep is the signal to stop and write the brief.
 
 Brief contents:
 

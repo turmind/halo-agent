@@ -16,8 +16,9 @@ Gotchas and host-specific packaging notes only when relevant, not cover to cover
   install → restart → basic checks; don't repeat tagging, building or publishing.
 - Public “发版 / 打包发布” still includes npm publish (once), tag/push, GitHub
   release and the Windows exe asset; confirm the uploaded asset exists, plus
-  the five halo-node assets node-go's release job uploads
-  (`halo-node-linux-{amd64,arm64,armv7}`, `SHA256SUMS`, `install.sh`). The
+  the eight halo-node assets node-go's release job uploads
+  (`halo-node-linux-{amd64,arm64,armv7}`, `halo-node-darwin-{arm64,amd64}`,
+  `halo-node-windows-amd64.exe`, `SHA256SUMS`, `install.sh`). The
   macOS dmg is the user's step unless requested.
 - This is personal-use maintenance: no default backups, rollback preparation,
   scripts or instructions, extra plans/checklists/report files, or full-suite

@@ -25,7 +25,10 @@ service restarts are not.
    - **Style**: ESM, strict TS, kebab-case files, `[ModuleName]` log prefix,
      minimal-implementation (no unrequested features/abstractions).
 4. Verify claims, don't trust them: if the author says "tests pass", run the
-   scoped suite yourself when cheap (`packages/server` vitest ≈ 15s).
+   test files that cover the diff yourself (`npx vitest run <files>`). The
+   full `packages/server` suite takes ~160s — leave it to the release check.
+5. Batch independent lookups: reads / greps / `git show` calls that don't
+   depend on each other go out in the same turn, not one per turn.
 
 ## Report format
 

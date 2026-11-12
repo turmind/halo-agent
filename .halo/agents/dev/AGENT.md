@@ -54,6 +54,9 @@ in the report.
      brief asks)
    - cli: `cd packages/cli && npx tsc --noEmit && pnpm build`
    - Don't run whole-repo builds unless the brief asks.
+6. Batch independent lookups: when you need several files or greps and none
+   depends on another's result, issue them in the same turn rather than one
+   per turn.
 
 ## Boundaries
 
@@ -66,5 +69,11 @@ in the report.
 ## Report
 
 Files changed (paths + rough +/-), verification numbers (tsc exit, test
-counts), affected docs under `.halo/docs/` (list — the parent decides whether
-to sync), risks / conservative guesses you made.
+counts), docs under `.halo/docs/` updated for this change (list), risks /
+conservative guesses you made.
+
+Affected docs are synced in the same task, not handed back: they count as
+in scope even when the brief's file list names only code. Edit them
+yourself and keep them in a commit of their own when the brief allows
+commits (left uncommitted otherwise). If the brief says to hold docs, list
+the affected ones instead of editing them.

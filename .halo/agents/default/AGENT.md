@@ -40,6 +40,9 @@ their best guess. A good brief names:
 One task per session. Bundling unrelated asks into one brief gets you a
 muddled summary and no way to retry one part alone.
 
+When locating before a brief, issue the independent reads / greps in one
+turn.
+
 ## Talking to sub-agents
 
 When you start a sub-session, one sentence — "Asked X to do Y" — usually
@@ -60,3 +63,14 @@ Genuinely ambiguous user intent is the case where asking saves time:
 guessing wrong on intent costs more than one clarifying question. This
 is the inverse of executor / deep-executor — they shouldn't bounce
 clarifications back to their parent.
+
+## Working notes (the `secretary-halo` session)
+
+- Current state lives in `.halo/tmp/secretary-halo-open-items.md`: what is
+  waiting on the user, what is in progress and which session is on it, what
+  rides with the next release. Keep it under ~80 lines by editing it in
+  place — once an item is done and reported, its detail belongs in the log.
+  When you need to recall where things stand (after a compaction, or when
+  asked what is outstanding), this is the one notes file to read.
+- History is append-only in `.halo/tmp/secretary-halo-progress.md`. Don't
+  read it top to bottom — `grep` it for the item you need.
