@@ -42,7 +42,13 @@
  *   backend, waiting for its exit, before it renames / deletes `<id>/`
  *   (Windows can't while a live process holds files in it — cwd, native
  *   addons).
- * - **Shutdown**: `close()` stops every child (bounded). A preload makes the
+ * - **Re-checked after every wait**: a start that waited (for a stopping
+ *   instance to exit, or for `ready`) looks the extension up again before it
+ *   goes on — still installed, on, declaring a backend, confirmed, not
+ *   suspended, and at its current version (a newer one is what starts).
+ * - **Shutdown**: `close()` refuses every start from then on (queued ones
+ *   included) and stops every child, waiting for all of them — stopping ones
+ *   too — to exit (bounded). A preload makes the
  *   child exit when its IPC channel disconnects, so a server that dies
  *   without running close() (SIGKILL, crash) doesn't leave one behind; the
  *   socket dir such a server leaves (`<tmpdir>/halo-ext-<pid>-*`) is removed
@@ -159,6 +165,9 @@ export interface ExtensionBackendsOptions {
   readyTimeoutMs?: number
   /** Extension directory; default `<extensionsRoot>/<id>`. */
   extensionDir?: (id: string) => string
+  /** The extension as the registry has it now (on, with a backend), or
+   *  undefined; default backendExtension. */
+  lookup?: (id: string) => ExtensionInfo | undefined
 }
 
 /** acquire() of a backend no admin confirmed yet. */
@@ -224,6 +233,7 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
   const idleMs = opts.idleMs ?? BACKEND_IDLE_MS
   const readyTimeoutMs = opts.readyTimeoutMs ?? READY_TIMEOUT_MS
   const extensionDir = opts.extensionDir ?? ((id: string) => path.join(extensionsRoot(), id))
+  const lookup = opts.lookup ?? backendExtension
   /** One entry per id, kept until its process has exited (stopping included). */
   const running = new Map<string, Backend>()
   /** Ids the installer holds (suspend): no start until it lets go. */
@@ -232,6 +242,8 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
    *  `spent` stays set — it doesn't expire with the window. */
   const failures = new Map<string, { key: string; times: number[]; reason: string; spent: boolean }>()
   let onFailureChange: (() => void) | undefined
+  /** close() ran: nothing starts any more. */
+  let closing = false
   let socketDir: string | null = null
   let counter = 0
 
@@ -380,17 +392,31 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
     b.idleTimer.unref()
   }
 
+  /** `ext` may (still) run: the registry's current entry for its id, or a
+   *  throw. Called before the first start and again after every wait — the
+   *  extension may have been switched off, removed, unconfirmed or updated
+   *  meanwhile (an update: the current version is the one to run). */
+  function eligible(id: string): ExtensionInfo {
+    if (closing) throw new Error('Halo is shutting down')
+    const current = lookup(id)
+    if (!current) throw new Error(`extension ${id} is no longer installed, switched on and declaring a backend`)
+    if (!confirmedBackendIds().has(id)) throw new BackendUnconfirmedError(id)
+    if (suspended.has(id)) throw new Error(`extension ${id} is being installed or removed — try again in a moment`)
+    return current
+  }
+
   /** The live instance of `ext`, started if needed — after the previous one
    *  of the same id has fully exited (a stopping entry is never replaced). */
-  async function instance(ext: ExtensionInfo): Promise<Backend> {
+  async function instance(first: ExtensionInfo): Promise<Backend> {
+    let ext = first
     for (;;) {
-      if (suspended.has(ext.id)) throw new Error(`extension ${ext.id} is being installed or removed — try again in a moment`)
       const b = running.get(ext.id)
       if (b && !b.stopping && b.key === keyOf(ext)) return b
       if (b) {
         stop(b, 'extension changed')
         await b.exited
-        continue // re-check: someone else may have started it meanwhile
+        ext = eligible(ext.id) // re-check, and someone else may have started it meanwhile
+        continue
       }
       const reason = failedReason(ext.id, keyOf(ext))
       if (reason) throw new BackendFailedError(ext.id, reason)
@@ -402,17 +428,27 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
 
   const api: ExtensionBackends = {
     async acquire(ext) {
-      if (!confirmedBackendIds().has(ext.id)) throw new BackendUnconfirmedError(ext.id)
-      const b = await instance(ext)
-      b.active++
-      if (b.idleTimer) { clearTimeout(b.idleTimer); b.idleTimer = null }
-      try {
-        await b.ready
-      } catch (err) {
+      // `ext` names the id; what runs is the registry's entry at each step.
+      for (;;) {
+        const b = await instance(eligible(ext.id))
+        b.active++
+        if (b.idleTimer) { clearTimeout(b.idleTimer); b.idleTimer = null }
+        let now: ExtensionInfo
+        try {
+          await b.ready
+          now = eligible(ext.id) // switched off / unconfirmed / removed / closing while it started
+        } catch (err) {
+          b.active--
+          armIdle(b)
+          throw err
+        }
+        if (!b.stopping && !b.dead && b.key === keyOf(now)) return b
+        // Updated while it started (or it went down right after ready): let
+        // this one go and start over with the current version.
         b.active--
-        throw err
+        if (b.key !== keyOf(now)) stop(b, 'extension changed')
+        armIdle(b)
       }
-      return b
     },
     release(rb) {
       const b = rb as Backend
@@ -457,6 +493,9 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
       return [...running.values()].filter((b) => !b.stopping).map(({ id, socket, pid }) => ({ id, socket, pid }))
     },
     async close() {
+      closing = true
+      // Every entry, stopping ones included: an entry stays until its
+      // process has exited, and no new one can appear (closing).
       const all = [...running.values()]
       for (const b of all) stop(b, 'server shutdown')
       await Promise.race([

@@ -366,7 +366,9 @@ describe('POST /api/extensions/:id/confirm-backend', () => {
     expect(extensionBackends.list()).toEqual([]) // stopped before the attempt
     const again = await extensionBackends.acquire(ext.getExtension('glb')!) // not refused as "being installed or removed"
     extensionBackends.release(again)
-    await extensionBackends.close()
+    // (not close(): that is final for the server's instance) — the uninstall stops it.
+    expect((await app.request('/api/extensions/glb', { method: 'DELETE', headers: { Cookie: cookie } })).status).toBe(200)
+    expect(extensionBackends.list()).toEqual([])
   })
 
   it('400 on a bad id or a backend-less extension, 404 when not installed, 401 without the cookie', async () => {

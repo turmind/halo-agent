@@ -42,6 +42,8 @@ http.createServer((req, res) => {
 process.on('SIGTERM', () => { fs.writeFileSync(process.env.HALO_EXT_DATA_DIR + '/sigterm', String(process.pid)); process.exit(0) })
 `
 
+const PROBE_EXT = { id: 'probe', name: 'probe', version: '1.0.0', extensions: [], entry: 'index.html', priority: 'default', capabilities: [], bundle: false, installedAt: 1, backend: { entry: 'backend/main.cjs' } } as never
+
 describe.skipIf(!bwrap)('extension backend under bwrap', () => {
   let home: string
   let root: string
@@ -59,7 +61,7 @@ describe.skipIf(!bwrap)('extension backend under bwrap', () => {
     fs.mkdirSync(path.join(root, 'probe', 'backend'), { recursive: true })
     fs.writeFileSync(path.join(root, 'probe', 'backend', 'main.cjs'), PROBE_SRC)
     confirmExtensionBackend('probe')
-    backends = createExtensionBackends({ extensionDir: (id) => path.join(root, id) })
+    backends = createExtensionBackends({ extensionDir: (id) => path.join(root, id), lookup: (id) => (id === 'probe' ? PROBE_EXT : undefined) })
   })
 
   afterAll(async () => {
@@ -78,8 +80,7 @@ describe.skipIf(!bwrap)('extension backend under bwrap', () => {
       tmp: hostTmp,
       tmpdir: 'TMP',
     })
-    const ext = { id: 'probe', name: 'probe', version: '1.0.0', extensions: [], entry: 'index.html', priority: 'default', capabilities: [], bundle: false, installedAt: 1, backend: { entry: 'backend/main.cjs' } } as never
-    const b = await backends.acquire(ext)
+    const b = await backends.acquire(PROBE_EXT)
     delete process.env.PROBES
     const out = await new Promise<Record<string, string>>((resolve, reject) => {
       http.get({ socketPath: b.socket, path: '/' }, (res) => {

@@ -92,20 +92,30 @@ async function until(cond: () => boolean, ms = 5000) {
 }
 const get = (p: string, init: RequestInit = {}) => fetch(`${base}${p}`, { ...init, headers: { cookie: 'halo_token=good', ...(init.headers ?? {}) } })
 
+const fresh = () => createExtensionBackends({ idleMs: IDLE_MS, readyTimeoutMs: 5000, extensionDir: (id) => path.join(root, id) })
+/** The routes reach the current `backends` through this: close() is final
+ *  for an instance, so each test gets a new one. */
+const current: ReturnType<typeof createExtensionBackends> = {
+  acquire: (e) => backends.acquire(e), release: (b) => backends.release(b), reconcile: (s) => backends.reconcile(s),
+  suspend: (id) => backends.suspend(id), failure: (e) => backends.failure(e), onFailure: (cb) => backends.onFailure(cb),
+  list: () => backends.list(), close: () => backends.close(),
+}
+
 beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-backend-'))
-  backends = createExtensionBackends({ idleMs: IDLE_MS, readyTimeoutMs: 5000, extensionDir: (id) => path.join(root, id) })
+  backends = fresh()
   const app = new Hono()
-  app.route('/api', createExtBackendRoutes(backends))
+  app.route('/api', createExtBackendRoutes(current))
   await new Promise<void>((resolve) => {
     server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' }, () => resolve())
   })
-  ;(server as http.Server).on('upgrade', createUpgradeRouter(new Map(), [[EXT_BACKEND_PREFIX, createExtBackendUpgrade(backends)]]))
+  ;(server as http.Server).on('upgrade', createUpgradeRouter(new Map(), [[EXT_BACKEND_PREFIX, createExtBackendUpgrade(current)]]))
   base = `http://127.0.0.1:${((server as http.Server).address() as AddressInfo).port}`
 })
 
 afterEach(async () => {
   await backends.close()
+  backends = fresh()
   for (const k of Object.keys(installed)) { delete installed[k]; forgetExtension(k) }
 })
 
@@ -289,6 +299,66 @@ describe('extension backends', () => {
     expect(alive(pid)).toBe(false)
   })
 
+  // Review-2 #3: a start queued behind a stopping instance looks the
+  // extension up again once it may go on — nothing starts for an extension
+  // switched off, unconfirmed or removed while it waited; an update while it
+  // waited starts the current version.
+  const SLOW_STOP = BACKEND_SRC.replace("server.listen(", "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 400))\nserver.listen(")
+  const queueBehindStop = async (id: string) => {
+    install(id, SLOW_STOP)
+    const { pid } = await (await get(`/api/ext/${id}/`)).json()
+    backends.reconcile({ extensions: [{ ...ext(id), installedAt: 2 }] as never, disabled: [], errors: [] }) // stopping now
+    installed[id] = ext(id, { installedAt: 2 })
+    const queued = get(`/api/ext/${id}/`) // waits for the old process to exit
+    await sleep(100)
+    expect(alive(pid)).toBe(true)
+    return { pid, queued }
+  }
+
+  it('a start queued behind a stopping instance does not start once the extension is switched off', async () => {
+    const { pid, queued } = await queueBehindStop('q-off')
+    delete installed['q-off'] // switched off: getExtension no longer returns it
+    const res = await queued
+    expect(res.status).toBe(502)
+    expect((await res.json()).error).toMatch(/no longer installed, switched on/)
+    expect(alive(pid)).toBe(false)
+    expect(backends.list()).toEqual([])
+  })
+
+  it('a queued start does not start once the confirmation is revoked, or the extension removed; an update meanwhile starts the current version', async () => {
+    const a = await queueBehindStop('q-unconf')
+    forgetExtension('q-unconf')
+    expect((await a.queued).status).toBe(403)
+    expect(backends.list()).toEqual([])
+
+    const b = await queueBehindStop('q-gone')
+    delete installed['q-gone']
+    fs.rmSync(path.join(root, 'q-gone'), { recursive: true })
+    expect((await b.queued).status).toBe(502)
+    expect(backends.list()).toEqual([])
+
+    const c = await queueBehindStop('q-upd')
+    installed['q-upd'] = ext('q-upd', { version: '1.1.0', installedAt: 3 })
+    const res = await c.queued
+    expect(res.status).toBe(200)
+    const { pid } = await res.json()
+    expect(pid).not.toBe(c.pid)
+    backends.reconcile({ extensions: [installed['q-upd']] as never, disabled: [], errors: [] })
+    expect(backends.list().map((x) => x.pid)).toEqual([pid]) // started as 1.1.0#3: reconcile keeps it
+  })
+
+  it('close() refuses starts from then on, queued ones too, and returns with no process left', async () => {
+    const { pid, queued } = await queueBehindStop('q-close')
+    await backends.close()
+    const res = await queued
+    expect(res.status).toBe(502)
+    expect((await res.json()).error).toMatch(/shutting down/)
+    expect(alive(pid)).toBe(false)
+    expect(backends.list()).toEqual([])
+    expect((await get('/api/ext/q-close/')).status).toBe(502) // a new request after close()
+    expect(backends.list()).toEqual([])
+  })
+
   // Review #6: a backend that keeps failing is not restarted without bound.
   it('stops restarting after 3 failures within the window; switching off and on resets it', async () => {
     let spawns = 0
@@ -341,17 +411,17 @@ describe('extension backends', () => {
     const dead = fs.mkdtempSync(path.join(tmp, 'halo-ext-999999999-'))
     fs.writeFileSync(path.join(dead, '1.sock'), '')
     const live = fs.mkdtempSync(path.join(tmp, `halo-ext-${process.ppid}-`))
-    const fresh = createExtensionBackends({ idleMs: IDLE_MS, readyTimeoutMs: 5000, extensionDir: (id) => path.join(root, id) })
+    const own = createExtensionBackends({ idleMs: IDLE_MS, readyTimeoutMs: 5000, extensionDir: (id) => path.join(root, id) })
     try {
       install('sock')
-      const b = await fresh.acquire(installed.sock as never)
+      const b = await own.acquire(installed.sock as never)
       expect(fs.existsSync(b.socket)).toBe(true)
       expect(fs.existsSync(dead)).toBe(false)
       expect(fs.existsSync(live)).toBe(true)
-      fresh.release(b)
+      own.release(b)
       await until(() => !fs.existsSync(b.socket), IDLE_MS * 6)
     } finally {
-      await fresh.close()
+      await own.close()
       fs.rmSync(live, { recursive: true, force: true })
     }
   })
@@ -360,19 +430,19 @@ describe('extension backends', () => {
   // down the same way, not leave a forever-rejected entry behind.
   it('a spawn error winds down like an exit: no stale entry, the next request starts fresh', async () => {
     const later = path.join(root, 'later')
-    const fresh = createExtensionBackends({ idleMs: IDLE_MS, readyTimeoutMs: 5000, extensionDir: () => later })
+    const own = createExtensionBackends({ idleMs: IDLE_MS, readyTimeoutMs: 5000, extensionDir: () => later })
     try {
       installed.late = ext('late')
       confirmExtensionBackend('late')
-      await expect(fresh.acquire(installed.late as never)).rejects.toThrow(/spawn failed: .*ENOENT/)
-      expect(fresh.list()).toEqual([])
+      await expect(own.acquire(installed.late as never)).rejects.toThrow(/spawn failed: .*ENOENT/)
+      expect(own.list()).toEqual([])
       fs.mkdirSync(path.join(later, 'backend'), { recursive: true })
       fs.writeFileSync(path.join(later, 'backend', 'main.cjs'), BACKEND_SRC)
-      const b = await fresh.acquire(installed.late as never)
+      const b = await own.acquire(installed.late as never)
       expect(alive(b.pid!)).toBe(true)
-      fresh.release(b)
+      own.release(b)
     } finally {
-      await fresh.close()
+      await own.close()
     }
   })
 
